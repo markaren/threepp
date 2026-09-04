@@ -244,6 +244,37 @@ def skin(colour=0xC8A088, roughness=0.75, opacity=None):
     return m
 
 
+def palm_hull(palm_z):
+    """A shaped palm instead of a box: a rounded slab, widest across the knuckles,
+    tapering to the wrist, and thicker on the thenar side where the thumb muscles sit.
+
+    Articulation.add_link cooks any non-primitive geometry to ONE convex hull, so this
+    improves the COLLIDER too, not just the silhouette -- a box palm has hard 90-degree
+    edges for an object to catch on. Points are in the palm's own frame, which stays put,
+    so every cable anchor expressed against it is unaffected.
+    """
+    #        x        half-z   dorsal   volar
+    profile = [
+        (-0.0380, 0.0250, 0.0092, 0.0100),   # wrist
+        (-0.0180, 0.0330, 0.0115, 0.0128),
+        ( 0.0060, 0.0380, 0.0122, 0.0138),
+        ( 0.0270, 0.0392, 0.0112, 0.0124),
+        ( 0.0378, 0.0350, 0.0090, 0.0100),   # the knuckle edge, narrowing again
+    ]
+    pts = []
+    for x, hz, hyd, hyv in profile:
+        for sz in (-1.0, 1.0):
+            for hy, sy in ((hyd, 1.0), (hyv, -1.0)):
+                pts.append((x, sy * hy, sz * hz))
+                pts.append((x, sy * hy * 0.55, sz * hz * 0.97))
+                pts.append((x, sy * hy * 0.92, sz * hz * 0.62))
+    # thenar bulge: the thumb muscles thicken the radial-volar quarter of the palm
+    for x in (-0.026, -0.008, 0.010):
+        pts.append((x, -0.0175, -0.0300))
+        pts.append((x, -0.0140, -0.0370))
+    return [tp.Vector3(*q) for q in pts]
+
+
 def cap(radius, length, colour=0xC8A088):
     """A capsule mesh of the given TOTAL length (CapsuleGeometry takes cylinder length)."""
     return tp.Mesh(tp.CapsuleGeometry(radius, max(1e-4, length - 2 * radius)), skin(colour))
@@ -259,10 +290,11 @@ class Hand:
         self.links = {}          # name -> ArticulationLink
         self.dof_names = []      # add order
         self.cables = {}         # name -> TendonCable
+        self.limits = {}         # name -> (lower, upper) radians
         self.meshes = []
         self._mat = material
 
-        palm = tp.Mesh(tp.BoxGeometry(0.075, 0.026, 0.082), skin(roughness=0.8))
+        palm = tp.Mesh(tp.ConvexGeometry(palm_hull(PALM_Z)), skin(roughness=0.8))
         palm.position.set(*(self.base + np.array([0.0325, 0.0, PALM_Z])))
         self.palm = self.art.add_link(palm, density=DENSITY, material=material)
         self.links["palm"] = self.palm
@@ -280,6 +312,7 @@ class Hand:
         # at a 10 mm arm accelerates a 9 g phalanx hard enough that the fingers slam
         # shut and BAT the object away -- measured, the can left at 0.6 m/s and the
         # "grasp" resisted 0.06 N. See JOINT_DAMPING.
+        self.limits[name] = (lower, upper)
         lk = self.art.add_link(mesh, parent=parent, density=DENSITY,
                                axis=list(axis), anchor=list(anchor),
                                lower=lower, upper=upper, material=self._mat,
@@ -301,7 +334,7 @@ class Hand:
         # MCP is 2 DOF, and Articulation gives one axis per link, so abduction gets its
         # own near-massless carrier link. Abduction is PROXIMAL to flexion so that
         # flexion happens in the abducted plane, as it does anatomically.
-        carrier = tp.Mesh(tp.SphereGeometry(0.0035, 8, 6), skin())
+        carrier = tp.Mesh(tp.SphereGeometry(0.0072, 12, 9), skin())
         carrier.position.set(kx, ky, kz)
         self._add(f"{name}_abd", carrier, self.palm, (0, 1, 0), (kx, ky, kz), -abd, abd)
 
@@ -359,22 +392,19 @@ class Hand:
         m = cap(0.0098, pp)
         m.position.set(*(j2 + L * (0.5 * pp)))
         orient(m, L, P)
-        self._add("thumb_mcp", m, self.links["thumb_cmc_flex"], tuple(fx), tuple(j2), -0.17, 1.00)
+        self._add("thumb_mcp", m, self.links["thumb_cmc_flex"], tuple(fx), tuple(j2), -0.17, 0.92)
 
         j3 = j2 + L * pp
         m = cap(0.0092, dp)
         m.position.set(*(j3 + L * (0.5 * dp)))
         orient(m, L, P)
-        self._add("thumb_ip", m, self.links["thumb_mcp"], tuple(fx), tuple(j3), -0.26, 1.40)
+        self._add("thumb_ip", m, self.links["thumb_mcp"], tuple(fx), tuple(j3), -0.26, 1.02)
 
         # Thenar eminence: visual only, no collider. It bridges the palm to the thumb
         # base so the thumb does not read as a detached object floating beside the hand,
         # without reintroducing the palm-vs-metacarpal collision that used to jam the
         # CMC swing after 9 degrees of a possible 60.
-        th = tp.Mesh(tp.SphereGeometry(0.020, 16, 12), skin(roughness=0.85))
-        th.position.set(*(c + L * 0.012 + np.array([-0.006, 0.004, 0.006])))
-        th.scale.set(1.25, 0.6, 0.9)
-        self.decor = [th]
+        self.decor = []
 
     # -- tendons ------------------------------------------------------------------
     def route(self):
@@ -509,7 +539,7 @@ class Hand:
         R = frame(B, P)
         mc, pp, dp = 0.046, 0.031, 0.025 + PULP
         v1, v2, v3 = 0.0105, 0.0082, 0.0058        # pad-side standoffs, proximal -> distal
-        d1, d2, d3 = 0.0080, 0.0050, 0.0034        # and the far side
+        d1, d2, d3 = 0.0080, 0.0062, 0.0046        # and the far side
 
         def bone(pad, along, lat=0.0):
             return (pad, along, lat)
@@ -737,11 +767,11 @@ def selftest():
         dofs = [i for i, n in enumerate(hand.dof_names) if n.startswith(f)]
         for c in [c for c in hand.cables if c.startswith(f)]:
             signs = {}
-            for ang in (0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5):
+            for frac in (0.0, 0.2, 0.4, 0.6, 0.8, 1.0):
                 qp = hand.zero()
                 for i in dofs:
                     if not hand.dof_names[i].endswith(("_abd", "_swing")):
-                        qp[i] = ang
+                        qp[i] = frac * hand.limits[hand.dof_names[i]][1]
                 hand.set_pose(qp)
                 r = moment_arms(hand, c, qp)
                 for i in dofs:
@@ -993,7 +1023,16 @@ class RopeView:
             pool.append(mesh)
         return pool[i]
 
+    def set_visible(self, on):
+        self._on = on
+        if not on:
+            for pool in self.pool.values():
+                for m in pool:
+                    m.visible = False
+
     def update(self, extra=None):
+        if not getattr(self, "_on", True):
+            return
         for name, cable in self.hand.cables.items():
             pts = np.asarray(cable.path, dtype=float)
             if extra and name in extra:
@@ -1020,33 +1059,61 @@ class Forearm:
 
     def __init__(self, scene, hand):
         self.hand = hand
-        arm = tp.Mesh(tp.BoxGeometry(0.150, 0.050, 0.064), skin(0xB89070, 0.85))
-        arm.position.set(-0.082, 0.0, -0.002)
-        scene.add(arm)
-        cuff = tp.Mesh(tp.BoxGeometry(0.016, 0.044, 0.060), skin(0x8899A6, 0.5, 0.45))
-        cuff.position.set(-0.002, 0.0, -0.002)
-        scene.add(cuff)
 
+        # A tapered, oval forearm rather than a box: a cylinder with a smaller radius at
+        # the wrist end than the elbow, squashed in one cross-section axis. After the
+        # -90 deg Z rotation its own +Y lies along +X, so radius_top is the WRIST end.
+        arm = tp.Mesh(tp.CylinderGeometry(0.0300, 0.0430, 0.150, 24), skin(0xB89070, 0.85))
+        arm.position.set(-0.083, 0.0, -0.002)
+        orient(arm, (1, 0, 0), (0, -1, 0))
+        arm.scale.set(1.0, 1.0, 0.74)
+        scene.add(arm)
+
+        wrist = tp.Mesh(tp.CylinderGeometry(0.0250, 0.0300, 0.022, 20), skin(0xC0A088, 0.7))
+        wrist.position.set(-0.002, 0.0, -0.002)
+        orient(wrist, (1, 0, 0), (0, -1, 0))
+        wrist.scale.set(1.0, 1.0, 0.78)
+        scene.add(wrist)
+
+        steel = tp.MeshStandardMaterial()
+        steel.color = tp.Color(0x59606B)
+        steel.metalness = 0.85
+        steel.roughness = 0.30
+        brass = tp.MeshStandardMaterial()
+        brass.color = tp.Color(0xC9A227)
+        brass.metalness = 0.9
+        brass.roughness = 0.35
+
+        # One actuator per cable: a motor can, a lead screw, and a nut that travels.
+        # Laid out in two banks either side of the forearm axis, the way the poster's
+        # forearm packs them, rather than a grid of blocks.
         self.names = list(hand.cables)
         self.rest = {n: hand.cables[n].length for n in self.names}
         self.rods, self.home = {}, {}
-        body_mat = tp.MeshStandardMaterial()
-        body_mat.color = tp.Color(0x4A5058)
-        body_mat.metalness = 0.75
-        body_mat.roughness = 0.35
+        per = math.ceil(len(self.names) / 2)
         for i, n in enumerate(self.names):
-            col, row = i % 5, i // 5
-            y = -0.019 + 0.0095 * row
-            z = -0.028 + 0.014 * col
-            x = -0.140 + 0.022 * (i % 3)
-            body = tp.Mesh(tp.BoxGeometry(0.030, 0.008, 0.009), body_mat)
-            body.position.set(x, y, z)
-            scene.add(body)
-            rod = tp.Mesh(_unit_cyl(), body_mat)
-            scene.add(rod)
-            self.rods[n] = rod
-            self.home[n] = np.array([x + 0.015, y, z])
-            rod.render_order = 2
+            bank, k = (1 if i >= per else -1), (i % per)
+            ang = (k / max(1, per - 1) - 0.5) * 2.1          # spread around the axis
+            r = 0.0205
+            y = r * math.cos(ang) * (0.62 if bank > 0 else -0.62) - 0.001
+            z = r * math.sin(ang) * 0.95 - 0.002
+            x = -0.132 + 0.0125 * (k % 2)
+
+            can = tp.Mesh(tp.CylinderGeometry(0.0042, 0.0042, 0.020, 12), steel)
+            can.position.set(x, y, z)
+            orient(can, (1, 0, 0), (0, -1, 0))
+            scene.add(can)
+
+            screw = tp.Mesh(tp.CylinderGeometry(0.0011, 0.0011, 0.030, 8), brass)
+            screw.position.set(x + 0.025, y, z)
+            orient(screw, (1, 0, 0), (0, -1, 0))
+            scene.add(screw)
+
+            nut = tp.Mesh(_unit_cyl(), brass)
+            nut.render_order = 2
+            scene.add(nut)
+            self.rods[n] = nut
+            self.home[n] = np.array([x + 0.040, y, z])
 
     def update(self):
         """Returns the extra proximal rope points, keyed by cable."""
@@ -1054,10 +1121,91 @@ class Forearm:
         for n in self.names:
             exc = self.rest[n] - self.hand.cables[n].length      # metres of rope taken in
             tip = self.home[n] - np.array([min(0.022, max(0.0, exc)), 0.0, 0.0])
-            _aim(self.rods[n], self.home[n] - np.array([0.016, 0, 0]), tip, 0.0022)
+            _aim(self.rods[n], tip - np.array([0.0035, 0, 0]), tip + np.array([0.0035, 0, 0]), 0.0032)
             # rod tip -> a fairing point at the cuff -> on into the cable's own path
             extra[n] = [tip, np.array([0.004, tip[1] * 0.45, tip[2] * 0.55])]
         return extra
+
+
+# ================================================================================
+# Control. The cables are the actuators, so the panel drives TENSIONS, not angles --
+# there is no joint target anywhere in this hand to set. Every slider is newtons on a
+# real cord, and what the hand does with them is up to the mechanics.
+# ================================================================================
+
+DIGITS = ["index", "middle", "ring", "little", "thumb"]
+
+
+def digit_cables(name):
+    """(flexors, extensors, cable that spreads +, cable that spreads -) for one digit."""
+    if name == "thumb":
+        return (["thumb_fpl", "thumb_fpb"], ["thumb_epl"], "thumb_abd", "thumb_add")
+    return ([f"{name}_fdp", f"{name}_fds"], [f"{name}_ext"],
+            f"{name}_io_uln", f"{name}_io_rad")
+
+
+# Tension presets, in newtons: (flex, extend, spread) per digit. Spread is signed and
+# scaled to SPREAD_N; a pull-only pair cannot do both, so the sign picks which cable.
+FLEX_N, EXT_N, SPREAD_N = 40.0, 25.0, 18.0
+PRESETS = {
+    "open":   {d: (0.00, 0.55, 0.0) for d in DIGITS},
+    "relax":  {d: (0.00, 0.00, 0.0) for d in DIGITS},
+    "fist":   {d: (0.90, 0.00, 0.0) for d in DIGITS} | {"thumb": (0.80, 0.0, -0.7)},
+    "pinch":  {"index": (0.55, 0.0, 0.0), "middle": (0.15, 0.0, 0.0),
+               "ring": (0.10, 0.0, 0.0), "little": (0.10, 0.0, 0.0),
+               "thumb": (0.75, 0.0, -0.9)},
+    "point":  {"index": (0.00, 0.85, 0.0), "middle": (0.95, 0.0, 0.0),
+               "ring": (0.95, 0.0, 0.0), "little": (0.95, 0.0, 0.0),
+               "thumb": (0.60, 0.0, -0.5)},
+    "spread": {"index": (0.0, 0.5, -0.9), "middle": (0.0, 0.5, -0.3),
+               "ring": (0.0, 0.5, 0.5), "little": (0.0, 0.5, 0.9),
+               "thumb": (0.0, 0.5, 0.9)},
+}
+
+
+class HandController:
+    """Slider state -> cable tensions, with a ramp so a preset never lands as a step.
+
+    A step in commanded tension is a step in applied force, which is an impulse no real
+    drivetrain could deliver -- and with a 40 N cable on a 9 g phalanx it visibly slaps
+    the object out of the hand rather than closing on it.
+    """
+
+    RATE = 2.5          # full-scale per second
+
+    def __init__(self, hand):
+        self.hand = hand
+        self.target = {d: [0.0, 0.55, 0.0] for d in DIGITS}
+        self.now = {d: [0.0, 0.55, 0.0] for d in DIGITS}
+        self.master = 1.0
+        self.manual = {}          # cable -> newtons, overrides the digit sliders
+
+    def preset(self, name):
+        for d, v in PRESETS[name].items():
+            self.target[d] = list(v)
+        self.manual.clear()
+
+    def step(self, dt):
+        for d in DIGITS:
+            for i in range(3):
+                a, b = self.now[d][i], self.target[d][i]
+                m = self.RATE * dt
+                self.now[d][i] = b if abs(b - a) <= m else a + math.copysign(m, b - a)
+        for d in DIGITS:
+            flex, ext, spread = self.now[d]
+            fl, ex, sp_plus, sp_minus = digit_cables(d)
+            for c in fl:
+                self.hand.cables[c].set_tension(FLEX_N * flex * self.master)
+            for c in ex:
+                self.hand.cables[c].set_tension(EXT_N * ext)
+            self.hand.cables[sp_plus].set_tension(SPREAD_N * max(0.0, spread))
+            self.hand.cables[sp_minus].set_tension(SPREAD_N * max(0.0, -spread))
+        for c, n in self.manual.items():
+            self.hand.cables[c].set_tension(n)
+
+    def excursion(self, name, rest):
+        return (rest[name] - self.hand.cables[name].length) * 1000.0
+
 
 
 def _scene(width, height, headless):
@@ -1097,14 +1245,14 @@ VIEWS = {
 }
 
 
-def visual(shots=None, width=1280, height=800, obj="ball", tension=35.0,
+def visual(shots=None, poses=None, width=1280, height=800, obj="ball", tension=35.0,
            headless=False, out="tendon_hand"):
     """Close the hand on an object with every cable drawn.
 
     With --shots it renders stills headless and writes PNGs; without, it opens a window
     and runs live.
     """
-    canvas, renderer, scene, cam = _scene(width, height, headless or bool(shots))
+    canvas, renderer, scene, cam = _scene(width, height, headless or bool(shots) or bool(poses))
     world = tp.PhysxWorld(gravity=tp.Vector3(0, 0, 0), fixed_timestep=DT,
                           max_substeps=1, tgs_pcm=True)
     pad = world.create_material(1.2, 1.1, 0.0, friction_combine="min")
@@ -1115,6 +1263,7 @@ def visual(shots=None, width=1280, height=800, obj="ball", tension=35.0,
     for m in getattr(hand, "decor", []):
         scene.add(m)
 
+    body = mesh = None
     if obj != "none":
         if obj == "can":
             mesh = tp.Mesh(tp.CapsuleGeometry(0.022, 0.040), skin(0x3388CC, 0.45))
@@ -1122,7 +1271,7 @@ def visual(shots=None, width=1280, height=800, obj="ball", tension=35.0,
         else:
             mesh = tp.Mesh(tp.SphereGeometry(0.018, 32, 24), skin(0x3388CC, 0.45))
         mesh.position.set(0.072, -0.043, -0.006)
-        world.add(mesh, 780.0, pad)
+        body = world.add(mesh, 780.0, pad)
         scene.add(mesh)
 
     arm = Forearm(scene, hand)
@@ -1135,6 +1284,39 @@ def visual(shots=None, width=1280, height=800, obj="ball", tension=35.0,
             hand.cables[c].set_tension(tension * k)
         world.step(DT)
         view.update(arm.update())
+
+    if poses:
+        # Render each preset at steady state. This is how the control layer is checked
+        # without a window: a preset that does not actually produce the posture it is
+        # named after is obvious on sight and invisible in a tension readout.
+        ctl = HandController(hand)
+        for name in poses:
+            ctl.preset("open")
+            for _ in range(900):
+                ctl.step(DT)
+                world.step(DT)
+            ctl.preset(name)
+            for _ in range(1500):
+                ctl.step(DT)
+                world.step(DT)
+            view.update(arm.update())
+            # The posture is the claim, so print it. A preset that does not produce what
+            # its name says is invisible in a tension readout and obvious here.
+            print(f"  {name}:")
+            for d in DIGITS:
+                js = [n for n in hand.dof_names if n.startswith(d)]
+                print("     " + f"{d:7s} " + "  ".join(
+                    f"{n.split('_', 1)[1]}={math.degrees(hand.links[n].joint_position):6.1f}"
+                    for n in js))
+            for vname in ("3q", "volar"):
+                pos, tgt = VIEWS[vname]
+                cam.position.set(*pos)
+                cam.look_at(*tgt)
+                renderer.render(scene, cam)
+                fn = f"{out}_pose_{name}_{vname}.png"
+                renderer.save_frame(fn)
+                print(f"  wrote {fn}")
+        return
 
     if shots:
         frames = {"open": 60, "closing": 800, "closed": 2600}
@@ -1153,17 +1335,91 @@ def visual(shots=None, width=1280, height=800, obj="ball", tension=35.0,
                     print(f"  wrote {fn}")
         return
 
-    pos, tgt = VIEWS["radial"]
+    pos, tgt = VIEWS["3q"]
     cam.position.set(*pos)
     cam.look_at(*tgt)
     controls = tp.OrbitControls(cam, canvas)
     controls.target.set(*tgt)
-    i = 0
+    controls.enable_damping = True
+    ui = tp.ImguiContext(canvas, renderer)
+    ctl = HandController(hand)
+    rest = {n: hand.cables[n].length for n in hand.cables}
+    clock = tp.Clock()
+    ui_state = {"advanced": False, "skin": SKIN_OPACITY, "ropes": True, "readout": True}
+    start = None
+    if obj != "none":
+        start = (mesh.position.x, mesh.position.y, mesh.position.z)
+
+    def draw_ui():
+        tp.imgui.set_next_window_pos(10, 10)
+        tp.imgui.set_next_window_size(330, 0)
+        tp.imgui.begin("Tendon drive")
+        tp.imgui.text("Every slider is NEWTONS on a real cord.")
+        tp.imgui.text("There is no joint target anywhere in this hand.")
+        tp.imgui.separator()
+
+        for i, name in enumerate(("open", "fist", "pinch", "point", "spread", "relax")):
+            if i % 3:
+                tp.imgui.same_line()
+            if tp.imgui.button(f"{name:>6}"):
+                ctl.preset(name)
+        tp.imgui.separator()
+        _, ctl.master = tp.imgui.slider_float("grip x", ctl.master, 0.0, 1.5)
+
+        for d in DIGITS:
+            if tp.imgui.collapsing_header(d):
+                t = ctl.target[d]
+                _, t[0] = tp.imgui.slider_float(f"flex##{d}", t[0], 0.0, 1.0)
+                _, t[1] = tp.imgui.slider_float(f"extend##{d}", t[1], 0.0, 1.0)
+                _, t[2] = tp.imgui.slider_float(f"spread##{d}", t[2], -1.0, 1.0)
+                fl, ex, sp, sm = digit_cables(d)
+                for c in fl + ex + [sp, sm]:
+                    tp.imgui.text(f"  {c.replace(d + '_', ''):<8} "
+                                  f"{hand.cables[c].tension:5.1f} N  "
+                                  f"{ctl.excursion(c, rest):+6.1f} mm")
+
+        tp.imgui.separator()
+        _, ui_state["advanced"] = tp.imgui.checkbox("per-cable override", ui_state["advanced"])
+        if ui_state["advanced"]:
+            for c in hand.cables:
+                cur = ctl.manual.get(c, hand.cables[c].tension)
+                changed, v = tp.imgui.slider_float(c, cur, 0.0, 60.0)
+                if changed:
+                    ctl.manual[c] = v
+            if tp.imgui.button("clear overrides"):
+                ctl.manual.clear()
+
+        tp.imgui.separator()
+        ch, ui_state["skin"] = tp.imgui.slider_float("skin opacity", ui_state["skin"], 0.0, 1.0)
+        if ch:
+            for m in hand.meshes:
+                m.material.opacity = ui_state["skin"]
+        ch2, ui_state["ropes"] = tp.imgui.checkbox("show rope", ui_state["ropes"])
+        if ch2:
+            view.set_visible(ui_state["ropes"])
+        if start and tp.imgui.button("reset object"):
+            body.set_pose(tp.Vector3(*start))
+            body.set_linear_velocity(tp.Vector3(0, 0, 0))
+            body.set_angular_velocity(tp.Vector3(0, 0, 0))
+        tp.imgui.same_line()
+        if tp.imgui.button("reset view"):
+            cam.position.set(*pos)
+            controls.target = tp.Vector3(*tgt)
+        tp.imgui.text(f"{tp.imgui.get_framerate():.0f} fps")
+        tp.imgui.end()
+
     def loop():
-        nonlocal i
-        step(i)
-        i += 1
+        dt = min(0.05, clock.get_delta())
+        ctl.step(dt)
+        n = max(1, min(8, int(round(dt / DT))))
+        for _ in range(n):
+            world.step(DT)
+        view.update(arm.update())
+        controls.enabled = not ui.want_capture_mouse
+        controls.update()
         renderer.render(scene, cam)
+        ui.render(draw_ui)
+
     canvas.animate(loop)
 
 
@@ -1176,13 +1432,16 @@ def main():
     ap.add_argument("--view", action="store_true", help="open a window: live grasp, cables drawn")
     ap.add_argument("--shots", nargs="*", default=None,
                     help="render stills headless: open | closing | closed | all")
+    ap.add_argument("--poses", nargs="*", default=None,
+                    help="render each tendon preset headless: open fist pinch point spread")
     ap.add_argument("--object", default="ball", help="ball | can | none")
     ap.add_argument("--size", default="1280x800")
     a = ap.parse_args()
-    if a.view or a.shots is not None:
+    if a.view or a.shots is not None or a.poses is not None:
         w, h = (int(v) for v in a.size.split("x"))
         shots = None if a.shots is None else (a.shots or ["all"])
-        visual(shots=shots, width=w, height=h, obj=a.object, tension=a.tension)
+        poses = None if a.poses is None else (a.poses or list(PRESETS))
+        visual(shots=shots, poses=poses, width=w, height=h, obj=a.object, tension=a.tension)
     elif a.grasp:
         grasp_test(a.grasp, a.tension)
     else:
