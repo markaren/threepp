@@ -603,7 +603,7 @@ namespace threepp_py {
                 .def_property_readonly("num_path_points", &TendonCable::numPathPoints,
                      "Points in the RESOLVED path, wrap arcs included, so it grows as a joint flexes.")
                 .def("add_wrap", &TendonCable::addWrap, py::arg("link"), py::arg("local_centre"),
-                     py::arg("local_axis"), py::arg("radius"), py::arg("side_hint"),
+                     py::arg("local_axis"), py::arg("radius"), py::arg("side_hint"), py::arg("sheathed") = false,
                      "Between the previous and next via point, run the cable around a cylinder of "
                      "`radius` centred at `local_centre` on `link` with its axis along `local_axis` "
                      "(both in the link ACTOR frame). Put the cylinder on a joint, co-axial with the "

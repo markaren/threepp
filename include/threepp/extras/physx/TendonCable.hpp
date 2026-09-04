@@ -87,7 +87,7 @@ namespace threepp {
         // from the actuator end to the insertion. The first and last are the anchor and
         // the insertion; everything between is a pulley.
         void addViaPoint(const ArticulationLink& link, const Vector3& localOffset) {
-            nodes_.push_back({Node::Via, link, localOffset, Vector3(0, 0, 1), 0.f, Vector3(1, 0, 0)});
+            nodes_.push_back({Node::Via, link, localOffset, Vector3(0, 0, 1), 0.f, Vector3(1, 0, 0), false});
         }
 
         // Add a WRAP: between the previous and the next via point the cable runs around
@@ -117,11 +117,20 @@ namespace threepp {
         // a sheath holds it on one definite side whether or not that side is shorter.
         // Inferring it put this hand's extensor on the volar side of every joint, which
         // measured as an extensor with a +7.53 mm FLEXION arm at the MCP.
+        // `sheathed` forces contact even where the free path would clear the pulley.
+        // Leave it FALSE for a flexor: one runs on the concave side, lifts off its pulley
+        // and bowstrings, and forcing it to follow lengthens its path by r*theta and turns
+        // it into an extensor (measured, 58.5 -> 73.2 mm over 105 deg). Set it TRUE for an
+        // extensor, which runs on the convex side and is genuinely held against the joint
+        // by its sheath -- without it the wrap DISENGAGES at deep flexion, the chord takes
+        // over and the moment arm reverses, so the extensor flexes the joint it is meant
+        // to straighten and the finger cannot come back out of a fist.
         void addWrap(const ArticulationLink& link, const Vector3& localCentre,
-                     const Vector3& localAxis, float radius, const Vector3& sideHint) {
+                     const Vector3& localAxis, float radius, const Vector3& sideHint,
+                     bool sheathed = false) {
             if (nodes_.empty())
                 throw std::runtime_error("TendonCable.add_wrap: a wrap needs a via point before it");
-            nodes_.push_back({Node::Wrap, link, localCentre, localAxis, radius, sideHint});
+            nodes_.push_back({Node::Wrap, link, localCentre, localAxis, radius, sideHint, sheathed});
         }
 
         // --- commands ---------------------------------------------------------------
@@ -180,6 +189,7 @@ namespace threepp {
             Vector3 axis;   // cylinder axis (wrap only)
             float radius;   // wrap only
             Vector3 side;   // which side of the cylinder the cable runs on (wrap only)
+            bool sheathed;  // wrap even where the free path would clear the pulley
         };
 
         // Resolve the node list into the actual cable path: a flat list of world points,
@@ -281,7 +291,8 @@ namespace threepp {
             const float t1 = bestT1;
             const float sweep = bestSweep;
 
-            // Contact only where the free path would actually cut through the pulley.
+            // Contact only where the free path would actually cut through the pulley --
+            // unless the caller says the tendon is SHEATHED there and cannot leave it.
             // This is not an optimisation, it is the physics, and it is what separates a
             // flexor from an extensor. A cable on the CONCAVE side of a closing joint
             // (a flexor, volar) lifts OFF its pulley and bowstrings: its chord shortens
@@ -292,7 +303,7 @@ namespace threepp {
             // 58.5 -> 73.2 mm over 105 deg of flexion, moment arm +8 mm where the chord
             // gives -8. A cable on the CONVEX side (an extensor, dorsal) genuinely does
             // wrap, and there this branch engages and holds the arm at the radius.
-            if (distancePointSegment(C, P, Q) >= r) return;
+            if (!w.sheathed && distancePointSegment(C, P, Q) >= r) return;
 
             const int steps = std::max(2, static_cast<int>(std::ceil(std::fabs(sweep) / 0.25f)));
             for (int k = 0; k <= steps; ++k) {

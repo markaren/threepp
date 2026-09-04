@@ -159,6 +159,18 @@ JOINT_DAMPING = 0.0035            # N.m.s/rad
 JOINT_DAMP_MAX = 0.5              # N.m
 JOINT_FRICTION = 0.0008           # N.m of stiction, per joint
 
+# COLLATERAL LIGAMENTS on the abduction axes, as a weak centring spring.
+#
+# Not a motor, and not a fudge: an MCP is held in line by its collateral ligaments, and
+# without them the abduction axis has no restoring force at all. That matters because
+# co-contraction cannot supply one -- two interossei with equal and opposite moment arms
+# produce ZERO net torque at EVERY angle, so balancing them holds the joint wherever it
+# was left rather than centring it. Measured before this existed: after the "spread"
+# preset the fingers kept 24 deg of abduction through every later preset, which reads as
+# the hand being stuck. The interossei still overpower it easily to spread on command.
+LIG_STIFFNESS = 0.075             # N.m/rad
+LIG_DAMPING = 0.0020              # N.m.s/rad
+
 
 
 # --------------------------------------------------------------------------------
@@ -313,11 +325,14 @@ class Hand:
         # shut and BAT the object away -- measured, the can left at 0.6 m/s and the
         # "grasp" resisted 0.06 N. See JOINT_DAMPING.
         self.limits[name] = (lower, upper)
+        ligament = name.endswith("_abd")
         lk = self.art.add_link(mesh, parent=parent, density=DENSITY,
                                axis=list(axis), anchor=list(anchor),
                                lower=lower, upper=upper, material=self._mat,
-                               stiffness=0.0, damping=JOINT_DAMPING,
-                               max_force=JOINT_DAMP_MAX, joint_friction=JOINT_FRICTION)
+                               stiffness=LIG_STIFFNESS if ligament else 0.0,
+                               damping=LIG_DAMPING if ligament else JOINT_DAMPING,
+                               max_force=JOINT_DAMP_MAX, drive_target=0.0,
+                               joint_friction=JOINT_FRICTION)
         self.links[name] = lk
         self.dof_names.append(name)
         self.meshes.append(mesh)
@@ -427,10 +442,11 @@ class Hand:
         c = tp.TendonCable(self.world, mode or tp.TendonCable.Mode.TENSION)
         for nd in nodes:
             if nd[0] == "wrap":
-                _, link, centre, axis, radius, side = nd
+                _, link, centre, axis, radius, side = nd[:6]
+                sheathed = bool(nd[6]) if len(nd) > 6 else False
                 c.add_wrap(link, tp.Vector3(*map(float, centre)),
                            tp.Vector3(*map(float, axis)), float(radius),
-                           tp.Vector3(*map(float, side)))
+                           tp.Vector3(*map(float, side)), sheathed)
             else:
                 link, off = nd
                 c.add_via_point(link, tp.Vector3(*[float(v) for v in off]))
@@ -503,12 +519,12 @@ class Hand:
         # the chord over the same joints swung to +6.33.
         self._cable(f"{name}_ext", [
             (palm, palm_pt(-0.026, -E_MCP)),
-            ("wrap", abd, (0.0, 0.0, 0.0), AXIS, E_MCP, (0.0, 1.0, 0.0)),
+            ("wrap", abd, (0.0, 0.0, 0.0), AXIS, E_MCP, (0.0, 1.0, 0.0), True),
             (p1, bone(-E_MCP, -0.35 * pp)),
             (p1, bone(-E_PIP, 0.30 * pp)),
-            ("wrap", p1, (0.0, 0.5 * pp, 0.0), AXIS, E_PIP, (-1.0, 0.0, 0.0)),
+            ("wrap", p1, (0.0, 0.5 * pp, 0.0), AXIS, E_PIP, (-1.0, 0.0, 0.0), True),
             (p2, bone(-E_DIP, -0.05 * mp)),
-            ("wrap", p2, (0.0, 0.5 * mp, 0.0), AXIS, E_DIP, (-1.0, 0.0, 0.0)),
+            ("wrap", p2, (0.0, 0.5 * mp, 0.0), AXIS, E_DIP, (-1.0, 0.0, 0.0), True),
             (p3, bone(-E_DIP * 0.8, -0.5 * dp + 0.25 * dp)),
         ])
         # Interossei. Volar of the MCP so they flex it, and offset to one side so they
@@ -549,6 +565,24 @@ class Hand:
             anything anchored here is rigidly welded to the world."""
             return (c[0] - (self.base[0] + 0.0325) + dx, dy, c[2] - self.base[2] - PALM_Z + dz)
 
+        def anchor(along, pad, lat):
+            """A palm-link point placed in the THUMB's frame and converted back.
+
+            This is what the abductor/adductor pair needs and what they did not have.
+            Working the moment about the abduction axis through, with the pull roughly
+            along the bone, it comes out proportional to MINUS THE LATERAL OFFSET -- the
+            local Z of the thumb's own frame. But the thumb's lateral direction is
+            (0.68, 0.71, 0.16) in world: mostly +X and +Y, nothing like world Z. So
+            anchors written as world-ish offsets, as these were, do not straddle the axis
+            at all, and both cables measured a POSITIVE arm there (+3.91 and +2.50 mm) --
+            nothing could adduct, opposition stalled at 3.6 deg, and the thumb's torque
+            space could never be positively spanned. Expressed in the thumb frame the two
+            become true mirrors and the signs are guaranteed opposite by construction.
+            """
+            w = c + B * along + R[:, 0] * pad + R[:, 2] * lat
+            return (w[0] - (self.base[0] + 0.0325), w[1] - self.base[1],
+                    w[2] - self.base[2] - PALM_Z)
+
         AX = (0.0, 0.0, 1.0)
         self._cable("thumb_fpl", [
             (palm, wrist(-0.016, -0.010, 0.014)),
@@ -560,19 +594,36 @@ class Hand:
         self._cable("thumb_epl", [
             (palm, wrist(-0.016, 0.010, 0.014)),
             (m1, bone(-d2, -0.30 * mc)),
-            ("wrap", m1, (0.0, 0.5 * mc, 0.0), AX, d2, (-1.0, 0.0, 0.0)),
+            ("wrap", m1, (0.0, 0.5 * mc, 0.0), AX, d2, (-1.0, 0.0, 0.0), True),
             (m2, bone(-d3, -0.20 * pp)),
-            ("wrap", m2, (0.0, 0.5 * pp, 0.0), AX, d3, (-1.0, 0.0, 0.0)),
+            ("wrap", m2, (0.0, 0.5 * pp, 0.0), AX, d3, (-1.0, 0.0, 0.0), True),
             (m3, bone(-d3 * 0.8, -0.5 * dp + 0.25 * dp)),
         ])
         # Abductor / adductor pollicis, either side of the CMC abduction axis.
+        # Which axis each offset actually drives was MEASURED, not assumed. The lateral
+        # (local Z) offset turns out to drive CMC FLEXION, and the PAD (local X) offset
+        # drives CMC ABDUCTION -- the opposite of what a quick derivation gives, because
+        # the pull is nothing like along the bone once the anchor is offset. Mirroring
+        # only the lateral offset therefore gave two cables that both ABDUCTED (+4.23 and
+        # +2.57 mm), so nothing could adduct, opposition stalled, and the thumb's torque
+        # space was never positively spanned. The pad offset is what has to straddle.
+        # Abductor: origin at the wrist, radial to the thumb, so it lifts it out of the
+        # palm. Straightforward.
         self._cable("thumb_abd", [
-            (palm, wrist(-0.020, -0.008, -0.008)), (ab, (0.0, 0.0, -0.011)),
-            (m1, bone(0.002, -0.20 * mc, -0.010)),
+            (palm, anchor(-0.026, 0.006, -0.013)),
+            (ab, (0.005, 0.0, -0.011)),
+            (m1, bone(0.006, -0.18 * mc, -0.010)),
         ])
+        # Adductor pollicis: its origin is on the MIDDLE METACARPAL, across the palm, and
+        # that is not a detail -- it is the only way the cable crosses the abduction axis
+        # from the far side. Anchored beside the thumb like every other thumb cable, no
+        # offset makes it adduct: mirroring the lateral offset gave +4.23 and +2.57 mm,
+        # mirroring the pad offset gave +2.03 and +8.23, both cables ABDUCTING either way,
+        # so nothing could pull the thumb back into the palm and its torque space could
+        # never be positively spanned. Measured each time, not assumed.
         self._cable("thumb_add", [
-            (palm, wrist(-0.006, 0.006, 0.016)), (ab, (0.0, 0.0, 0.011)),
-            (m1, bone(0.002, -0.20 * mc, 0.010)),
+            (palm, (0.008, -0.006, 0.022)),
+            (m1, bone(-0.004, 0.10 * mc, 0.009)),
         ])
         # Flexor pollicis brevis: pad side AND offset, so it drives the CMC flexion that
         # carries the thumb across the palm. This is the opposition cable.
@@ -1147,16 +1198,20 @@ def digit_cables(name):
 # Tension presets, in newtons: (flex, extend, spread) per digit. Spread is signed and
 # scaled to SPREAD_N; a pull-only pair cannot do both, so the sign picks which cable.
 FLEX_N, EXT_N, SPREAD_N = 40.0, 25.0, 18.0
+# Baseline co-contraction on the spread pair. Kept at zero: it cannot centre anything,
+# because two cables with equal and opposite moment arms cancel at every angle. The
+# collateral ligaments (LIG_STIFFNESS) are what re-centre abduction.
+SPREAD_BASE = 0.0
 PRESETS = {
-    "open":   {d: (0.00, 0.55, 0.0) for d in DIGITS},
+    "open":   {d: (0.00, 0.85, 0.0) for d in DIGITS},
     "relax":  {d: (0.00, 0.00, 0.0) for d in DIGITS},
-    "fist":   {d: (0.90, 0.00, 0.0) for d in DIGITS} | {"thumb": (0.80, 0.0, -0.7)},
+    "fist":   {d: (0.90, 0.00, 0.0) for d in DIGITS} | {"thumb": (0.80, 0.0, 0.60)},
     "pinch":  {"index": (0.55, 0.0, 0.0), "middle": (0.15, 0.0, 0.0),
                "ring": (0.10, 0.0, 0.0), "little": (0.10, 0.0, 0.0),
-               "thumb": (0.75, 0.0, -0.9)},
+               "thumb": (0.75, 0.0, 0.80)},
     "point":  {"index": (0.00, 0.85, 0.0), "middle": (0.95, 0.0, 0.0),
                "ring": (0.95, 0.0, 0.0), "little": (0.95, 0.0, 0.0),
-               "thumb": (0.60, 0.0, -0.5)},
+               "thumb": (0.60, 0.0, 0.40)},
     "spread": {"index": (0.0, 0.5, -0.9), "middle": (0.0, 0.5, -0.3),
                "ring": (0.0, 0.5, 0.5), "little": (0.0, 0.5, 0.9),
                "thumb": (0.0, 0.5, 0.9)},
@@ -1198,8 +1253,8 @@ class HandController:
                 self.hand.cables[c].set_tension(FLEX_N * flex * self.master)
             for c in ex:
                 self.hand.cables[c].set_tension(EXT_N * ext)
-            self.hand.cables[sp_plus].set_tension(SPREAD_N * max(0.0, spread))
-            self.hand.cables[sp_minus].set_tension(SPREAD_N * max(0.0, -spread))
+            self.hand.cables[sp_plus].set_tension(SPREAD_N * (SPREAD_BASE + max(0.0, spread)))
+            self.hand.cables[sp_minus].set_tension(SPREAD_N * (SPREAD_BASE + max(0.0, -spread)))
         for c, n in self.manual.items():
             self.hand.cables[c].set_tension(n)
 
