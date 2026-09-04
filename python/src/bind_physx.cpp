@@ -586,6 +586,20 @@ namespace threepp_py {
                                        "Tension at the INSERTION end (N). Equals tension when friction is 0; "
                                        "the ratio is what the routing swallowed.")
                 .def_property_readonly("num_nodes", &TendonCable::numNodes)
+                .def_property_readonly("path",
+                     [](const TendonCable& c) {
+                         const auto pts = c.path();
+                         py::array_t<float> out({static_cast<py::ssize_t>(pts.size()), py::ssize_t(3)});
+                         auto m = out.mutable_unchecked<2>();
+                         for (py::ssize_t i = 0; i < static_cast<py::ssize_t>(pts.size()); ++i) {
+                             m(i, 0) = pts[i].x; m(i, 1) = pts[i].y; m(i, 2) = pts[i].z;
+                         }
+                         return out;
+                     },
+                     "The resolved cable path in world space as an (N, 3) array, actuator end "
+                     "first, wrap arcs included. Draw it: a cable on the wrong side of a joint, "
+                     "or cutting a corner it should wrap, is obvious on sight and nearly "
+                     "invisible in a column of moment arms.")
                 .def_property_readonly("num_path_points", &TendonCable::numPathPoints,
                      "Points in the RESOLVED path, wrap arcs included, so it grows as a joint flexes.")
                 .def("add_wrap", &TendonCable::addWrap, py::arg("link"), py::arg("local_centre"),

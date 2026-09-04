@@ -65,6 +65,8 @@ MEASURED, at 35 N per flexor cable (python tendon_hand.py --grasp ball):
 Run:
   python tendon_hand.py --selftest      # measure the mechanics; no window
   python tendon_hand.py --grasp ball    # close on an object and pull until it slips
+  python tendon_hand.py --view          # window: live grasp with every cable drawn
+  python tendon_hand.py --shots         # the same, headless, to PNGs
 """
 
 import argparse
@@ -132,6 +134,8 @@ FDS_DISTAL = 0.38                 # FDS insertion standoff, as a fraction of A3
 FDP_PP = 0.18                     # flexor pulley along the proximal phalanx
 FDP_MP = 0.45                     # ... and along the middle phalanx
 
+PALM_Z = -0.008                   # palm box centre, offset radially to cover the thenar
+
 DENSITY = 1100.0                  # kg/m^3, hand soft tissue + bone
 
 # Passive joint resistance. A zero-stiffness, non-zero-damping articulation drive is a
@@ -167,8 +171,8 @@ class Hand:
         self.meshes = []
         self._mat = material
 
-        palm = tp.Mesh(tp.BoxGeometry(0.075, 0.026, 0.080), skin(roughness=0.8))
-        palm.position.set(*(self.base + np.array([0.0325, 0.0, 0.0])))
+        palm = tp.Mesh(tp.BoxGeometry(0.075, 0.026, 0.096), skin(roughness=0.8))
+        palm.position.set(*(self.base + np.array([0.0325, 0.0, PALM_Z])))
         self.palm = self.art.add_link(palm, density=DENSITY, material=material)
         self.links["palm"] = self.palm
         self.meshes.append(palm)
@@ -308,7 +312,7 @@ class Hand:
         # `v` volar and `a` along the bone (from the capsule CENTRE) is (v, a, 0) in that
         # link's frame, and the hinge axis stays local Z.
         def palm_pt(dx, volar):
-            return (kx - (self.base[0] + 0.0325) + dx, -volar, kz - self.base[2])
+            return (kx - (self.base[0] + 0.0325) + dx, -volar, kz - self.base[2] - PALM_Z)
 
         def bone(volar, along, lat=0.0):
             return (volar, along, lat)
@@ -375,7 +379,8 @@ class Hand:
         # DOF controllable in BOTH directions with actuators that can only pull.
         for side, lat in (("rad", -IO_LAT), ("uln", +IO_LAT)):
             self._cable(f"{name}_io_{side}", [
-                (palm, (kx - (self.base[0] + 0.0325) - 0.024, -0.004, kz - self.base[2] + lat)),
+                (palm, (kx - (self.base[0] + 0.0325) - 0.024, -0.004,
+                        float(np.clip(kz - self.base[2] - PALM_Z + lat, -0.045, 0.045)))),
                 (p1, bone(IO_VOLAR, 0.35 * pp, lat * 0.25)),
             ])
 
@@ -391,7 +396,7 @@ class Hand:
         m1, m2, m3 = L["thumb_cmc_swing"], L["thumb_mcp"], L["thumb_ip"]
         cx, cy, cz = self.base + np.array([0.020, -0.026, -0.052])
         mc, pp, dp = 0.045, 0.032, 0.022 + PULP
-        px, py, pz = cx - (self.base[0] + 0.0325), cy - self.base[1], cz - self.base[2]
+        px, py, pz = cx - (self.base[0] + 0.0325), cy - self.base[1], cz - self.base[2] - PALM_Z
         v1, v2, v3 = 0.0105, 0.0080, 0.0055        # volar standoffs, proximal -> distal
         d1, d2, d3 = 0.0080, 0.0050, 0.0035        # dorsal
 
@@ -399,13 +404,13 @@ class Hand:
             return (volar, along, lat)
 
         self._cable("thumb_fpl", [
-            (palm, (px - 0.014, py - v1, pz + 0.012)), (ab, (0.0, -v1, 0.0)),
+            (palm, (px - 0.014, -0.010, pz + 0.012)), (ab, (0.0, -v1, 0.0)),
             (m1, bone(v2, 0.05 * mc)), (m2, bone(v3, 0.05 * pp)),
             (m3, bone(v3 * 0.8, -0.5 * dp + 0.20 * dp)),
         ])
         AXIS = (0.0, 0.0, 1.0)
         self._cable("thumb_epl", [
-            (palm, (px - 0.014, py + d1, pz + 0.012)),
+            (palm, (px - 0.014, 0.010, pz + 0.012)),
             (m1, bone(-d2, -0.30 * mc)),
             ("wrap", m1, (0.0, 0.5 * mc, 0.0), AXIS, d2, (-1.0, 0.0, 0.0)),
             (m2, bone(-d3, -0.20 * pp)),
@@ -415,17 +420,17 @@ class Hand:
         # Abductor / adductor pollicis: opposite sides of the CMC abduction axis (X), so
         # one lifts the thumb volar out of the palm and the other pulls it back in.
         self._cable("thumb_abd", [
-            (palm, (px - 0.024, py - 0.014, pz - 0.010)), (ab, (0.0, -0.012, -0.004)),
+            (palm, (px - 0.022, -0.010, pz + 0.004)), (ab, (0.0, -0.012, -0.004)),
             (m1, bone(0.010, 0.10 * mc, -0.004)),
         ])
         self._cable("thumb_add", [
-            (palm, (px - 0.010, py + 0.012, pz + 0.010)), (ab, (0.0, 0.011, 0.004)),
+            (palm, (px - 0.010, 0.008, pz + 0.010)), (ab, (0.0, 0.011, 0.004)),
             (m1, bone(-0.009, 0.10 * mc, 0.004)),
         ])
         # Flexor pollicis brevis: offset toward the fingers, so it drives the SWING as
         # well as flexing - the cable that makes opposition reachable.
         self._cable("thumb_fpb", [
-            (palm, (px - 0.016, py - 0.008, pz + 0.014)), (ab, (0.0, -0.007, 0.010)),
+            (palm, (px - 0.016, -0.009, pz + 0.014)), (ab, (0.0, -0.007, 0.010)),
             (m1, bone(v2 * 0.7, 0.20 * mc, 0.010)),
             (m2, bone(v3 * 0.8, 0.0, 0.004)),
         ])
@@ -768,14 +773,201 @@ def hand_dofs(hand, f):
     return [n for n in hand.dof_names if n.startswith(f)]
 
 
+# ================================================================================
+# Visual. The routing is the whole design, and a column of moment arms is a poor way
+# to see it: a cable on the wrong side of a joint, or one cutting a corner it should
+# wrap, is obvious on sight and nearly invisible in a table. Every cable is drawn as
+# its RESOLVED path -- via points plus whatever arc a wrap contributed -- rebuilt each
+# frame from the live link poses, so what is on screen is what is pulling.
+# ================================================================================
+
+CABLE_COLOUR = {
+    "fdp": 0xE03030,     # deep flexor  - red
+    "fds": 0xFF7040,     # superficial  - orange
+    "ext": 0x3070E0,     # extensor     - blue
+    "io_": 0x30C060,     # interossei   - green
+    "fpl": 0xE03030, "fpb": 0xFF7040, "epl": 0x3070E0,
+    "abd": 0x30C060, "add": 0xC060D0,
+}
+
+
+def cable_colour(name):
+    tail = name.split("_", 1)[1] if "_" in name else name
+    for k, c in CABLE_COLOUR.items():
+        if tail.startswith(k):
+            return c
+    return 0xFFFFFF
+
+
+CABLE_CAPACITY = 96
+
+
+def _padded(pts):
+    """A fixed-size (CABLE_CAPACITY, 3) float32 array, the tail repeating the last point.
+
+    TWO things have to be right here, and both were wrong first, in ways that looked
+    like the routing was broken rather than the drawing:
+
+      * A wrapped cable's path GROWS as the joint flexes -- measured, the finger
+        extensors go from 11 points to as many as 26 while the hand closes -- so the
+        vertex count must be pinned or the line draws a varying number of vertices.
+        Repeated tail points draw as zero-length segments and vanish.
+      * set_from_points rebuilds the CPU attribute but does not mark it for re-upload,
+        so the GL side kept serving the FIRST frame's vertices. The closed-fist render
+        came back with cables shooting off past the fingertips, and they were pointing
+        exactly where the fingers had been when the hand was open. update_attribute is
+        the path that actually uploads.
+    """
+    a = np.asarray(pts, dtype=np.float32)
+    out = np.empty((CABLE_CAPACITY, 3), dtype=np.float32)
+    n = min(len(a), CABLE_CAPACITY)
+    out[:n] = a[:n]
+    out[n:] = a[n - 1]
+    return out
+
+
+class CableView:
+    """One Line per cable, its geometry rewritten every frame from cable.path."""
+
+    def __init__(self, scene, hand):
+        self.hand = hand
+        self.lines = {}
+        for name, c in hand.cables.items():
+            mat = tp.LineBasicMaterial()
+            mat.color = tp.Color(cable_colour(name))
+            geo = tp.BufferGeometry()
+            geo.set_from_points([tp.Vector3(*q) for q in _padded(c.path)])
+            line = tp.Line(geo, mat)
+            # Cables run INSIDE the finger, so they would be hidden by the skin. Drawing
+            # them without depth test puts the routing on top, which is the whole point
+            # of showing it -- this is an instrument, not a beauty shot.
+            mat.depth_test = False
+            line.render_order = 10
+            scene.add(line)
+            self.lines[name] = (line, geo)
+
+    def update(self):
+        for name, (line, _geo) in self.lines.items():
+            line.geometry.update_attribute("position", _padded(self.hand.cables[name].path))
+
+
+def _scene(width, height, headless):
+    canvas = tp.Canvas("tendon hand", width=width, height=height, headless=headless)
+    renderer = tp.GLRenderer(canvas)
+    renderer.set_clear_color(0x14161C)
+    scene = tp.Scene()
+    cam = tp.PerspectiveCamera(42, width / height, 0.01, 10)
+    scene.add(tp.HemisphereLight(0xFFFFFF, 0x404048, 1.0))
+    key = tp.DirectionalLight(0xFFFFFF, 2.0)
+    key.position.set(0.25, 0.35, 0.30)
+    scene.add(key)
+    # A volar fill, because the palm-side views are the informative ones and the first
+    # pass lit only the dorsum: the volar render came back as a black rectangle.
+    fill = tp.DirectionalLight(0xFFE8D8, 1.6)
+    fill.position.set(0.10, -0.40, 0.20)
+    scene.add(fill)
+    rim = tp.DirectionalLight(0x88AACC, 0.9)
+    rim.position.set(-0.30, 0.10, -0.35)
+    scene.add(rim)
+    return canvas, renderer, scene, cam
+
+
+VIEWS = {
+    #                camera position           look-at
+    # One framing has to hold both the open hand (~190 mm, fingers extended) and the
+    # closed fist (~110 mm), so it is set by the open pose and the fist simply sits
+    # smaller inside it.
+    "3q":     ((0.294, -0.169, -0.194), (0.095, -0.025, -0.004)),   # three-quarter volar-radial
+    "volar":  ((0.100, -0.250, -0.016), (0.095, -0.024, -0.004)),   # straight into the palm
+    "radial": ((0.288, -0.042, -0.222), (0.095, -0.026, -0.004)),   # thumb side
+    "dorsal": ((0.115, 0.250, 0.196), (0.095, -0.010, -0.004)),     # back of the hand
+}
+
+
+def visual(shots=None, width=1280, height=800, obj="ball", tension=35.0,
+           headless=False, out="tendon_hand"):
+    """Close the hand on an object with every cable drawn.
+
+    With --shots it renders stills headless and writes PNGs; without, it opens a window
+    and runs live.
+    """
+    canvas, renderer, scene, cam = _scene(width, height, headless or bool(shots))
+    world = tp.PhysxWorld(gravity=tp.Vector3(0, 0, 0), fixed_timestep=DT,
+                          max_substeps=1, tgs_pcm=True)
+    pad = world.create_material(1.2, 1.1, 0.0, friction_combine="min")
+    hand = Hand(world, material=pad).finalize()
+    hand.route()
+    for m in hand.meshes:
+        scene.add(m)
+
+    if obj != "none":
+        if obj == "can":
+            mesh = tp.Mesh(tp.CapsuleGeometry(0.022, 0.040), skin(0x3388CC, 0.45))
+            mesh.rotation.x = math.pi / 2
+        else:
+            mesh = tp.Mesh(tp.SphereGeometry(0.018, 32, 24), skin(0x3388CC, 0.45))
+        mesh.position.set(0.072, -0.043, -0.006)
+        world.add(mesh, 780.0, pad)
+        scene.add(mesh)
+
+    view = CableView(scene, hand)
+    close = [f"{f}_{t}" for f in FINGERS for t in ("fdp", "fds")] +             ["thumb_fpl", "thumb_fpb", "thumb_add"]
+
+    def step(i):
+        k = min(1.0, max(0.0, (i - 120) / 1400.0))
+        for c in close:
+            hand.cables[c].set_tension(tension * k)
+        world.step(DT)
+        view.update()
+
+    if shots:
+        frames = {"open": 60, "closing": 800, "closed": 2600}
+        want = [s for s in shots] if shots != ["all"] else list(frames)
+        last = max(frames[s] for s in want)
+        marks = {frames[s]: s for s in want}
+        for i in range(last + 1):
+            step(i)
+            if i in marks:
+                for vname, (pos, tgt) in VIEWS.items():
+                    cam.position.set(*pos)
+                    cam.look_at(*tgt)
+                    renderer.render(scene, cam)
+                    fn = f"{out}_{marks[i]}_{vname}.png"
+                    renderer.save_frame(fn)
+                    print(f"  wrote {fn}")
+        return
+
+    pos, tgt = VIEWS["radial"]
+    cam.position.set(*pos)
+    cam.look_at(*tgt)
+    controls = tp.OrbitControls(cam, canvas)
+    controls.target.set(*tgt)
+    i = 0
+    def loop():
+        nonlocal i
+        step(i)
+        i += 1
+        renderer.render(scene, cam)
+    canvas.animate(loop)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--selftest", action="store_true", help="measure the mechanics, no window")
     ap.add_argument("--grasp", nargs="?", const="can", default=None,
                     help="close on an object and pull until it slips: can | ball")
     ap.add_argument("--tension", type=float, default=35.0, help="flexor tension, N per cable")
+    ap.add_argument("--view", action="store_true", help="open a window: live grasp, cables drawn")
+    ap.add_argument("--shots", nargs="*", default=None,
+                    help="render stills headless: open | closing | closed | all")
+    ap.add_argument("--object", default="ball", help="ball | can | none")
+    ap.add_argument("--size", default="1280x800")
     a = ap.parse_args()
-    if a.grasp:
+    if a.view or a.shots is not None:
+        w, h = (int(v) for v in a.size.split("x"))
+        shots = None if a.shots is None else (a.shots or ["all"])
+        visual(shots=shots, width=w, height=h, obj=a.object, tension=a.tension)
+    elif a.grasp:
         grasp_test(a.grasp, a.tension)
     else:
         selftest()

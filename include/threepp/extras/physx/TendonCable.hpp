@@ -164,6 +164,13 @@ namespace threepp {
         // Points in the RESOLVED path, wrap arcs included -- so it grows as a joint flexes.
         [[nodiscard]] std::size_t numPathPoints() const { return points().size(); }
 
+        // The whole resolved path in world space, actuator end first. This is what the
+        // cable IS at this instant: via points plus whatever arc a wrap contributed. Draw
+        // it and the routing stops being a table of numbers -- a cable on the wrong side
+        // of a joint, or one cutting a corner it should wrap, is obvious on sight and
+        // very hard to see in a moment-arm column.
+        [[nodiscard]] std::vector<Vector3> path() const { return points(); }
+
     private:
         struct Node {
             enum Kind { Via,
