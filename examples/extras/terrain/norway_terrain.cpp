@@ -801,16 +801,19 @@ int main(int argc, char** argv) {
             lo.cap = static_cast<int>(envF("NT_FOREST_CAP", 40000.f));
             lo.cellSize = envF("NT_FOREST_CELL", 128.f);
             lo.l0Distance = envF("NT_FOREST_L0", 300.f);
-            lo.l1Distance = envF("NT_FOREST_L1", 1200.f);
+            lo.l1Distance = envF("NT_FOREST_L1", 800.f);
             // NT_FOREST_L2MESH=1 swaps the thinned blob level for the CHM canopy
             // SURFACE (buildCanopySurface). Kept as an A/B, not the default: it
             // is faster and closes the canopy on gentle ground, but on this
             // pack's benched wall the slope gate leaves tread-wide strips that
             // read as a staircase of lit green trays.
             lo.buildCanopyMesh = envSet("NT_FOREST_L2MESH");
-            // 1 = no L2 tier. The 1-in-4 thinning WAS the density pop the user saw
-            // at the far boundary, and turning it off costs 113 -> 89 fps here.
-            lo.l2Keep = static_cast<int>(envF("NT_FOREST_L2KEEP", 1.f));
+            // 1 = no L2 tier, and that is what the whole tier costs: 113 -> 89 fps
+            // here, 21% of the frame every frame for density at 800 m+ where a
+            // crown is 2-4 px. The far "pop" the user reported was COLOUR, not
+            // density (fixed in makeForestTreeVariant), so the thinning is back on
+            // by default; NT_FOREST_L2KEEP=1 buys the density back.
+            lo.l2Keep = static_cast<int>(envF("NT_FOREST_L2KEEP", 4.f));
             lo.mesh.seaLevel = reg.seaLevel;
             lo.mesh.maxSlopeDeg = so.maxSlopeDeg;// same gate as the sites, or the
             lo.mesh.minGroundHeight = so.minGroundHeight;// handoff grows new forest

@@ -487,6 +487,23 @@ namespace threepp::vegetation {
         // species to measure), memoised: three extra tree builds, once.
         Vector3 cardLeafReference(TreeSpecies sp);
 
+        // Per-species linear correction on the BLOB leaf colour, calibrated on
+        // rendered tree pixels (not on albedo — see makeForestTreeVariant). 1,1,1
+        // means "the albedo match was already the pixel match", and it was not:
+        // with the albedos equal the blob half of an all-L0/all-L1 boundary still
+        // measured G/R 1.93 against the card half's 1.64 (geiranger, default sun,
+        // a lit bench at 250 m). One scale for all three species: the residual is
+        // a property of the SHADING (opaque puff vs cutout card), not of a
+        // species, and the tree-pixel mask cannot tell the species apart anyway.
+        inline Vector3 blobRenderScale(TreeSpecies sp) {
+            switch (sp) {
+                case TreeSpecies::ScrubBirch: return {1.02f, 0.84f, 0.94f};
+                case TreeSpecies::Birch: return {1.02f, 0.84f, 0.94f};
+                case TreeSpecies::Spruce: return {1.02f, 0.84f, 0.94f};
+            }
+            return {1.f, 1.f, 1.f};
+        }
+
     }// namespace detail
 
     // One prototype. `cheapBlob` swaps the card/frond canopy for low-poly puffs —
@@ -612,10 +629,16 @@ namespace threepp::vegetation {
                 MeshStandardMaterial::Params{}.color(Color::white).roughness(0.85f).metalness(0.f));
         // Backlit canopies glow through instead of going flat-dark (deferred).
         v.leafMat->translucencyColor = Color(0.50f, 0.80f, 0.28f);
-        // Equal across the tiers: translucency is a second albedo term on a
-        // backlit crown, and 0.35 vs 0.5 put a visible brightness step in the
-        // handoff even once the diffuse means matched.
-        v.leafMat->translucency = 0.5f;
+        // ONLY on the cutout tier. Translucency models light coming through a
+        // THIN LEAF, and a card canopy is exactly that: alpha-tested blades with
+        // baked burial occlusion, so only the leaves that really are exposed pick
+        // the term up. A blob is a solid UV sphere, so the same term lights every
+        // sun-facing puff with a lime (0.50,0.80,0.28) wash — which is what the
+        // user kept seeing at the LOD boundary AFTER the albedos were matched:
+        // equal albedo means, G/R 1.50 (cards) vs 1.66 (blobs) on the rendered
+        // pixels, and 1.9% of blob pixels over G=90 against 0.1% of card pixels.
+        // Measured on aaa_caps/geiranger_lodfix_l0l1_crop.png.
+        v.leafMat->translucency = cheapBlob ? 0.f : 0.5f;
         const Vector3 vcMean = detail::vertexColorMean(v.leafGeo);
         if (cheapBlob) {
             // leafColor is an sRGB hint; material->color is LINEAR working space.
@@ -633,9 +656,18 @@ namespace threepp::vegetation {
             const auto solve = [](float want, float tint, float fallback) {
                 return tint > 1e-4f ? std::clamp(want / tint, 0.f, 1.f) : fallback;
             };
-            v.leafMat->color = Color(solve(ref.x, vcMean.x, srgb.r),
-                                     solve(ref.y, vcMean.y, srgb.g),
-                                     solve(ref.z, vcMean.z, srgb.b));
+            // Equal ALBEDO is not equal PIXELS. A card crown is a cutout: half
+            // the leaf quad is sky/backdrop and the surviving texels carry baked
+            // burial occlusion, so a card tree integrates darker than a solid
+            // blob of the same albedo no matter what the material says. The last
+            // step of the match is therefore measured on RENDERED tree pixels
+            // (the green-dominant mask, all-L0 against all-L1 over the same
+            // frame) and folded back in as a linear per-species scale — see the
+            // phase 3c numbers in plans/fjord-cliff-realism.md.
+            const Vector3 cal = detail::blobRenderScale(sp);
+            v.leafMat->color = Color(solve(ref.x, vcMean.x, srgb.r) * cal.x,
+                                     solve(ref.y, vcMean.y, srgb.g) * cal.y,
+                                     solve(ref.z, vcMean.z, srgb.b) * cal.z);
             v.leafMat->vertexColors = true;// canopy tint gradient baked per-vertex
             v.leafMeanLinear.set(v.leafMat->color.r * vcMean.x,
                                  v.leafMat->color.g * vcMean.y,
@@ -1099,10 +1131,16 @@ namespace threepp::vegetation {
         // ...and then measured: dropping 3 in 4 IS a density pop at `l1Distance`,
         // and the widening does not hide it. On this pack the whole L2 tier buys
         // 113 fps against 89 with it off — both far above the 55 fps floor — so
-        // the default is now 1, which adds no third level at all and removes the
-        // second LOD boundary from the shot. Raise it when a scene actually needs
-        // the headroom (2 is 85 fps against 65 at a 2 km fly-out).
-        int l2Keep = 1;          // keep 1 instance in l2Keep; 1 = no L2 level
+        // for one phase the default was 1, no third level at all.
+        //
+        // Reverted: 21% of the frame, EVERY frame, buys a tier the user never
+        // sees pop. The 1-in-4 boundary sits at 800 m, where a crown is 2-4 px
+        // and the pop the user actually reported was the COLOUR jump, not the
+        // density (see the calibration in `makeForestTreeVariant`). Pay the 21%
+        // only where a scene needs the density: `NT_FOREST_L2KEEP=1` /
+        // `NT_FOREST_L1` are the knobs (keep=2 is the middle setting, 85 fps
+        // against 65 at a 2 km fly-out).
+        int l2Keep = 4;          // keep 1 instance in l2Keep; 1 = no L2 level
         float l2ScaleBoost = 1.4f;// survivors widen to close the gaps
         bool buildCanopyMesh = false;
         CanopyMeshOptions mesh;
