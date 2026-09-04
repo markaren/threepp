@@ -7,9 +7,6 @@
 
 using namespace threepp;
 
-template class threepp::CurvePath<Vector2>;
-template class threepp::CurvePath<Vector3>;
-
 template<class T>
 void CurvePath<T>::add(const std::shared_ptr<Curve<T>>& curve) {
 
@@ -164,3 +161,6 @@ std::vector<T> CurvePath<T>::getPoints(unsigned int divisions) const {
 
     return points;
 }
+
+template class threepp::CurvePath<Vector2>;
+template class threepp::CurvePath<Vector3>;
