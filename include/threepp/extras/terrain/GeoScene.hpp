@@ -152,6 +152,9 @@ namespace threepp::terrain {
     private:
         GeoScene() = default;
 
+    public:
+        // Public so demos (norway_terrain NT_SEA_BATHY) can sink a pack
+        // grid with the same profile the facade uses; otherwise internal.
         // ── synthetic bathymetry ────────────────────────────────────────────
         //
         // depth(d) = maxDepth · (1 − exp(−shoreSlope · d · ease(d) / maxDepth))
@@ -235,6 +238,7 @@ namespace threepp::terrain {
                 h[i] -= maxDepth * (1.f - std::exp(-shoreSlope * d * ease / maxDepth));
             }
         }
+    private:
 
         void build(const GeoSceneOptions& o) {
             const auto t0 = std::chrono::high_resolution_clock::now();

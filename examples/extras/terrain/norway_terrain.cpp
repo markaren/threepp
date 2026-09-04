@@ -30,6 +30,7 @@
 #include "threepp/extras/terrain/CliffShell.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
 #include "threepp/extras/terrain/GeoBuildings.hpp"
+#include "threepp/extras/terrain/GeoScene.hpp"
 #include "threepp/extras/terrain/GeoTerrain.hpp"
 #include "threepp/extras/terrain/GeoTerrainPack.hpp"
 #include "threepp/extras/terrain/TerrainScatter.hpp"
@@ -266,6 +267,17 @@ int main(int argc, char** argv) {
     // at sea level. NT_SEA_DEPTH overrides; 0 restores the flat sheet.
     float seaDepth = 6.f;
     if (const char* e = std::getenv("NT_SEA_DEPTH"); e && e[0] != '\0') seaDepth = std::strtof(e, nullptr);
+    // NT_SEA_BATHY=1: the GeoScene facade's distance-to-shore profile instead
+    // of the flat sink (NT_SEA_SHORE_SLOPE m/m, NT_SEA_MAXDEPTH m). This is what
+    // the netpen --terrain scene stands in, so shoreline water-colour work is
+    // reproduced here, in the C++ demo, with the same seabed.
+    if (const char* e = std::getenv("NT_SEA_BATHY"); e && *e == '1' && reg.heightMin < 1.0f) {
+        float slope = 0.35f, maxDepth = 180.f;
+        if (const char* v = std::getenv("NT_SEA_SHORE_SLOPE"); v && *v) slope = std::strtof(v, nullptr);
+        if (const char* v = std::getenv("NT_SEA_MAXDEPTH"); v && *v) maxDepth = std::strtof(v, nullptr);
+        terrain::GeoScene::makeBathymetry(pack.grid, reg.seaLevel, slope, maxDepth);
+        seaDepth = 0.f;// the profile replaces the flat sink
+    }
     if (seaDepth > 0.f && reg.heightMin < 1.0f) {
         for (float& h : pack.grid.data())
             if (h <= reg.seaLevel + 0.05f) h -= seaDepth;

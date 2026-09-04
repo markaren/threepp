@@ -441,7 +441,16 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                     // reads instead of drowning in deep-ocean teal. Scalar on
                     // purpose: a per-channel weight would hue-shift the body.
                     const float bodyW = 1.0 - exp(-dBot / (0.5 * pm.attenuationDistance));
-                    transmitColor = deepBody * bodyW + bottom * Tbot;
+                    // The probe stops at maxVis, so a floor that slopes away
+                    // crosses from "hit" to "no hit" along a depth isoline. Tbot
+                    // is small there (attenuationColor^6..12) but the floor it
+                    // multiplies is unshadowed sunlit albedo, so the residual
+                    // step printed as a hard band parallel to the shore in a
+                    // top-down view (netpen --terrain, 2026-09-05). Fade the
+                    // floor term out over the last 30% of the probe range so
+                    // the two branches meet continuously.
+                    const float edgeFade = 1.0 - smoothstep(0.7 * maxVis, maxVis, dBot);
+                    transmitColor = deepBody * bodyW + bottom * Tbot * edgeFade;
                     bodyLeg = dBot;// the in-scatter integral stops at the floor
                 }
             }

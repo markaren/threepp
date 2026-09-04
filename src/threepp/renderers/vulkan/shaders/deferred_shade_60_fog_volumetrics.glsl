@@ -555,7 +555,22 @@ vec3 applyMurk(vec3 col, vec3 ro, vec3 hit) {
     const vec3  tr = exp(-vec3(fog.murkDensity) * d);
     const vec3  fogLight = lights.ambient
                          + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
-    return col * tr + fog.murkColor * fogLight * (vec3(1.0) - tr);
+    // The in-scatter must be graded by view ELEVATION exactly as applyMurkSky
+    // grades the saturated limit (1.55 looking up, 1.0 at the horizon, 0.30
+    // looking down): a lit column is fed from above, so a downward leg sees
+    // less scattered light than a horizontal one. Before this the finite leg
+    // used the ungraded value while the miss beyond the probe range used the
+    // graded one, so a seabed that slopes away crossed a 3.3x step in the
+    // water colour exactly along the depth isoline where the bottom probe ran
+    // out (netpen --terrain, top-down, 2026-09-05), and every seabed edge
+    // against open water carried the same step. With the grade shared, hit
+    // and miss meet at murkColor * fogLight * grade as tr -> 0. Byte-identical
+    // for scenes without a murk (the early return above).
+    const vec3  up = (dot(fog.worldUp, fog.worldUp) > 1e-6) ? normalize(fog.worldUp) : vec3(0.0, 1.0, 0.0);
+    const vec3  legDir = hit - ro;
+    const float elev = (dot(legDir, legDir) > 1e-8) ? clamp(dot(normalize(legDir), up), -1.0, 1.0) : 0.0;
+    const float grade = (elev >= 0.0) ? mix(1.0, 1.55, elev) : mix(1.0, 0.30, -elev);
+    return col * tr + fog.murkColor * fogLight * grade * (vec3(1.0) - tr);
 }
 // ── Submerged camera: the two gates every underwater path is behind ──────────
 // murkLive() = the water body exists as a medium at all (a density AND a clip
