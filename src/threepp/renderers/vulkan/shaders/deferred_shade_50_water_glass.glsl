@@ -152,6 +152,29 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                                       /*probeHitFill=*/true,
                                       /*envInt=*/pm.envMapIntensity);
     gTraceSkipWater = false;
+    // Reflected GEOMETRY strength, on specularIntensity (KHR_materials_specular).
+    //
+    // DELIBERATE DEVIATION, do not "correct" it: the glTF extension scales the whole
+    // specular BRDF, environment included. Here it scales ONLY a reflection that landed
+    // on geometry and leaves an escape to sky at full Fresnel. That asymmetry is the
+    // point. Water's horizon sky-mirror band and its Snell's-window view from below are
+    // what make water read as water; dimming those is never what is wanted, whereas a
+    // shoreline mirrored at full radiance routinely is too strong.
+    //
+    // Why a new knob is needed at all: water's reflection is ONE hard mirror ray whose
+    // energy is Schlick Fresnel from ior alone. effRough reaches only reflLod, the
+    // environment-MISS mip, so material.roughness blurs a reflected sky and leaves a
+    // reflected forest at full strength; water writes reflectImage = 0 so it never gets
+    // the roughness-driven reflection denoiser opaque surfaces get; envMapIntensity
+    // scales only the escape-to-environment terms, so lowering it dims the sky and makes
+    // the ratio worse; and r0 = 0.02 against a grazing F of 0.25-0.67 leaves ior nearly
+    // inert. Wave slope is not a lever either: the slope integral is dominated by the
+    // finest cascade's cutoff, so a fully developed sea moves rms slope by -5% while
+    // multiplying wave height by 2.85.
+    //
+    // gTraceHitT < 0 is the environment escape (deferred_shade_40_reflections.glsl:148).
+    // Defaults to 1.0, so every existing scene runs the pre-change arithmetic textually.
+    if (gTraceHitT > 0.0) reflectColor *= clamp(pm.specularIntensity, 0.0, 1.0);
 
     // ── FIRE IN THE MIRROR ───────────────────────────────────────────────────
     // The traced leg above sees geometry and the environment. It does NOT see
