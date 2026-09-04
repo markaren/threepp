@@ -69,8 +69,8 @@ namespace threepp {
             if (fjord) {
                 mat->attenuationColor = Color(0.10f, 0.50f, 0.48f);
                 mat->attenuationDistance = 1.5f;
-                mat->scatterColor = Color(0.30f, 0.62f, 0.60f);
-                mat->scatterDistance = 5.0f;
+                mat->scatterColor = Color(0.18f, 0.42f, 0.40f);// tuned by eye vs (0.30,0.62,0.60): that read milky/opaque
+                mat->scatterDistance = 8.0f;    // 5 m over-saturated the body; 8 m keeps the wall reflection legible
             }
             return mat;
         }

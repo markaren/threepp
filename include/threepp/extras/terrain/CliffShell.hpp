@@ -102,12 +102,21 @@ namespace threepp::terrain {
 
         // ── relief ──────────────────────────────────────────────────────────
         float offset = 0.35f;   // metres proud of the terrain along the DEM normal
-        float benchAmp = 0.55f; // ledge riser, peak-to-peak (m)
-        // Bench period in v (m), fBm-modulated between these. The floor is TWO
-        // level steps at the 2 m default: a period sampled once per strip row
-        // aliases into a random offset per row instead of reading as a ledge.
-        float benchLo = 4.f;
-        float benchHi = 9.f;
+        float benchAmp = 0.85f; // ledge riser, peak-to-peak (m)
+        // Bench period in v (m), fBm-modulated between these. Keep the floor at
+        // FIVE level steps: the rows sample the bench ramp once per levelStep,
+        // and a 4-9 m period at 2 m rows (the first version) aliased into a
+        // riser on every row, i.e. rice-terrace corduroy over the whole wall
+        // (looked at 1:1, 2026-09-04). Real gneiss walls carry a few big
+        // benches per hundred metres, not one every four.
+        float benchLo = 10.f;
+        float benchHi = 24.f;
+        // Two oblique joint sets (grooves at +-jointAngleDeg from horizontal in
+        // the along-wall/height plane), intermittent, cutting ACROSS the bench
+        // rows so the rows never read as one stacked pattern.
+        float jointAmp = 0.35f;     // groove depth (m)
+        float jointPeriod = 9.f;    // spacing between grooves of one set (m)
+        float jointAngleDeg = 35.f;
         float fbmAmp = 0.45f;   // 4-12 m fBm on top (m)
         float edgeFade = 4.f;   // displacement fades to 0 this near the mask boundary
 
@@ -610,23 +619,53 @@ namespace threepp::terrain {
         if (runs.empty()) return st;
 
         // ── displacement (world-anchored, deterministic) ─────────────────────
-        // A bench term whose period is 2.5-8 m in v with an asymmetric ramp (a
+        // A bench term whose period is 10-24 m in v with an asymmetric ramp (a
         // long outward tread, a short pull-in riser) — that shape is what makes
-        // the ledges read as HORIZONTAL rows rather than as noise — plus 4-12 m
-        // fBm. Amplitude fades at the mask boundary so the shell meets the
-        // terrain flush.
+        // the ledges read as HORIZONTAL rows rather than as noise — plus two
+        // oblique joint sets that cut across the rows, plus 4-12 m fBm.
+        // Amplitude fades at the mask boundary so the shell meets the terrain
+        // flush.
+        //
+        // Sampling is the constraint on every term here: the shell has one
+        // vertex row per levelStep of height, so anything periodic in y with a
+        // period under ~5 rows aliases into a per-row offset. The first version
+        // (4-9 m benches, phase drifting only at a 55 m wavelength) rendered as
+        // a riser on EVERY row across the whole wall. The bench phase now also
+        // gets a 12 m-wavelength term half a period deep, so neighbouring
+        // columns stop sharing a riser height, and the joint grooves are
+        // cos^6 bumps a quarter period wide (2+ m), wide enough to survive the
+        // 2 m rows at their oblique angle.
         const float sph = static_cast<float>(opt.seed & 0xffu) * 0.0173f;
+        const float jca = std::cos(opt.jointAngleDeg * 0.0174533f);
+        const float jsa = std::sin(opt.jointAngleDeg * 0.0174533f);
+        auto groove = [](float t) {
+            t -= std::floor(t);
+            const float c = 0.5f + 0.5f * std::cos(6.2831853f * (t - 0.5f));
+            const float c2 = c * c;
+            return c2 * c2 * c2;// cos^6: a bump ~0.25 period wide, zero elsewhere
+        };
         auto displace = [&](float x, float y, float z) {
             const float period = opt.benchLo + (opt.benchHi - opt.benchLo) *
                                                        detail::geoFbm(x * 0.018f + sph, z * 0.018f);
-            float t = (y + 3.f * detail::geoFbm(x * 0.03f, z * 0.03f)) / period;
+            const float phase = 3.f * detail::geoFbm(x * 0.03f, z * 0.03f) +
+                                0.5f * period * (detail::geoFbm(x * 0.085f + 11.f, z * 0.085f) - 0.5f);
+            float t = (y + phase) / period;
             t -= std::floor(t);
-            const float ramp = t < 0.75f ? t / 0.75f : (1.f - t) / 0.25f;
+            const float ramp = t < 0.85f ? t / 0.85f : (1.f - t) / 0.15f;
             const float bench = opt.benchAmp * (ramp - 0.5f);
+            // Joint sets in the (s, y) plane, s = a fixed along-wall direction.
+            // The wall is not axis-aligned, so any fixed s works; the two sets
+            // are mirrored about horizontal and intermittent (a 50 m gate), so
+            // some panels are cut and some are plain.
+            const float sAlong = (x + z) * 0.70710678f;
+            const float g1 = groove((y * jca + sAlong * jsa) / opt.jointPeriod);
+            const float g2 = groove((y * jca - sAlong * jsa) / opt.jointPeriod + 0.37f);
+            const float gate = detail::smoothstep01(0.40f, 0.60f, detail::geoFbm(x * 0.02f + 5.f, z * 0.02f + 9.f));
+            const float joints = -opt.jointAmp * std::max(g1, g2) * gate;
             const float f = 0.5f * (detail::geoFbm(x * 0.10f, y * 0.11f) +
                                     detail::geoFbm(z * 0.10f + 37.f, y * 0.09f));
             const float fbm = opt.fbmAmp * (f - 0.5f) * 2.f;
-            return (bench + fbm) * detail::smoothstep01(0.f, opt.edgeFade, edgeMetres(x, z));
+            return (bench + joints + fbm) * detail::smoothstep01(0.f, opt.edgeFade, edgeMetres(x, z));
         };
         auto place = [&](std::array<float, 3>& p) {
             const auto n = detail::demNormal(grid, p[0], p[2]);

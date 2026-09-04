@@ -608,8 +608,15 @@ int main(int argc, char** argv) {
                     // Look::Fjord already carries the recipe (attenuation back
                     // near physical at 1.5 m + scatterColor/scatterDistance);
                     // nothing to override here. NT_SEA_ATTEN still pins the
-                    // absorption length for A/B sweeps.
+                    // absorption length for A/B sweeps; NT_SEA_SCATTER_DIST and
+                    // NT_SEA_SCATTER_COL=r,g,b (linear) sweep the in-scatter
+                    // recipe without a rebuild of Ocean.cpp.
                     wm->attenuationDistance = envF("NT_SEA_ATTEN", wm->attenuationDistance);
+                    wm->scatterDistance = envF("NT_SEA_SCATTER_DIST", wm->scatterDistance);
+                    if (const char* e = std::getenv("NT_SEA_SCATTER_COL"); e && e[0] != '\0') {
+                        float r = 0.f, g = 0.f, b = 0.f;
+                        if (std::sscanf(e, "%f,%f,%f", &r, &g, &b) == 3) wm->scatterColor = Color(r, g, b);
+                    }
                 } else if (cliffPack) {
                     // GLACIAL fjord: rock flour in suspension scatters, so the
                     // water is opaque turquoise-teal rather than a dark mirror.

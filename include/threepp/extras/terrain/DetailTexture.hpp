@@ -251,9 +251,26 @@ namespace threepp::terrain {
                         // period put the same features at 1.4 m and below,
                         // where the footprint averaged them into flat grey.
                         const auto s = banddetail::voronoi(u, v, 5, seed);
-                        const float crack = 1.f - math::smoothstep(0.f, 0.13f, s.f2 - s.f1);
+                        // Crack WIDTH varies along the net (hairline to open
+                        // joint): a uniform-width dark line on flat plates is
+                        // what made the 4 m blocks read as craquelure on a
+                        // painted wall from 150 m (netpen film, 2026-09-04).
+                        const float crackW = 0.05f + 0.14f * sampleLat(l8g, 8, u * 1.3f + 0.4f, v * 0.8f);
+                        const float crack = 1.f - math::smoothstep(0.f, crackW, s.f2 - s.f1);
+                        // Fine joint set (1.25 m blocks) + per-texel grain: the
+                        // close-range octaves. Under 200 m the 20 m texture's
+                        // 2 cm texels are on screen and a plate with nothing
+                        // inside it reads as plastic; from 600 m the mip chain
+                        // averages both away, so the far read is unchanged.
+                        const auto s3 = banddetail::voronoi(u, v, 16, seed + 3u);
+                        const float crack3 = 1.f - math::smoothstep(0.f, 0.20f, s3.f2 - s3.f1);
+                        const float grain = banddetail::bandHash(i, j, seed + 21u);
                         const float macro = sampleLat(l8, 8, u * 2.f, v * 0.10f);
-                        const float foliation = sampleLat(l24, 24, u * 5.f, v * 0.30f);
+                        // Foliation domain-warped by a low-frequency field so the
+                        // bands wave instead of hanging as straight columns (the
+                        // "pale vertical striping" on smooth panels, phase 2b).
+                        const float warp = 0.09f * (sampleLat(l8, 8, u * 0.7f + 0.3f, v * 0.7f) - 0.5f);
+                        const float foliation = sampleLat(l24, 24, u * 5.f + warp * 5.f, v * 0.30f);
                         const float fine = sampleLat(l24, 24, u * 11.f, v * 0.60f);
                         const float weather = sampleLat(l8, 8, u, v);
                         const float vein = math::smoothstep(
@@ -264,13 +281,17 @@ namespace threepp::terrain {
                         // fabric-like smear, raised past ~0.4 the 4 m Voronoi
                         // cells read as a uniform craquelure net (both looked
                         // at, 1:1, 2026-09-04). 0.30 punctuates the banding.
+                        // Plate offset (s.id) doubled from 0.12: blocks read as
+                        // slabs standing proud of each other, not as tiles.
                         h = std::clamp(0.52f + 0.34f * (macro - 0.5f) + 0.22f * (foliation - 0.5f) +
-                                               0.07f * (fine - 0.5f) + 0.12f * (s.id - 0.5f) -
+                                               0.07f * (fine - 0.5f) + 0.24f * (s.id - 0.5f) +
+                                               0.07f * (s3.id - 0.5f) - 0.08f * crack3 +
+                                               0.05f * (grain - 0.5f) -
                                                0.30f * crack - 0.16f * vein + 0.16f * lichen,
                                        0.f, 1.f);
                         id = 0.30f * weather + 0.24f * foliation + 0.24f * macro + 0.22f * s.id;
-                        r = 0.5f + 0.20f * crack + 0.18f * (weather - 0.5f) - 0.42f * vein -
-                            0.20f * lichen;
+                        r = 0.5f + 0.20f * crack + 0.08f * crack3 + 0.06f * (grain - 0.5f) +
+                            0.18f * (weather - 0.5f) - 0.42f * vein - 0.20f * lichen;
                         break;
                     }
                     case BandKind::Grass: {
