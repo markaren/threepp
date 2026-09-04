@@ -215,6 +215,13 @@ namespace threepp_py {
                                "Beer-Lambert tint per attenuation_distance of travel — the water colour lever.")
                 .def_readwrite("attenuation_distance", &MeshPhysicalMaterial::attenuationDistance,
                                "Distance (m) over which attenuation_color is applied once; smaller = murkier.")
+                .def_readwrite("scatter_color", &MeshPhysicalMaterial::scatterColor,
+                               "Single-scattering albedo weight per channel — what the medium puts BACK into "
+                               "the ray. Inert unless scatter_distance > 0.")
+                .def_readwrite("scatter_distance", &MeshPhysicalMaterial::scatterDistance,
+                               "Scattering mean free path (m), i.e. 1/sigma_s. 0 (default) = no in-scatter and "
+                               "the pure-absorption water body, bit-identical to before this field existed. "
+                               "Read by the Vulkan deferred water body only.")
                 .def_readwrite("clearcoat", &MeshPhysicalMaterial::clearcoat)
                 .def_readwrite("clearcoat_roughness", &MeshPhysicalMaterial::clearcoatRoughness)
                 // KHR_materials_specular. Unlike clearcoat (which the Vulkan

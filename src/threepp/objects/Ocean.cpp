@@ -16,7 +16,7 @@ namespace threepp {
         // path tracer / deferred renderer refract through with Beer-Lambert
         // absorption. Lifted from examples/vulkan/vulkan_ocean.cpp so the tuned
         // values now live in one first-party place.
-        std::shared_ptr<MeshPhysicalMaterial> makeOceanMaterial(bool pond) {
+        std::shared_ptr<MeshPhysicalMaterial> makeOceanMaterial(bool pond, bool fjord) {
             auto mat = MeshPhysicalMaterial::create();
             // Pure water has no diffuse pigment — the blue comes from
             // Beer-Lambert absorption through the medium, not albedo.
@@ -57,6 +57,21 @@ namespace threepp {
                 // veil ≈ one attenuation length of colour — green murk, not tar.
                 mat->thickness = 0.8f;
             }
+            // Glacial fjord: the turquoise is SCATTERED light, so this recipe
+            // brings absorption back toward physical (red gone in ~1 m, blue-
+            // green carried) and lets the in-scatter make it bright. Getting
+            // the same colour out of absorption alone needed attenuationDistance
+            // stretched to 4 m — clear-open-ocean clarity for water you cannot
+            // see a metre into. scatterDistance 5 m is a mean free path in the
+            // range measured for turbid glacial melt; scatterColor is the
+            // albedo weight, blue-green because rock flour scatters those
+            // wavelengths back before the water absorbs them.
+            if (fjord) {
+                mat->attenuationColor = Color(0.10f, 0.50f, 0.48f);
+                mat->attenuationDistance = 1.5f;
+                mat->scatterColor = Color(0.30f, 0.62f, 0.60f);
+                mat->scatterDistance = 5.0f;
+            }
             return mat;
         }
 
@@ -85,6 +100,7 @@ namespace threepp {
         const float scaleRef = std::max(sizeX, sizeZ);
         const bool pond = options.look == Look::Auto ? scaleRef < 100.f
                                                      : options.look == Look::Pond;
+        const bool fjord = options.look == Look::Fjord;
 
         const unsigned int resX = std::max<unsigned int>(2u, options.resolution);
         // Default row count keeps grid cells square-ish across the rectangle.
@@ -98,7 +114,7 @@ namespace threepp {
         auto geo = PlaneGeometry::create(sizeX, sizeZ, resX - 1u, resZ - 1u);
         geo->rotateX(-math::PI / 2.0f);
 
-        auto ocean = std::make_shared<Ocean>(geo, makeOceanMaterial(pond));
+        auto ocean = std::make_shared<Ocean>(geo, makeOceanMaterial(pond, fjord));
         ocean->halfExtent_ = scaleRef * 0.5f;
         // Non-square grids can't be derived from sqrt(vertexCount) — hand the
         // renderer the actual topology.

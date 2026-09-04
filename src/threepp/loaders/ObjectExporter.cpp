@@ -721,6 +721,8 @@ namespace {
         if (auto* m = dynamic_cast<MaterialWithAttenuation*>(&material)) {
             data["attenuationDistance"] = m->attenuationDistance;
             data["attenuationColor"] = hex(m->attenuationColor);
+            data["scatterDistance"] = m->scatterDistance;
+            data["scatterColor"] = hex(m->scatterColor);
         }
         if (auto* m = dynamic_cast<MaterialWithIridescence*>(&material)) {
             data["iridescence"] = m->iridescence;

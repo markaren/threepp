@@ -3400,6 +3400,8 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
             d.clearcoatRoughnessTexIndex = -1;
             d.attenuationColor[0] = d.attenuationColor[1] = d.attenuationColor[2] = 1.0f;
             d.attenuationDistance = 0.0f;
+            d.scatterColor[0] = d.scatterColor[1] = d.scatterColor[2] = 0.0f;
+            d.scatterDistance = 0.0f;// 0 = in-scatter off; shader keeps the old path
             d.emissiveTexIndex = -1;
             d.specularIntensity = 1.0f;
             d.specularColor[0] = d.specularColor[1] = d.specularColor[2] = 1.0f;
@@ -3561,6 +3563,11 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
                 d.attenuationColor[1] = att->attenuationColor.g;
                 d.attenuationColor[2] = att->attenuationColor.b;
                 d.attenuationDistance = att->attenuationDistance;
+                d.scatterColor[0] = att->scatterColor.r;
+                d.scatterColor[1] = att->scatterColor.g;
+                d.scatterColor[2] = att->scatterColor.b;
+                // Negative would make sigma_s negative (radiance sink); clamp.
+                d.scatterDistance = std::max(0.0f, att->scatterDistance);
             }
             if (auto* em = dynamic_cast<MaterialWithEnvMap*>(mat.get())) {
                 // The deferred path has no per-material env MAP — one scene

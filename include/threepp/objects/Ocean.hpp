@@ -48,9 +48,16 @@ namespace threepp {
         // absorption). Set explicitly to pin either look regardless of scale —
         // a small harbour basin that is really sea, or a big lake that should
         // read as freshwater.
+        // Fjord is the SCATTERING recipe: glacial/silty water whose turquoise
+        // comes from rock flour throwing skylight back at the eye, not from
+        // absorption. It is the only look that sets scatterColor/
+        // scatterDistance, so it is also the only one whose body arithmetic
+        // differs from before this enumerator existed (Vulkan deferred only —
+        // the GL water ignores the scatter fields).
         enum class Look { Auto,
                           Ocean,
-                          Pond };
+                          Pond,
+                          Fjord };
 
         struct Options {
             // Mesh extent in metres along local X. The LARGER of size/sizeZ

@@ -17,6 +17,26 @@ bool murkLive();
 vec3 applyMurkSky(vec3 dir);
 bool camPortWetDryEye();
 vec3 applyMurk(vec3 col, vec3 ro, vec3 hit);
+// The Henyey-Greenstein phase the fog/particle/cloud volumetrics all use — the
+// water column gets the SAME phase function, not a second one (deferred_shade_60).
+float hgPhase(float mu, float g);
+
+// ── Water-body IN-SCATTER calibration ───────────────────────────────────────
+// kSky ties the in-scatter's skylight source to the SAME scale the analytic
+// deep body already uses (`skyLum * 0.35` below), so the two terms are one
+// calibration, not two. A fully scattering column (single-scattering albedo
+// -> 1, leg >> 1/sigma_t) then in-scatters exactly the skylight the old body
+// showed at tint == 1 — it reproduces that brightness rather than adding a
+// second, independently scaled copy of it.
+const float kWaterInScatterSky = 0.35;
+// Forward-scattering water: suspended matter throws light along the ray far
+// more than back at it. 0.75 is the fog/cloud family's mid-forward value.
+const float kWaterInScatterG = 0.75;
+// The HG lobe peaks at 28x isotropic for g = 0.75 (mu -> 1), i.e. looking down
+// the sun's own refracted direction. Single scattering has no multiple-bounce
+// budget to spend that on, so the spike is capped — the same reasoning as the
+// glint loop's fireflyClamp, at the one place it can bite.
+const float kWaterInScatterPhaseMax = 8.0;
 
 // The murk is only the WATER BODY once it is dense enough to BE water. Below
 // this the scene is using setUnderwaterMurk as a haze/absorption stand-in, and
@@ -314,6 +334,29 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     const vec3  deepBody  = tint * (skyLum * 0.35 + lights.ambient) * depthFade;
     transmitColor = deepBody;
 
+    // ── VOLUME EXTINCTION (absorption + scattering) ──────────────────────────
+    // Everything from here to the in-scatter block is gated on
+    // pm.scatterDistance > 0.0, so a material that never sets it takes the
+    // byte-identical old arithmetic. sigma_a is read back out of the SAME
+    // Beer-Lambert the tint above uses — attenuationColor is the per-
+    // attenuationDistance transmittance, so sigma_a = -ln(att)/attDist [1/m]
+    // — which keeps one medium description, not two.
+    vec3 sigmaT = vec3(0.0);
+    vec3 sigmaS = vec3(0.0);
+    if (pm.scatterDistance > 0.0) {
+        const vec3 sigmaA = (pm.attenuationDistance > 0.0)
+                          ? -log(max(pm.attenuationColor, vec3(1e-4))) / pm.attenuationDistance
+                          : vec3(0.0);
+        sigmaS = pm.scatterColor / pm.scatterDistance;
+        // Floored: sigmaT divides below, and a channel with neither absorption
+        // nor scattering is a vacuum whose in-scatter is zero anyway.
+        sigmaT = max(sigmaA + sigmaS, vec3(1e-4));
+    }
+    // Length of the in-water leg for the single-scattering integral. The
+    // shallow-bottom probe below overwrites it with the real bottom distance
+    // when it finds one; -1 means "not probed yet".
+    float bodyLeg = -1.0;
+
     // 2) SHALLOW BOTTOM — the pond/shore path. Refract the view ray for real
     // and probe for geometry within the Beer-Lambert visibility range; a hit
     // (sand, rocks, a hull below the waterline) is shaded deterministically and
@@ -358,7 +401,14 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                     // View path + approximate sun path (vertical depth) through
                     // the column, Beer-Lambert per channel.
                     const float sunPath = dBot * (1.0 + clamp(-dRef.y, 0.0, 1.0));
-                    const vec3  Tbot    = pow(max(pm.attenuationColor, vec3(1e-6)),
+                    // With scattering live the column removes light by the FULL
+                    // extinction, not absorption alone: light scattered out of
+                    // the bottom ray is gone from it (it reappears in the
+                    // in-scatter term below, which is where that energy goes).
+                    // The else branch is the old expression, textually.
+                    const vec3  Tbot    = (pm.scatterDistance > 0.0)
+                                        ? exp(-sigmaT * sunPath)
+                                        : pow(max(pm.attenuationColor, vec3(1e-6)),
                                               vec3(sunPath / pm.attenuationDistance));
                     // The body veil builds up over the water column: SCALAR
                     // exponential saturation with a half-attenuation-length
@@ -369,9 +419,83 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                     // purpose: a per-channel weight would hue-shift the body.
                     const float bodyW = 1.0 - exp(-dBot / (0.5 * pm.attenuationDistance));
                     transmitColor = deepBody * bodyW + bottom * Tbot;
+                    bodyLeg = dBot;// the in-scatter integral stops at the floor
                 }
             }
         }
+    }
+
+    // ── SINGLE SCATTERING IN THE WATER COLUMN ────────────────────────────────
+    // The block above is pure Beer-Lambert: it can only ever REMOVE light from
+    // the column, so the transmitted side is at best a darkened skylight. That
+    // is why glacial and silty fjord water — bright turquoise precisely BECAUSE
+    // rock flour scatters skylight sideways into the eye — could only be faked
+    // by stretching attenuationDistance to non-physical values. This puts the
+    // light back IN.
+    //
+    // ONE expression for the in-water leg: the deep body and the shallow-bottom
+    // case differ only in the leg length handed to it (bodyLeg), never in the
+    // integral.
+    if (pm.scatterDistance > 0.0) {
+        // Refracted view leg — the same refract() the bottom probe uses. From
+        // the air side a transmitted ray always exists; the guard is for a
+        // degenerate normal only.
+        vec3 dRef = refract(-V, N, 1.0 / ior);
+        if (dot(dRef, dRef) < 1e-6) dRef = -N;
+        dRef = normalize(dRef);
+        // No bottom within reach → integrate to the visibility limit, the same
+        // 6-optical-depth budget the bottom probe budgets: past it the
+        // exponential below is within 0.3% of its saturated value.
+        const float legLen = (bodyLeg > 0.0)
+                           ? bodyLeg
+                           : 6.0 / max(max(sigmaT.r, sigmaT.g), sigmaT.b);
+
+        // Light ENTERING the column at this surface point. Both terms are
+        // Fresnel-transmitted (1-F) — what reflects off the surface is already
+        // accounted for in reflectColor.
+        //   • sky: the hemisphere is already integrated, so it is isotropic and
+        //     takes no phase factor. Scaled by kWaterInScatterSky against the
+        //     SAME skyLum the deep body uses (see the constant's note).
+        //   • sun: a delta light, so it gets the HG phase between the refracted
+        //     view leg and the refracted sun leg. Shadowed exactly as the
+        //     surface is — a cliff shadow on the water must darken the glow
+        //     under it, or the column lights up inside the shadow.
+        vec3 Ein = vec3(skyLum * kWaterInScatterSky) + lights.ambient;
+        const vec3 sunOrigIn = P + N * SHADOW_EPS;
+        for (uint i = 0u; i < lights.dirCount; ++i) {
+            const vec3  L   = normalize(lights.dirLights[i].direction);
+            const float ndl = dot(N, L);
+            if (ndl <= 0.0) continue;// sun below the surface plane: no transmitted beam
+            const float vis = doShadows ? shadowVis(sunOrigIn, L, 1e30) : 1.0;
+            if (vis <= 0.0) continue;
+            vec3 sunRefr = refract(-L, N, 1.0 / ior);
+            if (dot(sunRefr, sunRefr) < 1e-6) continue;
+            sunRefr = normalize(sunRefr);
+            const float phase = min(hgPhase(dot(dRef, sunRefr), kWaterInScatterG) * 4.0 * PI,
+                                    kWaterInScatterPhaseMax);// 1 == isotropic
+            Ein += lights.dirLights[i].color * (ndl * vis * cloudShadowSample(P) * phase);
+        }
+        Ein *= (1.0 - F);
+
+        // Source sigma_s·E_in attenuated by exp(-sigma_t·t), integrated over
+        // t in [0, legLen]:  (sigma_s/sigma_t)·E_in·(1 - exp(-sigma_t·legLen)).
+        // SATURATING by construction — looking straight down lengthens the leg
+        // but the term can never exceed the single-scattering albedo times the
+        // incident light, so there is no blow-up down the column.
+        const vec3 inScatter = (sigmaS / sigmaT) * Ein * (1.0 - exp(-sigmaT * legLen));
+
+        // NO DOUBLE COUNT. The analytic deepBody is itself a stand-in for the
+        // light that comes back out of a deep column — over a truly dark seabed
+        // pure absorption returns nothing, and `skyLum * 0.35` is the hand-fit
+        // that made deep water look lit at all. Now that the in-scatter is
+        // computed for real, the stand-in is faded out by exactly the fraction
+        // of extinction that IS scattering (the single-scattering albedo, as a
+        // scalar so the body's hue does not shift). A non-scattering medium
+        // keeps the old body whole; a strongly scattering one hands the job
+        // over to the physical term instead of stacking two copies of it.
+        const float ssAlbedo = clamp(dot(sigmaS / sigmaT, vec3(0.2126, 0.7152, 0.0722)),
+                                     0.0, 1.0);
+        transmitColor = transmitColor * (1.0 - ssAlbedo) + inScatter;
     }
     }
 

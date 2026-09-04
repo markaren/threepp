@@ -243,8 +243,9 @@ namespace threepp_py {
                          o.fftSize = fft_size;
                          if (look == "ocean") o.look = Ocean::Look::Ocean;
                          else if (look == "pond") o.look = Ocean::Look::Pond;
+                         else if (look == "fjord") o.look = Ocean::Look::Fjord;
                          else if (look != "auto")
-                             throw py::value_error("look must be 'auto', 'ocean' or 'pond'");
+                             throw py::value_error("look must be 'auto', 'ocean', 'pond' or 'fjord'");
                          return Ocean::create(o);
                      }),
                      py::arg("size") = 1000.0f, py::arg("resolution") = 512u,
@@ -263,7 +264,8 @@ namespace threepp_py {
                      "(a 1000 m ocean gets the classic 127/9.3 bands, a 16 m pond gets dm-scale "
                      "ripples); 0 disables a cascade, >0 pins it. Ponds also want wind_speed 2-5. "
                      "look picks the water material: 'auto' = pond recipe under 100 m, ocean above; "
-                     "'ocean'/'pond' pin it regardless of scale. fetch (m) = 0 is a fully developed sea "
+                     "'ocean'/'pond' pin it regardless of scale; 'fjord' is the glacial recipe whose turquoise "
+                     "comes from volume SCATTERING (Vulkan deferred only). fetch (m) = 0 is a fully developed sea "
                      "(long swell); 20e3-40e3 gives the shorter, steeper JONSWAP chop of a coastal sea "
                      "(see Params.fetch).")
                 .def("warp_toward", &Ocean::warpToward,

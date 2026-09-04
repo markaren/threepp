@@ -584,7 +584,14 @@ int main(int argc, char** argv) {
             Ocean::Options oo;
             oo.size = reg.worldSize * 1.2f;
             oo.resolution = 384;
-            oo.look = Ocean::Look::Ocean;// open sea — never the small-body pond recipe
+            // NT_SEA_SCATTER=1 opts the cliff pack into Ocean::Look::Fjord: the
+            // GLACIAL recipe, whose turquoise comes from volume in-scatter
+            // instead of a stretched attenuation distance (see below). Off by
+            // default so this demo's shot is unchanged; it is the A/B switch the
+            // water-body-scatter work is judged on.
+            const bool seaScatter = cliffPack && envF("NT_SEA_SCATTER", 0.f) > 0.5f;
+            oo.look = seaScatter ? Ocean::Look::Fjord
+                                 : Ocean::Look::Ocean;// open sea — never the small-body pond recipe
             // Beaufort 4-ish: Phillips amplitude ∝ V⁴ and the dominant swell
             // wavelength ∝ V², so below ~7 m/s the sea is glassy AND its short
             // chop falls under this sheet's ~25 m vertex spacing — reads dead
@@ -597,7 +604,13 @@ int main(int argc, char** argv) {
             oo.fftSize = 512;// half the default — a big calm sea needs less spectral detail; recovers FPS
             ocean = Ocean::create(oo);
             if (auto* wm = ocean->material()->as<MeshPhysicalMaterial>()) {
-                if (cliffPack) {
+                if (seaScatter) {
+                    // Look::Fjord already carries the recipe (attenuation back
+                    // near physical at 1.5 m + scatterColor/scatterDistance);
+                    // nothing to override here. NT_SEA_ATTEN still pins the
+                    // absorption length for A/B sweeps.
+                    wm->attenuationDistance = envF("NT_SEA_ATTEN", wm->attenuationDistance);
+                } else if (cliffPack) {
                     // GLACIAL fjord: rock flour in suspension scatters, so the
                     // water is opaque turquoise-teal rather than a dark mirror.
                     // The deferred body is tint = attenuationColor ^ (2·thickness
