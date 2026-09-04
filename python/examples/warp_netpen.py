@@ -585,6 +585,12 @@ if TERRAIN:
     ocean.warp.coef_a = 0.07
 ocean.material.attenuation_color = tp.Color(0.16, 0.30, 0.24)   # fjord water from above: dark green-grey, not tropical teal
 ocean.material.attenuation_distance = 2.5
+# Reflected GEOMETRY only. The shoreline forest was mirroring at full radiance: water
+# reflects with one hard mirror ray, so roughness blurs the reflected SKY and leaves
+# reflected terrain sharp, and Schlick drives F -> 1 at the grazing angles a shore
+# reflects at. This dims the reflected scene and leaves the sky, the horizon mirror
+# band and the sun glints at full Fresnel.
+ocean.material.specular_intensity = 0.55
 if "--no-ocean" not in sys.argv:
     scene.add(ocean)
 
@@ -1608,6 +1614,22 @@ def lift_at(t):
     return LIFT[0](t + FILM_T_OFF) - PATROL[0, :3] if LIFT[0] is not None and t < 0.0 else np.zeros(3)
 
 
+DESC_FLIP, DESC_TURN = -math.pi, 8.0                  # lowered nose-in, then it noses round onto the patrol
+
+
+def yaw_flip(t):
+    """Film only: hold a half-turn through the descent (patrol t < 0), smoothstepped out over
+    the first DESC_TURN seconds of the patrol -- zero slope at both ends, so nothing snaps
+    when the bake takes over. -pi and not +pi: the two are the same heading but differ in
+    which way they unwind, and the baked yaw sweeps -127 deg over that same window, so
+    negative rides with it at 22.3 deg/s (inside the vehicle's own YAW_RATE_MAX) while
+    positive fights it at 62.9 deg/s and swings the nose out past the wall and back."""
+    if LIFT[0] is None:                               # no crane path = no descent (the SHOT modes)
+        return 0.0
+    u = min(max(t / DESC_TURN, 0.0), 1.0)
+    return DESC_FLIP * (1.0 - u * u * (3.0 - 2.0 * u))
+
+
 rov_off = np.zeros(3)                                 # live push-back off the sagging cloth
 net_host = [None]                                     # last downloaded cloth positions (net_upload)
 ROV_STATS = {"min_d": float("inf"), "max_roll": 0.0, "max_pitch": 0.0}
@@ -1631,6 +1653,17 @@ _TEAR_RING = np.nonzero((net.cls == -1)
 # the ring's centroid sits 0.11 m inside the wall (a chord across 620 particles); take that
 # constant out so tear_now() is exactly TEAR_C at rest and only reports the real drift
 _TEAR_BIAS = TEAR_C - net.rest_host[_TEAR_RING].mean(0) if len(_TEAR_RING) else np.zeros(3)
+
+
+def tear_normal():
+    """Outward unit normal of the DEFORMED sheet at the hole (SVD of the same ring).
+    e_r is the rest meridian and is 9.6-13.6 deg off it once the current has the wall."""
+    pos = net_host[0]
+    if pos is None or not len(_TEAR_RING):
+        return e_r
+    q = pos[_TEAR_RING] - pos[_TEAR_RING].mean(0)
+    n = np.linalg.svd(q, full_matrices=False)[2][2]
+    return n if float(n @ e_r) > 0.0 else -n
 
 
 def tear_now():
@@ -1659,6 +1692,7 @@ def patrol_row(t):
 def rov_pose(t, dt=1.0 / 60.0):
     global rov_pos, rov_R, rov_thrust, rov_off
     x, y, z, yaw, pitch, roll, tf, tl, tv = patrol_row(t)
+    yaw += yaw_flip(t)                                # one place: mesh, rov_R, sonar frame, ROV cam, lamps
     base = np.array([x, y, z]) + lift_at(t)
     cand = base + rov_off
     d, q, _ = net_nearest(cand)
@@ -2095,30 +2129,40 @@ def boids(pos: wp.array(dtype=wp.vec3), vel: wp.array(dtype=wp.vec3),
     rad = wp.vec3(p[0], 0.0, p[2]) / wp.max(r, 1.0e-3)
     tan = wp.vec3(-rad[2], 0.0, rad[0])
     leaking = leak_t[i] >= 0.0 and t > leak_t[i] + uni[3][2]
-    near_tear = wp.length(p - tear) < 2.4
+    dh = p - tear                                     # e_r is now the LIVE sheet normal
+    ax = wp.dot(dh, e_r)                              # + is outboard of the sheet
+    off = wp.length(dh - e_r * ax)                    # offset from the hole centre, IN the sheet
     goal = wp.vec3(0.0, 0.0, 0.0)
     if leaking:
         acc = acc * 0.25
         pj = wp.vec3(0.0, pref[i][2], 0.0)
-        if r < pen_r:
-            if wp.length(p - tear) > 1.6:
-                goal = tear - e_r * 1.2 + pj
+        if ax < 0.0:
+            # The scatter a milling flock holds (~0.65 m) is the same size as the hole, so
+            # neither a tight gate nor a loose one works on its own: the leakers have to be
+            # made to CONVERGE. Far out they hold a spread staging point (pj is a per-fish
+            # vertical offset, up to 0.25 m, which is itself off-axis); once inside 0.9 m
+            # they drop the spread and aim at the hole centre exactly, so off collapses and
+            # the graded wall gate opens for them. Measured: 0 of 10 out before this.
+            if off > 0.90:
+                goal = tear - e_r * 1.1 + pj          # spread staging point, still milling
             else:
-                goal = tear + e_r * 1.5 + pj
+                goal = tear + e_r * 0.6               # dead on the axis: converge and go
         else:
             goal = tear + e_r * 6.0 + tan * 3.0 * pref[i][2]
         g = goal - p
-        want = wp.normalize(wp.vec3(g[0], 0.3 * g[1], g[2])) * 0.7    # a level run at the hole
-        acc += (want - v) * 1.4
+        want = wp.normalize(wp.vec3(g[0], 0.3 * g[1], g[2])) * 1.05   # a level run at the hole
+        acc += (want - v) * 2.4                        # firm: it has to beat the wall push on the way in
     else:
         want = tan * MILL_SPEED - rad * (r - pref[i][0]) * 0.45 + wp.vec3(0.0, (pref[i][1] - p[1]) * 0.45, 0.0)
         acc += (want - v) * 1.1
     dwall = pen_r - r
-    if not (leaking and near_tear):
-        if dwall > 0.0 and dwall < 2.2:
-            acc -= rad * (2.2 - dwall) * 4.0
-        if dwall <= 0.0 and dwall > -1.0:
-            acc += rad * (1.0 + dwall) * 6.0
+    wg = 1.0                                          # wall strength: 0 at the aperture, 1 off it
+    if leaking and ax > -1.2 and ax < 1.2:
+        wg = wp.min(wp.max((off - 0.22) / 0.78, 0.0), 1.0)
+    if dwall > 0.0 and dwall < 2.2:
+        acc -= rad * (2.2 - dwall) * 4.0 * wg
+    if dwall <= 0.0 and dwall > -1.0:
+        acc += rad * (1.0 + dwall) * 6.0 * wg
     if p[1] > -0.7:
         acc += wp.vec3(0.0, -6.0 * (p[1] + 0.7), 0.0)
     if p[1] < -pen_d + 1.0:
@@ -2224,7 +2268,7 @@ class School:
         self.out_n = wp.zeros(FISH_N * self.nv, dtype=wp.vec3, device=device)
 
     def step(self, t, dt, rov_pos, cam_pos):
-        self.uni.assign(np.asarray([rov_pos, tear_now(), e_r, [PEN_R, PEN_D, LEAK_T0[0]], cam_pos], np.float32))
+        self.uni.assign(np.asarray([rov_pos, tear_now(), tear_normal(), [PEN_R, PEN_D, LEAK_T0[0]], cam_pos], np.float32))
         wp.launch(boids, dim=FISH_N, device=device,
                   inputs=[self.pos, self.vel, self.pos2, self.vel2, self.yaw, self.pitch, self.roll, self.beat,
                           self.amp, self.brake, self.len, self.pref, self.leak, self.uni, FISH_N, t, dt])
@@ -2369,8 +2413,8 @@ motes.set_live_count(MOTE_CAP)
 scene.add(motes)
 
 # ---- sonar: Warp ray fan against a wp.Mesh of net + collar + fish ------------------------------
-SON_BEAMS, SON_VS, SON_BINS, SON_RANGE, SON_FOV = 256, 8, 512, 20.0, 130.0
-SON_W, SON_H, SON_VIEW = 512, 384, 4.0                  # 20 m of bins, 4 m on the display: the wall arc fills the fan
+SON_BEAMS, SON_VS, SON_BINS, SON_RANGE, SON_FOV, SON_EL = 256, 16, 512, 20.0, 130.0, 14.0
+SON_W, SON_H, SON_VIEW = 512, 384, 10.0                 # 20 m of bins, 10 m shown: the wall arc AND the milling band inboard
 
 
 @wp.kernel
@@ -2380,7 +2424,7 @@ def sonar(mesh: wp.uint64, mat: wp.array(dtype=int), refl: wp.array(dtype=float)
     i = tid // nvs
     j = tid - i * nvs
     az = (-0.5 * SON_FOV + SON_FOV * (float(i) + 0.5) / float(nb)) * wp.pi / 180.0
-    el = (-6.0 + 12.0 * (float(j) + 0.5) / float(nvs)) * wp.pi / 180.0
+    el = (-SON_EL + 2.0 * SON_EL * (float(j) + 0.5) / float(nvs)) * wp.pi / 180.0
     d = frame[1] * (wp.cos(el) * wp.cos(az)) + frame[2] * (wp.cos(el) * wp.sin(az)) + frame[3] * wp.sin(el)
     q = wp.mesh_query_ray(mesh, frame[0], d, rng)
     if q.result:
@@ -2446,7 +2490,7 @@ _bear = np.degrees(np.arctan2(_dx, np.maximum(_dy, 1e-6)))
 SON_VALID = (_r_m < SON_VIEW) & (np.abs(_bear) < 0.5 * SON_FOV) & (_dy > 0)
 SON_BEAM = np.clip(((_bear + 0.5 * SON_FOV) / SON_FOV * SON_BEAMS).astype(int), 0, SON_BEAMS - 1)
 SON_BIN = np.clip((_r_m / SON_RANGE * SON_BINS).astype(int), 0, SON_BINS - 1)
-SON_RINGS = SON_VALID & (np.abs(_r_m - np.round(_r_m)) < 0.0125) & (_r_m > 0.5)
+SON_RINGS = SON_VALID & (np.abs(_r_m - np.round(_r_m)) < 0.6 * SON_VIEW / (SON_H - 24)) & (_r_m > 0.5)
 SON_TICK = SON_VALID & (np.abs(_dx) < 0.8) & (_r_m > 0.5)
 SON_EDGE = ((np.abs(np.abs(_bear) - 0.5 * SON_FOV) < 0.35) & (_r_m < SON_VIEW) & (_dy > 0)) | ((np.abs(_r_m - SON_VIEW) < 0.03) & (np.abs(_bear) < 0.5 * SON_FOV))
 _k = np.linspace(0, 1, 256)[:, None]
@@ -2466,7 +2510,7 @@ SON_OVER[SON_RINGS | SON_EDGE] = (70, 42, 14, 255)
 SON_OVER[SON_TICK] = np.maximum(SON_OVER[SON_TICK], np.uint8([120, 80, 30, 255]))
 SON_OVER = np.ascontiguousarray(SON_OVER[::-1])
 SON_FRAME_I = np.flatnonzero(SON_FRAME[::-1])
-SON_TILT = -15.0                                        # mount pitch, deg: the 12 deg band sits on the hole, below the top flap
+SON_TILT = -6.0                                         # mount pitch, deg: a 28 deg band that reaches the school as well as the hole
 
 
 def sonar_step(frame_i):
@@ -2897,6 +2941,7 @@ APPROACH = {}
 def rov_at(tf):
     """Baked ROV at film time tf (no live clearance): pos, fwd, inboard."""
     x, y, z, yaw = patrol_row(tf - FILM_T_OFF)[:4]
+    yaw += yaw_flip(tf - FILM_T_OFF)
     p = np.array([x, y, z]) + lift_at(tf - FILM_T_OFF)
     return p, np.array([math.cos(yaw), 0.0, -math.sin(yaw)]), -np.array([p[0], 0.0, p[2]]) / np.hypot(p[0], p[2])
 
@@ -2975,7 +3020,7 @@ def build_approach():
 
 
 def cam_approach(u, t):
-    hud_park(t >= T_FOLLOW - 0.5)
+    hud_park(T_WL + 1.0 <= t <= FILM_T_OFF + 8.0 or t >= T_FOLLOW - 0.5)
     eye = APPROACH["eye"](t)
     if DRONE_PATH is not None and DRONE_LIVE[0]:
         # it flies the whole cut: on station it is still in frame behind the sweep, and it
