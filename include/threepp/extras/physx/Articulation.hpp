@@ -101,6 +101,45 @@ namespace threepp {
             link_->addForce(toPxVec3(v) / dt, ::physx::PxForceMode::eFORCE);
         }
 
+        // Pure torque about the link's centre of mass (N·m). eFORCE for the same
+        // reason addForce uses it — a link rejects the impulsive modes.
+        void addTorque(const Vector3& v) { link_->addTorque(toPxVec3(v), ::physx::PxForceMode::eFORCE); }
+
+        // Force applied at a WORLD point rather than at the centre of mass.
+        //
+        // addForce() alone is a force through the COM: it accelerates the link and
+        // produces exactly ZERO torque about its own joint, so it can never drive an
+        // articulation the way a real load does. Anything that pulls, pushes or rests
+        // on a body at an offset — a cable over a pulley, a fingertip contact, a
+        // thruster on a boom — needs the offset moment too, which is the whole
+        // content of this function:
+        //
+        //   tau = (worldPos - comWorld) x force
+        //
+        // Same decomposition PxRigidBodyExt::addForceAtPos performs; spelled out here
+        // because that helper takes a PxRigidBody& and defaults to modes a link
+        // rejects, and because the COM lookup is the part callers get wrong (the
+        // moment arm is measured from the CENTRE OF MASS, not the link origin and not
+        // the joint anchor — for a capsule phalanx those differ by half its length).
+        //
+        // Accumulates: several calls in one substep sum, as PhysX force accumulation
+        // always does, and the whole accumulator is cleared by the next simulate().
+        void addForceAtPos(const Vector3& force, const Vector3& worldPos) {
+            using namespace ::physx;
+            const PxVec3 f = toPxVec3(force);
+            const PxVec3 com = link_->getGlobalPose().transform(link_->getCMassLocalPose().p);
+            link_->addForce(f, PxForceMode::eFORCE);
+            link_->addTorque((toPxVec3(worldPos) - com).cross(f), PxForceMode::eFORCE);
+        }
+
+        // World-space position of a point given in this link's ACTOR frame. The
+        // conversion a tendon via-point needs every substep, and the one place the
+        // actor-frame convention (the frame PxArticulationAttachment::setRelativeOffset
+        // also uses) is written down.
+        [[nodiscard]] Vector3 worldPoint(const Vector3& localOffset) const {
+            return fromPxVec3(link_->getGlobalPose().transform(toPxVec3(localOffset)));
+        }
+
         // Operate on this joint's actual motion axis (eTWIST for revolute, eX for
         // prismatic) so the accessors are correct for both joint types.
         void setDriveTarget(float t) { joint()->setDriveTarget(axis_, t); }
@@ -110,6 +149,9 @@ namespace threepp {
 
         [[nodiscard]] ::physx::PxArticulationLink* raw() const { return link_; }
         [[nodiscard]] ::physx::PxTransform creationPose() const { return creationPose_; }
+        // This joint's motion axis (eTWIST for revolute, eX for prismatic). A fixed
+        // tendon binds a specific axis, so it has to be able to ask.
+        [[nodiscard]] ::physx::PxArticulationAxis::Enum axis() const { return axis_; }
 
     private:
         ::physx::PxArticulationJointReducedCoordinate* joint() const {

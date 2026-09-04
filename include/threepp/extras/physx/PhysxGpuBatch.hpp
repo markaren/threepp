@@ -129,7 +129,26 @@ namespace threepp {
                 case Write::eROOT_GLOBAL_POSE: return 7;
                 case Write::eROOT_LINEAR_VELOCITY:
                 case Write::eROOT_ANGULAR_VELOCITY: return 3;
-                default: return maxDofs;
+                // The four tendon write types are NOT sized by the DOF count:
+                // PxDirectGPUAPI.h:118-121 gives their blocks as maxFixedTendons,
+                // maxFixedTendons*maxFixedTendonJoints, maxSpatialTendons and
+                // maxSpatialTendons*maxSpatialTendonAttachments respectively, and their
+                // elements are multi-float structs (PxGpuFixedTendonData is 8 floats),
+                // not one float per slot. A catch-all `return maxDofs` here does not
+                // fail — it hands PhysX a plausibly-sized, wrongly-shaped block and the
+                // garbage reads as physics. Refuse instead; whoever wants batched
+                // tendon actuation has to teach this class the tendon counts first.
+                case Write::eFIXED_TENDON:
+                case Write::eFIXED_TENDON_JOINT:
+                case Write::eSPATIAL_TENDON:
+                case Write::eSPATIAL_TENDON_ATTACHMENT:
+                    throw std::runtime_error(
+                            "PhysxGpuBatch: tendon write types are not supported - their block size is a "
+                            "tendon/attachment count, not the DOF count (PxDirectGPUAPI.h:118-121). Add the "
+                            "per-batch tendon counts before writing them.");
+                default:
+                    throw std::runtime_error(
+                            "PhysxGpuBatch: unhandled articulation write type - refusing to guess its block size");
             }
         }
 

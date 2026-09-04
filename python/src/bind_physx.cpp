@@ -26,8 +26,10 @@
 
 #include "threepp/core/Object3D.hpp"
 #include "threepp/extras/physx/Articulation.hpp"
+#include "threepp/extras/physx/ArticulationTendon.hpp"
 #include "threepp/extras/physx/Joint.hpp"
 #include "threepp/extras/physx/PhysxGpuBatch.hpp"
+#include "threepp/extras/physx/TendonCable.hpp"
 #include "threepp/extras/physx/PhysxSoftBody.hpp"
 #include "threepp/extras/physx/PhysxVehicle.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
@@ -284,6 +286,18 @@ namespace threepp_py {
                 .def_property_readonly("joint_position", &ArticulationLink::jointPosition, "Joint angle (radians).")
                 .def_property_readonly("joint_velocity", &ArticulationLink::jointVelocity, "Joint angular velocity (rad/s).")
                 .def("add_force", &ArticulationLink::addForce, py::arg("force"), "Apply an external force (N) to this link.")
+                .def("add_torque", &ArticulationLink::addTorque, py::arg("torque"),
+                     "Apply an external torque (N·m) about this link's centre of mass.")
+                .def("add_force_at_pos", &ArticulationLink::addForceAtPos, py::arg("force"), py::arg("world_pos"),
+                     "Apply an external force (N) at a WORLD point instead of at the centre of mass. add_force "
+                     "alone acts through the COM and so produces zero torque about this link's own joint — it "
+                     "cannot drive the articulation the way an offset load does. This adds the moment "
+                     "(world_pos - centre_of_mass) × force, which is what a cable over a pulley, a fingertip "
+                     "contact or a thruster on a boom actually applies. Note the arm is measured from the CENTRE "
+                     "OF MASS, not the link origin or the joint anchor.")
+                .def("world_point", &ArticulationLink::worldPoint, py::arg("local_offset"),
+                     "World position of a point given in this link's ACTOR frame — the same frame a spatial "
+                     "tendon attachment's relative_offset uses.")
                 .def("add_impulse", &ArticulationLink::addImpulse, py::arg("impulse"),
                      "Apply an external impulse (kg·m/s) — e.g. a random shove. PhysX takes no impulse on an "
                      "articulation link, so this goes in as the force that carries the same momentum through one "
@@ -416,6 +430,162 @@ namespace threepp_py {
                      "Per add-order joint, its low-level DOF slot in the direct-GPU joint buffers "
                      "(PhysX cache order != add-order). Use to map a GPU-trained policy back to the "
                      "CPU getters: obs_gpu[dof_order[i]] = cpu[i]; cpu_target[i] = gpu_target[dof_order[i]].");
+
+        // --- Tendons -----------------------------------------------------------
+        // Both tendon types are owned by their articulation ("When an articulation is
+        // released, its attached tendons are automatically released"), so every handle
+        // here is non-owning and every constructor carries keep_alive<1,2> to stop the
+        // articulation being collected out from under it.
+        py::class_<SpatialAttachment>(m, "SpatialAttachment",
+                                      "One attachment point of a SpatialTendon, pinned at an offset in a link's "
+                                      "actor frame. rest_length and the limits are LEAF-ONLY — PhysX silently "
+                                      "ignores them on an interior attachment, so setting one here raises "
+                                      "instead of leaving a mis-built routing looking configured.")
+                .def_property_readonly("is_leaf", &SpatialAttachment::isLeaf)
+                .def_property("coefficient", &SpatialAttachment::coefficient, &SpatialAttachment::setCoefficient,
+                              "Scale on this segment's contribution to the accumulated tendon length.")
+                .def_property("relative_offset", &SpatialAttachment::relativeOffset, &SpatialAttachment::setRelativeOffset,
+                              "The attachment point in its link's ACTOR frame.")
+                .def_property("rest_length", &SpatialAttachment::restLength, &SpatialAttachment::setRestLength,
+                              "Rest length of the bilateral spring for the sub-tendon ending here (leaf only).")
+                .def("set_taut_length", &SpatialAttachment::setTautLength, py::arg("length"),
+                     "Configure this leaf as a PULL-ONLY cable of the given taut length: low limit -inf (a cable "
+                     "never pushes), high limit `length`. Force appears only once the tendon is longer than this, "
+                     "and is exactly zero when slack. Pair with stiffness=0 and limit_stiffness=k on the tendon.")
+                .def("set_limits", &SpatialAttachment::setLimits, py::arg("low"), py::arg("high"))
+                .def_property_readonly("limits", &SpatialAttachment::limits);
+
+        py::class_<SpatialTendon>(m, "SpatialTendon",
+                                  "A geometric tendon: a tree of attachment points whose coefficient-weighted "
+                                  "segment lengths sum to the tendon length. MUST be built before "
+                                  "Articulation.finalize() — PhysX forbids creating one on a scene-resident "
+                                  "articulation.\n\n"
+                                  "CAVEAT: a sub-tendon applies force only at its leaf and root links, along "
+                                  "the root-to-leaf CHORD; interior attachments set the length but exert no "
+                                  "force. So a single multi-attachment tendon does NOT reproduce the transverse "
+                                  "pulley reaction a real routed cable applies, and its moment arms distal of "
+                                  "the first joint are fabricated. For mechanically real routing use one "
+                                  "two-attachment tendon per segment, where the chord IS the segment.")
+                .def(py::init<Articulation&>(), py::arg("articulation"), py::keep_alive<1, 2>())
+                .def("add_attachment",
+                     [](SpatialTendon& t, const ArticulationLink& link, const Vector3& local_offset,
+                        const py::object& parent, float coefficient) {
+                         const SpatialAttachment* p = parent.is_none() ? nullptr : parent.cast<const SpatialAttachment*>();
+                         return t.addAttachment(p, link, local_offset, coefficient);
+                     },
+                     py::arg("link"), py::arg("local_offset"), py::arg("parent") = py::none(),
+                     py::arg("coefficient") = 1.f,
+                     "Attach to `link` at `local_offset` in its ACTOR frame. parent=None makes it the root.")
+                .def_property("stiffness", &SpatialTendon::stiffness, &SpatialTendon::setStiffness,
+                              "Bilateral spring on the length. Leave 0 for a cable: a nonzero stiffness makes "
+                              "the tendon PUSH when it is shorter than its rest length.")
+                .def_property("damping", &SpatialTendon::damping, &SpatialTendon::setDamping,
+                              "Documented as acting on both the spring and the limits, so it is not known to be "
+                              "one-sided. Leave 0 for a cable and damp at the joint instead.")
+                .def_property("limit_stiffness", &SpatialTendon::limitStiffness, &SpatialTendon::setLimitStiffness,
+                              "Axial stiffness of the cable in the pull-only construction.")
+                .def_property("offset", &SpatialTendon::offset,
+                              [](SpatialTendon& t, float o) { t.setOffset(o); },
+                              "The actuator: added to the accumulated length, so raising it makes the tendon act "
+                              "shorter, i.e. pull.")
+                .def_property_readonly("num_attachments", &SpatialTendon::numAttachments);
+
+        py::class_<FixedTendon::TendonJoint>(m, "TendonJoint", "One joint DOF bound into a FixedTendon.")
+                .def("set_coefficient",
+                     [](FixedTendon::TendonJoint& j, float c, float recip) {
+                         j.setCoefficient(::physx::PxArticulationAxis::eTWIST, c, recip);
+                     },
+                     py::arg("coefficient"), py::arg("recip_coefficient"),
+                     "Re-scale this DOF's contribution. Whether this takes effect on a scene-resident "
+                     "articulation is undocumented — verify with a measured torque change, not a return code.");
+
+        py::class_<FixedTendon>(m, "FixedTendon",
+                                "A joint-space tendon: length is the linear combination sum(c_i * q_i) of the "
+                                "joint positions it spans, so a spring on that length couples those joints. No "
+                                "geometry, so its 'moment arms' are the coefficients — prescribed rather than "
+                                "emergent, which is the trade against SpatialTendon. The joints must be directly "
+                                "connected in the articulation. Build before Articulation.finalize().")
+                .def(py::init<Articulation&>(), py::arg("articulation"), py::keep_alive<1, 2>())
+                .def("add_joint",
+                     [](FixedTendon& t, const ArticulationLink& link, float coefficient,
+                        const py::object& recip_coefficient, const py::object& parent) {
+                         const FixedTendon::TendonJoint* p =
+                                 parent.is_none() ? nullptr : parent.cast<const FixedTendon::TendonJoint*>();
+                         const float recip = recip_coefficient.is_none() ? coefficient
+                                                                        : recip_coefficient.cast<float>();
+                         return t.addJoint(p, link, coefficient, recip);
+                     },
+                     py::arg("link"), py::arg("coefficient"), py::arg("recip_coefficient") = py::none(),
+                     py::arg("parent") = py::none(),
+                     "Bind `link`'s INBOUND joint into the tendon. `coefficient` is c_i in L = sum(c_i q_i) — "
+                     "dimensionally a moment arm for a revolute DOF. `recip_coefficient` scales the response "
+                     "applied back to this DOF; the SDK calls 1/coefficient 'commonly expected', but power "
+                     "balance (F·L̇ = sum(tau_i·q̇_i) with L = sum(c_i q_i)) gives tau_i = F·c_i, so the "
+                     "energetically consistent multiplier is c_i. Defaults to `coefficient` for that reason.")
+                .def_property("stiffness", &FixedTendon::stiffness, &FixedTendon::setStiffness)
+                .def_property("damping", &FixedTendon::damping, &FixedTendon::setDamping)
+                .def_property("limit_stiffness", &FixedTendon::limitStiffness, &FixedTendon::setLimitStiffness)
+                .def_property("rest_length", &FixedTendon::restLength, &FixedTendon::setRestLength)
+                .def_property("offset", &FixedTendon::offset, [](FixedTendon& t, float o) { t.setOffset(o); })
+                .def_property_readonly("limits", &FixedTendon::limits)
+                .def("set_limits", &FixedTendon::setLimits, py::arg("low"), py::arg("high"))
+                .def("open_limits", &FixedTendon::openLimits,
+                     "Set limits wide enough never to clamp. The SDK's DEFAULT limit parameters are "
+                     "(+FLT_MAX, -FLT_MAX) — the header itself calls that 'an invalid configuration that can "
+                     "only work if stiffness is zero'. A spring-driven fixed tendon left at the default is a "
+                     "silent no-op: it produces no force at all, and nothing warns.")
+                .def_property_readonly("num_joints", &FixedTendon::numJoints);
+
+        py::class_<TendonCable> cable(m, "TendonCable",
+                                      "A tendon that behaves like a CABLE: routed over via points, pull-only, "
+                                      "with a real tension number and optional routing friction.\n\n"
+                                      "Neither PhysX tendon is a routed cable, measured on a two-link finger "
+                                      "(python/examples/tendon_probe.py): a spatial tendon's interior "
+                                      "attachments set the length but exert no force, so its generalized force "
+                                      "matches the gradient taken with the via point FROZEN to 0.07 deg and "
+                                      "sits 21.06 deg from a real cable; a fixed tendon has no geometry at "
+                                      "all. This applies the true frictionless-pulley force at every via "
+                                      "point, so torque = -T dL/dq exactly -- measured at 0.02% of magnitude "
+                                      "and 0.001 deg of direction against the analytic gradient.\n\n"
+                                      "Runs on the CPU physics path only: PhysX rejects link forces under "
+                                      "direct-GPU, so batched GPU RL would need the SDK tendons instead.");
+        py::enum_<TendonCable::Mode>(cable, "Mode")
+                .value("TENSION", TendonCable::Mode::Tension,
+                       "The command IS the cable tension (N) - an ideal motor with a torque loop closed "
+                       "around it. Cannot go unstable: there is no stiffness to explode.")
+                .value("LENGTH", TendonCable::Mode::Length,
+                       "The command is the SPOOLED length (m); tension follows from how far the route is "
+                       "stretched past it, T = k*(L - L_cmd) + c*Ldot, floored at zero. A real "
+                       "series-elastic drivetrain - cable stretch is a property of actual tendons.");
+        cable.def(py::init<PhysxWorld&, TendonCable::Mode>(), py::arg("world"),
+                  py::arg("mode") = TendonCable::Mode::Tension, py::keep_alive<1, 2>())
+                .def("add_via_point", &TendonCable::addViaPoint, py::arg("link"), py::arg("local_offset"),
+                     "Add a via point on `link` at `local_offset` in the link's ACTOR frame, in order from "
+                     "the actuator end to the insertion. First and last are the anchor and the insertion; "
+                     "everything between is a pulley.")
+                .def("set_tension", &TendonCable::setTension, py::arg("tension"),
+                     "TENSION mode: cable tension in newtons. Negative is clamped to zero rather than "
+                     "rejected - a cable asked to push simply goes slack.")
+                .def("set_spool_length", &TendonCable::setSpoolLength, py::arg("length"),
+                     "LENGTH mode: the spooled length in metres. Pull the cable by REDUCING it.")
+                .def("set_stiffness", &TendonCable::setStiffness, py::arg("k"))
+                .def("set_damping", &TendonCable::setDamping, py::arg("c"))
+                .def("set_friction", &TendonCable::setFriction, py::arg("mu"),
+                     "Capstan friction at the pulleys. A cable wrapping through angle theta comes out "
+                     "carrying T*exp(-mu*theta) - which is exactly why tendon hands are hard to control "
+                     "precisely: the tension reaching the fingertip is not the tension the motor applied, "
+                     "and the shortfall depends on posture. 0 (default) is the ideal cable; sheathed "
+                     "tendons are typically 0.1-0.4.")
+                .def_property_readonly("length", &TendonCable::length,
+                                       "Total routed length (m), from the live link poses.")
+                .def_property_readonly("tension", &TendonCable::tension,
+                                       "Tension at the ACTUATOR end (N) - the value actually applied last "
+                                       "substep, not a reconstruction. PhysX exposes no tendon force readback "
+                                       "at all, so with an SDK tendon this could only ever be a prediction.")
+                .def_property_readonly("tip_tension", &TendonCable::tipTension,
+                                       "Tension at the INSERTION end (N). Equals tension when friction is 0; "
+                                       "the ratio is what the routing swallowed.")
+                .def_property_readonly("num_via_points", &TendonCable::numViaPoints);
 
         // One maximal-coordinate constraint between two RigidBodies (or one
         // body and the world). The joint MUST die before its world (its
