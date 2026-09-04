@@ -718,7 +718,26 @@ int main(int argc, char** argv) {
         so.centerX = controls.target.x;
         so.centerZ = controls.target.z;
         so.halfExtent = envF("NT_FOREST_EXTENT", 1100.f);
-        const auto sites = vegetation::detectTreeSites(pack.canopy, pack.grid, so);
+        // NT_TREELINE=<m> pins the treeline (9999 = effectively off);
+        // NT_FOREST_NOGATE=1 restores the phase-3 detector exactly — no treeline,
+        // no neighbourhood support, no tightened high-elevation slope gate — so
+        // the "trees on the plateau" A/B needs no stash.
+        so.treelineElevation = envF("NT_TREELINE", 0.f);
+        if (envSet("NT_FOREST_NOGATE")) {
+            so.treelineElevation = 1e9f;
+            so.minNeighborSupport = 0;
+            so.highSlopeElevation = 1e9f;
+        }
+        vegetation::CanopySiteReport srep;
+        const auto sites = vegetation::detectTreeSites(pack.canopy, pack.grid, so, &srep);
+        std::cout << "[norway] canopy sites: " << srep.peaks << " CHM peaks -> "
+                  << sites.size() << " sites (rejected: support " << srep.rejectedSupport
+                  << ", treeline " << srep.rejectedTreeline << ", high-slope "
+                  << srep.rejectedHighSlope << ", slope " << srep.rejectedSlope
+                  << ", ground " << srep.rejectedGround << "); treeline "
+                  << srep.treelineElevation << " m +-" << so.treelineFeather
+                  << ", highest site " << srep.highestSite << " m\n"
+                  << std::flush;
 
         // NT_FOREST_LOD=0 restores the phase-2 single-tier planting (the A/B).
         // The default is the camera-following cell LOD: the old path splits its
@@ -741,6 +760,16 @@ int main(int argc, char** argv) {
             species[s].far = {vegetation::makeForestTreeVariant(sp, base + 11u, true, lodForest),
                               vegetation::makeForestTreeVariant(sp, base + 12u, true, lodForest),
                               vegetation::makeForestTreeVariant(sp, base + 13u, true, lodForest)};
+            // The LOD colour match, in numbers: the near tier's measured mean leaf
+            // albedo, and what the far tier rendered before / after the match.
+            const auto& n = species[s].near.front().leafMeanLinear;
+            const auto& fr = species[s].far.front().leafMeanRaw;
+            const auto& fa = species[s].far.front().leafMeanLinear;
+            std::cout << "[norway] leaf mean (linear) species " << s << ": card "
+                      << n.x << "," << n.y << "," << n.z << "  blob was " << fr.x << ","
+                      << fr.y << "," << fr.z << " -> now " << fa.x << "," << fa.y << ","
+                      << fa.z << "\n"
+                      << std::flush;
         }
 
         auto forest = Group::create();
@@ -772,14 +801,16 @@ int main(int argc, char** argv) {
             lo.cap = static_cast<int>(envF("NT_FOREST_CAP", 40000.f));
             lo.cellSize = envF("NT_FOREST_CELL", 128.f);
             lo.l0Distance = envF("NT_FOREST_L0", 300.f);
-            lo.l1Distance = envF("NT_FOREST_L1", 800.f);
+            lo.l1Distance = envF("NT_FOREST_L1", 1200.f);
             // NT_FOREST_L2MESH=1 swaps the thinned blob level for the CHM canopy
             // SURFACE (buildCanopySurface). Kept as an A/B, not the default: it
             // is faster and closes the canopy on gentle ground, but on this
             // pack's benched wall the slope gate leaves tread-wide strips that
             // read as a staircase of lit green trays.
             lo.buildCanopyMesh = envSet("NT_FOREST_L2MESH");
-            lo.l2Keep = static_cast<int>(envF("NT_FOREST_L2KEEP", 4.f));
+            // 1 = no L2 tier. The 1-in-4 thinning WAS the density pop the user saw
+            // at the far boundary, and turning it off costs 113 -> 89 fps here.
+            lo.l2Keep = static_cast<int>(envF("NT_FOREST_L2KEEP", 1.f));
             lo.mesh.seaLevel = reg.seaLevel;
             lo.mesh.maxSlopeDeg = so.maxSlopeDeg;// same gate as the sites, or the
             lo.mesh.minGroundHeight = so.minGroundHeight;// handoff grows new forest

@@ -81,6 +81,43 @@ namespace threepp::vegetation {
         float maxSlopeDeg = 65.f;
         float slopeEpsilon = 3.f;// metres, central-difference arm for the slope
 
+        // ── Treeline ─────────────────────────────────────────────────────
+        // A CHM does not know what a tree is; it knows DOM - DTM. Above the real
+        // treeline that difference is registration noise on rock, and this pack
+        // shows it plainly (share of land cells with canopy >= 2.5 m, geiranger):
+        //
+        //   600-700 m  57.1%   isolated 0.9%     700-800 m  40.1%   2.8%
+        //   800-900 m  15.2%   isolated 5.9%     900-1000 m  1.5%  13.8%
+        //   1000-1100  0.6%    isolated 17.5%    1200+       0.1%  19-36%
+        //
+        // The forest ends at ~850 m; everything above is single cells on 45-100°
+        // rock. Without an elevation term the detector plants them, and the shot
+        // grows spruce on the plateau.
+        //
+        // <= 0 ⇒ measure it from the grids: the lowest elevation band above the
+        // canopy peak whose canopy fraction drops under `treelineFraction`.
+        float treelineElevation = 0.f;
+        // The line is not a contour: it dips into gullies and rides ridges.
+        // World-anchored value noise, so it does not swim when the ROI moves.
+        float treelineFeather = 60.f;// metres, ±
+        float treelineFraction = 0.10f;
+        float treelineBand = 50.f;// metres per histogram bucket
+        // Inside the feather the stand goes to krummholz: canopy heights are
+        // pulled toward this so the species rule picks scrub, not spruce.
+        float treelineScrubHeight = 5.f;
+
+        // Neighbourhood support: a real crown sits in a stand. A peak needs at
+        // least this many of its 8 neighbours carrying canopy >= supportHeight.
+        // A registration spike on a cliff has none, at ANY elevation.
+        int minNeighborSupport = 5;
+        float supportHeight = 2.f;
+
+        // Above `highSlopeElevation` the CHM noise floor rises with the terrain
+        // (45-100% of the "canopy" cells up there sit on slopes > 45°), so the
+        // slope gate tightens.
+        float highSlopeElevation = 600.f;
+        float highMaxSlopeDeg = 40.f;
+
         // Ground gate: the sea sheet and any carved bathymetry sit at/below this.
         float seaLevel = 0.f;
         float minGroundHeight = 0.5f;// metres above seaLevel
@@ -91,12 +128,49 @@ namespace threepp::vegetation {
         float halfExtent = 1e9f;
     };
 
+    // What the gates did — so a demo can print the treeline it measured and the
+    // highest tree it actually planted instead of asserting the forest stopped.
+    struct CanopySiteReport {
+        int peaks = 0;             // CHM local maxima over the ROI
+        int rejectedSupport = 0;   // isolated spikes (no stand around them)
+        int rejectedTreeline = 0;  // above the feathered treeline
+        int rejectedHighSlope = 0; // steep AND high
+        int rejectedSlope = 0;     // the plain slope gate
+        int rejectedGround = 0;    // sea / bathymetry
+        float treelineElevation = 0.f;// measured or supplied
+        float highestSite = 0.f;      // ground elevation of the top planted site
+    };
+
+    namespace detail {
+
+        // World-anchored value noise, ~`wavelength` metres. Anchored so the
+        // treeline does not swim when the region of interest moves with the
+        // camera: the same (x, z) always gets the same offset.
+        inline float valueNoise2D(float x, float z, float wavelength) {
+            const auto hash = [](int a, int b) {
+                std::uint32_t h = static_cast<std::uint32_t>(a) * 374761393u +
+                                  static_cast<std::uint32_t>(b) * 668265263u;
+                h = (h ^ (h >> 13)) * 1274126177u;
+                return static_cast<float>((h ^ (h >> 16)) & 0xffffffu) / 16777215.f;
+            };
+            const float gx = x / wavelength, gz = z / wavelength;
+            const int ix = static_cast<int>(std::floor(gx)), iz = static_cast<int>(std::floor(gz));
+            const float fx = gx - static_cast<float>(ix), fz = gz - static_cast<float>(iz);
+            const float sx = fx * fx * (3.f - 2.f * fx), sz = fz * fz * (3.f - 2.f * fz);
+            const float a = hash(ix, iz) + (hash(ix + 1, iz) - hash(ix, iz)) * sx;
+            const float b = hash(ix, iz + 1) + (hash(ix + 1, iz + 1) - hash(ix, iz + 1)) * sx;
+            return (a + (b - a) * sz) * 2.f - 1.f;// [-1, 1]
+        }
+
+    }// namespace detail
+
     // Local maxima of `canopy`, gated by `dem` slope/height, thinned by crown size.
     // Both grids must share the same frame (a pack's CHM and DEM do by
     // construction). Pure: neither grid is modified.
     inline std::vector<TreeSite> detectTreeSites(const terrain::HeightGrid& canopy,
                                                  const terrain::HeightGrid& dem,
-                                                 const CanopySiteOptions& o) {
+                                                 const CanopySiteOptions& o,
+                                                 CanopySiteReport* report = nullptr) {
         std::vector<TreeSite> out;
         if (!canopy.valid() || !dem.valid()) return out;
 
@@ -122,6 +196,64 @@ namespace threepp::vegetation {
         const int iz0 = clampIx(o.centerZ - o.halfExtent), iz1 = clampIx(o.centerZ + o.halfExtent);
 
         const float cosMax = std::cos(o.maxSlopeDeg * math::DEG2RAD);
+        const float cosHigh = std::cos(o.highMaxSlopeDeg * math::DEG2RAD);
+
+        // ── Treeline, measured from the pack ─────────────────────────────
+        // Canopy fraction per elevation band over the ROI: walk up from the band
+        // that holds the most forest and take the first band whose fraction falls
+        // under `treelineFraction`. That is the elevation where "canopy" stops
+        // being a stand and starts being noise, and it is a property of THIS
+        // terrain — a coastal pack and an inland one do not share a treeline.
+        float treeline = o.treelineElevation;
+        if (treeline <= 0.f) {
+            const float band = std::max(10.f, o.treelineBand);
+            std::vector<int> land, wood;
+            land.reserve(64);
+            wood.reserve(64);
+            for (int iz = iz0; iz <= iz1; iz += 2) {
+                for (int ix = ix0; ix <= ix1; ix += 2) {
+                    const float g = dem.sampleBilinear(gx(ix), gz(iz));
+                    if (g < o.seaLevel + o.minGroundHeight) continue;
+                    const auto b = static_cast<size_t>(std::max(0.f, g) / band);
+                    if (b >= land.size()) {
+                        land.resize(b + 1, 0);
+                        wood.resize(b + 1, 0);
+                    }
+                    ++land[b];
+                    if (at(ix, iz) >= o.minHeight) ++wood[b];
+                }
+            }
+            // Start above the band with the most forest (a band with 5 land cells
+            // and 1 tree is 20% and means nothing, so require a real sample).
+            size_t peakBand = 0;
+            float best = 0.f;
+            for (size_t b = 0; b < land.size(); ++b) {
+                if (land[b] < 200) continue;
+                const float f = static_cast<float>(wood[b]) / static_cast<float>(land[b]);
+                if (f > best) {
+                    best = f;
+                    peakBand = b;
+                }
+            }
+            // A treeline only means something when there IS a stand to end. If
+            // even the best band is under the threshold (a synthetic grid, a
+            // pack with a handful of trees, a single flat elevation), the gate
+            // stays inert rather than cutting the forest at its own elevation —
+            // which is what a naive "first band under the threshold" walk does
+            // when the whole grid sits in ONE band.
+            treeline = 1e9f;
+            if (best >= o.treelineFraction) {
+                for (size_t b = peakBand + 1; b < land.size(); ++b) {
+                    if (land[b] < 200) continue;
+                    const float f = static_cast<float>(wood[b]) / static_cast<float>(land[b]);
+                    if (f < o.treelineFraction) {
+                        treeline = static_cast<float>(b) * band;
+                        break;
+                    }
+                }
+            }
+        }
+        if (report) report->treelineElevation = treeline;
 
         std::vector<TreeSite> peaks;
         peaks.reserve(4096);
@@ -144,11 +276,62 @@ namespace threepp::vegetation {
                         }
                     }
                 if (!isMax) continue;
+                if (report) ++report->peaks;
+
+                // Neighbourhood support. A crown 5 m across covers most of a 3×3
+                // window on a 1 m grid; a DOM/DTM misregistration on a cliff edge
+                // is one cell wide. This is the cheapest separator there is, and
+                // unlike the elevation gate it is true everywhere.
+                if (o.minNeighborSupport > 0) {
+                    int sup = 0;
+                    for (int dz = -1; dz <= 1; ++dz)
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            if (dx == 0 && dz == 0) continue;
+                            if (at(ix + dx, iz + dz) >= o.supportHeight) ++sup;
+                        }
+                    if (sup < o.minNeighborSupport) {
+                        if (report) ++report->rejectedSupport;
+                        continue;
+                    }
+                }
 
                 const float x = gx(ix), z = gz(iz);
-                if (dem.slopeNy(x, z, o.slopeEpsilon) < cosMax) continue;// too steep to trust
-                if (dem.sampleBilinear(x, z) < o.seaLevel + o.minGroundHeight) continue;
-                peaks.push_back({x, z, h});
+                const float g = dem.sampleBilinear(x, z);
+                if (g < o.seaLevel + o.minGroundHeight) {
+                    if (report) ++report->rejectedGround;
+                    continue;
+                }
+
+                // Treeline, feathered. Above the top of the feather nothing grows;
+                // inside it the stand thins to krummholz (the height pull below).
+                const float line = treeline + o.treelineFeather *
+                                                      detail::valueNoise2D(x, z, 140.f);
+                if (g > line) {
+                    if (report) ++report->rejectedTreeline;
+                    continue;
+                }
+
+                const float ny = dem.slopeNy(x, z, o.slopeEpsilon);
+                if (ny < cosMax) {// too steep to trust the CHM at all
+                    if (report) ++report->rejectedSlope;
+                    continue;
+                }
+                if (g > o.highSlopeElevation && ny < cosHigh) {
+                    if (report) ++report->rejectedHighSlope;
+                    continue;
+                }
+
+                // Krummholz: the last 2·feather metres under the line grade the
+                // canopy height down to scrub, so the species rule (which keys on
+                // height) picks the low bright thicket, not a 15 m spruce.
+                float hh = h;
+                const float toLine = line - g;
+                if (o.treelineFeather > 0.f && toLine < 2.f * o.treelineFeather) {
+                    const float t = std::clamp(toLine / (2.f * o.treelineFeather), 0.f, 1.f);
+                    hh = std::min(h, o.treelineScrubHeight +
+                                             t * std::max(0.f, h - o.treelineScrubHeight));
+                }
+                peaks.push_back({x, z, hh});
             }
         }
         if (peaks.empty()) return out;
@@ -192,6 +375,11 @@ namespace threepp::vegetation {
             bins[key(bx, bz)].push_back(static_cast<int>(out.size()));
             out.push_back(p);
         }
+        if (report) {
+            for (const auto& s : out)
+                report->highestSite = std::max(report->highestSite,
+                                               dem.sampleBilinear(s.x, s.z));
+        }
         return out;
     }
 
@@ -211,6 +399,12 @@ namespace threepp::vegetation {
         // Prototype height in metres, measured from the geometry — the divisor
         // that turns a measured canopy height into an instance scale.
         float height = 10.f;
+        // Mean leaf albedo this prototype actually renders, in LINEAR space:
+        // material colour × mean vertex tint × (atlas mean, card path only).
+        // `leafMeanRaw` is the same product BEFORE the LOD colour match — kept
+        // so a demo can print what the calibration moved.
+        Vector3 leafMeanLinear{1.f, 1.f, 1.f};
+        Vector3 leafMeanRaw{1.f, 1.f, 1.f};
     };
 
     namespace detail {
@@ -220,6 +414,78 @@ namespace threepp::vegetation {
             g->computeBoundingBox();
             return g->boundingBox ? g->boundingBox->max().y : 0.f;
         }
+
+        // ── LOD colour calibration ──────────────────────────────────────
+        // The near tier and the far tier arrive at a leaf colour by completely
+        // different routes, and giving them the same `leafColor` does NOT make
+        // them match:
+        //
+        //   card:  leaf ATLAS (drawn with shading, veins and a dark stem, so its
+        //          mean is well under the flat hint) × baked canopy occlusion /
+        //          burial vertex colour, material colour white.
+        //   blob:  flat material colour (sRGB→linear) × a sparser canopy field's
+        //          vertex tint — fewer, bigger puffs occlude each other less, so
+        //          the same tint term lands much brighter.
+        //
+        // Two multiplies out of three differ, which is why the far spruce read
+        // lime against a near spruce that read almost black. The fix is to
+        // MEASURE both products and divide: the blob's material colour becomes
+        // whatever makes its mean equal the card's, in linear space.
+
+        // Mean of a geometry's per-vertex colour attribute (a linear multiplier).
+        inline Vector3 vertexColorMean(const std::shared_ptr<BufferGeometry>& g) {
+            Vector3 m(1.f, 1.f, 1.f);
+            if (!g) return m;
+            const auto* a = g->getAttribute<float>("color");
+            if (!a || a->itemSize() < 3 || a->count() == 0) return m;
+            const auto& v = a->array();
+            const int is = a->itemSize();
+            double r = 0, gg = 0, b = 0;
+            const size_t n = static_cast<size_t>(a->count());
+            for (size_t i = 0; i < n; ++i) {
+                r += v[i * is + 0];
+                gg += v[i * is + 1];
+                b += v[i * is + 2];
+            }
+            m.set(static_cast<float>(r / n), static_cast<float>(gg / n),
+                  static_cast<float>(b / n));
+            return m;
+        }
+
+        // Mean of the texels of an RGBA leaf atlas that SURVIVE the alpha cutout,
+        // converted to LINEAR. Not alpha-weighted: with alphaTest the shader keeps
+        // a texel whole or discards it, so a coverage weighting would count
+        // half-transparent fringe texels that never reach the g-buffer.
+        inline Vector3 atlasMeanLinear(const std::shared_ptr<DataTexture>& tex, float alphaTest) {
+            Vector3 m(1.f, 1.f, 1.f);
+            if (!tex) return m;
+            const auto& px = tex->image().data<unsigned char>();
+            if (px.size() < 4) return m;
+            const auto toLin = [](unsigned char c) {
+                const float s = static_cast<float>(c) / 255.f;
+                return s <= 0.04045f ? s / 12.92f : std::pow((s + 0.055f) / 1.055f, 2.4f);
+            };
+            const auto cut = static_cast<unsigned char>(std::clamp(alphaTest, 0.f, 1.f) * 255.f);
+            double r = 0, g = 0, b = 0;
+            size_t n = 0;
+            for (size_t i = 0; i + 3 < px.size(); i += 4) {
+                if (px[i + 3] < cut) continue;
+                r += toLin(px[i + 0]);
+                g += toLin(px[i + 1]);
+                b += toLin(px[i + 2]);
+                ++n;
+            }
+            if (n == 0) return m;
+            m.set(static_cast<float>(r / static_cast<double>(n)),
+                  static_cast<float>(g / static_cast<double>(n)),
+                  static_cast<float>(b / static_cast<double>(n)));
+            return m;
+        }
+
+        // The near tier's measured mean leaf albedo per species, in linear space.
+        // Defined below makeForestTreeVariant (it builds one card prototype per
+        // species to measure), memoised: three extra tree builds, once.
+        Vector3 cardLeafReference(TreeSpecies sp);
 
     }// namespace detail
 
@@ -240,6 +506,13 @@ namespace threepp::vegetation {
         applyPreset(sp == TreeSpecies::Spruce ? 1 : 2, tp);// 1 = Norway spruce, 2 = birch
         tp.seed = seed;
 
+        // SPECIES COLOUR FIRST, for every tier. It used to live inside the
+        // card-only block below, so the blob spruce silently kept the preset's
+        // brighter green and the 300 m LOD boundary cut a lime patch out of a
+        // dark forest. A species has one leaf colour; the tiers differ in how
+        // they SHADE it, and that is what the calibration at the bottom equalises.
+        if (sp == TreeSpecies::Spruce) tp.leafColor = {0.11f, 0.28f, 0.09f};
+
         if (sp == TreeSpecies::Spruce && !cheapBlob) {
             // Slim serrated conifer: height ≈ 12.8 m, width ≈ 3.8 m, whorl shelves
             // close enough to overlap over the bole (the fjord-demo silhouette).
@@ -256,7 +529,6 @@ namespace threepp::vegetation {
             tp.leafSize = 0.75f;
             tp.leafDensity = 0.92f;
             tp.leafClumping = 0.f;
-            tp.leafColor = {0.11f, 0.28f, 0.09f};// darker than the birches
         }
         if (sp != TreeSpecies::Spruce) {
             tp.barkColor = {0.72f, 0.71f, 0.67f};// mute the preset's pure white
@@ -340,26 +612,71 @@ namespace threepp::vegetation {
                 MeshStandardMaterial::Params{}.color(Color::white).roughness(0.85f).metalness(0.f));
         // Backlit canopies glow through instead of going flat-dark (deferred).
         v.leafMat->translucencyColor = Color(0.50f, 0.80f, 0.28f);
-        v.leafMat->translucency = cheapBlob ? 0.35f : 0.5f;
+        // Equal across the tiers: translucency is a second albedo term on a
+        // backlit crown, and 0.35 vs 0.5 put a visible brightness step in the
+        // handoff even once the diffuse means matched.
+        v.leafMat->translucency = 0.5f;
+        const Vector3 vcMean = detail::vertexColorMean(v.leafGeo);
         if (cheapBlob) {
             // leafColor is an sRGB hint; material->color is LINEAR working space.
             // Without the conversion the blobs render ~4× too bright and read
             // "always lit".
-            v.leafMat->color = Color(tp.leafColor[0], tp.leafColor[1], tp.leafColor[2])
+            const Color srgb = Color(tp.leafColor[0], tp.leafColor[1], tp.leafColor[2])
                                        .convertSRGBToLinear();
+            v.leafMeanRaw.set(srgb.r * vcMean.x, srgb.g * vcMean.y, srgb.b * vcMean.z);
+
+            // Match the near tier's measured mean. Divide out THIS prototype's own
+            // vertex tint, so the correction also removes the seed-to-seed and
+            // L1-vs-L2 brightness drift (a coarser skeleton buries itself less and
+            // would otherwise be brighter again).
+            const Vector3 ref = detail::cardLeafReference(sp);
+            const auto solve = [](float want, float tint, float fallback) {
+                return tint > 1e-4f ? std::clamp(want / tint, 0.f, 1.f) : fallback;
+            };
+            v.leafMat->color = Color(solve(ref.x, vcMean.x, srgb.r),
+                                     solve(ref.y, vcMean.y, srgb.g),
+                                     solve(ref.z, vcMean.z, srgb.b));
             v.leafMat->vertexColors = true;// canopy tint gradient baked per-vertex
+            v.leafMeanLinear.set(v.leafMat->color.r * vcMean.x,
+                                 v.leafMat->color.g * vcMean.y,
+                                 v.leafMat->color.b * vcMean.z);
         } else {
             // The atlas grid must be the one the cards were UV'd for
             // (TreeParams::leafAtlasCells) or every card samples the wrong cell.
-            v.leafMat->map = (tp.leafStyle == LeafStyle::Frond)
+            auto atlas = (tp.leafStyle == LeafStyle::Frond)
                     ? makeNeedleFrondTexture(256, seed, tp.leafColor, tp.leafAtlasCells)
                     : makeLeafClusterTexture(256, seed, tp.leafColor, tp.leafShape, 8, tp.leafAtlasCells);
+            v.leafMat->map = atlas;
             v.leafMat->alphaTest = kLeafAlphaTest;
             v.leafMat->side = Side::Double;
             v.leafMat->vertexColors = true;
+            const Vector3 am = detail::atlasMeanLinear(atlas, kLeafAlphaTest);
+            v.leafMeanLinear.set(am.x * vcMean.x, am.y * vcMean.y, am.z * vcMean.z);
+            v.leafMeanRaw.copy(v.leafMeanLinear);
         }
         return v;
     }
+
+    namespace detail {
+
+        // One canonical card prototype per species, measured once. The seed is
+        // fixed so the target does not move between runs or between the L1 and L2
+        // prototypes of the same forest; per-seed variation in the near tier is
+        // ±2-3% and is not what the LOD boundary shows.
+        inline Vector3 cardLeafReference(TreeSpecies sp) {
+            static const std::array<Vector3, 3> means = [] {
+                std::array<Vector3, 3> m{};
+                for (int s = 0; s < 3; ++s)
+                    m[static_cast<size_t>(s)] =
+                            makeForestTreeVariant(static_cast<TreeSpecies>(s), 90001u, false)
+                                    .leafMeanLinear;
+                return m;
+            }();
+            const auto i = static_cast<size_t>(sp);
+            return i < means.size() ? means[i] : Vector3(0.05f, 0.12f, 0.03f);
+        }
+
+    }// namespace detail
 
     // ── Builder ─────────────────────────────────────────────────────────────
 
@@ -778,7 +1095,14 @@ namespace threepp::vegetation {
         // silhouette in three dimensions. So beyond `l1Distance` keep the blobs
         // and drop 3 in 4, widening the survivors to hold the canopy MASS — the
         // thing the user said "did wonders for the look".
-        int l2Keep = 4;          // keep 1 instance in l2Keep
+        //
+        // ...and then measured: dropping 3 in 4 IS a density pop at `l1Distance`,
+        // and the widening does not hide it. On this pack the whole L2 tier buys
+        // 113 fps against 89 with it off — both far above the 55 fps floor — so
+        // the default is now 1, which adds no third level at all and removes the
+        // second LOD boundary from the shot. Raise it when a scene actually needs
+        // the headroom (2 is 85 fps against 65 at a 2 km fly-out).
+        int l2Keep = 1;          // keep 1 instance in l2Keep; 1 = no L2 level
         float l2ScaleBoost = 1.4f;// survivors widen to close the gaps
         bool buildCanopyMesh = false;
         CanopyMeshOptions mesh;
