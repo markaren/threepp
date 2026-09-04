@@ -114,6 +114,8 @@ int main(int argc, char** argv) {
     float fovArg = 55.f;// --fov <deg>: a long lens compresses a fjord wall the
                         // way the reference photo does; 55° makes it recede.
     bool noRoadBias = false;// disable the road-aware LOD refinement (A/B compare)
+    std::string viewName;   // --view <name>: a named camera/sun preset (see below)
+    bool haveFov = false;
     std::string profilePath;// --road-profile <csv>: dump the height field along the longest road and exit
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -122,7 +124,10 @@ int main(int argc, char** argv) {
         else if (a == "--seqstart" && i + 1 < argc) seqStart = std::atoi(argv[++i]);
         else if (a == "--seqstep" && i + 1 < argc) seqStep = std::atoi(argv[++i]);
         else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
-        else if (a == "--fov" && i + 1 < argc) fovArg = static_cast<float>(std::atof(argv[++i]));
+        else if (a == "--fov" && i + 1 < argc) {
+            fovArg = static_cast<float>(std::atof(argv[++i]));
+            haveFov = true;
+        } else if (a == "--view" && i + 1 < argc) viewName = argv[++i];
         else if (a == "--no-road-bias") noRoadBias = true;
         else if (a == "--road-profile" && i + 1 < argc) profilePath = argv[++i];
         else if (a == "--cam" && i + 1 < argc) {
@@ -146,6 +151,34 @@ int main(int argc, char** argv) {
                 std::cerr << "[norway] --cam needs 6 comma-separated floats: x,y,z,tx,ty,tz\n";
             }
         } else if (!a.empty() && a[0] != '-') packArg = a;
+    }
+    // ── named views ───────────────────────────────────────────────────────────
+    // A shot worth judging has to be repeatable, and a 6-float --cam is not a
+    // name. `reference` is the geiranger fjord-wall framing the realism plan is
+    // judged against: drone height (150 m over the water), a long lens, and the
+    // sun raking in from the image LEFT low enough that the wall's own relief
+    // puts its right half in shadow. Distance is 950 m rather than the photo's
+    // ~650 m because THIS wall is 570 m tall against the photo's ~400 m — the
+    // angular size, not the metre count, is what has to match. --cam / --fov /
+    // NT_SUN_AZ / NT_SUN_EL still win when given explicitly.
+    float sunAzDeg = 215.f, sunElDeg = 34.f;
+    bool viewSun = false;// a view preset owns the sun: don't re-aim it at the HDRI's
+    if (!viewName.empty()) {
+        if (viewName == "reference") {
+            if (!haveCam) {
+                haveCam = true;
+                camPosArg.set(1000.f, 150.f, -1470.f);   // over the fjord
+                camTargetArg.set(1000.f, 117.f, -520.f);// 2° down: the shoreline
+                                                        // lands ~1/5 up the frame,
+                                                        // so the wall stays the subject
+            }
+            if (!haveFov) fovArg = 35.f;// long lens: the wall must not recede
+            sunAzDeg = 118.f;           // from +X / -Z = upper LEFT of this frame
+            sunElDeg = 26.f;            // low enough to rake the foliation
+            viewSun = true;
+        } else {
+            std::cerr << "[norway] unknown --view '" << viewName << "' (known: reference)\n";
+        }
     }
     if (packArg.empty()) {
         if (const char* env = std::getenv("THREEPP_REGION_PACK")) packArg = env;
@@ -338,8 +371,12 @@ int main(int argc, char** argv) {
             }
             tileOpts.bandRepeat = bands.repeat;
             tileOpts.bandRoughness = bands.roughness;
-            tileOpts.bandStrength = 0.8f;
-            tileOpts.bandNormalScale = 1.4f;// relief lighting carries the depth read
+            // A wall gets the band layer HOT: the macro splat under it is baked
+            // in XZ and therefore smears vertically on a near-vertical face, so
+            // the triplanar band is the only layer that can put structure there
+            // — it has to out-shout the smear, not politely modulate it.
+            tileOpts.bandStrength = cliffPack ? 1.0f : 0.8f;
+            tileOpts.bandNormalScale = cliffPack ? 2.2f : 1.4f;// relief lighting carries the depth read
             tileOpts.bandRoughStrength = 0.6f;
         }
         // Legacy cm-scale detail layer — the fallback wherever bands are off
@@ -547,11 +584,15 @@ int main(int argc, char** argv) {
                 if (cliffPack) {
                     // GLACIAL fjord: rock flour in suspension scatters, so the
                     // water is opaque turquoise-teal rather than a dark mirror.
-                    // Short attenuation distance = the light is absorbed before
-                    // it reaches anything below, which is what makes the colour
-                    // read as the WATER's own and not the seabed's.
-                    wm->attenuationColor = Color(0.055f, 0.42f, 0.38f);
-                    wm->attenuationDistance = envF("NT_SEA_ATTEN", 0.75f);
+                    // The deferred body is tint = attenuationColor ^ (2·thickness
+                    // / attenuationDistance) with Ocean's thickness = 2, so the
+                    // EXPONENT is the knob that matters: 0.75 m gave 5.3 and
+                    // powered the colour down to (2e-7, 0.010, 0.006) — black
+                    // water, the "dark mirror" of the phase-1 crops, and the
+                    // reason the knobs looked inert. 4 m ⇒ exponent 1, i.e. the
+                    // body IS the attenuation colour, lit by skylight.
+                    wm->attenuationColor = Color(0.10f, 0.50f, 0.48f);
+                    wm->attenuationDistance = envF("NT_SEA_ATTEN", 4.0f);
                 } else {
                     wm->attenuationColor = Color(0.045f, 0.13f, 0.16f);// dark Nordic fjord water
                     wm->attenuationDistance = 1.9f;
@@ -574,7 +615,7 @@ int main(int argc, char** argv) {
     {
         // NT_SUN_AZ / NT_SUN_EL override the analytic sun direction (for aligning
         // it to the HDRI's baked sun disk — A/B of Bug B symptom 1).
-        const float az = envF("NT_SUN_AZ", 215.f) * kDeg2Rad, el = envF("NT_SUN_EL", 34.f) * kDeg2Rad;
+        const float az = envF("NT_SUN_AZ", sunAzDeg) * kDeg2Rad, el = envF("NT_SUN_EL", sunElDeg) * kDeg2Rad;
         sun->position.set(std::cos(el) * std::sin(az), std::sin(el), std::cos(el) * std::cos(az));
         sun->position.multiplyScalar(std::max(reg.worldSize, 2000.f));
     }
@@ -661,7 +702,7 @@ int main(int argc, char** argv) {
         // raking heading is a deliberate artistic choice and the HDRI sun would push
         // the valley into shadow. NT_SUN_AZ/EL (if set) keep the manual override.
 #ifdef THREEPP_WITH_VULKAN
-        if (!sunAligned && coastal && vk && vk->envSunFound() &&
+        if (!sunAligned && coastal && vk && vk->envSunFound() && !viewSun &&
             !envSet("NT_SUN_AZ") && !envSet("NT_SUN_EL")) {
             const Vector3 d = vk->envSunDirection();// unit vector TOWARD the sun
             if (d.length() > 0.5f) {

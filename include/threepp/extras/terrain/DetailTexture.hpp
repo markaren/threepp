@@ -182,7 +182,7 @@ namespace threepp::terrain {
                 // stays below the 0.02 "reptile scale" threshold that turned
                 // the generic rock band purple at mid distance. The extra
                 // roughness contrast is what separates wet veins from dry face.
-                if (defC) albedoContrast = 0.34f;
+                if (defC) albedoContrast = 0.55f;// wall-scale bands must read at 1 km, not whisper
                 if (defN) normalStrength = 6.5f;
                 if (defR) roughContrast = 0.60f;
                 if (defH) chroma = 0.012f;
@@ -242,20 +242,34 @@ namespace threepp::terrain {
                         //     gives them their sub-metre structure and gloss.
                         // Pale weathering + rare lichen specks lift the mean so
                         // the face is not uniformly dark.
+                        // The band's world period is 20 m (repeat 0.05/m, see
+                        // makeTerrainBandSet), so the u-multipliers below ARE the
+                        // world scales: ×2 → 10 m banding, ×5 → 4 m foliation,
+                        // ×11 → 1.8 m grain, Voronoi 5 → 4 m joint blocks. A
+                        // wall pixel is ~0.5 m from the shot camera, so every
+                        // one of these survives the mip chain; the old 7 m
+                        // period put the same features at 1.4 m and below,
+                        // where the footprint averaged them into flat grey.
                         const auto s = banddetail::voronoi(u, v, 5, seed);
                         const float crack = 1.f - math::smoothstep(0.f, 0.13f, s.f2 - s.f1);
+                        const float macro = sampleLat(l8, 8, u * 2.f, v * 0.10f);
                         const float foliation = sampleLat(l24, 24, u * 5.f, v * 0.30f);
                         const float fine = sampleLat(l24, 24, u * 11.f, v * 0.60f);
                         const float weather = sampleLat(l8, 8, u, v);
                         const float vein = math::smoothstep(
                                 0.70f, 0.95f, sampleLat(l8g, 8, u * 3.f, v * 0.12f));
                         const float lichen = banddetail::bandHash(i, j, seed + 7u) > 0.988f ? 1.f : 0.f;
-                        h = std::clamp(0.52f + 0.20f * (foliation - 0.5f) + 0.10f * (fine - 0.5f) +
-                                               0.10f * (s.id - 0.5f) - 0.30f * crack - 0.12f * vein +
-                                               0.18f * lichen,
+                        // Crack weight is the wall's whole legibility at 1 km:
+                        // dropped to 0.18 the face went back to a smooth
+                        // fabric-like smear, raised past ~0.4 the 4 m Voronoi
+                        // cells read as a uniform craquelure net (both looked
+                        // at, 1:1, 2026-09-04). 0.30 punctuates the banding.
+                        h = std::clamp(0.52f + 0.34f * (macro - 0.5f) + 0.22f * (foliation - 0.5f) +
+                                               0.07f * (fine - 0.5f) + 0.12f * (s.id - 0.5f) -
+                                               0.30f * crack - 0.16f * vein + 0.16f * lichen,
                                        0.f, 1.f);
-                        id = 0.35f * weather + 0.35f * foliation + 0.30f * s.id;
-                        r = 0.5f + 0.30f * crack + 0.18f * (weather - 0.5f) - 0.42f * vein -
+                        id = 0.30f * weather + 0.24f * foliation + 0.24f * macro + 0.22f * s.id;
+                        r = 0.5f + 0.20f * crack + 0.18f * (weather - 0.5f) - 0.42f * vein -
                             0.20f * lichen;
                         break;
                     }
@@ -387,9 +401,24 @@ namespace threepp::terrain {
         o.seed = seed;
         o.dim = 512;// metre-scale periods need cm-scale texels (cracks, blades)
         s.band[0] = makeBandMaps(BandKind::Grass, o);
-        s.band[1] = makeBandMaps(rockKind, o);
         s.band[2] = makeBandMaps(BandKind::Scree, o);
         s.band[3] = makeBandMaps(BandKind::Snow, o);
+        if (rockKind != BandKind::Cliff) {
+            s.band[1] = makeBandMaps(rockKind, o);
+        } else {
+            // A WALL is the one surface whose structure is metres, not
+            // centimetres: foliation banding, joint blocks and seepage veins
+            // read at 1-20 m. The generic 7 m rock period puts all of that
+            // below a distant wall pixel's footprint, which is exactly why the
+            // band layer contributed nothing to a 1 km cliff crop (measured
+            // 2026-09-04). 20 m period at 1024 px keeps 2 cm texels, so the
+            // close-up is not softer than the generic rock band; stochastic
+            // tiling is what makes the long period safe from visible repeats.
+            DetailMapOptions co = o;
+            co.dim = 1024;
+            s.band[1] = makeBandMaps(BandKind::Cliff, co);
+            s.repeat[1] = 0.05f;
+        }
         return s;
     }
 
