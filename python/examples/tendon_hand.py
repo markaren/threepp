@@ -71,10 +71,15 @@ Run:
 
 import argparse
 import math
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
-
 import threepp as tp
+
+
 
 DT = 1.0 / 240.0
 
@@ -134,7 +139,16 @@ FDS_DISTAL = 0.38                 # FDS insertion standoff, as a fraction of A3
 FDP_PP = 0.18                     # flexor pulley along the proximal phalanx
 FDP_MP = 0.45                     # ... and along the middle phalanx
 
-PALM_Z = -0.008                   # palm box centre, offset radially to cover the thenar
+PALM_Z = -0.001                   # palm box centre
+
+# The whole hand's orientation rule lives in these four vectors. A finger runs distally
+# with its pad volar; the thumb leaves the wrist obliquely and pronated so its pad faces
+# the fingers, which is the only reason opposition exists.
+FINGER_BONE = (1.0, 0.0, 0.0)
+FINGER_PAD = (0.0, -1.0, 0.0)
+THUMB_CMC = (0.026, -0.016, -0.042)
+THUMB_BONE = (0.62, -0.45, -0.64)
+THUMB_PAD = (0.15, -0.35, 0.92)
 
 DENSITY = 1100.0                  # kg/m^3, hand soft tissue + bone
 
@@ -146,10 +160,87 @@ JOINT_DAMP_MAX = 0.5              # N.m
 JOINT_FRICTION = 0.0008           # N.m of stiction, per joint
 
 
-def skin(colour=0xC8A088, roughness=0.75):
+
+# --------------------------------------------------------------------------------
+# Orientation. ONE rule for every segment in the hand, fingers and thumb alike.
+#
+# A link's frame is built from two vectors: the BONE AXIS it runs along, and the
+# direction its PAD faces. CapsuleGeometry runs along its own +Y, so local +Y is the
+# bone axis; local +X is the pad direction; local +Z completes the right-handed set.
+# Two consequences fall straight out and are used everywhere below:
+#
+#     flexion axis   =  cross(bone, pad)        the joint that curls the pad inward
+#     abduction axis =  -pad                    the joint that swings it sideways
+#
+# For a finger (bone +X, pad volar -Y) that yields a capsule rotated -90 deg about Z and
+# a flexion axis of -Z, which is exactly what the fingers were built with by hand before
+# this existed. For the THUMB it is the whole difference between a thumb and a fifth
+# finger: a real thumb leaves the wrist obliquely -- distal AND volar AND radial -- and
+# is pronated about its own axis so its pad faces the fingers. Built parallel to the
+# fingers in the palm plane, as this model first was, it reads as five identical digits
+# and can only ever pinch by luck.
+# --------------------------------------------------------------------------------
+
+
+def _unit(v):
+    v = np.asarray(v, dtype=float)
+    n = np.linalg.norm(v)
+    return v / n if n > 1e-12 else v
+
+
+def frame(bone, pad):
+    """Columns are the link's local +X (pad), +Y (bone), +Z axes, expressed in world."""
+    y = _unit(bone)
+    x = _unit(np.asarray(pad, dtype=float) - y * float(np.dot(pad, y)))
+    z = np.cross(x, y)
+    return np.column_stack([x, y, z])
+
+
+def quat_from(R):
+    """Shepperd's method. threepp binds no matrix-to-quaternion conversion, and the
+    Quaternion binding has no set_from_unit_vectors, so this is done here."""
+    t = R[0, 0] + R[1, 1] + R[2, 2]
+    if t > 0:
+        s = math.sqrt(t + 1.0) * 2
+        w, x, y, z = 0.25 * s, (R[2, 1] - R[1, 2]) / s, (R[0, 2] - R[2, 0]) / s, (R[1, 0] - R[0, 1]) / s
+    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+        s = math.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2]) * 2
+        w, x, y, z = (R[2, 1] - R[1, 2]) / s, 0.25 * s, (R[0, 1] + R[1, 0]) / s, (R[0, 2] + R[2, 0]) / s
+    elif R[1, 1] > R[2, 2]:
+        s = math.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2]) * 2
+        w, x, y, z = (R[0, 2] - R[2, 0]) / s, (R[0, 1] + R[1, 0]) / s, 0.25 * s, (R[1, 2] + R[2, 1]) / s
+    else:
+        s = math.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1]) * 2
+        w, x, y, z = (R[1, 0] - R[0, 1]) / s, (R[0, 2] + R[2, 0]) / s, (R[1, 2] + R[2, 1]) / s, 0.25 * s
+    return float(x), float(y), float(z), float(w)
+
+
+def orient(mesh, bone, pad):
+    """Point `mesh` along `bone` with its pad facing `pad`. Returns the frame."""
+    R = frame(bone, pad)
+    q = quat_from(R)
+    mesh.quaternion.set(*q)
+    return R
+
+
+def flex_axis(bone, pad):
+    return _unit(np.cross(_unit(bone), _unit(np.asarray(pad) - _unit(bone) * np.dot(pad, _unit(bone)))))
+
+
+# The skin is TRANSLUCENT on purpose. Tendons run inside a finger, so an opaque hand
+# hides the entire mechanism -- the first render with real rope showed four stray blue
+# arcs and nothing else. The poster this is modelled on is a cutaway for the same reason:
+# the routing IS the subject.
+SKIN_OPACITY = 0.28
+
+
+def skin(colour=0xC8A088, roughness=0.75, opacity=None):
     m = tp.MeshStandardMaterial()
     m.color = tp.Color(colour)
     m.roughness = roughness
+    m.transparent = True
+    m.opacity = SKIN_OPACITY if opacity is None else opacity
+    m.depth_write = False
     return m
 
 
@@ -171,7 +262,7 @@ class Hand:
         self.meshes = []
         self._mat = material
 
-        palm = tp.Mesh(tp.BoxGeometry(0.075, 0.026, 0.096), skin(roughness=0.8))
+        palm = tp.Mesh(tp.BoxGeometry(0.075, 0.026, 0.082), skin(roughness=0.8))
         palm.position.set(*(self.base + np.array([0.0325, 0.0, PALM_Z])))
         self.palm = self.art.add_link(palm, density=DENSITY, material=material)
         self.links["palm"] = self.palm
@@ -216,57 +307,74 @@ class Hand:
 
         m = cap(R_PP, pp)
         m.position.set(kx + 0.5 * pp, ky, kz)
-        m.rotation.z = -math.pi / 2                     # CapsuleGeometry runs along +Y
+        orient(m, FINGER_BONE, FINGER_PAD)
         self._add(f"{name}_mcp", m, self.links[f"{name}_abd"], (0, 0, -1), (kx, ky, kz), lo, hi)
 
         m = cap(R_MP, mp)
         m.position.set(kx + pp + 0.5 * mp, ky, kz)
-        m.rotation.z = -math.pi / 2
+        orient(m, FINGER_BONE, FINGER_PAD)
         self._add(f"{name}_pip", m, self.links[f"{name}_mcp"], (0, 0, -1), (kx + pp, ky, kz), -0.17, 1.83)
 
         m = cap(R_DP, dp)
         m.position.set(kx + pp + mp + 0.5 * dp, ky, kz)
-        m.rotation.z = -math.pi / 2
+        orient(m, FINGER_BONE, FINGER_PAD)
         self._add(f"{name}_dip", m, self.links[f"{name}_pip"], (0, 0, -1), (kx + pp + mp, ky, kz), -0.17, 1.31)
 
     def _thumb(self):
-        """Trapeziometacarpal (2 DOF) + MCP + IP, four DOF in all.
+        """Trapeziometacarpal (2 DOF) + MCP + IP.
 
-        Built along +X like the fingers, with the SAME -90 deg capsule twist, so the
-        actor-frame convention in bone() is identical everywhere and there is one less
-        class of silent routing bug. Opposition is produced by the joints, not by the
-        build pose: palmar abduction lifts the thumb volar out of the palm plane, then
-        the swing brings it across toward the fingers.
+        A thumb is not a fifth finger, and the difference is entirely in how it LEAVES
+        the wrist. It emerges from the radial side obliquely -- distal AND volar AND
+        radial, all at once -- and it is pronated about its own axis so its pad faces
+        the fingers rather than the floor. Built parallel to the fingers in the palm
+        plane, as this model first was, the hand reads as five identical digits and can
+        only oppose by accident.
 
-        APPROXIMATION, and the largest geometric one in this model: Hollister 1992
-        showed the real CMC has two NON-orthogonal, NON-intersecting axes fixed in
-        different bones (flexion/extension in the trapezium, abduction/adduction in the
-        metacarpal), which is what gives a real thumb its axial pronation during
-        opposition. Two orthogonal serial revolutes cannot reproduce that.
+        So the whole thumb is defined by two vectors, THUMB_BONE and THUMB_PAD, and its
+        joint axes then come from the same rule the fingers use: flexion about
+        cross(bone, pad), abduction about -pad. Flexion therefore carries the tip along
+        the pad direction, across the palm toward the fingers, which is opposition.
+
+        Still an approximation, and the largest one here: Hollister 1992 showed the real
+        CMC has two NON-orthogonal, NON-intersecting axes fixed in different bones, and
+        that is where a real thumb's axial pronation during opposition comes from. These
+        two are orthogonal and intersect.
         """
-        cx, cy, cz = self.base + np.array([0.020, -0.026, -0.052])
-        mc, pp, dp = 0.045, 0.032, 0.022 + PULP
+        c = self.base + np.array(THUMB_CMC)
+        L, P = _unit(THUMB_BONE), np.asarray(THUMB_PAD, dtype=float)
+        fx = flex_axis(L, P)
+        mc, pp, dp = 0.046, 0.031, 0.025 + PULP
 
-        carrier = tp.Mesh(tp.SphereGeometry(0.005, 8, 6), skin())
-        carrier.position.set(cx, cy, cz)
-        # Palmar abduction: lifts the thumb out of the palm plane (volar, -Y).
-        self._add("thumb_cmc_abd", carrier, self.palm, (1, 0, 0), (cx, cy, cz), -0.17, 1.22)
+        carrier = tp.Mesh(tp.SphereGeometry(0.006, 10, 8), skin())
+        carrier.position.set(*c)
+        self._add("thumb_cmc_abd", carrier, self.palm, tuple(-_unit(P - L * float(np.dot(P, L)))),
+                  tuple(c), -0.20, 1.15)
 
-        m = cap(0.0105, mc)
-        m.position.set(cx + 0.5 * mc, cy, cz)
-        m.rotation.z = -math.pi / 2
-        # Swing across the palm toward the fingers (+Z) or away from them.
-        self._add("thumb_cmc_swing", m, self.links["thumb_cmc_abd"], (0, 1, 0), (cx, cy, cz), -1.05, 0.35)
+        m = cap(0.0110, mc)
+        m.position.set(*(c + L * (0.5 * mc)))
+        orient(m, L, P)
+        self._add("thumb_cmc_flex", m, self.links["thumb_cmc_abd"], tuple(fx), tuple(c), -0.50, 0.90)
 
-        m = cap(0.0095, pp)
-        m.position.set(cx + mc + 0.5 * pp, cy, cz)
-        m.rotation.z = -math.pi / 2
-        self._add("thumb_mcp", m, self.links["thumb_cmc_swing"], (0, 0, -1), (cx + mc, cy, cz), -0.17, 0.96)
+        j2 = c + L * mc
+        m = cap(0.0098, pp)
+        m.position.set(*(j2 + L * (0.5 * pp)))
+        orient(m, L, P)
+        self._add("thumb_mcp", m, self.links["thumb_cmc_flex"], tuple(fx), tuple(j2), -0.17, 1.00)
 
-        m = cap(0.0090, dp)
-        m.position.set(cx + mc + pp + 0.5 * dp, cy, cz)
-        m.rotation.z = -math.pi / 2
-        self._add("thumb_ip", m, self.links["thumb_mcp"], (0, 0, -1), (cx + mc + pp, cy, cz), -0.26, 1.40)
+        j3 = j2 + L * pp
+        m = cap(0.0092, dp)
+        m.position.set(*(j3 + L * (0.5 * dp)))
+        orient(m, L, P)
+        self._add("thumb_ip", m, self.links["thumb_mcp"], tuple(fx), tuple(j3), -0.26, 1.40)
+
+        # Thenar eminence: visual only, no collider. It bridges the palm to the thumb
+        # base so the thumb does not read as a detached object floating beside the hand,
+        # without reintroducing the palm-vs-metacarpal collision that used to jam the
+        # CMC swing after 9 degrees of a possible 60.
+        th = tp.Mesh(tp.SphereGeometry(0.020, 16, 12), skin(roughness=0.85))
+        th.position.set(*(c + L * 0.012 + np.array([-0.006, 0.004, 0.006])))
+        th.scale.set(1.25, 0.6, 0.9)
+        self.decor = [th]
 
     # -- tendons ------------------------------------------------------------------
     def route(self):
@@ -385,54 +493,63 @@ class Hand:
             ])
 
     def _thumb_cables(self):
-        """Five cables for four DOF, same N+1 bound as the fingers.
+        """Five cables for four DOF, the same N+1 bound as the fingers, and now the same
+        SHAPE as a finger's: the thumb has a proper frame, so "volar" means "toward the
+        pad" for it exactly as it does for a finger, and the routing reads the same way.
 
-        FPL and EPL are the flexor/extensor pair; APB and ADD straddle the palmar
-        abduction axis so it is drivable both ways by pull-only actuators; FPB sits off
-        to one side of the swing axis and is what makes the swing controllable.
+        FPL and EPL are the flexor/extensor pair; APB and ADD straddle the CMC abduction
+        axis so it is drivable both ways by pull-only actuators; FPB sits off to the pad
+        side of the CMC and is what makes opposition reachable.
         """
         L = self.links
         palm, ab = L["palm"], L["thumb_cmc_abd"]
-        m1, m2, m3 = L["thumb_cmc_swing"], L["thumb_mcp"], L["thumb_ip"]
-        cx, cy, cz = self.base + np.array([0.020, -0.026, -0.052])
-        mc, pp, dp = 0.045, 0.032, 0.022 + PULP
-        px, py, pz = cx - (self.base[0] + 0.0325), cy - self.base[1], cz - self.base[2] - PALM_Z
-        v1, v2, v3 = 0.0105, 0.0080, 0.0055        # volar standoffs, proximal -> distal
-        d1, d2, d3 = 0.0080, 0.0050, 0.0035        # dorsal
+        m1, m2, m3 = L["thumb_cmc_flex"], L["thumb_mcp"], L["thumb_ip"]
+        c = self.base + np.array(THUMB_CMC)
+        B, P = _unit(THUMB_BONE), np.asarray(THUMB_PAD, dtype=float)
+        R = frame(B, P)
+        mc, pp, dp = 0.046, 0.031, 0.025 + PULP
+        v1, v2, v3 = 0.0105, 0.0082, 0.0058        # pad-side standoffs, proximal -> distal
+        d1, d2, d3 = 0.0080, 0.0050, 0.0034        # and the far side
 
-        def bone(volar, along, lat=0.0):
-            return (volar, along, lat)
+        def bone(pad, along, lat=0.0):
+            return (pad, along, lat)
 
+        def wrist(dx, dy, dz):
+            """A point on the PALM link, in its own frame. The palm is the fixed root, so
+            anything anchored here is rigidly welded to the world."""
+            return (c[0] - (self.base[0] + 0.0325) + dx, dy, c[2] - self.base[2] - PALM_Z + dz)
+
+        AX = (0.0, 0.0, 1.0)
         self._cable("thumb_fpl", [
-            (palm, (px - 0.014, -0.010, pz + 0.012)), (ab, (0.0, -v1, 0.0)),
-            (m1, bone(v2, 0.05 * mc)), (m2, bone(v3, 0.05 * pp)),
-            (m3, bone(v3 * 0.8, -0.5 * dp + 0.20 * dp)),
+            (palm, wrist(-0.016, -0.010, 0.014)),
+            (m1, bone(v2, -0.20 * mc)),
+            (m2, bone(v3, -0.10 * pp)),
+            (m3, bone(v3 * 0.8, -0.5 * dp + 0.25 * dp)),
         ])
-        AXIS = (0.0, 0.0, 1.0)
+        # The extensor is the convex-side case, so it wraps, exactly as the fingers' do.
         self._cable("thumb_epl", [
-            (palm, (px - 0.014, 0.010, pz + 0.012)),
+            (palm, wrist(-0.016, 0.010, 0.014)),
             (m1, bone(-d2, -0.30 * mc)),
-            ("wrap", m1, (0.0, 0.5 * mc, 0.0), AXIS, d2, (-1.0, 0.0, 0.0)),
+            ("wrap", m1, (0.0, 0.5 * mc, 0.0), AX, d2, (-1.0, 0.0, 0.0)),
             (m2, bone(-d3, -0.20 * pp)),
-            ("wrap", m2, (0.0, 0.5 * pp, 0.0), AXIS, d3, (-1.0, 0.0, 0.0)),
+            ("wrap", m2, (0.0, 0.5 * pp, 0.0), AX, d3, (-1.0, 0.0, 0.0)),
             (m3, bone(-d3 * 0.8, -0.5 * dp + 0.25 * dp)),
         ])
-        # Abductor / adductor pollicis: opposite sides of the CMC abduction axis (X), so
-        # one lifts the thumb volar out of the palm and the other pulls it back in.
+        # Abductor / adductor pollicis, either side of the CMC abduction axis.
         self._cable("thumb_abd", [
-            (palm, (px - 0.022, -0.010, pz + 0.004)), (ab, (0.0, -0.012, -0.004)),
-            (m1, bone(0.010, 0.10 * mc, -0.004)),
+            (palm, wrist(-0.020, -0.008, -0.008)), (ab, (0.0, 0.0, -0.011)),
+            (m1, bone(0.002, -0.20 * mc, -0.010)),
         ])
         self._cable("thumb_add", [
-            (palm, (px - 0.010, 0.008, pz + 0.010)), (ab, (0.0, 0.011, 0.004)),
-            (m1, bone(-0.009, 0.10 * mc, 0.004)),
+            (palm, wrist(-0.006, 0.006, 0.016)), (ab, (0.0, 0.0, 0.011)),
+            (m1, bone(0.002, -0.20 * mc, 0.010)),
         ])
-        # Flexor pollicis brevis: offset toward the fingers, so it drives the SWING as
-        # well as flexing - the cable that makes opposition reachable.
+        # Flexor pollicis brevis: pad side AND offset, so it drives the CMC flexion that
+        # carries the thumb across the palm. This is the opposition cable.
         self._cable("thumb_fpb", [
-            (palm, (px - 0.016, -0.009, pz + 0.014)), (ab, (0.0, -0.007, 0.010)),
-            (m1, bone(v2 * 0.7, 0.20 * mc, 0.010)),
-            (m2, bone(v3 * 0.8, 0.0, 0.004)),
+            (palm, wrist(-0.012, -0.009, 0.010)), (ab, (v1 * 0.5, 0.0, 0.004)),
+            (m1, bone(v1, -0.10 * mc, 0.004)),
+            (m2, bone(v3, -0.20 * pp)),
         ])
 
     # -- state --------------------------------------------------------------------
@@ -799,71 +916,165 @@ def cable_colour(name):
     return 0xFFFFFF
 
 
-CABLE_CAPACITY = 96
+ROPE_RADIUS = 0.0013
+ROPE_SEGMENTS_MAX = 48
+
+# One unit cylinder shared by every rope segment in the scene: height 1 along +Y,
+# radius 1, scaled and oriented per segment. 25 ropes at up to 48 segments is ~1200
+# meshes, so they share geometry rather than each owning one.
+_UNIT_CYL = None
 
 
-def _padded(pts):
-    """A fixed-size (CABLE_CAPACITY, 3) float32 array, the tail repeating the last point.
+def _unit_cyl():
+    global _UNIT_CYL
+    if _UNIT_CYL is None:
+        _UNIT_CYL = tp.CylinderGeometry(1.0, 1.0, 1.0, 6, 1)
+    return _UNIT_CYL
 
-    TWO things have to be right here, and both were wrong first, in ways that looked
-    like the routing was broken rather than the drawing:
 
-      * A wrapped cable's path GROWS as the joint flexes -- measured, the finger
-        extensors go from 11 points to as many as 26 while the hand closes -- so the
-        vertex count must be pinned or the line draws a varying number of vertices.
-        Repeated tail points draw as zero-length segments and vanish.
-      * set_from_points rebuilds the CPU attribute but does not mark it for re-upload,
-        so the GL side kept serving the FIRST frame's vertices. The closed-fist render
-        came back with cables shooting off past the fingertips, and they were pointing
-        exactly where the fingers had been when the hand was open. update_attribute is
-        the path that actually uploads.
+def _aim(mesh, a, b, radius):
+    """Place the shared unit cylinder so it spans a -> b."""
+    d = b - a
+    n = float(np.linalg.norm(d))
+    if n < 1e-9:
+        mesh.visible = False
+        return
+    mesh.visible = True
+    mid = 0.5 * (a + b)
+    mesh.position.set(float(mid[0]), float(mid[1]), float(mid[2]))
+    mesh.scale.set(radius, n, radius)
+    u = d / n
+    # Rotation taking the cylinder's own +Y onto u, as axis-angle: threepp's Quaternion
+    # binding has set_from_axis_angle but no set_from_unit_vectors.
+    ax = np.cross((0.0, 1.0, 0.0), u)
+    s = float(np.linalg.norm(ax))
+    if s < 1e-9:
+        mesh.quaternion.set(0.0, 0.0, 0.0, 1.0 if u[1] > 0 else 0.0)
+        if u[1] < 0:
+            mesh.quaternion.set(1.0, 0.0, 0.0, 0.0)
+        return
+    ax = ax / s
+    ang = math.acos(max(-1.0, min(1.0, float(u[1]))))
+    mesh.quaternion.set_from_axis_angle(tp.Vector3(float(ax[0]), float(ax[1]), float(ax[2])), ang)
+
+
+class RopeView:
+    """Every cable drawn as an actual rope: a chain of thin cylinders following the
+    RESOLVED path, wrap arcs included, rebuilt each frame from the live link poses.
+
+    Debug lines were the first attempt and they were the wrong instrument for this. The
+    mechanism is defined by physical cord running over pulleys, and a 1-pixel line does
+    not read as cord; it also hid, for several iterations, that the cables were passing
+    outside the body entirely.
     """
-    a = np.asarray(pts, dtype=np.float32)
-    out = np.empty((CABLE_CAPACITY, 3), dtype=np.float32)
-    n = min(len(a), CABLE_CAPACITY)
-    out[:n] = a[:n]
-    out[n:] = a[n - 1]
-    return out
-
-
-class CableView:
-    """One Line per cable, its geometry rewritten every frame from cable.path."""
 
     def __init__(self, scene, hand):
         self.hand = hand
-        self.lines = {}
-        for name, c in hand.cables.items():
-            mat = tp.LineBasicMaterial()
-            mat.color = tp.Color(cable_colour(name))
-            geo = tp.BufferGeometry()
-            geo.set_from_points([tp.Vector3(*q) for q in _padded(c.path)])
-            line = tp.Line(geo, mat)
-            # Cables run INSIDE the finger, so they would be hidden by the skin. Drawing
-            # them without depth test puts the routing on top, which is the whole point
-            # of showing it -- this is an instrument, not a beauty shot.
-            mat.depth_test = False
-            line.render_order = 10
-            scene.add(line)
-            self.lines[name] = (line, geo)
+        self.pool = {}
+        self.mats = {}
+        for name in hand.cables:
+            m = tp.MeshStandardMaterial()
+            m.color = tp.Color(cable_colour(name))
+            m.roughness = 0.55
+            m.metalness = 0.05
+            self.mats[name] = m
+            # ropes are opaque and drawn first, skin blends over them
+            self.pool[name] = []
+        self.scene = scene
+        self.update()
+
+    def _seg(self, name, i):
+        pool = self.pool[name]
+        while len(pool) <= i:
+            mesh = tp.Mesh(_unit_cyl(), self.mats[name])
+            mesh.render_order = 1
+            mesh.visible = False
+            self.scene.add(mesh)
+            pool.append(mesh)
+        return pool[i]
+
+    def update(self, extra=None):
+        for name, cable in self.hand.cables.items():
+            pts = np.asarray(cable.path, dtype=float)
+            if extra and name in extra:
+                pts = np.vstack([np.asarray(extra[name], dtype=float), pts])
+            n = min(len(pts) - 1, ROPE_SEGMENTS_MAX)
+            for i in range(n):
+                _aim(self._seg(name, i), pts[i], pts[i + 1], ROPE_RADIUS)
+            for i in range(n, len(self.pool[name])):
+                self.pool[name][i].visible = False
+
+
+class Forearm:
+    """The other half of the picture: the motors, and the rope running from them.
+
+    A tendon hand exists because a motor at a finger joint would be mass at the fastest
+    moving end of the arm, so the motors sit back here and pull. Each cable gets a linear
+    actuator whose rod retracts by that cable's ACTUAL EXCURSION -- the change in its own
+    routed length since the hand was open -- so what the rods do is a measurement, not an
+    animation. The rope drawn from each rod to the wrist is decoration: the physics cable
+    already begins at a via point on the palm, which is the fixed root, so extending it
+    backwards adds nothing to any joint torque (--selftest confirms the moment arms are
+    unchanged to the digit).
+    """
+
+    def __init__(self, scene, hand):
+        self.hand = hand
+        arm = tp.Mesh(tp.BoxGeometry(0.150, 0.050, 0.064), skin(0xB89070, 0.85))
+        arm.position.set(-0.082, 0.0, -0.002)
+        scene.add(arm)
+        cuff = tp.Mesh(tp.BoxGeometry(0.016, 0.044, 0.060), skin(0x8899A6, 0.5, 0.45))
+        cuff.position.set(-0.002, 0.0, -0.002)
+        scene.add(cuff)
+
+        self.names = list(hand.cables)
+        self.rest = {n: hand.cables[n].length for n in self.names}
+        self.rods, self.home = {}, {}
+        body_mat = tp.MeshStandardMaterial()
+        body_mat.color = tp.Color(0x4A5058)
+        body_mat.metalness = 0.75
+        body_mat.roughness = 0.35
+        for i, n in enumerate(self.names):
+            col, row = i % 5, i // 5
+            y = -0.019 + 0.0095 * row
+            z = -0.028 + 0.014 * col
+            x = -0.140 + 0.022 * (i % 3)
+            body = tp.Mesh(tp.BoxGeometry(0.030, 0.008, 0.009), body_mat)
+            body.position.set(x, y, z)
+            scene.add(body)
+            rod = tp.Mesh(_unit_cyl(), body_mat)
+            scene.add(rod)
+            self.rods[n] = rod
+            self.home[n] = np.array([x + 0.015, y, z])
+            rod.render_order = 2
 
     def update(self):
-        for name, (line, _geo) in self.lines.items():
-            line.geometry.update_attribute("position", _padded(self.hand.cables[name].path))
+        """Returns the extra proximal rope points, keyed by cable."""
+        extra = {}
+        for n in self.names:
+            exc = self.rest[n] - self.hand.cables[n].length      # metres of rope taken in
+            tip = self.home[n] - np.array([min(0.022, max(0.0, exc)), 0.0, 0.0])
+            _aim(self.rods[n], self.home[n] - np.array([0.016, 0, 0]), tip, 0.0022)
+            # rod tip -> a fairing point at the cuff -> on into the cable's own path
+            extra[n] = [tip, np.array([0.004, tip[1] * 0.45, tip[2] * 0.55])]
+        return extra
 
 
 def _scene(width, height, headless):
     canvas = tp.Canvas("tendon hand", width=width, height=height, headless=headless)
     renderer = tp.GLRenderer(canvas)
-    renderer.set_clear_color(0x14161C)
+    renderer.set_clear_color(0x161A22)
     scene = tp.Scene()
     cam = tp.PerspectiveCamera(42, width / height, 0.01, 10)
-    scene.add(tp.HemisphereLight(0xFFFFFF, 0x404048, 1.0))
-    key = tp.DirectionalLight(0xFFFFFF, 2.0)
+    # Translucent skin swallows light, so this is lit harder than a solid model would be.
+    scene.add(tp.AmbientLight(0xFFFFFF, 1.1))
+    scene.add(tp.HemisphereLight(0xFFFFFF, 0x50505A, 1.4))
+    key = tp.DirectionalLight(0xFFFFFF, 2.6)
     key.position.set(0.25, 0.35, 0.30)
     scene.add(key)
     # A volar fill, because the palm-side views are the informative ones and the first
     # pass lit only the dorsum: the volar render came back as a black rectangle.
-    fill = tp.DirectionalLight(0xFFE8D8, 1.6)
+    fill = tp.DirectionalLight(0xFFE8D8, 2.0)
     fill.position.set(0.10, -0.40, 0.20)
     scene.add(fill)
     rim = tp.DirectionalLight(0x88AACC, 0.9)
@@ -877,10 +1088,12 @@ VIEWS = {
     # One framing has to hold both the open hand (~190 mm, fingers extended) and the
     # closed fist (~110 mm), so it is set by the open pose and the fist simply sits
     # smaller inside it.
-    "3q":     ((0.294, -0.169, -0.194), (0.095, -0.025, -0.004)),   # three-quarter volar-radial
-    "volar":  ((0.100, -0.250, -0.016), (0.095, -0.024, -0.004)),   # straight into the palm
-    "radial": ((0.288, -0.042, -0.222), (0.095, -0.026, -0.004)),   # thumb side
-    "dorsal": ((0.115, 0.250, 0.196), (0.095, -0.010, -0.004)),     # back of the hand
+    # Framed to hold the forearm as well as the hand: the picture is motors-at-the-back,
+    # rope-through-the-wrist, fingers-pulled, and cropping to the hand loses the point.
+    "3q":     ((0.225, -0.170, -0.245), (0.018, -0.018, -0.004)),   # three-quarter volar-radial
+    "volar":  ((0.022, -0.330, -0.018), (0.018, -0.018, -0.004)),   # straight into the palm
+    "radial": ((0.237, -0.070, -0.396), (0.018, -0.018, -0.004)),   # thumb side
+    "hand":   ((0.294, -0.169, -0.194), (0.095, -0.025, -0.004)),   # the hand alone
 }
 
 
@@ -899,6 +1112,8 @@ def visual(shots=None, width=1280, height=800, obj="ball", tension=35.0,
     hand.route()
     for m in hand.meshes:
         scene.add(m)
+    for m in getattr(hand, "decor", []):
+        scene.add(m)
 
     if obj != "none":
         if obj == "can":
@@ -910,7 +1125,8 @@ def visual(shots=None, width=1280, height=800, obj="ball", tension=35.0,
         world.add(mesh, 780.0, pad)
         scene.add(mesh)
 
-    view = CableView(scene, hand)
+    arm = Forearm(scene, hand)
+    view = RopeView(scene, hand)
     close = [f"{f}_{t}" for f in FINGERS for t in ("fdp", "fds")] +             ["thumb_fpl", "thumb_fpb", "thumb_add"]
 
     def step(i):
@@ -918,7 +1134,7 @@ def visual(shots=None, width=1280, height=800, obj="ball", tension=35.0,
         for c in close:
             hand.cables[c].set_tension(tension * k)
         world.step(DT)
-        view.update()
+        view.update(arm.update())
 
     if shots:
         frames = {"open": 60, "closing": 800, "closed": 2600}
