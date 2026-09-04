@@ -510,7 +510,16 @@ namespace threepp_py {
 
         m.def(
                 "make_sensor_mesh",
-                [](const splats::SurfaceMesh& surface) { return splats::makeSensorMesh(surface); },
+                [](const splats::SurfaceMesh& surface) -> std::shared_ptr<Mesh> {
+#ifdef THREEPP_PY_HAS_VULKAN
+                    return splats::makeSensorMesh(surface);
+#else
+                    // makeSensorMesh lives in SplatSurface.cpp, compiled only with the Vulkan
+                    // backend (kSensorOnlyLayer is a VulkanRenderer concept).
+                    (void) surface;
+                    throw std::runtime_error("make_sensor_mesh: this build has no Vulkan backend (the sensor-only layer is a VulkanRenderer concept)");
+#endif
+                },
                 py::arg("surface"),
                 "The baked surface as a Mesh that ONLY THE SENSORS perceive. Add it at the "
                 "SCENE ROOT, not under the cloud: the vertices are world space already.\n\n"
