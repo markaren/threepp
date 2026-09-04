@@ -580,7 +580,7 @@ namespace threepp::terrain {
         wetland.structureBand = 0;// grass-family structure (tufty bog)
         wetland.color = {0.16f, 0.17f, 0.12f};
         wetland.slopeLo = 0.f; wetland.slopeHi = 0.30f; wetland.slopeFeather = 0.06f;
-        wetland.heightLo = sea - 5.f;
+        wetland.heightLo = sea - 0.5f;// the bog stops at the waterline: the seabed has its own layers below
         wetland.heightHi = sea + o.wetlandBand;
         wetland.heightFeather = 4.f;
         wetland.concaveBias = 0.4f;
@@ -628,7 +628,35 @@ namespace threepp::terrain {
         snow.noiseAmpHeight = 70.f;// ragged snowline
         snow.noiseFreq = 0.03f;
 
-        r.layers = {wetland, grass, heath, scree, rock, snow};
+        // ── seabed: what the water reveals when it is clear enough ────────
+        // Every layer above is a LAND rule; below the surface the slope windows
+        // admitted grass (gentle bottoms) and rock (steep ones), so the visible
+        // shallows read as a lawn under teal water and switched to bare rock
+        // along a slope contour (netpen --terrain aerials, 2026-09-05). Two
+        // layers own the underwater band by weight (weightScale): pale gravel
+        // and sand in the first metres, grading over ~2-5 m of depth into the
+        // dark silt and rock the light no longer reaches. Feathers are in
+        // metres of DEPTH; with a ~0.35 m/m shore profile that is a 10-15 m wide
+        // shoreline grade, soft at any sensible altitude. Bands: gravel takes
+        // the scree structure (stones), the deep bottom the rock structure.
+        SplatLayer shallow;
+        shallow.structureBand = 2;
+        shallow.color = {0.40f, 0.38f, 0.30f};
+        shallow.heightLo = sea - 3.5f;
+        shallow.heightHi = sea + 0.1f;
+        shallow.heightFeather = 1.2f;
+        shallow.noiseAmpHeight = 0.8f;// ragged, not an iso-contour
+        shallow.noiseFreq = 0.08f;
+        shallow.weightScale = 6.f;
+
+        SplatLayer seabed;
+        seabed.structureBand = 1;
+        seabed.color = {0.09f, 0.11f, 0.10f};
+        seabed.heightHi = sea - 2.5f;
+        seabed.heightFeather = 2.0f;
+        seabed.weightScale = 6.f;
+
+        r.layers = {wetland, grass, heath, scree, rock, snow, shallow, seabed};
         return r;
     }
 

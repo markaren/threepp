@@ -428,7 +428,10 @@ int main(int argc, char** argv) {
         int cw = 0, ch = 0;
         if (std::sscanf(cs, "%dx%d", &cw, &ch) == 2 && cw > 63 && ch > 63) canvasSize = {cw, ch};
     }
-    Canvas canvas("threepp - NORWAY TERRAIN", {{"vsync", false}, {"size", canvasSize}});
+    // Shot/sequence captures run on a HEADLESS canvas: hidden window, and the
+    // Vulkan renderer prefers VK_EXT_headless_surface, so a batch of captures
+    // never pops windows over whatever the user is doing (asked for 2026-09-05).
+    Canvas canvas("threepp - NORWAY TERRAIN", {{"vsync", false}, {"size", canvasSize}, {"headless", headless}});
     // Headless capture forces the Vulkan deferred renderer (detail-map layer is
     // Vulkan-only); NT_GL=1 captures the forward GL path instead (renderer-specific
     // artifact A/B — e.g. tile-albedo mip behaviour). Interactive runs keep the

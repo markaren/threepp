@@ -73,6 +73,13 @@ namespace threepp::terrain {
         // value so pixels that match no window still resolve to it, never grey.
         float weightFloor = 0.f;
 
+        // Multiplier on the windowed weight (floor excluded). The blend is a
+        // weight-normalised sum, so a layer whose window is fully open still
+        // only ties with every other open layer; a seabed layer under the sea
+        // surface would mix 50/50 with the grass the slope window admits there.
+        // Scaling lets a layer OWN its band. 1 = the old arithmetic exactly.
+        float weightScale = 1.f;
+
         // STRUCTURE band this layer feeds in the terrain shader's per-band
         // texture sets (MaterialWithTerrainMaps): 0 grass, 1 rock, 2 scree,
         // 3 snow (the makeTerrainBandSet convention). -1 = no structure — the
@@ -246,7 +253,7 @@ namespace threepp::terrain {
                       band(ht, L.heightLo, L.heightHi, L.heightFeather);
             const float cr = 1.f + L.convexBias * std::max(0.f, -curvN) +
                              L.concaveBias * std::max(0.f, curvN);
-            return std::max(w * cr + L.weightFloor, 0.f);
+            return std::max(w * cr * L.weightScale + L.weightFloor, 0.f);
         }
         // Normalised curvature at (x,z): tanh(Laplacian · scale). Fixed eps so
         // adjacent LODs agree. <0 convex (ridge), >0 concave (hollow).

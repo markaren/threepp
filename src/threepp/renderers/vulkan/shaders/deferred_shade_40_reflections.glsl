@@ -205,7 +205,11 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     // thread several. Give the pass-throughs their own, larger budget so the ray
     // reaches a real surface (or the open sky) on its own, and let
     // REFL_MAX_BOUNCES count only genuine reflective bounces, unchanged.
-    const int REFL_MAX_STEPS = 12;
+    const int REFL_MAX_STEPS = 16;
+    // The last alpha-cutout surface the ray passed THROUGH, shaded at its own
+    // texel: the terminal for a ray that exhausts the step budget inside a
+    // canopy (see the exhaustion branch after the loop).
+    vec3  lastCutout = vec3(-1.0);
     vec3  radiance   = vec3(0.0);
     vec3  tput       = vec3(1.0);
     vec3  o          = origin;
@@ -251,6 +255,11 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // painting its transparent regions as a solid wall.
         if (hm.alphaCutoff > 0.0 &&
             hitTexAlpha(hm.albedoTexIndex, hm.uvTransform, hitUv) < hm.alphaCutoff) {
+            // Remember what this cutout is made of (its RGB is dilated across
+            // the transparent region, so a sub-cutoff texel still carries the
+            // leaf colour): if the ray never escapes the canopy, THIS is what
+            // it is looking at, not the sky.
+            lastCutout = hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
             o = o + d * (tHit + 1e-3);
             continue;
         }
@@ -409,7 +418,24 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     // answer in its own right; at 3 it fired constantly, and a frequent wrong
     // answer is a visible artifact whichever colour it is.
     // Every shading exit break's first, so this can never double-count.
-    if (step >= REFL_MAX_STEPS) radiance += tput * sampleEnvLod(d, curMissLod) * envInt;
+    if (step >= REFL_MAX_STEPS) {
+        if (lastCutout.x >= 0.0) {
+            // Exhausted INSIDE a stack of cutouts (a canopy). The ray did not
+            // reach the sky; it is buried in foliage, which is dark and lit by
+            // the sky it can still partly see, not the sky itself. Terminating
+            // on the environment here painted every dense reflected canopy in
+            // the fjord water with white blotches (the "white tree
+            // reflections", 2026-09-05): a canopy is exactly the place a ray
+            // threads the most cutout texels, so the budget ran out there
+            // routinely, not rarely. Shade the last leaf we passed as an
+            // opaque diffuse surface facing the ray, under sky+ambient only.
+            const vec3 nFace = -d;
+            const vec3 fill = sampleEnvLod(nFace, maxLod) + lights.ambient + hemiAmbient(nFace);
+            radiance += tput * lastCutout * fill * (1.0 / PI) * envInt;
+        } else {
+            radiance += tput * sampleEnvLod(d, curMissLod) * envInt;
+        }
+    }
     // A moving-caster SHADOW inside the reflected content is moving content just
     // like the mover itself: the shadow rays at the reflected hits committed on
     // a currently-MOVING mesh, so the reflected radiance carries a shadow that
