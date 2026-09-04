@@ -111,6 +111,8 @@ int main(int argc, char** argv) {
     int shotFrames = 160;
     bool haveCam = false;
     Vector3 camPosArg, camTargetArg;
+    float fovArg = 55.f;// --fov <deg>: a long lens compresses a fjord wall the
+                        // way the reference photo does; 55° makes it recede.
     bool noRoadBias = false;// disable the road-aware LOD refinement (A/B compare)
     std::string profilePath;// --road-profile <csv>: dump the height field along the longest road and exit
     for (int i = 1; i < argc; ++i) {
@@ -120,6 +122,7 @@ int main(int argc, char** argv) {
         else if (a == "--seqstart" && i + 1 < argc) seqStart = std::atoi(argv[++i]);
         else if (a == "--seqstep" && i + 1 < argc) seqStep = std::atoi(argv[++i]);
         else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        else if (a == "--fov" && i + 1 < argc) fovArg = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--no-road-bias") noRoadBias = true;
         else if (a == "--road-profile" && i + 1 < argc) profilePath = argv[++i];
         else if (a == "--cam" && i + 1 < argc) {
@@ -242,6 +245,14 @@ int main(int argc, char** argv) {
     gopt.roadEdgeFeather = 1.2f;
     // (envSet is declared later; this runs before it exists)
     gopt.paintUrban = !std::getenv("NT_NO_URBAN");// grey town fabric under dense buildings (A/B)
+    // CLIFF relief + gneiss band, on 1 m packs only. The gate is the DEM's own
+    // resolution, not the scene: sub-metre benches on a 2 m DEM would be
+    // INVENTING structure below the data's sampling, which is exactly the soft
+    // fBm look this replaces. At 1 m the benches sharpen structure the lidar
+    // actually measured. NT_NO_CLIFF forces it off for an A/B.
+    const float gridStep = reg.worldSize / static_cast<float>(reg.dim - 1);
+    const bool cliffPack = gridStep <= 1.5f && !std::getenv("NT_NO_CLIFF");
+    gopt.cliffRelief = cliffPack;
     const terrain::TerrainProvider prov = terrain::makeGeoProvider(pack, network, gopt);
 
     reportRoadConformance(pack, network);
@@ -316,7 +327,11 @@ int main(int argc, char** argv) {
             return v && v[0] == '1';
         }();
         if (!noBands) {
-            const terrain::TerrainBandSet bands = terrain::makeTerrainBandSet();
+            // On a cliff pack the rock slot carries the GNEISS generator
+            // (foliation hanging vertically on the triplanar side projections,
+            // joint blocks, wet veins) instead of the generic plate rock.
+            const terrain::TerrainBandSet bands = terrain::makeTerrainBandSet(
+                    4242u, cliffPack ? terrain::BandKind::Cliff : terrain::BandKind::Rock);
             for (size_t i = 0; i < 4; ++i) {
                 tileOpts.bandAlbedo[i] = bands.band[i].albedo;
                 tileOpts.bandNormalRough[i] = bands.band[i].normalRough;
@@ -340,7 +355,15 @@ int main(int argc, char** argv) {
 
     // ── renderer ────────────────────────────────────────────────────────────────
     const bool headless = !shotPath.empty() || !seqPrefix.empty();
-    Canvas canvas("threepp - NORWAY TERRAIN", {{"vsync", false}});
+    // NT_SIZE="wxh" pins the framebuffer (Canvas::size() is a REQUEST — the
+    // shot's real resolution is framebufferSize()); a judged 1:1 crop needs a
+    // known native size, and the default window is smaller than 1080p.
+    WindowSize canvasSize{1280, 800};
+    if (const char* cs = std::getenv("NT_SIZE")) {
+        int cw = 0, ch = 0;
+        if (std::sscanf(cs, "%dx%d", &cw, &ch) == 2 && cw > 63 && ch > 63) canvasSize = {cw, ch};
+    }
+    Canvas canvas("threepp - NORWAY TERRAIN", {{"vsync", false}, {"size", canvasSize}});
     // Headless capture forces the Vulkan deferred renderer (detail-map layer is
     // Vulkan-only); NT_GL=1 captures the forward GL path instead (renderer-specific
     // artifact A/B — e.g. tile-albedo mip behaviour). Interactive runs keep the
@@ -513,7 +536,7 @@ int main(int argc, char** argv) {
             // wavelength ∝ V², so below ~7 m/s the sea is glassy AND its short
             // chop falls under this sheet's ~25 m vertex spacing — reads dead
             // flat. Live-tunable in the settings panel; NT_SEA_WIND pins it.
-            oo.windSpeed = envF("NT_SEA_WIND", 9.0f);
+            oo.windSpeed = envF("NT_SEA_WIND", cliffPack ? 5.5f : 9.0f);
             oo.windTheta = 215.f * kDeg2Rad;// swell rolling in from the SW (the sun heading)
             oo.choppiness = 0.45f;
             oo.tileSize1 = 90.f;
@@ -521,8 +544,18 @@ int main(int argc, char** argv) {
             oo.fftSize = 512;// half the default — a big calm sea needs less spectral detail; recovers FPS
             ocean = Ocean::create(oo);
             if (auto* wm = ocean->material()->as<MeshPhysicalMaterial>()) {
-                wm->attenuationColor = Color(0.045f, 0.13f, 0.16f);// dark Nordic fjord water
-                wm->attenuationDistance = 1.9f;
+                if (cliffPack) {
+                    // GLACIAL fjord: rock flour in suspension scatters, so the
+                    // water is opaque turquoise-teal rather than a dark mirror.
+                    // Short attenuation distance = the light is absorbed before
+                    // it reaches anything below, which is what makes the colour
+                    // read as the WATER's own and not the seabed's.
+                    wm->attenuationColor = Color(0.055f, 0.42f, 0.38f);
+                    wm->attenuationDistance = envF("NT_SEA_ATTEN", 0.75f);
+                } else {
+                    wm->attenuationColor = Color(0.045f, 0.13f, 0.16f);// dark Nordic fjord water
+                    wm->attenuationDistance = 1.9f;
+                }
             }
             seaObj = ocean;
         }
@@ -551,7 +584,7 @@ int main(int argc, char** argv) {
     scene.add(sun);
 
     // ── camera above the longest road, looking along it ─────────────────────────
-    PerspectiveCamera camera(55.f, canvas.aspect(), 1.f, std::max(reg.worldSize * 3.f, 12000.f));
+    PerspectiveCamera camera(fovArg, canvas.aspect(), 1.f, std::max(reg.worldSize * 3.f, 12000.f));
     Vector3 roadMid, roadDir;
     if (network.longestRoad(roadMid, roadDir)) {
         const float groundY = tiles->heightAt(roadMid.x, roadMid.z);

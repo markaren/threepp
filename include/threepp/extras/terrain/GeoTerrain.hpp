@@ -89,6 +89,36 @@ namespace threepp::terrain {
         float urbanMax = 0.85f;      // paint ceiling — gardens keep some ground tone
         std::array<float, 3> urbanAsphalt = {0.085f, 0.085f, 0.09f};// sRGB street/lot
         std::array<float, 3> urbanGravel = {0.185f, 0.175f, 0.155f};// sRGB yard/gravel
+
+        // ── CLIFF relief (benches + joint sets) ─────────────────────────────
+        // A smooth fBm gives ROUNDED slopes; real gneiss walls are stratified
+        // (near-horizontal benches, because the rock is layered) and jointed
+        // (two oblique fracture sets). Both are added in the height domain and
+        // gated on DEM slope, so gentle ground is untouched.
+        //
+        // OFF by default, and callers should only enable it on ~1 m packs: on a
+        // 2 m DEM a 0.9 m riser is finer than the data's own resolution, so it
+        // would be inventing structure rather than sharpening measured
+        // structure. Existing 2 m packs (trollstigen, aalesund) are therefore
+        // bit-identical unless a caller opts in.
+        bool cliffRelief = false;
+        float cliffBenchAmp = 0.9f;    // riser height (m), peak-to-peak
+        float cliffBenchPeriod = 4.5f; // vertical bench spacing (m), fBm-modulated
+        float cliffJointAmp = 0.30f;   // joint groove depth (m)
+        float cliffJointPeriod = 5.5f; // joint spacing (m)
+        float cliffSlopeLo = 0.45f;    // relief fades in over this DEM-slope window
+        float cliffSlopeHi = 0.62f;    // (slope = 1 − Ny, so 0.62 ≈ 68°)
+
+        // ── LAND COVER from measured data (canopy CHM + flow accumulation) ──
+        // No-op on packs that carry neither. Paints forest, wet seepage streaks,
+        // scree fans and bench moss; road/urban paint is applied on top,
+        // unchanged.
+        bool landCover = true;
+        float canopyForestMin = 2.f;// m of canopy where forest paint starts
+        float canopyForestFull = 6.f;
+        float wetFlowLo = 0.52f;    // log-normalised accumulation window for wet rock
+        float wetFlowHi = 0.72f;
+        float screeFlowLo = 0.48f;  // fans want drainage AND a relaxed slope
     };
 
     namespace detail {
@@ -113,6 +143,139 @@ namespace threepp::terrain {
             return 0.55f * geoVNoise(x, y) + 0.30f * geoVNoise(x * 2.13f + 7.3f, y * 2.13f) +
                    0.15f * geoVNoise(x * 4.7f, y * 4.7f + 3.1f);
         }
+
+        // ── Cliff relief ────────────────────────────────────────────────────
+        //
+        // Value-by-value POD of the cliff knobs, so the height callback captures
+        // one small struct instead of eight floats (and can be shared with the
+        // splat side without re-reading GeoTerrainOptions).
+        struct CliffParams {
+            float benchAmp = 0.f, benchPeriod = 4.5f;
+            float jointAmp = 0.f, jointPeriod = 5.5f;
+            float slopeLo = 0.45f, slopeHi = 0.62f;
+            [[nodiscard]] bool active() const { return benchAmp > 0.f || jointAmp > 0.f; }
+        };
+
+        inline float smoothstep01(float e0, float e1, float x) {
+            const float t = std::clamp((x - e0) / (e1 - e0 + 1e-6f), 0.f, 1.f);
+            return t * t * (3.f - 2.f * t);
+        }
+
+        // DEM slope (0 flat → 1 vertical, the TileTerrain convention) measured
+        // BICUBICALLY. Bilinear would be cheaper, but its derivative jumps at
+        // every DEM cell edge; feeding that through the steep gate below and
+        // into the HEIGHT field would emboss the 1 m sample grid onto the wall.
+        // Bicubic is C1, so the gate — and therefore the relief — is C1 too.
+        inline float geoDemSlope(const HeightGrid& g, float x, float z, float e = 6.f) {
+            const float hx = g.sampleBicubic(x + e, z) - g.sampleBicubic(x - e, z);
+            const float hz = g.sampleBicubic(x, z + e) - g.sampleBicubic(x, z - e);
+            return 1.f - (2.f * e) / std::sqrt(hx * hx + hz * hz + 4.f * e * e);
+        }
+
+        // Benched + jointed displacement for a steep face, in metres.
+        //
+        // BENCHES are a smooth staircase in the HEIGHT domain, not the plan
+        // domain: a function of h alone follows the wall's own contours, so the
+        // treads come out horizontal on a wall of any orientation for free (a
+        // plan-space pattern would smear into diagonal stripes as the face
+        // turns). The staircase uses smoothstep, whose derivative is zero at
+        // both ends, so it is C1 across the period wrap. Riser is kept ≤ ~0.25×
+        // period: the vertical Jacobian is 1 + riser·5/period > 0, i.e. the
+        // step steepens the face but can never fold it into an overhang.
+        //
+        // JOINTS are two oblique cosine groove sets — C∞, so the baked normal
+        // map never carries a crease the geometry does not have — with an fBm
+        // phase wobble so they read as fractures rather than corduroy.
+        inline float geoCliffRelief(float x, float z, float base, float demSlope,
+                                    const CliffParams& c) {
+            const float gate = smoothstep01(c.slopeLo, c.slopeHi, demSlope);
+            if (gate <= 0.f) return 0.f;
+
+            float d = 0.f;
+            if (c.benchAmp > 0.f) {
+                // 50 m drift in the bedding spacing + a separate drift in riser
+                // height: real strata thicken and thin along a wall.
+                const float period = c.benchPeriod * (0.65f + 0.70f * geoFbm(x * 0.02f, z * 0.02f));
+                const float u = base / period;
+                const float t = u - std::floor(u);
+                const float riser = c.benchAmp * (0.55f + 0.90f * geoFbm(x * 0.05f + 13.f, z * 0.05f));
+                d += (smoothstep01(0.30f, 0.70f, t) - 0.5f) * riser;
+            }
+            if (c.jointAmp > 0.f) {
+                constexpr float kTwoPi = 6.28318531f;
+                // ±34° from the X axis: an oblique conjugate pair, the usual
+                // fracture geometry, and neither set lines up with the DEM grid.
+                constexpr float c1 = 0.829f, s1 = 0.559f; // +34°
+                constexpr float c2 = 0.829f, s2 = -0.559f;// −34°
+                const float p = c.jointPeriod;
+                const float w1 = (x * c1 + z * s1) / p + 1.1f * geoFbm(x * 0.03f, z * 0.03f);
+                const float w2 = (x * c2 + z * s2) / (p * 0.73f) + 1.1f * geoFbm(x * 0.041f + 5.f, z * 0.041f);
+                const float g1 = 0.5f - 0.5f * std::cos(kTwoPi * w1);
+                const float g2 = 0.5f - 0.5f * std::cos(kTwoPi * w2);
+                d -= c.jointAmp * (g1 * g1 * 0.65f + g2 * g2 * 0.45f);
+            }
+            return d * gate;
+        }
+
+        // ── Land cover from measured grids ──────────────────────────────────
+        //
+        // Four masks, all derived from data rather than tuned noise:
+        //   forest — the canopy height model says where trees ARE.
+        //   wet    — high drainage on a steep face = a seepage streak.
+        //   scree  — high drainage where the slope has RELAXED = a talus fan.
+        //   bench  — DEM steep but the DETAILED surface flat: that is exactly a
+        //            bench tread cut by geoCliffRelief, and moss/heath collects
+        //            on treads. Free by construction: the geometry places the
+        //            paint, so the two can never disagree.
+        // All pointers are into the pack (read-only after load), so the masks
+        // are pure and safe on the tile-bake threads.
+        struct LandCover {
+            const HeightGrid* canopy = nullptr;
+            const HeightGrid* flow = nullptr;
+            const HeightGrid* dem = nullptr;// for the DEM-vs-detail slope split
+            float forestMin = 2.f, forestFull = 6.f;
+            float wetLo = 0.52f, wetHi = 0.72f, screeLo = 0.48f;
+
+            [[nodiscard]] bool active() const { return canopy || flow; }
+
+            struct Mix {
+                float forest = 0.f;// 0..1 canopy coverage
+                float conifer = 0.f;// 0 broadleaf → 1 spruce/pine (altitude)
+                float wet = 0.f;
+                float scree = 0.f;
+                float bench = 0.f;
+            };
+
+            [[nodiscard]] Mix eval(float x, float z, float h, float slope) const {
+                Mix m;
+                // DEM slope is only needed by the bench/scree split; skip the
+                // four extra bicubic samples when no mask uses it.
+                const float ds = dem ? geoDemSlope(*dem, x, z) : slope;
+                if (canopy) {
+                    const float ch = canopy->sampleBilinear(x, z);
+                    // A near-vertical face has no trees: a CHM reading there is
+                    // lidar returning off the wall itself, not a canopy.
+                    m.forest = smoothstep01(forestMin, forestFull, ch) *
+                               (1.f - smoothstep01(0.62f, 0.80f, ds));
+                    m.conifer = smoothstep01(220.f, 620.f, h);
+                }
+                if (flow) {
+                    const float f = flow->sampleBilinear(x, z);
+                    m.wet = smoothstep01(wetLo, wetHi, f) * smoothstep01(0.50f, 0.66f, slope) *
+                            (1.f - m.forest);
+                    // Fan: the drainage line has arrived somewhere the ground
+                    // eased off, and it is not the shoreline.
+                    m.scree = smoothstep01(screeLo, screeLo + 0.20f, f) *
+                              (1.f - smoothstep01(0.36f, 0.54f, slope)) *
+                              smoothstep01(8.f, 30.f, h) * (1.f - m.forest);
+                }
+                if (dem) {
+                    m.bench = smoothstep01(0.58f, 0.74f, ds) *
+                              (1.f - smoothstep01(0.26f, 0.46f, slope)) * (1.f - m.forest);
+                }
+                return m;
+            }
+        };
 
     }// namespace detail
 
@@ -496,8 +659,22 @@ namespace threepp::terrain {
         // as a flat seaLevel sheet, and noise there would dither the seabed up
         // through the sea plane (patchy shoreline). Urban ground is graded
         // flat too — the relief fades with built coverage.
+        //
+        // CLIFF relief (opt-in) rides on the same shore fade but uses a WIDER
+        // one (3 m, the plan's figure): a bench riser cutting the waterline
+        // would chop the shoreline into a sawtooth where the DTM's flat sea
+        // sheet meets the wall.
         const float sea = pack.region.seaLevel;
-        prov.height = [&grid, &network, urban, amp, freq, sea](float x, float z) {
+        detail::CliffParams cliff;
+        if (o.cliffRelief) {
+            cliff.benchAmp = o.cliffBenchAmp;
+            cliff.benchPeriod = o.cliffBenchPeriod;
+            cliff.jointAmp = o.cliffJointAmp;
+            cliff.jointPeriod = o.cliffJointPeriod;
+            cliff.slopeLo = o.cliffSlopeLo;
+            cliff.slopeHi = o.cliffSlopeHi;
+        }
+        prov.height = [&grid, &network, urban, amp, freq, sea, cliff](float x, float z) {
             const float base = grid.sampleBicubic(x, z);
             const float cw = network.corridorWeight(x, z);
             if (cw >= 0.999f) return base;// fully paved — keep it dead smooth
@@ -505,7 +682,14 @@ namespace threepp::terrain {
             if (shore <= 0.f) return base;
             float relief = (detail::geoFbm(x * freq, z * freq) - 0.5f) * 2.f * amp;
             if (urban) relief *= 1.f - urban->sample(x, z);
-            return base + relief * (1.f - cw) * shore * shore * (3.f - 2.f * shore);
+            float h = base + relief * (1.f - cw) * shore * shore * (3.f - 2.f * shore);
+            if (cliff.active()) {
+                const float seaFade = detail::smoothstep01(sea + 0.5f, sea + 3.5f, base);
+                if (seaFade > 0.f)
+                    h += detail::geoCliffRelief(x, z, base, detail::geoDemSlope(grid, x, z), cliff) *
+                         seaFade * (1.f - cw);
+            }
+            return h;
         };
 
         // Albedo: Norwegian splat, then (buildings) the urban town-fabric
@@ -514,6 +698,19 @@ namespace threepp::terrain {
         // pavedWeight — pavement + a NARROW edge feather, never the shoulder
         // corridor: a corridor-wide darkened swath reads as a phantom second
         // road wherever roads run close or stack (hairpins, dual carriageways).
+        detail::LandCover cover;
+        if (o.landCover) {
+            if (pack.hasCanopy()) cover.canopy = &pack.canopy;
+            if (pack.hasFlow()) cover.flow = &pack.flow;
+            // The bench mask only means something when benches exist.
+            if (o.cliffRelief) cover.dem = &grid;
+            cover.forestMin = o.canopyForestMin;
+            cover.forestFull = o.canopyForestFull;
+            cover.wetLo = o.wetFlowLo;
+            cover.wetHi = o.wetFlowHi;
+            cover.screeLo = o.screeFlowLo;
+        }
+
         {
             const bool paint = o.paintRoads;
             const float edgeFeather = o.roadEdgeFeather;
@@ -521,12 +718,46 @@ namespace threepp::terrain {
             const std::array<float, 3> urbA = o.urbanAsphalt;
             const std::array<float, 3> urbG = o.urbanGravel;
             const float urbMax = o.urbanMax;
-            prov.albedo = [rules, &network, urban, paint, edgeFeather, roadCol, urbA, urbG,
+            prov.albedo = [rules, &network, urban, cover, paint, edgeFeather, roadCol, urbA, urbG,
                            urbMax](float x, float z, float h, float slope, float* rgb) {
                 const Rgb c = rules.evaluate(x, z, h, slope);
                 rgb[0] = c[0];
                 rgb[1] = c[1];
                 rgb[2] = c[2];
+                // ── measured land cover, UNDER the urban/road paint ─────────
+                if (cover.active()) {
+                    const auto m = cover.eval(x, z, h, slope);
+                    // Canopy: birch/alder green low down drifting to spruce
+                    // dark with altitude, plus a 40 m stand-scale patchiness so
+                    // the mass is not one flat green.
+                    if (m.forest > 0.001f) {
+                        const float pat = 0.85f + 0.30f * detail::geoFbm(x * 0.025f, z * 0.025f);
+                        const std::array<float, 3> birch{0.125f, 0.190f, 0.070f};
+                        const std::array<float, 3> spruce{0.042f, 0.072f, 0.045f};
+                        for (int i = 0; i < 3; ++i) {
+                            const float tree = (birch[i] + (spruce[i] - birch[i]) * m.conifer) * pat;
+                            rgb[i] += (tree - rgb[i]) * m.forest;
+                        }
+                    }
+                    // Bench moss/lichen: greener and lighter than the wall.
+                    if (m.bench > 0.001f) {
+                        const std::array<float, 3> moss{0.145f, 0.170f, 0.095f};
+                        for (int i = 0; i < 3; ++i) rgb[i] += (moss[i] - rgb[i]) * m.bench * 0.75f;
+                    }
+                    // Scree fan below the gullies.
+                    if (m.scree > 0.001f) {
+                        const std::array<float, 3> talus{0.400f, 0.378f, 0.345f};
+                        for (int i = 0; i < 3; ++i) rgb[i] += (talus[i] - rgb[i]) * m.scree * 0.8f;
+                    }
+                    // Wet seepage: wet rock is DARKER and slightly bluer than
+                    // dry rock (the water film kills the diffuse bounce).
+                    if (m.wet > 0.001f) {
+                        const float k = m.wet * 0.62f;
+                        rgb[0] *= 1.f - k;
+                        rgb[1] *= 1.f - k * 0.94f;
+                        rgb[2] *= 1.f - k * 0.86f;
+                    }
+                }
                 if (urban) {
                     const float uw = urban->sample(x, z) * urbMax;
                     if (uw > 0.f) {
@@ -559,9 +790,23 @@ namespace threepp::terrain {
         {
             const float edgeFeather = o.roadEdgeFeather;
             const bool paint = o.paintRoads;
-            prov.weights = [rules, &network, urban, edgeFeather, paint](float x, float z, float h,
-                                                                        float slope, float* w4) {
+            prov.weights = [rules, &network, urban, cover, edgeFeather, paint](float x, float z, float h,
+                                                                               float slope, float* w4) {
                 rules.evaluateWeights(x, z, h, slope, w4);
+                // Land cover moves STRUCTURE too, not just colour: forest floor
+                // and bench moss are soft (grass band 0), a talus fan is loose
+                // stone (scree band 2). Colour-only would leave rock plates
+                // crawling under the canopy paint.
+                if (cover.active()) {
+                    const auto m = cover.eval(x, z, h, slope);
+                    const auto pushTo = [w4](int band, float t) {
+                        if (t <= 0.001f) return;
+                        for (int i = 0; i < 4; ++i) w4[i] *= 1.f - t;
+                        w4[band] += t;
+                    };
+                    pushTo(0, std::min(0.9f, m.forest * 0.9f + m.bench * 0.6f));
+                    pushTo(2, m.scree * 0.7f);
+                }
                 float keep = 1.f;
                 if (paint) keep *= 1.f - network.pavedWeight(x, z, edgeFeather);
                 if (urban) keep *= 1.f - urban->sample(x, z);

@@ -59,10 +59,16 @@ DEFAULT_OUT = os.path.join(REPO_ROOT, "geodata")
 #     (Spelled "aalesund" to match the pack dir; "alesund" stays accepted as
 #     an alias so older invocations keep working.)
 # --------------------------------------------------------------------------
+#   geiranger: the Seven Sisters (De syv søstre) wall on the north side of
+#     Geirangerfjorden.  The falls plunge ~250 m off the shelf at Knivsflå
+#     into the fjord; the center below sits ON the water just south of the
+#     falls so a 4 km square holds the whole wall (0 -> ~1400 m), the fjord
+#     channel and the opposite (Skageflå) side.  Verify with --preview.
 PRESETS = {
     "trollstigen": (62.4525, 7.6675),
     "aalesund": (62.4722, 6.1495),
     "alesund": (62.4722, 6.1495),  # alias for aalesund (deprecated spelling)
+    "geiranger": (62.1090, 7.1122),
 }
 
 # WCS elevation endpoint (ArcGIS - only the WCS 1.0.0 bbox form works here;
@@ -225,6 +231,29 @@ def _fetch_grid_window(originE, originN, size, res, row0, row1, col0, col1,
 def fetch_heights(originE, originN, size, res, dim):
     """Fetch the full dim x dim node-aligned DTM height grid."""
     return _fetch_grid_window(originE, originN, size, res, 0, dim, 0, dim)
+
+
+def fetch_canopy(heights, originE, originN, size, res, dim):
+    """
+    Canopy height model (CHM) = DOM - DTM over the whole region, quantised to
+    unsigned quarter-metres.
+
+    WHY quarter-metre u8: the consumer only needs "is there forest here and
+    roughly how tall" -- 0.25 m steps over 0..63.75 m covers every Norwegian
+    tree with room to spare, and one byte per node keeps a 4001^2 grid at
+    16 MB instead of 64 MB.  Values are clamped, so buildings and power
+    pylons saturate at 63.75 m rather than wrapping.
+
+    The DOM is the same national NHM lidar campaign as the DTM and is fetched
+    on the SAME node grid, so no resampling is involved and the difference is
+    exact per node.  Sea and nodata are 0 in both models, so water reads 0.
+    """
+    dom = _fetch_grid_window(originE, originN, size, res, 0, dim, 0, dim,
+                             url=WCS_DOM_URL, coverage=WCS_DOM_COVERAGE,
+                             label="DOM")
+    chm = dom - heights
+    np.clip(chm, 0.0, 63.75, out=chm)
+    return np.rint(chm * 4.0).astype(np.uint8)
 
 
 # ==========================================================================
@@ -967,7 +996,7 @@ def write_preview(pack_dir, heights, roads, size, res, dim, buildings=None):
 # ==========================================================================
 def build_region(name, lat, lon, size, res, out_dir, include_paths,
                  do_roads=True, do_buildings=False, do_preview=False,
-                 texture=None, texture_res=2.0):
+                 texture=None, texture_res=2.0, do_canopy=False):
     dim = int(round(size / res)) + 1
     transformer = Transformer.from_crs("EPSG:4326", "EPSG:25833", always_xy=True)
     originE, originN = transformer.transform(lon, lat)
@@ -982,6 +1011,14 @@ def build_region(name, lat, lon, size, res, out_dir, include_paths,
     heights = fetch_heights(originE, originN, size, res, dim)
     hmin, hmax = float(heights.min()), float(heights.max())
     print(f"  heights: min={hmin:.2f} max={hmax:.2f} m", flush=True)
+
+    canopy = None
+    if do_canopy:
+        print("Fetching canopy height model (Kartverket DOM - DTM)...", flush=True)
+        canopy = fetch_canopy(heights, originE, originN, size, res, dim)
+        forest_frac = float((canopy > 8).mean())  # >8 quarter-m = >2 m
+        print(f"  canopy: max={canopy.max() / 4.0:.2f} m, "
+              f"{100.0 * forest_frac:.1f}% of cells above 2 m", flush=True)
 
     roads_local = []
     if do_roads:
@@ -1012,6 +1049,10 @@ def build_region(name, lat, lon, size, res, out_dir, include_paths,
 
     # --- write heights.f32 (row-major, iz*dim+ix; row 0 = north, no flip) ---
     heights.astype("<f4").tofile(os.path.join(pack_dir, "heights.f32"))
+
+    # --- write canopy.u8 (same row-major node layout as heights.f32) ---
+    if canopy is not None:
+        canopy.tofile(os.path.join(pack_dir, "canopy.u8"))
 
     # --- write roads.json ---
     with open(os.path.join(pack_dir, "roads.json"), "w", encoding="utf-8") as f:
@@ -1064,6 +1105,9 @@ def build_region(name, lat, lon, size, res, out_dir, include_paths,
     }
     if do_buildings:
         region["buildings"] = "buildings.json"
+    if canopy is not None:
+        region["canopy"] = "canopy.u8"
+        region["canopyScale"] = 0.25  # u8 value * scale = canopy height in m
     if texture:
         region["texture"] = "texture.png"
         region["textureLayer"] = texture
@@ -1098,6 +1142,9 @@ def parse_args(argv):
                          "raster WMS (writes texture.png)")
     ap.add_argument("--texture-res", type=float, default=2.0,
                     help="texture resolution m/px (default 2)")
+    ap.add_argument("--canopy", action="store_true",
+                    help="fetch the DOM over the whole region and write a "
+                         "canopy height model (canopy.u8, quarter-metres)")
     ap.add_argument("--preview", action="store_true", help="render hillshade+roads preview")
     return ap.parse_args(argv)
 
@@ -1121,7 +1168,8 @@ def main(argv=None):
                  do_buildings=args.buildings,
                  do_preview=args.preview,
                  texture=args.texture,
-                 texture_res=args.texture_res)
+                 texture_res=args.texture_res,
+                 do_canopy=args.canopy)
     print("Done.", flush=True)
     return 0
 

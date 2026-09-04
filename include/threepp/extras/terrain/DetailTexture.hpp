@@ -73,10 +73,14 @@ namespace threepp::terrain {
     //   • roughness is shaped per material (crack dust rough, pebble tops
     //     smoother, snow near-uniform with sparkle glints).
     // Everything is periodic (wrapping lattices), LINEAR, 0.5-neutral in RGB.
+    // Generator kinds. 0..3 double as the standard band-slot order; Cliff is an
+    // ALTERNATIVE generator for slot 1 (rock) — a gneiss wall rather than the
+    // generic fractured-plate rock — so it takes an index past the four slots.
     enum class BandKind { Grass = 0,
                           Rock = 1,
                           Scree = 2,
-                          Snow = 3 };
+                          Snow = 3,
+                          Cliff = 4 };
 
     namespace banddetail {
 
@@ -173,6 +177,16 @@ namespace threepp::terrain {
                 if (defR) roughContrast = 0.45f;
                 if (defH) chroma = 0.03f;
                 break;
+            case BandKind::Cliff:
+                // Gneiss reads through LUMINANCE structure, not hue: chroma
+                // stays below the 0.02 "reptile scale" threshold that turned
+                // the generic rock band purple at mid distance. The extra
+                // roughness contrast is what separates wet veins from dry face.
+                if (defC) albedoContrast = 0.34f;
+                if (defN) normalStrength = 6.5f;
+                if (defR) roughContrast = 0.60f;
+                if (defH) chroma = 0.012f;
+                break;
             case BandKind::Snow:
                 // NOT near-flat: a flat snow band reads as untextured plaster
                 // wherever the snowline transition assigns it partial weight
@@ -209,6 +223,40 @@ namespace threepp::terrain {
                         id = s.id;
                         r = 0.5f + 0.5f * std::max(crack, crack2 * 0.6f)// crack dust = rough
                             - 0.15f * (h - 0.5f);                      // worn tops slightly smoother
+                        break;
+                    }
+                    case BandKind::Cliff: {
+                        // Gneiss wall. Three structures, in the order they read
+                        // from 600 m out:
+                        //  1. FOLIATION — the metamorphic banding. Stretched
+                        //     along texture V (high frequency in u, ~flat in
+                        //     v). The Vulkan terrain path projects side faces
+                        //     with V along world Y, so these bands hang
+                        //     VERTICALLY down a wall. That single cue is what
+                        //     separates "cliff" from "grey noise".
+                        //  2. JOINT BLOCKS — a coarse Voronoi whose F2−F1
+                        //     pinch cuts the fracture planes between columns.
+                        //  3. WET VEINS — narrow, near-vertical dark streaks
+                        //     with a big roughness DROP: seepage lines. The
+                        //     flow-accumulation paint places wet regions; this
+                        //     gives them their sub-metre structure and gloss.
+                        // Pale weathering + rare lichen specks lift the mean so
+                        // the face is not uniformly dark.
+                        const auto s = banddetail::voronoi(u, v, 5, seed);
+                        const float crack = 1.f - math::smoothstep(0.f, 0.13f, s.f2 - s.f1);
+                        const float foliation = sampleLat(l24, 24, u * 5.f, v * 0.30f);
+                        const float fine = sampleLat(l24, 24, u * 11.f, v * 0.60f);
+                        const float weather = sampleLat(l8, 8, u, v);
+                        const float vein = math::smoothstep(
+                                0.70f, 0.95f, sampleLat(l8g, 8, u * 3.f, v * 0.12f));
+                        const float lichen = banddetail::bandHash(i, j, seed + 7u) > 0.988f ? 1.f : 0.f;
+                        h = std::clamp(0.52f + 0.20f * (foliation - 0.5f) + 0.10f * (fine - 0.5f) +
+                                               0.10f * (s.id - 0.5f) - 0.30f * crack - 0.12f * vein +
+                                               0.18f * lichen,
+                                       0.f, 1.f);
+                        id = 0.35f * weather + 0.35f * foliation + 0.30f * s.id;
+                        r = 0.5f + 0.30f * crack + 0.18f * (weather - 0.5f) - 0.42f * vein -
+                            0.20f * lichen;
                         break;
                     }
                     case BandKind::Grass: {
@@ -328,13 +376,18 @@ namespace threepp::terrain {
         std::array<float, 4> roughness{0.92f, 0.82f, 0.9f, 0.45f};
     };
 
-    inline TerrainBandSet makeTerrainBandSet(unsigned int seed = 4242u) {
+    // `rockKind` swaps what fills band slot 1: Rock (generic fractured plates,
+    // the default) or Cliff (gneiss foliation + joint blocks + wet veins). The
+    // slot index, the repeat and the weight-map channel are unchanged, so a
+    // caller flips the look of every steep face with one argument.
+    inline TerrainBandSet makeTerrainBandSet(unsigned int seed = 4242u,
+                                             BandKind rockKind = BandKind::Rock) {
         TerrainBandSet s;
         DetailMapOptions o;
         o.seed = seed;
         o.dim = 512;// metre-scale periods need cm-scale texels (cracks, blades)
         s.band[0] = makeBandMaps(BandKind::Grass, o);
-        s.band[1] = makeBandMaps(BandKind::Rock, o);
+        s.band[1] = makeBandMaps(rockKind, o);
         s.band[2] = makeBandMaps(BandKind::Scree, o);
         s.band[3] = makeBandMaps(BandKind::Snow, o);
         return s;

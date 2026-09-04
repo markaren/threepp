@@ -6,6 +6,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -33,6 +35,90 @@ namespace threepp::terrain {
         }
 
     }// namespace
+
+    HeightGrid computeFlowAccumulation(const HeightGrid& dem, float targetCell) {
+        if (!dem.valid()) return {};
+
+        const int dim = dem.dim();
+        const float world = dem.worldSize();
+        const float demStep = world / static_cast<float>(dim - 1);
+        // Routing grid is capped at 2048 per side: the sort is O(N log N) over
+        // every cell, and an uncapped 8 km / 2 m pack (4001²  = 16 M cells)
+        // adds seconds to load for a field that is only ever sampled at metre
+        // scale. The cap costs the 1 m pack nothing (it already wants stride 2).
+        constexpr int kMaxFlowDim = 2048;
+        const int strideCap = (dim - 2) / (kMaxFlowDim - 1) + 1;
+        const int stride = std::max({1, strideCap, static_cast<int>(std::lround(targetCell / demStep))});
+        const int fd = (dim - 1) / stride + 1;
+        if (fd < 4) return {};
+        const float cell = world / static_cast<float>(fd - 1);
+
+        // ── routing DEM: box mean over each stride×stride window ─────────────
+        // The mean (not a point sample) is what removes the single-cell lidar
+        // pits that would otherwise terminate a fall line halfway down a wall.
+        const std::vector<float>& src = dem.data();
+        std::vector<float> h(static_cast<size_t>(fd) * fd, 0.f);
+        for (int jz = 0; jz < fd; ++jz) {
+            const int z0 = jz * stride, z1 = std::min(z0 + stride, dim);
+            for (int jx = 0; jx < fd; ++jx) {
+                const int x0 = jx * stride, x1 = std::min(x0 + stride, dim);
+                double s = 0.0;
+                int n = 0;
+                for (int z = z0; z < z1; ++z)
+                    for (int x = x0; x < x1; ++x) {
+                        s += src[static_cast<size_t>(z) * dim + x];
+                        ++n;
+                    }
+                h[static_cast<size_t>(jz) * fd + jx] = n ? static_cast<float>(s / n) : 0.f;
+            }
+        }
+
+        // ── D8: one pass, cells visited high → low ──────────────────────────
+        // Processing in descending height order guarantees a cell's own inflow
+        // is complete before it donates downstream, so a single linear sweep
+        // gives exact accumulation — no iteration to convergence.
+        const size_t n = h.size();
+        std::vector<std::uint32_t> order(n);
+        for (std::uint32_t i = 0; i < n; ++i) order[i] = i;
+        std::sort(order.begin(), order.end(),
+                  [&h](std::uint32_t a, std::uint32_t b) { return h[a] > h[b]; });
+
+        std::vector<float> acc(n, 1.f);// every cell drains at least itself
+        static constexpr int DX[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+        static constexpr int DZ[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+        for (const std::uint32_t idx : order) {
+            const int jx = static_cast<int>(idx % fd);
+            const int jz = static_cast<int>(idx / fd);
+            const float hc = h[idx];
+            int best = -1;
+            float bestGrad = 0.f;
+            for (int k = 0; k < 8; ++k) {
+                const int nx = jx + DX[k], nz = jz + DZ[k];
+                if (nx < 0 || nz < 0 || nx >= fd || nz >= fd) continue;
+                const size_t ni = static_cast<size_t>(nz) * fd + nx;
+                // Steepest DESCENT per unit distance — the diagonal step is
+                // √2 longer, so an unweighted drop comparison would bias the
+                // routing into diagonal staircases.
+                const float drop = hc - h[ni];
+                if (drop <= 0.f) continue;
+                const float dist = (DX[k] && DZ[k]) ? 1.41421356f : 1.f;
+                const float g = drop / dist;
+                if (g > bestGrad) {
+                    bestGrad = g;
+                    best = static_cast<int>(ni);
+                }
+            }
+            if (best >= 0) acc[best] += acc[idx];// no lower neighbour ⇒ sink, stops
+        }
+
+        // ── log-normalise to 0..1 ───────────────────────────────────────────
+        const float cellArea = cell * cell;
+        const float denom = std::log1p(static_cast<float>(n) * cellArea);
+        for (size_t i = 0; i < n; ++i)
+            acc[i] = std::clamp(std::log1p(acc[i] * cellArea) / denom, 0.f, 1.f);
+
+        return HeightGrid(std::move(acc), fd, world);
+    }
 
     GeoTerrainPack GeoTerrainPack::load(const std::string& path) {
         namespace fs = std::filesystem;
@@ -93,6 +179,35 @@ namespace threepp::terrain {
         // Row-major [iz*dim+ix], spanning [-worldSize/2,+worldSize/2] around the
         // origin — the pack's stated layout. Drops straight into HeightGrid.
         pack.grid = HeightGrid(std::move(heights), r.dim, r.worldSize);
+
+        // ── canopy.u8 (optional) ─────────────────────────────────────────────
+        // Same node layout as heights.f32, one unsigned byte per node holding
+        // canopy height in units of `canopyScale` metres (0.25 by default, so
+        // 0..63.75 m). Missing file = pack predates the CHM: not an error, the
+        // grid simply stays invalid and every consumer falls back.
+        if (auto itCanopy = rj.find("canopy"); itCanopy != rj.end() && itCanopy->is_string()) {
+            const fs::path canopyPath = packDir / itCanopy->get<std::string>();
+            const float scale = rj.value("canopyScale", 0.25f);
+            const std::uint64_t expectC =
+                    static_cast<std::uint64_t>(r.dim) * static_cast<std::uint64_t>(r.dim);
+            std::error_code ecc;
+            if (fs::exists(canopyPath) && fs::file_size(canopyPath, ecc) == expectC && !ecc) {
+                std::vector<unsigned char> raw(static_cast<size_t>(expectC));
+                std::ifstream cf(canopyPath, std::ios::binary);
+                if (cf) {
+                    cf.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(expectC));
+                    if (cf.gcount() == static_cast<std::streamsize>(expectC)) {
+                        std::vector<float> canopy(raw.size());
+                        for (size_t i = 0; i < raw.size(); ++i)
+                            canopy[i] = static_cast<float>(raw[i]) * scale;
+                        pack.canopy = HeightGrid(std::move(canopy), r.dim, r.worldSize);
+                    }
+                }
+            }
+        }
+
+        // ── flow accumulation (derived, always) ──────────────────────────────
+        pack.flow = computeFlowAccumulation(pack.grid);
 
         // ── roads.json ───────────────────────────────────────────────────────
         const std::string roadsName = rj.value("roads", std::string("roads.json"));

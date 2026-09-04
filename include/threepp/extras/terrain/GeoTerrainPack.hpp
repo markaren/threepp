@@ -101,12 +101,46 @@ namespace threepp::terrain {
         std::string attribution;     // data licence / credit to print
     };
 
+    // ── Flow accumulation (D8) ──────────────────────────────────────────────
+    //
+    // "How much land drains through this point": the single field that tells a
+    // shader where water runs. Streams, wet streaks on a rock face and the
+    // scree fans below a gully are all the SAME structure at different slopes,
+    // so one grid drives all three instead of three hand-tuned noise fields.
+    //
+    // Returns a HeightGrid (same layout/extent as `dem`, coarser) whose value
+    // is log1p(drained area) / log1p(total area) — 0 on a ridge crest, →1 in a
+    // main channel. Log because drainage area is scale-free: a linear grid is
+    // ~0 everywhere except the few main channels, which paints nothing.
+    //
+    // `targetCell` is the routing resolution in metres (the DEM is box-averaged
+    // down to it). Coarsening is deliberate, not just a speed trick: raw 1 m
+    // lidar is full of one-cell pits that terminate D8 routing, and a 2 m box
+    // mean removes most of them while keeping gullies. Sinks that survive
+    // simply stop accumulating (no depression filling) — on a fjord wall the
+    // fall lines are monotone, so this is invisible.
+    HeightGrid computeFlowAccumulation(const HeightGrid& dem, float targetCell = 2.f);
+
     // A loaded region pack: elevation grid + roads + buildings + metadata.
     struct GeoTerrainPack {
         GeoRegion region;
         HeightGrid grid;             // dim×dim, centred at origin, worldSize wide
         std::vector<GeoRoad> roads;
         std::vector<GeoBuilding> buildings;// empty if the pack has none
+
+        // Canopy height model (DOM − DTM), metres of vegetation above ground,
+        // on the SAME node grid as `grid`. Invalid (!valid()) when the pack has
+        // no canopy.u8 — every consumer must check. This is measured ground
+        // truth for where forest stands, replacing hand-tuned altitude rules.
+        HeightGrid canopy;
+
+        // D8 flow accumulation, log-normalised 0..1 (see above). Built at load
+        // from `grid`; coarser than `grid`, same world extent. Both grids are
+        // read-only after load(), so provider callbacks stay pure/thread-safe.
+        HeightGrid flow;
+
+        [[nodiscard]] bool hasCanopy() const { return canopy.valid(); }
+        [[nodiscard]] bool hasFlow() const { return flow.valid(); }
 
         [[nodiscard]] bool valid() const { return region.dim >= 4 && grid.valid(); }
 
