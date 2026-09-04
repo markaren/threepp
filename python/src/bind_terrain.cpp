@@ -1,6 +1,7 @@
 #include "bindings.hpp"
 
 #include "threepp/constants.hpp"
+#include "threepp/extras/terrain/GeoScene.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/textures/Texture.hpp"
@@ -8,6 +9,7 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
+#include <array>
 #include <cstring>
 
 namespace threepp_py {
@@ -159,6 +161,75 @@ namespace threepp_py {
                          return t;
                      }, py::arg("params"),
                      "Bake splat colours into a sRGB DataTexture ready for material.map.");
+
+        // ── GeoScene ──────────────────────────────────────────────────────────
+        // Real-world geodata terrain (Kartverket DTM region pack) as ONE Group:
+        // tiles + LOD, band structure sets, cliff shell, canopy forest and
+        // synthetic bathymetry, all wired with the norway_terrain defaults.
+        // Holder is shared_ptr and the base is Group, so it drops straight into
+        // scene.add() and behaves like any other Object3D from Python.
+        py::class_<GeoScene, Group, std::shared_ptr<GeoScene>>(m, "GeoScene")
+                .def(py::init([](const std::string& packDir, bool bands, bool cliffShell,
+                                 bool forest, float forestExtent,
+                                 const std::array<float, 3>& forestFocus, int forestCap,
+                                 bool scatter, float shellLevelStep, float shellExtent,
+                                 bool bathymetry, float shoreSlope, float maxDepth,
+                                 unsigned int seed) {
+                         GeoSceneOptions o;
+                         o.packDir = packDir;
+                         o.bands = bands;
+                         o.cliffShell = cliffShell;
+                         o.forest = forest;
+                         o.forestExtent = forestExtent;
+                         o.forestCap = forestCap;
+                         o.focus.set(forestFocus[0], forestFocus[1], forestFocus[2]);
+                         o.scatter = scatter;
+                         o.shellLevelStep = shellLevelStep;
+                         o.shellExtent = shellExtent;
+                         o.bathymetry = bathymetry;
+                         o.shoreSlope = shoreSlope;
+                         o.maxDepth = maxDepth;
+                         o.seed = seed;
+                         // Loading a 4 km 1 m pack is seconds of I/O + a distance
+                         // transform + shell/forest baking: hold no GIL for it,
+                         // or a threaded caller stalls for the whole load.
+                         py::gil_scoped_release r;
+                         return GeoScene::create(o);
+                     }),
+                     py::arg("pack_dir"), py::arg("bands") = true,
+                     py::arg("cliff_shell") = true, py::arg("forest") = true,
+                     py::arg("forest_extent") = 1100.f,
+                     py::arg("forest_focus") = std::array<float, 3>{0.f, 0.f, 0.f},
+                     py::arg("forest_cap") = 40000, py::arg("scatter") = true,
+                     py::arg("shell_level_step") = 2.f, py::arg("shell_extent") = 1200.f,
+                     py::arg("bathymetry") = true, py::arg("shore_slope") = 0.35f,
+                     py::arg("max_depth") = 180.f, py::arg("seed") = 4242u,
+                     "Load a geodata region pack and build the whole terrain scene. "
+                     "Raises RuntimeError if the pack directory is missing or malformed.")
+                .def("update", [](GeoScene& g, const Vector3& p) { g.update(p); }, py::arg("pos"),
+                     "Once per frame, with the ACTIVE camera position: tile LOD + scatter.")
+                .def("update", [](GeoScene& g, const std::array<float, 3>& p) {
+                         g.update(Vector3(p[0], p[1], p[2]));
+                     }, py::arg("pos"))
+                .def("height_at", &GeoScene::heightAt, py::arg("x"), py::arg("z"),
+                     "Terrain height (m) at a world XZ — DEM + road carve + relief + bathymetry.")
+                .def_property_readonly("pack_world_size", &GeoScene::packWorldSize)
+                .def_property_readonly("sea_level", &GeoScene::seaLevel)
+                .def_property_readonly("height_min", [](const GeoScene& g) { return g.pack().region.heightMin; })
+                .def_property_readonly("height_max", [](const GeoScene& g) { return g.pack().region.heightMax; })
+                .def_property_readonly("attribution", [](const GeoScene& g) { return g.pack().region.attribution; })
+                .def_property_readonly("stats", [](const GeoScene& g) {
+                         const auto s = g.stats();
+                         py::dict d;
+                         d["tiles"] = s.tiles;
+                         d["baking"] = s.baking;
+                         d["shell_tris"] = s.shellTris;
+                         d["forest_sites"] = s.forestSites;
+                         d["forest_cells"] = s.forestCells;
+                         d["load_seconds"] = s.loadSeconds;
+                         return d;
+                     },
+                     "dict: tiles, baking, shell_tris, forest_sites, forest_cells, load_seconds.");
 
         // ── Free functions ────────────────────────────────────────────────────
         m.def("apply_terrain_preset",
