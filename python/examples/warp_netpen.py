@@ -43,6 +43,22 @@ PROFILE = "--profile" in sys.argv
 INTEROP = "--no-interop" not in sys.argv          # CUDA->Vulkan zero copy for the school (host upload otherwise)
 NET_INTEROP = "--net-interop" in sys.argv         # opt-in repro: four interop meshes = VK_ERROR_DEVICE_LOST on dev 2026-09-03
 
+# ---- the real site ----------------------------------------------------------
+# --terrain [packdir] puts the pen where it actually is: Norddalsfjorden,
+# 62.28428673 N 7.27893000 E, offshore of a 500 m fjord wall. The pack is
+# FETCHED CENTRED ON THAT POINT, so the pack origin IS the site and the pen
+# stays exactly where it has always been -- at the world origin, WATER_Y 0.
+# Nothing about the pen, the barge or the ROV moves; the world grows around it.
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+TERRAIN = "--terrain" in sys.argv
+TERRAIN_DIR = cli_arg("--terrain", os.path.join(ROOT, "geodata", "norddal"), str)
+if TERRAIN and not os.path.isfile(os.path.join(TERRAIN_DIR, "region.json")):
+    print(f"no region pack at {TERRAIN_DIR}\nfetch it with:\n"
+          f"  python scripts/geodata/fetch_norway_terrain.py "
+          f"--center 62.28428672700424,7.27893000198078 --size 4000 --res 1 "
+          f"--canopy --preview --name {os.path.basename(TERRAIN_DIR)}")
+    sys.exit(2)
+
 # ---- world ------------------------------------------------------------------
 WATER_Y = 0.0
 PEN_R, PEN_D = 7.0, 8.0
@@ -520,10 +536,54 @@ ocean.material.attenuation_color = tp.Color(0.16, 0.30, 0.24)   # fjord water fr
 ocean.material.attenuation_distance = 2.5
 if "--no-ocean" not in sys.argv:
     scene.add(ocean)
-floor = tp.Mesh(tp.PlaneGeometry(400.0, 400.0), standard_material(0x03060a))
-floor.rotate_x(-math.pi / 2)
-floor.position.y = -45.0
-scene.add(floor)
+
+# ---- terrain: the real fjord around the pen ----------------------------------
+GEO = None
+if TERRAIN:
+    _t0 = time.perf_counter()
+    # forest_focus at the origin = the pen: a 4 km pack is 16 M cells and every
+    # cut looks at the same 600 m of wall, so the shell + forest budget is spent
+    # there rather than thin across the square. scatter off -- the near-field
+    # stones/tufts ring follows the CAMERA, and this camera lives over (and
+    # under) water, so every cell it built would land on the seabed.
+    GEO = tp.GeoScene(TERRAIN_DIR, forest_focus=(0.0, 0.0, 0.0), scatter=False)
+    scene.add(GEO)
+    # The DTM has no soundings; GeoScene's distance-to-shore bathymetry is what
+    # puts water under the pen. Print it: if this is ~0 the pack is not centred
+    # on open water and the pen is sitting on a beach.
+    print(f"terrain: {os.path.basename(TERRAIN_DIR)} {GEO.pack_world_size:.0f} m, "
+          f"{GEO.height_min:.0f}..{GEO.height_max:.0f} m, {GEO.stats}; "
+          f"seabed under the pen {GEO.height_at(0.0, 0.0):.1f} m, "
+          f"loaded in {time.perf_counter() - _t0:.1f} s")
+    # Water out to the pack edge. The 320 m FFT sheet above stays the PEN's
+    # water (0.83 m vertex spacing is what makes the surface read from 2 m away,
+    # and barge_bob samples it at the hull corners); this one only has to fill
+    # the 160 m..2 km band between it and the shore, where a crest is a pixel.
+    #
+    # The two sheets OVERLAP over the whole near disc, and depth decides which
+    # is drawn -- so the far one must never rise into the near one. Looked at:
+    # at -0.08 m with its own waves on, its 19.5 m-spaced crests won the depth
+    # test in broad patches and replaced the pen's chop with smooth plates
+    # (compare noterrain_film_c0_24.png). Fix is both halves: FLAT (wave_scale
+    # 0.35 leaves a slow distant swell, not chop that can lift) and 0.9 m down,
+    # which is below every trough of the near sheet. The cost is a 0.9 m band
+    # of exposed foreshore at the waterline -- 5 px at the 200 m shore, and it
+    # reads as a tide line.
+    ocean_far = tp.Ocean(size=GEO.pack_world_size * 1.25, resolution=256, wind_speed=7.0,
+                         wind_theta=0.6, choppiness=0.35, fft_size=256, fetch=3e3)
+    ocean_far.params.foam_amount = 0.0
+    ocean_far.params.wave_scale = 0.35
+    ocean_far.material.attenuation_color = tp.Color(0.16, 0.30, 0.24)
+    ocean_far.material.attenuation_distance = 2.5
+    ocean_far.position.y = WATER_Y - 0.9
+    if "--no-ocean" not in sys.argv:
+        scene.add(ocean_far)
+else:
+    # No terrain: the flat stand-in seabed the demo has always had.
+    floor = tp.Mesh(tp.PlaneGeometry(400.0, 400.0), standard_material(0x03060a))
+    floor.rotate_x(-math.pi / 2)
+    floor.position.y = -45.0
+    scene.add(floor)
 MURK_PLANE = WATER_Y + 0.30            # deep cuts: above every crest, or a crest shaded from above prints sun glints through the murk
 
 
@@ -2580,6 +2640,12 @@ def step(dt=1.0 / 60.0):
         p.rotation.y += dt * 45.0 * min(cmd, 1.5) * (1 if k % 2 else -1)
     bubbles_step(dt)
     barge_bob()
+    if GEO is not None:
+        # Tile LOD + shell/forest LOD follow the ACTIVE camera. step() runs
+        # before the cut's film_cam() places it, so the tiles see last frame's
+        # position -- at 60 fps and these camera speeds that is centimetres,
+        # far inside the split/merge dead band.
+        GEO.update(camera.position)
     if gulls.position.y > -1.0:
         gulls.update(dt)
     mark("props+bubbles")
@@ -2752,11 +2818,61 @@ TEST_T = (1.0, 8.0, 13.5, 17.0, 20.0, 23.5, 26.0, 29.0, 33.0, 38.0, 45.0, 50.0, 
 POSTER_U = 0.9
 
 
+TERRAIN_CLEAR = 3.0                                   # metres of air the eye keeps over the ground
+TERRAIN_HIT = [0.0, 0.0]                              # worst violation found by the pre-scan: metres, film time
+
+
+def terrain_clear(eye):
+    """Never let the eye enter the fjord. Cheap: the seabed under the pen is 35 m down, so
+    every underwater cut passes untouched; only an aerial that flew into the wall moves."""
+    if GEO is None:
+        return eye
+    floor_y = GEO.height_at(float(eye[0]), float(eye[2])) + TERRAIN_CLEAR
+    if eye[1] < floor_y:
+        eye = np.array(eye, np.float64)
+        eye[1] = floor_y
+    return eye
+
+
+def terrain_scan():
+    """Walk the whole camera schedule against the ground BEFORE the fix and report the worst
+    violation, so a path that grazes the wall is a printed number and not a surprise in cut 0."""
+    if GEO is None:
+        return
+    # Cut 0 only: it is the one that starts 34 m in the air and flies in. The
+    # other three sit at the pen under water, where the ground is 35 m below the
+    # deepest of them -- and calling their cam functions here would cache
+    # cam_tear's _anchor against the wrong ROV pose.
+    if FILM or FILM_BENCH:                            # the aerial only exists in the film
+        build_approach()
+        g_y, worst, at = gulls.position.y, 0.0, 0.0
+        for i in range(int(T_END * 10) + 1):
+            t = i / 10.0
+            eye = np.asarray(cam_approach(min(t / T_END, 1.0), t)[0], np.float64)
+            v = GEO.height_at(float(eye[0]), float(eye[2])) + TERRAIN_CLEAR - eye[1]
+            if v > worst:
+                worst, at = v, t
+        gulls.position.y = g_y                        # cam_approach parks/unparks them: put it back
+        TERRAIN_HIT[:] = [worst, at]
+        print(f"terrain: approach path vs ground, worst clearance violation {worst:.2f} m at film t={at:.1f} s"
+              f" ({'lifted by terrain_clear()' if worst > 0 else 'path is clear'}); "
+              f"clearance floor {TERRAIN_CLEAR:.1f} m")
+    # Is the pen in the wall's shadow at this sun? SUN_DIR is fixed (the tear
+    # lighting depends on it), so the only honest thing to do is measure the
+    # skyline along the sun bearing and print how far the sun clears it.
+    el = math.degrees(math.asin(SUN_DIR[1]))
+    rise = max(math.degrees(math.atan2(GEO.height_at(SUN_H[0] * r, SUN_H[1] * r) - WATER_Y, r))
+               for r in range(20, 2000, 10))
+    print(f"terrain: sun elevation {el:.1f} deg on bearing {math.degrees(math.atan2(SUN_H[0], SUN_H[1])):.0f} deg; "
+          f"skyline along that bearing rises to {rise:.1f} deg -> sun clears the wall by {el - rise:.1f} deg")
+
+
 def film_cam(cut, u, t):
     eye, tgt, fov = CUTS[cut][2](u, t)
     camera.fov = fov
     camera.update_projection_matrix()
     eye = net_clear(np.asarray(eye, np.float64))
+    eye = terrain_clear(eye)
     d = net_nearest(eye)[0]
     if d < CAM_STATS[1]:
         CAM_STATS[1], CAM_STATS[2] = d, t
@@ -2888,6 +3004,8 @@ arm_net_interop()
 print(f"fish: {'interop' if fish_vk else 'host upload'}; net: {'interop' if net_vk else 'host upload'}; "
       f"ROV cam: {'pip' if PIP else 'readback'}")
 
+terrain_scan()
+
 if FILM_BENCH:
     film_bench()
 elif FILM:
@@ -2896,13 +3014,19 @@ elif HEADLESS:
     os.makedirs(os.path.dirname(OUT) or ".", exist_ok=True)
     place(camera, SHOT)
     frames = int(SECONDS * 60)
-    for _ in range(frames):
+    WARM_B, t_bench = min(60, frames // 2), 0.0     # skip pipeline warm-up + the first tile bakes
+    for i in range(frames):
+        if i == WARM_B:
+            t_bench = time.perf_counter()
         step()
         if SHOTS[SHOT] is None:
             place(camera, SHOT)
         renderer.render(scene, camera)
+    t_bench, n_bench = time.perf_counter() - t_bench, frames - WARM_B
     renderer.save_frame(scene, camera, OUT)
     print(f"simulated {SECONDS:.1f} s ({frames} frames), wrote {OUT}")
+    print(f"frame path: {1e3 * t_bench / n_bench:.1f} ms/f = {n_bench / t_bench:.1f} fps at {W}x{H}"
+          f" over {n_bench} frames ({'terrain ON' if GEO is not None else 'terrain off'})")
     rov_report()
     if SHOT == "p1_tear":
         for _ in range(30):
