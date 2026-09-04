@@ -202,6 +202,33 @@ namespace threepp::vegetation {
         // colours (see makeLeafGeometry). 0 disables it and leaves foliage lit
         // only by its own normals — flat, with no interior depth.
         float foliageOcclusion = 1.0f;
+        // Baked canopy occlusion on LeafStyle::Blob puffs, PER VERTEX, as a
+        // multiple of foliageOcclusion. 0 (the default, and byte-identical to
+        // the old behaviour) shades a puff with ONE tint sampled at its CENTRE.
+        //
+        // A card carries the occlusion of the point it is drawn at, so a card
+        // canopy's outer shell is exposed and its core is dark. A puff sampled
+        // at its centre carries the CORE value over its whole surface — the
+        // visible shell included — which at leaf-size radii is a voxel or two
+        // away from where the pixels are. The tint is not just brightness (it
+        // also swings hue from open-canopy yellow-green to buried blue-green),
+        // so the far tier ends up hue-shifted against the near one even after
+        // the albedos are matched. Sampling per vertex puts each part of the
+        // puff on its own occlusion, and >1 pushes the contrast further (a
+        // caller that solves its blob albedo against a measured target — see
+        // CanopyForest's makeForestTreeVariant — renormalises the mean, so the
+        // contrast costs it nothing).
+        //
+        // MEASURED, and it is why the default is 0. On the fjord demo's far
+        // tier it is the wrong lever for the bright-speckle end: the visible
+        // SHELL of a puff really is more exposed than its centre, so shading it
+        // per vertex makes the sunward cap brighter, not darker. All-L0 against
+        // all-L1 over the same frame (geiranger, a lit bench at ~250 m,
+        // green-dominant tree mask): tree pixels over G=90 went 0.75% -> 1.00%
+        // against the card tier's 0.59% under the demo sun, with the means and
+        // G/R unchanged inside 2%. The far tier's residual is COVERAGE (an
+        // opaque sphere against a cutout canopy), not baked occlusion.
+        float blobOcclusion = 0.f;
 
         // ── Albedo hints (sRGB) ──────────────────────────────────────────
         std::array<float, 3> barkColor = {0.35f, 0.25f, 0.18f};
@@ -647,8 +674,44 @@ namespace threepp::vegetation {
             // draw time and works identically on every backend.
             const CanopyField field = buildCanopyField(tp, depthThresh, radiusThresh);
 
+            // Foliage tint at a POINT, with the per-card/per-puff brightness
+            // jitter passed in rather than drawn here — so the same shading can
+            // be evaluated many times (once per puff vertex) without touching
+            // the rng stream, which the geometry itself depends on. See
+            // `tintFor` below for what the terms mean.
+            auto shadeFor = [&](const Vector3& p, float jitter, float aoScale) {
+                const float h = std::clamp((p.y - canopyMinY) / canopySpan, 0.f, 1.f);
+                const float ao = std::clamp(tp.foliageOcclusion * aoScale, 0.f, 2.f);
+                const float sky = field.skyOcclusion(p) * ao;
+                const float deep = field.burial(p) * ao;
+                // Never reach zero: a canopy interior is dim, not black — it is
+                // still fed by sky bounce through the leaves around it.
+                const float occ = std::clamp(1.f - 0.70f * sky - 0.38f * deep, 0.18f, 1.f);
+                // Every factor is capped at 1, so the vertex colour only ever
+                // DARKENS the texture. Letting it climb above 1 turns it into a
+                // brightness gain on top of the albedo, and the best-lit foliage
+                // blows past the leaf colour into a pale mint that no amount of
+                // tone-mapping brings back.
+                const float bright = occ * jitter * (0.88f + 0.12f * h);
+                // exposure: 1 in full view of the sky, 0 buried.
+                const float expo = std::clamp(1.f - std::max(sky, deep), 0.f, 1.f);
+                Vector3 c;
+                c.set(bright * (0.86f + 0.14f * expo),
+                      bright * (0.94f + 0.06f * expo),
+                      bright * (1.00f - 0.18f * expo));
+                return c;
+            };
+
             // ── Low-poly foliage puff (deformed UV sphere, radial normals) ──
-            auto emitBlob = [&](const Vector3& c, float radius, const Vector3& col) {
+            //
+            // `col` is the puff's tint sampled at its centre; `jitter` is the
+            // brightness draw that produced it, replayed per vertex when
+            // TreeParams::blobOcclusion turns on per-vertex occlusion (so a
+            // puff keeps ONE random brightness and only its baked occlusion
+            // varies across the sphere).
+            const float blobOcc = std::max(0.f, tp.blobOcclusion);
+            auto emitBlob = [&](const Vector3& c, float radius, const Vector3& col,
+                                float jitter) {
                 const int latSegs = std::max(2, tp.blobLatSegs);
                 const int lonSegs = std::max(3, tp.blobLonSegs);
                 constexpr float PI = 3.14159265358979f;
@@ -684,17 +747,25 @@ namespace threepp::vegetation {
                                                 ny * 5.7f + c.x * 1.3f,
                                                 nz * 5.7f + c.y * 1.3f);
                         const float rr = radius * (0.74f + 0.36f * n1 + 0.16f * (n2 - 0.5f));
-                        positions.push_back(c.x + nx * rr);
-                        positions.push_back(c.y + ny * rr);
-                        positions.push_back(c.z + nz * rr);
+                        const Vector3 vp{c.x + nx * rr, c.y + ny * rr, c.z + nz * rr};
+                        positions.push_back(vp.x);
+                        positions.push_back(vp.y);
+                        positions.push_back(vp.z);
                         normals.push_back(nx);
                         normals.push_back(ny);
                         normals.push_back(nz);
                         uvs.push_back(u);
                         uvs.push_back(v);
-                        colors.push_back(col.x);
-                        colors.push_back(col.y);
-                        colors.push_back(col.z);
+                        // Off (default): the centre tint, flat over the sphere.
+                        // On: this vertex's own burial / sky occlusion, so the
+                        // sunward cap of a buried puff is not lit as if it were
+                        // the crown's top and the shell is not tinted with the
+                        // core's hue. Costs one field lookup per vertex at BUILD
+                        // time and nothing at draw time.
+                        const Vector3 vc = blobOcc > 0.f ? shadeFor(vp, jitter, blobOcc) : col;
+                        colors.push_back(vc.x);
+                        colors.push_back(vc.y);
+                        colors.push_back(vc.z);
                     }
                 }
                 const int rowVerts = lonSegs + 1;
@@ -826,26 +897,7 @@ namespace threepp::vegetation {
             // in the core are a deep blue-green. Darkening alone looks like a
             // dirty texture; the hue shift is what sells the depth.
             auto tintFor = [&](const Vector3& p) {
-                const float h = std::clamp((p.y - canopyMinY) / canopySpan, 0.f, 1.f);
-                const float ao = std::clamp(tp.foliageOcclusion, 0.f, 2.f);
-                const float sky = field.skyOcclusion(p) * ao;
-                const float deep = field.burial(p) * ao;
-                // Never reach zero: a canopy interior is dim, not black — it is
-                // still fed by sky bounce through the leaves around it.
-                const float occ = std::clamp(1.f - 0.70f * sky - 0.38f * deep, 0.18f, 1.f);
-                // Every factor is capped at 1, so the vertex colour only ever
-                // DARKENS the texture. Letting it climb above 1 turns it into a
-                // brightness gain on top of the albedo, and the best-lit foliage
-                // blows past the leaf colour into a pale mint that no amount of
-                // tone-mapping brings back.
-                const float bright = occ * (0.86f + unit(rng) * 0.14f) * (0.88f + 0.12f * h);
-                // exposure: 1 in full view of the sky, 0 buried.
-                const float expo = std::clamp(1.f - std::max(sky, deep), 0.f, 1.f);
-                Vector3 c;
-                c.set(bright * (0.86f + 0.14f * expo),
-                      bright * (0.94f + 0.06f * expo),
-                      bright * (1.00f - 0.18f * expo));
-                return c;
+                return shadeFor(p, 0.86f + unit(rng) * 0.14f, 1.f);
             };
 
             // Crown-hull normal. A leaf card is a flat quad, but the canopy it
@@ -999,8 +1051,9 @@ namespace threepp::vegetation {
                         // depends on the compiler, so a "deterministic for a
                         // given seed" tree differs between toolchains.
                         const float puffR = tp.leafSize * sizeVar(rng) * node.leafScale;
-                        const Vector3 puffCol = tintFor(pos);
-                        emitBlob(pos, puffR, puffCol);
+                        const float puffJitter = 0.86f + unit(rng) * 0.14f;
+                        const Vector3 puffCol = shadeFor(pos, puffJitter, 1.f);
+                        emitBlob(pos, puffR, puffCol, puffJitter);
                     }
                     continue;
                 }
