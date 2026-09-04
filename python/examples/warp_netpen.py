@@ -742,6 +742,463 @@ for k in range(48):
         collar.add(tube(((PEN_R + 0.85) * c, WATER_Y - 0.05, (PEN_R + 0.85) * s), far, 0.022, rope_mat, 6))
 scene.add(collar)
 
+# ---- feed barge (fôrflåte) ---------------------------------------------------
+BARGE_POS = np.array([22.0, 0.0, 16.0])          # ~27 m from pen centre; visible in the aerial approach
+BARGE_YAW = 0.85                                   # broadside toward the approach camera
+BARGE_L, BARGE_W = 20.0, 10.0
+
+
+def pipe_along(pts, radius, sides, mat):
+    """Tube mesh along a polyline (feed-line pipes)."""
+    pts = np.asarray(pts, np.float64)
+    n = len(pts)
+    d = np.gradient(pts, axis=0)
+    d /= np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-9)
+    up = np.where(np.abs(d[:, 1:2]) < 0.9, np.float64([[0, 1, 0]]), np.float64([[1, 0, 0]]))
+    b1 = np.cross(d, up)
+    b1 /= np.maximum(np.linalg.norm(b1, axis=1, keepdims=True), 1e-9)
+    b2 = np.cross(d, b1)
+    ang = 2 * np.pi * np.arange(sides) / sides
+    nrm = np.cos(ang)[None, :, None] * b1[:, None] + np.sin(ang)[None, :, None] * b2[:, None]
+    v = (pts[:, None] + radius * nrm).reshape(-1, 3).astype(np.float32)
+    nrm = nrm.reshape(-1, 3).astype(np.float32)
+    i = np.arange(n - 1)[:, None] * sides + np.arange(sides)[None, :]
+    j = np.arange(n - 1)[:, None] * sides + (np.arange(sides)[None, :] + 1) % sides
+    idx = np.stack([i, j, j + sides, i, j + sides, i + sides], -1).reshape(-1).astype(np.uint32)
+    geo = tp.BufferGeometry()
+    geo.set_attribute("position", v)
+    geo.set_attribute("normal", nrm)
+    geo.set_index(idx)
+    m = tp.Mesh(geo, mat)
+    m.cast_shadow = True
+    return m
+
+
+def corrugated_panel(w, h, n_ribs, depth):
+    """BufferGeometry for a corrugated-steel panel in the XY plane (normal +Z).
+    Vertical ribs with cosine profile; the specular response sells the cladding."""
+    nx = n_ribs * 8 + 1
+    ny = max(int(h / 0.6) + 1, 3)
+    xs = np.linspace(-w / 2, w / 2, nx)
+    ys = np.linspace(-h / 2, h / 2, ny)
+    X, Y = np.meshgrid(xs, ys)
+    phase = xs * (n_ribs * 2 * np.pi / w)
+    Z = np.broadcast_to((depth * np.cos(phase))[None, :], (ny, nx)).copy()
+    dz = -depth * (n_ribs * 2 * np.pi / w) * np.sin(phase)
+    inv = 1.0 / np.sqrt(dz ** 2 + 1.0)
+    NX = np.broadcast_to((-dz * inv)[None, :], (ny, nx)).copy()
+    NZ = np.broadcast_to(inv[None, :], (ny, nx)).copy()
+    pos = np.stack([X, Y, Z], -1).reshape(-1, 3).astype(np.float32)
+    nrm = np.stack([NX, np.zeros((ny, nx)), NZ], -1).reshape(-1, 3).astype(np.float32)
+    idx = []
+    for j in range(ny - 1):
+        row = j * nx
+        for i in range(nx - 1):
+            a = row + i
+            idx += [a, a + 1, a + nx + 1, a, a + nx + 1, a + nx]
+    geo = tp.BufferGeometry()
+    geo.set_attribute("position", pos)
+    geo.set_attribute("normal", nrm)
+    geo.set_index(np.array(idx, np.uint32))
+    return geo
+
+
+def corr_wall(w, h, ribs, depth, mat, pos, rot_y=0.0):
+    """Place a corrugated panel, rotated around Y and translated."""
+    m = tp.Mesh(corrugated_panel(w, h, ribs, depth), mat)
+    m.rotation.y = rot_y
+    m.position.set(*pos)
+    m.cast_shadow = m.receive_shadow = True
+    return m
+
+
+def build_barge():
+    """Norwegian feed barge (fôrflåte): corrugated cladding, two-section
+    superstructure with wrap-around bridge windows, pontoon hull, industrial
+    deck fittings."""
+    bg = tp.Group()
+    # ---- materials ----
+    pont_mat  = standard_material(0x080808, roughness=0.82)
+    fend_mat  = standard_material(0x0c0c0c, roughness=0.88)
+    hull_mat  = standard_material(0x1a1c1e, roughness=0.75)
+    deck_mat  = standard_material(0x4a4840, roughness=0.94)
+    wall_mat  = standard_material(0xe2ded6, roughness=0.55)
+    base_mat  = standard_material(0x2a2e2a, roughness=0.72)
+    roof_mat  = standard_material(0xbab6ae, roughness=0.68)
+    win_mat   = standard_material(0x162030, roughness=0.08, metalness=0.42)
+    frame_mat = standard_material(0x303030, roughness=0.50, metalness=0.60)
+    silo_mat  = standard_material(0xccc8c0, roughness=0.42, metalness=0.18)
+    rail_m    = standard_material(0x888888, roughness=0.42, metalness=0.88)
+    equip_mat = standard_material(0x606058, roughness=0.62, metalness=0.45)
+    red_mat   = standard_material(0xb82020, roughness=0.70)
+    pipe_m    = standard_material(0x3a3e42, roughness=0.65)
+    door_mat  = standard_material(0x505860, roughness=0.55, metalness=0.50)
+    vent_mat  = standard_material(0x404040, roughness=0.85)
+    L, W = BARGE_L, BARGE_W
+    HD = 0.85
+
+    # ================================================================= HULL ===
+    # main pontoons
+    for zz in (-W / 2 + 1.2, W / 2 - 1.2):
+        p = tp.Mesh(tp.CylinderGeometry(0.58, 0.58, L - 0.4, 18, 1), pont_mat)
+        p.rotation.z = math.pi / 2
+        p.position.set(0.0, -0.12, zz)
+        p.cast_shadow = True
+        bg.add(p)
+    # hull side plating
+    for zs in (-1, 1):
+        sp = tp.Mesh(tp.BoxGeometry(L - 0.3, 0.70, 0.06), hull_mat)
+        sp.position.set(0.0, HD / 2 + 0.02, zs * (W / 2 - 0.03))
+        sp.cast_shadow = True
+        bg.add(sp)
+    for xs in (-1, 1):
+        ep = tp.Mesh(tp.BoxGeometry(0.06, 0.70, W - 0.3), hull_mat)
+        ep.position.set(xs * (L / 2 - 0.03), HD / 2 + 0.02, 0.0)
+        ep.cast_shadow = True
+        bg.add(ep)
+    # cross-deck I-beams
+    beam_mat = standard_material(0x1e2022, roughness=0.70, metalness=0.50)
+    for xi in range(7):
+        x = -L / 2 + 1.5 + xi * (L - 3.0) / 6
+        bm = tp.Mesh(tp.BoxGeometry(0.18, 0.14, W - 2.4), beam_mat)
+        bm.position.set(x, 0.18, 0.0)
+        bg.add(bm)
+    # fenders — dense row along each side
+    FR = 0.32
+    for i in range(15):
+        x = -L / 2 + 0.65 + i * (L - 1.3) / 14
+        for zs in (-1, 1):
+            f = tp.Mesh(tp.CylinderGeometry(FR, FR, 0.58, 10, 1), fend_mat)
+            f.rotation.x = math.pi / 2
+            f.position.set(x, 0.08, zs * (W / 2 + FR * 0.08))
+            bg.add(f)
+    for j in range(7):
+        z = -W / 2 + 0.7 + j * (W - 1.4) / 6
+        for xs in (-1, 1):
+            f = tp.Mesh(tp.CylinderGeometry(FR, FR, 0.58, 10, 1), fend_mat)
+            f.rotation.z = math.pi / 2
+            f.position.set(xs * (L / 2 + FR * 0.08), 0.08, z)
+            bg.add(f)
+
+    # ================================================================= DECK ===
+    dk = tp.Mesh(tp.BoxGeometry(L, 0.10, W), deck_mat)
+    dk.position.y = HD
+    dk.cast_shadow = dk.receive_shadow = True
+    bg.add(dk)
+    # anti-skid tread strips (two bands of lighter metal across the walkways)
+    tread_mat = standard_material(0x5a5850, roughness=0.98)
+    for zs in (-1, 1):
+        tr = tp.Mesh(tp.BoxGeometry(L - 0.4, 0.005, 0.6), tread_mat)
+        tr.position.set(0.0, HD + 0.055, zs * (W / 2 - 0.55))
+        bg.add(tr)
+
+    # ===================================== SUPERSTRUCTURE — two-section ===
+    BW = W - 2.0
+    BT = 0.35                                     # dark base-trim height
+
+    # ---- main section (stern half, taller) ----
+    ML, MH = 8.5, 4.2
+    MX = -1.8
+    RIB_P = 22                                    # rib count per panel side
+    RIB_D = 0.016                                 # rib depth 16 mm
+    # dark base trim
+    base = tp.Mesh(tp.BoxGeometry(ML + 0.02, BT, BW + 0.02), base_mat)
+    base.position.set(MX, HD + BT / 2 + 0.05, 0.0)
+    base.cast_shadow = True
+    bg.add(base)
+    # corrugated walls (four faces)
+    WH = MH - BT                                 # wall height above base
+    WY = HD + BT + WH / 2 + 0.05                 # wall centre Y
+    bg.add(corr_wall(BW, WH, RIB_P, RIB_D, wall_mat,
+                     (MX + ML / 2 + RIB_D, WY, 0.0), math.pi / 2))          # +X face (bow)
+    bg.add(corr_wall(BW, WH, RIB_P, RIB_D, wall_mat,
+                     (MX - ML / 2 - RIB_D, WY, 0.0), -math.pi / 2))         # -X face (stern)
+    bg.add(corr_wall(ML, WH, int(ML / BW * RIB_P), RIB_D, wall_mat,
+                     (MX, WY, BW / 2 + RIB_D), 0.0))                         # +Z face (port)
+    bg.add(corr_wall(ML, WH, int(ML / BW * RIB_P), RIB_D, wall_mat,
+                     (MX, WY, -BW / 2 - RIB_D), math.pi))                    # -Z face (stbd)
+    # horizontal joint bands (sheet overlap seams every ~1.2 m)
+    seam_mat = standard_material(0xc8c4bc, roughness=0.48, metalness=0.25)
+    for sy in (1.2, 2.4):
+        for face_x, face_z, rot, sw in ((MX, BW / 2 + 0.02, 0.0, ML),
+                                         (MX, -BW / 2 - 0.02, math.pi, ML),
+                                         (MX + ML / 2 + 0.02, 0.0, math.pi / 2, BW),
+                                         (MX - ML / 2 - 0.02, 0.0, -math.pi / 2, BW)):
+            sm = tp.Mesh(tp.BoxGeometry(sw - 0.1, 0.025, 0.008), seam_mat)
+            sm.rotation.y = rot
+            sm.position.set(face_x, HD + BT + sy + 0.05, face_z)
+            bg.add(sm)
+    # main roof
+    main_roof = tp.Mesh(tp.BoxGeometry(ML + 0.22, 0.10, BW + 0.22), roof_mat)
+    main_roof.position.set(MX, HD + MH + 0.10, 0.0)
+    main_roof.cast_shadow = True
+    bg.add(main_roof)
+    # roof-edge parapet
+    for zs in (-1, 1):
+        bg.add(tp.Mesh(tp.BoxGeometry(ML + 0.12, 0.14, 0.035), roof_mat))
+        bg.children[-1].position.set(MX, HD + MH + 0.22, zs * (BW / 2 + 0.09))
+    # service doors
+    for xo in (-2.2, 1.8):
+        d = tp.Mesh(tp.BoxGeometry(0.92, 2.05, 0.04), door_mat)
+        d.position.set(MX + xo, HD + BT + 1.08, BW / 2 + 0.02)
+        bg.add(d)
+    # vent grilles
+    for yy in (1.0, 2.3):
+        v = tp.Mesh(tp.BoxGeometry(0.04, 0.50, 0.70), vent_mat)
+        v.position.set(MX - ML / 2 - 0.02, HD + BT + yy, 0.0)
+        bg.add(v)
+
+    # ---- control room / bridge (bow half, shorter) ----
+    CL, CH = 4.0, 3.0
+    CX = MX + ML / 2 + CL / 2
+    # base trim
+    cb = tp.Mesh(tp.BoxGeometry(CL + 0.02, BT, BW + 0.02), base_mat)
+    cb.position.set(CX, HD + BT / 2 + 0.05, 0.0)
+    cb.cast_shadow = True
+    bg.add(cb)
+    # lower wall (below windows)
+    LOW_H = 0.55
+    cl = tp.Mesh(tp.BoxGeometry(CL, LOW_H, BW), wall_mat)
+    cl.position.set(CX, HD + BT + LOW_H / 2 + 0.05, 0.0)
+    cl.cast_shadow = True
+    bg.add(cl)
+    # window band
+    WIN_H = 1.50
+    WIN_Y = HD + BT + LOW_H + WIN_H / 2 + 0.05
+    # window frames (slightly larger, behind the glass)
+    wff = tp.Mesh(tp.BoxGeometry(0.07, WIN_H + 0.12, BW - 0.20), frame_mat)
+    wff.position.set(CX + CL / 2 + 0.015, WIN_Y, 0.0)
+    bg.add(wff)
+    for zs in (-1, 1):
+        wsf = tp.Mesh(tp.BoxGeometry(CL - 0.20, WIN_H + 0.12, 0.07), frame_mat)
+        wsf.position.set(CX, WIN_Y, zs * (BW / 2 + 0.015))
+        bg.add(wsf)
+    # glass panes
+    wf = tp.Mesh(tp.BoxGeometry(0.04, WIN_H, BW - 0.35), win_mat)
+    wf.position.set(CX + CL / 2 + 0.03, WIN_Y, 0.0)
+    bg.add(wf)
+    for zs in (-1, 1):
+        ws = tp.Mesh(tp.BoxGeometry(CL - 0.35, WIN_H, 0.04), win_mat)
+        ws.position.set(CX, WIN_Y, zs * (BW / 2 + 0.03))
+        bg.add(ws)
+    # mullions (window dividers — thin vertical bars in the glass)
+    for xm in np.linspace(-BW / 2 + 0.8, BW / 2 - 0.8, 5):
+        ml = tp.Mesh(tp.BoxGeometry(0.025, WIN_H - 0.06, 0.05), frame_mat)
+        ml.position.set(CX + CL / 2 + 0.035, WIN_Y, xm)
+        bg.add(ml)
+    for zs in (-1, 1):
+        for xm in np.linspace(CX - CL / 2 + 0.6, CX + CL / 2 - 0.6, 3):
+            ml = tp.Mesh(tp.BoxGeometry(0.025, WIN_H - 0.06, 0.05), frame_mat)
+            ml.rotation.y = math.pi / 2
+            ml.position.set(xm, WIN_Y, zs * (BW / 2 + 0.035))
+            bg.add(ml)
+    # upper wall (above windows)
+    UP_H = CH - BT - LOW_H - WIN_H
+    cu = tp.Mesh(tp.BoxGeometry(CL, max(UP_H, 0.15), BW), wall_mat)
+    cu.position.set(CX, HD + BT + LOW_H + WIN_H + max(UP_H, 0.15) / 2 + 0.05, 0.0)
+    cu.cast_shadow = True
+    bg.add(cu)
+    # control-room roof
+    cr = tp.Mesh(tp.BoxGeometry(CL + 0.18, 0.08, BW + 0.18), roof_mat)
+    cr.position.set(CX, HD + CH + 0.09, 0.0)
+    cr.cast_shadow = True
+    bg.add(cr)
+    # roof-height transition wall (main → bridge step)
+    step_h = MH - CH
+    sw = tp.Mesh(tp.BoxGeometry(0.06, step_h, BW - 0.15), wall_mat)
+    sw.position.set(MX + ML / 2 + 0.03, HD + CH + step_h / 2 + 0.10, 0.0)
+    bg.add(sw)
+
+    # ================================================= ROOF EQUIPMENT ===
+    # HVAC cabinets
+    for xo, w, d, h in ((-0.6, 1.3, 0.85, 0.65), (2.0, 0.95, 0.70, 0.55)):
+        hv = tp.Mesh(tp.BoxGeometry(w, h, d), equip_mat)
+        hv.position.set(MX + xo, HD + MH + h / 2 + 0.12, BW / 2 - 0.75)
+        hv.cast_shadow = True
+        bg.add(hv)
+    # antenna masts
+    for xo, mh, mr in ((ML / 2 - 0.8, 3.5, 0.025), (-ML / 2 + 0.8, 2.2, 0.020)):
+        ma = tp.Mesh(tp.CylinderGeometry(mr, mr * 0.55, mh, 6, 1), rail_m)
+        ma.position.set(MX + xo, HD + MH + mh / 2 + 0.15, 0.0)
+        bg.add(ma)
+    # radar dome on bridge roof
+    dome = tp.Mesh(tp.SphereGeometry(0.22, 10, 8), standard_material(0xe0e0e0, roughness=0.30))
+    dome.position.set(CX, HD + CH + 0.32, 0.0)
+    bg.add(dome)
+    # radar arm
+    bg.add(tube((CX, HD + CH + 0.32, -0.5), (CX, HD + CH + 0.32, 0.5), 0.015, rail_m, 6))
+    # cable tray along the building side (main→bridge roof)
+    ct = tp.Mesh(tp.BoxGeometry(ML + CL - 0.5, 0.04, 0.20), equip_mat)
+    ct.position.set(MX + CL / 2 - 0.2, HD + CH + 0.14, BW / 2 - 0.15)
+    bg.add(ct)
+
+    # ================================================ FORE DECK (bow) ===
+    bow_x = CX + CL / 2                          # building front edge
+
+    # davit / A-frame crane
+    dav_x = L / 2 - 1.8
+    dav_h = 2.6
+    for zs in (-1, 1):
+        bg.add(tube((dav_x + 0.2, HD + 0.05, zs * 0.95),
+                     (dav_x - 0.35, HD + dav_h, zs * 0.25), 0.038, equip_mat, 8))
+    bg.add(tube((dav_x - 0.35, HD + dav_h, -0.25),
+                (dav_x - 0.35, HD + dav_h, 0.25), 0.038, equip_mat, 8))
+    bg.add(tube((dav_x - 0.35, HD + dav_h - 0.08, 0.0),
+                (dav_x + 2.0, HD + dav_h + 0.55, 0.0), 0.032, equip_mat, 8))
+    # winch drum under the davit
+    wd = tp.Mesh(tp.CylinderGeometry(0.18, 0.18, 0.35, 10, 1), equip_mat)
+    wd.rotation.x = math.pi / 2
+    wd.position.set(dav_x - 0.15, HD + 0.23, 0.0)
+    wd.cast_shadow = True
+    bg.add(wd)
+
+    # feed-distribution manifold: header pipe + branch pipes
+    man_x = bow_x + 0.4
+    vp = tp.Mesh(tp.CylinderGeometry(0.065, 0.065, 3.0, 10, 1), pipe_m)
+    vp.position.set(man_x, HD + 0.50, 0.0)
+    bg.add(vp)
+    for zo in (-1.2, 0.0, 1.2):
+        hp = tp.Mesh(tp.CylinderGeometry(0.050, 0.050, 2.2, 8, 1), pipe_m)
+        hp.rotation.z = math.pi / 2
+        hp.position.set(man_x + 1.2, HD + 0.50, zo)
+        bg.add(hp)
+    # pipe supports
+    for xo in (0.3, 1.4):
+        bg.add(tube((man_x + xo, HD + 0.05, -1.4), (man_x + xo, HD + 0.05, 1.4), 0.012, rail_m, 6))
+        bg.add(tube((man_x + xo, HD + 0.05, 0.0), (man_x + xo, HD + 0.42, 0.0), 0.012, rail_m, 6))
+
+    # hose reel / cable drum
+    reel = tp.Mesh(tp.CylinderGeometry(0.40, 0.40, 0.50, 12, 1), equip_mat)
+    reel.rotation.x = math.pi / 2
+    reel.position.set(bow_x + 1.2, HD + 0.45, 2.6)
+    reel.cast_shadow = True
+    bg.add(reel)
+    # reel flanges
+    for dz in (-0.26, 0.26):
+        fl = tp.Mesh(tp.CylinderGeometry(0.52, 0.52, 0.03, 12, 1), equip_mat)
+        fl.rotation.x = math.pi / 2
+        fl.position.set(bow_x + 1.2, HD + 0.45, 2.6 + dz)
+        bg.add(fl)
+
+    # equipment boxes
+    for xo, w, h, d, mt in ((1.5, 1.1, 0.85, 0.75, equip_mat), (2.9, 0.55, 0.55, 0.50, red_mat)):
+        bx = tp.Mesh(tp.BoxGeometry(w, h, d), mt)
+        bx.position.set(bow_x + xo, HD + h / 2 + 0.05, -2.6)
+        bx.cast_shadow = True
+        bg.add(bx)
+    # life-ring bracket
+    lr = tp.Mesh(tp.TorusGeometry(0.22, 0.03, 8, 16), standard_material(0xee4400, roughness=0.60))
+    lr.rotation.y = math.pi / 2
+    lr.position.set(L / 2 - 0.15, HD + 0.75, 2.0)
+    bg.add(lr)
+
+    # ============================================== AFT DECK (stern) ===
+    aft_x = MX - ML / 2
+    # mooring bollards
+    for zs in (-1, 1):
+        bol = tp.Mesh(tp.CylinderGeometry(0.08, 0.10, 0.28, 8, 1), hull_mat)
+        bol.position.set(-L / 2 + 0.55, HD + 0.19, zs * 3.0)
+        bg.add(bol)
+    # storage container
+    cont = tp.Mesh(tp.BoxGeometry(1.8, 1.3, 1.2), standard_material(0x2e5a2e, roughness=0.72))
+    cont.position.set(aft_x - 1.4, HD + 0.70, 0.0)
+    cont.cast_shadow = True
+    bg.add(cont)
+    # exhaust stack
+    stk = tp.Mesh(tp.CylinderGeometry(0.10, 0.10, 1.6, 8, 1), hull_mat)
+    stk.position.set(MX - ML / 2 + 0.5, HD + MH + 0.80, -BW / 2 + 0.5)
+    bg.add(stk)
+    stk_cap = tp.Mesh(tp.CylinderGeometry(0.14, 0.14, 0.06, 8, 1), hull_mat)
+    stk_cap.position.set(MX - ML / 2 + 0.5, HD + MH + 1.63, -BW / 2 + 0.5)
+    bg.add(stk_cap)
+
+    # ======================================================= RAILINGS ===
+    RH, RR = 1.05, 0.018
+    zr = W / 2 * 0.88
+    # walkway rails along the building sides
+    for zs in (-1, 1):
+        bg.add(tube((aft_x, HD + RH, zs * zr), (bow_x, HD + RH, zs * zr), RR, rail_m, 6))
+        bg.add(tube((aft_x, HD + RH * 0.48, zs * zr), (bow_x, HD + RH * 0.48, zs * zr), RR, rail_m, 6))
+        for x in np.linspace(aft_x + 0.8, bow_x - 0.3, 6):
+            bg.add(tube((x, HD + 0.05, zs * zr), (x, HD + RH, zs * zr), RR, rail_m, 6))
+    # forward deck
+    for zs in (-1, 1):
+        bg.add(tube((bow_x, HD + RH, zs * zr), (L / 2 - 0.25, HD + RH, zs * zr), RR, rail_m, 6))
+        bg.add(tube((bow_x, HD + RH * 0.48, zs * zr), (L / 2 - 0.25, HD + RH * 0.48, zs * zr), RR, rail_m, 6))
+        for x in np.linspace(bow_x + 0.4, L / 2 - 0.25, 3):
+            bg.add(tube((x, HD + 0.05, zs * zr), (x, HD + RH, zs * zr), RR, rail_m, 6))
+    bg.add(tube((L / 2 - 0.25, HD + RH, -zr), (L / 2 - 0.25, HD + RH, zr), RR, rail_m, 6))
+    # aft deck
+    for zs in (-1, 1):
+        bg.add(tube((-L / 2 + 0.25, HD + RH, zs * zr), (aft_x, HD + RH, zs * zr), RR, rail_m, 6))
+        bg.add(tube((-L / 2 + 0.25, HD + RH * 0.48, zs * zr), (aft_x, HD + RH * 0.48, zs * zr), RR, rail_m, 6))
+        for x in np.linspace(-L / 2 + 0.25, aft_x - 0.4, 2):
+            bg.add(tube((x, HD + 0.05, zs * zr), (x, HD + RH, zs * zr), RR, rail_m, 6))
+    bg.add(tube((-L / 2 + 0.25, HD + RH, -zr), (-L / 2 + 0.25, HD + RH, zr), RR, rail_m, 6))
+
+    # === boarding ladder (port side, midship) ===
+    lad_x, lad_z = MX, W / 2 * 0.88
+    for rung_y in np.arange(HD - 0.55, HD + 0.05, 0.30):
+        bg.add(tube((lad_x - 0.18, rung_y, lad_z), (lad_x + 0.18, rung_y, lad_z), 0.012, rail_m, 6))
+    bg.add(tube((lad_x - 0.18, HD - 0.55, lad_z), (lad_x - 0.18, HD + RH, lad_z), 0.012, rail_m, 6))
+    bg.add(tube((lad_x + 0.18, HD - 0.55, lad_z), (lad_x + 0.18, HD + RH, lad_z), 0.012, rail_m, 6))
+
+    return bg
+
+
+barge = build_barge()
+barge.rotation.y = BARGE_YAW
+barge.position.set(*BARGE_POS)
+scene.add(barge)
+
+# feed lines: HDPE pipes from the barge bow to the pen collar
+_fl_mat = standard_material(0x1a1e22, roughness=0.70)
+_bcy, _bsy = math.cos(BARGE_YAW), math.sin(BARGE_YAW)
+_barge_th = math.atan2(BARGE_POS[2], BARGE_POS[0])
+for _k, _th_off in enumerate((-0.55, 0.0, 0.55)):
+    _th_pen = _barge_th + _th_off
+    _collar_pt = np.array([(PEN_R + 0.85) * math.cos(_th_pen), WATER_Y + 0.04, (PEN_R + 0.85) * math.sin(_th_pen)])
+    _sl = np.array([BARGE_L / 2 - 0.5, 0.0, (_k - 1) * 1.5])
+    _start = BARGE_POS + np.array([_sl[0] * _bcy - _sl[2] * _bsy, 0.0, _sl[0] * _bsy + _sl[2] * _bcy])
+    _mid = 0.5 * (_start + _collar_pt)
+    _perp = np.array([-(_collar_pt[2] - _start[2]), 0.0, _collar_pt[0] - _start[0]])
+    _perp /= max(np.linalg.norm(_perp), 1e-6)
+    _mid += _perp * (_k - 1) * 4.0                               # spread the curves laterally
+    _u = np.linspace(0, 1, 40)[:, None]
+    _pts = (1 - _u) ** 2 * _start + 2 * (1 - _u) * _u * _mid + _u ** 2 * _collar_pt
+    _pts[:, 1] = WATER_Y + 0.02                                   # ride the surface
+    _fl = pipe_along(_pts, 0.045, 8, _fl_mat)
+    _fl.frustum_culled = False
+    scene.add(_fl)
+
+# mooring buoys
+_buoy_mat = standard_material(0xe8c820, roughness=0.65)
+_buoys, _buoy_xz = [], []
+for _th_b in (1.4, 2.2, 3.0, 3.9, 4.7, 5.5):
+    _r_b = PEN_R + 16 + 4 * math.sin(_th_b * 2.3)
+    _bx, _bz = _r_b * math.cos(_th_b), _r_b * math.sin(_th_b)
+    _b = tp.Mesh(tp.SphereGeometry(0.35, 10, 6), _buoy_mat)
+    _b.position.set(_bx, WATER_Y + 0.15, _bz)
+    scene.add(_b)
+    _buoys.append(_b)
+    _buoy_xz.append((_bx, _bz))
+
+# barge wave-following: 4-point hull sample → heave + damped pitch/roll
+_bcw = [(BARGE_POS[0] + dx * _bcy - dz * _bsy, BARGE_POS[2] + dx * _bsy + dz * _bcy)
+        for dx, dz in ((-8, -3.5), (-8, 3.5), (8, -3.5), (8, 3.5))]
+
+
+def barge_bob():
+    hs = [ocean.sample_height(wx, wz) for wx, wz in _bcw]
+    barge.position.y = sum(hs) * 0.25
+    lp = math.atan2((hs[2] + hs[3] - hs[0] - hs[1]) * 0.5, 16.0) * 0.30
+    lr = math.atan2((hs[1] + hs[3] - hs[0] - hs[2]) * 0.5, 7.0) * 0.30
+    barge.rotation.x = lr * _bcy + lp * _bsy
+    barge.rotation.z = -lr * _bsy + lp * _bcy
+    for _b, (_bx, _bz) in zip(_buoys, _buoy_xz):
+        _b.position.y = ocean.sample_height(_bx, _bz) + 0.15
+
+
 gp = tp.FlockParams()
 gp.seed, gp.bird_count, gp.perching, gp.birds_cast_shadow = 4711, 32, False, False
 gp.home, gp.roam_radius, gp.cruise_altitude, gp.altitude_spread = tp.Vector3(0.0, 11.0, 0.0), 22.0, 11.0, 0.4
@@ -2059,6 +2516,7 @@ def step(dt=1.0 / 60.0):
         cmd = (abs(tf) + 0.5 * abs(tl) + (0.4 if k >= 2 else 0.0) * max(tf, 0.0)) if k < 4 else abs(tv) + 0.15
         p.rotation.y += dt * 45.0 * min(cmd, 1.5) * (1 if k % 2 else -1)
     bubbles_step(dt)
+    barge_bob()
     if gulls.position.y > -1.0:
         gulls.update(dt)
     mark("props+bubbles")
