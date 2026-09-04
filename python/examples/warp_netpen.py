@@ -570,12 +570,14 @@ else:
 # 256^2 the two sheets cost, and one FFT pipeline instead of two.
 OCEAN_SIZE = (GEO.pack_world_size * 1.25) if TERRAIN else 320.0
 ocean = tp.Ocean(size=OCEAN_SIZE, resolution=512 if TERRAIN else 384, wind_speed=7.0,
-                 wind_theta=0.6, choppiness=0.8, fft_size=512, fetch=3e3)   # young short-fetched sea
+                 wind_theta=0.6, choppiness=0.8, fft_size=512, fetch=9e3)   # fjord in a fresh breeze
 ocean.params.foam_amount = 0.0                 # whitecaps print as white slabs from below
 # Ocean sizes cascade 0 from the mesh extent (Ocean.cpp: tileSize0 = size), so a
 # 5 km sheet would ask for a 5 km swell. Pin the tile: the sea stays the young
 # fjord chop the pen cuts were lit for, whatever the mesh spans.
 ocean.params.tile_size_0 = 320.0
+ocean.params.tile_size_1 = 40.6
+ocean.params.tile_size_2 = 2.98
 if TERRAIN:
     ocean.warp.center_x = 0.0
     ocean.warp.center_z = 0.0
@@ -586,7 +588,7 @@ ocean.material.attenuation_distance = 2.5
 if "--no-ocean" not in sys.argv:
     scene.add(ocean)
 
-MURK_PLANE = WATER_Y + 0.30            # deep cuts: above every crest, or a crest shaded from above prints sun glints through the murk
+MURK_PLANE = WATER_Y + 0.42            # deep cuts: above every crest, or a crest shaded from above prints sun glints through the murk
 
 
 def murk_plane_update():
@@ -1621,6 +1623,23 @@ def net_nearest(p):
     return float(np.linalg.norm(p - pos[j])), pos[j], n / max(np.linalg.norm(n), 1e-9)
 
 
+_TEAR_RING = np.nonzero((net.cls == -1)
+                        & (np.linalg.norm(net.rest_host - TEAR_C, axis=1) > 1.2)
+                        & (np.linalg.norm(net.rest_host - TEAR_C, axis=1) < 2.2))[0]
+
+
+# the ring's centroid sits 0.11 m inside the wall (a chord across 620 particles); take that
+# constant out so tear_now() is exactly TEAR_C at rest and only reports the real drift
+_TEAR_BIAS = TEAR_C - net.rest_host[_TEAR_RING].mean(0) if len(_TEAR_RING) else np.zeros(3)
+
+
+def tear_now():
+    """Where the hole IS: the mean of the intact twine ringing it, on the deformed wall.
+    TEAR_C is the rest position and the wall bows ~1 m off it under the current."""
+    pos = net_host[0]
+    return TEAR_C if pos is None or not len(_TEAR_RING) else pos[_TEAR_RING].mean(0) + _TEAR_BIAS
+
+
 def rov_pose(t, dt=1.0 / 60.0):
     global rov_pos, rov_R, rov_thrust, rov_off
     x, y, z, yaw, pitch, roll, tf, tl, tv = PATROL[int(patrol_clock(t) * 60.0) % len(PATROL)]
@@ -2094,8 +2113,8 @@ def boids(pos: wp.array(dtype=wp.vec3), vel: wp.array(dtype=wp.vec3),
         acc += dr / wp.max(lr, 1.0e-3) * (1.0 - lr / rr) * 5.0
     dc = p - uni[4]
     lc = wp.length(dc)
-    if i > 0 and lc < 1.8:                            # keep the shot camera clear; fish 0 is the close-up hero
-        acc += dc / wp.max(lc, 1.0e-3) * (1.0 - lc / 1.8) * 5.0
+    if i > 0 and lc < 2.6:                            # keep the shot camera clear; fish 0 is the close-up hero
+        acc += dc / wp.max(lc, 1.0e-3) * (1.0 - lc / 2.6) * 9.0
     acc += wp.vec3(0.0, -0.4 * v[1], 0.0)
     v2 = v + acc * dt
     s2 = wp.max(wp.length(v2), 1.0e-4)
@@ -2186,7 +2205,7 @@ class School:
         self.out_n = wp.zeros(FISH_N * self.nv, dtype=wp.vec3, device=device)
 
     def step(self, t, dt, rov_pos, cam_pos):
-        self.uni.assign(np.asarray([rov_pos, TEAR_C, e_r, [PEN_R, PEN_D, LEAK_T0[0]], cam_pos], np.float32))
+        self.uni.assign(np.asarray([rov_pos, tear_now(), e_r, [PEN_R, PEN_D, LEAK_T0[0]], cam_pos], np.float32))
         wp.launch(boids, dim=FISH_N, device=device,
                   inputs=[self.pos, self.vel, self.pos2, self.vel2, self.yaw, self.pitch, self.roll, self.beat,
                           self.amp, self.brake, self.len, self.pref, self.leak, self.uni, FISH_N, t, dt])
@@ -2522,6 +2541,148 @@ def hud_update():
             cam_tex.update_data(np.ascontiguousarray(rgb[::-1]))
 
 
+
+# ---- the filming drone (ported from warp_sailboat.py) ------------------------
+#  A camera vehicle, not a quadrotor sim: the attitude is kinematic -- it leans the way
+#  the acceleration says it must be leaning for the path it is on, which is all the eye
+#  reads at filming distance. Names are _dr_-prefixed: `props` is already the ROV's.
+DRONE_SPAN = 0.45
+DRONE_ARM = DRONE_SPAN * 0.5 * 0.7071
+DRONE_G = 9.81
+
+drone = tp.Group()
+drone.rotation.order = tp.RotationOrder.YXZ
+drone.visible = False
+scene.add(drone)
+
+_dr_body = standard_material(0x2c333d, roughness=0.42, metalness=0.25)
+_dr_trim = standard_material(0x515a66, roughness=0.55)
+# Bare blades, no blur disc: at this span and filming distance a disc reads as a grey
+# plate bolted to the arm, while the blades alias into a filmed prop's counter-rotation.
+_dr_prop = standard_material(0x14171c, roughness=0.60, side=tp.Side.Double)
+_dr_lens = standard_material(0x07090c, roughness=0.05, metalness=0.2)
+
+_dh = tp.Mesh(tp.BoxGeometry(0.115, 0.052, 0.170), _dr_body)
+_dh.cast_shadow = True
+drone.add(_dh)
+_dc = tp.Mesh(tp.SphereGeometry(0.055, 14, 10), _dr_trim)
+_dc.scale.set(1.0, 0.52, 1.30)
+_dc.position.set(0.0, 0.026, 0.005)
+drone.add(_dc)
+for _s in (1.0, -1.0):
+    _bm = tp.Mesh(tp.BoxGeometry(DRONE_SPAN, 0.015, 0.021), _dr_trim)
+    _bm.rotation.y = _s * math.radians(45.0)
+    _bm.cast_shadow = True
+    drone.add(_bm)
+
+_dr_props = []
+for _sx, _sz in ((1, 1), (-1, 1), (-1, -1), (1, -1)):
+    _px, _pz = _sx * DRONE_ARM, _sz * DRONE_ARM
+    _pod = tp.Mesh(tp.CylinderGeometry(0.017, 0.020, 0.032, 10, 1), _dr_body)
+    _pod.position.set(_px, 0.013, _pz)
+    drone.add(_pod)
+    _hub = tp.Group()
+    _hub.position.set(_px, 0.035, _pz)
+    drone.add(_hub)
+    _bl = tp.Mesh(tp.BoxGeometry(0.126, 0.0024, 0.016), _dr_prop)
+    _bl.rotation.z = math.radians(9.0)      # a little pitch, so it reads as a blade
+    _hub.add(_bl)
+    _dr_props.append((_hub, 1.0 if _sx * _sz > 0 else -1.0))
+
+_dr_leds = []
+for _col, _x, _z in ((0xff1408, -1.02, 1.02), (0x18ff3c, 1.02, 1.02)):
+    _m = standard_material(0x0a0a0a, roughness=1.0, emissive=_col, emissive_intensity=6.0)
+    _sp = tp.Mesh(tp.SphereGeometry(0.012, 10, 8), _m)
+    _sp.position.set(_x * DRONE_ARM, 0.004, _z * DRONE_ARM)
+    drone.add(_sp)
+    _dr_leds.append(_m)
+_dr_strobe = standard_material(0x0a0a0a, roughness=1.0, emissive=0xffffff, emissive_intensity=0.0)
+_st = tp.Mesh(tp.SphereGeometry(0.013, 10, 8), _dr_strobe)
+_st.position.set(0.0, -0.030, -0.030)
+drone.add(_st)
+
+_dr_gimbal = tp.Group()
+_dr_gimbal.position.set(0.0, -0.038, 0.082)
+drone.add(_dr_gimbal)
+_gb = tp.Mesh(tp.SphereGeometry(0.027, 14, 10), _dr_body)
+_gb.scale.set(1.0, 1.0, 0.85)
+_dr_gimbal.add(_gb)
+_gl = tp.Mesh(tp.CylinderGeometry(0.014, 0.017, 0.018, 12, 1), _dr_lens)
+_gl.rotate_x(math.pi / 2)
+_gl.position.set(0.0, 0.0, 0.022)
+_dr_gimbal.add(_gl)
+
+drone_state = {
+    "pos": np.array([0.0, 19.0, 0.0]), "vel": np.zeros(3), "acc": np.zeros(3),
+    "yaw": 0.0, "pitch": 0.0, "roll": 0.0, "spin": 0.0, "spool": 0.0,
+    "throttle": 0.5, "have": False,
+}
+DRONE_LIVE = [True]            # terrain_scan replays cam_approach 600+ times: freeze the machine
+
+
+def _dr_step01(a, b, x):
+    x = min(max((x - a) / (b - a), 0.0), 1.0)
+    return x * x * (3.0 - 2.0 * x)
+
+
+def _dr_wrap(a, b, k):
+    return a + ((b - a + math.pi) % (2.0 * math.pi) - math.pi) * k
+
+
+def drone_set_pose(pos, look_at, dt=1.0 / 60.0):
+    """Put the drone at `pos` looking at `look_at`. THE call a shot makes.
+    Attitude is derived, never authored: smoothed velocity and acceleration give the lean a
+    machine on that path must have. Yaw follows the velocity heading once it is actually
+    moving and the look bearing when it is not, so a hover does not spin on noise."""
+    d = drone_state
+    pp = np.asarray(pos, np.float64).copy()
+    tgt = np.asarray(look_at, np.float64).copy()
+    dt = max(float(dt), 1e-4)
+    if not d["have"]:
+        d["have"] = True
+        d["vel"][:] = 0.0
+        d["acc"][:] = 0.0
+        d["yaw"] = math.atan2((tgt - pp)[0], (tgt - pp)[2])
+    else:
+        v = (pp - d["pos"]) / dt
+        vprev = d["vel"].copy()
+        d["vel"] += (v - d["vel"]) * (1.0 - math.exp(-dt / 0.12))
+        d["acc"] += ((d["vel"] - vprev) / dt - d["acc"]) * (1.0 - math.exp(-dt / 0.22))
+    d["pos"] = pp
+    sp = float(np.linalg.norm(d["vel"][[0, 2]]))
+    to = tgt - pp
+    yaw_t = _dr_wrap(math.atan2(to[0], to[2]),
+                     math.atan2(d["vel"][0], d["vel"][2]) if sp > 1e-3 else math.atan2(to[0], to[2]),
+                     _dr_step01(0.6, 2.5, sp))
+    d["yaw"] = _dr_wrap(d["yaw"], yaw_t, 1.0 - math.exp(-dt / 0.15))
+    fwd = np.array([math.sin(d["yaw"]), 0.0, math.cos(d["yaw"])])
+    lat = np.array([math.cos(d["yaw"]), 0.0, -math.sin(d["yaw"])])
+    lim = math.radians(25.0)
+    pt = max(-lim, min(lim, math.atan2(float(np.dot(d["acc"], fwd)), DRONE_G)))
+    rl = max(-lim, min(lim, -math.atan2(float(np.dot(d["acc"], lat)), DRONE_G)))
+    k = 1.0 - math.exp(-dt / 0.10)
+    d["pitch"] += (pt - d["pitch"]) * k
+    d["roll"] += (rl - d["roll"]) * k
+    d["throttle"] = float(np.clip(0.5 + d["acc"][1] / 9.0, 0.0, 1.0))
+    drone.position.set(float(pp[0]), float(pp[1]), float(pp[2]))
+    drone.rotation.set(d["pitch"], d["yaw"], d["roll"])
+    dh = math.hypot(float(to[0]), float(to[2]))              # the gimbal holds the horizon
+    _dr_gimbal.rotation.set(math.atan2(-float(to[1]), max(dh, 1e-3)) - d["pitch"], 0.0, -d["roll"])
+
+
+def drone_tick(dt):
+    """Props and the strobe. Runs whenever the machine is in the world."""
+    d = drone_state
+    d["spool"] += (1.0 - d["spool"]) * (1.0 - math.exp(-dt / 0.55))
+    d["spin"] += (100.0 + 55.0 * d["throttle"]) * d["spool"] * dt
+    for hub, sgn in _dr_props:
+        hub.rotation.y = sgn * d["spin"]
+    blink = 340.0 if (world_t % 1.05) < 0.065 else 0.0
+    if blink != _dr_strobe.emissive_intensity:
+        _dr_strobe.emissive_intensity = blink
+        _dr_strobe.needs_update()
+
+
 # ---- cameras -----------------------------------------------------------------
 camera = tp.PerspectiveCamera(60.0, W / H, 0.05, 6000.0)   # the far shore is 2 km out and the
 # ocean spans 5 km; 600 clipped both. Reverse-Z on a D32_SFLOAT buffer puts the precision at the
@@ -2706,8 +2867,10 @@ class Path:
         return ((t2 - s) * b1 + (s - t1) * b2) / (t2 - t1)
 
 
-T_LIFT, T_WL, FILM_T_OFF, T_DIVE = 9.0, 17.0, 22.0, 24.0        # crane starts, eye at the waterline, patrol starts, eye under
-T_SWEEP, T_HOLD0, T_HOLD1, T_FOLLOW, T_END = 31.0, 36.0, 44.0, 49.0, 54.0
+T_AIR = 8.0                                                      # the drone leg, prepended to cut 0
+T_HAND = 5.0 + T_AIR                                             # the eye lets go of the drone
+T_LIFT, T_WL, FILM_T_OFF, T_DIVE = 9.0 + T_AIR, 17.0 + T_AIR, 22.0 + T_AIR, 24.0 + T_AIR
+T_SWEEP, T_HOLD0, T_HOLD1, T_FOLLOW, T_END = 31.0 + T_AIR, 36.0 + T_AIR, 44.0 + T_AIR, 49.0 + T_AIR, 54.0 + T_AIR
 SONAR_S = 6.0
 APPROACH = {}
 
@@ -2717,6 +2880,22 @@ def rov_at(tf):
     x, y, z, yaw = PATROL[int(patrol_clock(tf - FILM_T_OFF) * 60.0) % len(PATROL)][:4]
     p = np.array([x, y, z]) + lift_at(tf - FILM_T_OFF)
     return p, np.array([math.cos(yaw), 0.0, -math.sin(yaw)]), -np.array([p[0], 0.0, p[2]]) / np.hypot(p[0], p[2])
+
+
+DRONE_PATH = None
+
+
+def build_drone_path():
+    """Inbound on bearing 243 deg: the sun (38.6 deg up, bearing 26 deg) then sits off the
+    machine's right shoulder, so it flies with a lit face and a rim rather than as a black
+    blob over the glitter path. Ends on a standoff hover 3.3 m outside the collar, then
+    climbs away to overwatch so it is still there when the camera leaves it."""
+    return Path([
+        (0.0, [-19.07, 19.00, -37.42]), (2.0, [-18.02, 18.20, -34.60]),
+        (7.0, [-12.55, 15.30, -21.35]), (8.3, [-11.20, 14.60, -18.10]),
+        (11.0, [-8.05, 12.40, -11.60]), (T_HAND, [-6.20, 11.50, -8.23]),
+        (T_HAND + 5.0, [-8.21, 13.21, -7.65]), (T_HAND + 11.0, [-11.53, 15.20, -7.21]),
+        (T_END, [-12.40, 16.00, -7.05])])
 
 
 def build_approach():
@@ -2743,27 +2922,48 @@ def build_approach():
     H = -5.0 * np.array([ph[0], 0.0, ph[2]]) / np.hypot(ph[0], ph[2]) + [0, -4.7, 0]   # 2 m inside the opposite wall, under the band
     look = ph + [0, 0.9, 0] + 2.2 * pf                               # the ROV small, off centre; the window above
     mid = 0.5 * (H + follow(T_FOLLOW, 3.2)) * [0.75, 1.0, 0.75]
+    # 0 -> T_HAND the eye chases the drone; T_HAND -> 18 it lets go and its own momentum
+    # carries it round the enclosure onto the ROV. The 15.7 key is load-bearing: with only
+    # the two ends the centripetal Catmull-Rom chords straight across the pen.
     APPROACH["eye"] = Path([
-        (0.0, -16.0 * sun_h3 + [0, 34.0, 0]), (5.0, -13.0 * sun_h3 + [0, 31.0, 0]),
-        (10.0, R0 * (PEN_R + 5.0) + 2.0 * T0 + [0, 13.0, 0]), (13.5, R0 * (PEN_R + 1.8) + 2.2 * T0 + [0, 3.0, 0]),
-        (15.5, R0 * (PEN_R - 2.0) + 1.6 * T0 + [0, 0.9, 0]), (T_WL, wl(0.10)), (T_WL + 4.0, wl(0.07)), (T_DIVE, wl(-0.12)),
-        (26.0, desc(26.0, -1.0)), (28.5, desc(28.5, -1.2)), (T_SWEEP, desc(T_SWEEP, -1.4)),
+        (0.0, [-20.66, 20.50, -41.09]), (2.0, [-18.69, 19.75, -36.42]), (7.0, [-13.03, 16.94, -23.06]),
+        (8.3, [-11.97, 16.23, -20.62]), (11.0, [-8.90, 14.00, -14.78]), (T_HAND, [-6.65, 13.10, -12.87]),
+        (15.7, [-12.67, 13.05, -2.92]),
+        (10.0 + T_AIR, R0 * (PEN_R + 5.0) + 2.0 * T0 + [0, 13.0, 0]),
+        (13.5 + T_AIR, R0 * (PEN_R + 1.8) + 2.2 * T0 + [0, 3.0, 0]),
+        (15.5 + T_AIR, R0 * (PEN_R - 2.0) + 1.6 * T0 + [0, 0.9, 0]),
+        (T_WL, wl(0.10)), (T_WL + 4.0, wl(0.07)), (T_DIVE, wl(-0.12)),
+        (26.0 + T_AIR, desc(26.0 + T_AIR, -1.0)), (28.5 + T_AIR, desc(28.5 + T_AIR, -1.2)),
+        (T_SWEEP, desc(T_SWEEP, -1.4)),
         (T_HOLD0, H), (T_HOLD1, H), (T_HOLD1 + 2.5, mid),
         (T_FOLLOW, follow(T_FOLLOW, 3.2)), (T_FOLLOW + 2.5, follow(T_FOLLOW + 2.5, 2.55)), (T_END, follow(T_END, 1.9))])
     C = np.array([0.0, WATER_Y - 0.5, 0.0])
+    # the chase target is the air over the pen, lifted so the drone flies across the
+    # enclosure rather than across empty water; it settles as the eye lets go
     APPROACH["tgt"] = Path([
-        (0.0, C), (5.0, C), (10.0, R(10.0)), (13.5, R(13.5)), (15.5, R(15.5)), (T_WL, R(T_WL)), (T_WL + 4.0, R(T_WL + 4.0)),
-        (T_DIVE, R(T_DIVE)), (26.0, R(26.0, 1.0)), (28.5, R(28.5, 1.0)), (T_SWEEP, R(T_SWEEP, 1.0)),
+        (0.0, C + [0, 2.2, 0]), (7.0, C + [0, 2.2, 0]), (T_HAND, C + [0, 1.2, 0]),
+        (10.0 + T_AIR, R(10.0 + T_AIR)), (13.5 + T_AIR, R(13.5 + T_AIR)), (15.5 + T_AIR, R(15.5 + T_AIR)),
+        (T_WL, R(T_WL)), (T_WL + 4.0, R(T_WL + 4.0)), (T_DIVE, R(T_DIVE)),
+        (26.0 + T_AIR, R(26.0 + T_AIR, 1.0)), (28.5 + T_AIR, R(28.5 + T_AIR, 1.0)), (T_SWEEP, R(T_SWEEP, 1.0)),
         (T_HOLD0, look), (T_HOLD1, look), (T_HOLD1 + 2.5, ahead(T_HOLD1 + 2.5)),
         (T_FOLLOW, ahead(T_FOLLOW)), (T_FOLLOW + 2.5, ahead(T_FOLLOW + 2.5)), (T_END, ahead(T_END))])
-    APPROACH["w"] = (np.array([0.0, 5.0, 10.0, T_END]), np.array([0.0, 0.0, 1.0, 1.0]))     # live-ROV weight of the target
-    APPROACH["fov"] = (np.array([0.0, T_DIVE, 26.0, T_SWEEP, T_HOLD0, T_HOLD1, T_FOLLOW, T_END]),
+    # the crossfade the film already had: it just never had anything to hand over FROM
+    APPROACH["w"] = (np.array([0.0, T_HAND, 10.0 + T_AIR, T_END]), np.array([0.0, 0.0, 1.0, 1.0]))
+    APPROACH["fov"] = (np.array([0.0, T_DIVE, 26.0 + T_AIR, T_SWEEP, T_HOLD0, T_HOLD1, T_FOLLOW, T_END]),
                        np.array([55.0, 55.0, 66.0, 66.0, 64.0, 64.0, 62.0, 62.0]))
+    global DRONE_PATH
+    DRONE_PATH = build_drone_path()
 
 
 def cam_approach(u, t):
     hud_park(t >= T_FOLLOW - 0.5)
     eye = APPROACH["eye"](t)
+    if DRONE_PATH is not None and DRONE_LIVE[0]:
+        # it flies the whole cut: on station it is still in frame behind the sweep, and it
+        # parks with the gulls once the eye goes under
+        drone_set_pose(DRONE_PATH(min(t, T_END)), [0.0, WATER_Y + 0.6, 0.0])   # it films the pen throughout
+        drone_tick(1.0 / 60.0)
+    drone.visible = eye[1] > WATER_Y - 0.5
     gulls.position.y = 0.0 if eye[1] > WATER_Y - 0.5 else -9000.0
     tgt = APPROACH["tgt"](t) + float(pchip(*APPROACH["w"], t)) * (rov_pos - rov_at(t)[0])
     return eye, tgt, float(pchip(*APPROACH["fov"], t))
@@ -2791,23 +2991,25 @@ def cam_tear(u, t):
     if "tear" not in _anchor:                         # the ROV keeps creeping: anchor the push on its pose at the cut
         fwd = rov_R @ [1.0, 0.0, 0.0]
         _anchor["tear"] = rov_pos - 1.5 * fwd - 1.2 * e_t + [0, 0.6, 0]   # the ROV creeps along +e_t: stay on the other side
-    a, b = _anchor["tear"], TEAR_C - 1.1 * e_r - 1.15 * e_t + [0, 0.35, 0]
+    tc = tear_now()
+    a, b = _anchor["tear"], tc - 1.9 * e_r - 1.15 * e_t + [0, 0.35, 0]
     e = smooth(u, hold=0.3)                           # the push stops 0.8 m off the twine and holds the last 3 s
-    return a + (b - a) * e, TEAR_C + 0.3 * e_r * e, 50.0
+    return a + (b - a) * e, tc + 0.3 * e_r * e, 50.0
 
 
 def cam_hero(u, t):
-    a = TEAR_C - 1.1 * e_r - 1.15 * e_t + [0, 0.35, 0]
-    b = TEAR_C - 3.6 * e_r - 1.5 * e_t + [0, -1.7, 0]           # below the milling band, looking up at the hole and the window
+    tc = tear_now()
+    a = tc - 1.9 * e_r - 1.15 * e_t + [0, 0.35, 0]
+    b = tc - 3.6 * e_r - 1.5 * e_t + [0, -1.7, 0]               # below the milling band, looking up at the hole and the window
     e = smooth(u, hold=0.15)
-    return a + (b - a) * e, TEAR_C + (0.3 - 0.9 * e) * e_r + [0, 0.3 * e, 0], 50.0 + 8.0 * e
+    return a + (b - a) * e, tc + (0.3 - 0.9 * e) * e_r + [0, 0.3 * e, 0], 50.0 + 8.0 * e
 
 
 T_HOVER = _hover_i / 60.0
 CUTS = [("approach", T_END, cam_approach, False), ("sonar", SONAR_S, cam_sonar, True),
         ("tear", 10.0, cam_tear, True), ("hero", 12.0, cam_hero, False)]
 T_CUT = np.concatenate([[0.0], np.cumsum([c[1] for c in CUTS])])
-TEST_T = (1.0, 8.0, 13.5, 17.0, 20.0, 23.5, 26.0, 29.0, 33.0, 38.0, 45.0, 50.0, 53.0)   # --film-test stills of the approach
+TEST_T = (1.0, 4.0, 7.0, 10.0, 12.5, 14.5, 16.5, 18.0, 21.5, 25.0, 28.0, 34.0, 41.0, 46.0, 53.0, 58.0, 61.0)
 POSTER_U = 0.9
 
 
@@ -2839,12 +3041,14 @@ def terrain_scan():
     if FILM or FILM_BENCH:                            # the aerial only exists in the film
         build_approach()
         g_y, worst, at = gulls.position.y, 0.0, 0.0
+        DRONE_LIVE[0] = False                         # do not integrate attitude across a replay
         for i in range(int(T_END * 10) + 1):
             t = i / 10.0
             eye = np.asarray(cam_approach(min(t / T_END, 1.0), t)[0], np.float64)
             v = GEO.height_at(float(eye[0]), float(eye[2])) + TERRAIN_CLEAR - eye[1]
             if v > worst:
                 worst, at = v, t
+        DRONE_LIVE[0] = True
         gulls.position.y = g_y                        # cam_approach parks/unparks them: put it back
         TERRAIN_HIT[:] = [worst, at]
         print(f"terrain: approach path vs ground, worst clearance violation {worst:.2f} m at film t={at:.1f} s"
