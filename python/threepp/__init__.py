@@ -16,6 +16,16 @@ from . import threepp as _native  # keep the native module reachable as threepp.
 
 import contextlib as _contextlib
 
+# The installed distribution's version, so a dataset manifest or an audit run
+# can name the wheel it came from. An in-tree import (no distribution) reports
+# a local marker rather than raising.
+try:
+    from importlib.metadata import version as _dist_version
+
+    __version__ = _dist_version("threepp")
+except Exception:  # pragma: no cover - source tree, not an installed wheel
+    __version__ = "0.0.0+local"
+
 # Mirror the native module's public names for `from threepp import X` and dir() completeness.
 __all__ = [n for n in dir(_native) if not n.startswith("_")]
 
