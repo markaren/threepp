@@ -15,9 +15,11 @@ import torch
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))
+sys.path.insert(0, os.path.dirname(_HERE))   # examples/, for demo_common
 sys.path.insert(0, _HERE)
 
 import threepp as tp
+from demo_common import resize_handler
 from cartpole import CartPole
 from cartpole_env import CONFIG as ENV_CONFIG
 from cartpole_env import make_obs   # the ONE observation function, shared with training
@@ -117,13 +119,7 @@ pivot.add(bob)
 scene.add(pivot)
 
 
-def on_resize(w, h):
-    camera.aspect = w / max(h, 1)
-    camera.update_projection_matrix()
-    renderer.set_size(w, h)
-
-
-canvas.on_window_resize(on_resize)
+canvas.on_window_resize(resize_handler(camera, renderer))
 ui = tp.ImguiContext(canvas, renderer) if tp.HAS_IMGUI else None
 clock = tp.Clock()
 st = {"accum": 0.0, "key_p": False, "key_r": False, "up": -1.0, "rng": np.random.default_rng(0)}

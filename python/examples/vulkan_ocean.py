@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 
 import threepp as tp
+from demo_common import resize_handler
 
 from demo_common import write_radiance_hdr
 
@@ -125,13 +126,7 @@ controls.enable_damping = True
 controls.max_distance = 400.0
 
 
-def on_resize(w, h):
-    camera.aspect = w / max(h, 1)
-    camera.update_projection_matrix()
-    renderer.set_size(w, h)
-
-
-canvas.on_window_resize(on_resize)
+canvas.on_window_resize(resize_handler(camera, renderer))
 
 
 # Live wave knobs. waveScale and choppiness are applied per-frame in the

@@ -13,6 +13,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import threepp as tp
+from demo_common import resize_handler
 
 if not tp.HAS_VULKAN:
     print("This build has no Vulkan backend (configure -DTHREEPP_WITH_VULKAN=ON).")
@@ -47,13 +48,7 @@ ground.position.y = -1.6
 ground.rotate_x(-math.pi / 2)
 scene.add(ground)
 
-def on_resize(w, h):
-    camera.aspect = w / max(h, 1)
-    camera.update_projection_matrix()
-    renderer.set_size(w, h)
-
-
-canvas.on_window_resize(on_resize)
+canvas.on_window_resize(resize_handler(camera, renderer))
 
 state = {"roughness": 0.4, "metalness": 0.2, "color": (1.0, 0.53, 0.0), "spin": True, "speed": 0.6}
 clock = tp.Clock()

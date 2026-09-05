@@ -30,7 +30,8 @@ import threepp as tp
 
 # Re-exported so a film has one import; they live in the Warp-free module
 # because the hello-world demos share them too. noqa: F401 - re-export.
-from demo_common import encode_rgbe, write_radiance_hdr  # noqa: F401
+from demo_common import (encode_rgbe, resize_handler,  # noqa: F401
+                         write_radiance_hdr)
 
 # --- command line --------------------------------------------------------------
 
@@ -751,15 +752,6 @@ def ground_plane(scene, size=30.0, y=0.0, color=0x4a4f55):
     ground.receive_shadow = True
     scene.add(ground)
     return ground
-
-
-def resize_handler(camera, renderer):
-    """The window-resize callback every example installs."""
-    def on_resize(w, h):
-        camera.aspect = w / max(h, 1)
-        camera.update_projection_matrix()
-        renderer.set_size(w, h)
-    return on_resize
 
 
 # --- zero-copy particle fields -------------------------------------------------

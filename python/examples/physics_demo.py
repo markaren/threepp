@@ -18,6 +18,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import threepp as tp
+from demo_common import resize_handler
 
 if not tp.HAS_PHYSX:
     print("This build has no PhysX backend. Configure the module with the vcpkg "
@@ -73,13 +74,7 @@ for _ in range(35):
     spawn_box()
 
 
-def on_resize(w, h):
-    camera.aspect = w / max(h, 1)
-    camera.update_projection_matrix()
-    renderer.set_size(w, h)
-
-
-canvas.on_window_resize(on_resize)
+canvas.on_window_resize(resize_handler(camera, renderer))
 
 clock = tp.Clock()
 elapsed = {"t": 0.0}

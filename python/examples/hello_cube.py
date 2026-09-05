@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import threepp as tp
+from demo_common import resize_handler
 
 canvas = tp.Canvas("threepp — hello cube", width=900, height=600, antialiasing=4)
 renderer = tp.GLRenderer(canvas)
@@ -43,13 +44,7 @@ for i, color in enumerate((0xff5555, 0x55ff66, 0x5599ff)):
     cubes.add(cube)
 scene.add(cubes)
 
-def on_resize(w, h):
-    camera.aspect = w / max(h, 1)
-    camera.update_projection_matrix()
-    renderer.set_size(w, h)
-
-
-canvas.on_window_resize(on_resize)
+canvas.on_window_resize(resize_handler(camera, renderer))
 
 clock = tp.Clock()
 

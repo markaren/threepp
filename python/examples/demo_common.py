@@ -46,3 +46,15 @@ def write_radiance_hdr(path, rgb):
         f.write(b"-Y %d +X %d\n" % (h, w))
         f.write(rgbe.tobytes())
     return path
+
+
+# --- scene plumbing ------------------------------------------------------------
+
+
+def resize_handler(camera, renderer):
+    """The window-resize callback every example installs."""
+    def on_resize(w, h):
+        camera.aspect = w / max(h, 1)
+        camera.update_projection_matrix()
+        renderer.set_size(w, h)
+    return on_resize
