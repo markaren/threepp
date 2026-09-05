@@ -257,7 +257,22 @@ namespace threepp::road {
         // GLOBAL station: with a shared, tiling marking texture the dash phase is
         // a function of v alone, and without the offset every chunk would restart
         // its dashes at its own seam. Default 0 = the whole-road case, unchanged.
-        [[nodiscard]] std::shared_ptr<BufferGeometry> buildSurface(float vOffsetMeters = 0.f) const {
+        //
+        // mirrorAlternateTiles flips u on ODD texture tiles (even tiles sample u,
+        // odd tiles 1-u), which doubles the shared tile's along-road repeat again
+        // without a second bake: the aggregate grain, the wheel-track amplitude
+        // and the crack field all come back MIRRORED rather than identical.
+        // SAFE ONLY BECAUSE EVERY BAKED CLASS LAYOUT IS LEFT-RIGHT SYMMETRIC —
+        // edge lines, centre line, gravel strips and wheel tracks all sit at
+        // ±the same offsets, so the mirrored tile carries the markings in the
+        // same places. A future asymmetric layout (a climbing lane, a one-sided
+        // kerb, right-hand-drive-only paint) would swap sides at every odd tile
+        // and this flag would have to be gated off for that class.
+        // The flip lands EXACTLY on the tile boundary (a duplicated
+        // cross-section there), so no triangle ever interpolates u across it.
+        // Default false = byte-identical to the pre-mirror geometry.
+        [[nodiscard]] std::shared_ptr<BufferGeometry> buildSurface(float vOffsetMeters = 0.f,
+                                                                    bool mirrorAlternateTiles = false) const {
             auto geo = std::make_shared<BufferGeometry>();
             const size_t n = samples_.size();
             if (n < 2) return geo;
@@ -276,37 +291,103 @@ namespace threepp::road {
             for (int k = 0; k < 4; ++k)
                 uCoord[k] = (fullWidth > 1e-6f) ? (off[k] + corridorHalf) / fullWidth : 0.f;
 
+            // ── cross-section node list ──────────────────────────────────────
+            // One node per centerline sample in the default case. With mirroring
+            // on, a DUPLICATE PAIR is inserted at every tile boundary the ribbon
+            // crosses: the first node closes the previous tile with its own u
+            // convention, the second opens the next tile with the flipped one,
+            // and no quad spans the two (join == false), so the flip is a hard
+            // edge exactly at v = integer rather than a smear across a segment.
+            struct Node {
+                float x = 0.f, z = 0.f, h = 0.f;// centre position + conformed height
+                float rx = 1.f, rz = 0.f;       // unit right (XZ)
+                float cb = 1.f, sb = 0.f;       // cos/sin of the camber roll
+                float v = 0.f;                  // texture v (tiles of road)
+                bool flip = false;              // sample 1-u instead of u
+                bool join = true;               // quad back to the previous node
+            };
+            std::vector<Node> nodes;
+            nodes.reserve(n + 8);
+            // t == 0 takes the sample verbatim (no lerp, no renormalise) so the
+            // default path is bit-for-bit what it was before mirroring existed.
+            const auto emit = [&](size_t i, float t, bool flip, bool join) {
+                Node nd;
+                float bank;
+                if (t <= 0.f) {
+                    const Sample& a = samples_[i];
+                    nd.x = a.pos.x;
+                    nd.z = a.pos.z;
+                    nd.h = a.height;
+                    nd.rx = a.right.x;
+                    nd.rz = a.right.z;
+                    bank = bankingAngle(i);
+                    nd.v = (a.arcLength + vOffsetMeters) / tile;
+                } else {
+                    const size_t j = std::min(i + 1, n - 1);
+                    const Sample& a = samples_[i];
+                    const Sample& b = samples_[j];
+                    nd.x = lerp(a.pos.x, b.pos.x, t);
+                    nd.z = lerp(a.pos.z, b.pos.z, t);
+                    nd.h = lerp(a.height, b.height, t);
+                    nd.rx = lerp(a.right.x, b.right.x, t);
+                    nd.rz = lerp(a.right.z, b.right.z, t);
+                    const float rl = std::sqrt(nd.rx * nd.rx + nd.rz * nd.rz);
+                    if (rl > 1e-6f) {
+                        nd.rx /= rl;
+                        nd.rz /= rl;
+                    }
+                    bank = lerp(bankingAngle(i), bankingAngle(j), t);
+                    nd.v = (lerp(a.arcLength, b.arcLength, t) + vOffsetMeters) / tile;
+                }
+                nd.cb = std::cos(bank);
+                nd.sb = std::sin(bank);
+                nd.flip = flip;
+                nd.join = join;
+                nodes.push_back(nd);
+            };
+            const auto tileOf = [&](float arc) {
+                return static_cast<int>(std::floor((arc + vOffsetMeters) / tile));
+            };
+            for (size_t i = 0; i < n; ++i) {
+                const int ti = tileOf(samples_[i].arcLength);
+                const bool flip = mirrorAlternateTiles && ((ti & 1) != 0);
+                emit(i, 0.f, flip, i != 0);
+                if (!mirrorAlternateTiles || i + 1 >= n) continue;
+                // Cross every tile boundary between this sample and the next
+                // (sample spacing is sub-metre against a ~96 m tile, so this is
+                // normally zero or one crossing — the loop is for safety).
+                const int tj = tileOf(samples_[i + 1].arcLength);
+                const float a0 = samples_[i].arcLength, a1 = samples_[i + 1].arcLength;
+                const float span = a1 - a0;
+                for (int tb = ti + 1; tb <= tj; ++tb) {
+                    if (span <= 1e-6f) break;
+                    const float sB = static_cast<float>(tb) * tile - vOffsetMeters;
+                    const float t = std::clamp((sB - a0) / span, 0.f, 1.f);
+                    if (t <= 1e-6f || t >= 1.f - 1e-6f) continue;
+                    emit(i, t, flip, true);                        // closes tile tb-1
+                    emit(i, t, ((tb & 1) != 0), false);            // opens tile tb
+                }
+            }
+            const size_t nNodes = nodes.size();
+
             std::vector<float> positions;
             std::vector<float> normals;
             std::vector<float> uvs;
-            positions.reserve(n * 4 * 3);
-            normals.reserve(n * 4 * 3);
-            uvs.reserve(n * 4 * 2);
+            positions.reserve(nNodes * 4 * 3);
+            normals.reserve(nNodes * 4 * 3);
+            uvs.reserve(nNodes * 4 * 2);
 
-            const Vector3 up{0.f, 1.f, 0.f};
-            for (size_t i = 0; i < n; ++i) {
-                const Sample& s = samples_[i];
-                // Banking: roll the cross-section about the tangent by an amount
-                // proportional to curvature, clamped to ±maxBanking. Sign chosen so
-                // the road banks into the curve (outer edge lifts).
-                const float bank = bankingAngle(i);
-                // Rotate the (right, up) basis about the tangent by `bank`. The
-                // right vector tilts toward up; the per-vertex Y gets the camber.
-                const float cb = std::cos(bank), sb = std::sin(bank);
-                // Tilted lateral & vertical basis (in the plane spanned by right & up).
-                const Vector3& right = s.right;
-                const float vScale = (s.arcLength + vOffsetMeters) / tile;
-
+            for (const Node& nd : nodes) {
                 for (int k = 0; k < 4; ++k) {
                     const float lat = off[k];
                     // Lateral displacement: right rotated about tangent by `bank`.
                     // right' = right*cos(bank) + up*sin(bank)  (a roll in the cross
                     // plane). The vertex sits at center + lat * right'.
-                    const float px = s.pos.x + lat * (right.x * cb);
-                    const float pz = s.pos.z + lat * (right.z * cb);
+                    const float px = nd.x + lat * (nd.rx * nd.cb);
+                    const float pz = nd.z + lat * (nd.rz * nd.cb);
                     // Camber raises the outer edge: height contribution = lat*sin(bank)
                     // (lat sign distinguishes left/right of centerline).
-                    float py = s.height + lat * sb;
+                    float py = nd.h + lat * nd.sb;
                     if (paved[k]) py += raise;
 
                     positions.push_back(px);
@@ -318,16 +399,18 @@ namespace threepp::road {
                     normals.push_back(1.f);
                     normals.push_back(0.f);
 
-                    uvs.push_back(uCoord[k]);
-                    uvs.push_back(vScale);
+                    uvs.push_back(nd.flip ? 1.f - uCoord[k] : uCoord[k]);
+                    uvs.push_back(nd.v);
                 }
             }
 
             // Index: 3 quads per segment, 2 triangles per quad. Cross-section of
-            // sample i occupies vertices [i*4 .. i*4+3].
+            // node i occupies vertices [i*4 .. i*4+3]; a node with join == false
+            // starts a new strip (the far half of a mirror-boundary pair).
             std::vector<unsigned int> indices;
-            indices.reserve((n - 1) * 3 * 6);
-            for (size_t i = 0; i + 1 < n; ++i) {
+            indices.reserve((nNodes - 1) * 3 * 6);
+            for (size_t i = 0; i + 1 < nNodes; ++i) {
+                if (!nodes[i + 1].join) continue;
                 const unsigned int a = static_cast<unsigned int>(i * 4);
                 const unsigned int b = static_cast<unsigned int>((i + 1) * 4);
                 for (int q = 0; q < 3; ++q) {
@@ -357,6 +440,48 @@ namespace threepp::road {
             geo->computeBoundingBox();
             geo->computeBoundingSphere();
             return geo;
+        }
+
+        // Total XZ arc length of the centerline (m).
+        [[nodiscard]] float totalLength() const {
+            return samples_.empty() ? 0.f : samples_.back().arcLength;
+        }
+
+        // A point ON the paved surface, at arc-length `station` (m from the start)
+        // and lateral offset `lat` (m, + toward `right`). This is the SAME
+        // cross-section formula buildSurface bakes — the banking roll about the
+        // tangent, plus surfaceRaise — so anything placed with it (a repair-patch
+        // decal, a manhole, a stop line) lies exactly on the ribbon rather than
+        // on a flat plane the ribbon curves away from. `extraRaise` lifts it
+        // clear of the ribbon by that many metres.
+        [[nodiscard]] Vector3 surfacePointAt(float station, float lat, float extraRaise = 0.f) const {
+            const size_t n = samples_.size();
+            if (n == 0) return Vector3::ZEROS();
+            if (n == 1) return Vector3(samples_[0].pos.x, samples_[0].height + params_.surfaceRaise + extraRaise,
+                                       samples_[0].pos.z);
+            station = std::clamp(station, 0.f, samples_[n - 1].arcLength);
+            // Binary search the arc-length table for the bracketing samples.
+            size_t lo = 0, hi = n - 1;
+            while (lo + 1 < hi) {
+                const size_t mid = (lo + hi) / 2;
+                if (samples_[mid].arcLength <= station) lo = mid; else hi = mid;
+            }
+            const Sample& a = samples_[lo];
+            const Sample& b = samples_[hi];
+            const float span = std::max(b.arcLength - a.arcLength, 1e-6f);
+            const float t = std::clamp((station - a.arcLength) / span, 0.f, 1.f);
+            const float bank = lerp(bankingAngle(lo), bankingAngle(hi), t);
+            const float cb = std::cos(bank), sb = std::sin(bank);
+            float rx = lerp(a.right.x, b.right.x, t);
+            float rz = lerp(a.right.z, b.right.z, t);
+            const float rl = std::sqrt(rx * rx + rz * rz);
+            if (rl > 1e-6f) { rx /= rl; rz /= rl; }
+            const float cx = lerp(a.pos.x, b.pos.x, t);
+            const float cz = lerp(a.pos.z, b.pos.z, t);
+            const float ch = lerp(a.height, b.height, t);
+            return Vector3(cx + lat * (rx * cb),
+                           ch + lat * sb + params_.surfaceRaise + extraRaise,
+                           cz + lat * (rz * cb));
         }
 
         // Bake an sRGB RGBA8 albedo (row-major, `width` across road = U, `height`
@@ -475,6 +600,16 @@ namespace threepp::road {
             const float edgeCentre = std::max(pavedHalf - st.shoulderInset - halfLine, 0.05f);
             const float w = std::clamp(st.wear, 0.f, 1.f);
             const float seedX = static_cast<float>(st.seed % 977u) * 13.37f;
+            // Every along-road field wraps with the TILE, so the wrap period of a
+            // lattice whose cell is `cellM` metres must be derived from
+            // st.tileLength — hard-coded periods silently pin the longest visible
+            // feature to whatever tile length they were written for (they were
+            // written for 48 m; the tile is 96 m now, and a hard-coded 48 m wrap
+            // would have handed back the very 48 m repeat this bake is trying to
+            // get rid of).
+            const auto periodFor = [tile](float cellM) {
+                return std::max(1, static_cast<int>(std::lround(tile / std::max(cellM, 1e-3f))));
+            };
 
             // Coverage of a band of half-width `hw` centred on 0, sampled at
             // signed distance d with texel footprint `texel`.
@@ -521,35 +656,89 @@ namespace threepp::road {
             };
             const int sd = static_cast<int>(st.seed & 0x7FFFFFFFu);
 
-            // Asphalt PATCHES: 0-2 per tile, kept clear of the tile seam so the
-            // repeat does not slice one in half. Low contrast on purpose — the
-            // tile comes round every 48 m (96 m with the two variants) and a
-            // hero patch would read as wallpaper down a straight.
-            struct Patch {
-                float lat0, lat1, s0, s1;
-            };
-            std::array<Patch, 2> patches{};
-            int nPatch = 0;
-            if (!gravel && w > 0.05f) {
-                const int count = (hash2(sd, 21) > 0.2f) ? 2 : ((hash2(sd, 22) > -0.3f) ? 1 : 0);
-                for (int k = 0; k < count; ++k) {
-                    // Some are full-lane resurfacings, not pothole plugs: a 1 m
-                    // patch is gone by the third car length, a 3 x 5 m one is
-                    // still there. Still low contrast - see below.
-                    const bool big = hash2(sd + k * 13, 35) > 0.15f;
-                    const float hwd = big ? 1.0f + 1.0f * (hash2(sd + k * 13, 33) * 0.5f + 0.5f) // 2-4 m
-                                          : 0.5f + 1.0f * (hash2(sd + k * 13, 33) * 0.5f + 0.5f);// 1-3 m
-                    const float hln = big ? 1.5f + 1.5f * (hash2(sd + k * 13, 34) * 0.5f + 0.5f) // 3-6 m
-                                          : 0.5f + 1.5f * (hash2(sd + k * 13, 34) * 0.5f + 0.5f);// 1-4 m
-                    const float cx = hash2(sd + k * 13, 31) * pavedHalf * 0.65f;
-                    const float cs = hln + (hash2(sd + k * 13, 32) * 0.5f + 0.5f) * (tile - 2.f * hln);
-                    patches[nPatch++] = Patch{cx - hwd, cx + hwd, cs - hln, cs + hln};
-                }
-            }
-            // An old edge repair: a 0.6 m strip of a different mix along one
-            // side, on some tiles.
-            const bool repairStrip = !gravel && w > 0.05f && hash2(sd, 41) > 0.4f;
+            // NOTHING DISCRETE IS BAKED INTO THIS TILE ANY MORE. The tile is
+            // SHARED by every chunk of every road of its class, so a recognisable
+            // object in it — a repair patch, a pothole plug, a manhole — comes
+            // back at the identical lateral position every tileLength metres
+            // along every road in the scene, which is exactly what "the patches
+            // are just repeated the same way at an interval" describes. Repair
+            // patches now live per CHUNK as decal quads (RoadNetwork's
+            // buildPatchDecals) where their positions are a function of the road
+            // id and the piece index and therefore never line up.
+            // What is still allowed here: fields with no recognisable SHAPE —
+            // grain, wheel-track polish, paint wear, cracks.
+            //
+            // The one thing that survives is the old EDGE REPAIR — a 0.6 m strip
+            // of a different mix along one side — because it has no shape of its
+            // own, only an extent; it is gated by a run fbm so it fades in and
+            // out over tens of metres instead of starting and stopping with the
+            // tile.
             const float repairSide = (hash2(sd, 42) > 0.f) ? 1.f : -1.f;
+
+            // ── transverse cracks ────────────────────────────────────────────
+            // One CANDIDATE per 8 m cell, but a third of the cells carry no
+            // crack and every survivor is jittered by up to half a cell, so
+            // consecutive cracks land anywhere from ~5 to ~25 m apart and the
+            // eye never finds the beat. What was there before — one crack per
+            // cell, jittered ±2.4 m, drawn as a single station for the whole row
+            // — is precisely a set of evenly spaced straight lines spanning the
+            // carriageway, i.e. concrete slab joints, which is what the road
+            // read as.
+            //
+            // Everything that makes a crack look like a crack is a function of
+            // LAT (how far across the road you are), evaluated per texel:
+            // the station wanders, the width breathes, pieces are missing, and
+            // most cracks do not reach both edges.
+            struct XCrack {
+                float at = 0.f;      // nominal station of the crack (m)
+                float halfW = 0.f;   // base half width (m)
+                float sealed = 0.f;  // 1 = tar-sealed, 0 = open
+                float sx = 0.f;      // per-crack noise offset
+                float latA = 0.f, latB = 0.f;// piece 1 lateral extent (m)
+                float latC = 0.f, latD = 0.f;// piece 2 (empty when latC >= latD)
+                float jog = 0.f;     // station offset of piece 2 (m)
+            };
+            const float crackCell = 8.f;
+            const int crackCells = periodFor(crackCell);
+            const auto crackAt = [&](int c, XCrack& out) {
+                const int cw = ((c % crackCells) + crackCells) % crackCells;
+                const int cs = sd + cw * 37;
+                if (hash2(cs, 5) < -0.30f) return false;// ~35% of cells: no crack
+                const auto u01 = [cs](int k) { return hash2(cs, k) * 0.5f + 0.5f; };
+                out.at = (static_cast<float>(c) + 0.5f + hash2(cs, 6) * 0.5f) * crackCell;
+                const bool sealed = hash2(cs, 9) > -0.2f;
+                out.sealed = sealed ? 1.f : 0.f;
+                // A texel is dv (~4.7 cm) long, so a literal 2 cm crack can never
+                // cover half of one and mips erase it by the second car length.
+                // Real tar sealing is a smeared 5-7 cm band anyway, and this is
+                // the signature of a Norwegian road — it has to survive to eye
+                // level. An UNSEALED crack is a hairline and stays thin.
+                out.halfW = sealed ? 0.035f : 0.012f;
+                out.sx = static_cast<float>(cw) * 7.31f + seedX * 0.017f;
+                out.latA = -pavedHalf - 0.2f;
+                out.latB = pavedHalf + 0.2f;
+                out.latC = 1.f;
+                out.latD = 0.f;// piece 2 empty by default
+                out.jog = 0.f;
+                const float span = 2.f * pavedHalf;
+                if (hash2(cs, 11) <= 0.20f) {// ~40% are PARTIAL
+                    if (hash2(cs, 12) > 0.5f) {
+                        // Two offset pieces with a jog between them: the crack
+                        // steps sideways along the road where it crossed a joint.
+                        const float f1 = 0.25f + 0.25f * u01(13);
+                        const float f2 = std::min(f1 + 0.05f + 0.15f * u01(14), 0.95f);
+                        out.latB = -pavedHalf + f1 * span;
+                        out.latC = -pavedHalf + f2 * span;
+                        out.latD = pavedHalf + 0.2f;
+                        out.jog = (hash2(cs, 15) > 0.f ? 1.f : -1.f) * (0.10f + 0.25f * u01(16));
+                    } else {
+                        const float f = 0.20f + 0.40f * u01(13);
+                        if (hash2(cs, 14) > 0.f) out.latA = -pavedHalf + f * span;// starts late
+                        else out.latB = -pavedHalf + f * span;                    // stops early
+                    }
+                }
+                return true;
+            };
 
             for (int y = 0; y < H; ++y) {
                 // Station along the tile, in metres, and in lattice cells for the
@@ -558,35 +747,37 @@ namespace threepp::road {
 
                 // ── fields that depend only on the station ──────────────────
                 // A real pavement edge is chipped and frayed, not sawn.
-                const float ragL = 0.13f * w * fbmP(seedX + 3.f, s / 3.f, 16, 3, 2.f, 0.5f);
-                const float ragR = 0.13f * w * fbmP(seedX + 91.f, s / 3.f, 16, 3, 2.f, 0.5f);
+                const float ragL = 0.13f * w * fbmP(seedX + 3.f, s / 3.f, periodFor(3.f), 3, 2.f, 0.5f);
+                const float ragR = 0.13f * w * fbmP(seedX + 91.f, s / 3.f, periodFor(3.f), 3, 2.f, 0.5f);
                 // Paint is renewed in stretches, so how faded a line is depends
                 // on WHERE along the road you are, in ~12 m segments.
                 const float segWear =
-                        std::clamp(0.55f + 0.60f * fbmP(seedX + 17.f, s / 12.f, 4, 3, 2.f, 0.5f), 0.f, 1.f) * w;
+                        std::clamp(0.55f + 0.60f * fbmP(seedX + 17.f, s / 12.f, periodFor(12.f), 3, 2.f, 0.5f), 0.f, 1.f) * w;
                 // A ghost of an older line, offset a few centimetres, on some
                 // segments: the road was re-marked and the old one still shows.
-                const float ghostSeg = (fbmP(seedX + 57.f, s / 12.f, 4, 2, 2.f, 0.5f) > 0.28f) ? 1.f : 0.f;
+                const float ghostSeg = (fbmP(seedX + 57.f, s / 12.f, periodFor(12.f), 2, 2.f, 0.5f) > 0.28f) ? 1.f : 0.f;
                 const float ghostOff = 0.03f + 0.03f * (hash2(sd, 61) * 0.5f + 0.5f);
-                // Transverse frost cracks every ~8 m (jitter puts them 5-12 m
-                // apart); most of them tar-sealed.
-                float crackRaw = 0.f, crackSealed = 0.f;
+                // The edge repair runs in and out over tens of metres.
+                const float repairRun = !gravel && w > 0.05f
+                        ? std::clamp(fbmP(seedX + 167.f, s / 24.f, periodFor(24.f), 3, 2.f, 0.5f) * 3.f - 0.55f, 0.f, 1.f)
+                        : 0.f;
+                // Which transverse cracks can possibly reach THIS row: a crack of
+                // cell c sits inside cell c after jitter, and wanders at most
+                // ~0.3 m in station, so only the three cells around s matter and
+                // in practice none of them do. Rows with no crack nearby pay one
+                // hash per cell and nothing in the x loop.
+                std::array<XCrack, 3> xc{};
+                int nXc = 0;
                 if (!gravel && w > 0.05f) {
-                    constexpr float cell = 8.f;// 6 per 48 m tile
-                    const int ci = ((static_cast<int>(std::floor(s / cell)) % 6) + 6) % 6;
-                    const float jit = hash2(sd + ci * 37, 5) * 0.30f;
-                    const float at = (static_cast<float>(ci) + 0.5f + jit) * cell;
-                    const float wob = 0.05f * noise2p(0.f, s / 0.5f, 96);
-                    const bool sealed = hash2(sd + ci * 37, 9) > -0.2f;
-                    // A texel is dv (~4.7 cm) long, so a literal 2 cm crack can
-                    // never cover half of one and mips erase it by the second
-                    // car length. Real tar sealing is a smeared 5-7 cm band
-                    // anyway, and this is the signature of a Norwegian road -
-                    // it has to survive to eye level.
-                    const float halfW = sealed ? 0.035f : 0.010f;
-                    const float c = cover(s - at + wob, halfW, dv) * w;
-                    crackRaw = sealed ? 0.f : c;
-                    crackSealed = sealed ? c : 0.f;
+                    const int c0 = static_cast<int>(std::floor(s / crackCell));
+                    for (int c = c0 - 1; c <= c0 + 1; ++c) {
+                        XCrack cr;
+                        if (!crackAt(c, cr)) continue;
+                        // 0.29 m of wander + 0.35 m of jog + the widest band.
+                        if (std::abs(s - cr.at) > 0.75f + cr.halfW * 1.5f) continue;
+                        xc[nXc++] = cr;
+                        if (nXc == 3) break;
+                    }
                 }
 
                 // How hard a wheel track is polished varies ALONG the road: a
@@ -596,8 +787,8 @@ namespace threepp::road {
                 std::array<float, 4> trackAmp{};
                 for (int k = 0; k < nTracks; ++k) {
                     const float kf = static_cast<float>(k);
-                    const float lo = fbmP(seedX + 211.f + 37.f * kf, s / 24.f, 2, 2, 2.f, 0.5f);
-                    const float hi = fbmP(seedX + 409.f + 53.f * kf, s / 12.f, 4, 2, 2.f, 0.5f);
+                    const float lo = fbmP(seedX + 211.f + 37.f * kf, s / 24.f, periodFor(24.f), 2, 2.f, 0.5f);
+                    const float hi = fbmP(seedX + 409.f + 53.f * kf, s / 12.f, periodFor(12.f), 4, 2.f, 0.5f);
                     trackAmp[k] = std::clamp(0.55f + 0.85f * lo + 0.35f * hi, 0.05f, 1.f);
                 }
 
@@ -638,8 +829,8 @@ namespace threepp::road {
                         // frayed asphalt edge this is the narrow grusskulder the
                         // terrain's grass then takes over from - it must stay a
                         // FRAYED EDGE, never a dirt band beside the road.
-                        const float stone = noise2p(lat / 0.055f + seedX, s / 0.055f, 873);
-                        const float patch = fbmP(lat / 6.f + seedX, s / 6.f, 8, 3, 2.f, 0.5f);
+                        const float stone = noise2p(lat / 0.055f + seedX, s / 0.055f, periodFor(0.055f));
+                        const float patch = fbmP(lat / 6.f + seedX, s / 6.f, periodFor(6.f), 3, 2.f, 0.5f);
                         const float base = gravel ? 0.55f : 0.50f;
                         const float k = base + 0.105f * stone + 0.05f * patch +
                                         (gravel ? 0.05f * trackW : 0.f);
@@ -655,7 +846,7 @@ namespace threepp::road {
                         // A grass stripe grows down the middle of a forest track.
                         if (gravel && !twoLane && st.edge == LinePattern::None) {
                             const float gr = softBand(lat, 0.15f, 0.12f) * 0.4f * w *
-                                             std::clamp(0.5f + fbmP(seedX + 5.f, s / 4.f, 12, 3, 2.f, 0.5f), 0.f, 1.f);
+                                             std::clamp(0.5f + fbmP(seedX + 5.f, s / 4.f, periodFor(4.f), 3, 2.f, 0.5f), 0.f, 1.f);
                             r += (0.20f - r) * gr;
                             g += (0.28f - g) * gr;
                             b += (0.12f - b) * gr;
@@ -667,8 +858,8 @@ namespace threepp::road {
                         // 2 cm stones, not 3: at driving height the coarser
                         // grain read as gravel. Half the amplitude too, and a
                         // darker base - 0.42 was reading as concrete.
-                        const float aggregate = noise2p(lat / 0.02f + seedX, s / 0.02f, 2400);
-                        const float patchN = fbmP(lat / 8.f + seedX, s / 8.f, 6, 4, 2.f, 0.5f);
+                        const float aggregate = noise2p(lat / 0.02f + seedX, s / 0.02f, periodFor(0.02f));
+                        const float patchN = fbmP(lat / 8.f + seedX, s / 8.f, periodFor(8.f), 4, 2.f, 0.5f);
                         float k = 0.38f + 0.040f * aggregate + 0.050f * patchN;
                         // Polished wheel tracks, dirtier strip between them. The
                         // lightening is deliberately small: what sells a track
@@ -678,22 +869,9 @@ namespace threepp::road {
                         rough = 0.88f - 0.26f * trackW * w;
                         relief = 0.002f * aggregate - 0.012f * trackW * w;
 
-                        // Patches and the old edge repair.
-                        for (int p = 0; p < nPatch; ++p) {
-                            const auto& P = patches[p];
-                            // Soft-ish edges and low contrast: the tile comes
-                            // round every 48 m and a hard dark rectangle reads
-                            // as a sticker repeated down the straight.
-                            const float inx = softBand(lat - 0.5f * (P.lat0 + P.lat1),
-                                                       0.5f * (P.lat1 - P.lat0), 0.25f);
-                            const float iny = softBand(s - 0.5f * (P.s0 + P.s1),
-                                                       0.5f * (P.s1 - P.s0), 0.25f);
-                            const float a = inx * iny;
-                            k -= 0.100f * a * w;
-                            relief -= 0.003f * a * w;
-                        }
-                        if (repairStrip) {
-                            const float a = softBand(lat - repairSide * (pavedHalf - 0.3f), 0.30f, 0.08f);
+                        // The old edge repair — an extent, not an object.
+                        if (repairRun > 0.f) {
+                            const float a = softBand(lat - repairSide * (pavedHalf - 0.3f), 0.30f, 0.08f) * repairRun;
                             k -= 0.06f * a * w;
                             relief -= 0.002f * a * w;
                         }
@@ -702,12 +880,46 @@ namespace threepp::road {
                         b = k * 0.97f;
 
                         // ── cracks ──────────────────────────────────────────
+                        // TRANSVERSE. Everything that varies along the crack is
+                        // a function of lat and is evaluated here, per texel:
+                        // the station wanders (a 1.5 m meander plus 15 cm
+                        // kinks), the width breathes between half and one and a
+                        // half of its nominal, and about a sixth of the length
+                        // is simply missing in 10-30 cm gaps. That is what stops
+                        // a crack being a ruled line across the carriageway.
+                        float crackX = 0.f, crackXSealed = 0.f;
+                        for (int c = 0; c < nXc; ++c) {
+                            const XCrack& cr = xc[c];
+                            // Which piece of the crack is this texel in?
+                            float jog = 0.f;
+                            if (lat >= cr.latA && lat <= cr.latB) jog = 0.f;
+                            else if (lat >= cr.latC && lat <= cr.latD) jog = cr.jog;
+                            else continue;
+                            const float wander = 0.25f * noise2(lat / 1.5f + cr.sx * 3.1f, cr.sx) +
+                                                 0.04f * noise2(lat / 0.15f + cr.sx * 5.7f, cr.sx + 11.f);
+                            const float wmul = std::clamp(1.f + 0.5f * noise2(lat / 2.f + cr.sx * 2.3f, cr.sx + 3.f),
+                                                          0.4f, 1.6f);
+                            // 10-30 cm gaps: a 0.2 m lattice thresholded high.
+                            const float gapN = noise2(lat / 0.20f + cr.sx * 9.7f, cr.sx + 7.f);
+                            const float present = std::clamp((0.62f - gapN) * 8.f, 0.f, 1.f);
+                            if (present <= 0.f) continue;
+                            // Soft 5 cm ends so a partial crack tapers out
+                            // instead of being clipped square.
+                            const float endA = (jog == 0.f) ? cr.latA : cr.latC;
+                            const float endB = (jog == 0.f) ? cr.latB : cr.latD;
+                            const float ends = std::clamp((lat - endA) / 0.05f, 0.f, 1.f) *
+                                               std::clamp((endB - lat) / 0.05f, 0.f, 1.f);
+                            const float cv = cover(s - cr.at - jog + wander, cr.halfW * wmul, dv) *
+                                             present * ends * w;
+                            if (cr.sealed > 0.5f) crackXSealed = std::max(crackXSealed, cv);
+                            else crackX = std::max(crackX, cv);
+                        }
                         // Longitudinal hairlines wander along the OUTER track
                         // edges, where the pavement flexes most.
                         float crackL = 0.f;
                         {
-                            const float wander = 0.05f * fbmP(seedX + 71.f, s / 12.f, 4, 3, 2.f, 0.5f);
-                            const float run = std::clamp(fbmP(seedX + 83.f, s / 12.f, 4, 2, 2.f, 0.5f) * 2.f, 0.f, 1.f);
+                            const float wander = 0.05f * fbmP(seedX + 71.f, s / 12.f, periodFor(12.f), 3, 2.f, 0.5f);
+                            const float run = std::clamp(fbmP(seedX + 83.f, s / 12.f, periodFor(12.f), 2, 2.f, 0.5f) * 2.f, 0.f, 1.f);
                             for (int kk = 0; kk < nTracks; ++kk) {
                                 const float at = trackC[kk] + (trackC[kk] > 0.f ? 0.24f : -0.24f) + wander;
                                 crackL = std::max(crackL, cover(lat - at, 0.012f, du) * run);
@@ -720,20 +932,30 @@ namespace threepp::road {
                         // erase it two car lengths ahead, while a seam running
                         // away from the camera stays a continuous dark line all
                         // the way to the vanishing point.
+                        //
+                        // PER EDGE, not one field for all four: a single shared
+                        // wander and a single shared run made both sides of the
+                        // road start, stop and bend at the same station, which
+                        // from above is a pair of ruled lines. Each edge now
+                        // gets its own wander (±0.10 m at a 3 m scale, so it
+                        // visibly snakes), its own width, and its own run hash.
                         float sealL = 0.f;
-                        {
-                            const float wander = 0.07f * fbmP(seedX + 131.f, s / 16.f, 3, 3, 2.f, 0.5f);
-                            const float run = std::clamp(fbmP(seedX + 149.f, s / 24.f, 2, 2, 2.f, 0.5f) * 2.6f + 0.35f, 0.f, 1.f);
-                            for (int kk = 0; kk < nTracks; ++kk) {
-                                const float at = trackC[kk] + (trackC[kk] > 0.f ? 0.30f : -0.30f) + wander;
-                                sealL = std::max(sealL, cover(lat - at, 0.026f, du) * run);
-                            }
-                            sealL *= w;
+                        for (int kk = 0; kk < nTracks; ++kk) {
+                            const float kf = static_cast<float>(kk);
+                            const float wander = 0.10f * fbmP(seedX + 131.f + 61.f * kf, s / 3.f,
+                                                              periodFor(3.f), 3, 2.f, 0.5f);
+                            const float run = std::clamp(fbmP(seedX + 149.f + 83.f * kf, s / 24.f,
+                                                              periodFor(24.f), 2, 2.f, 0.5f) * 2.6f + 0.35f, 0.f, 1.f);
+                            const float wmul = std::clamp(1.f + 0.55f * fbmP(seedX + 311.f + 47.f * kf, s / 6.f,
+                                                                             periodFor(6.f), 2, 2.f, 0.5f), 0.4f, 1.6f);
+                            const float at = trackC[kk] + (trackC[kk] > 0.f ? 0.30f : -0.30f) + wander;
+                            sealL = std::max(sealL, cover(lat - at, 0.026f * wmul, du) * run);
                         }
+                        sealL *= w;
                         // Sealed cracks are the signature of a Norwegian road:
                         // black bitumen wiggles standing slightly proud.
-                        const float sealAll = std::max(crackSealed, sealL);
-                        const float openAll = std::max(crackRaw, crackL);
+                        const float sealAll = std::max(crackXSealed, sealL);
+                        const float openAll = std::max(crackX, crackL);
                         if (openAll > 0.f) {
                             const float t = openAll;
                             r += (0.20f * r - r) * t;
@@ -752,7 +974,7 @@ namespace threepp::road {
                         // ── markings, composited by coverage ─────────────────
                         // Ragged edges: the paint's own boundary jitters by about
                         // a texel, so a worn line never reads as a vector stroke.
-                        const float jit = du * 0.9f * noise2p(0.f, s / 0.25f, 192) * w;
+                        const float jit = du * 0.9f * noise2p(0.f, s / 0.25f, periodFor(0.25f)) * w;
                         // Some dash cells have a 0.3-1.5 m bite eaten out.
                         const auto dashWorn = [&](float on, float off) {
                             const float period = std::max(on + off, 1e-3f);
@@ -867,6 +1089,89 @@ namespace threepp::road {
             }
             return m;
         }
+
+        // Bake the REPAIR-PATCH ATLAS: four variants side by side, each `cellRes`
+        // square, one shared albedo + roughMetal pair. A patch is a resurfacing:
+        // a rectangle sawn out of the carriageway and filled with a newer, finer,
+        // DARKER mix (about 0.08 sRGB below the 0.38 road base), its own grain,
+        // an uneven tone across it, and a bitumen seam right at the saw cut.
+        //
+        // The quad IS the patch — the decal is opaque (the Vulkan deferred path
+        // has blend gotchas, and a repair has hard sawn edges anyway), so the
+        // cell border must carry that edge itself: the outer few texels are the
+        // dark seam, with a ~1.5-texel ramp inward so the cut is crisp without
+        // aliasing. That also makes the atlas safe to mip and to sample near a
+        // variant boundary — every cell's border is the same dark seam.
+        [[nodiscard]] static RoadSurfaceMaps bakePatchAtlas(int cellRes = 256,
+                                                            unsigned int seed = 4711u) {
+            RoadSurfaceMaps m;
+            const int C = std::max(cellRes, 16);
+            constexpr int kVariants = 4;
+            const int W = C * kVariants, H = C;
+            m.width = W;
+            m.height = H;
+            const size_t nPx = static_cast<size_t>(W) * static_cast<size_t>(H);
+            m.albedo.assign(nPx * 4, 255u);
+            m.normal.assign(nPx * 4, 255u);
+            m.roughMetal.assign(nPx * 4, 255u);
+            // Flat tangent-space normal everywhere (the patch's own relief is far
+            // below what a 1.5 cm lift already reads as).
+            for (size_t p = 0; p < nPx; ++p) {
+                m.normal[p * 4 + 0] = toByte(0.5f);
+                m.normal[p * 4 + 1] = toByte(0.5f);
+                m.normal[p * 4 + 2] = 255u;
+            }
+            const float fC = static_cast<float>(C);
+            for (int v = 0; v < kVariants; ++v) {
+                const int sv = static_cast<int>(seed) + v * 9173;
+                const float sx = static_cast<float>(v) * 137.7f + static_cast<float>(seed % 601u) * 0.31f;
+                // Each variant is its own mix: how much darker than the road, how
+                // coarse the aggregate, how blotchy the tone.
+                // MEASURED, not guessed: at 0.275-0.30 minus its own grain the
+                // patch bottomed out around 0.21 and rendered at 0.45x the road
+                // (34-52 against 88 in the road-top frame) — a black hole, not a
+                // repair. The road base is 0.38; a resurfacing is about 0.08
+                // below it, so the mix is centred at 0.307 and its noise is
+                // small enough that it never dips below ~0.26.
+                const float dark = 0.315f - 0.015f * (hash2(sv, 3) * 0.5f + 0.5f);// 0.30-0.315
+                const float grainScale = 1.6f + 1.6f * (hash2(sv, 4) * 0.5f + 0.5f);
+                const float seamW = 2.f + 1.5f * (hash2(sv, 5) * 0.5f + 0.5f);// 2-3.5 texels
+                for (int y = 0; y < C; ++y) {
+                    const float fy = static_cast<float>(y) + 0.5f;
+                    for (int x = 0; x < C; ++x) {
+                        const float fx = static_cast<float>(x) + 0.5f;
+                        const float grain = noise2(fx / grainScale + sx, fy / grainScale + sx);
+                        const float tone = fbm(fx / (fC * 0.22f) + sx, fy / (fC * 0.22f) + sx, 4, 2.f, 0.5f);
+                        const float blotch = fbm(fx / (fC * 0.08f) + sx * 3.f, fy / (fC * 0.08f) + sx * 3.f,
+                                                 3, 2.f, 0.5f);
+                        float k = dark + 0.022f * grain + 0.016f * tone + 0.008f * blotch;
+                        float rough = 0.93f - 0.05f * tone;
+                        // The saw cut and its bitumen seam. Dark, but a SEAM and
+                        // not a frame: a near-black ring all the way round made
+                        // the quad read as a raised slab rather than a patch let
+                        // into the surface, so it is lighter, thinner, and its
+                        // depth varies along the cut the way a hand-run bead of
+                        // sealant does.
+                        const float dB = std::min(std::min(fx, fC - fx), std::min(fy, fC - fy));
+                        const float seam = std::clamp((seamW - dB) / 1.5f + 0.5f, 0.f, 1.f) *
+                                           (0.72f + 0.28f * (tone * 0.5f + 0.5f));
+                        if (seam > 0.f) {
+                            k += (0.145f - k) * seam;
+                            rough += (0.62f - rough) * seam;
+                        }
+                        const size_t o = (static_cast<size_t>(y) * W + (v * C + x)) * 4;
+                        m.albedo[o + 0] = toByte(k * 1.01f);
+                        m.albedo[o + 1] = toByte(k);
+                        m.albedo[o + 2] = toByte(k * 0.98f);
+                        m.roughMetal[o + 0] = 0u;
+                        m.roughMetal[o + 1] = toByte(rough);
+                        m.roughMetal[o + 2] = 0u;// dielectric
+                    }
+                }
+            }
+            return m;
+        }
+        static constexpr int kPatchVariants = 4;
 
         // ── spawn helpers ────────────────────────────────────────────────────
         // First centerline sample position (with conformed elevation).

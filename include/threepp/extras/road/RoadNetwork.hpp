@@ -48,6 +48,7 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <array>
 #include <vector>
 
 namespace threepp::road {
@@ -94,8 +95,15 @@ namespace threepp::road {
         float wear = 0.6f;        // 0 = fresh paint on new asphalt, 1 = ruined
         bool gravelEdge = true;   // narrow grusskulder at the pavement edge
         unsigned int seed = 1337u;// variant seed
-        int texWidth = 256, texHeight = 1024;
-        float tileLength = 48.f;// 4 x (3+9) and 8 x (3+3): both patterns tile exactly
+        int texWidth = 256, texHeight = 2048;
+        float tileLength = 96.f;// 8 x (3+9) and 16 x (3+3): both patterns tile exactly
+                                // 96 m at the same ~4.7 cm texel as the old 48/1024,
+                                // so the tile's own repeat is 96 m of road (192 m with
+                                // the two seeded variants, 384 m with mirroring) at
+                                // 2 MB per map instead of 1.
+        int patchRes = 256;     // repair-patch atlas: 4 variants of this square
+        unsigned int patchSeed = 4711u;
+        float patchesPer100m = 3.f;// upper bound; the per-piece hash picks 0..this
     };
 
     // Elevation-profile handling for conformTo (all opt-in; default = the
@@ -200,6 +208,7 @@ namespace threepp::road {
         void setMarkingRules(const MarkingRules& mr) {
             rules_ = mr;
             surfaceCache_.clear();
+            patchMat_.reset();
             meanCached_[0] = meanCached_[1] = false;
         }
         [[nodiscard]] const MarkingRules& markingRules() const { return rules_; }
@@ -556,7 +565,7 @@ namespace threepp::road {
                         std::vector<Vector3> pts(cl.begin() + static_cast<std::ptrdiff_t>(s),
                                                  cl.begin() + static_cast<std::ptrdiff_t>(e + 1));
                         if (auto mesh = buildRibbonPiece(r, pts, "roadchunk", piece, texWidth,
-                                                         texHeight, cum[s])) {
+                                                         texHeight, cum[s], /*patchDecals*/ true)) {
                             group->add(mesh);
                             ++piece;
                         }
@@ -918,6 +927,165 @@ namespace threepp::road {
             return mat;
         }
 
+        // The ONE shared repair-patch material (albedo + roughMetal atlas, four
+        // variants). Baked on first use, like the surface sets.
+        [[nodiscard]] std::shared_ptr<MeshStandardMaterial> patchMaterial() const {
+            if (patchMat_) return patchMat_;
+            const auto atlas = RoadGenerator::bakePatchAtlas(rules_.patchRes, rules_.patchSeed);
+            const auto mkTex = [&](std::vector<unsigned char> px, bool srgb) {
+                auto t = DataTexture::create(ImageData{std::move(px)},
+                                             static_cast<unsigned int>(atlas.width),
+                                             static_cast<unsigned int>(atlas.height));
+                t->colorSpace = srgb ? ColorSpace::sRGB : ColorSpace::NoColorSpace;
+                t->magFilter = Filter::Linear;
+                t->minFilter = Filter::LinearMipmapLinear;
+                t->generateMipmaps = true;
+                t->anisotropy = 16;
+                t->wrapS = TextureWrapping::ClampToEdge;
+                t->wrapT = TextureWrapping::ClampToEdge;
+                return t;
+            };
+            auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                            .color(Color::white)
+                                                            .roughness(1.f)
+                                                            .metalness(1.f));
+            mat->map = mkTex(atlas.albedo, true);
+            auto rm = mkTex(atlas.roughMetal, false);
+            mat->roughnessMap = rm;
+            mat->metalnessMap = rm;
+            patchMat_ = mat;
+            return patchMat_;
+        }
+
+        // Repair-patch DECALS for ONE ribbon piece: 0-3 patches per 100 m, each
+        // a quad lying on the ribbon surface (same cross-section formula, lifted
+        // 1.5 cm) with one of the atlas's four variants and a random u/v flip.
+        //
+        // This is where the patches moved TO. In the shared 96 m tile a patch was
+        // one rectangle that every chunk of every road of that class carried at
+        // the same lateral position every 96 m — "these patches are just repeated
+        // the same way at an interval". Here the count, the stations, the lanes,
+        // the sizes, the yaws and the variants are all functions of (road id,
+        // piece index), so two pieces never place the same patch in the same
+        // place, and a road that has no piece boundary in frame still gets
+        // patches that are unique to that stretch.
+        //
+        // All of a piece's patches are ONE indexed geometry (one draw, one entry)
+        // and the mesh is a CHILD of the ribbon piece, so the demo's distance
+        // cull — which toggles the piece's `visible` — hides them with it (both
+        // renderers skip an invisible node's whole subtree).
+        [[nodiscard]] std::shared_ptr<Mesh> buildPatchDecals(const RoadGenerator& gen,
+                                                             const RoadSpec& spec,
+                                                             const RoadSurfaceStyle& st,
+                                                             int idx) const {
+            if (st.kind != SurfaceKind::Asphalt || rules_.wear <= 0.05f) return nullptr;
+            const float len = gen.totalLength();
+            if (len < 8.f) return nullptr;
+            const float pavedHalf = std::max(st.pavedWidth, 1.f) * 0.5f;
+            const std::uint32_t base = idHash(spec.id) ^ (static_cast<std::uint32_t>(idx) * 2654435761u);
+            // Cheap deterministic stream: h(k) in [0,1).
+            const auto h01 = [base](int k) {
+                std::uint32_t x = base + static_cast<std::uint32_t>(k) * 2246822519u;
+                x ^= x >> 15;
+                x *= 2654435761u;
+                x ^= x >> 13;
+                x *= 3266489917u;
+                x ^= x >> 16;
+                return static_cast<float>(x & 0xFFFFFFu) / static_cast<float>(0x1000000);
+            };
+
+            std::vector<float> pos, nrm, uv;
+            std::vector<unsigned int> idxs;
+            const int windows = std::max(1, static_cast<int>(std::ceil(len / 100.f)));
+            int key = 0;
+            for (int wI = 0; wI < windows; ++wI) {
+                const float w0 = static_cast<float>(wI) * 100.f;
+                const float w1 = std::min(w0 + 100.f, len);
+                if (w1 - w0 < 6.f) continue;
+                const int count = static_cast<int>(h01(key++) * (rules_.patchesPer100m + 0.999f));
+                for (int p = 0; p < count; ++p) {
+                    const float halfWid = 0.5f * (1.5f + 2.5f * h01(key++));// 1.5-4 m across
+                    const float halfLen = 0.5f * (2.0f + 4.0f * h01(key++));// 2-6 m along
+                    const float station = w0 + halfLen + h01(key++) * std::max(w1 - w0 - 2.f * halfLen, 0.1f);
+                    if (station - halfLen < 0.5f || station + halfLen > len - 0.5f) continue;
+                    // Centred on a lane, jittered enough that some straddle the
+                    // centre line — a resurfacing does not respect the paint.
+                    const float laneC = (st.centre != LinePattern::None)
+                                                ? (h01(key++) > 0.5f ? 1.f : -1.f) * pavedHalf * 0.5f
+                                                : (++key, 0.f);
+                    float lat = laneC + (h01(key++) * 2.f - 1.f) * 0.9f;
+                    const float limit = std::max(pavedHalf - 0.1f - halfWid, 0.f);
+                    lat = std::clamp(lat, -limit, limit);
+                    const float yaw = (h01(key++) * 2.f - 1.f) * 3.f * math::DEG2RAD;
+                    const int variant = static_cast<int>(h01(key++) * RoadGenerator::kPatchVariants) %
+                                        RoadGenerator::kPatchVariants;
+                    const bool flipU = h01(key++) > 0.5f, flipV = h01(key++) > 0.5f;
+
+                    const float cy = std::cos(yaw), sy = std::sin(yaw);
+                    const unsigned int v0 = static_cast<unsigned int>(pos.size() / 3);
+                    // Corner order (along, across): (-,-) (+,-) (-,+) (+,+).
+                    std::array<Vector3, 4> corner{};
+                    for (int c = 0; c < 4; ++c) {
+                        const float ds = ((c & 1) ? 1.f : -1.f) * halfLen;
+                        const float dl = ((c & 2) ? 1.f : -1.f) * halfWid;
+                        const float ds2 = ds * cy - dl * sy;
+                        const float dl2 = ds * sy + dl * cy;
+                        corner[c] = gen.surfacePointAt(station + ds2, lat + dl2, 0.03f);
+                    }
+                    // The TRUE quad normal, not (0,1,0). A patch lies on a road
+                    // that is cambered and on a grade, so its plane is tilted by
+                    // up to ~0.1 rad from vertical — and a shading normal that
+                    // disagrees with the geometry by that much puts the shadow
+                    // ray's bias origin BELOW the triangle it came from, which
+                    // self-shadows the quad. Measured: with up-normals the patch
+                    // rendered 78 -> 57 -> 35 across its own face against a road
+                    // at 85, i.e. classic acne, not the -0.08 albedo step it is
+                    // supposed to be.
+                    Vector3 nq = corner[2].clone().sub(corner[0])
+                                         .cross(corner[1].clone().sub(corner[0]));
+                    if (nq.length() < 1e-8f) nq.set(0.f, 1.f, 0.f);
+                    nq.normalize();
+                    if (nq.y < 0.f) nq.multiplyScalar(-1.f);
+                    for (int c = 0; c < 4; ++c) {
+                        const Vector3& P = corner[c];
+                        pos.push_back(P.x);
+                        pos.push_back(P.y);
+                        pos.push_back(P.z);
+                        nrm.push_back(nq.x);
+                        nrm.push_back(nq.y);
+                        nrm.push_back(nq.z);
+                        // Half-texel inset so the atlas cells never bleed.
+                        const float e = 0.5f / static_cast<float>(std::max(rules_.patchRes, 16));
+                        float fu = (c & 1) ? 1.f - e : e;
+                        float fv = (c & 2) ? 1.f - e : e;
+                        if (flipU) fu = 1.f - fu;
+                        if (flipV) fv = 1.f - fv;
+                        uv.push_back((static_cast<float>(variant) + fu) /
+                                     static_cast<float>(RoadGenerator::kPatchVariants));
+                        uv.push_back(fv);
+                    }
+                    // Wound to face UP, matching buildSurface's convention.
+                    idxs.push_back(v0 + 0); idxs.push_back(v0 + 2); idxs.push_back(v0 + 1);
+                    idxs.push_back(v0 + 1); idxs.push_back(v0 + 2); idxs.push_back(v0 + 3);
+                }
+            }
+            if (idxs.empty()) return nullptr;
+
+            auto geo = std::make_shared<BufferGeometry>();
+            geo->setIndex(idxs);
+            geo->setAttribute("position", FloatBufferAttribute::create(pos, 3));
+            geo->setAttribute("normal", FloatBufferAttribute::create(nrm, 3));
+            geo->setAttribute("uv", FloatBufferAttribute::create(uv, 2));
+            geo->computeBoundingBox();
+            geo->computeBoundingSphere();
+            auto mesh = Mesh::create(geo, patchMaterial());
+            mesh->name = "roadpatch_" + (spec.id.empty() ? std::string("?") : spec.id) + "_" +
+                         std::to_string(idx);
+            mesh->receiveShadow = true;
+            mesh->autoLod = false;
+            return mesh;
+        }
+
         // One ribbon sub-mesh over `pts` (a slice of a road's conformed dense
         // centerline, y = final grade): sub-generator draped onto the slice's
         // own profile + the same material/texture recipe as buildMeshes.
@@ -928,7 +1096,8 @@ namespace threepp::road {
                                                              const std::vector<Vector3>& pts,
                                                              const char* namePrefix, int idx,
                                                              int texWidth, int texHeight,
-                                                             float station = 0.f) const {
+                                                             float station = 0.f,
+                                                             bool patchDecals = false) const {
             (void) texWidth;
             (void) texHeight;
             if (pts.size() < 2) return nullptr;
@@ -958,13 +1127,16 @@ namespace threepp::road {
             gen.conformTo([&pts](float x, float z) {
                 return polylineHeightAt(pts, x, z);
             }, 2);
-            auto geo = gen.buildSurface(station);
+            // Mirror u on odd tiles: the tile's own repeat becomes 2 x tileLength
+            // and comes back left-right flipped rather than identical. Safe here
+            // because every baked class layout is symmetric (see buildSurface).
+            auto geo = gen.buildSurface(station, /*mirrorAlternateTiles*/ true);
             if (!geo->getAttribute<float>("position") ||
                 geo->getAttribute<float>("position")->count() == 0)
                 return nullptr;
 
             // Two seeded variants per class alternate by piece index, so the
-            // shared tile's own repeat is 96 m of road rather than 48.
+            // shared tile's own repeat is 192 m of road rather than 96.
             auto mat = surfaceMaterialFor(r.spec, idx & 1);
 
             auto mesh = Mesh::create(geo, mat);
@@ -973,6 +1145,14 @@ namespace threepp::road {
                          "_" + std::to_string(idx);
             mesh->receiveShadow = true;
             mesh->autoLod = false;// thin strip — LOD would sliver it (see buildMeshes)
+            // GROUND chunks only. A bridge deck is a structure, not a stretch of
+            // pavement that has been dug up and refilled — patching one reads as
+            // a mistake, and the deck's own piece indices would collide with the
+            // ground chunks' anyway.
+            if (patchDecals) {
+                if (auto patches = buildPatchDecals(gen, r.spec, styleFor(r.spec, idx & 1), idx))
+                    mesh->add(patches);
+            }
             return mesh;
         }
 
@@ -1213,6 +1393,7 @@ namespace threepp::road {
         // built lazily by surfaceMaterialFor from the const mesh builders, hence
         // mutable. Not part of the logical const state.
         mutable std::unordered_map<std::uint64_t, std::shared_ptr<MeshStandardMaterial>> surfaceCache_;
+        mutable std::shared_ptr<MeshStandardMaterial> patchMat_;// shared repair-patch atlas
         mutable bool meanCached_[2] = {false, false};
         mutable std::array<float, 3> meanValue_[2] = {{0.f, 0.f, 0.f}, {0.f, 0.f, 0.f}};
         std::vector<Road> roads_;
