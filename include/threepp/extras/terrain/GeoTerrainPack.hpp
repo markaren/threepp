@@ -78,16 +78,21 @@ namespace threepp::terrain {
     // which resolves a ridge the pack's own 2 m grid smears into the eave:
     //   kind   "flat" | "gabled" | "hipped" (empty = not measured)
     //   eave   p15 of the footprint's interior nDSM, metres above groundMin
-    //   ridge  p95 of the same (== eave for "flat"); the building's `height`
+    //   ridge  p95 of the same (== eave for "flat"), the rise capped at 50°
+    //          over half the footprint's short side; the building's `height`
     //   axis   unit ridge direction in (x, z); (1,0) for "flat"
-    // Absent on old packs and on footprints too small to sample (< 12 interior
-    // 1 m cells), so every consumer must check hasRoof() and keep its own
-    // shape heuristic as the fallback.
+    //   tower  the uncapped rise was > 1.5x that cap: a spire, tower or mast
+    //          stands here, and the roof planes stop at the capped ridge
+    // Absent on old packs, on footprints too small to sample (< 12 interior
+    // 1 m cells), and wherever the lidar predates the building or the
+    // footprint is mislocated (there the pack keeps the old height chain), so
+    // every consumer must check hasRoof() and keep its own shape heuristic.
     struct GeoRoof {
         std::string kind;
         float eave = 0.f;
         float ridge = 0.f;
         Vector2 axis{1.f, 0.f};
+        bool tower = false;
     };
 
     // One building footprint from the pack (OSM-sourced). Rings are OPEN

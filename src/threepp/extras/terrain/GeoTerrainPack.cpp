@@ -285,6 +285,7 @@ namespace threepp::terrain {
                         rf.kind = itRoof->value("kind", std::string{});
                         rf.ridge = itRoof->value("ridge", 0.f);
                         rf.eave = itRoof->value("eave", rf.ridge);
+                        rf.tower = itRoof->value("tower", false);
                         if (auto itAxis = itRoof->find("axis");
                             itAxis != itRoof->end() && itAxis->is_array() && itAxis->size() >= 2) {
                             const float ax = (*itAxis)[0].get<float>();

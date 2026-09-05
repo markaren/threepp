@@ -966,6 +966,59 @@ ROOF_ERODE = 1.0        # m - edge cells straddle the wall, drop them
 ROOF_FLAT_RISE = 1.2    # m - eave-to-ridge below this reads as a flat roof
 ROOF_GABLE_FRAC = 0.85  # ridge covering this share of the span = gabled, else hipped
 ROOF_BLOCK = 1000       # 1 m nodes per DOM fetch block (1 km squares)
+ROOF_MAX_PITCH = 50.0   # deg - a hip/gable steeper than this over half the short
+                        # side is a tower or a mast, not a roof plane: cap the rise
+ROOF_TOWER_FACTOR = 1.5 # measured rise beyond this x the cap = a real spire/tower
+ROOF_MISLOC_FRAC = 0.5  # ridge under this share of the old-chain height on a
+                        # non-utility building = a mislocated footprint
+# Types that really are 2-3 m tall: a low ridge on these is the building, not a
+# mislocated footprint, so the mislocation test does not apply to them.
+ROOF_UTILITY_TYPES = {"garage", "garages", "shed", "carport", "boathouse",
+                      "hut", "roof"}
+
+
+def _min_rect_short_side(ring):
+    """Short side of the minimum-area bounding rectangle of `ring` (rotating
+    calipers over the convex hull), mirroring geoBldMinRect in GeoBuildings.hpp."""
+    pts = sorted(set((float(p[0]), float(p[1])) for p in ring))
+    if len(pts) < 3:
+        return 0.0
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower = []
+    for p in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    upper = []
+    for p in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    hull = lower[:-1] + upper[:-1]
+    if len(hull) < 3:
+        return 0.0
+    hx = np.array([p[0] for p in hull])
+    hz = np.array([p[1] for p in hull])
+    best_area, best_short = float("inf"), 0.0
+    n = len(hull)
+    for i in range(n):
+        ex = hull[(i + 1) % n][0] - hull[i][0]
+        ez = hull[(i + 1) % n][1] - hull[i][1]
+        el = math.hypot(ex, ez)
+        if el < 1e-4:
+            continue
+        ux, uz = ex / el, ez / el
+        pu = hx * ux + hz * uz
+        pv = hx * -uz + hz * ux
+        du = float(pu.max() - pu.min())
+        dv = float(pv.max() - pv.min())
+        if du * dv < best_area:
+            best_area = du * dv
+            best_short = min(du, dv)
+    return best_short
 
 
 def _dist_to_ring(px, pz, ring):
@@ -1017,8 +1070,28 @@ def resolve_roof_blocks(blds, heights, originE, originN, size, res, dim):
         extent along the axis, else hipped
 
     `height` becomes the measured ridge for every building that gets a block.
-    Buildings with fewer than ROOF_MIN_CELLS interior cells keep the p90 height
-    and get NO roof block, so the consumer falls back to its own heuristic.
+    A block is written only where the lidar actually saw a building:
+
+      * fewer than ROOF_MIN_CELLS interior cells -> no block (percentile noise);
+      * ridge < NDSM_MIN_VALID -> no block.  The DOM predates the building, so
+        the whole footprint reads as ground; the old chain's own nDSM test
+        already rejected it and fell through to levels/type, and a 0.2-1.9 m
+        "ridge" would otherwise collapse a 12 m school to the 2.5 m clamp;
+      * ridge < ROOF_MISLOC_FRAC x the old-chain height on a non-utility type
+        -> no block.  A footprint whose eroded interior sits far below the
+        height the chain measured over the WHOLE footprint is mislocated (the
+        building is next to the polygon, not in it), not a 1.3 m shop.
+
+    Those buildings keep exactly the old height chain (tag > nDSM p90 > levels
+    > type default) and their own heightSource, so the consumer falls back to
+    its own roof heuristic.
+
+    p95 also catches towers, masts and spires, which are metres above the roof
+    over a few cells: the rise is capped at ROOF_MAX_PITCH over half the short
+    side of the footprint's minimum-area rectangle, so a 22 m church tower
+    stops becoming a 22 m hip pyramid over the whole nave.  A measured rise
+    beyond ROOF_TOWER_FACTOR x that cap is flagged `"tower": true` for a later
+    phase to put a spire there.
 
     The 1 m DOM is fetched only over the 1 km blocks that actually contain
     footprints (the whole 8 km square at 1 m would be 64 M nodes) and is never
@@ -1067,7 +1140,7 @@ def resolve_roof_blocks(blds, heights, originE, originN, size, res, dim):
             url=WCS_DOM_URL, coverage=WCS_DOM_COVERAGE, label="DOM1")
 
     kinds = {}
-    n_none = moved = 0
+    n_none = n_low = n_misloc = n_capped = n_tower = moved = 0
     for b in blds:
         r0, r1, c0, c1 = b["_r0"], b["_r1"], b["_c0"], b["_c1"]
         for k in ("_r0", "_r1", "_c0", "_c1"):
@@ -1093,8 +1166,17 @@ def resolve_roof_blocks(blds, heights, originE, originN, size, res, dim):
         if not (math.isfinite(eave) and math.isfinite(ridge)) or ridge <= 0.0:
             n_none += 1
             continue
+        if ridge < NDSM_MIN_VALID:
+            # The lidar predates the building: no block, keep the old chain.
+            n_low += 1
+            continue
+        if (b["type"] not in ROOF_UTILITY_TYPES and
+                ridge < ROOF_MISLOC_FRAC * b["height"]):
+            n_misloc += 1
+            continue
         eave = max(0.0, min(eave, ridge))
         rise = ridge - eave
+        tower = False
         if rise < ROOF_FLAT_RISE:
             kind, ax, az = "flat", 1.0, 0.0
             eave = ridge
@@ -1122,17 +1204,33 @@ def resolve_roof_blocks(blds, heights, originE, originN, size, res, dim):
             else:
                 ax, az, frac = 1.0, 0.0, 0.0
             kind = "gabled" if frac >= ROOF_GABLE_FRAC else "hipped"
+            # A hip/gable cannot rise faster than ROOF_MAX_PITCH off the eave
+            # over half the short side; anything above that is a tower.
+            short = _min_rect_short_side(b["outer"])
+            cap = math.tan(math.radians(ROOF_MAX_PITCH)) * 0.5 * short
+            if short > 0.0 and rise > cap:
+                tower = rise > ROOF_TOWER_FACTOR * cap
+                n_capped += 1
+                n_tower += 1 if tower else 0
+                rise = cap
+                ridge = eave + rise
         b["roof"] = {"kind": kind, "eave": round(eave, 2),
                      "ridge": round(ridge, 2),
                      "axis": [round(ax, 4), round(az, 4)]}
+        if tower:
+            b["roof"]["tower"] = True
         kinds[kind] = kinds.get(kind, 0) + 1
         newh = min(max(ridge, BUILDING_MIN_HEIGHT), BUILDING_MAX_HEIGHT)
         if abs(newh - b["height"]) > 1.0:
             moved += 1
         b["height"] = round(newh, 2)
         b["heightSource"] = "roof"
-    print(f"  roofs: {sum(kinds.values())} measured {kinds}, {n_none} without "
-          f"a block; {moved} heights moved > 1 m off the old p90", flush=True)
+    print(f"  roofs: {sum(kinds.values())} measured {kinds}; no block: "
+          f"{n_none} too few cells, {n_low} ridge < {NDSM_MIN_VALID} m (lidar "
+          f"predates the building), {n_misloc} mislocated footprints; "
+          f"{n_capped} rises capped at {ROOF_MAX_PITCH:.0f} deg ({n_tower} "
+          f"flagged tower); {moved} heights moved > 1 m off the old p90",
+          flush=True)
 
 
 # ==========================================================================

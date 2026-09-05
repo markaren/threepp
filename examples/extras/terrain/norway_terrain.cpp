@@ -397,29 +397,35 @@ int main(int argc, char** argv) {
     // ── named ÅLESUND views ────────────────────────────────────────────────────
     // The close-up realism programme is judged from the SAME three framings every
     // phase, and two of them are the photograph everyone compares the render to:
-    // the Fjellstua viewpoint on Aksla, looking down over Brosundet and the
-    // Jugend centre. `aksla` is the phone-wide postcard, `aksla-near` the same eye
-    // on a 28° lens for 1:1 crops of the centre blocks at ~350 m, and `suburb` is
+    // the Aksla plateau edge, looking down over Brosundet and the
+    // Jugend centre. `aksla` is the postcard, `aksla-near` the same eye
+    // on a 28° lens for 1:1 crops of the centre blocks at ~600 m, and `suburb` is
     // eye level on a residential street — the only one of the three that shows a
     // wall and a window at reading distance. None of them touches the sun: the
     // default (215°/34°) is the one every previous aalesund shot used, so a
     // before/after pair differs by geometry alone.
     if (viewName == "aksla" || viewName == "aksla-near" || viewName == "suburb") {
         if (viewName != "suburb") {
-            // The eye is on the Aksla ridge, at the pack's own local elevation
-            // maximum (166 m) — NOT at the plan's 62.4757 N 6.1627 E, which
-            // transforms to pack-local (729, -294) and lands 280 m short of the
-            // summit, 30 m up in a courtyard between two centre blocks. The
-            // summit node is hardcoded rather than searched so the frame is
-            // pinned: every phase must shoot the identical camera.
-            constexpr float ex = 994.f, ez = -214.f;
+            // The eye is on the WEST EDGE of the Aksla plateau (801, -160,
+            // ground ~131 m), not on the summit node (994, -214, 166 m): from
+            // the summit the town is a distant strip behind the bare shoulder
+            // of the hill, which is not the photograph. From the edge the town
+            // fills the lower two thirds, the centre blocks sit at ~600 m and
+            // the islands run along the top, as in the reference. The target
+            // is the centre rather than Brosundet itself and the lens is 55°,
+            // which frames the same span the phone-wide photo does. Both are
+            // hardcoded so the frame is pinned: every phase shoots the
+            // identical camera.
+            //   --cam 801,133,-160,300,5,-40 --fov 55   (aksla, y resolved)
+            //   --cam 801,133,-160,300,5,-40 --fov 28   (aksla-near)
+            constexpr float ex = 801.f, ez = -160.f;
             const float ground = pack.grid.sampleBicubic(ex, ez);
             if (!haveCam) {
                 haveCam = true;
                 camPosArg.set(ex, ground + 2.f, ez);
-                camTargetArg.set(181.f, 5.f, 14.f);// Brosundet, the harbour inlet
+                camTargetArg.set(300.f, 5.f, -40.f);// the Jugend centre blocks
             }
-            if (!haveFov) fovArg = (viewName == "aksla") ? 62.f : 28.f;
+            if (!haveFov) fovArg = (viewName == "aksla") ? 55.f : 28.f;
             std::printf("[norway] --view %s -> eye %.0f m (ground %.0f + 2); "
                         "--cam %.2f,%.2f,%.2f,%.2f,%.2f,%.2f --fov %.1f\n",
                         viewName.c_str(), camPosArg.y, ground,
