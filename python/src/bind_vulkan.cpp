@@ -1082,7 +1082,7 @@ namespace threepp_py {
                          }
                          const size_t need = static_cast<size_t>(w) * static_cast<size_t>(h) * 4u;
                          if (w <= 0 || h <= 0 || rgba.size() < need) {
-                             return py::array_t<uint8_t>({py::ssize_t(0), py::ssize_t(0)});
+                             return py::array_t<uint8_t>(std::vector<py::ssize_t>{0, 0});
                          }
                          py::array_t<uint8_t> arr({h, w});
                          auto* dst = arr.mutable_data();
