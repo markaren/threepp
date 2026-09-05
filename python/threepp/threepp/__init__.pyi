@@ -8,7 +8,7 @@ import numpy.typing
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'FBXLoader', 'Filter', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'ParticleField', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'Ray', 'RayHit', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'SkeletonHelper', 'SoftBody', 'SogLoader', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'SurfaceMesh', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
+__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'FBXLoader', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'ParticleField', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'Ray', 'RayHit', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'SkeletonHelper', 'SoftBody', 'SogLoader', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
 class AmbientLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
@@ -217,9 +217,17 @@ class ArticulationLink:
         """
         Apply an external force (N) to this link.
         """
+    def add_force_at_pos(self, force: Vector3, world_pos: Vector3) -> None:
+        """
+        Apply an external force (N) at a WORLD point instead of at the centre of mass. add_force alone acts through the COM and so produces zero torque about this link's own joint — it cannot drive the articulation the way an offset load does. This adds the moment (world_pos - centre_of_mass) × force, which is what a cable over a pulley, a fingertip contact or a thruster on a boom actually applies. Note the arm is measured from the CENTRE OF MASS, not the link origin or the joint anchor.
+        """
     def add_impulse(self, impulse: Vector3) -> None:
         """
         Apply an external impulse (kg·m/s) — e.g. a random shove. PhysX takes no impulse on an articulation link, so this goes in as the force that carries the same momentum through one substep (force = impulse / fixed_timestep), consumed by the next step().
+        """
+    def add_torque(self, torque: Vector3) -> None:
+        """
+        Apply an external torque (N·m) about this link's centre of mass.
         """
     def set_drive_target(self, target: typing.SupportsFloat | typing.SupportsIndex) -> None:
         """
@@ -227,6 +235,10 @@ class ArticulationLink:
         """
     def set_drive_velocity(self, velocity: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
+    def world_point(self, local_offset: Vector3) -> Vector3:
+        """
+        World position of a point given in this link's ACTOR frame — the same frame a spatial tendon attachment's relative_offset uses.
+        """
     @property
     def is_root(self) -> bool:
         ...
@@ -2026,6 +2038,58 @@ class Filter:
         ...
     @property
     def value(self) -> int:
+        ...
+class FixedTendon:
+    """
+    A joint-space tendon: length is the linear combination sum(c_i * q_i) of the joint positions it spans, so a spring on that length couples those joints. No geometry, so its 'moment arms' are the coefficients — prescribed rather than emergent, which is the trade against SpatialTendon. The joints must be directly connected in the articulation. Build before Articulation.finalize().
+    """
+    def __init__(self, articulation: Articulation) -> None:
+        ...
+    def add_joint(self, link: ArticulationLink, coefficient: typing.SupportsFloat | typing.SupportsIndex, recip_coefficient: typing.Any = None, parent: typing.Any = None) -> TendonJoint:
+        """
+        Bind `link`'s INBOUND joint into the tendon. `coefficient` is c_i in L = sum(c_i q_i) — dimensionally a moment arm for a revolute DOF. `recip_coefficient` scales the response applied back to this DOF; the SDK calls 1/coefficient 'commonly expected', but power balance (F·L̇ = sum(tau_i·q̇_i) with L = sum(c_i q_i)) gives tau_i = F·c_i, so the energetically consistent multiplier is c_i. Defaults to `coefficient` for that reason.
+        """
+    def open_limits(self) -> None:
+        """
+        Set limits wide enough never to clamp. The SDK's DEFAULT limit parameters are (+FLT_MAX, -FLT_MAX) — the header itself calls that 'an invalid configuration that can only work if stiffness is zero'. A spring-driven fixed tendon left at the default is a silent no-op: it produces no force at all, and nothing warns.
+        """
+    def set_limits(self, low: typing.SupportsFloat | typing.SupportsIndex, high: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def damping(self) -> float:
+        ...
+    @damping.setter
+    def damping(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def limit_stiffness(self) -> float:
+        ...
+    @limit_stiffness.setter
+    def limit_stiffness(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def limits(self) -> tuple[float, float]:
+        ...
+    @property
+    def num_joints(self) -> int:
+        ...
+    @property
+    def offset(self) -> float:
+        ...
+    @offset.setter
+    def offset(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rest_length(self) -> float:
+        ...
+    @rest_length.setter
+    def rest_length(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stiffness(self) -> float:
+        ...
+    @stiffness.setter
+    def stiffness(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
 class Flock(Mesh):
     @typing.overload
@@ -7040,6 +7104,326 @@ class SogLoader:
         """
     def __init__(self) -> None:
         ...
+class SonarImage:
+    """
+    One sonar frame: echo strength in [0, 1] per (beam, range bin).
+    """
+    def __init__(self) -> None:
+        ...
+    def range_of_bin(self, bin: typing.SupportsInt | typing.SupportsIndex) -> float:
+        ...
+    @property
+    def beams(self) -> int:
+        ...
+    @property
+    def bins(self) -> int:
+        ...
+    @property
+    def intensity(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        Echo strength as a (beams, bins) float32 array, beam 0 = left-most.
+        """
+    @property
+    def max_range(self) -> float:
+        ...
+    @property
+    def time(self) -> float:
+        """
+        Sim time the rays were fired at.
+        """
+class SonarModel:
+    """
+    Fan geometry + echo model of an imaging sonar. Angles in the LIDAR frame (azimuth 0 = local -Z, positive toward +X, elevation up). Presets carry swath / beams / aperture / range from the datasheet; no beam pattern.
+    """
+    @staticmethod
+    def blueview_m900() -> SonarModel:
+        """
+        Teledyne BlueView M900-130: 130 x 20 deg, 768 beams, 100 m.
+        """
+    @staticmethod
+    def gemini_720is() -> SonarModel:
+        """
+        Tritech Gemini 720is: 120 x 20 deg, 512 beams, 120 m.
+        """
+    @staticmethod
+    def oculus_m750d() -> SonarModel:
+        """
+        Blueprint Oculus M750d, 750 kHz: 130 x 20 deg, 512 beams, 120 m.
+        """
+    @staticmethod
+    def wide130() -> SonarModel:
+        """
+        130 x 20 deg, 256 beams, 20 m (the default).
+        """
+    def __init__(self) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    @property
+    def attenuation(self) -> float:
+        """
+        One-way amplitude attenuation, 1/m, applied over the two-way path.
+        """
+    @attenuation.setter
+    def attenuation(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def beams(self) -> int:
+        """
+        Azimuth beams across the swath.
+        """
+    @beams.setter
+    def beams(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def bin_width(self) -> float:
+        ...
+    @property
+    def horizontal_fov(self) -> float:
+        """
+        Full swath, degrees.
+        """
+    @horizontal_fov.setter
+    def horizontal_fov(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def incidence_floor(self) -> float:
+        """
+        strength *= floor + (1 - floor) * |n.d|; 0 = Lambertian.
+        """
+    @incidence_floor.setter
+    def incidence_floor(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def max_range(self) -> float:
+        ...
+    @max_range.setter
+    def max_range(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def min_range(self) -> float:
+        """
+        Blind zone: closer surfaces are traced through.
+        """
+    @min_range.setter
+    def min_range(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def range_bins(self) -> int:
+        ...
+    @range_bins.setter
+    def range_bins(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def ray_count(self) -> int:
+        ...
+    @property
+    def vertical_aperture(self) -> float:
+        """
+        Full vertical aperture, degrees.
+        """
+    @vertical_aperture.setter
+    def vertical_aperture(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def vertical_samples(self) -> int:
+        """
+        Rays per beam through the aperture.
+        """
+    @vertical_samples.setter
+    def vertical_samples(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+class SonarReflectivity:
+    """
+    Echo strength per target, keyed on the stable instance id (renderer.set_object_instance_id). Unlisted surfaces echo at default_value; volume-scatter returns at volume.
+    """
+    def __init__(self) -> None:
+        ...
+    def clear(self) -> None:
+        ...
+    def get(self, instance_id: typing.SupportsInt | typing.SupportsIndex) -> float:
+        ...
+    def set(self, instance_id: typing.SupportsInt | typing.SupportsIndex, reflectivity: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def default_value(self) -> float:
+        ...
+    @default_value.setter
+    def default_value(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def volume(self) -> float:
+        ...
+    @volume.setter
+    def volume(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class SonarSensor(Object3D, Sensor):
+    """
+    Forward-looking imaging sonar, ray-cast through the renderer's acceleration structure: a SonarModel fan traced as one dispatch and folded into a SonarImage (echo strength per beam and range bin, a max per bin so the picture is order-independent). Vulkan only; render() once before the first scan.
+    
+    The sonar sees what the tracer's TLAS holds. Author acoustic proxies on threepp.SENSOR_ONLY_LAYER (mesh.layers.set) with renderer.set_sensor_only_surfaces(True): a solid membrane for a net the camera renders as twine, a cage for a fish. `reflectivity` gives each stable instance id its echo strength (optical material is ignored). `params` is the tracer's LidarParams (max_returns > 1 lets sound pass a transmissive surface; the medium fields add water-column scatter).
+    
+    Forward is local -Z; look_at() aims the fan. `noise` perturbs ranges and `speckle` multiplies bins, both from seeded streams; both zero by default.
+    """
+    def __init__(self, model: SonarModel = ...) -> None:
+        ...
+    def last_returns(self) -> dict:
+        """
+        Per-ray hits of the last scan as the scan_lidar dict layout, beam-major.
+        """
+    def reset_noise(self) -> None:
+        ...
+    def scan(self, renderer: VulkanRenderer) -> SonarImage:
+        """
+        One scan from the current pose -> SonarImage. Blocks on the trace; call after render().
+        """
+    def scan_begin(self, renderer: VulkanRenderer) -> bool:
+        """
+        Fire this frame's scan; collect it with scan_collect on a later frame.
+        """
+    def scan_collect(self, renderer: VulkanRenderer) -> typing.Any:
+        """
+        The fired scan's SonarImage, or None when nothing was fired.
+        """
+    def scan_ready(self, renderer: VulkanRenderer) -> bool:
+        ...
+    def set_attenuation(self, per_metre: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def set_incidence_floor(self, floor: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def set_range_bins(self, bins: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def last_origin(self) -> Vector3:
+        ...
+    @property
+    def model(self) -> SonarModel:
+        ...
+    @property
+    def noise(self) -> RangeNoiseModel:
+        """
+        Seeded RangeNoiseModel on each ray's range.
+        """
+    @noise.setter
+    def noise(self, arg0: RangeNoiseModel) -> None:
+        ...
+    @property
+    def params(self) -> LidarParams:
+        """
+        LidarParams of the trace; mutate in place.
+        """
+    @params.setter
+    def params(self, arg0: LidarParams) -> None:
+        ...
+    @property
+    def ray_count(self) -> int:
+        ...
+    @property
+    def reflectivity(self) -> SonarReflectivity:
+        """
+        SonarReflectivity; mutate in place.
+        """
+    @reflectivity.setter
+    def reflectivity(self, arg0: SonarReflectivity) -> None:
+        ...
+    @property
+    def scan_pending(self) -> bool:
+        ...
+    @property
+    def speckle(self) -> float:
+        """
+        Multiplicative speckle amplitude: each bin scales by a seeded uniform in [1-s, 1+s].
+        """
+    @speckle.setter
+    def speckle(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class SpatialAttachment:
+    """
+    One attachment point of a SpatialTendon, pinned at an offset in a link's actor frame. rest_length and the limits are LEAF-ONLY — PhysX silently ignores them on an interior attachment, so setting one here raises instead of leaving a mis-built routing looking configured.
+    """
+    def set_limits(self, low: typing.SupportsFloat | typing.SupportsIndex, high: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def set_taut_length(self, length: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Configure this leaf as a PULL-ONLY cable of the given taut length: low limit -inf (a cable never pushes), high limit `length`. Force appears only once the tendon is longer than this, and is exactly zero when slack. Pair with stiffness=0 and limit_stiffness=k on the tendon.
+        """
+    @property
+    def coefficient(self) -> float:
+        """
+        Scale on this segment's contribution to the accumulated tendon length.
+        """
+    @coefficient.setter
+    def coefficient(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def is_leaf(self) -> bool:
+        ...
+    @property
+    def limits(self) -> tuple[float, float]:
+        ...
+    @property
+    def relative_offset(self) -> Vector3:
+        """
+        The attachment point in its link's ACTOR frame.
+        """
+    @relative_offset.setter
+    def relative_offset(self, arg1: Vector3) -> None:
+        ...
+    @property
+    def rest_length(self) -> float:
+        """
+        Rest length of the bilateral spring for the sub-tendon ending here (leaf only).
+        """
+    @rest_length.setter
+    def rest_length(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class SpatialTendon:
+    """
+    A geometric tendon: a tree of attachment points whose coefficient-weighted segment lengths sum to the tendon length. MUST be built before Articulation.finalize() — PhysX forbids creating one on a scene-resident articulation.
+    
+    CAVEAT: a sub-tendon applies force only at its leaf and root links, along the root-to-leaf CHORD; interior attachments set the length but exert no force. So a single multi-attachment tendon does NOT reproduce the transverse pulley reaction a real routed cable applies, and its moment arms distal of the first joint are fabricated. For mechanically real routing use one two-attachment tendon per segment, where the chord IS the segment.
+    """
+    def __init__(self, articulation: Articulation) -> None:
+        ...
+    def add_attachment(self, link: ArticulationLink, local_offset: Vector3, parent: typing.Any = None, coefficient: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> SpatialAttachment:
+        """
+        Attach to `link` at `local_offset` in its ACTOR frame. parent=None makes it the root.
+        """
+    @property
+    def damping(self) -> float:
+        """
+        Documented as acting on both the spring and the limits, so it is not known to be one-sided. Leave 0 for a cable and damp at the joint instead.
+        """
+    @damping.setter
+    def damping(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def limit_stiffness(self) -> float:
+        """
+        Axial stiffness of the cable in the pull-only construction.
+        """
+    @limit_stiffness.setter
+    def limit_stiffness(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def num_attachments(self) -> int:
+        ...
+    @property
+    def offset(self) -> float:
+        """
+        The actuator: added to the accumulated length, so raising it makes the tendon act shorter, i.e. pull.
+        """
+    @offset.setter
+    def offset(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stiffness(self) -> float:
+        """
+        Bilateral spring on the length. Leave 0 for a cable: a nonzero stiffness makes the tendon PUSH when it is shorter than its rest length.
+        """
+    @stiffness.setter
+    def stiffness(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
 class SphereGeometry(BufferGeometry):
     def __init__(self, radius: typing.SupportsFloat | typing.SupportsIndex = 1.0, width_segments: typing.SupportsInt | typing.SupportsIndex = 16, height_segments: typing.SupportsInt | typing.SupportsIndex = 12, phi_start: typing.SupportsFloat | typing.SupportsIndex = 0.0, phi_length: typing.SupportsFloat | typing.SupportsIndex = 6.2831854820251465, theta_start: typing.SupportsFloat | typing.SupportsIndex = 0.0, theta_length: typing.SupportsFloat | typing.SupportsIndex = 3.1415927410125732) -> None:
         ...
@@ -7341,6 +7725,113 @@ class SurfaceMesh:
     @property
     def vertex_count(self) -> int:
         ...
+class TendonCable:
+    """
+    A tendon that behaves like a CABLE: routed over via points, pull-only, with a real tension number and optional routing friction.
+    
+    Neither PhysX tendon is a routed cable, measured on a two-link finger (python/examples/tendon_probe.py): a spatial tendon's interior attachments set the length but exert no force, so its generalized force matches the gradient taken with the via point FROZEN to 0.07 deg and sits 21.06 deg from a real cable; a fixed tendon has no geometry at all. This applies the true frictionless-pulley force at every via point, so torque = -T dL/dq exactly -- measured at 0.02% of magnitude and 0.001 deg of direction against the analytic gradient.
+    
+    Runs on the CPU physics path only: PhysX rejects link forces under direct-GPU, so batched GPU RL would need the SDK tendons instead.
+    """
+    class Mode:
+        """
+        Members:
+        
+          TENSION : The command IS the cable tension (N) - an ideal motor with a torque loop closed around it. Cannot go unstable: there is no stiffness to explode.
+        
+          LENGTH : The command is the SPOOLED length (m); tension follows from how far the route is stretched past it, T = k*(L - L_cmd) + c*Ldot, floored at zero. A real series-elastic drivetrain - cable stretch is a property of actual tendons.
+        """
+        LENGTH: typing.ClassVar[TendonCable.Mode]  # value = <Mode.LENGTH: 1>
+        TENSION: typing.ClassVar[TendonCable.Mode]  # value = <Mode.TENSION: 0>
+        __members__: typing.ClassVar[dict[str, TendonCable.Mode]]  # value = {'TENSION': <Mode.TENSION: 0>, 'LENGTH': <Mode.LENGTH: 1>}
+        def __eq__(self, other: typing.Any) -> bool:
+            ...
+        def __getstate__(self) -> int:
+            ...
+        def __hash__(self) -> int:
+            ...
+        def __index__(self) -> int:
+            ...
+        def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        def __int__(self) -> int:
+            ...
+        def __ne__(self, other: typing.Any) -> bool:
+            ...
+        def __repr__(self) -> str:
+            ...
+        def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        def __str__(self) -> str:
+            ...
+        @property
+        def name(self) -> str:
+            ...
+        @property
+        def value(self) -> int:
+            ...
+    def __init__(self, world: ..., mode: TendonCable.Mode = TendonCable.Mode.TENSION) -> None:
+        ...
+    def add_via_point(self, link: ArticulationLink, local_offset: Vector3) -> None:
+        """
+        Add a via point on `link` at `local_offset` in the link's ACTOR frame, in order from the actuator end to the insertion. First and last are the anchor and the insertion; everything between is a pulley.
+        """
+    def add_wrap(self, link: ArticulationLink, local_centre: Vector3, local_axis: Vector3, radius: typing.SupportsFloat | typing.SupportsIndex, side_hint: Vector3, sheathed: bool = False) -> None:
+        """
+        Between the previous and next via point, run the cable around a cylinder of `radius` centred at `local_centre` on `link` with its axis along `local_axis` (both in the link ACTOR frame). Put the cylinder on a joint, co-axial with the hinge, and the radius IS the tendon standoff. A via point is welded to its link, so a cable strung across a flexing joint chords over it and the moment REVERSES once the distal point swings behind the axis (measured on this hand: an FDP MCP arm running +9.98 mm extended to -5.03 mm at 89 deg). A real tendon slides along the pulley instead; the wrap models that, and the arm then holds at the radius through the whole range.
+        """
+    def set_damping(self, c: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def set_friction(self, mu: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Capstan friction at the pulleys. A cable wrapping through angle theta comes out carrying T*exp(-mu*theta) - which is exactly why tendon hands are hard to control precisely: the tension reaching the fingertip is not the tension the motor applied, and the shortfall depends on posture. 0 (default) is the ideal cable; sheathed tendons are typically 0.1-0.4.
+        """
+    def set_spool_length(self, length: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        LENGTH mode: the spooled length in metres. Pull the cable by REDUCING it.
+        """
+    def set_stiffness(self, k: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def set_tension(self, tension: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        TENSION mode: cable tension in newtons. Negative is clamped to zero rather than rejected - a cable asked to push simply goes slack.
+        """
+    @property
+    def length(self) -> float:
+        """
+        Total routed length (m), from the live link poses.
+        """
+    @property
+    def num_nodes(self) -> int:
+        ...
+    @property
+    def num_path_points(self) -> int:
+        """
+        Points in the RESOLVED path, wrap arcs included, so it grows as a joint flexes.
+        """
+    @property
+    def path(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        The resolved cable path in world space as an (N, 3) array, actuator end first, wrap arcs included. Draw it: a cable on the wrong side of a joint, or cutting a corner it should wrap, is obvious on sight and nearly invisible in a column of moment arms.
+        """
+    @property
+    def tension(self) -> float:
+        """
+        Tension at the ACTUATOR end (N) - the value actually applied last substep, not a reconstruction. PhysX exposes no tendon force readback at all, so with an SDK tendon this could only ever be a prediction.
+        """
+    @property
+    def tip_tension(self) -> float:
+        """
+        Tension at the INSERTION end (N). Equals tension when friction is 0; the ratio is what the routing swallowed.
+        """
+class TendonJoint:
+    """
+    One joint DOF bound into a FixedTendon.
+    """
+    def set_coefficient(self, coefficient: typing.SupportsFloat | typing.SupportsIndex, recip_coefficient: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Re-scale this DOF's contribution. Whether this takes effect on a scene-resident articulation is undocumented — verify with a measured torque change, not a return code.
+        """
 class TerrainFalloff:
     """
     Members:
@@ -9210,6 +9701,10 @@ def select_lod(cloud: SplatCloud, camera: Camera, viewport_height_px: typing.Sup
     """
 def simplify_geometry(geometry: BufferGeometry, ratio: typing.SupportsFloat | typing.SupportsIndex, error: typing.SupportsFloat | typing.SupportsIndex = 0.009999999776482582) -> BufferGeometry:
     ...
+def sonar_ray_directions(model: SonarModel) -> numpy.typing.NDArray[numpy.float32]:
+    """
+    Sensor-local unit ray directions, (beams * vertical_samples, 3), beam-major. The table a SonarSensor traces; also what to feed renderer.scan_lidar for a hand-rolled fan.
+    """
 def splat_points_to_field(points: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], cell_size: typing.SupportsFloat | typing.SupportsIndex, radius: typing.SupportsFloat | typing.SupportsIndex, max_nodes: typing.SupportsInt | typing.SupportsIndex = 8000000) -> ScalarField:
     """
     Build a union-of-balls scalar field from an (N,3) point array.
@@ -9280,6 +9775,7 @@ Papery: BarkStyle  # value = <BarkStyle.Papery: 2>
 Perched: BirdState  # value = <BirdState.Perched: 3>
 Plated: BarkStyle  # value = <BarkStyle.Plated: 1>
 Quad: LeafStyle  # value = <LeafStyle.Quad: 0>
+SENSOR_ONLY_LAYER: int = 31
 Serrate: LeafShape  # value = <LeafShape.Serrate: 2>
 Sphere: CrownShape  # value = <CrownShape.Sphere: 0>
 Walk: Gait  # value = <Gait.Walk: 1>

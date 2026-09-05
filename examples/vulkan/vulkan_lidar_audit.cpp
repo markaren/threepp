@@ -71,11 +71,21 @@
 // the compare reports instance-id disagreement separately, because a beam that
 // flips which instance it struck is a different failure from one that reports a
 // slightly different range off the same instance.
+//
+// ── --sonar: the imaging sonar joins the same scan ─────────────────────────
+// A SonarSensor (Wide130: 256 beams x 16 samples, 512 bins, 20 m) rides the
+// lidar's pose and fires on the lidar's schedule. Each echogram is dumped as
+// sonar_NNN.bin and hashed into the manifest; --compare reports it bit-exact or
+// gives the number of differing bins and the max |Δecho| (echo in [0, 1]). The
+// sonar is the same tracer seen through a different fold — a max per bin, which
+// is order-independent — so the prior here is "bit-exact whenever the lidar is",
+// and the row exists to make that a measurement rather than an argument.
 
 #include "threepp/threepp.hpp"
 
 #include "threepp/helpers/LidarModel.hpp"
 #include "threepp/helpers/PathTracedLidarSensor.hpp"
+#include "threepp/helpers/SonarSensor.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 
 #include <algorithm>
@@ -135,14 +145,53 @@ namespace {
         std::int32_t returnKind;   // 0 surface, 1 volume scatter
         float px, py, pz;          // world hit point
     };
+    // Echogram dump: header + beams*bins floats, beam-major (SonarImage's own
+    // layout, written as-is).
+    struct SonarDumpHeader {
+        char magic[8];// "TPSONAR1"
+        std::uint32_t version;
+        std::uint32_t scanIndex;
+        std::uint32_t beams;
+        std::uint32_t bins;
+        std::uint32_t rays;
+        std::uint32_t returns;// returns.size() of the scan (rays x maxReturns)
+        double simTime;
+    };
 #pragma pack(pop)
     static_assert(sizeof(DumpHeader) == 40, "header layout is the file format");
     static_assert(sizeof(DumpRec) == 32, "record layout is the file format");
+    static_assert(sizeof(SonarDumpHeader) == 40, "sonar header layout is the file format");
 
     std::string scanFile(const std::string& dir, int idx) {
         char buf[32];
         std::snprintf(buf, sizeof(buf), "scan_%03d.bin", idx);
         return dir + "/" + buf;
+    }
+
+    std::string sonarFile(const std::string& dir, int idx) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "sonar_%03d.bin", idx);
+        return dir + "/" + buf;
+    }
+
+    struct SonarDump {
+        SonarDumpHeader hdr{};
+        std::vector<float> echo;
+        std::vector<char> raw;
+    };
+
+    bool loadSonar(const std::string& path, SonarDump& out) {
+        std::ifstream f(path, std::ios::binary);
+        if (!f) return false;
+        out.raw.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+        if (out.raw.size() < sizeof(SonarDumpHeader)) return false;
+        std::memcpy(&out.hdr, out.raw.data(), sizeof(SonarDumpHeader));
+        if (std::memcmp(out.hdr.magic, "TPSONAR1", 8) != 0) return false;
+        const std::size_t cells = std::size_t(out.hdr.beams) * out.hdr.bins;
+        if (out.raw.size() != sizeof(SonarDumpHeader) + cells * sizeof(float)) return false;
+        out.echo.resize(cells);
+        if (cells) std::memcpy(out.echo.data(), out.raw.data() + sizeof(SonarDumpHeader), cells * sizeof(float));
+        return true;
     }
 
     struct Scan {
@@ -343,19 +392,83 @@ namespace {
                   << " presenceflips=" << allPresenceFlips
                   << " idflips=" << allIdFlips << std::defaultfloat << "\n";
 
+        // ---- sonar rows, when the runs carried them --------------------------
+        int nSonar = 0, nSonarB = 0;
+        for (const auto& [k, v] : manA)
+            if (k.rfind("sonar_", 0) == 0) ++nSonar;
+        for (const auto& [k, v] : manB)
+            if (k.rfind("sonar_", 0) == 0) ++nSonarB;
+        if (nSonar != nSonarB) {
+            std::cout << "MISMATCH sonar count " << nSonar << " vs " << nSonarB << "\n";
+            ++structural;
+            nSonar = std::min(nSonar, nSonarB);
+        }
+        int sonarExact = 0;
+        float sonarMax = 0.f;
+        std::size_t sonarCells = 0, sonarDiffering = 0;
+        for (int s = 0; s < nSonar; ++s) {
+            SonarDump a, b;
+            const std::string pa = sonarFile(dirA, s), pb = sonarFile(dirB, s);
+            if (!loadSonar(pa, a) || !loadSonar(pb, b)) {
+                std::cout << "IO FAIL  sonar_" << std::setw(3) << std::setfill('0') << s
+                          << std::setfill(' ') << " (" << pa << " / " << pb << ")\n";
+                ++structural;
+                continue;
+            }
+            std::cout << "sonar_" << std::setw(3) << std::setfill('0') << s << std::setfill(' ') << " ";
+            const std::size_t echoes = std::size_t(std::count_if(a.echo.begin(), a.echo.end(),
+                                                                 [](float v) { return v > 0.f; }));
+            sonarCells += a.echo.size();
+            if (a.raw.size() == b.raw.size() && std::memcmp(a.raw.data(), b.raw.data(), a.raw.size()) == 0) {
+                std::cout << "OK  bit-identical (" << a.hdr.beams << "x" << a.hdr.bins << ", "
+                          << echoes << " echo bins)\n";
+                ++sonarExact;
+                continue;
+            }
+            if (a.hdr.beams != b.hdr.beams || a.hdr.bins != b.hdr.bins || a.hdr.returns != b.hdr.returns) {
+                std::cout << "STRUCTURAL " << a.hdr.beams << "x" << a.hdr.bins << "/" << a.hdr.returns
+                          << " vs " << b.hdr.beams << "x" << b.hdr.bins << "/" << b.hdr.returns << "\n";
+                ++structural;
+                continue;
+            }
+            std::size_t differing = 0;
+            float mx = 0.f;
+            for (std::size_t i = 0; i < a.echo.size(); ++i) {
+                const float d = std::abs(a.echo[i] - b.echo[i]);
+                if (d > 0.f) ++differing;
+                mx = std::max(mx, d);
+            }
+            sonarDiffering += differing;
+            sonarMax = std::max(sonarMax, mx);
+            std::cout << "DIFF bins=" << differing << "/" << a.echo.size()
+                      << " max|d|=" << std::scientific << std::setprecision(3) << mx << std::defaultfloat << "\n";
+        }
+        if (nSonar > 0) {
+            std::cout << "SONAR BITEXACT " << sonarExact << "/" << nSonar
+                      << " cells=" << sonarCells << " differing=" << sonarDiffering
+                      << " max|d|=" << sonarMax << "\n";
+        }
+
         if (structural) {
             std::cout << "RESULT structural mismatch\n";
             return 1;
         }
-        if (bitExact == nScans) {
+        if (bitExact == nScans && sonarExact == nSonar) {
             std::cout << "RESULT bit-exact replay\n";
             return 0;
         }
-        if (globalMax < kJitterTol) {
-            std::cout << "RESULT within-jitter (max |d| " << globalMax << " m < " << kJitterTol << " m)\n";
+        // A sonar bin is an echo in [0, 1]; a difference at float-rounding
+        // level is a scheduling artefact of the tracer, not a different picture.
+        constexpr float kSonarTol = 1e-3f;
+        if (globalMax < kJitterTol && sonarMax < kSonarTol) {
+            std::cout << "RESULT within-jitter (max |d| " << globalMax << " m < " << kJitterTol << " m";
+            if (nSonar > 0) std::cout << ", sonar max |d| " << sonarMax << " < " << kSonarTol;
+            std::cout << ")\n";
             return 3;
         }
-        std::cout << "RESULT jitter exceeds tolerance (max |d| " << globalMax << " m)\n";
+        std::cout << "RESULT jitter exceeds tolerance (max |d| " << globalMax << " m";
+        if (nSonar > 0) std::cout << ", sonar max |d| " << sonarMax;
+        std::cout << ")\n";
         return 1;
     }
 
@@ -413,6 +526,7 @@ int main(int argc, char** argv) {
     bool noLod = false;    // auto-LOD swaps geometry -> different TLAS content
     bool noOccl = false;
     bool sceneEdit = false;
+    bool withSonar = false;
     int editAddFrame = 45, editRemoveFrame = 81;
     int idPre = 6, idPost = 15;// scan indices: frame 36 (pre-add), frame 90 (post-remove)
     for (int i = 1; i < argc; ++i) {
@@ -420,6 +534,7 @@ int main(int argc, char** argv) {
         if (arg == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
         else if (arg == "--out" && i + 1 < argc) outDir = argv[++i];
         else if (arg == "--scene-edit") sceneEdit = true;
+        else if (arg == "--sonar") withSonar = true;
         else if (arg == "--edit-add" && i + 1 < argc) editAddFrame = std::atoi(argv[++i]);
         else if (arg == "--edit-remove" && i + 1 < argc) editRemoveFrame = std::atoi(argv[++i]);
         else if (arg == "--pre" && i + 1 < argc) idPre = std::atoi(argv[++i]);
@@ -442,7 +557,7 @@ int main(int argc, char** argv) {
         else if (arg == "--compare" && i + 2 < argc) return compare(argv[i + 1], argv[i + 2]);
     }
     if (outDir.empty()) {
-        std::cout << "usage: vulkan_lidar_audit --frames N [--scene-edit] --out <dir>\n"
+        std::cout << "usage: vulkan_lidar_audit --frames N [--scene-edit] [--sonar] --out <dir>\n"
                   << "       vulkan_lidar_audit --compare <dirA> <dirB>\n"
                   << "       vulkan_lidar_audit --idstability <dir> [--pre N] [--post N]\n";
         return 1;
@@ -566,6 +681,16 @@ int main(int argc, char** argv) {
     sensor.rangeNoise = {noiseSigma, 0.f, 0.f, seed};
     sensor.resetNoise();
 
+    // The sonar rides the lidar's pose (same mount, same yaw script) and, like
+    // it, stays out of the scene graph. Clean by default for the same reason:
+    // the fold is what is being measured, not the speckle stream.
+    SonarSensor sonarSensor(SonarModel::Wide130());
+    sonarSensor.position.copy(sensor.position);
+    sonarSensor.rangeNoise = {noiseSigma, 0.f, 0.f, seed};
+    sonarSensor.resetNoise();
+    SonarImage sonarImage;
+    int sonarScans = 0;
+
     // The edit subject. Built up front so its geometry upload is not itself the
     // event; the ADD at editAddFrame is what churns the entry list. Placed in
     // clear line of sight at ~4.9 m and 1 m up — well inside the VLP-16's
@@ -592,6 +717,7 @@ int main(int argc, char** argv) {
         const double t = f * kDt;
         renderer.setSimTime(t);
         sensor.setSimTime(t);
+        sonarSensor.setSimTime(t);
 
         mover->position.set(static_cast<float>(2.0 * std::sin(t * 1.3)), 1.f,
                             static_cast<float>(1.5 * std::cos(t * 0.9)));
@@ -602,6 +728,7 @@ int main(int argc, char** argv) {
         // same run, and that only isolates static geometry if both were fired
         // from the same pose. See the file header.
         sensor.rotation.y = sceneEdit ? 0.f : static_cast<float>(t * 0.35);
+        sonarSensor.rotation.y = sensor.rotation.y;
 
         if (sceneEdit) {
             if (f == editAddFrame) {
@@ -683,6 +810,48 @@ int main(int argc, char** argv) {
         manifest << name << " frame=" << f << " points=" << hdr.pointCount
                  << " hits=" << hits << " fnv=" << std::hex << h.value() << std::dec << "\n";
         ++scans;
+
+        if (withSonar) {
+            sonarSensor.scan(renderer, sonarImage);
+            const auto& rets = sonarSensor.lastReturns();
+            if (rets.empty()) {
+                ++failures;
+                continue;
+            }
+            SonarDumpHeader sh{};
+            std::memcpy(sh.magic, "TPSONAR1", 8);
+            sh.version = 1;
+            sh.scanIndex = static_cast<std::uint32_t>(sonarScans);
+            sh.beams = sonarImage.beams;
+            sh.bins = sonarImage.bins;
+            sh.rays = sonarSensor.rayCount();
+            sh.returns = static_cast<std::uint32_t>(rets.size());
+            sh.simTime = sonarSensor.lastScanTime();
+
+            const std::string spath = sonarFile(outDir, sonarScans);
+            std::ofstream sout(spath, std::ios::binary);
+            if (!sout) {
+                std::cout << "cannot write " << spath << "\n";
+                return 1;
+            }
+            sout.write(reinterpret_cast<const char*>(&sh), sizeof(sh));
+            sout.write(reinterpret_cast<const char*>(sonarImage.intensity.data()),
+                       static_cast<std::streamsize>(sonarImage.intensity.size() * sizeof(float)));
+
+            std::size_t sonarHits = 0, echoes = 0;
+            for (const auto& r : rets)
+                if (r.returnNo > 0) ++sonarHits;
+            for (float v : sonarImage.intensity)
+                if (v > 0.f) ++echoes;
+            Fnv sh1;
+            sh1.bytes(&sh, sizeof(sh));
+            sh1.bytes(sonarImage.intensity.data(), sonarImage.intensity.size() * sizeof(float));
+            char sname[32];
+            std::snprintf(sname, sizeof(sname), "sonar_%03d", sonarScans);
+            manifest << sname << " frame=" << f << " rays=" << sh.rays << " hits=" << sonarHits
+                     << " echoes=" << echoes << " fnv=" << std::hex << sh1.value() << std::dec << "\n";
+            ++sonarScans;
+        }
     }
 
     // meta is compared field-for-field by --compare: two runs that disagree here
@@ -699,7 +868,14 @@ int main(int argc, char** argv) {
          << " sceneEdit=" << (sceneEdit ? 1 : 0)
          << " editAdd=" << (sceneEdit ? editAddFrame : -1)
          << " editRemove=" << (sceneEdit ? editRemoveFrame : -1)
-         << " yaw=" << (sceneEdit ? "fixed" : "orbit") << "\n";
+         << " yaw=" << (sceneEdit ? "fixed" : "orbit")
+         << " sonar=" << (withSonar ? 1 : 0);
+    if (withSonar) {
+        const auto& sm = sonarSensor.model();
+        meta << " sonarModel=Wide130 sonarBeams=" << sm.beams << " sonarSamples=" << sm.verticalSamples
+             << " sonarBins=" << sm.rangeBins << " sonarRange=" << sm.maxRange << " sonarScans=" << sonarScans;
+    }
+    meta << "\n";
 
     const auto dyn = renderer.dynamicGeomStats();
     std::ostringstream dynRow;

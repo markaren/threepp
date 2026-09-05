@@ -42,6 +42,7 @@
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/ParticleField.hpp"
 #include "threepp/helpers/PathTracedLidarSensor.hpp"
+#include "threepp/helpers/SonarSensor.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/renderers/vulkan/ValidationReport.hpp"
 
@@ -1977,6 +1978,70 @@ namespace threepp_py {
                    "return_no > 0 is the 'real return' predicate). Adds key 'clean' when "
                    "params.paired_clean_trace is set. Call after render(); never during it.");
 
+        py::class_<SonarSensor, Object3D, Sensor, std::shared_ptr<SonarSensor>>(
+                m, "SonarSensor",
+                "Forward-looking imaging sonar, ray-cast through the renderer's acceleration "
+                "structure: a SonarModel fan traced as one dispatch and folded into a SonarImage "
+                "(echo strength per beam and range bin, a max per bin so the picture is "
+                "order-independent). Vulkan only; render() once before the first scan.\n\n"
+                "The sonar sees what the tracer's TLAS holds. Author acoustic proxies on "
+                "threepp.SENSOR_ONLY_LAYER (mesh.layers.set) with renderer.set_sensor_only_surfaces(True): a "
+                "solid membrane for a net the camera renders as twine, a cage for a fish. "
+                "`reflectivity` gives each stable instance id its echo strength (optical material "
+                "is ignored). `params` is the tracer's LidarParams (max_returns > 1 lets sound pass "
+                "a transmissive surface; the medium fields add water-column scatter).\n\n"
+                "Forward is local -Z; look_at() aims the fan. `noise` perturbs ranges and `speckle` "
+                "multiplies bins, both from seeded streams; both zero by default.")
+                .def(py::init([](const SonarModel& model) { return std::make_shared<SonarSensor>(model); }),
+                     py::arg("model") = SonarModel::Wide130())
+                .def_readwrite("params", &SonarSensor::params, "LidarParams of the trace; mutate in place.")
+                .def_readwrite("reflectivity", &SonarSensor::reflectivity, "SonarReflectivity; mutate in place.")
+                .def_readwrite("noise", &SonarSensor::rangeNoise, "Seeded RangeNoiseModel on each ray's range.")
+                .def_readwrite("speckle", &SonarSensor::speckle,
+                               "Multiplicative speckle amplitude: each bin scales by a seeded uniform in [1-s, 1+s].")
+                .def_property_readonly("model", &SonarSensor::model)
+                .def_property_readonly("ray_count", &SonarSensor::rayCount)
+                .def("set_attenuation", &SonarSensor::setAttenuation, py::arg("per_metre"))
+                .def("set_incidence_floor", &SonarSensor::setIncidenceFloor, py::arg("floor"))
+                .def("set_range_bins", &SonarSensor::setRangeBins, py::arg("bins"))
+                .def("reset_noise", &SonarSensor::resetNoise)
+                .def("scan", [](SonarSensor& self, PyVulkanRenderer& r) {
+                    self.updateWorldMatrix(true, true);
+                    SonarImage img;
+                    {
+                        py::gil_scoped_release release;
+                        self.scan(r.native(), img);
+                    }
+                    return img;
+                }, py::arg("renderer"),
+                   "One scan from the current pose -> SonarImage. Blocks on the trace; call after render().")
+                .def("scan_begin", [](SonarSensor& self, PyVulkanRenderer& r) {
+                    self.updateWorldMatrix(true, true);
+                    self.scanBegin(r.native());
+                    return self.scanFired();
+                }, py::arg("renderer"), "Fire this frame's scan; collect it with scan_collect on a later frame.")
+                .def("scan_ready", [](const SonarSensor& self, PyVulkanRenderer& r) {
+                    return self.scanReady(r.native());
+                }, py::arg("renderer"))
+                .def("scan_collect", [](SonarSensor& self, PyVulkanRenderer& r) -> py::object {
+                    SonarImage img;
+                    bool ok;
+                    {
+                        py::gil_scoped_release release;
+                        ok = self.scanCollect(r.native(), img);
+                    }
+                    if (!ok) return py::none();
+                    return py::cast(img);
+                }, py::arg("renderer"), "The fired scan's SonarImage, or None when nothing was fired.")
+                .def_property_readonly("scan_pending", &SonarSensor::scanFired)
+                .def("last_returns", [returns_to_dict](const SonarSensor& self) {
+                    return returns_to_dict(self.lastReturns());
+                }, "Per-ray hits of the last scan as the scan_lidar dict layout, beam-major.")
+                .def_property_readonly("last_origin", &SonarSensor::lastOrigin);
+
+        // The layer an acoustic / sensor-only proxy opts into (VulkanRenderer::kSensorOnlyLayer):
+        //     mesh.layers.set(threepp.SENSOR_ONLY_LAYER); renderer.set_sensor_only_surfaces(True)
+        m.attr("SENSOR_ONLY_LAYER") = VulkanRenderer::kSensorOnlyLayer;
         m.attr("HAS_VULKAN") = true;
         // HAS_VULKAN says the backend was COMPILED IN; this says the machine can
         // actually load it. Distinct since the wheel began shipping Vulkan with a

@@ -104,6 +104,7 @@ set(publicHeaders
         "threepp/helpers/DepthSensor.hpp"
         "threepp/helpers/EventCameraSensor.hpp"
         "threepp/helpers/LidarModel.hpp"
+        "threepp/helpers/SonarModel.hpp"
         "threepp/helpers/LidarSensor.hpp"
         "threepp/helpers/LidarTypes.hpp"
         "threepp/helpers/LidarWaveform.hpp"
@@ -519,6 +520,7 @@ set(sources
         "threepp/helpers/DepthSensor.cpp"
         "threepp/helpers/EventCameraSensor.cpp"
         "threepp/helpers/LidarSensor.cpp"
+        "threepp/helpers/SonarModel.cpp"
         "threepp/helpers/LidarWaveform.cpp"
         "threepp/helpers/TracedRasterVisionSensor.cpp"
         "threepp/helpers/DirectionalLightHelper.cpp"
@@ -805,6 +807,7 @@ if (THREEPP_WITH_VULKAN)
             # PRIVATE Vulkan/VMA include paths this target keeps to itself.
             "threepp/renderers/vulkan/ValidationReport.hpp"
             "threepp/helpers/PathTracedLidarSensor.hpp"
+            "threepp/helpers/SonarSensor.hpp"
             # Depth fusion of a splat scan into a triangle surface: it reads the
             # Vulkan depth AOV, so it lives with the renderer that exports it.
             "threepp/splats/SplatSurface.hpp"
@@ -841,6 +844,7 @@ if (THREEPP_WITH_VULKAN)
     list(APPEND sources
             "threepp/renderers/VulkanRenderer.cpp"
             "threepp/helpers/PathTracedLidarSensor.cpp"
+            "threepp/helpers/SonarSensor.cpp"
             "threepp/splats/SplatSurface.cpp"
             "threepp/objects/DisplacedMesh.cpp"
             "threepp/objects/Ocean.cpp"

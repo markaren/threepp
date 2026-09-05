@@ -87,6 +87,9 @@ ENUM_CLASS_LOCATIONS = [
     f"LeafShape:{MODULE}",
     f"BarkStyle:{MODULE}",
     f"SplatPoseSet:{MODULE}",
+    # TendonCable.__init__ defaults its mode to Mode.TENSION; the enum is nested
+    # in the class, so the generator needs told where to find it.
+    f"Mode:{MODULE}.TendonCable",
 ]
 
 # A bound name that is a Python keyword cannot appear literally in a stub (or in

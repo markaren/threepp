@@ -16,6 +16,7 @@
 #include "threepp/input/KeyFromName.hpp"
 #include "threepp/helpers/LidarModel.hpp"
 #include "threepp/helpers/LidarTypes.hpp"
+#include "threepp/helpers/SonarModel.hpp"
 #include "threepp/input/KeyListener.hpp"
 #include "threepp/math/Color.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
@@ -127,6 +128,84 @@ namespace threepp_py {
                       << ", azimuth_resolution=" << lm.azimuthResolution << ")";
                     return o.str();
                 });
+
+        // ---- Imaging sonar value types (helpers/SonarModel.hpp) --------------
+        // The renderer-free half of SonarSensor: fan geometry, the echogram,
+        // and per-target reflectivity. The sensor itself is Vulkan-side.
+        py::class_<SonarModel>(m, "SonarModel",
+                               "Fan geometry + echo model of an imaging sonar. Angles in the LIDAR frame "
+                               "(azimuth 0 = local -Z, positive toward +X, elevation up). Presets carry "
+                               "swath / beams / aperture / range from the datasheet; no beam pattern.")
+                .def(py::init<>())
+                .def_readwrite("horizontal_fov", &SonarModel::horizontalFov, "Full swath, degrees.")
+                .def_readwrite("beams", &SonarModel::beams, "Azimuth beams across the swath.")
+                .def_readwrite("vertical_aperture", &SonarModel::verticalAperture, "Full vertical aperture, degrees.")
+                .def_readwrite("vertical_samples", &SonarModel::verticalSamples, "Rays per beam through the aperture.")
+                .def_readwrite("max_range", &SonarModel::maxRange)
+                .def_readwrite("min_range", &SonarModel::minRange, "Blind zone: closer surfaces are traced through.")
+                .def_readwrite("range_bins", &SonarModel::rangeBins)
+                .def_readwrite("attenuation", &SonarModel::attenuation,
+                               "One-way amplitude attenuation, 1/m, applied over the two-way path.")
+                .def_readwrite("incidence_floor", &SonarModel::incidenceFloor,
+                               "strength *= floor + (1 - floor) * |n.d|; 0 = Lambertian.")
+                .def_property_readonly("ray_count", &SonarModel::rayCount)
+                .def_property_readonly("bin_width", &SonarModel::binWidth)
+                .def_static("wide130", &SonarModel::Wide130, "130 x 20 deg, 256 beams, 20 m (the default).")
+                .def_static("oculus_m750d", &SonarModel::OculusM750d, "Blueprint Oculus M750d, 750 kHz: 130 x 20 deg, 512 beams, 120 m.")
+                .def_static("blueview_m900", &SonarModel::BlueViewM900, "Teledyne BlueView M900-130: 130 x 20 deg, 768 beams, 100 m.")
+                .def_static("gemini_720is", &SonarModel::Gemini720is, "Tritech Gemini 720is: 120 x 20 deg, 512 beams, 120 m.")
+                .def("__repr__", [](const SonarModel& s) {
+                    std::ostringstream o;
+                    o << "SonarModel(fov=" << s.horizontalFov << ", beams=" << s.beams
+                      << ", aperture=" << s.verticalAperture << ", samples=" << s.verticalSamples
+                      << ", max_range=" << s.maxRange << ", bins=" << s.rangeBins << ")";
+                    return o.str();
+                });
+
+        py::class_<SonarImage>(m, "SonarImage",
+                               "One sonar frame: echo strength in [0, 1] per (beam, range bin).")
+                .def(py::init<>())
+                .def_readonly("beams", &SonarImage::beams)
+                .def_readonly("bins", &SonarImage::bins)
+                .def_readonly("max_range", &SonarImage::maxRange)
+                .def_readonly("time", &SonarImage::time, "Sim time the rays were fired at.")
+                .def_property_readonly("intensity", [](const SonarImage& img) {
+                    // A (beams, bins) float32 copy: the image is rewritten by the
+                    // next scan, and a view into it would change under the caller.
+                    py::array_t<float> a({static_cast<py::ssize_t>(img.beams), static_cast<py::ssize_t>(img.bins)});
+                    if (!img.intensity.empty())
+                        std::memcpy(a.mutable_data(), img.intensity.data(), img.intensity.size() * sizeof(float));
+                    return a;
+                }, "Echo strength as a (beams, bins) float32 array, beam 0 = left-most.")
+                .def("range_of_bin", &SonarImage::rangeOfBin, py::arg("bin"));
+
+        py::class_<SonarReflectivity>(m, "SonarReflectivity",
+                                      "Echo strength per target, keyed on the stable instance id "
+                                      "(renderer.set_object_instance_id). Unlisted surfaces echo at "
+                                      "default_value; volume-scatter returns at volume.")
+                .def(py::init<>())
+                .def_readwrite("default_value", &SonarReflectivity::defaultValue)
+                .def_readwrite("volume", &SonarReflectivity::volume)
+                .def("set", &SonarReflectivity::set, py::arg("instance_id"), py::arg("reflectivity"))
+                .def("get", [](const SonarReflectivity& r, std::int32_t id) {
+                    const auto it = r.byInstance.find(id);
+                    return it == r.byInstance.end() ? r.defaultValue : it->second;
+                }, py::arg("instance_id"))
+                .def("clear", [](SonarReflectivity& r) { r.byInstance.clear(); });
+
+        m.def("sonar_ray_directions", [](const SonarModel& model) {
+            const auto dirs = sonarRayDirections(model);
+            py::array_t<float> a({static_cast<py::ssize_t>(dirs.size()), static_cast<py::ssize_t>(3)});
+            auto* p = a.mutable_data();
+            for (std::size_t i = 0; i < dirs.size(); ++i) {
+                p[3 * i + 0] = dirs[i].x;
+                p[3 * i + 1] = dirs[i].y;
+                p[3 * i + 2] = dirs[i].z;
+            }
+            return a;
+        }, py::arg("model"),
+           "Sensor-local unit ray directions, (beams * vertical_samples, 3), beam-major. The table "
+           "a SonarSensor traces; also what to feed renderer.scan_lidar for a hand-rolled fan.");
 
         // ---- Canvas ----------------------------------------------------------
         // A GLFW window (or a hidden surface when headless=True). Construction is
