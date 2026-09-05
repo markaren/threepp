@@ -1826,6 +1826,17 @@ namespace threepp_py {
                               "Drives tone-mapping exposure toward 18% gray for the scene's "
                               "weighted-average luminance. tone_mapping_exposure is ignored "
                               "while this is True.")
+                // Hard restart of every temporal accumulator (TAA, the shade's
+                // histories, fog and cloud accumulators, probe GI, ReSTIR,
+                // occlusion visibility, the random sample index). For a capture
+                // in a scene that streams (terrain tiles): let it settle, reset,
+                // skip one frame, record — the frames are then replayable across
+                // processes. Costs a few frames of temporal re-convergence.
+                .def("reset_temporal_history",
+                     [](PyVulkanRenderer& r) { r.native().resetTemporalHistory(); },
+                     "Restart every temporal accumulator on every view; takes effect on the next "
+                     "render(). After a streaming scene has settled: reset, skip one frame, then "
+                     "record replayable frames.")
                 .def("set_auto_exposure_speed",
                      [](PyVulkanRenderer& r, float s) { r.native().setAutoExposureSpeed(s); },
                      py::arg("ev_per_second"),

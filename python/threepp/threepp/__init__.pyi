@@ -9103,6 +9103,10 @@ class VulkanRenderer:
         """
         Restart the noise sequence -- call on episode reset so two episodes with the same seed produce the same frames.
         """
+    def reset_temporal_history(self) -> None:
+        """
+        Restart every temporal accumulator on every view; takes effect on the next render(). After a streaming scene has settled: reset, skip one frame, then record replayable frames.
+        """
     def save_frame(self, scene: Object3D, camera: Camera, path: str) -> None:
         ...
     def scan_lidar(self, origins: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], directions: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], params: LidarParams = ...) -> dict:
