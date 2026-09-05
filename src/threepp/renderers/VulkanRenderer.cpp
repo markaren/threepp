@@ -1918,12 +1918,22 @@ namespace threepp {
         const uint32_t slot = (impl.currentFrame + n - 1u) % n;
         auto& g             = impl.primaryView().rasterGbufs[slot];
 
-        // All six are compute storage images that live in GENERAL for their
-        // whole lives; every format here is 8 bytes/px (rgba16f or rg32f).
+        // All of these are compute storage images that live in GENERAL for
+        // their whole lives; every format here is 8 bytes/px (rgba16f or
+        // rg32f). The second row is the state the shade carries but the six
+        // classic outputs do not show: the RT AO pair, the GI filter's scratch
+        // ping-pong, and the ReSTIR reservoir weights in both parity slots.
+        // A divergence that surfaces in shadowVis at frame k but began in a
+        // reservoir at frame k-1 is only visible with these in the split.
+        auto& pv = impl.primaryView();
         const std::pair<const char*, const vulkan::Image2D*> imgs[] = {
                 {"indirect", &g.indirect},   {"momentsSq", &g.momentsSq},
                 {"reflect", &g.reflect},     {"reflAux", &g.reflAux},
                 {"shadowVis", &g.shadowVis}, {"directU", &g.directU},
+                {"rtao", &g.rtao},           {"rtaoAux", &g.rtaoAux},
+                {"atrousA", &g.atrousA},     {"atrousB", &g.atrousB},
+                {"reservoirW0", &pv.reservoirWImagesPP[0]},
+                {"reservoirW1", &pv.reservoirWImagesPP[1]},
         };
         constexpr VkDeviceSize kBpp = 8;
 
@@ -2036,9 +2046,23 @@ namespace threepp {
             return hsh;
         };
         offset = 0;
+        // THREEPP_SHADE_DUMP_DIR=<dir>: also write each image's bytes for the
+        // first frames as <name>_f<serial>.raw, so two runs whose hashes differ
+        // can be compared pixel by pixel (WHERE a pass differs says what class
+        // of input it consumed). Debug only; the hash rows are the contract.
+        const char* dumpDir = std::getenv("THREEPP_SHADE_DUMP_DIR");
         for (const auto& [name, img] : imgs) {
             const VkDeviceSize sz = static_cast<VkDeviceSize>(img->width) * img->height * kBpp;
             out.emplace_back(name, fnv(offset, sz));
+            if (dumpDir && impl.frameSerial_ <= 8) {
+                const std::string path = std::string(dumpDir) + "/" + name + "_f" +
+                                         std::to_string(impl.frameSerial_) + "_" +
+                                         std::to_string(img->width) + "x" + std::to_string(img->height) + ".raw";
+                if (FILE* fp = std::fopen(path.c_str(), "wb")) {
+                    std::fwrite(base + offset, 1, static_cast<size_t>(sz), fp);
+                    std::fclose(fp);
+                }
+            }
             offset += sz;
         }
         if (probeShBytes > 0) {
