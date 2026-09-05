@@ -174,6 +174,9 @@ vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool 
     const float hitEnc = hitT < 0.0 ? -1.0 : min(hitT, 1e4);// rgba16f-safe
     vec2 pUv; float histCap;
     bool valid = reflReproject(uv, N, rough, viewDist, pUv, histCap);
+    // Stale-history frame (flags bit 13): the prev G-buffer slot predates the
+    // cleared histories, so the reprojection verdict is void. Start fresh.
+    if ((pc.flags & 8192u) != 0u) valid = false;
     // MOVING REFLECTED CONTENT — the reflected hit is a moving mesh (its content
     // slides frame-to-frame while the reflecting surface reproject tracks the
     // surface, not the content). Near-MIRROR: HARD-reset history so the moving

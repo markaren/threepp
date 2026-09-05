@@ -1004,7 +1004,8 @@ namespace threepp::vulkan {
                    | (shadowDwellOff ? 512u : 0u)   // bit 9: shadow dwell kill switch (was SSR)
                    | (p.bgIsSolidColor ? 1024u : 0u) // solid bg: sky store NOT pre-exposed
                    | (p.particleDensity ? 2048u : 0u) // bit 11: ParticleField dust live
-                   | (p.splatVolume ? 4096u : 0u);    // bit 12: splat reflection volume live
+                   | (p.splatVolume ? 4096u : 0u)     // bit 12: splat reflection volume live
+                   | (p.historyStale ? 8192u : 0u);   // bit 13: histories cleared, prev G-buffer stale
         push.frame              = p.frameCounter;
         push.emissiveCount      = p.emissiveCount;
         push.emissiveTotalPower = p.emissiveTotalPower;

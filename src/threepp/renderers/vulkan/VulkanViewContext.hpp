@@ -303,6 +303,17 @@ namespace threepp::vulkan::impl {
         //   [12..15]= vec4(up.xyz,   0)             → prevCamUp
         std::array<float, 16> prevCamBufData_{};
         bool prevCameraValid = false;
+        // The deferred shade's temporal histories were just cleared
+        // (clearGbufImages: init, reset, env swap), so the PREVIOUS G-buffer
+        // slot describes a frame those histories never saw. The next shade
+        // must not reproject against it: its disocclusion tests would pass or
+        // fail on a frame that is no longer part of the run, and the
+        // pass/fail pattern leaks into the trend and hit-distance channels
+        // (measured 2026-09-06: settle 1800 vs 1801, 620 px of trend and
+        // 5,192 px of reflection hit distance differing at the first frame
+        // after the reset, everything else exact). Raised by the clear,
+        // consumed by the frame that records the shade (flags bit 13).
+        bool shadeHistoryStale = true;
         // Cached unjittered view-projection matrix (column-major,
         // row-of-element-4 layout). Computed once per frame in
         // uploadRasterCameraUbo and read by recordOverlayPass to build

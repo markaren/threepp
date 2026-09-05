@@ -106,7 +106,81 @@ void VulkanRenderer::Impl::clearGbufImages() {
             dep2.pImageMemoryBarriers = toGeneral.data();
             vkCmdPipelineBarrier2(cb, &dep2);
 
+            // The raster G-buffer attachments of EVERY slot as well. The render
+            // pass writes only the current slot, so on the first frame after a
+            // (re)start the "previous" slot the temporal consumers sample has
+            // never been rasterised: its contents were whatever memory the
+            // allocator handed out, and under GPU load that is recycled memory
+            // from another process, i.e. a second stable state. Measured
+            // 2026-09-06 (box scene beside a second renderer: the shade's
+            // disocclusion verdict flipped on 526 pixels around the movers,
+            // the accumulators diverged at the last ulp on every lit pixel).
+            // Zero is a defined, run-independent starting point: depth 0 is the
+            // reversed-Z far plane, ids 0 is sky. UNDEFINED as the old layout:
+            // the contents are being discarded anyway, and the images rest in
+            // their sampled-read layouts between frames (see the pushInit at
+            // creation), which is where they go back to.
+            struct Att { VkImage image; VkImageAspectFlags aspect; VkImageLayout rest; };
+            std::vector<Att> atts;
+            for (auto& g : view().rasterGbufs) {
+                for (const VkImage img : {g.normal.image, g.motion.image, g.ids.image, g.uv.image, g.albedo.image}) {
+                    if (img != VK_NULL_HANDLE)
+                        atts.push_back({img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+                }
+                if (g.depth.image != VK_NULL_HANDLE)
+                    atts.push_back({g.depth.image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL});
+            }
+            if (!atts.empty()) {
+                std::vector<VkImageMemoryBarrier2> attToDst(atts.size()), attToRest(atts.size());
+                for (size_t i = 0; i < atts.size(); ++i) {
+                    auto& b = attToDst[i];
+                    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                    b.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                    b.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT;
+                    b.dstStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    b.image = atts[i].image;
+                    b.subresourceRange.aspectMask = atts[i].aspect;
+                    b.subresourceRange.levelCount = 1;
+                    b.subresourceRange.layerCount = 1;
+                    auto& r = attToRest[i];
+                    r = b;
+                    r.srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
+                    r.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                    r.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                    r.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+                    r.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    r.newLayout = atts[i].rest;
+                }
+                VkDependencyInfo depA{};
+                depA.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                depA.imageMemoryBarrierCount = static_cast<uint32_t>(attToDst.size());
+                depA.pImageMemoryBarriers = attToDst.data();
+                vkCmdPipelineBarrier2(cb, &depA);
+                const VkClearDepthStencilValue depthClear{0.f, 0u};
+                for (const auto& a : atts) {
+                    VkImageSubresourceRange r{a.aspect, 0, 1, 0, 1};
+                    if (a.aspect == VK_IMAGE_ASPECT_DEPTH_BIT)
+                        vkCmdClearDepthStencilImage(cb, a.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &depthClear, 1, &r);
+                    else
+                        vkCmdClearColorImage(cb, a.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &r);
+                }
+                VkDependencyInfo depB{};
+                depB.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                depB.imageMemoryBarrierCount = static_cast<uint32_t>(attToRest.size());
+                depB.pImageMemoryBarriers = attToRest.data();
+                vkCmdPipelineBarrier2(cb, &depB);
+            }
+
             endAndSubmitOneShot(cb);
+            // The histories are zero; the previous G-buffer slot is not part
+            // of this run's history either way. Tell the next shade so
+            // (VulkanViewContext::shadeHistoryStale).
+            view().shadeHistoryStale = true;
         }
 
 void VulkanRenderer::Impl::destroyRasterGbufMsObjects() {
@@ -432,15 +506,20 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
             // resolved single-sample attachments to a host staging buffer. It is
             // a pure capability flag (no render-pass / layout / perf effect); the
             // STORAGE bit below stays MSAA-gated for its byte-identical guarantee.
+            // TRANSFER_DST: clearGbufImages zeroes every slot's attachments at
+            // start-up and on a temporal reset (undefined contents were a
+            // run-dependent input to the first frame's disocclusion tests).
             const VkImageUsageFlags colorUsage =
                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                     VK_IMAGE_USAGE_SAMPLED_BIT |
                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                    VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                     (gbufMsaaSamples_ > 1 ? VK_IMAGE_USAGE_STORAGE_BIT : 0);
             const VkImageUsageFlags depthUsage =
                     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
                     VK_IMAGE_USAGE_SAMPLED_BIT |
-                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                    VK_IMAGE_USAGE_TRANSFER_DST_BIT;// clearGbufImages zeroes every slot
             for (size_t fi = 0; fi < view().rasterGbufs.size(); ++fi) {
                 auto& g = view().rasterGbufs[fi];
                 char nameBuf[64];
@@ -705,9 +784,14 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
             // same-mesh reproject guard, and the deferred shade reads the
             // per-frame gbuffer. Without a defined starting layout that read
             // finds the image in UNDEFINED and trips VUID-vkCmdDraw-None-09600 /
-            // -vkCmdDispatch-None-09600. Contents stay undefined, but the layout
-            // is now valid; the temporal logic discards previous data on the
-            // first frame regardless. Re-runs on resize (images are recreated).
+            // -vkCmdDispatch-None-09600. This only sets the LAYOUT; the contents
+            // are defined by clearGbufImages, which runs right after creation
+            // and on every temporal reset and zeroes these attachments in every
+            // slot. (Until 2026-09-06 the contents stayed undefined on the
+            // assumption that the temporal logic discards previous data on the
+            // first frame. It did not: the deferred shade's disocclusion test
+            // read them, and under GPU load they were another process's
+            // recycled memory.) Re-runs on resize (images are recreated).
             VkCommandBuffer initCb = beginOneShot();
             std::vector<VkImageMemoryBarrier> inits;
             inits.reserve(view().rasterGbufs.size() * (gbufMsaaSamples_ > 1 ? 18 : 12));

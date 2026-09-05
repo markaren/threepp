@@ -129,7 +129,7 @@ void VulkanRenderer::Impl::recordDeformAndTlas(VkCommandBuffer cb) {
                 // Persistent scratch is sized to buildScratchSize, which is
                 // always >= updateScratchSize, so the same buffer serves both.
                 for (auto* st : pendingSkinnedRebuilds_) {
-                    const bool fullRebuild =
+                    const bool fullRebuild = blasRebuildThisFrame_ ||
                             st->blasRefitCounter >=
                             SkinnedMeshState::kBlasFullRebuildInterval;
                     st->blasRefitCounter = fullRebuild ? 0u
@@ -241,7 +241,7 @@ void VulkanRenderer::Impl::recordDeformAndTlas(VkCommandBuffer cb) {
                 }
 
                 for (auto* st : pendingTetRebuilds_) {
-                    const bool fullRebuild =
+                    const bool fullRebuild = blasRebuildThisFrame_ ||
                             st->blasRefitCounter >= TetMeshState::kBlasFullRebuildInterval;
                     st->blasRefitCounter = fullRebuild ? 0u : (st->blasRefitCounter + 1u);
                     VkAccelerationStructureGeometryTrianglesDataKHR triData{};

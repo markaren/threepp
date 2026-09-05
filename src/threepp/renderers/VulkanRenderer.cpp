@@ -329,6 +329,7 @@ namespace threepp {
         shadeParams.shadeBActive       = shadeBActive;
         shadeParams.clusterLightCount  = clusterLightCountThisFrame_;
         shadeParams.froxelsActive      = froxelsActive;
+        shadeParams.historyStale       = view().shadeHistoryStale;
         shadeParams.particleDensity    = densityActive;
         // ── Splats in the mirror: PRIMARY VIEW ONLY ──────────────────────────
         // The volume descriptors are world-anchored and shared by every view's
@@ -347,6 +348,10 @@ namespace threepp {
         gpuTimings_->begin(cb, TP_DeferredShade, currentFrame);
         view().deferredShade_->recordDispatch(cb, currentFrame, shadeParams);
         gpuTimings_->end(cb, TP_DeferredShade, currentFrame);// pathTraceMs = deferred SHADE only
+        // Consumed: this frame's shade started every temporal path fresh
+        // (dispatch B below reuses shadeParams, flag included). From the next
+        // frame on, the previous G-buffer slot is one the histories have seen.
+        view().shadeHistoryStale = false;
 
         // ── MSAA dispatch B: per-sample shading at complex (edge) pixels ──
         // Opt-in (gbufShadeBEnabled_, default false) and only when
@@ -2076,11 +2081,35 @@ namespace threepp {
         // first frames as <name>_f<serial>.raw, so two runs whose hashes differ
         // can be compared pixel by pixel (WHERE a pass differs says what class
         // of input it consumed). Debug only; the hash rows are the contract.
+        // THREEPP_SHADE_DUMP_MIN / _MAX bound the window by frame serial
+        // (default 0..8), so a reset that happens 1,800 frames into a run can
+        // be dumped without dumping the run; THREEPP_SHADE_DUMP_NAMES is a
+        // comma-separated substring filter on the image names.
         const char* dumpDir = std::getenv("THREEPP_SHADE_DUMP_DIR");
+        const auto envU64 = [](const char* key, uint64_t dflt) {
+            const char* v = std::getenv(key);
+            return v ? static_cast<uint64_t>(std::strtoull(v, nullptr, 10)) : dflt;
+        };
+        const uint64_t dumpMin = envU64("THREEPP_SHADE_DUMP_MIN", 0);
+        const uint64_t dumpMax = envU64("THREEPP_SHADE_DUMP_MAX", 8);
+        const char* dumpNames  = std::getenv("THREEPP_SHADE_DUMP_NAMES");
+        const auto dumpWanted  = [&](const char* name) {
+            if (!dumpNames || !*dumpNames) return true;
+            std::string list(dumpNames);
+            size_t pos = 0;
+            while (pos <= list.size()) {
+                const size_t comma = list.find(',', pos);
+                const std::string tok = list.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+                if (!tok.empty() && std::string(name).find(tok) != std::string::npos) return true;
+                if (comma == std::string::npos) break;
+                pos = comma + 1;
+            }
+            return false;
+        };
         for (const auto& [name, img] : imgs) {
             const VkDeviceSize sz = static_cast<VkDeviceSize>(img->width) * img->height * kBpp;
             out.emplace_back(name, fnv(offset, sz));
-            if (dumpDir && impl.frameSerial_ <= 8) {
+            if (dumpDir && impl.frameSerial_ >= dumpMin && impl.frameSerial_ <= dumpMax && dumpWanted(name)) {
                 const std::string path = std::string(dumpDir) + "/" + name + "_f" +
                                          std::to_string(impl.frameSerial_) + "_" +
                                          std::to_string(img->width) + "x" + std::to_string(img->height) + ".raw";
@@ -2213,6 +2242,10 @@ namespace threepp {
         // different numbers of frames would disagree on every AOV. Restart it.
         impl.haltonFrame_ = 0;
         impl.pendingAccumulationReset_ = true;
+        // The dynamic acceleration structures are temporal state too: a refit
+        // chain's structure and its rebuild cadence depend on how many frames
+        // preceded this call. Rebuild them once, from this frame's vertices.
+        impl.forceBlasRebuild_ = true;
     }
 
     double VulkanRenderer::simTime() const {

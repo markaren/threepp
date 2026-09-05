@@ -1979,6 +1979,13 @@ void main() {
         // Checkerboard carry: prefer the reprojected history; if this skip-
         // frame pixel's reproject fails (rare gate mismatch), carry the
         // same-pixel history rather than cold-starting on no data.
+        // STALE-HISTORY FRAME (flags bit 13: the histories were cleared since
+        // the previous frame). The prev G-buffer slot belongs to a frame the
+        // histories never saw, so the disocclusion verdict above is about the
+        // wrong frame; it must not choose the branch. Every temporal path in
+        // this shader starts fresh on such a frame (also the shadow ratio and
+        // the reflection, below and in reflSVGFTemporal).
+        if ((pc.flags & 8192u) != 0u) valid = false;
         const vec4  prevT = valid ? texture(giPrevTex, paneToPhys(giPrevTex, prevUv))
                                   : (giSkip ? texture(giPrevTex, paneToPhys(giPrevTex, uv)) : vec4(0.0));
         const vec3  prev  = prevT.rgb;
@@ -2203,7 +2210,8 @@ void main() {
             }
             // .z==0 = cold-start marker (sky/glass/off); the magnitude guards
             // reject first-frame / garbage fp16 history (NaN compares false).
-            const bool sValid = sAnyTap && sPrev.z > 0.5 && sPrev.z < 4096.0 &&
+            const bool sValid = (pc.flags & 8192u) == 0u &&// stale-history frame: fresh
+                                sAnyTap && sPrev.z > 0.5 && sPrev.z < 4096.0 &&
                                 abs(sPrev.x) <= 1.5 && abs(sPrev.w) <= 1.5;
             const float dev      = visEst - sPrev.x;
             const float trend    = sValid ? mix(sPrev.w, dev, 0.34) : 0.0;

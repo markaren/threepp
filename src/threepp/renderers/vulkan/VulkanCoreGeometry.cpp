@@ -1489,7 +1489,7 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
                         VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
                         VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
                 const bool fullRebuild = primitiveCount != rec.blasBuiltPrims ||
-                        wantFlags != rec.blasBuiltFlags ||
+                        wantFlags != rec.blasBuiltFlags || blasRebuildThisFrame_ ||
                         rec.blasRefitCounter >= BlasRecord::kBlasFullRebuildInterval;
                 rec.blasRefitCounter = fullRebuild ? 0u : (rec.blasRefitCounter + 1u);
                 rec.blasBuiltPrims = primitiveCount;
@@ -1979,7 +1979,7 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                     // interop route) forces BUILD for the same
                     // update-must-match-its-source reason.
                     const bool fullRebuild = primitiveCount != rec.blasBuiltPrims ||
-                            wantFlags != rec.blasBuiltFlags ||
+                            wantFlags != rec.blasBuiltFlags || blasRebuildThisFrame_ ||
                             rec.blasRefitCounter >= BlasRecord::kBlasFullRebuildInterval;
                     rec.blasRefitCounter = fullRebuild ? 0u : (rec.blasRefitCounter + 1u);
                     rec.blasBuiltPrims = primitiveCount;
@@ -2580,7 +2580,7 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
             // keeps the BVH balanced over time. buildBlasFor itself counts as
             // the first build, so blasRefitCounter starts at 0 and the very
             // first refreshDisplacedBlas takes the UPDATE path.
-            const bool fullRebuild =
+            const bool fullRebuild = blasRebuildThisFrame_ ||
                     st.blasRefitCounter >= DisplacedMeshState::kBlasFullRebuildInterval;
             st.blasRefitCounter = fullRebuild ? 0u : (st.blasRefitCounter + 1u);
 
@@ -2734,7 +2734,7 @@ void VulkanRenderer::Impl::recordGrassDeform(VkCommandBuffer cb, GrassMesh& gm, 
             blasGeom.geometry.triangles = triData;
             blasGeom.flags = 0;
 
-            const bool fullRebuild =
+            const bool fullRebuild = blasRebuildThisFrame_ ||
                     st.blasRefitCounter >= GrassMeshState::kBlasFullRebuildInterval;
             st.blasRefitCounter = fullRebuild ? 0u : (st.blasRefitCounter + 1u);
 

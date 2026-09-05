@@ -650,6 +650,10 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // pool / clear images — both unsafe with an open cmd buffer in the
             // prior frame. We're past the fence wait now so the GPU is idle for
             // *this* slot at minimum; vkDeviceWaitIdle below drains the rest.
+            // A temporal reset's one-shot BLAS rebuild is latched here, for
+            // THIS frame's refit sites (VulkanCoreImpl::blasRebuildThisFrame_).
+            blasRebuildThisFrame_ = forceBlasRebuild_;
+            forceBlasRebuild_     = false;
             if (pendingRenderScaleRealloc_ || pendingAccumulationReset_ || pendingViewChanges_) {
                 vkDeviceWaitIdle(d);
                 if (pendingRenderScaleRealloc_) {
@@ -910,6 +914,11 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 THREEPP_CPUPROF("frame.3a_cbBegin");
                 vkResetCommandBuffer(cmdBuffers[currentFrame], 0);
                 beginCommandRecording(cmdBuffers[currentFrame]);
+                // (2026-09-06: a global ALL_COMMANDS barrier here, ordering
+                // each frame after everything the queue held, was tried against
+                // the GPU-load frame difference and changed nothing: 0/9 loaded
+                // cells either way. The difference is not a cross-frame GPU
+                // hazard on this queue. Not kept; it would only cost overlap.)
             }
             // First thing in the stream, and its own phase: one dispatch, no
             // dependants. Deliberately NOT inside frame.J_record — a phase whose

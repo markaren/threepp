@@ -236,6 +236,10 @@ namespace threepp::vulkan {
             // recordClusterBuild + a compute barrier first).
             uint32_t clusterLightCount = 0;
             bool froxelsActive = false;// froxel LUT valid this frame (flags bit 8)
+            // The temporal histories were cleared since the previous frame,
+            // so the previous G-buffer slot must not be reprojected against
+            // (flags bit 13): every temporal path starts fresh this frame.
+            bool historyStale = false;
             // Float-bits of the pre-exposure baked into every sceneHdr store
             // (physical camera keeps 100k lux in fp16). 0x3F800000 = legacy 1.
             uint32_t preExpBits = 0x3F800000u;

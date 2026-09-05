@@ -2522,6 +2522,19 @@ namespace threepp {
         // called when Idle apply immediately as before.
         bool pendingRenderScaleRealloc_ = false;
         bool pendingAccumulationReset_  = false;
+        // resetTemporalHistory: every dynamic BLAS takes the BUILD path on the
+        // next frame and its refit counter restarts. A refit chain and the
+        // periodic full rebuild it counts toward are temporal state like any
+        // history: two runs that reached the reset after different numbers of
+        // refits carried different structures (and rebuilt at different
+        // post-reset frames), and the ray-traced rows diverged 20 to 70 frames
+        // later (fjord, settle 1800 vs 1801, 2026-09-06; exact with --static).
+        bool forceBlasRebuild_          = false;
+        // The request above, latched for the frame being recorded: taken at
+        // frame start (beside the pending accumulation reset), so a request
+        // made between frames lands in the next frame's geometry work and not
+        // in the tail of the previous frame's endFrame.
+        bool blasRebuildThisFrame_      = false;
         // Raster G-buffer MSAA sample count (1/2/4). 1 = today's single-sample
         // path, byte-identical output, default. See setGbufferMsaa. Reallocation
         // (render pass + pipelines + MS images) is render-extent-resource work,
