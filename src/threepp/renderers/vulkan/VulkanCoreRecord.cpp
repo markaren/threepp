@@ -1,4 +1,5 @@
 #include "VulkanCoreImpl.hpp"
+#include "VulkanCpuPhaseProf.hpp"
 #include "threepp/renderers/vulkan/shaders/event_shade.comp.spv.h"
 
 namespace threepp {
@@ -683,6 +684,29 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                     VkRect2D dsc{{regionDstX_, regionDstY_}, regionSwapExt_};
                     vkCmdSetScissor(cb, 0, 1, &dsc);
 
+                    // Last-entry memos, the same shape (and for the same
+                    // reason) as the ones the indirect draw builder keeps: an
+                    // InstancedMesh expands to one entry per instance, all
+                    // sharing a single en.mesh, so a whole instanced run
+                    // collapses to one BLAS resolve and one pair of buffer
+                    // binds; a scene of distinct meshes simply always misses
+                    // and pays a pointer compare. Keying on en.mesh is exact —
+                    // resolveBlasForEntry dispatches on en.mesh's cached type
+                    // flags and looks up by en.mesh (or by its geometry), and
+                    // none of the caches it reads are mutated inside this loop.
+                    // The bind cache is a SEPARATE key because blasCache is
+                    // keyed by geometry: two distinct meshes sharing one
+                    // BufferGeometry resolve to the same record and so to the
+                    // same handles. Both live HERE, inside the render-pass
+                    // instance, so no bind state is ever assumed to survive
+                    // into the next frame's command buffer — this loop is the
+                    // only thing that binds vertex/index buffers in the pass.
+                    const Mesh*       memoMesh = nullptr;
+                    const BlasRecord* memoRec  = nullptr;
+                    VkBuffer          boundVtx = VK_NULL_HANDLE;
+                    VkBuffer          boundIdx = VK_NULL_HANDLE;
+                    VkIndexType       boundIdxType = VK_INDEX_TYPE_UINT32;
+                    THREEPP_CPUPROF("frame.N_overlayDepthRec");
                     for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
                         const auto& en = lastVisibleEntries_[i];
                         if (en.isOverlay) continue;// overlay meshes drawn by overlay pass instead
@@ -700,7 +724,15 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                         // meshes; the alternative is a second particle pipeline
                         // for a depth-only pass, which no consumer has asked for.
                         if (en.isParticleField) continue;
-                        const BlasRecord* rec = resolveBlasForEntry(en);
+                        // Below the skips: the resolve is a pure lookup, so a
+                        // culled entry has no reason to pay for it. It cannot
+                        // stale the memo either — the answer depends only on
+                        // en.mesh, never on which entries came before.
+                        if (en.mesh != memoMesh) {
+                            memoMesh = en.mesh;
+                            memoRec  = resolveBlasForEntry(en);
+                        }
+                        const BlasRecord* rec = memoRec;
                         if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
 
                         struct PC {
@@ -717,24 +749,37 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                                            VK_SHADER_STAGE_VERTEX_BIT,
                                            0, sizeof(pcDepth), &pcDepth);
 
-                        VkBuffer     vbufs[1] = {rec->vertex.handle};
-                        VkDeviceSize voffs[1] = {0};
-                        vkCmdBindVertexBuffers(cb, 0, 1, vbufs, voffs);
+                        if (rec->vertex.handle != boundVtx) {
+                            VkBuffer     vbufs[1] = {rec->vertex.handle};
+                            VkDeviceSize voffs[1] = {0};
+                            vkCmdBindVertexBuffers(cb, 0, 1, vbufs, voffs);
+                            boundVtx = rec->vertex.handle;
+                        }
+                        // Element counts come off the record, not off the CPU
+                        // attribute: the snapshot was taken by buildBlasFor
+                        // against the very buffers bound above (every state
+                        // that owns a BlasRecord — skinned, tet, displaced,
+                        // grass, morphed — gets it from that one funnel), so
+                        // the count can never describe more elements than the
+                        // buffer holds. idxAttr->count() can, on a frame where
+                        // the app grew the array and the BLAS refresh has not
+                        // run yet. It also drops two by-value shared_ptr
+                        // returns and a string-keyed attribute lookup per
+                        // entry, which is the whole point at instance counts.
                         if (rec->index.handle != VK_NULL_HANDLE) {
                             // Packed static records store uint16 indices (bit 3).
-                            vkCmdBindIndexBuffer(cb, rec->index.handle, 0,
-                                                 (rec->packedMask & 8u) ? VK_INDEX_TYPE_UINT16
-                                                                        : VK_INDEX_TYPE_UINT32);
-                            auto* idxAttr = en.mesh->geometry()->getIndex();
-                            if (idxAttr) {
-                                vkCmdDrawIndexed(cb, static_cast<uint32_t>(idxAttr->count()),
-                                                 1, 0, 0, 0);
+                            const VkIndexType itype = (rec->packedMask & 8u) ? VK_INDEX_TYPE_UINT16
+                                                                             : VK_INDEX_TYPE_UINT32;
+                            if (rec->index.handle != boundIdx || itype != boundIdxType) {
+                                vkCmdBindIndexBuffer(cb, rec->index.handle, 0, itype);
+                                boundIdx     = rec->index.handle;
+                                boundIdxType = itype;
                             }
-                        } else {
-                            auto* posAttr = en.mesh->geometry()->getAttribute<float>("position");
-                            if (posAttr) {
-                                vkCmdDraw(cb, static_cast<uint32_t>(posAttr->count()), 1, 0, 0);
+                            if (rec->indexCount > 0u) {
+                                vkCmdDrawIndexed(cb, rec->indexCount, 1, 0, 0, 0);
                             }
+                        } else if (rec->vertexCount > 0u) {
+                            vkCmdDraw(cb, rec->vertexCount, 1, 0, 0);
                         }
                     }
                     vkCmdEndRendering(cb);
