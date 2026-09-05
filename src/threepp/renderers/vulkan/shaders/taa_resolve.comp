@@ -596,5 +596,10 @@ void main() {
     // the texture origin (region-local), so next frame reprojects consistently.
     const ivec2 dstPx = px + ivec2(int(pc.dstOffset & 0xFFFFu), int(pc.dstOffset >> 16u));
     if ((pc.flags & kFlagWriteSwap) != 0u) imageStore(taaSwapImage, dstPx, vec4(result, 1.0));
+    // A forced resolve (history invalid, blendAlpha >= 1) restarts the streak
+    // too: it is per-pixel temporal state carried in history .a, and a value
+    // inherited from before the invalidation would steer the blend for frames
+    // afterwards (the audit saw it only once the camera moved).
+    if (pc.blendAlpha >= 1.0) devStreak = 0.0;
     imageStore(taaHistoryWriteImg,  px, vec4(result, devStreak));// .a = deviation streak
 }
