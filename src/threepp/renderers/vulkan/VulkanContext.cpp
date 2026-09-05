@@ -465,12 +465,13 @@ namespace threepp::vulkan {
         std::vector<char> initial = readPipelineCacheFile(path);
         auto source = path;
         const auto legacy = legacyPipelineCachePath();
+        // The legacy file is read as a fallback and otherwise left alone.
+        // Older builds on the same machine still read and write it — a second
+        // worktree, the wheel, a checkout of master — and deleting it from here
+        // would put every one of them back to a cold compile on every run.
         if (initial.empty()) {
             initial = readPipelineCacheFile(legacy);
             if (!initial.empty()) source = legacy;
-        } else if (!legacy.empty()) {
-            std::error_code ec;
-            std::filesystem::remove(legacy, ec);
         }
 
         // Validate the cache header against THIS device — vendor/device/UUID
@@ -501,6 +502,10 @@ namespace threepp::vulkan {
         if (vkCreatePipelineCache(device_, &ci, nullptr, &pipelineCache_) != VK_SUCCESS) {
             pipelineCache_ = VK_NULL_HANDLE;// non-fatal: pipelines just compile cold
         }
+        // What the keyed path holds now, for savePipelineCacheIfChanged to
+        // compare against. A legacy-sourced load counts as zero: the keyed
+        // file does not exist yet, and the first check should write it.
+        savedPipelineCacheBytes_ = (usable && source == path) ? initial.size() : 0;
         std::cout << "[VulkanContext] pipeline cache: "
                   << (usable ? "WARM - loaded " : "COLD - ignoring ")
                   << initial.size() << " bytes from " << source.string()
@@ -563,6 +568,24 @@ namespace threepp::vulkan {
         }
         std::cout << "[VulkanContext] pipeline cache: saved " << sz
                   << " bytes to " << path.string() << std::endl;
+        savedPipelineCacheBytes_ = sz;
+    }
+
+    void VulkanContext::savePipelineCacheIfChanged() {
+        if (pipelineCache_ == VK_NULL_HANDLE) return;
+        // The first call lands right after the first frame, where the startup
+        // compiles have all just finished; after that every 120th. The size
+        // query is a driver call rather than free, and pipelines arrive in
+        // bursts, so per-frame polling would buy nothing.
+        const uint32_t tick = pipelineCacheTick_++;
+        if (tick != 0 && tick % 120 != 0) return;
+        size_t sz = 0;
+        if (vkGetPipelineCacheData(device_, pipelineCache_, &sz, nullptr) != VK_SUCCESS) return;
+        if (sz == savedPipelineCacheBytes_) return;
+        // Synchronous on the render thread: a blob of tens of megabytes costs
+        // on the order of 100 ms, once, immediately after a compile burst that
+        // itself took seconds. Nothing in the frame's state is touched.
+        savePipelineCache();
     }
 
     void VulkanContext::createInstance(bool enableValidation) {
