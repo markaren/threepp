@@ -27,27 +27,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import threepp as tp
 
+from demo_common import write_radiance_hdr
+
 # --------------------------------------------------------------------------- #
 #  Procedural HDR sky  (numpy -> Radiance .hdr -> RGBELoader)
 # --------------------------------------------------------------------------- #
 SUN_DIR = np.array([0.45, 0.40, 0.80])
 SUN_DIR = SUN_DIR / np.linalg.norm(SUN_DIR)
-
-
-def _encode_rgbe(rgb):
-    """Vectorised linear-RGB float -> Radiance RGBE bytes, shape (H, W, 4)."""
-    rgb = np.maximum(np.asarray(rgb, np.float64), 0.0)
-    m = rgb.max(axis=2)
-    mask = m >= 1e-32
-    safe = np.where(mask, m, 1.0)
-    mant, exp = np.frexp(safe)             # m = mant * 2**exp,  mant in [0.5, 1)
-    scale = np.where(mask, mant * 256.0 / safe, 0.0)
-    out = np.zeros(rgb.shape[:2] + (4,), np.uint8)
-    out[..., 0] = np.clip(rgb[..., 0] * scale, 0, 255).astype(np.uint8)
-    out[..., 1] = np.clip(rgb[..., 1] * scale, 0, 255).astype(np.uint8)
-    out[..., 2] = np.clip(rgb[..., 2] * scale, 0, 255).astype(np.uint8)
-    out[..., 3] = np.where(mask, np.clip(exp + 128, 0, 255), 0).astype(np.uint8)
-    return out
 
 
 def make_sky_hdr(path, W=2048, H=1024):
@@ -84,16 +70,7 @@ def make_sky_hdr(path, W=2048, H=1024):
     halo = np.exp(-(ang / math.radians(11.0)) ** 2)
     sky = sky + (core * 60.0 + halo * 4.5)[..., None] * np.array([1.0, 0.93, 0.82])
 
-    rgbe = _encode_rgbe(sky)
-    # ensure stb reads the scanlines uncompressed: the first pixel must not look
-    # like an RLE run marker (2, 2, <128).
-    if rgbe[0, 0, 0] == 2 and rgbe[0, 0, 1] == 2 and rgbe[0, 0, 2] < 128:
-        rgbe[0, 0, 0] = 3
-    with open(path, "wb") as f:
-        f.write(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n")
-        f.write(b"-Y %d +X %d\n" % (H, W))
-        f.write(rgbe.tobytes())
-    return path
+    return write_radiance_hdr(path, sky)
 
 
 # --------------------------------------------------------------------------- #

@@ -179,7 +179,7 @@ import threepp as tp
 from threepp.terrain_deform import MATERIALS, DeformableTerrain
 from warp_common import (DensitySurface, cli_arg, encode_png_sequence, find_ffmpeg,
                          parse_size,
-                         standard_material)
+                         standard_material, write_radiance_hdr)
 
 try:
     from threepp.cuda_interop import VkInteropArray
@@ -656,24 +656,7 @@ def make_dusk_hdr(path, key_dir, W=512, HH=256):
     sky = sky + np.exp(-(ang / math.radians(42.0)) ** 2)[..., None] \
         * np.array([1.05, 0.66, 0.33])
     sky = np.where((y < 0)[..., None], np.array([0.045, 0.040, 0.034]), sky)
-    rgb = np.maximum(sky, 0.0)
-    m = rgb.max(axis=2)
-    mask = m >= 1e-32
-    mant, exp = np.frexp(np.where(mask, m, 1.0))
-    scale = np.where(mask, mant * 256.0 / np.where(mask, m, 1.0), 0.0)
-    rgbe = np.zeros(rgb.shape[:2] + (4,), np.uint8)
-    for c in range(3):
-        rgbe[..., c] = np.clip(rgb[..., c] * scale, 0, 255).astype(np.uint8)
-    rgbe[..., 3] = np.where(mask, np.clip(exp + 128, 0, 255), 0).astype(np.uint8)
-    # An RGBE row starting (2, 2, <128) reads as "adaptive RLE" to a .hdr
-    # reader; nudge the one pixel that could fake that signature.
-    if rgbe[0, 0, 0] == 2 and rgbe[0, 0, 1] == 2 and rgbe[0, 0, 2] < 128:
-        rgbe[0, 0, 0] = 3
-    with open(path, "wb") as f:
-        f.write(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n")
-        f.write(b"-Y %d +X %d\n" % (HH, W))
-        f.write(rgbe.tobytes())
-    return path
+    return write_radiance_hdr(path, sky)
 
 
 try:

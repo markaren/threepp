@@ -18,11 +18,19 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Appended, not inserted: a caller run from a subdirectory still gets its own
+# modules first, but `demo_common` below resolves either way.
+if os.path.dirname(os.path.abspath(__file__)) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
 import warp as wp
 
 import threepp as tp
+
+# Re-exported so a film has one import; they live in the Warp-free module
+# because the hello-world demos share them too. noqa: F401 - re-export.
+from demo_common import encode_rgbe, write_radiance_hdr  # noqa: F401
 
 # --- command line --------------------------------------------------------------
 
