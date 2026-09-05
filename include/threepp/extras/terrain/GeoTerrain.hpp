@@ -120,6 +120,10 @@ namespace threepp::terrain {
         float wetFlowLo = 0.52f;    // log-normalised accumulation window for wet rock
         float wetFlowHi = 0.72f;
         float screeFlowLo = 0.48f;  // fans want drainage AND a relaxed slope
+        // OSM natural=bare_rock / scree / scrub / heath polygons as cover. The
+        // A/B switch for the surveyed cover alone (the CHM forest paint above
+        // stays on): NT_NO_LANDUSE_PAINT=1 in the demo.
+        bool landUsePaint = true;
     };
 
     // ── FootprintMask: a hard yes/no raster of polygon coverage ─────────────
@@ -436,8 +440,19 @@ namespace threepp::terrain {
                 }
                 // Surveyed cover wins over the guessed cover: where OSM says bare
                 // rock there is no grass tint and no bench moss, and where it says
-                // scrub/heath the ground is brown, not lawn.
-                if (rock) m.rock = std::clamp(rock->coverage(x, z), 0.f, 1.f) * (1.f - m.forest);
+                // scrub/heath the ground carries the low dense green of birch
+                // scrub and heather rather than lawn.
+                //
+                // Rock is gated on the DEM slope. A bare_rock polygon is drawn
+                // around a whole knoll, and its FLAT parts are grass and moss with
+                // stone showing through, not a slab: painting the whole polygon
+                // grey turns every mapped outcrop into a concrete apron. Full only
+                // where the ground is steep enough to shed soil, ~25° (slope here
+                // is 1 − Ny, so cos 25° gives 0.094), a quarter weight below.
+                if (rock) {
+                    const float steep = 0.25f + 0.75f * smoothstep01(0.035f, 0.094f, slope);
+                    m.rock = std::clamp(rock->coverage(x, z), 0.f, 1.f) * (1.f - m.forest) * steep;
+                }
                 if (heath)
                     m.heath = std::clamp(heath->coverage(x, z), 0.f, 1.f) *
                               (1.f - m.forest) * (1.f - m.rock);
@@ -901,7 +916,7 @@ namespace threepp::terrain {
             if (pack.hasFlow()) cover.flow = &pack.flow;
             // The bench mask only means something when benches exist.
             if (o.cliffRelief) cover.dem = &grid;
-            if (pack.hasLandUse()) {
+            if (pack.hasLandUse() && o.landUsePaint) {
                 cover.rock = buildLandUseMask(pack, {"bare_rock", "scree"}, 0.f, 4.f);
                 cover.heath = buildLandUseMask(pack, {"scrub", "heath"}, 0.f, 4.f);
             }
@@ -958,15 +973,24 @@ namespace threepp::terrain {
                         const float pat = 0.90f + 0.20f * detail::geoFbm(x * 0.06f, z * 0.06f);
                         const std::array<float, 3> stone{0.340f, 0.330f, 0.310f};
                         for (int i = 0; i < 3; ++i)
-                            rgb[i] += (stone[i] * pat - rgb[i]) * m.rock * 0.9f;
+                            rgb[i] += (stone[i] * pat - rgb[i]) * m.rock * 0.7f;
                     }
-                    // OSM scrub / heath: brown-olive, the band between the
-                    // gardens and the rock on Aksla's flanks.
+                    // OSM scrub / heath. NOT brown: Norwegian coastal scrub is
+                    // birch and willow thicket, juniper and heather, a dense
+                    // GREEN — darker and bluer than a lawn, close to the birch
+                    // the forest paint uses, and it goes rust only in October.
+                    // The first pass painted (0.16, 0.14, 0.07) at 0.85, which
+                    // turned the whole scrub-mapped hill behind the suburb into
+                    // one flat brown apron (looked at: phaseB_suburb.png). Cap
+                    // the blend at 0.6 so the splat's own grass structure still
+                    // shows through, and give it the same 30 m fBm patchiness
+                    // the forest and urban paints carry — an unbroken field of
+                    // one colour is the tell, whatever the colour is.
                     if (m.heath > 0.001f) {
-                        const float pat = 0.88f + 0.24f * detail::geoFbm(x * 0.04f, z * 0.04f);
-                        const std::array<float, 3> hth{0.160f, 0.140f, 0.070f};
+                        const float pat = 0.85f + 0.30f * detail::geoFbm(x * 0.033f, z * 0.033f);
+                        const std::array<float, 3> hth{0.110f, 0.160f, 0.060f};
                         for (int i = 0; i < 3; ++i)
-                            rgb[i] += (hth[i] * pat - rgb[i]) * m.heath * 0.85f;
+                            rgb[i] += (hth[i] * pat - rgb[i]) * m.heath * 0.6f;
                     }
                     // Wet seepage: wet rock is DARKER and slightly bluer than
                     // dry rock (the water film kills the diffuse bounce).
@@ -1029,7 +1053,11 @@ namespace threepp::terrain {
                     // clumps — and TerrainScatter reads these weights, so this is
                     // also what keeps tufts off a rock slab.
                     pushTo(1, m.rock * 0.9f);
-                    pushTo(0, m.heath * 0.6f);
+                    // Heath moves NO weight. Pushing it to the grass band flattens
+                    // the splat's relief over the whole polygon, and a hillside of
+                    // scrub with its structure gone reads as painted mud however
+                    // green the albedo is: the colour is the only thing that
+                    // should change here.
                 }
                 float keep = 1.f;
                 if (paint) keep *= 1.f - network.pavedWeight(x, z, edgeFeather);

@@ -129,9 +129,16 @@ namespace threepp::vegetation {
         // A CHM is DOM − DTM: EVERY tall thing the lidar saw is "canopy". On a
         // fjord that is trees; over a town it is also roofs, cranes, ship
         // superstructure, church spires and moored masts. The height cap kills
-        // the tall end of that list outright (this pack: p99 of the peaks is
-        // 22 m, the max is 43 m and it is a crane).
-        float maxCanopyHeight = 28.f;
+        // the tall end of that list outright (the Ålesund pack: p99 of the peaks
+        // is 22 m, the max is 43 m and it is a crane).
+        //
+        // Off by default. Shipped at 28 m it was a global rule, and a global
+        // rule about harbour cranes is wrong on a fjord: it dropped 14 126 cells
+        // on geiranger, where a 30 m spruce is just a spruce. The CALLER knows
+        // whether its pack has a harbour in it (the demo turns it on for packs
+        // with buildings), and no gate at all is the right default for a
+        // vegetation header.
+        float maxCanopyHeight = 1e9f;
 
         // ...and the rest needs geometry the CHM does not carry: footprints,
         // pavement, pier decks, parking lots. The caller composes those into ONE
@@ -1180,6 +1187,23 @@ namespace threepp::vegetation {
         float cellSize = 128.f;// world metres per LOD cell
         float l0Distance = 300.f;
         float l1Distance = 800.f;
+
+        // ── far cells are COARSER ──────────────────────────────────────────
+        // The cell is the unit of OBJECT count: every non-empty (cell, species,
+        // level) bucket is an InstancedMesh, and on a 2.5 km urban ROI that is
+        // ~1500 cells and several thousand draws before a single triangle is
+        // considered. Measured on the Ålesund pack, the frame is spent on the
+        // object count and not on the near tier: dropping l0Distance from 300 m
+        // to 60 m moved nothing, while capping the instances moved everything.
+        //
+        // Beyond `farCellDistance` from the ROI centre, sites are binned on a
+        // `farCellSize` grid instead: 3× the cell edge is 9× fewer cells out
+        // there, for trees that are 2-4 px wide. The near ring keeps its fine
+        // cells, so nothing the camera can walk up to gets coarser culling.
+        // 0 disables (fjord packs: their ROI is inside the near ring anyway).
+        float centerX = 0.f, centerZ = 0.f;
+        float farCellDistance = 0.f;
+        float farCellSize = 384.f;
         // Same site → same species/scale/yaw at every level, so a handoff moves
         // no tree. Shared with ForestOptions.
         float scrubMaxHeight = 6.f, birchMaxHeight = 14.f, birchMaxElevation = 350.f;
@@ -1220,6 +1244,7 @@ namespace threepp::vegetation {
 
     struct ForestLodStats {
         int sites = 0, planted = 0, cells = 0;
+        int coarseCells = 0;// of `cells`, the ones binned on farCellSize
         int l0Meshes = 0, l1Meshes = 0, l2Meshes = 0;
         int canopyTris = 0;
         int l1ProtoTris = 0;// triangles in ONE L1 prototype (trunk + leaves)
@@ -1248,15 +1273,23 @@ namespace threepp::vegetation {
         }
 
         const float cs = std::max(16.f, o.cellSize);
+        const float fcs = std::max(cs, o.farCellSize);
+        const bool coarsen = o.farCellDistance > 0.f && fcs > cs * 1.01f;
         struct Cell {
             int cx = 0, cz = 0;
+            float cs = 128.f;
             std::array<std::vector<Matrix4>, 3> xf;// per species, WORLD transforms
             Vector3 sum;
             int n = 0;
         };
         std::unordered_map<std::int64_t, Cell> cells;
-        const auto key = [](int bx, int bz) {
-            return (static_cast<std::int64_t>(bx) << 32) ^ static_cast<std::uint32_t>(bz);
+        // The tier is part of the key: a fine (3, -7) and a coarse (3, -7) are
+        // different cells and must not collide. 24 bits per axis covers a
+        // ±8000 m pack at the 16 m floor with room to spare.
+        const auto key = [](int bx, int bz, int tier) {
+            return (static_cast<std::int64_t>(tier) << 48) |
+                   ((static_cast<std::int64_t>(bx) & 0xffffff) << 24) |
+                   (static_cast<std::int64_t>(bz) & 0xffffff);
         };
 
         Quaternion q;
@@ -1270,11 +1303,16 @@ namespace threepp::vegetation {
             // The scale divisor is the L0 prototype's height; L1/L0 prototypes are
             // measured separately below and re-scaled per level, so a tree keeps
             // its metre height across the handoff.
-            const int cx = static_cast<int>(std::floor(p.x / cs));
-            const int cz = static_cast<int>(std::floor(p.z / cs));
-            auto& cell = cells[key(cx, cz)];
+            const float ddx = p.x - o.centerX, ddz = p.z - o.centerZ;
+            const bool far = coarsen &&
+                             (ddx * ddx + ddz * ddz) > o.farCellDistance * o.farCellDistance;
+            const float gs = far ? fcs : cs;
+            const int cx = static_cast<int>(std::floor(p.x / gs));
+            const int cz = static_cast<int>(std::floor(p.z / gs));
+            auto& cell = cells[key(cx, cz, far ? 1 : 0)];
             cell.cx = cx;
             cell.cz = cz;
+            cell.cs = gs;
             q.setFromAxisAngle(up, u01(rng) * math::TWO_PI);
             Matrix4 m;
             // Scale field carries the site's CANOPY HEIGHT, not a ratio: each level
@@ -1356,7 +1394,14 @@ namespace threepp::vegetation {
                 return std::pair{g, meshes};
             };
 
-            auto [g0, m0] = levelGroup(true, 1, 1.f);
+            // A coarse cell is by construction outside the near ring, so its
+            // level 0 is the FAR prototype: no near-tier meshes are built for
+            // it at all. (If the camera flies out there it sees the far tree it
+            // would have seen from the ROI edge, which is the honest answer for
+            // a cell that is 384 m across.)
+            const bool cellFar = cell.cs > cs * 1.01f;
+            if (cellFar) ++st.coarseCells;
+            auto [g0, m0] = levelGroup(!cellFar, 1, 1.f);
             auto [g1, m1] = levelGroup(false, 1, 1.f);
             st.l0Meshes += m0;
             st.l1Meshes += m1;
@@ -1375,10 +1420,10 @@ namespace threepp::vegetation {
                                                          ? Color(0.2f, 0.35f, 0.12f)
                                                          : species[s].far.front().leafMat->color;
                 auto geo = buildCanopySurface(canopy, dem, heightFn, sc,
-                                              static_cast<float>(cell.cx) * cs,
-                                              static_cast<float>(cell.cz) * cs,
-                                              static_cast<float>(cell.cx + 1) * cs,
-                                              static_cast<float>(cell.cz + 1) * cs,
+                                              static_cast<float>(cell.cx) * cell.cs,
+                                              static_cast<float>(cell.cz) * cell.cs,
+                                              static_cast<float>(cell.cx + 1) * cell.cs,
+                                              static_cast<float>(cell.cz + 1) * cell.cs,
                                               origin, o.mesh);
                 if (geo) {
                     if (auto* ix = geo->getIndex()) st.canopyTris += static_cast<int>(ix->count()) / 3;
@@ -1407,9 +1452,24 @@ namespace threepp::vegetation {
     // 600 m it is under a pixel, and the whole point of the tier is the 40-150 m
     // band where a bare garden reads as mown grass between paper houses.
 
-    // 2-3 puffs on a 0.3 m stub, darker than the scrub birch (a shrub mass is
-    // its own shadow). Height ≈ 1.6 m, ~120 triangles.
-    inline TreeVariant makeBushVariant(unsigned int seed, const Color& leaf = Color(0.13f, 0.24f, 0.08f)) {
+    // A dome of small overlapping puffs on a 0.22 m stub. Height ≈ 1.6 m.
+    //
+    // The second pass, and the first one was wrong in a way worth recording: at
+    // 3×6 segments with 2 puffs per node and a leaf colour of (0.13, 0.24, 0.08)
+    // sRGB the near bush rendered as a FACETED DARK POLYHEDRON — the user's
+    // words were "piles of coal", and they were right twice over. The geometry
+    // was a 3×6 sphere, which is 18 quads, and at 1.6 m across in a 20 m frame
+    // every one of those facets is 15 px of flat shading. And the colour was
+    // (0.015, 0.047, 0.007) LINEAR, which is DARKER THAN ASPHALT: a sunlit hedge
+    // that reads darker than the road beside it is not a hedge.
+    //
+    // So: 4×7 segments (the noise deformation in emitBlob does the rest of the
+    // silhouette work), three puffs per node instead of two at a smaller radius
+    // so they overlap into a mass rather than stacking as spheres, and a leaf
+    // colour a stop and a half lighter and distinctly greener than the spruce
+    // blob. Measured on the suburb crop, the hedge means G 0.19 against the
+    // asphalt's 0.061 — the hedge is now the brighter thing, as it is outdoors.
+    inline TreeVariant makeBushVariant(unsigned int seed, const Color& leaf = Color(0.32f, 0.50f, 0.16f)) {
         TreeParams tp;
         applyPreset(2, tp);// birch base: broadleaf proportions
         tp.seed = seed;
@@ -1423,19 +1483,20 @@ namespace threepp::vegetation {
         tp.crownRadiusX = tp.crownRadiusZ = 0.85f;
         tp.crownHeight = 1.05f;
         tp.influenceDistance = 0.9f;
-        tp.killDistance = 0.28f;
+        tp.killDistance = 0.26f;
         tp.segmentLength = 0.16f;
         tp.maxIterations = 90;
-        tp.attractorCount = 70;
+        tp.attractorCount = 80;
         tp.radialSegments = 4;
         tp.tropism = -0.02f;
         tp.leafStyle = LeafStyle::Blob;
         // Many SMALL puffs, or the dome is four spheres and reads as a prop.
-        tp.leavesPerCluster = 2;
-        tp.leafSize = 0.30f;
-        tp.leafDensity = 0.9f;
-        tp.blobLatSegs = 3;
-        tp.blobLonSegs = 6;
+        tp.leavesPerCluster = 3;
+        tp.leafSize = 0.32f;
+        tp.leafSpread = 0.22f;// offsets inside a cluster: overlap, not a stack
+        tp.leafDensity = 1.0f;
+        tp.blobLatSegs = 4;
+        tp.blobLonSegs = 7;
         // Near-black bark: a shrub's stems are inside its own shade, and a
         // mid-grey stick reaching out of the foliage is the whole silhouette.
         tp.barkColor = {0.12f, 0.10f, 0.08f};
@@ -1454,6 +1515,10 @@ namespace threepp::vegetation {
         v.leafMat = MeshStandardMaterial::create(
                 MeshStandardMaterial::Params{}.color(Color::white).roughness(0.88f).metalness(0.f));
         v.leafMat->vertexColors = true;
+        // A puff is a SOLID sphere, not a thin leaf: translucency on it washes
+        // every sun-facing hemisphere with the term's own colour, which is the
+        // same mistake the far-tree tier already learned (see makeForestTreeVariant).
+        v.leafMat->translucency = 0.f;
         // leafColor is an sRGB hint, material->color is linear working space —
         // the same conversion the blob tier does, and skipping it is what makes
         // untuned foliage read "always lit".
@@ -1467,7 +1532,10 @@ namespace threepp::vegetation {
 
     struct BushOptions {
         float cellSize = 128.f;
-        float cullDistance = 600.f;// past this the LOD node shows an empty group
+        // Past this the LOD node shows an empty group. 400 m, not 600: a 1.6 m
+        // shrub at 400 m is 2 px on a 1280-wide 55° frame, and every bush cell
+        // inside the radius is 2 more InstancedMesh objects in the walk.
+        float cullDistance = 400.f;
         float minScale = 0.55f, maxScale = 1.7f;
         float sink = 0.15f;
         int cap = 20000;

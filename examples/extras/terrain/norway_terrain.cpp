@@ -406,29 +406,34 @@ int main(int argc, char** argv) {
     // before/after pair differs by geometry alone.
     if (viewName == "aksla" || viewName == "aksla-near" || viewName == "suburb") {
         if (viewName != "suburb") {
-            // The eye is on the WEST EDGE of the Aksla plateau (801, -160,
-            // ground ~131 m), not on the summit node (994, -214, 166 m): from
-            // the summit the town is a distant strip behind the bare shoulder
-            // of the hill, which is not the photograph. From the edge the town
-            // fills the lower two thirds, the centre blocks sit at ~600 m and
-            // the islands run along the top, as in the reference. The target
-            // is the centre rather than Brosundet itself and the lens is 55°,
-            // which frames the same span the phone-wide photo does. Both are
-            // hardcoded so the frame is pinned: every phase shoots the
-            // identical camera.
-            //   --cam 801,133,-160,300,5,-40 --fov 55   (aksla, y resolved)
-            //   --cam 801,133,-160,300,5,-40 --fov 28   (aksla-near)
-            constexpr float ex = 801.f, ez = -160.f;
+            // The eye is on the WEST EDGE of the Aksla plateau, not on the
+            // summit node (994, -214, 166 m): from the summit the town is a
+            // distant strip behind the bare shoulder of the hill, which is not
+            // the photograph. From the edge the town fills the lower two
+            // thirds, the centre blocks sit at ~600 m and the islands run along
+            // the top, as in the reference.
+            //
+            // The eye y is now an ABSOLUTE metre height, not ground + 2. Phase
+            // B planted the Aksla forest, and the old eye (801, ground + 2,
+            // -160) stands INSIDE two 20 m CHM trees: they fill the middle
+            // third of the frame and there is no view at all. Moving 15 m west
+            // and standing 20 m over the slope clears the crowns and keeps the
+            // same composition — checked against the three candidates with the
+            // forest on. A fixed y also means the frame does not move when the
+            // DTM sampling changes.
+            //   --cam 786,141,-150,300,5,-40 --fov 55   (aksla)
+            //   --cam 786,141,-150,300,5,-40 --fov 28   (aksla-near)
+            constexpr float ex = 786.f, ey = 141.f, ez = -150.f;
             const float ground = pack.grid.sampleBicubic(ex, ez);
             if (!haveCam) {
                 haveCam = true;
-                camPosArg.set(ex, ground + 2.f, ez);
+                camPosArg.set(ex, ey, ez);
                 camTargetArg.set(300.f, 5.f, -40.f);// the Jugend centre blocks
             }
             if (!haveFov) fovArg = (viewName == "aksla") ? 55.f : 28.f;
-            std::printf("[norway] --view %s -> eye %.0f m (ground %.0f + 2); "
+            std::printf("[norway] --view %s -> eye %.0f m absolute (ground %.0f, %.0f m over it); "
                         "--cam %.2f,%.2f,%.2f,%.2f,%.2f,%.2f --fov %.1f\n",
-                        viewName.c_str(), camPosArg.y, ground,
+                        viewName.c_str(), camPosArg.y, ground, camPosArg.y - ground,
                         camPosArg.x, camPosArg.y, camPosArg.z,
                         camTargetArg.x, camTargetArg.y, camTargetArg.z, fovArg);
         } else {
@@ -573,6 +578,11 @@ int main(int argc, char** argv) {
     // through the shell's 0.35 m offset — so the two are mutually exclusive.
     const bool shellOn = gridStep <= 1.5f && !std::getenv("NT_NO_SHELL");
     gopt.cliffRelief = cliffPack && !shellOn;
+    // Surveyed land cover (OSM bare_rock / scree / scrub / heath) painted over
+    // the splat. NT_NO_LANDUSE_PAINT=1 is the A/B for that layer ALONE — the
+    // CHM forest paint, the urban fabric and the road paint are untouched, so
+    // the pair differs by the polygons and nothing else.
+    gopt.landUsePaint = !std::getenv("NT_NO_LANDUSE_PAINT");
     const terrain::TerrainProvider prov = terrain::makeGeoProvider(pack, network, gopt);
 
     reportRoadConformance(pack, network);
@@ -1068,15 +1078,24 @@ int main(int argc, char** argv) {
         // is better spent dense near the subject than thin across the whole square.
         so.centerX = controls.target.x;
         so.centerZ = controls.target.z;
-        // Ålesund from Fjellstua looks 2.5 km down the sound to the far shore;
-        // the fjord packs only ever need the valley wall in front of the camera.
-        so.halfExtent = envF("NT_FOREST_EXTENT", urbanPack ? 2500.f : 1100.f);
+        // Ålesund from Fjellstua looks 2.5 km down the sound to the far shore,
+        // but 1.6 km of PLANTED trees is where the frame stops being able to
+        // tell: past that a crown is under a pixel and the forest PAINT (the
+        // CHM land cover) carries the far hills at a fraction of the cost. The
+        // fjord packs only ever need the valley wall in front of the camera.
+        so.halfExtent = envF("NT_FOREST_EXTENT", urbanPack ? 1600.f : 1100.f);
         if (urbanPack) {
             // 2 m grid: a 3×3 window is a 4 m crown spacing, which is a town
             // tree. The 5×5 default is a plantation rule and it halves the
             // garden crowns (106 875 peaks vs 57 359 over this pack).
             so.windowRadius = 1;
             so.reject = rejectSite;
+            // Cranes, spires, masts and ship superstructure are the tall end of
+            // a CHM over a HARBOUR; on a fjord pack a 30 m peak is a spruce, so
+            // this cap belongs to the pack, not to the detector.
+            so.maxCanopyHeight = envF("NT_FOREST_MAXH", 28.f);
+        } else {
+            so.maxCanopyHeight = envF("NT_FOREST_MAXH", 1e9f);
         }
         // NT_TREELINE=<m> pins the treeline (9999 = effectively off);
         // NT_FOREST_NOGATE=1 restores the phase-3 detector exactly — no treeline,
@@ -1157,6 +1176,12 @@ int main(int argc, char** argv) {
         // (~30 tris/puff, 110 attractors) for its 300-800 m level: at that range
         // the fjord demo's blob spends tens of thousands of triangles per tree on
         // a crown that covers ten pixels.
+        // What the vegetation actually costs the SCENE WALK, summed over the
+        // forest and the bushes: an InstancedMesh is a draw, a descriptor set
+        // and a TLAS instance whatever it holds, and on this pack the object
+        // count is the frame, not the triangles (measured: dropping l0Distance
+        // from 300 m to 60 m moved nothing, halving the ROI moved everything).
+        int vegMeshes = 0, vegInstances = 0, vegCells = 0;
         std::array<vegetation::SpeciesVariants, 3> species;
         for (int s = 0; s < 3; ++s) {
             const auto sp = static_cast<vegetation::TreeSpecies>(s);
@@ -1229,6 +1254,16 @@ int main(int argc, char** argv) {
             // density (fixed in makeForestTreeVariant), so the thinning is back on
             // by default; NT_FOREST_L2KEEP=1 buys the density back.
             lo.l2Keep = static_cast<int>(envF("NT_FOREST_L2KEEP", 4.f));
+            // FAR CELLS ARE COARSER. The cell is the unit of object count, and
+            // the object count is what this frame is spent on: geiranger runs
+            // 28 k trees at ~100 fps over ~180 cells, Ålesund ran 26 k over
+            // ~1500 and managed 18. Beyond 800 m from the ROI centre, bin on a
+            // 384 m grid: 9× fewer cells for crowns that are 2-4 px wide.
+            // NT_FOREST_FARCELL=0 turns it off for the A/B.
+            lo.centerX = so.centerX;
+            lo.centerZ = so.centerZ;
+            lo.farCellDistance = envF("NT_FOREST_FARCELL", urbanPack ? 800.f : 0.f);
+            lo.farCellSize = envF("NT_FOREST_FARCELLSIZE", 384.f);
             lo.mesh.seaLevel = reg.seaLevel;
             lo.mesh.maxSlopeDeg = so.maxSlopeDeg;// same gate as the sites, or the
             lo.mesh.minGroundHeight = so.minGroundHeight;// handoff grows new forest
@@ -1236,8 +1271,13 @@ int main(int argc, char** argv) {
                                                              pack.canopy, pack.grid, prov.height, lo);
             scene.add(forest);
             const auto tf1 = std::chrono::high_resolution_clock::now();
+            vegMeshes += st.l0Meshes + st.l1Meshes + st.l2Meshes;
+            vegInstances += st.planted;
+            vegCells += st.cells;
             std::cout << "[norway] forest LOD: " << st.sites << " sites, " << st.planted
-                      << " instances in " << st.cells << " cells @ " << lo.cellSize << " m"
+                      << " instances in " << st.cells << " cells @ " << lo.cellSize << " m ("
+                      << st.coarseCells << " coarse @ " << lo.farCellSize << " m beyond "
+                      << lo.farCellDistance << " m)"
                       << " (L0 " << st.l0Meshes << " meshes < " << lo.l0Distance << " m, L1 "
                       << st.l1Meshes << " meshes, L2 " << st.l2Meshes
                       << (lo.buildCanopyMesh ? " canopy meshes / " : " thinned meshes 1-in-" )
@@ -1256,6 +1296,8 @@ int main(int argc, char** argv) {
             }
             const auto st = vegetation::buildCanopyForest(*forest, sites, species, prov.height, fo);
             scene.add(forest);
+            vegMeshes += st.meshes;
+            vegInstances += st.planted;
             const auto tf1 = std::chrono::high_resolution_clock::now();
             std::cout << "[norway] forest: " << st.sites << " sites (CHM local maxima), "
                       << st.planted << " instances (" << st.nearTier << " near + " << st.farTier
@@ -1341,18 +1383,25 @@ int main(int argc, char** argv) {
             }
 
             if (!bushes.empty()) {
+                // Three greens around the prototype's default, all of them
+                // LIGHTER than a wet road: a hedge in sun is the brightest
+                // green in a suburban frame, and the first pass had it darker
+                // than the asphalt beside it.
                 std::vector<vegetation::TreeVariant> bushVars{
                         vegetation::makeBushVariant(4101u),
-                        vegetation::makeBushVariant(4102u, Color(0.16f, 0.27f, 0.10f)),
-                        vegetation::makeBushVariant(4103u, Color(0.11f, 0.21f, 0.09f))};
+                        vegetation::makeBushVariant(4102u, Color(0.36f, 0.54f, 0.19f)),
+                        vegetation::makeBushVariant(4103u, Color(0.27f, 0.45f, 0.14f))};
                 auto bushRoot = Group::create();
                 bushRoot->name = "bush_field";
                 vegetation::BushOptions bopt;
                 bopt.cap = static_cast<int>(envF("NT_BUSH_CAP", 20000.f));
-                bopt.cullDistance = envF("NT_BUSH_CULL", 600.f);
+                bopt.cullDistance = envF("NT_BUSH_CULL", 400.f);
                 const auto bst = vegetation::buildBushField(*bushRoot, bushes, bushVars,
                                                             prov.height, bopt);
                 scene.add(bushRoot);
+                vegMeshes += bst.meshes;
+                vegInstances += bst.planted;
+                vegCells += bst.cells;
                 const auto tb1 = std::chrono::high_resolution_clock::now();
                 std::cout << "[norway] bushes: " << brep.peaks << " CHM peaks 1-2.5 m -> "
                           << chmBushes << " garden sites + " << hedgeBushes
@@ -1364,6 +1413,14 @@ int main(int argc, char** argv) {
                           << std::flush;
             }
         }
+
+        // The one line to read when the frame is slow.
+        std::cout << "[norway] vegetation objects: " << vegMeshes
+                  << " InstancedMesh in " << vegCells << " cells, " << vegInstances
+                  << " instances ("
+                  << (vegMeshes > 0 ? vegInstances / vegMeshes : 0)
+                  << " per mesh)\n"
+                  << std::flush;
     }
 
     canvas.onWindowResize([&](const WindowSize& ns) {
