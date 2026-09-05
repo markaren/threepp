@@ -28,6 +28,7 @@ sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "spot"))
 
 from spot_terrain_env import OBS_DIM, N_SCAN, SCAN_MIRROR_PERM   # 2-D scan contract (single source of truth)
+import _common
 
 _SCAN0 = 49   # scan columns start after 48 proprio + 1 base_above
 
@@ -83,17 +84,13 @@ def mirror_act(a):
 
 
 def symmetry_loss(ac, obs):
-    """Equivariance penalty: actor(mirror(obs)) should equal mirror(actor(obs)). Mean-squared over the
-    action. Drives the policy toward a symmetric gait (kills the rightward drift + strafe asymmetry)."""
-    feat = ac._feat(obs)
-    mean = ac.actor(feat)
-    mean_m = ac.actor(ac._feat(mirror_obs(obs)))
-    return (mean_m - mirror_act(mean)).pow(2).mean()
+    """Equivariance penalty for the LEGACY layout: actor(mirror(obs)) should equal mirror(actor(obs))."""
+    return _common.symmetry_loss(ac, obs, mirror_obs, mirror_act)
 
 
 def make_aux_loss(coef):
     """Build an aux_loss(ac, obs) -> scalar for PPO. coef weights the symmetry penalty."""
-    return lambda ac, obs: coef * symmetry_loss(ac, obs)
+    return _common.make_aux_loss(coef, mirror_obs, mirror_act)
 
 
 if __name__ == "__main__":

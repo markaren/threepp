@@ -42,13 +42,13 @@ import threepp as tp
 from threepp.rl import load_policy
 from spot_deploy import (build_spot, fetch_assets, grid_texture, _quat_to_R,
                          default_q, add_to_isaac, isaac_to_add, ACTION_SCALE, Z0)
-from spot_terrain_env import scan_xy_np, STAIR_X0, LAND_LEN, HALF_W, VX_HI, VY_HI, WZ_HI
+from spot_terrain_env import STAIR_X0, LAND_LEN, HALF_W, VX_HI, VY_HI, WZ_HI
 from scratch_env import STIFF_GAINS
 from scratch_clock import GAIT_PERIOD
 from spot_depth_scan import ForwardDepthScanner
+from _common import v2_obs, resolve_model, analytic_scan, chase_cam, poll_reload
 
 DISP = 820
-GRAV = np.array([0.0, 0.0, -1.0])
 BOX_W = 2.0 * HALF_W            # physical tent width == the obs on-lane gate (|y| < HALF_W)
 CRUISE = 0.8                    # auto-forward speed (drives into the tent)
 
@@ -66,42 +66,6 @@ def terr_h(x, y, rise, run, n, x0=STAIR_X0, land=LAND_LEN):
     return float(steps * rise)
 
 
-def analytic_scan(art, rise, run, n):
-    """Privileged scan: exact tent height at the 45 heading-relative grid points (oracle baseline)."""
-    rs = art.root_state(); R = _quat_to_R(rs[3:7])
-    x, y = float(rs[0]), float(rs[1])
-    hx, hy = float(R[0, 0]), float(R[1, 0]); nrm = math.hypot(hx, hy) or 1.0
-    cyaw, syaw = hx / nrm, hy / nrm
-    h_here = terr_h(x, y, rise, run, n)
-    px, py = scan_xy_np(x, y, cyaw, syaw)
-    ahead = np.clip(np.array([terr_h(float(pxi), float(pyi), rise, run, n) - h_here
-                              for pxi, pyi in zip(px, py)], np.float32), -1.0, 1.0)
-    return ahead, h_here
-
-
-def v2_obs(art, last_act, cmd, ahead, h_here, phi):
-    """96-d clock obs: [proprio(48)|clock(2)|base_above(1)|scan(45)]. `ahead` (45) + `h_here` come
-    from the depth sensor OR the oracle. `phi` is the current phase scalar ∈ [0,1)."""
-    rs, rv = art.root_state(), art.root_velocity()
-    R = _quat_to_R(rs[3:7]); Rt = R.T
-    lin_b, ang_b, proj_g = Rt @ rv[0:3], Rt @ rv[3:6], Rt @ GRAV
-    jp_isaac = art.joint_positions()[isaac_to_add]                 # add-order sim -> isaac order
-    jv_isaac = art.joint_velocities()[isaac_to_add]
-    qpos = jp_isaac - default_q                                    # default_q is isaac order
-    z = float(rs[2])
-    clk = [math.sin(2 * math.pi * phi), math.cos(2 * math.pi * phi)]
-    return np.concatenate([lin_b, ang_b, proj_g, cmd, qpos, jv_isaac, last_act,
-                           clk, [z - h_here], ahead]).astype(np.float32)
-
-
-def _resolve_model(path):
-    """Default to the BEST checkpoint, fall back to the always-current _latest one."""
-    if os.path.exists(path):
-        return path
-    latest = os.path.splitext(path)[0] + "_latest.pt"
-    return latest if os.path.exists(latest) else path
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default=os.path.join(_HERE, "spot_steps.pt"))
@@ -117,7 +81,7 @@ def main():
                          "instead of tgs_pcm/0.005. Both transfer; tgs_pcm just matches the GPU training "
                          "contact model (TGS+PCM, 0.005 substep) most closely.")
     args = ap.parse_args()
-    model = _resolve_model(args.model)
+    model = resolve_model(args.model)
     if not os.path.exists(model):
         print(f"No policy at {model} — run train_spot_stairs.py first."); sys.exit(0)
     live = args.check == 0
@@ -221,7 +185,8 @@ def main():
             wz = float(np.clip(-2.0 * err, -1.0, 1.0))
         cmd = np.array([vx, vy, wz], np.float32); state["cmd"] = (vx, vy, wz)
         ahead, h_here = (scanner.scan(art.root_state()) if scanner is not None
-                         else analytic_scan(art, built["rise"], built["run"], built["n"]))
+                         else analytic_scan(art, lambda x, y: terr_h(x, y, built["rise"], built["run"],
+                                                                    built["n"])))
         with torch.no_grad():
             obs = v2_obs(art, state["last_act"], cmd, ahead, h_here, state["phi"])
             obs_t = torch.from_numpy(obs)[None]                             # [1, 96]
@@ -235,13 +200,7 @@ def main():
         state["phi"] = (state["phi"] + 0.02 / GAIT_PERIOD) % 1.0
 
     def render_chase():
-        rs = art.root_state(); p = np.array(rs[0:3], float)
-        fwd = _quat_to_R(rs[3:7])[:, 0]; fwd = np.array([fwd[0], fwd[1], 0.0])
-        nrm = np.linalg.norm(fwd); fwd = fwd / nrm if nrm > 1e-6 else np.array([1.0, 0.0, 0.0])
-        desired = p - fwd * BACK + np.array([0.0, 0.0, HEIGHT])
-        cam.position.lerp(tp.Vector3(float(desired[0]), float(desired[1]), float(desired[2])), LAG)
-        cam.look_at(float(p[0] + fwd[0] * 0.4), float(p[1] + fwd[1] * 0.4), float(p[2] + 0.1))
-        rend.render(scene, cam)
+        chase_cam(art, cam, rend, scene, BACK, HEIGHT, LAG)
 
     settle(120)
     if scanner is not None:                                           # pre-fill the elevation map before driving
@@ -301,13 +260,7 @@ def main():
             r_down[0] = False
         nf[0] += 1
         if nf[0] % 40 == 0:                                       # hot-reload the checkpoint ~1/s
-            try:
-                mt = os.path.getmtime(model)
-                if mt != pol["mt"]:
-                    pol["ac"], pol["norm"], _ = load_policy(model, device=dev); pol["mt"] = mt
-                    pol["reloads"] += 1; reset_spot(); print(f"[reload] {os.path.basename(model)} (#{pol['reloads']})")
-            except Exception:
-                pass
+            poll_reload(pol, model, dev, on_reload=reset_spot)
         cn = int(cfg["n"])                                        # debounced tent rebuild on slider release
         if cfg["rise"] != prev["rise"] or cn != prev["n"]:
             prev["rise"], prev["n"] = cfg["rise"], cn; rb_wait[0] = 0

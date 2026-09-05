@@ -33,6 +33,7 @@ from scratch_clock import OBS_DIM, CLOCK0, CLOCK_DIM   # noqa: E402
 # Reuse the per-joint mirror constants from spot_symmetry
 from spot_symmetry import (MIRROR_PERM, MIRROR_SIGN,   # noqa: E402
                             mirror_joints, _consts, mirror_act)
+import _common   # noqa: E402
 
 # --------------------------------------------------------------------------- #
 #  Per-device constant cache (extends spot_symmetry._consts with clock sign)
@@ -98,10 +99,7 @@ def symmetry_loss(ac, obs: torch.Tensor) -> torch.Tensor:
       - mirror_obs acts on the full 50-d obs
       - mirror_act acts on the 12-d action output
     """
-    feat   = ac._feat(obs)
-    mean   = ac.actor(feat)
-    mean_m = ac.actor(ac._feat(mirror_obs(obs)))
-    return (mean_m - mirror_act(mean)).pow(2).mean()
+    return _common.symmetry_loss(ac, obs, mirror_obs, mirror_act)
 
 
 def make_aux_loss(coef: float):
@@ -111,7 +109,7 @@ def make_aux_loss(coef: float):
     The returned lambda is passed to PPO as aux_loss; it is called on PPO's
     already-normalized obs so the mirror's scale-invariance is satisfied.
     """
-    return lambda ac, obs: coef * symmetry_loss(ac, obs)
+    return _common.make_aux_loss(coef, mirror_obs, mirror_act)
 
 
 # --------------------------------------------------------------------------- #

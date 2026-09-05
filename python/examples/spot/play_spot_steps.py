@@ -40,14 +40,14 @@ import threepp as tp
 from threepp.rl import load_policy
 from spot_deploy import (build_spot, fetch_assets, grid_texture, _quat_to_R,
                          default_q, add_to_isaac, isaac_to_add, ACTION_SCALE, Z0)
-from spot_terrain_env import scan_xy_np, HALF_W, VX_HI, VY_HI, WZ_HI
+from spot_terrain_env import HALF_W, VX_HI, VY_HI, WZ_HI
 from spot_steps_env import (RISERS, N_LEVELS, N_UP, STEP_RUN, FLAT_APPROACH, LAND, BAND_LEN,
                             SPAWN_OFF, STRIP_LEN, HALF_W_BOX, HALF_W_STEPS, STIFF_GAINS)
 from scratch_clock import GAIT_PERIOD
 from spot_depth_scan import ForwardDepthScanner
+from _common import v2_obs, resolve_model, analytic_scan, chase_cam, poll_reload
 
 DISP = 820
-GRAV = np.array([0.0, 0.0, -1.0])
 CRUISE = 0.8
 
 
@@ -70,42 +70,6 @@ def terr_h(x, y):
     return float(r * steps)
 
 
-def analytic_scan(art):
-    """Privileged scan: exact terrain height at the 45 heading-relative grid points (the oracle baseline)."""
-    rs = art.root_state(); R = _quat_to_R(rs[3:7])
-    x, y = float(rs[0]), float(rs[1])
-    hx, hy = float(R[0, 0]), float(R[1, 0]); nrm = math.hypot(hx, hy) or 1.0
-    cyaw, syaw = hx / nrm, hy / nrm
-    h_here = terr_h(x, y)
-    px, py = scan_xy_np(x, y, cyaw, syaw)
-    ahead = np.clip(np.array([terr_h(float(pxi), float(pyi)) - h_here
-                              for pxi, pyi in zip(px, py)], np.float32), -1.0, 1.0)
-    return ahead, h_here
-
-
-def v2_obs(art, last_act, cmd, ahead, h_here, phi):
-    """96-d SpotStepsEnv obs: [proprio(48)|clock(2)|base_above(1)|scan(45)].
-    `ahead` (45) + `h_here` come from EITHER the depth sensor or the oracle.
-    `phi` is the current phase scalar ∈ [0,1)."""
-    rs, rv = art.root_state(), art.root_velocity()
-    R = _quat_to_R(rs[3:7]); Rt = R.T
-    lin_b, ang_b, proj_g = Rt @ rv[0:3], Rt @ rv[3:6], Rt @ GRAV
-    jp_isaac = art.joint_positions()[isaac_to_add]
-    jv_isaac = art.joint_velocities()[isaac_to_add]
-    qpos = jp_isaac - default_q
-    z = float(rs[2])
-    clk = [math.sin(2 * math.pi * phi), math.cos(2 * math.pi * phi)]
-    return np.concatenate([lin_b, ang_b, proj_g, cmd, qpos, jv_isaac, last_act,
-                           clk, [z - h_here], ahead]).astype(np.float32)
-
-
-def _resolve_model(path):
-    if os.path.exists(path):
-        return path
-    latest = os.path.splitext(path)[0] + "_latest.pt"
-    return latest if os.path.exists(latest) else path
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default=os.path.join(_HERE, "spot_steps.pt"))
@@ -118,7 +82,7 @@ def main():
                     help="use PhysX's default PGS/0.002 solver instead of tgs_pcm/0.005 (both transfer)")
     ap.add_argument("--shot", metavar="PNG", help="headless: drive --check steps, render the chase view, save a PNG")
     args = ap.parse_args()
-    model = _resolve_model(args.model)
+    model = resolve_model(args.model)
     if not os.path.exists(model):
         print(f"No policy at {model} — run train_spot_steps.py first."); sys.exit(0)
     live = args.check == 0 and not args.shot
@@ -216,7 +180,7 @@ def main():
             err = (yaw - state["hdg_lock"] + math.pi) % (2 * math.pi) - math.pi
             wz = float(np.clip(-2.0 * err, -1.0, 1.0))
         cmd = np.array([vx, vy, wz], np.float32); state["cmd"] = (vx, vy, wz)
-        ahead, h_here = scanner.scan(art.root_state()) if scanner is not None else analytic_scan(art)
+        ahead, h_here = scanner.scan(art.root_state()) if scanner is not None else analytic_scan(art, terr_h)
         with torch.no_grad():
             obs = v2_obs(art, state["last_act"], cmd, ahead, h_here, state["phi"])
             obs_t = torch.from_numpy(obs)[None]                                # [1, 96]
@@ -230,13 +194,7 @@ def main():
         state["phi"] = (state["phi"] + 0.02 / GAIT_PERIOD) % 1.0
 
     def render_chase():
-        rs = art.root_state(); p = np.array(rs[0:3], float)
-        fwd = _quat_to_R(rs[3:7])[:, 0]; fwd = np.array([fwd[0], fwd[1], 0.0])
-        nrm = np.linalg.norm(fwd); fwd = fwd / nrm if nrm > 1e-6 else np.array([1.0, 0.0, 0.0])
-        desired = p - fwd * BACK + np.array([0.0, 0.0, HEIGHT])
-        cam.position.lerp(tp.Vector3(float(desired[0]), float(desired[1]), float(desired[2])), LAG)
-        cam.look_at(float(p[0] + fwd[0] * 0.4), float(p[1] + fwd[1] * 0.4), float(p[2] + 0.1))
-        rend.render(scene, cam)
+        chase_cam(art, cam, rend, scene, BACK, HEIGHT, LAG)
 
     reset_spot(120)
 
@@ -294,13 +252,7 @@ def main():
         if int(state["level"]) != prev_lvl[0]:                       # level slider changed -> respawn there
             prev_lvl[0] = int(state["level"]); reset_spot()
         if nf[0] % 40 == 0:
-            try:
-                mt = os.path.getmtime(model)
-                if mt != pol["mt"]:
-                    pol["ac"], pol["norm"], _ = load_policy(model, device=dev); pol["mt"] = mt
-                    pol["reloads"] += 1; reset_spot(); print(f"[reload] {os.path.basename(model)} (#{pol['reloads']})")
-            except Exception:
-                pass
+            poll_reload(pol, model, dev, on_reload=reset_spot)
         control_tick(use_keys=True); render_chase(); ui.render(draw_ui)
 
     print(__doc__)

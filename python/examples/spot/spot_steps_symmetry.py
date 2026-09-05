@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.join(_HERE, "scratch_distillation"))   # scratch_cloc
 from spot_terrain_env import N_SCAN, SCAN_MIRROR_PERM       # 2-D scan contract
 from spot_symmetry import MIRROR_PERM, MIRROR_SIGN, mirror_joints, _consts, mirror_act  # noqa: F401
 from scratch_clock import CLOCK0, CLOCK_DIM                 # clock slot constants
+import _common
 
 OBS_DIM = 96   # [proprio(48)|clock(2)|base_above(1)|scan(45)]
 _SCAN0 = 51    # scan block starts at index 51 (= 48 proprio + 2 clock + 1 base_above)
@@ -74,15 +75,12 @@ def mirror_obs(obs: torch.Tensor) -> torch.Tensor:
 
 def symmetry_loss(ac, obs: torch.Tensor) -> torch.Tensor:
     """Equivariance penalty: actor(mirror(obs)) should equal mirror(actor(obs))."""
-    feat   = ac._feat(obs)
-    mean   = ac.actor(feat)
-    mean_m = ac.actor(ac._feat(mirror_obs(obs)))
-    return (mean_m - mirror_act(mean)).pow(2).mean()
+    return _common.symmetry_loss(ac, obs, mirror_obs, mirror_act)
 
 
 def make_aux_loss(coef: float):
     """Build an aux_loss(ac, obs) -> scalar for PPO. obs is already normalized by PPO."""
-    return lambda ac, obs: coef * symmetry_loss(ac, obs)
+    return _common.make_aux_loss(coef, mirror_obs, mirror_act)
 
 
 # --------------------------------------------------------------------------- #

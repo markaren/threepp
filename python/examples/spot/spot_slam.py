@@ -35,8 +35,8 @@ from spot_depth_scan import ForwardDepthScanner
 from spot_terrain_env import VX_HI, VY_HI, WZ_HI
 from scratch_env import STIFF_GAINS
 from scratch_clock import GAIT_PERIOD
+from _common import v2_obs
 
-GRAV = np.array([0.0, 0.0, -1.0])
 
 # SPOT_SCANSTATS=1 prints the 45-cell scan's spread every 60 frames — the check that the
 # height scan the policy consumes is actually tracking terrain, independent of how it is drawn.
@@ -508,19 +508,6 @@ def add_pond(scene, gen, params, max_r=20.0, exclude_r=7.0, depth=1.4):
     scene.add(pond)
     print(f"[pond] basin ({lx:.1f},{ly:.1f})  water_level={wl:.2f} m")
     return pond, wl
-
-
-# ── policy observation (96-d clock: mirrors SpotStepsEnv) ─────────────────────
-def v2_obs(art, last_act, cmd, ahead, h_here, phi):
-    rs, rv = art.root_state(), art.root_velocity()
-    R = _quat_to_R(rs[3:7]); Rt = R.T
-    lin_b = Rt @ rv[0:3]; ang_b = Rt @ rv[3:6]; proj_g = Rt @ GRAV
-    jp_isaac = art.joint_positions()[isaac_to_add]
-    jv_isaac = art.joint_velocities()[isaac_to_add]
-    qpos = jp_isaac - default_q
-    clk = [math.sin(2 * math.pi * phi), math.cos(2 * math.pi * phi)]   # [48:50] phase clock
-    return np.concatenate([lin_b, ang_b, proj_g, cmd, qpos, jv_isaac, last_act,
-                           clk, [float(rs[2]) - h_here], ahead]).astype(np.float32)
 
 
 # ── SLAM mapper ────────────────────────────────────────────────────────────────

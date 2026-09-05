@@ -6,7 +6,7 @@
     python train_spot_heightfield.py --eval  spot_hf.pt                          # flat-steering regression
 
 Warm-starts from scratch_flat_best.pt (50-d clock base gait, normalize_obs=True, stiff gains=90)
-via warmstart_scratch_to_terrain (defined in train_spot_stairs). --sym_coef uses the 96-d mirror
+via warmstart_scratch_to_terrain (in _common.py, next to this file). --sym_coef uses the 96-d mirror
 from spot_steps_symmetry (same as train_spot_steps).
 """
 import argparse
@@ -23,7 +23,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "spot"))
 import threepp as tp
 from spot_heightfield_env import ACT_DIM, CONFIG, HF_AMP_MAX, HIDDEN, SpotHeightfieldEnv
 from spot_steps_symmetry import make_aux_loss
-from train_spot_stairs import warmstart_scratch_to_terrain, sanity_walk, stochastic_flat_baseline
+from _common import (warmstart_scratch_to_terrain, sanity_walk, stochastic_flat_baseline,
+                     eval_flat_steering)
 from threepp.rl import PPO, load_policy
 
 
@@ -47,32 +48,6 @@ def score_checkpoint(policy_path, k=512, amp_max=HF_AMP_MAX, device="cuda", step
     print(f"[score] {os.path.basename(policy_path)}  (deterministic, K={k}, amp_max={amp_max}, {steps - warm} steps)")
     print(f"        track {m(trk):.3f}/2.0   flat {m(flt):.3f}/2.0   fell/step {m(fl):.4f}")
     return m(trk), m(flt), m(fl)
-
-
-@torch.no_grad()
-def eval_flat_steering(policy_path, k=512, device="cuda"):
-    """Held-out steering regression on FLAT ground vs the scratch base gait (PASS = within ~1.10x)."""
-    if not tp.HAS_PHYSX or not torch.cuda.is_available():
-        print("need PhysX + CUDA"); return
-    ac, norm, meta = load_policy(policy_path, device=device)
-    env = SpotHeightfieldEnv(num_envs=k, device=device, flat_only=True,
-                             height_source=meta.get("height_source", "analytic"))
-    pol = (lambda o: ac.act_mean(norm.norm(o))) if norm is not None else ac.act_mean
-    # Compare vs the base gait (50-d, norm-aware) — same starting point as the fine-tune.
-    base_path = os.path.join(_HERE, "scratch_distillation", "scratch_flat_best.pt")
-    base_ac, base_norm, _ = load_policy(base_path, device=device)
-    tea = lambda o: base_ac.act_mean(base_norm.norm(o[:, :50]))
-    grid = [(1.0, 0.0, 0.0), (0.0, 0.0, 0.0), (-0.5, 0.0, 0.0), (0.0, 0.5, 0.0),
-            (0.0, -0.5, 0.0), (0.0, 0.0, 1.0), (0.0, 0.0, -1.0), (1.0, 0.0, 0.5)]
-    print(f"flat-steering regression ({os.path.basename(policy_path)} vs base gait, K={k}):")
-    print("   cmd[vx,vy,wz]      policy_err   teacher_err   ratio")
-    worst = 0.0
-    for cmd in grid:
-        ep = env.measure_tracking(pol, cmd); et = env.measure_tracking(tea, cmd)
-        ratio = ep / max(et, 1e-6); worst = max(worst, ratio)
-        flag = "" if ratio <= 1.10 else "  <- REGRESSED"
-        print(f"   [{cmd[0]:+.1f},{cmd[1]:+.1f},{cmd[2]:+.1f}]     {ep:8.3f}    {et:8.3f}    {ratio:5.2f}{flag}")
-    print(f"worst ratio {worst:.2f}  ->  {'PASS (steering preserved)' if worst <= 1.10 else 'FAIL (steering degraded)'}")
 
 
 def main():
@@ -103,7 +78,7 @@ def main():
     if args.score:
         score_checkpoint(args.score, amp_max=args.amp_max); return
     if args.eval:
-        eval_flat_steering(args.eval); return
+        eval_flat_steering(SpotHeightfieldEnv, args.eval, height_source=True); return
 
     env = SpotHeightfieldEnv(num_envs=args.envs, device="cuda", amp_max=args.amp_max,
                              height_source=args.height_source)

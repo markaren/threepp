@@ -63,10 +63,10 @@ import calico_look
 from spot_terrain_env import VX_HI
 from scratch_env import STIFF_GAINS
 from scratch_clock import GAIT_PERIOD
+from _common import v2_obs
 # The bench report is spot_slam's; no reason to own a second copy.
 from spot_slam import _bench_report, BENCH_WARMUP, BENCH_PHASES
 
-GRAV = np.array([0.0, 0.0, -1.0])
 _SCANSTATS = bool(os.environ.get("SPOT_SCANSTATS"))
 
 DEFAULT_ASSET = os.environ.get("THREEPP_CALICO_ASSET",
@@ -184,19 +184,6 @@ def lattice_bake_poses(cells, spacing=2.0):
                             w[2] + BAKE_SIDE_UP])
             poses.append(tp.BakePose(_v3(eye), _v3(tgt), up, BAKE_FOV))
     return poses, stations
-
-
-# ── policy observation (96-d clock: mirrors SpotStepsEnv) ─────────────────────
-def v2_obs(art, last_act, cmd, ahead, h_here, phi):
-    rs, rv = art.root_state(), art.root_velocity()
-    R = _quat_to_R(rs[3:7]); Rt = R.T
-    lin_b = Rt @ rv[0:3]; ang_b = Rt @ rv[3:6]; proj_g = Rt @ GRAV
-    jp_isaac = art.joint_positions()[isaac_to_add]
-    jv_isaac = art.joint_velocities()[isaac_to_add]
-    qpos = jp_isaac - default_q
-    clk = [math.sin(2 * math.pi * phi), math.cos(2 * math.pi * phi)]
-    return np.concatenate([lin_b, ang_b, proj_g, cmd, qpos, jv_isaac, last_act,
-                           clk, [float(rs[2]) - h_here], ahead]).astype(np.float32)
 
 
 # ── the LOD frame-time budget ─────────────────────────────────────────────────

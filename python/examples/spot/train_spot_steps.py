@@ -27,61 +27,8 @@ from spot_steps_env import (ACT_DIM, CONFIG, HIDDEN, N_LEVELS, OBS_DIM, RISERS, 
                             SpotStepsEnv)
 from spot_steps_symmetry import make_aux_loss
 from threepp.rl import PPO, load_policy
-
-
-def warmstart_scratch_to_terrain(ac, norm, scratch_path, n_keep=50, device="cuda"):
-    """Transfer the 50-d clock base gait into the 96-d clock+terrain AC.
-
-    Input-layer cols [0:n_keep] copied (proprio+clock), terrain cols zero-init; deeper layers +
-    log_std copied verbatim. The obs RunningNorm is expanded: proprio+clock stats kept, terrain
-    dims left at the fresh default (mean 0 / var 1), count reset so the norm adapts to the steps
-    distribution during fine-tune (sanity_walk pre-train still sees the loaded proprio stats =
-    bit-identical base gait)."""
-    src_ac, src_norm, src_meta = load_policy(scratch_path, device=device)
-    assert src_meta["obs_dim"] == n_keep, f"expected {n_keep}-d source, got {src_meta['obs_dim']}"
-    assert norm is not None and src_norm is not None, "both sides need a RunningNorm"
-    with torch.no_grad():
-        for dst_net, src_net in ((ac.actor, src_ac.actor), (ac.critic, src_ac.critic)):
-            for li in (0, 2, 4, 6):
-                dst, src = dst_net[li], src_net[li]
-                if li == 0:
-                    dst.weight.zero_()
-                    dst.weight[:, :n_keep].copy_(src.weight)   # proprio+clock cols; terrain stays 0
-                    dst.bias.copy_(src.bias)
-                else:
-                    dst.weight.copy_(src.weight); dst.bias.copy_(src.bias)
-        ac.log_std.copy_(src_ac.log_std)
-        norm.mean[:n_keep].copy_(src_norm.mean)
-        norm.var[:n_keep].copy_(src_norm.var)
-        # leave norm.mean[n_keep:]=0, var[n_keep:]=1 (fresh defaults); keep norm.count fresh (eps)
-        # so terrain dims (and proprio under the new distribution) adapt during fine-tune.
-    print(f"warm-started clock base gait {os.path.basename(scratch_path)} -> 96-d: cols[:{n_keep}] "
-          f"copied, {ac.actor[0].weight.shape[1]-n_keep} terrain cols zero-init; norm expanded")
-
-
-@torch.no_grad()
-def sanity_walk(env, ac, norm, steps=300):
-    """Roll the warm-started DETERMINISTIC policy and report tracking. norm-aware: ac.act_mean(norm.norm(obs))."""
-    obs = env.reset()
-    for _ in range(steps):
-        obs, _, _, _, _ = env.step(ac.act_mean(norm.norm(obs)))
-    print(f"warm-start sanity ({steps} steps): track={env.last_track:.3f}  flat_track={env.last_flat_track:.3f}  "
-          f"level={env.last_level:.2f}  fell/step={env.last_fell:.3f}")
-    return env.last_flat_track
-
-
-@torch.no_grad()
-def stochastic_flat_baseline(env, ac, norm, steps=240, warm=80):
-    """Mean flat-lane tracking under the STOCHASTIC policy (exploration noise).
-    Gate baseline calibrated to this — not to the deterministic number — to avoid
-    it reading LOW every iter from noise alone."""
-    obs = env.reset()
-    acc = []
-    for t in range(steps):
-        obs, _, _, _, _ = env.step(ac.act(norm.norm(obs))[0])
-        if t >= warm:
-            acc.append(env.last_flat_track)
-    return sum(acc) / max(1, len(acc))
+from _common import (warmstart_scratch_to_terrain, sanity_walk, stochastic_flat_baseline,
+                     eval_flat_steering)
 
 
 @torch.no_grad()
@@ -128,33 +75,6 @@ def score_checkpoint(policy_path, k=512, device="cuda", steps=900, warm=200, hei
 
 
 @torch.no_grad()
-def eval_flat_steering(policy_path, k=512, device="cuda"):
-    """Held-out steering regression on FLAT ground vs the scratch base gait (the real steering test)."""
-    if not tp.HAS_PHYSX or not torch.cuda.is_available():
-        print("need PhysX + CUDA"); return
-    ac, norm, meta = load_policy(policy_path, device=device)
-    torch.manual_seed(0)
-    env = SpotStepsEnv(num_envs=k, device=device, flat_only=True,
-                       height_source=meta.get("height_source", "analytic"))
-    pol = (lambda o: ac.act_mean(norm.norm(o))) if norm is not None else ac.act_mean
-    # Base gait teacher (50-d, norm-aware): compare against it so steering regression is defined
-    # relative to the actual STARTING point of this fine-tune (not the old Isaac TorchScript).
-    base_path = os.path.join(_HERE, "scratch_distillation", "scratch_flat_best.pt")
-    base_ac, base_norm, _ = load_policy(base_path, device=device)
-    tea = lambda o: base_ac.act_mean(base_norm.norm(o[:, :50]))   # reads the 50-d slice
-    grid = [(1.0, 0.0, 0.0), (0.0, 0.0, 0.0), (-0.5, 0.0, 0.0), (0.0, 0.5, 0.0),
-            (0.0, -0.5, 0.0), (0.0, 0.0, 1.0), (0.0, 0.0, -1.0), (1.0, 0.0, 0.5)]
-    print(f"flat-steering regression ({os.path.basename(policy_path)} vs base gait, K={k}):")
-    print("   cmd[vx,vy,wz]      policy_err   teacher_err   ratio")
-    worst = 0.0
-    for cmd in grid:
-        ep = env.measure_tracking(pol, cmd); et = env.measure_tracking(tea, cmd)
-        ratio = ep / max(et, 1e-6); worst = max(worst, ratio)
-        flag = "" if ratio <= 1.10 else "  <- REGRESSED"
-        print(f"   [{cmd[0]:+.1f},{cmd[1]:+.1f},{cmd[2]:+.1f}]     {ep:8.3f}    {et:8.3f}    {ratio:5.2f}{flag}")
-    print(f"worst ratio {worst:.2f}  ->  {'PASS (steering preserved)' if worst <= 1.10 else 'FAIL (steering degraded)'}")
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--envs", type=int, default=2048)        # ~52k stair boxes -> builds fine; 2x throughput vs 1024
@@ -229,7 +149,8 @@ def main():
                          perceive=None if not args.score_perceive else args.score_perceive == "on")
         return
     if args.eval:
-        eval_flat_steering(args.eval, k=args.score_envs); return
+        eval_flat_steering(SpotStepsEnv, args.eval, k=args.score_envs,
+                           height_source=True, seed=0); return
 
     env = SpotStepsEnv(num_envs=args.envs, device="cuda", perceive=args.perceive,
                        perceive_noise=args.perceive_noise, graph=args.graph,
