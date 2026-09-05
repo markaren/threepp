@@ -122,6 +122,63 @@ cd python
 python examples/headless_render.py
 ```
 
+The rest of `examples/`, by what it is about. One line per script, from its own
+module docstring.
+
+**Basics**
+
+| Script | What it shows |
+| --- | --- |
+| [`examples/animation.py`](examples/animation.py) | Keyframe animation driven by an `AnimationMixer`. |
+| [`examples/transform_controls.py`](examples/transform_controls.py) | `TransformControls` — grab the gizmo to translate, rotate or scale a mesh. |
+| [`examples/terrain_demo.py`](examples/terrain_demo.py) | The procedural terrain generator, with its parameters on sliders. |
+| [`examples/tree_demo.py`](examples/tree_demo.py) | The procedural tree generator, likewise. |
+
+**Sensors**
+
+| Script | What it shows |
+| --- | --- |
+| [`examples/depth_sensor.py`](examples/depth_sensor.py) | `DepthSensor` showcase: live coloured point cloud, incremental `VoxelGrid` map, marching-cubes surface. |
+| [`examples/torch_frames.py`](examples/torch_frames.py) | Zero-copy frames out — the Vulkan renderer's images as live torch tensors. |
+
+**Physics and robots**
+
+| Script | What it shows |
+| --- | --- |
+| [`examples/urdf_arm.py`](examples/urdf_arm.py) | Import any URDF as a PhysX articulation and wave its joints. |
+| [`examples/stewart_balancer.py`](examples/stewart_balancer.py) | A 6-leg Stewart platform balancing a ball along a rose curve: LQR + IK + stepper dynamics. |
+| [`examples/tendon_hand.py`](examples/tendon_hand.py) | A tendon-driven anthropomorphic hand, built so the mechanics are right. |
+| [`examples/tendon_probe.py`](examples/tendon_probe.py) | Measures what PhysX articulation tendons actually do, before building a hand on them. |
+
+**Warp films** — NVIDIA Warp simulation rendered live by threepp. Each is
+self-contained; what they share lives in [`examples/warp_common.py`](examples/warp_common.py).
+
+| Script | What it shows |
+| --- | --- |
+| [`examples/warp_cloth.py`](examples/warp_cloth.py) | GPU cloth, the smallest complete Warp + threepp loop. |
+| [`examples/warp_cloth_toss.py`](examples/warp_cloth_toss.py) | Can a cloth throw a ball? The spike behind the toss demo. |
+| [`examples/warp_cloth_catch.py`](examples/warp_cloth_catch.py) | Four arms catch a cannonball in a cloth, throw it up, and four drones net it. |
+| [`examples/warp_squishy_ball.py`](examples/warp_squishy_ball.py) | A pressurised shell: Verlet predict, volume constraint, normals. |
+| [`examples/warp_fluid.py`](examples/warp_fluid.py) | A PBF liquid surfaced by marching cubes. |
+| [`examples/warp_water_balloon.py`](examples/warp_water_balloon.py) | A water balloon and a needle — the shell tears and the water leaves. |
+| [`examples/warp_hydraulic_press.py`](examples/warp_hydraulic_press.py) | A chrome sphere crushed by a hydraulic press in a Cornell box. |
+| [`examples/warp_explosion.py`](examples/warp_explosion.py) | Blast Yard: a brick test range demolished by a charge (PhysX + Warp + Vulkan). |
+| [`examples/warp_nebula.py`](examples/warp_nebula.py) | A particle nebula (GL). |
+| [`examples/warp_nebula_vk.py`](examples/warp_nebula_vk.py) | The same nebula as a VOLUME, through the Vulkan particle sprites. |
+| [`examples/warp_prop_vortex.py`](examples/warp_prop_vortex.py) | A twin-screw stern cavitating underwater. |
+| [`examples/warp_sailboat.py`](examples/warp_sailboat.py) | A sailboat whose sails are Warp cloth, sailing the FFT ocean in the mist. |
+| [`examples/warp_netpen.py`](examples/warp_netpen.py) | Net-pen inspection ROV: a torn Warp-cloth net, tether, sonar and camera insets, a school of salmon. |
+| [`examples/warp_mudsnow.py`](examples/warp_mudsnow.py) | Deformable ground: the same boots and rolling ball, in mud and in snow. |
+| [`examples/warp_mudsnow_mpm.py`](examples/warp_mudsnow_mpm.py) | The same ground as MLS-MPM granular material. |
+| [`examples/warp_mudsnow_drive.py`](examples/warp_mudsnow_drive.py) | A Range Rover driven over Bekker-Wong ground: mud, snow, packed clay. |
+
+**Inverse design** — an optimiser, not an animator, decides the shape.
+
+| Script | What it shows |
+| --- | --- |
+| [`examples/warp_hull_sculpt.py`](examples/warp_hull_sculpt.py) | Differentiable hull sculpting: gradient descent designs a hull, live in the water. |
+| [`examples/lidar_sculpt.py`](examples/lidar_sculpt.py) | Sculpting against a sensor: a body reshaped to hide from, or shout at, the engine's own LIDAR. |
+
 ## What's exposed
 
 - **Math** (mutable value types): `Vector2/3/4`, `Color`, `Euler`, `Quaternion`,

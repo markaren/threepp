@@ -135,6 +135,28 @@ Checkpoints (`*.pt`) are git-ignored — regenerate by training, or keep your ow
 The PPO has a general `aux_loss` hook (used here for symmetry augmentation; also reusable for a
 behavioral-cloning / KL anchor to the teacher).
 
+## Probes and archived experiments
+
+The task contract the viewers, trainers and mirrors share — the 96-d obs builder, the checkpoint
+resolver, the analytic scan oracle, the chase camera, the hot-reload watcher, the warm-start and
+eval helpers — lives in `_common.py`. What differs per terrain (`terr_h`, `mirror_obs`,
+`score_checkpoint`) stays with its own script and is passed in.
+
+Probes: each answers one question about a trained policy and prints a number, not a picture.
+
+| Script | The question |
+| --- | --- |
+| `spot_gait_probe.py` | Does the policy have more than one way of walking? |
+| `spot_push_probe.py` | How hard a shove does it survive? Stability as a survival curve. |
+| `spot_scan_ab.py` | A/B of the Warp raycast height scan against the analytic oracle it replaces. |
+| `spot_occlusion.py` | How much of the 45-cell scan could Spot's own camera actually have seen? |
+
+Finished experiments, kept for provenance rather than for running:
+`scratch_distillation/train_scratch.py` (the from-scratch teacher-guided phase-RL trainer that
+produced `scratch_flat_best.pt`, the base gait every terrain fine-tune warm-starts from) and
+`scratch_distillation/scratch_calibrate.py` (the gait-period calibration and contact validation
+behind `GAIT_PERIOD`). Their outputs are checked in; neither needs to be re-run to use the stack.
+
 ## What the raycast scan says about the analytic one
 
 `spot_scan_ab.py` runs both height sources through the env's own `_terrain_h` and compares them.
