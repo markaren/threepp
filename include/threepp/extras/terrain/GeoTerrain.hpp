@@ -46,6 +46,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace threepp::terrain {
@@ -120,6 +121,159 @@ namespace threepp::terrain {
         float wetFlowHi = 0.72f;
         float screeFlowLo = 0.48f;  // fans want drainage AND a relaxed slope
     };
+
+    // ── FootprintMask: a hard yes/no raster of polygon coverage ─────────────
+    //
+    // `UrbanMask` below answers "how built is the land here" (blurred, soft);
+    // this answers "is this exact point inside one of these polygons", which is
+    // what a SITE gate needs. Trees, bushes and (phase D) cars all ask the same
+    // question of different polygon sets: building footprints, piers and quays,
+    // parking lots, pitches.
+    //
+    // Two extras over a plain point-in-polygon loop:
+    //   * it is a raster, so a gate costs one lookup instead of a scan over
+    //     8000 rings — the difference between a 200 ms site pass and a 3 minute
+    //     one;
+    //   * it DILATES. A DOM-derived canopy model and an OSM footprint disagree
+    //     by metres (different sources, different epochs): on this pack 23.5% of
+    //     canopy cells fall inside a raw footprint and 29.3% inside footprints
+    //     grown by 4 m, and the difference is exactly the ring of "canopy" that
+    //     is really a roof edge. Dilate by the registration error, not by taste.
+    struct FootprintMask {
+        int dim = 0;
+        float cell = 2.f;
+        float half = 0.f;
+        std::vector<std::uint8_t> m;
+
+        [[nodiscard]] bool valid() const { return dim > 1 && !m.empty(); }
+
+        // Nearest cell — the raster IS the answer, no interpolation.
+        [[nodiscard]] bool inside(float x, float z) const {
+            if (dim < 2) return false;
+            const int ix = static_cast<int>(std::lround((x + half) / cell));
+            const int iz = static_cast<int>(std::lround((z + half) / cell));
+            if (ix < 0 || iz < 0 || ix >= dim || iz >= dim) return false;
+            return m[static_cast<size_t>(iz) * dim + ix] != 0u;
+        }
+
+        // Bilinear coverage in 0..1, for PAINT (a hard raster edge at 4 m reads
+        // as a staircase in the albedo).
+        [[nodiscard]] float coverage(float x, float z) const {
+            if (dim < 2) return 0.f;
+            const float fx = (x + half) / cell, fz = (z + half) / cell;
+            const int ix = static_cast<int>(std::floor(fx)), iz = static_cast<int>(std::floor(fz));
+            if (ix < 0 || iz < 0 || ix >= dim - 1 || iz >= dim - 1) return 0.f;
+            const float tx = fx - static_cast<float>(ix), tz = fz - static_cast<float>(iz);
+            const auto v = [&](int a, int b) {
+                return static_cast<float>(m[static_cast<size_t>(b) * dim + a]);
+            };
+            const float a = v(ix, iz) + (v(ix + 1, iz) - v(ix, iz)) * tx;
+            const float b = v(ix, iz + 1) + (v(ix + 1, iz + 1) - v(ix, iz + 1)) * tx;
+            return a + (b - a) * tz;
+        }
+    };
+
+    namespace detail {
+
+        // Crossing-number rasterisation of ONE open ring into a uint8 grid.
+        // Same test the UrbanMask occupancy pass uses; kept separate because
+        // that one accumulates into a float field it then blurs.
+        inline void geoRasterRing(FootprintMask& mask, const std::vector<Vector2>& ring,
+                                  std::uint8_t value = 1u) {
+            if (ring.size() < 3) return;
+            const int dim = mask.dim;
+            const float cell = mask.cell, half = mask.half;
+            float minX = ring[0].x, maxX = ring[0].x, minZ = ring[0].y, maxZ = ring[0].y;
+            for (const auto& p : ring) {
+                minX = std::min(minX, p.x);
+                maxX = std::max(maxX, p.x);
+                minZ = std::min(minZ, p.y);
+                maxZ = std::max(maxZ, p.y);
+            }
+            const int ix0 = std::max(0, static_cast<int>(std::floor((minX + half) / cell)));
+            const int ix1 = std::min(dim - 1, static_cast<int>(std::ceil((maxX + half) / cell)));
+            const int iz0 = std::max(0, static_cast<int>(std::floor((minZ + half) / cell)));
+            const int iz1 = std::min(dim - 1, static_cast<int>(std::ceil((maxZ + half) / cell)));
+            for (int iz = iz0; iz <= iz1; ++iz) {
+                const float pz = -half + static_cast<float>(iz) * cell;
+                for (int ix = ix0; ix <= ix1; ++ix) {
+                    const float px = -half + static_cast<float>(ix) * cell;
+                    bool in = false;
+                    for (size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++) {
+                        const Vector2& a = ring[i];
+                        const Vector2& c = ring[j];
+                        if ((a.y > pz) != (c.y > pz) &&
+                            px < (c.x - a.x) * (pz - a.y) / (c.y - a.y) + a.x)
+                            in = !in;
+                    }
+                    if (in) mask.m[static_cast<size_t>(iz) * dim + ix] = value;
+                }
+            }
+        }
+
+        // Chebyshev dilation by `r` cells, separable (two max-filter passes).
+        inline void geoDilateMask(FootprintMask& mask, int r) {
+            if (r <= 0 || mask.dim < 2) return;
+            const int dim = mask.dim;
+            std::vector<std::uint8_t> tmp(mask.m.size(), 0u);
+            for (int b = 0; b < dim; ++b)
+                for (int a = 0; a < dim; ++a) {
+                    std::uint8_t v = 0u;
+                    for (int k = std::max(0, a - r); k <= std::min(dim - 1, a + r); ++k)
+                        v = std::max(v, mask.m[static_cast<size_t>(b) * dim + k]);
+                    tmp[static_cast<size_t>(b) * dim + a] = v;
+                }
+            for (int a = 0; a < dim; ++a)
+                for (int b = 0; b < dim; ++b) {
+                    std::uint8_t v = 0u;
+                    for (int k = std::max(0, b - r); k <= std::min(dim - 1, b + r); ++k)
+                        v = std::max(v, tmp[static_cast<size_t>(k) * dim + a]);
+                    mask.m[static_cast<size_t>(b) * dim + a] = v;
+                }
+        }
+
+        inline std::shared_ptr<FootprintMask> geoMakeMask(float worldSize, float cell) {
+            auto mask = std::make_shared<FootprintMask>();
+            mask->cell = std::max(0.5f, cell);
+            mask->half = worldSize * 0.5f;
+            mask->dim = static_cast<int>(std::ceil(worldSize / mask->cell)) + 1;
+            mask->m.assign(static_cast<size_t>(mask->dim) * mask->dim, 0u);
+            return mask;
+        }
+
+    }// namespace detail
+
+    // Every building footprint, rasterised at `cell` and grown by
+    // `dilateMetres`. Courtyard holes are NOT punched out: a courtyard is still
+    // building fabric, and a 4 m dilation would swallow a small one anyway.
+    inline std::shared_ptr<const FootprintMask> buildFootprintMask(const GeoTerrainPack& pack,
+                                                                   float dilateMetres = 4.f,
+                                                                   float cell = 2.f) {
+        if (pack.buildings.empty() || pack.region.worldSize <= 0.f) return nullptr;
+        auto mask = detail::geoMakeMask(pack.region.worldSize, cell);
+        for (const auto& b : pack.buildings) detail::geoRasterRing(*mask, b.outer);
+        detail::geoDilateMask(*mask, static_cast<int>(std::lround(dilateMetres / mask->cell)));
+        return mask;
+    }
+
+    // The same, for a set of land-use polygon classes (pier, quay, parking...).
+    // `classes` is a null-terminated list of class strings; a pack without
+    // landuse.json yields nullptr.
+    inline std::shared_ptr<const FootprintMask> buildLandUseMask(
+            const GeoTerrainPack& pack, const std::vector<std::string>& classes,
+            float dilateMetres = 0.f, float cell = 2.f) {
+        if (pack.landuse.polygons.empty() || pack.region.worldSize <= 0.f) return nullptr;
+        auto mask = detail::geoMakeMask(pack.region.worldSize, cell);
+        int n = 0;
+        for (const auto& p : pack.landuse.polygons) {
+            if (std::find(classes.begin(), classes.end(), p.cls) == classes.end()) continue;
+            detail::geoRasterRing(*mask, p.outer);
+            ++n;
+        }
+        if (n == 0) return nullptr;
+        detail::geoDilateMask(*mask, static_cast<int>(std::lround(dilateMetres / mask->cell)));
+        return mask;
+    }
 
     namespace detail {
 
@@ -233,10 +387,15 @@ namespace threepp::terrain {
             const HeightGrid* canopy = nullptr;
             const HeightGrid* flow = nullptr;
             const HeightGrid* dem = nullptr;// for the DEM-vs-detail slope split
+            // OSM land cover, rasterised once (4 m): the surveyor drew where the
+            // rock is bare and where the heath starts. The splat's slope/height
+            // rules guess it; these polygons KNOW it.
+            std::shared_ptr<const FootprintMask> rock;
+            std::shared_ptr<const FootprintMask> heath;
             float forestMin = 2.f, forestFull = 6.f;
             float wetLo = 0.52f, wetHi = 0.72f, screeLo = 0.48f;
 
-            [[nodiscard]] bool active() const { return canopy || flow; }
+            [[nodiscard]] bool active() const { return canopy || flow || rock || heath; }
 
             struct Mix {
                 float forest = 0.f;// 0..1 canopy coverage
@@ -244,6 +403,8 @@ namespace threepp::terrain {
                 float wet = 0.f;
                 float scree = 0.f;
                 float bench = 0.f;
+                float rock = 0.f; // OSM natural=bare_rock
+                float heath = 0.f;// OSM scrub | heath
             };
 
             [[nodiscard]] Mix eval(float x, float z, float h, float slope) const {
@@ -273,6 +434,14 @@ namespace threepp::terrain {
                     m.bench = smoothstep01(0.58f, 0.74f, ds) *
                               (1.f - smoothstep01(0.26f, 0.46f, slope)) * (1.f - m.forest);
                 }
+                // Surveyed cover wins over the guessed cover: where OSM says bare
+                // rock there is no grass tint and no bench moss, and where it says
+                // scrub/heath the ground is brown, not lawn.
+                if (rock) m.rock = std::clamp(rock->coverage(x, z), 0.f, 1.f) * (1.f - m.forest);
+                if (heath)
+                    m.heath = std::clamp(heath->coverage(x, z), 0.f, 1.f) *
+                              (1.f - m.forest) * (1.f - m.rock);
+                if (m.rock > 0.f) m.bench *= 1.f - m.rock;
                 return m;
             }
         };
@@ -732,6 +901,10 @@ namespace threepp::terrain {
             if (pack.hasFlow()) cover.flow = &pack.flow;
             // The bench mask only means something when benches exist.
             if (o.cliffRelief) cover.dem = &grid;
+            if (pack.hasLandUse()) {
+                cover.rock = buildLandUseMask(pack, {"bare_rock", "scree"}, 0.f, 4.f);
+                cover.heath = buildLandUseMask(pack, {"scrub", "heath"}, 0.f, 4.f);
+            }
             cover.forestMin = o.canopyForestMin;
             cover.forestFull = o.canopyForestFull;
             cover.wetLo = o.wetFlowLo;
@@ -776,6 +949,24 @@ namespace threepp::terrain {
                     if (m.scree > 0.001f) {
                         const std::array<float, 3> talus{0.400f, 0.378f, 0.345f};
                         for (int i = 0; i < 3; ++i) rgb[i] += (talus[i] - rgb[i]) * m.scree * 0.8f;
+                    }
+                    // OSM bare rock: the splat's slope rule keeps grass on any
+                    // gentle ground, and Aksla's crown and the skerries are flat
+                    // bare gneiss. Pull to the rock layer's own colour so the
+                    // painted patch matches the steep faces around it.
+                    if (m.rock > 0.001f) {
+                        const float pat = 0.90f + 0.20f * detail::geoFbm(x * 0.06f, z * 0.06f);
+                        const std::array<float, 3> stone{0.340f, 0.330f, 0.310f};
+                        for (int i = 0; i < 3; ++i)
+                            rgb[i] += (stone[i] * pat - rgb[i]) * m.rock * 0.9f;
+                    }
+                    // OSM scrub / heath: brown-olive, the band between the
+                    // gardens and the rock on Aksla's flanks.
+                    if (m.heath > 0.001f) {
+                        const float pat = 0.88f + 0.24f * detail::geoFbm(x * 0.04f, z * 0.04f);
+                        const std::array<float, 3> hth{0.160f, 0.140f, 0.070f};
+                        for (int i = 0; i < 3; ++i)
+                            rgb[i] += (hth[i] * pat - rgb[i]) * m.heath * 0.85f;
                     }
                     // Wet seepage: wet rock is DARKER and slightly bluer than
                     // dry rock (the water film kills the diffuse bounce).
@@ -834,6 +1025,11 @@ namespace threepp::terrain {
                     };
                     pushTo(0, std::min(0.9f, m.forest * 0.9f + m.bench * 0.6f));
                     pushTo(2, m.scree * 0.7f);
+                    // Surveyed bare rock is the ROCK band (1): plates, not grass
+                    // clumps — and TerrainScatter reads these weights, so this is
+                    // also what keeps tufts off a rock slab.
+                    pushTo(1, m.rock * 0.9f);
+                    pushTo(0, m.heath * 0.6f);
                 }
                 float keep = 1.f;
                 if (paint) keep *= 1.f - network.pavedWeight(x, z, edgeFeather);

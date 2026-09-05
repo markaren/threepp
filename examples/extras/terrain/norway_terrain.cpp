@@ -1022,22 +1022,45 @@ int main(int argc, char** argv) {
     // (trollstigen/aalesund unchanged). NT_NO_FOREST=1 for the A/B,
     // NT_FOREST_CAP=<n> for the instance budget.
     //
-    // URBAN GATE (temporary, until the town site gates land): the CHM is a
-    // DOM−DTM difference, so every BUILDING is a 10 m "canopy peak" in it. On a
-    // pack with footprints the detector would plant a spruce on every roof in
-    // Ålesund, which is worse than no trees at all. Until the footprint /
-    // paved / quay gates exist, the forest simply does not run on a pack that
-    // has buildings; NT_FOREST_URBAN=1 forces it on to look at exactly that.
-    const bool urbanForestGate = !pack.buildings.empty() && !envSet("NT_FOREST_URBAN");
-    if (pack.hasCanopy() && urbanForestGate && !envSet("NT_NO_FOREST")) {
-        std::cout << "[norway] canopy forest SKIPPED: this pack has "
-                  << pack.buildings.size()
-                  << " buildings and the CHM includes them, so trees would grow on "
-                     "roofs (set NT_FOREST_URBAN=1 to force it on)\n"
-                  << std::flush;
-    }
-    if (pack.hasCanopy() && !urbanForestGate && !envSet("NT_NO_FOREST")) {
+    // TOWN GATES: a CHM is DOM − DTM, so on an urban pack every BUILDING is a
+    // 10 m "canopy peak" and every ship, crane and pier crate is a taller one.
+    // The gates below are what let the forest run over a town at all — without
+    // them the detector plants a spruce on every roof in Ålesund, which is why
+    // phase A shipped with the forest switched off on packs with footprints.
+    // Measured on this pack: 30.2% of land cells carry canopy ≥ 2.5 m, and
+    // 29.3% of those sit inside a footprint DILATED BY 4 M — the dilation is
+    // not padding, it is the registration offset between the Kartverket DOM
+    // and the OSM footprint, and at 2 m dilation a full ring of roof-edge
+    // "canopy" survives.
+    const bool urbanPack = !pack.buildings.empty() || pack.hasLandUse();
+    if (pack.hasCanopy() && !envSet("NT_NO_FOREST")) {
         const auto tf0 = std::chrono::high_resolution_clock::now();
+
+        // Rasters, built once (2 m, the pack's own resolution).
+        const auto fpMask = terrain::buildFootprintMask(pack, envF("NT_FOREST_DILATE", 4.f), 2.f);
+        // Decks and lots: a pier is not ground, a marina is water, a parking lot
+        // and a football pitch are surfaces nobody plants a tree in.
+        const auto deckMask = terrain::buildLandUseMask(
+                pack, {"pier", "quay", "breakwater", "marina", "parking", "pitch"}, 1.f, 2.f);
+        // Within 40 m of a building = "garden": where the bush tier is allowed.
+        const auto gardenMask = urbanPack ? terrain::buildFootprintMask(pack, 40.f, 4.f) : nullptr;
+
+        int gateFootprint = 0, gatePaved = 0, gateDeck = 0;
+        auto rejectSite = [&, fpMask, deckMask](float x, float z) {
+            if (fpMask && fpMask->inside(x, z)) {
+                ++gateFootprint;
+                return true;
+            }
+            if (network.pavedWeight(x, z, 1.0f) > 0.2f) {
+                ++gatePaved;
+                return true;
+            }
+            if (deckMask && deckMask->inside(x, z)) {
+                ++gateDeck;
+                return true;
+            }
+            return false;
+        };
 
         vegetation::CanopySiteOptions so;
         so.seaLevel = reg.seaLevel;
@@ -1045,7 +1068,16 @@ int main(int argc, char** argv) {
         // is better spent dense near the subject than thin across the whole square.
         so.centerX = controls.target.x;
         so.centerZ = controls.target.z;
-        so.halfExtent = envF("NT_FOREST_EXTENT", 1100.f);
+        // Ålesund from Fjellstua looks 2.5 km down the sound to the far shore;
+        // the fjord packs only ever need the valley wall in front of the camera.
+        so.halfExtent = envF("NT_FOREST_EXTENT", urbanPack ? 2500.f : 1100.f);
+        if (urbanPack) {
+            // 2 m grid: a 3×3 window is a 4 m crown spacing, which is a town
+            // tree. The 5×5 default is a plantation rule and it halves the
+            // garden crowns (106 875 peaks vs 57 359 over this pack).
+            so.windowRadius = 1;
+            so.reject = rejectSite;
+        }
         // NT_TREELINE=<m> pins the treeline (9999 = effectively off);
         // NT_FOREST_NOGATE=1 restores the phase-3 detector exactly — no treeline,
         // no neighbourhood support, no tightened high-elevation slope gate — so
@@ -1057,15 +1089,61 @@ int main(int argc, char** argv) {
             so.highSlopeElevation = 1e9f;
         }
         vegetation::CanopySiteReport srep;
-        const auto sites = vegetation::detectTreeSites(pack.canopy, pack.grid, so, &srep);
+        auto sites = vegetation::detectTreeSites(pack.canopy, pack.grid, so, &srep);
         std::cout << "[norway] canopy sites: " << srep.peaks << " CHM peaks -> "
                   << sites.size() << " sites (rejected: support " << srep.rejectedSupport
                   << ", treeline " << srep.rejectedTreeline << ", high-slope "
                   << srep.rejectedHighSlope << ", slope " << srep.rejectedSlope
-                  << ", ground " << srep.rejectedGround << "); treeline "
+                  << ", ground " << srep.rejectedGround << ", tall " << srep.rejectedTall
+                  << ", masked " << srep.rejectedMasked << " [footprint " << gateFootprint
+                  << " + paved " << gatePaved << " + deck " << gateDeck << "]); treeline "
                   << srep.treelineElevation << " m +-" << so.treelineFeather
                   << ", highest site " << srep.highestSite << " m\n"
                   << std::flush;
+
+        // ── Trees the surveyor drew ────────────────────────────────────────
+        // OSM natural=tree points and tree_row lines are not a guess about the
+        // CHM: someone stood there. They bypass the masks (a street tree IS on
+        // the pavement, a park row IS beside a path) but not the ground gate,
+        // and they take their height from the CHM where it has one.
+        int explicitTrees = 0;
+        if (pack.hasLandUse() && !envSet("NT_NO_OSM_TREES")) {
+            const float roi = so.halfExtent;
+            const auto addTree = [&](float x, float z) {
+                if (std::fabs(x - so.centerX) > roi || std::fabs(z - so.centerZ) > roi) return;
+                if (pack.grid.sampleBilinear(x, z) < so.seaLevel + so.minGroundHeight) return;
+                float h = pack.hasCanopy() ? pack.canopy.sampleBilinear(x, z) : 0.f;
+                if (h < 2.5f || h > so.maxCanopyHeight) h = 8.f;
+                // standHeight 0: an OSM street tree is a single crown, never a
+                // stand, so the species rule sends it to broadleaf.
+                sites.push_back({x, z, h, 0.f});
+                ++explicitTrees;
+            };
+            for (const auto& p : pack.landuse.points)
+                if (p.cls == "tree") addTree(p.pos.x, p.pos.y);
+            for (const auto& l : pack.landuse.lines) {
+                if (l.cls != "tree_row" || l.points.size() < 2) continue;
+                addTree(l.points.front().x, l.points.front().y);
+                float acc = 0.f;// metres walked since the last tree
+                for (size_t i = 1; i < l.points.size(); ++i) {
+                    const float dx = l.points[i].x - l.points[i - 1].x;
+                    const float dz = l.points[i].y - l.points[i - 1].y;
+                    const float len = std::sqrt(dx * dx + dz * dz);
+                    if (len < 1e-3f) continue;
+                    float pos = 0.f;
+                    while (acc + (len - pos) >= 6.f) {
+                        pos += 6.f - acc;
+                        acc = 0.f;
+                        addTree(l.points[i - 1].x + dx * (pos / len),
+                                l.points[i - 1].y + dz * (pos / len));
+                    }
+                    acc += len - pos;
+                }
+            }
+            std::cout << "[norway] OSM trees: " << explicitTrees
+                      << " explicit sites (natural=tree points + tree_row @ 6 m)\n"
+                      << std::flush;
+        }
 
         // NT_FOREST_LOD=0 restores the phase-2 single-tier planting (the A/B).
         // The default is the camera-following cell LOD: the old path splits its
@@ -1126,7 +1204,16 @@ int main(int argc, char** argv) {
             canopyMat->translucency = 0.3f;
 
             vegetation::ForestLodOptions lo;
-            lo.cap = static_cast<int>(envF("NT_FOREST_CAP", 40000.f));
+            lo.cap = static_cast<int>(envF("NT_FOREST_CAP", urbanPack ? 80000.f : 40000.f));
+            // A town's tall trees are limes, maples, chestnuts and rowans, not
+            // Norway spruce: spruce needs BOTH height above sea and a stand
+            // around it. Aksla's plantation (60 m+, closed canopy) still gets
+            // conifers; the 16 m tree in a churchyard at 12 m elevation becomes
+            // the broadleaf it is. Both terms are 0 on fjord packs = old rule.
+            if (urbanPack) {
+                lo.spruceMinElevation = envF("NT_SPRUCE_ELEV", 60.f);
+                lo.spruceMinStandHeight = envF("NT_SPRUCE_STAND", 12.f);
+            }
             lo.cellSize = envF("NT_FOREST_CELL", 128.f);
             lo.l0Distance = envF("NT_FOREST_L0", 300.f);
             lo.l1Distance = envF("NT_FOREST_L1", 800.f);
@@ -1162,7 +1249,11 @@ int main(int argc, char** argv) {
         } else {
             vegetation::ForestOptions fo;
             fo.cameraPos = camera.position;
-            fo.cap = static_cast<int>(envF("NT_FOREST_CAP", 40000.f));
+            fo.cap = static_cast<int>(envF("NT_FOREST_CAP", urbanPack ? 80000.f : 40000.f));
+            if (urbanPack) {
+                fo.spruceMinElevation = envF("NT_SPRUCE_ELEV", 60.f);
+                fo.spruceMinStandHeight = envF("NT_SPRUCE_STAND", 12.f);
+            }
             const auto st = vegetation::buildCanopyForest(*forest, sites, species, prov.height, fo);
             scene.add(forest);
             const auto tf1 = std::chrono::high_resolution_clock::now();
@@ -1171,6 +1262,107 @@ int main(int argc, char** argv) {
                       << " far) in " << st.meshes << " meshes, "
                       << std::chrono::duration<float>(tf1 - tf0).count() << " s\n"
                       << std::flush;
+        }
+
+        // Species split, for the record: the rule is invisible in a shot until
+        // it is wrong, and "why is that garden full of spruce" is the failure.
+        {
+            std::array<int, 3> split{};
+            const float se = urbanPack ? envF("NT_SPRUCE_ELEV", 60.f) : 0.f;
+            const float ss = urbanPack ? envF("NT_SPRUCE_STAND", 12.f) : 0.f;
+            for (const auto& s : sites)
+                ++split[static_cast<size_t>(vegetation::pickTreeSpecies(
+                        s.canopyHeight, prov.height(s.x, s.z), s.standHeight, 6.f, 14.f, 350.f,
+                        se, ss))];
+            std::cout << "[norway] species: " << split[0] << " scrub, " << split[1]
+                      << " broadleaf, " << split[2] << " spruce (spruce needs >= " << se
+                      << " m elevation AND >= " << ss << " m stand)\n"
+                      << std::flush;
+        }
+
+        // ── Bush tier ──────────────────────────────────────────────────────
+        // The 1.0-2.5 m band of the CHM: garden shrubs and the scrub along
+        // walls. Restricted to gardens (within 40 m of a footprint), because
+        // the same band over open hillside is 42 000 blobs nobody looks at.
+        if (urbanPack && !envSet("NT_NO_BUSHES")) {
+            const auto tb0 = std::chrono::high_resolution_clock::now();
+            vegetation::CanopySiteOptions bo = so;
+            bo.minHeight = 1.0f;
+            bo.maxCanopyHeight = 2.5f;
+            bo.windowRadius = 1;
+            bo.minNeighborSupport = 0;// a shrub is not a stand
+            bo.treelineElevation = 1e9f;
+            bo.highSlopeElevation = 1e9f;
+            // 2 m spacing: crownRadiusFactor · spacingFactor · (h1 + h2) with
+            // h ≈ 2 m, and the thinner's own 4 m floor on the bin size.
+            bo.crownRadiusFactor = 0.5f;
+            bo.spacingFactor = 1.0f;
+            bo.reject = [&, fpMask, deckMask, gardenMask](float x, float z) {
+                if (gardenMask && !gardenMask->inside(x, z)) return true;// not a garden
+                if (fpMask && fpMask->inside(x, z)) return true;
+                if (network.pavedWeight(x, z, 1.0f) > 0.2f) return true;
+                if (deckMask && deckMask->inside(x, z)) return true;
+                return false;
+            };
+            vegetation::CanopySiteReport brep;
+            auto bushes = vegetation::detectTreeSites(pack.canopy, pack.grid, bo, &brep);
+            const int chmBushes = static_cast<int>(bushes.size());
+
+            // Hedges: OSM barrier=hedge lines, one bush every 1.5 m. A hedge is
+            // a LINE of the same prototype — no CHM peak survives a 0.6 m wide
+            // object on a 2 m grid, so the data has to place these.
+            int hedgeBushes = 0;
+            if (pack.hasLandUse()) {
+                const float roi = bo.halfExtent;
+                for (const auto& l : pack.landuse.lines) {
+                    if (l.cls != "hedge" || l.points.size() < 2) continue;
+                    float acc = 1.5f;
+                    for (size_t i = 1; i < l.points.size(); ++i) {
+                        const float dx = l.points[i].x - l.points[i - 1].x;
+                        const float dz = l.points[i].y - l.points[i - 1].y;
+                        const float len = std::sqrt(dx * dx + dz * dz);
+                        if (len < 1e-3f) continue;
+                        float pos = 0.f;
+                        while (acc + (len - pos) >= 1.5f) {
+                            pos += 1.5f - acc;
+                            acc = 0.f;
+                            const float x = l.points[i - 1].x + dx * (pos / len);
+                            const float z = l.points[i - 1].y + dz * (pos / len);
+                            if (std::fabs(x - bo.centerX) > roi || std::fabs(z - bo.centerZ) > roi)
+                                continue;
+                            if (pack.grid.sampleBilinear(x, z) < bo.seaLevel + bo.minGroundHeight)
+                                continue;
+                            bushes.push_back({x, z, 1.6f, 0.f});
+                            ++hedgeBushes;
+                        }
+                        acc += len - pos;
+                    }
+                }
+            }
+
+            if (!bushes.empty()) {
+                std::vector<vegetation::TreeVariant> bushVars{
+                        vegetation::makeBushVariant(4101u),
+                        vegetation::makeBushVariant(4102u, Color(0.16f, 0.27f, 0.10f)),
+                        vegetation::makeBushVariant(4103u, Color(0.11f, 0.21f, 0.09f))};
+                auto bushRoot = Group::create();
+                bushRoot->name = "bush_field";
+                vegetation::BushOptions bopt;
+                bopt.cap = static_cast<int>(envF("NT_BUSH_CAP", 20000.f));
+                bopt.cullDistance = envF("NT_BUSH_CULL", 600.f);
+                const auto bst = vegetation::buildBushField(*bushRoot, bushes, bushVars,
+                                                            prov.height, bopt);
+                scene.add(bushRoot);
+                const auto tb1 = std::chrono::high_resolution_clock::now();
+                std::cout << "[norway] bushes: " << brep.peaks << " CHM peaks 1-2.5 m -> "
+                          << chmBushes << " garden sites + " << hedgeBushes
+                          << " hedge sites (rejected: masked " << brep.rejectedMasked
+                          << ", ground " << brep.rejectedGround << ", slope "
+                          << brep.rejectedSlope << ") -> " << bst.planted << " instances in "
+                          << bst.cells << " cells, cull " << bopt.cullDistance << " m, "
+                          << std::chrono::duration<float>(tb1 - tb0).count() << " s\n"
+                          << std::flush;
+            }
         }
     }
 
