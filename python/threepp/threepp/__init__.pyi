@@ -9312,6 +9312,19 @@ class VulkanRenderer:
     def depth_of_field(self, arg1: bool) -> None:
         ...
     @property
+    def dlss(self) -> bool:
+        """
+        NVIDIA DLSS upscaler on/off (no-op / False if unavailable — see dlss_available).
+        """
+    @dlss.setter
+    def dlss(self, arg1: bool) -> None:
+        ...
+    @property
+    def dlss_available(self) -> bool:
+        """
+        True when DLSS was compiled in and NGX created its feature on this GPU.
+        """
+    @property
     def env_sun_color(self) -> typing.Annotated[list[float], "FixedSize(3)"]:
         """
         Integrated sun-disc energy (linear RGB irradiance, valid when env_sun_found).

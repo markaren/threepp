@@ -146,10 +146,21 @@ int main(int argc, char** argv) {
     // --dumpprobes <prefix>: raw probeSh dump per frame (frames 0..5) for
     // byte-level forensics — which probe index, which SH band, what magnitude.
     std::string probeDumpPrefix;
+    // --scene-edit: the lidar audit's entry-list churn, applied to the AOV
+    // rows. A mesh is added at frame 45 and removed at frame 81, and at those
+    // same frames an existing MID-LIST object (the spinner) is pulled out and
+    // later re-added at the tail, so the post-revert scene holds the same
+    // objects in a different order. The Ids AOV must not care: it carries the
+    // stable per-object id, not the entry index.
+    bool sceneEdit = false;
+    int editAddFrame = 45, editRemoveFrame = 81;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
         else if (arg == "--out" && i + 1 < argc) outPath = argv[++i];
+        else if (arg == "--scene-edit") sceneEdit = true;
+        else if (arg == "--edit-add" && i + 1 < argc) editAddFrame = std::atoi(argv[++i]);
+        else if (arg == "--edit-remove" && i + 1 < argc) editRemoveFrame = std::atoi(argv[++i]);
         else if (arg == "--rgbtrace" && i + 1 < argc) rgbTracePath = argv[++i];
         else if (arg == "--dumprgb" && i + 1 < argc) dumpPrefix = argv[++i];
         else if (arg == "--taasplit") taaSplit = true;
@@ -277,6 +288,13 @@ int main(int argc, char** argv) {
         wavNrm->needsUpdate();
     };
 
+    // The edit subject (see --scene-edit above). Built up front so its
+    // geometry upload is not itself the event.
+    auto editBox = Mesh::create(BoxGeometry::create(1.f, 1.f, 1.f),
+                                MeshStandardMaterial::create(
+                                        MeshStandardMaterial::Params{}.color(Color(0xd0c060))));
+    editBox->position.set(3.5f, 1.0f, 3.5f);
+
     // ---- render + hash ------------------------------------------------------
 
     struct AovRow {
@@ -311,6 +329,19 @@ int main(int argc, char** argv) {
             mover->rotation.y = static_cast<float>(t * 1.7);
             spinner->rotation.x = static_cast<float>(t * 2.3);
             deform(t);
+        }
+        if (sceneEdit) {
+            if (f == editAddFrame) {
+                scene.add(editBox);
+                renderer.setObjectInstanceId(*editBox, 6);
+                renderer.setObjectClassId(*editBox, 2);
+                scene.remove(*spinner);
+            } else if (f == editRemoveFrame) {
+                scene.remove(*editBox);
+                scene.add(spinner);
+                renderer.setObjectInstanceId(*spinner, 3);
+                renderer.setObjectClassId(*spinner, 2);
+            }
         }
 
         renderer.render(scene, *camera);
@@ -413,6 +444,14 @@ int main(int argc, char** argv) {
     manifest << "dyn.geom graduated=" << dyn.graduated
              << " refits=" << dyn.refitsRecorded
              << " rebuilds=" << dyn.fullRebuilds << "\n";
+    // Which experiment this was: two runs that disagree here were not running
+    // the same script, and the compare must say so rather than diff pixels.
+    const auto tl = renderer.tlasStats();
+    manifest << "script frames=" << frames << " sceneEdit=" << (sceneEdit ? 1 : 0)
+             << " editAdd=" << (sceneEdit ? editAddFrame : -1)
+             << " editRemove=" << (sceneEdit ? editRemoveFrame : -1)
+             << " static=" << (staticScene ? 1 : 0)
+             << " tlasRebuilds=" << tl.fullRebuilds << " tlasInstances=" << tl.instances << "\n";
     if (!staticScene && dyn.graduated == 0) {
         std::cout << "DYNAMIC-GEOM PATH NEVER ENGAGED (deformer failed to graduate)\n";
         ++failures;

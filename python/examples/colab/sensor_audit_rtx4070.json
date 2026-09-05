@@ -1,0 +1,79 @@
+{
+ "meta": {
+  "threepp": "?",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "python": "3.14.6",
+  "frames": 120,
+  "scan_every": 6,
+  "seconds_prop": 20.0,
+  "seed": "0x9e3779b97f4a7c15",
+  "size": [
+   800,
+   600
+  ],
+  "gpu": "NVIDIA GeForce RTX 4070, 595.97",
+  "pins": {
+   "auto_exposure": false,
+   "fsr": false,
+   "dlss": false,
+   "sim_time": true
+  },
+  "sonar": "SonarSensor",
+  "wall_seconds": 3.75,
+  "lidar_hits": 238821,
+  "sonar_echoes": 21414,
+  "recorded": "2026-09-05, development machine, C++ build of the same tree (dev d3028acf+)"
+ },
+ "rows": {
+  "prop.imu": {
+   "fnv": "a5c16cd31adfb9ae",
+   "bytes": 268800,
+   "frames": 4800
+  },
+  "prop.contact": {
+   "fnv": "1ad5d1926d84b7dc",
+   "bytes": 177600,
+   "frames": 4800
+  },
+  "aov.depth": {
+   "fnv": "5e2e4f2e01c2fbcc",
+   "bytes": 230400000,
+   "frames": 120
+  },
+  "aov.normals": {
+   "fnv": "53725e139793be9b",
+   "bytes": 691200000,
+   "frames": 120
+  },
+  "aov.ids": {
+   "fnv": "da23413915c3df63",
+   "bytes": 230400000,
+   "frames": 120
+  },
+  "aov.motion": {
+   "fnv": "0c24d00f02129b75",
+   "bytes": 460800000,
+   "frames": 120
+  },
+  "aov.albedo": {
+   "fnv": "d0e9ef53a74f473a",
+   "bytes": 230400000,
+   "frames": 120
+  },
+  "rgb": {
+   "fnv": "9d0fb8eb7846735b",
+   "bytes": 172800000,
+   "frames": 120
+  },
+  "lidar": {
+   "fnv": "67a6a65fd10d7b57",
+   "bytes": 16128000,
+   "frames": 20
+  },
+  "sonar": {
+   "fnv": "7bf38fdf3df74e40",
+   "bytes": 10485760,
+   "frames": 20
+  }
+ }
+}
