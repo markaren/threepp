@@ -34,6 +34,22 @@ def main():
 
     base_nb = json.load(open(os.path.join(HERE, "threepp_colab.ipynb"), encoding="utf-8"))
     setup_cell = "".join(base_nb["cells"][2]["source"])
+    # A release candidate sits on TestPyPI before it reaches PyPI, and the T4
+    # column is measured from whichever the form flag names. Dependencies still
+    # resolve from PyPI through the extra index; the manifest records the
+    # installed version either way (sensor_audit.py writes threepp.__version__).
+    pip_line = 'sh(f"{sys.executable} -m pip -q install threepp")'
+    assert pip_line in setup_cell, "threepp_colab.ipynb setup cell changed; update the pip anchor"
+    setup_cell = setup_cell.replace(
+        pip_line,
+        'INDEX = ("--index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple "\n'
+        '         if USE_TESTPYPI else "")\n'
+        'sh(f"{sys.executable} -m pip -q install {INDEX}threepp")', 1)
+    form_anchor = '{ display-mode: "form" }\n'
+    assert form_anchor in setup_cell, "setup cell lost its form title line"
+    setup_cell = setup_cell.replace(
+        form_anchor,
+        form_anchor + 'USE_TESTPYPI = False  # @param {type:"boolean"}  (a release candidate on TestPyPI)\n', 1)
     audit_src = open(os.path.join(HERE, "..", "sensor_audit.py"), encoding="utf-8").read()
     baseline = open(a.baseline, encoding="utf-8").read().strip() if os.path.exists(a.baseline) else None
 
