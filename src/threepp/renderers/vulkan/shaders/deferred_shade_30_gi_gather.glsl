@@ -245,7 +245,7 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         const float vis = (doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0) * wPick;
         if (vis <= 0.0) continue;
         const float decay = lights.pointLights[i].decay;
-        float atten = 1.0 / max(pow(dist, decay), 0.01);
+        float atten = 1.0 / max(distFalloff(dist, decay), 0.01);
         const float range = lights.pointLights[i].range;
         if (range > 0.0) {
             const float t  = dist / range;
@@ -270,7 +270,7 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         const float vis = (doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0) * wPick;
         if (vis <= 0.0) continue;
         const float decay = lights.spotLights[i].decay;
-        float atten = 1.0 / max(pow(dist, decay), 0.01);
+        float atten = 1.0 / max(distFalloff(dist, decay), 0.01);
         const float range = lights.spotLights[i].range;
         if (range > 0.0) {
             const float t  = dist / range;

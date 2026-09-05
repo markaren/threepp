@@ -75,7 +75,11 @@ float froxelParticleTransmittance(vec2 fuv, float viewDist) {
 // for rough, down to 1 (reset) as roughness → mirror. Thresholds use a
 // view-dependence factor (1 - smoothstep(0.05, 0.30, roughness)).
 bool reflReproject(vec2 uv, vec3 N, float rough, float viewDist, out vec2 pUv, out float histCap) {
-    const vec2 mv   = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).rg;
+    // ONE motion tap for both halves of the reproject: .rg is the NDC delta and .b
+    // this surface's prev NDC depth (read by the depth gate below at the same uv),
+    // so the second fetch this function used to make returned the same bits.
+    const vec3 mot  = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).rgb;
+    const vec2 mv   = mot.rg;
     const vec2 pNdc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + mv;
     pUv = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
     bool valid = all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)));
@@ -91,7 +95,7 @@ bool reflReproject(vec2 uv, vec3 N, float rough, float viewDist, out vec2 pUv, o
         // mismatch means the reproject crossed the silhouette onto a DIFFERENT surface
         // ⇒ reject ⇒ the edge resets to a fresh (noisy, un-smeared) reflection. Normal
         // loosened to 0.7 to match the GI (depth is now the primary disocclusion gate).
-        const float surfD = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).b;     // this surface's prev NDC depth
+        const float surfD = mot.b;                                                       // this surface's prev NDC depth
         const float bufD  = texture(gbufDepthPrevTex, paneToPhys(gbufDepthPrevTex, pUv)).x; // prev depth buffer at the reproject
         const vec4  svh   = cam.projInverse * vec4(pNdc, surfD, 1.0);
         const vec4  bvh   = cam.projInverse * vec4(pNdc, bufD,  1.0);
@@ -474,6 +478,19 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
     return 0.0;
 }
 
+// Distance term of the point/spot falloff, d^decay. decay is a per-light uniform
+// copied verbatim from the host, so it round-trips through the UBO bit-exact and
+// the two values that occur in practice — PointLight's default 1 and the physical
+// inverse-square 2 — can be matched with == and evaluated without pow()'s log2/exp2
+// pair. Avoiding pow() also removes a source of cross-vendor drift: GLSL specifies
+// pow() only to 16 ULP and every driver lowers it differently, while d and d*d are
+// exact everywhere. decay 0 (and any authored fractional decay) still takes pow.
+float distFalloff(float d, float decay) {
+    if (decay == 1.0) return d;
+    if (decay == 2.0) return d * d;
+    return pow(d, decay);
+}
+
 // Cook-Torrance specular + Lambert diffuse for one analytic light direction L.
 vec3 evalLight(vec3 N, vec3 V, vec3 L, float NdotV, vec3 F0, vec3 albedo,
                float roughness, float metalness, float k,
@@ -596,6 +613,37 @@ vec3 emissiveNEE(int EM_SAMPLES, vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, v
         if (!emPlanSample(plan, s, P, /*twoSided=*/false, es)) continue;
         const vec3 L = es.L;
         if (dot(N, L) <= 0.01) continue;
+        // DIFFUSE-ONLY emitter NEE. Light sampling (sampling the emitter) is the
+        // correct, low-variance estimator for the broad DIFFUSE term — but the WRONG
+        // one for the peaked SPECULAR lobe: at low roughness a single sample lands
+        // near the GGX peak and the firefly clamp leaves a bright "probe speckle"
+        // highlight (a proper BRDF-sampling + MIS estimator would never show this).
+        // Emitter specular is owned by the reflection ray at near-mirror roughness and by
+        // emissiveSpecNEE on rough lobes (the specNEET split in main()).
+        // BRDF FIRST, shadow ray second (the same ordering emissiveSpecNEE uses): none
+        // of this depends on the ray, so a sample that cannot move the pixel skips its
+        // TLAS traversal entirely — the win is many-distant-weak-emitter scenes.
+        const vec3  H  = normalize(V + L);
+        const vec3  Fr = fresnelSchlick(max(dot(V, H), 0.0), F0);
+        const vec3  kd = (vec3(1.0) - Fr) * (1.0 - metalness);
+        vec3 c = (kd * albedo * (1.0 / PI)) * max(dot(N, L), 0.0) * es.Le * es.gw;
+        const float lum = max(max(c.r, c.g), c.b);
+        // Skip-the-ray cutoff, measured RELATIVE to what this pixel has already
+        // gathered — never an absolute radiance floor. A fixed epsilon is invisible in
+        // daylight but a night scene at 100x auto-exposure lifts it into the display
+        // range, where it draws a faint distance-threshold contour across large flat
+        // surfaces. Against the running sum the total discarded energy is at most
+        // plan.count · 1e-4 of the pixel — below a thousandth at ANY exposure — and
+        // while sum is still zero (nothing gathered yet, e.g. every earlier sample
+        // occluded) the test never fires, so the first contributing sample always
+        // traces. lum · es.w bounds what this sample would add: the clamp below can
+        // only shrink it, and es.w is 1 or 1/count, never a large 1/pdf weight that
+        // could resurrect a discarded sample.
+        if (lum * es.w <= 1e-4 * max(max(sum.r, sum.g), sum.b)) continue;
+        // Firefly clamp: cap a single sample's luminance so a stray spike (grazing
+        // emitter / near hit) can't dominate — the dominant noise on animated
+        // geometry where TAA can't accumulate it away.
+        if (lum > pc.fireflyClamp) c *= pc.fireflyClamp / lum;
         if (doShadows) {
             // Shadow ray to the SAME emitter point used for lighting. Non-opaque + SKIP
             // emitters: a light never shadows itself, so the emitter's own far side can't
@@ -623,22 +671,6 @@ vec3 emissiveNEE(int EM_SAMPLES, vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, v
                     continue;
             }
         }
-        // DIFFUSE-ONLY emitter NEE. Light sampling (sampling the emitter) is the
-        // correct, low-variance estimator for the broad DIFFUSE term — but the WRONG
-        // one for the peaked SPECULAR lobe: at low roughness a single sample lands
-        // near the GGX peak and the firefly clamp leaves a bright "probe speckle"
-        // highlight (a proper BRDF-sampling + MIS estimator would never show this).
-        // Emitter specular is owned by the reflection ray at near-mirror roughness and by
-        // emissiveSpecNEE on rough lobes (the specNEET split in main()).
-        const vec3  H  = normalize(V + L);
-        const vec3  Fr = fresnelSchlick(max(dot(V, H), 0.0), F0);
-        const vec3  kd = (vec3(1.0) - Fr) * (1.0 - metalness);
-        vec3 c = (kd * albedo * (1.0 / PI)) * max(dot(N, L), 0.0) * es.Le * es.gw;
-        // Firefly clamp: cap a single sample's luminance so a stray spike (grazing
-        // emitter / near hit) can't dominate — the dominant noise on animated
-        // geometry where TAA can't accumulate it away.
-        const float lum = max(max(c.r, c.g), c.b);
-        if (lum > pc.fireflyClamp) c *= pc.fireflyClamp / lum;
         sum += c * es.w;
     }
     return sum;
