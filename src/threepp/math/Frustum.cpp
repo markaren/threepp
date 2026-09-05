@@ -7,10 +7,16 @@
 
 using namespace threepp;
 
-namespace {
-    Sphere _sphere{};
-    Vector3 _vector{};
-}// namespace
+// The scratch Sphere/Vector3 below used to live at namespace scope, three.js
+// style. They are written by const member functions, so two threads culling
+// different objects against different frustums would clobber each other's
+// scratch — a silent wrong-cull in an engine whose output has to be
+// reproducible run to run. Neither carried state between calls (each is fully
+// overwritten before it is read), so plain locals are an exact substitution.
+// Plain locals rather than static thread_local: Sphere and Vector3 have
+// user-provided constructors, so a function-local thread_local would pay a
+// guard variable check on every access under both MSVC and the Itanium ABI,
+// while these stay in registers.
 
 Frustum::Frustum(Plane p0, Plane p1, Plane p2, Plane p3, Plane p4, Plane p5)
     : planes_{p0, p1, p2, p3, p4, p5} {}
@@ -57,11 +63,13 @@ Frustum& Frustum::setFromProjectionMatrix(const Matrix4& m) {
 
 bool Frustum::intersectsObject(Object3D& object) const {
 
+    Sphere sphere{};
+
     if (auto instancedMesh = object.as<InstancedMesh>()) {
 
         if (!instancedMesh->boundingSphere) instancedMesh->computeBoundingSphere();
 
-        _sphere.copy(instancedMesh->boundingSphere.value()).applyMatrix4(*object.matrixWorld);
+        sphere.copy(instancedMesh->boundingSphere.value()).applyMatrix4(*object.matrixWorld);
 
     } else {
 
@@ -69,18 +77,20 @@ bool Frustum::intersectsObject(Object3D& object) const {
 
         if (!geometry->boundingSphere) geometry->computeBoundingSphere();
 
-        _sphere.copy(geometry->boundingSphere.value()).applyMatrix4(*object.matrixWorld);
+        sphere.copy(geometry->boundingSphere.value()).applyMatrix4(*object.matrixWorld);
     }
 
-    return this->intersectsSphere(_sphere);
+    return this->intersectsSphere(sphere);
 }
 
 bool Frustum::intersectsSprite(const Sprite& sprite) const {
-    _sphere.center.set(0, 0, 0);
-    _sphere.radius = 0.7071067811865476f;
-    _sphere.applyMatrix4(*sprite.matrixWorld);
 
-    return this->intersectsSphere(_sphere);
+    Sphere sphere{};
+    sphere.center.set(0, 0, 0);
+    sphere.radius = 0.7071067811865476f;
+    sphere.applyMatrix4(*sprite.matrixWorld);
+
+    return this->intersectsSphere(sphere);
 }
 
 bool Frustum::intersectsSphere(const Sphere& sphere) const {
@@ -103,17 +113,19 @@ bool Frustum::intersectsSphere(const Sphere& sphere) const {
 
 bool Frustum::intersectsBox(const Box3& box) const {
 
+    Vector3 corner{};
+
     for (int i = 0; i < 6; i++) {
 
         const auto& plane = planes_[i];
 
         // corner at max distance
 
-        _vector.x = plane.normal.x > 0 ? box.max().x : box.min().x;
-        _vector.y = plane.normal.y > 0 ? box.max().y : box.min().y;
-        _vector.z = plane.normal.z > 0 ? box.max().z : box.min().z;
+        corner.x = plane.normal.x > 0 ? box.max().x : box.min().x;
+        corner.y = plane.normal.y > 0 ? box.max().y : box.min().y;
+        corner.z = plane.normal.z > 0 ? box.max().z : box.min().z;
 
-        if (plane.distanceToPoint(_vector) < 0) {
+        if (plane.distanceToPoint(corner) < 0) {
 
             return false;
         }

@@ -539,7 +539,7 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
         toL /= dist;
         const float ndl = dot(hitN, toL);
         if (ndl <= 0.0) continue;
-        float atten = 1.0 / max(pow(dist, lights.pointLights[i].decay), 0.01);
+        float atten = 1.0 / max(distFalloff(dist, lights.pointLights[i].decay), 0.01);
         const float range = lights.pointLights[i].range;
         if (range > 0.0) { const float tt = dist / range; const float t4 = tt*tt*tt*tt; const float wnd = max(1.0 - t4, 0.0); atten *= wnd * wnd; }
         if (atten <= 1e-6) continue;
@@ -558,7 +558,7 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
         const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter,
                                            lights.spotLights[i].cosAngleInner, spotCos);
         if (spotAtten <= 0.0) continue;
-        float atten = spotAtten / max(pow(dist, lights.spotLights[i].decay), 0.01);
+        float atten = spotAtten / max(distFalloff(dist, lights.spotLights[i].decay), 0.01);
         const float range = lights.spotLights[i].range;
         if (range > 0.0) { const float tt = dist / range; const float t4 = tt*tt*tt*tt; const float wnd = max(1.0 - t4, 0.0); atten *= wnd * wnd; }
         if (atten <= 1e-6) continue;

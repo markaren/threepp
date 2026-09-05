@@ -53,6 +53,17 @@ namespace threepp::vulkan {
         // discarded if incompatible, so it can never affect correctness.
         VkPipelineCache pipelineCache() const { return pipelineCache_; }
 
+        // Persist the cache during the run, not only at destruction. The
+        // destructor save is the one a kill by PID never reaches, and killing
+        // by PID is how this project measures, so a 95 s cold compile was
+        // routinely paid and then thrown away. Called once per frame from the
+        // renderer and throttled here: a size-only vkGetPipelineCacheData is
+        // cheap, and the write happens only when that size has moved since the
+        // last save, i.e. when a pipeline was genuinely compiled in this
+        // process. The first check runs after the first frame, which is where
+        // the startup compiles have all just landed.
+        void savePipelineCacheIfChanged();
+
         VkSurfaceKHR surface() const { return surface_; }
         VkQueue graphicsQueue() const { return graphicsQueue_; }
         VkQueue presentQueue() const { return presentQueue_; }
@@ -194,6 +205,10 @@ namespace threepp::vulkan {
         PFN_vkSetDebugUtilsObjectNameEXT setObjectNameFn_ = nullptr;
 
         VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
+        // Bytes on disk after the last successful save (or keyed load), so a
+        // save is skipped when the driver reports the same size back.
+        size_t savedPipelineCacheBytes_ = 0;
+        uint32_t pipelineCacheTick_ = 0;
 
         void createInstance(bool enableValidation);
         void createDebugMessenger();

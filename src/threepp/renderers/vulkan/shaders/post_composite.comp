@@ -221,11 +221,19 @@ void main() {
     // on the renderer (see the binding-5 note). HDR mode: the sky-mask
     // sources are still RENDER-extent while `px` is DISPLAY-extent — scale
     // down to the mask's native texel grid (identity at renderScale == 1).
-    const ivec2 maskPx = hdr ? ivec2(vec2(px) * vec2(float(pc.srcWidth), float(pc.srcHeight))
-                                     / vec2(float(pc.width), float(pc.height)))
-                             : px;
-    const float skyW = float(texelFetch(rasterIdsTex, maskPx, 0).x);
-    const bool bypass = (pc.bgIsSolidColor != 0u) && (skyW < 0.5);
+    //
+    // The id fetch sits INSIDE the bgIsSolidColor test: that flag is a push
+    // constant, so the branch is dispatch-uniform (every invocation takes the
+    // same side, no divergence to pay for) and on a sky/env-map frame the whole
+    // ids read — one distinct R16G16B16A16_UINT texel per pixel, so real DRAM
+    // traffic, not an L1 hit — disappears from the one pass that always runs.
+    bool bypass = false;
+    if (pc.bgIsSolidColor != 0u) {
+        const ivec2 maskPx = hdr ? ivec2(vec2(px) * vec2(float(pc.srcWidth), float(pc.srcHeight))
+                                         / vec2(float(pc.width), float(pc.height)))
+                                 : px;
+        bypass = float(texelFetch(rasterIdsTex, maskPx, 0).x) < 0.5;
+    }
     vec3 outRgb;
     if (bypass) {
         // Bypass pixels are stored at DISPLAY scale (the shade/resolve skips

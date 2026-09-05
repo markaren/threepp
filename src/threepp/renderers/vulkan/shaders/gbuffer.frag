@@ -695,13 +695,28 @@ void main() {
     float roughness = m.roughness;
     float metalness = m.metalness;
     if (roughness >= 0.0) {
-        if (m.roughnessTexIndex >= 0) {
+        // The packed case gets ONE tap. ensureMaterialTexture caches per
+        // Texture*, so a glTF/FBX/USD asset whose roughnessMap and metalnessMap
+        // are the same image lands on the same bindless index — but the compiler
+        // cannot prove that and would otherwise issue two filtered, nonuniform-
+        // indexed samples of the same texel (two descriptor waterfalls on AMD).
+        // Same sampler, same coordinate, same derivatives as the pair below, so
+        // the result is bit-identical. The two-tap fallback stays for the case
+        // three.js also allows: genuinely separate roughness/metalness images.
+        if (m.roughnessTexIndex >= 0 && m.roughnessTexIndex == m.metalnessTexIndex) {
             const int i = clamp(m.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
-            roughness *= texture(gbufAlbedoMaps[nonuniformEXT(i)], uvRoughMetal).g;
-        }
-        if (m.metalnessTexIndex >= 0) {
-            const int i = clamp(m.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
-            metalness *= texture(gbufAlbedoMaps[nonuniformEXT(i)], uvRoughMetal).b;
+            const vec4 orm = texture(gbufAlbedoMaps[nonuniformEXT(i)], uvRoughMetal);
+            roughness *= orm.g;
+            metalness *= orm.b;
+        } else {
+            if (m.roughnessTexIndex >= 0) {
+                const int i = clamp(m.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
+                roughness *= texture(gbufAlbedoMaps[nonuniformEXT(i)], uvRoughMetal).g;
+            }
+            if (m.metalnessTexIndex >= 0) {
+                const int i = clamp(m.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
+                metalness *= texture(gbufAlbedoMaps[nonuniformEXT(i)], uvRoughMetal).b;
+            }
         }
         // World-anchored detail roughness breakup (MaterialWithDetailMap detail
         // normal map's alpha). Fades with distance like the detail normal/albedo.

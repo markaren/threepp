@@ -98,10 +98,16 @@ float heightFogDensity(vec3 p, float time) {
     const float h = (p.y - clouds.hfBaseY) / max(clouds.hfFalloff, 1e-3);
     if (h > 24.0) return 0.0;// e^-24 ≈ 0 — nothing left this high
     const float base = clouds.hfDensity * exp(-max(h, 0.0));
+    const float amt  = clamp(clouds.hfNoiseAmount, 0.0, 1.0);
+    // Smooth fog, no churn: mix(1, n·2, 0) is exactly 1 for any finite n, so
+    // the fBm below would be built and then thrown away — and it is thrown away
+    // on every scene that leaves hfNoiseAmount at its default, which is most of
+    // them, once per froxel in BOTH froxel passes. amt is a UBO scalar, so the
+    // branch is uniform across the dispatch and costs nothing where it fails.
+    if (amt <= 0.0) return max(base, 0.0);
     // Wind-scrolled fBm churns the patches (shares the cloud wind vector).
     const vec3  wind = vec3(clouds.wind.x, 0.0, clouds.wind.z) * time;
     const float n    = cloudValueFbm((p + wind) * 0.02);// ~50 m mist features
-    const float amt  = clamp(clouds.hfNoiseAmount, 0.0, 1.0);
     return max(base * mix(1.0, n * 2.0, amt), 0.0);
 }
 

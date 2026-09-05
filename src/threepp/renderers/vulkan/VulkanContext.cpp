@@ -22,6 +22,15 @@
 #include <string>
 #include <vector>
 
+// For the process id that makes each pipeline-cache temp file unique. <process.h>
+// and <unistd.h> are the two smallest headers that declare it; windows.h is not
+// dragged into this TU for one integer.
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace threepp::vulkan {
 
 #if defined(THREEPP_WITH_DLSS)
@@ -353,43 +362,132 @@ namespace threepp::vulkan {
     }
 
     namespace {
-        std::filesystem::path pipelineCachePath() {
+
+        std::filesystem::path pipelineCacheDir() {
             std::error_code ec;
             auto dir = std::filesystem::temp_directory_path(ec);
             if (ec) return {};
+            return dir;
+        }
+
+        // The blob is keyed to the device that produced it. The driver already
+        // refuses a foreign one, but a single shared file name means the two
+        // devices of a dual-GPU box overwrite each other on every launch and
+        // both then report COLD forever. pipelineCacheUUID is the driver's own
+        // identity for "these binaries are still valid" — a driver update
+        // changes it — so it is exactly the right key, and blobs for other
+        // devices simply sit alongside instead of fighting over one name.
+        std::string pipelineCacheKey(const uint8_t uuid[VK_UUID_SIZE]) {
+            static constexpr char kHex[] = "0123456789abcdef";
+            std::string s;
+            s.reserve(VK_UUID_SIZE * 2);
+            for (size_t i = 0; i < VK_UUID_SIZE; ++i) {
+                s.push_back(kHex[(uuid[i] >> 4) & 0xF]);
+                s.push_back(kHex[uuid[i] & 0xF]);
+            }
+            return s;
+        }
+
+        std::filesystem::path pipelineCachePath(const std::string& key) {
+            const auto dir = pipelineCacheDir();
+            if (dir.empty()) return {};
+            return dir / ("threepp_pipeline_cache." + key + ".bin");
+        }
+
+        // The unkeyed name older builds wrote. Read as a fallback so an
+        // existing warm blob survives the rename, and deleted only once this
+        // device has a keyed file of its own — i.e. after the migration has
+        // actually landed, never on the run that still depends on it.
+        std::filesystem::path legacyPipelineCachePath() {
+            const auto dir = pipelineCacheDir();
+            if (dir.empty()) return {};
             return dir / "threepp_pipeline_cache.bin";
         }
+
+        // Process id, decimal, for the temp file name. <process.h> and
+        // <unistd.h> spell it differently and nothing else in this TU needs it.
+        std::string currentProcessIdString() {
+#ifdef _WIN32
+            return std::to_string(_getpid());
+#else
+            return std::to_string(static_cast<long long>(getpid()));
+#endif
+        }
+
+        std::vector<char> readPipelineCacheFile(const std::filesystem::path& path) {
+            std::vector<char> bytes;
+            if (path.empty()) return bytes;
+            std::ifstream f(path, std::ios::binary | std::ios::ate);
+            if (!f) return bytes;
+            const std::streamsize sz = f.tellg();
+            if (sz <= 0) return bytes;
+            bytes.resize(static_cast<size_t>(sz));
+            f.seekg(0);
+            if (!f.read(bytes.data(), sz)) bytes.clear();
+            return bytes;
+        }
+
+        // Collect temps left behind by a save that was killed between the write
+        // and the rename; nothing else ever removes them and each is the full
+        // blob size. Every filesystem call here takes the error_code overload
+        // and every failure is ignored on purpose: on Windows a temp another
+        // process still has open cannot be deleted, which is precisely the file
+        // that must not be touched. On POSIX the unlink would succeed, but the
+        // writer's descriptor stays valid and its rename then fails, so the
+        // worst case is one lost save and never a damaged blob.
+        void sweepPipelineCacheTemps() {
+            const auto dir = pipelineCacheDir();
+            if (dir.empty()) return;
+            std::error_code ec;
+            std::filesystem::directory_iterator it(dir, ec);
+            const std::filesystem::directory_iterator end;
+            while (!ec && it != end) {
+                const auto p = it->path();
+                const auto name = p.filename().string();
+                if (name.rfind("threepp_pipeline_cache.", 0) == 0 && p.extension() == ".tmp") {
+                    std::error_code rmEc;
+                    std::filesystem::remove(p, rmEc);
+                }
+                it.increment(ec);
+            }
+        }
+
     }// namespace
 
     void VulkanContext::createPipelineCache() {
-        // Read the previous run's blob, if any.
-        std::vector<char> initial;
-        const auto path = pipelineCachePath();
-        if (!path.empty()) {
-            std::ifstream f(path, std::ios::binary | std::ios::ate);
-            if (f) {
-                const std::streamsize sz = f.tellg();
-                if (sz > 0) {
-                    initial.resize(static_cast<size_t>(sz));
-                    f.seekg(0);
-                    f.read(initial.data(), sz);
-                }
-            }
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(physicalDevice_, &props);
+        const auto path = pipelineCachePath(pipelineCacheKey(props.pipelineCacheUUID));
+
+        sweepPipelineCacheTemps();
+
+        // Read the previous run's blob, if any, preferring this device's own.
+        std::vector<char> initial = readPipelineCacheFile(path);
+        auto source = path;
+        const auto legacy = legacyPipelineCachePath();
+        // The legacy file is read as a fallback and otherwise left alone.
+        // Older builds on the same machine still read and write it — a second
+        // worktree, the wheel, a checkout of master — and deleting it from here
+        // would put every one of them back to a cold compile on every run.
+        if (initial.empty()) {
+            initial = readPipelineCacheFile(legacy);
+            if (!initial.empty()) source = legacy;
         }
 
         // Validate the cache header against THIS device — vendor/device/UUID
         // must match or the blob is from another GPU/driver and must be dropped
         // (some drivers reject foreign data outright). Header layout
         // (VkPipelineCacheHeaderVersionOne): u32 size, u32 version, u32 vendorID,
-        // u32 deviceID, u8 uuid[VK_UUID_SIZE] — 32 bytes total.
+        // u32 deviceID, u8 uuid[VK_UUID_SIZE] — 32 bytes total. Note that the
+        // leading u32 is the length of the HEADER, not of the blob, so no amount
+        // of header checking can spot a truncated file; that is what the atomic
+        // rename in savePipelineCache is for.
         bool usable = false;
         if (initial.size() >= 32) {
             uint32_t hdrVersion = 0, vendorID = 0, deviceID = 0;
             std::memcpy(&hdrVersion, initial.data() + 4, 4);
             std::memcpy(&vendorID, initial.data() + 8, 4);
             std::memcpy(&deviceID, initial.data() + 12, 4);
-            VkPhysicalDeviceProperties props{};
-            vkGetPhysicalDeviceProperties(physicalDevice_, &props);
             usable = hdrVersion == VK_PIPELINE_CACHE_HEADER_VERSION_ONE &&
                      vendorID == props.vendorID && deviceID == props.deviceID &&
                      std::memcmp(initial.data() + 16, props.pipelineCacheUUID, VK_UUID_SIZE) == 0;
@@ -404,9 +502,13 @@ namespace threepp::vulkan {
         if (vkCreatePipelineCache(device_, &ci, nullptr, &pipelineCache_) != VK_SUCCESS) {
             pipelineCache_ = VK_NULL_HANDLE;// non-fatal: pipelines just compile cold
         }
+        // What the keyed path holds now, for savePipelineCacheIfChanged to
+        // compare against. A legacy-sourced load counts as zero: the keyed
+        // file does not exist yet, and the first check should write it.
+        savedPipelineCacheBytes_ = (usable && source == path) ? initial.size() : 0;
         std::cout << "[VulkanContext] pipeline cache: "
                   << (usable ? "WARM - loaded " : "COLD - ignoring ")
-                  << initial.size() << " bytes from " << path.string()
+                  << initial.size() << " bytes from " << source.string()
                   << (usable ? " (pipelines reused)" : " (recompiling all pipelines)") << std::endl;
     }
 
@@ -416,14 +518,74 @@ namespace threepp::vulkan {
         if (vkGetPipelineCacheData(device_, pipelineCache_, &sz, nullptr) != VK_SUCCESS || sz == 0) return;
         std::vector<char> data(sz);
         if (vkGetPipelineCacheData(device_, pipelineCache_, &sz, data.data()) != VK_SUCCESS) return;
-        const auto path = pipelineCachePath();
+
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(physicalDevice_, &props);
+        const auto path = pipelineCachePath(pipelineCacheKey(props.pipelineCacheUUID));
         if (path.empty()) return;
-        std::ofstream f(path, std::ios::binary | std::ios::trunc);
-        if (f) {
+
+        // Write a temp beside the blob and rename it into place instead of
+        // truncating the blob itself. The blob runs to tens of megabytes, so the
+        // write is wide enough that a kill lands inside it regularly, and the
+        // loader cannot tell a fragment from a whole file (see the header note
+        // above) — it would hand the fragment to the driver as initialData. The
+        // rename is atomic, so a reader sees either the whole old blob or the
+        // whole new one and never a splice of the two. The temp carries this
+        // process's pid so two threepp processes saving at once write to
+        // separate files rather than interleaving into one.
+        const auto tmp = path.parent_path() /
+                         (path.stem().string() + "." + currentProcessIdString() + ".tmp");
+        {
+            std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+            if (!f) return;
             f.write(data.data(), static_cast<std::streamsize>(sz));
-            std::cout << "[VulkanContext] pipeline cache: saved " << sz
-                      << " bytes to " << path.string() << std::endl;
+            // Closed explicitly rather than by the destructor, because the
+            // status of the final flush has to be read before deciding whether
+            // to rename, and because Windows refuses both the rename and the
+            // remove below while this process still holds the file open.
+            f.close();
+            if (!f) {
+                // Out of space, most likely. Leave the previous blob alone and
+                // take the half-written temp with us.
+                std::error_code rmEc;
+                std::filesystem::remove(tmp, rmEc);
+                return;
+            }
         }
+
+        // error_code overload, never the throwing one — this also runs from
+        // ~VulkanContext, where an escaping exception terminates the process. A
+        // rename can legitimately fail (on Windows, over a blob another process
+        // has open), and the right answer then is to keep the old blob and drop
+        // the temp: a stale-but-whole cache costs a partial recompile, a
+        // half-written one costs correctness.
+        std::error_code ec;
+        std::filesystem::rename(tmp, path, ec);
+        if (ec) {
+            std::error_code rmEc;
+            std::filesystem::remove(tmp, rmEc);
+            return;
+        }
+        std::cout << "[VulkanContext] pipeline cache: saved " << sz
+                  << " bytes to " << path.string() << std::endl;
+        savedPipelineCacheBytes_ = sz;
+    }
+
+    void VulkanContext::savePipelineCacheIfChanged() {
+        if (pipelineCache_ == VK_NULL_HANDLE) return;
+        // The first call lands right after the first frame, where the startup
+        // compiles have all just finished; after that every 120th. The size
+        // query is a driver call rather than free, and pipelines arrive in
+        // bursts, so per-frame polling would buy nothing.
+        const uint32_t tick = pipelineCacheTick_++;
+        if (tick != 0 && tick % 120 != 0) return;
+        size_t sz = 0;
+        if (vkGetPipelineCacheData(device_, pipelineCache_, &sz, nullptr) != VK_SUCCESS) return;
+        if (sz == savedPipelineCacheBytes_) return;
+        // Synchronous on the render thread: a blob of tens of megabytes costs
+        // on the order of 100 ms, once, immediately after a compile burst that
+        // itself took seconds. Nothing in the frame's state is touched.
+        savePipelineCache();
     }
 
     void VulkanContext::createInstance(bool enableValidation) {

@@ -1707,6 +1707,31 @@ endif ()
 # single input just compiles it. No PCH in this build, so no interaction there.
 if (MSVC)
     target_compile_options(threepp PRIVATE /MP)
+
+    # RelWithDebInfo is MSVC's /O2 /Ob1: full optimization, but only functions
+    # marked `inline` are inlined. Everything else — the non-`inline` helpers
+    # that make up most of the per-frame CPU work — stays a call. Release gets
+    # /Ob2 and MinSizeRel deliberately keeps /Ob1 (that is what "min size"
+    # means), so only the profile config needs correcting.
+    #
+    # This is the config every CPU-phase A/B in this tree is measured in, so
+    # leaving it at /Ob1 does not just cost time — it measures the wrong
+    # inliner. The same trap cost the RLtools examples 10x until they forced
+    # /Ob2 (examples/projects/RLtools/CMakeLists.txt).
+    #
+    # No float results move: /fp:precise on x64 has no x87 excess precision to
+    # spill and the SSE2 baseline offers nothing to contract into, so an
+    # inlining decision cannot change a rounded value. The cost is that
+    # RelWithDebInfo stack traces get shallower.
+    # Rewritten rather than appended: appending /Ob2 leaves /Ob1 on the command
+    # line too, and while the last /Ob wins, cl reports D9025 for every single
+    # translation unit. Editing the config flags here is directory-scoped, so it
+    # reaches the library and nothing above it.
+    string(REPLACE "/Ob1" "/Ob2" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
+    if (NOT CMAKE_CXX_FLAGS_RELWITHDEBINFO MATCHES "/Ob2")
+        # A toolchain file or preset replaced the stock flags; append instead.
+        string(APPEND CMAKE_CXX_FLAGS_RELWITHDEBINFO " /Ob2")
+    endif ()
 endif ()
 
 if (THREEPP_TREAT_WARNINGS_AS_ERRORS)

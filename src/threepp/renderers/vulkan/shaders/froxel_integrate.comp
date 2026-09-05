@@ -21,9 +21,8 @@ layout(set = 0, binding = 0) uniform CameraUbo {
     mat4 viewInverse;
     mat4 projInverse;
     vec4 jitter;
-    vec4 camAux;// .x = parallel projection — camera_ray.glsl reads it
+    vec4 camAux;// .x = parallel projection — froxelWorldRay reads it
 } cam;
-#include "camera_ray.glsl"// camViewPointAtDist — perspective AND ortho
 
 layout(set = 0, binding = 33, scalar) uniform FogUbo {
     vec3  sigmaT;
@@ -70,14 +69,34 @@ float froxelDist(float s) {
 
 #include "cloud_density.glsl"// mediumExtinction (hetero mode)
 
-// World position of a froxel column point at view distance `dist`. Via
-// camViewPointAtDist so a PARALLEL projection reconstructs correctly (the
-// hand-rolled dist/-pv.z scale drifted the sampled world position with slice
-// depth under ortho — wrong heights into the height-fog profile); the
-// perspective branch is formula-identical to what stood here.
-vec3 froxelWorld(vec2 uv, float dist) {
+// This froxel column's world-space ray, as origin + dist·direction where `dist`
+// is view distance (-z, GL-style forward). One column walks 64 slices along a
+// FIXED ray — only the scalar distance moves — so the unprojection and the
+// perspective divide are loop-invariant and belong out here rather than once
+// per slice.
+//
+// Same semantics as camViewPointAtDist, just factored: a PARALLEL projection
+// has one direction and an origin per pixel, a perspective one has one origin
+// and a direction per pixel, and getting that backwards is what once drifted
+// the sampled world position with slice depth under ortho — wrong heights into
+// the height-fog profile. The perspective branch is formula-identical to the
+// per-slice unprojection it replaces, only reassociated as (M·d)·dist.
+//
+// Built in VIEW space and rotated out, NEVER as a difference of two world-space
+// unprojections. This engine runs geodata scenes whose camera sits ~1e5 m from
+// the world origin; differencing two points that large cancels most of the
+// mantissa, and the residual lands in exp(-h) as metres of Y drift — coherent
+// banding across the ground mist. In view space the numbers stay near the eye
+// and the rotation out is exact.
+void froxelWorldRay(vec2 uv, out vec3 ro, out vec3 rd) {
     const vec2 ndc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
-    return (cam.viewInverse * vec4(camViewPointAtDist(ndc, dist), 1.0)).xyz;
+    const vec4 v   = cam.projInverse * vec4(ndc, 0.5, 1.0);
+    const vec3 p   = v.xyz / v.w;// unproject depth is arbitrary — only the ray matters
+    const bool ortho = cam.camAux.x > 0.5;
+    const vec3 ov    = ortho ? vec3(p.xy, 0.0) : vec3(0.0);
+    const vec3 dv    = ortho ? vec3(0.0, 0.0, -1.0) : p / max(-p.z, 1e-6);
+    ro = (cam.viewInverse * vec4(ov, 1.0)).xyz;
+    rd = mat3(cam.viewInverse) * dv;
 }
 
 void main() {
@@ -93,6 +112,9 @@ void main() {
     const float sigmaHom  = fogDriven ? max(dot(fog.sigmaT, vec3(1.0 / 3.0)), pc.volDensity)
                                       : pc.volDensity;
     const vec2  uv = (vec2(col) + 0.5) / vec2(float(kFroxelX), float(kFroxelY));
+    // The column's ray is fixed; only the slice distance moves along it below.
+    vec3 rayO, rayD;
+    froxelWorldRay(uv, rayO, rayD);
 
     vec3  L = vec3(0.0);
     float T = 1.0;
@@ -114,7 +136,7 @@ void main() {
         float sigmaP = 0.0;
         float sigma  = sigmaHom;
         if (hetero) {
-            const vec3 x = froxelWorld(uv, 0.5 * (z0 + z1));
+            const vec3 x = rayO + rayD * (0.5 * (z0 + z1));
             sigmaP = particleDensity(x);
             sigma  = heightFogDensity(x, clouds.timeSec) + sigmaP;
         }

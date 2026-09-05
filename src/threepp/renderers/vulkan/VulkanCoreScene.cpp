@@ -2,6 +2,8 @@
 
 #include "VulkanCpuPhaseProf.hpp"
 
+#include "threepp/core/Assert.hpp"
+
 #include <algorithm>
 #include <cfloat>
 
@@ -9,7 +11,13 @@ namespace threepp {
 
 uint32_t VulkanRenderer::Impl::snapMeshFlags(Mesh& m, const MaterialWithWireframe* wf) const {
             uint32_t fl = kSnapKindMesh;
-            if (auto geom = m.geometry()) {
+            // geometry()/material() are virtual and hand back the shared_ptr by
+            // value, so every call is a dispatch plus a refcount pair. This runs
+            // once per mesh per expansion and nothing below it mutates the mesh,
+            // so one fetch each serves the whole function.
+            const auto geom = m.geometry();
+            const auto mat = m.material();
+            if (geom) {
                 if (geom->hasAttribute("position")) fl |= kSnapHasPos;
                 if (geom->hasAttribute("normal")) fl |= kSnapHasNorm;
             }
@@ -17,24 +25,22 @@ uint32_t VulkanRenderer::Impl::snapMeshFlags(Mesh& m, const MaterialWithWirefram
             if (overlayLayer_ >= 0 &&
                 m.layers.isEnabled(static_cast<unsigned>(overlayLayer_))) fl |= kSnapOverlay;
             if (m.layers.isEnabled(VulkanRenderer::kSensorOnlyLayer)) fl |= kSnapSensorOnly;
-            if (auto mat = m.material(); mat && mat->tetSkinning && mat->tetTexture) fl |= kSnapTet;
+            if (mat && mat->tetSkinning && mat->tetTexture) fl |= kSnapTet;
             // Unlit transparent untextured mesh → raster overlay routing (see
             // kSnapUiBlend). Textured basics stay traced — the overlay fill
             // pipelines have no sampler. Vertex-colored ones route too, via
             // the overlayMeshColoredPipelines / line-geometry-cache path
             // (drawOverlayMesh); before that path existed they stayed in the
             // G-buffer and rendered opaque, ignoring transparent/opacity.
-            if (!(fl & kSnapWire)) {
-                if (auto mat = m.material()) {
-                    if (auto* mb = dynamic_cast<MeshBasicMaterial*>(mat.get());
-                        mb && mb->transparent && !mb->map) fl |= kSnapUiBlend;
-                }
+            if (!(fl & kSnapWire) && mat) {
+                if (auto* mb = dynamic_cast<MeshBasicMaterial*>(mat.get());
+                    mb && mb->transparent && !mb->map) fl |= kSnapUiBlend;
             }
             // ParticleSystem billboard mesh — detected by the unique material-name
             // marker (cheap: a length-mismatch reject for the empty-named common
             // case). Routed to the dedicated billboard pass and excluded from the
             // traced/rasterized scene.
-            if (auto mat = m.material(); mat && mat->name == kParticleMaterialName) fl |= kSnapParticle;
+            if (mat && mat->name == kParticleMaterialName) fl |= kSnapParticle;
             return fl;
         }
 
@@ -503,20 +509,28 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         sp.movedThisFrame = true;
                         sp.aabbValid = false;
                         // Tight refresh: world = meshWorld * instanceMat[j],
-                        // straight off the raw attribute floats (no Matrix4
-                        // temporaries, no bounds-checked getMatrixAt).
+                        // straight off the raw attribute floats (no
+                        // bounds-checked getMatrixAt). The multiply itself
+                        // goes through Matrix4::multiplyMatrices rather than a
+                        // hand expansion, because that is where the SSE2
+                        // kernel lives — 3.9 ns against the scalar form's
+                        // 16.0 ns. Its accumulation order is the scalar form's
+                        // term for term, so this path stays bit-identical to
+                        // the full expansion below AND to instance_expand.comp,
+                        // the `precise` GPU replica that instanceExpandCheck
+                        // compares against bit for bit.
                         const auto& arr = sp.inst->instanceMatrix()->array();
+                        // mw is this matrix's element array; binding the
+                        // Matrix4 itself keeps the mesh world out of the
+                        // per-instance copy entirely.
+                        const Matrix4& meshWorld = *sp.mesh->matrixWorld;
+                        Matrix4 instMat;
+                        Matrix4 world;
                         for (uint32_t j = 0; j < sp.count; ++j) {
-                            const float* b = arr.data() + size_t(j) * 16u;
-                            float* o = entries[sp.first + j].worldMatrix.data();
-                            for (int c = 0; c < 4; ++c) {
-                                const float b0 = b[c * 4 + 0], b1 = b[c * 4 + 1],
-                                            b2 = b[c * 4 + 2], b3 = b[c * 4 + 3];
-                                o[c * 4 + 0] = mw[0] * b0 + mw[4] * b1 + mw[8] * b2 + mw[12] * b3;
-                                o[c * 4 + 1] = mw[1] * b0 + mw[5] * b1 + mw[9] * b2 + mw[13] * b3;
-                                o[c * 4 + 2] = mw[2] * b0 + mw[6] * b1 + mw[10] * b2 + mw[14] * b3;
-                                o[c * 4 + 3] = mw[3] * b0 + mw[7] * b1 + mw[11] * b2 + mw[15] * b3;
-                            }
+                            std::memcpy(instMat.elements.data(), arr.data() + size_t(j) * 16u, 64);
+                            world.multiplyMatrices(meshWorld, instMat);
+                            std::memcpy(entries[sp.first + j].worldMatrix.data(),
+                                        world.elements.data(), 64);
                             // Keep the fingerprint's matrix mirror fresh so a
                             // later non-lean frame's generic compare sees this
                             // frame's state, not a stale lean-era matrix.
@@ -545,6 +559,18 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             std::vector<MeshEntry> built;
             std::vector<LineEntry> builtLines;
             std::vector<EntrySpan> builtSpans;
+            // A rebuild almost always lands within a few entries of the last
+            // one — a rebuild fires on any add/remove/visibility toggle, which
+            // in an editor or a streaming world is routine, not rare. The
+            // members below are not moved-from until the very end of this
+            // block, so they still hold the previous frame's counts here.
+            // Without this a six-figure instanced scene grows from capacity 0
+            // through ~17 reallocations, copying ~2N MeshEntry (~128 B each).
+            // Capacity only — nothing is appended here, so entry ORDER, which
+            // indexes the TLAS and the descriptor rings, is untouched.
+            built.reserve(lastVisibleEntries_.size());
+            builtLines.reserve(lastVisibleLines_.size());
+            builtSpans.reserve(entrySpans_.size());
             // (field, its entry index). Rebuilt only here: a field appearing or
             // disappearing is a structural change, so the snapshot fast path
             // can't reach a frame where this list is stale.
@@ -801,11 +827,22 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 if (inst && inst->count() > 0) {
                     sp.inst           = inst;
                     sp.instMatVersion = inst->instanceMatrix()->version;
+                    // Read the instance matrices straight off the attribute
+                    // rather than through getMatrixAt. The loop stops at
+                    // count(), and setCount() clamps count() to the buffer
+                    // capacity that getMatrixAt range-checks against, so that
+                    // check can only ever pass here; the assert keeps it in
+                    // debug builds in case the invariant is ever broken
+                    // upstream. Hoisting *m->matrixWorld likewise pulls a
+                    // shared_ptr dereference out of the per-instance loop.
+                    const auto& instArr = inst->instanceMatrix()->array();
+                    THREEPP_ASSERT(instArr.size() >= inst->count() * 16u);
+                    const Matrix4& meshWorld = *m->matrixWorld;
                     Matrix4 instMat;
                     Matrix4 world;
                     for (size_t j = 0; j < inst->count(); ++j) {
-                        inst->getMatrixAt(j, instMat);
-                        world.multiplyMatrices(*m->matrixWorld, instMat);
+                        std::memcpy(instMat.elements.data(), instArr.data() + j * 16u, 64);
+                        world.multiplyMatrices(meshWorld, instMat);
                         MeshEntry e{};
                         e.mesh = m;
                         e.instanceIndex = static_cast<uint32_t>(j);

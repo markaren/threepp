@@ -153,6 +153,17 @@ vec4 cloudMarch(vec3 ro, vec3 rd, float maxLod, ivec2 px, float tSceneMax, out f
             for (int j = 0; j < 5; ++j) {
                 const vec3 lp = p + sunDir * (float(j) + 0.5) * lightStep;
                 sunDepth += cloudDensity(lp, time);
+                // Density is non-negative, so this partial sum is a lower bound
+                // on the sun optical depth and the taps we skip could only
+                // darken sunT further. The cut sits at 12 and not at the usual
+                // 8 because what gets dropped is not exp(-τ) but
+                // sunCol · exp(-τ) · phase, and phase peaks near 22.8 in the
+                // forward-scatter lobe: at 8 that gain lifts the residual back
+                // to a percent of a step's radiance, visible as a flat wash on
+                // the sun-facing side of a thick core that swims as the cloud
+                // churns. At 12 it is ~1e-4 of sunCol, against the ambient term
+                // added on the next line that is orders larger.
+                if (sunDepth * sigmaMul * lightStep > 12.0) break;
             }
             const float sunT   = exp(-sunDepth * sigmaMul * lightStep);
             const float powder = 1.0 - exp(-dens * 3.2);

@@ -625,6 +625,10 @@ namespace threepp {
                         std::chrono::high_resolution_clock::now() - frameStart)
                         .count());
         vulkan::cpuprof::Registry::get().endFrame();
+        // Anything compiled this frame is in the cache object now and on disk
+        // only at destruction, which a kill by PID never reaches. Cheap when
+        // nothing changed; see the note on the method.
+        core()->ctx->savePipelineCacheIfChanged();
     }
 
     WindowSize VulkanRenderer::size() const { return core()->size; }

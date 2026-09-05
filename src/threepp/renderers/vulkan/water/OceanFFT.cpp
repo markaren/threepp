@@ -669,10 +669,11 @@ namespace threepp::water {
         pipeVertical_ = makeComputePipeline(ctx_, modV, layoutButterfly_);
         vkDestroyShaderModule(ctx_.device(), modV, nullptr);
 
-        // ── Permute layout: 1 sampled + 1 storage (no PC)
-        const std::array<VkDescriptorSetLayoutBinding, 2> pbb{
-            VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        // ── Permute layout: 1 storage image, read and written (no PC). The
+        // permute is a strict 1:1 texel map, so it runs in place on a single
+        // image rather than sampling one and storing into another.
+        const std::array<VkDescriptorSetLayoutBinding, 1> pbb{
+            VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         };
         VkDescriptorSetLayoutCreateInfo dlciP{};
         dlciP.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -693,9 +694,11 @@ namespace threepp::water {
         vkDestroyShaderModule(ctx_.device(), modP, nullptr);
 
         // ── Pool: 1 twiddle set + kMaxDescGroups write-once groups, each
-        // 4 butterfly (2 horizontal + 2 vertical) + 2 permute sets.
+        // 4 butterfly (2 horizontal + 2 vertical) + 2 permute sets. A butterfly
+        // set is 2 sampled + 1 storage; an in-place permute set is 1 storage
+        // and samples nothing.
         const std::array<VkDescriptorPoolSize, 2> poolSizes{
-            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxDescGroups * (4 * 2 + 2 * 1)},
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxDescGroups * (4 * 2)},
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1 + kMaxDescGroups * (4 * 1 + 2 * 1)},
         };
         VkDescriptorPoolCreateInfo dpci{};
@@ -801,15 +804,22 @@ namespace threepp::water {
         writeButterfly(g.v[0], aSampled, bStorage);
         writeButterfly(g.v[1], bSampled, aStorage);
 
-        auto writePermute = [&](VkDescriptorSet ds, const VkDescriptorImageInfo& read, const VkDescriptorImageInfo& write) {
-            std::array<VkWriteDescriptorSet, 2> w{};
-            for (auto& e : w) { e.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; e.dstSet = ds; e.descriptorCount = 1; }
-            w[0].dstBinding = 0; w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[0].pImageInfo = &read;
-            w[1].dstBinding = 1; w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          w[1].pImageInfo = &write;
-            vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
+        // The permute reads and writes one image in place, so a permute set is
+        // a single storage binding. Both are written even though the butterfly
+        // parity means only p[0] is ever bound today: an allocated set left
+        // undescribed is a landmine for whoever changes that parity.
+        auto writePermute = [&](VkDescriptorSet ds, const VkDescriptorImageInfo& inPlace) {
+            VkWriteDescriptorSet w{};
+            w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet          = ds;
+            w.descriptorCount = 1;
+            w.dstBinding      = 0;
+            w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            w.pImageInfo      = &inPlace;
+            vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
         };
-        writePermute(g.p[0], aSampled, bStorage);
-        writePermute(g.p[1], bSampled, aStorage);
+        writePermute(g.p[0], aStorage);
+        writePermute(g.p[1], bStorage);
 
         groups_.push_back(g);
         return groups_.back();
@@ -862,92 +872,32 @@ namespace threepp::water {
             cmdShaderRWBarrier(cb, pingPong ? scratch.image : input.image);
         }
 
-        // Permute. After 2*logSize butterfly passes, pingPong is back to its
-        // starting parity (false for even logSize). The result lives in `input`
-        // when pingPong is false, in `scratch` when true.
-        const bool resultInScratch = pingPong;
+        // Permute, in place. The loops above flip pingPong exactly 2*logSize
+        // times — an even count whatever logSize is — so it returns to the
+        // `false` it started at and the butterfly result always lands back in
+        // `input`, which is where the caller's contract says the spatial-domain
+        // field must end up. Guard it rather than assume it: an in-place permute
+        // on the wrong image would strand the result in `scratch` silently, and
+        // the ocean would go quietly wrong instead of loudly.
+        if (pingPong) {
+            throw std::runtime_error("[IFFT] butterfly parity left the result in scratch — the in-place permute would strand it there");
+        }
+        // Unlike a butterfly, the permute maps texel (x,y) to texel (x,y) and
+        // nothing else, so each invocation only read-modify-writes its own
+        // texel. That makes it safe to run over `input` directly, which is why
+        // there is no scratch → input copy back here: the result never leaves
+        // the image it is already in, sparing a full N x N RG32F blit and the
+        // four COMPUTE <-> TRANSFER layout barriers it had to be wrapped in.
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipePermute_);
-        // grp.p[0]: read a (=input), write b (=scratch)
-        // grp.p[1]: read b (=scratch), write a (=input)
-        VkDescriptorSet dsP = resultInScratch ? grp.p[1] : grp.p[0];
+        // grp.p[0] permutes a (=input) in place; grp.p[1] is its mirror on b.
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layoutPermute_,
-                                0, 1, &dsP, 0, nullptr);
+                                0, 1, &grp.p[0], 0, nullptr);
         const uint32_t g = groupCountFor(textureSize_);
         vkCmdDispatch(cb, g, g, 1);
 
-        // Final barrier — caller reads the result.
-        cmdShaderRWBarrier(cb, resultInScratch ? input.image : scratch.image);
-
-        // The permute writes to whichever image was NOT holding the result.
-        // We want the spatial-domain result in `input` (caller's contract).
-        // If permute wrote to scratch, copy scratch → input.
-        if (!resultInScratch) {
-            // permute wrote to scratch (since result was in input). Copy back.
-            VkImageCopy copy{};
-            copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            copy.extent         = {textureSize_, textureSize_, 1};
-            // Both already in GENERAL — vkCmdCopyImage requires TRANSFER_SRC/DST.
-            // Use a barrier sandwich to flip layouts for the copy then restore.
-            VkImageMemoryBarrier toSrc{};
-            toSrc.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            toSrc.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
-            toSrc.newLayout     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            toSrc.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            toSrc.image         = scratch.image;
-            toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            toSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-
-            VkImageMemoryBarrier toDst{};
-            toDst.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            toDst.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
-            toDst.newLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            toDst.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            toDst.image         = input.image;
-            toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            toDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-
-            VkImageMemoryBarrier flip[2] = {toSrc, toDst};
-            vkCmdPipelineBarrier(cb,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                VK_PIPELINE_STAGE_TRANSFER_BIT,
-                0, 0, nullptr, 0, nullptr, 2, flip);
-
-            vkCmdCopyImage(cb,
-                scratch.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                input.image,   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                1, &copy);
-
-            // Back to GENERAL for downstream samplers.
-            VkImageMemoryBarrier back[2]{};
-            back[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            back[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            back[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            back[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            back[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-            back[0].image = scratch.image;
-            back[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            back[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            back[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-
-            back[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            back[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            back[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            back[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            back[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-            back[1].image = input.image;
-            back[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            back[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            back[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            vkCmdPipelineBarrier(cb,
-                VK_PIPELINE_STAGE_TRANSFER_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                0, 0, nullptr, 0, nullptr, 2, back);
-        }
+        // Final barrier — the caller, and every downstream reader of `input`
+        // (water_displace, the height readback), reads what the permute wrote.
+        cmdShaderRWBarrier(cb, input.image);
     }
 
     IFFT::~IFFT() {

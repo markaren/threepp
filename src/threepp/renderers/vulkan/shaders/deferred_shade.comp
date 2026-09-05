@@ -926,41 +926,15 @@ void main() {
     SHADOW_EPS = max(1e-3, max(max(abs(worldPos.x), abs(worldPos.y)), abs(worldPos.z)) * 1e-5);
 
     vec3        N         = normalize(nTap.xyz * 2.0 - 1.0);// mutable: FFT chop below
-    // GEOMETRIC SPECULAR AA (Kaplanyan-style): widen the GGX roughness by the
-    // 4-neighbour G-buffer normal variance, so sub-pixel normal detail (dense
-    // normal maps, curvature, distant meshes) shades with the roughness its
-    // pixel footprint actually spans. At 1 spp under the Halton jitter a
-    // sub-pixel glint otherwise flips bright/dark every frame — an alternating
-    // input TAA can never converge (the "distant edges shimmer" bug; the
-    // original fix measured 4.5× lower consecutive-frame diff on the ocean
-    // harness). kernel² capped at 0.04 so macro geometry edges don't go matte.
-    float specAaKernelSq = 0.0;
-    {
-        const ivec2 saMax = ivec2(int(pc.width), int(pc.height)) - 1;
-        const ivec2 saOff[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1));
-        float varN = 0.0;
-        for (int i = 0; i < 4; ++i) {
-            const vec4 nn = texelFetch(gbufNormalTex, clamp(px + saOff[i], ivec2(0), saMax), 0);
-            if (nn.w <= 0.0) continue;// sky (0) / unlit (<0) neighbours carry no surface normal
-            const vec3 dn = normalize(nn.xyz * 2.0 - 1.0) - N;
-            varN += dot(dn, dn) * 0.25;
-        }
-        specAaKernelSq = min(2.0 * varN, 0.04);
-    }
-    const float roughMat  = clamp(nTap.w, 0.04, 1.0);
-    const float roughness = min(sqrt(roughMat * roughMat + specAaKernelSq), 1.0);
-    const float metalness = clamp(am.a, 0.0, 1.0);
+    // The RASTERISED normal, captured before the ocean branch below flips and tilts
+    // N. The specular-AA gather (sunk past the water branch, see there) differences
+    // its four G-buffer neighbours against THIS one: a thin-walled displaced mesh
+    // that misses the water branch still falls through to the opaque path with N
+    // already flipped and chop-tilted, and differencing raster neighbours against
+    // that mutated normal reads as enormous variance — a matte band across the mesh.
+    const vec3  Nraster   = N;
 
     const MaterialDesc pm = mats[id - 1u];
-    // Emissive: factor × emissive MAP. glTF sets emissiveFactor=(1,1,1) whenever
-    // an emissive texture is present (the MAP, not the factor, carries the actual
-    // emission), so applying the bare factor makes textured-emissive submeshes
-    // (e.g. the SWAT exoskeleton) glow full white. The primary UV comes from the
-    // G-buffer (gbuffer.frag attachment 3). Mirrors the reflection-hit path
-    // (hitTex at the hit UV); texIndex < 0 → factor unchanged (no regression).
-    const vec2 primUv     = (msSampleIdx >= 0) ? texelFetch(gbufUvMS, px, msSampleIdx).rg : texelFetch(gbufUvTex, px, 0).rg;
-    const vec3 emissive   = hitTex(pm.emissiveTexIndex, pm.uvTransformEmissive, primUv,
-                                   pm.emissive * pm.emissiveIntensity);
 
     const vec3 V          = normalize(camPos - worldPos);
     const bool shadowsOn  = (pc.flags & 1u) != 0u;
@@ -1110,6 +1084,46 @@ void main() {
         return;
     }
 
+    // GEOMETRIC SPECULAR AA (Kaplanyan-style): widen the GGX roughness by the
+    // 4-neighbour G-buffer normal variance, so sub-pixel normal detail (dense
+    // normal maps, curvature, distant meshes) shades with the roughness its
+    // pixel footprint actually spans. At 1 spp under the Halton jitter a
+    // sub-pixel glint otherwise flips bright/dark every frame — an alternating
+    // input TAA can never converge (the "distant edges shimmer" bug; the
+    // original fix measured 4.5× lower consecutive-frame diff on the ocean
+    // harness). kernel² capped at 0.04 so macro geometry edges don't go matte.
+    // Sits BELOW the water return: an ocean pixel consumes none of this (shadeWater
+    // derives its own roughness from fineKernelSq and reads no emissive map), so
+    // for it the four neighbour fetches and the emissive tap were pure dead work.
+    // The variance is measured against Nraster, the pre-flip pre-tilt normal — see
+    // its capture above for why differencing against the mutated N goes matte.
+    float specAaKernelSq = 0.0;
+    {
+        const ivec2 saMax = ivec2(int(pc.width), int(pc.height)) - 1;
+        const ivec2 saOff[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1));
+        float varN = 0.0;
+        for (int i = 0; i < 4; ++i) {
+            const vec4 nn = texelFetch(gbufNormalTex, clamp(px + saOff[i], ivec2(0), saMax), 0);
+            if (nn.w <= 0.0) continue;// sky (0) / unlit (<0) neighbours carry no surface normal
+            const vec3 dn = normalize(nn.xyz * 2.0 - 1.0) - Nraster;
+            varN += dot(dn, dn) * 0.25;
+        }
+        specAaKernelSq = min(2.0 * varN, 0.04);
+    }
+    const float roughMat  = clamp(nTap.w, 0.04, 1.0);
+    const float roughness = min(sqrt(roughMat * roughMat + specAaKernelSq), 1.0);
+    const float metalness = clamp(am.a, 0.0, 1.0);
+
+    // Emissive: factor × emissive MAP. glTF sets emissiveFactor=(1,1,1) whenever
+    // an emissive texture is present (the MAP, not the factor, carries the actual
+    // emission), so applying the bare factor makes textured-emissive submeshes
+    // (e.g. the SWAT exoskeleton) glow full white. The primary UV comes from the
+    // G-buffer (gbuffer.frag attachment 3). Mirrors the reflection-hit path
+    // (hitTex at the hit UV); texIndex < 0 → factor unchanged (no regression).
+    const vec2 primUv     = (msSampleIdx >= 0) ? texelFetch(gbufUvMS, px, msSampleIdx).rg : texelFetch(gbufUvTex, px, 0).rg;
+    const vec3 emissive   = hitTex(pm.emissiveTexIndex, pm.uvTransformEmissive, primUv,
+                                   pm.emissive * pm.emissiveIntensity);
+
     const float NdotV = max(dot(N, V), 1e-4);
     vec3        F0    = mix(vec3(0.04) * pm.specularIntensity * pm.specularColor, albedo, metalness);
     // Thin-film iridescence (KHR_materials_iridescence). Modulates F0 with the
@@ -1147,13 +1161,17 @@ void main() {
     bool giSkip = false;// checkerboard carry (set in the adaptive block below)
     int nSRays = 2;// shadow-ratio rays: 2 while fresh / in-penumbra, 1 converged
     if (demodIndirect) {
-        const vec2 mv   = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).rg;
+        // ONE motion tap for both halves of the reproject: .rg is the NDC delta and
+        // .b this surface's prev NDC depth, and the depth gate below samples the
+        // same texel at the same uv, so a second fetch returns the same bits.
+        const vec3 mot  = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).rgb;
+        const vec2 mv   = mot.rg;
         const vec2 pNdc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + mv;
         const vec2 pUv  = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
         float ph = 0.0;// prev histLen at the reprojected pixel (0 = off-screen / disoccluded ⇒ fresh)
         if (all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)))) {
             const vec3  pn = texture(gbufNormalPrevTex, paneToPhys(gbufNormalPrevTex, pUv)).xyz * 2.0 - 1.0;
-            const float surfD = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).b;    // this surface's prev NDC depth
+            const float surfD = mot.b;    // this surface's prev NDC depth
             const float bufD  = texture(gbufDepthPrevTex, paneToPhys(gbufDepthPrevTex, pUv)).x;// prev depth buffer at the reproject
             const vec4  svh = cam.projInverse * vec4(pNdc, surfD, 1.0);
             const vec4  bvh = cam.projInverse * vec4(pNdc, bufD, 1.0);

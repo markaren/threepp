@@ -781,11 +781,23 @@ void VulkanRenderer::Impl::drainLodResults() {
 void VulkanRenderer::Impl::refreshSkinnedBlas(SkinnedMesh& sm, SkinnedMeshState& st) {
             if (!st.blas || !sm.skeleton || st.boneCount == 0) return;
 
-            // Recompute per-bone matrix = bones[b]->matrixWorld * boneInverse[b].
-            // Mirrors what cpuSkin used to do on host; cheap (a few dozen
-            // matrix multiplies). Upload into the bones[..] section of the
-            // host-visible boneMatrices buffer (skipping the [bindMat, bindInv]
-            // prefix written once in ensureSkinnedBlas).
+            // Flatten the pose first. The per-frame deformer scan already calls
+            // update() for every skinned mesh it has a state for, but
+            // ensureSkinnedBlas reaches here for a mesh the scan has never seen
+            // — its boneMatrices is still the constructor's zero-filled vector,
+            // and adopting that below would collapse the character onto the
+            // origin for its first frame, in the ray-traced shadows and
+            // reflections too. update() is idempotent, and its bone-texture
+            // branch is dead on this backend (boneTexture is only ever built by
+            // GLRenderer).
+            sm.skeleton->update();
+
+            // Per-bone matrix = bones[b]->matrixWorld * boneInverse[b] — which
+            // is precisely the array update() just flattened, so take it whole
+            // rather than rebuilding it a bone at a time. Upload into the
+            // bones[..] section of the host-visible boneMatrices buffer
+            // (skipping the [bindMat, bindInv] prefix written once in
+            // ensureSkinnedBlas).
             const auto& skel = *sm.skeleton;
             // Advance the ring FIRST: this write must not land in the slot an
             // in-flight dispatch is still reading (see
@@ -805,13 +817,31 @@ void VulkanRenderer::Impl::refreshSkinnedBlas(SkinnedMesh& sm, SkinnedMeshState&
             std::memcpy(static_cast<char*>(mapped) + 16 * sizeof(float),
                         sm.bindMatrixInverse.elements.data(), 16 * sizeof(float));
             char* dst = static_cast<char*>(mapped) + 32 * sizeof(float);
-            for (uint32_t b = 0; b < st.boneCount; ++b) {
-                Matrix4 m;
-                if (b < skel.bones.size() && skel.bones[b]) {
-                    m.multiplyMatrices(*skel.bones[b]->matrixWorld, skel.boneInverses[b]);
+            // The admission test is on the BONE count, not the float count:
+            // computeBoneTexture() swaps boneMatrices for a power-of-two padded
+            // vector, so a float-count test would pass happily while the copy
+            // ran off the end of the real bones into padding zeros. Both
+            // conditions hold for every skeleton Skeleton::create builds; the
+            // bone-at-a-time fallback covers a skeleton whose bone list was
+            // mutated behind this state's back.
+            //
+            // A null bone slot now uploads boneInverses[b] where the old loop
+            // uploaded identity — that is what Skeleton has always flattened
+            // into boneMatrices, and what the GL path and three.js both use, so
+            // this closes a divergence rather than opening one.
+            if (skel.bones.size() >= st.boneCount &&
+                skel.boneMatrices.size() >= size_t(st.boneCount) * 16u) {
+                std::memcpy(dst, skel.boneMatrices.data(),
+                            size_t(st.boneCount) * 16u * sizeof(float));
+            } else {
+                for (uint32_t b = 0; b < st.boneCount; ++b) {
+                    Matrix4 m;
+                    if (b < skel.bones.size() && skel.bones[b]) {
+                        m.multiplyMatrices(*skel.bones[b]->matrixWorld, skel.boneInverses[b]);
+                    }
+                    std::memcpy(dst + b * 16 * sizeof(float),
+                                m.elements.data(), 16 * sizeof(float));
                 }
-                std::memcpy(dst + b * 16 * sizeof(float),
-                            m.elements.data(), 16 * sizeof(float));
             }
             flushHostWrites(ctx->allocator(), slot.alloc);
             vmaUnmapMemory(ctx->allocator(), slot.alloc);
@@ -1512,6 +1542,29 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
             if (pendingDynamicGeomRefits_.empty() && pendingDynamicPrevResyncs_.empty()) return;
             THREEPP_CPUPROF("frame.dynGeomRefit");
 
+            // Scratch that outlives the call. Every one of these used to be a
+            // fresh vector per frame, and packedNormals a fresh one per RECORD:
+            // a 200k-vertex graduated deformer paid a demand-zeroed 800 KB
+            // malloc + free every frame for an array the very next line
+            // overwrote element by element. Holding the storage across frames
+            // costs one high-water allocation and nothing after that.
+            //
+            // Per-thread rather than per-renderer because recording is
+            // single-threaded per renderer and none of these carries anything
+            // across a call — each is resized and refilled before it is read —
+            // so two renderers sharing a thread cannot observe each other. The
+            // build-info arrays take clear() + resize(), never a bare resize:
+            // Phase 6 leaves several fields of
+            // VkAccelerationStructureBuildGeometryInfoKHR unassigned and relies
+            // on the value-initialisation a fresh vector used to hand it.
+            static thread_local std::vector<size_t>   liveOps;
+            static thread_local std::vector<uint32_t> packedNormals;
+            static thread_local std::vector<VkAccelerationStructureGeometryTrianglesDataKHR> triDatas;
+            static thread_local std::vector<VkAccelerationStructureGeometryKHR>              blasGeoms;
+            static thread_local std::vector<VkAccelerationStructureBuildGeometryInfoKHR>     blasBuilds;
+            static thread_local std::vector<VkAccelerationStructureBuildRangeInfoKHR>        ranges;
+            static thread_local std::vector<const VkAccelerationStructureBuildRangeInfoKHR*> rangePtrs;
+
             // Phase 0 — same finite-position contract as refreshGeomBlasBatch's
             // Phase A: a NaN reaching the BLAS build is VK_ERROR_DEVICE_LOST on
             // NVIDIA. A bad op is dropped (its geomVersion stays stale, so a
@@ -1527,7 +1580,7 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
             // the exported buffer, which is the memory that actually reaches the
             // build. (Same reason interop records never fail the attribute test:
             // a producer-owned geometry need not carry host arrays at all.)
-            std::vector<size_t> liveOps;
+            liveOps.clear();
             liveOps.reserve(pendingDynamicGeomRefits_.size());
             for (size_t k = 0; k < pendingDynamicGeomRefits_.size(); ++k) {
                 const auto& geom = *pendingDynamicGeomRefits_[k].geom;
@@ -1603,13 +1656,17 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                                   posAttr->array().data(), posBytes, slotOff);
                 if (rec.packedMask & 1u) {
                     const auto& nrm = nrmAttr->array();
-                    std::vector<uint32_t> packed(rec.vertexCount);
+                    // Bare resize, not clear() + resize(): the loop assigns
+                    // every element of [0, vertexCount), so the zero-fill a
+                    // fresh vector performed was dead stores. size() is still
+                    // exactly vertexCount, which is what the upload measures.
+                    packedNormals.resize(rec.vertexCount);
                     for (uint32_t v = 0; v < rec.vertexCount; ++v) {
                         const auto [ox, oy] = octEncode(nrm[v * 3u + 0], nrm[v * 3u + 1], nrm[v * 3u + 2]);
-                        packed[v] = packSnorm2x16(ox, oy);
+                        packedNormals[v] = packSnorm2x16(ox, oy);
                     }
-                    uploadHostVisible(ctx->allocator(), rec.dynStaging, packed.data(),
-                                      packed.size() * sizeof(uint32_t), slotOff + posBytes);
+                    uploadHostVisible(ctx->allocator(), rec.dynStaging, packedNormals.data(),
+                                      packedNormals.size() * sizeof(uint32_t), slotOff + posBytes);
                 } else {
                     uploadHostVisible(ctx->allocator(), rec.dynStaging, nrmAttr->array().data(),
                                       nrmAttr->array().size() * sizeof(float), slotOff + posBytes);
@@ -1803,13 +1860,22 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
             if (anyRefit) {
                 // Phase 6 — batched BLAS refit, the recorded twin of
                 // refreshGeomBlasBatch's Phase D. The build-info structs are
-                // consumed at record time, so stack storage is enough here.
+                // consumed by the record below and never outlive it, so the
+                // frame scratch declared at the top of the function carries
+                // them; clear() before resize() so every element is
+                // value-initialised exactly as a freshly constructed vector
+                // would be.
                 const uint32_t N = static_cast<uint32_t>(liveOps.size());
-                std::vector<VkAccelerationStructureGeometryTrianglesDataKHR> triDatas(N);
-                std::vector<VkAccelerationStructureGeometryKHR>              blasGeoms(N);
-                std::vector<VkAccelerationStructureBuildGeometryInfoKHR>     blasBuilds(N);
-                std::vector<VkAccelerationStructureBuildRangeInfoKHR>        ranges(N);
-                std::vector<const VkAccelerationStructureBuildRangeInfoKHR*> rangePtrs(N);
+                triDatas.clear();
+                triDatas.resize(N);
+                blasGeoms.clear();
+                blasGeoms.resize(N);
+                blasBuilds.clear();
+                blasBuilds.resize(N);
+                ranges.clear();
+                ranges.resize(N);
+                rangePtrs.clear();
+                rangePtrs.resize(N);
                 for (uint32_t kk = 0; kk < N; ++kk) {
                     auto& rec = *pendingDynamicGeomRefits_[liveOps[kk]].rec;
                     const bool indexed = rec.indexCount != 0u;
