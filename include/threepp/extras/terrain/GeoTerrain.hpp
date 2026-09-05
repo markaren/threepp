@@ -51,6 +51,8 @@
 
 namespace threepp::terrain {
 
+    struct FootprintMask;// defined below; GeoTerrainOptions only holds a handle
+
     // Tunables for the geodata provider. Heights are absolute metres (the pack's
     // NN2000 datum); defaults suit a Norwegian fjord/mountain region.
     struct GeoTerrainOptions {
@@ -120,10 +122,21 @@ namespace threepp::terrain {
         float wetFlowLo = 0.52f;    // log-normalised accumulation window for wet rock
         float wetFlowHi = 0.72f;
         float screeFlowLo = 0.48f;  // fans want drainage AND a relaxed slope
-        // OSM natural=bare_rock / scree / scrub / heath polygons as cover. The
-        // A/B switch for the surveyed cover alone (the CHM forest paint above
-        // stays on): NT_NO_LANDUSE_PAINT=1 in the demo.
+        // OSM natural=bare_rock / scree / scrub / heath polygons as cover, AND
+        // (LandUsePaint below) the surveyed town SURFACING: parking asphalt with
+        // bay stripes, gardens and pitches that block the urban grey, gravel
+        // playgrounds, footpaths and service drives, the quay apron. The A/B
+        // switch for the surveyed cover alone (the CHM forest paint, the urban
+        // fabric and the road paint all stay on): NT_NO_LANDUSE_PAINT=1.
         bool landUsePaint = true;
+        float landUseCell = 2.f;// class-raster resolution (m)
+        std::array<float, 3> landUseConcrete = {0.150f, 0.145f, 0.135f};// sRGB quay/pier
+        std::array<float, 3> landUsePitch = {0.150f, 0.290f, 0.095f};   // sRGB sports turf
+        std::array<float, 3> landUseRock = {0.235f, 0.225f, 0.210f};    // sRGB breakwater armour
+        // Quay apron cells (see the demo): the ground the harbour buildings
+        // actually stand on, which the lidar read as sea. Painted concrete so
+        // the reclaimed land is not a lawn running into the water.
+        std::shared_ptr<const FootprintMask> apronMask;
     };
 
     // ── FootprintMask: a hard yes/no raster of polygon coverage ─────────────
@@ -215,6 +228,43 @@ namespace threepp::terrain {
             }
         }
 
+        // The same crossing-number scan, but the caller decides what to write.
+        // `plot(ix, iz, px, pz)` is invoked for every cell centre inside `ring`.
+        // Split out of geoRasterRing so a class-code raster (LandUsePaint) and a
+        // yes/no raster share ONE inside test: two copies of a point-in-polygon
+        // loop is two chances to disagree about which cells a lot covers.
+        template<class F>
+        void geoScanRing(const std::vector<Vector2>& ring, int dim, float cell, float half,
+                         F&& plot) {
+            if (ring.size() < 3 || dim < 2) return;
+            float minX = ring[0].x, maxX = ring[0].x, minZ = ring[0].y, maxZ = ring[0].y;
+            for (const auto& p : ring) {
+                minX = std::min(minX, p.x);
+                maxX = std::max(maxX, p.x);
+                minZ = std::min(minZ, p.y);
+                maxZ = std::max(maxZ, p.y);
+            }
+            const int ix0 = std::max(0, static_cast<int>(std::floor((minX + half) / cell)));
+            const int ix1 = std::min(dim - 1, static_cast<int>(std::ceil((maxX + half) / cell)));
+            const int iz0 = std::max(0, static_cast<int>(std::floor((minZ + half) / cell)));
+            const int iz1 = std::min(dim - 1, static_cast<int>(std::ceil((maxZ + half) / cell)));
+            for (int iz = iz0; iz <= iz1; ++iz) {
+                const float pz = -half + static_cast<float>(iz) * cell;
+                for (int ix = ix0; ix <= ix1; ++ix) {
+                    const float px = -half + static_cast<float>(ix) * cell;
+                    bool in = false;
+                    for (size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++) {
+                        const Vector2& a = ring[i];
+                        const Vector2& c = ring[j];
+                        if ((a.y > pz) != (c.y > pz) &&
+                            px < (c.x - a.x) * (pz - a.y) / (c.y - a.y) + a.x)
+                            in = !in;
+                    }
+                    if (in) plot(ix, iz, px, pz);
+                }
+            }
+        }
+
         // Chebyshev dilation by `r` cells, separable (two max-filter passes).
         inline void geoDilateMask(FootprintMask& mask, int r) {
             if (r <= 0 || mask.dim < 2) return;
@@ -277,6 +327,184 @@ namespace threepp::terrain {
         if (n == 0) return nullptr;
         detail::geoDilateMask(*mask, static_cast<int>(std::lround(dilateMetres / mask->cell)));
         return mask;
+    }
+
+    // ── LandUsePaint: the surveyed GROUND SURFACE, rasterised once ──────────
+    //
+    // `UrbanMask` says how built the land is; `FootprintMask` says whether a
+    // point is inside a polygon set. This says WHAT THE GROUND IS MADE OF at a
+    // point, from the OSM survey: the lot is asphalt, the pitch is grass, the
+    // path is gravel, the quay is concrete. One byte per 2 m cell, so the whole
+    // town's surfacing costs 16 MB and one lookup.
+    //
+    // Sampling is BILINEAR over per-class indicators, not over the codes (the
+    // mean of "asphalt" and "grass" is not a class): the four corner codes each
+    // contribute their bilinear weight to their own slot, so a lot's edge
+    // arrives as a 2 m ramp from lot to ground instead of a staircase, and a
+    // 2 m footpath keeps a soft edge at the ~1 m near-tile texel size.
+    struct LandUsePaint {
+        enum Cls : std::uint8_t {
+            None = 0,
+            Asphalt,  // parking, yards, paved footways/cycleways/service drives
+            Bay,      // parking-bay stripe: the same asphalt, one shade lighter
+            Gravel,   // playgrounds, paths, steps, gravel yards
+            Grass,    // mown ground the urban paint must not grey over
+            Pitch,    // sports turf: greener and brighter than a lawn
+            Concrete, // quay apron / pier deck
+            Rock,     // breakwater armour
+            ClsCount
+        };
+        int dim = 0;
+        float cell = 2.f;
+        float half = 0.f;
+        std::vector<std::uint8_t> m;
+
+        [[nodiscard]] bool valid() const { return dim > 1 && !m.empty(); }
+
+        [[nodiscard]] std::uint8_t code(int ix, int iz) const {
+            if (ix < 0 || iz < 0 || ix >= dim || iz >= dim) return None;
+            return m[static_cast<size_t>(iz) * dim + ix];
+        }
+
+        using Mix = std::array<float, ClsCount>;
+
+        [[nodiscard]] Mix sample(float x, float z) const {
+            Mix w{};
+            if (dim < 2) return w;
+            const float fx = (x + half) / cell, fz = (z + half) / cell;
+            const int ix = static_cast<int>(std::floor(fx)), iz = static_cast<int>(std::floor(fz));
+            const float tx = fx - static_cast<float>(ix), tz = fz - static_cast<float>(iz);
+            w[code(ix, iz)] += (1.f - tx) * (1.f - tz);
+            w[code(ix + 1, iz)] += tx * (1.f - tz);
+            w[code(ix, iz + 1)] += (1.f - tx) * tz;
+            w[code(ix + 1, iz + 1)] += tx * tz;
+            return w;
+        }
+    };
+
+    // Rasterise landuse.json (plus an optional quay-apron mask) into the class
+    // raster above. Order is deliberate and is the whole design:
+    //   1. soft cover (grass, pitch) — the classes that BLOCK the urban paint;
+    //   2. hard cover (parking, playground, yards) — a lot inside a park wins;
+    //   3. lines (footways, paths, service drives) — a path crosses both;
+    //   4. the apron, only where nothing else was drawn.
+    // Parking lots also get bay stripes: 2.5 m bands along the lot's long axis
+    // (its longest ring edge — parking lots are near-rectangular, and the full
+    // rotating-calipers fit buys nothing a 200 m read can see), alternating
+    // Asphalt/Bay so the lot carries texture rather than one flat grey.
+    inline std::shared_ptr<const LandUsePaint> buildLandUsePaint(
+            const GeoTerrainPack& pack, float cell = 2.f,
+            const std::shared_ptr<const FootprintMask>& apron = nullptr) {
+        if (pack.region.worldSize <= 0.f) return nullptr;
+        if (!pack.hasLandUse() && !apron) return nullptr;
+        auto p = std::make_shared<LandUsePaint>();
+        p->cell = std::max(0.5f, cell);
+        p->half = pack.region.worldSize * 0.5f;
+        p->dim = static_cast<int>(std::ceil(pack.region.worldSize / p->cell)) + 1;
+        p->m.assign(static_cast<size_t>(p->dim) * p->dim, LandUsePaint::None);
+        const int dim = p->dim;
+        const float cs = p->cell, half = p->half;
+        auto& m = p->m;
+        const auto put = [&](int ix, int iz, std::uint8_t v) {
+            m[static_cast<size_t>(iz) * dim + ix] = v;
+        };
+
+        // A cheap deterministic per-polygon draw (yard: asphalt or gravel).
+        const auto idHash = [](const std::string& s) {
+            unsigned int h = 2166136261u;
+            for (char c : s) h = (h ^ static_cast<unsigned char>(c)) * 16777619u;
+            return h;
+        };
+
+        for (int pass = 0; pass < 2; ++pass) {
+            for (const auto& poly : pack.landuse.polygons) {
+                std::uint8_t v = LandUsePaint::None;
+                bool stripes = false;
+                if (pass == 0) {
+                    if (poly.cls == "grass") v = LandUsePaint::Grass;
+                    else if (poly.cls == "pitch") v = LandUsePaint::Pitch;
+                } else {
+                    if (poly.cls == "parking") {
+                        v = LandUsePaint::Asphalt;
+                        stripes = true;
+                    } else if (poly.cls == "playground") v = LandUsePaint::Gravel;
+                    else if (poly.cls == "yard")
+                        v = (idHash(poly.id) & 1u) ? LandUsePaint::Asphalt : LandUsePaint::Gravel;
+                    else if (poly.cls == "breakwater") v = LandUsePaint::Rock;
+                }
+                if (v == LandUsePaint::None || poly.outer.size() < 3) continue;
+                if (!stripes) {
+                    detail::geoScanRing(poly.outer, dim, cs, half,
+                                        [&](int ix, int iz, float, float) { put(ix, iz, v); });
+                    continue;
+                }
+                // Long axis = longest ring edge; bays every 2.5 m along it.
+                Vector2 axis(1.f, 0.f);
+                float bestLen = -1.f;
+                for (size_t i = 0, n = poly.outer.size(); i < n; ++i) {
+                    const Vector2& a = poly.outer[i];
+                    const Vector2& b = poly.outer[(i + 1) % n];
+                    const float dx = b.x - a.x, dz = b.y - a.y;
+                    const float l = dx * dx + dz * dz;
+                    if (l > bestLen) {
+                        bestLen = l;
+                        axis.set(dx, dz);
+                    }
+                }
+                if (bestLen > 1e-6f) axis.divideScalar(std::sqrt(bestLen));
+                const Vector2 o0 = poly.outer[0];
+                detail::geoScanRing(poly.outer, dim, cs, half, [&](int ix, int iz, float px, float pz) {
+                    const float s = (px - o0.x) * axis.x + (pz - o0.y) * axis.y;
+                    const int band = static_cast<int>(std::floor(s / 2.5f));
+                    put(ix, iz, ((band & 1) != 0) ? LandUsePaint::Bay : LandUsePaint::Asphalt);
+                });
+            }
+        }
+
+        // Lines: walk each polyline and stamp a disc of its own width. A 2 m
+        // footway on a 2 m raster is one cell wide, which is exactly what it
+        // should be — the bilinear sample then softens it to a 4 m ramp, and at
+        // 200 m that reads as a path rather than a hairline.
+        for (const auto& l : pack.landuse.lines) {
+            std::uint8_t v = LandUsePaint::None;
+            if (l.cls == "footway" || l.cls == "cycleway" || l.cls == "pedestrian" ||
+                l.cls == "service")
+                v = LandUsePaint::Asphalt;
+            else if (l.cls == "path" || l.cls == "steps")
+                v = LandUsePaint::Gravel;
+            else if (l.cls == "pier")
+                v = LandUsePaint::Concrete;
+            if (v == LandUsePaint::None || l.points.size() < 2) continue;
+            const float hw = std::max(0.5f * (l.width > 0.f ? l.width : 2.f), 0.6f * cs);
+            const int r = std::max(0, static_cast<int>(std::floor(hw / cs)));
+            const float step = std::max(0.5f * cs, 0.5f);
+            for (size_t i = 1; i < l.points.size(); ++i) {
+                const float ax = l.points[i - 1].x, az = l.points[i - 1].y;
+                const float dx = l.points[i].x - ax, dz = l.points[i].y - az;
+                const float len = std::sqrt(dx * dx + dz * dz);
+                if (len < 1e-4f) continue;
+                for (float t = 0.f; t <= len; t += step) {
+                    const float x = ax + dx * (t / len), z = az + dz * (t / len);
+                    const int cx = static_cast<int>(std::lround((x + half) / cs));
+                    const int cz = static_cast<int>(std::lround((z + half) / cs));
+                    for (int b = cz - r; b <= cz + r; ++b)
+                        for (int a = cx - r; a <= cx + r; ++a)
+                            if (a >= 0 && b >= 0 && a < dim && b < dim) put(a, b, v);
+                }
+            }
+        }
+
+        if (apron && apron->valid()) {
+            for (int iz = 0; iz < dim; ++iz) {
+                const float pz = -half + static_cast<float>(iz) * cs;
+                for (int ix = 0; ix < dim; ++ix) {
+                    if (m[static_cast<size_t>(iz) * dim + ix] != LandUsePaint::None) continue;
+                    const float px = -half + static_cast<float>(ix) * cs;
+                    if (apron->inside(px, pz)) put(ix, iz, LandUsePaint::Concrete);
+                }
+            }
+        }
+        return p;
     }
 
     namespace detail {
@@ -861,6 +1089,12 @@ namespace threepp::terrain {
         const std::shared_ptr<const UrbanMask> urban =
                 o.paintUrban ? buildUrbanMask(pack, o) : nullptr;
 
+        // The surveyed ground surface (lots, gardens, paths, the quay apron),
+        // layered BETWEEN the urban fabric and the road paint: the survey knows
+        // what the two-tone fBm was guessing at, and the roads still win on top.
+        const std::shared_ptr<const LandUsePaint> luPaint =
+                o.landUsePaint ? buildLandUsePaint(pack, o.landUseCell, o.apronMask) : nullptr;
+
         TerrainProvider prov;
 
         // Height: pure bicubic of the (carved) DEM + corridor-faded sub-grid
@@ -934,8 +1168,12 @@ namespace threepp::terrain {
             const std::array<float, 3> urbA = o.urbanAsphalt;
             const std::array<float, 3> urbG = o.urbanGravel;
             const float urbMax = o.urbanMax;
-            prov.albedo = [rules, &network, urban, cover, paint, edgeFeather, roadCol, urbA, urbG,
-                           urbMax](float x, float z, float h, float slope, float* rgb) {
+            const std::array<float, 3> luConc = o.landUseConcrete;
+            const std::array<float, 3> luPit = o.landUsePitch;
+            const std::array<float, 3> luRock = o.landUseRock;
+            prov.albedo = [rules, &network, urban, cover, luPaint, paint, edgeFeather, roadCol,
+                           urbA, urbG, urbMax, luConc, luPit,
+                           luRock](float x, float z, float h, float slope, float* rgb) {
                 const Rgb c = rules.evaluate(x, z, h, slope);
                 rgb[0] = c[0];
                 rgb[1] = c[1];
@@ -1001,8 +1239,20 @@ namespace threepp::terrain {
                         rgb[2] *= 1.f - k * 0.86f;
                     }
                 }
+                // ── surveyed surfacing ──────────────────────────────────────
+                // Sampled BEFORE the urban blend because two of its classes
+                // (grass, pitch) exist to SUPPRESS that blend: a park inside a
+                // dense block is still a park, and greying it over is exactly
+                // the "houses scattered on one flat grey" the urban paint was
+                // meant to cure in the other direction.
+                LandUsePaint::Mix lu{};
+                float green = 0.f;
+                if (luPaint) {
+                    lu = luPaint->sample(x, z);
+                    green = std::clamp(lu[LandUsePaint::Grass] + lu[LandUsePaint::Pitch], 0.f, 1.f);
+                }
                 if (urban) {
-                    const float uw = urban->sample(x, z) * urbMax;
+                    const float uw = urban->sample(x, z) * urbMax * (1.f - green);
                     if (uw > 0.f) {
                         // Two-tone fabric: ~30 m fBm patches alternate between
                         // asphalt lots and gravel/paved yards, so towns get
@@ -1014,6 +1264,27 @@ namespace threepp::terrain {
                             rgb[i] += (urb - rgb[i]) * uw;
                         }
                     }
+                }
+                if (luPaint) {
+                    // Same 20 m fBm the urban fabric carries: an unbroken field
+                    // of one colour is the tell, whatever the colour is.
+                    const float pat = 0.88f + 0.24f * detail::geoFbm(x * 0.05f, z * 0.05f);
+                    const auto lay = [&](const std::array<float, 3>& col, float w) {
+                        if (w <= 0.002f) return;
+                        for (int i = 0; i < 3; ++i) rgb[i] += (col[i] * pat - rgb[i]) * w;
+                    };
+                    // The bay stripe is the SAME asphalt one shade up, not white
+                    // paint: at 200 m a lot reads as bays because of the rhythm,
+                    // and real white bay lines are 10 cm on a 1 m texel.
+                    const std::array<float, 3> bayCol{roadCol[0] * 0.55f + 0.085f,
+                                                      roadCol[1] * 0.55f + 0.085f,
+                                                      roadCol[2] * 0.55f + 0.088f};
+                    lay(roadCol, lu[LandUsePaint::Asphalt] * 0.90f);
+                    lay(bayCol, lu[LandUsePaint::Bay] * 0.90f);
+                    lay(urbG, lu[LandUsePaint::Gravel] * 0.85f);
+                    lay(luConc, lu[LandUsePaint::Concrete] * 0.92f);
+                    lay(luRock, lu[LandUsePaint::Rock] * 0.85f);
+                    lay(luPit, lu[LandUsePaint::Pitch] * 0.70f);
                 }
                 if (paint) {
                     const float w = network.pavedWeight(x, z, edgeFeather);
@@ -1033,8 +1304,8 @@ namespace threepp::terrain {
         {
             const float edgeFeather = o.roadEdgeFeather;
             const bool paint = o.paintRoads;
-            prov.weights = [rules, &network, urban, cover, edgeFeather, paint](float x, float z, float h,
-                                                                               float slope, float* w4) {
+            prov.weights = [rules, &network, urban, cover, luPaint, edgeFeather,
+                            paint](float x, float z, float h, float slope, float* w4) {
                 rules.evaluateWeights(x, z, h, slope, w4);
                 // Land cover moves STRUCTURE too, not just colour: forest floor
                 // and bench moss are soft (grass band 0), a talus fan is loose
@@ -1060,8 +1331,22 @@ namespace threepp::terrain {
                     // should change here.
                 }
                 float keep = 1.f;
+                float green = 0.f;
+                if (luPaint) {
+                    const auto lu = luPaint->sample(x, z);
+                    green = std::clamp(lu[LandUsePaint::Grass] + lu[LandUsePaint::Pitch], 0.f, 1.f);
+                    // Surveyed HARD surfacing kills band structure exactly as
+                    // pavement does — a grass clump crawling over a quay or a
+                    // parking lot reads as damage. Grass and pitch do the
+                    // opposite: they buy the structure back from the urban mask.
+                    const float hard = std::clamp(lu[LandUsePaint::Asphalt] + lu[LandUsePaint::Bay] +
+                                                          lu[LandUsePaint::Gravel] +
+                                                          lu[LandUsePaint::Concrete],
+                                                  0.f, 1.f);
+                    keep *= 1.f - hard * 0.9f;
+                }
                 if (paint) keep *= 1.f - network.pavedWeight(x, z, edgeFeather);
-                if (urban) keep *= 1.f - urban->sample(x, z);
+                if (urban) keep *= 1.f - urban->sample(x, z) * (1.f - green);
                 if (keep < 1.f) {
                     w4[0] *= keep;
                     w4[1] *= keep;

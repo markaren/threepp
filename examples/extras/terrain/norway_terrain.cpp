@@ -35,6 +35,7 @@
 #include "threepp/extras/terrain/GeoTerrainPack.hpp"
 #include "threepp/extras/terrain/TerrainScatter.hpp"
 #include "threepp/extras/terrain/TerrainTiles.hpp"
+#include "threepp/extras/terrain/UrbanProps.hpp"
 #include "threepp/extras/vegetation/CanopyForest.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
@@ -520,6 +521,59 @@ int main(int argc, char** argv) {
         std::cout << std::flush;
     }
 
+    // ── QUAY APRON ─────────────────────────────────────────────────────────
+    // Ålesund's harbour front is reclaimed land, and the lidar reads reclaimed
+    // quay as WATER: the DTM puts those cells at exactly seaLevel, and the sea
+    // sink below then drops them 6 m — so the warehouses along Skansekaia stand
+    // with their walls in the fjord (phaseC2_aksla_near.png). Nothing downstream
+    // can fix that; the ground under a building has to exist.
+    //
+    // So: every sea-level cell that is under a building (footprints grown by
+    // 8 m — the apron is the yard around the shed, not just its outline) or
+    // inside a surveyed pier/quay polygon becomes an apron 0.9 m above the
+    // water, and every breakwater cell a 1.5 m rock ridge. The heightfield gives
+    // the apron a short ramp at its edge instead of a vertical quay wall; at the
+    // ranges this pack is judged from that is the right trade, and it means no
+    // extra geometry and no seam with the tiles.
+    //
+    // BEFORE the sink, and before makeGeoProvider: the sink must not see these
+    // cells as water any more, and the paint needs the mask. NT_NO_APRON=1 for
+    // the A/B.
+    std::shared_ptr<const terrain::FootprintMask> apronMask;
+    int apronCells = 0;
+    if (reg.heightMin < 1.0f && !std::getenv("NT_NO_APRON") &&
+        (!pack.buildings.empty() || pack.hasLandUse())) {
+        const auto builtNear = terrain::buildFootprintMask(pack, 8.f, 2.f);
+        const auto quayPoly = terrain::buildLandUseMask(pack, {"pier", "quay"}, 0.f, 2.f);
+        const auto breakPoly = terrain::buildLandUseMask(pack, {"breakwater"}, 0.f, 2.f);
+        if (builtNear || quayPoly || breakPoly) {
+            const int gdim = pack.grid.dim();
+            const float gstep = pack.grid.worldSize() / static_cast<float>(gdim - 1);
+            const float ghalf = pack.grid.worldSize() * 0.5f;
+            auto apron = terrain::detail::geoMakeMask(reg.worldSize, gstep);
+            auto& hh = pack.grid.data();
+            for (int iz = 0; iz < gdim && iz < apron->dim; ++iz) {
+                const float z = -ghalf + static_cast<float>(iz) * gstep;
+                for (int ix = 0; ix < gdim && ix < apron->dim; ++ix) {
+                    float& hv = hh[static_cast<size_t>(iz) * gdim + ix];
+                    if (hv > reg.seaLevel + 0.05f) continue;
+                    const float x = -ghalf + static_cast<float>(ix) * gstep;
+                    const bool rock = breakPoly && breakPoly->inside(x, z);
+                    if (!rock && !(builtNear && builtNear->inside(x, z)) &&
+                        !(quayPoly && quayPoly->inside(x, z)))
+                        continue;
+                    hv = reg.seaLevel + (rock ? 1.5f : 0.9f);
+                    apron->m[static_cast<size_t>(iz) * apron->dim + ix] = 1u;
+                    ++apronCells;
+                }
+            }
+            apronMask = apron;
+            std::cout << "[norway] quay apron: " << apronCells << " sea-level cells raised to +"
+                      << 0.9f << " m (breakwater +1.5)\n"
+                      << std::flush;
+        }
+    }
+
     // Synthetic bathymetry. The DTM stores water as a flat sheet at EXACTLY
     // seaLevel (no soundings), so the seabed would sit 0.15 m under the ocean
     // surface: the whole sea reads as a knee-deep pond (bottom splat visible
@@ -583,6 +637,7 @@ int main(int argc, char** argv) {
     // CHM forest paint, the urban fabric and the road paint are untouched, so
     // the pair differs by the polygons and nothing else.
     gopt.landUsePaint = !std::getenv("NT_NO_LANDUSE_PAINT");
+    gopt.apronMask = apronMask;
     const terrain::TerrainProvider prov = terrain::makeGeoProvider(pack, network, gopt);
 
     reportRoadConformance(pack, network);
@@ -1451,6 +1506,45 @@ int main(int argc, char** argv) {
                   << (vegMeshes > 0 ? vegInstances / vegMeshes : 0)
                   << " per mesh)\n"
                   << std::flush;
+    }
+
+    // ── urban props: pier decks, parked cars, moored boats ─────────────────
+    // Everything here is placed from the survey, never scattered, and every
+    // placement passes the same gates the trees do (footprint, pavement, sea).
+    // Static ROI around the view target, like the forest: a car at 2 km is a
+    // sub-pixel smudge that still costs a draw. NT_NO_PROPS=1 for the A/B,
+    // NT_PROPS_EXTENT / NT_PROPS_CELL to sweep.
+    if (pack.hasLandUse() && !envSet("NT_NO_PROPS")) {
+        const auto tp0 = std::chrono::high_resolution_clock::now();
+        // 1 m dilation only: a car parked hard against a wall is normal, a car
+        // INSIDE the wall is the failure this gate exists for.
+        const auto propFp = terrain::buildFootprintMask(pack, 1.f, 2.f);
+        const auto propUrban = gopt.paintUrban ? terrain::buildUrbanMask(pack, gopt) : nullptr;
+        terrain::UrbanPropsOptions po;
+        po.seaLevel = reg.seaLevel;
+        po.centerX = controls.target.x;
+        po.centerZ = controls.target.z;
+        po.halfExtent = envF("NT_PROPS_EXTENT", 1500.f);
+        po.cellSize = envF("NT_PROPS_CELL", 250.f);
+        po.cars = !envSet("NT_NO_CARS");
+        po.boats = !envSet("NT_NO_BOATS");
+        po.decks = !envSet("NT_NO_DECKS");
+        po.urban = propUrban.get();
+        po.footprints = propFp.get();
+        po.ground = prov.height;
+        auto props = Group::create();
+        props->name = "urban_props";
+        const auto ps = terrain::buildUrbanProps(*props, pack, network, po);
+        scene.add(props);
+        const auto tp1 = std::chrono::high_resolution_clock::now();
+        std::printf("[norway] urban props: %d pier deck runs, %d cars (%d lot + %d kerb) in "
+                    "%d cells @ %.0f m, %d boats in %d marinas; %zu meshes, %zu tris; "
+                    "rejected roof %d, sea %d, paved %d, junction %d; ROI %.0f m, %.2f s\n",
+                    ps.deckLines, ps.carsLot + ps.carsKerb, ps.carsLot, ps.carsKerb, ps.carCells,
+                    po.cellSize, ps.boats, ps.marinas, ps.meshes, ps.triangles, ps.rejectRoof,
+                    ps.rejectSea, ps.rejectPaved, ps.rejectJunction, po.halfExtent,
+                    std::chrono::duration<float>(tp1 - tp0).count());
+        std::fflush(stdout);
     }
 
     canvas.onWindowResize([&](const WindowSize& ns) {
