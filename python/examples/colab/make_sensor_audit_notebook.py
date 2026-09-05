@@ -101,6 +101,17 @@ each stream over 120 frames, and writes a JSON manifest. Rows the installed whee
 cannot produce are reported as `absent`, never as a match.
 """),
         code("%%writefile sensor_audit.py\n" + audit_src),
+        code('''import subprocess, sys
+def compare(a, b):
+    """sensor_audit.py --compare exits 0 when every row is bit-identical and 1
+    when rows differ. A differing row is a RESULT here (the boundary this
+    column measures), not an error, so this prints the report and never
+    raises the way run() does for a crashed render."""
+    p = subprocess.run([sys.executable, "sensor_audit.py", "--compare", a, b],
+                       env=ENV, capture_output=True, text=True)
+    print((p.stdout + "\\n" + p.stderr).strip())
+    print("exit", p.returncode, "(0 = every row bit-identical, 1 = some rows differ)")
+'''),
         md("""## 3 - Fresh process x 2 on this GPU (~4 min)
 
 Two runs, two processes, one compare. `OK` rows are bit-identical; a `DIFF` row
@@ -108,7 +119,7 @@ is a finding, not a failure of the notebook - the paper's method is to report it
 """),
         code("""run("sensor_audit.py", "--frames", 120, "--out", "t4_a.json")
 run("sensor_audit.py", "--frames", 120, "--out", "t4_b.json")
-run("sensor_audit.py", "--compare", "t4_a.json", "t4_b.json")
+compare("t4_a.json", "t4_b.json")
 """),
         md("""## 4 - Against the development machine (RTX 4070, Windows)
 
@@ -118,7 +129,7 @@ two compilers are reproducible in the strongest sense this method can test; rows
 that differ tell you where device-specific arithmetic enters the stream.
 """),
         code("%%writefile rtx4070.json\n" + (baseline if baseline else '{"meta": {"note": "baseline not recorded yet"}, "rows": {}}')),
-        code("""run("sensor_audit.py", "--compare", "rtx4070.json", "t4_a.json")
+        code("""compare("rtx4070.json", "t4_a.json")
 """),
         md("""## 5 - Reading the result
 
