@@ -92,7 +92,15 @@ namespace threepp::vulkan {
         // as a fresh grid fit does: probes bootstrap with alpha = 1 instead of
         // blending into whatever the store held. Part of the renderer's
         // resetTemporalHistory().
-        void invalidateHistory() { needsClear_ = true; }
+        void invalidateHistory() {
+            needsClear_ = true;
+            // The update cursor is temporal state as well: it advances by
+            // kProbesPerFrame per frame, so its phase encodes how many frames
+            // preceded the reset, and two captures that began after different
+            // frame counts would update different probe slices on the same
+            // window frame.
+            probeOffset_ = 0;
+        }
         [[nodiscard]] bool gridFitted() const { return gridFitted_; }
 
         // Upload this frame's grid UBO (origin/spacing/dims + the sampling

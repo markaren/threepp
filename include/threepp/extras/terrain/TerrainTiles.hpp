@@ -299,7 +299,18 @@ namespace threepp::terrain {
 
         [[nodiscard]] float heightAt(float x, float z) const { return provider_.height(x, z); }
         [[nodiscard]] int activeTiles() const { return activeTiles_; }
+        // Bakes RUNNING on workers right now. A finished bake that is waiting
+        // for its swap gate no longer counts: see releaseSlot().
         [[nodiscard]] int pendingBakes() const { return inFlight_; }
+        // FNV-1a over (level, x0, z0) of every tile with a live mesh, in tree
+        // order. Two runs with equal tile counts can still hold different
+        // trees (the split/merge dead band keeps whatever state a node
+        // arrived in), and only the signature tells them apart.
+        [[nodiscard]] std::uint64_t treeSignature() const {
+            std::uint64_t h = 0xCBF29CE484222325ULL;
+            for (const auto& r : roots_) signatureRec(*r, h);
+            return h;
+        }
         [[nodiscard]] const TileTerrainOptions& options() const { return o_; }
 
     private:
@@ -332,6 +343,9 @@ namespace threepp::terrain {
             std::shared_ptr<Mesh> mesh;
             std::array<std::unique_ptr<Node>, 4> kid;
             std::future<BakeData> baking;
+            // True while `baking` occupies an in-flight slot (requestBake to
+            // the first frame it is observed ready, or to apply/discard).
+            bool bakeCounted = false;
             // Border stitching state: the tile's natural border heights (per
             // edge, vdim values, captured at bake) and whether each edge is
             // currently CONFORMED to a coarser neighbour's interpolation.
@@ -492,7 +506,8 @@ namespace threepp::terrain {
                 for (auto& c : n.kid) {
                     if (c->mesh) continue;
                     requestBake(*c);
-                    if (!c->bakeReady()) allReady = false;
+                    if (c->bakeReady()) releaseSlot(*c);// done: free the slot while we wait on the gate
+                    else allReady = false;
                 }
                 // Swap gate: children going visible at level+1 requires every
                 // side neighbour's visible level >= our level, or the border
@@ -520,6 +535,7 @@ namespace threepp::terrain {
                 if (swapsLeft_ > 0) {
                     requestBake(n);
                     if (n.bakeReady()) {
+                        releaseSlot(n);
                         --swapsLeft_;
                         applyBake(n);
                         for (auto& c : n.kid) detachMesh(*c);
@@ -569,7 +585,37 @@ namespace threepp::terrain {
             // workers is bounded by the graveyard, which drains every frame.
             graveyard_.push_back(std::move(n.baking));
             n.baking = {};
+            releaseSlot(n);
+        }
+
+        // The in-flight budget bounds bakes RUNNING on workers, not bakes
+        // waiting to be swapped in. A split's children can sit ready for many
+        // frames while the swap gate waits for a coarser neighbour to catch
+        // up, and that neighbour needs a slot to do so: counting the ready
+        // futures against the budget deadlocked the streamer with exactly
+        // maxBakesInFlight bakes "in flight" forever (four, on the norddal
+        // pack). Release the slot the first frame a bake is seen ready.
+        void releaseSlot(Node& n) {
+            if (!n.bakeCounted) return;
+            n.bakeCounted = false;
             --inFlight_;
+        }
+
+        static void fnvBytes(std::uint64_t& h, const void* p, std::size_t n) {
+            const auto* b = static_cast<const unsigned char*>(p);
+            for (std::size_t i = 0; i < n; ++i) {
+                h ^= b[i];
+                h *= 0x100000001B3ULL;
+            }
+        }
+        static void signatureRec(const Node& n, std::uint64_t& h) {
+            if (n.mesh) {
+                fnvBytes(h, &n.level, sizeof(n.level));
+                fnvBytes(h, &n.x0, sizeof(n.x0));
+                fnvBytes(h, &n.z0, sizeof(n.z0));
+            }
+            for (const auto& c : n.kid)
+                if (c) signatureRec(*c, h);
         }
 
         // Min distance from any viewpoint to the tile's height-AABB
@@ -591,6 +637,7 @@ namespace threepp::terrain {
             if (n.mesh || n.baking.valid()) return;
             if (inFlight_ >= o_.maxBakesInFlight) return;// retry next update
             ++inFlight_;
+            n.bakeCounted = true;
             // Plain-data bake on a worker; mesh creation stays on the update()
             // thread (scene graph and GPU upload are not thread-safe). Sync
             // mode uses a deferred future: .get() bakes inline at swap time.
@@ -896,7 +943,7 @@ namespace threepp::terrain {
             if (n.baking.valid()) {
                 b = n.baking.get();
                 n.baking = {};
-                --inFlight_;
+                releaseSlot(n);
             } else {
                 b = bakeTile(n.x0, n.z0, n.size);
             }

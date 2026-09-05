@@ -2142,6 +2142,10 @@ namespace threepp {
         // motion state, and FSR's history) here, so a capture that begins after
         // this call draws the same sequence in every run.
         impl.resetAccumulation();
+        // The sub-pixel jitter phase is temporal state as well: the raster
+        // G-buffer of frame k depends on it, so two captures that began after
+        // different numbers of frames would disagree on every AOV. Restart it.
+        impl.haltonFrame_ = 0;
         impl.pendingAccumulationReset_ = true;
     }
 

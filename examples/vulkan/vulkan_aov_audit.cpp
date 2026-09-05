@@ -520,21 +520,22 @@ int main(int argc, char** argv) {
             // Until the tile baker is idle, then a fixed tail so the last landed
             // tile has been through the temporal passes. Bounded: a baker that
             // never idles is itself a finding, printed below.
-            // "Idle" = no bake in flight, OR the in-flight count has not moved
-            // for 300 frames (the norddal pack holds four bakes in flight
-            // indefinitely; a baker that never drains is reported, not waited
-            // on forever).
-            int idleTail = -1, lastBaking = -1, stableFor = 0;
-            for (int f = 0; f < 3600 && idleTail != 0; ++f) {
+            // "Idle" = converged, not merely quiet: no bake in flight AND the
+            // live tile count unchanged for 120 consecutive frames. The LOD
+            // state machine proceeds in waves (two swaps per frame, children
+            // baked ahead of the swap), so a moment with nothing in flight is
+            // a lull between waves, and two runs that stop at different lulls
+            // hash different tile sets. Bounded: a baker that never converges
+            // is reported, not waited on forever.
+            int quietFor = 0, lastTiles = -1;
+            for (int f = 0; f < 3600 && quietFor < 120; ++f) {
                 renderer.setSimTime(0.0);
                 geo->update(camera->position);
                 renderer.render(scene, *camera);
                 ++settleFrames;
-                const int baking = geo->stats().baking;
-                stableFor = (baking == lastBaking) ? stableFor + 1 : 0;
-                lastBaking = baking;
-                if (idleTail < 0 && (baking == 0 || stableFor >= 300)) idleTail = 60;
-                else if (idleTail > 0) --idleTail;
+                const auto st = geo->stats();
+                quietFor = (st.baking == 0 && st.tiles == lastTiles) ? quietFor + 1 : 0;
+                lastTiles = st.tiles;
             }
         }
         const auto st = geo->stats();
@@ -841,6 +842,7 @@ int main(int argc, char** argv) {
     if (fjord) {
         const auto st = geo->stats();
         manifest << "geo tiles=" << st.tiles << " baking=" << st.baking
+                 << " tree=" << std::hex << st.treeSignature << std::dec
                  << " shellTris=" << st.shellTris << " forestCells=" << st.forestCells
                  << " settle=" << settleFrames << " hold=" << (hold ? 1 : 0)
                  << " settleIdle=" << (settleIdle ? 1 : 0)

@@ -109,6 +109,7 @@ namespace threepp::terrain {
             int forestSites = 0;// CHM sites that survived the gates
             int forestCells = 0;// LOD cells planted
             float loadSeconds = 0.f;
+            std::uint64_t treeSignature = 0;// TerrainTiles::treeSignature(): which tiles, not how many
         };
 
         static std::shared_ptr<GeoScene> create(const GeoSceneOptions& opts) {
@@ -141,6 +142,7 @@ namespace threepp::terrain {
             if (tiles_) {
                 s.tiles = tiles_->activeTiles();
                 s.baking = tiles_->pendingBakes();
+                s.treeSignature = tiles_->treeSignature();
             }
             return s;
         }
