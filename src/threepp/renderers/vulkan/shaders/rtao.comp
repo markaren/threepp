@@ -154,13 +154,21 @@ void main() {
         const float tmax   = isLong ? SKY_TMAX : AO_RADIUS;
 
         rayQueryEXT rq;
-        // Any-hit, terminate on the first opaque hit: a visibility ray only needs
-        // hit / no-hit (not the nearest), so terminate-on-first is correct at any
-        // tmax. kRayMaskOpaque (0x01) skips blend/transmissive instances so a
+        // The long sky ray is a visibility ray: hit / no-hit, so it may
+        // terminate on the first opaque hit. The near-field rays are NOT: their
+        // hit DISTANCE feeds the occlusion falloff below, and "the first hit the
+        // traversal happens to find" is not a well-defined distance where
+        // surfaces overlap along the ray (terrain tile skirts under a cliff
+        // shell). It depends on the acceleration structure's layout, which a
+        // per-frame GPU build does not reproduce across runs: the sensor
+        // determinism audit measured a 1-LSB scatter on distant terrain from
+        // exactly this, with every closest-hit consumer in the frame exact.
+        // The nearest occluder is also the physically right one for the
+        // falloff. kRayMaskOpaque (0x01) skips blend/transmissive instances so a
         // glass pane / decal doesn't paint an occlusion rectangle behind it.
-        rayQueryInitializeEXT(rq, topAS,
-                              gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
-                              0x01u, orig, 1e-3, dir, tmax);
+        const uint rayFlags = isLong ? (gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT)
+                                     : gl_RayFlagsOpaqueEXT;
+        rayQueryInitializeEXT(rq, topAS, rayFlags, 0x01u, orig, 1e-3, dir, tmax);
         while (rayQueryProceedEXT(rq)) {}
         const bool committed =
             rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT;

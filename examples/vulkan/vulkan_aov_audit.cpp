@@ -210,6 +210,22 @@ int main(int argc, char** argv) {
     // shading; if this one differs too, the ray tracer sees different
     // geometry from run to run while the rasterizer (the AOV rows) does not.
     bool lidar = false;
+    // --no-ao: setDeferredAO(false). The ray-traced AO/GI gather is a
+    // first-hit-terminate query whose hit DISTANCE is consumed; where surfaces
+    // overlap along a short ray (terrain tile skirts under a cliff shell) the
+    // first hit found is not unique, so this is the bisection toggle for it.
+    bool noAo = false;
+    // --lidar-grazing (fjord only): a narrow dense-grid lidar sitting 2 cm above
+    // the first shore point found ahead of the camera, aimed along the sun
+    // direction, i.e. the geometry of a shadow ray leaving a terrain point.
+    // Camera rays meet tile faces head-on; shadow rays graze the neighbouring
+    // tile skirts and the cliff shell, where two surfaces sit within float
+    // precision of each other and "closest hit" is a tie broken by traversal
+    // order. If THIS row differs across fresh processes while the camera lidar
+    // is exact, the acceleration structure resolves ties differently run to
+    // run, and every boolean shadow query over overlapping geometry inherits
+    // that.
+    bool lidarGrazing = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
@@ -226,6 +242,8 @@ int main(int argc, char** argv) {
         else if (arg == "--fjord-off" && i + 1 < argc) fjordOff = argv[++i];
         else if (arg == "--settle" && i + 1 < argc) settleFixed = std::atoi(argv[++i]);
         else if (arg == "--lidar") lidar = true;
+        else if (arg == "--no-ao") noAo = true;
+        else if (arg == "--lidar-grazing") lidarGrazing = true;
         else if (arg == "--edit-add" && i + 1 < argc) editAddFrame = std::atoi(argv[++i]);
         else if (arg == "--edit-remove" && i + 1 < argc) editRemoveFrame = std::atoi(argv[++i]);
         else if (arg == "--rgbtrace" && i + 1 < argc) rgbTracePath = argv[++i];
@@ -273,6 +291,7 @@ int main(int argc, char** argv) {
     if (noLod) renderer.setAutoLod(false);
     if (hardSun) renderer.setSunAngularRadius(0.f);
     if (noProbes) renderer.setProbeGI(false);
+    if (noAo) renderer.setDeferredAO(false);
 
     const bool fjord = sceneName == "fjord";
     if (sceneName != "default" && !fjord) {
@@ -545,6 +564,23 @@ int main(int argc, char** argv) {
     Stream lidarRow;
     std::vector<LidarReturn> lidarReturns;
     std::uint64_t lidarHits = 0;
+    double rtaoMsSum = 0.0, shadeMsSum = 0.0;
+    // The grazing probe: 8 deg x 8 deg, 160 x 160 beams, from the shore point.
+    PathTracedLidarSensor grazing(8.f, 160u, 160u, 3000.f);
+    grazing.params.detectorThreshold = 0.f;
+    Stream grazingRow;
+    std::uint64_t grazingHits = 0;
+    if (lidarGrazing && fjord) {
+        // First point ahead of the camera (toward -Z) that is at least 5 m above
+        // the sea: the near shore of the far wall.
+        float zs = -50.f;
+        while (zs > -3500.f && geo->heightAt(0.f, zs) < seaLevel + 5.f) zs -= 10.f;
+        const float ys = geo->heightAt(0.f, zs) + 0.02f;
+        grazing.position.set(0.f, ys, zs);
+        const Vector3 sunDir = Vector3(20.f, 30.f, 15.f).normalize();
+        grazing.lookAt(Vector3(0.f + sunDir.x * 100.f, ys + sunDir.y * 100.f, zs + sunDir.z * 100.f));
+        std::cout << "grazing probe at (0, " << ys << ", " << zs << ") aimed along the sun\n";
+    }
 
     for (int f = 0; f < frames; ++f) {
         const double t = f * kDt;
@@ -583,6 +619,34 @@ int main(int argc, char** argv) {
         }
 
         renderer.render(scene, *camera);
+        {
+            // Pass cost on record (stdout only, never the manifest: timings are
+            // not a determinism claim). Used for the A/B of a shader fix.
+            const auto ft = renderer.lastFrameTimings();
+            rtaoMsSum += ft.rtaoMs;
+            shadeMsSum += ft.pathTraceMs;
+        }
+
+        if (lidarGrazing && fjord && f % 6 == 0) {
+            grazing.setSimTime(t);
+            std::vector<LidarReturn> gr;
+            grazing.scan(renderer, gr);
+            std::vector<float> packed;
+            packed.reserve(gr.size() * 2);
+            for (const auto& r : gr) {
+                packed.push_back(r.distance);
+                packed.push_back(static_cast<float>(r.hitInstanceId));
+                if (r.returnNo > 0) ++grazingHits;
+            }
+            grazingRow.hash.bytes(packed.data(), packed.size() * sizeof(float));
+            grazingRow.bytes += packed.size() * sizeof(float);
+            ++grazingRow.frames;
+            if (!rgbTracePath.empty()) {
+                Fnv one;
+                one.bytes(packed.data(), packed.size() * sizeof(float));
+                rgbTrace << "f" << f << " grazing=" << std::hex << one.value() << std::dec << "\n";
+            }
+        }
 
         if (lidar && f % 6 == 0) {
             lidarSensor.position.copy(camera->position);
@@ -734,6 +798,10 @@ int main(int argc, char** argv) {
         emit("taa.history", taaHist);
     }
     if (hdrSplit) emit("shade.hdr", shadeHdr);
+    if (lidarGrazing && fjord) {
+        emit("lidar.grazing", grazingRow);
+        manifest << "lidar.grazing.meta beams=" << grazing.beamCount() << " hits=" << grazingHits << "\n";
+    }
     if (lidar) {
         emit("lidar", lidarRow);
         manifest << "lidar.meta beams=" << lidarSensor.beamCount() << " hits=" << lidarHits
@@ -771,7 +839,7 @@ int main(int argc, char** argv) {
              << " editRemove=" << (sceneEdit ? editRemoveFrame : -1)
              << " static=" << (staticScene ? 1 : 0)
              << " resolve=" << (fsr ? "fsr" : "taa")
-             << " scene=" << sceneName
+             << " scene=" << sceneName << " ao=" << (noAo ? 0 : 1)
              << " events=" << (events ? (eventsFinal ? "final" : "shaded") : "off")
              << " tlasRebuilds=" << tl.fullRebuilds << " tlasInstances=" << tl.instances << "\n";
     if (!staticScene && dyn.graduated == 0) {
@@ -779,6 +847,8 @@ int main(int argc, char** argv) {
         ++failures;
     }
 
+    std::cout << "timings: rtao " << (frames ? rtaoMsSum / frames : 0.0) << " ms, shade "
+              << (frames ? shadeMsSum / frames : 0.0) << " ms (means over hashed frames)\n";
     std::cout << "vulkan_aov_audit: " << frames << " frames";
     if (failures) {
         std::cout << ", READBACK FAILURES: " << failures;
