@@ -23,6 +23,13 @@
 //                        point not repeated), outer wound to POSITIVE shoelace
 //                        area in (x,z), holes negative. Roof top sits at
 //                        groundMin + height (slope relief already folded in).
+//                        Each building may carry an optional roof block
+//                        { kind, eave, ridge, axis:[dx,dz] } measured from the
+//                        1 m DOM (see GeoRoof).
+//   <pack>/landuse.json  (optional) { version, polygons:[{class,id,outer,
+//                        holes?}], lines:[{class,id,width,points}],
+//                        points:[{class,x,z}] } — OSM land use in the same
+//                        local frame and winding as buildings.json.
 //
 //   <pack>/texture.png   (optional) square RGB basemap drape (Kartverket topo
 //                        raster WMS). Row 0 = north edge, so
@@ -65,6 +72,24 @@ namespace threepp::terrain {
         std::vector<Vector3> points;// centerline, local world coords, y = height
     };
 
+    // ── Measured roof block (optional per building) ─────────────────────────
+    //
+    // The fetcher measures these four numbers off the 1 m surface model (DOM),
+    // which resolves a ridge the pack's own 2 m grid smears into the eave:
+    //   kind   "flat" | "gabled" | "hipped" (empty = not measured)
+    //   eave   p15 of the footprint's interior nDSM, metres above groundMin
+    //   ridge  p95 of the same (== eave for "flat"); the building's `height`
+    //   axis   unit ridge direction in (x, z); (1,0) for "flat"
+    // Absent on old packs and on footprints too small to sample (< 12 interior
+    // 1 m cells), so every consumer must check hasRoof() and keep its own
+    // shape heuristic as the fallback.
+    struct GeoRoof {
+        std::string kind;
+        float eave = 0.f;
+        float ridge = 0.f;
+        Vector2 axis{1.f, 0.f};
+    };
+
     // One building footprint from the pack (OSM-sourced). Rings are OPEN
     // (first point not repeated) in local world metres; Vector2 = (x, z).
     // Extrusion contract: walls rise from groundMin (sink slightly below for
@@ -80,8 +105,47 @@ namespace threepp::terrain {
         std::string colour;      // OSM building:colour (rare; empty = none)
         std::string roofColour;  // OSM roof:colour (rare; empty = none)
         std::string roofShape;   // OSM roof:shape (rare; empty = none)
+        GeoRoof roof;            // measured off the 1 m DOM; empty kind = absent
         std::vector<Vector2> outer;              // footprint, +shoelace in (x,z)
         std::vector<std::vector<Vector2>> holes; // courtyards, -shoelace
+
+        [[nodiscard]] bool hasRoof() const { return !roof.kind.empty(); }
+    };
+
+    // ── OSM land use (optional landuse.json) ────────────────────────────────
+    //
+    // Everything the town is made of that is neither a road nor a building:
+    // parking lots, gardens, pitches, woods, rock, quays and piers as polygons;
+    // footpaths, steps, service drives, hedges, fences and tree rows as lines
+    // with a width; single trees as points. Same local frame and winding as
+    // buildings.json (rings OPEN, outer +shoelace in (x,z), holes negative).
+    // `cls` is the producer's class string, deliberately not an enum: a new
+    // OSM class added by the fetcher must not require a loader change, and a
+    // consumer simply ignores classes it does not paint.
+    struct GeoLandUse {
+        struct Polygon {
+            std::string cls;
+            std::string id;
+            std::vector<Vector2> outer;
+            std::vector<std::vector<Vector2>> holes;
+        };
+        struct Line {
+            std::string cls;
+            std::string id;
+            float width = 2.f;// metres, full width of the strip
+            std::vector<Vector2> points;
+        };
+        struct Point {
+            std::string cls;
+            Vector2 pos;
+        };
+        std::vector<Polygon> polygons;
+        std::vector<Line> lines;
+        std::vector<Point> points;
+
+        [[nodiscard]] bool empty() const {
+            return polygons.empty() && lines.empty() && points.empty();
+        }
     };
 
     // Region metadata mirroring region.json (minus the file references). Kept
@@ -127,6 +191,7 @@ namespace threepp::terrain {
         HeightGrid grid;             // dim×dim, centred at origin, worldSize wide
         std::vector<GeoRoad> roads;
         std::vector<GeoBuilding> buildings;// empty if the pack has none
+        GeoLandUse landuse;                // empty if the pack has no landuse.json
 
         // Canopy height model (DOM − DTM), metres of vegetation above ground,
         // on the SAME node grid as `grid`. Invalid (!valid()) when the pack has
@@ -141,6 +206,7 @@ namespace threepp::terrain {
 
         [[nodiscard]] bool hasCanopy() const { return canopy.valid(); }
         [[nodiscard]] bool hasFlow() const { return flow.valid(); }
+        [[nodiscard]] bool hasLandUse() const { return !landuse.empty(); }
 
         [[nodiscard]] bool valid() const { return region.dim >= 4 && grid.valid(); }
 

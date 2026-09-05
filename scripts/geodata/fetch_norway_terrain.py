@@ -141,6 +141,18 @@ PATH_TYPEVEG = {"Gangveg", "Gang- og sykkelveg", "Gågate"}
 
 CHUNK = 2000  # max px per WCS request dimension (server limit ~2048)
 
+# Optional on-disk cache for the raw network responses (--cache DIR).  A pack
+# fetch is minutes of WCS/Overpass traffic; with a cache a re-run after a code
+# fix costs seconds instead of re-hammering the servers.  Keyed on the exact
+# request parameters, so a changed bbox/resolution simply misses.
+CACHE_DIR = None
+
+
+def _cache_path(kind, key, ext):
+    import hashlib
+    h = hashlib.md5(key.encode("utf-8")).hexdigest()[:20]
+    return os.path.join(CACHE_DIR, f"{kind}_{h}.{ext}")
+
 
 # ==========================================================================
 # Elevation
@@ -154,6 +166,15 @@ def _wcs_tile(minE, minN, maxE, maxN, w, h, session, retries=4,
         "bbox": f"{minE},{minN},{maxE},{maxN}",
         "width": int(w), "height": int(h), "format": "GeoTIFF",
     }
+    cpath = None
+    if CACHE_DIR:
+        cpath = _cache_path("wcs", url + "|" + json.dumps(params, sort_keys=True),
+                            "npy")
+        if os.path.exists(cpath):
+            try:
+                return np.load(cpath)
+            except Exception:  # noqa: BLE001  (corrupt cache entry: refetch)
+                pass
     last = None
     for attempt in range(retries):
         try:
@@ -161,7 +182,10 @@ def _wcs_tile(minE, minN, maxE, maxN, w, h, session, retries=4,
             if r.status_code == 200 and r.content[:4] in (b"II*\x00", b"MM\x00*"):
                 arr = tifffile.imread(io.BytesIO(r.content))
                 if arr.shape == (h, w):
-                    return np.asarray(arr, dtype=np.float32)
+                    arr = np.asarray(arr, dtype=np.float32)
+                    if cpath:
+                        np.save(cpath, arr)
+                    return arr
                 raise ValueError(f"tile shape {arr.shape} != {(h, w)}")
             # HTML error page or bad status
             snippet = r.content[:80]
@@ -636,6 +660,44 @@ def _assemble_rings(seg_lists):
     return rings
 
 
+def overpass_query(query, retries=5):
+    """
+    POST one Overpass QL query and return the decoded JSON, cycling the public
+    mirrors on failure.  Overpass answers 429 (rate limit) and 504 (timeout)
+    freely on hot queries, so back off between tries; the response is cached
+    under --cache when one is configured.
+    """
+    cpath = None
+    if CACHE_DIR:
+        cpath = _cache_path("overpass", query, "json")
+        if os.path.exists(cpath):
+            try:
+                with open(cpath, encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:  # noqa: BLE001
+                pass
+    mirrors = [OVERPASS_URL, "https://overpass.kumi.systems/api/interpreter"]
+    session = requests.Session()
+    session.headers.update({"User-Agent": "threepp-geodata/1.0"})
+    last = None
+    for attempt in range(retries):
+        url = mirrors[attempt % len(mirrors)]
+        try:
+            r = session.post(url, data={"data": query}, timeout=300)
+            if r.status_code == 200:
+                d = r.json()
+                if cpath:
+                    with open(cpath, "w", encoding="utf-8") as f:
+                        json.dump(d, f)
+                return d
+            last = f"HTTP {r.status_code} {r.content[:120]!r}"
+        except Exception as e:  # noqa: BLE001
+            last = str(e)
+        print(f"  overpass retry {attempt + 1}: {last}", flush=True)
+        time.sleep(5.0 * (attempt + 1))
+    raise RuntimeError(f"Overpass failed after retries: {last}")
+
+
 def fetch_buildings_osm(originE, originN, size, verbose=True):
     """
     Fetch OSM building footprints intersecting the region via Overpass.
@@ -660,24 +722,7 @@ def fetch_buildings_osm(originE, originN, size, verbose=True):
     query = (f'[out:json][timeout:180];'
              f'(way["building"]({bbox});relation["building"]({bbox}););'
              f'out geom;')
-    mirrors = [OVERPASS_URL, "https://overpass.kumi.systems/api/interpreter"]
-    session = requests.Session()
-    session.headers.update({"User-Agent": "threepp-geodata/1.0"})
-    d = None
-    last = None
-    for attempt in range(4):
-        url = mirrors[attempt % len(mirrors)]
-        try:
-            r = session.post(url, data={"data": query}, timeout=300)
-            if r.status_code == 200:
-                d = r.json()
-                break
-            last = f"HTTP {r.status_code} {r.content[:120]!r}"
-        except Exception as e:  # noqa: BLE001
-            last = str(e)
-        time.sleep(5.0 * (attempt + 1))
-    if d is None:
-        raise RuntimeError(f"Overpass failed after retries: {last}")
+    d = overpass_query(query)
 
     out = []
     n_ways = n_rels = n_bad_rings = 0
@@ -914,6 +959,399 @@ def resolve_building_heights(blds, heights, originE, originN, size, res, dim):
 
 
 # ==========================================================================
+# Roof blocks (1 m DOM)
+# ==========================================================================
+ROOF_MIN_CELLS = 12     # fewer 1 m cells than this and the percentiles are noise
+ROOF_ERODE = 1.0        # m - edge cells straddle the wall, drop them
+ROOF_FLAT_RISE = 1.2    # m - eave-to-ridge below this reads as a flat roof
+ROOF_GABLE_FRAC = 0.85  # ridge covering this share of the span = gabled, else hipped
+ROOF_BLOCK = 1000       # 1 m nodes per DOM fetch block (1 km squares)
+
+
+def _dist_to_ring(px, pz, ring):
+    """Min distance from each (px, pz) to the closed polyline through `ring`."""
+    d = np.full(px.shape, np.inf, dtype=np.float64)
+    n = len(ring)
+    for i in range(n):
+        ax, az = ring[i]
+        bx, bz = ring[(i + 1) % n]
+        ex, ez = bx - ax, bz - az
+        L2 = ex * ex + ez * ez
+        if L2 < 1e-12:
+            dd = np.hypot(px - ax, pz - az)
+        else:
+            t = np.clip(((px - ax) * ex + (pz - az) * ez) / L2, 0.0, 1.0)
+            dd = np.hypot(px - (ax + t * ex), pz - (az + t * ez))
+        np.minimum(d, dd, out=d)
+    return d
+
+
+def _bilinear_grid(grid, fz, fx):
+    """Bilinear sample of `grid` on the outer product of fractional indices
+    fz (rows) x fx (cols).  Returns a (len(fz), len(fx)) array."""
+    nz, nx = grid.shape
+    z0 = np.clip(np.floor(fz).astype(np.int64), 0, nz - 1)
+    x0 = np.clip(np.floor(fx).astype(np.int64), 0, nx - 1)
+    z1 = np.minimum(z0 + 1, nz - 1)
+    x1 = np.minimum(x0 + 1, nx - 1)
+    tz = (fz - z0)[:, None]
+    tx = (fx - x0)[None, :]
+    a = grid[np.ix_(z0, x0)] * (1.0 - tx) + grid[np.ix_(z0, x1)] * tx
+    b = grid[np.ix_(z1, x0)] * (1.0 - tx) + grid[np.ix_(z1, x1)] * tx
+    return a * (1.0 - tz) + b * tz
+
+
+def resolve_roof_blocks(blds, heights, originE, originN, size, res, dim):
+    """
+    Measure a roof block per building from the 1 m DOM, in place.
+
+    The pack's own heights grid is 2 m, which smears a 6 m ridge into the eave:
+    the roof shape only becomes measurable at 1 m.  nDSM1 = DOM(1 m) - DTM
+    (bilinear from the pack's 2 m grid), sampled at the footprint's interior
+    1 m nodes (eroded by ROOF_ERODE so wall-straddling edge cells are out).
+
+        eave  = p15(nDSM1)      ridge = p95(nDSM1)
+        flat  when ridge - eave < ROOF_FLAT_RISE
+        axis  = principal direction of the cells in the top 30% of the rise
+        gabled when that ridge patch spans >= ROOF_GABLE_FRAC of the interior's
+        extent along the axis, else hipped
+
+    `height` becomes the measured ridge for every building that gets a block.
+    Buildings with fewer than ROOF_MIN_CELLS interior cells keep the p90 height
+    and get NO roof block, so the consumer falls back to its own heuristic.
+
+    The 1 m DOM is fetched only over the 1 km blocks that actually contain
+    footprints (the whole 8 km square at 1 m would be 64 M nodes) and is never
+    written to disk: only these six numbers per building survive.
+    """
+    if not blds:
+        return
+    half = size / 2.0
+    dim1 = int(round(size)) + 1  # node count of the 1 m grid
+
+    def node_range1(lo, hi):
+        return (max(0, int(math.floor(lo + half)) - 1),
+                min(dim1 - 1, int(math.ceil(hi + half)) + 1))
+
+    for b in blds:
+        xs = [p[0] for p in b["outer"]]
+        zs = [p[1] for p in b["outer"]]
+        b["_c0"], b["_c1"] = node_range1(min(xs), max(xs))
+        b["_r0"], b["_r1"] = node_range1(min(zs), max(zs))
+
+    wr0 = min(b["_r0"] for b in blds)
+    wr1 = max(b["_r1"] for b in blds)
+    wc0 = min(b["_c0"] for b in blds)
+    wc1 = max(b["_c1"] for b in blds)
+    need = set()
+    for b in blds:
+        for br in range(b["_r0"] // ROOF_BLOCK, b["_r1"] // ROOF_BLOCK + 1):
+            for bc in range(b["_c0"] // ROOF_BLOCK, b["_c1"] // ROOF_BLOCK + 1):
+                need.add((br, bc))
+    blocks = sorted(need)
+    print(f"  DOM1 window rows[{wr0}:{wr1 + 1}] cols[{wc0}:{wc1 + 1}] "
+          f"({(wr1 - wr0 + 1) * (wc1 - wc0 + 1) / 1e6:.1f} Mnodes), "
+          f"{len(blocks)} occupied {ROOF_BLOCK} m blocks fetched", flush=True)
+
+    dom1 = np.full((wr1 - wr0 + 1, wc1 - wc0 + 1), np.nan, dtype=np.float32)
+    for i, (br, bc) in enumerate(blocks):
+        r0 = max(br * ROOF_BLOCK, wr0)
+        r1 = min((br + 1) * ROOF_BLOCK, wr1 + 1)
+        c0 = max(bc * ROOF_BLOCK, wc0)
+        c1 = min((bc + 1) * ROOF_BLOCK, wc1 + 1)
+        if r1 <= r0 or c1 <= c0:
+            continue
+        print(f"  DOM1 block {i + 1}/{len(blocks)}", flush=True)
+        dom1[r0 - wr0:r1 - wr0, c0 - wc0:c1 - wc0] = _fetch_grid_window(
+            originE, originN, size, 1.0, r0, r1, c0, c1,
+            url=WCS_DOM_URL, coverage=WCS_DOM_COVERAGE, label="DOM1")
+
+    kinds = {}
+    n_none = moved = 0
+    for b in blds:
+        r0, r1, c0, c1 = b["_r0"], b["_r1"], b["_c0"], b["_c1"]
+        for k in ("_r0", "_r1", "_c0", "_c1"):
+            b.pop(k)
+        iz = np.arange(r0, r1 + 1)
+        ix = np.arange(c0, c1 + 1)
+        px, pz = np.meshgrid(ix - half, iz - half)
+        inside = (_points_in_ring(px, pz, b["outer"]) &
+                  (_dist_to_ring(px, pz, b["outer"]) >= ROOF_ERODE))
+        for hole in b["holes"]:
+            inside &= ~_points_in_ring(px, pz, hole)
+            inside &= _dist_to_ring(px, pz, hole) >= ROOF_ERODE
+        sub = dom1[r0 - wr0:r1 - wr0 + 1, c0 - wc0:c1 - wc0 + 1]
+        ok = inside & np.isfinite(sub)
+        if int(ok.sum()) < ROOF_MIN_CELLS:
+            n_none += 1
+            continue
+        dtm = _bilinear_grid(heights, iz / res, ix / res)
+        nd = np.asarray(sub, dtype=np.float64) - dtm
+        vals = nd[ok]
+        eave = float(np.percentile(vals, 15))
+        ridge = float(np.percentile(vals, 95))
+        if not (math.isfinite(eave) and math.isfinite(ridge)) or ridge <= 0.0:
+            n_none += 1
+            continue
+        eave = max(0.0, min(eave, ridge))
+        rise = ridge - eave
+        if rise < ROOF_FLAT_RISE:
+            kind, ax, az = "flat", 1.0, 0.0
+            eave = ridge
+        else:
+            top = ok & (nd >= ridge - 0.3 * rise)
+            tx, tz = px[top], pz[top]
+            if tx.size >= 3:
+                dx, dz = tx - tx.mean(), tz - tz.mean()
+                cxx = float((dx * dx).mean())
+                czz = float((dz * dz).mean())
+                cxz = float((dx * dz).mean())
+                tr = cxx + czz
+                lam = 0.5 * tr + math.sqrt(max(0.0, 0.25 * tr * tr -
+                                               (cxx * czz - cxz * cxz)))
+                if abs(cxz) > 1e-9:
+                    ax, az = cxz, lam - cxx
+                else:
+                    ax, az = (1.0, 0.0) if cxx >= czz else (0.0, 1.0)
+                L = math.hypot(ax, az) or 1.0
+                ax, az = ax / L, az / L
+                ptop = tx * ax + tz * az
+                pall = px[ok] * ax + pz[ok] * az
+                span = float(pall.max() - pall.min())
+                frac = float(ptop.max() - ptop.min()) / max(span, 1e-6)
+            else:
+                ax, az, frac = 1.0, 0.0, 0.0
+            kind = "gabled" if frac >= ROOF_GABLE_FRAC else "hipped"
+        b["roof"] = {"kind": kind, "eave": round(eave, 2),
+                     "ridge": round(ridge, 2),
+                     "axis": [round(ax, 4), round(az, 4)]}
+        kinds[kind] = kinds.get(kind, 0) + 1
+        newh = min(max(ridge, BUILDING_MIN_HEIGHT), BUILDING_MAX_HEIGHT)
+        if abs(newh - b["height"]) > 1.0:
+            moved += 1
+        b["height"] = round(newh, 2)
+        b["heightSource"] = "roof"
+    print(f"  roofs: {sum(kinds.values())} measured {kinds}, {n_none} without "
+          f"a block; {moved} heights moved > 1 m off the old p90", flush=True)
+
+
+# ==========================================================================
+# Land use (OSM)
+# ==========================================================================
+# Only the tag values the consumer paints; a bare way["natural"] would drag in
+# coastline ways spanning the whole country.
+LU_LANDUSE = "grass|meadow|cemetery|forest|industrial|retail|commercial"
+LU_LEISURE = "park|garden|common|pitch|playground|marina"
+LU_NATURAL = "wood|scrub|heath|bare_rock|scree|wetland|tree_row"
+LU_MANMADE = "pier|quay|breakwater"
+LU_HIGHWAY = "footway|path|pedestrian|cycleway|steps|service"
+LU_BARRIER = "hedge|fence|wall|retaining_wall"
+
+SERVICE_NEAR_ROAD = 4.0  # m - NVDB P roads already cover most OSM service ways
+
+
+def _classify_landuse(tags, closed):
+    """(tags, closed ring?) -> ('poly'|'line', class, width) or None."""
+    lu = tags.get("landuse")
+    le = tags.get("leisure")
+    na = tags.get("natural")
+    mm = tags.get("man_made")
+    hw = tags.get("highway")
+    ba = tags.get("barrier")
+    w = _parse_meters(tags.get("width"))
+    if hw in ("footway", "path", "pedestrian", "cycleway"):
+        return "line", hw, w or 2.0
+    if hw == "steps":
+        return "line", "steps", 1.5
+    if hw == "service":
+        return "line", "service", 3.5
+    if ba in ("hedge", "fence", "wall", "retaining_wall"):
+        return "line", ba, w or 0.4
+    if na == "tree_row":
+        return "line", "tree_row", w or 2.0
+    if mm == "pier":
+        if closed or tags.get("area") == "yes":
+            return "poly", "pier", 0.0
+        return "line", "pier", w or 3.0
+    if not closed:
+        return None
+    if mm in ("quay", "breakwater"):
+        return "poly", mm, 0.0
+    if tags.get("amenity") == "parking":
+        return "poly", "parking", 0.0
+    if lu in ("grass", "meadow", "cemetery") or le in ("park", "garden", "common"):
+        return "poly", "grass", 0.0
+    if le in ("pitch", "playground", "marina"):
+        return "poly", le, 0.0
+    if na == "wood" or lu == "forest":
+        return "poly", "wood", 0.0
+    if na in ("scrub", "heath", "bare_rock", "scree", "wetland"):
+        return "poly", na, 0.0
+    if lu in ("industrial", "retail", "commercial"):
+        return "poly", "yard", 0.0
+    return None
+
+
+def fetch_landuse_osm(originE, originN, size):
+    """One Overpass call for every land-use polygon, line and tree point."""
+    inv = Transformer.from_crs("EPSG:25833", "EPSG:4326", always_xy=True)
+    half = size / 2.0
+    lons, lats = [], []
+    for sE in (-1, 1):
+        for sN in (-1, 1):
+            lon, lat = inv.transform(originE + sE * half, originN + sN * half)
+            lons.append(lon)
+            lats.append(lat)
+    bb = f"{min(lats)},{min(lons)},{max(lats)},{max(lons)}"
+    q = (f'[out:json][timeout:300];('
+         f'way["amenity"="parking"]({bb});relation["amenity"="parking"]({bb});'
+         f'way["landuse"~"^({LU_LANDUSE})$"]({bb});'
+         f'relation["landuse"~"^({LU_LANDUSE})$"]({bb});'
+         f'way["leisure"~"^({LU_LEISURE})$"]({bb});'
+         f'relation["leisure"~"^({LU_LEISURE})$"]({bb});'
+         f'way["natural"~"^({LU_NATURAL})$"]({bb});'
+         f'relation["natural"~"^({LU_NATURAL})$"]({bb});'
+         f'way["man_made"~"^({LU_MANMADE})$"]({bb});'
+         f'way["highway"~"^({LU_HIGHWAY})$"]({bb});'
+         f'way["barrier"~"^({LU_BARRIER})$"]({bb});'
+         f'node["natural"="tree"]({bb});'
+         f');out geom;')
+    return overpass_query(q)
+
+
+def landuse_to_local(d, originE, originN, size, roads_local):
+    """
+    Overpass land-use elements -> the landuse.json payload, in the SAME local
+    frame and rounding as buildings.json (x = E - originE, z = -(N - originN),
+    2 decimals, outer rings positive shoelace, holes negative).
+    """
+    tf = Transformer.from_crs("EPSG:4326", "EPSG:25833", always_xy=True)
+    half = size / 2.0
+
+    def to_local(ring_ll):
+        Es, Ns = tf.transform([p[1] for p in ring_ll], [p[0] for p in ring_ll])
+        return [(E - originE, -(N - originN)) for E, N in zip(Es, Ns)]
+
+    def rnd(pts):
+        return [[round(x, 2), round(z, 2)] for x, z in pts]
+
+    def inside(x, z):
+        return -half <= x <= half and -half <= z <= half
+
+    # Segment soup of the pack's own roads, for the service-way overlap test.
+    segs = []
+    for rd in roads_local:
+        p = rd["points"]
+        for i in range(len(p) - 1):
+            segs.append((p[i][0], p[i][2], p[i + 1][0], p[i + 1][2]))
+    if segs:
+        S = np.asarray(segs, dtype=np.float64)
+        sax, saz, sbx, sbz = S[:, 0], S[:, 1], S[:, 2], S[:, 3]
+        sex, sez = sbx - sax, sbz - saz
+        sL2 = np.maximum(sex * sex + sez * sez, 1e-12)
+
+    def near_road(x, z):
+        if not segs:
+            return False
+        t = np.clip(((x - sax) * sex + (z - saz) * sez) / sL2, 0.0, 1.0)
+        return bool(np.min(np.hypot(x - (sax + t * sex),
+                                    z - (saz + t * sez))) <= SERVICE_NEAR_ROAD)
+
+    polygons, lines, points = [], [], []
+    n_service_dropped = 0
+    for el in d.get("elements", []):
+        tags = el.get("tags", {}) or {}
+        et = el["type"]
+        if et == "node":
+            if tags.get("natural") != "tree":
+                continue
+            (x, z), = to_local([(el["lat"], el["lon"])])
+            if inside(x, z):
+                points.append({"class": "tree", "x": round(x, 2),
+                               "z": round(z, 2)})
+            continue
+        if et == "way":
+            geom = el.get("geometry") or []
+            ring = [(g["lat"], g["lon"]) for g in geom]
+            if len(ring) < 2:
+                continue
+            closed = len(ring) >= 4 and ring[0] == ring[-1]
+            cls = _classify_landuse(tags, closed)
+            if cls is None:
+                continue
+            kind, name, width = cls
+            local = to_local(ring[:-1] if closed else ring)
+            if kind == "poly":
+                if len(local) < 3:
+                    continue
+                cx = sum(p[0] for p in local) / len(local)
+                cz = sum(p[1] for p in local) / len(local)
+                if not inside(cx, cz):
+                    continue
+                if _ring_area_xz(local) < 0:
+                    local.reverse()
+                polygons.append({"class": name, "id": f'w{el["id"]}',
+                                 "outer": rnd(local), "holes": []})
+            else:
+                if not any(inside(x, z) for x, z in local):
+                    continue
+                if name == "service":
+                    mx = sum(p[0] for p in local) / len(local)
+                    mz = sum(p[1] for p in local) / len(local)
+                    if near_road(mx, mz):
+                        n_service_dropped += 1
+                        continue
+                lines.append({"class": name, "id": f'w{el["id"]}',
+                              "width": round(float(width), 2),
+                              "points": rnd(local)})
+            continue
+        # relation: multipolygon, outer rings only (as buildings do)
+        cls = _classify_landuse(tags, True)
+        if cls is None or cls[0] != "poly":
+            continue
+        outers_raw, inners_raw = [], []
+        for m in el.get("members", []):
+            seg = [(g["lat"], g["lon"]) for g in (m.get("geometry") or [])]
+            (inners_raw if m.get("role") == "inner" else outers_raw).append(seg)
+        outers = _assemble_rings(outers_raw)
+        inners = _assemble_rings(inners_raw)
+        for oi, o in enumerate(outers):
+            local = to_local(o)
+            if len(local) < 3:
+                continue
+            cx = sum(p[0] for p in local) / len(local)
+            cz = sum(p[1] for p in local) / len(local)
+            if not inside(cx, cz):
+                continue
+            if _ring_area_xz(local) < 0:
+                local.reverse()
+            holes = []
+            for h in inners:
+                hl = to_local(h)
+                if len(hl) < 3 or not _point_in_ring_ll(h[0], o):
+                    continue
+                if _ring_area_xz(hl) > 0:
+                    hl.reverse()
+                holes.append(rnd(hl))
+            polygons.append({"class": cls[1], "id": f'r{el["id"]}.{oi}',
+                             "outer": rnd(local), "holes": holes})
+
+    def hist(items):
+        c = {}
+        for it in items:
+            c[it["class"]] = c.get(it["class"], 0) + 1
+        return dict(sorted(c.items(), key=lambda kv: -kv[1]))
+
+    print(f"  landuse polygons: {len(polygons)} {hist(polygons)}", flush=True)
+    print(f"  landuse lines: {len(lines)} {hist(lines)} "
+          f"({n_service_dropped} service ways dropped within "
+          f"{SERVICE_NEAR_ROAD:.0f} m of a pack road)", flush=True)
+    print(f"  landuse points: {len(points)} {hist(points)}", flush=True)
+    return {"version": 1, "polygons": polygons, "lines": lines,
+            "points": points}
+
+
+# ==========================================================================
 # Preview
 # ==========================================================================
 def hillshade(z, res, azimuth=315.0, altitude=45.0):
@@ -927,8 +1365,21 @@ def hillshade(z, res, azimuth=315.0, altitude=45.0):
     return np.clip(hs, 0.0, 1.0)
 
 
-def write_preview(pack_dir, heights, roads, size, res, dim, buildings=None):
-    """Hillshade + road/building overlay. PNG via matplotlib, else TIF."""
+LU_PREVIEW_COLOUR = {
+    "parking": (0.35, 0.35, 0.40), "grass": (0.35, 0.75, 0.30),
+    "pitch": (0.20, 0.65, 0.35), "playground": (0.85, 0.70, 0.25),
+    "wood": (0.10, 0.45, 0.15), "scrub": (0.45, 0.65, 0.25),
+    "heath": (0.65, 0.60, 0.35), "bare_rock": (0.60, 0.58, 0.55),
+    "scree": (0.70, 0.66, 0.60), "wetland": (0.35, 0.60, 0.65),
+    "yard": (0.55, 0.45, 0.40), "pier": (0.80, 0.55, 0.20),
+    "quay": (0.75, 0.45, 0.15), "breakwater": (0.50, 0.40, 0.30),
+    "marina": (0.25, 0.55, 0.85),
+}
+
+
+def write_preview(pack_dir, heights, roads, size, res, dim, buildings=None,
+                  landuse=None):
+    """Hillshade + land-use / road / building overlay. PNG via matplotlib."""
     hs = hillshade(heights, res)
     # blend hillshade with a light elevation tint
     hmin, hmax = float(heights.min()), float(heights.max())
@@ -943,6 +1394,28 @@ def write_preview(pack_dir, heights, roads, size, res, dim, buildings=None):
         ix = (x + size / 2.0) / res
         iz = (z + size / 2.0) / res
         return ix, iz
+
+    # Land-use polygons as a thin translucent fill UNDER the roads.
+    for poly in (landuse or {}).get("polygons", []):
+        col = LU_PREVIEW_COLOUR.get(poly["class"])
+        if col is None:
+            continue
+        ring = poly["outer"]
+        xs = [p[0] for p in ring]
+        zs = [p[1] for p in ring]
+        c0 = max(0, int((min(xs) + size / 2.0) / res))
+        c1 = min(dim - 1, int((max(xs) + size / 2.0) / res) + 1)
+        r0 = max(0, int((min(zs) + size / 2.0) / res))
+        r1 = min(dim - 1, int((max(zs) + size / 2.0) / res) + 1)
+        if c1 < c0 or r1 < r0:
+            continue
+        gx, gz = np.meshgrid(np.arange(c0, c1 + 1) * res - size / 2.0,
+                             np.arange(r0, r1 + 1) * res - size / 2.0)
+        m = _points_in_ring(gx, gz, ring)
+        for h in poly.get("holes", []):
+            m &= ~_points_in_ring(gx, gz, h)
+        blk = rgb[r0:r1 + 1, c0:c1 + 1]
+        blk[m] = 0.65 * blk[m] + 0.35 * np.asarray(col)
 
     for rd in roads:
         col = {"E": (1, 0, 0), "R": (1, 0.4, 0), "F": (1, 0.85, 0),
@@ -978,6 +1451,25 @@ def write_preview(pack_dir, heights, roads, size, res, dim, buildings=None):
                 if 0 <= px < dim and 0 <= py < dim:
                     rgb[py, px] = (0.85, 0.15, 0.75)
 
+    # Measured ridge axes: a short cyan tick through the footprint centroid.
+    for b in buildings or []:
+        roof = b.get("roof")
+        if not roof or roof["kind"] == "flat":
+            continue
+        ring = b["outer"]
+        cx = sum(p[0] for p in ring) / len(ring)
+        cz = sum(p[1] for p in ring) / len(ring)
+        ax, az = roof["axis"]
+        ix0, iz0 = to_px(cx - 4.0 * ax, cz - 4.0 * az)
+        ix1, iz1 = to_px(cx + 4.0 * ax, cz + 4.0 * az)
+        steps = int(max(abs(ix1 - ix0), abs(iz1 - iz0))) + 1
+        for s in range(steps + 1):
+            t = s / steps
+            px = int(round(ix0 + (ix1 - ix0) * t))
+            py = int(round(iz0 + (iz1 - iz0) * t))
+            if 0 <= px < dim and 0 <= py < dim:
+                rgb[py, px] = (0.1, 0.95, 0.95)
+
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -996,7 +1488,8 @@ def write_preview(pack_dir, heights, roads, size, res, dim, buildings=None):
 # ==========================================================================
 def build_region(name, lat, lon, size, res, out_dir, include_paths,
                  do_roads=True, do_buildings=False, do_preview=False,
-                 texture=None, texture_res=2.0, do_canopy=False):
+                 texture=None, texture_res=2.0, do_canopy=False,
+                 do_roofs=False, do_landuse=False):
     dim = int(round(size / res)) + 1
     transformer = Transformer.from_crs("EPSG:4326", "EPSG:25833", always_xy=True)
     originE, originN = transformer.transform(lon, lat)
@@ -1037,6 +1530,17 @@ def build_region(name, lat, lon, size, res, out_dir, include_paths,
             print("Measuring building heights (Kartverket DOM nDSM)...", flush=True)
             resolve_building_heights(buildings_local, heights,
                                      originE, originN, size, res, dim)
+            if do_roofs:
+                print("Measuring roof blocks (Kartverket DOM at 1 m)...",
+                      flush=True)
+                resolve_roof_blocks(buildings_local, heights,
+                                    originE, originN, size, res, dim)
+
+    landuse = None
+    if do_landuse:
+        print("Fetching land use (OSM Overpass)...", flush=True)
+        landuse = landuse_to_local(fetch_landuse_osm(originE, originN, size),
+                                   originE, originN, size, roads_local)
 
     if texture:
         print(f"Fetching texture (Kartverket {texture} WMS)...", flush=True)
@@ -1072,6 +1576,8 @@ def build_region(name, lat, lon, size, res, out_dir, include_paths,
             for k in ("colour", "roofColour", "roofShape"):
                 if b.get(k):
                     e[k] = b[k]
+            if b.get("roof"):
+                e["roof"] = b["roof"]
             if b["holes"]:
                 e["holes"] = b["holes"]
             slim.append(e)
@@ -1079,6 +1585,12 @@ def build_region(name, lat, lon, size, res, out_dir, include_paths,
                   encoding="utf-8") as f:
             json.dump({"version": 1, "buildings": slim}, f,
                       ensure_ascii=False, separators=(",", ":"))
+
+    # --- write landuse.json ---
+    if landuse is not None:
+        with open(os.path.join(pack_dir, "landuse.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump(landuse, f, ensure_ascii=False, separators=(",", ":"))
 
     # --- write region.json ---
     attribution = ("Terrain: © Kartverket, hoydedata.no (CC BY 4.0). "
@@ -1105,6 +1617,8 @@ def build_region(name, lat, lon, size, res, out_dir, include_paths,
     }
     if do_buildings:
         region["buildings"] = "buildings.json"
+    if landuse is not None:
+        region["landuse"] = "landuse.json"
     if canopy is not None:
         region["canopy"] = "canopy.u8"
         region["canopyScale"] = 0.25  # u8 value * scale = canopy height in m
@@ -1118,7 +1632,7 @@ def build_region(name, lat, lon, size, res, out_dir, include_paths,
     if do_preview:
         print("Rendering preview...", flush=True)
         preview_path = write_preview(pack_dir, heights, roads_local, size, res,
-                                     dim, buildings_local)
+                                     dim, buildings_local, landuse)
         print(f"  preview: {preview_path}", flush=True)
 
     return pack_dir, region, heights, roads_local, preview_path
@@ -1145,12 +1659,26 @@ def parse_args(argv):
     ap.add_argument("--canopy", action="store_true",
                     help="fetch the DOM over the whole region and write a "
                          "canopy height model (canopy.u8, quarter-metres)")
+    ap.add_argument("--roofs", action="store_true",
+                    help="measure a per-building roof block (eave/ridge/axis, "
+                         "flat|gabled|hipped) from the 1 m DOM; implies "
+                         "--buildings")
+    ap.add_argument("--landuse", action="store_true",
+                    help="fetch OSM land-use polygons, paths and trees "
+                         "(writes landuse.json)")
+    ap.add_argument("--cache",
+                    help="directory to cache raw WCS tiles and Overpass "
+                         "responses in, so a re-run costs no network")
     ap.add_argument("--preview", action="store_true", help="render hillshade+roads preview")
     return ap.parse_args(argv)
 
 
 def main(argv=None):
+    global CACHE_DIR
     args = parse_args(argv if argv is not None else sys.argv[1:])
+    if args.cache:
+        CACHE_DIR = args.cache
+        os.makedirs(CACHE_DIR, exist_ok=True)
     if args.preset:
         lat, lon = PRESETS[args.preset]
         name = args.name or args.preset
@@ -1165,11 +1693,13 @@ def main(argv=None):
     build_region(name, lat, lon, args.size, args.res, args.out,
                  include_paths=args.include_paths,
                  do_roads=not args.no_roads,
-                 do_buildings=args.buildings,
+                 do_buildings=args.buildings or args.roofs,
                  do_preview=args.preview,
                  texture=args.texture,
                  texture_res=args.texture_res,
-                 do_canopy=args.canopy)
+                 do_canopy=args.canopy,
+                 do_roofs=args.roofs,
+                 do_landuse=args.landuse)
     print("Done.", flush=True)
     return 0
 

@@ -59,6 +59,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -183,11 +184,13 @@ int main(int argc, char** argv) {
             sunAzDeg = 118.f;           // from +X / -Z = upper LEFT of this frame
             sunElDeg = 26.f;            // low enough to rake the foliation
             viewSun = true;
-        } else if (viewName.rfind("road", 0) != 0) {
-            // road / road-aerial / road-far need the conformed network, so they
-            // resolve further down (right after carveRoads).
+        } else if (viewName.rfind("road", 0) != 0 && viewName != "aksla" &&
+                   viewName != "aksla-near" && viewName != "suburb") {
+            // road* / aksla* / suburb need the loaded pack (ground height, the
+            // conformed network), so they resolve further down after carveRoads.
             std::cerr << "[norway] unknown --view '" << viewName
-                      << "' (known: reference, road[=id][@station], road-top, road-aerial, road-far)\n";
+                      << "' (known: reference, aksla, aksla-near, suburb, "
+                         "road[=id][@station], road-top, road-aerial, road-far)\n";
         }
     }
     if (packArg.empty()) {
@@ -213,6 +216,24 @@ int main(int argc, char** argv) {
               << ", roads " << pack.roads.size() << ", buildings " << pack.buildings.size() << "\n"
               << "         attribution: " << reg.attribution << "\n"
               << std::flush;
+    {
+        // What the pack actually carries for the close-up realism work: the CHM
+        // (no CHM, no trees at all), the measured roof blocks (no blocks, the
+        // rect-fit heuristic), and the OSM land use (no land use, one asphalt
+        // fBm under the whole town). Printed on every run so a shot's log says
+        // which of the three it was made with.
+        std::map<std::string, int> roofKinds;
+        for (const auto& b : pack.buildings)
+            if (b.hasRoof()) ++roofKinds[b.roof.kind];
+        std::cout << "         canopy: " << (pack.hasCanopy() ? "present" : "ABSENT")
+                  << "; roof blocks: ";
+        if (roofKinds.empty()) std::cout << "none";
+        for (const auto& [k, n] : roofKinds) std::cout << k << ' ' << n << ' ';
+        std::cout << "\n         landuse: " << pack.landuse.polygons.size() << " polygons, "
+                  << pack.landuse.lines.size() << " lines, " << pack.landuse.points.size()
+                  << " points\n"
+                  << std::flush;
+    }
 
     // ── road network + unified ground height ───────────────────────────────────
     std::vector<road::RoadSpec> specs;
@@ -371,6 +392,121 @@ int main(int argc, char** argv) {
                         camTargetArg.x, camTargetArg.y, camTargetArg.z, fovArg);
             std::cout << std::flush;
         }
+    }
+
+    // ── named ÅLESUND views ────────────────────────────────────────────────────
+    // The close-up realism programme is judged from the SAME three framings every
+    // phase, and two of them are the photograph everyone compares the render to:
+    // the Fjellstua viewpoint on Aksla, looking down over Brosundet and the
+    // Jugend centre. `aksla` is the phone-wide postcard, `aksla-near` the same eye
+    // on a 28° lens for 1:1 crops of the centre blocks at ~350 m, and `suburb` is
+    // eye level on a residential street — the only one of the three that shows a
+    // wall and a window at reading distance. None of them touches the sun: the
+    // default (215°/34°) is the one every previous aalesund shot used, so a
+    // before/after pair differs by geometry alone.
+    if (viewName == "aksla" || viewName == "aksla-near" || viewName == "suburb") {
+        if (viewName != "suburb") {
+            // The eye is on the Aksla ridge, at the pack's own local elevation
+            // maximum (166 m) — NOT at the plan's 62.4757 N 6.1627 E, which
+            // transforms to pack-local (729, -294) and lands 280 m short of the
+            // summit, 30 m up in a courtyard between two centre blocks. The
+            // summit node is hardcoded rather than searched so the frame is
+            // pinned: every phase must shoot the identical camera.
+            constexpr float ex = 994.f, ez = -214.f;
+            const float ground = pack.grid.sampleBicubic(ex, ez);
+            if (!haveCam) {
+                haveCam = true;
+                camPosArg.set(ex, ground + 2.f, ez);
+                camTargetArg.set(181.f, 5.f, 14.f);// Brosundet, the harbour inlet
+            }
+            if (!haveFov) fovArg = (viewName == "aksla") ? 62.f : 28.f;
+            std::printf("[norway] --view %s -> eye %.0f m (ground %.0f + 2); "
+                        "--cam %.2f,%.2f,%.2f,%.2f,%.2f,%.2f --fov %.1f\n",
+                        viewName.c_str(), camPosArg.y, ground,
+                        camPosArg.x, camPosArg.y, camPosArg.z,
+                        camTargetArg.x, camTargetArg.y, camTargetArg.z, fovArg);
+        } else {
+            // A wooden-house street, RESOLVED rather than hardcoded: of the K
+            // roads at least 150 m long, take the one with the most house-like
+            // footprints (house / detached / semidetached / terrace) within 60 m
+            // of its centreline, then the station along it where that count
+            // peaks. Deterministic for a given pack, and it prints the id +
+            // station so a later phase can re-shoot the identical frame with
+            // --view road=<id>@<station>. On the 2026-09-05 aalesund pack this
+            // resolves to K road 220317 at station 160 of 1105 m, with 18
+            // house-like footprints inside 60 m.
+            std::vector<Vector2> houses;
+            houses.reserve(pack.buildings.size());
+            for (const auto& b : pack.buildings) {
+                if (b.type != "house" && b.type != "detached" &&
+                    b.type != "semidetached_house" && b.type != "terrace")
+                    continue;
+                Vector2 c;
+                for (const auto& p : b.outer) c.add(p);
+                houses.push_back(c.divideScalar(static_cast<float>(b.outer.size())));
+            }
+            const auto countNear = [&houses](const Vector3& p, float r) {
+                int n = 0;
+                for (const auto& h : houses) {
+                    const float dx = h.x - p.x, dz = h.y - p.z;
+                    if (dx * dx + dz * dz <= r * r) ++n;
+                }
+                return n;
+            };
+            std::string bestId;
+            int bestScore = -1;
+            for (const auto& info : network.roadInfos()) {
+                if (info.category != "K" || info.length < 150.f) continue;
+                const auto cl = network.roadCenterline(info.id);
+                if (cl.size() < 2) continue;
+                int score = 0;
+                for (size_t k = 0; k < cl.size(); k += 2) score += countNear(cl[k], 60.f);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestId = info.id;
+                }
+            }
+            const auto cl = bestId.empty() ? std::vector<Vector3>{}
+                                           : network.roadCenterline(bestId);
+            if (cl.size() < 2) {
+                std::cerr << "[norway] --view suburb: no K road with houses in this pack\n";
+            } else {
+                std::vector<float> cum(cl.size(), 0.f);
+                for (size_t k = 1; k < cl.size(); ++k)
+                    cum[k] = cum[k - 1] + std::hypot(cl[k].x - cl[k - 1].x, cl[k].z - cl[k - 1].z);
+                const auto at = [&](float s) {
+                    s = std::clamp(s, 0.f, cum.back());
+                    size_t k = 1;
+                    while (k + 1 < cum.size() && cum[k] < s) ++k;
+                    const float span = std::max(cum[k] - cum[k - 1], 1e-4f);
+                    return cl[k - 1].clone().lerp(cl[k], std::clamp((s - cum[k - 1]) / span, 0.f, 1.f));
+                };
+                float bestS = 0.f;
+                int bestN = -1;
+                for (float s = 0.f; s <= cum.back(); s += 20.f) {
+                    const int n = countNear(at(s), 60.f);
+                    if (n > bestN) {
+                        bestN = n;
+                        bestS = s;
+                    }
+                }
+                const Vector3 anchor = at(bestS);
+                const Vector3 ahead = at(bestS + 60.f);
+                const float eye = road::RoadNetwork::kSurfaceRaise + 1.7f;
+                if (!haveCam) {
+                    haveCam = true;
+                    camPosArg.set(anchor.x, anchor.y + eye, anchor.z);
+                    camTargetArg.set(ahead.x, ahead.y + eye, ahead.z);
+                }
+                if (!haveFov) fovArg = 55.f;
+                std::printf("[norway] --view suburb -> K road '%s' station %.0f/%.0f m, "
+                            "%d houses within 60 m; --cam %.2f,%.2f,%.2f,%.2f,%.2f,%.2f --fov %.1f\n",
+                            bestId.c_str(), bestS, cum.back(), bestN,
+                            camPosArg.x, camPosArg.y, camPosArg.z,
+                            camTargetArg.x, camTargetArg.y, camTargetArg.z, fovArg);
+            }
+        }
+        std::cout << std::flush;
     }
 
     // Synthetic bathymetry. The DTM stores water as a flat sheet at EXACTLY
@@ -879,7 +1015,22 @@ int main(int argc, char** argv) {
     // slope/elevation rule that invents a forest. Packs without a CHM get nothing
     // (trollstigen/aalesund unchanged). NT_NO_FOREST=1 for the A/B,
     // NT_FOREST_CAP=<n> for the instance budget.
-    if (pack.hasCanopy() && !envSet("NT_NO_FOREST")) {
+    //
+    // URBAN GATE (temporary, until the town site gates land): the CHM is a
+    // DOM−DTM difference, so every BUILDING is a 10 m "canopy peak" in it. On a
+    // pack with footprints the detector would plant a spruce on every roof in
+    // Ålesund, which is worse than no trees at all. Until the footprint /
+    // paved / quay gates exist, the forest simply does not run on a pack that
+    // has buildings; NT_FOREST_URBAN=1 forces it on to look at exactly that.
+    const bool urbanForestGate = !pack.buildings.empty() && !envSet("NT_FOREST_URBAN");
+    if (pack.hasCanopy() && urbanForestGate && !envSet("NT_NO_FOREST")) {
+        std::cout << "[norway] canopy forest SKIPPED: this pack has "
+                  << pack.buildings.size()
+                  << " buildings and the CHM includes them, so trees would grow on "
+                     "roofs (set NT_FOREST_URBAN=1 to force it on)\n"
+                  << std::flush;
+    }
+    if (pack.hasCanopy() && !urbanForestGate && !envSet("NT_NO_FOREST")) {
         const auto tf0 = std::chrono::high_resolution_clock::now();
 
         vegetation::CanopySiteOptions so;
