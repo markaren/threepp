@@ -277,6 +277,27 @@ namespace threepp::terrain {
                     b.colour = bd.value("colour", std::string{});
                     b.roofColour = bd.value("roofColour", std::string{});
                     b.roofShape = bd.value("roofShape", std::string{});
+                    // Optional measured roof block. Only a well-formed object
+                    // with a non-empty kind counts: a half-written one leaves
+                    // hasRoof() false and the consumer keeps its heuristic.
+                    if (auto itRoof = bd.find("roof"); itRoof != bd.end() && itRoof->is_object()) {
+                        GeoRoof rf;
+                        rf.kind = itRoof->value("kind", std::string{});
+                        rf.ridge = itRoof->value("ridge", 0.f);
+                        rf.eave = itRoof->value("eave", rf.ridge);
+                        rf.tower = itRoof->value("tower", false);
+                        if (auto itAxis = itRoof->find("axis");
+                            itAxis != itRoof->end() && itAxis->is_array() && itAxis->size() >= 2) {
+                            const float ax = (*itAxis)[0].get<float>();
+                            const float az = (*itAxis)[1].get<float>();
+                            const float len = std::sqrt(ax * ax + az * az);
+                            if (len > 1e-6f) rf.axis.set(ax / len, az / len);
+                        }
+                        if (!rf.kind.empty()) {
+                            rf.eave = std::clamp(rf.eave, 0.f, rf.ridge);
+                            b.roof = rf;
+                        }
+                    }
                     const auto itOuter = bd.find("outer");
                     if (itOuter == bd.end() || !itOuter->is_array()) continue;
                     b.outer = parseRing(*itOuter);
@@ -289,6 +310,71 @@ namespace threepp::terrain {
                         }
                     }
                     pack.buildings.push_back(std::move(b));
+                }
+            }
+        }
+
+        // ── landuse.json (optional) ──────────────────────────────────────────
+        // Named by region.json only; a pack without the key (every pack made
+        // before this loader) simply leaves pack.landuse empty. Type-tolerant
+        // like roads.json: every field optional, malformed entries skipped
+        // rather than throwing, so one bad ring cannot cost the whole layer.
+        if (auto itLU = rj.find("landuse"); itLU != rj.end() && itLU->is_string()) {
+            const fs::path luPath = packDir / itLU->get<std::string>();
+            if (fs::exists(luPath)) {
+                const nlohmann::json luDoc = parseJsonFile(luPath);
+                const auto parseRing = [](const nlohmann::json& arr) {
+                    std::vector<Vector2> ring;
+                    ring.reserve(arr.size());
+                    for (const auto& p : arr) {
+                        if (!p.is_array() || p.size() < 2) continue;
+                        ring.emplace_back(p[0].get<float>(), p[1].get<float>());
+                    }
+                    return ring;
+                };
+                if (auto it = luDoc.find("polygons"); it != luDoc.end() && it->is_array()) {
+                    for (const auto& e : *it) {
+                        if (!e.is_object()) continue;
+                        GeoLandUse::Polygon poly;
+                        poly.cls = e.value("class", std::string{});
+                        poly.id = e.value("id", std::string{});
+                        const auto itOuter = e.find("outer");
+                        if (poly.cls.empty() || itOuter == e.end() || !itOuter->is_array()) continue;
+                        poly.outer = parseRing(*itOuter);
+                        if (poly.outer.size() < 3) continue;
+                        if (auto itH = e.find("holes"); itH != e.end() && itH->is_array()) {
+                            for (const auto& h : *itH) {
+                                if (!h.is_array()) continue;
+                                auto ring = parseRing(h);
+                                if (ring.size() >= 3) poly.holes.push_back(std::move(ring));
+                            }
+                        }
+                        pack.landuse.polygons.push_back(std::move(poly));
+                    }
+                }
+                if (auto it = luDoc.find("lines"); it != luDoc.end() && it->is_array()) {
+                    for (const auto& e : *it) {
+                        if (!e.is_object()) continue;
+                        GeoLandUse::Line line;
+                        line.cls = e.value("class", std::string{});
+                        line.id = e.value("id", std::string{});
+                        line.width = e.value("width", 2.f);
+                        const auto itPts = e.find("points");
+                        if (line.cls.empty() || itPts == e.end() || !itPts->is_array()) continue;
+                        line.points = parseRing(*itPts);
+                        if (line.points.size() < 2) continue;
+                        pack.landuse.lines.push_back(std::move(line));
+                    }
+                }
+                if (auto it = luDoc.find("points"); it != luDoc.end() && it->is_array()) {
+                    for (const auto& e : *it) {
+                        if (!e.is_object()) continue;
+                        GeoLandUse::Point pt;
+                        pt.cls = e.value("class", std::string{});
+                        if (pt.cls.empty()) continue;
+                        pt.pos.set(e.value("x", 0.f), e.value("z", 0.f));
+                        pack.landuse.points.push_back(std::move(pt));
+                    }
                 }
             }
         }

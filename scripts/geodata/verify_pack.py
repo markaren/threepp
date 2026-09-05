@@ -30,7 +30,97 @@ def load(pack_dir):
     if os.path.exists(bpath):
         with open(bpath, encoding="utf-8") as f:
             buildings = json.load(f)["buildings"]
-    return region, h, roads, buildings
+    canopy = None
+    if "canopy" in region:
+        cpath = os.path.join(pack_dir, region["canopy"])
+        if os.path.exists(cpath):
+            raw = np.fromfile(cpath, dtype=np.uint8)
+            if raw.size == dim * dim:
+                canopy = raw.reshape(dim, dim) * region.get("canopyScale", 0.25)
+    landuse = None
+    if "landuse" in region:
+        lpath = os.path.join(pack_dir, region["landuse"])
+        if os.path.exists(lpath):
+            with open(lpath, encoding="utf-8") as f:
+                landuse = json.load(f)
+    return region, h, roads, buildings, canopy, landuse
+
+
+def _rasterize_footprints(region, buildings):
+    """Boolean mask on the pack's node grid: is this node inside a footprint?"""
+    from fetch_norway_terrain import _points_in_ring  # same even-odd test
+
+    dim = region["dim"]
+    size = region["worldSize"]
+    res = size / (dim - 1)
+    half = size / 2.0
+    mask = np.zeros((dim, dim), dtype=bool)
+    for b in buildings:
+        ring = b["outer"]
+        xs = [p[0] for p in ring]
+        zs = [p[1] for p in ring]
+        c0 = max(0, int((min(xs) + half) / res))
+        c1 = min(dim - 1, int((max(xs) + half) / res) + 1)
+        r0 = max(0, int((min(zs) + half) / res))
+        r1 = min(dim - 1, int((max(zs) + half) / res) + 1)
+        if c1 < c0 or r1 < r0:
+            continue
+        gx, gz = np.meshgrid(np.arange(c0, c1 + 1) * res - half,
+                             np.arange(r0, r1 + 1) * res - half)
+        m = _points_in_ring(gx, gz, ring)
+        for h in b.get("holes", []):
+            m &= ~_points_in_ring(gx, gz, h)
+        mask[r0:r1 + 1, c0:c1 + 1] |= m
+    return mask
+
+
+def verify_canopy(region, h, canopy, buildings):
+    """
+    Canopy stats, and the ONE number the town forest gate turns on: how much of
+    the >= 2.5 m canopy sits inside a building footprint.  The CHM is DOM - DTM,
+    so every roof IS a canopy peak; that share is the fraction of candidate
+    tree sites a footprint mask has to reject before a tree can be planted in
+    this town.
+    """
+    land = h > (region.get("seaLevel", 0.0) + 0.5)
+    tall = canopy >= 2.5
+    n_land = int(land.sum())
+    print(f"canopy: max={canopy.max():.2f} m, "
+          f"{100.0 * float((tall & land).sum()) / max(n_land, 1):.1f}% of land "
+          f"cells >= 2.5 m ({int((tall & land).sum())} of {n_land})")
+    if buildings:
+        fp = _rasterize_footprints(region, buildings)
+        n_tall = int(tall.sum())
+        inside = int((tall & fp).sum())
+        print(f"  canopy >= 2.5 m INSIDE building footprints: "
+              f"{100.0 * inside / max(n_tall, 1):.1f}% ({inside} of {n_tall}) "
+              f"<- the Phase B gate")
+
+
+def verify_roofs(buildings):
+    kinds = {}
+    for b in buildings:
+        r = b.get("roof")
+        if r:
+            kinds[r["kind"]] = kinds.get(r["kind"], 0) + 1
+    n = sum(kinds.values())
+    print(f"roofs: {n} of {len(buildings)} buildings carry a measured block "
+          f"{dict(sorted(kinds.items(), key=lambda kv: -kv[1]))}")
+    if n:
+        rises = [b["roof"]["ridge"] - b["roof"]["eave"] for b in buildings
+                 if b.get("roof")]
+        print(f"  eave->ridge rise: median={np.median(rises):.2f} "
+              f"p90={np.percentile(rises, 90):.2f} max={max(rises):.2f} m")
+
+
+def verify_landuse(landuse):
+    for key in ("polygons", "lines", "points"):
+        items = landuse.get(key, [])
+        c = {}
+        for it in items:
+            c[it["class"]] = c.get(it["class"], 0) + 1
+        print(f"landuse {key}: {len(items)} "
+              f"{dict(sorted(c.items(), key=lambda kv: -kv[1]))}")
 
 
 def sample_bilinear(h, region, x, z):
@@ -95,7 +185,7 @@ def verify_buildings(region, h, buildings):
 
 
 def main(pack_dir):
-    region, h, roads, buildings = load(pack_dir)
+    region, h, roads, buildings, canopy, landuse = load(pack_dir)
     print(f"pack {region['name']}: dim={region['dim']} "
           f"hMin={region['heightMin']} hMax={region['heightMax']} "
           f"roads={len(roads)}")
@@ -127,6 +217,13 @@ def main(pack_dir):
     if buildings:
         print(f"buildings: {len(buildings)}")
         verify_buildings(region, h, buildings)
+        verify_roofs(buildings)
+
+    if canopy is not None:
+        verify_canopy(region, h, canopy, buildings)
+
+    if landuse is not None:
+        verify_landuse(landuse)
 
     if "texture" in region:
         tpath = os.path.join(pack_dir, region["texture"])
@@ -143,7 +240,7 @@ def main(pack_dir):
                   f"dimensions not checked)")
 
     for name in ("region.json", "heights.f32", "roads.json", "buildings.json",
-                 "texture.png"):
+                 "landuse.json", "canopy.u8", "texture.png"):
         p = os.path.join(pack_dir, name)
         if os.path.exists(p):
             print(f"  {name}: {os.path.getsize(p)} bytes")

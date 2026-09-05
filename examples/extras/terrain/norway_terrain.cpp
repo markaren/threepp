@@ -27,6 +27,7 @@
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/road/RoadNetwork.hpp"
+#include "threepp/extras/terrain/CellStreamer.hpp"
 #include "threepp/extras/terrain/CliffShell.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
 #include "threepp/extras/terrain/GeoBuildings.hpp"
@@ -35,6 +36,7 @@
 #include "threepp/extras/terrain/GeoTerrainPack.hpp"
 #include "threepp/extras/terrain/TerrainScatter.hpp"
 #include "threepp/extras/terrain/TerrainTiles.hpp"
+#include "threepp/extras/terrain/UrbanProps.hpp"
 #include "threepp/extras/vegetation/CanopyForest.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
@@ -59,6 +61,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -123,6 +126,13 @@ int main(int argc, char** argv) {
     std::string viewName;   // --view <name>: a named camera/sun preset (see below)
     bool haveFov = false;
     std::string profilePath;// --road-profile <csv>: dump the height field along the longest road and exit
+    // --fly x,y,z[,tx,ty,tz]: with --shotseq, the camera walks from the --cam
+    // pose to this one over NT_FLY_FRAMES (600) frames starting at --seqstart.
+    // Streamed content (trees, bushes, cars, tiles) is only ever exercised by a
+    // camera that MOVES; a static shot photographs the first ring and nothing
+    // else. Without a target the look-at stays at the --cam target.
+    bool haveFly = false, haveFlyTarget = false;
+    Vector3 flyPosArg, flyTargetArg;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
@@ -157,6 +167,28 @@ int main(int argc, char** argv) {
             } else {
                 std::cerr << "[norway] --cam needs 6 comma-separated floats: x,y,z,tx,ty,tz\n";
             }
+        } else if (a == "--fly" && i + 1 < argc) {
+            float v[6] = {0, 0, 0, 0, 0, 0};
+            std::string s = argv[++i];
+            int k = 0;
+            size_t pos = 0;
+            while (k < 6 && pos <= s.size()) {
+                const size_t comma = s.find(',', pos);
+                const std::string tok = s.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+                if (!tok.empty()) v[k++] = std::stof(tok);
+                if (comma == std::string::npos) break;
+                pos = comma + 1;
+            }
+            if (k == 3 || k == 6) {
+                haveFly = true;
+                flyPosArg.set(v[0], v[1], v[2]);
+                if (k == 6) {
+                    haveFlyTarget = true;
+                    flyTargetArg.set(v[3], v[4], v[5]);
+                }
+            } else {
+                std::cerr << "[norway] --fly needs 3 or 6 comma-separated floats: x,y,z[,tx,ty,tz]\n";
+            }
         } else if (!a.empty() && a[0] != '-') packArg = a;
     }
     // ── named views ───────────────────────────────────────────────────────────
@@ -183,11 +215,13 @@ int main(int argc, char** argv) {
             sunAzDeg = 118.f;           // from +X / -Z = upper LEFT of this frame
             sunElDeg = 26.f;            // low enough to rake the foliation
             viewSun = true;
-        } else if (viewName.rfind("road", 0) != 0) {
-            // road / road-aerial / road-far need the conformed network, so they
-            // resolve further down (right after carveRoads).
+        } else if (viewName.rfind("road", 0) != 0 && viewName != "aksla" &&
+                   viewName != "aksla-near" && viewName != "suburb") {
+            // road* / aksla* / suburb need the loaded pack (ground height, the
+            // conformed network), so they resolve further down after carveRoads.
             std::cerr << "[norway] unknown --view '" << viewName
-                      << "' (known: reference, road[=id][@station], road-top, road-aerial, road-far)\n";
+                      << "' (known: reference, aksla, aksla-near, suburb, "
+                         "road[=id][@station], road-top, road-aerial, road-far)\n";
         }
     }
     if (packArg.empty()) {
@@ -213,6 +247,24 @@ int main(int argc, char** argv) {
               << ", roads " << pack.roads.size() << ", buildings " << pack.buildings.size() << "\n"
               << "         attribution: " << reg.attribution << "\n"
               << std::flush;
+    {
+        // What the pack actually carries for the close-up realism work: the CHM
+        // (no CHM, no trees at all), the measured roof blocks (no blocks, the
+        // rect-fit heuristic), and the OSM land use (no land use, one asphalt
+        // fBm under the whole town). Printed on every run so a shot's log says
+        // which of the three it was made with.
+        std::map<std::string, int> roofKinds;
+        for (const auto& b : pack.buildings)
+            if (b.hasRoof()) ++roofKinds[b.roof.kind];
+        std::cout << "         canopy: " << (pack.hasCanopy() ? "present" : "ABSENT")
+                  << "; roof blocks: ";
+        if (roofKinds.empty()) std::cout << "none";
+        for (const auto& [k, n] : roofKinds) std::cout << k << ' ' << n << ' ';
+        std::cout << "\n         landuse: " << pack.landuse.polygons.size() << " polygons, "
+                  << pack.landuse.lines.size() << " lines, " << pack.landuse.points.size()
+                  << " points\n"
+                  << std::flush;
+    }
 
     // ── road network + unified ground height ───────────────────────────────────
     std::vector<road::RoadSpec> specs;
@@ -373,6 +425,185 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ── named ÅLESUND views ────────────────────────────────────────────────────
+    // The close-up realism programme is judged from the SAME three framings every
+    // phase, and two of them are the photograph everyone compares the render to:
+    // the Aksla plateau edge, looking down over Brosundet and the
+    // Jugend centre. `aksla` is the postcard, `aksla-near` the same eye
+    // on a 28° lens for 1:1 crops of the centre blocks at ~600 m, and `suburb` is
+    // eye level on a residential street — the only one of the three that shows a
+    // wall and a window at reading distance. None of them touches the sun: the
+    // default (215°/34°) is the one every previous aalesund shot used, so a
+    // before/after pair differs by geometry alone.
+    if (viewName == "aksla" || viewName == "aksla-near" || viewName == "suburb") {
+        if (viewName != "suburb") {
+            // The eye is on the WEST EDGE of the Aksla plateau, not on the
+            // summit node (994, -214, 166 m): from the summit the town is a
+            // distant strip behind the bare shoulder of the hill, which is not
+            // the photograph. From the edge the town fills the lower two
+            // thirds, the centre blocks sit at ~600 m and the islands run along
+            // the top, as in the reference.
+            //
+            // The eye y is now an ABSOLUTE metre height, not ground + 2. Phase
+            // B planted the Aksla forest, and the old eye (801, ground + 2,
+            // -160) stands INSIDE two 20 m CHM trees: they fill the middle
+            // third of the frame and there is no view at all. Moving 15 m west
+            // and standing 20 m over the slope clears the crowns and keeps the
+            // same composition — checked against the three candidates with the
+            // forest on. A fixed y also means the frame does not move when the
+            // DTM sampling changes.
+            //   --cam 786,141,-150,300,5,-40 --fov 55   (aksla)
+            //   --cam 786,141,-150,300,5,-40 --fov 28   (aksla-near)
+            constexpr float ex = 786.f, ey = 141.f, ez = -150.f;
+            const float ground = pack.grid.sampleBicubic(ex, ez);
+            if (!haveCam) {
+                haveCam = true;
+                camPosArg.set(ex, ey, ez);
+                camTargetArg.set(300.f, 5.f, -40.f);// the Jugend centre blocks
+            }
+            if (!haveFov) fovArg = (viewName == "aksla") ? 55.f : 28.f;
+            std::printf("[norway] --view %s -> eye %.0f m absolute (ground %.0f, %.0f m over it); "
+                        "--cam %.2f,%.2f,%.2f,%.2f,%.2f,%.2f --fov %.1f\n",
+                        viewName.c_str(), camPosArg.y, ground, camPosArg.y - ground,
+                        camPosArg.x, camPosArg.y, camPosArg.z,
+                        camTargetArg.x, camTargetArg.y, camTargetArg.z, fovArg);
+        } else {
+            // A wooden-house street, RESOLVED rather than hardcoded: of the K
+            // roads at least 150 m long, take the one with the most house-like
+            // footprints (house / detached / semidetached / terrace) within 60 m
+            // of its centreline, then the station along it where that count
+            // peaks. Deterministic for a given pack, and it prints the id +
+            // station so a later phase can re-shoot the identical frame with
+            // --view road=<id>@<station>. On the 2026-09-05 aalesund pack this
+            // resolves to K road 220317 at station 160 of 1105 m, with 18
+            // house-like footprints inside 60 m.
+            std::vector<Vector2> houses;
+            houses.reserve(pack.buildings.size());
+            for (const auto& b : pack.buildings) {
+                if (b.type != "house" && b.type != "detached" &&
+                    b.type != "semidetached_house" && b.type != "terrace")
+                    continue;
+                Vector2 c;
+                for (const auto& p : b.outer) c.add(p);
+                houses.push_back(c.divideScalar(static_cast<float>(b.outer.size())));
+            }
+            const auto countNear = [&houses](const Vector3& p, float r) {
+                int n = 0;
+                for (const auto& h : houses) {
+                    const float dx = h.x - p.x, dz = h.y - p.z;
+                    if (dx * dx + dz * dz <= r * r) ++n;
+                }
+                return n;
+            };
+            std::string bestId;
+            int bestScore = -1;
+            for (const auto& info : network.roadInfos()) {
+                if (info.category != "K" || info.length < 150.f) continue;
+                const auto cl = network.roadCenterline(info.id);
+                if (cl.size() < 2) continue;
+                int score = 0;
+                for (size_t k = 0; k < cl.size(); k += 2) score += countNear(cl[k], 60.f);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestId = info.id;
+                }
+            }
+            const auto cl = bestId.empty() ? std::vector<Vector3>{}
+                                           : network.roadCenterline(bestId);
+            if (cl.size() < 2) {
+                std::cerr << "[norway] --view suburb: no K road with houses in this pack\n";
+            } else {
+                std::vector<float> cum(cl.size(), 0.f);
+                for (size_t k = 1; k < cl.size(); ++k)
+                    cum[k] = cum[k - 1] + std::hypot(cl[k].x - cl[k - 1].x, cl[k].z - cl[k - 1].z);
+                const auto at = [&](float s) {
+                    s = std::clamp(s, 0.f, cum.back());
+                    size_t k = 1;
+                    while (k + 1 < cum.size() && cum[k] < s) ++k;
+                    const float span = std::max(cum[k] - cum[k - 1], 1e-4f);
+                    return cl[k - 1].clone().lerp(cl[k], std::clamp((s - cum[k - 1]) / span, 0.f, 1.f));
+                };
+                float bestS = 0.f;
+                int bestN = -1;
+                for (float s = 0.f; s <= cum.back(); s += 20.f) {
+                    const int n = countNear(at(s), 60.f);
+                    if (n > bestN) {
+                        bestN = n;
+                        bestS = s;
+                    }
+                }
+                const Vector3 anchor = at(bestS);
+                const Vector3 ahead = at(bestS + 60.f);
+                const float eye = road::RoadNetwork::kSurfaceRaise + 1.7f;
+                if (!haveCam) {
+                    haveCam = true;
+                    camPosArg.set(anchor.x, anchor.y + eye, anchor.z);
+                    camTargetArg.set(ahead.x, ahead.y + eye, ahead.z);
+                }
+                if (!haveFov) fovArg = 55.f;
+                std::printf("[norway] --view suburb -> K road '%s' station %.0f/%.0f m, "
+                            "%d houses within 60 m; --cam %.2f,%.2f,%.2f,%.2f,%.2f,%.2f --fov %.1f\n",
+                            bestId.c_str(), bestS, cum.back(), bestN,
+                            camPosArg.x, camPosArg.y, camPosArg.z,
+                            camTargetArg.x, camTargetArg.y, camTargetArg.z, fovArg);
+            }
+        }
+        std::cout << std::flush;
+    }
+
+    // ── QUAY APRON ─────────────────────────────────────────────────────────
+    // Ålesund's harbour front is reclaimed land, and the lidar reads reclaimed
+    // quay as WATER: the DTM puts those cells at exactly seaLevel, and the sea
+    // sink below then drops them 6 m — so the warehouses along Skansekaia stand
+    // with their walls in the fjord (phaseC2_aksla_near.png). Nothing downstream
+    // can fix that; the ground under a building has to exist.
+    //
+    // So: every sea-level cell that is under a building (footprints grown by
+    // 8 m — the apron is the yard around the shed, not just its outline) or
+    // inside a surveyed pier/quay polygon becomes an apron 0.9 m above the
+    // water, and every breakwater cell a 1.5 m rock ridge. The heightfield gives
+    // the apron a short ramp at its edge instead of a vertical quay wall; at the
+    // ranges this pack is judged from that is the right trade, and it means no
+    // extra geometry and no seam with the tiles.
+    //
+    // BEFORE the sink, and before makeGeoProvider: the sink must not see these
+    // cells as water any more, and the paint needs the mask. NT_NO_APRON=1 for
+    // the A/B.
+    std::shared_ptr<const terrain::FootprintMask> apronMask;
+    int apronCells = 0;
+    if (reg.heightMin < 1.0f && !std::getenv("NT_NO_APRON") &&
+        (!pack.buildings.empty() || pack.hasLandUse())) {
+        const auto builtNear = terrain::buildFootprintMask(pack, 8.f, 2.f);
+        const auto quayPoly = terrain::buildLandUseMask(pack, {"pier", "quay"}, 0.f, 2.f);
+        const auto breakPoly = terrain::buildLandUseMask(pack, {"breakwater"}, 0.f, 2.f);
+        if (builtNear || quayPoly || breakPoly) {
+            const int gdim = pack.grid.dim();
+            const float gstep = pack.grid.worldSize() / static_cast<float>(gdim - 1);
+            const float ghalf = pack.grid.worldSize() * 0.5f;
+            auto apron = terrain::detail::geoMakeMask(reg.worldSize, gstep);
+            auto& hh = pack.grid.data();
+            for (int iz = 0; iz < gdim && iz < apron->dim; ++iz) {
+                const float z = -ghalf + static_cast<float>(iz) * gstep;
+                for (int ix = 0; ix < gdim && ix < apron->dim; ++ix) {
+                    float& hv = hh[static_cast<size_t>(iz) * gdim + ix];
+                    if (hv > reg.seaLevel + 0.05f) continue;
+                    const float x = -ghalf + static_cast<float>(ix) * gstep;
+                    const bool rock = breakPoly && breakPoly->inside(x, z);
+                    if (!rock && !(builtNear && builtNear->inside(x, z)) &&
+                        !(quayPoly && quayPoly->inside(x, z)))
+                        continue;
+                    hv = reg.seaLevel + (rock ? 1.5f : 0.9f);
+                    apron->m[static_cast<size_t>(iz) * apron->dim + ix] = 1u;
+                    ++apronCells;
+                }
+            }
+            apronMask = apron;
+            std::cout << "[norway] quay apron: " << apronCells << " sea-level cells raised to +"
+                      << 0.9f << " m (breakwater +1.5)\n"
+                      << std::flush;
+        }
+    }
+
     // Synthetic bathymetry. The DTM stores water as a flat sheet at EXACTLY
     // seaLevel (no soundings), so the seabed would sit 0.15 m under the ocean
     // surface: the whole sea reads as a knee-deep pond (bottom splat visible
@@ -431,7 +662,100 @@ int main(int argc, char** argv) {
     // through the shell's 0.35 m offset — so the two are mutually exclusive.
     const bool shellOn = gridStep <= 1.5f && !std::getenv("NT_NO_SHELL");
     gopt.cliffRelief = cliffPack && !shellOn;
+    // Surveyed land cover (OSM bare_rock / scree / scrub / heath) painted over
+    // the splat. NT_NO_LANDUSE_PAINT=1 is the A/B for that layer ALONE — the
+    // CHM forest paint, the urban fabric and the road paint are untouched, so
+    // the pair differs by the polygons and nothing else.
+    gopt.landUsePaint = !std::getenv("NT_NO_LANDUSE_PAINT");
+    gopt.apronMask = apronMask;
     const terrain::TerrainProvider prov = terrain::makeGeoProvider(pack, network, gopt);
+
+    // ── land-use paint diagnostic ─────────────────────────────────────────
+    // The parking paint went missing in the Round 5 shots (lots rendered as
+    // grey-green ground with tufts while the cars stood on them), and the only
+    // way to tell "the lot was never rasterised" from "the lot is painted and
+    // something above it wins" is to look at the raster and at the layers.
+    //   NT_LANDUSE_DUMP=<file.pgm>  class-code raster (P5, one code per byte)
+    //                               + a per-class cell histogram, then exit.
+    //   NT_LANDUSE_PROBE="x,z;x,z"  per point: the class code, the sampled Mix,
+    //                               and albedo/weights with the layer ON and
+    //                               OFF, so the layer's own contribution shows.
+    {
+        const char* dumpPath = std::getenv("NT_LANDUSE_DUMP");
+        const char* probeArg = std::getenv("NT_LANDUSE_PROBE");
+        if ((dumpPath && dumpPath[0]) || (probeArg && probeArg[0])) {
+            const auto lup = terrain::buildLandUsePaint(pack, gopt.landUseCell, apronMask);
+            if (!lup || !lup->valid()) {
+                std::cout << "[landuse] NO PAINT (hasLandUse " << pack.hasLandUse()
+                          << ", apron " << (apronMask ? 1 : 0) << ")\n";
+            } else {
+                std::array<long long, terrain::LandUsePaint::ClsCount> hist{};
+                for (std::uint8_t v : lup->m)
+                    if (v < terrain::LandUsePaint::ClsCount) ++hist[v];
+                static const char* kNames[] = {"None", "Asphalt", "Bay", "Gravel",
+                                               "Grass", "Pitch", "Concrete", "Rock"};
+                std::cout << "[landuse] raster dim " << lup->dim << " cell " << lup->cell
+                          << " half " << lup->half << "\n";
+                for (int i = 0; i < terrain::LandUsePaint::ClsCount; ++i)
+                    std::cout << "[landuse]   " << kNames[i] << " " << hist[i] << " cells\n";
+                if (dumpPath && dumpPath[0]) {
+                    std::ofstream f(dumpPath, std::ios::binary);
+                    f << "P5\n" << lup->dim << " " << lup->dim << "\n255\n";
+                    f.write(reinterpret_cast<const char*>(lup->m.data()),
+                            static_cast<std::streamsize>(lup->m.size()));
+                    std::cout << "[landuse] wrote " << dumpPath << "\n";
+                }
+            }
+            if (probeArg && probeArg[0]) {
+                terrain::GeoTerrainOptions gOff = gopt;
+                gOff.landUsePaint = false;
+                const terrain::TerrainProvider provOff =
+                        terrain::makeGeoProvider(pack, network, gOff);
+                std::string s = probeArg;
+                size_t pos = 0;
+                while (pos <= s.size()) {
+                    const size_t semi = s.find(';', pos);
+                    const std::string tok =
+                            s.substr(pos, semi == std::string::npos ? std::string::npos : semi - pos);
+                    float px = 0.f, pz = 0.f;
+                    if (std::sscanf(tok.c_str(), "%f,%f", &px, &pz) == 2) {
+                        const float h = prov.height(px, pz);
+                        const float dx = prov.height(px + 1.f, pz) - prov.height(px - 1.f, pz);
+                        const float dz = prov.height(px, pz + 1.f) - prov.height(px, pz - 1.f);
+                        const float slope = std::sqrt(dx * dx + dz * dz) / 2.f;
+                        std::printf("[probe] (%.1f, %.1f) h %.2f slope %.3f\n", px, pz, h, slope);
+                        if (lup && lup->valid()) {
+                            const int ix = static_cast<int>(std::lround((px + lup->half) / lup->cell));
+                            const int iz = static_cast<int>(std::lround((pz + lup->half) / lup->cell));
+                            const auto mix = lup->sample(px, pz);
+                            std::printf("[probe]   cell (%d, %d) code %d  mix", ix, iz,
+                                        static_cast<int>(lup->code(ix, iz)));
+                            for (int i = 0; i < terrain::LandUsePaint::ClsCount; ++i)
+                                std::printf(" %.2f", mix[i]);
+                            std::printf("\n");
+                        }
+                        float on[3] = {0, 0, 0}, off[3] = {0, 0, 0};
+                        float wOn[4] = {0, 0, 0, 0}, wOff[4] = {0, 0, 0, 0};
+                        prov.albedo(px, pz, h, slope, on);
+                        provOff.albedo(px, pz, h, slope, off);
+                        if (prov.weights) prov.weights(px, pz, h, slope, wOn);
+                        if (provOff.weights) provOff.weights(px, pz, h, slope, wOff);
+                        std::printf("[probe]   albedo OFF %.3f %.3f %.3f -> ON %.3f %.3f %.3f\n",
+                                    off[0], off[1], off[2], on[0], on[1], on[2]);
+                        std::printf("[probe]   weights OFF %.2f %.2f %.2f %.2f (sum %.2f)"
+                                    " -> ON %.2f %.2f %.2f %.2f (sum %.2f)\n",
+                                    wOff[0], wOff[1], wOff[2], wOff[3],
+                                    wOff[0] + wOff[1] + wOff[2] + wOff[3], wOn[0], wOn[1], wOn[2],
+                                    wOn[3], wOn[0] + wOn[1] + wOn[2] + wOn[3]);
+                    }
+                    if (semi == std::string::npos) break;
+                    pos = semi + 1;
+                }
+            }
+            std::cout << std::flush;
+            if (dumpPath && dumpPath[0]) return 0;
+        }
+    }
 
     reportRoadConformance(pack, network);
 
@@ -490,9 +814,38 @@ int main(int argc, char** argv) {
     // Road-aware LOD: subdivide road-corridor tiles ~2.2× sooner/deeper so the
     // ribbon stays crisp at mid distance (terrain interp error shrinks with tile
     // size). The 1.2/1.7 split/merge dead band is preserved under the bias.
-    if (!noRoadBias) {
-        tileOpts.refineBias = [&network](float cx, float cz, float half) {
-            return network.corridorIntersects(cx, cz, half) ? 2.2f : 1.0f;
+    // The SURVEYED HARD SURFACING gets the same bias as a road corridor, and for
+    // the same reason. Its content is fine paint — 2.5 m bay stripes, a lot's
+    // edge, a quay apron — and none of it survives a coarse tile's texel. Worse,
+    // `errorLod` shrinks the split radius of a tile whose MESH error is small,
+    // and urban ground is graded flat by construction: exactly the ground that
+    // carries the most paint detail was the last to refine. A 110 m camera over
+    // the big lot sat on a ~2.6 m texel for hundreds of frames and the lot
+    // rendered as one flat grey (phaseF_lot_nadir_before.png) — the paint was
+    // right in the raster the whole time.
+    //
+    // OPT-IN (NT_LU_BIAS=1), because it is not free and the trade is the user's
+    // to make: measured at --view aksla, 400-frame shots, 25.0 / 31.7 fps with
+    // the bias against 31.0 / 39.4 without (same run order, tile settling still
+    // in flight in both). It buys sharp lots and quays near the camera at about
+    // a fifth of the frame rate in the flagship wide view.
+    std::shared_ptr<const terrain::FootprintMask> hardMask;
+    if (const char* lb = std::getenv("NT_LU_BIAS"); pack.hasLandUse() && lb && lb[0] == '1')
+        hardMask = terrain::buildLandUseMask(
+                pack, {"parking", "pier", "quay", "yard", "marina", "playground"}, 0.f, 4.f);
+    if (!noRoadBias || hardMask) {
+        tileOpts.refineBias = [&network, hardMask, noRoadBias](float cx, float cz, float half) {
+            if (!noRoadBias && network.corridorIntersects(cx, cz, half)) return 2.2f;
+            if (hardMask && half <= 400.f) {
+                // Nine taps over the tile box: a lot is tens of metres across,
+                // so a centre-only test misses the tile it sits in the corner of.
+                for (int j = -1; j <= 1; ++j)
+                    for (int i = -1; i <= 1; ++i)
+                        if (hardMask->inside(cx + static_cast<float>(i) * half * 0.8f,
+                                             cz + static_cast<float>(j) * half * 0.8f))
+                            return 2.2f;
+            }
+            return 1.0f;
         };
     }
     // Hoisted out of the block below: the cliff shell shades the SAME wall as
@@ -691,9 +1044,39 @@ int main(int argc, char** argv) {
     if (!pack.buildings.empty() && !envSet("NT_NO_BUILDINGS")) {
         terrain::GeoBuildingsOptions bo;
         bo.pitchedRoofs = !envSet("NT_FLAT_ROOFS");
+        bo.measuredRoofs = !envSet("NT_NO_MEASURED_ROOFS");
+        terrain::GeoBuildingsStats bs;
+        bo.stats = &bs;
         auto buildings = terrain::buildGeoBuildingMeshes(pack, bo);
-        std::cout << "[norway] buildings: " << pack.buildings.size() << " footprints in "
-                  << buildings->children.size() << " chunk meshes\n" << std::flush;
+        std::printf("[norway] buildings: %d footprints -> flat %d, gabled %d, "
+                    "hipped-skeleton %d (skeleton tried %d, fell back %d = %.1f%%), "
+                    "no roof block %d, towers %d\n",
+                    bs.buildings, bs.flat, bs.gabled, bs.hipped, bs.skeletonTried,
+                    bs.skeletonFailed,
+                    bs.skeletonTried ? 100.f * static_cast<float>(bs.skeletonFailed) /
+                                               static_cast<float>(bs.skeletonTried)
+                                     : 0.f,
+                    bs.heuristic, bs.towers);
+        {
+            std::string causes;
+            for (int r = 1; r < terrain::SK_COUNT; ++r)
+                if (bs.skelFail[static_cast<size_t>(r)])
+                    causes += std::string(causes.empty() ? "" : ", ") +
+                              terrain::skeletonFailName(r) + " " +
+                              std::to_string(bs.skelFail[static_cast<size_t>(r)]);
+            if (bs.skelFailRing) causes += (causes.empty() ? "" : ", ") +
+                                           std::string("ring-degenerate ") +
+                                           std::to_string(bs.skelFailRing);
+            if (bs.skelFailPitch) causes += (causes.empty() ? "" : ", ") +
+                                            std::string("pitch-reject ") +
+                                            std::to_string(bs.skelFailPitch);
+            std::printf("[norway] buildings: skeleton fallback causes: %s\n",
+                        causes.empty() ? "none" : causes.c_str());
+        }
+        std::printf("[norway] buildings: %zu meshes, %zu triangles, %zu materials, "
+                    "%d corner boards\n",
+                    bs.meshes, bs.triangles, bs.materials, bs.cornerBoards);
+        std::fflush(stdout);
         scene.add(buildings);
     }
 
@@ -879,16 +1262,73 @@ int main(int argc, char** argv) {
     // slope/elevation rule that invents a forest. Packs without a CHM get nothing
     // (trollstigen/aalesund unchanged). NT_NO_FOREST=1 for the A/B,
     // NT_FOREST_CAP=<n> for the instance budget.
+    //
+    // TOWN GATES: a CHM is DOM − DTM, so on an urban pack every BUILDING is a
+    // 10 m "canopy peak" and every ship, crane and pier crate is a taller one.
+    // The gates below are what let the forest run over a town at all — without
+    // them the detector plants a spruce on every roof in Ålesund, which is why
+    // phase A shipped with the forest switched off on packs with footprints.
+    // Measured on this pack: 30.2% of land cells carry canopy ≥ 2.5 m, and
+    // 29.3% of those sit inside a footprint DILATED BY 4 M — the dilation is
+    // not padding, it is the registration offset between the Kartverket DOM
+    // and the OSM footprint, and at 2 m dilation a full ring of roof-edge
+    // "canopy" survives.
+    const bool urbanPack = !pack.buildings.empty() || pack.hasLandUse();
+    // Streamed content: built per cell around the LIVE camera, updated in the
+    // frame loop next to the tiles. Declared out here so the loop can see them.
+    std::vector<std::shared_ptr<terrain::CellStreamer>> streamers;
     if (pack.hasCanopy() && !envSet("NT_NO_FOREST")) {
         const auto tf0 = std::chrono::high_resolution_clock::now();
 
+        // Rasters, built once (2 m, the pack's own resolution).
+        const auto fpMask = terrain::buildFootprintMask(pack, envF("NT_FOREST_DILATE", 4.f), 2.f);
+        // Decks and lots: a pier is not ground, a marina is water, a parking lot
+        // and a football pitch are surfaces nobody plants a tree in.
+        const auto deckMask = terrain::buildLandUseMask(
+                pack, {"pier", "quay", "breakwater", "marina", "parking", "pitch"}, 1.f, 2.f);
+        // Within 40 m of a building = "garden": where the bush tier is allowed.
+        const auto gardenMask = urbanPack ? terrain::buildFootprintMask(pack, 40.f, 4.f) : nullptr;
+
+        int gateFootprint = 0, gatePaved = 0, gateDeck = 0;
+        auto rejectSite = [&, fpMask, deckMask](float x, float z) {
+            if (fpMask && fpMask->inside(x, z)) {
+                ++gateFootprint;
+                return true;
+            }
+            if (network.pavedWeight(x, z, 1.0f) > 0.2f) {
+                ++gatePaved;
+                return true;
+            }
+            if (deckMask && deckMask->inside(x, z)) {
+                ++gateDeck;
+                return true;
+            }
+            return false;
+        };
+
         vegetation::CanopySiteOptions so;
         so.seaLevel = reg.seaLevel;
-        // The shot only ever looks at part of a 4 km pack, and the instance budget
-        // is better spent dense near the subject than thin across the whole square.
-        so.centerX = controls.target.x;
-        so.centerZ = controls.target.z;
-        so.halfExtent = envF("NT_FOREST_EXTENT", 1100.f);
+        // PACK-WIDE. This used to be a square ROI centred on the STARTUP camera
+        // target — which is why the user asked whether "trees are a function of
+        // where the camera is located at startup". They were. Detection is a
+        // one-off scan and the sites are 16 bytes each; what has to be bounded
+        // is the GEOMETRY, and that is the streamer's job below.
+        so.centerX = 0.f;
+        so.centerZ = 0.f;
+        so.halfExtent = 1e9f;
+        if (urbanPack) {
+            // 2 m grid: a 3×3 window is a 4 m crown spacing, which is a town
+            // tree. The 5×5 default is a plantation rule and it halves the
+            // garden crowns (106 875 peaks vs 57 359 over this pack).
+            so.windowRadius = 1;
+            so.reject = rejectSite;
+            // Cranes, spires, masts and ship superstructure are the tall end of
+            // a CHM over a HARBOUR; on a fjord pack a 30 m peak is a spruce, so
+            // this cap belongs to the pack, not to the detector.
+            so.maxCanopyHeight = envF("NT_FOREST_MAXH", 28.f);
+        } else {
+            so.maxCanopyHeight = envF("NT_FOREST_MAXH", 1e9f);
+        }
         // NT_TREELINE=<m> pins the treeline (9999 = effectively off);
         // NT_FOREST_NOGATE=1 restores the phase-3 detector exactly — no treeline,
         // no neighbourhood support, no tightened high-elevation slope gate — so
@@ -900,15 +1340,61 @@ int main(int argc, char** argv) {
             so.highSlopeElevation = 1e9f;
         }
         vegetation::CanopySiteReport srep;
-        const auto sites = vegetation::detectTreeSites(pack.canopy, pack.grid, so, &srep);
+        auto sites = vegetation::detectTreeSites(pack.canopy, pack.grid, so, &srep);
         std::cout << "[norway] canopy sites: " << srep.peaks << " CHM peaks -> "
                   << sites.size() << " sites (rejected: support " << srep.rejectedSupport
                   << ", treeline " << srep.rejectedTreeline << ", high-slope "
                   << srep.rejectedHighSlope << ", slope " << srep.rejectedSlope
-                  << ", ground " << srep.rejectedGround << "); treeline "
+                  << ", ground " << srep.rejectedGround << ", tall " << srep.rejectedTall
+                  << ", masked " << srep.rejectedMasked << " [footprint " << gateFootprint
+                  << " + paved " << gatePaved << " + deck " << gateDeck << "]); treeline "
                   << srep.treelineElevation << " m +-" << so.treelineFeather
                   << ", highest site " << srep.highestSite << " m\n"
                   << std::flush;
+
+        // ── Trees the surveyor drew ────────────────────────────────────────
+        // OSM natural=tree points and tree_row lines are not a guess about the
+        // CHM: someone stood there. They bypass the masks (a street tree IS on
+        // the pavement, a park row IS beside a path) but not the ground gate,
+        // and they take their height from the CHM where it has one.
+        int explicitTrees = 0;
+        if (pack.hasLandUse() && !envSet("NT_NO_OSM_TREES")) {
+            const float roi = so.halfExtent;
+            const auto addTree = [&](float x, float z) {
+                if (std::fabs(x - so.centerX) > roi || std::fabs(z - so.centerZ) > roi) return;
+                if (pack.grid.sampleBilinear(x, z) < so.seaLevel + so.minGroundHeight) return;
+                float h = pack.hasCanopy() ? pack.canopy.sampleBilinear(x, z) : 0.f;
+                if (h < 2.5f || h > so.maxCanopyHeight) h = 8.f;
+                // standHeight 0: an OSM street tree is a single crown, never a
+                // stand, so the species rule sends it to broadleaf.
+                sites.push_back({x, z, h, 0.f});
+                ++explicitTrees;
+            };
+            for (const auto& p : pack.landuse.points)
+                if (p.cls == "tree") addTree(p.pos.x, p.pos.y);
+            for (const auto& l : pack.landuse.lines) {
+                if (l.cls != "tree_row" || l.points.size() < 2) continue;
+                addTree(l.points.front().x, l.points.front().y);
+                float acc = 0.f;// metres walked since the last tree
+                for (size_t i = 1; i < l.points.size(); ++i) {
+                    const float dx = l.points[i].x - l.points[i - 1].x;
+                    const float dz = l.points[i].y - l.points[i - 1].y;
+                    const float len = std::sqrt(dx * dx + dz * dz);
+                    if (len < 1e-3f) continue;
+                    float pos = 0.f;
+                    while (acc + (len - pos) >= 6.f) {
+                        pos += 6.f - acc;
+                        acc = 0.f;
+                        addTree(l.points[i - 1].x + dx * (pos / len),
+                                l.points[i - 1].y + dz * (pos / len));
+                    }
+                    acc += len - pos;
+                }
+            }
+            std::cout << "[norway] OSM trees: " << explicitTrees
+                      << " explicit sites (natural=tree points + tree_row @ 6 m)\n"
+                      << std::flush;
+        }
 
         // NT_FOREST_LOD=0 restores the phase-2 single-tier planting (the A/B).
         // The default is the camera-following cell LOD: the old path splits its
@@ -922,6 +1408,12 @@ int main(int argc, char** argv) {
         // (~30 tris/puff, 110 attractors) for its 300-800 m level: at that range
         // the fjord demo's blob spends tens of thousands of triangles per tree on
         // a crown that covers ten pixels.
+        // What the vegetation actually costs the SCENE WALK, summed over the
+        // forest and the bushes: an InstancedMesh is a draw, a descriptor set
+        // and a TLAS instance whatever it holds, and on this pack the object
+        // count is the frame, not the triangles (measured: dropping l0Distance
+        // from 300 m to 60 m moved nothing, halving the ROI moved everything).
+        int vegMeshes = 0, vegInstances = 0, vegCells = 0;
         std::array<vegetation::SpeciesVariants, 3> species;
         for (int s = 0; s < 3; ++s) {
             const auto sp = static_cast<vegetation::TreeSpecies>(s);
@@ -969,7 +1461,16 @@ int main(int argc, char** argv) {
             canopyMat->translucency = 0.3f;
 
             vegetation::ForestLodOptions lo;
-            lo.cap = static_cast<int>(envF("NT_FOREST_CAP", 40000.f));
+            lo.cap = static_cast<int>(envF("NT_FOREST_CAP", 1e9f));
+            // A town's tall trees are limes, maples, chestnuts and rowans, not
+            // Norway spruce: spruce needs BOTH height above sea and a stand
+            // around it. Aksla's plantation (60 m+, closed canopy) still gets
+            // conifers; the 16 m tree in a churchyard at 12 m elevation becomes
+            // the broadleaf it is. Both terms are 0 on fjord packs = old rule.
+            if (urbanPack) {
+                lo.spruceMinElevation = envF("NT_SPRUCE_ELEV", 60.f);
+                lo.spruceMinStandHeight = envF("NT_SPRUCE_STAND", 12.f);
+            }
             lo.cellSize = envF("NT_FOREST_CELL", 128.f);
             lo.l0Distance = envF("NT_FOREST_L0", 300.f);
             lo.l1Distance = envF("NT_FOREST_L1", 800.f);
@@ -985,29 +1486,103 @@ int main(int argc, char** argv) {
             // density (fixed in makeForestTreeVariant), so the thinning is back on
             // by default; NT_FOREST_L2KEEP=1 buys the density back.
             lo.l2Keep = static_cast<int>(envF("NT_FOREST_L2KEEP", 4.f));
+            // FAR CELLS ARE COARSER. The cell is the unit of object count, and
+            // the object count is what this frame is spent on: geiranger runs
+            // 28 k trees at ~100 fps over ~180 cells, Ålesund ran 26 k over
+            // ~1500 and managed 18. Beyond NT_FOREST_NEAR from THE CAMERA the
+            // streamer switches a whole 3×3 block to one 384 m cell: 9× fewer
+            // objects for crowns that are 2-4 px wide.
+            lo.cellSize = envF("NT_FOREST_CELL", 128.f);
+            lo.farCellSize = lo.cellSize * 3.f;
             lo.mesh.seaLevel = reg.seaLevel;
             lo.mesh.maxSlopeDeg = so.maxSlopeDeg;// same gate as the sites, or the
             lo.mesh.minGroundHeight = so.minGroundHeight;// handoff grows new forest
-            const auto st = vegetation::buildCanopyForestLod(*forest, sites, species, canopyMat,
-                                                             pack.canopy, pack.grid, prov.height, lo);
-            scene.add(forest);
+
+            // ── sites → a fine spatial grid, once ──────────────────────────
+            // The whole pack's sites, binned on the streamer's fine cell. A
+            // cell build is then a lookup, not a scan.
+            auto grid = std::make_shared<std::unordered_map<std::int64_t,
+                                                            std::vector<vegetation::TreeSite>>>();
+            const float gcs = lo.cellSize;
+            const auto gkey = [](int cx, int cz) {
+                return (static_cast<std::int64_t>(cx) << 32) ^ static_cast<std::uint32_t>(cz);
+            };
+            for (const auto& s : sites)
+                (*grid)[gkey(static_cast<int>(std::floor(s.x / gcs)),
+                             static_cast<int>(std::floor(s.z / gcs)))]
+                        .push_back(s);
+
+            auto speciesPtr = std::make_shared<std::array<vegetation::SpeciesVariants, 3>>(species);
+            auto heightFn = prov.height;
+            auto builder = [grid, gkey, speciesPtr, canopyMat, heightFn, lo, &pack](
+                                   int level, int cx, int cz, float) -> std::shared_ptr<Object3D> {
+                std::vector<vegetation::TreeSite> sub;
+                const int span = level ? 3 : 1;
+                const int bx = level ? cx * 3 : cx, bz = level ? cz * 3 : cz;
+                for (int i = 0; i < span; ++i)
+                    for (int j = 0; j < span; ++j) {
+                        auto it = grid->find(gkey(bx + j, bz + i));
+                        if (it != grid->end())
+                            sub.insert(sub.end(), it->second.begin(), it->second.end());
+                    }
+                if (sub.empty()) return nullptr;
+                auto g = Group::create();
+                g->name = level ? "forest_coarse" : "forest_fine";
+                vegetation::ForestLodOptions co = lo;
+                co.coarseOnly = level != 0;
+                // Per-cell seed: the yaw stream restarts inside every build, so
+                // a shared seed would give every cell the same rotation
+                // sequence — a rhythm the eye finds on a hillside.
+                co.seed = lo.seed ^ (static_cast<unsigned int>(cx) * 73856093u) ^
+                          (static_cast<unsigned int>(cz) * 19349663u) ^
+                          (static_cast<unsigned int>(level) * 83492791u);
+                vegetation::buildCanopyForestLod(*g, sub, *speciesPtr, canopyMat, pack.canopy,
+                                                 pack.grid, heightFn, co);
+                return g;
+            };
+
+            terrain::CellStreamerOptions cso;
+            cso.fineCellSize = lo.cellSize;
+            cso.fineRadius = envF("NT_FOREST_NEAR", 800.f);
+            cso.coarseRadius = envF("NT_FOREST_FAR", urbanPack ? 1600.f : 1100.f);
+            cso.maxCellBuildsPerFrame = static_cast<int>(envF("NT_STREAM_BUDGET", 2.f));
+            auto forestStream = terrain::CellStreamer::create(builder, cso);
+            forestStream->name = "forest_stream";
+            scene.add(forestStream);
+            forestStream->update(camera.position);// the startup ring, in one go
+            streamers.push_back(forestStream);
+            forest.reset();
+
+            int fm = 0, fi = 0;
+            forestStream->traverseType<InstancedMesh>([&](InstancedMesh& im) {
+                ++fm;
+                fi += static_cast<int>(im.count());
+            });
             const auto tf1 = std::chrono::high_resolution_clock::now();
-            std::cout << "[norway] forest LOD: " << st.sites << " sites, " << st.planted
-                      << " instances in " << st.cells << " cells @ " << lo.cellSize << " m"
-                      << " (L0 " << st.l0Meshes << " meshes < " << lo.l0Distance << " m, L1 "
-                      << st.l1Meshes << " meshes, L2 " << st.l2Meshes
-                      << (lo.buildCanopyMesh ? " canopy meshes / " : " thinned meshes 1-in-" )
-                      << (lo.buildCanopyMesh ? st.canopyTris : lo.l2Keep)
-                      << (lo.buildCanopyMesh ? " tris > " : " > ") << lo.l1Distance
-                      << " m), L1 prototype " << st.l1ProtoTris << " tris, "
-                      << std::chrono::duration<float>(tf1 - tf0).count() << " s\n"
+            vegMeshes += fm;
+            vegInstances += fi;
+            vegCells += forestStream->stats().active;
+            std::cout << "[norway] forest stream: " << sites.size() << " pack-wide sites, "
+                      << forestStream->stats().active << " live cells (" << fm << " meshes, "
+                      << fi << " instances) @ " << cso.fineCellSize << " m < " << cso.fineRadius
+                      << " m, " << (cso.fineCellSize * 3.f) << " m to " << cso.coarseRadius
+                      << " m; L0 < " << lo.l0Distance << " m, L1, L2 1-in-" << lo.l2Keep << " > "
+                      << lo.l1Distance << " m, budget " << cso.maxCellBuildsPerFrame
+                      << " builds/frame, " << std::chrono::duration<float>(tf1 - tf0).count()
+                      << " s\n"
                       << std::flush;
         } else {
             vegetation::ForestOptions fo;
             fo.cameraPos = camera.position;
-            fo.cap = static_cast<int>(envF("NT_FOREST_CAP", 40000.f));
+            fo.cap = static_cast<int>(envF("NT_FOREST_CAP", urbanPack ? 80000.f : 40000.f));
+            if (urbanPack) {
+                fo.spruceMinElevation = envF("NT_SPRUCE_ELEV", 60.f);
+                fo.spruceMinStandHeight = envF("NT_SPRUCE_STAND", 12.f);
+            }
             const auto st = vegetation::buildCanopyForest(*forest, sites, species, prov.height, fo);
             scene.add(forest);
+            vegMeshes += st.meshes;
+            vegInstances += st.planted;
             const auto tf1 = std::chrono::high_resolution_clock::now();
             std::cout << "[norway] forest: " << st.sites << " sites (CHM local maxima), "
                       << st.planted << " instances (" << st.nearTier << " near + " << st.farTier
@@ -1015,6 +1590,241 @@ int main(int argc, char** argv) {
                       << std::chrono::duration<float>(tf1 - tf0).count() << " s\n"
                       << std::flush;
         }
+
+        // Species split, for the record: the rule is invisible in a shot until
+        // it is wrong, and "why is that garden full of spruce" is the failure.
+        {
+            std::array<int, 3> split{};
+            const float se = urbanPack ? envF("NT_SPRUCE_ELEV", 60.f) : 0.f;
+            const float ss = urbanPack ? envF("NT_SPRUCE_STAND", 12.f) : 0.f;
+            for (const auto& s : sites)
+                ++split[static_cast<size_t>(vegetation::pickTreeSpecies(
+                        s.canopyHeight, prov.height(s.x, s.z), s.standHeight, 6.f, 14.f, 350.f,
+                        se, ss))];
+            std::cout << "[norway] species: " << split[0] << " scrub, " << split[1]
+                      << " broadleaf, " << split[2] << " spruce (spruce needs >= " << se
+                      << " m elevation AND >= " << ss << " m stand)\n"
+                      << std::flush;
+        }
+
+        // ── Bush tier ──────────────────────────────────────────────────────
+        // The 1.0-2.5 m band of the CHM: garden shrubs and the scrub along
+        // walls. Restricted to gardens (within 40 m of a footprint), because
+        // the same band over open hillside is 42 000 blobs nobody looks at.
+        if (urbanPack && !envSet("NT_NO_BUSHES")) {
+            const auto tb0 = std::chrono::high_resolution_clock::now();
+            vegetation::CanopySiteOptions bo = so;
+            bo.minHeight = 1.0f;
+            bo.maxCanopyHeight = 2.5f;
+            bo.windowRadius = 1;
+            bo.minNeighborSupport = 0;// a shrub is not a stand
+            bo.treelineElevation = 1e9f;
+            bo.highSlopeElevation = 1e9f;
+            // 2 m spacing: crownRadiusFactor · spacingFactor · (h1 + h2) with
+            // h ≈ 2 m, and the thinner's own 4 m floor on the bin size.
+            bo.crownRadiusFactor = 0.5f;
+            bo.spacingFactor = 1.0f;
+            bo.reject = [&, fpMask, deckMask, gardenMask](float x, float z) {
+                if (gardenMask && !gardenMask->inside(x, z)) return true;// not a garden
+                if (fpMask && fpMask->inside(x, z)) return true;
+                if (network.pavedWeight(x, z, 1.0f) > 0.2f) return true;
+                if (deckMask && deckMask->inside(x, z)) return true;
+                return false;
+            };
+            vegetation::CanopySiteReport brep;
+            auto bushes = vegetation::detectTreeSites(pack.canopy, pack.grid, bo, &brep);
+            const int chmBushes = static_cast<int>(bushes.size());
+
+            // Hedges: OSM barrier=hedge lines, one bush every 1.5 m. A hedge is
+            // a LINE of the same prototype — no CHM peak survives a 0.6 m wide
+            // object on a 2 m grid, so the data has to place these.
+            int hedgeBushes = 0;
+            if (pack.hasLandUse()) {
+                const float roi = bo.halfExtent;
+                for (const auto& l : pack.landuse.lines) {
+                    if (l.cls != "hedge" || l.points.size() < 2) continue;
+                    float acc = 1.5f;
+                    for (size_t i = 1; i < l.points.size(); ++i) {
+                        const float dx = l.points[i].x - l.points[i - 1].x;
+                        const float dz = l.points[i].y - l.points[i - 1].y;
+                        const float len = std::sqrt(dx * dx + dz * dz);
+                        if (len < 1e-3f) continue;
+                        float pos = 0.f;
+                        while (acc + (len - pos) >= 1.5f) {
+                            pos += 1.5f - acc;
+                            acc = 0.f;
+                            const float x = l.points[i - 1].x + dx * (pos / len);
+                            const float z = l.points[i - 1].y + dz * (pos / len);
+                            if (std::fabs(x - bo.centerX) > roi || std::fabs(z - bo.centerZ) > roi)
+                                continue;
+                            if (pack.grid.sampleBilinear(x, z) < bo.seaLevel + bo.minGroundHeight)
+                                continue;
+                            bushes.push_back({x, z, 1.6f, 0.f});
+                            ++hedgeBushes;
+                        }
+                        acc += len - pos;
+                    }
+                }
+            }
+
+            if (!bushes.empty()) {
+                // Three greens around the prototype's default, all of them
+                // LIGHTER than a wet road: a hedge in sun is the brightest
+                // green in a suburban frame, and the first pass had it darker
+                // than the asphalt beside it.
+                std::vector<vegetation::TreeVariant> bushVars{
+                        vegetation::makeBushVariant(4101u),
+                        vegetation::makeBushVariant(4102u, Color(0.36f, 0.54f, 0.19f)),
+                        vegetation::makeBushVariant(4103u, Color(0.27f, 0.45f, 0.14f))};
+                vegetation::BushOptions bopt;
+                bopt.cap = static_cast<int>(envF("NT_BUSH_CAP", 1e9f));
+                bopt.cullDistance = envF("NT_BUSH_CULL", 400.f);
+                bopt.cellSize = 128.f;
+                // Same treatment as the forest: pack-wide sites, fine cells
+                // only (a 1.6 m shrub has no far tier worth the object).
+                auto bgrid = std::make_shared<
+                        std::unordered_map<std::int64_t, std::vector<vegetation::TreeSite>>>();
+                const auto bkey = [](int cx, int cz) {
+                    return (static_cast<std::int64_t>(cx) << 32) ^ static_cast<std::uint32_t>(cz);
+                };
+                for (const auto& s : bushes)
+                    (*bgrid)[bkey(static_cast<int>(std::floor(s.x / bopt.cellSize)),
+                                  static_cast<int>(std::floor(s.z / bopt.cellSize)))]
+                            .push_back(s);
+                auto bvars = std::make_shared<std::vector<vegetation::TreeVariant>>(bushVars);
+                auto bHeight = prov.height;
+                terrain::CellStreamerOptions bso;
+                bso.fineCellSize = bopt.cellSize;
+                bso.fineRadius = bopt.cullDistance;
+                bso.coarseRadius = 0.f;// fine only
+                bso.maxCellBuildsPerFrame = static_cast<int>(envF("NT_STREAM_BUDGET", 2.f));
+                auto bushStream = terrain::CellStreamer::create(
+                        [bgrid, bkey, bvars, bHeight, bopt](int, int cx, int cz,
+                                                            float) -> std::shared_ptr<Object3D> {
+                            auto it = bgrid->find(bkey(cx, cz));
+                            if (it == bgrid->end() || it->second.empty()) return nullptr;
+                            auto g = Group::create();
+                            g->name = "bush_cell_root";
+                            vegetation::BushOptions co = bopt;
+                            co.seed = bopt.seed ^ (static_cast<unsigned int>(cx) * 73856093u) ^
+                                      (static_cast<unsigned int>(cz) * 19349663u);
+                            vegetation::buildBushField(*g, it->second, *bvars, bHeight, co);
+                            return g;
+                        },
+                        bso);
+                bushStream->name = "bush_field";
+                scene.add(bushStream);
+                bushStream->update(camera.position);
+                streamers.push_back(bushStream);
+                int bm = 0, bi = 0;
+                bushStream->traverseType<InstancedMesh>([&](InstancedMesh& im) {
+                    ++bm;
+                    bi += static_cast<int>(im.count());
+                });
+                vegMeshes += bm;
+                vegInstances += bi;
+                vegCells += bushStream->stats().active;
+                const auto tb1 = std::chrono::high_resolution_clock::now();
+                std::cout << "[norway] bushes: " << brep.peaks << " CHM peaks 1-2.5 m -> "
+                          << chmBushes << " garden sites + " << hedgeBushes
+                          << " hedge sites (rejected: masked " << brep.rejectedMasked
+                          << ", ground " << brep.rejectedGround << ", slope "
+                          << brep.rejectedSlope << ") -> " << bi << " instances live in "
+                          << bushStream->stats().active << " streamed cells, radius "
+                          << bso.fineRadius << " m, "
+                          << std::chrono::duration<float>(tb1 - tb0).count() << " s\n"
+                          << std::flush;
+            }
+        }
+
+        // The one line to read when the frame is slow.
+        std::cout << "[norway] vegetation objects: " << vegMeshes
+                  << " InstancedMesh in " << vegCells << " cells, " << vegInstances
+                  << " instances ("
+                  << (vegMeshes > 0 ? vegInstances / vegMeshes : 0)
+                  << " per mesh)\n"
+                  << std::flush;
+    }
+
+    // ── urban props: pier decks, parked cars, moored boats ─────────────────
+    // Everything here is placed from the survey, never scattered, and every
+    // placement passes the same gates the trees do (footprint, pavement, sea).
+    // Static ROI around the view target, like the forest: a car at 2 km is a
+    // sub-pixel smudge that still costs a draw. NT_NO_PROPS=1 for the A/B,
+    // NT_PROPS_EXTENT / NT_PROPS_CELL to sweep.
+    if (pack.hasLandUse() && !envSet("NT_NO_PROPS")) {
+        const auto tp0 = std::chrono::high_resolution_clock::now();
+        // 1 m dilation only: a car parked hard against a wall is normal, a car
+        // INSIDE the wall is the failure this gate exists for.
+        const auto propFp = terrain::buildFootprintMask(pack, 1.f, 2.f);
+        const auto propUrban = gopt.paintUrban ? terrain::buildUrbanMask(pack, gopt) : nullptr;
+        // Mown ground. Footways, service roads and thin parking ribbons run
+        // straight through the town's parks, and a kerb car placed off one of
+        // them stands on the grass; 2 m of dilation covers the path shoulder.
+        const auto propParks = terrain::buildLandUseMask(
+                pack, {"grass", "pitch", "playground", "cemetery"}, 2.f, 2.f);
+        terrain::UrbanPropsOptions po;
+        po.seaLevel = reg.seaLevel;
+        // Pack-wide placement (see the forest: the ROI was the defect), 250 m
+        // cells streamed by the camera out to NT_PROPS_EXTENT. Decks and boats
+        // stay unstreamed: they are a few hundred objects for the whole pack
+        // and they are part of the LAND, not scatter.
+        po.centerX = 0.f;
+        po.centerZ = 0.f;
+        po.halfExtent = 1e9f;
+        po.cellSize = envF("NT_PROPS_CELL", 250.f);
+        po.cars = !envSet("NT_NO_CARS");
+        po.boats = !envSet("NT_NO_BOATS");
+        po.decks = !envSet("NT_NO_DECKS");
+        po.urban = propUrban.get();
+        po.footprints = propFp.get();
+        po.parks = propParks.get();
+        po.ground = prov.height;
+        auto props = Group::create();
+        props->name = "urban_props";
+        auto carField = std::make_shared<terrain::UrbanCarField>();
+        const auto ps = terrain::buildUrbanProps(*props, pack, network, po, carField.get());
+        scene.add(props);
+
+        auto carMat = terrain::makeUrbanCarMaterial();
+        terrain::CellStreamerOptions pso;
+        pso.fineCellSize = po.cellSize;
+        pso.fineRadius = envF("NT_PROPS_EXTENT", 1500.f);
+        pso.coarseRadius = 0.f;// a car has no far tier: past the ring, nothing
+        pso.maxCellBuildsPerFrame = static_cast<int>(envF("NT_STREAM_BUDGET", 2.f));
+        auto carStream = terrain::CellStreamer::create(
+                [carField, carMat](int, int cx, int cz, float) -> std::shared_ptr<Object3D> {
+                    const auto* cars = carField->at(cx, cz);
+                    if (!cars) return nullptr;
+                    return terrain::buildCarCellMesh(*cars, carMat,
+                                                     "cars_" + std::to_string(cx) + "_" +
+                                                             std::to_string(cz));
+                },
+                pso);
+        carStream->name = "car_stream";
+        scene.add(carStream);
+        carStream->update(camera.position);
+        streamers.push_back(carStream);
+        size_t liveCarTris = 0;
+        int liveCarMeshes = 0;
+        carStream->traverseType<Mesh>([&](Mesh& m) {
+            ++liveCarMeshes;
+            if (auto* p = m.geometry()->getAttribute<float>("position"))
+                liveCarTris += p->count() / 3;
+        });
+        const auto tp1 = std::chrono::high_resolution_clock::now();
+        std::printf("[norway] urban props: %d pier deck runs, %zu cars pack-wide (%d lot in %d "
+                    "lots + %d lane in %d kerb lanes + %d kerb) in %d cells @ %.0f m -> %d cells "
+                    "live (%d meshes, %zu tris) within %.0f m of the camera; %d boats in %d "
+                    "marinas; deck/boat meshes %zu, %zu tris; rejected roof %d, sea %d, paved %d, "
+                    "junction %d, park-lane %d, park-kerb %d, row cap/gap %d; %.2f s\n",
+                    ps.deckLines, carField->count(), ps.carsLot, ps.lotPolys, ps.carsLane,
+                    ps.lanePolys, ps.carsKerb, ps.carCells, po.cellSize,
+                    carStream->stats().active, liveCarMeshes, liveCarTris, pso.fineRadius,
+                    ps.boats, ps.marinas, ps.meshes, ps.triangles, ps.rejectRoof, ps.rejectSea,
+                    ps.rejectPaved, ps.rejectJunction, ps.rejectParkLane, ps.rejectParkKerb,
+                    ps.rejectRunGap, std::chrono::duration<float>(tp1 - tp0).count());
+        std::fflush(stdout);
     }
 
     canvas.onWindowResize([&](const WindowSize& ns) {
@@ -1129,8 +1939,49 @@ int main(int argc, char** argv) {
                                 camTargetArg.z + off.x * std::sin(w) + off.z * std::cos(w));
             camera.lookAt(camTargetArg);
         }
+        // --fly: linear traverse from the --cam pose to the --fly pose over
+        // NT_FLY_FRAMES frames, starting at --seqstart. This is the only camera
+        // MOTION the demo has (NT_ORBIT drifts, it does not travel), and it is
+        // what the content streamers have to survive.
+        if (haveFly && haveCam) {
+            const int flyFrames = static_cast<int>(envF("NT_FLY_FRAMES", 600.f));
+            const float t = std::clamp(static_cast<float>(frame - seqStart) /
+                                               static_cast<float>(std::max(1, flyFrames)),
+                                       0.f, 1.f);
+            camera.position.lerpVectors(camPosArg, flyPosArg, t);
+            Vector3 look = camTargetArg;
+            if (haveFlyTarget) look.lerpVectors(camTargetArg, flyTargetArg, t);
+            camera.lookAt(look);
+            lodPos = camera.position;
+        }
         if (!freezeTiles) tiles->update(lodPos);
         if (scatter && !freezeTiles) scatter->update(lodPos);
+        // Vegetation and props follow the LIVE camera, on the same position and
+        // the same freeze rule as the tiles.
+        if (!freezeTiles)
+            for (auto& s : streamers) s->update(lodPos);
+        // Streamer churn, printed only on the frames where something changed:
+        // adds and (especially) removes are what a fly-through can flash on,
+        // because removing a scene entry clears the renderer's temporal history.
+        if (!streamers.empty() && (!seqPrefix.empty() || envSet("NT_STREAM_LOG"))) {
+            int nb = 0, na = 0, nr = 0, nact = 0, npend = 0;
+            for (auto& s : streamers) {
+                const auto& st = s->stats();
+                nb += st.builds;
+                na += st.adds;
+                nr += st.removes;
+                nact += st.active;
+                npend += st.pending;
+            }
+            if (nb || na || nr) {
+                int objs = 0;
+                scene.traverse([&](Object3D&) { ++objs; });
+                std::printf("[stream] frame %d built %d added %d removed %d active %d pending %d "
+                            "objects %d\n",
+                            frame, nb, na, nr, nact, npend, objs);
+                std::fflush(stdout);
+            }
+        }
         renderer->render(scene, camera);
         if (ui) ui->render();
 
