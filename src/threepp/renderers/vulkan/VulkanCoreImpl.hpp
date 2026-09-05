@@ -161,6 +161,7 @@ namespace threepp {
     using vulkan::TP_Froxel;
     using vulkan::TP_SensorImage;
     using vulkan::TP_Splat;
+    using vulkan::TP_ProbeGI;
     using vulkan::TP_Rtao;
 
     namespace {

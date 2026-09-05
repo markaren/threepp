@@ -100,6 +100,17 @@ namespace threepp::vulkan {
             // frame counts would update different probe slices on the same
             // window frame.
             probeOffset_ = 0;
+            // Same argument for the update counter, and it is the stronger
+            // half: it is the shader's `frame`, so it seeds every probe ray and
+            // rotates the ray sphere. Left running, a reset grid rebuilt itself
+            // from a different set of directions depending on how many frames
+            // preceded the reset, and two runs of the same scene in one process
+            // could not produce the same grid. setGridBounds already zeroed
+            // both; this path zeroed only the cursor.
+            updateCounter_ = 0;
+            // The clear above already forces a full prev refresh; this keeps
+            // the two facts from having to be reasoned about together.
+            haveWindow_ = false;
         }
         [[nodiscard]] bool gridFitted() const { return gridFitted_; }
 
@@ -148,6 +159,13 @@ namespace threepp::vulkan {
         bool     needsClear_     = true;// zero the SH store on first dispatch
         uint32_t probeOffset_    = 0;   // round-robin cursor
         uint32_t updateCounter_  = 0;   // rotates the per-probe ray sphere
+        // The window the LAST dispatch wrote — the only place the canonical
+        // stores can differ from the prev snapshots, and therefore the only
+        // part the next dispatch's snapshot has to copy. haveWindow_ false
+        // means "prev is not known to match": copy everything.
+        uint32_t lastOffset_     = 0;
+        uint32_t lastCount_      = 0;
+        bool     haveWindow_     = false;
 
         void createPipeline();
         void createDescriptorPool();

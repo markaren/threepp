@@ -310,6 +310,7 @@ namespace threepp::vulkan {
         needsClear_   = true;
         probeOffset_  = 0;
         updateCounter_ = 0;
+        haveWindow_    = false;// the fill below invalidates the prev snapshots
     }
 
     void ProbeGI::updateGridUbo(uint32_t frame, bool enabled) {
@@ -331,6 +332,11 @@ namespace threepp::vulkan {
     void ProbeGI::recordDispatch(VkCommandBuffer cb, uint32_t frame,
                                  uint32_t emissiveCount, float emissiveTotalPower,
                                  bool shadows, uint32_t envMipCount) {
+        // A full prev-store refresh is needed whenever the canonical stores
+        // could differ from prev OUTSIDE the last dispatch's window: the first
+        // dispatch of all (prev is uninitialised), and any frame the clear
+        // below zeroes the canonical stores under prev's feet.
+        bool fullCopy = !haveWindow_;
         if (needsClear_) {
             // Fresh fit: zero SH + validity + history so probes bootstrap with
             // α = 1 instead of blending into a stale grid. The depth store is
@@ -351,9 +357,20 @@ namespace threepp::vulkan {
             dep.pMemoryBarriers = &bar;
             vkCmdPipelineBarrier2(cb, &dep);
             needsClear_ = false;
+            fullCopy    = true;
         }
 
-        // Snapshot the canonical stores for this update's reads. Barrier 1:
+        // Snapshot the canonical stores for this update's reads — but only the
+        // part that can have changed. The update reads prev ANYWHERE (the
+        // feedback tap samples at ray-hit points, which land wherever the
+        // geometry does), so prev must equal canonical over the whole grid.
+        // After dispatch k, though, the only probes where they differ are
+        // dispatch k's own window: nothing else wrote the canonical stores.
+        // So copying just that window before dispatch k+1 restores equality by
+        // induction, and the snapshot is byte-for-byte what a full copy would
+        // have produced. 10 MB of copy per frame becomes ~1.3 MB.
+        //
+        // Barrier 1:
         // whatever wrote them last (the previous update's compute, or the
         // needsClear_ fill above) must be visible to the transfer; barrier 2:
         // the copies must land before the dispatch reads the snapshots, and
@@ -375,12 +392,29 @@ namespace threepp::vulkan {
             dep.pMemoryBarriers    = &toCopy;
             vkCmdPipelineBarrier2(cb, &dep);
 
-            VkBufferCopy shCopy{};
-            shCopy.size = static_cast<VkDeviceSize>(kProbeCount) * 4 * 16;
-            vkCmdCopyBuffer(cb, shBuf_.handle, prevShBuf_.handle, 1, &shCopy);
-            VkBufferCopy depthCopy{};
-            depthCopy.size = static_cast<VkDeviceSize>(kProbeCount) * kDepthTexels * 4;
-            vkCmdCopyBuffer(cb, depthBuf_.handle, prevDepthBuf_.handle, 1, &depthCopy);
+            // [first, first + n) in probe indices, wrapped at kProbeCount into
+            // at most two regions. The window never wraps as long as
+            // kProbesPerFrame divides kProbeCount, but the cursor arithmetic
+            // does not promise that and a silent half-copy would be a
+            // needle-in-a-haystack bug.
+            const uint32_t first = fullCopy ? 0u : lastOffset_;
+            const uint32_t n     = fullCopy ? kProbeCount : lastCount_;
+            uint32_t spans[2][2] = {{first, std::min(n, kProbeCount - first)}, {0u, 0u}};
+            spans[1][1]          = n - spans[0][1];
+            const uint32_t regionCount = spans[1][1] > 0 ? 2u : 1u;
+
+            constexpr VkDeviceSize kShStride    = 4 * 16;
+            const VkDeviceSize     kDepthStride = static_cast<VkDeviceSize>(kDepthTexels) * 4;
+
+            VkBufferCopy shCopy[2]{}, depthCopy[2]{};
+            for (uint32_t i = 0; i < regionCount; ++i) {
+                shCopy[i].srcOffset = shCopy[i].dstOffset = spans[i][0] * kShStride;
+                shCopy[i].size                            = spans[i][1] * kShStride;
+                depthCopy[i].srcOffset = depthCopy[i].dstOffset = spans[i][0] * kDepthStride;
+                depthCopy[i].size                               = spans[i][1] * kDepthStride;
+            }
+            vkCmdCopyBuffer(cb, shBuf_.handle, prevShBuf_.handle, regionCount, shCopy);
+            vkCmdCopyBuffer(cb, depthBuf_.handle, prevDepthBuf_.handle, regionCount, depthCopy);
 
             VkMemoryBarrier2 toCompute{};
             toCompute.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
@@ -405,6 +439,12 @@ namespace threepp::vulkan {
                                 emissiveCount, emPowerBits, envMipCount, 0u};
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
         vkCmdDispatch(cb, count, 1, 1);
+
+        // The window this dispatch is about to write, so the NEXT dispatch's
+        // snapshot knows what to restore. Tracked per dispatch, not per frame.
+        lastOffset_ = probeOffset_;
+        lastCount_  = count;
+        haveWindow_ = true;
 
         probeOffset_ = (probeOffset_ + count) % kProbeCount;
         ++updateCounter_;

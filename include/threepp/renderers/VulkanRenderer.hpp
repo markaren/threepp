@@ -1341,10 +1341,15 @@ namespace threepp {
             // Half-res RT ambient occlusion + bent normals (rtao.comp).
             // 0 unless setDeferredAO is on (the pass is only dispatched then).
             float rtaoMs          = 0.f;
+            // World-space probe-GI update (probe_update.comp) plus its
+            // prev-store snapshot copy. 0 unless probe GI is enabled. Recorded
+            // once per frame for all views — the dispatch is primary-only — so
+            // this is the frame's whole probe cost, not a per-view share.
+            float probeGiMs       = 0.f;
             // GPU execution SPAN of the whole submitted command buffer — not a sum
             // of the fields above, and not busy time. It covers the passes that
             // have no timestamp bracket at all (skinned/tet/grass deformers,
-            // bloom/post, RCAS, probe GI, cluster build, cloud march, auto-exposure,
+            // bloom/post, RCAS, cluster build, cloud march, auto-exposure,
             // particle light, ImGui/present transition) and every secondary view, whose
             // timestamps are suppressed. Read against cpuFrameMs to tell "the CPU
             // is the wall" from "the CPU is waiting".

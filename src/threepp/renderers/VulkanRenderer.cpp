@@ -85,18 +85,44 @@ namespace threepp {
         // same TLAS/BLAS). The grid UBO is re-uploaded every frame — its
         // `enabled` flag is what the shader-side sampling gates on.
         if (probeGI_) {
+            // The UBO write is per view on purpose: it targets the
+            // frame-in-flight slot every view of this frame shares, and the
+            // content is identical, so it is idempotent — writing it once per
+            // view costs a memcpy and keeps this independent of which view
+            // records first.
             probeGI_->updateGridUbo(currentFrame, probeGIEnabled_);
-            if (probeGIEnabled_) {
+            // The DISPATCH is once per FRAME, primary only. probe_update.comp
+            // binds no camera anything: it is 2048 probes x 64 world-space ray
+            // queries plus a snapshot copy, and running it again for a
+            // secondary view did not make anything fresher — it advanced the
+            // round-robin cursor and the ray seed (the shader's `frame`) once
+            // per view, which made the grid at frame N a function of how many
+            // cameras were attached. The gate is VulkanMultiView_test's
+            // [probe] section. It stays HERE rather than moving to the frame
+            // head because it must sit after the AS barrier above (the probe
+            // rays traverse the TLAS the refit just built) and before the
+            // primary's shade, and the primary records first.
+            //
+            // Safe against the early-outs: the debug-blit and events-only
+            // returns in VulkanCoreRecord abort the whole record, secondaries
+            // included, so there is no frame where a secondary would want a
+            // grid the primary never updated.
+            if (probeGIEnabled_ && !view().secondary) {
                 if (probeGridDirty_) {
                     fitProbeGridToScene();
                     probeGridDirty_ = false;
                     // Grid moved → the UBO written above is stale; rewrite.
                     probeGI_->updateGridUbo(currentFrame, true);
                 }
+                // The bracket covers the snapshot copy recordDispatch opens
+                // with as well as the probe rays themselves — they are one
+                // cost and the copy is the half that was easy to forget.
+                gpuTimings_->begin(cb, TP_ProbeGI, currentFrame);
                 probeGI_->recordDispatch(cb, currentFrame,
                                          emissiveTriCountThisFrame_,
                                          emissiveTotalPowerThisFrame_,
                                          /*shadows=*/true, envImage.mipLevels);
+                gpuTimings_->end(cb, TP_ProbeGI, currentFrame);
                 // Probe SH writes → deferred shade reads (compute→compute).
                 VkMemoryBarrier2 pbar{};
                 pbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;

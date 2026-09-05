@@ -54,7 +54,7 @@ namespace threepp::vulkan {
         // the pool reset, closed in endFrame right before vkEndCommandBuffer.
         // Deliberately not a sum of the slots above — it also covers every pass
         // that has no bracket at all (skinned/tet/grass deformers, bloom/post,
-        // RCAS, probe GI, cluster build, cloud march, auto-exposure, particle
+        // RCAS, cluster build, cloud march, auto-exposure, particle
         // light, ImGui/present transition) AND every secondary view, whose timestamps
         // are suppressed. Read gpuTotalMs - gpuPassSumMs to see how much GPU work
         // is invisible to the bracketed passes. It is a SPAN, not busy time: the
@@ -107,7 +107,14 @@ namespace threepp::vulkan {
         // bracket because without one the pass hides inside the unbracketed
         // residual, and the whole Phase-2 case is decided by what it costs.
         TP_Rtao           = 25,
-        TP_COUNT          = 26,
+        // World-space probe-GI update (probe_update.comp): the prev-store
+        // snapshot copy plus the round-robin probe dispatch. Recorded ONCE per
+        // frame for all views (the dispatch is primary-only — see
+        // recordSceneDispatch), so this is the whole frame's probe cost, not a
+        // per-view share. It sat in the unbracketed residual while the
+        // per-view-duplication claim was being made about it.
+        TP_ProbeGI        = 26,
+        TP_COUNT          = 27,
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
 

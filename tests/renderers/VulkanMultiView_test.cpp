@@ -703,6 +703,82 @@ namespace {
         runFrames(canvas, r, scene, primaryCam, 3);
     }
 
+    // ── Gate: the probe grid is a function of the frame, not the view count ─
+    // The world-space probe-GI update (probe_update.comp) binds no camera
+    // anything, but it was recorded inside recordSceneDispatch, which runs once
+    // per view. A V-camera rig therefore ran it V times a frame, and its
+    // round-robin cursor and its ray seed (the update counter, which is the
+    // shader's `frame`) advanced V per frame. The grid at frame N was a function
+    // of how many cameras happened to be attached: a capture replayed with one
+    // extra sensor bolted on did not reproduce.
+    //
+    // This reads the SH store directly (readProbeShDebug) rather than pixels,
+    // because pixels also carry the stochastic shade and would need a PSNR
+    // threshold — the claim here is bit-exactness, and the probe store is where
+    // it is either true or false. The one-view-twice control run is not
+    // ceremony: without it an equal-digest result could just mean the readback
+    // returned the same zeros both times, and an unequal one could be ordinary
+    // run-to-run drift rather than the view count.
+    void gateProbeDeterminism(Canvas& canvas, VulkanRenderer& r, Scene& scene, Camera& primaryCam) {
+        std::printf("\n[probe] the probe grid must not depend on the number of views\n");
+        const bool savedProbe = r.probeGI();
+        r.setProbeGI(true);
+
+        auto secCam = makeCam(Vector3(4.2f, 2.6f, 4.6f), Vector3(0.f, 1.5f, 0.f));
+
+        // kProbeCount / kProbesPerFrame = 8 frames per full grid sweep. Three
+        // sweeps: long enough that the round-robin has wrapped and the EMA has
+        // folded a per-frame difference into every probe, short enough to stay
+        // cheap.
+        constexpr int kFrames = 24;
+
+        // FNV-1a over the whole SH store, run under a fixed sim time per frame
+        // so nothing time-driven can differ between the two configurations.
+        const auto digest = [&](int views, std::uint64_t& out) {
+            uint32_t vh = 0;
+            if (views > 1) {
+                vh = r.addView(*secCam, 320, 200);
+                if (!vh) return false;
+            }
+            // A view's resources are created on the frame AFTER addView, and
+            // the grid fit lands on the first probe-enabled frame. Both are
+            // one-shot, so spend them here, BEFORE the reset that starts the
+            // measured run.
+            for (int i = 0; i < 4; ++i) {
+                r.setSimTime(0.0);
+                canvas.animateOnce([&] { r.render(scene, primaryCam); });
+            }
+            // Zeroes the SH store and rewinds the round-robin cursor and the
+            // update counter, so both runs start from the same probe state
+            // regardless of how many frames this process rendered before.
+            r.resetTemporalHistory();
+            for (int i = 0; i < kFrames; ++i) {
+                r.setSimTime(static_cast<double>(i) / 60.0);
+                canvas.animateOnce([&] { r.render(scene, primaryCam); });
+            }
+            std::vector<uint8_t> sh;
+            const bool ok = r.readProbeShDebug(sh) && !sh.empty();
+            out = 1469598103934665603ull;
+            for (uint8_t b : sh) {
+                out ^= b;
+                out *= 1099511628211ull;
+            }
+            if (vh) (void) r.removeView(vh);
+            return ok;
+        };
+
+        std::uint64_t d1a = 0, d1b = 0, d2 = 0;
+        const bool ok = digest(1, d1a) && digest(1, d1b) && digest(2, d2);
+        std::printf("  SH digest: 1 view %016llx, again %016llx, 2 views %016llx\n",
+                    (unsigned long long) d1a, (unsigned long long) d1b, (unsigned long long) d2);
+        check(ok, "probe: the SH store read back");
+        check(ok && d1a == d1b, "probe: one view rendered twice gives the same grid (control)");
+        check(ok && d1a == d2, "probe: the grid is identical with a second view attached");
+
+        r.setProbeGI(savedProbe);
+        runFrames(canvas, r, scene, primaryCam, 3);
+    }
+
     // ── Opt-in measurement: 0 vs 3 secondary views, interleaved ─────────────
     // Interleaved within ONE run, alternating in blocks, because per-session
     // clock/thermal drift makes two separate runs untrustworthy. Not a gate —
@@ -850,6 +926,7 @@ int main(int argc, char** argv) {
     gateAov(canvas, renderer, scene, *primaryCam);
     gateMsaa(canvas, renderer, scene, *primaryCam);
     gateSplats(canvas, renderer, scene, *primaryCam);
+    gateProbeDeterminism(canvas, renderer, scene, *primaryCam);
 
     std::printf("\nmulti-view: %d failed\n", failures);
     return failures == 0 ? 0 : 1;
