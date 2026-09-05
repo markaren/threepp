@@ -843,9 +843,22 @@ int main(int argc, char** argv) {
     if (!pack.buildings.empty() && !envSet("NT_NO_BUILDINGS")) {
         terrain::GeoBuildingsOptions bo;
         bo.pitchedRoofs = !envSet("NT_FLAT_ROOFS");
+        bo.measuredRoofs = !envSet("NT_NO_MEASURED_ROOFS");
+        terrain::GeoBuildingsStats bs;
+        bo.stats = &bs;
         auto buildings = terrain::buildGeoBuildingMeshes(pack, bo);
-        std::cout << "[norway] buildings: " << pack.buildings.size() << " footprints in "
-                  << buildings->children.size() << " chunk meshes\n" << std::flush;
+        std::printf("[norway] buildings: %d footprints -> flat %d, gabled %d, "
+                    "hipped-skeleton %d (skeleton tried %d, fell back %d = %.1f%%), "
+                    "no roof block %d, towers %d\n",
+                    bs.buildings, bs.flat, bs.gabled, bs.hipped, bs.skeletonTried,
+                    bs.skeletonFailed,
+                    bs.skeletonTried ? 100.f * static_cast<float>(bs.skeletonFailed) /
+                                               static_cast<float>(bs.skeletonTried)
+                                     : 0.f,
+                    bs.heuristic, bs.towers);
+        std::printf("[norway] buildings: %zu meshes, %zu triangles, %zu materials\n",
+                    bs.meshes, bs.triangles, bs.materials);
+        std::fflush(stdout);
         scene.add(buildings);
     }
 

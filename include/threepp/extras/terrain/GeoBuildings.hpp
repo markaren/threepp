@@ -45,6 +45,7 @@
 #include "threepp/extras/ShapeUtils.hpp"
 #include "threepp/extras/terrain/FacadeTexture.hpp"
 #include "threepp/extras/terrain/GeoTerrainPack.hpp"
+#include "threepp/extras/terrain/StraightSkeleton.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -61,6 +62,8 @@
 #include <vector>
 
 namespace threepp::terrain {
+
+    struct GeoBuildingsStats;
 
     struct GeoBuildingsOptions {
         float sink = 0.6f;      // walls extend this far below groundMin (m)
@@ -91,6 +94,28 @@ namespace threepp::terrain {
         bool chimneys = true;
         float chimneyHeight = 0.9f;// stack top above the ridge (m)
         float chimneySide = 0.55f; // square cross-section (m)
+
+        // Roofs measured off the pack's 1 m DOM (GeoBuilding::roof). Buildings
+        // WITHOUT a roof block keep the heuristic above, bit for bit.
+        bool measuredRoofs = true;
+        float eavesOverhang = 0.45f;  // roof projection past the wall (m)
+        float utilityOverhang = 0.25f;// ... on garages / sheds / industry
+        float fasciaHeight = 0.18f;   // board hanging from the roof edge (m)
+        float parapetHeight = 0.30f;  // lip around a measured FLAT roof (m)
+        float corniceDepth = 0.12f;   // masonry cornice projection (m)
+        float corniceHeight = 0.35f;  // ... and its band height (m)
+
+        GeoBuildingsStats* stats = nullptr;// optional counters (see below)
+    };
+
+    // Filled by buildGeoBuildingMeshes when a pointer is supplied.
+    struct GeoBuildingsStats {
+        int buildings = 0;
+        int flat = 0, gabled = 0, hipped = 0;// roof kinds actually emitted
+        int heuristic = 0;                   // no roof block: old rect-fit path
+        int skeletonTried = 0, skeletonFailed = 0;
+        int towers = 0;
+        size_t meshes = 0, triangles = 0, materials = 0;
     };
 
     namespace detail {
@@ -304,11 +329,161 @@ namespace threepp::terrain {
             return plain.count(t) != 0;
         }
 
+        // ── facade classes ──────────────────────────────────────────────────
+        // Ålesund's centre is rendered masonry in Jugend pastels; its suburbs
+        // are painted wood; its quays are profiled sheet. One clapboard tile
+        // for all three is the flat read the close-up loses on.
+        enum class GeoBldClass { Wood,
+                                 Masonry,
+                                 Industrial };
+
+        inline bool geoBldIsMasonryType(const std::string& t) {
+            static const std::unordered_set<std::string> s = {
+                    "apartments", "retail", "office", "commercial", "hotel",
+                    "public", "civic", "school", "hospital", "church", "chapel",
+                    "cathedral", "university", "college", "kindergarten",
+                    "government", "museum", "train_station", "sports_centre",
+                    "supermarket", "dormitory", "parking"};
+            return s.count(t) != 0;
+        }
+        inline bool geoBldIsIndustrialType(const std::string& t) {
+            static const std::unordered_set<std::string> s = {
+                    "industrial", "warehouse", "hangar", "factory", "manufacture",
+                    "depot", "silo", "boat_storage", "works"};
+            return s.count(t) != 0;
+        }
+        inline bool geoBldIsHouseType(const std::string& t) {
+            static const std::unordered_set<std::string> s = {
+                    "house", "detached", "semidetached_house", "terrace", "cabin",
+                    "boathouse", "farm", "bungalow", "hut", "static_caravan",
+                    "summer_house", "garage", "garages", "shed", "carport"};
+            return s.count(t) != 0;
+        }
+
+        inline GeoBldClass geoBldClassify(const std::string& type, int floors, float area) {
+            if (geoBldIsIndustrialType(type)) return GeoBldClass::Industrial;
+            if (geoBldIsMasonryType(type)) return GeoBldClass::Masonry;
+            if (!geoBldIsHouseType(type) && floors >= 3 && area >= 200.f)
+                return GeoBldClass::Masonry;
+            return GeoBldClass::Wood;
+        }
+
+        // Pastel Jugend render (LINEAR). Calibrated like the roof palette: a
+        // linear albedo near 0.5 reads as the photo's pale cream under a bright
+        // sky; anything under 0.3 reads as a dirty grey block.
+        inline const std::array<std::array<float, 3>, 7>& geoBldMasonryPalette() {
+            static const std::array<std::array<float, 3>, 7> p{{
+                    {0.720f, 0.710f, 0.685f},// white render
+                    {0.660f, 0.600f, 0.455f},// cream
+                    {0.520f, 0.375f, 0.155f},// ochre
+                    {0.545f, 0.325f, 0.260f},// salmon
+                    {0.395f, 0.455f, 0.335f},// pale green
+                    {0.375f, 0.425f, 0.460f},// pale blue-grey
+                    {0.600f, 0.520f, 0.360f},// sand
+            }};
+            return p;
+        }
+        // Painted wood: white dominates a Norwegian suburb (~55%), then falu
+        // red, ochre, grey and a dark brown.
+        inline const std::array<std::array<float, 3>, 5>& geoBldWoodPalette() {
+            static const std::array<std::array<float, 3>, 5> p{{
+                    {0.645f, 0.635f, 0.605f},// white
+                    {0.260f, 0.070f, 0.050f},// falu red
+                    {0.420f, 0.270f, 0.100f},// ochre
+                    {0.300f, 0.300f, 0.310f},// mid grey
+                    {0.140f, 0.090f, 0.060f},// dark brown
+            }};
+            return p;
+        }
+        inline size_t geoBldWoodPick(std::uint32_t h) {
+            const std::uint32_t r = h % 20u;// white ≈55%, then 15/10/10/10
+            if (r < 11u) return 0;
+            if (r < 14u) return 1;
+            if (r < 16u) return 2;
+            if (r < 18u) return 3;
+            return 4;
+        }
+        // Slate on masonry, tile/black on wood, felt/zinc on flat + industry.
+        inline const std::array<std::array<float, 3>, 3>& geoBldSlatePalette() {
+            static const std::array<std::array<float, 3>, 3> p{{
+                    {0.150f, 0.158f, 0.175f},// dark slate
+                    {0.195f, 0.205f, 0.225f},// mid slate
+                    {0.115f, 0.122f, 0.135f},// near-black slate
+            }};
+            return p;
+        }
+        inline const std::array<std::array<float, 3>, 4>& geoBldTilePalette() {
+            static const std::array<std::array<float, 3>, 4> p{{
+                    {0.140f, 0.145f, 0.150f},// dark concrete tile
+                    {0.300f, 0.085f, 0.055f},// red tile
+                    {0.095f, 0.100f, 0.110f},// black
+                    {0.200f, 0.115f, 0.062f},// brown tile
+            }};
+            return p;
+        }
+        inline const std::array<std::array<float, 3>, 3>& geoBldFlatRoofPalette() {
+            static const std::array<std::array<float, 3>, 3> p{{
+                    {0.095f, 0.100f, 0.110f},// felt
+                    {0.320f, 0.330f, 0.340f},// zinc
+                    {0.240f, 0.245f, 0.250f},// grey membrane
+            }};
+            return p;
+        }
+
+        // Trim: white against a coloured wall, dark grey-brown against white.
+        inline void geoBldTrimColour(const float wall[3], float out[3]) {
+            const float lum = 0.2126f * wall[0] + 0.7152f * wall[1] + 0.0722f * wall[2];
+            if (lum > 0.42f) {
+                out[0] = 0.055f;
+                out[1] = 0.046f;
+                out[2] = 0.038f;
+            } else {
+                out[0] = 0.700f;
+                out[1] = 0.690f;
+                out[2] = 0.660f;
+            }
+        }
+
+        // Mitred OUTWARD offset of a positive-shoelace ring — the eaves line.
+        // Vertex count is preserved so the offset ring and the wall ring stay
+        // 1:1 (the fascia/soffit strip is then a plain quad strip). Very sharp
+        // corners would throw a spike; those are clamped to a bevel-ish length.
+        inline std::vector<Vector2> geoBldOffsetRing(const std::vector<Vector2>& r, float d) {
+            const size_t n = r.size();
+            std::vector<Vector2> out(n);
+            for (size_t i = 0; i < n; ++i) {
+                const Vector2& p = r[i];
+                const Vector2& a = r[(i + n - 1) % n];
+                const Vector2& b = r[(i + 1) % n];
+                Vector2 d0(p.x - a.x, p.y - a.y), d1(b.x - p.x, b.y - p.y);
+                const float l0 = std::sqrt(d0.x * d0.x + d0.y * d0.y);
+                const float l1 = std::sqrt(d1.x * d1.x + d1.y * d1.y);
+                if (l0 < 1e-5f || l1 < 1e-5f) {
+                    out[i] = p;
+                    continue;
+                }
+                d0 = Vector2(d0.x / l0, d0.y / l0);
+                d1 = Vector2(d1.x / l1, d1.y / l1);
+                const Vector2 n0(d0.y, -d0.x), n1(d1.y, -d1.x);// OUTWARD
+                const Vector2 s(n0.x + n1.x, n0.y + n1.y);
+                const float k = 1.f + (n0.x * n1.x + n0.y * n1.y);
+                const float sl = std::sqrt(s.x * s.x + s.y * s.y);
+                if (sl < 1e-5f) {
+                    out[i] = p;
+                } else if (k < 0.4f) {
+                    out[i] = Vector2(p.x + d * 2.f * s.x / sl, p.y + d * 2.f * s.y / sl);
+                } else {
+                    out[i] = Vector2(p.x + d * s.x / k, p.y + d * s.y / k);
+                }
+            }
+            return out;
+        }
+
     }// namespace detail
 
     // Build the batched building meshes for a pack. Returns a Group of chunk
-    // meshes (empty Group if the pack carries no buildings); all meshes share
-    // three materials (windowed walls / plain walls / roofs).
+    // meshes (empty Group if the pack carries no buildings); meshes share the
+    // nine facade/roof materials (three per class plus three roof coverings).
     inline std::shared_ptr<Group> buildGeoBuildingMeshes(const GeoTerrainPack& pack,
                                                          const GeoBuildingsOptions& o = {}) {
         auto group = Group::create();
@@ -337,9 +512,31 @@ namespace threepp::terrain {
             }
             return m;
         };
-        auto matWin = mkMat(o.facadeTextures ? &maps.windowed : nullptr);
-        auto matPlain = mkMat(o.facadeTextures ? &maps.plain : nullptr);
-        auto matRoof = mkMat(o.facadeTextures ? &maps.roof : nullptr);
+
+        enum MatId {
+            M_WOOD_WIN = 0,
+            M_WOOD_PLAIN,
+            M_MAS_UP,
+            M_MAS_GND,
+            M_MAS_PLAIN,
+            M_IND,
+            M_ROOF_SLATE,
+            M_ROOF_TILE,
+            M_ROOF_METAL,
+            M_COUNT
+        };
+        const FacadeSet* sets[M_COUNT] = {
+                &maps.windowed, &maps.plain, &maps.masonryUpper, &maps.masonryGround,
+                &maps.masonryPlain, &maps.industrial, &maps.roofSlate, &maps.roofTile,
+                &maps.roof};
+        static const char* matNames[M_COUNT] = {
+                "geo_buildings_wood", "geo_buildings_wood_plain", "geo_buildings_masonry",
+                "geo_buildings_masonry_ground", "geo_buildings_masonry_plain",
+                "geo_buildings_industrial", "geo_buildings_roof_slate",
+                "geo_buildings_roof_tile", "geo_buildings_roof_metal"};
+        std::array<std::shared_ptr<MeshStandardMaterial>, M_COUNT> mats;
+        for (int i = 0; i < M_COUNT; ++i)
+            mats[i] = mkMat(o.facadeTextures ? sets[i] : nullptr);
 
         struct Buf {
             std::vector<float> pos, nrm, col, uv;
@@ -352,29 +549,30 @@ namespace threepp::terrain {
             }
         };
         struct ChunkBuf {
-            Buf win, plain, roof;
+            std::array<Buf, M_COUNT> b;
         };
         std::unordered_map<std::int64_t, ChunkBuf> chunks;
 
+        // Quad wound so (B−A)×(C−A) points along `n` — the same convention the
+        // wall strips below use.
+        const auto quad = [](Buf& buf, const float A[3], const float B[3], const float C[3],
+                             const float D[3], const float n[3], const float c[3],
+                             float u0, float u1, float v0, float v1) {
+            buf.push(A[0], A[1], A[2], n, c, u0, v0);
+            buf.push(B[0], B[1], B[2], n, c, u1, v0);
+            buf.push(C[0], C[1], C[2], n, c, u1, v1);
+            buf.push(A[0], A[1], A[2], n, c, u0, v0);
+            buf.push(C[0], C[1], C[2], n, c, u1, v1);
+            buf.push(D[0], D[1], D[2], n, c, u0, v1);
+        };
+
+        GeoBuildingsStats st;
         for (const auto& b : pack.buildings) {
             if (b.outer.size() < 3) continue;
+            ++st.buildings;
 
-            // Per-building colours: real OSM tags win; otherwise hashed out of
-            // the palette, stable in the OSM id (XOR seed re-rolls them all).
             const std::uint32_t h = detail::geoBldHash(b.id) ^ o.seed;
             const float jitter = 0.85f + 0.3f * static_cast<float>((h >> 8) & 0xff) / 255.f;
-            float wall[3], roof[3];
-            if (!detail::geoBldParseColour(b.colour, wall)) {
-                const auto& wp = detail::geoBldWallPalette()[h % detail::geoBldWallPalette().size()];
-                for (int c = 0; c < 3; ++c) wall[c] = wp[c] * jitter;
-            }
-            const bool plainType = detail::geoBldIsPlainType(b.type);
-            const float wallBase[3] = {wall[0] * (1.f - o.grime),
-                                       wall[1] * (1.f - o.grime),
-                                       wall[2] * (1.f - o.grime)};
-
-            const float yBase = b.groundMin - o.sink;
-            const float yTop = b.groundMin + b.height;
 
             // Normalize winding defensively (the pack contract already says
             // outer positive / holes negative shoelace in (x,z)).
@@ -385,102 +583,266 @@ namespace threepp::terrain {
             for (auto& hole : holes)
                 if (detail::geoBldRingArea(hole) > 0.f)
                     std::reverse(hole.begin(), hole.end());
+            const float plan = detail::geoBldRingArea(outer);
 
-            // ── gable fit ───────────────────────────────────────────────────
-            // Near-rectangular non-utility footprints get a gabled roof: ridge
-            // along the long axis of the minimum-area bounding rectangle at
-            // yTop (nDSM heights measure the ridge — the old flat slab there
-            // OVERSTATED the volume), walls stopping at the eaves. Utility
-            // types, courtyard footprints and poor rectangle fits stay flat.
-            bool gable = false;
-            Vector2 gU, gV;// ridge / cross-ridge unit axes in (x, z)
-            float gVc = 0.f, gHalfW = 0.f, gRise = 0.f;
-            float gUc = 0.f, gHalfL = 0.f;// ridge centre / half-length along gU
-            if (o.pitchedRoofs && !plainType && holes.empty() && b.roofShape != "flat") {
-                detail::GeoBldRectFit rect;
-                if (detail::geoBldMinRect(outer, rect)) {
-                    float longE = rect.uMax - rect.uMin, shortE = rect.vMax - rect.vMin;
-                    Vector2 axU = rect.u, axV = rect.v;
-                    float c0 = rect.vMin, c1 = rect.vMax;
-                    float cL0 = rect.uMin, cL1 = rect.uMax;
-                    if (longE < shortE) {// ridge along the LONG rectangle axis
-                        std::swap(longE, shortE);
-                        std::swap(axU, axV);
-                        c0 = rect.uMin;
-                        c1 = rect.uMax;
-                        cL0 = rect.vMin;
-                        cL1 = rect.vMax;
+            const bool plainType = detail::geoBldIsPlainType(b.type);
+            const int floorsEst = std::max(1, static_cast<int>(std::lround(b.height / o.floorHeight)));
+            const auto cls = detail::geoBldClassify(b.type, floorsEst, plan);
+            const bool masonry = cls == detail::GeoBldClass::Masonry;
+            const bool industrial = cls == detail::GeoBldClass::Industrial;
+
+            // ── palette ────────────────────────────────────────────────────
+            float wall[3];
+            if (!detail::geoBldParseColour(b.colour, wall)) {
+                if (masonry) {
+                    const auto& wp = detail::geoBldMasonryPalette()
+                            [h % detail::geoBldMasonryPalette().size()];
+                    for (int c = 0; c < 3; ++c) wall[c] = wp[c] * jitter;
+                } else if (industrial) {
+                    static const std::array<std::array<float, 3>, 3> ind{{
+                            {0.330f, 0.335f, 0.345f},// galvanised
+                            {0.190f, 0.215f, 0.245f},// blue-grey sheet
+                            {0.430f, 0.420f, 0.395f},// off-white sheet
+                    }};
+                    const auto& wp = ind[h % ind.size()];
+                    for (int c = 0; c < 3; ++c) wall[c] = wp[c] * jitter;
+                } else {
+                    const auto& wp = detail::geoBldWoodPalette()[detail::geoBldWoodPick(h)];
+                    for (int c = 0; c < 3; ++c) wall[c] = wp[c] * jitter;
+                }
+            }
+            float trim[3];
+            detail::geoBldTrimColour(wall, trim);
+            const float wallBase[3] = {wall[0] * (1.f - o.grime),
+                                       wall[1] * (1.f - o.grime),
+                                       wall[2] * (1.f - o.grime)};
+
+            // ── roof shape ─────────────────────────────────────────────────
+            // Measured roof block (Phase A) wins; without one the old
+            // rectangle-fit heuristic runs unchanged, overhang 0, no trim.
+            enum Kind { K_FLAT,
+                        K_GABLE,
+                        K_HIP };
+            Kind kind = K_FLAT;
+            const bool measured = o.measuredRoofs && b.hasRoof() && o.pitchedRoofs;
+            if (b.roof.tower) ++st.towers;
+
+            float overhang = 0.f;
+            std::vector<Vector2> wallRing = outer;
+            std::vector<Vector2> offRing;
+            float yTop = b.groundMin + b.height;// ridge
+            float yWallTop = yTop;              // eaves
+            Vector2 gU(1.f, 0.f), gV(0.f, 1.f);
+            float gVc = 0.f, gHalfW = 1.f, gSlope = 0.f, gUc = 0.f, gHalfL = 0.f;
+            StraightSkeletonResult skel;
+            float hipPitch = 0.f;
+
+            const auto axesFrom = [&](const Vector2& axis) {
+                float l = std::sqrt(axis.x * axis.x + axis.y * axis.y);
+                if (l < 1e-4f) return false;
+                gU = Vector2(axis.x / l, axis.y / l);
+                gV = Vector2(-gU.y, gU.x);
+                float vMin = 1e30f, vMax = -1e30f, uMin = 1e30f, uMax = -1e30f;
+                for (const auto& p : wallRing) {
+                    const float pv = p.x * gV.x + p.y * gV.y;
+                    const float pu = p.x * gU.x + p.y * gU.y;
+                    vMin = std::min(vMin, pv);
+                    vMax = std::max(vMax, pv);
+                    uMin = std::min(uMin, pu);
+                    uMax = std::max(uMax, pu);
+                }
+                gVc = 0.5f * (vMin + vMax);
+                gHalfW = 0.5f * (vMax - vMin);
+                gUc = 0.5f * (uMin + uMax);
+                gHalfL = 0.5f * (uMax - uMin);
+                return gHalfW > 0.6f;
+            };
+
+            if (measured) {
+                overhang = (plainType || industrial) ? o.utilityOverhang : o.eavesOverhang;
+                auto simp = simplifyRing(outer);
+                if (simp.size() >= 3 &&
+                    std::abs(detail::geoBldRingArea(simp) - plan) < 0.05f * plan)
+                    wallRing = simp;
+                offRing = detail::geoBldOffsetRing(wallRing, overhang);
+                if (detail::geoBldRingArea(offRing) <= plan) {
+                    offRing = wallRing;// pathological notch: no overhang
+                    overhang = 0.f;
+                }
+                const float eave = b.groundMin + b.roof.eave;
+                const float ridge = b.groundMin + b.roof.ridge;
+                const bool pitched = b.roof.kind != "flat" && (ridge - eave) > 0.8f &&
+                                     b.roofShape != "flat";
+                if (!pitched) {
+                    kind = K_FLAT;
+                    yTop = yWallTop = std::max(ridge, b.groundMin + 1.5f);
+                } else if (b.roof.kind == "hipped" && holes.empty()) {
+                    ++st.skeletonTried;
+                    skel = computeRoofSkeleton(offRing);
+                    if (skel.ok && skel.maxOffset > overhang + 0.6f) {
+                        hipPitch = (ridge - eave) / (skel.maxOffset - overhang);
+                        if (hipPitch > 0.04f && hipPitch < 3.2f) {
+                            kind = K_HIP;
+                            yTop = ridge;
+                            yWallTop = eave;
+                        }
                     }
-                    const float cover = detail::geoBldRingArea(outer) /
-                                        std::max(1e-3f, longE * shortE);
-                    // An explicit OSM pitched-roof tag trusts the mapper on
-                    // less rectangular footprints; the heuristic needs a snug
-                    // fit before it overrules "unknown".
-                    const float coverMin = b.roofShape.empty() ? o.gableCoverageMin : 0.55f;
-                    if (cover >= coverMin && shortE >= 3.f && shortE <= o.maxGableSpan) {
-                        float rise = std::tan(o.roofPitchDeg * detail::kGeoBldDeg2Rad) * 0.5f * shortE;
-                        rise = std::min({rise, o.maxRoofRise, b.height - o.minEavesWall});
-                        if (rise >= o.minRoofRise) {
-                            gable = true;
-                            gU = axU;
-                            gV = axV;
-                            gVc = 0.5f * (c0 + c1);
-                            gHalfW = 0.5f * (c1 - c0);
-                            gUc = 0.5f * (cL0 + cL1);
-                            gHalfL = 0.5f * (cL1 - cL0);
-                            gRise = rise;
+                    if (kind != K_HIP) ++st.skeletonFailed;
+                }
+                if (kind == K_FLAT && pitched) {
+                    // gabled (or a hip the skeleton refused): ridge along the
+                    // measured axis through the footprint centre.
+                    if (axesFrom(b.roof.axis)) {
+                        kind = K_GABLE;
+                        yTop = ridge;
+                        yWallTop = eave;
+                        gSlope = (ridge - eave) / gHalfW;
+                    } else {
+                        yTop = yWallTop = std::max(ridge, b.groundMin + 1.5f);
+                    }
+                }
+            } else {
+                // ── heuristic (unchanged) ──────────────────────────────────
+                ++st.heuristic;
+                offRing = wallRing;
+                if (o.pitchedRoofs && !plainType && holes.empty() && b.roofShape != "flat") {
+                    detail::GeoBldRectFit rect;
+                    if (detail::geoBldMinRect(outer, rect)) {
+                        float longE = rect.uMax - rect.uMin, shortE = rect.vMax - rect.vMin;
+                        Vector2 axU = rect.u, axV = rect.v;
+                        float c0 = rect.vMin, c1 = rect.vMax;
+                        float cL0 = rect.uMin, cL1 = rect.uMax;
+                        if (longE < shortE) {// ridge along the LONG rectangle axis
+                            std::swap(longE, shortE);
+                            std::swap(axU, axV);
+                            c0 = rect.uMin;
+                            c1 = rect.uMax;
+                            cL0 = rect.vMin;
+                            cL1 = rect.vMax;
+                        }
+                        const float cover = plan / std::max(1e-3f, longE * shortE);
+                        const float coverMin = b.roofShape.empty() ? o.gableCoverageMin : 0.55f;
+                        if (cover >= coverMin && shortE >= 3.f && shortE <= o.maxGableSpan) {
+                            float rise = std::tan(o.roofPitchDeg * detail::kGeoBldDeg2Rad) *
+                                         0.5f * shortE;
+                            rise = std::min({rise, o.maxRoofRise, b.height - o.minEavesWall});
+                            if (rise >= o.minRoofRise) {
+                                kind = K_GABLE;
+                                gU = axU;
+                                gV = axV;
+                                gVc = 0.5f * (c0 + c1);
+                                gHalfW = 0.5f * (c1 - c0);
+                                gUc = 0.5f * (cL0 + cL1);
+                                gHalfL = 0.5f * (cL1 - cL0);
+                                gSlope = rise / gHalfW;
+                                yWallTop = yTop - rise;
+                            }
                         }
                     }
                 }
             }
-            // Roof colour (needs the gable verdict): real OSM tags win; tile
-            // red/brown only rolls on PITCHED roofs — flat caps and utility
-            // types stay in the grey entries (felt/metal), where a tile colour
-            // would read as a mistake.
+            if (kind == K_GABLE) ++st.gabled;
+            else if (kind == K_HIP)
+                ++st.hipped;
+            else
+                ++st.flat;
+
+            // Roof colour: real OSM tags win; slate on masonry, tile on wood,
+            // felt/zinc on flat and industrial (a tile red on a flat cap reads
+            // as a mistake).
+            float roof[3];
+            int roofMat = M_ROOF_METAL;
+            if (kind == K_FLAT || industrial || plainType) roofMat = M_ROOF_METAL;
+            else if (masonry)
+                roofMat = M_ROOF_SLATE;
+            else
+                roofMat = M_ROOF_TILE;
             if (!detail::geoBldParseColour(b.roofColour, roof)) {
-                const size_t n = (plainType || !gable) ? 3 : detail::geoBldRoofPalette().size();
-                const auto& rp = detail::geoBldRoofPalette()[(h >> 16) % n];
-                for (int c = 0; c < 3; ++c) roof[c] = rp[c] * jitter;
+                if (roofMat == M_ROOF_SLATE) {
+                    const auto& rp = detail::geoBldSlatePalette()
+                            [(h >> 16) % detail::geoBldSlatePalette().size()];
+                    for (int c = 0; c < 3; ++c) roof[c] = rp[c] * jitter;
+                } else if (roofMat == M_ROOF_TILE) {
+                    const auto& rp = detail::geoBldTilePalette()
+                            [(h >> 16) % detail::geoBldTilePalette().size()];
+                    for (int c = 0; c < 3; ++c) roof[c] = rp[c] * jitter;
+                } else {
+                    const auto& rp = detail::geoBldFlatRoofPalette()
+                            [(h >> 16) % detail::geoBldFlatRoofPalette().size()];
+                    for (int c = 0; c < 3; ++c) roof[c] = rp[c] * jitter;
+                }
             }
 
-            const float yWallTop = gable ? yTop - gRise : yTop;
-            const float gSlope = gable ? gRise / gHalfW : 0.f;
-            // Tent height over the footprint: yTop on the ridge line v = gVc,
-            // falling to the eaves at |v − gVc| = gHalfW (clamped so float
-            // slop at the rectangle boundary never dips below the eaves).
+            const float yBase = b.groundMin - o.sink;
+            const float hMinEave = yWallTop - gSlope * overhang;// gable verge bottom
             const auto tentH = [&](const Vector2& p) {
                 const float v = p.x * gV.x + p.y * gV.y;
-                return std::max(yWallTop, yTop - std::abs(v - gVc) * gSlope);
+                return std::max(hMinEave, yTop - std::abs(v - gVc) * gSlope);
             };
 
             // Floor snap: an INTEGER number of texture floors spans base→eaves
-            // exactly (window rows never cut at the roofline; the sunk strip
-            // lands on the tile's plain lower band).
+            // exactly (window rows never cut at the roofline).
             const float wallH = yWallTop - yBase;
             const int floors = std::max(1, static_cast<int>(std::lround(wallH / o.floorHeight)));
             const float floorH = wallH / static_cast<float>(floors);
 
-            // Chunk by footprint centroid.
             float cx = 0.f, cz = 0.f;
-            for (const auto& p : outer) { cx += p.x; cz += p.y; }
-            cx /= static_cast<float>(outer.size());
-            cz /= static_cast<float>(outer.size());
+            for (const auto& p : wallRing) {
+                cx += p.x;
+                cz += p.y;
+            }
+            cx /= static_cast<float>(wallRing.size());
+            cz /= static_cast<float>(wallRing.size());
             const auto cellX = static_cast<std::int32_t>(std::floor(cx / o.chunkSize));
             const auto cellZ = static_cast<std::int32_t>(std::floor(cz / o.chunkSize));
             ChunkBuf& chunk = chunks[(static_cast<std::int64_t>(cellX) << 32) ^
                                      static_cast<std::uint32_t>(cellZ)];
 
-            // ── roof ────────────────────────────────────────────────────────
-            if (gable) {
-                // Two roof planes: the footprint clipped against the ridge
-                // line, each half lifted onto the tent (linear in v on one
-                // side, so each half is planar). Watertight against the walls:
-                // the plane height at any footprint edge equals the gable-fill
-                // top emitted with the walls below.
-                const float slopeLen = std::sqrt(1.f + gSlope * gSlope);// slope m per plan m
-                const float rt = 1.f / o.roofTileSize;
+            const int trimMat = masonry ? M_MAS_PLAIN : (industrial ? M_IND : M_WOOD_PLAIN);
+            Buf& trimBuf = chunk.b[trimMat];
+            const float rt = 1.f / o.roofTileSize;
+
+            // ── roof surface ───────────────────────────────────────────────
+            Buf& roofBuf = chunk.b[roofMat];
+            if (kind == K_HIP) {
+                for (const auto& f : skel.faces) {
+                    const Vector2& p1 = skel.ring[f.edge];
+                    const Vector2& p2 = skel.ring[(f.edge + 1) % skel.ring.size()];
+                    Vector2 d(p2.x - p1.x, p2.y - p1.y);
+                    const float dl = std::sqrt(d.x * d.x + d.y * d.y);
+                    if (dl < 1e-4f) continue;
+                    d = Vector2(d.x / dl, d.y / dl);
+                    const Vector2 nIn(-d.y, d.x);// inward
+                    const float slopeLen = std::sqrt(1.f + hipPitch * hipPitch);
+                    float n[3] = {-hipPitch * nIn.x, 1.f, -hipPitch * nIn.y};
+                    const float nl = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+                    n[0] /= nl;
+                    n[1] /= nl;
+                    n[2] /= nl;
+                    std::vector<Vector2> face = f.poly;
+                    std::vector<std::vector<Vector2>> noHoles;
+                    const auto tris = shapeutils::triangulateShape(face, noHoles);
+                    const auto hAt = [&](const Vector2& p) {
+                        const float dist = (p.x - p1.x) * nIn.x + (p.y - p1.y) * nIn.y;
+                        return yWallTop + hipPitch * (dist - overhang);
+                    };
+                    for (const auto& t : tris) {
+                        if (t.size() < 3) continue;
+                        Vector2 a = face[t[0]], bb = face[t[1]], c = face[t[2]];
+                        const float cr = (bb.x - a.x) * (c.y - a.y) - (bb.y - a.y) * (c.x - a.x);
+                        if (cr > 0.f) std::swap(bb, c);
+                        for (const Vector2* pt : {&a, &bb, &c}) {
+                            const float tu = ((pt->x - p1.x) * d.x + (pt->y - p1.y) * d.y) * rt;
+                            const float tv = ((pt->x - p1.x) * nIn.x + (pt->y - p1.y) * nIn.y) *
+                                             slopeLen * rt;
+                            roofBuf.push(pt->x, hAt(*pt), pt->y, n, roof, tu, tv);
+                        }
+                    }
+                }
+            } else if (kind == K_GABLE) {
+                const float slopeLen = std::sqrt(1.f + gSlope * gSlope);
                 for (const float side : {-1.f, 1.f}) {
-                    std::vector<Vector2> half = detail::geoBldClipHalfPlane(outer, gV, gVc, side);
+                    std::vector<Vector2> half = detail::geoBldClipHalfPlane(offRing, gV, gVc, side);
                     if (half.size() < 3) continue;
                     std::vector<std::vector<Vector2>> noHoles;
                     const auto faces = shapeutils::triangulateShape(half, noHoles);
@@ -492,46 +854,40 @@ namespace threepp::terrain {
                     for (const auto& f : faces) {
                         if (f.size() < 3) continue;
                         Vector2 a = half[f[0]], bb = half[f[1]], c = half[f[2]];
-                        // Same up-facing orientation rule as the flat cap.
-                        const float cross = (bb.x - a.x) * (c.y - a.y) - (bb.y - a.y) * (c.x - a.x);
-                        if (cross > 0.f) std::swap(bb, c);
+                        const float cr = (bb.x - a.x) * (c.y - a.y) - (bb.y - a.y) * (c.x - a.x);
+                        if (cr > 0.f) std::swap(bb, c);
                         for (const Vector2* pt : {&a, &bb, &c}) {
-                            // UVs: metres along the ridge × true metres down
-                            // the slope, so the tile density matches flat roofs.
                             const float tu = (pt->x * gU.x + pt->y * gU.y) * rt;
-                            const float tv = std::abs(pt->x * gV.x + pt->y * gV.y - gVc) * slopeLen * rt;
-                            chunk.roof.push(pt->x, tentH(*pt), pt->y, n, roof, tu, tv);
+                            const float tv = std::abs(pt->x * gV.x + pt->y * gV.y - gVc) *
+                                             slopeLen * rt;
+                            roofBuf.push(pt->x, tentH(*pt), pt->y, n, roof, tu, tv);
                         }
                     }
                 }
-            }
-            // ── roof cap (flat) ─────────────────────────────────────────────
-            // triangulateShape mutates its inputs; feed it copies. Face indices
-            // reference outer ⧺ holes concatenated.
-            else {
-                std::vector<Vector2> contour = outer;
+            } else {
+                std::vector<Vector2> contour = wallRing;
                 std::vector<std::vector<Vector2>> triHoles = holes;
                 const auto faces = shapeutils::triangulateShape(contour, triHoles);
                 std::vector<Vector2> all = contour;
                 for (const auto& hole : triHoles) all.insert(all.end(), hole.begin(), hole.end());
                 static constexpr float up[3] = {0.f, 1.f, 0.f};
-                const float rt = 1.f / o.roofTileSize;
                 for (const auto& f : faces) {
                     if (f.size() < 3) continue;
                     Vector2 a = all[f[0]], bb = all[f[1]], c = all[f[2]];
-                    // Orient so the world normal points UP: a triangle wound
-                    // counter-clockwise in (x,z) has a DOWNWARD y normal, so
-                    // flip positive-shoelace triangles.
-                    const float cross = (bb.x - a.x) * (c.y - a.y) - (bb.y - a.y) * (c.x - a.x);
-                    if (cross > 0.f) std::swap(bb, c);
-                    chunk.roof.push(a.x, yTop, a.y, up, roof, a.x * rt, a.y * rt);
-                    chunk.roof.push(bb.x, yTop, bb.y, up, roof, bb.x * rt, bb.y * rt);
-                    chunk.roof.push(c.x, yTop, c.y, up, roof, c.x * rt, c.y * rt);
+                    const float cr = (bb.x - a.x) * (c.y - a.y) - (bb.y - a.y) * (c.x - a.x);
+                    if (cr > 0.f) std::swap(bb, c);
+                    roofBuf.push(a.x, yTop, a.y, up, roof, a.x * rt, a.y * rt);
+                    roofBuf.push(bb.x, yTop, bb.y, up, roof, bb.x * rt, bb.y * rt);
+                    roofBuf.push(c.x, yTop, c.y, up, roof, c.x * rt, c.y * rt);
                 }
             }
 
-            // ── walls (outer ring + courtyard rings) ───────────────────────
-            const float vTop = static_cast<float>(floors);// (yWallTop-yBase)/floorH exactly
+            // ── walls ──────────────────────────────────────────────────────
+            // Masonry gets its GROUND FLOOR as a separate strip so it can carry
+            // shopfront glazing over a rusticated base; every edge gets a
+            // hashed integer bay phase so the window grid stops lining up from
+            // building to building (the wallpaper read).
+            const float vTop = static_cast<float>(floors);
             const auto emitWalls = [&](const std::vector<Vector2>& ring) {
                 for (size_t i = 0, n = ring.size(); i < n; ++i) {
                     const Vector2& p = ring[i];
@@ -539,46 +895,58 @@ namespace threepp::terrain {
                     const float dx = q.x - p.x, dz = q.y - p.y;
                     const float len = std::sqrt(dx * dx + dz * dz);
                     if (len < 1e-4f) continue;
-                    // Bay snap per facade: an INTEGER number of bays spans the
-                    // edge exactly — complete, centred window columns. Sub-bay
-                    // stubs go windowless.
                     const bool windowed = !plainType && len >= o.minWindowEdge;
-                    Buf& buf = windowed ? chunk.win : chunk.plain;
                     const int bays = std::max(1, static_cast<int>(std::lround(len / o.bayWidth)));
-                    const float u1 = static_cast<float>(bays);
-                    // Outward for a positive-shoelace ring traversal (and
-                    // courtyard-facing for the negative hole rings).
                     const float nrm[3] = {dz / len, 0.f, -dx / len};
-                    // Two triangles, wound to match the outward normal; grimed
-                    // colour at the base fades up the wall.
-                    buf.push(p.x, yBase, p.y, nrm, wallBase, 0.f, 0.f);
-                    buf.push(q.x, yWallTop, q.y, nrm, wall, u1, vTop);
-                    buf.push(q.x, yBase, q.y, nrm, wallBase, u1, 0.f);
-                    buf.push(p.x, yBase, p.y, nrm, wallBase, 0.f, 0.f);
-                    buf.push(p.x, yWallTop, p.y, nrm, wall, 0.f, vTop);
-                    buf.push(q.x, yWallTop, q.y, nrm, wall, u1, vTop);
+                    const float phase = static_cast<float>((h >> (3u * (i & 7u))) & 1u);
+                    int mat;
+                    float uScale = 1.f;
+                    if (industrial) mat = M_IND;
+                    else if (masonry)
+                        mat = windowed ? M_MAS_UP : M_MAS_PLAIN, uScale = windowed ? 0.5f : 1.f;
+                    else
+                        mat = windowed ? M_WOOD_WIN : M_WOOD_PLAIN, uScale = windowed ? 0.5f : 1.f;
+                    const float u0 = phase * uScale;
+                    const float u1 = u0 + uScale * static_cast<float>(bays);
+                    const bool splitGround = masonry && windowed && floors >= 2;
+                    const float yMid = splitGround ? yBase + floorH : yBase;
+                    if (splitGround) {
+                        Buf& g = chunk.b[M_MAS_GND];
+                        g.push(p.x, yBase, p.y, nrm, wallBase, u0, 0.f);
+                        g.push(q.x, yMid, q.y, nrm, wall, u1, 1.f);
+                        g.push(q.x, yBase, q.y, nrm, wallBase, u1, 0.f);
+                        g.push(p.x, yBase, p.y, nrm, wallBase, u0, 0.f);
+                        g.push(p.x, yMid, p.y, nrm, wall, u0, 1.f);
+                        g.push(q.x, yMid, q.y, nrm, wall, u1, 1.f);
+                    }
+                    Buf& buf = chunk.b[mat];
+                    const float vHi = splitGround ? vTop - 1.f : vTop;
+                    const float cLo[3] = {splitGround ? wall[0] : wallBase[0],
+                                          splitGround ? wall[1] : wallBase[1],
+                                          splitGround ? wall[2] : wallBase[2]};
+                    buf.push(p.x, yMid, p.y, nrm, cLo, u0, 0.f);
+                    buf.push(q.x, yWallTop, q.y, nrm, wall, u1, vHi);
+                    buf.push(q.x, yMid, q.y, nrm, cLo, u1, 0.f);
+                    buf.push(p.x, yMid, p.y, nrm, cLo, u0, 0.f);
+                    buf.push(p.x, yWallTop, p.y, nrm, wall, u0, vHi);
+                    buf.push(q.x, yWallTop, q.y, nrm, wall, u1, vHi);
                 }
             };
-            emitWalls(outer);
+            emitWalls(wallRing);
             for (const auto& hole : holes) emitWalls(hole);
 
             // ── gable ends ─────────────────────────────────────────────────
-            // Fill between the eaves line and the roof tent with plain
-            // cladding (the window grid stays complete below the eaves; gable
-            // triangles above it read as painted wood). Edges near the eave
-            // lines contribute nothing and drop out; edges crossing the ridge
-            // split there so the apex lands exactly under the roof planes.
-            if (gable) {
-                for (size_t i = 0, n = outer.size(); i < n; ++i) {
-                    const Vector2& p = outer[i];
-                    const Vector2& q = outer[(i + 1) % n];
+            if (kind == K_GABLE) {
+                for (size_t i = 0, n = wallRing.size(); i < n; ++i) {
+                    const Vector2& p = wallRing[i];
+                    const Vector2& q = wallRing[(i + 1) % n];
                     const float dx = q.x - p.x, dz = q.y - p.y;
                     const float len = std::sqrt(dx * dx + dz * dz);
                     if (len < 1e-4f) continue;
                     const float nrm[3] = {dz / len, 0.f, -dx / len};
                     struct GablePt {
                         Vector2 xy;
-                        float s, h;
+                        float s, hh;
                     };
                     GablePt pts[3];
                     int m = 0;
@@ -593,31 +961,110 @@ namespace threepp::terrain {
                     for (int k = 0; k + 1 < m; ++k) {
                         const GablePt& A = pts[k];
                         const GablePt& B = pts[k + 1];
-                        const float ha = A.h - yWallTop, hb = B.h - yWallTop;
+                        const float ha = A.hh - yWallTop, hb = B.hh - yWallTop;
                         if (ha < 1e-3f && hb < 1e-3f) continue;
                         const float ua = A.s / o.bayWidth, ub = B.s / o.bayWidth;
-                        // The eaves→tent quad, wound like the walls below;
-                        // degenerate corner triangles (flat end) drop out.
                         if (hb > 1e-3f) {
-                            chunk.plain.push(A.xy.x, yWallTop, A.xy.y, nrm, wall, ua, 0.f);
-                            chunk.plain.push(B.xy.x, B.h, B.xy.y, nrm, wall, ub, hb / floorH);
-                            chunk.plain.push(B.xy.x, yWallTop, B.xy.y, nrm, wall, ub, 0.f);
+                            trimBuf.push(A.xy.x, yWallTop, A.xy.y, nrm, wall, ua, 0.f);
+                            trimBuf.push(B.xy.x, B.hh, B.xy.y, nrm, wall, ub, hb / floorH);
+                            trimBuf.push(B.xy.x, yWallTop, B.xy.y, nrm, wall, ub, 0.f);
                         }
                         if (ha > 1e-3f) {
-                            chunk.plain.push(A.xy.x, yWallTop, A.xy.y, nrm, wall, ua, 0.f);
-                            chunk.plain.push(A.xy.x, A.h, A.xy.y, nrm, wall, ua, ha / floorH);
-                            chunk.plain.push(B.xy.x, B.h, B.xy.y, nrm, wall, ub, hb / floorH);
+                            trimBuf.push(A.xy.x, yWallTop, A.xy.y, nrm, wall, ua, 0.f);
+                            trimBuf.push(A.xy.x, A.hh, A.xy.y, nrm, wall, ua, ha / floorH);
+                            trimBuf.push(B.xy.x, B.hh, B.xy.y, nrm, wall, ub, hb / floorH);
                         }
                     }
                 }
             }
 
+            // ── eaves: fascia board + soffit ───────────────────────────────
+            // The roof plane stops in mid-air over the wall without these, and
+            // the RT shadow they cast on the facade IS the eaves line — the
+            // single cheapest cure for the paper-model read.
+            if (measured && overhang > 0.01f && kind != K_FLAT &&
+                offRing.size() == wallRing.size()) {
+                const size_t n = wallRing.size();
+                const auto outerH = [&](const Vector2& p) {
+                    return kind == K_HIP ? yWallTop - hipPitch * overhang : tentH(p);
+                };
+                const auto innerH = [&](const Vector2& p) {
+                    return kind == K_HIP ? yWallTop : std::max(yWallTop, tentH(p));
+                };
+                for (size_t i = 0; i < n; ++i) {
+                    const Vector2& O0 = offRing[i];
+                    const Vector2& O1 = offRing[(i + 1) % n];
+                    const Vector2& W0 = wallRing[i];
+                    const Vector2& W1 = wallRing[(i + 1) % n];
+                    const float dx = O1.x - O0.x, dz = O1.y - O0.y;
+                    const float len = std::sqrt(dx * dx + dz * dz);
+                    if (len < 1e-4f) continue;
+                    const float h0 = outerH(O0), h1 = outerH(O1);
+                    const float b0 = h0 - o.fasciaHeight, b1 = h1 - o.fasciaHeight;
+                    const float nrm[3] = {dz / len, 0.f, -dx / len};
+                    const float uu = len / o.bayWidth;
+                    const float A[3] = {O0.x, h0, O0.y}, B[3] = {O1.x, h1, O1.y};
+                    const float C[3] = {O1.x, b1, O1.y}, D[3] = {O0.x, b0, O0.y};
+                    quad(trimBuf, A, B, C, D, nrm, trim, 0.f, uu, 0.30f,
+                         0.30f - o.fasciaHeight / o.floorHeight);
+                    // soffit: the boxed underside back to the wall
+                    static constexpr float dn[3] = {0.f, -1.f, 0.f};
+                    const float S0[3] = {O0.x, b0, O0.y}, S1[3] = {O1.x, b1, O1.y};
+                    const float S2[3] = {W1.x, innerH(W1), W1.y};
+                    const float S3[3] = {W0.x, innerH(W0), W0.y};
+                    quad(trimBuf, S0, S1, S2, S3, dn, trim, 0.f, uu, 0.10f, 0.22f);
+                }
+            }
+
+            // ── flat roof: parapet lip ─────────────────────────────────────
+            if (measured && kind == K_FLAT && o.parapetHeight > 0.01f) {
+                const size_t n = wallRing.size();
+                for (size_t i = 0; i < n; ++i) {
+                    const Vector2& W0 = wallRing[i];
+                    const Vector2& W1 = wallRing[(i + 1) % n];
+                    const float dx = W1.x - W0.x, dz = W1.y - W0.y;
+                    const float len = std::sqrt(dx * dx + dz * dz);
+                    if (len < 1e-4f) continue;
+                    const float nrm[3] = {dz / len, 0.f, -dx / len};
+                    const float inv[3] = {-nrm[0], 0.f, -nrm[2]};
+                    const float yP = yTop + o.parapetHeight;
+                    const float uu = len / o.bayWidth;
+                    const float A[3] = {W0.x, yP, W0.y}, B[3] = {W1.x, yP, W1.y};
+                    const float C[3] = {W1.x, yTop, W1.y}, D[3] = {W0.x, yTop, W0.y};
+                    quad(trimBuf, A, B, C, D, nrm, trim, 0.f, uu, 0.30f, 0.20f);
+                    quad(trimBuf, B, A, D, C, inv, trim, 0.f, uu, 0.30f, 0.20f);
+                }
+            }
+
+            // ── masonry cornice ────────────────────────────────────────────
+            if (measured && masonry && o.corniceDepth > 0.01f && wallH > 4.f) {
+                const auto cRing = detail::geoBldOffsetRing(wallRing, o.corniceDepth);
+                const size_t n = wallRing.size();
+                const float yC1 = yWallTop, yC0 = yWallTop - o.corniceHeight;
+                for (size_t i = 0; i < n; ++i) {
+                    const Vector2& C0 = cRing[i];
+                    const Vector2& C1 = cRing[(i + 1) % n];
+                    const Vector2& W0 = wallRing[i];
+                    const Vector2& W1 = wallRing[(i + 1) % n];
+                    const float dx = C1.x - C0.x, dz = C1.y - C0.y;
+                    const float len = std::sqrt(dx * dx + dz * dz);
+                    if (len < 1e-4f) continue;
+                    const float nrm[3] = {dz / len, 0.f, -dx / len};
+                    static constexpr float up[3] = {0.f, 1.f, 0.f};
+                    static constexpr float dn[3] = {0.f, -1.f, 0.f};
+                    const float uu = len / o.bayWidth;
+                    const float A[3] = {C0.x, yC1, C0.y}, B[3] = {C1.x, yC1, C1.y};
+                    const float C[3] = {C1.x, yC0, C1.y}, D[3] = {C0.x, yC0, C0.y};
+                    quad(trimBuf, A, B, C, D, nrm, trim, 0.f, uu, 0.30f, 0.18f);
+                    const float T0[3] = {W0.x, yC1, W0.y}, T1[3] = {W1.x, yC1, W1.y};
+                    quad(trimBuf, T0, T1, B, A, up, trim, 0.f, uu, 0.30f, 0.34f);
+                    const float U0[3] = {W0.x, yC0, W0.y}, U1[3] = {W1.x, yC0, W1.y};
+                    quad(trimBuf, D, C, U1, U0, dn, trim, 0.f, uu, 0.30f, 0.34f);
+                }
+            }
+
             // ── chimneys ───────────────────────────────────────────────────
-            // Small hashed-offset stacks straddling the ridge (long ridges get
-            // two), sunk into the roof planes so the joint is watertight from
-            // every angle. Shares the plain-wall material; brick/render/metal
-            // colour hashed per building.
-            if (gable && o.chimneys && gHalfL > 2.f) {
+            if (kind == K_GABLE && o.chimneys && gHalfL > 2.f) {
                 static const std::array<std::array<float, 3>, 3> chimPal{{
                         {0.240f, 0.095f, 0.055f},// brick
                         {0.420f, 0.410f, 0.390f},// rendered/light concrete
@@ -627,9 +1074,9 @@ namespace threepp::terrain {
                 const float capCol[3] = {cc[0] * 0.45f, cc[1] * 0.45f, cc[2] * 0.45f};
                 const auto insideOuter = [&](float px, float pz) {
                     bool in = false;
-                    for (size_t i = 0, j = outer.size() - 1; i < outer.size(); j = i++) {
-                        const Vector2& a = outer[i];
-                        const Vector2& c = outer[j];
+                    for (size_t i = 0, j = wallRing.size() - 1; i < wallRing.size(); j = i++) {
+                        const Vector2& a = wallRing[i];
+                        const Vector2& c = wallRing[j];
                         if ((a.y > pz) != (c.y > pz) &&
                             px < (c.x - a.x) * (pz - a.y) / (c.y - a.y) + a.x)
                             in = !in;
@@ -638,7 +1085,7 @@ namespace threepp::terrain {
                 };
                 const int count = gHalfL > 12.f ? 2 : 1;
                 const float hs = 0.5f * o.chimneySide;
-                const float yB = yTop - 0.45f;// sunk through both roof planes
+                const float yB = yTop - 0.45f;
                 const float yT = yTop + o.chimneyHeight;
                 for (int ci = 0; ci < count; ++ci) {
                     const float frac =
@@ -646,16 +1093,11 @@ namespace threepp::terrain {
                     float cu = (count == 2)
                                        ? gUc + (ci == 0 ? -0.5f : 0.5f) * gHalfL + frac * 2.f
                                        : gUc + frac * 0.9f * (gHalfL - 1.f);
-                    // Keep the stack on the roof: fall back toward the ridge
-                    // centre if the hashed spot leaves the footprint (possible
-                    // on the less rectangular tag-forced gables).
                     if (!insideOuter(cu * gU.x + gVc * gV.x, cu * gU.y + gVc * gV.y)) {
                         cu = gUc;
                         if (!insideOuter(cu * gU.x + gVc * gV.x, cu * gU.y + gVc * gV.y))
                             continue;
                     }
-                    // Square ring, CCW in the (gU, gV) frame (the frame is a
-                    // pure rotation, so plan-winding conventions carry over).
                     const std::array<std::array<float, 2>, 4> sq{{
                             {cu - hs, gVc - hs},
                             {cu + hs, gVc - hs},
@@ -668,34 +1110,32 @@ namespace threepp::terrain {
                                         sq[i][0] * gU.y + sq[i][1] * gV.y);
                     const float u1 = 0.35f + o.chimneySide / o.bayWidth;
                     const float v1 = 0.30f + (yT - yB) / floorH;
-                    for (int i = 0; i < 4; ++i) {// sides, wound like the walls
+                    for (int i = 0; i < 4; ++i) {
                         const Vector2& p = w2[i];
                         const Vector2& q = w2[(i + 1) % 4];
                         const float dx = q.x - p.x, dz = q.y - p.y;
                         const float len = std::sqrt(dx * dx + dz * dz);
                         const float nrm[3] = {dz / len, 0.f, -dx / len};
-                        chunk.plain.push(p.x, yB, p.y, nrm, cc.data(), 0.35f, 0.30f);
-                        chunk.plain.push(q.x, yT, q.y, nrm, cc.data(), u1, v1);
-                        chunk.plain.push(q.x, yB, q.y, nrm, cc.data(), u1, 0.30f);
-                        chunk.plain.push(p.x, yB, p.y, nrm, cc.data(), 0.35f, 0.30f);
-                        chunk.plain.push(p.x, yT, p.y, nrm, cc.data(), 0.35f, v1);
-                        chunk.plain.push(q.x, yT, q.y, nrm, cc.data(), u1, v1);
+                        trimBuf.push(p.x, yB, p.y, nrm, cc.data(), 0.35f, 0.30f);
+                        trimBuf.push(q.x, yT, q.y, nrm, cc.data(), u1, v1);
+                        trimBuf.push(q.x, yB, q.y, nrm, cc.data(), u1, 0.30f);
+                        trimBuf.push(p.x, yB, p.y, nrm, cc.data(), 0.35f, 0.30f);
+                        trimBuf.push(p.x, yT, p.y, nrm, cc.data(), 0.35f, v1);
+                        trimBuf.push(q.x, yT, q.y, nrm, cc.data(), u1, v1);
                     }
-                    // Cap: CCW plan winding has a downward normal (same rule
-                    // as the roof caps), so emit flipped.
                     static constexpr float up[3] = {0.f, 1.f, 0.f};
-                    chunk.plain.push(w2[0].x, yT, w2[0].y, up, capCol, 0.5f, 0.15f);
-                    chunk.plain.push(w2[2].x, yT, w2[2].y, up, capCol, 0.5f, 0.15f);
-                    chunk.plain.push(w2[1].x, yT, w2[1].y, up, capCol, 0.5f, 0.15f);
-                    chunk.plain.push(w2[0].x, yT, w2[0].y, up, capCol, 0.5f, 0.15f);
-                    chunk.plain.push(w2[3].x, yT, w2[3].y, up, capCol, 0.5f, 0.15f);
-                    chunk.plain.push(w2[2].x, yT, w2[2].y, up, capCol, 0.5f, 0.15f);
+                    trimBuf.push(w2[0].x, yT, w2[0].y, up, capCol, 0.5f, 0.15f);
+                    trimBuf.push(w2[2].x, yT, w2[2].y, up, capCol, 0.5f, 0.15f);
+                    trimBuf.push(w2[1].x, yT, w2[1].y, up, capCol, 0.5f, 0.15f);
+                    trimBuf.push(w2[0].x, yT, w2[0].y, up, capCol, 0.5f, 0.15f);
+                    trimBuf.push(w2[3].x, yT, w2[3].y, up, capCol, 0.5f, 0.15f);
+                    trimBuf.push(w2[2].x, yT, w2[2].y, up, capCol, 0.5f, 0.15f);
                 }
             }
         }
 
-        const auto addMesh = [&](Buf& buf, const std::shared_ptr<MeshStandardMaterial>& mat,
-                                 const char* name) {
+        std::array<bool, M_COUNT> used{};
+        const auto addMesh = [&](Buf& buf, int mat) {
             if (buf.pos.empty()) return;
             auto geometry = BufferGeometry::create();
             geometry->setAttribute("position", FloatBufferAttribute::create(buf.pos, 3));
@@ -703,17 +1143,20 @@ namespace threepp::terrain {
             geometry->setAttribute("color", FloatBufferAttribute::create(buf.col, 3));
             geometry->setAttribute("uv", FloatBufferAttribute::create(buf.uv, 2));
             geometry->computeBoundingSphere();
-            auto mesh = Mesh::create(geometry, mat);
-            mesh->name = name;
+            auto mesh = Mesh::create(geometry, mats[mat]);
+            mesh->name = matNames[mat];
             mesh->castShadow = true;
             mesh->receiveShadow = true;
             group->add(mesh);
+            st.triangles += buf.pos.size() / 9;
+            ++st.meshes;
+            used[mat] = true;
         };
-        for (auto& [key, chunk] : chunks) {
-            addMesh(chunk.win, matWin, "geo_buildings_walls");
-            addMesh(chunk.plain, matPlain, "geo_buildings_walls_plain");
-            addMesh(chunk.roof, matRoof, "geo_buildings_roof");
-        }
+        for (auto& [key, chunk] : chunks)
+            for (int m = 0; m < M_COUNT; ++m) addMesh(chunk.b[m], m);
+        for (int m = 0; m < M_COUNT; ++m)
+            if (used[m]) ++st.materials;
+        if (o.stats) *o.stats = st;
         return group;
     }
 
