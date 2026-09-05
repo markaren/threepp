@@ -570,13 +570,50 @@ namespace threepp::vegetation {
         // means "the albedo match was already the pixel match", and it was not:
         // with the albedos equal the blob half of an all-L0/all-L1 boundary still
         // measured G/R 1.93 against the card half's 1.64 (geiranger, default sun,
-        // a lit bench at 250 m). One scale for all three species: the residual is
-        // a property of the SHADING (opaque puff vs cutout card), not of a
-        // species, and the tree-pixel mask cannot tell the species apart anyway.
+        // a lit bench at 250 m).
+        //
+        // The scale IS per species, because the residual is per species. It was
+        // one number while only the fjord's conifer wall was measured; the town
+        // (Ålesund, `--view aksla`, broadleaf crowns over streets) shows a much
+        // bigger one. Measured the same way — all-L0 against all-L1 against
+        // no-forest over the same frame, exposure pinned (non-tree pixels agree
+        // to 0.2%), tree pixels split into 0-300 m and 300-800 m by which tier
+        // the SHIPPED frame drew there — the blob tier rendered
+        //
+        //   band < 300 m   blob/card 1.49, 1.67, 1.28   (37 k px)
+        //   band 300-800 m blob/card 1.29, 1.34, 1.14   ( 6 k px)
+        //
+        // against the fjord spruce's ~1.0. That is the visible handoff line the
+        // user reported across the town. Why a broadleaf card is so much darker
+        // than its blob and a spruce card is not: the broadleaf card canopy is a
+        // sparse cutout over a SHADED street (its gaps show dark blue-lit ground
+        // and wall, which is why the card mask's blue channel outruns its green),
+        // while the spruce wall closes and its gaps show more of the same tree.
+        // A blob has no gaps at all, so it loses nothing to the background.
+        //
+        // The correction targets the geometric mean of the two bands (the seam
+        // sits between them). It is NOT a straight reciprocal: the render
+        // responds to blob albedo sub-linearly (albedo ×0.67 in G moved the
+        // pixels only ×0.77, so pixels ≈ albedo^0.65 through ACES at these
+        // levels), so the scale was solved with that exponent and re-measured.
+        // Two rounds, masks pinned to the first run so the same pixels are
+        // compared:
+        //
+        //   band < 300 m   1.49,1.67,1.28 -> 1.16,1.18,1.10
+        //   band 300-800 m 1.29,1.34,1.14 -> 1.04,1.02,0.99
+        //
+        // Geiranger (`--view reference`, the spruce calibration) does not
+        // regress: < 300 m 1.03,1.02,1.04 -> 0.99,1.00,1.00 and 300-800 m
+        // 1.06,1.01,1.01 -> 1.04,1.02,1.02 (its bands carry some scrub, which
+        // is why they move at all). The spruce value itself does not move.
+        //
+        // Coverage was measured too and is NOT the defect: over the aksla frame
+        // the two tiers cover 179 146 vs 179 207 canopy pixels (1.000), and
+        // 0.94-1.01 per row band. The handoff step was brightness alone.
         inline Vector3 blobRenderScale(TreeSpecies sp) {
             switch (sp) {
-                case TreeSpecies::ScrubBirch: return {1.02f, 0.84f, 0.94f};
-                case TreeSpecies::Birch: return {1.02f, 0.84f, 0.94f};
+                case TreeSpecies::ScrubBirch: return {0.525f, 0.424f, 0.691f};
+                case TreeSpecies::Birch: return {0.525f, 0.424f, 0.691f};
                 case TreeSpecies::Spruce: return {1.02f, 0.84f, 0.94f};
             }
             return {1.f, 1.f, 1.f};
