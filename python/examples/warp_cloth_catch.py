@@ -234,7 +234,6 @@ second catch can each be judged separately.
 """
 import math
 import os
-import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -243,7 +242,8 @@ import numpy as np
 import warp as wp
 
 import threepp as tp
-from warp_common import cli_arg, find_ffmpeg, parse_size, standard_material
+from warp_common import (cli_arg, encode_png_sequence, find_ffmpeg, parse_size,
+                         standard_material)
 
 # ---- flags -------------------------------------------------------------------
 TUNE = "--tune" in sys.argv
@@ -4198,10 +4198,8 @@ if (CLIP or SEQ) and not FRAMES:
         if ff is None:
             print("  no ffmpeg on PATH; frames kept")
         else:
-            subprocess.run([ff, "-y", "-loglevel", "error", "-framerate", f"{CLIP_FPS:.0f}",
-                            "-i", f"{outdir}_%04d.png", "-an", "-c:v", "libx264",
-                            "-pix_fmt", "yuv420p", "-crf", "18", "-preset", "medium",
-                            "-movflags", "+faststart", CLIP], check=True)
+            encode_png_sequence(f"{outdir}_%04d.png", CLIP, f"{CLIP_FPS:.0f}", crf=18,
+                                preset="medium", faststart=True, an=True, ffmpeg=ff)
             print(f"  wrote {CLIP}")
             if not SEQ:
                 shutil.rmtree(os.path.dirname(outdir), ignore_errors=True)

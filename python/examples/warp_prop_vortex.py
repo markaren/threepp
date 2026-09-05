@@ -515,7 +515,7 @@ import numpy as np
 import warp as wp
 
 import threepp as tp
-from warp_common import cli_arg, find_ffmpeg, sky_env
+from warp_common import Encoder, cli_arg, find_ffmpeg, sky_env
 
 # 2M -> 1.7M, and it is the 25 fps floor that moved it, not taste. Fixing the
 # negative-age bug (see the kernel) put a sixth of the parcels BACK into the
@@ -4739,15 +4739,9 @@ elif FILM:
         print(f"       framebuffer is {FW}x{FH}, not the requested {W}x{H}")
 
     def encoder(path):
-        cmd = [FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
-               "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{FW}x{FH}",
-               "-r", str(FPS), "-i", "-", "-an",
-               "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", str(CRF),
-               "-preset", "slow", "-movflags", "+faststart"]
-        if FW % 2 or FH % 2:
-            cmd += ["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2"]
-        return subprocess.Popen(cmd + [path], stdin=subprocess.PIPE,
-                                stdout=log, stderr=log)
+        odd = "scale=trunc(iw/2)*2:trunc(ih/2)*2" if (FW % 2 or FH % 2) else None
+        return Encoder(path, FW, FH, FPS, crf=CRF, preset="slow", faststart=True,
+                       loglevel="error", vf=odd, log=log, ffmpeg=FFMPEG)
 
     # ── The run ─────────────────────────────────────────────────────────────
     # One pass over the film's frames. A beat that is not being captured still
@@ -4783,7 +4777,7 @@ elif FILM:
                 px = _np.array(renderer.read_pixels(), _np.uint8, order="C")
                 draw_film_panel(px, state_now, omega_now * 60.0 / TWO_PI)
                 if enc is not None:
-                    enc.stdin.write(px.tobytes())
+                    enc.send(px)
                 if f in shot_at:
                     Image.fromarray(px).save(
                         os.path.join(FILM_DIR, f"{shot_at[f]}.png"))
@@ -4796,8 +4790,7 @@ elif FILM:
                       f"{1e3 * el / max(rendered, 1):.0f} ms/rendered frame",
                       flush=True)
         if enc is not None:
-            enc.stdin.close()
-            enc.wait()
+            enc.close()
         if PROBE and rendered >= PROBE:
             break
     wall = time.perf_counter() - t_run

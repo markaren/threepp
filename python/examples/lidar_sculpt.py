@@ -101,7 +101,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 
 import threepp as tp
-from warp_common import cli_arg, icosphere, parse_size, resize_handler, signed_volume
+from warp_common import (Encoder, cli_arg, find_ffmpeg, icosphere, parse_size,
+                         resize_handler, signed_volume)
 
 # ---- flags -------------------------------------------------------------------
 SELFTEST = "--selftest" in sys.argv
@@ -944,20 +945,7 @@ def summary(results, base_soft, base_hard):
 #  clock), raw RGB streamed straight into x264 -- the pipeline the hull film
 #  settled on after paying 5.4 GB of PNG intermediates to learn it.
 # --------------------------------------------------------------------------- #
-def _ffmpeg_exe():
-    import shutil
-    exe = shutil.which("ffmpeg")
-    if exe is None:
-        try:
-            import imageio_ffmpeg
-            exe = imageio_ffmpeg.get_ffmpeg_exe()
-        except Exception:
-            exe = None
-    return exe
-
-
 def render_clip(shape, renderer, scene, camera, results, old_mesh, old_cloud):
-    import subprocess
     print("\n  --- CLIP " + "-" * 54)
     fps, secs = 30, 3.0
     names = ("sphere", "stealth", "conspicuous")
@@ -984,20 +972,15 @@ def render_clip(shape, renderer, scene, camera, results, old_mesh, old_cloud):
     for _ in range(3):
         renderer.render(scene, camera)      # material warm-up, as everywhere
 
-    exe = _ffmpeg_exe()
+    exe = find_ffmpeg()
     if exe is None:
         print("  no ffmpeg on PATH and no imageio-ffmpeg; cannot encode the clip")
         return
     out = os.path.join(SHOT_DIR, "lidar_sculpt.mp4")
     os.makedirs(SHOT_DIR, exist_ok=True)
     log = os.path.join(os.environ.get("TEMP", "."), "lidar_sculpt_ffmpeg.log")
-    cmd = [exe, "-y", "-hide_banner", "-loglevel", "warning",
-           "-f", "rawvideo", "-pix_fmt", "rgb24",
-           "-s", f"{WIN_W}x{WIN_H}", "-r", str(fps), "-i", "-",
-           "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-           "-crf", "18", "-preset", "medium", "-movflags", "+faststart", out]
-    logf = open(log, "w")
-    enc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=logf, stderr=logf)
+    enc = Encoder(out, WIN_W, WIN_H, fps, crf=18, preset="medium", faststart=True,
+                  log=log, ffmpeg=exe)
 
     fpseg = int(fps * secs)
     t0 = time.perf_counter()
@@ -1041,11 +1024,9 @@ def render_clip(shape, renderer, scene, camera, results, old_mesh, old_cloud):
         rgb = renderer.read_pixels()
         if f == 0:
             assert rgb.shape[:2] == (WIN_H, WIN_W), f"readback {rgb.shape}"
-        enc.stdin.write(np.ascontiguousarray(rgb, np.uint8).tobytes())
+        enc.send(rgb)
 
-    enc.stdin.close()
-    rc = enc.wait()
-    logf.close()
+    rc = enc.close()
     dt = time.perf_counter() - t0
     sz = os.path.getsize(out) / 1e6 if os.path.exists(out) else 0.0
     print(f"  wrote {out}  ({4 * fpseg} frames in {dt:.1f} s = "

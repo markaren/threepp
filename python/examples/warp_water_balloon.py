@@ -37,7 +37,6 @@ Vulkan only (the water is the ray-traced glass path). Needs a CUDA device.
 """
 import math
 import os
-import subprocess
 import sys
 import tempfile
 import time
@@ -49,7 +48,8 @@ import numpy as np
 import warp as wp
 
 import threepp as tp
-from warp_common import (DensitySurface, cli_arg, csr_from_pairs, edge_adjacency, find_ffmpeg,
+from warp_common import (DensitySurface, Encoder, cli_arg, csr_from_pairs, edge_adjacency,
+                         find_ffmpeg,
                          icosphere, load_font, parse_size, pbf_constants, resize_handler,
                          shell_pairs, standard_material)
 
@@ -1035,11 +1035,8 @@ elif VIDEO:
     outdir = None
     proc = None
     if ff:
-        proc = subprocess.Popen(
-            [ff, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
-             "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
-             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
-             "warp_water_balloon.mp4"], stdin=subprocess.PIPE)
+        proc = Encoder("warp_water_balloon.mp4", W, H, FPS, crf=18, an=False,
+                       hide_banner=False, loglevel="error", ffmpeg=ff)
     else:
         outdir = tempfile.mkdtemp(prefix="warp_water_balloon_")
         from PIL import Image
@@ -1051,15 +1048,14 @@ elif VIDEO:
         renderer.render(scene, camera)
         frame = film_frame(renderer.read_pixels(), speed)
         if proc is not None:
-            proc.stdin.write(np.ascontiguousarray(frame).tobytes())
+            proc.send(frame)
         else:
             Image.fromarray(frame).save(os.path.join(outdir, f"f{k:05d}.png"))
         if k % FPS == 0:
             print(f"  frame {k}/{total}  sim t={sim_t:.3f}s  speed {speed:.2f}x  "
                   f"dead faces {faces_dead:,}  ({time.perf_counter() - t0:.0f}s)", flush=True)
     if proc is not None:
-        proc.stdin.close()
-        proc.wait()
+        proc.close()
         print(f"wrote warp_water_balloon.mp4 ({VIDEO:.0f}s playback, sim reached "
               f"{sim_t:.2f}s) in {time.perf_counter() - t0:.0f}s")
     else:

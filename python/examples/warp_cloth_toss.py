@@ -608,9 +608,8 @@ def refresh():
 
 if CLIP or SEQ:
     import shutil
-    import subprocess
     import tempfile
-    from warp_common import find_ffmpeg
+    from warp_common import encode_png_sequence, find_ffmpeg
     outdir = SEQ or os.path.join(tempfile.mkdtemp(prefix="clothtoss_"), "f")
     os.makedirs(os.path.dirname(outdir) or ".", exist_ok=True)
     for i in range(TOTAL):
@@ -624,10 +623,8 @@ if CLIP or SEQ:
         if ff is None:
             print("  no ffmpeg on PATH; frames kept")
         else:
-            subprocess.run([ff, "-y", "-loglevel", "error", "-framerate", "60",
-                            "-i", f"{outdir}_%04d.png", "-an", "-c:v", "libx264",
-                            "-pix_fmt", "yuv420p", "-crf", "18", "-preset", "medium",
-                            "-movflags", "+faststart", CLIP], check=True)
+            encode_png_sequence(f"{outdir}_%04d.png", CLIP, 60, crf=18,
+                                preset="medium", faststart=True, an=True, ffmpeg=ff)
             print(f"  wrote {CLIP}")
             if not SEQ:
                 shutil.rmtree(os.path.dirname(outdir), ignore_errors=True)

@@ -173,7 +173,7 @@ import warp as wp
 
 import threepp as tp
 from warp_common import sky_env
-from warp_common import (accum_normals, cli_arg, icosphere, normalize_vec3,
+from warp_common import (Encoder, accum_normals, cli_arg, icosphere, normalize_vec3,
                          parse_size, resize_handler, signed_volume,
                          smooth_vec3_csr, standard_material, unique_edges,
                          vertex_adjacency)
@@ -3112,62 +3112,6 @@ def _end_card(lines, size):
     return np.asarray(im, dtype=np.uint8)
 
 
-def _ffmpeg_exe():
-    """PATH first; failing that, the one `imageio-ffmpeg` ships, which is
-    already in this environment because half the other demos encode with it."""
-    import shutil
-    exe = shutil.which("ffmpeg")
-    if exe is None:
-        try:
-            import imageio_ffmpeg
-            exe = imageio_ffmpeg.get_ffmpeg_exe()
-        except Exception:
-            exe = None
-    return exe
-
-
-class _Encoder:
-    """A pipe to x264, fed raw RGB.
-
-    The first cut of this film wrote a 1920x1080 PNG per frame and encoded the
-    directory afterwards: 2.46 frames/s, 5.4 GB of intermediates and eighteen
-    minutes for eighty seconds of picture, on a renderer that does this scene at
-    170 fps in a window. The PNG was the whole bill -- deflate on 6 MB a frame,
-    single threaded, plus a second render, because `save_frame` renders again
-    rather than reading the frame just drawn. So: `read_pixels()` off the frame
-    already on the GPU, straight down a pipe to the encoder. Nothing touches the
-    disk but the mp4.
-    """
-
-    def __init__(self, out, size, fps, log_path):
-        import subprocess
-        exe = _ffmpeg_exe()
-        if exe is None:
-            raise RuntimeError("no ffmpeg on PATH and no imageio-ffmpeg")
-        self.cmd = [
-            exe, "-y", "-hide_banner", "-loglevel", "warning",
-            "-f", "rawvideo", "-pix_fmt", "rgb24",
-            "-s", f"{size[0]}x{size[1]}", "-r", str(fps), "-i", "-",
-            "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-            # `medium`, not `slow`: the old cut spent two minutes of the
-            # eighteen here and nobody could see the difference.
-            "-crf", "18", "-preset", "medium", "-movflags", "+faststart", out]
-        self.log = open(log_path, "w")
-        self.p = subprocess.Popen(self.cmd, stdin=subprocess.PIPE,
-                                  stdout=self.log, stderr=self.log)
-        self.n = 0
-
-    def send(self, rgb):
-        self.p.stdin.write(np.ascontiguousarray(rgb, dtype=np.uint8).tobytes())
-        self.n += 1
-
-    def close(self):
-        self.p.stdin.close()
-        rc = self.p.wait()
-        self.log.close()
-        return rc
-
-
 # ---- the water as a MEDIUM, for the film's two submerged shots ------------- #
 #  What the optimiser actually designs is the SUBMERGED body, and the first cut
 #  of the film never showed it. `set_fog_water_surface_y` tells the renderer
@@ -3308,7 +3252,8 @@ def run_film(sculpt, m0, renderer, scene, camera, ocean, live, blob_mesh,
     out = FILM_OUT or os.path.join(SHOT_DIR, "hull_sculpt.mp4")
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     log = os.path.join(tempfile.gettempdir(), "hull_sculpt_ffmpeg.log")
-    enc = _Encoder(out, (WIN_W, WIN_H), FILM_FPS, log)
+    enc = Encoder(out, WIN_W, WIN_H, FILM_FPS, crf=18, preset="medium",
+                  faststart=True, log=log)
     print(f"\nfilm: {WIN_W}x{WIN_H} at {FILM_FPS} fps, streaming -> {out}")
 
     _film_water(renderer, scene)

@@ -200,7 +200,6 @@ phase-1 debug flag -- it turns the gas volumes off with it.
 import atexit
 import math
 import os
-import subprocess
 import sys
 import tempfile
 import time
@@ -212,7 +211,7 @@ import numpy as np
 import warp as wp
 
 import threepp as tp
-from warp_common import (bench_loop, cli_arg, find_ffmpeg, parse_size,
+from warp_common import (bench_loop, cli_arg, encode_png_sequence, find_ffmpeg, parse_size,
                          resize_handler, standard_material)
 
 SHOT = "--shot" in sys.argv
@@ -4016,10 +4015,8 @@ elif VIDEO > 0:
     ff = find_ffmpeg()
     mp4 = cli_arg("--out", "warp_explosion.mp4", str)
     if ff:
-        subprocess.run([ff, "-y", "-loglevel", "error", "-framerate", "60",
-                        "-i", os.path.join(outdir, "f%05d.png"),
-                        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "17",
-                        mp4], check=False)
+        encode_png_sequence(os.path.join(outdir, "f%05d.png"), mp4, 60, crf=17,
+                            ffmpeg=ff, check=False)
         print(f"wrote {mp4}")
 elif BENCH:
     # Bench the interesting state: bricks in flight, not a sleeping stack.

@@ -44,7 +44,6 @@ check the "closed" note the bake prints.
 import atexit
 import math
 import os
-import subprocess
 import sys
 import tempfile
 import time
@@ -56,7 +55,8 @@ import numpy as np
 import warp as wp
 
 import threepp as tp
-from warp_common import (DensitySurface, bench_loop, cli_arg, find_ffmpeg, pbf_constants,
+from warp_common import (DensitySurface, bench_loop, cli_arg, encode_png_sequence,
+                         find_ffmpeg, pbf_constants,
                          resize_handler, standard_material)
 try:
     from threepp.cuda_interop import VkInteropArray
@@ -1399,10 +1399,8 @@ elif VIDEO:
     print(f"rendered {total} frames in {time.perf_counter() - t0:.0f}s -> {outdir}")
     ff = find_ffmpeg()
     if ff:
-        subprocess.run([ff, "-y", "-loglevel", "error", "-framerate", "60",
-                        "-i", os.path.join(outdir, "f%05d.png"),
-                        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
-                        "warp_fluid.mp4"], check=True)
+        encode_png_sequence(os.path.join(outdir, "f%05d.png"), "warp_fluid.mp4", 60,
+                            crf=18, ffmpeg=ff)
         print(f"wrote warp_fluid.mp4 ({VIDEO:.0f}s @ 60fps, "
               f"{os.path.getsize('warp_fluid.mp4') // 1024} KB)")
     else:

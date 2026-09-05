@@ -177,7 +177,8 @@ import warp as wp
 
 import threepp as tp
 from threepp.terrain_deform import MATERIALS, DeformableTerrain
-from warp_common import (DensitySurface, cli_arg, find_ffmpeg, parse_size,
+from warp_common import (DensitySurface, cli_arg, encode_png_sequence, find_ffmpeg,
+                         parse_size,
                          standard_material)
 
 try:
@@ -3634,13 +3635,8 @@ elif FILM:
             # so re-rendering one take (--takes) overwrites its own segment and
             # the concat below reassembles the whole film around it.
             seg = os.path.join(FILM_DIR, f"seg_{take_no:02d}_{name}.mp4")
-            cmd = [FFMPEG, "-y", "-loglevel", "error", "-framerate", "60",
-                   "-i", os.path.join(out_dir, "f%05d.png")]
-            if take.get("vf"):
-                cmd += ["-vf", take["vf"]]
-            cmd += ["-c:v", "libx264", "-crf", "18", "-preset", "slow",
-                    "-pix_fmt", "yuv420p", seg]
-            subprocess.run(cmd, check=True)
+            encode_png_sequence(os.path.join(out_dir, "f%05d.png"), seg, 60, crf=18,
+                                preset="slow", vf=take.get("vf"), ffmpeg=FFMPEG)
             segments.append(seg)
             for f_old in os.listdir(out_dir):
                 os.remove(os.path.join(out_dir, f_old))

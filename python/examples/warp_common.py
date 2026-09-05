@@ -13,6 +13,7 @@ flags and pass values in.
 import math
 import os
 import shutil
+import subprocess
 import sys
 import time
 
@@ -51,6 +52,86 @@ def find_ffmpeg():
         return imageio_ffmpeg.get_ffmpeg_exe()
     except Exception:                      # noqa: BLE001 - optional dependency
         return None
+
+
+class Encoder:
+    """A pipe to x264, fed raw RGB frames.
+
+    The film demos all learned the same lesson: writing a PNG per frame and
+    encoding the directory afterwards costs more than the render does (the hull
+    film paid 5.4 GB of intermediates and eighteen minutes for eighty seconds of
+    picture). So `read_pixels()` off the frame already on the GPU goes straight
+    down this pipe and nothing touches the disk but the mp4.
+
+    The keyword flags exist because the films disagree about them and their
+    output must not change: `preset`, `faststart`, `an`, `hide_banner`,
+    `loglevel`, `vf` (a filter, e.g. the odd-size fixup) and `log` (a path this
+    class opens and closes, or an already-open handle it only writes to).
+    """
+
+    def __init__(self, path, w, h, fps, crf=18, preset=None, faststart=False,
+                 an=True, hide_banner=True, loglevel="warning", vf=None,
+                 log=None, ffmpeg=None):
+        exe = ffmpeg or find_ffmpeg()
+        if exe is None:
+            raise RuntimeError("no ffmpeg on PATH and no imageio-ffmpeg")
+        cmd = [exe, "-y"]
+        if hide_banner:
+            cmd += ["-hide_banner"]
+        cmd += ["-loglevel", loglevel, "-f", "rawvideo", "-pix_fmt", "rgb24",
+                "-s", f"{w}x{h}", "-r", str(fps), "-i", "-"]
+        if an:
+            cmd += ["-an"]
+        cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", str(crf)]
+        if preset:
+            cmd += ["-preset", preset]
+        if faststart:
+            cmd += ["-movflags", "+faststart"]
+        if vf:
+            cmd += ["-vf", vf]
+        self.cmd = cmd + [path]
+        self._own_log = isinstance(log, str)
+        self.log = open(log, "w") if self._own_log else log
+        redirect = {"stdout": self.log, "stderr": self.log} if self.log is not None else {}
+        self.p = subprocess.Popen(self.cmd, stdin=subprocess.PIPE, **redirect)
+        self.n = 0
+
+    def send(self, rgb):
+        """One RGB frame, HxWx3 uint8."""
+        self.p.stdin.write(np.ascontiguousarray(rgb, dtype=np.uint8).tobytes())
+        self.n += 1
+
+    def close(self):
+        """Close the pipe and wait for the encoder; returns its exit code."""
+        self.p.stdin.close()
+        rc = self.p.wait()
+        if self._own_log:
+            self.log.close()
+        return rc
+
+
+def encode_png_sequence(pattern, path, fps, crf=18, preset=None, faststart=False,
+                        an=False, vf=None, loglevel="error", ffmpeg=None, check=True):
+    """Encode an already-written PNG sequence (`pattern` is an ffmpeg %0Nd path).
+
+    The other half of the film encoders: the shots that render to disk first,
+    either because the frames are wanted as stills too or because the run is
+    assembled from segments afterwards.
+    """
+    exe = ffmpeg or find_ffmpeg()
+    if exe is None:
+        raise RuntimeError("no ffmpeg on PATH and no imageio-ffmpeg")
+    cmd = [exe, "-y", "-loglevel", loglevel, "-framerate", str(fps), "-i", pattern]
+    if an:
+        cmd += ["-an"]
+    if vf:
+        cmd += ["-vf", vf]
+    cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", str(crf)]
+    if preset:
+        cmd += ["-preset", preset]
+    if faststart:
+        cmd += ["-movflags", "+faststart"]
+    return subprocess.run(cmd + [path], check=check)
 
 
 def load_font(px):
