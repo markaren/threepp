@@ -123,6 +123,15 @@ namespace threepp::vulkan {
         Buffer phase2_{};
         Buffer visBits_{};// 1 bit per instance (occlCullBitFor domain), init ALL-VISIBLE
         bool   visBitsNeedInit_ = true;// fresh/grown buffer → fill 0xFF in recordFilter
+
+    public:
+        // Forget what was visible last frame: the next filter starts from
+        // all-visible, as a fresh buffer does. The bits are per-frame temporal
+        // state like any history, and the renderer's resetTemporalHistory()
+        // restarts them with the rest.
+        void resetVisibility() { visBitsNeedInit_ = true; }
+
+    private:
         uint32_t capacity_ = 0;// records the buffers currently hold
 
         // 1×1 GENERAL R32F stand-in for the pyramid in the filter set (the

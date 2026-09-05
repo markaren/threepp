@@ -158,9 +158,17 @@ namespace threepp::vulkan {
         [[nodiscard]] static uint32_t writeSlotFor(uint32_t frame) { return frame & 1u; }
 
         // First-frame history is undefined. Caller sets this to false on
-        // resetAccumulation; the first recordResolve after that uses
-        // alpha=1 so we don't bleed garbage into history.
-        void invalidateHistory() { historyValid_ = false; }
+        // resetAccumulation; the next recordResolves use alpha=1 so we don't
+        // bleed garbage into history. TWO of them, not one: the history
+        // ping-pongs across two images by frame parity, so a single forced
+        // resolve rewrites one slot and leaves the other, written before the
+        // invalidation, to be read by the resolve after it. The sensor
+        // determinism audit measured exactly that: exact on the frame after a
+        // reset, then a residue from the third frame on.
+        void invalidateHistory() {
+            historyValid_ = false;
+            historyInvalidResolves_ = 2;
+        }
         [[nodiscard]] bool historyValid() const { return historyValid_; }
 
         // HDR-mode finalize: reads PostComposite's hdrOut_ (display-extent
@@ -248,6 +256,7 @@ namespace threepp::vulkan {
         std::vector<VkImage> postFinalizeDstImage_;// [imageCount]
 
         bool historyValid_ = false;
+        uint32_t historyInvalidResolves_ = 2;// forced-alpha resolves still owed
 
         // Internal helpers.
         Image2D createStorageSampledImage(uint32_t w, uint32_t h, VkFormat format,

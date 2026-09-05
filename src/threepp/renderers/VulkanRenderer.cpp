@@ -2132,6 +2132,7 @@ namespace threepp {
             v.deferredCamPrevValid_  = false;
         });
         if (impl.probeGI_) impl.probeGI_->invalidateHistory();
+        if (impl.occl_) impl.occl_->resetVisibility();
         // The sample index seeds every stochastic pass (ReSTIR, the gathers,
         // the soft sun, AO). A structural rebuild that cannot match entries by
         // identity zeroes it, and a scene streaming in does that at

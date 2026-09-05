@@ -50,6 +50,7 @@ namespace threepp::vulkan {
         for (auto& img : tileMax_)         destroyImage2D(ctx_.allocator(), d, img);
         for (auto& img : mblurOut_)        destroyImage2D(ctx_.allocator(), d, img);
         historyValid_ = false;
+        historyInvalidResolves_ = 2;
     }
 
     Image2D TaaResolve::createStorageSampledImage(uint32_t w, uint32_t h,
@@ -743,7 +744,7 @@ namespace threepp::vulkan {
         // First-frame history is undefined → force alpha=1 so the resolved
         // output is purely the current frame and garbage doesn't bleed into
         // a permanent history. Subsequent frames use the caller's alpha.
-        const float alpha = historyValid_ ? blendAlpha : 1.0f;
+        const float alpha = (historyInvalidResolves_ > 0) ? 1.0f : blendAlpha;
         uint32_t alphaBits;
         std::memcpy(&alphaBits, &alpha, sizeof(alphaBits));
         // Layout: blendAlpha, output w/h (history + dispatch + writes),
@@ -863,7 +864,8 @@ namespace threepp::vulkan {
             vkCmdDispatch(cb, gx, gy, 1);
         }
 
-        historyValid_ = true;
+        if (historyInvalidResolves_ > 0) --historyInvalidResolves_;
+        historyValid_ = (historyInvalidResolves_ == 0);
     }
 
     void TaaResolve::rewritePostFinalizeDescriptors(const VkImageView* hdrOutPerFrame,

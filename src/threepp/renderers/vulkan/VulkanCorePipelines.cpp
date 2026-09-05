@@ -47,7 +47,8 @@ void VulkanRenderer::Impl::clearGbufImages() {
             };
             for (auto& g : view().rasterGbufs) {
                 for (const VkImage img : {g.indirect.image, g.momentsSq.image, g.reflect.image,
-                                          g.reflAux.image, g.shadowVis.image, g.froxelScatter.image}) {
+                                          g.reflAux.image, g.shadowVis.image, g.froxelScatter.image,
+                                          g.rtao.image, g.rtaoAux.image, g.cloudColor.image, g.cloudAux.image}) {
                     if (img != VK_NULL_HANDLE) images.push_back(img);
                 }
             }
@@ -484,7 +485,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 // audit hashes them per frame (debugHashShadeImages) to name the
                 // pass a divergence enters at. Pure capability bit.
                 g.indirect = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                                     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                                                      VK_IMAGE_ASPECT_COLOR_BIT, N("indirect"));
                 // SVGF second-moment accumulator E[L²] (single channel). Same
                 // STORAGE+SAMPLED + ping-pong as indirect: deferred_shade reproject-
@@ -499,7 +500,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 // object's stale contact-darkening/bounce fades at content rate
                 // instead of dragging as a smear) — RG32F is likewise mandatory.
                 g.momentsSq = createAttachmentImage2D(w, h, VK_FORMAT_R32G32_SFLOAT,
-                                                      VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                                      VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                                                       VK_IMAGE_ASPECT_COLOR_BIT, N("momentsSq"));
                 // SVGF multi-pass à-trous ping-pong scratch (rgb=GI, a=variance).
                 // STORAGE only (compute imageLoad/Store, no sampling). The denoise
@@ -516,12 +517,12 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 // frame-in-flight as 1-frame history) to anti-alias the 1-ray
                 // refraction via the gbuffer jitter — sharp AND alias-free.
                 g.reflect = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                                    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                                                     VK_IMAGE_ASPECT_COLOR_BIT, N("reflect"));
                 // Reflection-denoiser auxiliary — mirrors `reflect` exactly (STORAGE
                 // write + SAMPLED prev-frame read, ping-ponged across frames-in-flight).
                 g.reflAux = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                                    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                                                     VK_IMAGE_ASPECT_COLOR_BIT, N("reflAux"));
                 // Denoised direct-shadow channel: the shadow-ratio accumulator
                 // (STORAGE write + SAMPLED prev-fif read, same ping-pong as
@@ -529,7 +530,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 // multiplies by the filtered ratio, and the ratio's own rg16f
                 // à-trous scratch pair.
                 g.shadowVis = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                      VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                                      VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                                                       VK_IMAGE_ASPECT_COLOR_BIT, N("shadowVis"));
                 g.directU = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
@@ -545,7 +546,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 // also correctly resets the temporal history). KEEP the dims
                 // in sync with froxel_inject/integrate.comp.
                 g.froxelScatter = createImage3D(128, 72, 64, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                                                 N("froxelScatter"));
                 g.froxelLut = createImage3D(128, 72, 64, VK_FORMAT_R16G16B16A16_SFLOAT,
                                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
