@@ -152,6 +152,21 @@ namespace threepp_py {
                 });
 
         // --- Imu -----------------------------------------------------------
+        py::class_<ImuModel>(m, "ImuModel",
+                             "A named IMU noise model from a datasheet: `gyro` and `accel` NoiseModels "
+                             "(assign them to Imu.gyro_noise / Imu.accel_noise, then call reset()). Only "
+                             "the white-noise densities are datasheet figures; the parts publish no rate "
+                             "random walk in NoiseModel's units, so presets leave random_walk at zero. "
+                             "Imu's defaults ARE ImuModel.icm42688p().")
+                .def(py::init<>())
+                .def_readonly("name", &ImuModel::name)
+                .def_readwrite("gyro", &ImuModel::gyro, "Gyroscope NoiseModel (rad/s units).")
+                .def_readwrite("accel", &ImuModel::accel, "Accelerometer NoiseModel (m/s^2 units).")
+                .def_static("icm42688p", &ImuModel::ICM42688P,
+                            "TDK InvenSense ICM-42688-P: gyro 2.8 mdps/sqrt(Hz), accel 70 ug/sqrt(Hz) "
+                            "(datasheet DS-000347).")
+                .def("__repr__", [](const ImuModel& m) { return std::string("<threepp.ImuModel ") + m.name + ">"; });
+
         py::class_<Imu, Sensor, std::shared_ptr<Imu>>(m, "Imu",
                         "Gyroscope + accelerometer attached to an Object3D. Its measurement frame is "
                         "that node's world frame; register it with a PhysxWorld (world.register_sensor) "

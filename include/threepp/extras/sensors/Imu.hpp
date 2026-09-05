@@ -60,28 +60,55 @@ namespace threepp {
         Vector3 linearAcceleration{0.f, 0.f, 0.f};
     };
 
+    /**
+     * A named IMU noise model taken from a datasheet: a gyroscope and an
+     * accelerometer NoiseModel. Only the white-noise densities are datasheet
+     * figures. The parts below publish no rate random walk in the units of
+     * NoiseModel::randomWalk (an "in-run bias stability" is a different
+     * Allan-variance regime), so a preset leaves randomWalk at zero and says so
+     * here rather than inventing a number; set it yourself for a drifting bias.
+     * The seeds are the sensor's long-standing defaults, so seeded replays keep
+     * their meaning across the change of densities.
+     */
+    struct ImuModel {
+        const char* name = "";
+        NoiseModel gyro;
+        NoiseModel accel;
+
+        // TDK InvenSense ICM-42688-P (datasheet DS-000347): gyroscope noise
+        // density 2.8 mdps/sqrt(Hz) = 4.8869e-5 rad/s/sqrt(Hz), accelerometer
+        // noise density 70 ug/sqrt(Hz) = 6.8647e-4 m/s^2/sqrt(Hz).
+        static ImuModel ICM42688P() {
+            ImuModel m;
+            m.name = "ICM-42688-P";
+            m.gyro = NoiseModel{
+                    /*whiteNoiseDensity*/ Vector3(4.8869e-5f, 4.8869e-5f, 4.8869e-5f),
+                    /*randomWalk*/ Vector3(0.f, 0.f, 0.f),
+                    /*constantBias*/ Vector3(0.f, 0.f, 0.f),
+                    /*seed*/ 0x9E3779B97F4A7C15ULL};
+            m.accel = NoiseModel{
+                    /*whiteNoiseDensity*/ Vector3(6.8647e-4f, 6.8647e-4f, 6.8647e-4f),
+                    /*randomWalk*/ Vector3(0.f, 0.f, 0.f),
+                    /*constantBias*/ Vector3(0.f, 0.f, 0.f),
+                    /*seed*/ 0xBF58476D1CE4E5B9ULL};
+            return m;
+        }
+    };
+
     class Imu: public Sensor {
 
     public:
         // Per-axis noise. Public so a domain-randomization loop can re-roll them;
         // call reset() afterwards to re-seed the RNG / re-arm the finite-difference.
         //
-        // Defaults are consumer MEMS-class (roughly ICM-20602 / MPU-9250 order):
-        //   gyro  white-noise density 0.005 rad/s/sqrt(Hz)  (~0.29 deg/s/sqrt(Hz)),
-        //         bias random walk    4e-5 rad/s^2/sqrt(Hz)
-        //   accel white-noise density 0.06 m/s^2/sqrt(Hz),
-        //         bias random walk    4e-3 m/s^3/sqrt(Hz)
+        // Defaults are the ICM-42688-P preset: datasheet white-noise densities,
+        // no random walk (see ImuModel). The previous placeholder, 0.005
+        // rad/s/sqrt(Hz) and 0.06 m/s^2/sqrt(Hz) with invented random walks, sat
+        // two orders of magnitude above any current part; the sensor-conformance
+        // table of the reproducibility paper found it, and this is the fix.
         // Set every field to 0 for a perfect (noiseless, unbiased) sensor.
-        NoiseModel gyroNoise{
-                /*whiteNoiseDensity*/ Vector3(0.005f, 0.005f, 0.005f),
-                /*randomWalk*/ Vector3(4e-5f, 4e-5f, 4e-5f),
-                /*constantBias*/ Vector3(0.f, 0.f, 0.f),
-                /*seed*/ 0x9E3779B97F4A7C15ULL};
-        NoiseModel accelNoise{
-                /*whiteNoiseDensity*/ Vector3(0.06f, 0.06f, 0.06f),
-                /*randomWalk*/ Vector3(4e-3f, 4e-3f, 4e-3f),
-                /*constantBias*/ Vector3(0.f, 0.f, 0.f),
-                /*seed*/ 0xBF58476D1CE4E5B9ULL};
+        NoiseModel gyroNoise  = ImuModel::ICM42688P().gyro;
+        NoiseModel accelNoise = ImuModel::ICM42688P().accel;
 
         /**
          * @param node   The attachment node; its world frame is the sensor frame.
