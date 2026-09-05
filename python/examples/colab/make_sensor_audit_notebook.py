@@ -40,11 +40,21 @@ def main():
     # installed version either way (sensor_audit.py writes threepp.__version__).
     pip_line = 'sh(f"{sys.executable} -m pip -q install threepp")'
     assert pip_line in setup_cell, "threepp_colab.ipynb setup cell changed; update the pip anchor"
+    # Not an extra index: TestPyPI carries dev versions (0.1.0.devN) that sort
+    # BELOW the calendar releases on PyPI under PEP 440, so a resolver that can
+    # see both always picks PyPI, and dev releases are skipped without --pre
+    # anyway. The one dependency comes from PyPI first; threepp itself then
+    # comes from TestPyPI alone, pre-releases allowed, replacing whatever an
+    # earlier cell run left installed.
     setup_cell = setup_cell.replace(
         pip_line,
-        'INDEX = ("--index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple "\n'
-        '         if USE_TESTPYPI else "")\n'
-        'sh(f"{sys.executable} -m pip -q install {INDEX}threepp")', 1)
+        'if USE_TESTPYPI:\n'
+        '    sh(f"{sys.executable} -m pip -q install numpy")\n'
+        '    sh(f"{sys.executable} -m pip -q install --pre --no-deps --force-reinstall "\n'
+        '       "--index-url https://test.pypi.org/simple/ threepp")\n'
+        'else:\n'
+        '    sh(f"{sys.executable} -m pip -q install threepp")\n'
+        'print(sh(f"{sys.executable} -c \\"import threepp; print(\'threepp\', threepp.__version__, threepp.__file__)\\""))', 1)
     form_anchor = '{ display-mode: "form" }\n'
     assert form_anchor in setup_cell, "setup cell lost its form title line"
     setup_cell = setup_cell.replace(
