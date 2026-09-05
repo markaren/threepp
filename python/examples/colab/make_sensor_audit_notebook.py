@@ -117,7 +117,7 @@ def compare(a, b):
 Two runs, two processes, one compare. `OK` rows are bit-identical; a `DIFF` row
 is a finding, not a failure of the notebook - the paper's method is to report it.
 """),
-        code("""run("sensor_audit.py", "--frames", 120, "--out", "t4_a.json")
+        code("""run("sensor_audit.py", "--frames", 120, "--out", "t4_a.json", "--sample", "t4_sample.npz")
 run("sensor_audit.py", "--frames", 120, "--out", "t4_b.json")
 compare("t4_a.json", "t4_b.json")
 """),
@@ -131,7 +131,32 @@ that differ tell you where device-specific arithmetic enters the stream.
         code("%%writefile rtx4070.json\n" + (baseline if baseline else '{"meta": {"note": "baseline not recorded yet"}, "rows": {}}')),
         code("""compare("rtx4070.json", "t4_a.json")
 """),
-        md("""## 5 - Reading the result
+        md("""## 5 - How far apart (~1 min)
+
+Hashes say whether the two machines agree; they cannot say by how much. The
+first run above also saved one frame of every stream as arrays
+(`t4_sample.npz`: depth, labels, albedo, frame, one lidar scan, one echogram,
+and the whole proprioceptive run). The same frame recorded on the development
+machine is fetched from the repository (or upload `sensor_audit_rtx4070_sample.npz`
+if the download fails), and the report below counts, per stream, how many
+elements differ, by how much, in how many units in the last place, and for the
+label image how many of the differing pixels sit on a silhouette edge.
+"""),
+        code("""import os, urllib.request
+SAMPLE = "sensor_audit_rtx4070_sample.npz"
+URL = "https://raw.githubusercontent.com/markaren/threepp/dev/python/examples/colab/" + SAMPLE
+if not os.path.exists(SAMPLE):
+    try:
+        urllib.request.urlretrieve(URL, SAMPLE)
+        print("downloaded", SAMPLE)
+    except Exception as e:
+        print("download failed:", e, "- upload the file from the repository instead")
+        from google.colab import files
+        files.upload()
+print(SAMPLE, os.path.getsize(SAMPLE) // 1024, "KiB")
+run("sensor_audit.py", "--diff-sample", SAMPLE, "t4_sample.npz")
+"""),
+        md("""## 6 - Reading the result
 
 * `prop.*` bit-identical across machines means CPU PhysX plus the seeded noise
   streams are platform-independent for this scene: same bits on Linux/GCC and

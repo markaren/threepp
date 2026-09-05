@@ -35,6 +35,16 @@ Rows a wheel cannot produce are reported as "absent", never as a match. The
 manifest also records GPU, driver, platform and package version, so a
 cross-machine compare says what it is comparing.
 
+Hashes say whether two platforms agree; they cannot say how far apart they
+are. For that, --sample saves one frame of every stream as arrays (frame
+--sample-frame, a scan frame, plus the whole proprioceptive run), and
+--diff-sample reports, per stream, how many elements differ, by how much, in
+how many units in the last place, and for the label image whether the
+differing pixels sit on silhouette edges. It is a report and exits 0:
+
+    python sensor_audit.py --frames 120 --out a.json --sample a.npz
+    python sensor_audit.py --diff-sample rtx4070_sample.npz a.npz
+
 The scene mirrors the C++ audits: a ground box, a translating+rotating mover,
 a spinner, a static pillar, and a CPU-deformed grid that exercises the
 per-frame dynamic-geometry path. Every motion is a function of frame index.
@@ -147,9 +157,13 @@ def build_scene(tp, renderer, aspect):
 # proprioceptive: PhysX CPU, a tumbling stack with an IMU and a contact sensor
 # --------------------------------------------------------------------------
 def run_proprioceptive(tp, seconds, seed):
+    """Returns (rows, arrays): the hash rows, and the raw packets as arrays for
+    --sample (imu: N x 7 float64 [t, gyro xyz, accel xyz]; contact: N x 6
+    float64 [t, in_contact, force xyz, observed_points])."""
     rows = {}
+    arrays = {}
     if not getattr(tp, "HAS_PHYSX", False):
-        return {"prop.imu": "absent", "prop.contact": "absent"}
+        return {"prop.imu": "absent", "prop.contact": "absent"}, arrays
     dt = 1.0 / 240.0
     world = tp.PhysxWorld(gravity=tp.Vector3(0, -9.81, 0), fixed_timestep=dt)
     floor = tp.Mesh(tp.BoxGeometry(40, 1, 40), tp.MeshStandardMaterial())
@@ -178,17 +192,23 @@ def run_proprioceptive(tp, seconds, seed):
     world.register_sensor(contact)
 
     h_imu, h_con = Fnv(), Fnv()
+    imu_rows, con_rows = [], []
     steps = int(seconds / dt)
     for _ in range(steps):
         world.step(dt)
         for s in imu.drain():
-            h_imu.update(struct.pack("<7d", s.t, s.angular_velocity.x, s.angular_velocity.y, s.angular_velocity.z,
-                                     s.linear_acceleration.x, s.linear_acceleration.y, s.linear_acceleration.z))
+            vals = (s.t, s.angular_velocity.x, s.angular_velocity.y, s.angular_velocity.z,
+                    s.linear_acceleration.x, s.linear_acceleration.y, s.linear_acceleration.z)
+            h_imu.update(struct.pack("<7d", *vals))
+            imu_rows.append(vals)
         for s in contact.drain():
             h_con.update(struct.pack("<d?3dI", s.t, s.in_contact, s.force.x, s.force.y, s.force.z, s.observed_points))
+            con_rows.append((s.t, float(s.in_contact), s.force.x, s.force.y, s.force.z, float(s.observed_points)))
     rows["prop.imu"] = h_imu.row()
     rows["prop.contact"] = h_con.row()
-    return rows
+    arrays["prop.imu"] = np.asarray(imu_rows, dtype=np.float64).reshape(-1, 7)
+    arrays["prop.contact"] = np.asarray(con_rows, dtype=np.float64).reshape(-1, 6)
+    return rows, arrays
 
 
 # --------------------------------------------------------------------------
@@ -251,11 +271,20 @@ def run(args):
     except Exception:
         manifest["meta"]["gpu"] = "?"
 
-    manifest["rows"].update(run_proprioceptive(tp, args.seconds, args.seed))
+    prop_rows, sample = run_proprioceptive(tp, args.seconds, args.seed)
+    manifest["rows"].update(prop_rows)
+
+    def save_sample():
+        if not args.sample:
+            return
+        sample["meta"] = np.asarray(json.dumps(manifest["meta"]))
+        np.savez_compressed(args.sample, **sample)
+        print(f"wrote {args.sample} ({', '.join(k for k in sample if k != 'meta')})")
 
     if not (getattr(tp, "HAS_VULKAN", False) and tp.vulkan_available()):
         for k in ("aov.depth", "aov.normals", "aov.ids", "aov.motion", "aov.albedo", "rgb", "lidar", "sonar"):
             manifest["rows"][k] = "absent"
+        save_sample()
         return manifest
 
     canvas = tp.Canvas("sensor_audit", args.width, args.height, vsync=False, headless=True)
@@ -331,12 +360,22 @@ def run(args):
         rows["aov.albedo"].update(arr_bytes(aovs["albedo"]))
         if not fsr_missing:
             rows[rgb_key].update(arr_bytes(aovs["rgb"]))
+        take = args.sample and f == args.sample_frame
+        if take:
+            sample["aov.depth"] = np.ascontiguousarray(aovs["depth"])
+            sample["aov.ids"] = np.ascontiguousarray(aovs["instance_ids"])
+            sample["aov.albedo"] = np.ascontiguousarray(aovs["albedo"])
+            if not fsr_missing:
+                sample[rgb_key] = np.ascontiguousarray(aovs["rgb"])
 
         if f % args.scan_every != 0:
             continue
         r = lidar.scan(renderer)
         lidar_hits += int((r["return_no"] > 0).sum())
         rows["lidar"].update(b"".join(arr_bytes(r[k]) for k in ("position", "distance", "intensity", "instance_id", "return_no")))
+        if take:
+            for k in ("position", "distance", "intensity", "instance_id", "return_no"):
+                sample[f"lidar.{k}"] = np.ascontiguousarray(r[k])
 
         if sonar is not None:
             img = sonar.scan(renderer).intensity
@@ -355,12 +394,92 @@ def run(args):
             img = sonar_fold(rr, origin, 256, 16, 512, 20.0)
         sonar_echoes += int((img > 0).sum())
         rows["sonar"].update(arr_bytes(img))
+        if take:
+            sample["sonar"] = np.ascontiguousarray(img)
     manifest["meta"]["wall_seconds"] = round(time.time() - t0, 2)
     manifest["meta"]["lidar_hits"] = lidar_hits
     manifest["meta"]["sonar_echoes"] = sonar_echoes
     for k, v in rows.items():
         manifest["rows"][k] = v.row() if v.frames else "absent"
+    save_sample()
     return manifest
+
+
+# --------------------------------------------------------------------------
+# how far apart: element-wise comparison of two --sample files
+# --------------------------------------------------------------------------
+def _ulp_distance(a, b):
+    """Units in the last place between two float arrays of the same dtype,
+    via the monotonic integer image of IEEE floats (sign-magnitude folded so
+    that ordering of the integers matches ordering of the floats)."""
+    it = {np.dtype(np.float32): np.int32, np.dtype(np.float64): np.int64,
+          np.dtype(np.float16): np.int16}[a.dtype]
+    ia = a.view(it).astype(np.int64)
+    ib = b.view(it).astype(np.int64)
+    bits = np.dtype(it).itemsize * 8 - 1
+    ia = np.where(ia < 0, -(ia & ((1 << bits) - 1)), ia)
+    ib = np.where(ib < 0, -(ib & ((1 << bits) - 1)), ib)
+    return np.abs(ia - ib)
+
+
+def _edge_mask(ids):
+    """Pixels whose 4-neighbourhood holds another id: silhouettes in the label image."""
+    e = np.zeros(ids.shape, bool)
+    e[1:, :] |= ids[1:, :] != ids[:-1, :]
+    e[:-1, :] |= ids[:-1, :] != ids[1:, :]
+    e[:, 1:] |= ids[:, 1:] != ids[:, :-1]
+    e[:, :-1] |= ids[:, :-1] != ids[:, 1:]
+    return e
+
+
+def diff_sample(pa, pb):
+    A, B = np.load(pa, allow_pickle=False), np.load(pb, allow_pickle=False)
+    for tag, z in (("A", A), ("B", B)):
+        try:
+            m = json.loads(str(z["meta"]))
+            print(f"{tag}: {m.get('gpu')} | {m.get('platform')} | threepp {m.get('threepp')}")
+        except Exception:
+            print(f"{tag}: (no meta)")
+    keys = sorted((set(A.files) | set(B.files)) - {"meta"})
+    print(f"{'stream':16s} {'shape':>16s} {'differing':>22s} {'max|d|':>12s} {'ulp med/max':>14s}  note")
+    for k in keys:
+        if k not in A.files or k not in B.files:
+            print(f"{k:16s} {'':>16s} {'absent on one side':>22s}")
+            continue
+        a, b = A[k], B[k]
+        if a.shape != b.shape or a.dtype != b.dtype:
+            print(f"{k:16s} {'':>16s} SHAPE/DTYPE {a.shape}/{a.dtype} vs {b.shape}/{b.dtype}")
+            continue
+        shape = "x".join(map(str, a.shape))
+        if a.dtype.kind == "f":
+            d = np.abs(a.astype(np.float64) - b.astype(np.float64))
+            m = (a != b) & ~(np.isnan(a) & np.isnan(b))
+            n = int(m.sum())
+            ulp = _ulp_distance(a, b)[m] if n else np.zeros(0, np.int64)
+            ulps = f"{int(np.median(ulp))}/{int(ulp.max())}" if n else "-"
+            note = ""
+            if k == "prop.imu" and n:
+                cols = ["t", "gx", "gy", "gz", "ax", "ay", "az"]
+                per = [f"{c}:{d[:, i].max():.3g}" for i, c in enumerate(cols) if d[:, i].max() > 0]
+                note = "per field max|d| " + " ".join(per)
+            if k == "prop.contact" and n:
+                cols = ["t", "in_contact", "fx", "fy", "fz", "points"]
+                per = [f"{c}:{d[:, i].max():.3g}" for i, c in enumerate(cols) if d[:, i].max() > 0]
+                note = "per field max|d| " + " ".join(per)
+            print(f"{k:16s} {shape:>16s} {n:>12d} ({100.0 * n / a.size:6.3f}%) {d.max() if n else 0:12.4g} {ulps:>14s}  {note}")
+        else:
+            m = a != b
+            n = int(m.sum())
+            note = ""
+            if k == "aov.ids" and n and a.ndim == 2:
+                edge = _edge_mask(a) | _edge_mask(b)
+                on_edge = int((m & edge).sum())
+                note = f"{on_edge} of {n} differing pixels ({100.0 * on_edge / n:.1f}%) lie on a silhouette edge"
+            if k == "lidar.return_no" and n:
+                note = f"{n} returns present on one side only"
+            maxd = int(np.abs(a.astype(np.int64) - b.astype(np.int64)).max()) if n else 0
+            print(f"{k:16s} {shape:>16s} {n:>12d} ({100.0 * n / a.size:6.3f}%) {maxd:12d} {'-':>14s}  {note}")
+    return 0
 
 
 def compare(pa, pb):
@@ -400,9 +519,17 @@ def main():
                          "or AMD FSR 3.1 as its own row (rgb.fsr)")
     ap.add_argument("--out", default="")
     ap.add_argument("--compare", nargs=2, metavar=("A", "B"))
+    ap.add_argument("--sample", default="", metavar="NPZ",
+                    help="also save one frame of every stream as arrays, for --diff-sample")
+    ap.add_argument("--sample-frame", type=int, default=60,
+                    help="the frame --sample captures (a scan frame: multiple of --scan-every)")
+    ap.add_argument("--diff-sample", nargs=2, metavar=("A.npz", "B.npz"),
+                    help="element-wise report of how far two --sample files are apart; exits 0")
     args = ap.parse_args()
     if args.compare:
         sys.exit(compare(*args.compare))
+    if args.diff_sample:
+        sys.exit(diff_sample(*args.diff_sample))
     m = run(args)
     text = json.dumps(m, indent=1)
     if args.out:
