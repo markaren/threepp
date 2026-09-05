@@ -2412,24 +2412,16 @@ motes.set_emitter_time(0.0, 1.0 / 60.0)
 motes.set_live_count(MOTE_CAP)
 scene.add(motes)
 
-# ---- sonar: Warp ray fan against a wp.Mesh of net + collar + fish ------------------------------
+# ---- sonar: tp.SonarSensor through the renderer's own acceleration structure ------------------
+# The imaging sonar is a threepp sensor now: a 130 x 28 deg fan of 256 x 16 rays traced as one
+# dispatch through the TLAS the picture is drawn from, folded into an echogram (strongest echo
+# per range bin). The collar, the fish and the barge are in that TLAS already. The net is not,
+# acoustically: its render meshes are alpha-cut twine the rays would mostly pass through, so a
+# solid membrane (the periodic grid minus the hole, the same triangles the old Warp kernel
+# traced) rides the sensor-only layer: every camera skips it, every sensor ray hits it.
 SON_BEAMS, SON_VS, SON_BINS, SON_RANGE, SON_FOV, SON_EL = 256, 16, 512, 20.0, 130.0, 14.0
 SON_W, SON_H, SON_VIEW = 512, 384, 10.0                 # 20 m of bins, 10 m shown: the wall arc AND the milling band inboard
-
-
-@wp.kernel
-def sonar(mesh: wp.uint64, mat: wp.array(dtype=int), refl: wp.array(dtype=float), frame: wp.array(dtype=wp.vec3),
-          out: wp.array2d(dtype=float), nb: int, nvs: int, nbins: int, rng: float):
-    tid = wp.tid()
-    i = tid // nvs
-    j = tid - i * nvs
-    az = (-0.5 * SON_FOV + SON_FOV * (float(i) + 0.5) / float(nb)) * wp.pi / 180.0
-    el = (-SON_EL + 2.0 * SON_EL * (float(j) + 0.5) / float(nvs)) * wp.pi / 180.0
-    d = frame[1] * (wp.cos(el) * wp.cos(az)) + frame[2] * (wp.cos(el) * wp.sin(az)) + frame[3] * wp.sin(el)
-    q = wp.mesh_query_ray(mesh, frame[0], d, rng)
-    if q.result:
-        b = wp.min(int(q.t / rng * float(nbins)), nbins - 1)
-        wp.atomic_max(out, i, b, refl[mat[q.face]] * (0.35 + 0.65 * wp.abs(wp.dot(q.normal, d))) * wp.exp(-0.10 * q.t))
+SON_ID_FISH, SON_ID_NET = 7, 8                          # stable instance ids: the sonar's reflectivity is keyed on them
 
 
 def net_solid_tris():
@@ -2440,49 +2432,30 @@ def net_solid_tris():
     return tri[(net.cls[tri] != -2).all(1)]
 
 
-def collar_tris(seg=96, sides=8):
-    th, ph = np.meshgrid(2 * np.pi * np.arange(seg) / seg, 2 * np.pi * np.arange(sides) / sides, indexing="ij")
-    r = PEN_R + 0.16 * np.cos(ph)
-    pts = np.stack([r * np.cos(th), WATER_Y + 0.04 + 0.16 * np.sin(ph), r * np.sin(th)], -1).reshape(-1, 3)
-    i, j = np.arange(seg)[:, None], np.arange(sides)[None, :]
-    a, b, c, d = i * sides + j, i * sides + (j + 1) % sides, ((i + 1) % seg) * sides + (j + 1) % sides, ((i + 1) % seg) * sides + j
-    return pts, np.stack([a, b, c, a, c, d], -1).reshape(-1, 3)
-
-
-def fish_cage():
-    """Sonar proxy per fish: every 4th body ring x every 4th side of the skinned mesh (42 verts, 72 tris)."""
-    S1 = F_SIDES + 1
-    rings, sides = np.append(np.arange(0, F_RINGS, 4), F_RINGS - 1), np.arange(0, F_SIDES, 4)
-    ids = (rings[:, None] * S1 + sides[None, :]).reshape(-1)
-    i, j = np.arange(len(rings) - 1)[:, None], np.arange(len(sides))[None, :]
-    a, b = i * len(sides) + j, i * len(sides) + (j + 1) % len(sides)
-    tri = np.stack([a, b, b + len(sides), a, b + len(sides), a + len(sides)], -1).reshape(-1, 3)
-    ids = (ids[None, :] + (np.arange(FISH_N) * school.nv)[:, None]).reshape(-1)
-    tri = (tri[None] + (np.arange(FISH_N) * len(rings) * len(sides))[:, None, None]).reshape(-1, 3)
-    return wp.array(ids.astype(np.int32), dtype=int, device=device), tri
-
-
-@wp.kernel
-def gather(src: wp.array(dtype=wp.vec3), ids: wp.array(dtype=int), dst: wp.array(dtype=wp.vec3), off: int):
-    i = wp.tid()
-    dst[off + i] = src[ids[i]]
-
-
 SON_EVERY = 3
 _net_tri = net_solid_tris()
-_col_pts, _col_tri = collar_tris()
-_cage_ids, _cage_tri = fish_cage()
-_n_net, _n_fish = net.n, len(_cage_ids)
-_son_pts = wp.zeros(_n_net + _n_fish + len(_col_pts), dtype=wp.vec3, device=device)
-wp.copy(_son_pts, wp.array(_col_pts.astype(np.float32), dtype=wp.vec3, device=device), _n_net + _n_fish, 0, len(_col_pts))
-_son_idx = np.concatenate([_net_tri.reshape(-1), _cage_tri.reshape(-1) + _n_net, _col_tri.reshape(-1) + _n_net + _n_fish])
-_son_idx_wp = wp.array(_son_idx.astype(np.int32), dtype=int, device=device)
-son_mesh = None
-son_mat = wp.array(np.concatenate([np.zeros(len(_net_tri)), np.full(len(_cage_tri), 2), np.ones(len(_col_tri))]).astype(np.int32),
-                   dtype=int, device=device)
-son_refl = wp.array(np.float32([1.0, 1.0, 0.35]), dtype=float, device=device)
-son_frame = wp.zeros(4, dtype=wp.vec3, device=device)
-son_out = wp.zeros((SON_BEAMS, SON_BINS), dtype=float, device=device)
+son_proxy_geo = tp.BufferGeometry()
+son_proxy_geo.set_attribute("position", net.pos.numpy())
+son_proxy_geo.set_index(np.ascontiguousarray(_net_tri.reshape(-1).astype(np.uint32)))
+_son_proxy_mat = tp.MeshStandardMaterial()
+_son_proxy_mat.side = tp.Side.Double
+son_proxy = tp.Mesh(son_proxy_geo, _son_proxy_mat)
+son_proxy.frustum_culled = False
+son_proxy.cast_shadow = False
+son_proxy.receive_shadow = False
+son_proxy.layers.set(tp.SENSOR_ONLY_LAYER)
+scene.add(son_proxy)
+renderer.set_instance_id(son_proxy, SON_ID_NET)
+renderer.set_instance_id(fish, SON_ID_FISH)
+renderer.set_sensor_only_surfaces(True)
+
+_son_model = tp.SonarModel.wide130()
+_son_model.vertical_aperture = 2.0 * SON_EL
+_son_model.attenuation = 0.05                          # exp(-0.10 r) over the round trip, the old kernel's figure
+sonar = tp.SonarSensor(_son_model)
+sonar.params.min_range = 0.35                          # the ROV's own hull sits right behind the transducer
+sonar.reflectivity.set(SON_ID_NET, 1.0)
+sonar.reflectivity.set(SON_ID_FISH, 0.35)
 _yy, _xx = np.mgrid[0:SON_H, 0:SON_W]
 _dx, _dy = _xx - SON_W / 2, (SON_H - 12) - _yy
 _r_m = np.hypot(_dx, _dy) / (SON_H - 24) * SON_VIEW
@@ -2513,22 +2486,40 @@ SON_FRAME_I = np.flatnonzero(SON_FRAME[::-1])
 SON_TILT = -6.0                                         # mount pitch, deg: a 28 deg band that reaches the school as well as the hole
 
 
-def sonar_step(frame_i):
-    if frame_i % SON_EVERY or not HUD_LIVE[0]:
-        return
-    global son_mesh
-    wp.copy(_son_pts, net.pos, 0, 0, _n_net)
-    wp.launch(gather, dim=_n_fish, device=device, inputs=[school.out_p, _cage_ids, _son_pts, _n_net])
-    son_mesh = wp.Mesh(points=_son_pts, indices=_son_idx_wp, bvh_constructor="lbvh")
-    mark("sonar bvh build", gpu=True)
+def sonar_aim():
+    """Transducer on the ROV's nose, pitched SON_TILT: forward is the sensor's local -Z, up its +Y."""
     o = rov_pos + rov_R @ [0.20, 0.09, 0.0]
     R = rov_R @ rot_z(math.radians(SON_TILT))
-    son_frame.assign(np.asarray([o, R @ [1, 0, 0], R @ [0, 0, 1], R @ [0, 1, 0]], np.float32))
-    son_out.zero_()
-    wp.launch(sonar, dim=SON_BEAMS * SON_VS, device=device,
-              inputs=[son_mesh.id, son_mat, son_refl, son_frame, son_out, SON_BEAMS, SON_VS, SON_BINS, SON_RANGE])
-    son_hist[(frame_i // SON_EVERY) % 3] = son_out.numpy()
-    mark("sonar kernel", gpu=True)
+    fwd, up = R @ [1.0, 0.0, 0.0], R @ [0.0, 1.0, 0.0]
+    sonar.position.set(float(o[0]), float(o[1]), float(o[2]))
+    sonar.up = tp.Vector3(float(up[0]), float(up[1]), float(up[2]))
+    sonar.look_at(float(o[0] + fwd[0]), float(o[1] + fwd[1]), float(o[2] + fwd[2]))
+
+
+def sonar_step(frame_i):
+    if not HUD_LIVE[0]:
+        return
+    if sonar.scan_pending:
+        # Fired on an earlier frame; take delivery once the trace is done (a poll, never a wait).
+        if not sonar.scan_ready(renderer):
+            return
+        img = sonar.scan_collect(renderer)
+        mark("sonar collect", gpu=True)
+        if img is None:
+            return
+        son_hist[(frame_i // SON_EVERY) % 3] = img.intensity
+        sonar_draw(frame_i)
+        return
+    if frame_i % SON_EVERY:
+        return
+    # The membrane follows the cloth; the fish and collar are already live in the TLAS.
+    son_proxy_geo.update_attribute("position", net.pos.numpy())
+    sonar_aim()
+    sonar.scan_begin(renderer)                          # False before the first render: retried next scan frame
+    mark("sonar fire")
+
+
+def sonar_draw(frame_i):
     a = son_hist.max(0)                                                   # 3-frame persistence
     a = np.maximum(a, np.maximum(np.roll(a, 1, 1), np.roll(a, -1, 1)))   # +-1 bin: the wall reads as a solid arc
     a = a * np.random.default_rng(1000 + frame_i).uniform(0.7, 1.3, (SON_BEAMS, SON_BINS)).astype(np.float32) + SON_NEAR

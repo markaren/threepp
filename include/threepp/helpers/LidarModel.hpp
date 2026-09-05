@@ -51,23 +51,27 @@ namespace threepp {
             return m;
         }
 
-        /// Ouster OS1-64: 64 beams, ±22.5° elevation (uniform), 0.35° azimuth.
+        /// Ouster OS1-64: 64 beams, ±22.5° elevation (uniform), 1024 columns
+        /// per revolution (360/1024 = 0.3515625°). The step used to be quoted
+        /// as 0.35°, which the generator rounds to 1029 columns: a conformance
+        /// table caught it.
         static LidarModel OS1_64() {
             LidarModel m;
             m.elevationAngles.resize(64);
             for (int i = 0; i < 64; ++i)
                 m.elevationAngles[i] = -22.5f + i * (45.f / 63.f);
-            m.azimuthResolution = 0.35f;
+            m.azimuthResolution = 360.f / 1024.f;
             return m;
         }
 
-        /// Ouster OS0-128: 128 beams, ±45° elevation (uniform), 0.35° azimuth.
+        /// Ouster OS0-128: 128 beams, ±45° elevation (uniform), 1024 columns
+        /// per revolution (see OS1_64 for the 0.35° history).
         static LidarModel OS0_128() {
             LidarModel m;
             m.elevationAngles.resize(128);
             for (int i = 0; i < 128; ++i)
                 m.elevationAngles[i] = -45.f + i * (90.f / 127.f);
-            m.azimuthResolution = 0.35f;
+            m.azimuthResolution = 360.f / 1024.f;
             return m;
         }
     };

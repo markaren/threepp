@@ -3764,12 +3764,12 @@ class LidarModel:
     @staticmethod
     def os0_128() -> LidarModel:
         """
-        Ouster OS0-128: 128 beams, +/-45deg elevation.
+        Ouster OS0-128: 128 beams, +/-45deg elevation, 1024 columns/rev.
         """
     @staticmethod
     def os1_64() -> LidarModel:
         """
-        Ouster OS1-64: 64 beams, +/-22.5deg elevation.
+        Ouster OS1-64: 64 beams, +/-22.5deg elevation, 1024 columns/rev.
         """
     @staticmethod
     def vlp16() -> LidarModel:

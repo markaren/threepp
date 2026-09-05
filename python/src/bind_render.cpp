@@ -120,8 +120,8 @@ namespace threepp_py {
                 .def_readwrite("azimuth_max", &LidarModel::azimuthMax)
                 .def_static("vlp16", &LidarModel::VLP16, "Velodyne VLP-16: 16 beams, +/-15deg elevation.")
                 .def_static("hdl32e", &LidarModel::HDL32E, "Velodyne HDL-32E: 32 beams, -30.67..+10.67deg.")
-                .def_static("os1_64", &LidarModel::OS1_64, "Ouster OS1-64: 64 beams, +/-22.5deg elevation.")
-                .def_static("os0_128", &LidarModel::OS0_128, "Ouster OS0-128: 128 beams, +/-45deg elevation.")
+                .def_static("os1_64", &LidarModel::OS1_64, "Ouster OS1-64: 64 beams, +/-22.5deg elevation, 1024 columns/rev.")
+                .def_static("os0_128", &LidarModel::OS0_128, "Ouster OS0-128: 128 beams, +/-45deg elevation, 1024 columns/rev.")
                 .def("__repr__", [](const LidarModel& lm) {
                     std::ostringstream o;
                     o << "LidarModel(beams=" << lm.elevationAngles.size()
