@@ -533,8 +533,14 @@ namespace threepp::road {
             if (!gravel && w > 0.05f) {
                 const int count = (hash2(sd, 21) > 0.2f) ? 2 : ((hash2(sd, 22) > -0.3f) ? 1 : 0);
                 for (int k = 0; k < count; ++k) {
-                    const float hwd = 0.5f + 1.0f * (hash2(sd + k * 13, 33) * 0.5f + 0.5f);// 1-3 m
-                    const float hln = 0.5f + 1.5f * (hash2(sd + k * 13, 34) * 0.5f + 0.5f);// 1-4 m
+                    // Some are full-lane resurfacings, not pothole plugs: a 1 m
+                    // patch is gone by the third car length, a 3 x 5 m one is
+                    // still there. Still low contrast - see below.
+                    const bool big = hash2(sd + k * 13, 35) > 0.15f;
+                    const float hwd = big ? 1.0f + 1.0f * (hash2(sd + k * 13, 33) * 0.5f + 0.5f) // 2-4 m
+                                          : 0.5f + 1.0f * (hash2(sd + k * 13, 33) * 0.5f + 0.5f);// 1-3 m
+                    const float hln = big ? 1.5f + 1.5f * (hash2(sd + k * 13, 34) * 0.5f + 0.5f) // 3-6 m
+                                          : 0.5f + 1.5f * (hash2(sd + k * 13, 34) * 0.5f + 0.5f);// 1-4 m
                     const float cx = hash2(sd + k * 13, 31) * pavedHalf * 0.65f;
                     const float cs = hln + (hash2(sd + k * 13, 32) * 0.5f + 0.5f) * (tile - 2.f * hln);
                     patches[nPatch++] = Patch{cx - hwd, cx + hwd, cs - hln, cs + hln};
@@ -562,24 +568,37 @@ namespace threepp::road {
                 // segments: the road was re-marked and the old one still shows.
                 const float ghostSeg = (fbmP(seedX + 57.f, s / 12.f, 4, 2, 2.f, 0.5f) > 0.28f) ? 1.f : 0.f;
                 const float ghostOff = 0.03f + 0.03f * (hash2(sd, 61) * 0.5f + 0.5f);
-                // Transverse frost cracks every ~12 m; half of them tar-sealed.
+                // Transverse frost cracks every ~8 m (jitter puts them 5-12 m
+                // apart); most of them tar-sealed.
                 float crackRaw = 0.f, crackSealed = 0.f;
                 if (!gravel && w > 0.05f) {
-                    constexpr float cell = 12.f;// 4 per 48 m tile
-                    const int ci = ((static_cast<int>(std::floor(s / cell)) % 4) + 4) % 4;
-                    const float jit = hash2(sd + ci * 37, 5) * 0.42f;
+                    constexpr float cell = 8.f;// 6 per 48 m tile
+                    const int ci = ((static_cast<int>(std::floor(s / cell)) % 6) + 6) % 6;
+                    const float jit = hash2(sd + ci * 37, 5) * 0.30f;
                     const float at = (static_cast<float>(ci) + 0.5f + jit) * cell;
                     const float wob = 0.05f * noise2p(0.f, s / 0.5f, 96);
-                    const bool sealed = hash2(sd + ci * 37, 9) > 0.f;
+                    const bool sealed = hash2(sd + ci * 37, 9) > -0.2f;
                     // A texel is dv (~4.7 cm) long, so a literal 2 cm crack can
                     // never cover half of one and mips erase it by the second
-                    // car length. Real tar sealing is a 4-6 cm band anyway, and
-                    // this is the signature of a Norwegian road - it has to
-                    // survive to eye level.
-                    const float halfW = sealed ? 0.030f : 0.010f;
+                    // car length. Real tar sealing is a smeared 5-7 cm band
+                    // anyway, and this is the signature of a Norwegian road -
+                    // it has to survive to eye level.
+                    const float halfW = sealed ? 0.035f : 0.010f;
                     const float c = cover(s - at + wob, halfW, dv) * w;
                     crackRaw = sealed ? 0.f : c;
                     crackSealed = sealed ? c : 0.f;
+                }
+
+                // How hard a wheel track is polished varies ALONG the road: a
+                // lane's two tracks are driven differently and each fades in
+                // and out over 10-40 m. Without this the four tracks of a
+                // two-lane road read from the air as four painted stripes.
+                std::array<float, 4> trackAmp{};
+                for (int k = 0; k < nTracks; ++k) {
+                    const float kf = static_cast<float>(k);
+                    const float lo = fbmP(seedX + 211.f + 37.f * kf, s / 24.f, 2, 2, 2.f, 0.5f);
+                    const float hi = fbmP(seedX + 409.f + 53.f * kf, s / 12.f, 4, 2, 2.f, 0.5f);
+                    trackAmp[k] = std::clamp(0.55f + 0.85f * lo + 0.35f * hi, 0.05f, 1.f);
                 }
 
                 for (int x = 0; x < W; ++x) {
@@ -594,9 +613,15 @@ namespace threepp::road {
                     float relief = 0.f;
 
                     // ── track bands (shared by both surface kinds) ───────────
-                    float trackW = 0.f;
-                    for (int k = 0; k < nTracks; ++k)
-                        trackW = std::max(trackW, softBand(lat - trackC[k], 0.225f, 0.15f));
+                    // `trackW` is the band SHAPE (polish and ruts are always
+                    // there); `trackLight` is the same band with the along-road
+                    // amplitude folded in, and only the LIGHTENING uses it.
+                    float trackW = 0.f, trackLight = 0.f;
+                    for (int k = 0; k < nTracks; ++k) {
+                        const float bandK = softBand(lat - trackC[k], 0.18f, 0.27f);
+                        trackW = std::max(trackW, bandK);
+                        trackLight = std::max(trackLight, bandK * trackAmp[k]);
+                    }
                     // The strip between a lane's two tracks stays dirtier.
                     float betweenW = 0.f;
                     if (twoLane) {
@@ -639,12 +664,17 @@ namespace threepp::road {
                         // Weathered Norwegian asphalt: light gneiss aggregate
                         // exposed by studded tyres, not the fresh-bitumen black a
                         // 0.055 albedo bakes (which decodes to linear 0.004).
-                        const float aggregate = noise2p(lat / 0.03f + seedX, s / 0.03f, 1600);
+                        // 2 cm stones, not 3: at driving height the coarser
+                        // grain read as gravel. Half the amplitude too, and a
+                        // darker base - 0.42 was reading as concrete.
+                        const float aggregate = noise2p(lat / 0.02f + seedX, s / 0.02f, 2400);
                         const float patchN = fbmP(lat / 8.f + seedX, s / 8.f, 6, 4, 2.f, 0.5f);
-                        float k = 0.42f + 0.080f * aggregate + 0.050f * patchN;
-                        // Polished wheel tracks, dirtier strip between them.
-                        k += 0.060f * trackW * w;
-                        k -= 0.030f * betweenW * w;
+                        float k = 0.38f + 0.040f * aggregate + 0.050f * patchN;
+                        // Polished wheel tracks, dirtier strip between them. The
+                        // lightening is deliberately small: what sells a track
+                        // is the ROUGHNESS step catching the sky, not albedo.
+                        k += 0.025f * trackLight * w;
+                        k -= 0.020f * betweenW * w;
                         rough = 0.88f - 0.26f * trackW * w;
                         relief = 0.002f * aggregate - 0.012f * trackW * w;
 
@@ -659,7 +689,7 @@ namespace threepp::road {
                             const float iny = softBand(s - 0.5f * (P.s0 + P.s1),
                                                        0.5f * (P.s1 - P.s0), 0.25f);
                             const float a = inx * iny;
-                            k -= 0.085f * a * w;
+                            k -= 0.100f * a * w;
                             relief -= 0.003f * a * w;
                         }
                         if (repairStrip) {
@@ -684,9 +714,25 @@ namespace threepp::road {
                             }
                             crackL *= w;
                         }
+                        // LONGITUDINAL tar seams along the outer track edges.
+                        // These are what carries the crack-sealing look to eye
+                        // level: a transverse crack is one texel row and mips
+                        // erase it two car lengths ahead, while a seam running
+                        // away from the camera stays a continuous dark line all
+                        // the way to the vanishing point.
+                        float sealL = 0.f;
+                        {
+                            const float wander = 0.07f * fbmP(seedX + 131.f, s / 16.f, 3, 3, 2.f, 0.5f);
+                            const float run = std::clamp(fbmP(seedX + 149.f, s / 24.f, 2, 2, 2.f, 0.5f) * 2.6f + 0.35f, 0.f, 1.f);
+                            for (int kk = 0; kk < nTracks; ++kk) {
+                                const float at = trackC[kk] + (trackC[kk] > 0.f ? 0.30f : -0.30f) + wander;
+                                sealL = std::max(sealL, cover(lat - at, 0.026f, du) * run);
+                            }
+                            sealL *= w;
+                        }
                         // Sealed cracks are the signature of a Norwegian road:
                         // black bitumen wiggles standing slightly proud.
-                        const float sealAll = std::max(crackSealed, 0.f);
+                        const float sealAll = std::max(crackSealed, sealL);
                         const float openAll = std::max(crackRaw, crackL);
                         if (openAll > 0.f) {
                             const float t = openAll;
@@ -696,9 +742,9 @@ namespace threepp::road {
                             relief -= 0.002f * t;
                         }
                         if (sealAll > 0.f) {
-                            r += (0.12f - r) * sealAll;
-                            g += (0.115f - g) * sealAll;
-                            b += (0.11f - b) * sealAll;
+                            r += (0.085f - r) * sealAll;
+                            g += (0.082f - g) * sealAll;
+                            b += (0.080f - b) * sealAll;
                             rough += (0.50f - rough) * sealAll;
                             relief += 0.001f * sealAll;
                         }
