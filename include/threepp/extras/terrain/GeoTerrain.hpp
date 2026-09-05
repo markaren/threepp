@@ -1392,9 +1392,17 @@ namespace threepp::terrain {
                     // The bay stripe is the SAME asphalt one shade up, not white
                     // paint: at 200 m a lot reads as bays because of the rhythm,
                     // and real white bay lines are 10 cm on a 1 m texel.
-                    const std::array<float, 3> bayCol{roadCol[0] * 0.55f + 0.085f,
-                                                      roadCol[1] * 0.55f + 0.085f,
-                                                      roadCol[2] * 0.55f + 0.088f};
+                    //
+                    // RELATIVE to the asphalt, not an affine formula tuned on a
+                    // literal. `roadCol` is MEASURED off the ribbon bake
+                    // (meanSurfaceColor), and on this pack it comes back at 0.36
+                    // — so the old 0.55·c + 0.085 put the stripe at 0.28, one
+                    // shade DOWN, and the lot rendered as dark blotches between
+                    // pale asphalt instead of bays. A lot is asphalt with worn
+                    // white paint on it: the stripe is always LIGHTER.
+                    const std::array<float, 3> bayCol{
+                            std::min(roadCol[0] + 0.085f, 1.f), std::min(roadCol[1] + 0.085f, 1.f),
+                            std::min(roadCol[2] + 0.088f, 1.f)};
                     lay(roadCol, lu[LandUsePaint::Asphalt] * 0.90f);
                     lay(bayCol, lu[LandUsePaint::Bay] * 0.90f);
                     lay(urbG, lu[LandUsePaint::Gravel] * 0.85f);
@@ -1459,7 +1467,14 @@ namespace threepp::terrain {
                                                           lu[LandUsePaint::Gravel] +
                                                           lu[LandUsePaint::Concrete],
                                                   0.f, 1.f);
-                    keep *= 1.f - hard * 0.9f;
+                    // 0.9 left a tenth of the grass band standing, and a tenth
+                    // is not nothing: the shader NORMALISES the four weights, so
+                    // a lot whose only surviving band is grass still resolves the
+                    // grass structure set (at coverage 0.1), and TerrainScatter
+                    // reads the same weights to decide where a tuft goes — which
+                    // is how tufts kept growing on a surveyed car park. Hard
+                    // surfacing means NO band.
+                    keep *= 1.f - hard * 0.995f;
                 }
                 if (paint) keep *= 1.f - network.pavedWeight(x, z, edgeFeather);
                 if (urban) keep *= 1.f - urban->sample(x, z) * (1.f - green);

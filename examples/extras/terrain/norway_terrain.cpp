@@ -126,6 +126,13 @@ int main(int argc, char** argv) {
     std::string viewName;   // --view <name>: a named camera/sun preset (see below)
     bool haveFov = false;
     std::string profilePath;// --road-profile <csv>: dump the height field along the longest road and exit
+    // --fly x,y,z[,tx,ty,tz]: with --shotseq, the camera walks from the --cam
+    // pose to this one over NT_FLY_FRAMES (600) frames starting at --seqstart.
+    // Streamed content (trees, bushes, cars, tiles) is only ever exercised by a
+    // camera that MOVES; a static shot photographs the first ring and nothing
+    // else. Without a target the look-at stays at the --cam target.
+    bool haveFly = false, haveFlyTarget = false;
+    Vector3 flyPosArg, flyTargetArg;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
@@ -159,6 +166,28 @@ int main(int argc, char** argv) {
                 camTargetArg.set(v[3], v[4], v[5]);
             } else {
                 std::cerr << "[norway] --cam needs 6 comma-separated floats: x,y,z,tx,ty,tz\n";
+            }
+        } else if (a == "--fly" && i + 1 < argc) {
+            float v[6] = {0, 0, 0, 0, 0, 0};
+            std::string s = argv[++i];
+            int k = 0;
+            size_t pos = 0;
+            while (k < 6 && pos <= s.size()) {
+                const size_t comma = s.find(',', pos);
+                const std::string tok = s.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+                if (!tok.empty()) v[k++] = std::stof(tok);
+                if (comma == std::string::npos) break;
+                pos = comma + 1;
+            }
+            if (k == 3 || k == 6) {
+                haveFly = true;
+                flyPosArg.set(v[0], v[1], v[2]);
+                if (k == 6) {
+                    haveFlyTarget = true;
+                    flyTargetArg.set(v[3], v[4], v[5]);
+                }
+            } else {
+                std::cerr << "[norway] --fly needs 3 or 6 comma-separated floats: x,y,z[,tx,ty,tz]\n";
             }
         } else if (!a.empty() && a[0] != '-') packArg = a;
     }
@@ -641,6 +670,93 @@ int main(int argc, char** argv) {
     gopt.apronMask = apronMask;
     const terrain::TerrainProvider prov = terrain::makeGeoProvider(pack, network, gopt);
 
+    // ── land-use paint diagnostic ─────────────────────────────────────────
+    // The parking paint went missing in the Round 5 shots (lots rendered as
+    // grey-green ground with tufts while the cars stood on them), and the only
+    // way to tell "the lot was never rasterised" from "the lot is painted and
+    // something above it wins" is to look at the raster and at the layers.
+    //   NT_LANDUSE_DUMP=<file.pgm>  class-code raster (P5, one code per byte)
+    //                               + a per-class cell histogram, then exit.
+    //   NT_LANDUSE_PROBE="x,z;x,z"  per point: the class code, the sampled Mix,
+    //                               and albedo/weights with the layer ON and
+    //                               OFF, so the layer's own contribution shows.
+    {
+        const char* dumpPath = std::getenv("NT_LANDUSE_DUMP");
+        const char* probeArg = std::getenv("NT_LANDUSE_PROBE");
+        if ((dumpPath && dumpPath[0]) || (probeArg && probeArg[0])) {
+            const auto lup = terrain::buildLandUsePaint(pack, gopt.landUseCell, apronMask);
+            if (!lup || !lup->valid()) {
+                std::cout << "[landuse] NO PAINT (hasLandUse " << pack.hasLandUse()
+                          << ", apron " << (apronMask ? 1 : 0) << ")\n";
+            } else {
+                std::array<long long, terrain::LandUsePaint::ClsCount> hist{};
+                for (std::uint8_t v : lup->m)
+                    if (v < terrain::LandUsePaint::ClsCount) ++hist[v];
+                static const char* kNames[] = {"None", "Asphalt", "Bay", "Gravel",
+                                               "Grass", "Pitch", "Concrete", "Rock"};
+                std::cout << "[landuse] raster dim " << lup->dim << " cell " << lup->cell
+                          << " half " << lup->half << "\n";
+                for (int i = 0; i < terrain::LandUsePaint::ClsCount; ++i)
+                    std::cout << "[landuse]   " << kNames[i] << " " << hist[i] << " cells\n";
+                if (dumpPath && dumpPath[0]) {
+                    std::ofstream f(dumpPath, std::ios::binary);
+                    f << "P5\n" << lup->dim << " " << lup->dim << "\n255\n";
+                    f.write(reinterpret_cast<const char*>(lup->m.data()),
+                            static_cast<std::streamsize>(lup->m.size()));
+                    std::cout << "[landuse] wrote " << dumpPath << "\n";
+                }
+            }
+            if (probeArg && probeArg[0]) {
+                terrain::GeoTerrainOptions gOff = gopt;
+                gOff.landUsePaint = false;
+                const terrain::TerrainProvider provOff =
+                        terrain::makeGeoProvider(pack, network, gOff);
+                std::string s = probeArg;
+                size_t pos = 0;
+                while (pos <= s.size()) {
+                    const size_t semi = s.find(';', pos);
+                    const std::string tok =
+                            s.substr(pos, semi == std::string::npos ? std::string::npos : semi - pos);
+                    float px = 0.f, pz = 0.f;
+                    if (std::sscanf(tok.c_str(), "%f,%f", &px, &pz) == 2) {
+                        const float h = prov.height(px, pz);
+                        const float dx = prov.height(px + 1.f, pz) - prov.height(px - 1.f, pz);
+                        const float dz = prov.height(px, pz + 1.f) - prov.height(px, pz - 1.f);
+                        const float slope = std::sqrt(dx * dx + dz * dz) / 2.f;
+                        std::printf("[probe] (%.1f, %.1f) h %.2f slope %.3f\n", px, pz, h, slope);
+                        if (lup && lup->valid()) {
+                            const int ix = static_cast<int>(std::lround((px + lup->half) / lup->cell));
+                            const int iz = static_cast<int>(std::lround((pz + lup->half) / lup->cell));
+                            const auto mix = lup->sample(px, pz);
+                            std::printf("[probe]   cell (%d, %d) code %d  mix", ix, iz,
+                                        static_cast<int>(lup->code(ix, iz)));
+                            for (int i = 0; i < terrain::LandUsePaint::ClsCount; ++i)
+                                std::printf(" %.2f", mix[i]);
+                            std::printf("\n");
+                        }
+                        float on[3] = {0, 0, 0}, off[3] = {0, 0, 0};
+                        float wOn[4] = {0, 0, 0, 0}, wOff[4] = {0, 0, 0, 0};
+                        prov.albedo(px, pz, h, slope, on);
+                        provOff.albedo(px, pz, h, slope, off);
+                        if (prov.weights) prov.weights(px, pz, h, slope, wOn);
+                        if (provOff.weights) provOff.weights(px, pz, h, slope, wOff);
+                        std::printf("[probe]   albedo OFF %.3f %.3f %.3f -> ON %.3f %.3f %.3f\n",
+                                    off[0], off[1], off[2], on[0], on[1], on[2]);
+                        std::printf("[probe]   weights OFF %.2f %.2f %.2f %.2f (sum %.2f)"
+                                    " -> ON %.2f %.2f %.2f %.2f (sum %.2f)\n",
+                                    wOff[0], wOff[1], wOff[2], wOff[3],
+                                    wOff[0] + wOff[1] + wOff[2] + wOff[3], wOn[0], wOn[1], wOn[2],
+                                    wOn[3], wOn[0] + wOn[1] + wOn[2] + wOn[3]);
+                    }
+                    if (semi == std::string::npos) break;
+                    pos = semi + 1;
+                }
+            }
+            std::cout << std::flush;
+            if (dumpPath && dumpPath[0]) return 0;
+        }
+    }
+
     reportRoadConformance(pack, network);
 
     // Diagnostic: dump the provider height field along the longest road at fine
@@ -698,9 +814,38 @@ int main(int argc, char** argv) {
     // Road-aware LOD: subdivide road-corridor tiles ~2.2× sooner/deeper so the
     // ribbon stays crisp at mid distance (terrain interp error shrinks with tile
     // size). The 1.2/1.7 split/merge dead band is preserved under the bias.
-    if (!noRoadBias) {
-        tileOpts.refineBias = [&network](float cx, float cz, float half) {
-            return network.corridorIntersects(cx, cz, half) ? 2.2f : 1.0f;
+    // The SURVEYED HARD SURFACING gets the same bias as a road corridor, and for
+    // the same reason. Its content is fine paint — 2.5 m bay stripes, a lot's
+    // edge, a quay apron — and none of it survives a coarse tile's texel. Worse,
+    // `errorLod` shrinks the split radius of a tile whose MESH error is small,
+    // and urban ground is graded flat by construction: exactly the ground that
+    // carries the most paint detail was the last to refine. A 110 m camera over
+    // the big lot sat on a ~2.6 m texel for hundreds of frames and the lot
+    // rendered as one flat grey (phaseF_lot_nadir_before.png) — the paint was
+    // right in the raster the whole time.
+    //
+    // OPT-IN (NT_LU_BIAS=1), because it is not free and the trade is the user's
+    // to make: measured at --view aksla, 400-frame shots, 25.0 / 31.7 fps with
+    // the bias against 31.0 / 39.4 without (same run order, tile settling still
+    // in flight in both). It buys sharp lots and quays near the camera at about
+    // a fifth of the frame rate in the flagship wide view.
+    std::shared_ptr<const terrain::FootprintMask> hardMask;
+    if (const char* lb = std::getenv("NT_LU_BIAS"); pack.hasLandUse() && lb && lb[0] == '1')
+        hardMask = terrain::buildLandUseMask(
+                pack, {"parking", "pier", "quay", "yard", "marina", "playground"}, 0.f, 4.f);
+    if (!noRoadBias || hardMask) {
+        tileOpts.refineBias = [&network, hardMask, noRoadBias](float cx, float cz, float half) {
+            if (!noRoadBias && network.corridorIntersects(cx, cz, half)) return 2.2f;
+            if (hardMask && half <= 400.f) {
+                // Nine taps over the tile box: a lot is tens of metres across,
+                // so a centre-only test misses the tile it sits in the corner of.
+                for (int j = -1; j <= 1; ++j)
+                    for (int i = -1; i <= 1; ++i)
+                        if (hardMask->inside(cx + static_cast<float>(i) * half * 0.8f,
+                                             cz + static_cast<float>(j) * half * 0.8f))
+                            return 2.2f;
+            }
+            return 1.0f;
         };
     }
     // Hoisted out of the block below: the cliff shell shades the SAME wall as
@@ -1786,12 +1931,49 @@ int main(int argc, char** argv) {
                                 camTargetArg.z + off.x * std::sin(w) + off.z * std::cos(w));
             camera.lookAt(camTargetArg);
         }
+        // --fly: linear traverse from the --cam pose to the --fly pose over
+        // NT_FLY_FRAMES frames, starting at --seqstart. This is the only camera
+        // MOTION the demo has (NT_ORBIT drifts, it does not travel), and it is
+        // what the content streamers have to survive.
+        if (haveFly && haveCam) {
+            const int flyFrames = static_cast<int>(envF("NT_FLY_FRAMES", 600.f));
+            const float t = std::clamp(static_cast<float>(frame - seqStart) /
+                                               static_cast<float>(std::max(1, flyFrames)),
+                                       0.f, 1.f);
+            camera.position.lerpVectors(camPosArg, flyPosArg, t);
+            Vector3 look = camTargetArg;
+            if (haveFlyTarget) look.lerpVectors(camTargetArg, flyTargetArg, t);
+            camera.lookAt(look);
+            lodPos = camera.position;
+        }
         if (!freezeTiles) tiles->update(lodPos);
         if (scatter && !freezeTiles) scatter->update(lodPos);
         // Vegetation and props follow the LIVE camera, on the same position and
         // the same freeze rule as the tiles.
         if (!freezeTiles)
             for (auto& s : streamers) s->update(lodPos);
+        // Streamer churn, printed only on the frames where something changed:
+        // adds and (especially) removes are what a fly-through can flash on,
+        // because removing a scene entry clears the renderer's temporal history.
+        if (!streamers.empty() && (!seqPrefix.empty() || envSet("NT_STREAM_LOG"))) {
+            int nb = 0, na = 0, nr = 0, nact = 0, npend = 0;
+            for (auto& s : streamers) {
+                const auto& st = s->stats();
+                nb += st.builds;
+                na += st.adds;
+                nr += st.removes;
+                nact += st.active;
+                npend += st.pending;
+            }
+            if (nb || na || nr) {
+                int objs = 0;
+                scene.traverse([&](Object3D&) { ++objs; });
+                std::printf("[stream] frame %d built %d added %d removed %d active %d pending %d "
+                            "objects %d\n",
+                            frame, nb, na, nr, nact, npend, objs);
+                std::fflush(stdout);
+            }
+        }
         renderer->render(scene, camera);
         if (ui) ui->render();
 
