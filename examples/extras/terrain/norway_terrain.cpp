@@ -187,7 +187,7 @@ int main(int argc, char** argv) {
             // road / road-aerial / road-far need the conformed network, so they
             // resolve further down (right after carveRoads).
             std::cerr << "[norway] unknown --view '" << viewName
-                      << "' (known: reference, road[=id][@station], road-aerial, road-far)\n";
+                      << "' (known: reference, road[=id][@station], road-top, road-aerial, road-far)\n";
         }
     }
     if (packArg.empty()) {
@@ -338,7 +338,18 @@ int main(int argc, char** argv) {
             if (tan.length() < 1e-3f) tan.set(0.f, 0.f, 1.f);
             tan.normalize();
             const float eye = road::RoadNetwork::kSurfaceRaise + 1.6f;// driver's eye
-            if (kind == "road-aerial") {
+            if (kind == "road-top") {
+                // Near-vertical: this is the view the surface look is JUDGED in,
+                // because a repeated object or an evenly spaced crack rhythm is
+                // obvious from straight above and hides in perspective. Tilted
+                // ~8 degrees off vertical ALONG the road so the up vector never
+                // degenerates (a true nadir camera with up = +Y is a lookAt
+                // singularity and the frame rolls arbitrarily).
+                constexpr float topH = 28.f;
+                const float back = topH * std::tan(8.f * math::DEG2RAD);
+                camPosArg.set(anchor.x - tan.x * back, anchor.y + topH, anchor.z - tan.z * back);
+                camTargetArg.copy(anchor);
+            } else if (kind == "road-aerial") {
                 camPosArg.set(anchor.x - tan.x * 40.f, anchor.y + 25.f, anchor.z - tan.z * 40.f);
                 camTargetArg.copy(anchor);
             } else if (kind == "road-far") {
@@ -657,9 +668,17 @@ int main(int argc, char** argv) {
             roadChunkRadii.push_back(geo->boundingSphere->radius);
         }
         const auto rc = network.meanSurfaceColor(road::SurfaceKind::Asphalt);
+        const auto& mrules = network.markingRules();
+        const double perTex = static_cast<double>(mrules.texWidth) * mrules.texHeight * 4.0;
+        const size_t nSurfTex = network.surfaceSetCount() * 3;// albedo + normal + roughMetal
+        const double patchMB = 2.0 * static_cast<double>(mrules.patchRes) * mrules.patchRes * 4.0 * 4.0;
         std::printf("[norway] road ribbon chunks: %zu sharing %zu baked surface sets "
-                    "(mean paved sRGB %.3f, %.3f, %.3f)\n",
-                    roadChunkCenters.size(), network.surfaceSetCount(), rc[0], rc[1], rc[2]);
+                    "= %zu textures %.1f MB + patch atlas 2 x %d x %d (%.1f MB); "
+                    "tile %.0f m (mean paved sRGB %.3f, %.3f, %.3f)\n",
+                    roadChunkCenters.size(), network.surfaceSetCount(), nSurfTex,
+                    static_cast<double>(nSurfTex) * perTex / 1048576.0,
+                    mrules.patchRes * 4, mrules.patchRes, patchMB / 1048576.0,
+                    static_cast<double>(mrules.tileLength), rc[0], rc[1], rc[2]);
         std::cout << std::flush;
         scene.add(chunks);
     }
