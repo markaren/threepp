@@ -226,6 +226,20 @@ int main(int argc, char** argv) {
     // run, and every boolean shadow query over overlapping geometry inherits
     // that.
     bool lidarGrazing = false;
+    // --fresh-camera: render the hashed frames through a NEW camera object with
+    // the same pose. A camera swap invalidates the TAA history and the
+    // reprojection state, so the temporal passes start from nothing at frame 0
+    // of the window instead of carrying whatever the settle phase accumulated.
+    // The settle phase is where asynchronous tile bakes land at run-dependent
+    // frames; an EMA with long memory never returns to bit-equality within
+    // float precision after integrating run-varying frames. This flag is the
+    // test of that mechanism: if the frame row turns exact with it, the carrier
+    // is the history, not any pass.
+    bool freshCamera = false;
+    // --reset-history: VulkanRenderer::resetTemporalHistory() before frame 0
+    // of the hashed window. The hard form of the test above: every temporal
+    // accumulator on every view restarts from nothing.
+    bool resetHistory = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
@@ -244,6 +258,8 @@ int main(int argc, char** argv) {
         else if (arg == "--lidar") lidar = true;
         else if (arg == "--no-ao") noAo = true;
         else if (arg == "--lidar-grazing") lidarGrazing = true;
+        else if (arg == "--fresh-camera") freshCamera = true;
+        else if (arg == "--reset-history") resetHistory = true;
         else if (arg == "--edit-add" && i + 1 < argc) editAddFrame = std::atoi(argv[++i]);
         else if (arg == "--edit-remove" && i + 1 < argc) editRemoveFrame = std::atoi(argv[++i]);
         else if (arg == "--rgbtrace" && i + 1 < argc) rgbTracePath = argv[++i];
@@ -584,6 +600,13 @@ int main(int argc, char** argv) {
 
     for (int f = 0; f < frames; ++f) {
         const double t = f * kDt;
+        if (freshCamera && f == 0) {
+            auto fresh = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, fjord ? 6000.f : 100.f);
+            fresh->position.copy(camera->position);
+            fresh->rotation.copy(camera->rotation);
+            camera = fresh;
+        }
+        if (resetHistory && f == 0) renderer.resetTemporalHistory();
         // The deterministic frame clock: with it, the TAA blend weights and
         // every other formerly-wall-clock input advance on this scripted time.
         renderer.setSimTime(t);
@@ -840,6 +863,7 @@ int main(int argc, char** argv) {
              << " static=" << (staticScene ? 1 : 0)
              << " resolve=" << (fsr ? "fsr" : "taa")
              << " scene=" << sceneName << " ao=" << (noAo ? 0 : 1)
+             << " freshCamera=" << (freshCamera ? 1 : 0) << " resetHistory=" << (resetHistory ? 1 : 0)
              << " events=" << (events ? (eventsFinal ? "final" : "shaded") : "off")
              << " tlasRebuilds=" << tl.fullRebuilds << " tlasInstances=" << tl.instances << "\n";
     if (!staticScene && dyn.graduated == 0) {

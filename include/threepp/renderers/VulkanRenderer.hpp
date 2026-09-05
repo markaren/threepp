@@ -377,6 +377,19 @@ namespace threepp {
         // Sensor pipelines should drive this with the same sim clock that
         // stamps their measurements (see extras/sensors/Sensor.hpp).
         void setSimTime(double seconds);
+
+        // Hard restart of every temporal accumulator, on every live view: the
+        // TAA history, the reprojection validity of the deferred shade's
+        // per-frame histories (GI, shadow, reflections, volumetric fog) and the
+        // ReSTIR reservoirs. The next render() starts them from nothing, as the
+        // first frame does. Meant for the start of a capture once a scene has
+        // finished STREAMING: terrain tiles that land at run-dependent frames
+        // put run-varying content into every history, and an exponential
+        // average never returns to bit-equality within float precision, so a
+        // replayable capture restarts the histories after the scene is stable.
+        // Costs one frame of temporal convergence. Takes effect on the next
+        // render().
+        void resetTemporalHistory();
         [[nodiscard]] double simTime() const;
 
         // Debug/audit readback of the temporal-resolve endpoints for the LAST

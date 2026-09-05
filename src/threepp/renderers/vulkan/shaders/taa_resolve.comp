@@ -565,6 +565,16 @@ void main() {
     // history above is at best the neighbourhood mean, but a freshly revealed
     // surface should read its own current sample, not a clip of stale colour.
     float a = max(clamp((pc.blendAlpha + velocityBump) * antiFlicker, 0.01, 1.0), depthDisocc);
+    // blendAlpha >= 1 is the host's "history invalid" signal (the first resolve
+    // after TaaResolve::invalidateHistory). It has to mean NO history, not a
+    // strong preference for the current frame: the anti-flicker scale above
+    // would otherwise blend up to 90% of a history the host just declared
+    // stale back in, and whatever it held (a scene still streaming in, a
+    // previous camera) then decays only exponentially, never to bit-equality.
+    // The sensor-determinism audit measured exactly that residue in the fjord
+    // scene: identical TAA input, 1-LSB differences in the output for the
+    // rest of the run.
+    if (pc.blendAlpha >= 1.0) a = 1.0;
     // SHADING-REACTIVE content — α floor toward the current frame. Sources +
     // channel semantics: instance_flags.glsl (today: persistent deformers +
     // animated textures — shading changes every frame in ways motion vectors

@@ -2117,6 +2117,33 @@ namespace threepp {
         core()->simTimeSec_ = seconds;
     }
 
+    void VulkanRenderer::resetTemporalHistory() {
+        auto& impl = *core();
+        // Every live view, the primary included: the camera-swap path only
+        // ever reached the secondaries. The flags are the same set a camera
+        // change clears; the reservoir clear is deferred to the frame path,
+        // which drains the device before touching them.
+        impl.forEachLiveView([&] {
+            auto& v = impl.view();
+            if (v.taa_) v.taa_->invalidateHistory();
+            v.prevCameraValid        = false;
+            v.rasterPrevVPValid_     = false;
+            v.rasterPrevJitterValid_ = false;
+            v.deferredCamPrevValid_  = false;
+        });
+        if (impl.probeGI_) impl.probeGI_->invalidateHistory();
+        // The sample index seeds every stochastic pass (ReSTIR, the gathers,
+        // the soft sun, AO). A structural rebuild that cannot match entries by
+        // identity zeroes it, and a scene streaming in does that at
+        // run-dependent frames, so two runs reach the same frame with
+        // different seeds and every ray-fed image differs from then on, with
+        // no history involved. resetAccumulation() restarts the index (and the
+        // motion state, and FSR's history) here, so a capture that begins after
+        // this call draws the same sequence in every run.
+        impl.resetAccumulation();
+        impl.pendingAccumulationReset_ = true;
+    }
+
     double VulkanRenderer::simTime() const {
         return core()->simTimeSec_;
     }

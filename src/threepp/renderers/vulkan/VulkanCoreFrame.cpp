@@ -648,7 +648,9 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                     pendingRenderScaleRealloc_ = false;
                 }
                 if (pendingAccumulationReset_) {
-                    clearGbufImages();
+                    // Every live view: the reset is a per-view act (each view
+                    // owns its histories) and the device is idle here.
+                    forEachLiveView([&] { clearGbufImages(); });
                     pendingAccumulationReset_ = false;
                 }
                 // Views added / removed since the last frame. Same reasoning as

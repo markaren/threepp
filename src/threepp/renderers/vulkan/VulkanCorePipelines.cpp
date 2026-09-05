@@ -30,13 +30,29 @@ void VulkanRenderer::Impl::clearGbufImages() {
 
             // Clears the ReSTIR DI reservoir ping-pong (pos + W) so M=0 on
             // frame 0's read side and the deferred shade's temporal-reuse path
-            // correctly sees "no prior history" instead of garbage.
-            std::array<VkImage, 4> images = {
+            // correctly sees "no prior history" instead of garbage — and, since
+            // 2026-09-05, every other temporal accumulator the shade owns: the
+            // per-slot indirect / momentsSq / reflect / reflAux / shadowVis
+            // histories and the froxel fog accumulator (.a = history length, so
+            // zero reads as "no history"). Before, this "reset" left them all in
+            // place, and whatever they held decayed only exponentially: the
+            // sensor-determinism audit measured the residue of a run-dependent
+            // streaming phase in the frame row for the rest of a run.
+            // Zero history costs a few frames of re-convergence; a capture that
+            // wants replayable frames restarts here once its scene is stable
+            // (VulkanRenderer::resetTemporalHistory).
+            std::vector<VkImage> images = {
                     view().reservoirPosImagesPP[0].image, view().reservoirPosImagesPP[1].image,
                     view().reservoirWImagesPP[0].image, view().reservoirWImagesPP[1].image,
             };
+            for (auto& g : view().rasterGbufs) {
+                for (const VkImage img : {g.indirect.image, g.momentsSq.image, g.reflect.image,
+                                          g.reflAux.image, g.shadowVis.image, g.froxelScatter.image}) {
+                    if (img != VK_NULL_HANDLE) images.push_back(img);
+                }
+            }
 
-            std::array<VkImageMemoryBarrier2, 4> toTransfer{};
+            std::vector<VkImageMemoryBarrier2> toTransfer(images.size());
             for (size_t i = 0; i < images.size(); ++i) {
                 toTransfer[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
                 toTransfer[i].srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
@@ -66,7 +82,7 @@ void VulkanRenderer::Impl::clearGbufImages() {
                                      &clear, 1, &range);
             }
 
-            std::array<VkImageMemoryBarrier2, 4> toGeneral{};
+            std::vector<VkImageMemoryBarrier2> toGeneral(images.size());
             for (size_t i = 0; i < images.size(); ++i) {
                 toGeneral[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
                 toGeneral[i].srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
