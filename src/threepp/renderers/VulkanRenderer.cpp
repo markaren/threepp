@@ -1442,6 +1442,9 @@ namespace threepp {
             if (!impl.eventCam_) {
                 impl.eventCam_ = std::make_unique<vulkan::EventCameraDetector>(*impl.ctx);
             }
+            // The stream ring is sized for the per-pixel cap at resize(); a
+            // cap set before enabling must reach the detector first.
+            impl.eventCam_->setMaxEventsPerPixel(impl.eventCamParams_.maxEventsPerPixel);
             const VkExtent2D ext = impl.ctx->swapchainExtent();
             // Honour any user-pinned sensor resolution; 0 means "track
             // swapchain". Clamp to [16, swapchain] so we never dispatch
@@ -1501,6 +1504,16 @@ namespace threepp {
         impl.eventCamParams_.minLuma           = p.minLuma;
         impl.eventCamParams_.maxEventsPerPixel = p.maxEventsPerPixel;
         impl.eventCamParams_.frameTimeUs       = p.frameTimeUs;
+        // A larger per-pixel cap needs a larger stream ring (the ring is
+        // sized so a frame can never overflow it). Reallocation destroys
+        // buffers a pending submission may still bind, hence the idle wait,
+        // taken only when growth is actually needed.
+        if (impl.eventCam_) {
+            if (impl.eventCam_->needsGrowthFor(p.maxEventsPerPixel)) {
+                vkDeviceWaitIdle(impl.ctx->device());
+            }
+            impl.eventCam_->setMaxEventsPerPixel(p.maxEventsPerPixel);
+        }
     }
 
     VulkanRenderer::EventCameraParams VulkanRenderer::eventCameraParams() const {

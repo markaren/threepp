@@ -12,6 +12,11 @@
 //     vulkan_aov_audit --frames 120 --out b.txt
 //     vulkan_aov_audit --compare a.txt b.txt      # exit 0 = bit-identical
 //     vulkan_aov_audit --fsr --out a_fsr.txt       # the rgb.fsr row instead of rgb
+//     vulkan_aov_audit --events --out a_ev.txt     # + the GPU event-camera stream row
+//     vulkan_aov_audit --scene fjord --terrain geodata/norddal --out a_fj.txt
+//                                                  # the capstone environment: GeoScene
+//                                                  # terrain + FFT ocean + fog + clouds,
+//                                                  # camera descending through the surface
 //
 // The G-buffer AOVs are raster-prepass products, so they are expected to be
 // bit-exact per device — unlike the RT-fed beauty frame. The `rgb` row hashes
@@ -22,8 +27,11 @@
 
 #include "threepp/threepp.hpp"
 
+#include "threepp/extras/terrain/GeoScene.hpp"
+#include "threepp/objects/Ocean.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -161,12 +169,42 @@ int main(int argc, char** argv) {
     // whether the shipped default replays is a question the matrix must
     // answer, but never by folding it into the TAA row's claim.
     bool fsr = false;
+    // --events: the GPU event camera (DVS) rides along and its stream is
+    // hashed per frame as row `events`. The detector's sub-frame clock is
+    // driven from the scripted dt (frameTimeUs = 1e6/60); --events-default-clock
+    // leaves it at the shipped default of 0 so the default's time source is
+    // itself measured. --events-final looks at the presented frame instead of
+    // the deterministic Lambert proxy.
+    bool events = false, eventsFinal = false, eventsDefaultClock = false;
+    // --scene fjord --terrain <pack>: the capstone environment in place of the
+    // box scene. GeoScene terrain (tiles, cliff shell, canopy forest), the FFT
+    // ocean in its fjord look, volumetric + height fog, clouds, and underwater
+    // murk, with the camera descending from 3 m above the sea to 4 m below it
+    // over the run so both the air and the water-column passes are hashed.
+    // Terrain tiles bake ASYNCHRONOUSLY: a fixed settle phase runs first, and
+    // the `geo` row reports the tile/bake counters so a divergence here is
+    // attributable to streaming rather than to shading.
+    std::string sceneName = "default";
+    std::string terrainDir;
+    // --hold: fjord camera stays at its start pose (no descent, so no LOD
+    // churn from camera motion). --settle-idle: after the fixed settle, keep
+    // rendering until the terrain reports no bake in flight, then 60 frames
+    // more, before hashing. Together they separate "streaming landed at
+    // different frames" from "the environment passes themselves diverge".
+    bool hold = false, settleIdle = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
         else if (arg == "--out" && i + 1 < argc) outPath = argv[++i];
         else if (arg == "--scene-edit") sceneEdit = true;
         else if (arg == "--fsr") fsr = true;
+        else if (arg == "--events") events = true;
+        else if (arg == "--events-final") events = eventsFinal = true;
+        else if (arg == "--events-default-clock") events = eventsDefaultClock = true;
+        else if (arg == "--scene" && i + 1 < argc) sceneName = argv[++i];
+        else if (arg == "--terrain" && i + 1 < argc) terrainDir = argv[++i];
+        else if (arg == "--hold") hold = true;
+        else if (arg == "--settle-idle") settleIdle = true;
         else if (arg == "--edit-add" && i + 1 < argc) editAddFrame = std::atoi(argv[++i]);
         else if (arg == "--edit-remove" && i + 1 < argc) editRemoveFrame = std::atoi(argv[++i]);
         else if (arg == "--rgbtrace" && i + 1 < argc) rgbTracePath = argv[++i];
@@ -215,6 +253,27 @@ int main(int argc, char** argv) {
     if (hardSun) renderer.setSunAngularRadius(0.f);
     if (noProbes) renderer.setProbeGI(false);
 
+    const bool fjord = sceneName == "fjord";
+    if (sceneName != "default" && !fjord) {
+        std::cout << "unknown --scene " << sceneName << " (default | fjord)\n";
+        return 1;
+    }
+    if (fjord && terrainDir.empty()) {
+        std::cout << "--scene fjord needs --terrain <pack dir> (e.g. geodata/norddal)\n";
+        return 1;
+    }
+
+    constexpr std::uint32_t kEvW = 320, kEvH = 240;
+    if (events) {
+        renderer.setEventCameraEnabled(true);
+        renderer.setEventCameraResolution(kEvW, kEvH);
+        renderer.setEventCameraSource(eventsFinal ? VulkanRenderer::EventCameraSource::Final
+                                                  : VulkanRenderer::EventCameraSource::Shaded);
+        VulkanRenderer::EventCameraParams ep;
+        if (!eventsDefaultClock) ep.frameTimeUs = 16667u;// the scripted 60 Hz dt
+        renderer.setEventCameraParams(ep);
+    }
+
     Scene scene;
     scene.background = Color(0x304050);
 
@@ -222,17 +281,71 @@ int main(int argc, char** argv) {
     sun->position.set(20.f, 30.f, 15.f);
     scene.add(sun);
 
-    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 100.f);
-    camera->position.set(0.f, 3.f, 9.f);
-    camera->lookAt(Vector3(0.f, 1.f, 0.f));
+    // Everything the box scene places is relative to `base`: the origin in the
+    // default scene, a point 2.5 m above the sea at the pack centre in the fjord.
+    Vector3 base(0.f, 0.f, 0.f);
+    std::shared_ptr<terrain::GeoScene> geo;
+    float seaLevel = 0.f;
+    if (fjord) {
+        terrain::GeoSceneOptions go;
+        go.packDir = terrainDir;
+        go.focus.set(0.f, 0.f, 0.f);
+        go.scatter = false;// the camera lives over and under water
+        geo = terrain::GeoScene::create(go);
+        scene.add(geo);
+        seaLevel = geo->seaLevel();
+        base.set(0.f, seaLevel + 2.5f, 0.f);
 
-    auto ground = Mesh::create(BoxGeometry::create(30.f, 0.5f, 30.f),
-                               MeshStandardMaterial::create(
-                                       MeshStandardMaterial::Params{}.color(Color(0x556b45))));
-    ground->position.y = -0.25f;
-    scene.add(ground);
-    renderer.setObjectInstanceId(*ground, 1);
-    renderer.setObjectClassId(*ground, 1);
+        Ocean::Options oo;
+        oo.size = geo->packWorldSize() * 1.2f;
+        oo.resolution = 384;
+        oo.look = Ocean::Look::Fjord;
+        oo.windSpeed = 5.5f;
+        oo.windTheta = 215.f * math::DEG2RAD;
+        oo.choppiness = 0.45f;
+        oo.tileSize1 = 90.f;
+        oo.tileSize2 = 7.f;
+        oo.fftSize = 512;
+        auto ocean = Ocean::create(oo);
+        ocean->position.y = seaLevel + 0.15f;
+        scene.add(ocean);
+
+        // Air: haze with volumetrics and a height profile. Sky: a cloud shell.
+        // Water column: murk clipped to below the surface.
+        scene.fog = FogExp2(Color(0.62f, 0.70f, 0.78f), 0.0025f);
+        renderer.setVolumetricFog(true);
+        VulkanRenderer::HeightFogSettings hf;
+        hf.density = 0.f;// profile-only: scene.fog supplies the density
+        hf.baseY = seaLevel;
+        hf.falloff = 120.f;
+        renderer.setHeightFog(hf);
+        VulkanRenderer::CloudSettings cs;
+        cs.coverage = 0.5f;
+        cs.bottomY = seaLevel + 700.f;
+        cs.topY = seaLevel + 1500.f;
+        renderer.setClouds(cs);
+        renderer.setFogWaterSurfaceY(seaLevel);
+        renderer.setUnderwaterMurk(0.06f, Color(0.02f, 0.08f, 0.10f));
+        const auto st = geo->stats();
+        std::cout << "fjord: pack " << geo->packWorldSize() << " m, sea " << seaLevel
+                  << " m, loaded in " << st.loadSeconds << " s, shell tris " << st.shellTris
+                  << ", forest cells " << st.forestCells << "\n";
+    }
+
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, fjord ? 6000.f : 100.f);
+    camera->position.set(base.x + 0.f, base.y + 3.f, base.z + 9.f);
+    camera->lookAt(Vector3(base.x, base.y + 1.f, base.z));
+
+    std::shared_ptr<Mesh> ground;
+    if (!fjord) {
+        ground = Mesh::create(BoxGeometry::create(30.f, 0.5f, 30.f),
+                              MeshStandardMaterial::create(
+                                      MeshStandardMaterial::Params{}.color(Color(0x556b45))));
+        ground->position.y = -0.25f;
+        scene.add(ground);
+        renderer.setObjectInstanceId(*ground, 1);
+        renderer.setObjectClassId(*ground, 1);
+    }
 
     // One mover (translates + rotates on the frame clock: exercises Motion and
     // per-frame TLAS/G-buffer updates), one spinner, one static occluder.
@@ -246,7 +359,7 @@ int main(int argc, char** argv) {
     auto spinner = Mesh::create(SphereGeometry::create(0.7f, 32, 16),
                                 MeshStandardMaterial::create(
                                         MeshStandardMaterial::Params{}.color(Color(0x3c78c8))));
-    spinner->position.set(-2.5f, 1.f, 0.f);
+    spinner->position.set(base.x - 2.5f, base.y + 1.f, base.z);
     scene.add(spinner);
     renderer.setObjectInstanceId(*spinner, 3);
     renderer.setObjectClassId(*spinner, 2);
@@ -254,7 +367,7 @@ int main(int argc, char** argv) {
     auto pillar = Mesh::create(BoxGeometry::create(0.8f, 4.f, 0.8f),
                                MeshStandardMaterial::create(
                                        MeshStandardMaterial::Params{}.color(Color(0x808890))));
-    pillar->position.set(2.5f, 2.f, -1.f);
+    pillar->position.set(base.x + 2.5f, base.y + 2.f, base.z - 1.f);
     scene.add(pillar);
     renderer.setObjectInstanceId(*pillar, 4);
     renderer.setObjectClassId(*pillar, 3);
@@ -270,7 +383,7 @@ int main(int argc, char** argv) {
                               MeshStandardMaterial::create(
                                       MeshStandardMaterial::Params{}.color(Color(0xb03a48))));
     waver->rotation.x = -math::PI / 2;
-    waver->position.set(-0.5f, 0.6f, 3.0f);
+    waver->position.set(base.x - 0.5f, base.y + 0.6f, base.z + 3.0f);
     scene.add(waver);
     renderer.setObjectInstanceId(*waver, 5);
     renderer.setObjectClassId(*waver, 4);
@@ -308,7 +421,39 @@ int main(int argc, char** argv) {
     auto editBox = Mesh::create(BoxGeometry::create(1.f, 1.f, 1.f),
                                 MeshStandardMaterial::create(
                                         MeshStandardMaterial::Params{}.color(Color(0xd0c060))));
-    editBox->position.set(3.5f, 1.0f, 3.5f);
+    editBox->position.set(base.x + 3.5f, base.y + 1.0f, base.z + 3.5f);
+
+    // ---- fjord settle: let the asynchronous tile bakes land BEFORE hashing ---
+    // A fixed frame count (not "until idle"), so the two runs enter the hash
+    // loop after the same number of renders; whether the bakes had all landed
+    // by then is reported in the `geo` row rather than assumed.
+    constexpr int kSettleFrames = 240;
+    int settleFrames = 0;
+    if (fjord) {
+        for (int f = 0; f < kSettleFrames; ++f) {
+            renderer.setSimTime(0.0);
+            geo->update(camera->position);
+            renderer.render(scene, *camera);
+            ++settleFrames;
+        }
+        if (settleIdle) {
+            // Until the tile baker is idle, then a fixed tail so the last landed
+            // tile has been through the temporal passes. Bounded: a baker that
+            // never idles is itself a finding, printed below.
+            int idleTail = -1;
+            for (int f = 0; f < 3600 && idleTail != 0; ++f) {
+                renderer.setSimTime(0.0);
+                geo->update(camera->position);
+                renderer.render(scene, *camera);
+                ++settleFrames;
+                if (idleTail < 0 && geo->stats().baking == 0) idleTail = 60;
+                else if (idleTail > 0) --idleTail;
+            }
+        }
+        const auto st = geo->stats();
+        std::cout << "fjord settle: " << settleFrames << " frames, tiles " << st.tiles
+                  << ", bakes in flight " << st.baking << "\n";
+    }
 
     // ---- render + hash ------------------------------------------------------
 
@@ -332,6 +477,15 @@ int main(int argc, char** argv) {
     Stream taaIn, taaHist, shadeHdr;
     std::vector<std::uint8_t> taaInBuf, taaHistBuf, hdrBuf;
     int failures = 0;
+    // Two hashes of the same stream: `events` in the order the GPU appended
+    // them, `events.sorted` in a canonical order (t, y, x, polarity). A DVS
+    // stream is a set with timestamps, and consumers sort by time; if only the
+    // raw row differs, the SET replays and the append order is what scheduling
+    // moves.
+    Stream evRow, evSorted;
+    std::vector<VulkanRenderer::Event> evBuf(events ? std::size_t(kEvW) * kEvH * 5 : 0);
+    std::uint64_t evCount = 0, evOverflows = 0;
+    std::ostringstream evTrace;
 
     for (int f = 0; f < frames; ++f) {
         const double t = f * kDt;
@@ -339,11 +493,21 @@ int main(int argc, char** argv) {
         // every other formerly-wall-clock input advance on this scripted time.
         renderer.setSimTime(t);
         if (!staticScene) {
-            mover->position.set(static_cast<float>(2.0 * std::sin(t * 1.3)), 1.f,
-                                static_cast<float>(1.5 * std::cos(t * 0.9)));
+            mover->position.set(base.x + static_cast<float>(2.0 * std::sin(t * 1.3)), base.y + 1.f,
+                                base.z + static_cast<float>(1.5 * std::cos(t * 0.9)));
             mover->rotation.y = static_cast<float>(t * 1.7);
             spinner->rotation.x = static_cast<float>(t * 2.3);
             deform(t);
+        }
+        if (fjord) {
+            // Descend from 3 m above the sea to 4 m below it: the surface is
+            // crossed around 60% of the run, so both media get hashed frames.
+            // --hold keeps the start pose.
+            const float y0 = base.y + 3.f, y1 = seaLevel - 4.f;
+            const float k = hold ? 0.f : static_cast<float>(f) / static_cast<float>(std::max(1, frames - 1));
+            camera->position.set(base.x, y0 + (y1 - y0) * k, base.z + 9.f);
+            camera->lookAt(Vector3(base.x, base.y + 1.f, base.z));
+            geo->update(camera->position);
         }
         if (sceneEdit) {
             if (f == editAddFrame) {
@@ -361,12 +525,49 @@ int main(int argc, char** argv) {
 
         renderer.render(scene, *camera);
 
+        if (events) {
+            bool overflowed = false;
+            const std::size_t n = renderer.readEventStreamInto(evBuf.data(), evBuf.size(), &overflowed);
+            const std::uint64_t n64 = n;
+            evRow.hash.bytes(&n64, sizeof(n64));
+            evRow.hash.bytes(evBuf.data(), n * sizeof(VulkanRenderer::Event));
+            evRow.bytes += n * sizeof(VulkanRenderer::Event);
+            ++evRow.frames;
+            evCount += n;
+            if (overflowed) ++evOverflows;
+            std::sort(evBuf.begin(), evBuf.begin() + static_cast<std::ptrdiff_t>(n),
+                      [](const VulkanRenderer::Event& a, const VulkanRenderer::Event& b) {
+                          if (a.t_us != b.t_us) return a.t_us < b.t_us;
+                          if (a.y != b.y) return a.y < b.y;
+                          if (a.x != b.x) return a.x < b.x;
+                          return a.polarity < b.polarity;
+                      });
+            evSorted.hash.bytes(&n64, sizeof(n64));
+            evSorted.hash.bytes(evBuf.data(), n * sizeof(VulkanRenderer::Event));
+            evSorted.bytes += n * sizeof(VulkanRenderer::Event);
+            ++evSorted.frames;
+            if (!rgbTracePath.empty()) {
+                Fnv one;
+                one.bytes(evBuf.data(), n * sizeof(VulkanRenderer::Event));
+                evTrace << "f" << f << " events=" << n << (overflowed ? " OVERFLOW" : "")
+                        << " sorted=" << std::hex << one.value() << std::dec << "\n";
+            }
+        }
+
         for (auto& row : rows) {
             int w = 0, h = 0, bpp = 0;
             if (renderer.readGBufferAOV(row.aov, buf, w, h, bpp)) {
                 row.stream.hash.bytes(buf.data(), buf.size());
                 row.stream.bytes += buf.size();
                 ++row.stream.frames;
+                if (!rgbTracePath.empty() && row.aov == VulkanRenderer::GBufferAOV::Depth) {
+                    // Depth is the cleanest onset marker: it has no temporal
+                    // history, so the first frame it differs on is the frame
+                    // the SCENE differed on.
+                    Fnv one;
+                    one.bytes(buf.data(), buf.size());
+                    rgbTrace << "f" << f << " depth=" << std::hex << one.value() << std::dec << "\n";
+                }
             } else if (f > 0) {
                 // The first frame legitimately has nothing to read yet
                 // (readGBufferAOV documents it); anything later is a failure.
@@ -436,7 +637,7 @@ int main(int argc, char** argv) {
     }
     if (!rgbTracePath.empty()) {
         std::ofstream tf(rgbTracePath);
-        tf << rgbTrace.str();
+        tf << rgbTrace.str() << evTrace.str();
     }
 
     std::ostringstream manifest;
@@ -451,6 +652,21 @@ int main(int argc, char** argv) {
         emit("taa.history", taaHist);
     }
     if (hdrSplit) emit("shade.hdr", shadeHdr);
+    if (events) {
+        emit("events", evRow);
+        emit("events.sorted", evSorted);
+        manifest << "events.meta count=" << evCount << " overflows=" << evOverflows
+                 << " source=" << (eventsFinal ? "final" : "shaded")
+                 << " clock=" << (eventsDefaultClock ? "default" : "scripted")
+                 << " res=" << kEvW << "x" << kEvH << "\n";
+    }
+    if (fjord) {
+        const auto st = geo->stats();
+        manifest << "geo tiles=" << st.tiles << " baking=" << st.baking
+                 << " shellTris=" << st.shellTris << " forestCells=" << st.forestCells
+                 << " settle=" << settleFrames << " hold=" << (hold ? 1 : 0)
+                 << " settleIdle=" << (settleIdle ? 1 : 0) << "\n";
+    }
 
     // The graduated-path proof: a manifest row both runs must agree on, and a
     // hard failure if the deformer never graduated — a certificate that reads
@@ -467,6 +683,8 @@ int main(int argc, char** argv) {
              << " editRemove=" << (sceneEdit ? editRemoveFrame : -1)
              << " static=" << (staticScene ? 1 : 0)
              << " resolve=" << (fsr ? "fsr" : "taa")
+             << " scene=" << sceneName
+             << " events=" << (events ? (eventsFinal ? "final" : "shaded") : "off")
              << " tlasRebuilds=" << tl.fullRebuilds << " tlasInstances=" << tl.instances << "\n";
     if (!staticScene && dyn.graduated == 0) {
         std::cout << "DYNAMIC-GEOM PATH NEVER ENGAGED (deformer failed to graduate)\n";

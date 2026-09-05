@@ -71,12 +71,27 @@ namespace threepp::vulkan {
             uint32_t t_us;
         };
 
-        // Capacity = max events the stream buffer can hold per frame.
-        // Beyond this the shader sets the overflow flag and drops further
-        // events for that frame. Default sized for a busy 640×480 scene
-        // (real DVS payloads top out around 50–100k events/frame in
-        // typical motion).
-        static constexpr uint32_t kEventStreamCapacity = 256u * 1024u;
+        // Floor for the per-frame event stream. The WORKING capacity is
+        // max(floor, width * height * maxEventsPerPixel): the per-pixel cap
+        // bounds a frame's worst case, so a stream sized to it cannot
+        // overflow. That matters beyond memory hygiene: the emit is an atomic
+        // append, and when a frame exceeds the capacity WHICH events survive
+        // is decided by workgroup scheduling. The sensor-determinism audit
+        // caught exactly that on a whole-frame burst (one of 120 frames hit
+        // the old fixed 256k cap; every other frame replayed bit for bit).
+        // An append list that never truncates is exact in content, and
+        // readEventStreamInto time-orders the packet, so the stream is then
+        // reproducible end to end. Cost: 16 B per event per ring slot, three
+        // slots (320x240x5 = 18 MB, 640x480x5 = 74 MB) — pin the sensor
+        // resolution (setEventCameraResolution) rather than tracking a large
+        // swapchain.
+        static constexpr uint32_t kEventStreamCapacityFloor = 256u * 1024u;
+        [[nodiscard]] uint32_t streamCapacity() const { return streamCapacity_; }
+        // Per-pixel event cap the stream ring is sized for. Growing it past
+        // the current allocation reallocates the ring: the caller must have
+        // the device idle, as for resize(). Returns true if it reallocated.
+        bool setMaxEventsPerPixel(uint32_t maxEventsPerPixel);
+        [[nodiscard]] bool needsGrowthFor(uint32_t maxEventsPerPixel) const;
 
         explicit EventCameraDetector(VulkanContext& ctx);
         ~EventCameraDetector();
@@ -156,6 +171,13 @@ namespace threepp::vulkan {
         // Per-ring-slot event stream buffer. 16B header + capacity·sizeof(Event)
         // bytes of payload. Host-visible so readEventStreamInto can read directly.
         std::array<Buffer, kRingSize> eventStreamRing_{};
+        // Working capacity of each stream slot (events), and the per-pixel
+        // cap it was sized for. See kEventStreamCapacityFloor.
+        uint32_t streamCapacity_ = 0;
+        uint32_t perPixelCap_ = 5;
+        [[nodiscard]] uint32_t requiredCapacity(uint32_t w, uint32_t h, uint32_t perPixel) const;
+        void allocateStreams();// (re)create the ring buffers at streamCapacity_
+        void bindStreams();    // point binding 3 of every slot's set at its buffer
         // Slot we'll WRITE next on record(); we then advance.
         uint32_t writeSlot_ = 0;
 

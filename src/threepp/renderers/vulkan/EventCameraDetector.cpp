@@ -308,24 +308,11 @@ namespace threepp::vulkan {
                             VMA_ALLOCATION_CREATE_MAPPED_BIT);
         }
 
-        // (Re)allocate the per-ring-slot event stream buffers. Host-visible
-        // so the host can mmap and read directly; STORAGE_BUFFER_BIT for the
-        // shader's atomic appends, TRANSFER_DST_BIT so we can vkCmdFillBuffer
-        // the header to zero at frame start. Size = 16B header + capacity
-        // events.
-        const VkDeviceSize streamBytes =
-                sizeof(EventStreamHeader) +
-                static_cast<VkDeviceSize>(kEventStreamCapacity) * sizeof(Event);
-        for (auto& b : eventStreamRing_) {
-            destroyBuffer(ctx_.allocator(), b);
-            b = createBuffer(
-                    ctx_.allocator(), ctx_.device(), streamBytes,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
-                    VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
-                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
-        }
+        // (Re)allocate the per-ring-slot event stream buffers, sized to the
+        // per-frame worst case for this resolution and per-pixel cap (see
+        // kEventStreamCapacityFloor for why they must never overflow).
+        streamCapacity_ = requiredCapacity(width, height, perPixelCap_);
+        allocateStreams();
 
         // Update the storage-image bindings (1 = log history, 2 = accumulator)
         // and the per-slot event-stream binding (3) on EVERY ring-slot set.
@@ -424,7 +411,7 @@ namespace threepp::vulkan {
         // overwrite all 16 bytes with the desired values via vkCmdUpdateBuffer.
         // Cheaper than a roundtrip mapped write.
         const EventStreamHeader hdr{
-                0u, kEventStreamCapacity, 0u, params.frameTimeUs};
+                0u, streamCapacity_, 0u, params.frameTimeUs};
         vkCmdUpdateBuffer(cb, eventStreamRing_[writeSlot_].handle,
                           0, sizeof(hdr), &hdr);
 
@@ -560,6 +547,64 @@ namespace threepp::vulkan {
         std::memcpy(dst, mapped, static_cast<size_t>(bytes));
         vmaUnmapMemory(ctx_.allocator(), src.alloc);
         return static_cast<size_t>(bytes);
+    }
+
+    uint32_t EventCameraDetector::requiredCapacity(uint32_t w, uint32_t h, uint32_t perPixel) const {
+        const uint64_t need = static_cast<uint64_t>(w) * h * std::max(1u, perPixel);
+        const uint64_t capped = std::min<uint64_t>(need, 0xFFFFFFFFull);
+        return std::max<uint32_t>(kEventStreamCapacityFloor, static_cast<uint32_t>(capped));
+    }
+
+    void EventCameraDetector::allocateStreams() {
+        // Host-visible so the host can mmap and read directly; STORAGE_BUFFER_BIT
+        // for the shader's atomic appends, TRANSFER_DST_BIT so the header can be
+        // rewritten at frame start. Size = 16B header + capacity events.
+        const VkDeviceSize streamBytes =
+                sizeof(EventStreamHeader) +
+                static_cast<VkDeviceSize>(streamCapacity_) * sizeof(Event);
+        for (auto& b : eventStreamRing_) {
+            destroyBuffer(ctx_.allocator(), b);
+            b = createBuffer(
+                    ctx_.allocator(), ctx_.device(), streamBytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+        }
+    }
+
+    void EventCameraDetector::bindStreams() {
+        std::array<VkDescriptorBufferInfo, kRingSize> infos{};
+        std::array<VkWriteDescriptorSet, kRingSize> w{};
+        for (uint32_t s = 0; s < kRingSize; ++s) {
+            infos[s].buffer = eventStreamRing_[s].handle;
+            infos[s].offset = 0;
+            infos[s].range  = VK_WHOLE_SIZE;
+            w[s].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[s].dstSet          = descSets_[s];
+            w[s].dstBinding      = 3;
+            w[s].descriptorCount = 1;
+            w[s].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[s].pBufferInfo     = &infos[s];
+        }
+        vkUpdateDescriptorSets(ctx_.device(), kRingSize, w.data(), 0, nullptr);
+    }
+
+    bool EventCameraDetector::needsGrowthFor(uint32_t maxEventsPerPixel) const {
+        if (width_ == 0 || height_ == 0) return false;
+        return requiredCapacity(width_, height_, maxEventsPerPixel) > streamCapacity_;
+    }
+
+    bool EventCameraDetector::setMaxEventsPerPixel(uint32_t maxEventsPerPixel) {
+        perPixelCap_ = std::max(1u, maxEventsPerPixel);
+        if (!needsGrowthFor(perPixelCap_)) return false;
+        // Device idle is the caller's contract (mirrors resize()): the old
+        // buffers may be bound by a still-pending submission otherwise.
+        streamCapacity_ = requiredCapacity(width_, height_, perPixelCap_);
+        allocateStreams();
+        bindStreams();
+        return true;
     }
 
     size_t EventCameraDetector::readEventStreamInto(Event* dst, size_t cap,
