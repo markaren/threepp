@@ -482,6 +482,15 @@ void VulkanRenderer::Impl::reallocateRenderExtentResources() {
         }
 
 void VulkanRenderer::Impl::recreateSwapchainAndDescriptors() {
+            // Logged because a recreate reallocates the render-extent resources
+            // and with them every temporal history: a run that recreates and a
+            // run that does not cannot agree on a frame afterwards. The present
+            // path recreates on VK_SUBOPTIMAL_KHR as well as on a real resize,
+            // and the compositor hands SUBOPTIMAL to a hidden window whenever
+            // another process is presenting, so a replay audit has to be able
+            // to see it happen (frame index, not wall time).
+            std::fprintf(stderr, "[VulkanRenderer] swapchain recreated at frame %llu\n",
+                         static_cast<unsigned long long>(frameSerial_));
             ctx->recreateSwapchain();// device-idles internally
             // imageCount_ is pinned, not refreshed — see its declaration for why
             // (TaaResolve's set arrays were SIZED from it at construction, so the
