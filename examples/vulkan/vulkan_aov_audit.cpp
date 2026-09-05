@@ -28,6 +28,8 @@
 #include "threepp/threepp.hpp"
 
 #include "threepp/extras/terrain/GeoScene.hpp"
+#include "threepp/helpers/LidarModel.hpp"
+#include "threepp/helpers/PathTracedLidarSensor.hpp"
 #include "threepp/objects/Ocean.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 
@@ -192,6 +194,22 @@ int main(int argc, char** argv) {
     // more, before hashing. Together they separate "streaming landed at
     // different frames" from "the environment passes themselves diverge".
     bool hold = false, settleIdle = false;
+    // --fjord-off a,b,c: leave named environment features out of the fjord
+    // scene, for bisecting a frame-row divergence to a pass. Names: ocean,
+    // fog (scene.fog + volumetrics + height fog), clouds, murk, forest,
+    // shell, bands, objects (the box-scene movers).
+    std::string fjordOff;
+    // --settle N: a FIXED settle length in place of the 240-frame default and
+    // the idle heuristic, so two runs of a bisection pair enter the hash loop
+    // after exactly the same number of renders whatever the baker did.
+    int settleFixed = 0;
+    // --lidar: a VLP-16 fired from the camera pose every 6th frame, its
+    // returns (range, instance id, return flag) hashed as row `lidar`. First
+    // hit, no shading, no history: if the shaded rows differ while this one
+    // is exact, the rays agree on the geometry and the divergence is in the
+    // shading; if this one differs too, the ray tracer sees different
+    // geometry from run to run while the rasterizer (the AOV rows) does not.
+    bool lidar = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
@@ -205,6 +223,9 @@ int main(int argc, char** argv) {
         else if (arg == "--terrain" && i + 1 < argc) terrainDir = argv[++i];
         else if (arg == "--hold") hold = true;
         else if (arg == "--settle-idle") settleIdle = true;
+        else if (arg == "--fjord-off" && i + 1 < argc) fjordOff = argv[++i];
+        else if (arg == "--settle" && i + 1 < argc) settleFixed = std::atoi(argv[++i]);
+        else if (arg == "--lidar") lidar = true;
         else if (arg == "--edit-add" && i + 1 < argc) editAddFrame = std::atoi(argv[++i]);
         else if (arg == "--edit-remove" && i + 1 < argc) editRemoveFrame = std::atoi(argv[++i]);
         else if (arg == "--rgbtrace" && i + 1 < argc) rgbTracePath = argv[++i];
@@ -286,11 +307,26 @@ int main(int argc, char** argv) {
     Vector3 base(0.f, 0.f, 0.f);
     std::shared_ptr<terrain::GeoScene> geo;
     float seaLevel = 0.f;
+    auto off = [&](const char* name) {
+        const std::string n = name;
+        std::size_t pos = 0;
+        while (pos <= fjordOff.size()) {
+            const std::size_t comma = fjordOff.find(',', pos);
+            const std::string item = fjordOff.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+            if (item == n) return true;
+            if (comma == std::string::npos) break;
+            pos = comma + 1;
+        }
+        return false;
+    };
     if (fjord) {
         terrain::GeoSceneOptions go;
         go.packDir = terrainDir;
         go.focus.set(0.f, 0.f, 0.f);
         go.scatter = false;// the camera lives over and under water
+        go.forest = !off("forest");
+        go.cliffShell = !off("shell");
+        go.bands = !off("bands");
         geo = terrain::GeoScene::create(go);
         scene.add(geo);
         seaLevel = geo->seaLevel();
@@ -306,26 +342,34 @@ int main(int argc, char** argv) {
         oo.tileSize1 = 90.f;
         oo.tileSize2 = 7.f;
         oo.fftSize = 512;
-        auto ocean = Ocean::create(oo);
-        ocean->position.y = seaLevel + 0.15f;
-        scene.add(ocean);
+        if (!off("ocean")) {
+            auto ocean = Ocean::create(oo);
+            ocean->position.y = seaLevel + 0.15f;
+            scene.add(ocean);
+        }
 
         // Air: haze with volumetrics and a height profile. Sky: a cloud shell.
         // Water column: murk clipped to below the surface.
-        scene.fog = FogExp2(Color(0.62f, 0.70f, 0.78f), 0.0025f);
-        renderer.setVolumetricFog(true);
-        VulkanRenderer::HeightFogSettings hf;
-        hf.density = 0.f;// profile-only: scene.fog supplies the density
-        hf.baseY = seaLevel;
-        hf.falloff = 120.f;
-        renderer.setHeightFog(hf);
-        VulkanRenderer::CloudSettings cs;
-        cs.coverage = 0.5f;
-        cs.bottomY = seaLevel + 700.f;
-        cs.topY = seaLevel + 1500.f;
-        renderer.setClouds(cs);
-        renderer.setFogWaterSurfaceY(seaLevel);
-        renderer.setUnderwaterMurk(0.06f, Color(0.02f, 0.08f, 0.10f));
+        if (!off("fog")) {
+            scene.fog = FogExp2(Color(0.62f, 0.70f, 0.78f), 0.0025f);
+            renderer.setVolumetricFog(true);
+            VulkanRenderer::HeightFogSettings hf;
+            hf.density = 0.f;// profile-only: scene.fog supplies the density
+            hf.baseY = seaLevel;
+            hf.falloff = 120.f;
+            renderer.setHeightFog(hf);
+        }
+        if (!off("clouds")) {
+            VulkanRenderer::CloudSettings cs;
+            cs.coverage = 0.5f;
+            cs.bottomY = seaLevel + 700.f;
+            cs.topY = seaLevel + 1500.f;
+            renderer.setClouds(cs);
+        }
+        if (!off("murk")) {
+            renderer.setFogWaterSurfaceY(seaLevel);
+            renderer.setUnderwaterMurk(0.06f, Color(0.02f, 0.08f, 0.10f));
+        }
         const auto st = geo->stats();
         std::cout << "fjord: pack " << geo->packWorldSize() << " m, sea " << seaLevel
                   << " m, loaded in " << st.loadSeconds << " s, shell tris " << st.shellTris
@@ -430,23 +474,31 @@ int main(int argc, char** argv) {
     constexpr int kSettleFrames = 240;
     int settleFrames = 0;
     if (fjord) {
-        for (int f = 0; f < kSettleFrames; ++f) {
+        const int fixed = settleFixed > 0 ? settleFixed : kSettleFrames;
+        for (int f = 0; f < fixed; ++f) {
             renderer.setSimTime(0.0);
             geo->update(camera->position);
             renderer.render(scene, *camera);
             ++settleFrames;
         }
-        if (settleIdle) {
+        if (settleIdle && settleFixed <= 0) {
             // Until the tile baker is idle, then a fixed tail so the last landed
             // tile has been through the temporal passes. Bounded: a baker that
             // never idles is itself a finding, printed below.
-            int idleTail = -1;
+            // "Idle" = no bake in flight, OR the in-flight count has not moved
+            // for 300 frames (the norddal pack holds four bakes in flight
+            // indefinitely; a baker that never drains is reported, not waited
+            // on forever).
+            int idleTail = -1, lastBaking = -1, stableFor = 0;
             for (int f = 0; f < 3600 && idleTail != 0; ++f) {
                 renderer.setSimTime(0.0);
                 geo->update(camera->position);
                 renderer.render(scene, *camera);
                 ++settleFrames;
-                if (idleTail < 0 && geo->stats().baking == 0) idleTail = 60;
+                const int baking = geo->stats().baking;
+                stableFor = (baking == lastBaking) ? stableFor + 1 : 0;
+                lastBaking = baking;
+                if (idleTail < 0 && (baking == 0 || stableFor >= 300)) idleTail = 60;
                 else if (idleTail > 0) --idleTail;
             }
         }
@@ -486,6 +538,13 @@ int main(int argc, char** argv) {
     std::vector<VulkanRenderer::Event> evBuf(events ? std::size_t(kEvW) * kEvH * 5 : 0);
     std::uint64_t evCount = 0, evOverflows = 0;
     std::ostringstream evTrace;
+    // The first-hit instrument (see --lidar). Not added to the scene: it
+    // carries no geometry and updates its own matrix when parentless.
+    PathTracedLidarSensor lidarSensor(LidarModel::VLP16(), fjord ? 3000.f : 25.f);
+    lidarSensor.params.detectorThreshold = 0.f;
+    Stream lidarRow;
+    std::vector<LidarReturn> lidarReturns;
+    std::uint64_t lidarHits = 0;
 
     for (int f = 0; f < frames; ++f) {
         const double t = f * kDt;
@@ -524,6 +583,29 @@ int main(int argc, char** argv) {
         }
 
         renderer.render(scene, *camera);
+
+        if (lidar && f % 6 == 0) {
+            lidarSensor.position.copy(camera->position);
+            lidarSensor.rotation.copy(camera->rotation);
+            lidarSensor.setSimTime(t);
+            lidarSensor.scan(renderer, lidarReturns);
+            std::vector<float> packed;
+            packed.reserve(lidarReturns.size() * 3);
+            for (const auto& r : lidarReturns) {
+                packed.push_back(r.distance);
+                packed.push_back(static_cast<float>(r.hitInstanceId));
+                packed.push_back(static_cast<float>(r.returnNo));
+                if (r.returnNo > 0) ++lidarHits;
+            }
+            lidarRow.hash.bytes(packed.data(), packed.size() * sizeof(float));
+            lidarRow.bytes += packed.size() * sizeof(float);
+            ++lidarRow.frames;
+            if (!rgbTracePath.empty()) {
+                Fnv one;
+                one.bytes(packed.data(), packed.size() * sizeof(float));
+                rgbTrace << "f" << f << " lidar=" << std::hex << one.value() << std::dec << "\n";
+            }
+        }
 
         if (events) {
             bool overflowed = false;
@@ -652,6 +734,11 @@ int main(int argc, char** argv) {
         emit("taa.history", taaHist);
     }
     if (hdrSplit) emit("shade.hdr", shadeHdr);
+    if (lidar) {
+        emit("lidar", lidarRow);
+        manifest << "lidar.meta beams=" << lidarSensor.beamCount() << " hits=" << lidarHits
+                 << " maxRange=" << lidarSensor.params.maxRange << "\n";
+    }
     if (events) {
         emit("events", evRow);
         emit("events.sorted", evSorted);
@@ -665,7 +752,8 @@ int main(int argc, char** argv) {
         manifest << "geo tiles=" << st.tiles << " baking=" << st.baking
                  << " shellTris=" << st.shellTris << " forestCells=" << st.forestCells
                  << " settle=" << settleFrames << " hold=" << (hold ? 1 : 0)
-                 << " settleIdle=" << (settleIdle ? 1 : 0) << "\n";
+                 << " settleIdle=" << (settleIdle ? 1 : 0)
+                 << " off=" << (fjordOff.empty() ? "none" : fjordOff) << "\n";
     }
 
     // The graduated-path proof: a manifest row both runs must agree on, and a
