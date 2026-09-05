@@ -1,6 +1,6 @@
 {
  "meta": {
-  "threepp": "?",
+  "threepp": "0.0.0+local",
   "platform": "Windows-11-10.0.26200-SP0",
   "python": "3.14.6",
   "frames": 120,
@@ -21,10 +21,9 @@
    "sim_time": true
   },
   "sonar": "SonarSensor",
-  "wall_seconds": 3.52,
+  "wall_seconds": 3.76,
   "lidar_hits": 238821,
-  "sonar_echoes": 21414,
-  "recorded": "2026-09-05, development machine, C++ build of the same tree (dev b2e2f009+), --resolve taa"
+  "sonar_echoes": 21414
  },
  "rows": {
   "prop.imu": {
@@ -63,7 +62,7 @@
    "frames": 120
   },
   "rgb": {
-   "fnv": "9d0fb8eb7846735b",
+   "fnv": "0fc1bd16ce78cf36",
    "bytes": 172800000,
    "frames": 120
   },
