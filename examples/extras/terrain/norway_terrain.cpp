@@ -119,6 +119,7 @@ int main(int argc, char** argv) {
     float fovArg = 55.f;// --fov <deg>: a long lens compresses a fjord wall the
                         // way the reference photo does; 55° makes it recede.
     bool noRoadBias = false;// disable the road-aware LOD refinement (A/B compare)
+    bool listRoads = false; // --list-roads: id/category/width/length per road, then exit
     std::string viewName;   // --view <name>: a named camera/sun preset (see below)
     bool haveFov = false;
     std::string profilePath;// --road-profile <csv>: dump the height field along the longest road and exit
@@ -134,6 +135,7 @@ int main(int argc, char** argv) {
             haveFov = true;
         } else if (a == "--view" && i + 1 < argc) viewName = argv[++i];
         else if (a == "--no-road-bias") noRoadBias = true;
+        else if (a == "--list-roads") listRoads = true;
         else if (a == "--road-profile" && i + 1 < argc) profilePath = argv[++i];
         else if (a == "--cam" && i + 1 < argc) {
             // --cam x,y,z,tx,ty,tz  — place the camera at (x,y,z) looking at (tx,ty,tz).
@@ -181,8 +183,11 @@ int main(int argc, char** argv) {
             sunAzDeg = 118.f;           // from +X / -Z = upper LEFT of this frame
             sunElDeg = 26.f;            // low enough to rake the foliation
             viewSun = true;
-        } else {
-            std::cerr << "[norway] unknown --view '" << viewName << "' (known: reference)\n";
+        } else if (viewName.rfind("road", 0) != 0) {
+            // road / road-aerial / road-far need the conformed network, so they
+            // resolve further down (right after carveRoads).
+            std::cerr << "[norway] unknown --view '" << viewName
+                      << "' (known: reference, road[=id][@station], road-aerial, road-far)\n";
         }
     }
     if (packArg.empty()) {
@@ -221,6 +226,25 @@ int main(int argc, char** argv) {
         specs.push_back(std::move(s));
     }
     road::RoadNetwork network(std::move(specs));
+    // ── N302 marking classes ───────────────────────────────────────────────────
+    // A Norwegian road is marked by its ASPHALT WIDTH, not by its number: yellow
+    // centre line only at 6 m and wider, white edge lines always, dashed 3+3 on
+    // the narrow roads that carry no centre line at all. NT_ROAD_CENTRE_MIN is
+    // the A/B for a road the pack's CATEGORY DEFAULT width mis-classifies (Fv63
+    // gets 7 m from the fetcher, but its hairpin section is really narrower and
+    // unmarked in the middle) until NVDB's measured widths are fetched.
+    {
+        road::MarkingRules mr;
+        if (const char* e = std::getenv("NT_ROAD_CENTRE_MIN"); e && e[0] != '\0')
+            mr.centreMin = std::strtof(e, nullptr);
+        if (const char* e = std::getenv("NT_ROAD_WEAR"); e && e[0] != '\0')
+            mr.wear = std::clamp(std::strtof(e, nullptr), 0.f, 1.f);
+        if (const char* e = std::getenv("NT_ROAD_SEED"); e && e[0] != '\0')
+            mr.seed = static_cast<unsigned int>(std::strtoul(e, nullptr, 10));
+        if (const char* e = std::getenv("NT_ROAD_GRAVEL_EDGE"); e && e[0] == '0')
+            mr.gravelEdge = false;
+        network.setMarkingRules(mr);
+    }
     // BAKED-ROAD pipeline. Conform roads to the RAW DEM height first (roads
     // must meet real ground) with the elevation PROFILE enabled: the pack's
     // NVDB point heights classify every span — data height well above ground
@@ -253,6 +277,90 @@ int main(int argc, char** argv) {
     if (const char* e = std::getenv("NT_CARVE_FILL"); e && e[0] != '\0') rco.fillInflate = std::strtof(e, nullptr);
     if (const char* e = std::getenv("NT_CARVE_FILLFEATHER"); e && e[0] != '\0') rco.fillFeather = std::strtof(e, nullptr);
     terrain::carveRoads(pack.grid, network, rco);
+
+    // ── --list-roads ───────────────────────────────────────────────────────────
+    // Which road is which, so a shot can name one (the K and P roads that show
+    // the narrow/unmarked classes are anonymous ids in the pack).
+    if (listRoads) {
+        auto infos = network.roadInfos();
+        std::sort(infos.begin(), infos.end(),
+                  [](const auto& a, const auto& b) { return a.length > b.length; });
+        std::cout << "[norway] roads (" << infos.size() << "), longest first:\n";
+        for (const auto& i : infos) {
+            static const char* kClass[] = {"main", "narrow", "unmarked", "track"};
+            std::printf("  %-24s %-2s %5.1f m wide %8.0f m long  %-8s  at (%.0f, %.0f)\n",
+                        i.id.c_str(), i.category.c_str(), i.width, i.length,
+                        kClass[static_cast<int>(i.cls)], i.first.x, i.first.z);
+        }
+        std::cout << std::flush;
+        return 0;
+    }
+
+    // ── named ROAD views ───────────────────────────────────────────────────────
+    // The road look is judged from a road, not from 150 m up. Each preset anchors
+    // on a station along a drivable run and PRINTS the --cam line it resolved to,
+    // so the identical frame can be re-shot from any other build (which is how
+    // the before/after sheets are made).
+    if (viewName.rfind("road", 0) == 0) {
+        std::string kind = viewName, roadId;
+        float stationArg = -1.f;
+        if (const size_t at = kind.find('@'); at != std::string::npos) {
+            stationArg = std::strtof(kind.c_str() + at + 1, nullptr);
+            kind = kind.substr(0, at);
+        }
+        if (const size_t eq = kind.find('='); eq != std::string::npos) {
+            roadId = kind.substr(eq + 1);
+            kind = kind.substr(0, eq);
+        }
+        std::vector<Vector3> cl = roadId.empty() ? network.longestDrivableRun()
+                                                 : network.roadCenterline(roadId);
+        if (cl.size() < 2) {
+            std::cerr << "[norway] --view " << viewName << ": no such road (try --list-roads)\n";
+        } else {
+            std::vector<float> cum(cl.size(), 0.f);
+            for (size_t k = 1; k < cl.size(); ++k) {
+                const float dx = cl[k].x - cl[k - 1].x, dz = cl[k].z - cl[k - 1].z;
+                cum[k] = cum[k - 1] + std::sqrt(dx * dx + dz * dz);
+            }
+            const float total = cum.back();
+            const auto at = [&](float s) {
+                s = std::clamp(s, 0.f, total);
+                size_t k = 1;
+                while (k + 1 < cum.size() && cum[k] < s) ++k;
+                const float span = std::max(cum[k] - cum[k - 1], 1e-4f);
+                const float t = std::clamp((s - cum[k - 1]) / span, 0.f, 1.f);
+                return cl[k - 1].clone().lerp(cl[k], t);
+            };
+            const float station = (stationArg >= 0.f) ? stationArg : 0.4f * total;
+            const Vector3 anchor = at(station);
+            const Vector3 ahead = at(station + 60.f);
+            Vector3 tan(ahead.x - anchor.x, 0.f, ahead.z - anchor.z);
+            if (tan.length() < 1e-3f) tan.set(0.f, 0.f, 1.f);
+            tan.normalize();
+            const float eye = road::RoadNetwork::kSurfaceRaise + 1.6f;// driver's eye
+            if (kind == "road-aerial") {
+                camPosArg.set(anchor.x - tan.x * 40.f, anchor.y + 25.f, anchor.z - tan.z * 40.f);
+                camTargetArg.copy(anchor);
+            } else if (kind == "road-far") {
+                // 900 m back: the 600 m ribbon cull is in the middle of the frame,
+                // so a colour step between ribbon and painted bed cannot hide.
+                camPosArg.set(anchor.x - tan.x * 900.f, anchor.y + 30.f, anchor.z - tan.z * 900.f);
+                camTargetArg.copy(anchor);
+            } else {
+                camPosArg.set(anchor.x, anchor.y + eye, anchor.z);
+                camTargetArg.set(ahead.x, ahead.y + eye, ahead.z);
+            }
+            haveCam = true;
+            if (!haveFov) fovArg = 55.f;
+            std::printf("[norway] --view %s -> road '%s' station %.0f/%.0f m; "
+                        "--cam %.2f,%.2f,%.2f,%.2f,%.2f,%.2f --fov %.1f\n",
+                        viewName.c_str(),
+                        roadId.empty() ? "longest-drivable" : roadId.c_str(), station, total,
+                        camPosArg.x, camPosArg.y, camPosArg.z,
+                        camTargetArg.x, camTargetArg.y, camTargetArg.z, fovArg);
+            std::cout << std::flush;
+        }
+    }
 
     // Synthetic bathymetry. The DTM stores water as a flat sheet at EXACTLY
     // seaLevel (no soundings), so the seabed would sit 0.15 m under the ocean
@@ -292,6 +400,11 @@ int main(int argc, char** argv) {
     // Near-tile splat texels are ~0.6-1.3 m; a feather below the texel size
     // can't anti-alias the paint edge and reads as a staircase up close.
     gopt.roadEdgeFeather = 1.2f;
+    // The far road is a flat tint mixed into the splat albedo. Take it from the
+    // SAME bake the near ribbon uses instead of a literal: the old 0.075 was a
+    // near-black that matched the old near-black ribbon, and any change to one
+    // without the other makes the 600 m ribbon-cull hand-off step.
+    gopt.roadColor = network.meanSurfaceColor(road::SurfaceKind::Asphalt);
     // (envSet is declared later; this runs before it exists)
     gopt.paintUrban = !std::getenv("NT_NO_URBAN");// grey town fabric under dense buildings (A/B)
     // CLIFF relief + gneiss band, on 1 m packs only. The gate is the DEM's own
@@ -543,7 +656,11 @@ int main(int argc, char** argv) {
             roadChunkCenters.emplace_back(child, geo->boundingSphere->center);
             roadChunkRadii.push_back(geo->boundingSphere->radius);
         }
-        std::cout << "[norway] road ribbon chunks: " << roadChunkCenters.size() << "\n" << std::flush;
+        const auto rc = network.meanSurfaceColor(road::SurfaceKind::Asphalt);
+        std::printf("[norway] road ribbon chunks: %zu sharing %zu baked surface sets "
+                    "(mean paved sRGB %.3f, %.3f, %.3f)\n",
+                    roadChunkCenters.size(), network.surfaceSetCount(), rc[0], rc[1], rc[2]);
+        std::cout << std::flush;
         scene.add(chunks);
     }
     const float ribbonDist = envF("NT_ROAD_RIBBON_DIST", 600.f);// 6 m road ≈ 5 px here
