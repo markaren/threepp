@@ -63,6 +63,57 @@ namespace threepp::road {
         std::array<float, 3> shoulderColor = {0.32f, 0.30f, 0.24f};// gravel verge
     };
 
+    // ── N302 marking classes ─────────────────────────────────────────────────
+    // Statens vegvesen N302 / Rapport 452, in the terms this bake needs:
+    //   • the centre marking is YELLOW and exists only where the asphalt is
+    //     >= 6.0 m wide; below that the road is marked as a ONE-lane road;
+    //   • the edge line (kantlinje) is WHITE — solid normally, dashed 3+3 m on
+    //     the narrow roads that carry no centre line;
+    //   • line width 0.10 m standard, 0.15 m on wide fast roads;
+    //   • centre patterns: skillelinje 3+9 at 70-90 km/h, varsellinje 9+3,
+    //     sperrelinje solid.
+    enum class SurfaceKind {
+        Asphalt,
+        Gravel
+    };
+    enum class LinePattern {
+        None,
+        Solid,
+        Dashed
+    };
+
+    // Everything the surface bake needs, in METRES — no texel counts leak into
+    // the look, so the same style bakes correctly at any resolution.
+    struct RoadSurfaceStyle {
+        SurfaceKind kind = SurfaceKind::Asphalt;
+        LinePattern centre = LinePattern::None;
+        float centreOn = 3.f, centreOff = 9.f;// skillelinje 3+9
+        LinePattern edge = LinePattern::Solid;
+        float edgeOn = 3.f, edgeOff = 3.f;// stiplet kantlinje 3+3
+        float lineWidth = 0.10f;          // N302 standard width
+        float shoulderInset = 0.25f;      // paved edge -> outer side of the edge line
+        std::array<float, 3> whiteColor = {0.86f, 0.86f, 0.84f};
+        std::array<float, 3> yellowColor = {0.88f, 0.70f, 0.12f};
+        float pavedWidth = 6.f;  // asphalt width (m)
+        float fullWidth = 7.f;   // the texture spans this much road + sealed edge (m)
+        float tileLength = 48.f; // metres of road per v tile (4 x 3+9, 8 x 3+3)
+        float laneCount = 2.f;   // wheel-track placement (Phase B)
+        float wear = 0.f;        // 0 fresh, 1 studded-tyre ruin
+        unsigned int seed = 0u;  // variant selector
+        bool gravelEdge = true;  // narrow grusskulder outside the pavement
+    };
+
+    // Three channel-packed maps, three.js convention (as FacadeTexture bakes):
+    // albedo sRGB, tangent-space normal (+Z out), roughMetal G = roughness and
+    // B = metalness.
+    struct RoadSurfaceMaps {
+        std::vector<unsigned char> albedo;
+        std::vector<unsigned char> normal;
+        std::vector<unsigned char> roughMetal;
+        int width = 0, height = 0;
+        std::array<float, 3> meanPaved = {0.f, 0.f, 0.f};// mean sRGB over the paved band
+    };
+
     class RoadGenerator {
 
     public:
@@ -200,7 +251,13 @@ namespace threepp::road {
         // flush at the conformed ground height. Curves bank INTO the turn (outer
         // edge higher) by camber roll about the tangent.
         // UV: u = 0..1 across the FULL geometry width; v = arcLength/textureTileLength.
-        [[nodiscard]] std::shared_ptr<BufferGeometry> buildSurface() const {
+        //
+        // vOffsetMeters shifts the v coordinate by that many metres of road, so a
+        // ribbon PIECE sliced out of a longer centreline can carry the piece's
+        // GLOBAL station: with a shared, tiling marking texture the dash phase is
+        // a function of v alone, and without the offset every chunk would restart
+        // its dashes at its own seam. Default 0 = the whole-road case, unchanged.
+        [[nodiscard]] std::shared_ptr<BufferGeometry> buildSurface(float vOffsetMeters = 0.f) const {
             auto geo = std::make_shared<BufferGeometry>();
             const size_t n = samples_.size();
             if (n < 2) return geo;
@@ -238,7 +295,7 @@ namespace threepp::road {
                 const float cb = std::cos(bank), sb = std::sin(bank);
                 // Tilted lateral & vertical basis (in the plane spanned by right & up).
                 const Vector3& right = s.right;
-                const float vScale = s.arcLength / tile;
+                const float vScale = (s.arcLength + vOffsetMeters) / tile;
 
                 for (int k = 0; k < 4; ++k) {
                     const float lat = off[k];
@@ -378,6 +435,172 @@ namespace threepp::road {
                 }
             }
             return out;
+        }
+
+        // Bake the THREE maps of a marking class (see RoadSurfaceStyle): sRGB
+        // albedo, tangent-space normal, and roughness/metalness. This is the road
+        // look; bakeSurfaceTexture above is the legacy single-albedo path and is
+        // left alone on purpose (buildMeshes and the Drive demo still call it).
+        //
+        // Two things it does that the legacy bake does not:
+        //   • lines are anti-aliased by COVERAGE — a texel that a 0.10 m line
+        //     half-covers gets half the paint. Hard per-texel thresholding is why
+        //     the old markings staircase at the grazing angles a road is always
+        //     seen at, no matter how much anisotropy the sampler has.
+        //   • every field varying along the road uses a lattice that WRAPS at the
+        //     tile, so the shared, repeating tile has no seam across the road.
+        //
+        // Everything is expressed in metres: `width` texels span style.fullWidth
+        // and `height` texels span style.tileLength.
+        [[nodiscard]] static RoadSurfaceMaps bakeSurfaceMaps(const RoadSurfaceStyle& st,
+                                                             int width, int height) {
+            RoadSurfaceMaps m;
+            const int W = std::max(width, 4);
+            const int H = std::max(height, 4);
+            m.width = W;
+            m.height = H;
+            const size_t nPx = static_cast<size_t>(W) * static_cast<size_t>(H);
+            m.albedo.assign(nPx * 4, 255u);
+            m.normal.assign(nPx * 4, 255u);
+            m.roughMetal.assign(nPx * 4, 255u);
+
+            const float full = std::max(st.fullWidth, 0.5f);
+            const float pavedHalf = std::max(st.pavedWidth, 0.5f) * 0.5f;
+            const float tile = std::max(st.tileLength, 1.f);
+            const float du = full / static_cast<float>(W); // metres per texel across
+            const float dv = tile / static_cast<float>(H); // metres per texel along
+            const float halfLine = std::max(st.lineWidth, 0.02f) * 0.5f;
+            // Edge line: its OUTER side sits `shoulderInset` in from the asphalt
+            // edge (N302 keeps >= 0.25 m of asphalt outside the kantlinje).
+            const float edgeCentre = std::max(pavedHalf - st.shoulderInset - halfLine, 0.05f);
+            const float w = std::clamp(st.wear, 0.f, 1.f);
+            const float seedX = static_cast<float>(st.seed % 977u) * 13.37f;
+
+            // Coverage of a band of half-width `hw` centred on 0, sampled at
+            // signed distance d with texel footprint `texel`.
+            const auto cover = [](float d, float hw, float texel) {
+                return std::clamp((hw - std::abs(d)) / std::max(texel, 1e-6f) + 0.5f, 0.f, 1.f);
+            };
+            // Coverage of the ON part of an on/off dash pattern at station s.
+            const auto dashCover = [&cover](float s, float on, float off, float texel) {
+                const float period = std::max(on + off, 1e-3f);
+                float ph = std::fmod(s, period);
+                if (ph < 0.f) ph += period;
+                return cover(ph - on * 0.5f, on * 0.5f, texel);
+            };
+
+            std::vector<float> hgt(nPx, 0.f);// relief for the normal map (metres)
+            double sumR = 0.0, sumG = 0.0, sumB = 0.0;
+            size_t pavedCount = 0;
+
+            for (int y = 0; y < H; ++y) {
+                // Station along the tile, in metres, and in lattice cells for the
+                // wrapping noise (tile / cellSize must be an integer — see below).
+                const float s = (static_cast<float>(y) + 0.5f) * dv;
+                for (int x = 0; x < W; ++x) {
+                    // Lateral offset from the centreline, matching buildSurface's
+                    // u = 0 at -corridorHalf .. u = 1 at +corridorHalf.
+                    const float lat = ((static_cast<float>(x) + 0.5f) / static_cast<float>(W) - 0.5f) * full;
+                    const bool onPaved = std::abs(lat) <= pavedHalf;
+
+                    float r, g, b, rough;
+                    float relief = 0.f;
+                    if (st.kind == SurfaceKind::Gravel) {
+                        // Loose gravel: warm grey, coarse stones, no bitumen.
+                        const float stone = noise2p(lat / 0.06f + seedX, s / 0.06f, 800);
+                        const float patch = fbmP(lat / 6.f + seedX, s / 6.f, 8, 3, 2.f, 0.5f);
+                        const float k = 0.52f + 0.10f * stone + 0.05f * patch;
+                        r = k * 1.03f;
+                        g = k * 0.99f;
+                        b = k * 0.92f;
+                        rough = 0.95f;
+                        relief = 0.004f * stone;
+                    } else {
+                        // Weathered Norwegian asphalt: light gneiss aggregate
+                        // exposed by studded tyres, not the fresh-bitumen black a
+                        // 0.055 albedo bakes (which decodes to linear 0.004).
+                        const float aggregate = noise2p(lat / 0.03f + seedX, s / 0.03f, 1600);
+                        const float patch = fbmP(lat / 8.f + seedX, s / 8.f, 6, 4, 2.f, 0.5f);
+                        const float k = 0.42f + 0.055f * aggregate + 0.040f * patch;
+                        r = k * 1.02f;
+                        g = k;
+                        b = k * 0.97f;
+                        rough = 0.88f;
+                        relief = 0.002f * aggregate;
+                    }
+
+                    if (onPaved) {
+                        sumR += r;
+                        sumG += g;
+                        sumB += b;
+                        ++pavedCount;
+
+                        // ── markings, composited by coverage ─────────────────
+                        float covWhite = 0.f, covYellow = 0.f;
+                        if (st.edge != LinePattern::None) {
+                            float c = std::max(cover(lat + edgeCentre, halfLine, du),
+                                               cover(lat - edgeCentre, halfLine, du));
+                            if (st.edge == LinePattern::Dashed)
+                                c *= dashCover(s, st.edgeOn, st.edgeOff, dv);
+                            covWhite = c;
+                        }
+                        if (st.centre != LinePattern::None) {
+                            float c = cover(lat, halfLine, du);
+                            if (st.centre == LinePattern::Dashed)
+                                c *= dashCover(s, st.centreOn, st.centreOff, dv);
+                            covYellow = c;
+                        }
+                        const auto paint = [&](const std::array<float, 3>& col, float c) {
+                            if (c <= 0.f) return;
+                            r += (col[0] - r) * c;
+                            g += (col[1] - g) * c;
+                            b += (col[2] - b) * c;
+                            // Glass beads in the paint: markings are markedly
+                            // smoother than the aggregate around them.
+                            rough += (0.55f - rough) * c;
+                        };
+                        paint(st.whiteColor, covWhite);
+                        paint(st.yellowColor, covYellow);
+                    }
+
+                    const size_t o = (static_cast<size_t>(y) * W + x) * 4;
+                    m.albedo[o + 0] = toByte(r);
+                    m.albedo[o + 1] = toByte(g);
+                    m.albedo[o + 2] = toByte(b);
+                    m.roughMetal[o + 0] = 0u;
+                    m.roughMetal[o + 1] = toByte(rough);
+                    m.roughMetal[o + 2] = 0u;// asphalt is a dielectric
+                    hgt[static_cast<size_t>(y) * W + x] = relief * w;
+                }
+            }
+
+            // Normal map from the relief field: x clamps at the ribbon edge, y
+            // wraps with the tile. Same convention as FacadeTexture (+G = +v).
+            const float invDu = 1.f / std::max(du, 1e-4f);
+            const float invDv = 1.f / std::max(dv, 1e-4f);
+            const auto hAt = [&](int x, int y) {
+                x = std::clamp(x, 0, W - 1);
+                y = ((y % H) + H) % H;
+                return hgt[static_cast<size_t>(y) * W + x];
+            };
+            for (int y = 0; y < H; ++y)
+                for (int x = 0; x < W; ++x) {
+                    const float dhdu = (hAt(x + 1, y) - hAt(x - 1, y)) * 0.5f * invDu;
+                    const float dhdv = -(hAt(x, y + 1) - hAt(x, y - 1)) * 0.5f * invDv;
+                    float nx = -dhdu, ny = -dhdv, nz = 1.f;
+                    const float il = 1.f / std::sqrt(nx * nx + ny * ny + nz * nz);
+                    const size_t o = (static_cast<size_t>(y) * W + x) * 4;
+                    m.normal[o + 0] = toByte(nx * il * 0.5f + 0.5f);
+                    m.normal[o + 1] = toByte(ny * il * 0.5f + 0.5f);
+                    m.normal[o + 2] = toByte(nz * il * 0.5f + 0.5f);
+                }
+
+            if (pavedCount > 0) {
+                m.meanPaved[0] = static_cast<float>(sumR / static_cast<double>(pavedCount));
+                m.meanPaved[1] = static_cast<float>(sumG / static_cast<double>(pavedCount));
+                m.meanPaved[2] = static_cast<float>(sumB / static_cast<double>(pavedCount));
+            }
+            return m;
         }
 
         // ── spawn helpers ────────────────────────────────────────────────────
@@ -597,6 +820,40 @@ namespace threepp::road {
             const float x1 = lerp(n00, n10, u);
             const float x2 = lerp(n01, n11, u);
             return lerp(x1, x2, v);
+        }
+        // Same value noise, but the Y lattice WRAPS every `period` cells. The
+        // marking tile is shared and repeats every tileLength metres along the
+        // road; a non-periodic field would draw a visible line across the
+        // carriageway at every tile seam. Callers pick cell sizes that divide the
+        // tile exactly (tileLength / cellSize == period, an integer).
+        static float noise2p(float x, float y, int period) {
+            const int P = std::max(period, 1);
+            const int xi = static_cast<int>(std::floor(x));
+            const int yi = static_cast<int>(std::floor(y));
+            const float xf = x - static_cast<float>(xi);
+            const float yf = y - static_cast<float>(yi);
+            const float u = fade(xf), v = fade(yf);
+            const int y0 = ((yi % P) + P) % P;
+            const int y1 = (y0 + 1) % P;
+            const float n00 = hash2(xi, y0);
+            const float n10 = hash2(xi + 1, y0);
+            const float n01 = hash2(xi, y1);
+            const float n11 = hash2(xi + 1, y1);
+            return lerp(lerp(n00, n10, u), lerp(n01, n11, u), v);
+        }
+        // fBm over noise2p. Octave i runs at lacunarity^i, so its wrap period
+        // scales with it — integer as long as the caller's base period is.
+        static float fbmP(float x, float y, int period, int oct, float lac, float gain) {
+            float f = 1.f, a = 1.f, sum = 0.f, norm = 0.f;
+            int p = std::max(period, 1);
+            for (int i = 0; i < oct; ++i) {
+                sum += a * noise2p(x * f, y * f, p);
+                norm += a;
+                f *= lac;
+                p = static_cast<int>(std::lround(static_cast<double>(p) * static_cast<double>(lac)));
+                a *= gain;
+            }
+            return norm > 0.f ? sum / norm : 0.f;
         }
         static float fbm(float x, float y, int oct, float lac, float gain) {
             float f = 1.f, a = 1.f, sum = 0.f, norm = 0.f;

@@ -67,6 +67,37 @@ namespace threepp::road {
         std::vector<Vector3> points;
     };
 
+    // Which N302 marking class a road falls into. Derived from its category and
+    // its asphalt width (see MarkingRules); NVDB's own vegoppmerking data would
+    // override this per road once it is fetched.
+    enum class MarkingClass {
+        Main,    // >= 6 m: yellow centre line, solid white edges
+        Narrow,  // 5-6 m: no centre, DASHED white edges
+        Unmarked,// < 5 m: no paint at all
+        Track    // category S: gravel forest road
+    };
+
+    // The knobs behind that derivation. Defaults are the N302 numbers; a demo
+    // can move centreMin to A/B a road it believes is mis-classified (Fv63's
+    // hairpins carry the 7 m category default but are narrower in reality).
+    struct MarkingRules {
+        float centreMin = 6.0f;// asphalt width at/above which a centre line exists
+        float edgeMin = 5.0f;  // ...at/above which edge lines exist at all
+        float wideMin = 8.5f;  // ...at/above which the lines are 0.15 m not 0.10
+        float lineWidth = 0.10f, lineWidthWide = 0.15f;
+        float centreOn = 3.f, centreOff = 9.f;// skillelinje 3+9
+        float edgeOn = 3.f, edgeOff = 3.f;    // stiplet kantlinje 3+3
+        float shoulderInset = 0.25f;          // asphalt outside the edge line
+        float shoulderInsetMain = 0.5f;       // ...on a wide road
+        std::array<float, 3> whiteColor = {0.86f, 0.86f, 0.84f};
+        std::array<float, 3> yellowColor = {0.88f, 0.70f, 0.12f};
+        float wear = 0.f;         // 0..1, Phase B
+        bool gravelEdge = true;   // narrow grusskulder at the pavement edge
+        unsigned int seed = 1337u;// variant seed
+        int texWidth = 256, texHeight = 1024;
+        float tileLength = 48.f;// 4 x (3+9) and 8 x (3+3): both patterns tile exactly
+    };
+
     // Elevation-profile handling for conformTo (all opt-in; default = the
     // legacy pure drape, byte-identical behaviour for existing callers).
     //
@@ -162,6 +193,85 @@ namespace threepp::road {
         }
 
         [[nodiscard]] size_t roadCount() const { return roads_.size(); }
+
+        // ── N302 marking classes and the shared surface materials ────────────
+        // Changing the rules invalidates the baked material cache (the class, the
+        // line widths and the wear level are all baked INTO the texture).
+        void setMarkingRules(const MarkingRules& mr) {
+            rules_ = mr;
+            surfaceCache_.clear();
+            meanCached_[0] = meanCached_[1] = false;
+        }
+        [[nodiscard]] const MarkingRules& markingRules() const { return rules_; }
+
+        // Marking class of a road: category S is always a forest track, otherwise
+        // the ASPHALT WIDTH decides — that is exactly how N302 reads.
+        [[nodiscard]] MarkingClass classOf(const RoadSpec& s) const {
+            const char c = s.category.empty() ? '?' : s.category[0];
+            if (c == 'S') return MarkingClass::Track;
+            if (s.width >= rules_.centreMin) return MarkingClass::Main;
+            if (s.width >= rules_.edgeMin) return MarkingClass::Narrow;
+            return MarkingClass::Unmarked;
+        }
+
+        // How many distinct baked surface sets the network has handed out — the
+        // whole point of the cache (one bake per class/width, not per chunk).
+        [[nodiscard]] size_t surfaceSetCount() const { return surfaceCache_.size(); }
+
+        // Mean sRGB of the paved band for a surface kind, straight out of the
+        // bake. The far road is painted into the terrain albedo with a single
+        // colour; taking it from here is what keeps the 600 m ribbon-to-paint
+        // hand-off from stepping.
+        [[nodiscard]] std::array<float, 3> meanSurfaceColor(SurfaceKind kind) const {
+            const int k = (kind == SurfaceKind::Gravel) ? 1 : 0;
+            if (!meanCached_[k]) {
+                RoadSurfaceStyle st;
+                st.kind = kind;
+                st.centre = LinePattern::None;// the paint is the SURFACE, not the lines
+                st.edge = LinePattern::None;
+                st.wear = rules_.wear;
+                st.seed = rules_.seed;
+                st.tileLength = rules_.tileLength;
+                st.pavedWidth = 6.f;
+                st.fullWidth = 7.f;
+                meanValue_[k] = RoadGenerator::bakeSurfaceMaps(st, 64, 128).meanPaved;
+                meanCached_[k] = true;
+            }
+            return meanValue_[k];
+        }
+
+        // Per-road summary for a demo's --list-roads / view picking.
+        struct RoadInfo {
+            std::string id;
+            std::string category;
+            float width = 0.f;
+            float length = 0.f;
+            MarkingClass cls = MarkingClass::Unmarked;
+            Vector3 first;
+        };
+        [[nodiscard]] std::vector<RoadInfo> roadInfos() const {
+            std::vector<RoadInfo> out;
+            out.reserve(roads_.size());
+            for (const auto& r : roads_) {
+                const auto& cl = r.gen->centerlineSamples();
+                RoadInfo i;
+                i.id = r.spec.id;
+                i.category = r.spec.category;
+                i.width = r.spec.width;
+                i.cls = classOf(r.spec);
+                for (size_t k = 1; k < cl.size(); ++k) i.length += cl[k].distanceTo(cl[k - 1]);
+                if (!cl.empty()) i.first = cl.front();
+                out.push_back(std::move(i));
+            }
+            return out;
+        }
+
+        // Conformed centreline of one road by id (empty if unknown).
+        [[nodiscard]] std::vector<Vector3> roadCenterline(const std::string& id) const {
+            for (const auto& r : roads_)
+                if (r.spec.id == id) return r.gen->centerlineSamples();
+            return {};
+        }
 
         void setTrenchDepth(float d) { trenchDepth_ = std::max(d, 0.f); }
         [[nodiscard]] float trenchDepth() const { return trenchDepth_; }
@@ -378,6 +488,7 @@ namespace threepp::road {
                 const auto& cl = r.gen->centerlineSamples();
                 const auto& f = r.sampleFlags;
                 if (f.size() != cl.size()) continue;// legacy mode — no classification ran
+                const std::vector<float> cum = stationsAlong(cl);
                 size_t i = 0;
                 int span = 0;
                 while (i < cl.size()) {
@@ -391,7 +502,8 @@ namespace threepp::road {
                                               cl.begin() + static_cast<std::ptrdiff_t>(hi));
                     i = j;
                     if (deck.size() < 2) continue;
-                    if (auto mesh = buildRibbonPiece(r, deck, "bridge", span, texWidth, texHeight)) {
+                    if (auto mesh = buildRibbonPiece(r, deck, "bridge", span, texWidth, texHeight,
+                                                     cum[lo])) {
                         group->add(mesh);
                         ++span;
                     }
@@ -422,6 +534,7 @@ namespace threepp::road {
                 const auto& cl = r.gen->centerlineSamples();
                 const auto& f = r.sampleFlags;
                 const bool flagged = f.size() == cl.size();
+                const std::vector<float> cum = stationsAlong(cl);
                 int piece = 0;
                 size_t i = 0;
                 while (i < cl.size()) {
@@ -442,7 +555,8 @@ namespace threepp::road {
                         }
                         std::vector<Vector3> pts(cl.begin() + static_cast<std::ptrdiff_t>(s),
                                                  cl.begin() + static_cast<std::ptrdiff_t>(e + 1));
-                        if (auto mesh = buildRibbonPiece(r, pts, "roadchunk", piece, texWidth, texHeight)) {
+                        if (auto mesh = buildRibbonPiece(r, pts, "roadchunk", piece, texWidth,
+                                                         texHeight, cum[s])) {
                             group->add(mesh);
                             ++piece;
                         }
@@ -685,6 +799,125 @@ namespace threepp::road {
             for (int idx : it->second) f(segs_[static_cast<size_t>(idx)]);
         }
 
+        // Cumulative XZ arc length along a centreline — the GLOBAL station each
+        // ribbon piece starts at. XZ, not 3D, because that is what
+        // RoadGenerator's own arcLength (and therefore the v coordinate) is.
+        static std::vector<float> stationsAlong(const std::vector<Vector3>& cl) {
+            std::vector<float> cum(cl.size(), 0.f);
+            for (size_t k = 1; k < cl.size(); ++k) {
+                const float dx = cl[k].x - cl[k - 1].x, dz = cl[k].z - cl[k - 1].z;
+                cum[k] = cum[k - 1] + std::sqrt(dx * dx + dz * dz);
+            }
+            return cum;
+        }
+
+        // FNV-1a over a road id: picks the surface of the roads that have no
+        // marking to tell them apart (half the private roads in a Norwegian
+        // valley are asphalt, half are gravel, and it is stable per road).
+        static std::uint32_t idHash(const std::string& s) {
+            std::uint32_t h = 2166136261u;
+            for (char c : s) {
+                h ^= static_cast<std::uint32_t>(static_cast<unsigned char>(c));
+                h *= 16777619u;
+            }
+            return h;
+        }
+
+        // The marking style of one road: its class decides the paint, its width
+        // decides the geometry the paint sits in. Widths come from paramsFor +
+        // the ribbon piece's narrowed sealed edge, so the texture's metre-space
+        // mapping matches the mesh exactly.
+        [[nodiscard]] RoadSurfaceStyle styleFor(const RoadSpec& spec, int variant) const {
+            RoadParams p = paramsFor(spec);
+            const float shoulder = std::min(p.shoulderWidth, 0.5f);
+            RoadSurfaceStyle st;
+            st.pavedWidth = p.laneWidth * static_cast<float>(std::max(p.laneCount, 1));
+            st.fullWidth = st.pavedWidth + 2.f * shoulder;
+            st.tileLength = rules_.tileLength;
+            st.wear = rules_.wear;
+            st.gravelEdge = rules_.gravelEdge;
+            st.whiteColor = rules_.whiteColor;
+            st.yellowColor = rules_.yellowColor;
+            st.centreOn = rules_.centreOn;
+            st.centreOff = rules_.centreOff;
+            st.edgeOn = rules_.edgeOn;
+            st.edgeOff = rules_.edgeOff;
+            st.seed = rules_.seed + 7919u * static_cast<unsigned int>(variant) + idHash(spec.category);
+            const MarkingClass cls = classOf(spec);
+            st.lineWidth = (spec.width >= rules_.wideMin) ? rules_.lineWidthWide : rules_.lineWidth;
+            st.shoulderInset = (cls == MarkingClass::Main) ? rules_.shoulderInsetMain
+                                                           : rules_.shoulderInset;
+            switch (cls) {
+                case MarkingClass::Main:
+                    st.centre = LinePattern::Dashed;// skillelinje 3+9, yellow
+                    st.edge = LinePattern::Solid;   // heltrukken kantlinje
+                    break;
+                case MarkingClass::Narrow:
+                    st.centre = LinePattern::None;// too narrow for two lanes
+                    st.edge = LinePattern::Dashed;// stiplet kantlinje 3+3
+                    break;
+                case MarkingClass::Unmarked:
+                    // A 4 m private road carries NO paint at all. Both patterns
+                    // must be cleared explicitly: RoadSurfaceStyle defaults its
+                    // edge to Solid (the common case), so falling through here
+                    // with only the surface set leaves phantom kantlinjer on
+                    // every farm track — which is exactly what the first
+                    // road-aerial of a P road showed.
+                    st.centre = LinePattern::None;
+                    st.edge = LinePattern::None;
+                    st.kind = (idHash(spec.id) & 1u) ? SurfaceKind::Gravel : SurfaceKind::Asphalt;
+                    break;
+                case MarkingClass::Track:
+                    st.centre = LinePattern::None;
+                    st.edge = LinePattern::None;
+                    st.kind = SurfaceKind::Gravel;
+                    break;
+            }
+            return st;
+        }
+
+        // The SHARED material for a road's class/width/variant. 1397 aalesund
+        // chunks used to mean 1397 bakes and ~180 MB of texture; there are only a
+        // handful of distinct (class, width) pairs in a pack, so bake each once
+        // and hand the same three maps to every piece that wants them.
+        [[nodiscard]] std::shared_ptr<MeshStandardMaterial> surfaceMaterialFor(const RoadSpec& spec,
+                                                                               int variant) const {
+            const RoadSurfaceStyle st = styleFor(spec, variant);
+            const std::uint64_t key =
+                    (static_cast<std::uint64_t>(static_cast<int>(classOf(spec))) << 40) |
+                    (static_cast<std::uint64_t>(st.kind == SurfaceKind::Gravel ? 1 : 0) << 36) |
+                    ((static_cast<std::uint64_t>(std::lround(st.pavedWidth * 4.f)) & 0xFFFFull) << 16) |
+                    ((static_cast<std::uint64_t>(std::lround(st.wear * 10.f)) & 0xFFull) << 8) |
+                    (static_cast<std::uint64_t>(variant) & 0xFFull);
+            if (const auto it = surfaceCache_.find(key); it != surfaceCache_.end()) return it->second;
+
+            const auto maps = RoadGenerator::bakeSurfaceMaps(st, rules_.texWidth, rules_.texHeight);
+            const auto mkTex = [&](std::vector<unsigned char> px, bool srgb) {
+                auto t = DataTexture::create(ImageData{std::move(px)},
+                                             static_cast<unsigned int>(maps.width),
+                                             static_cast<unsigned int>(maps.height));
+                t->colorSpace = srgb ? ColorSpace::sRGB : ColorSpace::NoColorSpace;
+                t->magFilter = Filter::Linear;
+                t->minFilter = Filter::LinearMipmapLinear;
+                t->generateMipmaps = true;// DataTexture defaults false -> GL black
+                t->anisotropy = 16;       // permanent grazing incidence (see buildMeshes)
+                t->wrapS = TextureWrapping::ClampToEdge;
+                t->wrapT = TextureWrapping::Repeat;// tiles along the road length
+                return t;
+            };
+            auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                            .color(Color::white)
+                                                            .roughness(1.f)
+                                                            .metalness(1.f));// the maps carry both
+            mat->map = mkTex(maps.albedo, true);
+            mat->normalMap = mkTex(maps.normal, false);
+            auto rm = mkTex(maps.roughMetal, false);
+            mat->roughnessMap = rm;// g = roughness
+            mat->metalnessMap = rm;// b = metalness (zero: asphalt is a dielectric)
+            surfaceCache_.emplace(key, mat);
+            return mat;
+        }
+
         // One ribbon sub-mesh over `pts` (a slice of a road's conformed dense
         // centerline, y = final grade): sub-generator draped onto the slice's
         // own profile + the same material/texture recipe as buildMeshes.
@@ -694,7 +927,10 @@ namespace threepp::road {
         [[nodiscard]] std::shared_ptr<Mesh> buildRibbonPiece(const Road& r,
                                                              const std::vector<Vector3>& pts,
                                                              const char* namePrefix, int idx,
-                                                             int texWidth, int texHeight) const {
+                                                             int texWidth, int texHeight,
+                                                             float station = 0.f) const {
+            (void) texWidth;
+            (void) texHeight;
             if (pts.size() < 2) return nullptr;
             RoadParams p = paramsFor(r.spec);
             p.samplesPerSegment = 2;// slice points are already dense
@@ -708,6 +944,12 @@ namespace threepp::road {
             // (legacy full ribbons) keeps the gravel verge.
             p.shoulderWidth = std::min(p.shoulderWidth, 0.5f);
             p.shoulderColor = p.asphaltColor;
+            // The marking tile is SHARED (one bake per class/width, see
+            // surfaceMaterialFor) and 48 m long — an exact whole number of both
+            // the 3+9 centre and the 3+3 edge dash periods — so the dashes carry
+            // across a chunk seam as long as the piece's v starts at its GLOBAL
+            // station along the road rather than at zero.
+            p.textureTileLength = rules_.tileLength;
             RoadGenerator gen(pts, p);
             // "Ground" for the piece is its own profile — light smoothing keeps
             // a deck taut instead of re-draping it into the ravine/water it
@@ -716,26 +958,14 @@ namespace threepp::road {
             gen.conformTo([&pts](float x, float z) {
                 return polylineHeightAt(pts, x, z);
             }, 2);
-            auto geo = gen.buildSurface();
+            auto geo = gen.buildSurface(station);
             if (!geo->getAttribute<float>("position") ||
                 geo->getAttribute<float>("position")->count() == 0)
                 return nullptr;
 
-            auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
-                                                            .color(Color::white)
-                                                            .roughness(0.95f)
-                                                            .metalness(0.f));
-            auto tex = DataTexture::create(
-                    ImageData{gen.bakeSurfaceTexture(texWidth, texHeight)},
-                    static_cast<unsigned int>(texWidth), static_cast<unsigned int>(texHeight));
-            tex->colorSpace = ColorSpace::sRGB;
-            tex->magFilter = Filter::Linear;
-            tex->minFilter = Filter::LinearMipmapLinear;
-            tex->generateMipmaps = true;// DataTexture defaults false → GL black
-            tex->anisotropy = 16;// permanent grazing incidence — see buildMeshes note
-            tex->wrapS = TextureWrapping::ClampToEdge;
-            tex->wrapT = TextureWrapping::Repeat;
-            mat->map = tex;
+            // Two seeded variants per class alternate by piece index, so the
+            // shared tile's own repeat is 96 m of road rather than 48.
+            auto mat = surfaceMaterialFor(r.spec, idx & 1);
 
             auto mesh = Mesh::create(geo, mat);
             mesh->name = std::string(namePrefix) + "_" +
@@ -978,6 +1208,13 @@ namespace threepp::road {
         float flattenMargin_;
         float trenchDepth_ = 0.35f;
         bool conformed_ = false;
+        MarkingRules rules_{};
+        // Baked surface sets, keyed on (class, surface, width, wear, variant) —
+        // built lazily by surfaceMaterialFor from the const mesh builders, hence
+        // mutable. Not part of the logical const state.
+        mutable std::unordered_map<std::uint64_t, std::shared_ptr<MeshStandardMaterial>> surfaceCache_;
+        mutable bool meanCached_[2] = {false, false};
+        mutable std::array<float, 3> meanValue_[2] = {{0.f, 0.f, 0.f}, {0.f, 0.f, 0.f}};
         std::vector<Road> roads_;
 
         std::vector<Seg> segs_;
