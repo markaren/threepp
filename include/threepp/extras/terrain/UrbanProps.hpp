@@ -82,6 +82,33 @@ namespace threepp::terrain {
         std::function<float(float, float)> ground;
     };
 
+    // One parked car, resolved: ground contact, heading, body colour. The
+    // placement pass runs ONCE over the whole pack (a lot 2 km away is still a
+    // lot), and the GEOMETRY for a 250 m cell is stamped later, on demand, by
+    // whatever streams the cells past the camera. A placement is 32 bytes; the
+    // triangles for the same car are ~4 kB, which is the whole reason the two
+    // are separated.
+    struct UrbanCarPlacement {
+        float x = 0.f, y = 0.f, z = 0.f;
+        float fx = 1.f, fz = 0.f;
+        std::array<float, 3> body{};
+    };
+
+    struct UrbanCarField {
+        float cellSize = 250.f;
+        std::map<std::pair<int, int>, std::vector<UrbanCarPlacement>> cells;
+
+        [[nodiscard]] const std::vector<UrbanCarPlacement>* at(int cx, int cz) const {
+            auto it = cells.find({cx, cz});
+            return it == cells.end() ? nullptr : &it->second;
+        }
+        [[nodiscard]] size_t count() const {
+            size_t n = 0;
+            for (const auto& [k, v] : cells) n += v.size();
+            return n;
+        }
+    };
+
     struct UrbanPropsStats {
         int deckLines = 0;
         int carsLot = 0, carsKerb = 0, carCells = 0;
@@ -339,10 +366,34 @@ namespace threepp::terrain {
         return {0.042f, 0.085f, 0.230f};               // blue
     }
 
+    inline std::shared_ptr<MeshStandardMaterial> makeUrbanCarMaterial() {
+        auto m = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(Color::white).roughness(0.35f).metalness(0.f));
+        m->vertexColors = true;
+        return m;
+    }
+
+    // Stamp one 250 m cell's cars into a single vertex-coloured mesh. Called by
+    // the streamer on first activation of the cell, and never again: the mesh is
+    // cached for as long as the streamer lives.
+    inline std::shared_ptr<Mesh> buildCarCellMesh(const std::vector<UrbanCarPlacement>& cars,
+                                                  const std::shared_ptr<Material>& mat,
+                                                  const std::string& name) {
+        if (cars.empty()) return nullptr;
+        detail::PropBuf buf;
+        for (const auto& c : cars) detail::upCar(buf, c.x, c.y, c.z, c.fx, c.fz, c.body);
+        if (buf.empty()) return nullptr;
+        return detail::upMakeMesh(buf, mat, name);
+    }
+
     // Build the props under `root`. Returns what it planted and why it refused.
+    // When `carsOut` is given the cars are RESOLVED but not stamped: the caller
+    // gets per-cell placement lists to stream, and `root` receives only the
+    // decks and the boats (a handful of meshes for the whole pack).
     inline UrbanPropsStats buildUrbanProps(Object3D& root, const GeoTerrainPack& pack,
                                            const road::RoadNetwork& net,
-                                           const UrbanPropsOptions& o) {
+                                           const UrbanPropsOptions& o,
+                                           UrbanCarField* carsOut = nullptr) {
         UrbanPropsStats st;
         if (!o.ground) return st;
         const float sea = o.seaLevel;
@@ -400,7 +451,8 @@ namespace threepp::terrain {
 
         // ── cars ────────────────────────────────────────────────────────────
         if (o.cars) {
-            std::map<std::pair<int, int>, detail::PropBuf> cells;
+            UrbanCarField field;
+            field.cellSize = o.cellSize;
             const auto cellOf = [&](float x, float z) {
                 return std::make_pair(static_cast<int>(std::floor(x / o.cellSize)),
                                       static_cast<int>(std::floor(z / o.cellSize)));
@@ -415,63 +467,92 @@ namespace threepp::terrain {
                     ++st.rejectRoof;
                     return false;
                 }
-                detail::upCar(cells[cellOf(x, z)], x, g, z, fx, fz,
-                              urbanCarColor(detail::upHash01(seed, 0x51u, 0u)));
+                field.cells[cellOf(x, z)].push_back(
+                        {x, g, z, fx, fz, urbanCarColor(detail::upHash01(seed, 0x51u, 0u))});
                 return true;
             };
 
-            // (a) mapped parking lots: a 2.5 m bay pitch along the lot's long
-            // axis, 5 m rows across it, cars nose-in (heading = short axis).
+            // ── (a) mapped parking lots ─────────────────────────────────────
+            // The first pass covered the whole polygon with a 2.5 × 5 m grid at
+            // a flat 55% coin toss, and the user's verdict was the right one:
+            // "way too many cars ate the parking lots". Two things were wrong.
+            // There were no AISLES — a real lot spends better than a third of
+            // its area on driving lanes, and the bays it does have come in
+            // double rows nose to nose — and the occupancy was UNIFORM, which
+            // is the one thing a real lot never is: cars clump at the entrance
+            // end of a row and whole rows stand empty. `ParkingLayout` (shared
+            // with the bay paint, so the cars stand on the lines) supplies the
+            // rows; the fill below is a contiguous RUN from a hashed end plus a
+            // few strays.
             for (const auto& poly : pack.landuse.polygons) {
                 if (poly.cls != "parking" || poly.outer.size() < 3) continue;
                 Vector2 c;
                 for (const auto& p : poly.outer) c.add(p);
                 c.divideScalar(static_cast<float>(poly.outer.size()));
                 if (!inRoi(c.x, c.y)) continue;
-                Vector2 axis(1.f, 0.f);
-                float bestLen = -1.f;
-                float minU = 1e30f, maxU = -1e30f, minV = 1e30f, maxV = -1e30f;
-                for (size_t i = 0, n = poly.outer.size(); i < n; ++i) {
-                    const Vector2& a = poly.outer[i];
-                    const Vector2& b = poly.outer[(i + 1) % n];
-                    const float dx = b.x - a.x, dz = b.y - a.y;
-                    const float l = dx * dx + dz * dz;
-                    if (l > bestLen) {
-                        bestLen = l;
-                        axis.set(dx, dz);
+                const auto L = parkingLayout(poly.outer);
+                if (!L.valid) continue;
+                const unsigned int lotSeed = detail::upStrHash(poly.id);
+                // Per-lot occupancy in [0.15, 0.55]: a quiet residential lot and
+                // a supermarket at noon are not the same lot.
+                const float occ = 0.15f + 0.40f * detail::upHash01(lotSeed, 0x0Cu, 0u);
+                // A pocket lot (a few bays behind a shop) is not a grid at all.
+                const int lotCap = L.area < 150.f ? 2 : 1 << 20;
+                int lotCars = 0;
+                const int nu = static_cast<int>((L.maxU - L.minU - 2.f * L.setback) / L.pitch);
+                // Row centres across the lot. A lot too narrow to hold an aisle
+                // AND a stall row is not a car park with lanes: it is a single
+                // row of bays off the street, and the street is the aisle. Half
+                // the mapped lots in this pack are that (median 205 m²), and
+                // the first cut of the aisle rule left every one of them EMPTY
+                // — which reads as wrong as the solid block did.
+                const float span = L.maxV - L.minV - 2.f * L.setback;
+                std::vector<std::pair<float, float>> rows;// (centre v, facing)
+                if (span < L.aisle + L.stall) {
+                    if (span >= 2.f) rows.emplace_back((L.minV + L.maxV) * 0.5f, -1.f);
+                } else {
+                    for (int k = 0;; ++k) {
+                        const float base = L.minV + L.setback + static_cast<float>(k) * L.period() +
+                                           L.aisle;
+                        if (base + 0.5f * L.stall > L.maxV - L.setback) break;
+                        rows.emplace_back(base + 0.5f * L.stall, -1.f);
+                        if (base + 1.5f * L.stall <= L.maxV - L.setback)
+                            rows.emplace_back(base + 1.5f * L.stall, 1.f);
                     }
                 }
-                if (bestLen < 1e-6f) continue;
-                axis.divideScalar(std::sqrt(bestLen));
-                const Vector2 lat(-axis.y, axis.x);
-                for (const auto& p : poly.outer) {
-                    const float u = p.x * axis.x + p.y * axis.y;
-                    const float v = p.x * lat.x + p.y * lat.y;
-                    minU = std::min(minU, u);
-                    maxU = std::max(maxU, u);
-                    minV = std::min(minV, v);
-                    maxV = std::max(maxV, v);
-                }
-                const unsigned int lotSeed = detail::upStrHash(poly.id);
-                int iu = 0;
-                for (float u = minU + 1.25f; u <= maxU; u += o.lotBayPitch, ++iu) {
-                    int iv = 0;
-                    for (float v = minV + 2.5f; v <= maxV; v += o.lotRowPitch, ++iv) {
-                        const float x = axis.x * u + lat.x * v;
-                        const float z = axis.y * u + lat.y * v;
-                        if (!detail::upInsideRing(poly.outer, x, z)) continue;
-                        if (detail::upHash01(lotSeed, static_cast<unsigned int>(iu),
-                                             static_cast<unsigned int>(iv)) > o.lotOccupancy)
+                for (size_t row = 0; row < rows.size() && lotCars < lotCap; ++row) {
+                    const float rowC = rows[row].first;
+                    const float facing = rows[row].second;
+                    const auto ru = static_cast<unsigned int>(row);
+                    // How full is THIS row, and from which end does it fill?
+                    // The spread (×0.4 … ×2.0, clamped) is what makes one row
+                    // nearly full while the next one is empty.
+                    const float fill = std::clamp(
+                            occ * (0.4f + 1.6f * detail::upHash01(lotSeed, ru, 0x21u)), 0.f, 1.f);
+                    const bool fromStart = detail::upHash01(lotSeed, ru, 0x22u) < 0.5f;
+                    const int run = static_cast<int>(std::lround(fill * static_cast<float>(nu)));
+                    for (int iu = 0; iu < nu; ++iu) {
+                        const bool inRun = fromStart ? iu < run : iu >= nu - run;
+                        // A few singles away from the run: nobody parks in a
+                        // perfectly solid block.
+                        if (!inRun && detail::upHash01(lotSeed, ru * 977u + static_cast<unsigned int>(iu),
+                                                       0x23u) > 0.05f)
                             continue;
+                        const float u = L.minU + L.setback + (static_cast<float>(iu) + 0.5f) * L.pitch;
+                        const float x = L.axis.x * u + L.lat.x * rowC;
+                        const float z = L.axis.y * u + L.lat.y * rowC;
+                        if (!detail::upInsideRing(poly.outer, x, z)) continue;
                         if (net.pavedWeight(x, z, 1.f) > 0.25f) {
                             ++st.rejectPaved;
                             continue;
                         }
-                        // Nose-in: the car points along the SHORT axis.
-                        if (place(x, z, lat.x, lat.y,
-                                  lotSeed ^ (static_cast<unsigned int>(iu) << 8) ^
-                                          static_cast<unsigned int>(iv)))
+                        // Nose-in: the car points across the lot, into the aisle
+                        // its row touches.
+                        if (place(x, z, L.lat.x * facing, L.lat.y * facing,
+                                  lotSeed ^ (static_cast<unsigned int>(iu) << 8) ^ ru)) {
                             ++st.carsLot;
+                            if (++lotCars >= lotCap) break;
+                        }
                     }
                 }
             }
@@ -548,14 +629,20 @@ namespace threepp::terrain {
                 }
             }
 
-            for (const auto& [key, buf] : cells) {
-                if (buf.empty()) continue;
-                root.add(detail::upMakeMesh(buf, carMat,
-                                            "cars_" + std::to_string(key.first) + "_" +
-                                                    std::to_string(key.second)));
-                ++st.meshes;
-                ++st.carCells;
-                st.triangles += buf.tris();
+            st.carCells = static_cast<int>(field.cells.size());
+            if (carsOut) {
+                // Streamed: hand the placements over, stamp nothing.
+                *carsOut = std::move(field);
+            } else {
+                for (const auto& [key, cars] : field.cells) {
+                    auto mesh = buildCarCellMesh(cars, carMat,
+                                                 "cars_" + std::to_string(key.first) + "_" +
+                                                         std::to_string(key.second));
+                    if (!mesh) continue;
+                    st.triangles += mesh->geometry()->getAttribute<float>("position")->count() / 3;
+                    root.add(std::move(mesh));
+                    ++st.meshes;
+                }
             }
         }
 

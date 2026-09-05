@@ -1,4 +1,5 @@
 add_test_executable(CanopyForest_test)
+add_test_executable(CellStreamer_test)
 add_test_executable(DataUtils_test)
 add_test_executable(DownwashEffect_test)
 add_test_executable(EditorAnimation_test)

@@ -1204,6 +1204,11 @@ namespace threepp::vegetation {
         float centerX = 0.f, centerZ = 0.f;
         float farCellDistance = 0.f;
         float farCellSize = 384.f;
+        // ...and when the CALLER already knows this batch is the far band —
+        // a distance-streamed coarse cell, whose sites are by construction all
+        // beyond the near ring — the ROI-centre test is meaningless. Bin
+        // everything on `farCellSize` and use the far prototypes.
+        bool coarseOnly = false;
         // Same site → same species/scale/yaw at every level, so a handoff moves
         // no tree. Shared with ForestOptions.
         float scrubMaxHeight = 6.f, birchMaxHeight = 14.f, birchMaxElevation = 350.f;
@@ -1304,8 +1309,9 @@ namespace threepp::vegetation {
             // measured separately below and re-scaled per level, so a tree keeps
             // its metre height across the handoff.
             const float ddx = p.x - o.centerX, ddz = p.z - o.centerZ;
-            const bool far = coarsen &&
-                             (ddx * ddx + ddz * ddz) > o.farCellDistance * o.farCellDistance;
+            const bool far = o.coarseOnly ||
+                             (coarsen &&
+                              (ddx * ddx + ddz * ddz) > o.farCellDistance * o.farCellDistance);
             const float gs = far ? fcs : cs;
             const int cx = static_cast<int>(std::floor(p.x / gs));
             const int cz = static_cast<int>(std::floor(p.z / gs));

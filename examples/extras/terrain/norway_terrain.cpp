@@ -27,6 +27,7 @@
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/road/RoadNetwork.hpp"
+#include "threepp/extras/terrain/CellStreamer.hpp"
 #include "threepp/extras/terrain/CliffShell.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
 #include "threepp/extras/terrain/GeoBuildings.hpp"
@@ -1128,6 +1129,9 @@ int main(int argc, char** argv) {
     // and the OSM footprint, and at 2 m dilation a full ring of roof-edge
     // "canopy" survives.
     const bool urbanPack = !pack.buildings.empty() || pack.hasLandUse();
+    // Streamed content: built per cell around the LIVE camera, updated in the
+    // frame loop next to the tiles. Declared out here so the loop can see them.
+    std::vector<std::shared_ptr<terrain::CellStreamer>> streamers;
     if (pack.hasCanopy() && !envSet("NT_NO_FOREST")) {
         const auto tf0 = std::chrono::high_resolution_clock::now();
 
@@ -1159,16 +1163,14 @@ int main(int argc, char** argv) {
 
         vegetation::CanopySiteOptions so;
         so.seaLevel = reg.seaLevel;
-        // The shot only ever looks at part of a 4 km pack, and the instance budget
-        // is better spent dense near the subject than thin across the whole square.
-        so.centerX = controls.target.x;
-        so.centerZ = controls.target.z;
-        // Ålesund from Fjellstua looks 2.5 km down the sound to the far shore,
-        // but 1.6 km of PLANTED trees is where the frame stops being able to
-        // tell: past that a crown is under a pixel and the forest PAINT (the
-        // CHM land cover) carries the far hills at a fraction of the cost. The
-        // fjord packs only ever need the valley wall in front of the camera.
-        so.halfExtent = envF("NT_FOREST_EXTENT", urbanPack ? 1600.f : 1100.f);
+        // PACK-WIDE. This used to be a square ROI centred on the STARTUP camera
+        // target — which is why the user asked whether "trees are a function of
+        // where the camera is located at startup". They were. Detection is a
+        // one-off scan and the sites are 16 bytes each; what has to be bounded
+        // is the GEOMETRY, and that is the streamer's job below.
+        so.centerX = 0.f;
+        so.centerZ = 0.f;
+        so.halfExtent = 1e9f;
         if (urbanPack) {
             // 2 m grid: a 3×3 window is a 4 m crown spacing, which is a town
             // tree. The 5×5 default is a plantation rule and it halves the
@@ -1314,7 +1316,7 @@ int main(int argc, char** argv) {
             canopyMat->translucency = 0.3f;
 
             vegetation::ForestLodOptions lo;
-            lo.cap = static_cast<int>(envF("NT_FOREST_CAP", urbanPack ? 80000.f : 40000.f));
+            lo.cap = static_cast<int>(envF("NT_FOREST_CAP", 1e9f));
             // A town's tall trees are limes, maples, chestnuts and rowans, not
             // Norway spruce: spruce needs BOTH height above sea and a stand
             // around it. Aksla's plantation (60 m+, closed canopy) still gets
@@ -1342,34 +1344,87 @@ int main(int argc, char** argv) {
             // FAR CELLS ARE COARSER. The cell is the unit of object count, and
             // the object count is what this frame is spent on: geiranger runs
             // 28 k trees at ~100 fps over ~180 cells, Ålesund ran 26 k over
-            // ~1500 and managed 18. Beyond 800 m from the ROI centre, bin on a
-            // 384 m grid: 9× fewer cells for crowns that are 2-4 px wide.
-            // NT_FOREST_FARCELL=0 turns it off for the A/B.
-            lo.centerX = so.centerX;
-            lo.centerZ = so.centerZ;
-            lo.farCellDistance = envF("NT_FOREST_FARCELL", urbanPack ? 800.f : 0.f);
-            lo.farCellSize = envF("NT_FOREST_FARCELLSIZE", 384.f);
+            // ~1500 and managed 18. Beyond NT_FOREST_NEAR from THE CAMERA the
+            // streamer switches a whole 3×3 block to one 384 m cell: 9× fewer
+            // objects for crowns that are 2-4 px wide.
+            lo.cellSize = envF("NT_FOREST_CELL", 128.f);
+            lo.farCellSize = lo.cellSize * 3.f;
             lo.mesh.seaLevel = reg.seaLevel;
             lo.mesh.maxSlopeDeg = so.maxSlopeDeg;// same gate as the sites, or the
             lo.mesh.minGroundHeight = so.minGroundHeight;// handoff grows new forest
-            const auto st = vegetation::buildCanopyForestLod(*forest, sites, species, canopyMat,
-                                                             pack.canopy, pack.grid, prov.height, lo);
-            scene.add(forest);
+
+            // ── sites → a fine spatial grid, once ──────────────────────────
+            // The whole pack's sites, binned on the streamer's fine cell. A
+            // cell build is then a lookup, not a scan.
+            auto grid = std::make_shared<std::unordered_map<std::int64_t,
+                                                            std::vector<vegetation::TreeSite>>>();
+            const float gcs = lo.cellSize;
+            const auto gkey = [](int cx, int cz) {
+                return (static_cast<std::int64_t>(cx) << 32) ^ static_cast<std::uint32_t>(cz);
+            };
+            for (const auto& s : sites)
+                (*grid)[gkey(static_cast<int>(std::floor(s.x / gcs)),
+                             static_cast<int>(std::floor(s.z / gcs)))]
+                        .push_back(s);
+
+            auto speciesPtr = std::make_shared<std::array<vegetation::SpeciesVariants, 3>>(species);
+            auto heightFn = prov.height;
+            auto builder = [grid, gkey, speciesPtr, canopyMat, heightFn, lo, &pack](
+                                   int level, int cx, int cz, float) -> std::shared_ptr<Object3D> {
+                std::vector<vegetation::TreeSite> sub;
+                const int span = level ? 3 : 1;
+                const int bx = level ? cx * 3 : cx, bz = level ? cz * 3 : cz;
+                for (int i = 0; i < span; ++i)
+                    for (int j = 0; j < span; ++j) {
+                        auto it = grid->find(gkey(bx + j, bz + i));
+                        if (it != grid->end())
+                            sub.insert(sub.end(), it->second.begin(), it->second.end());
+                    }
+                if (sub.empty()) return nullptr;
+                auto g = Group::create();
+                g->name = level ? "forest_coarse" : "forest_fine";
+                vegetation::ForestLodOptions co = lo;
+                co.coarseOnly = level != 0;
+                // Per-cell seed: the yaw stream restarts inside every build, so
+                // a shared seed would give every cell the same rotation
+                // sequence — a rhythm the eye finds on a hillside.
+                co.seed = lo.seed ^ (static_cast<unsigned int>(cx) * 73856093u) ^
+                          (static_cast<unsigned int>(cz) * 19349663u) ^
+                          (static_cast<unsigned int>(level) * 83492791u);
+                vegetation::buildCanopyForestLod(*g, sub, *speciesPtr, canopyMat, pack.canopy,
+                                                 pack.grid, heightFn, co);
+                return g;
+            };
+
+            terrain::CellStreamerOptions cso;
+            cso.fineCellSize = lo.cellSize;
+            cso.fineRadius = envF("NT_FOREST_NEAR", 800.f);
+            cso.coarseRadius = envF("NT_FOREST_FAR", urbanPack ? 1600.f : 1100.f);
+            cso.maxCellBuildsPerFrame = static_cast<int>(envF("NT_STREAM_BUDGET", 2.f));
+            auto forestStream = terrain::CellStreamer::create(builder, cso);
+            forestStream->name = "forest_stream";
+            scene.add(forestStream);
+            forestStream->update(camera.position);// the startup ring, in one go
+            streamers.push_back(forestStream);
+            forest.reset();
+
+            int fm = 0, fi = 0;
+            forestStream->traverseType<InstancedMesh>([&](InstancedMesh& im) {
+                ++fm;
+                fi += static_cast<int>(im.count());
+            });
             const auto tf1 = std::chrono::high_resolution_clock::now();
-            vegMeshes += st.l0Meshes + st.l1Meshes + st.l2Meshes;
-            vegInstances += st.planted;
-            vegCells += st.cells;
-            std::cout << "[norway] forest LOD: " << st.sites << " sites, " << st.planted
-                      << " instances in " << st.cells << " cells @ " << lo.cellSize << " m ("
-                      << st.coarseCells << " coarse @ " << lo.farCellSize << " m beyond "
-                      << lo.farCellDistance << " m)"
-                      << " (L0 " << st.l0Meshes << " meshes < " << lo.l0Distance << " m, L1 "
-                      << st.l1Meshes << " meshes, L2 " << st.l2Meshes
-                      << (lo.buildCanopyMesh ? " canopy meshes / " : " thinned meshes 1-in-" )
-                      << (lo.buildCanopyMesh ? st.canopyTris : lo.l2Keep)
-                      << (lo.buildCanopyMesh ? " tris > " : " > ") << lo.l1Distance
-                      << " m), L1 prototype " << st.l1ProtoTris << " tris, "
-                      << std::chrono::duration<float>(tf1 - tf0).count() << " s\n"
+            vegMeshes += fm;
+            vegInstances += fi;
+            vegCells += forestStream->stats().active;
+            std::cout << "[norway] forest stream: " << sites.size() << " pack-wide sites, "
+                      << forestStream->stats().active << " live cells (" << fm << " meshes, "
+                      << fi << " instances) @ " << cso.fineCellSize << " m < " << cso.fineRadius
+                      << " m, " << (cso.fineCellSize * 3.f) << " m to " << cso.coarseRadius
+                      << " m; L0 < " << lo.l0Distance << " m, L1, L2 1-in-" << lo.l2Keep << " > "
+                      << lo.l1Distance << " m, budget " << cso.maxCellBuildsPerFrame
+                      << " builds/frame, " << std::chrono::duration<float>(tf1 - tf0).count()
+                      << " s\n"
                       << std::flush;
         } else {
             vegetation::ForestOptions fo;
@@ -1476,24 +1531,62 @@ int main(int argc, char** argv) {
                         vegetation::makeBushVariant(4101u),
                         vegetation::makeBushVariant(4102u, Color(0.36f, 0.54f, 0.19f)),
                         vegetation::makeBushVariant(4103u, Color(0.27f, 0.45f, 0.14f))};
-                auto bushRoot = Group::create();
-                bushRoot->name = "bush_field";
                 vegetation::BushOptions bopt;
-                bopt.cap = static_cast<int>(envF("NT_BUSH_CAP", 20000.f));
+                bopt.cap = static_cast<int>(envF("NT_BUSH_CAP", 1e9f));
                 bopt.cullDistance = envF("NT_BUSH_CULL", 400.f);
-                const auto bst = vegetation::buildBushField(*bushRoot, bushes, bushVars,
-                                                            prov.height, bopt);
-                scene.add(bushRoot);
-                vegMeshes += bst.meshes;
-                vegInstances += bst.planted;
-                vegCells += bst.cells;
+                bopt.cellSize = 128.f;
+                // Same treatment as the forest: pack-wide sites, fine cells
+                // only (a 1.6 m shrub has no far tier worth the object).
+                auto bgrid = std::make_shared<
+                        std::unordered_map<std::int64_t, std::vector<vegetation::TreeSite>>>();
+                const auto bkey = [](int cx, int cz) {
+                    return (static_cast<std::int64_t>(cx) << 32) ^ static_cast<std::uint32_t>(cz);
+                };
+                for (const auto& s : bushes)
+                    (*bgrid)[bkey(static_cast<int>(std::floor(s.x / bopt.cellSize)),
+                                  static_cast<int>(std::floor(s.z / bopt.cellSize)))]
+                            .push_back(s);
+                auto bvars = std::make_shared<std::vector<vegetation::TreeVariant>>(bushVars);
+                auto bHeight = prov.height;
+                terrain::CellStreamerOptions bso;
+                bso.fineCellSize = bopt.cellSize;
+                bso.fineRadius = bopt.cullDistance;
+                bso.coarseRadius = 0.f;// fine only
+                bso.maxCellBuildsPerFrame = static_cast<int>(envF("NT_STREAM_BUDGET", 2.f));
+                auto bushStream = terrain::CellStreamer::create(
+                        [bgrid, bkey, bvars, bHeight, bopt](int, int cx, int cz,
+                                                            float) -> std::shared_ptr<Object3D> {
+                            auto it = bgrid->find(bkey(cx, cz));
+                            if (it == bgrid->end() || it->second.empty()) return nullptr;
+                            auto g = Group::create();
+                            g->name = "bush_cell_root";
+                            vegetation::BushOptions co = bopt;
+                            co.seed = bopt.seed ^ (static_cast<unsigned int>(cx) * 73856093u) ^
+                                      (static_cast<unsigned int>(cz) * 19349663u);
+                            vegetation::buildBushField(*g, it->second, *bvars, bHeight, co);
+                            return g;
+                        },
+                        bso);
+                bushStream->name = "bush_field";
+                scene.add(bushStream);
+                bushStream->update(camera.position);
+                streamers.push_back(bushStream);
+                int bm = 0, bi = 0;
+                bushStream->traverseType<InstancedMesh>([&](InstancedMesh& im) {
+                    ++bm;
+                    bi += static_cast<int>(im.count());
+                });
+                vegMeshes += bm;
+                vegInstances += bi;
+                vegCells += bushStream->stats().active;
                 const auto tb1 = std::chrono::high_resolution_clock::now();
                 std::cout << "[norway] bushes: " << brep.peaks << " CHM peaks 1-2.5 m -> "
                           << chmBushes << " garden sites + " << hedgeBushes
                           << " hedge sites (rejected: masked " << brep.rejectedMasked
                           << ", ground " << brep.rejectedGround << ", slope "
-                          << brep.rejectedSlope << ") -> " << bst.planted << " instances in "
-                          << bst.cells << " cells, cull " << bopt.cullDistance << " m, "
+                          << brep.rejectedSlope << ") -> " << bi << " instances live in "
+                          << bushStream->stats().active << " streamed cells, radius "
+                          << bso.fineRadius << " m, "
                           << std::chrono::duration<float>(tb1 - tb0).count() << " s\n"
                           << std::flush;
             }
@@ -1522,9 +1615,13 @@ int main(int argc, char** argv) {
         const auto propUrban = gopt.paintUrban ? terrain::buildUrbanMask(pack, gopt) : nullptr;
         terrain::UrbanPropsOptions po;
         po.seaLevel = reg.seaLevel;
-        po.centerX = controls.target.x;
-        po.centerZ = controls.target.z;
-        po.halfExtent = envF("NT_PROPS_EXTENT", 1500.f);
+        // Pack-wide placement (see the forest: the ROI was the defect), 250 m
+        // cells streamed by the camera out to NT_PROPS_EXTENT. Decks and boats
+        // stay unstreamed: they are a few hundred objects for the whole pack
+        // and they are part of the LAND, not scatter.
+        po.centerX = 0.f;
+        po.centerZ = 0.f;
+        po.halfExtent = 1e9f;
         po.cellSize = envF("NT_PROPS_CELL", 250.f);
         po.cars = !envSet("NT_NO_CARS");
         po.boats = !envSet("NT_NO_BOATS");
@@ -1534,15 +1631,45 @@ int main(int argc, char** argv) {
         po.ground = prov.height;
         auto props = Group::create();
         props->name = "urban_props";
-        const auto ps = terrain::buildUrbanProps(*props, pack, network, po);
+        auto carField = std::make_shared<terrain::UrbanCarField>();
+        const auto ps = terrain::buildUrbanProps(*props, pack, network, po, carField.get());
         scene.add(props);
+
+        auto carMat = terrain::makeUrbanCarMaterial();
+        terrain::CellStreamerOptions pso;
+        pso.fineCellSize = po.cellSize;
+        pso.fineRadius = envF("NT_PROPS_EXTENT", 1500.f);
+        pso.coarseRadius = 0.f;// a car has no far tier: past the ring, nothing
+        pso.maxCellBuildsPerFrame = static_cast<int>(envF("NT_STREAM_BUDGET", 2.f));
+        auto carStream = terrain::CellStreamer::create(
+                [carField, carMat](int, int cx, int cz, float) -> std::shared_ptr<Object3D> {
+                    const auto* cars = carField->at(cx, cz);
+                    if (!cars) return nullptr;
+                    return terrain::buildCarCellMesh(*cars, carMat,
+                                                     "cars_" + std::to_string(cx) + "_" +
+                                                             std::to_string(cz));
+                },
+                pso);
+        carStream->name = "car_stream";
+        scene.add(carStream);
+        carStream->update(camera.position);
+        streamers.push_back(carStream);
+        size_t liveCarTris = 0;
+        int liveCarMeshes = 0;
+        carStream->traverseType<Mesh>([&](Mesh& m) {
+            ++liveCarMeshes;
+            if (auto* p = m.geometry()->getAttribute<float>("position"))
+                liveCarTris += p->count() / 3;
+        });
         const auto tp1 = std::chrono::high_resolution_clock::now();
-        std::printf("[norway] urban props: %d pier deck runs, %d cars (%d lot + %d kerb) in "
-                    "%d cells @ %.0f m, %d boats in %d marinas; %zu meshes, %zu tris; "
-                    "rejected roof %d, sea %d, paved %d, junction %d; ROI %.0f m, %.2f s\n",
-                    ps.deckLines, ps.carsLot + ps.carsKerb, ps.carsLot, ps.carsKerb, ps.carCells,
-                    po.cellSize, ps.boats, ps.marinas, ps.meshes, ps.triangles, ps.rejectRoof,
-                    ps.rejectSea, ps.rejectPaved, ps.rejectJunction, po.halfExtent,
+        std::printf("[norway] urban props: %d pier deck runs, %zu cars pack-wide (%d lot + %d "
+                    "kerb) in %d cells @ %.0f m -> %d cells live (%d meshes, %zu tris) within "
+                    "%.0f m of the camera; %d boats in %d marinas; deck/boat meshes %zu, "
+                    "%zu tris; rejected roof %d, sea %d, paved %d, junction %d; %.2f s\n",
+                    ps.deckLines, carField->count(), ps.carsLot, ps.carsKerb, ps.carCells,
+                    po.cellSize, carStream->stats().active, liveCarMeshes, liveCarTris,
+                    pso.fineRadius, ps.boats, ps.marinas, ps.meshes, ps.triangles, ps.rejectRoof,
+                    ps.rejectSea, ps.rejectPaved, ps.rejectJunction,
                     std::chrono::duration<float>(tp1 - tp0).count());
         std::fflush(stdout);
     }
@@ -1661,6 +1788,10 @@ int main(int argc, char** argv) {
         }
         if (!freezeTiles) tiles->update(lodPos);
         if (scatter && !freezeTiles) scatter->update(lodPos);
+        // Vegetation and props follow the LIVE camera, on the same position and
+        // the same freeze rule as the tiles.
+        if (!freezeTiles)
+            for (auto& s : streamers) s->update(lodPos);
         renderer->render(scene, camera);
         if (ui) ui->render();
 

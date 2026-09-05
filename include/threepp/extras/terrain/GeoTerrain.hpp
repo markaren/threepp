@@ -382,6 +382,122 @@ namespace threepp::terrain {
         }
     };
 
+    // ── parking-lot stall layout ────────────────────────────────────────────
+    //
+    // ONE description of how a lot is laid out, shared by the paint (bay lines)
+    // and by UrbanProps (the cars), because a car that does not stand on a bay
+    // is worse than no bay line at all. A real lot is not a field of cars: it
+    // is double rows of stalls nose to nose separated by driving aisles, set
+    // back from the kerb. Across the lot's short axis, starting at the edge:
+    //
+    //     [ setback ][ aisle 6 m ][ stall 5 m ][ stall 5 m ][ aisle 6 m ]...
+    //
+    // so a period is 16 m and carries two rows of cars that face opposite ways
+    // (each row noses into the aisle it touches). Along the long axis the stall
+    // pitch is 2.5 m. The lot's own axis is the MINIMUM-AREA RECTANGLE's long
+    // side, not its longest ring edge: an L-shaped lot's longest edge can run
+    // across the lot, and then every bay line is drawn the wrong way.
+    struct ParkingLayout {
+        Vector2 axis{1.f, 0.f};// long axis (u)
+        Vector2 lat{0.f, 1.f}; // short axis (v)
+        float minU = 0.f, maxU = 0.f, minV = 0.f, maxV = 0.f;
+        float setback = 1.5f, aisle = 6.f, stall = 5.f, pitch = 2.5f;
+        float area = 0.f;
+        bool valid = false;
+
+        [[nodiscard]] float period() const { return aisle + 2.f * stall; }
+
+        // Which stall row does this v fall in? -1 = aisle, kerb setback or
+        // outside. `center` gets the row's centre line, `facing` the direction
+        // (in v) a car in it points: toward the aisle it noses into.
+        [[nodiscard]] int rowAt(float v, float* center = nullptr, float* facing = nullptr) const {
+            const float t = v - (minV + setback);
+            if (t < 0.f || v > maxV - setback) return -1;
+            // Narrow lot: one row of bays off the street, no aisle of its own
+            // (UrbanProps places cars the same way — see the note there).
+            if (maxV - minV - 2.f * setback < aisle + stall) {
+                const float c = (minV + maxV) * 0.5f;
+                if (std::fabs(v - c) > stall * 0.5f) return -1;
+                if (center) *center = c;
+                if (facing) *facing = -1.f;
+                return 0;
+            }
+            const float P = period();
+            const float k = std::floor(t / P);
+            const float r = t - k * P;
+            if (r < aisle) return -1;
+            const bool second = r >= aisle + stall;
+            if (r >= aisle + 2.f * stall) return -1;// (unreachable; guards fp drift)
+            const float base = minV + setback + k * P + aisle;
+            if (center) *center = base + (second ? 1.5f : 0.5f) * stall;
+            if (facing) *facing = second ? 1.f : -1.f;
+            return static_cast<int>(k) * 2 + (second ? 1 : 0);
+        }
+    };
+
+    // Minimum-area rectangle over the ring's edge directions, plus the ring's
+    // extents in that frame. Rings are a handful of points; O(n²) is free.
+    inline ParkingLayout parkingLayout(const std::vector<Vector2>& ring) {
+        ParkingLayout L;
+        if (ring.size() < 3) return L;
+        float bestArea = 1e30f;
+        Vector2 bestU(1.f, 0.f);
+        float bU0 = 0.f, bU1 = 0.f, bV0 = 0.f, bV1 = 0.f;
+        for (size_t i = 0, n = ring.size(); i < n; ++i) {
+            const Vector2& a = ring[i];
+            const Vector2& b = ring[(i + 1) % n];
+            const float dx = b.x - a.x, dz = b.y - a.y;
+            const float l = std::sqrt(dx * dx + dz * dz);
+            if (l < 1e-4f) continue;
+            const Vector2 u(dx / l, dz / l), v(-dz / l, dx / l);
+            float u0 = 1e30f, u1 = -1e30f, v0 = 1e30f, v1 = -1e30f;
+            for (const auto& p : ring) {
+                const float pu = p.x * u.x + p.y * u.y;
+                const float pv = p.x * v.x + p.y * v.y;
+                u0 = std::min(u0, pu);
+                u1 = std::max(u1, pu);
+                v0 = std::min(v0, pv);
+                v1 = std::max(v1, pv);
+            }
+            const float area = (u1 - u0) * (v1 - v0);
+            if (area < bestArea) {
+                bestArea = area;
+                bestU = u;
+                bU0 = u0;
+                bU1 = u1;
+                bV0 = v0;
+                bV1 = v1;
+            }
+        }
+        if (bestArea > 1e29f) return L;
+        // Long side is u; swap when the fit came out portrait.
+        if ((bU1 - bU0) >= (bV1 - bV0)) {
+            L.axis = bestU;
+            L.lat.set(-bestU.y, bestU.x);
+            L.minU = bU0;
+            L.maxU = bU1;
+            L.minV = bV0;
+            L.maxV = bV1;
+        } else {
+            L.axis.set(-bestU.y, bestU.x);
+            L.lat.set(-L.axis.y, L.axis.x);// = (-bestU.x, -bestU.y)
+            L.minU = bV0;
+            L.maxU = bV1;
+            L.minV = -bU1;
+            L.maxV = -bU0;
+        }
+        // Shoelace area of the ring itself (the rect is an upper bound).
+        float sh = 0.f;
+        for (size_t i = 0, n = ring.size(); i < n; ++i) {
+            const Vector2& a = ring[i];
+            const Vector2& b = ring[(i + 1) % n];
+            sh += a.x * b.y - b.x * a.y;
+        }
+        L.area = std::fabs(sh) * 0.5f;
+        L.valid = true;
+        return L;
+    }
+
     // Rasterise landuse.json (plus an optional quay-apron mask) into the class
     // raster above. Order is deliberate and is the whole design:
     //   1. soft cover (grass, pitch) — the classes that BLOCK the urban paint;
@@ -438,24 +554,24 @@ namespace threepp::terrain {
                                         [&](int ix, int iz, float, float) { put(ix, iz, v); });
                     continue;
                 }
-                // Long axis = longest ring edge; bays every 2.5 m along it.
-                Vector2 axis(1.f, 0.f);
-                float bestLen = -1.f;
-                for (size_t i = 0, n = poly.outer.size(); i < n; ++i) {
-                    const Vector2& a = poly.outer[i];
-                    const Vector2& b = poly.outer[(i + 1) % n];
-                    const float dx = b.x - a.x, dz = b.y - a.y;
-                    const float l = dx * dx + dz * dz;
-                    if (l > bestLen) {
-                        bestLen = l;
-                        axis.set(dx, dz);
-                    }
-                }
-                if (bestLen > 1e-6f) axis.divideScalar(std::sqrt(bestLen));
-                const Vector2 o0 = poly.outer[0];
+                // Bay lines belong to the STALL ROWS only. The first pass
+                // banded the whole polygon every 2.5 m along its long axis,
+                // aisles included, which is a corduroy blanket and not a car
+                // park; and it read the axis off the longest ring edge, which
+                // an L-shaped lot can point across the lot.
+                const auto L = parkingLayout(poly.outer);
                 detail::geoScanRing(poly.outer, dim, cs, half, [&](int ix, int iz, float px, float pz) {
-                    const float s = (px - o0.x) * axis.x + (pz - o0.y) * axis.y;
-                    const int band = static_cast<int>(std::floor(s / 2.5f));
+                    if (!L.valid) {
+                        put(ix, iz, LandUsePaint::Asphalt);
+                        return;
+                    }
+                    const float u = px * L.axis.x + pz * L.axis.y;
+                    const float v = px * L.lat.x + pz * L.lat.y;
+                    if (L.rowAt(v) < 0) {// aisle, setback: plain asphalt
+                        put(ix, iz, LandUsePaint::Asphalt);
+                        return;
+                    }
+                    const int band = static_cast<int>(std::floor((u - L.minU) / L.pitch));
                     put(ix, iz, ((band & 1) != 0) ? LandUsePaint::Bay : LandUsePaint::Asphalt);
                 });
             }
