@@ -145,12 +145,21 @@ namespace threepp::terrain {
 
         // Clapboard base shared by the wall variants: horizontal boards with a
         // shadowed under-edge, plus fine grain breakup.
+        // 0.2 m boards over a 3 m storey, and the lap gets a crisp SHADOW LINE,
+        // not the soft 5% gradient it had: at eye level a painted clapboard wall
+        // is read entirely off those lines, and 0.05 washed out to plaster.
         auto clapboard = [&](float u, float v) {
             Px p;
-            const float board = v * 12.f - std::floor(v * 12.f);// 12 boards/floor
-            p.h = 0.10f * board;                                // sawtooth relief
+            const float boards = 15.f;// 0.2 m boards over a 3 m storey
+            const float board = v * boards - std::floor(v * boards);
+            p.h = 0.30f * board - 0.30f;// each board laps over the one below
             const float grain = noise(u, v);
-            const float shade = 1.f - 0.05f * (1.f - board);// darker under each lap
+            float shade = 1.f - 0.045f * (1.f - board);
+            if (board < 0.14f) {// the lap's own shadow
+                const float t = 1.f - board / 0.14f;
+                shade *= 1.f - 0.085f * t;
+                p.h -= 0.34f * t;
+            }
             const float lum = (0.90f + 0.06f * (grain - 0.5f)) * shade;
             p.r = p.g = p.b = lum;
             p.rough = o.wallRoughness + 0.08f * (grain - 0.5f);
@@ -213,14 +222,17 @@ namespace threepp::terrain {
             bool inWin = false;
             for (int k = 0; k < 2; ++k) {
                 const float uc = 0.25f + 0.5f * static_cast<float>(k);
-                if (window(p, u, v, uc - 0.115f, uc + 0.115f, 0.35f, 0.83f, 0.035f,
-                           k == 1, 0.88f, 0.068f)) {
+                // frameLum 0.52, not 0.88: the frame is the TRIM, and a trim a
+                // hair off the wall colour is invisible by 20 m. Against a white
+                // painted wall this is the dark-framed window of the photo.
+                if (window(p, u, v, uc - 0.120f, uc + 0.120f, 0.35f, 0.83f, 0.042f,
+                           k == 1, 0.52f, 0.068f)) {
                     inWin = true;
                     break;
                 }
-                if (inRect(u, v, uc - 0.135f, uc + 0.135f, 0.315f, 0.35f)) {
+                if (inRect(u, v, uc - 0.140f, uc + 0.140f, 0.310f, 0.35f)) {
                     p.h = 0.45f;// sill
-                    p.r = p.g = p.b = 0.84f;
+                    p.r = p.g = p.b = 0.58f;
                     p.rough = 0.6f;
                     inWin = true;
                     break;
@@ -237,7 +249,7 @@ namespace threepp::terrain {
                 for (const float uc : {0.115f, 0.385f, 0.615f, 0.885f}) {
                     const float du = (u - uc) / 0.018f;
                     const float w = std::exp(-du * du) * (0.295f - v) / 0.295f;
-                    const float f = 1.f - 0.14f * w;
+                    const float f = 1.f - 0.07f * w;
                     p.r *= f;
                     p.g *= f;
                     p.b *= f;
@@ -247,22 +259,12 @@ namespace threepp::terrain {
         });
 
         // ── plain cladding ──────────────────────────────────────────────────
-        // Clapboard + a corner board at the bay boundary (u = 0/1 wraps to one
-        // per bay), widened from a hairline groove to a real 0.12 m board so it
-        // survives the mip chain at town distance.
-        const FacadeSet plain = bake([&](float u, float v) {
-            Px p = clapboard(u, v);
-            const float du = std::min(u, 1.f - u);
-            if (du < 0.024f) {
-                const float t = 1.f - du / 0.024f;
-                p.h += 0.22f * t;// proud board, not a groove
-                const float f = 1.f - 0.10f * (1.f - t);
-                p.r *= f;
-                p.g *= f;
-                p.b *= f;
-            }
-            return p;
-        });
+        // Plain clapboard, nothing else. The board that used to sit at u = 0/1
+        // wrapped once per BAY, not once per building corner, so a wooden wall
+        // came out as a run of panels with vertical seams — the flat plaster
+        // read of the suburb shot. Real corner boards are geometry now
+        // (GeoBuildings emits them in the trim colour at the ring vertices).
+        const FacadeSet plain = bake([&](float u, float v) { return clapboard(u, v); });
 
         // ── masonry: upper floors ───────────────────────────────────────────
         // Two tall windows per tile with a stone surround and a proud sill,
@@ -412,26 +414,31 @@ namespace threepp::terrain {
         // Fine dark courses with staggered vertical joints. MATTE for the same
         // reason as the metal roof: a glossy dark roof flares white at grazing
         // angles and every town roof reads as snow from the air.
+        // Base luminance 0.70, not 0.87: this map is a MULTIPLIER on the roof's
+        // vertex colour, and a near-white multiplier over a near-white wall tile
+        // is why a slate roof and a white wall came out the same brightness.
+        // 8 courses over the 3 m repeat = 0.375 m slates, wide enough to survive
+        // the mip chain at 400 m where 12 rows averaged to a flat field.
         const FacadeSet roofSlate = bake([&](float u, float v) {
             Px p;
-            const float rows = 12.f;
+            const float rows = 8.f;
             const float row = v * rows;
             const float ri = std::floor(row);
             const float rf = row - ri;
             const float stagger = (static_cast<int>(ri) & 1) ? 0.5f : 0.f;
-            const float col = u * 8.f + stagger;
+            const float col = u * 6.f + stagger;
             const float cf = col - std::floor(col);
             const float grain = noise(u * 2.f, v * 2.f);
             const float slate = noise(std::floor(col) * 0.13f, ri * 0.29f);
-            float lum = 0.87f + 0.075f * (slate - 0.5f) + 0.025f * (grain - 0.5f);
-            p.h = 0.10f * rf;// each course laps over the one below
-            if (rf < 0.09f) {// course shadow line
-                lum *= 0.74f;
-                p.h -= 0.18f;
+            float lum = 0.70f + 0.085f * (slate - 0.5f) + 0.025f * (grain - 0.5f);
+            p.h = 0.14f * rf;// each course laps over the one below
+            if (rf < 0.13f) {// course shadow line
+                lum *= 0.70f;
+                p.h -= 0.26f;
             }
-            if (std::min(cf, 1.f - cf) < 0.022f) {// vertical joint
-                lum *= 0.86f;
-                p.h -= 0.10f;
+            if (std::min(cf, 1.f - cf) < 0.026f) {// vertical joint
+                lum *= 0.84f;
+                p.h -= 0.12f;
             }
             p.r = p.g = p.b = lum;
             p.rough = 0.90f + 0.05f * (grain - 0.5f);
@@ -449,7 +456,7 @@ namespace threepp::terrain {
             const float cf = col - std::floor(col);
             const float barrel = std::sin(cf * 3.14159265f);// rounded pantile
             const float grain = noise(u * 2.f, v * 2.f);
-            float lum = 0.88f + 0.10f * (barrel - 0.5f) + 0.035f * (grain - 0.5f);
+            float lum = 0.74f + 0.10f * (barrel - 0.5f) + 0.035f * (grain - 0.5f);
             p.h = 0.30f * barrel + 0.20f * rf;
             if (rf < 0.13f) {// deep shadow under each lap
                 lum *= 0.66f;

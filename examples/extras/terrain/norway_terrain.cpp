@@ -856,8 +856,25 @@ int main(int argc, char** argv) {
                                                static_cast<float>(bs.skeletonTried)
                                      : 0.f,
                     bs.heuristic, bs.towers);
-        std::printf("[norway] buildings: %zu meshes, %zu triangles, %zu materials\n",
-                    bs.meshes, bs.triangles, bs.materials);
+        {
+            std::string causes;
+            for (int r = 1; r < terrain::SK_COUNT; ++r)
+                if (bs.skelFail[static_cast<size_t>(r)])
+                    causes += std::string(causes.empty() ? "" : ", ") +
+                              terrain::skeletonFailName(r) + " " +
+                              std::to_string(bs.skelFail[static_cast<size_t>(r)]);
+            if (bs.skelFailRing) causes += (causes.empty() ? "" : ", ") +
+                                           std::string("ring-degenerate ") +
+                                           std::to_string(bs.skelFailRing);
+            if (bs.skelFailPitch) causes += (causes.empty() ? "" : ", ") +
+                                            std::string("pitch-reject ") +
+                                            std::to_string(bs.skelFailPitch);
+            std::printf("[norway] buildings: skeleton fallback causes: %s\n",
+                        causes.empty() ? "none" : causes.c_str());
+        }
+        std::printf("[norway] buildings: %zu meshes, %zu triangles, %zu materials, "
+                    "%d corner boards\n",
+                    bs.meshes, bs.triangles, bs.materials, bs.cornerBoards);
         std::fflush(stdout);
         scene.add(buildings);
     }

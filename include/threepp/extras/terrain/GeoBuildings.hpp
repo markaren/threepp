@@ -114,6 +114,11 @@ namespace threepp::terrain {
         int flat = 0, gabled = 0, hipped = 0;// roof kinds actually emitted
         int heuristic = 0;                   // no roof block: old rect-fit path
         int skeletonTried = 0, skeletonFailed = 0;
+        // Per-cause breakdown of the skeleton fallbacks (index = SkeletonFail).
+        std::array<int, SK_COUNT> skelFail{};
+        int skelFailRing = 0; // the offset ring simplified away to nothing
+        int skelFailPitch = 0;// a valid skeleton whose pitch was out of range
+        int cornerBoards = 0;
         int towers = 0;
         size_t meshes = 0, triangles = 0, materials = 0;
     };
@@ -141,21 +146,6 @@ namespace threepp::terrain {
             }};
             return p;
         }
-        // Calibrated against aerial photos of the real towns: mid-grey slate
-        // and weathered zinc dominate, with red/brown tile accents. The old
-        // values (slate 0.055) read near-BLACK from the air — a linear albedo
-        // must be ~0.2 to read as the photo's mid-grey under a bright sky.
-        inline const std::array<std::array<float, 3>, 5>& geoBldRoofPalette() {
-            static const std::array<std::array<float, 3>, 5> p{{
-                    {0.195f, 0.205f, 0.225f},// mid slate grey
-                    {0.320f, 0.330f, 0.340f},// weathered zinc/metal
-                    {0.095f, 0.100f, 0.110f},// charcoal felt
-                    {0.300f, 0.085f, 0.055f},// tile red
-                    {0.200f, 0.115f, 0.062f},// brown tile
-            }};
-            return p;
-        }
-
         // Signed shoelace area of an open (x, z) ring (Vector2 = (x, z)).
         inline float geoBldRingArea(const std::vector<Vector2>& r) {
             float a = 0.f;
@@ -403,31 +393,52 @@ namespace threepp::terrain {
             if (r < 18u) return 3;
             return 4;
         }
-        // Slate on masonry, tile/black on wood, felt/zinc on flat + industry.
-        inline const std::array<std::array<float, 3>, 3>& geoBldSlatePalette() {
-            static const std::array<std::array<float, 3>, 3> p{{
-                    {0.150f, 0.158f, 0.175f},// dark slate
-                    {0.195f, 0.205f, 0.225f},// mid slate
-                    {0.115f, 0.122f, 0.135f},// near-black slate
-            }};
-            return p;
-        }
-        inline const std::array<std::array<float, 3>, 4>& geoBldTilePalette() {
-            static const std::array<std::array<float, 3>, 4> p{{
-                    {0.140f, 0.145f, 0.150f},// dark concrete tile
-                    {0.300f, 0.085f, 0.055f},// red tile
-                    {0.095f, 0.100f, 0.110f},// black
-                    {0.200f, 0.115f, 0.062f},// brown tile
-            }};
-            return p;
-        }
-        inline const std::array<std::array<float, 3>, 3>& geoBldFlatRoofPalette() {
-            static const std::array<std::array<float, 3>, 3> p{{
-                    {0.095f, 0.100f, 0.110f},// felt
-                    {0.320f, 0.330f, 0.340f},// zinc
-                    {0.240f, 0.245f, 0.250f},// grey membrane
-            }};
-            return p;
+        // ── roof coverings ──────────────────────────────────────────────────
+        // MEASURED against the render, not against an aerial photo. These are
+        // LINEAR albedos that are multiplied by a roof texture whose own mean is
+        // ~0.70, so the product is what the sun sees. Calibration (aksla-near,
+        // 2026-09-05): a sunlit slate plane must read 0.50-0.60x a sunlit white
+        // masonry wall in sRGB. The old 0.195 slate over a 0.87 texture read
+        // 0.68 — and being blue-biased (b > r by 15%) it came out pale BLUE-grey
+        // on every block. Slate is neutral to faintly warm.
+        enum GeoBldRoofCover { RC_SLATE = 0,
+                               RC_TILE,
+                               RC_METAL };
+
+        struct GeoBldRoofPick {
+            int cover = RC_SLATE;
+            float col[3] = {0.f, 0.f, 0.f};
+        };
+
+        // Distribution by hash, the mix the town actually shows:
+        //   masonry  slate 55 / near-black 20 / red tile 10 / light metal 15
+        //   wood     dark concrete tile 45 / red 25 / mid grey 15 / brown 15
+        //   flat + industrial  felt / zinc / grey membrane, as before.
+        inline GeoBldRoofPick geoBldPickRoof(bool masonry, bool coverFlat, std::uint32_t h) {
+            const std::uint32_t r = (h >> 16) % 20u;
+            GeoBldRoofPick k;
+            auto set = [&k](int cover, float a, float b, float c) {
+                k.cover = cover;
+                k.col[0] = a;
+                k.col[1] = b;
+                k.col[2] = c;
+            };
+            if (coverFlat) {
+                if (r < 10u) set(RC_METAL, 0.095f, 0.098f, 0.102f);     // felt
+                else if (r < 16u) set(RC_METAL, 0.300f, 0.306f, 0.312f);// zinc
+                else set(RC_METAL, 0.215f, 0.218f, 0.222f);             // membrane
+            } else if (masonry) {
+                if (r < 11u) set(RC_SLATE, 0.146f, 0.143f, 0.138f);     // slate
+                else if (r < 15u) set(RC_SLATE, 0.079f, 0.077f, 0.074f);// near-black
+                else if (r < 17u) set(RC_TILE, 0.205f, 0.058f, 0.038f); // red tile
+                else set(RC_METAL, 0.278f, 0.282f, 0.288f);             // light metal
+            } else {
+                if (r < 9u) set(RC_TILE, 0.104f, 0.101f, 0.098f);      // dark concrete
+                else if (r < 14u) set(RC_TILE, 0.205f, 0.058f, 0.038f);// red tile
+                else if (r < 17u) set(RC_TILE, 0.178f, 0.176f, 0.172f);// mid grey
+                else set(RC_TILE, 0.150f, 0.086f, 0.048f);             // brown
+            }
+            return k;
         }
 
         // Trim: white against a coloured wall, dark grey-brown against white.
@@ -678,14 +689,30 @@ namespace threepp::terrain {
                     yTop = yWallTop = std::max(ridge, b.groundMin + 1.5f);
                 } else if (b.roof.kind == "hipped" && holes.empty()) {
                     ++st.skeletonTried;
-                    skel = computeRoofSkeleton(offRing);
-                    if (skel.ok && skel.maxOffset > overhang + 0.6f) {
-                        hipPitch = (ridge - eave) / (skel.maxOffset - overhang);
-                        if (hipPitch > 0.04f && hipPitch < 3.2f) {
-                            kind = K_HIP;
-                            yTop = ridge;
-                            yWallTop = eave;
+                    // The skeleton gets its OWN simplified ring. The wall ring
+                    // has to keep its vertex count (the fascia strip runs 1:1
+                    // with it) and the 5% area guard above rejected most
+                    // simplifications, so the near-duplicate vertices and
+                    // collinear runs of an OSM cadastre ring were reaching the
+                    // event queue intact. That was the fallback rate.
+                    const auto skelRing = simplifyRing(offRing, 0.25f, 0.5f);
+                    if (skelRing.size() < 3) {
+                        ++st.skelFailRing;
+                    } else {
+                        skel = computeRoofSkeleton(skelRing);
+                        if (skel.ok && skel.maxOffset > overhang + 0.6f) {
+                            hipPitch = (ridge - eave) / (skel.maxOffset - overhang);
+                            if (hipPitch > 0.04f && hipPitch < 3.2f) {
+                                kind = K_HIP;
+                                yTop = ridge;
+                                yWallTop = eave;
+                            }
                         }
+                        if (!skel.ok)
+                            ++st.skelFail[static_cast<size_t>(
+                                    std::clamp(skel.reason, 0, SK_COUNT - 1))];
+                        else if (kind != K_HIP)
+                            ++st.skelFailPitch;
                     }
                     if (kind != K_HIP) ++st.skeletonFailed;
                 }
@@ -702,9 +729,18 @@ namespace threepp::terrain {
                     }
                 }
             } else {
-                // ── heuristic (unchanged) ──────────────────────────────────
+                // ── heuristic (no roof block) ──────────────────────────────
+                // Same eaves treatment as the measured path: without it the
+                // 974 blockless footprints here (and every building in packs
+                // with no roof block at all, e.g. trollstigen) kept the
+                // zero-thickness paper edge this phase set out to kill.
                 ++st.heuristic;
-                offRing = wallRing;
+                overhang = (plainType || industrial) ? o.utilityOverhang : o.eavesOverhang;
+                offRing = detail::geoBldOffsetRing(wallRing, overhang);
+                if (detail::geoBldRingArea(offRing) <= plan) {
+                    offRing = wallRing;// pathological notch: no overhang
+                    overhang = 0.f;
+                }
                 if (o.pitchedRoofs && !plainType && holes.empty() && b.roofShape != "flat") {
                     detail::GeoBldRectFit rect;
                     if (detail::geoBldMinRect(outer, rect)) {
@@ -751,27 +787,13 @@ namespace threepp::terrain {
             // felt/zinc on flat and industrial (a tile red on a flat cap reads
             // as a mistake).
             float roof[3];
-            int roofMat = M_ROOF_METAL;
-            if (kind == K_FLAT || industrial || plainType) roofMat = M_ROOF_METAL;
-            else if (masonry)
-                roofMat = M_ROOF_SLATE;
-            else
-                roofMat = M_ROOF_TILE;
-            if (!detail::geoBldParseColour(b.roofColour, roof)) {
-                if (roofMat == M_ROOF_SLATE) {
-                    const auto& rp = detail::geoBldSlatePalette()
-                            [(h >> 16) % detail::geoBldSlatePalette().size()];
-                    for (int c = 0; c < 3; ++c) roof[c] = rp[c] * jitter;
-                } else if (roofMat == M_ROOF_TILE) {
-                    const auto& rp = detail::geoBldTilePalette()
-                            [(h >> 16) % detail::geoBldTilePalette().size()];
-                    for (int c = 0; c < 3; ++c) roof[c] = rp[c] * jitter;
-                } else {
-                    const auto& rp = detail::geoBldFlatRoofPalette()
-                            [(h >> 16) % detail::geoBldFlatRoofPalette().size()];
-                    for (int c = 0; c < 3; ++c) roof[c] = rp[c] * jitter;
-                }
-            }
+            const bool coverFlat = kind == K_FLAT || industrial || plainType;
+            const auto pick = detail::geoBldPickRoof(masonry, coverFlat, h);
+            const int roofMat = pick.cover == detail::RC_SLATE  ? M_ROOF_SLATE
+                                : pick.cover == detail::RC_TILE ? M_ROOF_TILE
+                                                                : M_ROOF_METAL;
+            if (!detail::geoBldParseColour(b.roofColour, roof))
+                for (int c = 0; c < 3; ++c) roof[c] = pick.col[c] * jitter;
 
             const float yBase = b.groundMin - o.sink;
             const float hMinEave = yWallTop - gSlope * overhang;// gable verge bottom
@@ -935,6 +957,61 @@ namespace threepp::terrain {
             emitWalls(wallRing);
             for (const auto& hole : holes) emitWalls(hole);
 
+            // ── corner boards ──────────────────────────────────────────────
+            // Wood only, and GEOMETRY, not texture: the cladding tile's u wraps
+            // once per BAY, so a board baked into it landed every 2.5 m and a
+            // white house read as plaster panels with vertical seams. A real
+            // 0.14 m board in the trim colour at each footprint corner is what
+            // the eye uses to separate one wall plane from the next.
+            if (!masonry && !industrial && !plainType && wallH > 2.f) {
+                const float cw = 0.12f, prod = 0.035f;
+                const size_t n = wallRing.size();
+                // Only at a REAL corner. An OSM house ring carries collinear
+                // vertices by the handful; a board at every one of them came
+                // out as black posts down the middle of a wall.
+                const auto isCorner = [&](size_t v) {
+                    const Vector2& A = wallRing[(v + n - 1) % n];
+                    const Vector2& B = wallRing[v];
+                    const Vector2& C = wallRing[(v + 1) % n];
+                    const float ax = B.x - A.x, az = B.y - A.y;
+                    const float bx = C.x - B.x, bz = C.y - B.y;
+                    const float la = std::sqrt(ax * ax + az * az);
+                    const float lb = std::sqrt(bx * bx + bz * bz);
+                    if (la < 0.5f || lb < 0.5f) return false;
+                    const float c = (ax * bx + az * bz) / (la * lb);
+                    return c < 0.94f;// turn > ~20 deg
+                };
+                for (size_t i = 0; i < n; ++i) {
+                    const Vector2& P = wallRing[i];
+                    const Vector2& Q = wallRing[(i + 1) % n];
+                    const float dx = Q.x - P.x, dz = Q.y - P.y;
+                    const float len = std::sqrt(dx * dx + dz * dz);
+                    if (len < 2.f * cw + 0.6f) continue;
+                    const float ux = dx / len, uz = dz / len;
+                    const float nrm[3] = {uz, 0.f, -ux};
+                    const float yLo = yBase + 0.05f;
+                    const float yHi = std::min(yWallTop, tentH(P) + 0.0f);
+                    // 60% of the way to the trim: the full trim colour on a
+                    // white wall is near-black, and a black post is not a board.
+                    const float cbc[3] = {0.4f * wall[0] + 0.6f * trim[0],
+                                          0.4f * wall[1] + 0.6f * trim[1],
+                                          0.4f * wall[2] + 0.6f * trim[2]};
+                    for (const float s0 : {0.f, len - cw}) {
+                        if (!isCorner(s0 == 0.f ? i : (i + 1) % n)) continue;
+                        const float ax = P.x + ux * s0 + nrm[0] * prod;
+                        const float az = P.y + uz * s0 + nrm[2] * prod;
+                        const float bx = P.x + ux * (s0 + cw) + nrm[0] * prod;
+                        const float bz = P.y + uz * (s0 + cw) + nrm[2] * prod;
+                        const float top = kind == K_GABLE ? yHi : yWallTop;
+                        const float A[3] = {ax, top, az}, B[3] = {bx, top, bz};
+                        const float C[3] = {bx, yLo, bz}, D[3] = {ax, yLo, az};
+                        quad(trimBuf, A, B, C, D, nrm, cbc, 0.f, cw / o.bayWidth,
+                             (top - yLo) / o.floorHeight, 0.f);
+                        ++st.cornerBoards;
+                    }
+                }
+            }
+
             // ── gable ends ─────────────────────────────────────────────────
             if (kind == K_GABLE) {
                 for (size_t i = 0, n = wallRing.size(); i < n; ++i) {
@@ -982,7 +1059,7 @@ namespace threepp::terrain {
             // The roof plane stops in mid-air over the wall without these, and
             // the RT shadow they cast on the facade IS the eaves line — the
             // single cheapest cure for the paper-model read.
-            if (measured && overhang > 0.01f && kind != K_FLAT &&
+            if (overhang > 0.01f && kind != K_FLAT &&
                 offRing.size() == wallRing.size()) {
                 const size_t n = wallRing.size();
                 const auto outerH = [&](const Vector2& p) {
@@ -1017,7 +1094,7 @@ namespace threepp::terrain {
             }
 
             // ── flat roof: parapet lip ─────────────────────────────────────
-            if (measured && kind == K_FLAT && o.parapetHeight > 0.01f) {
+            if (kind == K_FLAT && o.parapetHeight > 0.01f) {
                 const size_t n = wallRing.size();
                 for (size_t i = 0; i < n; ++i) {
                     const Vector2& W0 = wallRing[i];

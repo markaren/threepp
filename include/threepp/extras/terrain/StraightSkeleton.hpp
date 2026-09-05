@@ -50,8 +50,40 @@ namespace threepp::terrain {
         std::vector<Vector2> poly;// simple polygon, input winding
     };
 
+    // Why a skeleton was refused. Counted per footprint by the caller: the
+    // 39.8% fallback rate Phase C shipped had NO per-cause breakdown, so there
+    // was nothing to fix.
+    enum SkeletonFail {
+        SK_OK = 0,
+        SK_DEGENERATE,// fewer than 3 vertices, or a zero-length edge
+        SK_ITERCAP,   // events still queued when maxIters ran out
+        SK_OPEN,      // the queue drained with the wavefront still open
+        SK_UNSTITCHED,// a face's birth-to-death segments would not close
+        SK_NONFINITE, // NaN / inf in a face
+        SK_NOFACES,
+        SK_AREA,  // face plan areas do not sum to the footprint
+        SK_OFFSET,// peak wavefront distance non-positive or non-finite
+        SK_COUNT
+    };
+
+    inline const char* skeletonFailName(int r) {
+        switch (r) {
+            case SK_OK: return "ok";
+            case SK_DEGENERATE: return "degenerate";
+            case SK_ITERCAP: return "iter-cap";
+            case SK_OPEN: return "open-wavefront";
+            case SK_UNSTITCHED: return "unstitched-face";
+            case SK_NONFINITE: return "non-finite";
+            case SK_NOFACES: return "no-faces";
+            case SK_AREA: return "area-bound";
+            case SK_OFFSET: return "bad-offset";
+            default: return "?";
+        }
+    }
+
     struct StraightSkeletonResult {
         bool ok = false;
+        int reason = SK_DEGENERATE;
         std::vector<SkeletonFace> faces;
         std::vector<Vector2> ring;// the ring the faces were built over (may be jittered)
         float maxOffset = 0.f;// peak wavefront distance = ridge height / pitch
@@ -101,7 +133,7 @@ namespace threepp::terrain {
     // neighbours and merge vertices closer than `minEdge`. OSM footprints carry
     // both in quantity and both wreck a straight-skeleton event queue.
     inline std::vector<Vector2> simplifyRing(const std::vector<Vector2>& in,
-                                             float collinearTol = 0.15f, float minEdge = 0.3f) {
+                                             float collinearTol = 0.25f, float minEdge = 0.5f) {
         std::vector<Vector2> r = in;
         for (int pass = 0; pass < 4 && r.size() > 3; ++pass) {
             bool changed = false;
@@ -157,11 +189,14 @@ namespace threepp::terrain {
     // Straight skeleton of a simple, hole-free ring wound so the interior lies
     // to the LEFT of every directed edge (positive shoelace in (x, z)).
     inline StraightSkeletonResult computeStraightSkeleton(const std::vector<Vector2>& ring,
-                                                          int maxIters = 600) {
+                                                          int maxIters = 4000) {
         using namespace detail;
         StraightSkeletonResult res;
         const int n = static_cast<int>(ring.size());
-        if (n < 3) return res;
+        if (n < 3) {
+            res.reason = SK_DEGENERATE;
+            return res;
+        }
 
         // Original edge frames: direction and INWARD unit normal.
         std::vector<Vector2> eDir(n), eNrm(n);
@@ -170,7 +205,10 @@ namespace threepp::terrain {
             const Vector2& q = ring[(i + 1) % n];
             Vector2 d(q.x - p.x, q.y - p.y);
             const float l = ssLen(d);
-            if (l < 1e-5f) return res;
+            if (l < 1e-5f) {
+                res.reason = SK_DEGENERATE;
+                return res;
+            }
             d.x /= l;
             d.y /= l;
             eDir[i] = d;
@@ -468,17 +506,31 @@ namespace threepp::terrain {
 
         for (int i = 0; i < n; ++i) pushNext(i, -1.f);
 
+        // STALE pops must not spend the iteration budget. repairLoops re-pushes
+        // a whole wavefront loop after every event, so on a 40-vertex ring the
+        // queue carries ~n dead events per live one; counting those against
+        // maxIters is what made 1005 of 3610 aalesund footprints report
+        // "iteration cap" and fall back to a rectangle gable.
+        // A retry that retires nothing must push the wavefront on by a real
+        // millimetre. With the old `after = ev.t` the queue handed the SAME
+        // rejected event back at t + 1e-5 and ground through the whole
+        // iteration budget without retiring a vertex — that livelock, not the
+        // budget's size, is what "iter-cap" was counting.
+        constexpr float kSkRetryStep = 1e-3f;
         int iter = 0;
-        while (!queue.empty() && iter < maxIters) {
-            ++iter;
+        long long pops = 0;
+        const long long popCap = 400LL * n + 50000LL;
+        while (!queue.empty() && iter < maxIters && pops < popCap) {
+            ++pops;
             const SkEvent ev = queue.top();
             queue.pop();
             if (ev.va < 0 || !V[ev.va].active) continue;
+            ++iter;
 
             if (ev.type == 0) {
                 const int a = ev.va;
                 if (V[a].next != ev.vb || !V[ev.vb].active) {
-                    pushNext(a, ev.t);
+                    pushNext(a, ev.t + kSkRetryStep);
                     continue;
                 }
                 const int b = ev.vb;
@@ -517,12 +569,12 @@ namespace threepp::terrain {
                     break;
                 }
                 if (x < 0) {
-                    pushNext(a, ev.t);
+                    pushNext(a, ev.t + kSkRetryStep);
                     continue;
                 }
                 const int pv = V[a].prev, nv = V[a].next;
                 if (pv < 0 || nv < 0 || pv == x || nv == y) {
-                    pushNext(a, ev.t);
+                    pushNext(a, ev.t + kSkRetryStep);
                     continue;
                 }
                 consume(a, ev.p);
@@ -545,8 +597,12 @@ namespace threepp::terrain {
             }
         }
         res.iterations = iter;
+        const bool capped = (iter >= maxIters || pops >= popCap) && !queue.empty();
         for (const auto& v : V)
-            if (v.active) return res;// wavefront never closed
+            if (v.active) {// wavefront never closed
+                res.reason = capped ? SK_ITERCAP : SK_OPEN;
+                return res;
+            }
 
         // ── stitch each face from its directed segments ─────────────────────
         res.faces.reserve(n);
@@ -579,12 +635,18 @@ namespace threepp::terrain {
                 cur = segs[pick].b;
                 poly.push_back(cur);
             }
-            if (!closed) return res;
+            if (!closed) {
+                res.reason = SK_UNSTITCHED;
+                return res;
+            }
             // drop the duplicate closing point and any near-duplicates
             std::vector<Vector2> clean;
             clean.reserve(poly.size());
             for (const auto& p : poly) {
-                if (!std::isfinite(p.x) || !std::isfinite(p.y)) return res;
+                if (!std::isfinite(p.x) || !std::isfinite(p.y)) {
+                    res.reason = SK_NONFINITE;
+                    return res;
+                }
                 if (!clean.empty()) {
                     const float dx = p.x - clean.back().x, dy = p.y - clean.back().y;
                     if (dx * dx + dy * dy < 1e-6f) continue;
@@ -599,15 +661,29 @@ namespace threepp::terrain {
             if (clean.size() < 3) continue;// degenerate sliver face — skipped
             res.faces.push_back({e, std::move(clean)});
         }
-        if (res.faces.empty()) return res;
+        if (res.faces.empty()) {
+            res.reason = SK_NOFACES;
+            return res;
+        }
 
         // area check: the faces must tile the footprint
         float sum = 0.f;
         for (const auto& f : res.faces) sum += std::abs(ssRingArea(f.poly));
         const float target = std::abs(ssRingArea(ring));
-        if (target < 1e-3f || sum < 0.98f * target || sum > 1.06f * target) return res;
-        if (!(res.maxOffset > 0.f) || !std::isfinite(res.maxOffset)) return res;
+        // Relative AND absolute slack: a 12 m2 sliver garage carries the same
+        // half-square-metre of single-precision stitching error as a 400 m2
+        // block, and a pure 6% ratio test threw the garage away.
+        const float slack = 0.06f * target + 0.75f;
+        if (target < 1e-3f || sum < target - slack || sum > target + slack) {
+            res.reason = SK_AREA;
+            return res;
+        }
+        if (!(res.maxOffset > 0.f) || !std::isfinite(res.maxOffset)) {
+            res.reason = SK_OFFSET;
+            return res;
+        }
 
+        res.reason = SK_OK;
         res.ok = true;
         res.ring = ring;
         return res;
@@ -619,7 +695,7 @@ namespace threepp::terrain {
     // deterministic jitter breaks the tie without moving a roof visibly, so
     // retry with one before giving up.
     inline StraightSkeletonResult computeRoofSkeleton(const std::vector<Vector2>& ring,
-                                                      int maxIters = 600) {
+                                                      int maxIters = 4000) {
         StraightSkeletonResult r = computeStraightSkeleton(ring, maxIters);
         if (r.ok) return r;
         std::vector<Vector2> jittered = ring;
