@@ -59,6 +59,19 @@ namespace {
 
     int failures = 0;
 
+    // --shot <dir>: the gates' compared frames as binary PPMs, so a failing
+    // PSNR can be LOOKED at instead of guessed at.
+    std::string shotDir;
+    void shot(const char* name, const std::vector<unsigned char>& rgb, int w, int h) {
+        if (shotDir.empty() || rgb.size() != size_t(w) * h * 3) return;
+        const std::string path = shotDir + "/" + name + ".ppm";
+        if (FILE* f = std::fopen(path.c_str(), "wb")) {
+            std::fprintf(f, "P6\n%d %d\n255\n", w, h);
+            std::fwrite(rgb.data(), 1, rgb.size(), f);
+            std::fclose(f);
+        }
+    }
+
     void check(bool ok, const char* what) {
         std::printf("  %-58s %s\n", what, ok ? "PASS" : "FAIL");
         if (!ok) ++failures;
@@ -186,6 +199,8 @@ namespace {
 
         const auto prim = r.readRGBPixels();
         const auto sec = r.readViewRGBPixels(vh);
+        shot("parity_primary", prim, kW, kH);
+        shot("parity_secondary", sec, kW, kH);
         check(!sec.empty() && sec.size() == prim.size(), "secondary readback matches primary size");
         if (sec.size() == prim.size() && !sec.empty()) {
             const auto d = capture::imageDiff(prim, sec);
@@ -657,6 +672,8 @@ namespace {
 
         const auto prim = r.readRGBPixels();
         const auto sec = r.readViewRGBPixels(vh);
+        shot("msaa_primary", prim, kW, kH);
+        shot("msaa_secondary", sec, kW, kH);
         check(!sec.empty() && sec.size() == prim.size(), "msaa: secondary readback matches primary size");
         if (!sec.empty() && sec.size() == prim.size()) {
             const auto d = capture::imageDiff(prim, sec);
@@ -792,6 +809,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--bench") == 0) bench = true;
         else if (std::strcmp(argv[i], "--sweep") == 0) sweep = true;
+        else if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotDir = argv[++i];
     }
 
     std::unique_ptr<Canvas> canvasPtr;

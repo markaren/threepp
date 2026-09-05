@@ -111,13 +111,25 @@ namespace threepp {
                 vkCmdPipelineBarrier2(cb, &pdep);
             }
         }
+        // The sample count THIS view's G-buffer was rastered at, not the
+        // renderer-wide setting. A secondary view gets no MS framebuffer
+        // (createRasterGbufImages gates it) and rasters through the 1x pass,
+        // so under setGbufferMsaa(2|4) it has to shade as 1x. Handed the
+        // renderer-wide count, the shade moved its reconstruction ray to an
+        // MSAA sample position that the view's centre-sampled depth never
+        // came from, which put the shadow-ray origin under every grazing
+        // surface: a same-camera secondary's floor rendered half in shadow
+        // (VulkanMultiView_test's msaa gate, 10.8 dB against the primary),
+        // and the filters read coverage bits the 1x pass never packs.
+        const uint32_t viewMsaaSamples =
+                (view().rasterGbufs[currentFrame].framebufferMS != VK_NULL_HANDLE) ? gbufMsaaSamples_ : 1u;
         // Dispatch A always sees the TRUE sample count: even with
         // dispatch B off it must blend SKY-minority coverage itself
         // (every geometry/sky silhouette — the most visible edges).
         // shadeBActive (flags bit 7) tells it whether to additionally
         // reserve the geometry-minority weight for dispatch B or fold
         // it into the dominant surface.
-        const bool shadeBActive = gbufMsaaSamples_ > 1 && gbufShadeBEnabled_;
+        const bool shadeBActive = viewMsaaSamples > 1 && gbufShadeBEnabled_;
         // Clustered light culling: per-cell light lists for the shade's
         // analytic split (all point/spot lights, no 8-per-type cap).
         // Barrier: cull's grid writes → shade's reads (compute→compute).
@@ -286,7 +298,7 @@ namespace threepp {
         shadeParams.camRotAngle        = deferredCamRotAngle_;
         shadeParams.timeSec            = static_cast<float>(frameNowSec());
         shadeParams.sunTanHalfAngle    = std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f);
-        shadeParams.gbufMsaaSamples    = gbufMsaaSamples_;
+        shadeParams.gbufMsaaSamples    = viewMsaaSamples;
         shadeParams.shadeMode          = 0u;// dispatch A
         shadeParams.shadeBActive       = shadeBActive;
         shadeParams.clusterLightCount  = clusterLightCountThisFrame_;
@@ -319,7 +331,7 @@ namespace threepp {
         // the MS attachments (already satisfied — they've been
         // SHADER_READ_ONLY since the MSAA render pass's own subpass
         // dependency, unchanged since dispatch A started).
-        if (gbufMsaaSamples_ > 1 && gbufShadeBEnabled_) {
+        if (shadeBActive) {
             VkMemoryBarrier2 shadeBar{};
             shadeBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
             shadeBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -375,7 +387,7 @@ namespace threepp {
             vkCmdPipelineBarrier2(cb, &denoiseDep);
             gpuTimings_->begin(cb, TP_Denoise, currentFrame);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
             view().deferredShade_->recordFilterAndComposite(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height,
-                                                     gbufMsaaSamples_, shadeBActive, preExpBits_);
+                                                     viewMsaaSamples, shadeBActive, preExpBits_);
             gpuTimings_->end(cb, TP_Denoise, currentFrame);
         }
         // Auto-exposure: histogram over the final sceneHdr. sceneHdr writes
