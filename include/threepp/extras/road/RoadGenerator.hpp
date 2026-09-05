@@ -493,63 +493,268 @@ namespace threepp::road {
             double sumR = 0.0, sumG = 0.0, sumB = 0.0;
             size_t pavedCount = 0;
 
+            const bool gravel = (st.kind == SurfaceKind::Gravel);
+            // Wheel tracks sit where the traffic is: a pair per lane on a road
+            // wide enough for two, a single pair down the middle where there is
+            // only room for one vehicle. Studded tyres polish them lighter and
+            // smoother than the aggregate beside them — on an overcast day the
+            // tracks are the part of the road that catches the sky.
+            const bool twoLane = (st.centre != LinePattern::None);
+            std::array<float, 4> trackC{};
+            int nTracks = 0;
+            if (twoLane) {
+                const float laneC = pavedHalf * 0.5f;
+                trackC[nTracks++] = laneC - 0.75f;
+                trackC[nTracks++] = laneC + 0.75f;
+                trackC[nTracks++] = -laneC + 0.75f;
+                trackC[nTracks++] = -laneC - 0.75f;
+            } else {
+                trackC[nTracks++] = 0.75f;
+                trackC[nTracks++] = -0.75f;
+            }
+            // 1 in the core of a band, smoothly out over `soft` metres.
+            const auto softBand = [](float d, float halfW, float soft) {
+                const float a = std::abs(d);
+                if (a <= halfW) return 1.f;
+                if (a >= halfW + soft) return 0.f;
+                return 1.f - math::smoothstep(halfW, halfW + soft, a);
+            };
+            const int sd = static_cast<int>(st.seed & 0x7FFFFFFFu);
+
+            // Asphalt PATCHES: 0-2 per tile, kept clear of the tile seam so the
+            // repeat does not slice one in half. Low contrast on purpose — the
+            // tile comes round every 48 m (96 m with the two variants) and a
+            // hero patch would read as wallpaper down a straight.
+            struct Patch {
+                float lat0, lat1, s0, s1;
+            };
+            std::array<Patch, 2> patches{};
+            int nPatch = 0;
+            if (!gravel && w > 0.05f) {
+                const int count = (hash2(sd, 21) > 0.2f) ? 2 : ((hash2(sd, 22) > -0.3f) ? 1 : 0);
+                for (int k = 0; k < count; ++k) {
+                    const float hwd = 0.5f + 1.0f * (hash2(sd + k * 13, 33) * 0.5f + 0.5f);// 1-3 m
+                    const float hln = 0.5f + 1.5f * (hash2(sd + k * 13, 34) * 0.5f + 0.5f);// 1-4 m
+                    const float cx = hash2(sd + k * 13, 31) * pavedHalf * 0.65f;
+                    const float cs = hln + (hash2(sd + k * 13, 32) * 0.5f + 0.5f) * (tile - 2.f * hln);
+                    patches[nPatch++] = Patch{cx - hwd, cx + hwd, cs - hln, cs + hln};
+                }
+            }
+            // An old edge repair: a 0.6 m strip of a different mix along one
+            // side, on some tiles.
+            const bool repairStrip = !gravel && w > 0.05f && hash2(sd, 41) > 0.4f;
+            const float repairSide = (hash2(sd, 42) > 0.f) ? 1.f : -1.f;
+
             for (int y = 0; y < H; ++y) {
                 // Station along the tile, in metres, and in lattice cells for the
                 // wrapping noise (tile / cellSize must be an integer — see below).
                 const float s = (static_cast<float>(y) + 0.5f) * dv;
+
+                // ── fields that depend only on the station ──────────────────
+                // A real pavement edge is chipped and frayed, not sawn.
+                const float ragL = 0.13f * w * fbmP(seedX + 3.f, s / 3.f, 16, 3, 2.f, 0.5f);
+                const float ragR = 0.13f * w * fbmP(seedX + 91.f, s / 3.f, 16, 3, 2.f, 0.5f);
+                // Paint is renewed in stretches, so how faded a line is depends
+                // on WHERE along the road you are, in ~12 m segments.
+                const float segWear =
+                        std::clamp(0.55f + 0.60f * fbmP(seedX + 17.f, s / 12.f, 4, 3, 2.f, 0.5f), 0.f, 1.f) * w;
+                // A ghost of an older line, offset a few centimetres, on some
+                // segments: the road was re-marked and the old one still shows.
+                const float ghostSeg = (fbmP(seedX + 57.f, s / 12.f, 4, 2, 2.f, 0.5f) > 0.28f) ? 1.f : 0.f;
+                const float ghostOff = 0.03f + 0.03f * (hash2(sd, 61) * 0.5f + 0.5f);
+                // Transverse frost cracks every ~12 m; half of them tar-sealed.
+                float crackRaw = 0.f, crackSealed = 0.f;
+                if (!gravel && w > 0.05f) {
+                    constexpr float cell = 12.f;// 4 per 48 m tile
+                    const int ci = ((static_cast<int>(std::floor(s / cell)) % 4) + 4) % 4;
+                    const float jit = hash2(sd + ci * 37, 5) * 0.42f;
+                    const float at = (static_cast<float>(ci) + 0.5f + jit) * cell;
+                    const float wob = 0.05f * noise2p(0.f, s / 0.5f, 96);
+                    const bool sealed = hash2(sd + ci * 37, 9) > 0.f;
+                    // A texel is dv (~4.7 cm) long, so a literal 2 cm crack can
+                    // never cover half of one and mips erase it by the second
+                    // car length. Real tar sealing is a 4-6 cm band anyway, and
+                    // this is the signature of a Norwegian road - it has to
+                    // survive to eye level.
+                    const float halfW = sealed ? 0.030f : 0.010f;
+                    const float c = cover(s - at + wob, halfW, dv) * w;
+                    crackRaw = sealed ? 0.f : c;
+                    crackSealed = sealed ? c : 0.f;
+                }
+
                 for (int x = 0; x < W; ++x) {
                     // Lateral offset from the centreline, matching buildSurface's
                     // u = 0 at -corridorHalf .. u = 1 at +corridorHalf.
                     const float lat = ((static_cast<float>(x) + 0.5f) / static_cast<float>(W) - 0.5f) * full;
-                    const bool onPaved = std::abs(lat) <= pavedHalf;
+                    // Where the asphalt actually ends on THIS row.
+                    const float edgeHere = pavedHalf + ((lat < 0.f) ? ragL : ragR);
+                    const bool onPaved = std::abs(lat) <= edgeHere;
 
                     float r, g, b, rough;
                     float relief = 0.f;
-                    if (st.kind == SurfaceKind::Gravel) {
-                        // Loose gravel: warm grey, coarse stones, no bitumen.
-                        const float stone = noise2p(lat / 0.06f + seedX, s / 0.06f, 800);
+
+                    // ── track bands (shared by both surface kinds) ───────────
+                    float trackW = 0.f;
+                    for (int k = 0; k < nTracks; ++k)
+                        trackW = std::max(trackW, softBand(lat - trackC[k], 0.225f, 0.15f));
+                    // The strip between a lane's two tracks stays dirtier.
+                    float betweenW = 0.f;
+                    if (twoLane) {
+                        const float laneC = pavedHalf * 0.5f;
+                        betweenW = std::max(softBand(lat - laneC, 0.35f, 0.2f),
+                                            softBand(lat + laneC, 0.35f, 0.2f));
+                    } else {
+                        betweenW = softBand(lat, 0.35f, 0.2f);
+                    }
+                    betweenW = std::max(betweenW - trackW, 0.f);
+
+                    if (gravel || !onPaved) {
+                        // Loose gravel: warm grey stones, no bitumen. Outside a
+                        // frayed asphalt edge this is the narrow grusskulder the
+                        // terrain's grass then takes over from - it must stay a
+                        // FRAYED EDGE, never a dirt band beside the road.
+                        const float stone = noise2p(lat / 0.055f + seedX, s / 0.055f, 873);
                         const float patch = fbmP(lat / 6.f + seedX, s / 6.f, 8, 3, 2.f, 0.5f);
-                        const float k = 0.52f + 0.10f * stone + 0.05f * patch;
-                        r = k * 1.03f;
+                        const float base = gravel ? 0.55f : 0.50f;
+                        const float k = base + 0.105f * stone + 0.05f * patch +
+                                        (gravel ? 0.05f * trackW : 0.f);
+                        r = k * 1.05f;
                         g = k * 0.99f;
-                        b = k * 0.92f;
-                        rough = 0.95f;
-                        relief = 0.004f * stone;
+                        b = k * 0.90f;
+                        rough = gravel ? (0.95f - 0.10f * trackW) : 0.95f;
+                        relief = 0.004f * stone - (gravel ? 0.010f * trackW : 0.f);
+                        if (!st.gravelEdge && !gravel) {
+                            // A/B: no gravel strip, the sealed edge runs to the rim.
+                            r = 0.40f; g = 0.39f; b = 0.38f; rough = 0.9f;
+                        }
+                        // A grass stripe grows down the middle of a forest track.
+                        if (gravel && !twoLane && st.edge == LinePattern::None) {
+                            const float gr = softBand(lat, 0.15f, 0.12f) * 0.4f * w *
+                                             std::clamp(0.5f + fbmP(seedX + 5.f, s / 4.f, 12, 3, 2.f, 0.5f), 0.f, 1.f);
+                            r += (0.20f - r) * gr;
+                            g += (0.28f - g) * gr;
+                            b += (0.12f - b) * gr;
+                        }
                     } else {
                         // Weathered Norwegian asphalt: light gneiss aggregate
                         // exposed by studded tyres, not the fresh-bitumen black a
                         // 0.055 albedo bakes (which decodes to linear 0.004).
                         const float aggregate = noise2p(lat / 0.03f + seedX, s / 0.03f, 1600);
-                        const float patch = fbmP(lat / 8.f + seedX, s / 8.f, 6, 4, 2.f, 0.5f);
-                        const float k = 0.42f + 0.055f * aggregate + 0.040f * patch;
+                        const float patchN = fbmP(lat / 8.f + seedX, s / 8.f, 6, 4, 2.f, 0.5f);
+                        float k = 0.42f + 0.080f * aggregate + 0.050f * patchN;
+                        // Polished wheel tracks, dirtier strip between them.
+                        k += 0.060f * trackW * w;
+                        k -= 0.030f * betweenW * w;
+                        rough = 0.88f - 0.26f * trackW * w;
+                        relief = 0.002f * aggregate - 0.012f * trackW * w;
+
+                        // Patches and the old edge repair.
+                        for (int p = 0; p < nPatch; ++p) {
+                            const auto& P = patches[p];
+                            // Soft-ish edges and low contrast: the tile comes
+                            // round every 48 m and a hard dark rectangle reads
+                            // as a sticker repeated down the straight.
+                            const float inx = softBand(lat - 0.5f * (P.lat0 + P.lat1),
+                                                       0.5f * (P.lat1 - P.lat0), 0.25f);
+                            const float iny = softBand(s - 0.5f * (P.s0 + P.s1),
+                                                       0.5f * (P.s1 - P.s0), 0.25f);
+                            const float a = inx * iny;
+                            k -= 0.085f * a * w;
+                            relief -= 0.003f * a * w;
+                        }
+                        if (repairStrip) {
+                            const float a = softBand(lat - repairSide * (pavedHalf - 0.3f), 0.30f, 0.08f);
+                            k -= 0.06f * a * w;
+                            relief -= 0.002f * a * w;
+                        }
                         r = k * 1.02f;
                         g = k;
                         b = k * 0.97f;
-                        rough = 0.88f;
-                        relief = 0.002f * aggregate;
-                    }
 
-                    if (onPaved) {
-                        sumR += r;
-                        sumG += g;
-                        sumB += b;
-                        ++pavedCount;
+                        // ── cracks ──────────────────────────────────────────
+                        // Longitudinal hairlines wander along the OUTER track
+                        // edges, where the pavement flexes most.
+                        float crackL = 0.f;
+                        {
+                            const float wander = 0.05f * fbmP(seedX + 71.f, s / 12.f, 4, 3, 2.f, 0.5f);
+                            const float run = std::clamp(fbmP(seedX + 83.f, s / 12.f, 4, 2, 2.f, 0.5f) * 2.f, 0.f, 1.f);
+                            for (int kk = 0; kk < nTracks; ++kk) {
+                                const float at = trackC[kk] + (trackC[kk] > 0.f ? 0.24f : -0.24f) + wander;
+                                crackL = std::max(crackL, cover(lat - at, 0.012f, du) * run);
+                            }
+                            crackL *= w;
+                        }
+                        // Sealed cracks are the signature of a Norwegian road:
+                        // black bitumen wiggles standing slightly proud.
+                        const float sealAll = std::max(crackSealed, 0.f);
+                        const float openAll = std::max(crackRaw, crackL);
+                        if (openAll > 0.f) {
+                            const float t = openAll;
+                            r += (0.20f * r - r) * t;
+                            g += (0.20f * g - g) * t;
+                            b += (0.20f * b - b) * t;
+                            relief -= 0.002f * t;
+                        }
+                        if (sealAll > 0.f) {
+                            r += (0.12f - r) * sealAll;
+                            g += (0.115f - g) * sealAll;
+                            b += (0.11f - b) * sealAll;
+                            rough += (0.50f - rough) * sealAll;
+                            relief += 0.001f * sealAll;
+                        }
 
                         // ── markings, composited by coverage ─────────────────
-                        float covWhite = 0.f, covYellow = 0.f;
+                        // Ragged edges: the paint's own boundary jitters by about
+                        // a texel, so a worn line never reads as a vector stroke.
+                        const float jit = du * 0.9f * noise2p(0.f, s / 0.25f, 192) * w;
+                        // Some dash cells have a 0.3-1.5 m bite eaten out.
+                        const auto dashWorn = [&](float on, float off) {
+                            const float period = std::max(on + off, 1e-3f);
+                            float ph = std::fmod(s, period);
+                            if (ph < 0.f) ph += period;
+                            float c = cover(ph - on * 0.5f, on * 0.5f, dv);
+                            const int di = ((static_cast<int>(std::floor(s / period))) % 16 + 16) % 16;
+                            if (hash2(sd + di * 7, 77) > 0.70f) {
+                                const float bite = 0.15f + 0.60f * (hash2(sd + di * 7, 78) * 0.5f + 0.5f);
+                                const float at = on * (0.25f + 0.5f * (hash2(sd + di * 7, 79) * 0.5f + 0.5f));
+                                c *= 1.f - cover(ph - at, bite, dv) * w;
+                            }
+                            return c;
+                        };
+                        float covWhite = 0.f, covYellow = 0.f, ghostWhite = 0.f, ghostYellow = 0.f;
                         if (st.edge != LinePattern::None) {
-                            float c = std::max(cover(lat + edgeCentre, halfLine, du),
-                                               cover(lat - edgeCentre, halfLine, du));
-                            if (st.edge == LinePattern::Dashed)
-                                c *= dashCover(s, st.edgeOn, st.edgeOff, dv);
+                            float c = std::max(cover(lat + edgeCentre + jit, halfLine, du),
+                                               cover(lat - edgeCentre + jit, halfLine, du));
+                            float gc = std::max(cover(lat + edgeCentre + ghostOff, halfLine, du),
+                                                cover(lat - edgeCentre - ghostOff, halfLine, du));
+                            if (st.edge == LinePattern::Dashed) {
+                                const float d = dashWorn(st.edgeOn, st.edgeOff);
+                                c *= d;
+                                gc *= d;
+                            }
                             covWhite = c;
+                            ghostWhite = gc * 0.25f * ghostSeg * w;
                         }
                         if (st.centre != LinePattern::None) {
-                            float c = cover(lat, halfLine, du);
-                            if (st.centre == LinePattern::Dashed)
-                                c *= dashCover(s, st.centreOn, st.centreOff, dv);
+                            float c = cover(lat + jit, halfLine, du);
+                            float gc = cover(lat - ghostOff, halfLine, du);
+                            if (st.centre == LinePattern::Dashed) {
+                                const float d = dashWorn(st.centreOn, st.centreOff);
+                                c *= d;
+                                gc *= d;
+                            }
                             covYellow = c;
+                            ghostYellow = gc * 0.25f * ghostSeg * w;
                         }
+                        // Fresh paint fades toward a grey-beige ghost of itself.
+                        const std::array<float, 3> wornWhite = {0.62f, 0.60f, 0.55f};
+                        const std::array<float, 3> wornYellow = {0.72f, 0.60f, 0.24f};
+                        const auto faded = [&](const std::array<float, 3>& fresh,
+                                               const std::array<float, 3>& worn) {
+                            return std::array<float, 3>{fresh[0] + (worn[0] - fresh[0]) * segWear,
+                                                        fresh[1] + (worn[1] - fresh[1]) * segWear,
+                                                        fresh[2] + (worn[2] - fresh[2]) * segWear};
+                        };
                         const auto paint = [&](const std::array<float, 3>& col, float c) {
                             if (c <= 0.f) return;
                             r += (col[0] - r) * c;
@@ -559,8 +764,22 @@ namespace threepp::road {
                             // smoother than the aggregate around them.
                             rough += (0.55f - rough) * c;
                         };
-                        paint(st.whiteColor, covWhite);
-                        paint(st.yellowColor, covYellow);
+                        const auto fw = faded(st.whiteColor, wornWhite);
+                        const auto fy = faded(st.yellowColor, wornYellow);
+                        paint(fw, ghostWhite);
+                        paint(fy, ghostYellow);
+                        paint(fw, covWhite);
+                        paint(fy, covYellow);
+                    }
+
+                    // Mean over the NOMINAL paved band, whatever surface won it:
+                    // this is what the far painted road is tinted with, and a
+                    // gravel road has to report its own gravel colour.
+                    if (std::abs(lat) <= pavedHalf) {
+                        sumR += r;
+                        sumG += g;
+                        sumB += b;
+                        ++pavedCount;
                     }
 
                     const size_t o = (static_cast<size_t>(y) * W + x) * 4;
@@ -570,7 +789,7 @@ namespace threepp::road {
                     m.roughMetal[o + 0] = 0u;
                     m.roughMetal[o + 1] = toByte(rough);
                     m.roughMetal[o + 2] = 0u;// asphalt is a dielectric
-                    hgt[static_cast<size_t>(y) * W + x] = relief * w;
+                    hgt[static_cast<size_t>(y) * W + x] = relief;
                 }
             }
 

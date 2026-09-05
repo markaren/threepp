@@ -91,7 +91,7 @@ namespace threepp::road {
         float shoulderInsetMain = 0.5f;       // ...on a wide road
         std::array<float, 3> whiteColor = {0.86f, 0.86f, 0.84f};
         std::array<float, 3> yellowColor = {0.88f, 0.70f, 0.12f};
-        float wear = 0.f;         // 0..1, Phase B
+        float wear = 0.6f;        // 0 = fresh paint on new asphalt, 1 = ruined
         bool gravelEdge = true;   // narrow grusskulder at the pavement edge
         unsigned int seed = 1337u;// variant seed
         int texWidth = 256, texHeight = 1024;
