@@ -28,12 +28,17 @@
 // view returns ~2% of it."
 //
 // ── WHY REGION STATISTICS AND NOT A STORED GOLDEN ────────────────────────────
-// A scene containing an Ocean is not reproducible at all: the FFT surface
-// advances on glfwGetTime(), so two reads of a "static" water scene are two
-// different sets of ripples. (Pre-existing renderer property; there is no
-// fixed-time path to drive.) So this follows the house convention that block
-// established — measure a SAME-SCENE CONTROL first, then require the effect to
-// beat it — rather than committing a reference PPM that could never match.
+// A scene containing an Ocean advances its FFT surface on the frame clock, so
+// two reads of a "static" water scene are two different sets of ripples unless
+// that clock is held. This test holds it (setSimTime at one constant for the
+// whole pond A/B): the hidden and the shown legs then see the SAME ripples, so
+// the only thing that can move the water band between them is the reflected
+// leg, and the same-scene control below measures only what the temporal
+// filters do to a still frame. On the wall clock the control swung with the
+// frame rate (0.03 to 0.81 in luma between runs on one machine) and a 1.5 luma
+// effect could not reliably clear it. The control stays, following the house
+// convention that block established — measure a SAME-SCENE CONTROL first, then
+// require the effect to beat it — rather than committing a reference PPM.
 //
 // ── THE A/B ──────────────────────────────────────────────────────────────────
 // Toggling the cloud's `visible` is EXACTLY the feature's own gate for the
@@ -374,7 +379,16 @@ int main(int argc, char** argv) {
     camera->lookAt(Vector3{0.f, 0.6f, -2.5f});
     camera->updateMatrixWorld();
 
-    const auto draw = [&] { renderer.render(*scene, *camera); };
+    // The frame clock is held at one instant for the whole pond A/B, so the
+    // FFT surface is the same set of ripples in the hidden legs, the control
+    // and the shown leg, on every run; see the header. (A constant is a valid
+    // non-decreasing clock; the temporal blends see dt = 0 and keep their
+    // reference-rate weights.)
+    constexpr double kPondTimeSec = 2.0;
+    const auto draw = [&] {
+        renderer.setSimTime(kPondTimeSec);
+        renderer.render(*scene, *camera);
+    };
     const auto settle = [&](int n) { for (int i = 0; i < n; ++i) draw(); };
     const auto shot = [&](const char* name) {
         if (shotDir.empty()) return;
