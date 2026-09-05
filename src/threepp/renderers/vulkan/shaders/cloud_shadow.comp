@@ -99,6 +99,14 @@ void main() {
     for (int i = 0; i < N; ++i) {
         const vec3 p = origin + sunDir * (float(i) + 0.5) * seg;
         od += cloudDensity(p, clouds.timeSec);
+        // cloudDensity is non-negative, so the running sum is a LOWER bound on
+        // the final optical depth and the remaining taps can only push T down.
+        // Once the bound crosses 8, T is already below exp(-8) = 3.35e-4, and
+        // cloudShadowImage is R8_UNORM: everything under 1/510 quantises to
+        // byte 0. Stopping here is therefore bit-identical rather than an
+        // approximation — but the proof is the 8-bit target, so widening that
+        // format to R16 turns this straight into a flat-black clamp.
+        if (od * seg * kCloudSigmaMul > 8.0) break;
     }
     const float T = exp(-od * seg * kCloudSigmaMul);
     imageStore(cloudShadowImage, tx, vec4(clamp(T, 0.0, 1.0)));
