@@ -242,8 +242,9 @@ import numpy as np
 import warp as wp
 
 import threepp as tp
-from warp_common import (cli_arg, encode_png_sequence, find_ffmpeg, parse_size,
-                         standard_material)
+from warp_common import (ball_predict, cli_arg, cloth_integrate, compute_normals,
+                         encode_png_sequence, find_ffmpeg, parse_size,
+                         set_anchors, spring, standard_material)
 
 # ---- flags -------------------------------------------------------------------
 TUNE = "--tune" in sys.argv
@@ -575,51 +576,6 @@ def lob_landmarks(p_rest=None):
 # ---- warp: the sheet ----------------------------------------------------------
 
 
-@wp.func
-def grid_index(ix: int, iy: int, nx: int) -> int:
-    return iy * (nx + 1) + ix
-
-
-@wp.func
-def spring(p: wp.vec3, pos: wp.array(dtype=wp.vec3), im: wp.array(dtype=float),
-           w_self: float, ix: int, iy: int, nx: int, ny: int,
-           rest: float, stiffness: float) -> wp.vec3:
-    if ix < 0 or ix > nx or iy < 0 or iy > ny:
-        return wp.vec3(0.0, 0.0, 0.0)
-    j = grid_index(ix, iy, nx)
-    w_nb = im[j]
-    denom = w_self + w_nb
-    if denom < 1.0e-12:
-        return wp.vec3(0.0, 0.0, 0.0)
-    d = pos[j] - p
-    l = wp.length(d)
-    if l < 1.0e-9:
-        return wp.vec3(0.0, 0.0, 0.0)
-    return d * (stiffness * (w_self / denom) * (l - rest) / l)
-
-
-@wp.kernel
-def integrate(pos: wp.array(dtype=wp.vec3), prev: wp.array(dtype=wp.vec3),
-              pred: wp.array(dtype=wp.vec3), im: wp.array(dtype=float),
-              dt: float, damping: float):
-    i = wp.tid()
-    p = pos[i]
-    prev_p = prev[i]
-    prev[i] = p
-    if im[i] == 0.0:
-        pred[i] = p
-        return
-    vel = (p - prev_p) * (1.0 - damping)
-    pred[i] = p + vel + GRAVITY * dt * dt
-
-
-@wp.kernel
-def set_anchors(pred: wp.array(dtype=wp.vec3), idx: wp.array(dtype=int),
-                target: wp.array(dtype=wp.vec3)):
-    k = wp.tid()
-    pred[idx[k]] = target[k]
-
-
 @wp.kernel
 def solve(p_in: wp.array(dtype=wp.vec3), p_out: wp.array(dtype=wp.vec3),
           im: wp.array(dtype=float), nx: int, ny: int, rest: float,
@@ -711,12 +667,6 @@ def solve(p_in: wp.array(dtype=wp.vec3), p_out: wp.array(dtype=wp.vec3),
 
 
 @wp.kernel
-def ball_predict(bp: wp.array(dtype=wp.vec3), bv: wp.array(dtype=wp.vec3),
-                 bpred: wp.array(dtype=wp.vec3), h: float):
-    bpred[0] = bp[0] + bv[0] * h + GRAVITY * h * h
-
-
-@wp.kernel
 def ball_finish(bp: wp.array(dtype=wp.vec3), bv: wp.array(dtype=wp.vec3),
                 impulse: wp.array(dtype=wp.vec3), h: float, inv_bm: float,
                 radius: float,
@@ -774,20 +724,6 @@ def ball_finish(bp: wp.array(dtype=wp.vec3), bv: wp.array(dtype=wp.vec3),
                 v = wp.vec3(v[0] - 1.5 * vn * nx, v[1] - 1.5 * vn * ny, v[2] - 1.5 * vn * nz)
     bv[0] = v
     bp[0] = p
-
-
-@wp.kernel
-def compute_normals(pos: wp.array(dtype=wp.vec3), nrm: wp.array(dtype=wp.vec3),
-                    nx: int, ny: int):
-    i = wp.tid()
-    ix = i % (nx + 1)
-    iy = i // (nx + 1)
-    xm = pos[grid_index(wp.max(ix - 1, 0), iy, nx)]
-    xp = pos[grid_index(wp.min(ix + 1, nx), iy, nx)]
-    zm = pos[grid_index(ix, wp.max(iy - 1, 0), nx)]
-    zp = pos[grid_index(ix, wp.min(iy + 1, ny), nx)]
-    n = wp.cross(zp - zm, xp - xm)
-    nrm[i] = n / wp.max(wp.length(n), 1.0e-9)
 
 
 # ---- sheet state --------------------------------------------------------------
@@ -916,7 +852,7 @@ if DRONES:
     NET_CENTRE_I = (NR // 2) * (NR + 1) + NR // 2
 
     def _net_kernels():
-        wp.launch(integrate, dim=NVV, device=device,
+        wp.launch(cloth_integrate, dim=NVV, device=device,
                   inputs=[netp, netprev, netpred, net_im, DT, DAMPING])
         wp.launch(set_anchors, dim=4, device=device,
                   inputs=[netpred, net_anchor_idx, net_anchor_tgt])
@@ -3406,7 +3342,7 @@ def substep(alpha=1.0):
     anchor_tgt.assign((anchor_from + (anchor_to - anchor_from) * alpha).astype(np.float32))
     impulse.zero_()
     wp.launch(ball_predict, dim=1, device=device, inputs=[bp, bv, bpred, DT])
-    wp.launch(integrate, dim=V, device=device, inputs=[pos, prev, pred, im, DT, DAMPING])
+    wp.launch(cloth_integrate, dim=V, device=device, inputs=[pos, prev, pred, im, DT, DAMPING])
     wp.launch(set_anchors, dim=4, device=device, inputs=[pred, anchor_idx, anchor_tgt])
     if solve_graph is not None:
         wp.capture_launch(solve_graph)

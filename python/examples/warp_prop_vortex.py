@@ -515,7 +515,8 @@ import numpy as np
 import warp as wp
 
 import threepp as tp
-from warp_common import Encoder, cli_arg, find_ffmpeg, sky_env
+from warp_common import (Encoder, arm_particle_interop, cli_arg, find_ffmpeg,
+                         sky_env)
 
 # 2M -> 1.7M, and it is the 25 fps floor that moved it, not taste. Fixing the
 # negative-age bug (see the kernel) put a sixth of the parcels BACK into the
@@ -3780,7 +3781,6 @@ bb.volume_sun_gain = 0.85
 
 sim_time = 0.0
 frame_no = 0
-imported_pos = imported_col = None
 host_pos = host_col = None
 
 # ── The helm, and its history ───────────────────────────────────────────────
@@ -3941,15 +3941,6 @@ def advance():
     helm_wp.assign(helm_np)
 
 
-def device_copy():
-    """The renderer's per-frame callback: evaluate the wake straight into the
-    two exported allocations, then synchronize. It runs INSIDE render(),
-    pre-record, and the host ordering it provides is the ONLY thing sequencing
-    these writes against the frame that reads them."""
-    launch(imported_pos.array, imported_col.array)
-    wp.synchronize_device(device)
-
-
 def step_frame_host():
     advance()
     launch(host_pos, host_col)
@@ -3963,36 +3954,11 @@ def step_frame_interop():
 
 
 # ── ARM THE ZERO-COPY PATH ──────────────────────────────────────────────────
-# enable_particle_field_interop returns None until after the FIRST render(): the
-# field's device state and the renderer's field pass are both created on the
-# frame the field is first seen.
-field.set_live_count(0)
-renderer.render(scene, camera)
-step_frame = step_frame_host
-if INTEROP:
-    from threepp.cuda_interop import VkInteropArray
-    try:
-        h = renderer.enable_particle_field_interop(field, device_copy)
-        if h is None:
-            raise RuntimeError("this device cannot export memory "
-                               f"(host_fallback={field.host_fallback})")
-        if len(h) < 4:
-            raise RuntimeError("the renderer exported no attribute buffer -- "
-                               "Config.attributes was not honoured")
-        imported_pos = VkInteropArray(h[0], h[1], wp.vec4, N, device)
-        imported_col = VkInteropArray(h[2], h[3], wp.vec4, N, device)
-        step_frame = step_frame_interop
-        print(f"       zero-copy: {2 * 16 * N / 1e6:.0f} MB exported "
-              f"(positions + attributes), 0 B/frame across the bus")
-    except Exception as e:                                # noqa: BLE001
-        INTEROP = False
-        print(f"       no zero-copy export ({e}); host ring")
-
-if not INTEROP:
-    host_pos = wp.zeros(N, dtype=wp.vec4, device="cpu", pinned=True)
-    host_col = wp.zeros(N, dtype=wp.vec4, device="cpu", pinned=True)
-
-field.set_live_count(N)
+_io = arm_particle_interop(renderer, scene, camera, field, launch, N, device,
+                           INTEROP)
+INTEROP = _io.on
+host_pos, host_col = _io.host_pos, _io.host_col
+step_frame = step_frame_interop if INTEROP else step_frame_host
 
 # The funnel's own numbers, evaluated on the host with the kernel's formulae so
 # the banner states the claim the demo exists to make rather than a guess: how

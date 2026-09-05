@@ -407,6 +407,89 @@ def scatter_soup(pos: wp.array(dtype=wp.vec3),
     out_nrm[k] = n / wp.max(wp.length(n), 1.0e-9)
 
 
+# --- grid cloth ---------------------------------------------------------------
+# A PBD sheet on a regular (nx+1) x (ny+1) lattice, shared by the two ball-in-a-
+# sheet films. What they share is the scaffolding: the index map, the mass-
+# weighted distance projection, the Verlet predict, the anchor write and the
+# normals. Each film keeps its own `solve` and `ball_finish`, because the catch
+# film's carry friction, an anchor-load readout and a basket collider, and those
+# are the demo rather than the cloth.
+
+GRAVITY = wp.vec3(0.0, -9.81, 0.0)
+
+
+@wp.func
+def grid_index(ix: int, iy: int, nx: int) -> int:
+    return iy * (nx + 1) + ix
+
+
+@wp.func
+def spring(p: wp.vec3, pos: wp.array(dtype=wp.vec3), im: wp.array(dtype=float),
+           w_self: float, ix: int, iy: int, nx: int, ny: int,
+           rest: float, stiffness: float) -> wp.vec3:
+    # Outside the grid there is no neighbour and nothing to project against.
+    if ix < 0 or ix > nx or iy < 0 or iy > ny:
+        return wp.vec3(0.0, 0.0, 0.0)
+    j = grid_index(ix, iy, nx)
+    w_nb = im[j]
+    denom = w_self + w_nb
+    if denom < 1.0e-12:
+        return wp.vec3(0.0, 0.0, 0.0)
+    d = pos[j] - p
+    l = wp.length(d)
+    if l < 1.0e-9:
+        return wp.vec3(0.0, 0.0, 0.0)
+    # Mass-weighted split. Against a pinned neighbour w_nb is 0 and this particle
+    # takes the whole correction -- which is exactly the corner, where the throw
+    # enters the sheet, so getting that weight right is not cosmetic.
+    return d * (stiffness * (w_self / denom) * (l - rest) / l)
+
+
+@wp.kernel
+def cloth_integrate(pos: wp.array(dtype=wp.vec3),
+                    prev: wp.array(dtype=wp.vec3),
+                    pred: wp.array(dtype=wp.vec3),
+                    im: wp.array(dtype=float), dt: float, damping: float):
+    """Verlet predict with pinned particles held: the cloth twin of `integrate`,
+    which takes gravity as an argument and has no inverse-mass gate."""
+    i = wp.tid()
+    p = pos[i]
+    prev_p = prev[i]
+    prev[i] = p
+    if im[i] == 0.0:
+        pred[i] = p
+        return
+    vel = (p - prev_p) * (1.0 - damping)
+    pred[i] = p + vel + GRAVITY * dt * dt
+
+
+@wp.kernel
+def set_anchors(pred: wp.array(dtype=wp.vec3),
+                idx: wp.array(dtype=int), target: wp.array(dtype=wp.vec3)):
+    k = wp.tid()
+    pred[idx[k]] = target[k]
+
+
+@wp.kernel
+def ball_predict(bp: wp.array(dtype=wp.vec3), bv: wp.array(dtype=wp.vec3),
+                 bpred: wp.array(dtype=wp.vec3), h: float):
+    bpred[0] = bp[0] + bv[0] * h + GRAVITY * h * h
+
+
+@wp.kernel
+def compute_normals(pos: wp.array(dtype=wp.vec3), nrm: wp.array(dtype=wp.vec3),
+                    nx: int, ny: int):
+    i = wp.tid()
+    ix = i % (nx + 1)
+    iy = i // (nx + 1)
+    xm = pos[grid_index(wp.max(ix - 1, 0), iy, nx)]
+    xp = pos[grid_index(wp.min(ix + 1, nx), iy, nx)]
+    zm = pos[grid_index(ix, wp.max(iy - 1, 0), nx)]
+    zp = pos[grid_index(ix, wp.min(iy + 1, ny), nx)]
+    n = wp.cross(zp - zm, xp - xm)
+    nrm[i] = n / wp.max(wp.length(n), 1.0e-9)
+
+
 # --- warp: particles -> density grid -> marching cubes ------------------------
 
 
@@ -677,6 +760,86 @@ def resize_handler(camera, renderer):
         camera.update_projection_matrix()
         renderer.set_size(w, h)
     return on_resize
+
+
+# --- zero-copy particle fields -------------------------------------------------
+
+
+class ParticleInterop:
+    """What `arm_particle_interop` hands back.
+
+    `on` says which leg is live. On the zero-copy leg `imported_pos` and
+    `imported_col` are the CUDA views of the renderer's own allocations and the
+    caller's per-frame work is already done inside `render()`; on the host leg
+    `host_pos` and `host_col` are pinned mirrors the caller launches into and
+    pushes across the bus itself.
+    """
+
+    def __init__(self, on, imported_pos, imported_col, host_pos, host_col,
+                 device_copy):
+        self.on = on
+        self.imported_pos = imported_pos
+        self.imported_col = imported_col
+        self.host_pos = host_pos
+        self.host_col = host_col
+        self.device_copy = device_copy      # the renderer holds this; so do we
+
+
+def arm_particle_interop(renderer, scene, camera, field, launch_fn, n, device,
+                         interop=True):
+    """Export a ParticleField's buffers to CUDA, or fall back to a host ring.
+
+    `launch_fn(out_pos, out_col)` is the caller's simulation step, written once
+    and launched into whichever pair of buffers this ends up choosing.
+
+    enable_particle_field_interop returns None until after the FIRST render():
+    the field's device state and the renderer's field pass are both created on
+    the frame the field is first seen. So render once (live count 0, nothing
+    drawn), then export, then import into CUDA.
+    """
+    field.set_live_count(0)
+    renderer.render(scene, camera)
+    imported_pos = imported_col = None
+    host_pos = host_col = None
+
+    def device_copy():
+        """The renderer's per-frame callback: run the sim straight into the two
+        exported allocations, then synchronize. It runs INSIDE render(),
+        pre-record, and the host ordering it provides is the ONLY thing
+        sequencing these writes against the frame that reads them -- there is no
+        shared semaphore."""
+        launch_fn(imported_pos.array, imported_col.array)
+        wp.synchronize_device(device)
+
+    if interop:
+        from threepp.cuda_interop import VkInteropArray
+        try:
+            h = renderer.enable_particle_field_interop(field, device_copy)
+            if h is None:
+                raise RuntimeError("this device cannot export memory "
+                                   f"(host_fallback={field.host_fallback})")
+            if len(h) < 4:
+                raise RuntimeError("the renderer exported no attribute buffer -- "
+                                   "Config.attributes was not honoured")
+            imported_pos = VkInteropArray(h[0], h[1], wp.vec4, n, device)
+            imported_col = VkInteropArray(h[2], h[3], wp.vec4, n, device)
+            print(f"       zero-copy: {2 * 16 * n / 1e6:.0f} MB exported "
+                  f"(positions + attributes), 0 B/frame across the bus")
+        except Exception as e:                            # noqa: BLE001
+            interop = False
+            print(f"       no zero-copy export ({e}); host ring")
+
+    if not interop:
+        # The host leg carries 32 B/particle/frame in both directions, so it is a
+        # correctness path and not a performance one. set_attributes is
+        # write-once by contract; calling it per frame there is the documented
+        # abuse the fallback accepts, and it is why this leg is not the demo.
+        host_pos = wp.zeros(n, dtype=wp.vec4, device="cpu", pinned=True)
+        host_col = wp.zeros(n, dtype=wp.vec4, device="cpu", pinned=True)
+
+    field.set_live_count(n)
+    return ParticleInterop(interop, imported_pos, imported_col,
+                           host_pos, host_col, device_copy)
 
 
 # --- run loops -----------------------------------------------------------------

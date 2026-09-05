@@ -59,7 +59,7 @@ import numpy as np
 import warp as wp
 
 import threepp as tp
-from warp_common import cli_arg
+from warp_common import arm_particle_interop, cli_arg
 
 N = cli_arg("--n", 4_000_000, int)
 BENCH = "--bench" in sys.argv
@@ -315,7 +315,6 @@ bb.volume_sun_gain = 0.60
 
 sim_time = 0.0
 frame_no = 0
-imported_pos = imported_col = None
 host_pos = host_col = None
 
 
@@ -329,15 +328,6 @@ def launch(out_pos, out_col):
     wp.launch(step, dim=N, device=device,
               inputs=[pos, vel, out_pos, out_col, noise, DT, sim_time,
                       blast_now(), frame_no, RADIUS, BRIGHT])
-
-
-def device_copy():
-    """The renderer's per-frame callback: run the sim straight into the two
-    exported allocations, then synchronize. It runs INSIDE render(), pre-record,
-    and the host ordering it provides is the ONLY thing sequencing these writes
-    against the frame that reads them -- there is no shared semaphore."""
-    launch(imported_pos.array, imported_col.array)
-    wp.synchronize_device(device)
 
 
 def step_frame_host():
@@ -359,41 +349,11 @@ def step_frame_interop():
 
 
 # ── ARM THE ZERO-COPY PATH ──────────────────────────────────────────────────
-# enable_particle_field_interop returns None until after the FIRST render(): the
-# field's device state and the renderer's field pass are both created on the
-# frame the field is first seen. So render once (live count 0, nothing drawn),
-# then export, then import into CUDA.
-field.set_live_count(0)
-renderer.render(scene, camera)
-step_frame = step_frame_host
-if INTEROP:
-    from threepp.cuda_interop import VkInteropArray
-    try:
-        h = renderer.enable_particle_field_interop(field, device_copy)
-        if h is None:
-            raise RuntimeError("this device cannot export memory "
-                               f"(host_fallback={field.host_fallback})")
-        if len(h) < 4:
-            raise RuntimeError("the renderer exported no attribute buffer -- "
-                               "Config.attributes was not honoured")
-        imported_pos = VkInteropArray(h[0], h[1], wp.vec4, N, device)
-        imported_col = VkInteropArray(h[2], h[3], wp.vec4, N, device)
-        step_frame = step_frame_interop
-        print(f"       zero-copy: {2 * 16 * N / 1e6:.0f} MB exported "
-              f"(positions + attributes), 0 B/frame across the bus")
-    except Exception as e:                                # noqa: BLE001
-        INTEROP = False
-        print(f"       no zero-copy export ({e}); host ring")
-
-if not INTEROP:
-    # The host leg carries 32 B/particle/frame in both directions, so it is a
-    # correctness path and not a performance one. set_attributes is write-once
-    # by contract; calling it per frame here is the documented abuse the
-    # fallback accepts, and it is why this leg is not the demo.
-    host_pos = wp.zeros(N, dtype=wp.vec4, device="cpu", pinned=True)
-    host_col = wp.zeros(N, dtype=wp.vec4, device="cpu", pinned=True)
-
-field.set_live_count(N)
+_io = arm_particle_interop(renderer, scene, camera, field, launch, N, device,
+                           INTEROP)
+INTEROP = _io.on
+host_pos, host_col = _io.host_pos, _io.host_col
+step_frame = step_frame_interop if INTEROP else step_frame_host
 
 print(f"       volume: {BOX_RES}^3 over {2 * BOX_HALF[0]:.1f} x "
       f"{2 * BOX_HALF[1]:.1f} x {2 * BOX_HALF[2]:.1f} m, sigma/particle {SIGMA:g}\n"
