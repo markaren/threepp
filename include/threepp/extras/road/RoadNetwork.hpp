@@ -103,7 +103,7 @@ namespace threepp::road {
                                 // 2 MB per map instead of 1.
         int patchRes = 256;     // repair-patch atlas: 4 variants of this square
         unsigned int patchSeed = 4711u;
-        float patchesPer100m = 3.f;// upper bound; the per-piece hash picks 0..this
+        float patchesPer100m = 1.f;// upper bound; the per-piece hash picks 0..this (one patch every ~200 m)
     };
 
     // Elevation-profile handling for conformTo (all opt-in; default = the
