@@ -11,18 +11,20 @@
    800,
    600
   ],
+  "resolve": "taa",
   "gpu": "NVIDIA GeForce RTX 4070, 595.97",
   "pins": {
    "auto_exposure": false,
    "fsr": false,
    "dlss": false,
+   "fsr_available": true,
    "sim_time": true
   },
   "sonar": "SonarSensor",
-  "wall_seconds": 3.75,
+  "wall_seconds": 3.52,
   "lidar_hits": 238821,
   "sonar_echoes": 21414,
-  "recorded": "2026-09-05, development machine, C++ build of the same tree (dev d3028acf+)"
+  "recorded": "2026-09-05, development machine, C++ build of the same tree (dev b2e2f009+), --resolve taa"
  },
  "rows": {
   "prop.imu": {

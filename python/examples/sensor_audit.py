@@ -11,6 +11,7 @@ frame index, reads every sensor for N frames, and folds each stream into one
     python sensor_audit.py --frames 120 --out a.json
     python sensor_audit.py --frames 120 --out b.json      # fresh process
     python sensor_audit.py --compare a.json b.json        # exit 0 = bit-identical
+    python sensor_audit.py --resolve fsr --out a_fsr.json # the rgb.fsr row instead
 
 Rows (each a chained hash over all frames):
 
@@ -18,7 +19,12 @@ Rows (each a chained hash over all frames):
                               seeded MEMS noise ON, contact incl. force
     aov.depth / aov.normals / aov.ids / aov.motion / aov.albedo
                               raster G-buffer readbacks, native dtypes
-    rgb                       the rendered frame after the temporal resolve
+    rgb                       the rendered frame after the in-house temporal
+                              resolve (TAA), the pinned default
+    rgb.fsr                   the same frame with `--resolve fsr`: AMD FSR 3.1
+                              in place of TAA, the upscaler the wheel enables
+                              by default on a GPU that has it. Its own row, so
+                              the TAA claim and the FSR finding never mix
     lidar                     path-traced VLP-16 returns (position, distance,
                               intensity, instance id, return no), 10 Hz
     sonar                     imaging-sonar echogram (SonarSensor when the wheel
@@ -234,6 +240,7 @@ def run(args):
             "seconds_prop": args.seconds,
             "seed": f"0x{args.seed:x}",
             "size": [args.width, args.height],
+            "resolve": args.resolve,
         },
         "rows": {},
     }
@@ -254,18 +261,27 @@ def run(args):
     canvas = tp.Canvas("sensor_audit", args.width, args.height, vsync=False, headless=True)
     renderer = tp.VulkanRenderer(canvas)
     # Pinned, as in the C++ audits: nothing that adapts from image statistics
-    # or from a third-party temporal black box.
+    # or from a third-party temporal black box. `--resolve fsr` lifts exactly
+    # one pin, FSR, and renames the frame row so the two claims stay apart.
     renderer.auto_exposure = False
     pins = {"auto_exposure": False}
-    for name in ("fsr", "dlss"):
+    want = {"fsr": args.resolve == "fsr", "dlss": False}
+    for name, on in want.items():
         if hasattr(renderer, name):
             try:
-                setattr(renderer, name, False)
-                pins[name] = False
+                setattr(renderer, name, on)
+                pins[name] = bool(getattr(renderer, name))
             except Exception as e:  # pragma: no cover
                 pins[name] = f"error: {e}"
         else:
             pins[name] = "no binding"
+    rgb_key = "rgb.fsr" if args.resolve == "fsr" else "rgb"
+    # Asked for FSR and did not get it (no library next to the module, or the
+    # GPU refused the context): the row must read absent, never as a TAA hash
+    # under the FSR name. `fsr` itself reports the ACTIVE upscaler, decided at
+    # the first frame, so availability is the thing to test here.
+    pins["fsr_available"] = bool(getattr(renderer, "fsr_available", False))
+    fsr_missing = args.resolve == "fsr" and not pins["fsr_available"]
     pins["sim_time"] = hasattr(renderer, "sim_time")
     manifest["meta"]["pins"] = pins
 
@@ -290,7 +306,7 @@ def run(args):
     else:
         manifest["meta"]["sonar"] = "absent (wheel predates scan_lidar)"
 
-    rows = {k: Fnv() for k in ("aov.depth", "aov.normals", "aov.ids", "aov.motion", "aov.albedo", "rgb", "lidar", "sonar")}
+    rows = {k: Fnv() for k in ("aov.depth", "aov.normals", "aov.ids", "aov.motion", "aov.albedo", rgb_key, "lidar", "sonar")}
     dt = 1.0 / 60.0
     lidar_hits = 0
     sonar_echoes = 0
@@ -313,7 +329,8 @@ def run(args):
         rows["aov.ids"].update(arr_bytes(aovs["instance_ids"]))
         rows["aov.motion"].update(arr_bytes(aovs["motion"]))
         rows["aov.albedo"].update(arr_bytes(aovs["albedo"]))
-        rows["rgb"].update(arr_bytes(aovs["rgb"]))
+        if not fsr_missing:
+            rows[rgb_key].update(arr_bytes(aovs["rgb"]))
 
         if f % args.scan_every != 0:
             continue
@@ -378,6 +395,9 @@ def main():
     ap.add_argument("--seed", type=lambda s: int(s, 0), default=0x9E3779B97F4A7C15)
     ap.add_argument("--width", type=int, default=800)
     ap.add_argument("--height", type=int, default=600)
+    ap.add_argument("--resolve", choices=("taa", "fsr"), default="taa",
+                    help="temporal resolve for the frame row: the pinned in-house TAA (rgb), "
+                         "or AMD FSR 3.1 as its own row (rgb.fsr)")
     ap.add_argument("--out", default="")
     ap.add_argument("--compare", nargs=2, metavar=("A", "B"))
     args = ap.parse_args()

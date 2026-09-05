@@ -11,6 +11,7 @@
 //     vulkan_aov_audit --frames 120 --out a.txt
 //     vulkan_aov_audit --frames 120 --out b.txt
 //     vulkan_aov_audit --compare a.txt b.txt      # exit 0 = bit-identical
+//     vulkan_aov_audit --fsr --out a_fsr.txt       # the rgb.fsr row instead of rgb
 //
 // The G-buffer AOVs are raster-prepass products, so they are expected to be
 // bit-exact per device — unlike the RT-fed beauty frame. The `rgb` row hashes
@@ -154,11 +155,18 @@ int main(int argc, char** argv) {
     // stable per-object id, not the entry index.
     bool sceneEdit = false;
     int editAddFrame = 45, editRemoveFrame = 81;
+    // --fsr: lift exactly one pin, the FSR 3.1 upscaler, in place of the
+    // in-house TAA. The frame row is then emitted as `rgb.fsr`, its own
+    // finding: the pip wheel turns FSR on by default wherever it has it, so
+    // whether the shipped default replays is a question the matrix must
+    // answer, but never by folding it into the TAA row's claim.
+    bool fsr = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
         else if (arg == "--out" && i + 1 < argc) outPath = argv[++i];
         else if (arg == "--scene-edit") sceneEdit = true;
+        else if (arg == "--fsr") fsr = true;
         else if (arg == "--edit-add" && i + 1 < argc) editAddFrame = std::atoi(argv[++i]);
         else if (arg == "--edit-remove" && i + 1 < argc) editRemoveFrame = std::atoi(argv[++i]);
         else if (arg == "--rgbtrace" && i + 1 < argc) rgbTracePath = argv[++i];
@@ -189,10 +197,17 @@ int main(int argc, char** argv) {
     // in-house TAA: DLSS (and FSR) are third-party black boxes we cannot make
     // determinism claims about, and DLSS measurably breaks fresh-process
     // rgb replay while the AOV rows stay bit-exact. The goldens pin TAA for
-    // the same reason.
+    // the same reason. --fsr is the one deliberate exception, reported under
+    // its own row name.
     renderer.setSceneCaptureEnabled(true);
     renderer.setDlss(false);
-    renderer.setFsr(false);
+    renderer.setFsr(fsr);
+    // fsr() reports the ACTIVE upscaler, which is decided at the first frame;
+    // availability (compiled in, context created) is what can be checked here.
+    if (fsr && !renderer.fsrAvailable()) {
+        std::cout << "FSR requested but unavailable on this build/GPU\n";
+        return 2;
+    }
     if (noDenoise) renderer.setDenoise(false);
     if (noRestir) renderer.setRestirDIEnabled(false);
     if (noOccl) renderer.setOcclusionCulling(false);
@@ -430,7 +445,7 @@ int main(int argc, char** argv) {
                  << " fnv=" << std::hex << s.hash.value() << std::dec << "\n";
     };
     for (auto& row : rows) emit(row.name, row.stream);
-    emit("rgb", rgb);
+    emit(fsr ? "rgb.fsr" : "rgb", rgb);
     if (taaSplit) {
         emit("taa.input", taaIn);
         emit("taa.history", taaHist);
@@ -451,6 +466,7 @@ int main(int argc, char** argv) {
              << " editAdd=" << (sceneEdit ? editAddFrame : -1)
              << " editRemove=" << (sceneEdit ? editRemoveFrame : -1)
              << " static=" << (staticScene ? 1 : 0)
+             << " resolve=" << (fsr ? "fsr" : "taa")
              << " tlasRebuilds=" << tl.fullRebuilds << " tlasInstances=" << tl.instances << "\n";
     if (!staticScene && dyn.graduated == 0) {
         std::cout << "DYNAMIC-GEOM PATH NEVER ENGAGED (deformer failed to graduate)\n";
