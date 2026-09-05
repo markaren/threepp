@@ -21,13 +21,13 @@
    "sim_time": true
   },
   "sonar": "SonarSensor",
-  "wall_seconds": 3.76,
+  "wall_seconds": 4.19,
   "lidar_hits": 238821,
   "sonar_echoes": 21414
  },
  "rows": {
   "prop.imu": {
-   "fnv": "a5c16cd31adfb9ae",
+   "fnv": "92195c176c05c927",
    "bytes": 268800,
    "frames": 4800
   },
