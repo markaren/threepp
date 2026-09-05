@@ -404,6 +404,15 @@ namespace threepp::terrain {
         float setback = 1.5f, aisle = 6.f, stall = 5.f, pitch = 2.5f;
         float area = 0.f;
         bool valid = false;
+        // A KERB LANE, not a lot. 160 of this pack's 380 amenity=parking
+        // polygons are under 7 m across, and another handful are ribbons like
+        // the 267 x 11 m strip through Byparken: OSM maps street-side parking
+        // as a thin polygon beside the carriageway. Laid out as a lot, each one
+        // becomes a single stall row filled contiguously from one end — a solid
+        // nose-to-tail line of cars, which is exactly what the user saw in the
+        // park. A lane carries parallel-parked cars in short runs instead, and
+        // no bay stripes: there are no bays to paint.
+        bool lane = false;
 
         [[nodiscard]] float period() const { return aisle + 2.f * stall; }
 
@@ -494,6 +503,13 @@ namespace threepp::terrain {
             sh += a.x * b.y - b.x * a.y;
         }
         L.area = std::fabs(sh) * 0.5f;
+        // Lane test: too thin to hold bays at all (< 7 m), or too thin to hold
+        // an aisle plus one stall row AND long out of all proportion (a 267 x
+        // 11 m ribbon is a street edge; a 20 x 13 m pocket behind a shop is a
+        // lot, and keeps its single row of bays).
+        const float shortSide = L.maxV - L.minV, longSide = L.maxU - L.minU;
+        L.lane = shortSide < 7.f ||
+                 (shortSide < 2.f * L.setback + L.aisle + L.stall && longSide >= 4.f * shortSide);
         L.valid = true;
         return L;
     }
@@ -561,7 +577,7 @@ namespace threepp::terrain {
                 // an L-shaped lot can point across the lot.
                 const auto L = parkingLayout(poly.outer);
                 detail::geoScanRing(poly.outer, dim, cs, half, [&](int ix, int iz, float px, float pz) {
-                    if (!L.valid) {
+                    if (!L.valid || L.lane) {// a kerb lane has no bays to stripe
                         put(ix, iz, LandUsePaint::Asphalt);
                         return;
                     }

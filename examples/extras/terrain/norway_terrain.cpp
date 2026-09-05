@@ -1758,6 +1758,11 @@ int main(int argc, char** argv) {
         // INSIDE the wall is the failure this gate exists for.
         const auto propFp = terrain::buildFootprintMask(pack, 1.f, 2.f);
         const auto propUrban = gopt.paintUrban ? terrain::buildUrbanMask(pack, gopt) : nullptr;
+        // Mown ground. Footways, service roads and thin parking ribbons run
+        // straight through the town's parks, and a kerb car placed off one of
+        // them stands on the grass; 2 m of dilation covers the path shoulder.
+        const auto propParks = terrain::buildLandUseMask(
+                pack, {"grass", "pitch", "playground", "cemetery"}, 2.f, 2.f);
         terrain::UrbanPropsOptions po;
         po.seaLevel = reg.seaLevel;
         // Pack-wide placement (see the forest: the ROI was the defect), 250 m
@@ -1773,6 +1778,7 @@ int main(int argc, char** argv) {
         po.decks = !envSet("NT_NO_DECKS");
         po.urban = propUrban.get();
         po.footprints = propFp.get();
+        po.parks = propParks.get();
         po.ground = prov.height;
         auto props = Group::create();
         props->name = "urban_props";
@@ -1807,15 +1813,17 @@ int main(int argc, char** argv) {
                 liveCarTris += p->count() / 3;
         });
         const auto tp1 = std::chrono::high_resolution_clock::now();
-        std::printf("[norway] urban props: %d pier deck runs, %zu cars pack-wide (%d lot + %d "
-                    "kerb) in %d cells @ %.0f m -> %d cells live (%d meshes, %zu tris) within "
-                    "%.0f m of the camera; %d boats in %d marinas; deck/boat meshes %zu, "
-                    "%zu tris; rejected roof %d, sea %d, paved %d, junction %d; %.2f s\n",
-                    ps.deckLines, carField->count(), ps.carsLot, ps.carsKerb, ps.carCells,
-                    po.cellSize, carStream->stats().active, liveCarMeshes, liveCarTris,
-                    pso.fineRadius, ps.boats, ps.marinas, ps.meshes, ps.triangles, ps.rejectRoof,
-                    ps.rejectSea, ps.rejectPaved, ps.rejectJunction,
-                    std::chrono::duration<float>(tp1 - tp0).count());
+        std::printf("[norway] urban props: %d pier deck runs, %zu cars pack-wide (%d lot in %d "
+                    "lots + %d lane in %d kerb lanes + %d kerb) in %d cells @ %.0f m -> %d cells "
+                    "live (%d meshes, %zu tris) within %.0f m of the camera; %d boats in %d "
+                    "marinas; deck/boat meshes %zu, %zu tris; rejected roof %d, sea %d, paved %d, "
+                    "junction %d, park-lane %d, park-kerb %d, row cap/gap %d; %.2f s\n",
+                    ps.deckLines, carField->count(), ps.carsLot, ps.lotPolys, ps.carsLane,
+                    ps.lanePolys, ps.carsKerb, ps.carCells, po.cellSize,
+                    carStream->stats().active, liveCarMeshes, liveCarTris, pso.fineRadius,
+                    ps.boats, ps.marinas, ps.meshes, ps.triangles, ps.rejectRoof, ps.rejectSea,
+                    ps.rejectPaved, ps.rejectJunction, ps.rejectParkLane, ps.rejectParkKerb,
+                    ps.rejectRunGap, std::chrono::duration<float>(tp1 - tp0).count());
         std::fflush(stdout);
     }
 

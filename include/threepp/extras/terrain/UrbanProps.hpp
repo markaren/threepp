@@ -64,6 +64,14 @@ namespace threepp::terrain {
         float lotBayPitch = 2.5f;  // along the lot's long axis
         float lotRowPitch = 5.0f;  // across it (car length + a share of aisle)
         float lotOccupancy = 0.55f;
+        // Nobody parks a whole row solid. A run is broken every 4-8 cars by at
+        // least one empty stall, and no row is ever more than 70% full.
+        int lotRunMax = 8;
+        float lotRowFillMax = 0.70f;
+        // Kerb lanes (thin parking polygons — see ParkingLayout::lane): short
+        // runs of parallel-parked cars, the same numbers the road kerb uses.
+        int laneRunMax = 3;
+        int laneGapMin = 2;
         float kerbPitch = 6.f;
         float kerbOccupancy = 0.25f;
         float kerbOffset = 1.0f;    // beyond the paved half width
@@ -76,9 +84,15 @@ namespace threepp::terrain {
         float boatOccupancy = 0.6f;
         float marinaRadius = 15.f;// a pier this close to a marina counts as in it
 
-        // Gates. `urban` and `footprints` may be null (the gate is then open).
+        // Gates. `urban`, `footprints` and `parks` may be null (the gate is
+        // then open). `parks` = grass | pitch | playground | cemetery: a kerb
+        // car or a lane car whose bay lands on mown ground is a mapping
+        // accident (footways and thin parking ribbons run right through a
+        // park), and reads as cars stacked on the lawn. A WIDE mapped lot
+        // inside a park is not touched: OSM says that one is real.
         const UrbanMask* urban = nullptr;
         const FootprintMask* footprints = nullptr;
+        const FootprintMask* parks = nullptr;
         std::function<float(float, float)> ground;
     };
 
@@ -111,9 +125,11 @@ namespace threepp::terrain {
 
     struct UrbanPropsStats {
         int deckLines = 0;
-        int carsLot = 0, carsKerb = 0, carCells = 0;
+        int carsLot = 0, carsLane = 0, carsKerb = 0, carCells = 0;
+        int lotPolys = 0, lanePolys = 0;
         int boats = 0, marinas = 0;
         int rejectRoof = 0, rejectSea = 0, rejectPaved = 0, rejectJunction = 0;
+        int rejectParkLane = 0, rejectParkKerb = 0, rejectRunGap = 0;
         size_t meshes = 0, triangles = 0;
     };
 
@@ -493,6 +509,57 @@ namespace threepp::terrain {
                 const auto L = parkingLayout(poly.outer);
                 if (!L.valid) continue;
                 const unsigned int lotSeed = detail::upStrHash(poly.id);
+
+                // ── (a1) a KERB LANE, not a lot ─────────────────────────────
+                // A thin parking ribbon (see ParkingLayout::lane) has no aisle,
+                // no rows and no bays: it is the edge of a street. Laying it
+                // out as a lot row filled from one end is what put a solid line
+                // of 55 cars through Byparken. Park PARALLEL along its centre
+                // line at the kerb pitch, in runs of at most `laneRunMax`
+                // separated by at least `laneGapMin` empty slots, and never on
+                // mown ground.
+                if (L.lane) {
+                    ++st.lanePolys;
+                    const float v = (L.minV + L.maxV) * 0.5f;
+                    const int ns = static_cast<int>((L.maxU - L.minU) / o.kerbPitch);
+                    for (int is = 0; is < ns;) {
+                        if (detail::upHash01(lotSeed, static_cast<unsigned int>(is), 0x31u) >=
+                            o.kerbOccupancy) {
+                            ++is;
+                            continue;
+                        }
+                        const int runLen =
+                                1 + static_cast<int>(
+                                            detail::upHash01(lotSeed, static_cast<unsigned int>(is),
+                                                             0x32u) *
+                                            static_cast<float>(o.laneRunMax));
+                        const int runEnd = std::min(ns, is + runLen);
+                        for (; is < runEnd; ++is) {
+                            const float u = L.minU + (static_cast<float>(is) + 0.5f) * o.kerbPitch;
+                            const float x = L.axis.x * u + L.lat.x * v;
+                            const float z = L.axis.y * u + L.lat.y * v;
+                            if (!detail::upInsideRing(poly.outer, x, z)) continue;
+                            if (o.parks && o.parks->inside(x, z)) {
+                                ++st.rejectParkLane;
+                                continue;
+                            }
+                            if (net.pavedWeight(x, z, 1.f) > 0.25f) {
+                                ++st.rejectPaved;
+                                continue;
+                            }
+                            if (place(x, z, L.axis.x, L.axis.y,
+                                      lotSeed ^ (static_cast<unsigned int>(is) << 8)))
+                                ++st.carsLane;
+                        }
+                        is += o.laneGapMin +
+                              static_cast<int>(detail::upHash01(lotSeed,
+                                                                static_cast<unsigned int>(is),
+                                                                0x33u) *
+                                               2.f);
+                    }
+                    continue;
+                }
+                ++st.lotPolys;
                 // Per-lot occupancy in [0.15, 0.55]: a quiet residential lot and
                 // a supermarket at noon are not the same lot.
                 const float occ = 0.15f + 0.40f * detail::upHash01(lotSeed, 0x0Cu, 0u);
@@ -527,12 +594,51 @@ namespace threepp::terrain {
                     // How full is THIS row, and from which end does it fill?
                     // The spread (×0.4 … ×2.0, clamped) is what makes one row
                     // nearly full while the next one is empty.
-                    const float fill = std::clamp(
-                            occ * (0.4f + 1.6f * detail::upHash01(lotSeed, ru, 0x21u)), 0.f, 1.f);
+                    const float raw =
+                            occ * (0.4f + 1.6f * detail::upHash01(lotSeed, ru, 0x21u));
+                    const float fill = std::clamp(raw, 0.f, o.lotRowFillMax);
                     const bool fromStart = detail::upHash01(lotSeed, ru, 0x22u) < 0.5f;
-                    const int run = static_cast<int>(std::lround(fill * static_cast<float>(nu)));
+                    const int wanted = static_cast<int>(
+                            std::lround(std::min(raw, 1.f) * static_cast<float>(nu)));
+                    int quota = static_cast<int>(std::lround(fill * static_cast<float>(nu)));
+                    // The run used to be ONE contiguous block from a hashed
+                    // end, and a long row then read as a wall of cars. Lay it
+                    // down in chunks of 4-8 with a one or two stall hole after
+                    // each instead: still clumped at one end, never solid.
+                    std::vector<char> take(static_cast<size_t>(std::max(nu, 0)), 0);
+                    {
+                        int idx = fromStart ? 0 : nu - 1;
+                        const int dir = fromStart ? 1 : -1;
+                        int chunk = 0;
+                        unsigned int g = 0u;
+                        const auto nextTarget = [&] {
+                            return std::max(1, 4 + static_cast<int>(
+                                                       detail::upHash01(lotSeed, ru * 131u + g++,
+                                                                        0x24u) *
+                                                       static_cast<float>(
+                                                               std::max(1, o.lotRunMax - 3))));
+                        };
+                        int target = nextTarget();
+                        while (quota > 0 && idx >= 0 && idx < nu) {
+                            take[static_cast<size_t>(idx)] = 1;
+                            --quota;
+                            ++chunk;
+                            idx += dir;
+                            if (chunk >= target) {
+                                idx += dir * (1 + static_cast<int>(detail::upHash01(lotSeed,
+                                                                                    ru * 131u + g,
+                                                                                    0x25u) *
+                                                                   2.f));
+                                chunk = 0;
+                                target = nextTarget();
+                            }
+                        }
+                    }
+                    int taken = 0;
+                    for (char t : take) taken += t ? 1 : 0;
+                    st.rejectRunGap += std::max(0, wanted - taken);
                     for (int iu = 0; iu < nu; ++iu) {
-                        const bool inRun = fromStart ? iu < run : iu >= nu - run;
+                        const bool inRun = take[static_cast<size_t>(iu)] != 0;
                         // A few singles away from the run: nobody parks in a
                         // perfectly solid block.
                         if (!inRun && detail::upHash01(lotSeed, ru * 977u + static_cast<unsigned int>(iu),
@@ -622,6 +728,13 @@ namespace threepp::terrain {
                             const float px = cx - uz * off * sideSign;
                             const float pz = cz + ux * off * sideSign;
                             if (o.urban && o.urban->sample(px, pz) < o.urbanMin) continue;
+                            // K and P roads and their footways cross the parks
+                            // (59 sampled road points inside a park polygon in
+                            // this pack): a kerb car there stands on the lawn.
+                            if (o.parks && o.parks->inside(px, pz)) {
+                                ++st.rejectParkKerb;
+                                continue;
+                            }
                             if (place(px, pz, ux, uz, rs ^ (idx * 2654435761u))) ++st.carsKerb;
                         }
                         acc += len - pos;
