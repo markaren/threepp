@@ -15,7 +15,7 @@ flight, and ground-truth sensor output for synthetic-data generation.
 *Golden hour, live: NVIDIA Warp cloth sails driving the hull, a JONSWAP FFT sea, a gull flock and a camera drone — Vulkan deferred-hybrid renderer (raster-first, with ray-traced shadows & reflections). [warp_sailboat.py](python/examples/warp_sailboat.py)*
 
 ![The threepp scene editor](doc/screenshots/bistro_editor.png)
-* The scene editor — hierarchy, inspector, Play mode, and a live sensor preview ([apps/editor](apps/editor), [doc/editor.md](doc/editor.md))*
+*The scene editor — hierarchy, inspector, Play mode, and a live sensor preview ([apps/editor](apps/editor), [doc/editor.md](doc/editor.md))*
 
 
 > You get a scene graph, materials, lighting, cameras, render loop, controls, loaders, all composable, in a handful of lines.
