@@ -33,8 +33,9 @@ lights, the frame loop, loaders and the two backends.
   also the Emscripten/WebGL2 target) and a **deferred Vulkan renderer** (raster
   G-buffer with ray-traced AO, GI, reflections and shadows, participating media
   marched per pixel; denoised, with TAA).
-* **`Ocean`** — three-cascade FFT-displaced water with foam, transmission and live
-  wind. Vulkan only; on OpenGL the type
+* **`Ocean`** — three-cascade FFT-displaced water with foam, transmission, live
+  wind and JONSWAP fetch, and an underwater side: a camera below the surface renders
+  as submerged. Vulkan only; on OpenGL the type
   is an inert flat plane. 
 * **`ParticleField`** — GPU particle fields whose count the CPU never walks: fire,
   smoke, snow, rain, embers, dust and physics-coupled grains, drawn as instanced
@@ -42,7 +43,8 @@ lights, the frame loop, loaders and the two backends.
   ray-traced sensors all see. Vulkan only.
 * PMREM environment maps.
 * **Gaussian splatting** — `SplatCloud` renders scans on both backends, with two
-  loaders (INRIA `.ply`, PlayCanvas SOG) and dynamic LOD on Vulkan.
+  loaders (INRIA `.ply`, PlayCanvas SOG) plus colour-only point-cloud `.ply` import
+  and an opaque-disc point mode, and dynamic LOD on Vulkan.
 
 **Simulation & perception**
 
@@ -51,7 +53,8 @@ lights, the frame loop, loaders and the two backends.
   survive add/remove/hide/LOD, semantic classes, world normals and motion. `addView`
   attaches N cameras rendered from one scene build in a single submission, so a whole
   sensor rig sees the same simulated instant.
-* **Simulated sensors** — LIDAR (VLP-16/HDL-32E/OS1-64/OS0-128 patterns), depth, colour
+* **Simulated sensors** — LIDAR (VLP-16/HDL-32E/OS1-64/OS0-128 patterns), imaging sonar
+  (Wide130/Oculus M750d/BlueView M900/Gemini 720is, Vulkan only), depth, colour
   and event cameras, plus IMU, joint encoder, contact and 6-axis force/torque. Ray-traced
   on Vulkan, rasterized on OpenGL, with the same range semantics on both. Every
   measurement is seeded and sim-clock-stamped; drive `VulkanRenderer::setSimTime()` from
@@ -69,7 +72,9 @@ lights, the frame loop, loaders and the two backends.
 * **Zero-copy CUDA interop** (Vulkan, NVIDIA) — hand a mesh's position/normal buffers to
   an external GPU producer and let it write them in place: no host round-trip, and the
   BLAS refits so the traced legs see the new geometry. Shipped from Python as
-  `threepp.cuda_interop`, with two NVIDIA Warp demos on it.
+  `threepp.cuda_interop`, with two NVIDIA Warp demos on it — and the same road out:
+  `enableFrameInterop` exports the rendered colour, depth, normal, motion and id images
+  as CUDA tensors with no host readback (`threepp.torch_frames`).
 * **Physical camera, lens and sensor model** — EV100 exposure from an aperture/shutter/ISO
   triplet, photometric light units, OpenCV-convention intrinsics, Brown-Conrady and fisheye
   distortion applied to both the image and the labels, and electron-domain sensor noise.
@@ -118,10 +123,12 @@ A few limits worth knowing before you start:
   check; at runtime it fails at device selection with an explanation. Use `GLRenderer` on macOS.
 * Gaussian splat clouds are a backdrop first. Nothing puts a splat into an acceleration
   structure, so they cast no shadows, contribute nothing to GI and are invisible to the
-  ray-traced sensors — and neither a `SplatCloud` nor a `ParticleField` is serialized into a
-  scene document. There are two narrow doors out of that, both opt-in: each cloud bakes a small
-  density/radiance volume that the water, glass and glossy *reflection* legs march (a stand-in
-  for the cloud, primary view only), and `splats::bakeSurface` fuses the depth AOV into a
+  ray-traced sensors — and a `ParticleField` is not serialized into a scene document (a
+  `SplatCloud` now is, by reference: the document stores its source file and the import ops to
+  replay, never the splats). There are two narrow doors out of that, both opt-in: each cloud
+  bakes a small density/radiance volume that the water, glass and glossy *reflection* legs march
+  (a stand-in for the cloud, primary view only), and `splats::bakeSurface` (Vulkan depth fusion)
+  or `splats::buildPointSurface` (CPU, every backend) turns the scan into a
   triangle mesh that PhysX can collide and — behind `setSensorOnlySurfaces`, off by default —
   the sensors can perceive. See [doc/vulkan_splats.md](doc/vulkan_splats.md).
 * The editor is tested against OpenGL; its Vulkan view pane is best-effort. See the known-limitations
@@ -161,13 +168,15 @@ A few limits worth knowing before you start:
 **Beyond three.js** — what this library adds:
 
 * Gaussian splatting — `SplatCloud` with two scan loaders and a Vulkan compute
-  tile rasterizer, plus `splats::bakeSurface` to fuse a scan into a triangle
+  tile rasterizer, plus `splats::bakeSurface` (Vulkan depth fusion) and
+  `splats::buildPointSurface` (CPU, every backend) to turn a scan into a triangle
   surface physics and sensors can use ([doc/vulkan_splats.md](doc/vulkan_splats.md))
-* Simulated sensors — LIDAR, depth, colour and event cameras, IMU, joint encoder,
-  contact, force/torque
-* PhysX physics — rigid bodies, reduced-coordinate articulations, joints, soft
-  bodies, PBD particles (GPU-solved granular piles and fluids), character
-  controllers, vehicles, and V-HACD convex decomposition
+* Simulated sensors — LIDAR, imaging sonar, depth, colour and event cameras, IMU,
+  joint encoder, contact, force/torque
+* PhysX physics — rigid bodies, reduced-coordinate articulations, joints, tendons and
+  routed pull-only cables, soft bodies, PBD particles (GPU-solved granular piles and
+  fluids), character controllers, vehicles, heightfield colliders, and V-HACD convex
+  decomposition
 * Automatic mesh LOD (Vulkan, on by default), GPU occlusion culling, and NVIDIA
   DLSS / AMD FSR 3.1 temporal upscaling
 * Procedural content, all asset-free and first-party — quadtree-LOD terrain, trees,
@@ -175,7 +184,9 @@ A few limits worth knowing before you start:
   smoke, snow, rain, dust), a parametric log cabin
 * Real-world terrain — a documented "region pack" format plus an included Python tool
   that builds one from Norwegian national open data (Kartverket elevation, NVDB roads,
-  OSM footprints with building heights)
+  OSM footprints and land use, measured roofs, lidar canopy heights); `terrain::GeoScene`
+  assembles the whole stack — terrain, roads, cliff shells, canopy forest, ground cover,
+  bathymetry — in one call
 * Audio via [miniaudio](https://miniaud.io/docs/manual/index.html) — playback,
   positional sources, a listener
 * Ray-traced acoustics — `AcousticScene` traces occlusion and transmission through
@@ -480,7 +491,7 @@ some headers will require additional dependencies to compile.
 | ImguiContext            | imgui          | ImGUI utility                                          |
 | Physx\*                 | physx          | Physics simulation                                     |
 | ConvexDecomposition     | v-hacd         | Concave collision shapes (pulled by the vcpkg `physx` feature) |
-| Vulkan\*, Ocean, DisplacedMesh, ParticleField, SplatSurface | Vulkan SDK | Vulkan renderer backend; these link only under `THREEPP_WITH_VULKAN` |
+| Vulkan\*, Ocean, DisplacedMesh, ParticleField, SplatSurface, SonarSensor, PathTracedLidarSensor | Vulkan SDK | Vulkan renderer backend; these link only under `THREEPP_WITH_VULKAN` |
 
 `THREEPP_WITH_VULKAN` arrives **PUBLIC** from the `threepp` target, so consumers do not restate
 it — and cannot end up compiling a different variant of the public headers than the library did.
