@@ -1,6 +1,6 @@
 {
  "meta": {
-  "threepp": "0.1.0.dev24",
+  "threepp": "0.1.0.dev26",
   "platform": "Linux-6.6.122+-x86_64-with-glibc2.35",
   "python": "3.13.15",
   "frames": 120,
@@ -21,13 +21,13 @@
    "sim_time": true
   },
   "sonar": "SonarSensor",
-  "wall_seconds": 12.94,
+  "wall_seconds": 14.7,
   "lidar_hits": 238821,
   "sonar_echoes": 21414
  },
  "rows": {
   "prop.imu": {
-   "fnv": "a3ce5e70acb98b8e",
+   "fnv": "21c8c44445860627",
    "bytes": 268800,
    "frames": 4800
   },
