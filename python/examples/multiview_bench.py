@@ -168,20 +168,37 @@ def film(tp, out, nframes, fps=30):
     path = os.path.join(out, "e2_fast_mover.mp4")
     writer = imageio.get_writer(path, fps=fps, codec="libx264", quality=None, macro_block_size=None,
                                 ffmpeg_params=["-crf", "18", "-pix_fmt", "yuv420p"])
+    # Both rows are read after SETTLE renders at the pose (the temporal resolve
+    # converges on it), so what separates the rows is the instant, not a
+    # history trail: the same-instant row holds one pose for all three views,
+    # the sequential row advances the world by DT between the cameras.
+    settle = 8
+    font = None
+    from PIL import ImageFont
+    candidates = ["DejaVuSans.ttf", "C:/Windows/Fonts/arial.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+    try:
+        import matplotlib
+        candidates.insert(0, os.path.join(os.path.dirname(matplotlib.__file__), "mpl-data", "fonts", "ttf", "DejaVuSans.ttf"))
+    except Exception:
+        pass
+    for cand in candidates:
+        try:
+            font = ImageFont.truetype(cand, 44)
+            break
+        except Exception:
+            continue
     for k in range(nframes):
         t0 = 0.1 + 0.8 * k / max(nframes - 1, 1)     # the mover's pass, 0.1 .. 0.9
-        # Same instant: one render, three views read back.
-        sim += DT
-        renderer.sim_time = sim
         place(t0)
-        renderer.render(scene, cams[1])
+        for _ in range(settle):
+            sim += DT
+            renderer.sim_time = sim
+            renderer.render(scene, cams[1])
         same = [np.asarray(renderer.read_view_rgb_pixels(h))[:, :, :3] for h in handles]
-        # Sequential: the world steps DT between the three cameras; three renders per
-        # camera so the primary's temporal resolve settles on it, as the figure does.
         seq = []
         for i, c in enumerate(cams):
             place(t0 + i * DT)
-            for _ in range(3):
+            for _ in range(settle):
                 sim += DT
                 renderer.sim_time = sim
                 renderer.render(scene, c)
@@ -191,8 +208,8 @@ def film(tp, out, nframes, fps=30):
         for r, imgs in enumerate((same, seq)):
             for c, a in enumerate(imgs):
                 tile.paste(Image.fromarray(np.ascontiguousarray(a)), (c * W, r * H))
-            draw.text((8, r * H + 8), labels[r], fill=(255, 255, 255))
-        draw.text((3 * W - 150, 8), f"t = {t0:5.2f} s", fill=(255, 255, 255))
+            draw.text((16, r * H + 12), labels[r], fill=(255, 255, 255), font=font)
+        draw.text((3 * W - 360, 12), f"t = {t0:5.2f} s", fill=(255, 255, 255), font=font)
         writer.append_data(np.asarray(tile.resize((1920, 720))))
     writer.close()
     for h in handles:
