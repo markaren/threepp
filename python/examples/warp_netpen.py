@@ -4,6 +4,7 @@ camera + sonar insets, and a Warp school of procedural salmon.
     python warp_netpen.py                          # window; drag to orbit, Esc quits
     python warp_netpen.py --shot p3_hud --out x.png --seconds 8 --size 1600x900
     python warp_netpen.py --film [out.mp4]         # 82 s film + contact sheet + poster (--film-test: stills per cut)
+    python warp_netpen.py --e3 60 --e3-seed 0 --e3-out e3_s0.json   # the closed sonar inspection loop (E3)
 Cameras: p1_net_wide p1_collar_below p1_rov_hero p1_tear p2_school p2_fish_close p2_leak p3_hud p3_sonar_tear
          barge barge_stern.
 `--fish N` (400); `--profile` prints per-stage ms over 300 live frames and exits; `--no-interop` uploads the school
@@ -32,7 +33,25 @@ FILM = "--film" in sys.argv
 FILM_BENCH = "--film-bench" in sys.argv               # interleaved A/B of the offline frame path over one short cut
 FILM_TEST = "--film-test" in sys.argv                # 3 stills per cut instead of the mp4
 FILM = FILM or FILM_TEST                             # --film-test on its own used to fall through to the window
-HEADLESS = bool(SHOT) or FILM or FILM_BENCH
+# --audit N: the sensor-determinism row for THIS scene (ocean, murk, fog, the
+# cloth net, the sonar). Renders N frames of one film cut on the simulation
+# clock, headless, and folds every stream into a manifest in
+# sensor_audit.py's format, so two fresh processes are judged by
+#   python sensor_audit.py --compare a.json b.json
+AUDIT = cli_arg("--audit", 0, int)
+AUDIT_OUT = cli_arg("--audit-out", "", str)
+AUDIT_CUT = cli_arg("--audit-cut", 1, int)            # 1 = the sonar cut: the ROV at the net, sonar live
+AUDIT_LAST = {}                                       # the sonar hands its latest image here
+# --e3 SECONDS: the closed inspection loop (paper E3). The baked patrol is
+# replaced by netpen_e3.py's controller, which sees the pen only through this
+# scene's imaging sonar and flies the vehicle model round the net wall. Same
+# clock, same warm-up and the same manifest as --audit; --e3-seed is the ONLY
+# thing that differs between the seed-spread runs.
+E3 = cli_arg("--e3", 0.0, float)
+E3_SEED = cli_arg("--e3-seed", 0, int)
+E3_OUT = cli_arg("--e3-out", "", str)
+E3_LIVE = [None]                                      # the live vehicle; None = the baked patrol
+HEADLESS = bool(SHOT) or FILM or FILM_BENCH or AUDIT > 0 or E3 > 0
 SECONDS = cli_arg("--seconds", 6.0, float)
 W, H = parse_size(cli_arg("--size", "1600x900", str))
 CAP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -1691,9 +1710,17 @@ def patrol_row(t):
 
 def rov_pose(t, dt=1.0 / 60.0):
     global rov_pos, rov_R, rov_thrust, rov_off
-    x, y, z, yaw, pitch, roll, tf, tl, tv = patrol_row(t)
-    yaw += yaw_flip(t)                                # one place: mesh, rov_R, sonar frame, ROV cam, lamps
-    base = np.array([x, y, z]) + lift_at(t)
+    if E3_LIVE[0] is None:
+        x, y, z, yaw, pitch, roll, tf, tl, tv = patrol_row(t)
+        yaw += yaw_flip(t)                            # one place: mesh, rov_R, sonar frame, ROV cam, lamps
+        base = np.array([x, y, z]) + lift_at(t)
+    else:
+        # --e3: the pose is the live vehicle's, integrated from the controller's
+        # thrusts before this call. Everything below is unchanged, so the sonar,
+        # the ROV camera, the lamps and the net-clearance safety follow it exactly
+        # as they follow the bake.
+        x, y, z, yaw, pitch, roll, tf, tl, tv = E3_LIVE[0].row()
+        base = np.array([x, y, z])
     cand = base + rov_off
     d, q, _ = net_nearest(cand)
     if d < NET_CLEAR:                                   # push along the line from the nearest particle,
@@ -1704,8 +1731,9 @@ def rov_pose(t, dt=1.0 / 60.0):
         d = net_nearest(cand)[0]
     else:
         rov_off *= math.exp(-dt / 2.0)
-    if T_WALL <= t < T_WALL + ROV_HOLD[0]:              # station keeping: idle thrust
+    if E3_LIVE[0] is None and T_WALL <= t < T_WALL + ROV_HOLD[0]:   # station keeping: idle thrust
         tf, tl, tv = 0.2 * tf, 0.2 * tl, 0.2 * tv
+    ROV_STATS["d"], ROV_STATS["q"] = d, q              # this frame's cloth distance, for --e3's log
     ROV_STATS["min_d"] = min(ROV_STATS["min_d"], d)
     ROV_STATS["max_roll"] = max(ROV_STATS["max_roll"], abs(roll))
     ROV_STATS["max_pitch"] = max(ROV_STATS["max_pitch"], abs(pitch))
@@ -2508,6 +2536,8 @@ def sonar_step(frame_i):
         if img is None:
             return
         son_hist[(frame_i // SON_EVERY) % 3] = img.intensity
+        if AUDIT or E3:                                 # --e3 reads the same hook: this is what the controller sees
+            AUDIT_LAST["sonar"] = img.intensity
         sonar_draw(frame_i)
         return
     if frame_i % SON_EVERY:
@@ -3239,6 +3269,214 @@ def run_film():
     print(f"camera: min net distance {CAM_STATS[0]:.2f} m")
 
 
+def run_audit(n):
+    """The determinism row for this scene: the film's own warm-up and cut, one render per
+    frame on the simulation clock, every stream hashed. Rows: the frame and five AOVs at
+    the film camera, the ROV camera view, the sonar image (each time one is collected),
+    and the CPU/GPU state the sensors see: net and rope particles, the school, the ROV
+    pose. Manifest in sensor_audit.py's format; `--compare` there is the verdict."""
+    global PATROL_T0
+    import json
+    import platform
+    import sensor_audit as sa
+    PATROL_T0 = -FILM_T_OFF
+    ROV_HOLD[0] = T_CUT[2] - FILM_T_OFF - T_HOVER
+    k = AUDIT_CUT
+    name, dur, _, hud = CUTS[k]
+    dt = 1.0 / FPS
+    renderer.set_flush_frames(1)
+    hud_park(hud)
+    renderer.set_auto_exposure_speed(12.0)
+    film_cam(k, 0.0, 0.0)
+    for _ in range(WARMUP):
+        step(dt)
+        film_cam(k, 0.0, 0.0)
+        renderer.render(scene, camera)
+        world_t_rewind(dt)
+    renderer.set_auto_exposure_speed(1.2)
+    keys = ["rgb", "aov.depth", "aov.normals", "aov.ids", "aov.motion", "aov.albedo",
+            "rov.rgb", "sonar", "net", "rope", "fish", "rov"]
+    rows = {key: sa.Fnv() for key in keys}
+    fish_arrays = [(nm, v) for nm, v in vars(school).items() if isinstance(v, wp.array)]
+    wall0 = time.perf_counter()
+    for f in range(n):
+        u = f / max(n - 1, 1)
+        step(dt)
+        film_cam(k, u, f * dt)
+        aovs = renderer.read_aovs_typed(scene, camera,
+                                        ["rgb", "depth", "normals", "instance_ids", "motion", "albedo"])
+        rows["rgb"].update(sa.arr_bytes(aovs["rgb"]))
+        rows["aov.depth"].update(sa.arr_bytes(aovs["depth"]))
+        rows["aov.normals"].update(sa.arr_bytes(aovs["normals"]))
+        rows["aov.ids"].update(sa.arr_bytes(aovs["instance_ids"]))
+        rows["aov.motion"].update(sa.arr_bytes(aovs["motion"]))
+        rows["aov.albedo"].update(sa.arr_bytes(aovs["albedo"]))
+        if ROV_VIEW:
+            rows["rov.rgb"].update(sa.arr_bytes(renderer.read_view_rgb_pixels(ROV_VIEW)))
+        if "sonar" in AUDIT_LAST:
+            rows["sonar"].update(sa.arr_bytes(AUDIT_LAST.pop("sonar")))
+        rows["net"].update(net.pos.numpy().tobytes())
+        rows["rope"].update(rope.pos.numpy().tobytes())
+        rows["fish"].update(b"".join(v.numpy().tobytes() for _, v in fish_arrays))
+        rows["rov"].update(np.asarray([*rov_pos, *rov_R.ravel(), *rov_thrust], np.float64).tobytes())
+    wall = time.perf_counter() - wall0
+    manifest = {
+        "meta": {
+            "threepp": getattr(tp, "__version__", "?"),
+            "platform": platform.platform(),
+            "scene": "warp_netpen", "cut": name, "frames": n, "warmup": WARMUP, "fps": FPS,
+            "size": [W, H], "terrain": GEO is not None,
+            "gpu": next((getattr(renderer, a) for a in ("gpu_name", "device_name") if hasattr(renderer, a)), ""),
+            "pins": {"sim_time": True, "auto_exposure": bool(getattr(renderer, "auto_exposure", True))},
+            "fish_arrays": [nm for nm, _ in fish_arrays],
+            "wall_seconds": round(wall, 2),
+        },
+        "rows": {key: v.row() if v.frames else "absent" for key, v in rows.items()},
+    }
+    out = AUDIT_OUT or os.path.join(CAP_DIR, "netpen_audit.json")
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    with open(out, "w") as fh:
+        json.dump(manifest, fh, indent=1)
+    for key, v in manifest["rows"].items():
+        print(f"  {key:12s} " + (v if isinstance(v, str) else f"{v['fnv']}  frames={v['frames']}"))
+    print(f"audit: cut {k} {name}, {n} frames after {WARMUP} warm-up, {1e3 * wall / n:.1f} ms/f -> {out}")
+    rov_report()
+
+
+E3_SIGMA, E3_SIGMA_M, E3_SPECKLE = 0.03, 0.006, 0.15   # the sonar's own seeded range noise + speckle
+
+
+def run_e3(seconds):
+    """E3: the closed inspection loop. The baked patrol is off; netpen_e3.Controller
+    flies netpen_e3.Rov from the sonar images this scene produces, and rov_pose()
+    puts that vehicle where the bake used to be, so the sonar, the ROV camera and
+    the lamps ride on the controller's own pose.
+
+    One process = one row. The seed sets the sonar's seeded range noise AND the
+    ranging noise on the derived standoff, and nothing else; two runs at the same
+    seed must agree bit for bit on the trajectory, the sonar and the net.
+    """
+    import json
+    import platform
+
+    import sensor_audit as sa
+    import netpen_e3 as e3
+
+    n = max(int(round(seconds * FPS)), 1)
+    dt = 1.0 / FPS
+    k = AUDIT_CUT                                      # 1 = the sonar cut: the camera rides behind the ROV
+    name = CUTS[k][0]
+    renderer.set_flush_frames(1)
+    hud_park(True)                                     # the sonar only runs while the HUD is live
+
+    # the sensor's own noise: seeded, and the only thing --e3-seed touches
+    sonar.noise = tp.RangeNoiseModel(E3_SIGMA, E3_SIGMA_M, 0.0, E3_SEED)
+    sonar.speckle = E3_SPECKLE
+    sonar.reset_noise()
+
+    r0 = patrol_row(0.0)                               # start where the patrol starts: at the wall, tangential
+    veh = e3.Rov(r0[:3].copy(), float(r0[3]))
+    ctl = e3.Controller(depth=float(r0[1]))
+    noise = e3.RangeNoise(stddev=0.02, stddev_per_metre=0.004, seed=E3_SEED)
+    E3_LIVE[0] = veh                                   # from here rov_pose reads the vehicle, warm-up included
+
+    renderer.set_auto_exposure_speed(12.0)
+    film_cam(k, 0.0, 0.0)
+    for _ in range(WARMUP):                            # the vehicle is held: the warm-up settles the scene, not the loop
+        step(dt)
+        film_cam(k, 0.0, 0.0)
+        renderer.render(scene, camera)
+        world_t_rewind(dt)
+    renderer.set_auto_exposure_speed(1.2)
+    if "sonar" in AUDIT_LAST:                          # open with a command, not with a blank frame
+        ctl.observe(AUDIT_LAST.pop("sonar"), noise)
+        ctl.command(veh, SON_EVERY * dt)
+
+    keys = ["traj", "sonar", "net", "rope", "fish", "rov", "rov.rgb"]
+    rows = {key: sa.Fnv() for key in keys}
+    fish_arrays = [(nm, v) for nm, v in vars(school).items() if isinstance(v, wp.array)]
+    log, images, wall0 = [], 0, time.perf_counter()
+    for f in range(n):
+        img = AUDIT_LAST.pop("sonar", None)            # last frame's scan: the sensor has a frame of latency
+        if img is not None:
+            rows["sonar"].update(sa.arr_bytes(img))
+            ctl.observe(img, noise)
+            ctl.command(veh, SON_EVERY * dt)
+            images += 1
+        veh.step(ctl.last, dt)                         # the controller holds its command between images
+        step(dt)                                       # rov_pose() takes the pose from veh
+        film_cam(k, f / max(n - 1, 1), f * dt)
+        renderer.render(scene, camera)
+        # the truth beside the estimate: the cloth distance rov_pose just measured,
+        # and the true bearing of the nearest cloth particle in the body frame
+        d_true = ROV_STATS.get("d", float("nan"))
+        qv = rov_R.T @ (ROV_STATS["q"] - rov_pos)
+        b_true = math.atan2(float(qv[2]), float(qv[0]))          # +ve to starboard
+        e_ = ctl.est
+        log.append([f * dt, *rov_pos, veh.yaw, veh.pitch, veh.roll, ctl.meas, ctl.clean,
+                    e_.perp, e_.bearing, e_.tangent, d_true, b_true, float(e_.seen),
+                    float(ctl.side), *ctl.last])
+        rows["traj"].update(np.asarray([f * dt, *rov_pos, veh.yaw], np.float64).tobytes())
+        rows["net"].update(net.pos.numpy().tobytes())
+        rows["rope"].update(rope.pos.numpy().tobytes())
+        rows["fish"].update(b"".join(v.numpy().tobytes() for _, v in fish_arrays))
+        rows["rov"].update(np.asarray([*rov_pos, *rov_R.ravel(), *rov_thrust], np.float64).tobytes())
+        if ROV_VIEW:
+            rows["rov.rgb"].update(sa.arr_bytes(renderer.read_view_rgb_pixels(ROV_VIEW)))
+    wall = time.perf_counter() - wall0
+
+    L = np.asarray(log, np.float64)
+    cols = ["t", "x", "y", "z", "yaw", "pitch", "roll", "meas", "clean", "perp", "bearing",
+            "tangent", "d_true", "b_true", "seen", "side", "cmd_fwd", "cmd_lat", "cmd_vert", "cmd_yaw"]
+    dist = float(np.linalg.norm(np.diff(L[:, 1:4], axis=0), axis=1).sum())
+    seen = L[:, 14] > 0.5
+    out = E3_OUT or os.path.join(CAP_DIR, f"netpen_e3_s{E3_SEED}.json")
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    stem = out[:-5] if out.endswith(".json") else out
+    np.savez(stem + ".npz", log=L, cols=np.array(cols), seed=np.int64(E3_SEED),
+             fps=np.int64(FPS), frames=np.int64(n), pen_r=np.float64(PEN_R))
+    manifest = {
+        "meta": {
+            "threepp": getattr(tp, "__version__", "?"),
+            "platform": platform.platform(),
+            "scene": "warp_netpen", "mode": "e3", "cut": name, "frames": n, "warmup": WARMUP,
+            "fps": FPS, "size": [W, H], "terrain": GEO is not None, "seed": E3_SEED,
+            "gpu": next((getattr(renderer, a) for a in ("gpu_name", "device_name") if hasattr(renderer, a)), ""),
+            "pins": {"sim_time": True, "auto_exposure": bool(getattr(renderer, "auto_exposure", True))},
+            "sonar": {"sigma": E3_SIGMA, "sigma_per_m": E3_SIGMA_M, "speckle": E3_SPECKLE,
+                      "every": SON_EVERY, "images": images},
+            "controller": {"standoff": ctl.standoff, "v_patrol": ctl.v_patrol, "side": ctl.side,
+                           "beam_sign": ctl.beam_sign, "noise_draws": noise.draws},
+            "result": {"distance_m": round(dist, 3),
+                       "mean_standoff_m": round(float(np.nanmean(L[seen, 7])), 3) if seen.any() else None,
+                       "mean_true_m": round(float(np.nanmean(L[:, 12])), 3),
+                       "min_net_m": round(float(ROV_STATS["min_d"]), 3),
+                       "seen_frac": round(float(seen.mean()), 3)},
+            "wall_seconds": round(wall, 2),
+        },
+        "rows": {key: v.row() if v.frames else "absent" for key, v in rows.items()},
+    }
+    with open(out, "w") as fh:
+        json.dump(manifest, fh, indent=1)
+    for key, v in manifest["rows"].items():
+        print(f"  {key:9s} " + (v if isinstance(v, str) else f"{v['fnv']}  frames={v['frames']}"))
+    r = manifest["meta"]["result"]
+    print(f"e3: seed {E3_SEED}, {n} frames = {n / FPS:.1f} s, {images} sonar images, "
+          f"{1e3 * wall / n:.1f} ms/f -> {out} + {os.path.basename(stem)}.npz")
+    print(f"e3: travelled {r['distance_m']:.1f} m, measured standoff {r['mean_standoff_m']} m "
+          f"(setpoint {ctl.standoff:.2f}), true cloth distance mean {r['mean_true_m']:.2f} m, "
+          f"min {r['min_net_m']:.2f} m, wall seen {100 * r['seen_frac']:.0f}% of frames")
+    # the one check that says whether netpen_e3.BEAM_SIGN is right: the estimated
+    # bearing of the wall against the true bearing of the nearest cloth particle
+    if seen.any():
+        agree = float(np.mean(np.sign(L[seen, 10]) == np.sign(L[seen, 13])))
+        print(f"e3: beam sign {ctl.beam_sign:+d}; estimated wall bearing agrees with the true "
+              f"bearing on {100 * agree:.0f}% of the frames that saw it "
+              f"(mean estimated {math.degrees(np.nanmean(L[seen, 10])):+.0f} deg, "
+              f"true {math.degrees(np.nanmean(L[seen, 13])):+.0f} deg)")
+    rov_report()
+
+
 if HEADLESS and SHOT and SHOT not in SHOTS:
     sys.exit(f"unknown shot {SHOT!r}; one of {', '.join(SHOTS)}")
 rov_cam_place()
@@ -3262,6 +3500,10 @@ if FILM_BENCH:
     film_bench()
 elif FILM:
     run_film()
+elif AUDIT:
+    run_audit(AUDIT)
+elif E3:
+    run_e3(E3)
 elif HEADLESS:
     os.makedirs(os.path.dirname(OUT) or ".", exist_ok=True)
     place(camera, SHOT)
