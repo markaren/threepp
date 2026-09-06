@@ -50,6 +50,7 @@ AUDIT_LAST = {}                                       # the sonar hands its late
 E3 = cli_arg("--e3", 0.0, float)
 E3_SEED = cli_arg("--e3-seed", 0, int)
 E3_OUT = cli_arg("--e3-out", "", str)
+E3_FILM = cli_arg("--e3-film", "", str)                # also write every frame of the loop to this mp4 (the video)
 E3_LIVE = [None]                                      # the live vehicle; None = the baked patrol
 HEADLESS = bool(SHOT) or FILM or FILM_BENCH or AUDIT > 0 or E3 > 0
 SECONDS = cli_arg("--seconds", 6.0, float)
@@ -3396,6 +3397,7 @@ def run_e3(seconds):
     rows = {key: sa.Fnv() for key in keys}
     fish_arrays = [(nm, v) for nm, v in vars(school).items() if isinstance(v, wp.array)]
     log, images, wall0 = [], 0, time.perf_counter()
+    writer = film_writer(os.path.abspath(E3_FILM)) if E3_FILM else None   # the video rides on the same frames
     for f in range(n):
         img = AUDIT_LAST.pop("sonar", None)            # last frame's scan: the sensor has a frame of latency
         if img is not None:
@@ -3407,6 +3409,8 @@ def run_e3(seconds):
         step(dt)                                       # rov_pose() takes the pose from veh
         film_cam(k, f / max(n - 1, 1), f * dt)
         renderer.render(scene, camera)
+        if writer is not None:
+            writer.append_data(renderer.read_pixels())
         # the truth beside the estimate: the cloth distance rov_pose just measured,
         # and the true bearing of the nearest cloth particle in the body frame
         d_true = ROV_STATS.get("d", float("nan"))
@@ -3424,6 +3428,9 @@ def run_e3(seconds):
         if ROV_VIEW:
             rows["rov.rgb"].update(sa.arr_bytes(renderer.read_view_rgb_pixels(ROV_VIEW)))
     wall = time.perf_counter() - wall0
+    if writer is not None:
+        writer.close()
+        print(f"e3 film -> {os.path.abspath(E3_FILM)}")
 
     L = np.asarray(log, np.float64)
     cols = ["t", "x", "y", "z", "yaw", "pitch", "roll", "meas", "clean", "perp", "bearing",

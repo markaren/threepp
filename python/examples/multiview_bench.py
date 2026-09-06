@@ -139,6 +139,67 @@ def figure(tp, out):
     print("centroids:", json.dumps(stats))
 
 
+def film(tp, out, nframes, fps=30):
+    """The triptych as a clip (the paper's video, segment 4): every clip frame is the
+    figure above at a later instant of the mover's pass. Top row: one render, three
+    secondary views, one instant. Bottom row: three sequential renders with the world
+    stepping between cameras. Writes out/e2_fast_mover.mp4; the same 3 x 2 tile, the
+    same labels, plus the simulated time burned in."""
+    import imageio
+    from PIL import Image, ImageDraw
+    canvas = tp.Canvas("e2 film", W, H, vsync=False, headless=True)
+    renderer = tp.VulkanRenderer(canvas)
+    pin(renderer)
+    scene, cams, place = build(tp, renderer, W / H)
+    for f in range(30):
+        renderer.sim_time = f * DT
+        place(0.1 - (30 - f) * DT)
+        renderer.render(scene, cams[1])
+    handles = [renderer.add_view(c, W, H) for c in cams]
+    assert all(h > 0 for h in handles), handles
+    sim = 30 * DT
+    for f in range(20):
+        sim += DT
+        renderer.sim_time = sim
+        place(0.1)
+        renderer.render(scene, cams[1])
+    labels = ["same instant (secondary views, one scene build)",
+              "sequential renders (the world steps between cameras)"]
+    path = os.path.join(out, "e2_fast_mover.mp4")
+    writer = imageio.get_writer(path, fps=fps, codec="libx264", quality=None, macro_block_size=None,
+                                ffmpeg_params=["-crf", "18", "-pix_fmt", "yuv420p"])
+    for k in range(nframes):
+        t0 = 0.1 + 0.8 * k / max(nframes - 1, 1)     # the mover's pass, 0.1 .. 0.9
+        # Same instant: one render, three views read back.
+        sim += DT
+        renderer.sim_time = sim
+        place(t0)
+        renderer.render(scene, cams[1])
+        same = [np.asarray(renderer.read_view_rgb_pixels(h))[:, :, :3] for h in handles]
+        # Sequential: the world steps DT between the three cameras; three renders per
+        # camera so the primary's temporal resolve settles on it, as the figure does.
+        seq = []
+        for i, c in enumerate(cams):
+            place(t0 + i * DT)
+            for _ in range(3):
+                sim += DT
+                renderer.sim_time = sim
+                renderer.render(scene, c)
+            seq.append(np.asarray(renderer.read_pixels())[:, :, :3])
+        tile = Image.new("RGB", (3 * W, 2 * H), (0, 0, 0))
+        draw = ImageDraw.Draw(tile)
+        for r, imgs in enumerate((same, seq)):
+            for c, a in enumerate(imgs):
+                tile.paste(Image.fromarray(np.ascontiguousarray(a)), (c * W, r * H))
+            draw.text((8, r * H + 8), labels[r], fill=(255, 255, 255))
+        draw.text((3 * W - 150, 8), f"t = {t0:5.2f} s", fill=(255, 255, 255))
+        writer.append_data(np.asarray(tile.resize((1920, 720))))
+    writer.close()
+    for h in handles:
+        renderer.remove_view(h)
+    print("film:", path, f"{nframes} frames at {fps} fps")
+
+
 def bench(tp, out, frames, reps):
     canvas = tp.Canvas("e2 bench", W, H, vsync=False, headless=True)
     renderer = tp.VulkanRenderer(canvas)
@@ -247,9 +308,14 @@ def main():
     ap.add_argument("--bench", action="store_true")
     ap.add_argument("--frames", type=int, default=150)
     ap.add_argument("--reps", type=int, default=3)
+    ap.add_argument("--film", type=int, default=0, metavar="N",
+                    help="write N frames of the triptych as out/e2_fast_mover.mp4 (the video's segment 4) and stop")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     import threepp as tp
+    if a.film:
+        film(tp, a.out, a.film)
+        return
     both = not (a.figure or a.bench)
     if a.figure or both:
         figure(tp, a.out)

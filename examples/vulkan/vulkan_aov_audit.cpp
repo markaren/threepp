@@ -121,7 +121,10 @@ int main(int argc, char** argv) {
     // <prefix>_f<N>.raw so two runs can be diffed spatially — WHERE pixels
     // differ says what class of pass diverged (edges = reprojection, scattered
     // singles = ray order, whole-frame LSB = a blend/exposure factor).
+    // --dumprgb-min/-max <N> widen the window (the paper's video animates a
+    // whole run's difference map: every frame of two fjord runs).
     std::string dumpPrefix;
+    int dumpMin = 2, dumpMax = 9;
     // --taasplit: additionally hash the TAA INPUT image (the shade→bloom→post
     // product) and the written HISTORY slot per frame, as manifest rows
     // taa.input / taa.history with per-frame traces on stdout. Splits "the
@@ -264,6 +267,8 @@ int main(int argc, char** argv) {
         else if (arg == "--edit-remove" && i + 1 < argc) editRemoveFrame = std::atoi(argv[++i]);
         else if (arg == "--rgbtrace" && i + 1 < argc) rgbTracePath = argv[++i];
         else if (arg == "--dumprgb" && i + 1 < argc) dumpPrefix = argv[++i];
+        else if (arg == "--dumprgb-min" && i + 1 < argc) dumpMin = std::atoi(argv[++i]);
+        else if (arg == "--dumprgb-max" && i + 1 < argc) dumpMax = std::atoi(argv[++i]);
         else if (arg == "--taasplit") taaSplit = true;
         else if (arg == "--hdrsplit") hdrSplit = true;
         else if (arg == "--shadesplit") shadeSplit = true;
@@ -797,7 +802,7 @@ int main(int argc, char** argv) {
                              static_cast<std::streamsize>(shRaw.size()));
                 }
             }
-            if (!dumpPrefix.empty() && f >= 2 && f <= 9) {
+            if (!dumpPrefix.empty() && f >= dumpMin && f <= dumpMax) {
                 std::ofstream df(dumpPrefix + "_f" + std::to_string(f) + ".raw",
                                  std::ios::binary);
                 df.write(reinterpret_cast<const char*>(pixels.data()),
