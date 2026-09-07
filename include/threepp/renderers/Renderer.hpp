@@ -9,6 +9,7 @@
 #include "threepp/math/Color.hpp"
 #include "threepp/math/Plane.hpp"
 #include "threepp/math/Vector2.hpp"
+#include "threepp/math/Vector3.hpp"
 #include "threepp/math/Vector4.hpp"
 
 #include "threepp/canvas/Canvas.hpp"
@@ -130,6 +131,32 @@ namespace threepp {
         virtual void copyFramebufferToTexture(const Vector2& /*position*/, Texture& /*texture*/, int /*level*/ = 0) {}
 
         virtual void copyTextureToImage(Texture& /*texture*/) {}
+
+        // --- HDRI sun (the one-sun policy) ---
+
+        // An equirect HDR sky bakes its sun into every prefiltered env level, so
+        // a scene that ALSO carries a DirectionalLight (the raster convention:
+        // raster cannot shadow from an env map) ends up lit by two suns — the
+        // brighter, warmer, flat-shadowed look that made the two backends
+        // disagree on colour temperature. Both backends therefore detect the
+        // disc, clamp it out of the glossy/rough env levels, and re-inject its
+        // exact energy as one analytic directional light:
+        //   Auto (default) — clamp always; inject ONLY while the scene has no
+        //     visible DirectionalLight of its own. Exactly one sun either way.
+        //   Always — clamp AND inject regardless of the scene's lights.
+        //   Off — no extraction: the raw env in every level, nothing injected.
+        // Base defaults describe a backend that does not implement the policy.
+        enum class EnvSunPolicy { Auto, Always, Off };
+        virtual void setEnvSunPolicy(EnvSunPolicy) {}
+        [[nodiscard]] virtual EnvSunPolicy envSunPolicy() const { return EnvSunPolicy::Auto; }
+
+        // The measured env sun (valid while envSunFound()): unit direction
+        // TOWARD the sun and the disc's integrated energy Σ L·dΩ (linear RGB
+        // irradiance). Use to ALIGN an explicit DirectionalLight with the HDRI
+        // so both backends shadow from the same side as the sky.
+        [[nodiscard]] virtual bool envSunFound() const { return false; }
+        [[nodiscard]] virtual Vector3 envSunDirection() const { return {0.f, 1.f, 0.f}; }
+        [[nodiscard]] virtual Vector3 envSunColor() const { return {}; }
 
         // --- Convention flags ---
 

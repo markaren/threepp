@@ -18,8 +18,11 @@
 #include "threepp/renderers/gl/GLTextures.hpp"
 #include "threepp/renderers/gl/GLUtils.hpp"
 
+#include "threepp/renderers/common/EnvSunExtract.hpp"
 #include "threepp/renderers/common/RendererCapabilities.hpp"
 #include "threepp/renderers/common/ShadowConfig.hpp"
+
+#include "threepp/lights/DirectionalLight.hpp"
 
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/canvas/Canvas.hpp"
@@ -162,6 +165,17 @@ struct GLRenderer::Impl {
 
     gl::GLShadowMap shadowMap;
 
+    // ── One-sun policy state (see Renderer::EnvSunPolicy) ──────────────────
+    // envSun_ is whatever the detector found in the current scene's
+    // environment, refreshed at the top of every render; envSunLight_ is the
+    // renderer-owned, shadowless DirectionalLight that carries the energy the
+    // PMREM's glossy strips gave up. It lives outside the scene graph on
+    // purpose: the shadow pass must never see it (the scene's own sun owns the
+    // shadow), and the user's scene must not gain a light they did not add.
+    Renderer::EnvSunPolicy envSunPolicy_ = Renderer::EnvSunPolicy::Auto;
+    EnvSunExtract envSun_;
+    std::shared_ptr<DirectionalLight> envSunLight_;
+
     Impl(GLRenderer& scope, const std::pair<int, int>& size, const Parameters& parameters)
         : scope(scope),
           _emptyScene(std::make_unique<Scene>()),
@@ -237,6 +251,60 @@ struct GLRenderer::Impl {
         }
     }
 
+    // Refresh envSun_ from the root scene's environment map. Anything that is
+    // not a Scene with an environment (the PMREM prefilter's own quad renders,
+    // shadow passes, render targets fed a bare Object3D) leaves envSun_ empty,
+    // which is what keeps nested renders from injecting a second sun.
+    void resolveEnvSun(Object3D* root) {
+
+        envSun_ = {};
+        if (envSunPolicy_ == Renderer::EnvSunPolicy::Off) return;
+
+        auto* asScene = root->as<Scene>();
+        if (!asScene || !asScene->environment) return;
+
+        cubemaps.getPMREM(asScene->environment.get());
+        if (const auto* sun = cubemaps.envSun(asScene->environment.get())) {
+            envSun_ = *sun;
+        }
+    }
+
+    // Re-inject the energy the PMREM's glossy/rough strips gave up, as ONE
+    // analytic directional light. Auto stands down when the scene pushed a
+    // DirectionalLight of its own: that light is the scene's sun (it owns the
+    // shadow map, which an env map cannot cast), and adding a second one is
+    // exactly the double-sun that made GL read brighter and warmer than Vulkan.
+    void injectEnvSunLight() {
+
+        if (!envSun_.found || envSunPolicy_ == Renderer::EnvSunPolicy::Off) return;
+
+        if (envSunPolicy_ == Renderer::EnvSunPolicy::Auto) {
+            for (auto* light : currentRenderState->getLightsArray()) {
+                if (light->as<DirectionalLight>()) return;
+            }
+        }
+
+        if (!envSunLight_) {
+            envSunLight_ = DirectionalLight::create();
+            envSunLight_->name = "threepp.envSun";
+            envSunLight_->castShadow = false;
+        }
+        // colorE is Σ L·dΩ over the removed disc, i.e. exactly the irradiance
+        // the env lost. Lights::setup packs color * intensity and the raster
+        // BRDF uses irradiance = NdotL * color, so it goes in unscaled and
+        // unconverted (setRGB would run a working-colour-space transform).
+        envSunLight_->color.r = envSun_.colorE[0];
+        envSunLight_->color.g = envSun_.colorE[1];
+        envSunLight_->color.b = envSun_.colorE[2];
+        envSunLight_->intensity = 1.f;
+        // Direction is carried by position - target, and the default target
+        // sits at the origin with an identity matrixWorld.
+        envSunLight_->position.set(envSun_.dir[0], envSun_.dir[1], envSun_.dir[2]);
+        envSunLight_->updateMatrixWorld(true);
+
+        currentRenderState->pushLight(envSunLight_.get());
+    }
+
     void render(Object3D* scene, Camera* camera) {
 
         // update scene graph
@@ -244,6 +312,13 @@ struct GLRenderer::Impl {
         if (auto _scene = scene->as<Scene>()) {
             if (_scene->autoUpdate) scene->updateMatrixWorld();
         }
+
+        // Resolve the environment's sun BEFORE any of this frame's state is set
+        // up. Building the PMREM runs a NESTED render (the prefilter strips),
+        // which would otherwise clobber _frustum / _clippingEnabled /
+        // currentRenderList halfway through the frame. It is cached, so every
+        // frame after the first is a map lookup.
+        resolveEnvSun(scene);
 
         // update camera matrices and frustum
 
@@ -276,6 +351,12 @@ struct GLRenderer::Impl {
 
             currentRenderList->sort();
         }
+
+        // The scene's own lights are all in the render state now, so the Auto
+        // policy can tell whether the scene already has a sun. Pushed before
+        // setupLights and never into shadowsArray, so the shadow pass below
+        // stays untouched.
+        injectEnvSunLight();
 
         //
 
@@ -1690,6 +1771,43 @@ void GLRenderer::dispose() {
 void GLRenderer::render(Object3D& scene, Camera& camera) {
 
     pimpl_->render(&scene, &camera);
+}
+
+void GLRenderer::setEnvSunPolicy(EnvSunPolicy policy) {
+
+    if (pimpl_->envSunPolicy_ == policy) return;
+    const bool wasOff = pimpl_->envSunPolicy_ == EnvSunPolicy::Off;
+    const bool isOff = policy == EnvSunPolicy::Off;
+    pimpl_->envSunPolicy_ = policy;
+    // Auto <-> Always only changes whether the light is pushed, so the atlases
+    // stay valid. Toggling Off changes what the strips were PREFILTERED FROM,
+    // so they have to be rebuilt from the right source.
+    if (wasOff != isOff) {
+        pimpl_->cubemaps.envSunExtraction = !isOff;
+        pimpl_->cubemaps.disposePMREMs();
+    }
+}
+
+Renderer::EnvSunPolicy GLRenderer::envSunPolicy() const {
+
+    return pimpl_->envSunPolicy_;
+}
+
+bool GLRenderer::envSunFound() const {
+
+    return pimpl_->envSun_.found;
+}
+
+Vector3 GLRenderer::envSunDirection() const {
+
+    const auto& s = pimpl_->envSun_;
+    return {s.dir[0], s.dir[1], s.dir[2]};
+}
+
+Vector3 GLRenderer::envSunColor() const {
+
+    const auto& s = pimpl_->envSun_;
+    return {s.colorE[0], s.colorE[1], s.colorE[2]};
 }
 
 void GLRenderer::renderBufferDirect(Camera* camera, Scene* scene, BufferGeometry* geometry, Material* material, Object3D* object, std::optional<GeometryGroup> group) {

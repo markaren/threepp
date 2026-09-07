@@ -240,7 +240,7 @@ GLPMREM::GLPMREM(GLRenderer& r)
 
 GLPMREM::~GLPMREM() = default;
 
-std::unique_ptr<RenderTarget> GLPMREM::fromEquirectangular(Texture& equirect) {
+std::unique_ptr<RenderTarget> GLPMREM::fromEquirectangular(Texture& equirect, Texture* roughSource) {
 
     RenderTarget::Options options;
     options.type = Type::HalfFloat;
@@ -286,6 +286,13 @@ std::unique_ptr<RenderTarget> GLPMREM::fromEquirectangular(Texture& equirect) {
         target->scissor.set(0.f, static_cast<float>(y),
                             static_cast<float>(STRIP_W), static_cast<float>(STRIP_H));
 
+        // Strip 0 is the sharp mirror copy and always reads the ORIGINAL
+        // equirect (sky background, clear glass and true mirrors must still
+        // show the real sun disc). Strips 1+ read the sun-clamped copy when the
+        // caller supplied one: a ~10^4:1 disc cannot be Monte-Carlo prefiltered
+        // smoothly, and its energy comes back as an analytic light instead.
+        impl->material->uniforms["envMap"].setValue(
+                (lod == 0 || !roughSource) ? &equirect : roughSource);
         impl->material->uniforms["roughness"].setValue(LOD_ROUGHNESS[lod]);
         // LOD 0 is a direct fetch (1 sample); narrow low-roughness lobes need
         // more samples to converge; wide rough lobes need fewer.

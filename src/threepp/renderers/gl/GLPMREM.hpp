@@ -32,7 +32,15 @@ namespace threepp {
 
             // Build a PMREM from an equirectangular 2D HDR texture.
             // Returns a RenderTarget owning a 2D texture with mapping CubeUVReflection.
-            std::unique_ptr<RenderTarget> fromEquirectangular(Texture& equirect);
+            //
+            // `roughSource`, when non-null, is prefiltered into strips 1..N-1 in
+            // place of `equirect` (strip 0 is always the sharp copy of
+            // `equirect` itself). That is how the one-sun policy keeps the HDRI
+            // sun disc visible in mirrors and the sky background while removing
+            // it from every diffuse/glossy env lookup — see
+            // common/EnvSunExtract.hpp.
+            std::unique_ptr<RenderTarget> fromEquirectangular(Texture& equirect,
+                                                              Texture* roughSource = nullptr);
 
         private:
             GLRenderer& renderer;

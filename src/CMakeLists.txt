@@ -290,6 +290,7 @@ set(privateHeaders
 
         "threepp/renderers/GLCubeRenderTarget.hpp"
 
+        "threepp/renderers/common/EnvSunExtract.hpp"
         "threepp/renderers/common/Lights.hpp"
         "threepp/renderers/common/RenderLists.hpp"
         "threepp/renderers/common/RenderStates.hpp"
@@ -678,6 +679,10 @@ set(sources
         "threepp/postprocessing/TexturePass.cpp"
         "threepp/postprocessing/UnrealBloomPass.cpp"
 
+        # Backend-neutral HDRI sun detector. Both the GL PMREM and the Vulkan
+        # env prefilter run it, on the same pixels, so the two backends light a
+        # scene with the same one sun.
+        "threepp/renderers/common/EnvSunExtract.cpp"
         "threepp/renderers/common/Lights.cpp"
         "threepp/renderers/common/RenderLists.cpp"
         "threepp/renderers/common/RenderStates.cpp"

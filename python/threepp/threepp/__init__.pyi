@@ -2666,6 +2666,29 @@ class GLRenderer:
     def size(self) -> tuple[int, int]:
         ...
     @property
+    def env_sun_color(self) -> typing.Annotated[list[float], "FixedSize(3)"]:
+        """
+        Integrated sun-disc energy (linear RGB irradiance, valid when env_sun_found).
+        """
+    @property
+    def env_sun_direction(self) -> typing.Annotated[list[float], "FixedSize(3)"]:
+        """
+        Unit direction TOWARD the detected env sun (valid when env_sun_found). Use to align an explicit DirectionalLight with the HDRI.
+        """
+    @property
+    def env_sun_found(self) -> bool:
+        """
+        True when the current environment has a detected sun disc.
+        """
+    @property
+    def env_sun_policy(self) -> str:
+        """
+        'auto' (a scene DirectionalLight claims the sun role), 'always', or 'off'.
+        """
+    @env_sun_policy.setter
+    def env_sun_policy(self, arg1: str) -> None:
+        ...
+    @property
     def tone_mapping_exposure(self) -> float:
         ...
     @tone_mapping_exposure.setter

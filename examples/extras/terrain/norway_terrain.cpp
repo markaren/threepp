@@ -916,16 +916,13 @@ int main(int argc, char** argv) {
     auto renderer = !headless ? createRenderer(canvas)
                     : createRenderer(canvas, std::getenv("NT_GL") ? GraphicsAPI::OpenGL
                                                                   : GraphicsAPI::Vulkan);
-    // Neutral on the forward GL path, ACESFilmic on Vulkan deferred —
-    // three.js ACESFilmic's 1/0.6 viewing-environment gain washes this bright
-    // scene out on the forward paths (see the NorwayDrive tone-mapping note).
-#ifdef THREEPP_WITH_VULKAN
-    renderer->toneMapping = dynamic_cast<VulkanRenderer*>(renderer.get())
-                                    ? ToneMapping::ACESFilmic
-                                    : ToneMapping::Neutral;
-#else
-    renderer->toneMapping = ToneMapping::Neutral;// forward GL path
-#endif
+    // ACESFilmic on BOTH backends. The forward GL path used to need Neutral
+    // because ACES washed it out, but that was the double sun: GL's PMREM baked
+    // the HDRI sun into every roughness strip AND the scene carried its own
+    // DirectionalLight, so every lit surface came in about twice as bright.
+    // With the one-sun policy on GL (Renderer::EnvSunPolicy) the two backends
+    // receive the same irradiance and take the same curve.
+    renderer->toneMapping = ToneMapping::ACESFilmic;
     renderer->toneMappingExposure = 1.0f;
 
     // ── instrumentation / A-B knobs (env-driven, so one build sweeps configs) ──
@@ -1882,10 +1879,12 @@ int main(int argc, char** argv) {
         // coherent sun. COASTAL packs only: on mountain packs (no sea) the hardcoded
         // raking heading is a deliberate artistic choice and the HDRI sun would push
         // the valley into shadow. NT_SUN_AZ/EL (if set) keep the manual override.
-#ifdef THREEPP_WITH_VULKAN
-        if (!sunAligned && coastal && vk && vk->envSunFound() && !viewSun &&
+        // Both backends measure the same disc through Renderer::envSun*(), so
+        // GL and Vulkan now shadow from the same side (this used to be gated on
+        // the Vulkan renderer and GL kept a heading of its own).
+        if (!sunAligned && coastal && renderer->envSunFound() && !viewSun &&
             !envSet("NT_SUN_AZ") && !envSet("NT_SUN_EL")) {
-            const Vector3 d = vk->envSunDirection();// unit vector TOWARD the sun
+            const Vector3 d = renderer->envSunDirection();// unit vector TOWARD the sun
             if (d.length() > 0.5f) {
                 sun->position.copy(d);
                 sun->position.multiplyScalar(std::max(reg.worldSize, 2000.f));
@@ -1894,7 +1893,6 @@ int main(int argc, char** argv) {
             }
             sunAligned = true;
         }
-#endif
 
         controls.update();
 

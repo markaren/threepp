@@ -89,6 +89,19 @@ namespace threepp {
 
         void dispose() override;
 
+        // --- HDRI sun (one-sun policy; see Renderer::EnvSunPolicy) ---
+        //
+        // The GL PMREM keeps the sun disc in strip 0 only and prefilters the
+        // glossy/rough strips from a sun-clamped copy, then this renderer pushes
+        // one shadowless DirectionalLight carrying the removed energy. Auto
+        // stands down when the scene pushed a visible DirectionalLight of its
+        // own, so the artist's sun keeps the shadow and the env stays sky-only.
+        void setEnvSunPolicy(EnvSunPolicy policy) override;
+        [[nodiscard]] EnvSunPolicy envSunPolicy() const override;
+        [[nodiscard]] bool envSunFound() const override;
+        [[nodiscard]] Vector3 envSunDirection() const override;
+        [[nodiscard]] Vector3 envSunColor() const override;
+
         // --- Additional GLRenderer-specific methods ---
 
         void getDrawingBufferSize(Vector2& target) const;

@@ -22,9 +22,11 @@
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/scenes/Scene.hpp"
 
+#include <array>
 #include <cctype>
 #include <cstring>
 #include <mutex>
+#include <stdexcept>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -289,6 +291,43 @@ namespace threepp_py {
                 .def_property("shadow_map_enabled",
                               [](GLRenderer& r) { return r.shadowMap().enabled; },
                               [](GLRenderer& r, bool v) { r.shadowMap().enabled = v; })
+                // ONE-SUN POLICY, same names and semantics as VulkanRenderer's:
+                // 'auto' (default) injects the extracted HDRI sun only while the
+                // scene has no visible DirectionalLight of its own (an explicit
+                // scene light claims the sun role — otherwise the scene is lit by
+                // two suns); 'always' injects regardless; 'off' disables
+                // extraction entirely (raw env in every PMREM strip).
+                .def_property("env_sun_policy",
+                              [](GLRenderer& r) -> std::string {
+                                  switch (r.envSunPolicy()) {
+                                      case Renderer::EnvSunPolicy::Always: return "always";
+                                      case Renderer::EnvSunPolicy::Off: return "off";
+                                      default: return "auto";
+                                  }
+                              },
+                              [](GLRenderer& r, const std::string& v) {
+                                  if (v == "auto") r.setEnvSunPolicy(Renderer::EnvSunPolicy::Auto);
+                                  else if (v == "always") r.setEnvSunPolicy(Renderer::EnvSunPolicy::Always);
+                                  else if (v == "off") r.setEnvSunPolicy(Renderer::EnvSunPolicy::Off);
+                                  else throw std::invalid_argument("env_sun_policy: expected 'auto', 'always' or 'off'");
+                              },
+                              "'auto' (a scene DirectionalLight claims the sun role), 'always', or 'off'.")
+                .def_property_readonly("env_sun_found",
+                                       [](GLRenderer& r) { return r.envSunFound(); },
+                                       "True when the current environment has a detected sun disc.")
+                .def_property_readonly("env_sun_direction",
+                                       [](GLRenderer& r) {
+                                           const auto d = r.envSunDirection();
+                                           return std::array<float, 3>{d.x, d.y, d.z};
+                                       },
+                                       "Unit direction TOWARD the detected env sun (valid when env_sun_found). "
+                                       "Use to align an explicit DirectionalLight with the HDRI.")
+                .def_property_readonly("env_sun_color",
+                                       [](GLRenderer& r) {
+                                           const auto c = r.envSunColor();
+                                           return std::array<float, 3>{c.x, c.y, c.z};
+                                       },
+                                       "Integrated sun-disc energy (linear RGB irradiance, valid when env_sun_found).")
                 .def("size", [](const GLRenderer& r) {
                     auto s = r.size();
                     return py::make_tuple(s.width(), s.height());
