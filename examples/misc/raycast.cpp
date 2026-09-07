@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/threepp.hpp"
 
 #include "threepp/core/Raycaster.hpp"
@@ -8,8 +10,8 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Raycast", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
+    renderer->setClearColor(Color::aliceblue);
 
     Scene scene;
     PerspectiveCamera camera(75, canvas.aspect(), 0.1f, 1000);
@@ -48,7 +50,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
@@ -64,7 +66,7 @@ int main() {
 
     Raycaster raycaster;
     raycaster.params.lineThreshold = 0.1f;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         raycaster.setFromCamera(mouse, camera);
 
         sphere->visible = false;
@@ -80,6 +82,6 @@ int main() {
             sphere->visible = true;
         }
 
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
     });
 }

@@ -2,11 +2,12 @@
 #include "threepp/renderers/gl/GLObjects.hpp"
 
 #include "threepp/objects/InstancedMesh.hpp"
+#include <algorithm>
 #include "threepp/renderers/gl/GLAttributes.hpp"
 #include "threepp/renderers/gl/GLGeometries.hpp"
 #include "threepp/renderers/gl/GLInfo.hpp"
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
 #include <glad/glad.h>
 #else
 #include <GLES3/gl3.h>
@@ -18,14 +19,17 @@ using namespace threepp::gl;
 
 struct GLObjects::Impl {
 
-    struct OnInstancedMeshDispose: public EventListener {
+    struct OnInstancedMeshDispose: EventListener {
 
-        explicit OnInstancedMeshDispose(GLObjects::Impl* scope): scope(scope) {}
+        explicit OnInstancedMeshDispose(Impl* scope): scope(scope) {}
 
         void onEvent(Event& event) override {
-            auto instancedMesh = static_cast<InstancedMesh*>(event.target);
+            auto instancedMesh = std::any_cast<InstancedMesh*>(event.target);
 
             instancedMesh->removeEventListener("dispose", *this);
+
+            auto& tracked = scope->registeredInstancedMeshes_;
+            tracked.erase(std::remove(tracked.begin(), tracked.end(), instancedMesh), tracked.end());
 
             scope->attributes_.remove(instancedMesh->instanceMatrix());
 
@@ -33,7 +37,7 @@ struct GLObjects::Impl {
         }
 
     private:
-        GLObjects::Impl* scope;
+        Impl* scope;
     };
 
     GLInfo& info_;
@@ -43,10 +47,12 @@ struct GLObjects::Impl {
     OnInstancedMeshDispose onInstancedMeshDispose;
 
     std::unordered_map<BufferGeometry*, size_t> updateMap_;
+    std::vector<InstancedMesh*> registeredInstancedMeshes_;
 
     Impl(GLGeometries& geometries, GLAttributes& attributes, GLInfo& info)
-        : attributes_(attributes),
-          geometries_(geometries), info_(info),
+        : info_(info),
+          geometries_(geometries),
+          attributes_(attributes),
           onInstancedMeshDispose(this) {}
 
     BufferGeometry* update(Object3D* object) {
@@ -70,6 +76,7 @@ struct GLObjects::Impl {
             if (!object->hasEventListener("dispose", onInstancedMeshDispose)) {
 
                 object->addEventListener("dispose", onInstancedMeshDispose);
+                registeredInstancedMeshes_.push_back(instancedMesh);
             }
 
             attributes_.update(instancedMesh->instanceMatrix(), GL_ARRAY_BUFFER);
@@ -85,6 +92,10 @@ struct GLObjects::Impl {
 
     void dispose() {
 
+        for (auto* im : registeredInstancedMeshes_) {
+            im->removeEventListener("dispose", onInstancedMeshDispose);
+        }
+        registeredInstancedMeshes_.clear();
         updateMap_.clear();
     }
 };

@@ -20,6 +20,12 @@ namespace threepp {
 
         void setMasterVolume(float volume);
 
+        // Retunes the shared reverb bus every source sends to. `rt60` is the
+        // decay time in seconds, `wet` the bus output gain [0,1]. The bus is
+        // created on first use — see AcousticsSystem in
+        // threepp/audio/Acoustics.hpp for a probe that drives both.
+        void setReverb(float rt60, float wet);
+
         void updateMatrixWorld(bool force) override;
 
         ~AudioListener() override;
@@ -47,9 +53,24 @@ namespace threepp {
 
         void setVolume(float volume);
 
+        // How much of this sound is copied onto the listener's reverb bus
+        // [0,1]. The dry signal keeps its own path to the endpoint, so this is
+        // a send, not a mix. Occluded sounds send their muffled selves.
+        void setReverbSend(float send);
+
+        // Playback rate / pitch multiplier (1 = as recorded). Takes effect on
+        // the next play(); re-rolling it per trigger keeps short one-shots
+        // (footsteps, impacts) from sounding machine-gunned.
+        void setPlaybackRate(float rate);
+
         void togglePlay();
 
         void stop();
+
+        // Rewind the playback cursor to the start. stop()/play() only
+        // pause/resume (miniaudio semantics), so call this before play() to
+        // re-trigger a one-shot sound from the beginning (e.g. rapid fire).
+        void seekToStart();
 
         void setLooping(bool flag);
 
@@ -63,7 +84,30 @@ namespace threepp {
     class PositionalAudio: public Audio, public Object3D {
 
     public:
+        // Distance-attenuation curve, mirroring three.js PositionalAudio /
+        // the Web Audio PannerNode distance models.
+        enum class DistanceModel {
+            None,       // no attenuation (constant volume)
+            Inverse,    // gain = min / (min + rolloff * (d - min))   [default]
+            Linear,     // gain = 1 - rolloff * (d - min) / (max - min)
+            Exponential // gain = (d / min) ^ -rolloff
+        };
+
         PositionalAudio(AudioListener& ctx, const std::filesystem::path& file);
+
+        // World-space distance within which the sound plays at full volume.
+        void setMinDistance(float distance);
+        // Distance at which attenuation stops increasing (matters for the Linear model).
+        void setMaxDistance(float distance);
+        // How quickly volume falls off with distance (higher = steeper).
+        void setRolloffFactor(float rolloff);
+        // Selects the attenuation curve above.
+        void setDistanceModel(DistanceModel model);
+
+        // 0 = unobstructed, 1 = fully occluded. Drives a low-pass filter and a
+        // gain dip on this sound. Call at most once per frame with a smoothed
+        // value — see AcousticsSystem in threepp/audio/Acoustics.hpp.
+        void setOcclusion(float occlusion);
 
         void updateMatrixWorld(bool force) override;
     };

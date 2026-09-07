@@ -18,11 +18,7 @@ namespace threepp {
         std::shared_ptr<InterleavedBuffer> data;
 
         InterleavedBufferAttribute(std::shared_ptr<InterleavedBuffer> data, int itemSize, unsigned int offset, bool normalized)
-            : data(std::move(data)), offset(offset), TypedBufferAttribute({}, itemSize, normalized) {}
-
-        static std::shared_ptr<InterleavedBufferAttribute> create(std::shared_ptr<InterleavedBuffer> data, int itemSize, unsigned int offset, bool normalized = false) {
-            return std::make_shared<InterleavedBufferAttribute>(data, itemSize, offset, normalized);
-        }
+            : data(std::move(data)), offset(offset), TypedBufferAttribute<float>({}, itemSize, normalized) {}
 
         [[nodiscard]] std::vector<float>& array() override {
 
@@ -39,28 +35,28 @@ namespace threepp {
             return data->count();
         }
 
-        InterleavedBufferAttribute& setX(size_t index, float x) override {
+        TypedBufferAttribute<float>& setX(size_t index, float x) override {
 
             this->data->array()[index * this->data->stride() + this->offset] = x;
 
             return *this;
         }
 
-        InterleavedBufferAttribute& setY(size_t index, float y) override {
+        TypedBufferAttribute<float>& setY(size_t index, float y) override {
 
             this->data->array()[index * this->data->stride() + this->offset + 1] = y;
 
             return *this;
         }
 
-        InterleavedBufferAttribute& setZ(size_t index, float z) override {
+        TypedBufferAttribute<float>& setZ(size_t index, float z) override {
 
             this->data->array()[index * this->data->stride() + this->offset + 2] = z;
 
             return *this;
         }
 
-        InterleavedBufferAttribute& setW(size_t index, float w) override {
+        TypedBufferAttribute<float>& setW(size_t index, float w) override {
 
             this->data->array()[index * this->data->stride() + this->offset + 3] = w;
 
@@ -87,7 +83,7 @@ namespace threepp {
             return this->data->array()[index * this->data->stride() + this->offset + 3];
         }
 
-        InterleavedBufferAttribute& setXY(size_t index, float x, float y) override {
+        TypedBufferAttribute<float>& setXY(size_t index, float x, float y) override {
 
             index = index * this->data->stride() + this->offset;
 
@@ -97,7 +93,7 @@ namespace threepp {
             return *this;
         }
 
-        InterleavedBufferAttribute& setXYZ(size_t index, float x, float y, float z) override {
+        TypedBufferAttribute<float>& setXYZ(size_t index, float x, float y, float z) override {
 
             index = index * this->data->stride() + this->offset;
 
@@ -108,7 +104,7 @@ namespace threepp {
             return *this;
         }
 
-        InterleavedBufferAttribute& setXYZW(size_t index, float x, float y, float z, float w) override {
+        TypedBufferAttribute<float>& setXYZW(size_t index, float x, float y, float z, float w) override {
 
             index = index * this->data->stride() + this->offset;
 

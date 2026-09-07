@@ -79,6 +79,13 @@ BufferAttribute* BufferGeometry::getAttribute(const std::string& name) {
     return attributes_.at(name).get();
 }
 
+const BufferAttribute* BufferGeometry::getAttribute(const std::string& name) const {
+
+    if (!hasAttribute(name)) return nullptr;
+
+    return attributes_.at(name).get();
+}
+
 std::vector<std::shared_ptr<BufferAttribute>>* BufferGeometry::getMorphAttribute(const std::string& name) {
 
     if (!morphAttributes_.count(name)) return nullptr;
@@ -88,6 +95,7 @@ std::vector<std::shared_ptr<BufferAttribute>>* BufferGeometry::getMorphAttribute
 
 std::vector<std::shared_ptr<BufferAttribute>>* BufferGeometry::getOrCreateMorphAttribute(const std::string& name) {
 
+    ++attributesVersion_;// callers typically add morph targets through this
     return &morphAttributes_[name];
 }
 
@@ -104,6 +112,7 @@ const std::unordered_map<std::string, std::vector<std::shared_ptr<BufferAttribut
 void BufferGeometry::setAttribute(const std::string& name, std::shared_ptr<BufferAttribute> attribute) {
 
     attributes_[name] = std::move(attribute);
+    ++attributesVersion_;
 }
 
 void BufferGeometry::deleteAttribute(const std::string& name) {
@@ -111,6 +120,7 @@ void BufferGeometry::deleteAttribute(const std::string& name) {
     if (attributes_.count(name)) {
 
         attributes_.erase(name);
+        ++attributesVersion_;
     }
 }
 
@@ -170,15 +180,13 @@ BufferGeometry& BufferGeometry::applyMatrix4(const Matrix4& matrix) {
         tangent->needsUpdate();
     }
 
-    if (!this->boundingBox) {
-
-        this->computeBoundingBox();
-    }
-
-    if (!this->boundingSphere) {
-
-        this->computeBoundingSphere();
-    }
+    // Unconditionally, where three.js recomputes only what was already
+    // computed. The old test here was INVERTED — compute only when absent —
+    // which left every cached box exactly where the geometry used to be:
+    // center() computes the box to find the offset, translates, and handed
+    // out an outline (and a raycast gate) sitting beside the vertices.
+    this->computeBoundingBox();
+    this->computeBoundingSphere();
 
     return *this;
 }
@@ -482,13 +490,10 @@ void BufferGeometry::copy(const BufferGeometry& source) {
 
     for (const auto& [name, attribute] : attributes) {
 
-        if (attribute->typed<unsigned int>()) {
-            this->setAttribute(name, attribute->typed<unsigned int>()->clone());
-        } else if (attribute->typed<float>()) {
-            this->setAttribute(name, attribute->typed<float>()->clone());
-        } else {
-            throw std::runtime_error("TODO");
-        }
+        // cloneUntyped() dispatches on the attribute's own scalar type, so this
+        // copies narrow (uint8/int8/uint16/int16) attributes without widening
+        // them — and without needing a branch per supported type.
+        this->setAttribute(name, attribute->cloneUntyped());
     }
 
 
@@ -641,8 +646,12 @@ void BufferGeometry::computeVertexNormals() {
         } else {
 
             // non-indexed elements (unconnected triangle soup)
+            // il is rounded down to a multiple of 3 — a trailing partial
+            // triangle (e.g. a non-triangle-mode glTF primitive misread as
+            // a triangle list) would otherwise read 1-2 vertices past the
+            // end of positionAttribute.
 
-            for (unsigned i = 0, il = positionAttribute->count(); i < il; i += 3) {
+            for (unsigned i = 0, il = positionAttribute->count() - positionAttribute->count() % 3; i < il; i += 3) {
 
                 positionAttribute->setFromBufferAttribute(pA, i + 0);
                 positionAttribute->setFromBufferAttribute(pB, i + 1);

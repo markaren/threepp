@@ -5,12 +5,13 @@
 #include "threepp/renderers/gl/GLBindingStates.hpp"
 #include "threepp/renderers/gl/GLInfo.hpp"
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
 #include <glad/glad.h>
 #else
 #include <GL/glew.h>
 #endif
 
+#include <ranges>
 #include <unordered_map>
 
 using namespace threepp;
@@ -25,14 +26,14 @@ struct GLGeometries::Impl {
 
         void onEvent(Event& event) override {
 
-            auto geometry = static_cast<BufferGeometry*>(event.target);
+            const auto geometry = std::any_cast<BufferGeometry*>(event.target);
 
             if (geometry->hasIndex()) {
 
                 scope_->attributes_.remove(geometry->getIndex());
             }
 
-            for (const auto& [name, value] : geometry->getAttributes()) {
+            for (const auto& value : geometry->getAttributes() | std::views::values) {
 
                 scope_->attributes_.remove(value.get());
             }

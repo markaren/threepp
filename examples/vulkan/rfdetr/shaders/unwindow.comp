@@ -1,0 +1,37 @@
+#version 450
+// Reverse the DINOv2 windowed-token layout into a CHW feature map (drops CLS).
+// in:  hidden [numWin^2, tokensPerWin, C] (window-major flat; tokensPerWin = winSide^2 + 1).
+// out: feature [totalC, grid, grid]; this tap occupies channels [chOffset, chOffset+C).
+//   out[chOffset+c, gh, gw] = in[w, 1 + lh*winSide + lw, c],
+//   where w = (gh/winSide)*numWin + (gw/winSide), lh = gh%winSide, lw = gw%winSide.
+// Bindings: 0 in (hidden), 1 out (shared CHW buffer). Params via push constant.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint C, grid, winSide, numWin;
+    uint chOffset, _p0, _p1, _p2;
+} p;
+
+layout(std430, binding = 0) readonly buffer In  { float src[]; };
+layout(std430, binding = 1)          buffer Out { float dst[]; };
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    uint HW = p.grid * p.grid;
+    uint total = p.C * HW;
+    if (i >= total) return;
+
+    uint c  = i / HW;
+    uint pp = i % HW;
+    uint gh = pp / p.grid;
+    uint gw = pp % p.grid;
+
+    uint w  = (gh / p.winSide) * p.numWin + (gw / p.winSide);
+    uint lh = gh % p.winSide;
+    uint lw = gw % p.winSide;
+    uint tokensPerWin = p.winSide * p.winSide + 1u;
+    uint token = 1u + lh * p.winSide + lw;
+
+    float v = src[(w * tokensPerWin + token) * p.C + c];
+    dst[(p.chOffset + c) * HW + pp] = v;
+}

@@ -1,0 +1,1268 @@
+
+#ifndef THREEPP_PHYSX_SOFT_BODY_HPP
+#define THREEPP_PHYSX_SOFT_BODY_HPP
+
+// SoftBody (deformable volume) integration for PhysxWorld. Requires
+// PhysxWorld::Settings::enableGpuDynamics = true (PhysX runs soft bodies on
+// CUDA). Each frame, PhysxWorld pulls deformed tet positions GPU->CPU and
+// writes them into the bound BufferGeometry's position attribute.
+//
+// Two skinning modes:
+//   - direct: visual geometry vertex count matches the collision tet mesh
+//     (the common case when we cook from the visual geometry itself).
+//   - barycentric: visual geometry vertex count differs (caller-supplied
+//     higher-detail visual). Built once at addSoftBody time on a thread pool.
+
+#include "threepp/extras/physx/PhysxWorld.hpp"
+
+#include "threepp/core/BufferAttribute.hpp"
+#include "threepp/core/BufferGeometry.hpp"
+#include "threepp/objects/Mesh.hpp"
+#include "threepp/textures/DataTexture.hpp"
+#include "threepp/math/Matrix3.hpp"
+
+#include <PxPhysicsAPI.h>
+#include <cudamanager/PxCudaContext.h>
+#include <extensions/PxCudaHelpersExt.h>
+#include <extensions/PxDeformableVolumeExt.h>
+#include <extensions/PxRemeshingExt.h>
+#include <extensions/PxTetMakerExt.h>
+
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+#ifdef _WIN32
+// <GL/gl.h> (pulled in by cudaGL.h) needs the Win32 WINGDIAPI/APIENTRY macros from
+// windows.h. NOMINMAX keeps windows.h from clobbering the std::min/std::max used below.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+#include <cudaGL.h>// CUDA driver-API GL interop (pulls in cuda.h + GL/gl.h)
+#endif
+
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+// CUDA driver API for external-memory import — the zero-copy bridge into the
+// Vulkan renderer's EXPORTED tet-position buffer (enableSoftBodyInterop).
+// Needs the CUDA toolkit headers + driver library (CUDA::cuda_driver); see the
+// Physics example CMake wiring.
+#include <cuda.h>
+#endif
+
+#include <algorithm>
+#include <array>
+#include <cfloat>
+#include <cmath>
+#include <memory>
+#include <stdexcept>
+#include <thread>
+#include <unordered_map>
+#include <vector>
+
+namespace threepp {
+
+    namespace tet_util {
+
+        // Signed 6x volume of a tetrahedron. Sign is positive for CCW-from-outside.
+        [[nodiscard]] inline float tetVolume6(const ::physx::PxVec3& a,
+                                              const ::physx::PxVec3& b,
+                                              const ::physx::PxVec3& c,
+                                              const ::physx::PxVec3& d) {
+            return (b - a).dot((c - a).cross(d - a));
+        }
+
+        // Closest point on triangle (a,b,c) to p; returns the point and barycentric (u,v,w).
+        // Standard Voronoi-region test from Real-Time Collision Detection §5.1.5.
+        inline ::physx::PxVec3 closestPointTriangle(
+                const ::physx::PxVec3& p,
+                const ::physx::PxVec3& a,
+                const ::physx::PxVec3& b,
+                const ::physx::PxVec3& c,
+                ::physx::PxVec3& bary) {
+            using namespace ::physx;
+            PxVec3 ab = b - a, ac = c - a, ap = p - a;
+            float d1 = ab.dot(ap), d2 = ac.dot(ap);
+            if (d1 <= 0 && d2 <= 0) {
+                bary = PxVec3(1, 0, 0);
+                return a;
+            }
+            PxVec3 bp = p - b;
+            float d3 = ab.dot(bp), d4 = ac.dot(bp);
+            if (d3 >= 0 && d4 <= d3) {
+                bary = PxVec3(0, 1, 0);
+                return b;
+            }
+            float vc = d1 * d4 - d3 * d2;
+            if (vc <= 0 && d1 >= 0 && d3 <= 0) {
+                float v = d1 / (d1 - d3);
+                bary = PxVec3(1 - v, v, 0);
+                return a + ab * v;
+            }
+            PxVec3 cp = p - c;
+            float d5 = ab.dot(cp), d6 = ac.dot(cp);
+            if (d6 >= 0 && d5 <= d6) {
+                bary = PxVec3(0, 0, 1);
+                return c;
+            }
+            float vb = d5 * d2 - d1 * d6;
+            if (vb <= 0 && d2 >= 0 && d6 <= 0) {
+                float w = d2 / (d2 - d6);
+                bary = PxVec3(1 - w, 0, w);
+                return a + ac * w;
+            }
+            float va = d3 * d6 - d5 * d4;
+            if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) {
+                float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+                bary = PxVec3(0, 1 - w, w);
+                return b + (c - b) * w;
+            }
+            float denom = 1.0f / (va + vb + vc);
+            float v = vb * denom, w = vc * denom;
+            bary = PxVec3(1 - v - w, v, w);
+            return a + ab * v + ac * w;
+        }
+
+        struct ClosestTetResult {
+            ::physx::PxVec3 point;
+            float w0, w1, w2, w3;
+        };
+
+        // Closest point on the surface of a tetrahedron to v. Used as a fallback when
+        // v lies outside every tetrahedron (vertices on the visual surface can sit
+        // just outside the simulation hull after voxelisation).
+        inline ClosestTetResult closestPointTetrahedron(
+                const ::physx::PxVec3& v,
+                const ::physx::PxVec3& p0,
+                const ::physx::PxVec3& p1,
+                const ::physx::PxVec3& p2,
+                const ::physx::PxVec3& p3) {
+            using namespace ::physx;
+            float bestDist = FLT_MAX;
+            ClosestTetResult best{};
+            auto testFace = [&](const PxVec3& a, const PxVec3& b, const PxVec3& c, int missing) {
+                PxVec3 bary;
+                const PxVec3 q = closestPointTriangle(v, a, b, c, bary);
+                const float d2 = (q - v).magnitudeSquared();
+                if (d2 >= bestDist) return;
+                bestDist = d2;
+                best.point = q;
+                float w[4] = {0, 0, 0, 0};
+                if (missing == 0) { w[1] = bary.x; w[2] = bary.y; w[3] = bary.z; }
+                if (missing == 1) { w[0] = bary.x; w[2] = bary.y; w[3] = bary.z; }
+                if (missing == 2) { w[0] = bary.x; w[1] = bary.y; w[3] = bary.z; }
+                if (missing == 3) { w[0] = bary.x; w[1] = bary.y; w[2] = bary.z; }
+                float sum = w[0] + w[1] + w[2] + w[3];
+                if (sum < 1e-6f) { w[0] = w[1] = w[2] = w[3] = 0.25f; sum = 1; }
+                best.w0 = w[0] / sum; best.w1 = w[1] / sum;
+                best.w2 = w[2] / sum; best.w3 = w[3] / sum;
+            };
+            testFace(p1, p2, p3, 0);
+            testFace(p0, p2, p3, 1);
+            testFace(p0, p1, p3, 2);
+            testFace(p0, p1, p2, 3);
+            return best;
+        }
+
+        // Extract the boundary triangles of a tet mesh (each interior face is shared
+        // by exactly 2 tets, so faces with count==1 are the outer surface). Winding
+        // is fixed so the normal points away from the opposite vertex.
+        inline void extractBoundaryTriangles(::physx::PxTetrahedronMesh* tetMesh,
+                                             std::vector<unsigned int>& outIndices) {
+            using namespace ::physx;
+            outIndices.clear();
+            if (!tetMesh) return;
+            const PxU32 nbTets = tetMesh->getNbTetrahedrons();
+            const auto* tets = static_cast<const PxU32*>(tetMesh->getTetrahedrons());
+            if (!tets || nbTets == 0) return;
+            const auto* verts = tetMesh->getVertices();
+            if (!verts) return;
+
+            struct Key {
+                std::array<PxU32, 3> s;
+                bool operator==(Key const& o) const { return s == o.s; }
+            };
+            struct KeyHash {
+                size_t operator()(Key const& k) const noexcept {
+                    return static_cast<size_t>(k.s[0]) * 73856093u ^
+                           static_cast<size_t>(k.s[1]) * 19349663u ^
+                           static_cast<size_t>(k.s[2]) * 83492791u;
+                }
+            };
+            struct Entry {
+                int count = 0;
+                std::array<PxU32, 3> tri{};
+                PxU32 opposite = 0;
+            };
+
+            std::unordered_map<Key, Entry, KeyHash> counts;
+            counts.reserve(nbTets * 4);
+            auto pushFace = [&](PxU32 a, PxU32 b, PxU32 c, PxU32 opposite) {
+                Key k{};
+                k.s = {a, b, c};
+                std::sort(k.s.begin(), k.s.end());
+                auto& e = counts[k];
+                if (e.count == 0) {
+                    e.tri = {a, b, c};
+                    e.opposite = opposite;
+                }
+                e.count += 1;
+            };
+            for (PxU32 ti = 0; ti < nbTets; ++ti) {
+                const PxU32 i0 = tets[ti * 4 + 0];
+                const PxU32 i1 = tets[ti * 4 + 1];
+                const PxU32 i2 = tets[ti * 4 + 2];
+                const PxU32 i3 = tets[ti * 4 + 3];
+                pushFace(i0, i1, i2, i3);
+                pushFace(i0, i1, i3, i2);
+                pushFace(i0, i2, i3, i1);
+                pushFace(i1, i2, i3, i0);
+            }
+            outIndices.reserve(counts.size() * 3);
+            for (const auto& kv : counts) {
+                const Entry& e = kv.second;
+                if (e.count != 1) continue;
+                auto tri = e.tri;
+                const PxVec3& p0 = verts[tri[0]];
+                const PxVec3& p1 = verts[tri[1]];
+                const PxVec3& p2 = verts[tri[2]];
+                const PxVec3 faceCenter = (p0 + p1 + p2) / 3.0f;
+                const PxVec3 normal = (p1 - p0).cross(p2 - p0);
+                const PxVec3& opV = verts[e.opposite];
+                if (normal.dot(opV - faceCenter) > 0) {
+                    std::swap(tri[1], tri[2]);
+                }
+                outIndices.push_back(tri[0]);
+                outIndices.push_back(tri[1]);
+                outIndices.push_back(tri[2]);
+            }
+        }
+
+    }// namespace tet_util
+
+
+    // Cook a PxDeformableVolumeMesh from a triangle surface (positions + indices).
+    // - voxelResolution = number of voxels along the longest AABB axis when building
+    //   the simulation mesh. Higher = finer simulation, more solver work.
+    // - The collision mesh is conforming (matches the surface); the simulation mesh
+    //   is voxelised (uniform, well-conditioned for the solver).
+    inline ::physx::PxDeformableVolumeMesh* cookDeformableVolumeMesh(
+            ::physx::PxPhysics& physics,
+            const ::physx::PxCookingParams& params,
+            const ::physx::PxArray<::physx::PxVec3>& triVerts,
+            const ::physx::PxArray<::physx::PxU32>& triIndices,
+            unsigned int voxelResolution = 10) {
+        using namespace ::physx;
+        PxSimpleTriangleMesh surfaceMesh;
+        surfaceMesh.points.count = triVerts.size();
+        surfaceMesh.points.data = triVerts.begin();
+        surfaceMesh.triangles.count = triIndices.size() / 3;
+        surfaceMesh.triangles.data = triIndices.begin();
+
+        PxArray<PxVec3> collVerts = triVerts;
+        PxArray<PxU32> collIndices = triIndices;
+        PxArray<PxVec3> simVerts = triVerts;
+        PxArray<PxU32> simIndices = triIndices;
+        PxTetMaker::createConformingTetrahedronMesh(surfaceMesh, collVerts, collIndices);
+        PxTetrahedronMeshDesc collDesc(collVerts, collIndices);
+
+        PxArray<PxI32> vertexToTet;
+        vertexToTet.resize(collDesc.points.count);
+        PxTetMaker::createVoxelTetrahedronMesh(collDesc, voxelResolution, simVerts, simIndices, vertexToTet.begin());
+        PxTetrahedronMeshDesc simDesc(simVerts, simIndices);
+        PxDeformableVolumeSimulationDataDesc simDataDesc(vertexToTet);
+
+        return PxCreateDeformableVolumeMesh(params, simDesc, collDesc, simDataDesc,
+                                            physics.getPhysicsInsertionCallback());
+    }
+
+
+    // Owns a PxDeformableVolume and the GPU/CPU bridge for it. Built by PhysxWorld;
+    // users hold a non-owning pointer. PhysxWorld::removeSoftBody() to destroy.
+    class SoftBody {
+
+    public:
+        using TetBind = SoftBodyTetBind;
+
+        // Constructor — internal use; prefer PhysxWorld::addSoftBody.
+        // When cachedBindings is non-null, the expensive per-vertex binding
+        // computation is skipped and the cached values are used directly.
+        SoftBody(::physx::PxDeformableVolume* volume,
+                 ::physx::PxCudaContextManager* cuda,
+                 const std::shared_ptr<BufferGeometry>& visualGeometry,
+                 const std::vector<TetBind>* cachedBindings = nullptr)
+            : volume_(volume), cuda_(cuda), visualGeometry_(visualGeometry) {
+
+            using namespace ::physx;
+            auto* tetMesh = volume_->getCollisionMesh();
+            nbCollVerts_ = tetMesh->getNbVertices();
+            positionsInvMass_ = PX_EXT_PINNED_MEMORY_ALLOC(PxVec4, *cuda_, nbCollVerts_);
+
+            pullDeformedPositionsSync();
+
+            auto vPosAttr = visualGeometry_->getAttribute<float>("position");
+            if (!vPosAttr) {
+                throw std::runtime_error("SoftBody: visual geometry has no position attribute");
+            }
+            const size_t visualVerts = vPosAttr->count();
+            // Equal vertex counts are necessary but NOT sufficient. The cooker
+            // remeshes the surface, so a match can be pure coincidence — a
+            // 221-vertex sphere cooking to a 221-vertex tet mesh whose vertices
+            // are in a completely different order — and skinning through that
+            // permutation scatters the mesh (a pole vertex lands at the far
+            // pole). Only take the fast path when the positions really do
+            // correspond, which is the case the direct mapping was meant for:
+            // a cook that passed the visual vertices through unchanged.
+            useDirectMapping_ = (visualVerts == static_cast<size_t>(nbCollVerts_)) &&
+                                positionsCorrespond(*vPosAttr);
+
+            if (!useDirectMapping_) {
+                if (cachedBindings) {
+                    bindings_ = *cachedBindings;
+                } else {
+                    buildBindings();
+                }
+            }
+            applyDeformedPositions();
+            visualGeometry_->computeVertexNormals();
+        }
+
+        SoftBody(const SoftBody&) = delete;
+        SoftBody& operator=(const SoftBody&) = delete;
+
+        ~SoftBody() {
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+            if (cudaTexResource_) {
+                ::physx::PxScopedCudaLock _lock(*cuda_);
+                cuGraphicsUnregisterResource(cudaTexResource_);
+                cudaTexResource_ = nullptr;
+            }
+#endif
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+            if (vkExtMem_) {
+                // Release the CUDA side BEFORE the renderer frees the Vulkan
+                // allocation (removeSoftBody destroys the SoftBody first; the
+                // renderer's tet-state GC runs later). Mapped buffers must be
+                // cuMemFree'd before the external memory is destroyed.
+                ::physx::PxScopedCudaLock _lock(*cuda_);
+                if (vkTetPtr_) {
+                    cuMemFree(vkTetPtr_);
+                    vkTetPtr_ = 0;
+                }
+                cuDestroyExternalMemory(vkExtMem_);
+                vkExtMem_ = nullptr;
+            }
+#endif
+            if (positionsInvMass_) {
+                PX_EXT_PINNED_MEMORY_FREE(*cuda_, positionsInvMass_);
+                positionsInvMass_ = nullptr;
+            }
+            if (volume_) {
+                volume_->release();
+                volume_ = nullptr;
+            }
+        }
+
+        // Issue async DtoH copy on the supplied stream. Caller must already hold the
+        // CUDA lock and must synchronise the stream before applyDeformedPositions().
+        // This is the path used by PhysxWorld when batching many soft bodies per frame.
+        void pullDeformedPositionsAsync(CUstream stream) const {
+            using namespace ::physx;
+            cuda_->getCudaContext()->memcpyDtoHAsync(
+                    positionsInvMass_,
+                    reinterpret_cast<CUdeviceptr>(volume_->getPositionInvMassBufferD()),
+                    nbCollVerts_ * sizeof(PxVec4),
+                    stream);
+        }
+
+        // Synchronous variant for one-shot use (initial binding, manual sync).
+        void pullDeformedPositionsSync() const {
+            using namespace ::physx;
+            PxScopedCudaLock _lock(*cuda_);
+            cuda_->getCudaContext()->memcpyDtoH(
+                    positionsInvMass_,
+                    reinterpret_cast<CUdeviceptr>(volume_->getPositionInvMassBufferD()),
+                    nbCollVerts_ * sizeof(PxVec4));
+        }
+
+        // Write the current pinned positions into the visual geometry's position
+        // attribute. Fast path: direct copy when vertex counts match. Slow path:
+        // barycentric skinning via precomputed bindings.
+        //
+        // Writes go straight through the attribute's backing `std::vector<float>`
+        // via `.data()` — `setXYZ` is virtual and bounds-checks per call, which
+        // dominated this loop on hot soft-body scenes (~3-5× speedup measured).
+        // The single `needsUpdate()` at the end bumps the version once, so the
+        // renderer's geomVersion dirty-detection still fires correctly.
+        void applyDeformedPositions() const {
+            auto vPosAttr = visualGeometry_->getAttribute<float>("position");
+            if (!vPosAttr) return;
+            float* dst = vPosAttr->array().data();
+            if (useDirectMapping_) {
+                for (::physx::PxU32 i = 0; i < nbCollVerts_; ++i) {
+                    const auto& p = positionsInvMass_[i];
+                    dst[i * 3 + 0] = p.x;
+                    dst[i * 3 + 1] = p.y;
+                    dst[i * 3 + 2] = p.z;
+                }
+            } else {
+                const auto& binds = bindings_;
+                const auto* src = positionsInvMass_;
+                for (size_t i = 0; i < binds.size(); ++i) {
+                    const auto& b = binds[i];
+                    dst[i * 3 + 0] = b.w0 * src[b.i0].x + b.w1 * src[b.i1].x +
+                                     b.w2 * src[b.i2].x + b.w3 * src[b.i3].x;
+                    dst[i * 3 + 1] = b.w0 * src[b.i0].y + b.w1 * src[b.i1].y +
+                                     b.w2 * src[b.i2].y + b.w3 * src[b.i3].y;
+                    dst[i * 3 + 2] = b.w0 * src[b.i0].z + b.w1 * src[b.i1].z +
+                                     b.w2 * src[b.i2].z + b.w3 * src[b.i3].z;
+                }
+            }
+            vPosAttr->needsUpdate();
+        }
+
+        [[nodiscard]] ::physx::PxDeformableVolume* actor() const { return volume_; }
+        [[nodiscard]] const std::shared_ptr<BufferGeometry>& visualGeometry() const { return visualGeometry_; }
+
+        // Non-owning back-pointer to the visual Mesh, set by PhysxWorld::addSoftBody(Mesh&).
+        // Null when the soft body was created from a bare BufferGeometry overload.
+        // PhysxWorld::removeSoftBody() uses it to detach the Mesh from its parent so
+        // a single call cleans up both physics and scene graph.
+        [[nodiscard]] Mesh* mesh() const { return mesh_; }
+
+        // Compute normals each frame after the deformation is applied; default on.
+        // Disable when the caller updates normals separately (or doesn't need them).
+        void setRecomputeNormals(bool enabled) { recomputeNormals_ = enabled; }
+        [[nodiscard]] bool recomputeNormals() const { return recomputeNormals_; }
+
+        // Switch this body to GPU skinning: the deformed tet positions are uploaded
+        // to a small texture each frame and the visual is blended in the vertex
+        // shader (USE_TET_SKIN), instead of skinning the full-res mesh on the CPU and
+        // re-uploading it. Requires the Mesh& overload (needs the visual Mesh to swap
+        // in a per-body material carrying the tet texture). Normals become rest
+        // normals (no per-frame recompute). Call once, after construction.
+        void enableGpuSkinning() {
+            using namespace ::physx;
+            if (gpuSkin_ || !mesh_) return;
+            auto vPosAttr = visualGeometry_->getAttribute<float>("position");
+            if (!vPosAttr) return;
+            const size_t vVerts = vPosAttr->count();
+
+            // Per-vertex tet indices + weights (the barycentric bindings), plus the
+            // bound tet's rest edge-matrix inverse Dr^-1 baked once here so the vertex
+            // shader can build F = Dc * Dr^-1 without a per-frame matrix inverse.
+            std::vector<float> idx(vVerts * 4, 0.f), wgt(vVerts * 4, 0.f);
+            std::vector<float> ri0(vVerts * 3, 0.f), ri1(vVerts * 3, 0.f), ri2(vVerts * 3, 0.f);
+            for (size_t i = 0; i < vVerts; ++i) {
+                if (useDirectMapping_) {
+                    idx[i * 4] = static_cast<float>(i);
+                    wgt[i * 4] = 1.f;
+                } else {
+                    const auto& b = bindings_[i];
+                    idx[i * 4 + 0] = static_cast<float>(b.i0);
+                    idx[i * 4 + 1] = static_cast<float>(b.i1);
+                    idx[i * 4 + 2] = static_cast<float>(b.i2);
+                    idx[i * 4 + 3] = static_cast<float>(b.i3);
+                    wgt[i * 4 + 0] = b.w0;
+                    wgt[i * 4 + 1] = b.w1;
+                    wgt[i * 4 + 2] = b.w2;
+                    wgt[i * 4 + 3] = b.w3;
+
+                    // Rest edge matrix Dr (columns r1-r0, r2-r0, r3-r0) from the rest
+                    // collision positions; bake its inverse (left zero when degenerate,
+                    // which makes the shader's F singular and keeps the rest normal).
+                    const auto& R0 = positionsInvMass_[b.i0];
+                    const auto& R1 = positionsInvMass_[b.i1];
+                    const auto& R2 = positionsInvMass_[b.i2];
+                    const auto& R3 = positionsInvMass_[b.i3];
+                    Matrix3 Dr;
+                    Dr.set(R1.x - R0.x, R2.x - R0.x, R3.x - R0.x,
+                           R1.y - R0.y, R2.y - R0.y, R3.y - R0.y,
+                           R1.z - R0.z, R2.z - R0.z, R3.z - R0.z);
+                    if (std::fabs(Dr.determinant()) > 1e-12f) {
+                        Dr.invert();
+                        const auto& e = Dr.elements;
+                        ri0[i * 3 + 0] = e[0]; ri0[i * 3 + 1] = e[1]; ri0[i * 3 + 2] = e[2];
+                        ri1[i * 3 + 0] = e[3]; ri1[i * 3 + 1] = e[4]; ri1[i * 3 + 2] = e[5];
+                        ri2[i * 3 + 0] = e[6]; ri2[i * 3 + 1] = e[7]; ri2[i * 3 + 2] = e[8];
+                    }
+                }
+            }
+            visualGeometry_->setAttribute("tetIndex", FloatBufferAttribute::create(idx, 4));
+            visualGeometry_->setAttribute("tetWeight", FloatBufferAttribute::create(wgt, 4));
+            visualGeometry_->setAttribute("tetRestInv0", FloatBufferAttribute::create(ri0, 3));
+            visualGeometry_->setAttribute("tetRestInv1", FloatBufferAttribute::create(ri1, 3));
+            visualGeometry_->setAttribute("tetRestInv2", FloatBufferAttribute::create(ri2, 3));
+
+            // Square RGBA-float texture holding one tet world-position per texel.
+            tetTexSize_ = 1;
+            while (tetTexSize_ * tetTexSize_ < static_cast<int>(nbCollVerts_)) tetTexSize_ *= 2;
+            tetTex_ = DataTexture::create<float>(4, tetTexSize_, tetTexSize_);
+            tetTex_->type = Type::Float;
+            uploadTetTexture();
+
+            // Per-body material clone (the tet texture is per-body) flagged for skinning.
+            if (auto mat = mesh_->material()) {
+                auto cloned = mat->clone();
+                cloned->tetSkinning = true;
+                cloned->tetTexture = tetTex_;
+                cloned->tetTextureSize = tetTexSize_;
+                mesh_->setMaterial(cloned);
+            }
+
+            updateBoundsFromTets();// valid bounds without touching visual positions
+            recomputeNormals_ = false;
+            gpuSkin_ = true;
+        }
+
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+        // CUDA-GL interop: after the renderer has uploaded tetTex_ (so a GL texture
+        // id exists), the example calls registerGlTexture() once. Thereafter the
+        // deformed tet positions are copied device->device straight into the texture
+        // in syncSoftBodies — no GPU->CPU->GPU round-trip and no host position readback.
+        [[nodiscard]] bool needsInteropRegister() const { return gpuSkin_ && !interopRegistered_ && !interopTried_; }
+        [[nodiscard]] Texture* interopTexture() const { return tetTex_.get(); }
+
+        void registerGlTexture(unsigned int glTexId) {
+            if (interopRegistered_ || interopTried_ || !gpuSkin_ || glTexId == 0) return;
+            interopTried_ = true;// attempt once; on failure stay on the CPU bridge (no per-frame retry)
+            ::physx::PxScopedCudaLock _lock(*cuda_);
+            const CUresult res = cuGraphicsGLRegisterImage(
+                    &cudaTexResource_, glTexId, GL_TEXTURE_2D,
+                    CU_GRAPHICS_REGISTER_FLAGS_WRITE_DISCARD);
+            if (res != CUDA_SUCCESS) {
+                cudaTexResource_ = nullptr;// stay on the CPU bridge
+                return;
+            }
+            interopRegistered_ = true;
+        }
+#endif
+
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+        // CUDA→Vulkan zero-copy. The Vulkan renderer re-backs the tet_skinning.comp
+        // input buffer with EXPORTED device memory (VulkanRenderer::
+        // enableSoftBodyInterop); registerVulkanMemory() imports that allocation
+        // into CUDA once, and copyTetToVulkan() — handed to the renderer as its
+        // per-frame deviceCopy callback — then moves the deformed tet positions
+        // device→device. The tet data never touches the host: no DtoH pull, no
+        // DataTexture staging, no map/memcpy.
+        // Glue (after the first render, e.g. polled in the render loop):
+        //   if (sb->needsVkInteropRegister()) {
+        //       auto h = vk->enableSoftBodyInterop(*sb->mesh(), [sb] { sb->copyTetToVulkan(); });
+        //       if (h.osHandle && !sb->registerVulkanMemory(h.osHandle, h.sizeBytes))
+        //           vk->disableSoftBodyInterop(*sb->mesh());// import failed → CPU bridge
+        //   }
+        [[nodiscard]] bool needsVkInteropRegister() const {
+            return gpuSkin_ && !vkInteropRegistered_ && !vkInteropTried_;
+        }
+
+        bool registerVulkanMemory(void* osHandle, size_t sizeBytes) {
+            if (vkInteropRegistered_ || vkInteropTried_ || !gpuSkin_ || !osHandle || sizeBytes == 0)
+                return false;
+            vkInteropTried_ = true;// attempt once; on failure the caller reverts to the CPU bridge
+            ::physx::PxScopedCudaLock _lock(*cuda_);
+            CUDA_EXTERNAL_MEMORY_HANDLE_DESC hd{};
+#ifdef _WIN32
+            hd.type = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32;
+            hd.handle.win32.handle = osHandle;// NT handle stays owned by the renderer (CUDA dups it)
+#else
+            hd.type = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD;// fd ownership transfers to CUDA on success
+            hd.handle.fd = static_cast<int>(reinterpret_cast<intptr_t>(osHandle));
+#endif
+            hd.size  = sizeBytes;
+            hd.flags = CUDA_EXTERNAL_MEMORY_DEDICATED;// the export is a dedicated VkDeviceMemory
+            if (cuImportExternalMemory(&vkExtMem_, &hd) != CUDA_SUCCESS) {
+                vkExtMem_ = nullptr;
+                return false;
+            }
+            CUDA_EXTERNAL_MEMORY_BUFFER_DESC bd{};
+            bd.offset = 0;
+            bd.size   = sizeBytes;
+            if (cuExternalMemoryGetMappedBuffer(&vkTetPtr_, vkExtMem_, &bd) != CUDA_SUCCESS) {
+                cuDestroyExternalMemory(vkExtMem_);
+                vkExtMem_ = nullptr;
+                vkTetPtr_ = 0;
+                return false;
+            }
+            vkInteropRegistered_ = true;
+            return true;
+        }
+
+        // The renderer's per-frame deviceCopy callback. PhysX's positionInvMass
+        // buffer is PxVec4 = pos.xyz + invMass.w — exactly the shader's
+        // `vec4 tetPos[]` layout (.w ignored), so this is a single straight
+        // device→device copy. Synchronized before returning, so the data is in
+        // place before the frame's command buffer is submitted — the same
+        // host-ordering contract as the CPU upload this replaces.
+        void copyTetToVulkan() const {
+            if (!vkInteropRegistered_) return;
+            ::physx::PxScopedCudaLock _lock(*cuda_);
+            cuMemcpyDtoDAsync(vkTetPtr_,
+                              reinterpret_cast<CUdeviceptr>(volume_->getPositionInvMassBufferD()),
+                              static_cast<size_t>(nbCollVerts_) * sizeof(::physx::PxVec4),
+                              nullptr);
+            cuStreamSynchronize(nullptr);
+        }
+#endif
+
+    private:
+        ::physx::PxDeformableVolume* volume_;
+        ::physx::PxCudaContextManager* cuda_;
+        ::physx::PxVec4* positionsInvMass_ = nullptr;
+        ::physx::PxU32 nbCollVerts_ = 0;
+        std::shared_ptr<BufferGeometry> visualGeometry_;
+        Mesh* mesh_ = nullptr;
+        bool useDirectMapping_ = true;
+        std::vector<TetBind> bindings_;
+        bool recomputeNormals_ = true;
+
+        bool gpuSkin_ = false;
+        std::shared_ptr<DataTexture> tetTex_;
+        int tetTexSize_ = 0;
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+        CUgraphicsResource cudaTexResource_ = nullptr;
+        bool interopRegistered_ = false;
+        bool interopTried_ = false;
+#endif
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+        CUexternalMemory vkExtMem_ = nullptr;// imported Vulkan tet-position allocation
+        CUdeviceptr      vkTetPtr_ = 0;      // its device pointer (copyTetToVulkan dst)
+        bool vkInteropRegistered_ = false;
+        bool vkInteropTried_      = false;
+#endif
+        friend class PhysxWorld;
+
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+        // GPU-skin interop: copy the deformed collision-tet positions device->device
+        // straight into the registered GL texture's CUDA array. The resource is mapped
+        // in a single batch by syncSoftBodies (map/unmap are heavyweight GL<->CUDA sync
+        // points, so per-body mapping is an anti-pattern). The PhysX position buffer is
+        // PxVec4 (== one RGBA32F texel) laid out row-major, exactly matching the
+        // texture, and the shader only reads .xyz.
+        void copyToMappedArray(CUstream stream) {
+            using namespace ::physx;
+            if (!interopRegistered_) return;
+            CUarray array = nullptr;
+            cuGraphicsSubResourceGetMappedArray(&array, cudaTexResource_, 0, 0);
+
+            const auto src = reinterpret_cast<CUdeviceptr>(volume_->getPositionInvMassBufferD());
+            const unsigned int rowTexels = static_cast<unsigned int>(tetTexSize_);
+            const unsigned int fullRows = nbCollVerts_ / rowTexels;
+            const unsigned int rem = nbCollVerts_ % rowTexels;
+
+            if (fullRows > 0) {
+                CUDA_MEMCPY2D cp{};
+                cp.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+                cp.srcDevice = src;
+                cp.srcPitch = rowTexels * sizeof(PxVec4);
+                cp.dstMemoryType = CU_MEMORYTYPE_ARRAY;
+                cp.dstArray = array;
+                cp.WidthInBytes = rowTexels * sizeof(PxVec4);
+                cp.Height = fullRows;
+                cuMemcpy2DAsync(&cp, stream);
+            }
+            if (rem > 0) {
+                CUDA_MEMCPY2D cp{};
+                cp.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+                cp.srcDevice = src + static_cast<size_t>(fullRows) * rowTexels * sizeof(PxVec4);
+                cp.srcPitch = rem * sizeof(PxVec4);
+                cp.dstMemoryType = CU_MEMORYTYPE_ARRAY;
+                cp.dstArray = array;
+                cp.dstY = fullRows;
+                cp.WidthInBytes = rem * sizeof(PxVec4);
+                cp.Height = 1;
+                cuMemcpy2DAsync(&cp, stream);
+            }
+        }
+#endif
+
+        // GPU-skin interop (GL + Vulkan): bounds from PhysX's world AABB — no
+        // host position copy, so the zero-copy paths stay zero-copy.
+        void updateBoundsFromWorld() {
+            using namespace ::physx;
+            const PxBounds3 b = volume_->getWorldBounds(1.0f);
+            if (b.isEmpty()) return;
+            const Vector3 mn(b.minimum.x, b.minimum.y, b.minimum.z);
+            const Vector3 mx(b.maximum.x, b.maximum.y, b.maximum.z);
+            Vector3 c;
+            c.addVectors(mn, mx).multiplyScalar(0.5f);
+            visualGeometry_->boundingBox = Box3(mn, mx);
+            visualGeometry_->boundingSphere = Sphere(c, c.distanceTo(mx));
+        }
+
+        // GPU-skin: copy the (just-pulled) tet positions into the texture, flag for re-upload.
+        void uploadTetTexture() {
+            if (!tetTex_) return;
+            auto& data = tetTex_->image().data<float>();
+            for (::physx::PxU32 i = 0; i < nbCollVerts_; ++i) {
+                const auto& p = positionsInvMass_[i];
+                data[i * 4 + 0] = p.x;
+                data[i * 4 + 1] = p.y;
+                data[i * 4 + 2] = p.z;
+                data[i * 4 + 3] = 1.f;
+            }
+            tetTex_->needsUpdate();
+        }
+
+        // GPU-skin: bounds from the few hundred tet positions (the visual position
+        // attribute is never updated, so the renderer needs these for frustum culling).
+        void updateBoundsFromTets() {
+            if (nbCollVerts_ == 0) return;
+            Vector3 mn(1e30f, 1e30f, 1e30f), mx(-1e30f, -1e30f, -1e30f);
+            for (::physx::PxU32 i = 0; i < nbCollVerts_; ++i) {
+                const auto& p = positionsInvMass_[i];
+                mn.x = std::min(mn.x, p.x); mn.y = std::min(mn.y, p.y); mn.z = std::min(mn.z, p.z);
+                mx.x = std::max(mx.x, p.x); mx.y = std::max(mx.y, p.y); mx.z = std::max(mx.z, p.z);
+            }
+            Vector3 c;
+            c.addVectors(mn, mx).multiplyScalar(0.5f);
+            visualGeometry_->boundingBox = Box3(mn, mx);
+            visualGeometry_->boundingSphere = Sphere(c, c.distanceTo(mx));
+        }
+
+        // Does collision vertex i sit on visual vertex i, for every i? That is
+        // what makes the direct (index-for-index) skinning path valid. The
+        // tolerance is scale-relative because the cooker welds within 1 mm at
+        // unit scale, and a model may be authored in any units.
+        [[nodiscard]] bool positionsCorrespond(const TypedBufferAttribute<float>& positions) const {
+
+            const auto& vp = positions.array();
+            ::physx::PxVec3 lo(FLT_MAX), hi(-FLT_MAX);
+            for (size_t i = 0; i < vp.size() / 3; ++i) {
+                const ::physx::PxVec3 p(vp[i * 3], vp[i * 3 + 1], vp[i * 3 + 2]);
+                lo = lo.minimum(p);
+                hi = hi.maximum(p);
+            }
+            const float tolerance = std::max(1e-6f, 1e-4f * (hi - lo).magnitude());
+            for (::physx::PxU32 i = 0; i < nbCollVerts_; ++i) {
+                const ::physx::PxVec3 c = positionsInvMass_[i].getXYZ();
+                if (std::fabs(c.x - vp[i * 3 + 0]) > tolerance ||
+                    std::fabs(c.y - vp[i * 3 + 1]) > tolerance ||
+                    std::fabs(c.z - vp[i * 3 + 2]) > tolerance) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Build per-vertex bindings from visual mesh into the collision tet mesh.
+        // Walks every tet's AABB (with a small pad) and tests barycentric
+        // containment. A vertex outside every tet — the cooked hull does not
+        // reach the sharp corners of a cone or a rotated box — binds to the
+        // nearest tet by extrapolation, so it still sits exactly where it was
+        // authored. Threaded.
+        void buildBindings() {
+            using namespace ::physx;
+            auto vPosAttr = visualGeometry_->getAttribute<float>("position");
+            if (!vPosAttr) return;
+            auto* tetMesh = volume_->getCollisionMesh();
+            // Tet positions come from positionsInvMass_ (synced just above), NOT
+            // tetMesh->getVertices(). getVertices() is the cooked rest pose in the
+            // mesh's local space; when the volume is reused from PhysxWorld's cook
+            // cache that local space differs from the world-space visual geometry,
+            // so every barycentric containment test would miss. positionsInvMass_
+            // is the live collision pose in the same world space as the visual
+            // geometry — and the same array applyDeformedPositions() skins against.
+            const PxVec4* verts = positionsInvMass_;
+            const auto* tets = static_cast<const PxU32*>(tetMesh->getTetrahedrons());
+            const PxU32 nbTets = tetMesh->getNbTetrahedrons();
+            const size_t vVerts = vPosAttr->count();
+            bindings_.resize(vVerts);
+
+            struct TetData {
+                PxU32 i0, i1, i2, i3;
+                PxVec3 p0, p1, p2, p3;
+                PxVec3 aabbMin, aabbMax;
+            };
+            std::vector<TetData> tetsData;
+            tetsData.reserve(nbTets);
+            const float aabbPad = 2e-2f;
+            for (PxU32 ti = 0; ti < nbTets; ++ti) {
+                PxU32 i0 = tets[ti * 4 + 0];
+                PxU32 i1 = tets[ti * 4 + 1];
+                PxU32 i2 = tets[ti * 4 + 2];
+                PxU32 i3 = tets[ti * 4 + 3];
+                PxVec3 p0 = verts[i0].getXYZ(), p1 = verts[i1].getXYZ(),
+                       p2 = verts[i2].getXYZ(), p3 = verts[i3].getXYZ();
+                PxVec3 mn(std::min({p0.x, p1.x, p2.x, p3.x}),
+                          std::min({p0.y, p1.y, p2.y, p3.y}),
+                          std::min({p0.z, p1.z, p2.z, p3.z}));
+                PxVec3 mx(std::max({p0.x, p1.x, p2.x, p3.x}),
+                          std::max({p0.y, p1.y, p2.y, p3.y}),
+                          std::max({p0.z, p1.z, p2.z, p3.z}));
+                mn -= PxVec3(aabbPad);
+                mx += PxVec3(aabbPad);
+                tetsData.push_back({i0, i1, i2, i3, p0, p1, p2, p3, mn, mx});
+            }
+            // Nothing to bind against; leave the bindings zeroed rather than
+            // indexing an empty array below.
+            if (tetsData.empty()) return;
+
+            const auto& vpos = vPosAttr->array();
+            const float eps = 5e-3f;
+            unsigned threads = std::thread::hardware_concurrency();
+            if (threads == 0) threads = 1;
+            const size_t chunk = (vVerts + threads - 1) / threads;
+            std::vector<std::thread> ths;
+            ths.reserve(threads);
+            for (unsigned t = 0; t < threads; ++t) {
+                size_t start = t * chunk;
+                size_t end = std::min(start + chunk, vVerts);
+                if (start >= end) break;
+                ths.emplace_back([&, start, end]() {
+                    // Barycentric coordinates of v in T. Not clamped: outside a
+                    // tet they go negative and still sum to 1, which is what
+                    // makes an outside vertex reproduce EXACTLY at rest.
+                    const auto baryOf = [](const PxVec3& v, const TetData& T, TetBind& out) {
+                        const float V = tet_util::tetVolume6(T.p0, T.p1, T.p2, T.p3);
+                        if (std::fabs(V) < 1e-8f) return false;
+                        float w0 = tet_util::tetVolume6(v, T.p1, T.p2, T.p3) / V;
+                        float w1 = tet_util::tetVolume6(T.p0, v, T.p2, T.p3) / V;
+                        float w2 = tet_util::tetVolume6(T.p0, T.p1, v, T.p3) / V;
+                        float w3 = tet_util::tetVolume6(T.p0, T.p1, T.p2, v) / V;
+                        float sum = w0 + w1 + w2 + w3;
+                        if (std::fabs(sum) < 1e-6f) sum = 1.0f;
+                        out = {T.i0, T.i1, T.i2, T.i3, w0 / sum, w1 / sum, w2 / sum, w3 / sum};
+                        return true;
+                    };
+
+                    for (size_t vi = start; vi < end; ++vi) {
+                        PxVec3 v(vpos[vi * 3 + 0], vpos[vi * 3 + 1], vpos[vi * 3 + 2]);
+                        float bestDist = FLT_MAX;
+                        const TetData* bestTet = nullptr;
+                        bool found = false;
+                        for (const TetData& T : tetsData) {
+                            if (v.x < T.aabbMin.x || v.x > T.aabbMax.x ||
+                                v.y < T.aabbMin.y || v.y > T.aabbMax.y ||
+                                v.z < T.aabbMin.z || v.z > T.aabbMax.z) continue;
+                            TetBind bind{};
+                            if (!baryOf(v, T, bind)) continue;
+                            if (bind.w0 >= -eps && bind.w1 >= -eps &&
+                                bind.w2 >= -eps && bind.w3 >= -eps) {
+                                bindings_[vi] = bind;
+                                found = true;
+                                break;
+                            }
+                            auto r = tet_util::closestPointTetrahedron(v, T.p0, T.p1, T.p2, T.p3);
+                            const float d2 = (r.point - v).magnitudeSquared();
+                            if (d2 < bestDist) {
+                                bestDist = d2;
+                                bestTet = &T;
+                            }
+                        }
+                        if (found) continue;
+
+                        // The AABB pad is a speed filter, not a correctness
+                        // bound. A visual vertex can sit further outside the
+                        // collision hull than the pad — the remeshed hull cuts
+                        // the corners of a rotated box, for one — and leaving
+                        // such a vertex on an arbitrary tet teleports it, and
+                        // the whole face it belongs to, into the middle of the
+                        // body. Only the stray vertices pay for this pass.
+                        if (!bestTet) {
+                            for (const TetData& T : tetsData) {
+                                auto r = tet_util::closestPointTetrahedron(v, T.p0, T.p1, T.p2, T.p3);
+                                const float d2 = (r.point - v).magnitudeSquared();
+                                if (d2 < bestDist) {
+                                    bestDist = d2;
+                                    bestTet = &T;
+                                }
+                            }
+                        }
+                        if (!bestTet) bestTet = &tetsData[0];
+
+                        // Bind by extrapolation from the nearest tet, so a
+                        // vertex outside the hull sits exactly where it was
+                        // authored instead of snapped onto the hull surface
+                        // (which visibly rounds off sharp corners). Runaway
+                        // weights would amplify that tet's deformation, so a
+                        // far-outside vertex still falls back to the clamped
+                        // surface point.
+                        TetBind bind{};
+                        const bool usable =
+                                baryOf(v, *bestTet, bind) &&
+                                std::max({std::fabs(bind.w0), std::fabs(bind.w1),
+                                          std::fabs(bind.w2), std::fabs(bind.w3)}) <= 2.f;
+                        if (usable) {
+                            bindings_[vi] = bind;
+                        } else {
+                            auto r = tet_util::closestPointTetrahedron(
+                                    v, bestTet->p0, bestTet->p1, bestTet->p2, bestTet->p3);
+                            bindings_[vi] = {bestTet->i0, bestTet->i1, bestTet->i2, bestTet->i3,
+                                             r.w0, r.w1, r.w2, r.w3};
+                        }
+                    }
+                });
+            }
+            for (auto& th : ths) {
+                if (th.joinable()) th.join();
+            }
+        }
+    };
+
+
+    // Inline implementations of the PhysxWorld soft-body API, deferred to here so
+    // they can see the full SoftBody definition.
+
+    inline ::physx::PxDeformableVolumeMaterial* PhysxWorld::createSoftBodyMaterial(
+            float youngsModulus, float poissonsRatio, float dynamicFriction) {
+        if (!cuda_) throw std::runtime_error("PhysxWorld::createSoftBodyMaterial: enableGpuDynamics is false");
+        return physics_->createDeformableVolumeMaterial(youngsModulus, poissonsRatio, dynamicFriction);
+    }
+
+    namespace softbody_detail {
+
+        // The four stages both addSoftBody overloads share. The uncached path
+        // runs them on the world-baked visual geometry; the cached path cooks
+        // from LOCAL geometry once and re-instantiates per spawn — same code,
+        // different inputs, previously two hand-maintained copies.
+
+        // Positions + indices (iota fallback when non-indexed) into PxArrays.
+        inline void extractTriMesh(const BufferGeometry& geometry,
+                                   ::physx::PxArray<::physx::PxVec3>& triVerts,
+                                   ::physx::PxArray<::physx::PxU32>& triIndices) {
+            using namespace ::physx;
+            const auto* posAttr = geometry.getAttribute<float>("position");
+            if (!posAttr) throw std::runtime_error("PhysxWorld::addSoftBody: geometry has no position attribute");
+            const auto count = static_cast<PxU32>(posAttr->count());
+            triVerts.resize(count);
+            for (PxU32 i = 0; i < count; ++i) {
+                triVerts[i] = PxVec3(posAttr->getX(i), posAttr->getY(i), posAttr->getZ(i));
+            }
+            const auto* idx = geometry.getIndex();
+            if (idx) {
+                const auto n = static_cast<PxU32>(idx->count());
+                triIndices.resize(n);
+                for (PxU32 i = 0; i < n; ++i) triIndices[i] = idx->getX(i);
+            } else {
+                triIndices.reserve(count);
+                for (PxU32 i = 0; i < count; ++i) triIndices.pushBack(i);
+            }
+        }
+
+        // Remesh + voxelise (well-conditioned sim mesh; skipped when
+        // voxelResolution <= 0), then cook the deformable volume mesh.
+        inline ::physx::PxDeformableVolumeMesh* remeshAndCook(
+                ::physx::PxPhysics& physics,
+                ::physx::PxArray<::physx::PxVec3>& triVerts,
+                ::physx::PxArray<::physx::PxU32>& triIndices,
+                int voxelResolution) {
+            using namespace ::physx;
+            if (voxelResolution > 0) {
+                PxRemeshingExt::limitMaxEdgeLength(triIndices, triVerts, 1.0f);
+                PxTetMaker::remeshTriangleMesh(triVerts, triIndices, static_cast<PxU32>(voxelResolution),
+                                               triVerts, triIndices);
+            }
+            PxCookingParams params(physics.getTolerancesScale());
+            params.meshWeldTolerance = 0.001f;
+            params.meshPreprocessParams = PxMeshPreprocessingFlags(PxMeshPreprocessingFlag::eWELD_VERTICES);
+            params.buildTriangleAdjacencies = false;
+            params.buildGPUData = true;
+            const int res = (voxelResolution > 0) ? voxelResolution : 6;
+            PxDeformableVolumeMesh* mesh = cookDeformableVolumeMesh(physics, params, triVerts, triIndices,
+                                                                    static_cast<unsigned>(res));
+            if (!mesh) throw std::runtime_error("PhysxWorld::addSoftBody: failed to cook deformable volume mesh");
+            return mesh;
+        }
+
+        // Deformable volume + shape + simulation mesh from a cooked mesh.
+        inline ::physx::PxDeformableVolume* instantiateVolume(
+                ::physx::PxPhysics& physics, ::physx::PxCudaContextManager& cuda,
+                ::physx::PxDeformableVolumeMesh* mesh,
+                ::physx::PxDeformableVolumeMaterial* material) {
+            using namespace ::physx;
+            PxDeformableVolume* volume = physics.createDeformableVolume(cuda);
+            const PxShapeFlags shapeFlags = PxShapeFlag::eVISUALIZATION | PxShapeFlag::eSIMULATION_SHAPE;
+            PxTetrahedronMeshGeometry tetGeom(mesh->getCollisionMesh());
+            PxShape* shape = physics.createShape(tetGeom, &material, 1, true, shapeFlags);
+            volume->attachShape(*shape);
+            volume->attachSimulationMesh(*mesh->getSimulationMesh(), *mesh->getDeformableVolumeAuxData());
+            shape->release();
+            return volume;
+        }
+
+        // Place at `pose`, set mass from density or explicit mass, push to GPU.
+        inline void placeAndUpload(::physx::PxDeformableVolume& volume,
+                                   ::physx::PxCudaContextManager* cuda,
+                                   const ::physx::PxTransform& pose, float mass) {
+            using namespace ::physx;
+            PxVec4 *simPos, *simVel, *collPos, *restPos;
+            PxDeformableVolumeExt::allocateAndInitializeHostMirror(
+                    volume, cuda, simPos, simVel, collPos, restPos);
+            constexpr PxReal maxInvMassRatio = 50.f;
+            PxDeformableVolumeExt::transform(volume, pose, 1.f, simPos, simVel, collPos, restPos);
+            if (mass > 0.f) {
+                PxDeformableVolumeExt::setMass(volume, mass, maxInvMassRatio, simPos);
+            } else {
+                PxDeformableVolumeExt::updateMass(volume, 1.f, maxInvMassRatio, simPos);
+            }
+            PxDeformableVolumeExt::copyToDevice(volume, PxDeformableVolumeDataFlag::eALL,
+                                                simPos, simVel, collPos, restPos);
+            PX_EXT_PINNED_MEMORY_FREE(*cuda, simPos);
+            PX_EXT_PINNED_MEMORY_FREE(*cuda, simVel);
+            PX_EXT_PINNED_MEMORY_FREE(*cuda, collPos);
+            PX_EXT_PINNED_MEMORY_FREE(*cuda, restPos);
+        }
+
+    }// namespace softbody_detail
+
+    inline SoftBody* PhysxWorld::addSoftBody(
+            const std::shared_ptr<BufferGeometry>& visualGeometry,
+            ::physx::PxDeformableVolumeMaterial* material,
+            int voxelResolution,
+            unsigned solverIterations,
+            bool selfCollision,
+            float mass) {
+        using namespace ::physx;
+        if (!cuda_) throw std::runtime_error("PhysxWorld::addSoftBody: enableGpuDynamics is false");
+        if (!visualGeometry) throw std::runtime_error("PhysxWorld::addSoftBody: visualGeometry is null");
+        if (!material) material = defaultSoftBodyMaterial();
+
+        // Extract (world-space — the visual geometry is what we render, and the
+        // simulation then runs in world space), remesh + cook, instantiate,
+        // place at identity, upload. Shared with the cached path below.
+        PxArray<PxVec3> triVerts;
+        PxArray<PxU32> triIndices;
+        softbody_detail::extractTriMesh(*visualGeometry, triVerts, triIndices);
+        PxDeformableVolumeMesh* mesh = softbody_detail::remeshAndCook(*physics_, triVerts, triIndices, voxelResolution);
+        PxDeformableVolume* volume = softbody_detail::instantiateVolume(*physics_, *cuda_, mesh, material);
+        softbody_detail::placeAndUpload(*volume, cuda_, PxTransform(PxIdentity), mass);
+
+        volume->setDeformableBodyFlag(PxDeformableBodyFlag::eDISABLE_SELF_COLLISION, !selfCollision);
+        volume->setSolverIterationCounts(solverIterations);
+
+        scene_->addActor(*volume);
+
+        auto sb = std::make_unique<SoftBody>(volume, cuda_, visualGeometry);
+        SoftBody* raw = sb.get();
+        softBodies_.push_back(std::move(sb));
+        return raw;
+    }
+
+    inline SoftBody* PhysxWorld::addSoftBody(
+            Mesh& mesh,
+            ::physx::PxDeformableVolumeMaterial* material,
+            int voxelResolution,
+            unsigned solverIterations,
+            bool selfCollision,
+            const std::string& cacheKey,
+            float mass) {
+        using namespace ::physx;
+        auto geom = mesh.geometry();
+        if (!geom) throw std::runtime_error("PhysxWorld::addSoftBody(Mesh): no geometry");
+        mesh.updateWorldMatrix(true, false);
+        auto* posAttr = geom->getAttribute<float>("position");
+        if (!posAttr) throw std::runtime_error("PhysxWorld::addSoftBody(Mesh): geometry has no position attribute");
+
+        // Bake mesh.matrixWorld into a visual geometry clone; reset mesh transform
+        // to identity. PhysX writes world-space positions back each frame.
+        auto bakedGeom = BufferGeometry::create();
+        std::vector<float> bakedPos(posAttr->array());
+        Matrix4 mw = *mesh.matrixWorld;
+        for (size_t i = 0; i < bakedPos.size() / 3; ++i) {
+            Vector3 v(bakedPos[i * 3], bakedPos[i * 3 + 1], bakedPos[i * 3 + 2]);
+            v.applyMatrix4(mw);
+            bakedPos[i * 3] = v.x;
+            bakedPos[i * 3 + 1] = v.y;
+            bakedPos[i * 3 + 2] = v.z;
+        }
+        bakedGeom->setAttribute("position", FloatBufferAttribute::create(bakedPos, 3));
+        for (const auto& [name, attr] : geom->getAttributes()) {
+            if (name != "position") {
+                bakedGeom->setAttribute(name, attr);
+            }
+        }
+        if (auto* idx = geom->getIndex()) {
+            bakedGeom->setIndex(std::vector<unsigned int>(idx->array().begin(), idx->array().end()));
+        }
+        if (!geom->groups.empty()) {
+            bakedGeom->groups = geom->groups;
+        }
+        mesh.setGeometry(bakedGeom);
+        mesh.position.set(0, 0, 0);
+        mesh.quaternion.set(0, 0, 0, 1);
+        mesh.scale.set(1, 1, 1);
+
+        if (cacheKey.empty()) {
+            SoftBody* raw = addSoftBody(bakedGeom, material, voxelResolution, solverIterations, selfCollision, mass);
+            raw->mesh_ = &mesh;
+            return raw;
+        }
+
+        // --- Cached path: cook from local geometry, apply world transform ---
+        if (!cuda_) throw std::runtime_error("PhysxWorld::addSoftBody: enableGpuDynamics is false");
+        if (!material) material = defaultSoftBodyMaterial();
+
+        Vector3 wPos, wScl;
+        Quaternion wRot;
+        mw.decompose(wPos, wRot, wScl);
+        PxTransform spawnTf(toPxVec3(wPos), toPxQuat(wRot));
+
+        std::string fullKey = cacheKey + "_v" + std::to_string(voxelResolution);
+        CookCacheEntry* entry = nullptr;
+        PxDeformableVolumeMesh* cookedMesh;
+
+        auto it = cookCache_.find(fullKey);
+        if (it != cookCache_.end()) {
+            entry = &it->second;
+            cookedMesh = entry->mesh;
+        } else {
+            // Cook from LOCAL geometry (before world baking). This is the expensive
+            // part that the cache eliminates on subsequent spawns. NOTE: the
+            // baked clone above replaced mesh.geometry(), but `geom` still
+            // holds the ORIGINAL local geometry — cook from that.
+            PxArray<PxVec3> triVerts;
+            PxArray<PxU32> triIndices;
+            softbody_detail::extractTriMesh(*geom, triVerts, triIndices);
+            cookedMesh = softbody_detail::remeshAndCook(*physics_, triVerts, triIndices, voxelResolution);
+
+            cookCache_[fullKey] = {cookedMesh, {}, false};
+            entry = &cookCache_[fullKey];
+        }
+
+        // Instantiate a new deformable volume from the (possibly cached) mesh,
+        // placed at the mesh's world pose.
+        PxDeformableVolume* volume = softbody_detail::instantiateVolume(*physics_, *cuda_, cookedMesh, material);
+        softbody_detail::placeAndUpload(*volume, cuda_, spawnTf, mass);
+
+        volume->setDeformableBodyFlag(PxDeformableBodyFlag::eDISABLE_SELF_COLLISION, !selfCollision);
+        volume->setSolverIterationCounts(solverIterations);
+        scene_->addActor(*volume);
+
+        // Build or reuse bindings. Bindings are barycentric weights + tet indices,
+        // invariant under rigid transforms, so the set built for the first spawn of
+        // this cooked mesh is valid for every later spawn regardless of placement.
+        const std::vector<SoftBodyTetBind>* cachedBindings = nullptr;
+        if (entry->hasBindings) {
+            cachedBindings = &entry->bindings;
+        }
+
+        auto sb = std::make_unique<SoftBody>(volume, cuda_, bakedGeom, cachedBindings);
+        if (!entry->hasBindings && !sb->useDirectMapping_) {
+            entry->bindings = sb->bindings_;
+            entry->hasBindings = true;
+        }
+
+        SoftBody* raw = sb.get();
+        raw->mesh_ = &mesh;
+        softBodies_.push_back(std::move(sb));
+        return raw;
+    }
+
+    inline SoftBody* PhysxWorld::findSoftBody(const Object3D* obj) const {
+        // Walk up like findActor: a script may hold the group an authored soft
+        // body sits under rather than the mesh itself.
+        for (const Object3D* o = obj; o != nullptr; o = o->parent) {
+            for (const auto& sb : softBodies_) {
+                if (sb->mesh() == o) return sb.get();
+            }
+        }
+        return nullptr;
+    }
+
+    inline void PhysxWorld::removeSoftBody(SoftBody* softBody) {
+        if (!softBody) return;
+        if (auto* m = softBody->mesh(); m && m->parent) {
+            m->removeFromParent();
+        }
+        if (auto* a = softBody->actor()) {
+            scene_->removeActor(*a);
+        }
+        softBodies_.erase(
+                std::remove_if(softBodies_.begin(), softBodies_.end(),
+                               [&](const std::unique_ptr<SoftBody>& s) { return s.get() == softBody; }),
+                softBodies_.end());
+    }
+
+    inline ::physx::PxDeformableVolumeMaterial* PhysxWorld::defaultSoftBodyMaterial() {
+        if (!defaultSoftBodyMat_) {
+            defaultSoftBodyMat_ = createSoftBodyMaterial(1e6f, 0.45f, 0.5f);
+        }
+        return defaultSoftBodyMat_;
+    }
+
+    inline void PhysxWorld::syncSoftBodies() {
+        if (softBodies_.empty()) return;
+        using namespace ::physx;
+        {
+            // Batch GPU->CPU copies on a dedicated stream, then sync once.
+            PxScopedCudaLock _lock(*cuda_);
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+            // Map every interop texture in ONE call. map/unmap are heavyweight
+            // GL<->CUDA sync points; per-body mapping was the regression.
+            std::vector<CUgraphicsResource> interopRes;
+            interopRes.reserve(softBodies_.size());
+            for (auto& sb : softBodies_) {
+                if (sb->interopRegistered_) interopRes.push_back(sb->cudaTexResource_);
+            }
+            if (!interopRes.empty()) {
+                cuGraphicsMapResources(static_cast<unsigned int>(interopRes.size()),
+                                       interopRes.data(), cudaCopyStream_);
+            }
+#endif
+            for (auto& sb : softBodies_) {
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+                if (sb->interopRegistered_) {
+                    // Texture mapped in the batch above: copy deformed tets device->device
+                    // straight into its array, skipping the device->host pull entirely.
+                    sb->copyToMappedArray(cudaCopyStream_);
+                    continue;
+                }
+#endif
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+                // Vulkan zero-copy: the renderer invokes copyTetToVulkan at its own
+                // (fence-ordered) refresh point — no host pull needed here at all.
+                if (sb->vkInteropRegistered_) continue;
+#endif
+                sb->pullDeformedPositionsAsync(cudaCopyStream_);
+            }
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+            if (!interopRes.empty()) {
+                cuGraphicsUnmapResources(static_cast<unsigned int>(interopRes.size()),
+                                         interopRes.data(), cudaCopyStream_);
+            }
+#endif
+            cuda_->getCudaContext()->streamSynchronize(cudaCopyStream_);
+        }
+        for (auto& sb : softBodies_) {
+            if (sb->gpuSkin_) {
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+                if (sb->interopRegistered_) {
+                    // Texture was filled device-side above; bounds come from PhysX's
+                    // world AABB (no host positions this frame).
+                    sb->updateBoundsFromWorld();
+                    continue;
+                }
+#endif
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+                if (sb->vkInteropRegistered_) {
+                    // Tet buffer is filled device-side by the renderer's deviceCopy;
+                    // bounds from PhysX's world AABB (no host positions this frame).
+                    sb->updateBoundsFromWorld();
+                    continue;
+                }
+#endif
+                // GPU skinning (CPU bridge, pre-registration or interop disabled): only
+                // the small tet texture is updated; the full-res visual is blended in
+                // the vertex shader, so no CPU skin / re-upload.
+                sb->uploadTetTexture();
+                sb->updateBoundsFromTets();
+                continue;
+            }
+            sb->applyDeformedPositions();
+            // Recompute bounds so frustum culling tracks the deformed body — the
+            // initial bounds only cover the rest pose. Both sphere AND box are
+            // needed: the GL renderer culls on boundingSphere, Vulkan culls on
+            // boundingBox. Without the box refresh, a settled body that has
+            // fallen below its spawn-y stays culled out by Vulkan's raster
+            // gbuf pass once the camera approaches it from below.
+            sb->visualGeometry()->computeBoundingSphere();
+            sb->visualGeometry()->computeBoundingBox();
+            if (sb->recomputeNormals()) sb->visualGeometry()->computeVertexNormals();
+        }
+    }
+
+}// namespace threepp
+
+#endif//THREEPP_PHYSX_SOFT_BODY_HPP

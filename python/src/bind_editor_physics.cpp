@@ -1,0 +1,1251 @@
+// threepp.editor, physics half — the runtime face of the editor's PhysicsConfig.
+//
+// rigid_body_from_object(obj) / soft_body_from_object(obj) hand a script the
+// body PhysX is actually simulating for that object, so a MonoBehaviour-style
+// script can push, steer and read it instead of fighting the simulation by
+// writing transforms it will overwrite next step.
+// articulation_from_object(obj) is the same idea for a robot the session
+// simulates as a reduced-coordinate articulation: joint state in, drive
+// targets out — the surface a policy deployment loop needs, which is exactly
+// what a script standing in for one wants.
+// raycast(origin, direction, ...) is the other direction entirely: not a handle
+// onto one authored body but a QUESTION put to the whole playing world — what is
+// under my feet, what is in front of me, what am I aiming at. The ground check
+// every character controller opens with.
+//
+// Three things about the contract, stated once:
+//
+//   * A body exists only DURING Play. An authored PhysicsConfig is just
+//     userData until the physics session builds actors from it, so these
+//     functions return None outside Play (and for an object with no physics).
+//     That is the difference from spline_from_object, which reads authoring
+//     data and works any time.
+//   * A handle is TIED to the play session that produced it. Stop releases
+//     every actor, so a handle kept across a stop/play raises rather than
+//     dereferencing freed memory. Ask again after each start.
+//   * The lookup walks UP the scene graph, like PhysxWorld::findActor: a
+//     script on a child of a physics object still finds the body governing it.
+//
+// This file is compiled only where the PhysX SDK was found, and registers into
+// the same threepp.editor submodule bind_editor.cpp creates — so in a build
+// without PhysX the names simply are not there, rather than existing and
+// always failing. It is also EDITOR-only: unlike most of python/src it is not
+// one of the wheel's translation units, only one of threepp_editor_scripting's
+// — which is what lets it reach the script host's handleFor below.
+
+#include "bindings.hpp"
+
+// The articulation handle answers in lists (joint names, positions, targets),
+// which the RigidBody/SoftBody halves never needed.
+#include <pybind11/stl.h>
+
+// handleFor: a raycast hands back an object the script never passed IN, so it
+// has to be cast to its concrete leaf type here (see the header's comment on
+// why casting one as Object3D across the virtual base is a heap bug waiting to
+// happen). The only such factory in the process, shared with the collision
+// payload, and in this same static library.
+#include "ScriptHost.hpp"
+
+#include "threepp/core/Object3D.hpp"
+#include "threepp/extras/editor/PhysicsPlaySession.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdio>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+using namespace threepp;
+
+namespace {
+
+    // bindings.hpp puts the alias inside threepp_py; RaycastHit holds a Python
+    // object and lives out here, with the other handle types.
+    namespace py = pybind11;
+
+    Vector3 toVector3(const ::physx::PxVec3& v) { return {v.x, v.y, v.z}; }
+
+    // Defined below with the other free functions; JointHandle::release needs
+    // it from up here.
+    editor::PhysicsPlaySession* playing();
+
+    // Everything a handle needs from the session that created it. Held as a
+    // weak token rather than a pointer to the session, so a handle cannot keep
+    // a stopped session's world alive and cannot silently read a dead one.
+    struct Lifetime {
+
+        std::weak_ptr<const void> token;
+
+        [[nodiscard]] bool alive() const { return !token.expired(); }
+
+        void require(const char* what) const {
+
+            if (!alive()) {
+                throw std::runtime_error(std::string("this ") + what +
+                                         " belongs to a play session that has stopped - "
+                                         "ask for it again after Play starts");
+            }
+        }
+    };
+
+
+    // A PxRigidActor, as a script sees it. Static bodies expose only what makes
+    // sense for one; asking a static body for its velocity is a mistake worth
+    // reporting rather than answering with a zero.
+    class RigidBody {
+
+    public:
+        RigidBody(std::shared_ptr<Object3D> object, ::physx::PxRigidActor* actor, Lifetime lifetime)
+            : object_(std::move(object)), actor_(actor), lifetime_(std::move(lifetime)) {}
+
+        [[nodiscard]] bool valid() const { return lifetime_.alive(); }
+
+        [[nodiscard]] std::shared_ptr<Object3D> object() const { return object_; }
+
+        [[nodiscard]] bool isStatic() const { return !asDynamic(false); }
+
+        [[nodiscard]] bool isKinematic() const {
+
+            auto* body = asDynamic(false);
+            return body && body->getRigidBodyFlags().isSet(::physx::PxRigidBodyFlag::eKINEMATIC);
+        }
+
+        [[nodiscard]] Vector3 position() const {
+
+            lifetime_.require("rigid body");
+            return toVector3(actor_->getGlobalPose().p);
+        }
+
+        [[nodiscard]] Quaternion rotation() const {
+
+            lifetime_.require("rigid body");
+            const auto q = actor_->getGlobalPose().q;
+            return Quaternion(q.x, q.y, q.z, q.w);
+        }
+
+        [[nodiscard]] Vector3 velocity() const { return toVector3(dynamic()->getLinearVelocity()); }
+
+        void setVelocity(const Vector3& v) {
+
+            dynamic()->setLinearVelocity(toPxVec3(v));
+        }
+
+        [[nodiscard]] Vector3 angularVelocity() const {
+
+            return toVector3(dynamic()->getAngularVelocity());
+        }
+
+        void setAngularVelocity(const Vector3& v) {
+
+            dynamic()->setAngularVelocity(toPxVec3(v));
+        }
+
+        [[nodiscard]] float mass() const { return dynamic()->getMass(); }
+
+        void setMass(float mass) {
+
+            ::physx::PxRigidBodyExt::setMassAndUpdateInertia(*dynamic(), std::max(mass, 1e-3f));
+        }
+
+        // Continuous force in newtons, applied for the coming step. Call it
+        // every update while the thrust should be on — this is not a setting.
+        void applyForce(const Vector3& force) {
+
+            dynamic()->addForce(toPxVec3(force), ::physx::PxForceMode::eFORCE);
+        }
+
+        // An instantaneous kick, in newton-seconds. One call is one kick.
+        void applyImpulse(const Vector3& impulse) {
+
+            dynamic()->addForce(toPxVec3(impulse), ::physx::PxForceMode::eIMPULSE);
+        }
+
+        void applyTorque(const Vector3& torque) {
+
+            dynamic()->addTorque(toPxVec3(torque), ::physx::PxForceMode::eFORCE);
+        }
+
+        void applyTorqueImpulse(const Vector3& torque) {
+
+            dynamic()->addTorque(toPxVec3(torque), ::physx::PxForceMode::eIMPULSE);
+        }
+
+        // Where a kinematic body should be by the end of the next step. PhysX
+        // sweeps it there, so it pushes dynamics on the way instead of
+        // teleporting through them — which is the entire reason to author a
+        // body kinematic rather than moving its transform.
+        void setKinematicTarget(const Vector3& position, const Quaternion* rotation) {
+
+            auto* body = dynamic();
+            if (!body->getRigidBodyFlags().isSet(::physx::PxRigidBodyFlag::eKINEMATIC)) {
+                throw std::runtime_error("set_kinematic_target needs a body authored Kinematic");
+            }
+            const auto q = rotation ? toPxQuat(*rotation) : body->getGlobalPose().q;
+            body->setKinematicTarget(::physx::PxTransform(toPxVec3(position), q));
+        }
+
+        [[nodiscard]] bool sleeping() const { return dynamic()->isSleeping(); }
+
+        void wakeUp() { dynamic()->wakeUp(); }
+
+        [[nodiscard]] std::string repr() const {
+
+            if (!valid()) return "<RigidBody (session stopped)>";
+            return "<RigidBody '" + object_->name + "' " +
+                   (isStatic() ? "static" : (isKinematic() ? "kinematic" : "dynamic")) + ">";
+        }
+
+        // The actor itself, for create_joint. Not bound to Python - a
+        // PxRigidActor is not a thing a script has any use for - but the
+        // resolver needs it, and it goes through the same lifetime gate as
+        // every other read so a handle held across Stop cannot smuggle a freed
+        // actor into a joint.
+        [[nodiscard]] ::physx::PxRigidActor* actor() const {
+
+            lifetime_.require("rigid body");
+            return actor_;
+        }
+
+    private:
+        std::shared_ptr<Object3D> object_;
+        ::physx::PxRigidActor* actor_;
+        Lifetime lifetime_;
+
+        // The dynamic face of the actor. `required` false is the query form
+        // used by is_static / is_kinematic, which must answer rather than throw.
+        [[nodiscard]] ::physx::PxRigidDynamic* asDynamic(bool required = true) const {
+
+            lifetime_.require("rigid body");
+            auto* body = actor_->is<::physx::PxRigidDynamic>();
+            if (!body && required) {
+                throw std::runtime_error("'" + object_->name +
+                                         "' is a static body - it has no velocity, mass or forces");
+            }
+            return body;
+        }
+
+        [[nodiscard]] ::physx::PxRigidDynamic* dynamic() const { return asDynamic(true); }
+    };
+
+
+    // A deformable volume, as a script sees it. Deliberately thin: PhysX drives
+    // a soft body through per-vertex GPU buffers, so there is no per-actor
+    // "push this" to expose. What a script does want is where the thing IS now
+    // that it is not a rigid transform any more — the object's own position is
+    // zero for the whole of Play, because the mesh carries world-space vertices.
+    class SoftBodyHandle {
+
+    public:
+        SoftBodyHandle(std::shared_ptr<Object3D> object, SoftBody* body, Lifetime lifetime)
+            : object_(std::move(object)), body_(body), lifetime_(std::move(lifetime)) {}
+
+        [[nodiscard]] bool valid() const { return lifetime_.alive(); }
+
+        [[nodiscard]] std::shared_ptr<Object3D> object() const { return object_; }
+
+        [[nodiscard]] Vector3 center() const {
+
+            const auto bounds = worldBounds();
+            return toVector3(bounds.getCenter());
+        }
+
+        [[nodiscard]] Vector3 boundsMin() const { return toVector3(worldBounds().minimum); }
+
+        [[nodiscard]] Vector3 boundsMax() const { return toVector3(worldBounds().maximum); }
+
+        [[nodiscard]] int vertexCount() const {
+
+            lifetime_.require("soft body");
+            const auto geometry = body_->visualGeometry();
+            const auto* positions = geometry ? geometry->getAttribute<float>("position") : nullptr;
+            return positions ? static_cast<int>(positions->count()) : 0;
+        }
+
+        // Off when the script updates normals itself, or does not need them —
+        // recomputing them every step is the bulk of a soft body's CPU cost.
+        [[nodiscard]] bool recomputeNormals() const {
+
+            lifetime_.require("soft body");
+            return body_->recomputeNormals();
+        }
+
+        void setRecomputeNormals(bool enabled) {
+
+            lifetime_.require("soft body");
+            body_->setRecomputeNormals(enabled);
+        }
+
+        [[nodiscard]] std::string repr() const {
+
+            if (!valid()) return "<SoftBody (session stopped)>";
+            return "<SoftBody '" + object_->name + "' " + std::to_string(vertexCount()) + " verts>";
+        }
+
+    private:
+        std::shared_ptr<Object3D> object_;
+        SoftBody* body_;
+        Lifetime lifetime_;
+
+        [[nodiscard]] ::physx::PxBounds3 worldBounds() const {
+
+            lifetime_.require("soft body");
+            return body_->actor()->getWorldBounds(1.f);
+        }
+    };
+
+
+    // A robot the play session simulates as a reduced-coordinate articulation,
+    // as a script sees it: the JOINT-SPACE face. Positions and velocities read
+    // back in the articulation's own DOF order (`joint_names`), radians for a
+    // revolute joint and metres for a prismatic one; drive targets go out the
+    // same way. Fixed URDF joints are collapsed by the articulation builder, so
+    // this order is NOT the visual Robot's joint order — the names are the
+    // bridge, which is why they are exposed at all.
+    class ArticulationHandle {
+
+    public:
+        ArticulationHandle(std::shared_ptr<Object3D> object,
+                           const editor::PhysicsPlaySession::PlayedArticulation* played,
+                           Lifetime lifetime)
+            : object_(std::move(object)), played_(played), lifetime_(std::move(lifetime)) {}
+
+        [[nodiscard]] bool valid() const { return lifetime_.alive(); }
+
+        [[nodiscard]] std::shared_ptr<Object3D> object() const { return object_; }
+
+        [[nodiscard]] std::vector<std::string> jointNames() const {
+
+            require();
+            return played_->jointNames;
+        }
+
+        [[nodiscard]] std::size_t numDof() const {
+
+            require();
+            return played_->jointNames.size();
+        }
+
+        [[nodiscard]] std::vector<float> jointPositions() const {
+
+            require();
+            return played_->articulation->jointPositions();
+        }
+
+        [[nodiscard]] std::vector<float> jointVelocities() const {
+
+            require();
+            return played_->articulation->jointVelocities();
+        }
+
+        // One target per DOF, in joint_names order. The PD drive authored in the
+        // robot's Articulation section pulls each joint toward its target — this
+        // is a setpoint, not a teleport, and with zero authored stiffness the
+        // drive is off and targets are inert.
+        void setDriveTargets(const std::vector<float>& targets) {
+
+            require();
+            if (targets.size() != played_->jointNames.size()) {
+                throw std::runtime_error(
+                        "set_drive_targets: got " + std::to_string(targets.size()) +
+                        " values for " + std::to_string(played_->jointNames.size()) +
+                        " DOFs - one per entry of joint_names");
+            }
+            played_->articulation->setDriveTargets(targets.data(), targets.size());
+        }
+
+        void setDriveTargetByIndex(std::size_t index, float value) {
+
+            require();
+            if (index >= played_->links.size()) {
+                throw std::runtime_error("set_drive_target: index " + std::to_string(index) +
+                                         " out of range for " +
+                                         std::to_string(played_->links.size()) + " DOFs");
+            }
+            // ArticulationLink is a value handle onto the PhysX joint, so a copy
+            // drives the same joint — and it drives the joint's actual motion
+            // axis, so this is correct for revolute and prismatic alike.
+            ArticulationLink link = played_->links[index];
+            link.setDriveTarget(value);
+        }
+
+        void setDriveTargetByName(const std::string& joint, float value) {
+
+            require();
+            for (std::size_t i = 0; i < played_->jointNames.size(); ++i) {
+                if (played_->jointNames[i] == joint) {
+                    setDriveTargetByIndex(i, value);
+                    return;
+                }
+            }
+            throw std::runtime_error("set_drive_target: \"" + joint +
+                                     "\" is not a simulated DOF of this robot (see joint_names)");
+        }
+
+        [[nodiscard]] Vector3 rootPosition() const {
+
+            require();
+            const auto s = played_->articulation->rootState();
+            return {s[0], s[1], s[2]};
+        }
+
+        [[nodiscard]] Quaternion rootRotation() const {
+
+            require();
+            const auto s = played_->articulation->rootState();
+            return Quaternion(s[3], s[4], s[5], s[6]);
+        }
+
+        [[nodiscard]] Vector3 rootVelocity() const {
+
+            require();
+            const auto v = played_->articulation->rootVelocity();
+            return {v[0], v[1], v[2]};
+        }
+
+        [[nodiscard]] Vector3 rootAngularVelocity() const {
+
+            require();
+            const auto v = played_->articulation->rootVelocity();
+            return {v[3], v[4], v[5]};
+        }
+
+        [[nodiscard]] std::string repr() const {
+
+            if (!valid()) return "<Articulation (session stopped)>";
+            return "<Articulation '" + object_->name + "' " +
+                   std::to_string(played_->jointNames.size()) + " dof>";
+        }
+
+    private:
+        std::shared_ptr<Object3D> object_;
+        const editor::PhysicsPlaySession::PlayedArticulation* played_;
+        Lifetime lifetime_;
+
+        // played_ points into the session's own list, freed on stop() — the
+        // lifetime gate is what makes dereferencing it safe, same contract as
+        // RigidBody's raw actor pointer.
+        void require() const { lifetime_.require("articulation"); }
+    };
+
+
+    // What a raycast that hit something answers with. A value, entirely: the
+    // shape it came off may be gone by the next step, so nothing here points
+    // into PhysX.
+    struct RaycastHit {
+
+        // The authored object the hit actor belongs to, as its concrete type —
+        // or None when the actor answers to nothing the script can name.
+        py::object object;
+        Vector3 point;
+        Vector3 normal;
+        float distance = 0.f;
+    };
+
+
+    // Actors a query must not see.
+    //
+    // A PRE-filter, not a post-filter, because what is being excluded is an
+    // IDENTITY: which actor, known before a single triangle is touched. Rejecting
+    // the shape ahead of the exact intersection test is both the cheaper answer
+    // and the one PhysX documents for this; post-filtering would compute the
+    // intersection and then throw it away.
+    //
+    // A callback rather than query filter DATA, because the shapes' query filter
+    // data is not ours to write. PhysxWorld leaves it zero — its one filter bit
+    // (kContactReportFilterBit) is SIMULATION data, read by the filter shader —
+    // and a query whose own data is zero skips the hardcoded equation entirely,
+    // so every shape reaches this callback. Marking an ignore in per-shape data
+    // would mean editing the world, and unediting it afterwards, to ask one
+    // question.
+    class IgnoreActors: public ::physx::PxQueryFilterCallback {
+
+    public:
+        explicit IgnoreActors(const std::vector<const ::physx::PxRigidActor*>& actors)
+            : actors_(actors) {}
+
+        ::physx::PxQueryHitType::Enum preFilter(const ::physx::PxFilterData&,
+                                                const ::physx::PxShape*,
+                                                const ::physx::PxRigidActor* actor,
+                                                ::physx::PxHitFlags&) override {
+
+            for (const auto* ignored : actors_) {
+                if (ignored == actor) return ::physx::PxQueryHitType::eNONE;
+            }
+            // eBLOCK, not eTOUCH: with a prefilter installed PhysX stops
+            // defaulting the hit type, and only a blocking hit reaches
+            // PxRaycastBuffer::block — which is the nearest-hit answer this
+            // function is.
+            return ::physx::PxQueryHitType::eBLOCK;
+        }
+
+        ::physx::PxQueryHitType::Enum postFilter(const ::physx::PxFilterData&,
+                                                 const ::physx::PxQueryHit&,
+                                                 const ::physx::PxShape*,
+                                                 const ::physx::PxRigidActor*) override {
+
+            return ::physx::PxQueryHitType::eBLOCK;// never asked for; ePOSTFILTER is off
+        }
+
+    private:
+        const std::vector<const ::physx::PxRigidActor*>& actors_;
+    };
+
+
+    // One authored joint, played: the node it was authored on and the live
+    // constraint the session built from it. Same weak-lifetime discipline as
+    // every other handle here — reads raise once the session stops.
+    class JointHandle {
+
+    public:
+        JointHandle(std::shared_ptr<Object3D> object, std::shared_ptr<Joint> joint,
+                    Lifetime lifetime)
+            : object_(std::move(object)), joint_(std::move(joint)),
+              lifetime_(std::move(lifetime)) {}
+
+        // Weak on BOTH counts. The session token covers Stop, as it does for
+        // every handle in this file; the weak_ptr additionally covers
+        // release(), which drops ONE joint without stopping anything - a
+        // distinction only a runtime joint can make, and exactly the one a
+        // gripper needs.
+        [[nodiscard]] bool valid() const { return lifetime_.alive() && !joint_.expired(); }
+
+        [[nodiscard]] std::shared_ptr<Object3D> object() const { return object_; }
+
+        [[nodiscard]] const char* type() const {
+
+            switch (live()->type()) {
+                case Joint::Type::Fixed: return "fixed";
+                case Joint::Type::Revolute: return "revolute";
+                case Joint::Type::Prismatic: return "prismatic";
+                case Joint::Type::Spherical: return "spherical";
+                case Joint::Type::Distance: return "distance";
+            }
+            return "revolute";
+        }
+
+        [[nodiscard]] float position() const {
+
+            return live()->position();
+        }
+
+        [[nodiscard]] float velocity() const {
+
+            return live()->velocity();
+        }
+
+        [[nodiscard]] bool broken() const {
+
+            return live()->broken();
+        }
+
+        void setDriveTarget(float value) {
+
+            live()->setDriveTarget(value);
+        }
+
+        void setDriveVelocity(float value) {
+
+            live()->setDriveVelocity(value);
+        }
+
+        [[nodiscard]] Vector3 reactionForce() const {
+
+            auto* j = live();
+            Vector3 force, torque;
+            j->reactionForce(force, torque);
+            return force;
+        }
+
+        [[nodiscard]] Vector3 reactionTorque() const {
+
+            auto* j = live();
+            Vector3 force, torque;
+            j->reactionForce(force, torque);
+            return torque;
+        }
+
+        [[nodiscard]] Vector3 breakForce() const {
+
+            auto* j = live();
+            Vector3 force, torque;
+            j->breakWrench(force, torque);
+            return force;
+        }
+
+        [[nodiscard]] Vector3 breakTorque() const {
+
+            auto* j = live();
+            Vector3 force, torque;
+            j->breakWrench(force, torque);
+            return torque;
+        }
+
+        [[nodiscard]] std::string repr() const {
+
+            const std::string name =
+                    object_ ? (object_->name.empty() ? object_->type() : object_->name) : "?";
+            if (!lifetime_.alive()) return "<threepp.editor.Joint '" + name + "' (stopped)>";
+            if (joint_.expired()) return "<threepp.editor.Joint '" + name + "' (released)>";
+            std::string out = "<threepp.editor.Joint '" + name + "' " + type();
+            if (live()->broken()) out += " BROKEN";
+            return out + ">";
+        }
+
+        // Drop the constraint NOW - the release half of a grasp. Idempotent:
+        // letting go twice is a script being careful, not an error, so this
+        // answers False rather than raising.
+        bool release() {
+
+            lifetime_.require("joint");
+            auto joint = joint_.lock();
+            if (!joint) return false;
+            auto* session = playing();
+            if (!session) return false;
+            const bool dropped = session->destroyJoint(joint.get());
+            // Drop our own lock before returning, so the Joint dies HERE -
+            // inside a call the script made while the world is unambiguously
+            // alive - rather than whenever the last handle happens to go.
+            joint.reset();
+            return dropped;
+        }
+
+    private:
+        // The joint, or a raise. Two deaths, two messages: "the session
+        // stopped" and "you released this" are different mistakes, and
+        // reporting the wrong one costs an afternoon.
+        [[nodiscard]] Joint* live() const {
+
+            lifetime_.require("joint");
+            const auto joint = joint_.lock();
+            if (!joint) {
+                throw std::runtime_error(
+                        "this joint has been released - call create_joint again to remake it");
+            }
+            return joint.get();
+        }
+
+        std::shared_ptr<Object3D> object_;
+        std::weak_ptr<Joint> joint_;
+        Lifetime lifetime_;
+    };
+
+
+    // One authored vehicle, played: the model root the config was authored on
+    // and the PhysX vehicle the session built from it. Same weak-lifetime
+    // discipline as every other handle here — reads raise once the session
+    // stops. Controls are the teleop's: throttle/brake/steer plus a reverse
+    // selector; the transmission stays automatic, so there is nothing to
+    // shift.
+    class VehicleHandle {
+
+    public:
+        VehicleHandle(std::shared_ptr<Object3D> object,
+                      const editor::PhysicsPlaySession::PlayedVehicle* played,
+                      Lifetime lifetime)
+            : object_(std::move(object)), played_(played), lifetime_(std::move(lifetime)) {}
+
+        [[nodiscard]] bool valid() const { return lifetime_.alive(); }
+
+        [[nodiscard]] std::shared_ptr<Object3D> object() const { return object_; }
+
+        void setThrottle(float value) {
+
+            require();
+            played_->drive->setThrottle(value);
+        }
+
+        void setBrake(float value) {
+
+            require();
+            played_->drive->setBrake(value);
+        }
+
+        void setSteer(float value) {
+
+            require();
+            played_->drive->setSteer(value);
+        }
+
+        [[nodiscard]] bool reverse() const {
+
+            require();
+            return played_->drive->reverse();
+        }
+
+        void setReverse(bool reverse) {
+
+            require();
+            played_->drive->setReverse(reverse);
+        }
+
+        [[nodiscard]] float speed() const {
+
+            require();
+            return played_->drive->forwardSpeed();
+        }
+
+        [[nodiscard]] std::vector<float> wheelSpinRates() const {
+
+            require();
+            std::vector<float> rates(4);
+            for (int i = 0; i < 4; ++i) rates[i] = played_->drive->wheelAngularSpeed(i);
+            return rates;
+        }
+
+        [[nodiscard]] std::vector<bool> wheelsGrounded() const {
+
+            require();
+            std::vector<bool> grounded(4);
+            for (int i = 0; i < 4; ++i) grounded[i] = played_->drive->wheelGrounded(i);
+            return grounded;
+        }
+
+        [[nodiscard]] Vector3 position() const {
+
+            require();
+            return toVector3(played_->drive->chassisPose().p);
+        }
+
+        [[nodiscard]] Quaternion rotation() const {
+
+            require();
+            const auto q = played_->drive->chassisPose().q;
+            return Quaternion(q.x, q.y, q.z, q.w);
+        }
+
+        [[nodiscard]] std::string repr() const {
+
+            const std::string name =
+                    object_ ? (object_->name.empty() ? object_->type() : object_->name) : "?";
+            if (!lifetime_.alive()) return "<threepp.editor.Vehicle '" + name + "' (stopped)>";
+            char speedText[32];
+            std::snprintf(speedText, sizeof(speedText), "%.1f", static_cast<double>(speed() * 3.6f));
+            return "<threepp.editor.Vehicle '" + name + "' " + speedText + " km/h" +
+                   (reverse() ? " R" : "") + ">";
+        }
+
+    private:
+        void require() const { lifetime_.require("vehicle"); }
+
+        std::shared_ptr<Object3D> object_;
+        const editor::PhysicsPlaySession::PlayedVehicle* played_;
+        Lifetime lifetime_;
+    };
+
+
+    // The world the editor is playing right now, or nullptr outside Play.
+    editor::PhysicsPlaySession* playing() {
+
+        auto* session = editor::PhysicsPlaySession::active();
+        return (session && session->world()) ? session : nullptr;
+    }
+
+    // One side of a runtime joint, whatever a script happened to be holding.
+    //
+    // Four spellings reach the same PxRigidActor, and accepting all four is
+    // the whole point of this function: the reason a gripper was not
+    // scriptable is that each of them was a dead end somewhere. None was the
+    // world; a SCENE OBJECT had no route to a body at all if it was an
+    // articulation link; the lifetime-checked editor.RigidBody was a different
+    // C++ type from the raw threepp.RigidBody that Joint's constructor cast
+    // to; and threepp.RigidBody itself is what world.add() hands back.
+    //
+    // A scene object resolves through the session's own rule
+    // (resolveJointBody), which is the SAME one an authored joint node uses -
+    // so "weld this to the gripper link" means the same thing whether it was
+    // authored in the inspector or built by a script. That rule reaches
+    // articulation links, which rigid_body_from_object deliberately does not.
+    ::physx::PxRigidActor* resolveJointSide(const py::handle& h, const char* which) {
+
+        if (h.is_none()) return nullptr;// the world
+
+        auto* session = playing();
+        if (!session) throw std::runtime_error("create_joint: no play session is running");
+
+        // The editor's own handle first: it is the one with a lifetime, so a
+        // stale one must raise here rather than be reinterpreted as something
+        // else further down.
+        if (py::isinstance<RigidBody>(h)) return h.cast<RigidBody*>()->actor();
+
+        // A link handed out by an Articulation.
+        if (py::isinstance<ArticulationLink>(h)) return h.cast<ArticulationLink*>()->raw();
+
+        // Anything in the scene graph: mesh, link node, robot, group.
+        if (const auto object = threepp_py::as_object3d(h)) {
+            if (auto* actor = session->resolveJointBody(object.get())) return actor;
+            const std::string name = object->name.empty() ? object->type() : object->name;
+            throw std::runtime_error(
+                    std::string("create_joint: ") + which + " \"" + name +
+                    "\" has no rigid body - give it a Physics entry, add it with "
+                    "editor.world().add(), or name a link of a robot whose Articulation "
+                    "section says Simulate");
+        }
+
+        // threepp.RigidBody - what world.add() hands back - cannot be unwrapped
+        // here: it is declared in bind_physx.cpp's own anonymous namespace, so
+        // this translation unit cannot name the type even though both register
+        // under module-level names that look related. That is the same split
+        // that made a gripper unscriptable in the first place, and the honest
+        // answer is not to smuggle the pointer across but to point at the door
+        // that IS open: the mesh it was added for resolves to the same actor.
+        std::string got = "that";
+        try {
+            got = py::cast<std::string>(h.attr("__class__").attr("__name__"));
+        } catch (const py::error_already_set&) {
+        }
+        if (got == "RigidBody") {
+            throw std::runtime_error(
+                    std::string("create_joint: ") + which +
+                    " is a raw threepp.RigidBody, which cannot be unwrapped here - pass the "
+                    "MESH you added instead (editor.world().add(mesh) binds the two, so the "
+                    "mesh resolves to the same body), or use "
+                    "editor.rigid_body_from_object(mesh)");
+        }
+        throw std::runtime_error(
+                std::string("create_joint: ") + which + " is a " + got +
+                " - it must be a scene object, an editor.RigidBody, an ArticulationLink, "
+                "or None for the world");
+    }
+
+}// namespace
+
+namespace threepp_py {
+
+    void init_editor_physics(py::module_& m) {
+
+        // bind_editor.cpp made the submodule; this adds the physics half to it.
+        auto sub = m.attr("editor").cast<py::module_>();
+
+        py::class_<RigidBody, std::shared_ptr<RigidBody>>(sub, "RigidBody")
+                .def_property_readonly("object", &RigidBody::object,
+                                       "The scene object this body governs.")
+                .def_property_readonly("valid", &RigidBody::valid,
+                                       "False once the play session that created it has stopped.")
+                .def_property_readonly("is_static", &RigidBody::isStatic)
+                .def_property_readonly("is_kinematic", &RigidBody::isKinematic)
+                .def_property_readonly("position", &RigidBody::position,
+                                       "WORLD-SPACE position of the body itself.")
+                .def_property_readonly("rotation", &RigidBody::rotation,
+                                       "WORLD-SPACE orientation of the body itself.")
+                .def_property("velocity", &RigidBody::velocity, &RigidBody::setVelocity,
+                              "Linear velocity in m/s. Dynamic bodies only.")
+                .def_property("angular_velocity", &RigidBody::angularVelocity,
+                              &RigidBody::setAngularVelocity,
+                              "Angular velocity in rad/s. Dynamic bodies only.")
+                .def_property("mass", &RigidBody::mass, &RigidBody::setMass,
+                              "Mass in kg; setting it recomputes the inertia tensor.")
+                .def("apply_force", &RigidBody::applyForce, py::arg("force"),
+                     "Add a force in newtons for the coming step. Call it every update while "
+                     "the force should act - it is not a setting.")
+                .def("apply_impulse", &RigidBody::applyImpulse, py::arg("impulse"),
+                     "Add an instantaneous impulse in newton-seconds.")
+                .def("apply_torque", &RigidBody::applyTorque, py::arg("torque"),
+                     "Add a torque in newton-metres for the coming step.")
+                .def("apply_torque_impulse", &RigidBody::applyTorqueImpulse, py::arg("torque"),
+                     "Add an instantaneous angular impulse.")
+                .def("set_kinematic_target", &RigidBody::setKinematicTarget,
+                     py::arg("position"), py::arg("rotation") = py::none(),
+                     "Where a Kinematic body should be by the end of the next step. PhysX sweeps "
+                     "it there, so it pushes dynamics on the way instead of teleporting through "
+                     "them. Keeps the current orientation when rotation is None.")
+                .def_property_readonly("sleeping", &RigidBody::sleeping,
+                                       "True when the solver has parked this body.")
+                .def("wake_up", &RigidBody::wakeUp, "Take the body out of sleep.")
+                .def("__repr__", &RigidBody::repr);
+
+        py::class_<SoftBodyHandle, std::shared_ptr<SoftBodyHandle>>(sub, "SoftBody")
+                .def_property_readonly("object", &SoftBodyHandle::object,
+                                       "The scene object whose mesh this body deforms.")
+                .def_property_readonly("valid", &SoftBodyHandle::valid,
+                                       "False once the play session that created it has stopped.")
+                .def_property_readonly("center", &SoftBodyHandle::center,
+                                       "WORLD-SPACE centre of the deformed body. The object's own "
+                                       "position is zero throughout Play - the mesh carries "
+                                       "world-space vertices - so this is how a script follows it.")
+                .def_property_readonly("bounds_min", &SoftBodyHandle::boundsMin)
+                .def_property_readonly("bounds_max", &SoftBodyHandle::boundsMax)
+                .def_property_readonly("vertex_count", &SoftBodyHandle::vertexCount)
+                .def_property("recompute_normals", &SoftBodyHandle::recomputeNormals,
+                              &SoftBodyHandle::setRecomputeNormals,
+                              "Recompute vertex normals every step (on by default). The bulk of a "
+                              "soft body's CPU cost, and pointless for a flat-shaded body.")
+                .def("__repr__", &SoftBodyHandle::repr);
+
+        py::class_<ArticulationHandle, std::shared_ptr<ArticulationHandle>>(sub, "Articulation")
+                .def_property_readonly("object", &ArticulationHandle::object,
+                                       "The Robot this articulation simulates — the robot itself, "
+                                       "even when the handle was asked for from one of its links.")
+                .def_property_readonly("valid", &ArticulationHandle::valid,
+                                       "False once the play session that created it has stopped.")
+                .def_property_readonly("joint_names", &ArticulationHandle::jointNames,
+                                       "The simulated DOFs, in the articulation's own order. Fixed "
+                                       "URDF joints are collapsed, so this is NOT the visual Robot's "
+                                       "joint order — match by name.")
+                .def_property_readonly("num_dof", &ArticulationHandle::numDof)
+                .def_property_readonly("joint_positions", &ArticulationHandle::jointPositions,
+                                       "Joint positions in joint_names order: radians for a revolute "
+                                       "joint, metres for a prismatic one.")
+                .def_property_readonly("joint_velocities", &ArticulationHandle::jointVelocities,
+                                       "Joint velocities in joint_names order: rad/s or m/s.")
+                .def("set_drive_targets", &ArticulationHandle::setDriveTargets, py::arg("targets"),
+                     "One PD setpoint per DOF, in joint_names order. The drive authored in the "
+                     "Articulation section pulls each joint toward its target over the coming "
+                     "steps - a setpoint, not a teleport, and inert with zero authored stiffness.")
+                .def("set_drive_target", &ArticulationHandle::setDriveTargetByName,
+                     py::arg("joint"), py::arg("value"),
+                     "PD setpoint for one DOF, by its URDF joint name.")
+                .def("set_drive_target", &ArticulationHandle::setDriveTargetByIndex,
+                     py::arg("index"), py::arg("value"),
+                     "PD setpoint for one DOF, by its index in joint_names.")
+                .def_property_readonly("root_position", &ArticulationHandle::rootPosition,
+                                       "WORLD-SPACE position of the root link.")
+                .def_property_readonly("root_rotation", &ArticulationHandle::rootRotation,
+                                       "WORLD-SPACE orientation of the root link.")
+                .def_property_readonly("root_velocity", &ArticulationHandle::rootVelocity,
+                                       "Root link linear velocity in m/s, world frame.")
+                .def_property_readonly("root_angular_velocity", &ArticulationHandle::rootAngularVelocity,
+                                       "Root link angular velocity in rad/s, world frame.")
+                .def("__repr__", &ArticulationHandle::repr);
+
+        py::class_<JointHandle, std::shared_ptr<JointHandle>>(sub, "Joint")
+                .def_property_readonly("object", &JointHandle::object,
+                                       "The joint NODE this handle was built from — the node whose "
+                                       "transform is the joint frame.")
+                .def_property_readonly("valid", &JointHandle::valid,
+                                       "False once the play session that created it has stopped.")
+                .def_property_readonly("type", &JointHandle::type,
+                                       "\"fixed\" | \"revolute\" | \"prismatic\" | \"spherical\" | "
+                                       "\"distance\".")
+                .def_property_readonly("position", &JointHandle::position,
+                                       "The joint coordinate: radians about the axis for a revolute "
+                                       "(and a spherical's twist), metres along it for a prismatic, "
+                                       "anchor distance for a distance joint. Zero for fixed.")
+                .def_property_readonly("velocity", &JointHandle::velocity,
+                                       "Its rate: rad/s or m/s, same convention as position.")
+                .def_property_readonly("broken", &JointHandle::broken,
+                                       "True once the solver exceeded the break threshold; the "
+                                       "constraint never comes back. A script ON the joint node "
+                                       "hears on_break() at that moment.")
+                .def("set_drive_target", &JointHandle::setDriveTarget, py::arg("value"),
+                     "PD setpoint along the motion axis (radians / metres). Acts through the "
+                     "authored stiffness — inert while stiffness is zero.")
+                .def("set_drive_velocity", &JointHandle::setDriveVelocity, py::arg("value"),
+                     "Velocity setpoint (rad/s or m/s). Acts through the authored damping — "
+                     "inert while damping is zero.")
+                .def_property_readonly("reaction_force", &JointHandle::reactionForce,
+                                       "Force (N, world axes) the solver applied to hold the "
+                                       "constraint on the last step. Zero once broken - a broken "
+                                       "joint transmits nothing; the failure load is break_force.")
+                .def_property_readonly("reaction_torque", &JointHandle::reactionTorque,
+                                       "Torque (N*m, world axes) alongside reaction_force.")
+                .def_property_readonly("break_force", &JointHandle::breakForce,
+                                       "The force (N, world axes) the solver applied on the step "
+                                       "that BROKE the joint - the true failure load, necessarily "
+                                       "past the authored break threshold. Zero until broken; an "
+                                       "on_break() reads it directly, the break already happened.")
+                .def_property_readonly("break_torque", &JointHandle::breakTorque,
+                                       "Torque (N*m, world axes) alongside break_force.")
+                .def("release", &JointHandle::release,
+                     "Drop this constraint now - the letting-go half of a grasp. True if it "
+                     "was still live, False if it had already gone (releasing twice is a "
+                     "script being careful, not an error). Every read on the handle raises "
+                     "afterwards, and `valid` goes False.\n\n"
+                     "An AUTHORED joint can be released too: it is document state, so the "
+                     "next Play builds it again from the node that carries it.")
+                .def("__repr__", &JointHandle::repr);
+
+        py::class_<VehicleHandle, std::shared_ptr<VehicleHandle>>(sub, "Vehicle")
+                .def_property_readonly("object", &VehicleHandle::object,
+                                       "The model root the vehicle was authored on — the root "
+                                       "itself, even when the handle was asked for from a wheel.")
+                .def_property_readonly("valid", &VehicleHandle::valid,
+                                       "False once the play session that created it has stopped.")
+                .def("set_throttle", &VehicleHandle::setThrottle, py::arg("value"),
+                     "Throttle in [0, 1]. A held pedal, not an impulse - it stays where it "
+                     "was set until set again.")
+                .def("set_brake", &VehicleHandle::setBrake, py::arg("value"),
+                     "Brake in [0, 1].")
+                .def("set_steer", &VehicleHandle::setSteer, py::arg("value"),
+                     "Steer in [-1, 1]; positive steers left, matching the editor's A key.")
+                .def_property("reverse", &VehicleHandle::reverse, &VehicleHandle::setReverse,
+                              "Direction selector. The transmission is automatic all the way - "
+                              "True selects reverse, False drive; there is nothing to shift.")
+                .def_property_readonly("speed", &VehicleHandle::speed,
+                                       "Forward speed in m/s (negative while rolling backwards).")
+                .def_property_readonly("wheel_spin_rates", &VehicleHandle::wheelSpinRates,
+                                       "Wheel spin in rad/s, [FR, FL, RR, RL].")
+                .def_property_readonly("wheels_grounded", &VehicleHandle::wheelsGrounded,
+                                       "Whether each wheel's suspension found ground, "
+                                       "[FR, FL, RR, RL].")
+                .def_property_readonly("position", &VehicleHandle::position,
+                                       "WORLD-SPACE position of the chassis centre.")
+                .def_property_readonly("rotation", &VehicleHandle::rotation,
+                                       "WORLD-SPACE orientation of the chassis (+Z is forward).")
+                .def("__repr__", &VehicleHandle::repr);
+
+        // The world ITSELF, not a handle onto something it is simulating. This
+        // is the one thing in this file a script cannot build for itself and
+        // must not try to: the session owns the world, and threepp.PhysxWorld's
+        // constructor raises in the editor precisely so this is the only way to
+        // one. With it, giving a spawned mesh a body is the ordinary threepp
+        // call rather than an editor verb invented for the purpose.
+        sub.def(
+                "world", []() -> py::object {
+                    auto* session = playing();
+                    if (!session) return py::none();
+                    // Reference, never a holder: the session owns the world and
+                    // outlives every script that asks. A Python-side keep-alive
+                    // here would let a stopped session's world survive its own
+                    // stop(), which is the opposite of what Stop means.
+                    return py::cast(session->world(), py::return_value_policy::reference);
+                },
+                "The PhysxWorld this Play session is stepping, or None outside Play.\n\n"
+                "The ordinary threepp.PhysxWorld - `world.add(mesh, mass=1.0)`, `add_static`, "
+                "`add_dynamic_convex`, `remove`, `create_material` - so a script that spawns a "
+                "mesh into `editor.scene()` gives it a body exactly as a standalone threepp "
+                "program would. Bodies added this way die with the world at Stop, and meshes "
+                "spawned into the scene die with the stop-restore, so neither needs cleaning up.\n\n"
+                "NOTE the handle difference: what `world.add()` returns is a raw "
+                "`threepp.RigidBody`, valid while the world is alive - which includes stop(), "
+                "since sessions stop in reverse order and physics goes down last - but NOT "
+                "invalidated when the world dies, so one stashed beyond its session "
+                "dereferences a released actor. `rigid_body_from_object` returns the "
+                "lifetime-checked `threepp.editor.RigidBody`, which raises instead. Prefer "
+                "that one for anything held longer than the session.");
+
+        sub.def(
+                "rigid_body_from_object", [](const py::handle& h) -> py::object {
+                    auto object = as_object3d(h);
+                    auto* session = playing();
+                    if (!object || !session) return py::none();
+                    // The session's own registry, not PhysxWorld's binding list:
+                    // static bodies are never bound (no pose to write back) and
+                    // would otherwise be invisible to a script.
+                    auto* actor = session->findActor(object.get());
+                    if (!actor) return py::none();
+                    return py::cast(std::make_shared<RigidBody>(
+                            std::move(object), actor, Lifetime{session->lifetime()}));
+                },
+                py::arg("object"),
+                "The RigidBody PhysX is simulating for `object`, or None when Play is not "
+                "running or the object has no physics. The lookup walks up the scene graph, so "
+                "a script on a child finds the body governing it.");
+
+        sub.def(
+                "soft_body_from_object", [](const py::handle& h) -> py::object {
+                    auto object = as_object3d(h);
+                    auto* session = playing();
+                    if (!object || !session) return py::none();
+                    auto* body = session->world()->findSoftBody(object.get());
+                    if (!body) return py::none();
+                    return py::cast(std::make_shared<SoftBodyHandle>(
+                            std::move(object), body, Lifetime{session->lifetime()}));
+                },
+                py::arg("object"),
+                "The SoftBody PhysX is simulating for `object`, or None when Play is not running "
+                "or the object is not a soft body.");
+
+        sub.def(
+                "articulation_from_object", [](const py::handle& h) -> py::object {
+                    auto object = as_object3d(h);
+                    auto* session = playing();
+                    if (!object || !session) return py::none();
+                    const auto* played = session->findArticulation(object.get());
+                    if (!played || !played->robot) return py::none();
+                    // The handle's object is the ROBOT, whatever node asked: the
+                    // articulation governs the whole subtree, and a script on a
+                    // link wants the robot's joint table, not the link.
+                    return py::cast(std::make_shared<ArticulationHandle>(
+                            played->robot->shared_from_this(), played,
+                            Lifetime{session->lifetime()}));
+                },
+                py::arg("object"),
+                "The Articulation PhysX is simulating for `object`, or None when Play is not "
+                "running or no articulated robot governs it. The lookup walks up the scene "
+                "graph, so a script on any link of a robot finds the robot's articulation. "
+                "Robots simulate only when their Articulation section says Simulate.");
+
+        sub.def(
+                "joint_from_object", [](const py::handle& h) -> py::object {
+                    auto object = as_object3d(h);
+                    auto* session = playing();
+                    if (!object || !session) return py::none();
+                    const auto* played = session->findJoint(object.get());
+                    if (!played || !played->joint) return py::none();
+                    return py::cast(std::make_shared<JointHandle>(
+                            std::move(object), played->joint,
+                            Lifetime{session->lifetime()}));
+                },
+                py::arg("object"),
+                "The live Joint built from `object`'s authored joint entry, or None when Play "
+                "is not running or the object is not a joint node. NO ancestor walk, unlike the "
+                "other from_object verbs: a joint is its own node, so the script asking is "
+                "normally sitting on it.");
+
+        sub.def(
+                "create_joint",
+                [](const py::handle& bodyA, const py::handle& bodyB, const Vector3& position,
+                   const Quaternion& rotation, const Joint::Params& params) -> py::object {
+                    auto* session = playing();
+                    if (!session) {
+                        throw std::runtime_error(
+                                "create_joint: no play session is running - joints exist only "
+                                "during Play");
+                    }
+                    auto* a = resolveJointSide(bodyA, "body_a");
+                    auto* b = resolveJointSide(bodyB, "body_b");
+
+                    auto joint = session->createJoint(a, b, position, rotation, params);
+
+                    // The handle's `object` is body A's, when body A was one -
+                    // an authored joint's handle carries the node it was
+                    // authored on, and the nearest thing a runtime joint has
+                    // is the thing it was hung off.
+                    auto object = as_object3d(bodyA);
+                    return py::cast(std::make_shared<JointHandle>(
+                            std::move(object), std::move(joint), Lifetime{session->lifetime()}));
+                },
+                py::arg("body_a"), py::arg("body_b"), py::arg("position"),
+                py::arg("rotation") = Quaternion(), py::arg("params") = Joint::Params{},
+                "Build a joint between two bodies RIGHT NOW, and hand back the same "
+                "threepp.editor.Joint that joint_from_object returns.\n\n"
+                "This is how a gripper is scripted: on contact, weld the part to the tool "
+                "link; to let go, call release() on what you get back. A joint is a real "
+                "constraint, so the part keeps its mass and its contacts - unlike reparenting "
+                "it in the scene graph, which teleports it and takes it out of the "
+                "simulation.\n\n"
+                "Either side may be a scene object (a mesh with Physics, or any LINK of a "
+                "simulated robot - the same resolution an authored joint node uses), a "
+                "RigidBody from either handle type, an ArticulationLink, or None for the "
+                "world. Not both None.\n\n"
+                "`position` and `rotation` are the joint frame in WORLD space: the anchor, "
+                "with local X along the hinge or slide axis. `params` is a threepp.Joint.Params "
+                "- the default is a fixed weld, which is what a grasp wants.\n\n"
+                "The SESSION owns the joint, so Stop destroys it in the right order however "
+                "long the handle is kept; the handle then reports valid == False. Raises "
+                "outside Play, when a side names something with no rigid body, or when both "
+                "sides are the world or the same body.");
+
+        sub.def(
+                "vehicle_from_object", [](const py::handle& h) -> py::object {
+                    auto object = as_object3d(h);
+                    auto* session = playing();
+                    if (!object || !session) return py::none();
+                    const auto* played = session->findVehicle(object.get());
+                    if (!played || !played->root || !played->drive) return py::none();
+                    // The handle's object is the model ROOT, whatever node
+                    // asked: the vehicle governs the whole subtree, and a
+                    // script on a wheel wants the car.
+                    return py::cast(std::make_shared<VehicleHandle>(
+                            played->root->shared_from_this(), played,
+                            Lifetime{session->lifetime()}));
+                },
+                py::arg("object"),
+                "The Vehicle PhysX is simulating for `object`, or None when Play is not "
+                "running or no authored vehicle governs it. The lookup walks up the scene "
+                "graph, so a script on a wheel (or anywhere in the model) finds the car.");
+
+        py::class_<RaycastHit>(
+                sub, "RaycastHit",
+                "What threepp.editor.raycast answers with when the ray hit something.\n\n"
+                "Values, all of it - nothing here points into PhysX, so keeping one is safe.")
+                .def_property_readonly(
+                        "object", [](const RaycastHit& h) { return h.object; },
+                        "The object the physics was authored on, as its concrete type (Mesh, "
+                        "Group, Robot, ...) - or None when the actor answers to nothing the "
+                        "script can name.")
+                .def_readonly("point", &RaycastHit::point, "WORLD-SPACE point of the hit.")
+                .def_readonly("normal", &RaycastHit::normal,
+                              "Unit surface normal there, pointing OUT of the surface hit.")
+                .def_readonly("distance", &RaycastHit::distance,
+                              "Metres from `origin` to `point`, along the ray.")
+                .def("__repr__", [](const RaycastHit& h) {
+                    std::string name = "None";
+                    if (!h.object.is_none()) {
+                        try {
+                            name = "'" + py::cast<std::string>(h.object.attr("name")) + "'";
+                        } catch (const py::error_already_set&) {
+                            name = "?";
+                        }
+                    }
+                    return "<threepp.editor.RaycastHit " + name + " at " +
+                           std::to_string(h.distance) + " m>";
+                });
+
+        sub.def(
+                "raycast", [](const Vector3& origin, const Vector3& direction, float maxDistance,
+                              const py::handle& ignore) -> py::object {
+                    using namespace ::physx;
+
+                    auto* session = playing();
+                    if (!session) {
+                        // A miss is None, so "not playing" must NOT be: the two
+                        // would be indistinguishable, and a ground check that
+                        // silently answers "nothing there" outside Play is a
+                        // script that looks like it works.
+                        throw std::runtime_error(
+                                "raycast needs a playing physics world - there is none "
+                                "(no PhysX build, or Play is not running)");
+                    }
+
+                    Vector3 unit(direction);
+                    const float length = unit.length();
+                    if (!(length > 0.f) || !std::isfinite(length)) {
+                        throw std::invalid_argument(
+                                "raycast: direction has no length - a ray needs somewhere to go");
+                    }
+                    unit.divideScalar(length);
+                    if (!(maxDistance > 0.f)) {
+                        throw std::invalid_argument("raycast: max_distance must be greater than zero");
+                    }
+
+                    // ALL the actors governing the ignored object, not just the
+                    // one a handle would name: a subtree collider or a compound
+                    // is several actors under one authored node, and skipping the
+                    // first of them would skip almost nothing.
+                    std::vector<const PxRigidActor*> ignored;
+                    if (!ignore.is_none()) {
+                        if (const auto object = as_object3d(ignore)) {
+                            ignored = session->findActors(object.get());
+                        }
+                    }
+
+                    PxQueryFilterData filter;// eSTATIC | eDYNAMIC
+                    IgnoreActors exclude(ignored);
+                    if (!ignored.empty()) filter.flags |= PxQueryFlag::ePREFILTER;
+
+                    PxRaycastBuffer buffer;
+                    const bool hit = session->world()->scene().raycast(
+                            toPxVec3(origin), toPxVec3(unit), maxDistance, buffer,
+                            PxHitFlag::eDEFAULT, filter,
+                            ignored.empty() ? nullptr : &exclude);
+                    if (!hit || !buffer.hasBlock) return py::none();
+
+                    const auto& block = buffer.block;
+                    RaycastHit result;
+                    result.object = py::none();
+                    if (auto* object = session->findObject(block.actor)) {
+                        result.object = editor::scripting::handleFor(*object);
+                    }
+                    result.point = toVector3(block.position);
+                    result.normal = toVector3(block.normal);
+                    result.distance = block.distance;
+                    return py::cast(result);
+                },
+                py::arg("origin"), py::arg("direction"),
+                py::arg("max_distance") = PX_MAX_F32, py::arg("ignore") = py::none(),
+                "Cast a ray through the playing physics world and return the NEAREST "
+                "RaycastHit, or None when it hits nothing.\n\n"
+                "`origin` and `direction` are Vector3, world space; direction is normalised "
+                "here, and a zero-length one raises ValueError. `max_distance` is in metres "
+                "and defaults to unbounded. `ignore` excludes every actor governing that "
+                "object - pass your own object for a ground check, or the ray starts inside "
+                "your own collider and hits it.\n\n"
+                "Raises RuntimeError when no physics world is playing: a miss is None, so "
+                "'not playing' cannot also be None without making the two the same answer.");
+    }
+
+}// namespace threepp_py

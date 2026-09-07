@@ -64,17 +64,17 @@ void SpotLightHelper::update() {
 
     this->cone->scale.set(coneWidth, coneWidth, coneLength);
 
-    static Vector3 _vector;
+    static thread_local Vector3 _vector;
     _vector.setFromMatrixPosition(*this->light->target().matrixWorld);
 
     this->cone->lookAt(_vector);
 
     if (this->color) {
 
-        this->material()->as<MaterialWithColor>()->color.copy(*this->color);
+        this->cone->materialAs<MaterialWithColor>()->color.copy(*this->color);
 
     } else {
 
-        this->cone->material()->as<MaterialWithColor>()->color.copy(this->light->color);
+        this->cone->materialAs<MaterialWithColor>()->color.copy(this->light->color);
     }
 }

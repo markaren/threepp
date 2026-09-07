@@ -11,12 +11,11 @@
 #include "threepp/utils/StringUtils.hpp"
 
 #include <cmath>
-#include <fstream>
 #include <iostream>
 #include <list>
 #include <vector>
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
 #include <glad/glad.h>
 #else
 #include <GLES3/gl32.h>
@@ -37,25 +36,27 @@ namespace {
         return shader;
     }
 
-    std::pair<std::string, std::string> getEncodingComponents(Encoding encoding) {
+    std::pair<std::string, std::string> getEncodingComponents(ColorSpace encoding) {
 
         switch (encoding) {
 
-            case Encoding::Linear:
+            case ColorSpace::NoColorSpace:
                 return {"Linear", "( value )"};
-            case Encoding::sRGB:
+            case ColorSpace::Linear:
+                return {"Linear", "( value )"};
+            case ColorSpace::sRGB:
                 return {"sRGB", "( value )"};
-            case Encoding::RGBE:
+            case ColorSpace::RGBE:
                 return {"RGBE", "( value )"};
-            case Encoding::RGBM7:
+            case ColorSpace::RGBM7:
                 return {"RGBM", "( value, 7.0 )"};
-            case Encoding::RGBM16:
+            case ColorSpace::RGBM16:
                 return {"RGBM", "( value, 16.0 )"};
-            case Encoding::RGBD:
+            case ColorSpace::RGBD:
                 return {"RGBD", "( value, 256.0 )"};
-            case Encoding::Gamma:
+            case ColorSpace::Gamma:
                 return {"Gamma", "( value, float( GAMMA_FACTOR ) )"};
-            case Encoding::LogLuv:
+            case ColorSpace::LogLuv:
                 return {"LogLuv", "( value )"};
             default:
                 std::cerr << "THREE.GLProgram: Unsupported encoding:" << as_integer(encoding) << std::endl;
@@ -82,13 +83,13 @@ namespace {
         return ss.str();
     }
 
-    std::string getTexelDecodingFunction(const std::string& functionName, Encoding encoding) {
+    std::string getTexelDecodingFunction(const std::string& functionName, ColorSpace encoding) {
 
         const auto components = getEncodingComponents(encoding);
         return "vec4 " + functionName + "( vec4 value ) { return " + components.first + "ToLinear" + components.second + "; }";
     }
 
-    std::string getTexelEncodingFunction(const std::string& functionName, Encoding encoding) {
+    std::string getTexelEncodingFunction(const std::string& functionName, ColorSpace encoding) {
 
         const auto components = getEncodingComponents(encoding);
         return "vec4 " + functionName + "( vec4 value ) { return LinearTo" + components.first + components.second + "; }";
@@ -114,6 +115,14 @@ namespace {
 
             case ToneMapping::ACESFilmic:
                 toneMappingName = "ACESFilmic";
+                break;
+
+            case ToneMapping::Neutral:
+                toneMappingName = "Neutral";
+                break;
+
+            case ToneMapping::AgX:
+                toneMappingName = "AgX";
                 break;
 
             case ToneMapping::Custom:
@@ -330,7 +339,7 @@ namespace {
 }// namespace
 
 
-GLProgram::GLProgram(const IGLRenderer* renderer, std::string cacheKey, const ProgramParameters* parameters, GLBindingStates* bindingStates)
+GLProgram::GLProgram(const Renderer* renderer, std::string cacheKey, const ProgramParameters* parameters, GLBindingStates* bindingStates)
     : cacheKey(std::move(cacheKey)), bindingStates(bindingStates) {
 
     auto& defines = parameters->defines;
@@ -444,6 +453,8 @@ GLProgram::GLProgram(const IGLRenderer* renderer, std::string cacheKey, const Pr
                     parameters->skinning ? "#define USE_SKINNING" : "",
                     parameters->useVertexTexture ? "#define BONE_TEXTURE" : "",
 
+                    parameters->tetSkinning ? "#define USE_TET_SKIN" : "",
+
                     parameters->morphTargets ? "#define USE_MORPHTARGETS" : "",
                     parameters->morphNormals && !parameters->flatShading ? "#define USE_MORPHNORMALS" : "",
                     parameters->doubleSided ? "#define DOUBLE_SIDED" : "",
@@ -528,6 +539,16 @@ GLProgram::GLProgram(const IGLRenderer* renderer, std::string cacheKey, const Pr
 
                     "#endif",
 
+                    "#ifdef USE_TET_SKIN",
+
+                    "	attribute vec4 tetIndex;",
+                    "	attribute vec4 tetWeight;",
+                    "	attribute vec3 tetRestInv0;",
+                    "	attribute vec3 tetRestInv1;",
+                    "	attribute vec3 tetRestInv2;",
+
+                    "#endif",
+
                     "\n"
 
             };
@@ -578,6 +599,8 @@ GLProgram::GLProgram(const IGLRenderer* renderer, std::string cacheKey, const Pr
                     parameters->alphaMap ? "#define USE_ALPHAMAP" : "",
 
                     parameters->sheen ? "#define USE_SHEEN" : "",
+                    parameters->pbrSpecular ? "#define USE_SPECULAR" : "",
+                    parameters->iridescence ? "#define USE_IRIDESCENCE" : "",
                     parameters->transmission ? "#define USE_TRANSMISSION" : "",
                     parameters->transmissionMap ? "#define USE_TRANSMISSIONMAP" : "",
                     parameters->thicknessMap ? "#define USE_THICKNESSMAP" : "",
@@ -600,7 +623,7 @@ GLProgram::GLProgram(const IGLRenderer* renderer, std::string cacheKey, const Pr
 
                     parameters->premultipliedAlpha ? "#define PREMULTIPLIED_ALPHA" : "",
 
-                    parameters->physicallyCorrectLights ? "#define PHYSICALLY_CORRECT_LIGHTS" : "",
+                    parameters->useLegacyLights ? "#define USE_LEGACY_LIGHTS" : "",
 
                     parameters->logarithmicDepthBuffer ? "#define USE_LOGDEPTHBUF" : "",
 
@@ -651,7 +674,7 @@ GLProgram::GLProgram(const IGLRenderer* renderer, std::string cacheKey, const Pr
     fragmentShader = unrollLoops(fragmentShader);
 
     std::string glslVersion{"330 core"};
-#if EMSCRIPTEN
+#ifdef __EMSCRIPTEN__
     glslVersion = "300 es";
 #endif
 
@@ -696,19 +719,6 @@ GLProgram::GLProgram(const IGLRenderer* renderer, std::string cacheKey, const Pr
 
     std::string vertexGlsl = prefixVertex + vertexShader;
     std::string fragmentGlsl = prefixFragment + fragmentShader;
-
-    // Save shaders to txt files
-    //std::ofstream vertexFile(parameters->shaderName +"_vertex_shader.txt");
-    //if (vertexFile.is_open()) {
-    //    vertexFile << vertexGlsl;
-    //    vertexFile.close();
-    //}
-    //
-    //std::ofstream fragmentFile(parameters->shaderName+"_fragment_shader.txt");
-    //if (fragmentFile.is_open()) {
-    //    fragmentFile << fragmentGlsl;
-    //    fragmentFile.close();
-    //}
 
     const auto glVertexShader = createShader(GL_VERTEX_SHADER, vertexGlsl.c_str());
     const auto glFragmentShader = createShader(GL_FRAGMENT_SHADER, fragmentGlsl.c_str());

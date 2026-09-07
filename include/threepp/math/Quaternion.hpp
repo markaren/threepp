@@ -6,6 +6,8 @@
 #include "threepp/math/float_view.hpp"
 
 #include <functional>
+#include <ostream>
+#include <vector>
 
 namespace threepp {
 
@@ -101,6 +103,9 @@ namespace threepp {
             os << "Quaternion(x=" << v.x << ", y=" << v.y << ", z=" << v.z << ", w=" << v.w << ")";
             return os;
         }
+
+        static void slerpFlat(std::vector<float>& dst, size_t dstOffset, const std::vector<float>& src0, size_t srcOffset0, const std::vector<float>& src1, size_t srcOffset1, float t);
+        static void multiplyQuaternionsFlat(std::vector<float>& dst, size_t dstOffset, const std::vector<float>& src0, size_t srcOffset0, const std::vector<float>& src1, size_t srcOffset1);
 
     private:
         std::function<void()> onChangeCallback_ = [] {};

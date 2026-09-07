@@ -1,0 +1,590 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+
+#include "instance_flags.glsl"// per-instance flag accessors + reactivity channels
+
+// Raster TAA resolve / temporal upsampler. Inputs:
+//   binding 0: taaInputTex        — current frame, post-denoise (RENDER extent)
+//   binding 1: taaHistoryReadTex  — previous frame's output      (OUTPUT extent)
+//   binding 2: gbufMotionTex      — gbuffer motion vector         (RENDER extent)
+//   binding 3: taaSwapImage       — swapchain output (write)      (OUTPUT extent)
+//   binding 4: taaHistoryWriteImg — next-frame history (write)    (OUTPUT extent)
+//
+// When the renderer renders below the swapchain resolution
+// (renderScale < 1) the input + gbuffer are at the render extent while
+// the history + output are at the swapchain extent: the pass becomes a
+// temporal upsampler — each frame's jittered low-res sample is folded
+// into the full-res history, reconstructing detail over several frames
+// (the FSR2 / TSR / DLSS principle; the camera jitter is what spreads
+// the samples across the high-res grid). At renderScale == 1 the two
+// extents are equal and this collapses to a plain 1:1 TAA resolve,
+// bit-identical to the non-upscaling path.
+//
+// Standard UE-style temporal AA:
+//   1) reproject prev frame via the gbuffer motion vector (sub-pixel exact for moving meshes)
+//   2) compute current-frame 3×3 color AABB (in INPUT texels) → clamp the reprojected history
+//   3) blend mix(history, current, alpha) with alpha small (~0.1 → 90% history weight)
+// The neighborhood clamp suppresses ghosting at disocclusions and on
+// fast-moving geometry without an explicit motion-rejection branch.
+
+#extension GL_GOOGLE_include_directive : enable
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D taaInputTex;
+layout(set = 0, binding = 1) uniform sampler2D taaHistoryReadTex;
+layout(set = 0, binding = 2) uniform sampler2D gbufMotionTex;
+// No format qualifier: the bound image is VK_FORMAT_B8G8R8A8_UNORM (matches the
+// swapchain channel order) but GLSL has no BGRA8 format qualifier. Writing
+// without a format requires shaderStorageImageWriteWithoutFormat — channel
+// names (r/g/b/a) still map by component, so behaviour is unchanged.
+layout(set = 0, binding = 3) uniform writeonly image2D taaSwapImage;
+// History storage is rgba16f (not rgba8) so the per-frame mix() result is
+// preserved at sub-quantum precision. With rgba8 history the running average
+// re-quantized every frame and locked into uint8 codes, producing visible
+// iso-luminance bands on smooth specular surfaces. Input/swap stay rgba8
+// because denoise.comp writes binding 1 with rgba8 and that target can be
+// either the TAA input image or the BGRA8 swapchain.
+layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D taaHistoryWriteImg;
+// Mesh-ID rejection: bind both the current frame's IDs and the previous
+// frame's. When the reprojected prev pixel sits on a different mesh than
+// the current pixel, the history is from a disocclusion and must be
+// rejected (neighborhood clamp can't catch this when adjacent surfaces
+// share similar color, e.g. boat-edge over water).
+layout(set = 0, binding = 5) uniform usampler2D gbufIdsCurrTex;
+layout(set = 0, binding = 6) uniform usampler2D gbufIdsPrevTex;
+// Prev-frame depth buffer (reversed-Z), sampled at the reprojected UV for
+// depth-based disocclusion (see linZ + depthDisocc in main). Same image the
+// deferred GI/reflection disocclusion uses (gbufDepthPrevTex there).
+layout(set = 0, binding = 7) uniform sampler2D gbufDepthPrevTex;
+
+layout(push_constant) uniform Pc {
+    float blendAlpha;// base new-sample weight (0.1 = strong AA, slow ghost decay)
+    uint  width;     // PANE (scissor region) output size — dispatch + writes
+    uint  height;
+    uint  inWidth;   // PANE (scissor region) input size (renderScale render extent)
+    uint  inHeight;
+    // bit 0 = writeSwap (1 = write the swapchain here; 0 = a downstream RCAS
+    //         sharpen pass owns the next read of the history-write slot
+    //         instead).
+    // bit 1 = reserved (unused).
+    uint  flags;
+    float dtFrames;  // this frame's duration in REFERENCE frames (dt · 90 fps,
+                     // host-clamped to [1, 6]; 1 at ≥90 fps). Converts the
+                     // per-frame temporal constants below (deviation-streak
+                     // ramp, soft-rectification rate) to wall-clock time. With
+                     // a fixed per-frame ramp, a low-fps frame displaces the
+                     // trailing edge several pixels while the ramp advances
+                     // only one step — leaving one discrete stale band per
+                     // ramp frame ("double/triple edge ghosts" behind moving
+                     // objects at capped fps).
+    // Split-screen: packed swapchain write offset (dstX | dstY<<16). The pane is
+    // rendered region-sized at the texture ORIGIN; only the swapchain store is
+    // offset to the pane's screen position. 0 = full-frame (no offset). Occupies
+    // the former std430 pad at offset 28, so the mat4 still aligns to offset 32.
+    uint  dstOffset;
+    // prevVPunjit · currVPunjit⁻¹ — maps current CLIP at the far plane
+    // (reversed-Z: z = 0) to previous clip. Supplies SKY pixels their true
+    // rotation-induced motion. std430: mat4 aligns to offset 32.
+    mat4  skyReproj;
+    // Split-screen: full (physical) texture sizes for UV normalisation, each
+    // packed as (w | h<<16) — same convention as dstOffset. The pane content
+    // lives in [0..inWidth]/[0..width] of these full-size textures, so a
+    // region-UV in [0,1] must be scaled by region/phys before sampling.
+    // Default (phys == region) → scale 1 → identical to full-frame.
+    uint  physIn;    // physInW | physInH << 16
+    uint  physOut;   // physOutW | physOutH << 16
+    // This frame's Halton sub-pixel jitter in RENDER TEXELS (offsets
+    // 104/108 — these two slots also keep the vec4 depthLin below 16-byte-
+    // aligned at offset 112). (0, 0) whenever the raster is unjittered
+    // (MSAA mode, event camera). Consumed by the jitter cancellation in
+    // main(); see TaaResolve::recordResolve for the host side.
+    float jitterTexX;
+    float jitterTexY;
+    // Reverse-Z view-depth linearization terms (A,B,C,D): viewZ = (A·d+B)/(C·d+D),
+    // taken from the inverse reverse-Z projection's z/w rows. Lets the depth
+    // disocclusion gate compare surfaces in linear view-Z (matches deferred_shade).
+    // All-zero ⇒ disocclusion disabled (caller supplied no camera depth params).
+    vec4  depthLin;
+} pc;
+
+const uint kFlagWriteSwap = 1u;
+
+// physIn/physOut are packed (w | h<<16) — see the Pc block comment.
+uvec2 unpackDims(uint packed) { return uvec2(packed & 0xFFFFu, packed >> 16u); }
+
+// Catmull-Rom resample (5-tap, bilinear-fused). Two users:
+//  · history reconstruction at the reprojected position — single-bilinear
+//    sampling of history smears under camera translation (every frame's
+//    prevUv lands at a sub-pixel position → bilinear blurs history by
+//    ~0.5 px → blur compounds across frames with α=0.1 → visible smear,
+//    worst on close objects where screen-space velocity per camera unit is
+//    highest);
+//  · CURRENT-frame jitter cancellation (see main) — the raster renders with
+//    a jittered projection, so reconstructing the scene at the output
+//    pixel's UNJITTERED center is a sub-texel resample every frame; a plain
+//    bilinear there would both blur and (worse) let the composed output
+//    translate with the jitter.
+// Catmull-Rom is a sharp separable cubic, evaluated as 5 bilinear taps
+// (Jorge Jimenez / Inside the renderer trick — drop the 4 corner weights,
+// since they're small). The neighborhood AABB clamp / dering clamp catches
+// any slight overshoot. Sampler stays LINEAR — required for the 4 sub-taps
+// fused into each fetch.
+// `uv` is in PHYSICAL texture space (the caller scales the region-UV by
+// region/phys). texSize is the full texture size so the 5 fused-bilinear taps
+// land on the correct texels.
+vec3 sampleCR(sampler2D tex, vec2 uv, vec2 texSize) {
+    const vec2 samplePos = uv * texSize;
+    const vec2 texPos1 = floor(samplePos - 0.5) + 0.5;
+    const vec2 f = samplePos - texPos1;
+
+    const vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    const vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    const vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    const vec2 w3 = f * f * (-0.5 + 0.5 * f);
+
+    const vec2 w12 = w1 + w2;
+    const vec2 offset12 = w2 / w12;
+
+    const vec2 texPos0  = (texPos1 - 1.0)        / texSize;
+    const vec2 texPos3  = (texPos1 + 2.0)        / texSize;
+    const vec2 texPos12 = (texPos1 + offset12)   / texSize;
+
+    // Cross of 5 fused-bilinear fetches (top, left, center, right, bottom).
+    vec3 result = vec3(0.0);
+    result += texture(tex, vec2(texPos12.x, texPos0.y )).rgb * (w12.x * w0.y );
+    result += texture(tex, vec2(texPos0.x,  texPos12.y)).rgb * (w0.x  * w12.y);
+    result += texture(tex, vec2(texPos12.x, texPos12.y)).rgb * (w12.x * w12.y);
+    result += texture(tex, vec2(texPos3.x,  texPos12.y)).rgb * (w3.x  * w12.y);
+    result += texture(tex, vec2(texPos12.x, texPos3.y )).rgb * (w12.x * w3.y );
+    return max(result, vec3(0.0));// Catmull-Rom can ring slightly negative on hard edges.
+}
+vec3 sampleHistoryCR(vec2 uv) {
+    return sampleCR(taaHistoryReadTex, uv, vec2(unpackDims(pc.physOut)));
+}
+
+// Spatial FXAA (FXAA3 "console" variant) on the LDR input. Unused by main()
+// today (jittered TAA / unjittered MSAA are the shipping AA modes) — kept for
+// the non-temporal fallback path.
+vec3 fxaa(sampler2D tex, vec2 uv, vec2 rcpFrame) {
+    const vec3 L = vec3(0.299, 0.587, 0.114);
+    const vec3 rgbM = texture(tex, uv).rgb;
+    const float lM  = dot(rgbM, L);
+    const float lNW = dot(textureOffset(tex, uv, ivec2(-1, -1)).rgb, L);
+    const float lNE = dot(textureOffset(tex, uv, ivec2( 1, -1)).rgb, L);
+    const float lSW = dot(textureOffset(tex, uv, ivec2(-1,  1)).rgb, L);
+    const float lSE = dot(textureOffset(tex, uv, ivec2( 1,  1)).rgb, L);
+    const float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
+    const float lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
+    if (lMax - lMin < max(0.0312, lMax * 0.125)) return rgbM;// no edge → passthrough
+
+    vec2 dir = vec2(-((lNW + lNE) - (lSW + lSE)),
+                     ((lNW + lSW) - (lNE + lSE)));
+    const float dirReduce = max((lNW + lNE + lSW + lSE) * 0.25 * (1.0 / 8.0), 1.0 / 128.0);
+    const float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
+    dir = clamp(dir * rcpDirMin, vec2(-8.0), vec2(8.0)) * rcpFrame;
+
+    const vec3 rgbA = 0.5 * (texture(tex, uv + dir * (1.0 / 3.0 - 0.5)).rgb +
+                             texture(tex, uv + dir * (2.0 / 3.0 - 0.5)).rgb);
+    const vec3 rgbB = rgbA * 0.5 + 0.25 * (texture(tex, uv + dir * -0.5).rgb +
+                                           texture(tex, uv + dir *  0.5).rgb);
+    const float lB = dot(rgbB, L);
+    return (lB < lMin || lB > lMax) ? rgbA : rgbB;
+}
+
+// YCoCg transform — TAA history rectification works far better in YCoCg than RGB
+// (luma/chroma separation → tighter, more perceptual clipping).
+vec3 RGB_to_YCoCg(vec3 c) {
+    return vec3( 0.25 * c.r + 0.5 * c.g + 0.25 * c.b,
+                 0.5  * c.r            - 0.5  * c.b,
+                -0.25 * c.r + 0.5 * c.g - 0.25 * c.b);
+}
+vec3 YCoCg_to_RGB(vec3 c) {
+    const float t = c.x - c.z;
+    return vec3(t + c.y, c.x + c.z, t - c.y);
+}
+// Variance clip (Karis/Salvi): clip the history toward the neighbourhood centre
+// until it lands inside the [min,max] box (along the centre→history line, so
+// chroma is preserved better than a per-channel clamp).
+vec3 clipAABB(vec3 aabbMin, vec3 aabbMax, vec3 q) {
+    const vec3 center = 0.5 * (aabbMax + aabbMin);
+    const vec3 extent = 0.5 * (aabbMax - aabbMin) + vec3(1e-5);
+    const vec3 v = q - center;
+    const vec3 a = abs(v / extent);
+    const float ma = max(a.x, max(a.y, a.z));
+    return (ma > 1.0) ? (center + v / ma) : q;
+}
+
+// Reverse-Z NDC depth → linear view-space Z, via the inverse-projection z/w rows
+// packed in pc.depthLin. Used only for the depth disocclusion gate below.
+float linZ(float d) {
+    return (pc.depthLin.x * d + pc.depthLin.y) / (pc.depthLin.z * d + pc.depthLin.w);
+}
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
+
+    const vec2 sz = vec2(float(pc.width), float(pc.height));
+    const vec2 uv = (vec2(px) + 0.5) / sz;
+
+    // Split-screen: the pane content occupies [0..inWidth]/[0..width] of the
+    // full-size textures, so map the region-UV into that sub-rect for sampling.
+    // (At full-frame, region == phys → scale 1 → unchanged.)
+    const vec2 physInSz  = vec2(unpackDims(pc.physIn));
+    const vec2 physOutSz = vec2(unpackDims(pc.physOut));
+    const vec2 inScale  = vec2(float(pc.inWidth), float(pc.inHeight)) / physInSz;
+    const vec2 outScale = vec2(float(pc.width),   float(pc.height))   / physOutSz;
+    const vec2 uvIn = uv * inScale;// render-extent textures (input, motion, ids)
+
+    // ── JITTER CANCELLATION ─────────────────────────────────────────────────
+    // The raster renders with a Halton-jittered projection (m02/m12 +=
+    // 2·j/extent in GL clip space), which translates the rendered CONTENT by
+    // (-jx, +jy) texels in y-down texture space (same convention the deferred
+    // shade's `pixelNDC + cam.jitter.xy` reconstruction is built on). Without
+    // compensation here, the current sample — and with it the composed output
+    // — TRANSLATES with the 8-phase jitter pattern: the systemic "everything
+    // shakes" (measured ±0.9 px global shift, period 8, on every jittered
+    // path). Anchor this pass at UNJITTERED pixel centers instead: every
+    // current-frame read (color, motion, ids, depth, stats box) samples where
+    // this output pixel's unjittered content actually landed in the jittered
+    // input. History reprojection needs NO extra term — motion vectors are
+    // jitter-free and the history itself is unjittered-anchored from here on.
+    //
+    // The jitter (in RENDER TEXELS) arrives in its own push-constant slots
+    // (pc.jitterTexX/Y). (0,0) whenever the raster is unjittered (MSAA mode,
+    // event camera) — every path below then collapses to the exact pre-fix
+    // arithmetic.
+    const vec2 jitTex   = vec2(pc.jitterTexX, pc.jitterTexY);
+    const bool jittered = any(notEqual(jitTex, vec2(0.0)));
+    // Clamp half a texel inside the pane so the sub-texel offset can't read
+    // beyond the region at the borders.
+    const vec2 uvInJ = jittered
+            ? clamp(uvIn + vec2(-jitTex.x, jitTex.y) / physInSz,
+                    vec2(0.5) / physInSz,
+                    (vec2(float(pc.inWidth), float(pc.inHeight)) - 0.5) / physInSz)
+            : uvIn;
+
+    // Reproject prev frame via gbuffer motion vec. Motion is in GL-NDC delta
+    // (Y-up); convert UV → GL-NDC → add motion → back to screen UV. Sampled
+    // at the unjittered position (NEAREST sampler → snaps to the closest
+    // surface sample to this output pixel's true center).
+    vec2 motionGL = texture(gbufMotionTex, uvInJ).rg;
+    const vec2 currNDC  = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+    // SKY MOTION RECONSTRUCTION. Sky rasterizes no geometry, so its motion
+    // stays at the 0 clear — correct under TRANSLATION (sky is at infinity)
+    // but wrong under ROTATION: the whole sky slides across the screen while
+    // its history reprojects from the same spot (sky smears when tilting).
+    // Rebuild the true motion from the camera matrices by reprojecting this
+    // pixel AT THE FAR PLANE. Geometry that legitimately carries ~0 motion
+    // (static camera) maps through the same matrices to ~identity, so the
+    // exact-zero test is safe.
+    if (all(equal(motionGL, vec2(0.0)))) {
+        const vec4 pclip = pc.skyReproj * vec4(currNDC, 0.0, 1.0);// reversed-Z far
+        if (abs(pclip.w) > 1e-6) motionGL = pclip.xy / pclip.w - currNDC;
+    }
+    const vec2 prevNDC  = currNDC + motionGL;
+    const vec2 prevUv   = vec2((prevNDC.x * 0.5) + 0.5,
+                                0.5 - (prevNDC.y * 0.5));
+
+    bool reprojValid = (prevUv.x >= 0.0 && prevUv.x <= 1.0 &&
+                        prevUv.y >= 0.0 && prevUv.y <= 1.0);
+
+    // Mesh-ID rejection + skinned-mesh detection. Read both at once.
+    //   ids.x = instanceCustomIndex+1 (0 = sky/miss)
+    //   ids.z = per-instance flags (layout: vulkan_shared.h)
+    const uvec4 currIds = texture(gbufIdsCurrTex, uvInJ);
+    const uvec4 prevIds = reprojValid
+            ? texture(gbufIdsPrevTex, prevUv * inScale)
+            : uvec4(0u);
+    const bool isSkinned = ifSkinned(currIds.z);
+    // NO hard mesh-ID disocclusion reject. Under jitter a silhouette pixel's
+    // coverage (hence its mesh-ID) flips EVERY frame, so an ID-mismatch reject
+    // fires at every edge every frame → history never accumulates → edges
+    // oscillate hard (the "edges unstable" bug; frame N vs N+1 differed ~230/255
+    // at every silhouette). The YCoCg variance clip below handles disocclusion
+    // smoothly instead: genuinely stale history falls outside the neighbourhood
+    // box and gets clipped, while a jittering edge stays inside the box (which
+    // spans surface+background) and converges to the anti-aliased average.
+
+    // 3×3 YCoCg neighbourhood MEAN + VARIANCE → history is variance-clipped to
+    // mu ± γ·σ below. This is the standard TSR history rectification.
+    //
+    // NO same-mesh gate (deliberately). The gate was added to stop emissive-halo
+    // bleed, but it is FATAL to edge anti-aliasing under jitter: at a silhouette
+    // pixel the jitter flips the centre's coverage (surface↔background) every
+    // frame, so a same-mesh gate flips the clip box between surface-only and
+    // background-only stats each frame → the history is forced alternately to one
+    // or the other and can NEVER converge to the anti-aliased edge average →
+    // edges oscillate hard (frame N vs N+1 differed by ~229/255 at every
+    // silhouette). The full neighbourhood spans surface+background, so the box is
+    // stable and the edge converges to the jitter-averaged coverage = clean AA.
+    // The halo the gate guarded against is bounded now anyway: the TAA input is
+    // post-tonemap and already in [0,1].
+    const ivec2 inSz = ivec2(int(pc.inWidth), int(pc.inHeight));
+    // Centre the box on the UNJITTERED sample position (uvInJ == uvIn when
+    // unjittered → identical to the old `uv * inSz` texel).
+    const ivec2 ipx  = clamp(ivec2(uvInJ * physInSz), ivec2(0), inSz - 1);
+    vec3 m1 = vec3(0.0), m2 = vec3(0.0);
+    // Working-space min/max of the same 3×3 — dering clamp for the Catmull-
+    // Rom current-sample resample below (FSR2-style: a sharp cubic can
+    // overshoot at hard edges; its footprint is a superset of this box, so
+    // clamping to the box bounds kills the ring without softening).
+    vec3 minS = vec3(1e30), maxS = vec3(-1e30);
+    float cnt = 0.0;
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            const ivec2 q = clamp(ipx + ivec2(dx, dy), ivec2(0), inSz - 1);
+            vec3 s = texelFetch(taaInputTex, q, 0).rgb;
+            minS = min(minS, s); maxS = max(maxS, s);
+            const vec3 c = RGB_to_YCoCg(s);
+            m1 += c; m2 += c * c; cnt += 1.0;
+        }
+    }
+
+    // Current sample, anchored at this output pixel's UNJITTERED center.
+    // Post-tonemap input; temporal accumulation over the Halton jitter
+    // sequence is the anti-aliasing (TSR).
+    // Jittered raster: Catmull-Rom resample at the unjittered position
+    // (uvInJ), deringed against the 3×3 working-space box — this is the
+    // jitter cancellation that stops the composed output translating with
+    // the jitter pattern. Unjittered raster (MSAA mode / event camera):
+    // plain center read, bit-identical to the pre-fix path.
+    vec3 curr;
+    if (jittered) {
+        curr = sampleCR(taaInputTex, uvInJ, physInSz);
+    } else {
+        curr = texture(taaInputTex, uvIn).rgb;
+    }
+    if (jittered) curr = clamp(curr, minS, maxS);// dering (no-op when unjittered)
+
+    // Motion in pixels — used by the clip-rate gate below AND the velocity
+    // alpha. NDC motion is in [-2, 2] across the screen.
+    const vec2 motionPx = motionGL * 0.5 * vec2(pc.width, pc.height);
+    const float motionLen = length(motionPx);
+
+    // DILATED motion: max |motion| over the input neighbourhood. A pixel
+    // an object edge just vacated reads ZERO motion itself when the revealed
+    // background writes none (sky has no geometry) — but the edge that left
+    // it is still adjacent and carries real motion vectors. Dilation gives
+    // the vacated pixel that motion context; a truly static neighbourhood
+    // (camera + scene still) stays at zero.
+    //
+    // The ±1 ring holds for a silhouette drifting at ~1 px/frame. It is FALSE
+    // for a small fast mover, and the wide fallback in the depth-disocclusion
+    // block below is what covers that case — see the comment there.
+    const vec2 motionInTexel = 1.0 / vec2(textureSize(gbufMotionTex, 0));
+    float dilatedMotionPx = motionLen;
+    {
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                const vec2 mv = texture(gbufMotionTex, uvInJ + vec2(dx, dy) * motionInTexel).rg;
+                dilatedMotionPx = max(dilatedMotionPx,
+                                      length(mv * 0.5 * vec2(pc.width, pc.height)));
+            }
+    }
+
+    // DEPTH-BASED DISOCCLUSION (FSR2 / deferred_shade idea). The current
+    // surface's OWN previous NDC depth (motion .b) vs what the prev depth
+    // buffer actually held at the reprojected spot. A >10% view-Z mismatch
+    // means the history reprojected onto a DIFFERENT surface — the trailing
+    // edge behind a moving object (the "motion ring"), or an object edge
+    // sweeping across the static sky (sky writes no motion vectors, so the
+    // colour/motion gates miss it → "sky-edge ghost"). MOTION-GATED: on a
+    // STATIC view a jittering silhouette flips coverage frame-to-frame, so
+    // surfD/bufD alternate and a raw test would false-fire EVERY frame (the
+    // mesh-ID reject lesson). But dilatedMotionPx≈0 there, so the gate stays
+    // off and the YCoCg variance clip keeps handling static edges EXACTLY as
+    // before — this term only adds hard-clip strength where the neighbourhood
+    // is genuinely moving. depthLin all-zero ⇒ disabled (no camera params).
+    float depthDisocc = 0.0;
+    if (reprojValid && (pc.depthLin.z != 0.0 || pc.depthLin.w != 0.0)) {
+        const float surfD = texture(gbufMotionTex, uvInJ).b;              // this surface's prev NDC depth
+        const float bufD  = texture(gbufDepthPrevTex, prevUv * inScale).x;// prev depth buffer at reproject
+        const float svz   = linZ(surfD);
+        const bool  mismatch = abs(svz - linZ(bufD)) > 0.1 * max(abs(svz), 1e-3);
+
+        // ── WIDE MOTION SEARCH, for SMALL FAST MOVERS ───────────────────────
+        // Every gate in this pass — depthDisocc here, instantDev and
+        // motionRelax below — is multiplied by dilatedMotionPx, and the ±1
+        // dilation above finds it on the assumption that "the edge that
+        // vacated this pixel is still adjacent". That assumption fails hard for
+        // a 3-px snowflake crossing 3 px in a frame: it has left the 3×3
+        // neighbourhood entirely by the time the pixel it vacated is resolved,
+        // so that pixel sees zero motion context, every gate stays shut, and
+        // its stale history decays only at the blend alpha — a ten-frame comet
+        // tail behind every flake. plans/particle-atmosphere.md F2 found this
+        // with 300k device-emitted particles; DLSS, fed the IDENTICAL motion
+        // vectors, resolved the same scene cleanly, which is what proves the
+        // defect was never in the vectors but in how far this pass looked.
+        //
+        // Gated twice, and both gates are close to free:
+        //   · `mismatch` — a static view has no depth mismatch outside
+        //     jittering silhouettes, and there every tap reads zero anyway, so
+        //     a still scene (which is what every golden capture is) resolves
+        //     to the identical value with or without this block.
+        //   · `dilatedMotionPx < 1.7` — depthDisocc SATURATES at 1/0.6 = 1.67
+        //     px, so above that the search could not change this term at all;
+        //     a moving camera, whose ±1 ring already finds motion everywhere,
+        //     therefore skips the taps. What is left is exactly the
+        //     disocclusion rim of a fast SMALL object — a mover larger than its
+        //     own per-frame step keeps the vacated pixel adjacent to its body
+        //     and never reaches here.
+        if (mismatch && dilatedMotionPx < 1.7) {
+            // 7x7 at stride 2: ±6 texels covered continuously once the
+            // bilinear fetch's own half-texel reach is counted. ±6 is what it
+            // took to clear the tail on 1.25 m/s snow at 2-4 px/frame; ±3 left
+            // two or three ghosts behind every flake.
+            for (int dy = -6; dy <= 6; dy += 2)
+                for (int dx = -6; dx <= 6; dx += 2) {
+                    const vec2 mv = texture(gbufMotionTex,
+                                            uvInJ + vec2(dx, dy) * motionInTexel).rg;
+                    dilatedMotionPx = max(dilatedMotionPx,
+                                          length(mv * 0.5 * vec2(pc.width, pc.height)));
+                }
+        }
+        depthDisocc = mismatch ? clamp(dilatedMotionPx * 0.6, 0.0, 1.0) : 0.0;
+    }
+
+    // `history` lives in the same WORKING space as `curr`. Falls back to
+    // `curr` when there's no valid reprojection, same as before.
+    vec3 history = curr;
+    float devStreak = 0.0;// consecutive strongly-deviating frames (carried in history .a)
+    if (reprojValid && cnt > 0.5) {
+        // Catmull-Rom 5-tap (sharper than single bilinear — kills the
+        // "everything smears on camera translation" compounding blur).
+        vec3 histRGB = sampleHistoryCR(prevUv * outScale);
+        // Variance clip in YCoCg. γ widens/tightens the allowed history box:
+        // ~1 is a good flicker/ghost balance.
+        const vec3  mu    = m1 / cnt;
+        const vec3  sigma = sqrt(max(m2 / cnt - mu * mu, vec3(0.0)));
+        const float gamma = 1.0;
+        const vec3 histY  = RGB_to_YCoCg(histRGB);
+        const vec3 clipped = clipAABB(mu - gamma * sigma, mu + gamma * sigma, histY);
+        // SOFT RECTIFICATION for jitter-scale deviations only. At a converged
+        // jittering edge the 3×3 box itself oscillates with the sub-pixel
+        // jitter, so HARD-clipping history to each frame's box re-injects that
+        // oscillation regardless of how small the blend α is — the clip, not
+        // the blend, is the static-flicker floor (silhouette edges + the
+        // grazing-horizon stripe in the --steel harness never settled).
+        // Gate the rate on HOW FAR outside the box the history is, in σ units:
+        //   · converged edge under jitter → box spans the edge contrast, σ is
+        //     large, history deviates ≤ ~1σ → soft (15 %/frame) → settles.
+        //   · stale history (disocclusion / vacated pixel) → the box is the
+        //     NEW content with small σ, history is many σ outside → hard clip.
+        // σ-gating (not motion-gating) is load-bearing for SKY-adjacent edges:
+        // sky writes no motion vectors, so a motion gate never fires there and
+        // object history smears into the sky during camera moves (the "edges
+        // toward sky ghost" regression). Pixel motion still forces the hard
+        // clip outright when it IS available.
+        const vec3  devSig = abs(histY - clipped) / max(sigma, vec3(1e-3));
+        const float devK   = max(devSig.x, max(devSig.y, devSig.z));
+        // Deviation STREAK (carried in history .a): a thin SUB-PIXEL feature
+        // deviates only on the jitter frames that MISS it (the 3×3 box
+        // collapses to the smooth background, σ→small, the converged blend
+        // history lands many σ outside) and recovers on hit frames — hard-
+        // clipping those frames pops the feature out of the history (bistro
+        // chair legs/slats read worse, not better). A genuinely VACATED pixel
+        // (e.g. an object edge passing across the motionless sky, which
+        // writes no motion vectors) deviates EVERY frame. So the deviation
+        // term fires only after ~3 consecutive REFERENCE frames (~33 ms): a
+        // real change eats an invisible one-frame-scale ghost while
+        // intermittent sub-pixel misses stay on the soft path and settle.
+        // The streak advances by dtFrames, not 1, so the ramp completes in
+        // constant wall-clock time: at 30 fps one real frame advances it 3
+        // reference frames and the backstop fires immediately, instead of
+        // leaving 3 frames × N px of discrete stale bands behind the edge.
+        devStreak = (devK > 2.0) ? min(texture(taaHistoryReadTex, prevUv * outScale).a + pc.dtFrames, 8.0) : 0.0;
+        // A real disocclusion is a fresh surface — drop any carried streak so the
+        // pixel restarts clean instead of inheriting the vacated surface's history.
+        if (depthDisocc > 0.5) devStreak = 0.0;
+        // Instant σ-term, gated on DILATED motion: during continuous camera
+        // motion the streak's 3-frame ramp re-arms on every freshly-vacated
+        // pixel, leaving a steady-state stale rim trailing edges across the
+        // sky. With motion context in the neighbourhood the deviation is
+        // trusted immediately; on a fully static view the term is disabled
+        // and sub-pixel features keep their jitter-miss protection.
+        // Threshold lowered (was 1.25→4.0) so a vacated/disoccluded pixel hard-
+        // clips its stale history SOONER — this is the trailing-edge smear behind
+        // a moving object. Still multiplied by dilated motion, so it fires ONLY
+        // where the neighbourhood is actually moving; a static sub-pixel feature
+        // under jitter has ~0 dilated motion and is untouched (keeps its jitter-
+        // miss protection via the devStreak path).
+        const float instantDev = smoothstep(0.8, 2.5, devK) * clamp(dilatedMotionPx * 2.0, 0.0, 1.0);
+        const float rate = max(max(max(clamp(motionLen * 0.5, 0.0, 1.0),// real pixel motion → hard
+                                       instantDev),                 // deviation + motion context → hard now
+                                   smoothstep(2.5, 3.5, devStreak)),// persistent deviation → hard (static backstop)
+                               depthDisocc);                        // depth says different surface → hard
+        // Soft floor is per-frame too — 15 % of the clip per REFERENCE frame
+        // compounds to the same wall-clock decay at any fps (0.85^dtFrames),
+        // instead of 5× slower at 30 fps than at 144.
+        const float softRate = 1.0 - pow(0.85, pc.dtFrames);
+        history = YCoCg_to_RGB(mix(histY, clipped, mix(softRate, 1.0, rate)));
+    }
+
+    // Velocity-scaled alpha: faster-moving pixels weight current more,
+    // making ghost trails decay quicker. Static/slow keeps strong AA via
+    // history (motionPx computed above the clip block).
+    // Velocity bump is keyed on DILATED motion (max over the 3×3), not the
+    // pixel's own motion: a trailing-edge pixel the object just vacated reads
+    // ~0 own-motion (the revealed background is static) yet must still shed its
+    // stale object history fast — its moving neighbours supply that push. Own-
+    // motion alone left those pixels on the low-α path = the residual smear.
+    // Cap raised 0.2→0.4 so fast motion drives α harder toward current; the
+    // YCoCg variance clip + the motion-relaxed antiFlicker below keep this from
+    // turning into flicker on a static view (dilatedMotionPx is 0 there).
+    const float velocityBump = clamp(dilatedMotionPx / 18.0, 0.0, 0.4);
+    // is_skinned flag (bit 3) is informational; SkinnedMesh now has proper
+    // per-vertex motion vectors via a prev-pose vertex buffer (gbuffer.vert
+    // reads it at attribute 3). The previous force-high-alpha hack is gone —
+    // velocity bump alone now correctly tracks deformation.
+    //
+    // LUMA ANTI-FLICKER (Karis): where the current (1-spp jittered) sample
+    // disagrees strongly with the converged history — i.e. EDGES, especially
+    // distant sub-pixel geometry — drop α hard so the pixel locks to the AA'd
+    // history instead of letting the per-frame coverage swing through. Interiors
+    // (history≈curr) keep the normal α and accumulate as usual. This kills the
+    // residual edge flicker that a constant α leaves (α·contrast per frame).
+    const float lumaH = dot(history, vec3(0.299, 0.587, 0.114));
+    const float lumaC = dot(curr,    vec3(0.299, 0.587, 0.114));
+    const float contrast = clamp(abs(lumaC - lumaH) / max(max(lumaC, lumaH), 0.1), 0.0, 1.0);
+    float antiFlicker = mix(1.0, 0.1, sqrt(contrast));// sqrt: triggers at a converged
+                                          // edge (contrast~0.5 → α×0.36) AND locks hard at a
+                                          // full-contrast edge (→ α×0.1). The variance clip
+                                          // still handles disocclusion, so a low edge α is safe.
+    // …but the edge-lock is for STATIC converged edges. At a disocclusion the
+    // "edge" is current-background vs STALE-object history — exactly the high
+    // contrast that drives antiFlicker→0.1 and so PRESERVES the smear it should
+    // be clearing. Release the lock in proportion to dilated motion: a moving
+    // neighbourhood trusts the (clipped) current sample instead of locking to
+    // history, while a fully static view keeps the full lock (so static-edge
+    // stability — the behaviour the comments above guard — is unchanged).
+    const float motionRelax = clamp(dilatedMotionPx * 0.5, 0.0, 1.0);
+    antiFlicker = mix(antiFlicker, 1.0, motionRelax);
+    // Depth disocclusion also drives the blend toward current: the clipped
+    // history above is at best the neighbourhood mean, but a freshly revealed
+    // surface should read its own current sample, not a clip of stale colour.
+    float a = max(clamp((pc.blendAlpha + velocityBump) * antiFlicker, 0.01, 1.0), depthDisocc);
+    // SHADING-REACTIVE content — α floor toward the current frame. Sources +
+    // channel semantics: instance_flags.glsl (today: persistent deformers +
+    // animated textures — shading changes every frame in ways motion vectors
+    // can't express, so an EMA at α≈0.1-0.25 displays a 3-8-frame-lagged
+    // average of it, read as "frames of history dragging behind" the
+    // content; the velocity bump can't catch it because screen velocity and
+    // shading-change rate are decoupled exactly there). Floor 0.75 leaves a
+    // ~1/3-frame mean shading lag (0.5 still read as a visible one-frame
+    // echo on high-contrast per-frame content); the variance clip (and
+    // setGbufferMsaa for edges) covers the reduced temporal AA. Scaling the
+    // floor by the [0..1] reactivity keeps the binary case exact and lets a
+    // graded source soften it.
+    a = max(a, 0.75 * ifShadingReactivity(currIds.z));
+    vec3 result = reprojValid ? mix(history, curr, a) : curr;
+
+    // When a downstream RCAS pass owns the swapchain write, skip it here but
+    // still write history (RCAS reads the resolved frame from the history slot).
+    // Swapchain write is offset to the pane's screen position; history stays at
+    // the texture origin (region-local), so next frame reprojects consistently.
+    const ivec2 dstPx = px + ivec2(int(pc.dstOffset & 0xFFFFu), int(pc.dstOffset >> 16u));
+    if ((pc.flags & kFlagWriteSwap) != 0u) imageStore(taaSwapImage, dstPx, vec4(result, 1.0));
+    imageStore(taaHistoryWriteImg,  px, vec4(result, devStreak));// .a = deviation streak
+}

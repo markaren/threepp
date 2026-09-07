@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/helpers/DirectionalLightHelper.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
@@ -15,7 +17,7 @@ namespace {
 
         auto sky = Sky::create();
         sky->scale.setScalar(1000);
-        auto& skyUniforms = sky->material()->as<ShaderMaterial>()->uniforms;
+        auto& skyUniforms = sky->materialAs<ShaderMaterial>()->uniforms;
         skyUniforms.at("turbidity").value<float>() = 10;
         skyUniforms.at("rayleigh").value<float>() = 1;
         skyUniforms.at("mieCoefficient").value<float>() = 0.005f;
@@ -58,10 +60,10 @@ namespace {
 int main() {
 
     Canvas canvas("DirectionalLight", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = ShadowMap::PFCSoft;
-    renderer.toneMapping = ToneMapping::ACESFilmic;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
+    renderer->shadowMap().type = ShadowMap::PFCSoft;
+    renderer->toneMapping = ToneMapping::ACESFilmic;
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
@@ -73,7 +75,7 @@ int main() {
     scene->add(light);
 
     auto sky = createSky(light->position);
-    auto shaderMaterial = sky->material()->as<ShaderMaterial>();
+    auto shaderMaterial = sky->materialAs<ShaderMaterial>();
     auto& sunPositionUniform = shaderMaterial->uniforms.at("sunPosition").value<Vector3>();
     scene->add(sky);
 
@@ -91,12 +93,12 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
-    canvas.animate([&]() {
-        float dt = clock.getDelta();
+    canvas.animate([&] {
+        const auto dt = clock.getDelta();
 
         torusKnot->rotation.y -= 0.5f * dt;
 
@@ -108,6 +110,6 @@ int main() {
         light->updateMatrixWorld();
         helper->update();
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 }

@@ -1,0 +1,552 @@
+diff --git a/src/composition.cc b/src/composition.cc
+index b8935d24..8b42c73c 100644
+--- a/src/composition.cc
++++ b/src/composition.cc
+@@ -186,6 +186,19 @@ bool ReplaceRootPrimPathRec(
+     }
+   }
+ 
++  // VariantSet contents must also have their absolute path references
++  // rewritten. Without this, a `material:binding = </Foo/Bar>` declared
++  // inside a `variantSet "shadingVariant" = { "Black" { … } }` block
++  // survives composition unchanged and points at /Foo/Bar in the source
++  // namespace rather than the final composed namespace.
++  for (auto &vs : ps.variantSets()) {
++    for (auto &kv : vs.second.variantSet) {
++      if (!ReplaceRootPrimPathRec(depth + 1, srcPrefix, dstPrefix, kv.second, warn, err)) {
++        return false;
++      }
++    }
++  }
++
+   return true;
+ }
+ 
+@@ -237,6 +250,26 @@ bool LoadAsset(AssetResolutionResolver &resolver,
+         "TODO: No assetPath but Prim path(e.g. </xform>) in references.");
+   }
+ 
++  // Snapshot/restore the resolver state across this LoadAsset call.
++  // LoadAsset mutates `_current_working_path` and `_search_paths` to point
++  // into the loaded asset's directory; if a caller invokes LoadAsset
++  // repeatedly (CompositePayloadRec/CompositeReferencesRec iterate over
++  // many sibling prims) the second-and-later calls inherit the previous
++  // sibling's pollution, which breaks resolution of relative asset paths
++  // when the prim's own CWP is empty (e.g. prims added via subLayer
++  // composition that did not run PropagateAssetResolverState).
++  struct ResolverGuard {
++    AssetResolutionResolver &r;
++    std::string cwp;
++    std::vector<std::string> paths;
++    ResolverGuard(AssetResolutionResolver &res)
++        : r(res), cwp(res.current_working_path()), paths(res.search_paths()) {}
++    ~ResolverGuard() {
++      r.set_current_working_path(cwp);
++      r.set_search_paths(paths);
++    }
++  } resolver_guard(resolver);
++
+   // TODO: Use std::stack to manage AssetResolutionResolver state?
+   if (current_working_path.size()) {
+     resolver.set_current_working_path(current_working_path);
+@@ -390,6 +423,36 @@ bool LoadAsset(AssetResolutionResolver &resolver,
+ 
+   DCOUT("layer = " << print_layer(layer, 0));
+ 
++  // Compose `subLayers` within the loaded asset before checking for empty
++  // primspecs. Real-world payload chains (e.g. OpenChessSet's
++  // *_payload.usd files) declare nothing locally and rely on subLayers to
++  // pull in their geometry/shading. Without this, those files appear
++  // empty and the "No prims in layer" check below aborts the load.
++  if (!layer.metas().subLayers.empty()) {
++    std::string asset_dir;
++    {
++      size_t pos = resolved_path.find_last_of("/\\");
++      if (pos != std::string::npos) asset_dir = resolved_path.substr(0, pos);
++    }
++    AssetResolutionResolver subResolver = resolver;
++    if (!asset_dir.empty()) {
++      subResolver.set_current_working_path(asset_dir);
++      auto sps = subResolver.search_paths();
++      sps.push_back(asset_dir);
++      subResolver.set_search_paths(sps);
++    }
++    Layer composed;
++    std::string sw, se;
++    SublayersCompositionOptions sopts;
++    if (CompositeSublayers(subResolver, layer, &composed, &sw, &se, sopts)) {
++      layer = std::move(composed);
++      if (warn && sw.size()) (*warn) += sw;
++    } else if (err && se.size()) {
++      // Non-fatal: leave layer as-is and let the caller decide.
++      (*err) += se;
++    }
++  }
++
+   // TODO: Recursively resolve `references`
+ 
+   if (_warn.size()) {
+@@ -473,6 +536,19 @@ bool CombinePrimSpecRec(uint32_t depth, PrimSpec &dst, const PrimSpec &src, std:
+     PUSH_ERROR_AND_RETURN("PrimSpec tree too deep.");
+   }
+ 
++  // typeName / specifier merge: a `def Mesh "Render"` opinion in a weaker
++  // sublayer should not be eclipsed by an `over "Render"` (no typeName,
++  // Specifier::Over) opinion in a stronger sublayer. The strongest opinion
++  // wins for properties, but the strongest non-empty typeName + the strongest
++  // Def specifier survive. Without this, USD `over` opinions silently turn
++  // typed prims (Mesh, Xform, Material...) into untyped Xforms.
++  if (dst.typeName().empty() && !src.typeName().empty()) {
++    dst.typeName() = src.typeName();
++  }
++  if (dst.specifier() == Specifier::Over && src.specifier() == Specifier::Def) {
++    dst.specifier() = Specifier::Def;
++  }
++
+   // Combine metadataum
+   dst.metas().update_from(src.metas(), false);
+ 
+@@ -502,6 +578,29 @@ bool CombinePrimSpecRec(uint32_t depth, PrimSpec &dst, const PrimSpec &src, std:
+     }
+   }
+ 
++  // Combine variantSets. Without this, a `variantSet "shadingVariant" = {…}`
++  // declared in a stronger sublayer (e.g. *_look.usd) is silently dropped
++  // when merged onto the same prim in a weaker sublayer (e.g. *_geom.usd),
++  // and downstream variant-selection processing finds nothing to apply.
++  for (const auto &vs : src.variantSets()) {
++    auto it = dst.variantSets().find(vs.first);
++    if (it == dst.variantSets().end()) {
++      dst.variantSets()[vs.first] = vs.second;
++    } else {
++      // Same variantSet name on both sides: merge per-variant content.
++      for (const auto &kv : vs.second.variantSet) {
++        auto vIt = it->second.variantSet.find(kv.first);
++        if (vIt == it->second.variantSet.end()) {
++          it->second.variantSet[kv.first] = kv.second;
++        } else {
++          if (!CombinePrimSpecRec(depth + 1, vIt->second, kv.second, warn, err)) {
++            return false;
++          }
++        }
++      }
++    }
++  }
++
+   return true;
+ }
+ 
+@@ -534,6 +633,18 @@ bool CompositeSublayersRec(AssetResolutionResolver &resolver,
+     }
+   }
+ 
++  // LoadAsset (called below per sublayer) mutates the resolver's
++  // current_working_path and search_paths to the loaded asset's directory,
++  // and that mutation persists across iterations. For multi-sublayer files
++  // (e.g. NVIDIA Omniverse Showcases) the second and subsequent
++  // resolver.resolve() calls then run against the previous sublayer's
++  // directory rather than the parent layer's, and "./SubUSDs/foo.usd"
++  // tries to load `parent/SubUSDs/SubUSDs/foo.usd`. Snapshot the resolver
++  // state once and restore it before resolving each sublayer so iterations
++  // are independent.
++  const std::string saved_cwp = resolver.current_working_path();
++  const std::vector<std::string> saved_paths = resolver.search_paths();
++
+   for (const auto &layer : in_layer.metas().subLayers) {
+     // TODO: subLayerOffset
+     std::string sublayer_asset_path = layer.assetPath.GetAssetPath();
+@@ -546,6 +657,10 @@ bool CompositeSublayersRec(AssetResolutionResolver &resolver,
+                       sublayer_asset_path, in_layer.name()));
+     }
+ 
++    // Restore resolver state before resolving this sublayer.
++    resolver.set_current_working_path(saved_cwp);
++    resolver.set_search_paths(saved_paths);
++
+     std::string layer_filepath = resolver.resolve(sublayer_asset_path);
+     if (layer_filepath.empty()) {
+       PUSH_ERROR_AND_RETURN(fmt::format("{} not found in path: {}",
+diff --git a/src/crate-format.hh b/src/crate-format.hh
+index 6646e5a5..b1d2c022 100644
+--- a/src/crate-format.hh
++++ b/src/crate-format.hh
+@@ -427,6 +427,10 @@ class CrateValue {
+   SET_TYPE_SCALAR(bool)
+   SET_TYPE_1D(bool)
+ 
++  // uchar (uint8_t) — required for CrateDataTypeId::CRATE_DATA_TYPE_UCHAR arrays.
++  SET_TYPE_SCALAR(uint8_t)
++  SET_TYPE_1D(uint8_t)
++
+   SET_TYPE_SCALAR(Specifier)
+   SET_TYPE_SCALAR(Permission)
+   SET_TYPE_SCALAR(Variability)
+diff --git a/src/crate-reader.cc b/src/crate-reader.cc
+index a2a1f2ab..ee9a20ef 100644
+--- a/src/crate-reader.cc
++++ b/src/crate-reader.cc
+@@ -2635,8 +2635,43 @@ bool CrateReader::UnpackValueRep(const crate::ValueRep &rep,
+       return false;
+     }
+     case crate::CrateDataTypeId::CRATE_DATA_TYPE_UCHAR: {
++      COMPRESS_UNSUPPORTED_CHECK(dty)
+       NON_ARRAY_UNSUPPORTED_CHECK(dty)
+-      TODO_IMPLEMENT(dty)
++
++      if (rep.IsArray()) {
++        std::vector<uint8_t> v;
++        if (rep.GetPayload() == 0) { // empty array
++          value->Set(v);
++          return true;
++        }
++
++        uint64_t n;
++        if (!_sr->read8(&n)) {
++          PUSH_ERROR("Failed to read the number of array elements.");
++          return false;
++        }
++
++        if (n > _config.maxArrayElements) {
++          PUSH_ERROR_AND_RETURN_TAG(kTag, fmt::format("# of UChar array too large. TinyUSDZ limites it up to {}", _config.maxArrayElements));
++        }
++
++        CHECK_MEMORY_USAGE(n * sizeof(uint8_t));
++
++        v.resize(static_cast<size_t>(n));
++        if (!_sr->read(size_t(n) * sizeof(uint8_t),
++                       size_t(n) * sizeof(uint8_t),
++                       reinterpret_cast<uint8_t *>(v.data()))) {
++          PUSH_ERROR("Failed to read UChar array.");
++          return false;
++        }
++
++        DCOUT("UCharArray = " << value::print_array_snipped(v));
++
++        value->Set(v);
++        return true;
++      } else {
++        return false;
++      }
+     }
+     case crate::CrateDataTypeId::CRATE_DATA_TYPE_INT: {
+       NON_ARRAY_UNSUPPORTED_CHECK(dty)
+diff --git a/src/usdc-reader.cc b/src/usdc-reader.cc
+index 681d7fdc..c6cb39f3 100644
+--- a/src/usdc-reader.cc
++++ b/src/usdc-reader.cc
+@@ -647,16 +647,15 @@ nonstd::expected<APISchemas, std::string> USDCReader::Impl::ToAPISchemas(
+     schemas.listOpQual = ListEditQual::ResetToExplicit;
+ 
+   } else {
+-    // Assume all items have same ListEdit qualifier.
+-    if (arg.GetExplicitItems().size()) {
+-      if (arg.GetAddedItems().size() || arg.GetAppendedItems().size() ||
+-          arg.GetDeletedItems().size() || arg.GetPrependedItems().size() ||
+-          arg.GetOrderedItems().size()) {
+-        return nonstd::make_unexpected(
+-            "Currently TinyUSDZ does not support ListOp with different "
+-            "ListEdit qualifiers.");
+-      }
+-      for (auto &&item : arg.GetExplicitItems()) {
++    // Real-world Omniverse / Lightwheel scenes commonly mix ListEdit
++    // qualifiers within a single `apiSchemas` listop (e.g. both prepended and
++    // appended items). The strict upstream policy of "all items must share
++    // one qualifier" rejects those scenes outright. Since the APISchemas
++    // struct stores items as a flat names list and only records a single
++    // `listOpQual`, we merge items from every populated category into the
++    // names vector and pick a representative qualifier.
++    auto processList = [&](const std::vector<value::token> &items) -> bool {
++      for (auto &item : items) {
+         if (auto pv = SchemaHandler(item)) {
+           std::string instanceName = "";  // TODO
+           schemas.names.push_back({pv.value(), instanceName});
+@@ -664,110 +663,47 @@ nonstd::expected<APISchemas, std::string> USDCReader::Impl::ToAPISchemas(
+           warn += "Ignored unknown or unsupported API schema: " +
+                                          item.str() + "\n";
+         } else {
+-          return nonstd::make_unexpected("Invalid or Unsupported API schema: " +
+-                                         item.str());
++          return false;
+         }
+       }
+-      schemas.listOpQual = ListEditQual::ResetToExplicit;
++      return true;
++    };
+ 
+-    } else if (arg.GetAddedItems().size()) {
+-      if (arg.GetExplicitItems().size() || arg.GetAppendedItems().size() ||
+-          arg.GetDeletedItems().size() || arg.GetPrependedItems().size() ||
+-          arg.GetOrderedItems().size()) {
+-        return nonstd::make_unexpected(
+-            "Currently TinyUSDZ does not support ListOp with different "
+-            "ListEdit qualifiers.");
+-      }
+-      for (auto &item : arg.GetAddedItems()) {
+-        if (auto pv = SchemaHandler(item)) {
+-          std::string instanceName = "";  // TODO
+-          schemas.names.push_back({pv.value(), instanceName});
+-        } else if (ignore_unknown) {
+-          warn += "Ignored unknown or unsupported API schema: " +
+-                                         item.str() + "\n";
+-        } else {
+-          return nonstd::make_unexpected("Invalid or Unsupported API schema: " +
+-                                         item.str());
+-        }
+-      }
+-      schemas.listOpQual = ListEditQual::Add;
++    // Merge in USD composition order: prepend/append/add/delete/explicit/order.
++    // Order is informational here; the rendering pipeline only needs the
++    // resulting names set.
++    if (!processList(arg.GetExplicitItems())) {
++      return nonstd::make_unexpected("Invalid or Unsupported API schema in explicit items.");
++    }
++    if (!processList(arg.GetPrependedItems())) {
++      return nonstd::make_unexpected("Invalid or Unsupported API schema in prepended items.");
++    }
++    if (!processList(arg.GetAppendedItems())) {
++      return nonstd::make_unexpected("Invalid or Unsupported API schema in appended items.");
++    }
++    if (!processList(arg.GetAddedItems())) {
++      return nonstd::make_unexpected("Invalid or Unsupported API schema in added items.");
++    }
++    if (!processList(arg.GetDeletedItems())) {
++      return nonstd::make_unexpected("Invalid or Unsupported API schema in deleted items.");
++    }
++    // Ordered items are still effectively a TODO upstream; treat as no-op.
++
++    // Pick the strongest populated qualifier (priority order matches USD).
++    if (arg.GetExplicitItems().size()) {
++      schemas.listOpQual = ListEditQual::ResetToExplicit;
++    } else if (arg.GetPrependedItems().size()) {
++      schemas.listOpQual = ListEditQual::Prepend;
+     } else if (arg.GetAppendedItems().size()) {
+-      if (arg.GetExplicitItems().size() || arg.GetAddedItems().size() ||
+-          arg.GetDeletedItems().size() || arg.GetPrependedItems().size() ||
+-          arg.GetOrderedItems().size()) {
+-        return nonstd::make_unexpected(
+-            "Currently TinyUSDZ does not support ListOp with different "
+-            "ListEdit qualifiers.");
+-      }
+-      for (auto &&item : arg.GetAppendedItems()) {
+-        if (auto pv = SchemaHandler(item)) {
+-          std::string instanceName = "";  // TODO
+-          schemas.names.push_back({pv.value(), instanceName});
+-        } else if (ignore_unknown) {
+-          warn += "Ignored unknown or unsupported API schema: " +
+-                                         item.str() + "\n";
+-        } else {
+-          return nonstd::make_unexpected("Invalid or Unsupported API schema: " +
+-                                         item.str());
+-        }
+-      }
+       schemas.listOpQual = ListEditQual::Append;
++    } else if (arg.GetAddedItems().size()) {
++      schemas.listOpQual = ListEditQual::Add;
+     } else if (arg.GetDeletedItems().size()) {
+-      if (arg.GetExplicitItems().size() || arg.GetAddedItems().size() ||
+-          arg.GetAppendedItems().size() || arg.GetPrependedItems().size() ||
+-          arg.GetOrderedItems().size()) {
+-        return nonstd::make_unexpected(
+-            "Currently TinyUSDZ does not support ListOp with different "
+-            "ListEdit qualifiers.");
+-      }
+-      for (auto &&item : arg.GetDeletedItems()) {
+-        if (auto pv = SchemaHandler(item)) {
+-          std::string instanceName = "";  // TODO
+-          schemas.names.push_back({pv.value(), instanceName});
+-        } else if (ignore_unknown) {
+-          warn += "Ignored unknown or unsupported API schema: " +
+-                                         item.str() + "\n";
+-        } else {
+-          return nonstd::make_unexpected("Invalid or Unsupported API schema: " +
+-                                         item.str());
+-        }
+-      }
+       schemas.listOpQual = ListEditQual::Delete;
+-    } else if (arg.GetPrependedItems().size()) {
+-      if (arg.GetExplicitItems().size() || arg.GetAddedItems().size() ||
+-          arg.GetAppendedItems().size() || arg.GetDeletedItems().size() ||
+-          arg.GetOrderedItems().size()) {
+-        return nonstd::make_unexpected(
+-            "Currently TinyUSDZ does not support ListOp with different "
+-            "ListEdit qualifiers.");
+-      }
+-      for (auto &&item : arg.GetPrependedItems()) {
+-        if (auto pv = SchemaHandler(item)) {
+-          std::string instanceName = "";  // TODO
+-          schemas.names.push_back({pv.value(), instanceName});
+-        } else if (ignore_unknown) {
+-          warn += "Ignored unknown or unsupported API schema: " +
+-                                         item.str() + "\n";
+-        } else {
+-          return nonstd::make_unexpected("Invalid or Unsupported API schema: " +
+-                                         item.str());
+-        }
+-      }
+-      schemas.listOpQual = ListEditQual::Prepend;
+     } else if (arg.GetOrderedItems().size()) {
+-      if (arg.GetExplicitItems().size() || arg.GetAddedItems().size() ||
+-          arg.GetAppendedItems().size() || arg.GetDeletedItems().size() ||
+-          arg.GetPrependedItems().size()) {
+-        return nonstd::make_unexpected(
+-            "Currently TinyUSDZ does not support ListOp with different "
+-            "ListEdit qualifiers.");
+-      }
+-
+-      // schemas.qual = ListEditQual::Order;
+-      return nonstd::make_unexpected("TODO: Ordered ListOp items.");
++      schemas.listOpQual = ListEditQual::Order;
+     } else {
+-      // ??? This should not happend.
+-      return nonstd::make_unexpected("Internal error: ListOp conversion.");
++      // No items at all — leave qualifier as default-constructed.
+     }
+   }
+ 
+@@ -1052,19 +988,29 @@ bool USDCReader::Impl::ParseProperty(const SpecType spec_type,
+         auto p = pv.value();
+         DCOUT("connectionPaths = " << to_string(p));
+ 
+-        if (!p.IsExplicit()) {
++        // Real-world Omniverse exports (e.g. NVIDIA Showcases) use mixed
++        // ListEdit qualifiers (`prepend`, `append`, …) on connectionPaths.
++        // The strict "Explicit only" check rejects those files outright,
++        // even when only one qualifier list has items. Merge items from
++        // every populated category — for a single-layer asset they're
++        // semantically equivalent (the connection target list).
++        std::vector<Path> items;
++        auto append_items = [&](const std::vector<Path>& src) {
++          items.insert(items.end(), src.begin(), src.end());
++        };
++        append_items(p.GetExplicitItems());
++        append_items(p.GetPrependedItems());
++        append_items(p.GetAppendedItems());
++        append_items(p.GetAddedItems());
++        // Skip Deleted/Ordered: not meaningful for a single-layer
++        // connection target list.
++
++        if (items.empty()) {
+           PUSH_ERROR_AND_RETURN_TAG(
+-              kTag, "`connectionPaths` must be composed of Explicit items.");
++              kTag, "`connectionPaths` have empty items.");
+         }
+ 
+-        // Must be explicit_items for now.
+-        auto items = p.GetExplicitItems();
+-        if (items.size() == 0) {
+-          PUSH_ERROR_AND_RETURN_TAG(
+-              kTag, "`connectionPaths` have empty Explicit items.");
+-        }
+-
+-        attr.set_connections(items); 
++        attr.set_connections(items);
+ 
+       } else {
+         PUSH_ERROR_AND_RETURN_TAG(
+@@ -2161,16 +2107,27 @@ bool USDCReader::Impl::ParsePrimSpec(const crate::FieldValuePairVector &fvs,
+ 
+         auto ps = DecodeListOp<Reference>(p);
+ 
++        // Real-world USDC files (e.g. NVIDIA Omniverse Showcases) author
++        // both `delete references` and `prepend references` on the same
++        // prim. DecodeListOp returns them in fixed insertion order with
++        // Delete BEFORE Prepend (qual=Delete=3 < Prepend=4 in dst[]). The
++        // legacy "ps[0]" pick then loses the actual additive items. Prefer
++        // an additive op (Prepend/Append/Add/Explicit) over Delete/Order
++        // when multiple list-op kinds are present.
++        size_t pickIdx = 0;
+         if (ps.size() > 1) {
+-          // This should not happen though.
+-          PUSH_WARN(
+-              "ListOp with multiple ListOpType is not supported for now. Use "
+-              "the first one: " +
+-              to_string(std::get<0>(ps[0])));
++          for (size_t i = 0; i < ps.size(); ++i) {
++            ListEditQual q = std::get<0>(ps[i]);
++            if (q == ListEditQual::Prepend || q == ListEditQual::Append ||
++                q == ListEditQual::Add || q == ListEditQual::ResetToExplicit) {
++              pickIdx = i;
++              break;
++            }
++          }
+         }
+ 
+-        auto qual = std::get<0>(ps[0]);
+-        auto items = std::get<1>(ps[0]);
++        auto qual = std::get<0>(ps[pickIdx]);
++        auto items = std::get<1>(ps[pickIdx]);
+         auto listop = (*pv);
+         primMeta.references = std::make_pair(qual, items);
+       } else {
+@@ -2197,16 +2154,22 @@ bool USDCReader::Impl::ParsePrimSpec(const crate::FieldValuePairVector &fvs,
+ 
+         auto ps = DecodeListOp<Payload>(p);
+ 
++        // See comments in `references` branch above: prefer an additive
++        // qualifier when DecodeListOp returns Delete/Order alongside it.
++        size_t pickIdx = 0;
+         if (ps.size() > 1) {
+-          // This should not happen though.
+-          PUSH_WARN(
+-              "ListOp with multiple ListOpType is not supported for now. Use "
+-              "the first one: " +
+-              to_string(std::get<0>(ps[0])));
++          for (size_t i = 0; i < ps.size(); ++i) {
++            ListEditQual q = std::get<0>(ps[i]);
++            if (q == ListEditQual::Prepend || q == ListEditQual::Append ||
++                q == ListEditQual::Add || q == ListEditQual::ResetToExplicit) {
++              pickIdx = i;
++              break;
++            }
++          }
+         }
+ 
+-        auto qual = std::get<0>(ps[0]);
+-        auto items = std::get<1>(ps[0]);
++        auto qual = std::get<0>(ps[pickIdx]);
++        auto items = std::get<1>(ps[pickIdx]);
+         auto listop = (*pvs);
+         primMeta.payload = std::make_pair(qual, items);
+       } else {
+@@ -2661,10 +2624,17 @@ bool USDCReader::Impl::ReconstructPrimNode(int parent, int current, int level,
+         std::string variantSetName = variantPair[0];
+         std::string variantPrimName = variantPair[1];
+ 
+-        if (!ValidatePrimElementName(variantPrimName)) {
++        // USD variant selection names (e.g. "24" for 24mm focal length on a
++        // Camera) are routinely numeric in real-world assets. The strict
++        // ValidatePrimElementName check rejects any name that starts with
++        // a digit, which causes whole-file parse failures (e.g. NVIDIA
++        // Omniverse Showcase cam.usd). Accept any non-empty token here:
++        // tokenize_variantElement already split on `{=}` so we know the
++        // bytes are well-formed identifiers in the looser USD-variant sense.
++        if (variantPrimName.empty()) {
+           PUSH_ERROR_AND_RETURN_TAG(
+-              kTag, fmt::format("Invalid Prim name in Variant: `{}`",
+-                                variantPrimName));
++              kTag, fmt::format("Empty Prim name in Variant for elemPath `{}`",
++                                elemPath));
+         }
+ 
+         bool is_unsupported_prim{false};
+@@ -3135,10 +3105,17 @@ bool USDCReader::Impl::ReconstructPrimSpecNode(int parent, int current, int leve
+         std::string variantSetName = variantPair[0];
+         std::string variantPrimName = variantPair[1];
+ 
+-        if (!ValidatePrimElementName(variantPrimName)) {
++        // USD variant selection names (e.g. "24" for 24mm focal length on a
++        // Camera) are routinely numeric in real-world assets. The strict
++        // ValidatePrimElementName check rejects any name that starts with
++        // a digit, which causes whole-file parse failures (e.g. NVIDIA
++        // Omniverse Showcase cam.usd). Accept any non-empty token here:
++        // tokenize_variantElement already split on `{=}` so we know the
++        // bytes are well-formed identifiers in the looser USD-variant sense.
++        if (variantPrimName.empty()) {
+           PUSH_ERROR_AND_RETURN_TAG(
+-              kTag, fmt::format("Invalid Prim name in Variant: `{}`",
+-                                variantPrimName));
++              kTag, fmt::format("Empty Prim name in Variant for elemPath `{}`",
++                                elemPath));
+         }
+ 
+ #if 0

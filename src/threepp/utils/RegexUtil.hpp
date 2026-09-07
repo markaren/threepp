@@ -3,7 +3,9 @@
 #ifndef THREEPP_REGEX_CALLBACK_HPP
 #define THREEPP_REGEX_CALLBACK_HPP
 
+#include <algorithm>
 #include <cstdlib>
+#include <iterator>
 #include <regex>
 #include <string>
 

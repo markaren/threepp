@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/helpers/HemisphereLightHelper.hpp"
 #include "threepp/threepp.hpp"
 
@@ -8,7 +10,7 @@ namespace {
 
     auto createBox(const Vector3& pos, const Color& color) {
         const auto boxGeometry = BoxGeometry::create();
-        const auto boxMaterial = MeshPhongMaterial::create({{"color", color}});
+        const auto boxMaterial = MeshPhongMaterial::create(MeshPhongMaterial::Params{}.color(color));
         auto box = Mesh::create(boxGeometry, boxMaterial);
         box->position.copy(pos);
 
@@ -17,7 +19,7 @@ namespace {
 
     auto createPlane() {
         const auto planeGeometry = PlaneGeometry::create(5, 5);
-        const auto planeMaterial = MeshPhongMaterial::create({{"color", Color::gray}, {"side", Side::Double}});
+        const auto planeMaterial = MeshPhongMaterial::create(MeshPhongMaterial::Params{}.color(Color::gray).side(Side::Double));
         auto plane = Mesh::create(planeGeometry, planeMaterial);
         plane->position.y = -1;
         plane->rotateX(math::degToRad(90));
@@ -30,7 +32,7 @@ namespace {
 int main() {
 
     Canvas canvas("HemisphereLight", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
@@ -56,15 +58,15 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
-    canvas.animate([&]() {
-        float dt = clock.getDelta();
+    canvas.animate([&] {
+        const auto dt = clock.getDelta();
 
         group->rotation.y += 0.5f * dt;
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 }

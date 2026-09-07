@@ -1,0 +1,72 @@
+#version 460
+
+// Vertex-interop sanitize pass (plan §1.2, option (a)).
+//
+// Every other route into a BLAS build validates positions on the CPU first —
+// refreshGeomBlasBatch's Phase A and recordDynamicGeomRefits' Phase 0 both walk
+// the host `position` array and drop the whole geometry on the first non-finite
+// component, because a NaN/Inf vertex reaching vkCmdBuildAccelerationStructures
+// is VK_ERROR_DEVICE_LOST on NVIDIA (a GPU reset, not an error return).
+//
+// Under enableVertexInterop that array does not exist: a foreign CUDA producer
+// owns the positions and the host copy is stale or empty. This dispatch is the
+// replacement guard, and it runs on the EXPORTED buffer before the copy into the
+// BLAS's own vertex buffer — so the buffer the AS build actually reads is
+// finite by construction, whatever the producer did.
+//
+// Repair, not rejection: dropping the geometry is not available here (the
+// renderer has no clean previous frame to fall back to when the producer owns
+// the memory), so a bad vertex is COLLAPSED to the first component of its own
+// triangle — a zero-area degenerate, which a BLAS build handles fine and which
+// keeps neighbouring triangles intact. If that anchor is itself non-finite the
+// whole triangle collapses to the origin. A degenerate triangle is invisible;
+// a NaN is a device reset. Note this repairs a `0/0` in a marching-cubes
+// gradient into a hole, it does not hide it — the intent is that a bad frame
+// looks wrong rather than killing the process.
+//
+// One thread per VERTEX (not per triangle): the anchor is recomputed per lane
+// from the triangle base so there is no cross-lane dependency and no barrier.
+
+layout(local_size_x = 64) in;
+
+// Positions as a flat float array — tightly packed xyz, matching the format
+// BlasRecord::vertex is built in for every deforming record (buildBlasFor only
+// packs attributes for STATIC geometry, and interop records are dynamic).
+// A plain SSBO binding rather than a buffer_reference: the exported allocation
+// has no device address and cannot be given one (see BlasRecord::posExt).
+layout(std430, set = 0, binding = 0) buffer PosBuf { float v[]; } posBuf;
+
+layout(push_constant) uniform Pc {
+    uint vertexCount;
+} pc;
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.vertexCount) return;
+
+    const uint b = i * 3u;
+    const float x = posBuf.v[b + 0u];
+    const float y = posBuf.v[b + 1u];
+    const float z = posBuf.v[b + 2u];
+
+    // isnan/isinf and not `x == x`: the compiler is free to assume finiteness
+    // under fast-math and fold the self-comparison away. These two are the
+    // spelling the SPIR-V validator keeps.
+    if (!isnan(x) && !isnan(y) && !isnan(z) &&
+        !isinf(x) && !isinf(y) && !isinf(z)) return;
+
+    // Anchor = vertex 0 of this vertex's triangle. Non-indexed soup and indexed
+    // geometry alike: the worst case for an indexed mesh is that the anchor is
+    // some other triangle's first vertex, which is still a finite point in the
+    // same object, and the resulting degenerate is still zero-area.
+    const uint tri = (i / 3u) * 3u * 3u;
+    const float ax = posBuf.v[tri + 0u];
+    const float ay = posBuf.v[tri + 1u];
+    const float az = posBuf.v[tri + 2u];
+    const bool anchorOk = !isnan(ax) && !isnan(ay) && !isnan(az) &&
+                          !isinf(ax) && !isinf(ay) && !isinf(az);
+
+    posBuf.v[b + 0u] = anchorOk ? ax : 0.0;
+    posBuf.v[b + 1u] = anchorOk ? ay : 0.0;
+    posBuf.v[b + 2u] = anchorOk ? az : 0.0;
+}

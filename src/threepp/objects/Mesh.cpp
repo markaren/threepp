@@ -3,6 +3,7 @@
 
 #include "threepp/objects/SkinnedMesh.hpp"
 
+#include "threepp/core/AttributeView.hpp"
 #include "threepp/core/Face3.hpp"
 #include "threepp/core/Raycaster.hpp"
 
@@ -22,7 +23,7 @@ namespace {
             Object3D& object, Material& material, const Raycaster& raycaster, const Ray& ray,
             const Vector3& pA, const Vector3& pB, const Vector3& pC, Vector3& point) {
 
-        static Vector3 _intersectionPointWorld{};
+        static thread_local Vector3 _intersectionPointWorld{};
 
         if (material.side == Side::Back) {
 
@@ -56,14 +57,14 @@ namespace {
             const FloatBufferAttribute& position,
             const std::vector<std::shared_ptr<BufferAttribute>>* morphPosition,
             bool morphTargetsRelative,
-            const FloatBufferAttribute* uv,
-            const FloatBufferAttribute* uv2,
+            const FloatAttributeView* uv,
+            const FloatAttributeView* uv2,
             unsigned int a, unsigned int b, unsigned int c) {
 
-        static Vector3 _vA{};
-        static Vector3 _vB{};
-        static Vector3 _vC{};
-        static Vector3 _intersectionPoint{};
+        static thread_local Vector3 _vA{};
+        static thread_local Vector3 _vB{};
+        static thread_local Vector3 _vC{};
+        static thread_local Vector3 _intersectionPoint{};
 
         position.setFromBufferAttribute(_vA, a);
         position.setFromBufferAttribute(_vB, b);
@@ -133,15 +134,24 @@ namespace {
 
         if (intersection) {
 
-            static Vector2 _uvA{};
-            static Vector2 _uvB{};
-            static Vector2 _uvC{};
+            static thread_local Vector2 _uvA{};
+            static thread_local Vector2 _uvB{};
+            static thread_local Vector2 _uvC{};
+
+            // The views are tightly packed (FloatAttributeView de-strides
+            // interleaved sources), so direct itemSize indexing is safe here.
+            // NB: vertex B used to be read from index `c` — a copy-paste slip
+            // that skewed every interpolated raycast UV toward the C corner.
+            const auto readUv = [](const FloatAttributeView& view, unsigned int v, Vector2& target) {
+                const auto base = static_cast<size_t>(v) * view.itemSize();
+                target.set(view[base], view[base + 1]);
+            };
 
             if (uv) {
 
-                uv->setFromBufferAttribute(_uvA, a);
-                uv->setFromBufferAttribute(_uvB, c);
-                uv->setFromBufferAttribute(_uvC, c);
+                readUv(*uv, a, _uvA);
+                readUv(*uv, b, _uvB);
+                readUv(*uv, c, _uvC);
 
                 Vector2 uvTarget{};
                 Triangle::getUV(_intersectionPoint, _vA, _vB, _vC, _uvA, _uvB, _uvC, uvTarget);
@@ -150,9 +160,9 @@ namespace {
 
             if (uv2) {
 
-                uv2->setFromBufferAttribute(_uvA, a);
-                uv2->setFromBufferAttribute(_uvB, c);
-                uv2->setFromBufferAttribute(_uvC, c);
+                readUv(*uv2, a, _uvA);
+                readUv(*uv2, b, _uvB);
+                readUv(*uv2, c, _uvC);
 
                 Vector2 uv2Target{};
                 Triangle::getUV(_intersectionPoint, _vA, _vB, _vC, _uvA, _uvB, _uvC, uv2Target);
@@ -173,40 +183,44 @@ namespace {
 
 
 Mesh::Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
-    : geometry_(geometry ? std::move(geometry) : BufferGeometry::create()),
-      ObjectWithMaterials({material ? std::move(material) : MeshBasicMaterial::create()}) {}
+    : ObjectWithMaterials({material ? std::move(material) : MeshBasicMaterial::create()}),
+      geometry_(geometry ? std::move(geometry) : BufferGeometry::create()) {}
 
 Mesh::Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials)
-    : geometry_(std::move(geometry)), ObjectWithMaterials{std::move(materials)} {}
+    : ObjectWithMaterials{std::move(materials)}, geometry_(std::move(geometry)) {}
 
 void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
     if (material() == nullptr) return;
 
-    static Sphere _sphere{};
+    static thread_local Sphere _sphere{};
 
-    // Checking boundingSphere distance to ray
+    // Checking boundingSphere distance to ray. Through the virtual hook, not
+    // straight off the geometry: a SkinnedMesh answers with the bounds of its
+    // POSED self, because its geometry describes a bind pose that is not where
+    // its vertices are drawn (see raycastBoundingSphere).
 
-    if (!geometry_->boundingSphere) geometry_->computeBoundingSphere();
+    if (const auto* bounds = raycastBoundingSphere()) {
 
-    _sphere.copy(*geometry_->boundingSphere);
-    _sphere.applyMatrix4(*matrixWorld);
+        _sphere.copy(*bounds);
+        _sphere.applyMatrix4(*matrixWorld);
 
-    if (!raycaster.ray.intersectsSphere(_sphere)) return;
+        if (!raycaster.ray.intersectsSphere(_sphere)) return;
+    }
 
     //
 
-    static Ray _ray{};
-    static Matrix4 _inverseMatrix{};
+    static thread_local Ray _ray{};
+    static thread_local Matrix4 _inverseMatrix{};
 
     _inverseMatrix.copy(*matrixWorld).invert();
     _ray.copy(raycaster.ray).applyMatrix4(_inverseMatrix);
 
     // Check boundingBox before continuing
 
-    if (geometry_->boundingBox) {
+    if (const auto* box = raycastBoundingBox()) {
 
-        if (!_ray.intersectsBox(*geometry_->boundingBox)) return;
+        if (!_ray.intersectsBox(*box)) return;
     }
 
     std::optional<Intersection> intersection;
@@ -215,8 +229,13 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
     const auto position = geometry_->getAttribute<float>("position");
     const auto morphPosition = geometry_->getMorphAttribute("position");
     const auto morphTargetsRelative = geometry_->morphTargetsRelative;
-    const auto uv = geometry_->getAttribute<float>("uv");
-    const auto uv2 = geometry_->getAttribute<float>("uv2");
+    // Views instead of typed pointers: uv/uv2 may be narrowed
+    // (compressAttributes), and the typed getter would return null — the
+    // intersection would silently lose its uv field. Zero-copy when float.
+    const FloatAttributeView uvView(geometry_->getAttribute("uv"));
+    const FloatAttributeView uv2View(geometry_->getAttribute("uv2"));
+    const auto* uv = uvView ? &uvView : nullptr;
+    const auto* uv2 = uv2View ? &uv2View : nullptr;
     const auto groups = geometry_->groups;
     const auto drawRange = geometry_->drawRange;
 
@@ -367,6 +386,22 @@ void Mesh::copy(const Object3D& source, bool recursive) {
         materials_ = m->materials_;
         geometry_ = m->geometry_;
     }
+}
+
+const Sphere* Mesh::raycastBoundingSphere() {
+
+    if (!geometry_) return nullptr;
+    if (!geometry_->boundingSphere) geometry_->computeBoundingSphere();
+    return geometry_->boundingSphere ? &*geometry_->boundingSphere : nullptr;
+}
+
+const Box3* Mesh::raycastBoundingBox() {
+
+    // Not computed on demand, matching the behaviour this replaced: the box is
+    // a second, tighter reject after the sphere already passed, and paying to
+    // build one for every mesh that has never needed it is not worth it.
+    if (!geometry_ || !geometry_->boundingBox) return nullptr;
+    return &*geometry_->boundingBox;
 }
 
 std::shared_ptr<Object3D> Mesh::createDefault() {

@@ -3,28 +3,21 @@
 #ifndef THREEPP_GLPROGRAMS_HPP
 #define THREEPP_GLPROGRAMS_HPP
 
-#include "GLCapabilities.hpp"
 #include "GLClipping.hpp"
-#include "GLLights.hpp"
 #include "GLProgram.hpp"
 #include "ProgramParameters.hpp"
 
 #include "threepp/core/Object3D.hpp"
-#include "threepp/materials/Material.hpp"
-#include "threepp/scenes/Scene.hpp"
-#include "threepp/textures/Texture.hpp"
-#include "threepp/renderers/IGLRenderer.hpp"
-#include <map>
-#include <memory>
-#include <optional>
-#include <string>
 #include <threepp/core/Uniform.hpp>
-#include <unordered_map>
+
+#include <memory>
+#include <string>
+
 #include <vector>
 
 namespace threepp {
 
-    class GLRenderer;
+    class Renderer;
 
     namespace gl {
 
@@ -45,19 +38,23 @@ namespace threepp {
             GLPrograms(GLBindingStates& bindingStates, GLClipping& clipping);
 
             static ProgramParameters getParameters(
-                    IGLRenderer& renderer,
+                    const Renderer& renderer,
+                    const ShadowConfig& shadowConfig,
+                    const RendererCapabilities& capabilities,
                     const GLClipping& clipping,
                     Material* material,
-                    const GLLights::LightState& lights,
+                    const Lights::LightState& lights,
                     size_t numShadows,
                     Scene* scene,
-                    Object3D* object);
+                    Object3D* object,
+                    Texture* resolvedEnvMap,
+                    ColorSpace outputColorSpace);
 
-            static std::string getProgramCacheKey(const IGLRenderer& renderer, const ProgramParameters& parameters);
+            static std::string getProgramCacheKey(const Renderer& renderer, const ProgramParameters& parameters);
 
             static UniformMap* getUniforms(Material& material);
 
-            GLProgram* acquireProgram(const IGLRenderer& renderer, const ProgramParameters& parameters, const std::string& cacheKey);
+            GLProgram* acquireProgram(const Renderer& renderer, const ProgramParameters& parameters, const std::string& cacheKey);
 
             void releaseProgram(GLProgram* program);
         };

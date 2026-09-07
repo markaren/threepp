@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -7,12 +9,17 @@ namespace {
 
     auto createEarth(float radius) {
         TextureLoader loader;
-        auto materialNormalMap = MeshPhongMaterial::create({{"specular", 0x333333},
-                                                            {"shininess", 10.f},
-                                                            {"map", loader.load("data/textures/planets/earth_atmos_2048.jpg")},
-                                                            {"specularMap", loader.load("data/textures/planets/earth_specular_2048.jpg")},
-                                                            {"normalMap", loader.load("data/textures/planets/earth_normal_2048.jpg")},
-                                                            {"normalScale", Vector2(0.85f, -0.85f)}});
+        const auto map = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_atmos_2048.jpg", ColorSpace::sRGB);
+        const auto specular = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_atmos_2048.jpg", ColorSpace::sRGB);
+        const auto normal = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_normal_2048.jpg", ColorSpace::NoColorSpace);
+        const auto materialNormalMap = MeshPhongMaterial::create(
+                MeshPhongMaterial::Params{}
+                        .specular(0x333333)
+                        .shininess(10.f)
+                        .map(map)
+                        .specularMap(specular)
+                        .normalMap(normal)
+                        .normalScale(Vector2(0.85f, -0.85f)));
 
         auto geometry = SphereGeometry::create(radius, 100, 50);
 
@@ -25,9 +32,8 @@ namespace {
 
     auto createMoon(float radius, float moonScale) {
         TextureLoader loader;
-        auto materialMoon = MeshPhongMaterial::create({{
-                {"map", loader.load("data/textures/planets/moon_1024.jpg")},
-        }});
+        const auto tex = loader.load(std::string(DATA_FOLDER) + "/textures/planets/moon_1024.jpg", ColorSpace::sRGB);
+        const auto materialMoon = MeshPhongMaterial::create(MeshPhongMaterial::Params{}.map(tex));
 
         auto geometry = SphereGeometry::create(radius, 100, 50);
 
@@ -41,8 +47,11 @@ namespace {
 
     auto createClouds(float radius) {
         TextureLoader loader;
-        auto materialMoon = MeshLambertMaterial::create({{{"map", loader.load("data/textures/planets/earth_clouds_1024.png")},
-                                                          {"transparent", true}}});
+        const auto tex = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_clouds_1024.png", ColorSpace::sRGB);
+        const auto materialMoon = MeshLambertMaterial::create(
+                MeshLambertMaterial::Params{}
+                        .map(tex)
+                        .transparent(true));
 
         auto geometry = SphereGeometry::create(radius, 100, 50);
 
@@ -57,7 +66,7 @@ namespace {
 
         auto starGroup = Group::create();
 
-        std::vector<std::shared_ptr<BufferGeometry>> starsGeometry{
+        std::vector starsGeometry{
                 BufferGeometry::create(),
                 BufferGeometry::create()};
 
@@ -90,12 +99,12 @@ namespace {
         starsGeometry[1]->setAttribute("position", FloatBufferAttribute::create(vertices2, 3));
 
         std::vector<std::shared_ptr<PointsMaterial>> starsMaterials{
-                PointsMaterial::create({{"color", 0x9c9c9c}, {"size", 2.f}, {"sizeAttenuation", false}}),
-                PointsMaterial::create({{"color", 0x9c9c9c}, {"size", 1.f}, {"sizeAttenuation", false}}),
-                PointsMaterial::create({{"color", 0x7c7c7c}, {"size", 2.f}, {"sizeAttenuation", false}}),
-                PointsMaterial::create({{"color", 0x838383}, {"size", 1.f}, {"sizeAttenuation", false}}),
-                PointsMaterial::create({{"color", 0x5a5a5a}, {"size", 2.f}, {"sizeAttenuation", false}}),
-                PointsMaterial::create({{"color", 0x5a5a5a}, {"size", 1.f}, {"sizeAttenuation", false}}),
+                PointsMaterial::create(PointsMaterial::Params{}.color(0x9c9c9c).size(2.f).sizeAttenuation(false)),
+                PointsMaterial::create(PointsMaterial::Params{}.color(0x9c9c9c).size(1.f).sizeAttenuation(false)),
+                PointsMaterial::create(PointsMaterial::Params{}.color(0x7c7c7c).size(2.f).sizeAttenuation(false)),
+                PointsMaterial::create(PointsMaterial::Params{}.color(0x838383).size(1.f).sizeAttenuation(false)),
+                PointsMaterial::create(PointsMaterial::Params{}.color(0x5a5a5a).size(2.f).sizeAttenuation(false)),
+                PointsMaterial::create(PointsMaterial::Params{}.color(0x5a5a5a).size(1.f).sizeAttenuation(false)),
         };
 
         for (unsigned i = 10; i < 30; i++) {
@@ -120,29 +129,29 @@ namespace {
 
 int main() {
 
-    float radius = 6731;
-    float moonScale = 0.23;
+    constexpr float radius = 6731.f;
+    constexpr float moonScale = 0.23f;
 
     Canvas canvas{"FlyControls", {{"aa", 6}}};
-    GLRenderer renderer{canvas.size()};
+    auto renderer = createRenderer(canvas);
 
     Scene scene;
-    scene.fog = FogExp2(0x000000, 0.00000025);
+    scene.fog = FogExp2(0x000000, 0.00000025f);
 
     PerspectiveCamera camera(25, canvas.aspect(), 50, 1e7);
     camera.position.z = radius * 5;
 
-    auto dirLight = DirectionalLight::create(0xffffff);
+    const auto dirLight = DirectionalLight::create(0xffffff);
     dirLight->position.set(-1, 0, 1).normalize();
     scene.add(dirLight);
 
-    auto earth = createEarth(radius);
+    const auto earth = createEarth(radius);
     scene.add(earth);
 
-    auto moon = createMoon(radius, moonScale);
+    const auto moon = createMoon(radius, moonScale);
     scene.add(moon);
 
-    auto stars = createStars(radius);
+    const auto stars = createStars(radius);
     scene.add(stars);
 
     auto clouds = createClouds(radius);
@@ -157,34 +166,28 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
     Vector3 dMoonVec;
-    float rotationSpeed = 0.02;
+    constexpr float rotationSpeed = 0.02;
     canvas.animate([&] {
-        float delta = clock.getDelta();
+        const float delta = clock.getDelta();
 
         earth->rotation.y += rotationSpeed * delta;
         clouds->rotation.y += 1.25f * rotationSpeed * delta;
 
-        float dPlanet = camera.position.length();
+        const float dPlanet = camera.position.length();
 
         dMoonVec.subVectors(camera.position, moon->position);
-        float dMoon = dMoonVec.length();
+        const float dMoon = dMoonVec.length();
 
-        float d;
-        if (dMoon < dPlanet) {
+        const float d = (dMoon < dPlanet) ? (dMoon - radius * moonScale * 1.01f)
+                                    : (dPlanet - radius * 1.01f);
 
-            d = (dMoon - radius * moonScale * 1.01f);
 
-        } else {
-
-            d = (dPlanet - radius * 1.01f);
-        }
-
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
         controls.movementSpeed = 0.33f * d;
         controls.update(delta);
     });

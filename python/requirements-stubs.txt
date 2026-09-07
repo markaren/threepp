@@ -1,0 +1,8 @@
+# Type-stub generation only (the `threepp_stubs` CMake target / scripts/gen_stubs.py).
+# Not needed to build or use the module.
+#
+# Pinned: pybind11-stubgen's output layout and formatting change between
+# releases, and an unpinned upgrade previously silently reshaped the stubs
+# (flat threepp.pyi -> threepp/threepp/ package). Bump deliberately, then
+# regenerate and review the diff.
+pybind11-stubgen==2.5.5

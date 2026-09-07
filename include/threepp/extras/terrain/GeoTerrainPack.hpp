@@ -1,0 +1,112 @@
+// Real-world geodata "region pack" loader (elevation + roads).
+//
+// A region pack is a small self-describing directory produced by an external
+// fetch/bake tool (e.g. the Norwegian Kartverket DTM + NVDB road pipeline). It
+// carries a square, north-up float32 elevation grid plus a set of road
+// polylines already resolved into the pack's LOCAL world frame, so the C++ side
+// needs no CRS math or reprojection — it just loads and renders.
+//
+// FROZEN pack format (the contract with the producer):
+//   <pack>/region.json  metadata (below)
+//   <pack>/heights.f32   raw little-endian float32, dim*dim, row-major
+//                        index = iz*dim + ix; ix=0 ↔ x=-worldSize/2 (west),
+//                        iz=0 ↔ z=-worldSize/2 (north edge). World mapping is
+//                        x=east, z=-north — this layout drops straight into
+//                        terrain::HeightGrid(heights, dim, worldSize).
+//   <pack>/roads.json    { version, roads:[ { id, category, typeVeg, width,
+//                        points:[[x,y,z],...] } ] } — points already in local
+//                        world coords, y = road height (metres).
+//   <pack>/buildings.json (optional) { version, buildings:[ { id, type,
+//                        height, heightSource, groundMin, groundMax, levels?,
+//                        outer:[[x,z],...], holes?:[[[x,z],...],...] } ] } —
+//                        extruded-footprint buildings. Rings are OPEN (first
+//                        point not repeated), outer wound to POSITIVE shoelace
+//                        area in (x,z), holes negative. Roof top sits at
+//                        groundMin + height (slope relief already folded in).
+//
+// region.json fields: version, name, crs, originEasting, originNorthing,
+// worldSize, dim, heightMin, heightMax, seaLevel, heights, roads, attribution,
+// buildings (optional).
+//
+// load() reads all three files, validates that heights.f32 is exactly
+// dim*dim*4 bytes, and returns a fully-populated GeoTerrainPack (a HeightGrid
+// ready for TileTerrain, the region metadata, and the road list). It throws
+// std::runtime_error with a descriptive message on any missing / malformed /
+// short file. The JSON parse lives in the .cpp (nlohmann is a PRIVATE threepp
+// dependency), so this header stays dependency-free beyond threepp core.
+
+#ifndef THREEPP_EXTRAS_TERRAIN_GEOTERRAINPACK_HPP
+#define THREEPP_EXTRAS_TERRAIN_GEOTERRAINPACK_HPP
+
+#include "threepp/extras/terrain/TerrainTiles.hpp"// terrain::HeightGrid
+#include "threepp/math/Vector2.hpp"
+#include "threepp/math/Vector3.hpp"
+
+#include <string>
+#include <vector>
+
+namespace threepp::terrain {
+
+    // One road polyline from the pack. `points` are already in local world
+    // coordinates (metres, Y-up); point.y is the road surface elevation.
+    struct GeoRoad {
+        std::string id;
+        std::string category;      // "E" (europavei) | "R" | "F" | "K" | "P" | "S"
+        std::string typeVeg;       // NVDB road-type label/code (informational)
+        float width = 6.f;         // total carriageway width (m)
+        std::vector<Vector3> points;// centerline, local world coords, y = height
+    };
+
+    // One building footprint from the pack (OSM-sourced). Rings are OPEN
+    // (first point not repeated) in local world metres; Vector2 = (x, z).
+    // Extrusion contract: walls rise from groundMin (sink slightly below for
+    // slope embedding) to the flat roof at groundMin + height.
+    struct GeoBuilding {
+        std::string id;          // OSM element ("w<id>" way / "r<id>" relation)
+        std::string type;        // OSM building=* value ("house", "garage", ...)
+        float height = 6.f;      // roof top above groundMin (m)
+        float groundMin = 0.f;   // DTM min under the footprint (m)
+        float groundMax = 0.f;   // DTM max under the footprint (m)
+        float levels = 0.f;      // OSM building:levels (0 = unknown)
+        std::string heightSource;// "tag" | "ndsm" | "levels" | "default"
+        std::string colour;      // OSM building:colour (rare; empty = none)
+        std::string roofColour;  // OSM roof:colour (rare; empty = none)
+        std::string roofShape;   // OSM roof:shape (rare; empty = none)
+        std::vector<Vector2> outer;              // footprint, +shoelace in (x,z)
+        std::vector<std::vector<Vector2>> holes; // courtyards, -shoelace
+    };
+
+    // Region metadata mirroring region.json (minus the file references). Kept
+    // separate so callers can inspect georeferencing / attribution without the
+    // heavy grid.
+    struct GeoRegion {
+        int version = 0;
+        std::string name;
+        std::string crs;             // e.g. "EPSG:25833"
+        double originEasting = 0.0;  // pack local (0,0) in the CRS
+        double originNorthing = 0.0;
+        float worldSize = 0.f;       // metres, square extent
+        int dim = 0;                 // heightfield samples per side
+        float heightMin = 0.f;       // metres (NN2000)
+        float heightMax = 0.f;
+        float seaLevel = 0.f;
+        std::string attribution;     // data licence / credit to print
+    };
+
+    // A loaded region pack: elevation grid + roads + buildings + metadata.
+    struct GeoTerrainPack {
+        GeoRegion region;
+        HeightGrid grid;             // dim×dim, centred at origin, worldSize wide
+        std::vector<GeoRoad> roads;
+        std::vector<GeoBuilding> buildings;// empty if the pack has none
+
+        [[nodiscard]] bool valid() const { return region.dim >= 4 && grid.valid(); }
+
+        // Load a pack directory. `path` is the pack folder (containing
+        // region.json). Throws std::runtime_error on any I/O or format error.
+        static GeoTerrainPack load(const std::string& path);
+    };
+
+}// namespace threepp::terrain
+
+#endif//THREEPP_EXTRAS_TERRAIN_GEOTERRAINPACK_HPP

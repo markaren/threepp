@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/helpers/BoxHelper.hpp"
 #include "threepp/helpers/PlaneHelper.hpp"
 #include "threepp/helpers/PolarGridHelper.hpp"
@@ -11,7 +13,7 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Helpers");
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
@@ -52,12 +54,12 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
-    canvas.animate([&]() {
-        float dt = clock.getDelta();
+    canvas.animate([&] {
+        const auto dt = clock.getDelta();
 
         arrow->rotation.z += 0.5f * dt;
         axes->rotation.y += 0.5f * dt;
@@ -67,6 +69,6 @@ int main() {
 
         boxHelper->update();
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 }

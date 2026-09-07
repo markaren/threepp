@@ -1,0 +1,160 @@
+#version 460
+
+// Motion blur — RECONSTRUCTION (McGuire et al. 2012). Runs on the RESOLVED
+// post-TAA frame (LDR, output extent): for each pixel, gathers ~15 samples
+// along the tile neighborhood's dominant velocity and weights them by the
+// scatter-as-gather classification —
+//   • a blurry FOREGROUND sample streaks over this pixel (cone in the
+//     sample's own velocity),
+//   • a blurry CENTER pixel lets the BACKGROUND show through (cone in the
+//     center's velocity),
+//   • two mutually-blurry surfaces share energy (cylinder × cylinder) —
+// which is what produces real object streaks with intact backgrounds
+// instead of a screen-space directional smear. Foreground/background is
+// decided with a soft depth compare on the motion buffer's .b channel (the
+// surface's own previous NDC depth — consistent between center and samples,
+// no extra depth bind).
+//
+// The 3×3 tile neighbor-max is folded in here (9 cached texel fetches per
+// pixel — every pixel of a tile reads the same 9, so this replaces the
+// separate NeighborMax pass and its image at no measurable cost).
+//
+// Runs AFTER the temporal resolve — the jitter must therefore be STATIC
+// (IGN without a frame term): there is no accumulator behind this pass to
+// clean temporal noise, and a per-frame jitter would shimmer.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D resolvedTex;  // post-TAA frame (output extent)
+layout(set = 0, binding = 1) uniform sampler2D gbufMotionTex;// RENDER extent, rg = NDC delta, b = prev NDC depth
+layout(set = 0, binding = 2) uniform sampler2D tileMaxTex;   // tilesX × tilesY dominant velocities
+// Swapchain (bgra8) or the pre-RCAS intermediate — no format qualifier,
+// same convention as taa_resolve.comp's swapchain store.
+layout(set = 0, binding = 3) uniform writeonly image2D outImage;
+
+layout(push_constant) uniform Pc {
+    uint  width;    // output extent — dispatch + velocity pixel space
+    uint  height;
+    uint  tilesX;
+    uint  tilesY;
+    float shutter;  // exposure as a fraction of the frame interval
+    uint  pad0;
+    uint  pad1;
+    uint  pad2;
+    mat4  skyReproj;// prevVPunjit · currVPunjit⁻¹ at the far plane
+    // Reverse-Z view-depth linearization (A,B,C,D): viewZ = (A·d+B)/(C·d+D),
+    // same terms the TAA depth-disocclusion gate uses. All-zero ⇒ fall back
+    // to a monotonic pseudo-depth (classification degrades softly, no NaNs).
+    vec4  depthLin;
+} pc;
+
+// KEEP IN SYNC with motion_tilemax.comp.
+const float kTilePx = 32.0;
+const int   kSamples = 15;// odd — center tap sits between the two half-lines
+
+vec2 blurVelocityPx(vec2 uv) {
+    vec2 motionGL = texture(gbufMotionTex, uv).rg;
+    const vec2 currNDC = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+    if (all(equal(motionGL, vec2(0.0)))) {
+        const vec4 pclip = pc.skyReproj * vec4(currNDC, 0.0, 1.0);// reversed-Z far
+        if (abs(pclip.w) > 1e-6) motionGL = pclip.xy / pclip.w - currNDC;
+    }
+    vec2 vPx = vec2(-motionGL.x, motionGL.y) * 0.5
+             * vec2(float(pc.width), float(pc.height)) * pc.shutter;
+    const float len = length(vPx);
+    if (len > kTilePx) vPx *= kTilePx / len;
+    return vPx;
+}
+
+// Linear view distance from the motion buffer's prev-NDC reversed-Z depth.
+// abs() makes the result convention-agnostic (the projection's view Z may
+// come out negative); smaller = closer either way. Sky stores 0 (reversed-Z
+// far) and maps to the largest distance, as it must.
+float viewDist(vec2 uv) {
+    const float d = texture(gbufMotionTex, uv).b;
+    if (pc.depthLin.z == 0.0 && pc.depthLin.w == 0.0)
+        return (1.0 - d) * 1e4;// no camera terms → monotonic pseudo-depth
+    return abs((pc.depthLin.x * d + pc.depthLin.y) /
+               (pc.depthLin.z * d + pc.depthLin.w));
+}
+
+// McGuire's soft classification helpers. front(a,b) → 1 when surface a is
+// clearly in front of surface b, 0 when clearly behind, ramp between. The
+// softness scales with distance so kilometre scenes classify as well as
+// interiors.
+float front(float za, float zb) {
+    const float soft = max(0.10 * min(za, zb), 0.25);
+    return clamp(1.0 - (za - zb) / soft, 0.0, 1.0);
+}
+float cone(float dist, float v) {
+    return clamp(1.0 - dist / max(v, 0.01), 0.0, 1.0);
+}
+float cylinder(float dist, float v) {
+    return 1.0 - smoothstep(0.95 * v, 1.05 * v, dist);
+}
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
+
+    const vec4 center = texelFetch(resolvedTex, px, 0);
+
+    // 3×3 neighbor-max: the longest velocity in this tile's neighborhood.
+    // Neighboring tiles matter because an object's streak reaches INTO tiles
+    // it isn't in — without the dilate, streaks clip at tile borders.
+    const ivec2 tile = px / int(kTilePx);
+    vec2  vN = vec2(0.0);
+    float lN2 = 0.0;
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            const ivec2 tc = clamp(tile + ivec2(dx, dy), ivec2(0),
+                                   ivec2(int(pc.tilesX) - 1, int(pc.tilesY) - 1));
+            const vec2  v = texelFetch(tileMaxTex, tc, 0).rg;
+            const float l = dot(v, v);
+            if (l > lN2) { lN2 = l; vN = v; }
+        }
+    }
+    const float lN = sqrt(lN2);
+    if (lN < 0.75) {// nothing in reach moves → passthrough
+        imageStore(outImage, px, center);
+        return;
+    }
+
+    const vec2 sz = vec2(float(pc.width), float(pc.height));
+    const vec2 uv = (vec2(px) + 0.5) / sz;
+    const vec2 vC = blurVelocityPx(uv);
+    const float lC = max(length(vC), 0.01);
+    const float zC = viewDist(uv);
+
+    // Static interleaved-gradient-noise jitter: turns the 15-tap banding into
+    // an unstructured (and temporally STABLE) dither.
+    const float ign = fract(52.9829189 *
+                            fract(dot(vec2(px), vec2(0.06711056, 0.00583715))));
+    const float j = ign - 0.5;
+
+    // Center tap: weighted by the inverse of its own blur (a sharp center
+    // dominates its pixel; a fast-moving one hands over to the gather).
+    float totalW = 1.0 / lC;
+    vec3  sum    = center.rgb * totalW;
+
+    for (int i = 0; i < kSamples; ++i) {
+        if (i == kSamples / 2) continue;// center handled above
+        const float t    = mix(-1.0, 1.0, (float(i) + j + 1.0) / (float(kSamples) + 1.0));
+        const float dist = abs(t) * lN;
+        const vec2  sUv  = clamp((vec2(px) + 0.5 + vN * t) / sz, vec2(0.0), vec2(1.0));
+
+        const vec3  cS = texture(resolvedTex, sUv).rgb;
+        const float lS = max(length(blurVelocityPx(sUv)), 0.01);
+        const float zS = viewDist(sUv);
+
+        const float f = front(zS, zC);// sample in front of center
+        const float b = front(zC, zS);// center in front of sample
+        const float w = f * cone(dist, lS)                      // foreground streaks over us
+                      + b * cone(dist, lC)                      // our blur reveals background
+                      + cylinder(dist, lS) * cylinder(dist, lC) * 2.0;// both blurry
+        totalW += w;
+        sum    += cS * w;
+    }
+
+    imageStore(outImage, px, vec4(sum / totalW, center.a));
+}

@@ -6,10 +6,9 @@
 #include "threepp/core/Object3D.hpp"
 
 #include "threepp/core/Raycaster.hpp"
-#include "threepp/utils/BufferGeometryUtils.hpp"
 
 
-class Sphero : public threepp::Object3D {
+class Sphero: public threepp::Object3D {
 
 public:
     class Flags {
@@ -21,7 +20,7 @@ public:
         static const uint8_t Boost = 0x02;       // 00000010
         static const uint8_t FastTurnMode = 0x04;// 00000100
 
-        explicit Flags(uint8_t flags = None) : flags(flags) {}
+        explicit Flags(uint8_t flags = None): flags(flags) {}
 
         // Set a flag
         void setFlag(uint8_t flag) {
@@ -56,9 +55,9 @@ public:
     // Drive towards a heading at a particular speed. Flags can be set to modify driving mode.
     void driveWithHeading(uint8_t speed, uint16_t heading, Flags flags);
 
-    std::pair<float, float> getTofMeasurements();
+    [[nodiscard]] std::pair<float, float> getTofMeasurements() const;
 
-    threepp::PerspectiveCamera &camera();
+    threepp::PerspectiveCamera& camera();
 
 private:
     float maxSpeed_ = 4;
@@ -71,7 +70,7 @@ private:
 
     void updateTofMeasurements();
 
-    float getTofMeasurement(const std::string &tofId);
+    float getTofMeasurement(const std::string& tofId);
 };
 
 #endif//SPHEROSIM_SPHERO_HPP

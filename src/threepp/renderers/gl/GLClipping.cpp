@@ -55,7 +55,7 @@ struct GLClipping::Impl {
 
         auto materialProperties = properties.materialProperties.get(material);
 
-        if (!scope.localClippingEnabled || planes.empty() || scope.renderingShadows && !clipShadows) {
+        if (!scope.localClippingEnabled || planes.empty() || (scope.renderingShadows && !clipShadows)) {
 
             // there's no local clipping
 

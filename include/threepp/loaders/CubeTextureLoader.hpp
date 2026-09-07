@@ -13,7 +13,8 @@ namespace threepp {
     class CubeTextureLoader {
 
     public:
-        std::shared_ptr<CubeTexture> load(const std::array<std::filesystem::path, 6>& paths) {
+        std::shared_ptr<CubeTexture> load(const std::array<std::filesystem::path, 6>& paths,
+                                          ColorSpace colorSpace = ColorSpace::sRGB) {
 
             auto checkIsJPEG = [](const std::string& path) {
                 return path.find(".jpg") != std::string::npos || path.find(".jpeg") != std::string::npos;
@@ -29,6 +30,7 @@ namespace threepp {
 
             auto texture = CubeTexture::create(images);
             texture->format = isJPEG ? Format::RGB : Format::RGBA;
+            texture->colorSpace = colorSpace;
             texture->needsUpdate();
 
             return texture;

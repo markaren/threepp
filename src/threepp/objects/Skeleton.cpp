@@ -15,7 +15,7 @@ namespace {
 
 
 Skeleton::Skeleton(const std::vector<std::shared_ptr<Bone>>& bones, const std::vector<Matrix4>& boneInverses)
-    : uuid_(math::generateUUID()), bones(bones), boneMatrices(bones.size() * 16), boneInverses(boneInverses) {
+    : bones(bones), boneInverses(boneInverses), boneMatrices(bones.size() * 16), uuid_(math::generateUUID()) {
 
     init();
 }
@@ -23,6 +23,11 @@ Skeleton::Skeleton(const std::vector<std::shared_ptr<Bone>>& bones, const std::v
 std::string Skeleton::uuid() const {
 
     return uuid_;
+}
+
+void Skeleton::setUuid(const std::string& uuid) {
+
+    uuid_ = uuid;
 }
 
 void Skeleton::init() {

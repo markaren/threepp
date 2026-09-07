@@ -10,7 +10,7 @@
 namespace threepp {
 
     class Mesh;
-    class IGLRenderer;
+    class Renderer;
 
     namespace gl {
 
@@ -21,7 +21,7 @@ namespace threepp {
 
         struct GLBackground {
 
-            GLBackground(IGLRenderer& renderer, GLCubeMaps& cubemaps, GLState& state, GLObjects& objects, bool premultipliedAlpha);
+            GLBackground(Renderer& renderer, GLCubeMaps& cubemaps, GLState& state, GLObjects& objects, bool premultipliedAlpha);
 
             void render(GLRenderList& renderList, Object3D* scene);
 
@@ -33,9 +33,15 @@ namespace threepp {
 
             void setClearAlpha(float alpha);
 
+            // Re-encode the current clear colour for whatever render target is
+            // bound now. Called when the bound target changes: the encode
+            // depends on the target's colour space, so the value glClearColor
+            // holds goes stale on every bind.
+            void refreshClear();
+
 
         private:
-            IGLRenderer& renderer;
+            Renderer& renderer;
             GLCubeMaps& cubemaps;
             GLState& state;
             GLObjects& objects;

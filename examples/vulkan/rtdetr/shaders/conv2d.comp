@@ -1,0 +1,148 @@
+#version 450
+// Standard (non-grouped) 2D conv. f32 weights [out_c, in_c, kH, kW].
+// Three internal paths chosen by kernel size:
+//   1x1  -> tiled GEMM with shared memory (TILE=16)
+//   3x3  -> unrolled kernel, loop over in_c
+//   else -> generic.
+// gid.x = output spatial position, gid.y = output channel.
+// Bindings: 0 input, 1 weight, 2 bias, 3 output. Params via push constant.
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint in_c, out_c, in_h, in_w;
+    uint out_h, out_w, k_h, k_w;
+    uint stride_h, stride_w, pad_h, pad_w;
+    uint has_bias, activation, _p0, _p1;
+} p;
+
+layout(std430, binding = 0) readonly buffer Inp  { float inp[]; };
+layout(std430, binding = 1) readonly buffer Wt   { float wt[]; };
+layout(std430, binding = 2) readonly buffer Bias { float bias[]; };
+layout(std430, binding = 3)          buffer Out  { float outp[]; };
+
+const uint TILE = 16u;
+shared float tileInp[256];// [TILE_IC x TILE_POS]
+shared float tileW[256];  // [TILE_OC x TILE_IC]
+
+float act(float v) {
+    if (p.activation == 1u) return max(0.0, v);
+    if (p.activation == 2u) return v / (1.0 + exp(-v));
+    return v;
+}
+
+void main() {
+    uint pos = gl_GlobalInvocationID.x;
+    uint oc  = gl_GlobalInvocationID.y;
+    uint lp  = gl_LocalInvocationID.x;
+    uint loc = gl_LocalInvocationID.y;
+
+    uint out_pitch = p.out_h * p.out_w;
+    uint in_pitch  = p.in_h * p.in_w;
+    uint total_pos = out_pitch;
+
+    if (p.k_h == 1u && p.k_w == 1u) {
+        // ---- Tiled 1x1 path (conv == GEMM) ----
+        uint oy = pos / p.out_w;
+        uint ox = pos % p.out_w;
+        uint iy = oy * p.stride_h;
+        uint ix = ox * p.stride_w;
+
+        float acc = 0.0;
+        uint numTiles = (p.in_c + TILE - 1u) / TILE;
+        for (uint t = 0u; t < numTiles; t++) {
+            uint icOff = t * TILE;
+
+            uint tic = icOff + loc;
+            if (tic < p.in_c && pos < total_pos) {
+                tileInp[loc * TILE + lp] = inp[tic * in_pitch + iy * p.in_w + ix];
+            } else {
+                tileInp[loc * TILE + lp] = 0.0;
+            }
+
+            uint wic = icOff + lp;
+            if (oc < p.out_c && wic < p.in_c) {
+                tileW[loc * TILE + lp] = wt[oc * p.in_c + wic];
+            } else {
+                tileW[loc * TILE + lp] = 0.0;
+            }
+
+            barrier();
+
+            for (uint k = 0u; k < TILE; k++) {
+                acc += tileW[loc * TILE + k] * tileInp[k * TILE + lp];
+            }
+
+            barrier();
+        }
+
+        if (oc < p.out_c && pos < total_pos) {
+            if (p.has_bias != 0u) acc += bias[oc];
+            outp[oc * out_pitch + oy * p.out_w + ox] = act(acc);
+        }
+    } else if (p.k_h == 3u && p.k_w == 3u) {
+        // ---- Specialized 3x3 path ----
+        if (pos >= total_pos || oc >= p.out_c) return;
+        uint oy = pos / p.out_w;
+        uint ox = pos % p.out_w;
+        uint w_per_oc = p.in_c * 9u;
+
+        float sum = 0.0;
+        for (uint ic = 0u; ic < p.in_c; ic++) {
+            uint wBase = oc * w_per_oc + ic * 9u;
+            uint icBase = ic * in_pitch;
+            int cy = int(oy * p.stride_h) - int(p.pad_h);
+            int cx = int(ox * p.stride_w) - int(p.pad_w);
+            int h = int(p.in_h);
+            int w = int(p.in_w);
+            // Row 0
+            if (cy >= 0 && cy < h) {
+                uint row = icBase + uint(cy) * p.in_w;
+                if (cx >= 0   && cx < w)   sum += inp[row + uint(cx)]     * wt[wBase];
+                if (cx+1 >= 0 && cx+1 < w) sum += inp[row + uint(cx+1)]   * wt[wBase + 1u];
+                if (cx+2 >= 0 && cx+2 < w) sum += inp[row + uint(cx+2)]   * wt[wBase + 2u];
+            }
+            // Row 1
+            if (cy+1 >= 0 && cy+1 < h) {
+                uint row = icBase + uint(cy+1) * p.in_w;
+                if (cx >= 0   && cx < w)   sum += inp[row + uint(cx)]     * wt[wBase + 3u];
+                if (cx+1 >= 0 && cx+1 < w) sum += inp[row + uint(cx+1)]   * wt[wBase + 4u];
+                if (cx+2 >= 0 && cx+2 < w) sum += inp[row + uint(cx+2)]   * wt[wBase + 5u];
+            }
+            // Row 2
+            if (cy+2 >= 0 && cy+2 < h) {
+                uint row = icBase + uint(cy+2) * p.in_w;
+                if (cx >= 0   && cx < w)   sum += inp[row + uint(cx)]     * wt[wBase + 6u];
+                if (cx+1 >= 0 && cx+1 < w) sum += inp[row + uint(cx+1)]   * wt[wBase + 7u];
+                if (cx+2 >= 0 && cx+2 < w) sum += inp[row + uint(cx+2)]   * wt[wBase + 8u];
+            }
+        }
+
+        if (p.has_bias != 0u) sum += bias[oc];
+        outp[oc * out_pitch + oy * p.out_w + ox] = act(sum);
+    } else {
+        // ---- Generic path ----
+        if (pos >= total_pos || oc >= p.out_c) return;
+        uint oy = pos / p.out_w;
+        uint ox = pos % p.out_w;
+        uint k_area = p.k_h * p.k_w;
+        uint w_per_oc = p.in_c * k_area;
+
+        float sum = 0.0;
+        for (uint ic = 0u; ic < p.in_c; ic++) {
+            for (uint ky = 0u; ky < p.k_h; ky++) {
+                for (uint kx = 0u; kx < p.k_w; kx++) {
+                    int iy = int(oy * p.stride_h + ky) - int(p.pad_h);
+                    int ix = int(ox * p.stride_w + kx) - int(p.pad_w);
+                    if (iy >= 0 && iy < int(p.in_h) && ix >= 0 && ix < int(p.in_w)) {
+                        uint ii = ic * in_pitch + uint(iy) * p.in_w + uint(ix);
+                        uint wi = oc * w_per_oc + ic * k_area + ky * p.k_w + kx;
+                        sum += inp[ii] * wt[wi];
+                    }
+                }
+            }
+        }
+
+        if (p.has_bias != 0u) sum += bias[oc];
+        outp[oc * out_pitch + oy * p.out_w + ox] = act(sum);
+    }
+}

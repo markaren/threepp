@@ -5,11 +5,12 @@ using namespace threepp;
 
 MeshBasicMaterial::MeshBasicMaterial()
     : MaterialWithColor(0xffffff),
-      MaterialWithAoMap(1),
       MaterialWithLightMap(1),
-      MaterialWithCombine(CombineOperation::Multiply),
+      MaterialWithAoMap(1),
+      MaterialWithRefractionRatio(0.98f),// virtual base: must be named here
       MaterialWithReflectivity(1, 0.98f),
-      MaterialWithWireframe(false, 1) {}
+      MaterialWithWireframe(false, 1),
+      MaterialWithCombine(CombineOperation::Multiply) {}
 
 
 std::string MeshBasicMaterial::type() const {
@@ -38,18 +39,56 @@ void MeshBasicMaterial::copyInto(Material& material) const {
     m->alphaMap = alphaMap;
 
     m->envMap = envMap;
+    m->envMapIntensity = envMapIntensity;
     m->combine = combine;
     m->reflectivity = reflectivity;
     m->refractionRatio = refractionRatio;
 
     m->wireframe = wireframe;
     m->wireframeLinewidth = wireframeLinewidth;
+
+    m->morphTargets = morphTargets;
+    m->morphNormals = morphNormals;
 }
 
 std::shared_ptr<MeshBasicMaterial> MeshBasicMaterial::create(const std::unordered_map<std::string, MaterialValue>& values) {
 
     auto m = std::shared_ptr<MeshBasicMaterial>(new MeshBasicMaterial());
     m->setValues(values);
+
+    return m;
+}
+
+std::shared_ptr<MeshBasicMaterial> MeshBasicMaterial::create(const Params& p) {
+
+    auto m = std::shared_ptr<MeshBasicMaterial>(new MeshBasicMaterial());
+
+    p.applyBaseTo(*m);
+
+    // Apply only the fields the caller set; everything else keeps the constructor default.
+    // Params stores each value in a `field_` member; the material's field is `field`.
+#define TPP_SET(field) \
+    if (p.field##_) m->field = *p.field##_;
+#define TPP_TEX(field) \
+    if (p.field##_) m->field = p.field##_;
+
+    TPP_SET(color)
+    TPP_SET(wireframe)
+    TPP_SET(wireframeLinewidth)
+    TPP_TEX(map)
+    TPP_TEX(alphaMap)
+    TPP_TEX(specularMap)
+    TPP_TEX(aoMap)
+    TPP_SET(aoMapIntensity)
+    TPP_TEX(lightMap)
+    TPP_SET(lightMapIntensity)
+    TPP_TEX(envMap)
+    TPP_SET(combine)
+    TPP_SET(reflectivity)
+    TPP_SET(refractionRatio)
+
+#undef TPP_SET
+#undef TPP_TEX
 
     return m;
 }
@@ -134,5 +173,5 @@ bool MeshBasicMaterial::setValue(const std::string& key, const MaterialValue& va
 
 std::shared_ptr<Material> MeshBasicMaterial::createDefault() const {
 
-    return {};
+    return std::shared_ptr<Material>(new MeshBasicMaterial());
 }

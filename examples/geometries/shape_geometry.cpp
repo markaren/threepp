@@ -1,3 +1,5 @@
+#include "renderer_factory.hpp"
+
 #include "threepp/geometries/EdgesGeometry.hpp"
 #include "threepp/geometries/ExtrudeGeometry.hpp"
 #include "threepp/threepp.hpp"
@@ -64,26 +66,27 @@ auto createSmiley() {
 }
 
 std::shared_ptr<Mesh> createMesh(const Shape& shape, float scale = 1) {
-    auto shapeGeometry = ShapeGeometry::create(shape);
+    const auto shapeGeometry = ShapeGeometry::create(shape);
     shapeGeometry->center();
     shapeGeometry->scale(scale, scale, scale);
 
-    auto shapeMesh = Mesh::create(shapeGeometry, MeshPhongMaterial::create({{"color", Color::orange},
-                                                                            {"side", Side::Double}}));
-    auto wireframe = LineSegments::create(WireframeGeometry::create(*shapeGeometry));
+    auto shapeMesh = Mesh::create(shapeGeometry, MeshPhongMaterial::create(MeshPhongMaterial::Params{}
+                                                                                   .color(Color::orange)
+                                                                                   .side(Side::Double)));
+    const auto wireframe = LineSegments::create(WireframeGeometry::create(*shapeGeometry));
     wireframe->position.z = -5;
     shapeMesh->add(wireframe);
 
-    auto edges = LineSegments::create(EdgesGeometry::create(*shapeGeometry));
+    const auto edges = LineSegments::create(EdgesGeometry::create(*shapeGeometry));
     edges->position.z = -10;
     shapeMesh->add(edges);
 
     ExtrudeGeometry::Options opts;
     opts.depth = 3;
-    auto extrudeGeometry = ExtrudeGeometry::create({shape}, opts);
+    const auto extrudeGeometry = ExtrudeGeometry::create({shape}, opts);
     extrudeGeometry->center();
     extrudeGeometry->scale(scale, scale, scale);
-    auto extrudeMesh = Mesh::create(extrudeGeometry, MeshPhongMaterial::create({{"color", Color::orange}, {"flatShading", true}}));
+    const auto extrudeMesh = Mesh::create(extrudeGeometry, MeshPhongMaterial::create(MeshPhongMaterial::Params{}.color(Color::orange).flatShading(true)));
     extrudeMesh->position.z = 10;
 
     shapeMesh->add(extrudeMesh);
@@ -94,7 +97,7 @@ std::shared_ptr<Mesh> createMesh(const Shape& shape, float scale = 1) {
 int main() {
 
     Canvas canvas("ShapeGeometry", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
     scene->background = Color::blue;
@@ -130,15 +133,15 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
-    canvas.animate([&]() {
-        float dt = clock.getDelta();
+    canvas.animate([&] {
+        const auto dt = clock.getDelta();
 
         group->rotation.y += 0.8f * dt;
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 }

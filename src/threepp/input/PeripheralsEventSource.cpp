@@ -23,6 +23,32 @@ bool PeripheralsEventSource::removeKeyListener(const KeyListener& listener) {
     return false;
 }
 
+int PeripheralsEventSource::onKeyPressed(std::function<void(KeyEvent)> callback) {
+    const int id = nextKeyListenerId_++;
+    ownedKeyListeners_.push_back({id, KeyAction::PRESS, std::move(callback)});
+    return id;
+}
+
+int PeripheralsEventSource::onKeyReleased(std::function<void(KeyEvent)> callback) {
+    const int id = nextKeyListenerId_++;
+    ownedKeyListeners_.push_back({id, KeyAction::RELEASE, std::move(callback)});
+    return id;
+}
+
+int PeripheralsEventSource::onKeyRepeat(std::function<void(KeyEvent)> callback) {
+    const int id = nextKeyListenerId_++;
+    ownedKeyListeners_.push_back({id, KeyAction::REPEAT, std::move(callback)});
+    return id;
+}
+
+void PeripheralsEventSource::removeKeyListener(int id) {
+    std::erase_if(ownedKeyListeners_, [id](const OwnedKeyListener& l) { return l.id == id; });
+}
+
+bool PeripheralsEventSource::isKeyDown(Key key) const {
+    return keysDown_.contains(key);
+}
+
 void PeripheralsEventSource::addMouseListener(MouseListener& listener) {
     if (const auto find = std::ranges::find(mouseListeners_, &listener); find == mouseListeners_.end()) {
         mouseListeners_.emplace_back(&listener);
@@ -75,6 +101,11 @@ void PeripheralsEventSource::onMouseWheelEvent(const Vector2& eventData) {
 }
 
 void PeripheralsEventSource::onKeyEvent(KeyEvent evt, PeripheralsEventSource::KeyAction action) {
+    // Track held state regardless of IOCapture so isKeyDown() stays physically accurate
+    // and never sticks (e.g. a RELEASE arriving while UI has keyboard focus).
+    if (action == KeyAction::PRESS) keysDown_.insert(evt.key);
+    else if (action == KeyAction::RELEASE) keysDown_.erase(evt.key);
+
     if (ioCapture_ && ioCapture_->preventKeyboardEvent()) return;
 
     auto listeners = keyListeners_;//copy - IMPORTANT
@@ -93,6 +124,13 @@ void PeripheralsEventSource::onKeyEvent(KeyEvent evt, PeripheralsEventSource::Ke
                 break;
             }
         }
+    }
+
+    // Owning callbacks (registered via onKeyPressed/Released/Repeat). Copy first so a
+    // callback may add/remove listeners during dispatch without invalidating iterators.
+    auto owned = ownedKeyListeners_;
+    for (const auto& l : owned) {
+        if (l.action == action) l.cb(evt);
     }
 }
 

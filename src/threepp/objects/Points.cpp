@@ -49,7 +49,7 @@ namespace {
 }// namespace
 
 Points::Points(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
-    : geometry_(std::move(geometry)), ObjectWithMaterials({std::move(material)}) {}
+    : ObjectWithMaterials({std::move(material)}), geometry_(std::move(geometry)) {}
 
 std::string Points::type() const {
 

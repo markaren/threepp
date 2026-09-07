@@ -2,7 +2,7 @@
 #include "threepp/math/Vector4.hpp"
 
 #include "threepp/math/Matrix4.hpp"
-#include "threepp/core/InterleavedBufferAttribute.hpp"
+
 #include <cmath>
 #include <string>
 
@@ -10,12 +10,27 @@ using namespace threepp;
 
 
 Vector4::Vector4(int x, int y, int z, int w)
-    : x((float) x), y((float) y), z((float) z), w((float) w) {}
+    : x(static_cast<float>(x)), y(static_cast<float>(y)), z(static_cast<float>(z)), w(static_cast<float>(w)) {}
 
 Vector4::Vector4(float x, float y, float z, float w)
     : x(x), y(y), z(z), w(w) {}
 
 float& Vector4::operator[](unsigned int index) {
+    switch (index) {
+        case 0:
+            return x;
+        case 1:
+            return y;
+        case 2:
+            return z;
+        case 3:
+            return w;
+        default:
+            throw std::runtime_error("index out of bound: " + std::to_string(index));
+    }
+}
+
+float Vector4::operator[](unsigned int index) const {
     switch (index) {
         case 0:
             return x;
@@ -192,15 +207,6 @@ Vector4& Vector4::negate() {
     return *this;
 }
 
-Vector4& threepp::Vector4::lerp(Vector4& v, float alpha) {
-    x += (v.x - x) * alpha;
-    y += (v.y - y) * alpha;
-    z += (v.z - z) * alpha;
-    w += (v.w - w) * alpha;
-
-    return *this;
-}
-
 float Vector4::dot(const Vector4& v) const {
 
     return this->x * v.x + this->y * v.y + this->z * v.z + this->w * v.w;
@@ -250,13 +256,4 @@ bool Vector4::operator==(const Vector4& other) const {
 bool Vector4::operator!=(const Vector4& other) const {
 
     return !equals(other);
-}
-
-Vector4& threepp::Vector4::fromBufferAttribute(const InterleavedBufferAttribute& attribute, int index) {
-    x = attribute.getX(static_cast<size_t>(index));
-    y = attribute.getY(static_cast<size_t>(index));
-    z = attribute.getZ(static_cast<size_t>(index));
-    w = attribute.getW(static_cast<size_t>(index));
-
-    return *this;
 }

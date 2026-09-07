@@ -5,6 +5,9 @@
 
 #include "float_view.hpp"
 
+#include <functional>
+#include <optional>
+
 namespace threepp {
 
     class Vector3;

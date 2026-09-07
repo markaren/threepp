@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include <threepp/threepp.hpp>
 
 using namespace threepp;
@@ -6,8 +8,8 @@ using namespace threepp;
 int main() {
 
     Canvas canvas{"STL loader", {{"aa", 4}}};
-    GLRenderer renderer(canvas.size());
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
+    renderer->setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
@@ -16,8 +18,8 @@ int main() {
     OrbitControls controls{*camera, canvas};
 
     STLLoader loader;
-    auto geometry = loader.load("data/models/stl/pr2_head_pan.stl");
-    auto material = MeshPhongMaterial::create({{"flatShading", true}, {"color", Color::brown}});
+    auto geometry = loader.load(std::string(DATA_FOLDER) + "/models/stl/pr2_head_pan.stl");
+    auto material = MeshPhongMaterial::create(MeshPhongMaterial::Params{}.flatShading(true).color(Color::brown));
     auto mesh = Mesh::create(geometry, material);
     mesh->scale *= 2;
     mesh->rotateX(-math::PI / 2).rotateZ(math::PI / 2);
@@ -36,15 +38,15 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
-    canvas.animate([&]() {
-        float dt = clock.getDelta();
+    canvas.animate([&] {
+        const auto dt = clock.getDelta();
 
         mesh->rotation.z += 1 * dt;
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 }

@@ -16,6 +16,11 @@ namespace threepp {
         float angle;
         float penumbra;
         float decay;
+        // Physical source radius (world units). >0 gives ray-traced soft
+        // shadows with distance-widening penumbras in the Vulkan deferred
+        // renderer; 0 (default) keeps exact hard shadows. (threepp extension —
+        // three.js has no analytic-light source size.)
+        float radius = 0.f;
 
         [[nodiscard]] std::string type() const override;
 

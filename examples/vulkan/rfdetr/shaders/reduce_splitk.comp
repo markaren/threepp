@@ -1,0 +1,38 @@
+#version 450
+// Reduction for split-K GEMM: sum the splitK partial planes produced by
+// linear_splitk.comp, add bias, apply activation, write Y[M,N]. One invocation
+// per output element. GELU is the erf form, identical to linear.comp so split-K
+// output matches the monolithic path to fp32 round-off.
+// Bindings: 0 partials[splitK,M,N], 1 bias[N], 2 y[M,N].
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint M, N, splitK, hasBias, act, _p0, _p1, _p2;// act: 0 = none, 1 = GELU (erf form)
+} p;
+
+layout(std430, binding = 0) readonly buffer P { float Pb[]; };// [splitK, M, N]
+layout(std430, binding = 1) readonly buffer B { float bias[]; };
+layout(std430, binding = 2)          buffer Y { float Yb[]; };// [M, N]
+
+float erf_approx(float z) {
+    float s = z < 0.0 ? -1.0 : 1.0;
+    float a = abs(z);
+    float t = 1.0 / (1.0 + 0.3275911 * a);
+    float poly = (((( 1.061405429 * t - 1.453152027) * t + 1.421413741) * t
+                    - 0.284496736) * t + 0.254829592) * t;
+    return s * (1.0 - poly * exp(-a * a));
+}
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint total = p.M * p.N;
+    if (gid >= total) return;
+
+    uint plane = p.M * p.N;
+    float v = 0.0;
+    for (uint z = 0u; z < p.splitK; z++) v += Pb[z * plane + gid];
+
+    if (p.hasBias != 0u) v += bias[gid % p.N];
+    if (p.act == 1u) v = 0.5 * v * (1.0 + erf_approx(v * 0.7071067811865475));
+    Yb[gid] = v;
+}

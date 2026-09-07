@@ -4,11 +4,11 @@
 using namespace threepp;
 
 MeshNormalMaterial::MeshNormalMaterial()
-    : MaterialWithFlatShading(false),
-      MaterialWithWireframe(false, 1),
-      MaterialWithDisplacementMap(1, 0),
+    : MaterialWithBumpMap(1),
       MaterialWithNormalMap(NormalMapType::TangentSpace, {1, 1}),
-      MaterialWithBumpMap(1) {
+      MaterialWithDisplacementMap(1, 0),
+      MaterialWithWireframe(false, 1),
+      MaterialWithFlatShading(false) {
 
     this->fog = false;
 }
@@ -33,11 +33,42 @@ std::shared_ptr<MeshNormalMaterial> MeshNormalMaterial::create(const std::unorde
     return m;
 }
 
+std::shared_ptr<MeshNormalMaterial> MeshNormalMaterial::create(const Params& p) {
+
+    auto m = std::shared_ptr<MeshNormalMaterial>(new MeshNormalMaterial());
+
+    p.applyBaseTo(*m);
+
+    // Apply only the fields the caller set; everything else keeps the constructor default.
+    // Params stores each value in a `field_` member; the material's field is `field`.
+#define TPP_SET(field) \
+    if (p.field##_) m->field = *p.field##_;
+#define TPP_TEX(field) \
+    if (p.field##_) m->field = p.field##_;
+
+    TPP_SET(wireframe)
+    TPP_SET(wireframeLinewidth)
+    TPP_SET(flatShading)
+    TPP_TEX(normalMap)
+    TPP_SET(normalMapType)
+    TPP_TEX(displacementMap)
+    TPP_SET(displacementBias)
+    TPP_SET(displacementScale)
+
+#undef TPP_SET
+#undef TPP_TEX
+
+    return m;
+}
+
 void MeshNormalMaterial::copyInto(Material& material) const {
 
     Material::copyInto(material);
 
     auto m = material.as<MeshNormalMaterial>();
+
+    m->bumpMap = bumpMap;
+    m->bumpScale = bumpScale;
 
     m->normalMap = normalMap;
     m->normalMapType = normalMapType;
@@ -78,6 +109,21 @@ bool MeshNormalMaterial::setValue(const std::string& key, const MaterialValue& v
     } else if (key == "normalMapType") {
 
         normalMapType = std::get<NormalMapType>(value);
+        return true;
+
+    } else if (key == "normalScale") {
+
+        normalScale.copy(std::get<Vector2>(value));
+        return true;
+
+    } else if (key == "bumpMap") {
+
+        bumpMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "bumpScale") {
+
+        bumpScale = extractFloat(value);
         return true;
 
     } else if (key == "displacementMap") {

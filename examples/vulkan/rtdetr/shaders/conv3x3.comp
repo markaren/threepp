@@ -1,0 +1,74 @@
+#version 450
+// Optimized 3x3 conv: each thread computes OCT=4 output channels at one spatial
+// position, so each input load is reused across 4 channels (4x less input-
+// bandwidth than the naive one-thread-per-output path). Scalar accumulators
+// (s0..s3) keep everything in registers — an array-based OCT=8 variant spilled
+// to local memory and ran slower. Handles arbitrary stride/pad. Weights f32
+// [out_c, in_c, 3, 3]. Bindings: 0 in, 1 wt, 2 bias, 3 out.
+//
+// Workgroup (16 pos × 4 oc-groups); gy tiles out_c in steps of 16.
+layout(local_size_x = 16, local_size_y = 4, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint in_c, out_c, in_h, in_w;
+    uint out_h, out_w, k_h, k_w;
+    uint stride_h, stride_w, pad_h, pad_w;
+    uint has_bias, activation, _p0, _p1;
+} p;
+
+layout(std430, binding = 0) readonly buffer Inp  { float inp[]; };
+layout(std430, binding = 1) readonly buffer Wt   { float wt[]; };
+layout(std430, binding = 2) readonly buffer Bias { float bias[]; };
+layout(std430, binding = 3)          buffer Out  { float outp[]; };
+
+float act(float v) {
+    if (p.activation == 1u) return max(0.0, v);
+    if (p.activation == 2u) return v / (1.0 + exp(-v));
+    return v;
+}
+
+void main() {
+    uint pos = gl_GlobalInvocationID.x;
+    uint oc0 = gl_GlobalInvocationID.y * 4u;
+    uint out_pitch = p.out_h * p.out_w;
+    if (pos >= out_pitch || oc0 >= p.out_c) return;
+
+    uint oy = pos / p.out_w, ox = pos % p.out_w;
+    int cy = int(oy * p.stride_h) - int(p.pad_h);
+    int cx = int(ox * p.stride_w) - int(p.pad_w);
+    int H = int(p.in_h), W = int(p.in_w);
+    uint in_pitch = p.in_h * p.in_w;
+    uint w_per_oc = p.in_c * 9u;
+
+    bool v0 = oc0 + 0u < p.out_c, v1 = oc0 + 1u < p.out_c,
+         v2 = oc0 + 2u < p.out_c, v3 = oc0 + 3u < p.out_c;
+    uint wb0 = (oc0 + 0u) * w_per_oc, wb1 = (oc0 + 1u) * w_per_oc,
+         wb2 = (oc0 + 2u) * w_per_oc, wb3 = (oc0 + 3u) * w_per_oc;
+
+    float s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+    for (uint ic = 0u; ic < p.in_c; ic++) {
+        uint icBase = ic * in_pitch;
+        uint wic = ic * 9u;
+        for (uint ky = 0u; ky < 3u; ky++) {
+            int iy = cy + int(ky);
+            if (iy < 0 || iy >= H) continue;
+            uint row = icBase + uint(iy) * p.in_w;
+            uint wky = wic + ky * 3u;
+            for (uint kx = 0u; kx < 3u; kx++) {
+                int ix = cx + int(kx);
+                if (ix < 0 || ix >= W) continue;
+                float iv = inp[row + uint(ix)];// one load, reused by 4 channels
+                uint wk = wky + kx;
+                if (v0) s0 += iv * wt[wb0 + wk];
+                if (v1) s1 += iv * wt[wb1 + wk];
+                if (v2) s2 += iv * wt[wb2 + wk];
+                if (v3) s3 += iv * wt[wb3 + wk];
+            }
+        }
+    }
+
+    if (v0) { float v = s0; if (p.has_bias != 0u) v += bias[oc0 + 0u]; outp[(oc0 + 0u) * out_pitch + pos] = act(v); }
+    if (v1) { float v = s1; if (p.has_bias != 0u) v += bias[oc0 + 1u]; outp[(oc0 + 1u) * out_pitch + pos] = act(v); }
+    if (v2) { float v = s2; if (p.has_bias != 0u) v += bias[oc0 + 2u]; outp[(oc0 + 2u) * out_pitch + pos] = act(v); }
+    if (v3) { float v = s3; if (p.has_bias != 0u) v += bias[oc0 + 3u]; outp[(oc0 + 3u) * out_pitch + pos] = act(v); }
+}

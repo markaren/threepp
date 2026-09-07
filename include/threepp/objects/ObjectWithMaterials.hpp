@@ -16,6 +16,8 @@ namespace threepp {
 
         void setMaterial(const std::shared_ptr<Material>& material);
 
+        void replaceMaterial(const std::shared_ptr<Material>& material);
+
         const std::vector<std::shared_ptr<Material>>& materials() const;
 
         void setMaterials(const std::vector<std::shared_ptr<Material>>& materials);

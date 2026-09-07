@@ -2,6 +2,9 @@
 #ifndef THREEPP_ASSIMPLOADER_HPP
 #define THREEPP_ASSIMPLOADER_HPP
 
+#include "threepp/animation/AnimationClip.hpp"
+#include "threepp/animation/tracks/QuaternionKeyframeTrack.hpp"
+#include "threepp/animation/tracks/VectorKeyframeTrack.hpp"
 #include "threepp/loaders/Loader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
@@ -10,11 +13,13 @@
 #include "threepp/objects/SkinnedMesh.hpp"
 
 #include <assimp/Importer.hpp>
+#include <assimp/config.h>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 #include <assimp/version.h>
 
 #include <filesystem>
+#include <ranges>
 #include <sstream>
 #include <utility>
 
@@ -39,8 +44,16 @@ namespace threepp {
         }
 
 
+        AssimpLoader& setIgnoreUpDirection(bool ignore) {
+            ignoreUpDirection_ = ignore;
+            return *this;
+        }
+
         std::shared_ptr<Group> load(const std::filesystem::path& path) override {
 
+            if (ignoreUpDirection_) {
+                importer_.SetPropertyBool(AI_CONFIG_IMPORT_COLLADA_IGNORE_UP_DIRECTION, true);
+            }
             auto aiScene = importer_.ReadFile(path.string().c_str(), aiProcessPreset_TargetRealtime_Quality);
 
             if (!aiScene) {
@@ -54,14 +67,95 @@ namespace threepp {
             group->name = path.filename().stem().string();
             parseNodes(info, aiScene, aiScene->mRootNode, *group);
 
+            for (unsigned i = 0; i < aiScene->mNumAnimations; i++) {
+                const auto aiAnim = aiScene->mAnimations[i];
+
+                std::string name(aiAnim->mName.data);
+                auto duration = static_cast<float>(aiAnim->mDuration / aiAnim->mTicksPerSecond);
+
+                std::vector<std::shared_ptr<KeyframeTrack>> tracks;
+                for (unsigned j = 0; j < aiAnim->mNumChannels; j++) {
+
+                    const auto aiNodeAnim = aiAnim->mChannels[j];
+
+                    if (auto rotationTrack = loadRotationTrack(aiNodeAnim)){
+                        tracks.emplace_back(std::move(rotationTrack));
+                    }
+
+                    if (auto positionTrack = loadPositionTrack(aiNodeAnim)){
+                        tracks.emplace_back(std::move(positionTrack));
+                    }
+
+                    if (auto scaleTrack = loadScaleTrack(aiNodeAnim)){
+                        tracks.emplace_back(std::move(scaleTrack));
+                    }
+                }
+
+                auto clip = std::make_shared<AnimationClip>(name, duration, tracks);
+                group->animations.emplace_back(clip);
+            }
+
             return group;
         }
 
     private:
+        bool ignoreUpDirection_ = false;
         TextureLoader texLoader_;
         Assimp::Importer importer_;
 
         struct SceneInfo;
+
+        static std::unique_ptr<KeyframeTrack> loadRotationTrack(const aiNodeAnim* aiNodeAnim) {
+            std::vector<float> times;
+            std::vector<float> values;
+            std::string name(aiNodeAnim->mNodeName.data);
+            // std::erase(name, '.');
+
+            for (auto k = 0; k < aiNodeAnim->mNumRotationKeys; k++) {
+
+                const auto key = aiNodeAnim->mRotationKeys[k];
+                times.emplace_back(static_cast<float>(key.mTime / 1000));
+                values.insert(values.end(), {static_cast<float>(key.mValue.x), static_cast<float>(key.mValue.y),
+                                             static_cast<float>(key.mValue.z), static_cast<float>(key.mValue.w)});
+            }
+
+            return std::make_unique<QuaternionKeyframeTrack>(name + ".quaternion", times, values);
+        }
+
+        static std::unique_ptr<KeyframeTrack> loadPositionTrack(const aiNodeAnim* aiNodeAnim) {
+            std::vector<float> times;
+            std::vector<float> values;
+            std::string name(aiNodeAnim->mNodeName.data);
+            // std::erase(name, '.');
+
+            for (auto k = 0; k < aiNodeAnim->mNumPositionKeys; k++) {
+
+                const auto key = aiNodeAnim->mPositionKeys[k];
+                times.emplace_back(static_cast<float>(key.mTime / 1000));
+                values.insert(values.end(), {static_cast<float>(key.mValue.x), static_cast<float>(key.mValue.y),
+                                             static_cast<float>(key.mValue.z)});
+            }
+
+            return std::make_unique<VectorKeyframeTrack>(name + ".position", times, values);
+        }
+
+        static std::unique_ptr<KeyframeTrack> loadScaleTrack(const aiNodeAnim* aiNodeAnim) {
+            std::vector<float> times;
+            std::vector<float> values;
+            std::string name(aiNodeAnim->mNodeName.data);
+            // std::erase(name, '.');
+
+            for (auto k = 0; k < aiNodeAnim->mNumScalingKeys; k++) {
+
+                const auto key = aiNodeAnim->mScalingKeys[k];
+                times.emplace_back(static_cast<float>(key.mTime / 1000));
+                values.insert(values.end(), {static_cast<float>(key.mValue.x), static_cast<float>(key.mValue.y),
+                                             static_cast<float>(key.mValue.z)});
+            }
+
+            return std::make_unique<VectorKeyframeTrack>(name + ".scale", times, values);
+        }
+
 
         void parseNodes(const SceneInfo& info, const aiScene* aiScene, aiNode* aiNode, Object3D& parent) {
 
@@ -200,11 +294,11 @@ namespace threepp {
             explicit SceneInfo(std::filesystem::path path): path(std::move(path)) {}
 
             [[nodiscard]] bool hasSkeleton(unsigned int meshIndex) const {
-                return boneData.count(meshIndex);
+                return boneData.contains(meshIndex);
             }
 
             [[nodiscard]] std::shared_ptr<Bone> getBone(const std::string& name) const {
-                for (const auto& [idx, data] : boneData) {
+                for (const auto& data : boneData | std::views::values) {
                     for (const auto& bone : data.bones) {
                         if (bone->name.substr(5) == name) {
                             return bone;
@@ -298,7 +392,7 @@ namespace threepp {
                 pairs.emplace_back(indexes[i], weights[i]);
             }
 
-            std::stable_sort(pairs.begin(), pairs.end(), [](const auto& a, const auto& b) {
+            std::ranges::stable_sort(pairs, [](const auto& a, const auto& b) {
                 return b.second < a.second;
             });
 
@@ -324,7 +418,7 @@ namespace threepp {
             }
         }
 
-        void handleWrapping(const aiMaterial* mat, aiTextureType mode, Texture& tex) {
+        static void handleWrapping(const aiMaterial* mat, aiTextureType mode, Texture& tex) {
 
             aiTextureMapMode wrapS;
             if (AI_SUCCESS == mat->Get(AI_MATKEY_MAPPINGMODE_U(mode, 0), wrapS)) {
@@ -365,9 +459,10 @@ namespace threepp {
                 if (aiGetMaterialTextureCount(mat, aiTextureType_DIFFUSE) > 0) {
                     if (aiGetMaterialTexture(mat, aiTextureType_DIFFUSE, 0, &p) == aiReturn_SUCCESS) {
                         auto tex = loadTexture(aiScene, path, p.C_Str());
-                        material.map = tex;
-
+                        tex->wrapS = TextureWrapping::Repeat;
+                        tex->wrapT = TextureWrapping::Repeat;
                         handleWrapping(mat, aiTextureType_DIFFUSE, *tex);
+                        material.map = tex;
                     }
                 } else {
                     C_STRUCT aiColor4D diffuse;
@@ -379,9 +474,10 @@ namespace threepp {
                 if (aiGetMaterialTextureCount(mat, aiTextureType_EMISSIVE) > 0) {
                     if (aiGetMaterialTexture(mat, aiTextureType_EMISSIVE, 0, &p) == aiReturn_SUCCESS) {
                         auto tex = loadTexture(aiScene, path, p.C_Str());
-                        material.emissiveMap = tex;
-
+                        tex->wrapS = TextureWrapping::Repeat;
+                        tex->wrapT = TextureWrapping::Repeat;
                         handleWrapping(mat, aiTextureType_EMISSIVE, *tex);
+                        material.emissiveMap = tex;
                     }
                 } else {
                     C_STRUCT aiColor4D emissive;
@@ -425,7 +521,7 @@ namespace threepp {
 
                 float opacity;
                 if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_OPACITY, &opacity)) {
-                    material.transparent = true;
+                    material.transparent = (opacity < 1.f);
                     material.opacity = opacity;
                 }
             }
@@ -446,25 +542,25 @@ namespace threepp {
                 if (embed->mHeight == 0) {
 
                     std::vector<unsigned char> data(embed->mWidth);
-                    std::copy((unsigned char*) embed->pcData, (unsigned char*) embed->pcData + data.size(), data.begin());
+                    std::copy_n(reinterpret_cast<unsigned char*>(embed->pcData), data.size(), data.begin());
                     tex = texLoader_.loadFromMemory(ss.str(), data);
 
                 } else {
 
                     std::vector<unsigned char> data(embed->mWidth * embed->mHeight);
-                    std::copy((unsigned char*) embed->pcData, (unsigned char*) embed->pcData + data.size(), data.begin());
+                    std::copy_n(reinterpret_cast<unsigned char*>(embed->pcData), data.size(), data.begin());
                     tex = texLoader_.loadFromMemory(ss.str(), data);
                 }
             } else {
 
-                auto texPath = path.parent_path() / name;
+                const auto texPath = path.parent_path() / name;
                 tex = texLoader_.load(texPath);
             }
 
             return tex;
         }
 
-        Matrix4 aiMatrixToMatrix4(const aiMatrix4x4& t) {
+        static Matrix4 aiMatrixToMatrix4(const aiMatrix4x4& t) {
             Matrix4 m;
             m.set(t.a1, t.a2, t.a3, t.a4,
                   t.b1, t.b2, t.b3, t.b4,
@@ -474,18 +570,16 @@ namespace threepp {
             return m;
         }
 
-        void setTransform(Object3D& obj, const aiMatrix4x4& t) {
+        static void setTransform(Object3D& obj, const aiMatrix4x4& t) {
             aiVector3t<float> pos;
             aiQuaterniont<float> quat;
             aiVector3t<float> scale;
             t.Decompose(scale, quat, pos);
 
-            Matrix4 m;
-            m.makeRotationFromQuaternion(Quaternion{quat.x, quat.y, quat.z, quat.w});
-            m.setPosition({pos.x, pos.y, pos.z});
-
-            obj.applyMatrix4(m);
+            obj.position.set(pos.x, pos.y, pos.z);
+            obj.quaternion.set(quat.x, quat.y, quat.z, quat.w);
             obj.scale.set(scale.x, scale.y, scale.z);
+
         }
     };
 

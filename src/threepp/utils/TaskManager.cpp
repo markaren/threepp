@@ -14,6 +14,10 @@ struct TaskManager::Impl {
 
     void handleTasks() {
 
+        // Time state shares m_ with the queue: invokeLater() reads time_ under
+        // the lock from other threads, so updating it unlocked was a data race.
+        std::unique_lock lock(m_);
+
         if (previousTime_ < 0) {
             previousTime_ = getCurrentTimeInSeconds();// first invocation
         }
@@ -22,9 +26,6 @@ struct TaskManager::Impl {
         const auto deltaTime = currentTime - previousTime_;
         time_ += deltaTime;
         previousTime_ = currentTime;
-
-        std::unique_lock lock(m_);
-        if (tasks_.empty()) return;
 
         while (!tasks_.empty()) {
             if (tasks_.top().second < time_) {
@@ -61,7 +62,9 @@ private:
 
     static double getCurrentTimeInSeconds() {
 
-        using Clock = std::chrono::high_resolution_clock;
+        // steady_clock, not high_resolution_clock: the latter may alias
+        // system_clock, and a wall-clock adjustment must not re-schedule tasks.
+        using Clock = std::chrono::steady_clock;
 
         const auto now = Clock::now();
         const auto duration = now.time_since_epoch();

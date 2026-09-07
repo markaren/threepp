@@ -1,0 +1,582 @@
+// Assemble a terrain::TerrainProvider from a real-world region pack + its road
+// network. This is the glue that turns GeoTerrainPack (elevation grid + roads)
+// into the two std::functions TileTerrain bakes from:
+//
+//   height(x,z) = grid.sampleBicubic(x,z)
+//                 + detailRelief(x,z) · (1 − corridorWeight(x,z))
+//
+//     • the grid is CARVED at load (carveRoads below): every cell near a road
+//       is clamped to sit below the conformed ribbon surface, so the road cut
+//       is baked into the DEM itself — no runtime corridor warp. The carved
+//       grid is band-limited at DEM resolution, so bicubic sampling is C1
+//       everywhere and tile-LOD splits can never reveal sub-quad road features
+//       ("humps popping in" as tiles refine);
+//     • bicubic keeps the DEM C1-continuous (no per-cell creases up close);
+//     • a small world-anchored fBm adds sub-grid relief the DEM's samples can't
+//       hold, FADED OUT inside road corridors so the ribbon stays smooth.
+//
+//   albedo — a Norwegian-tuned terrain::SplatRules (wetland-dark near sea level,
+//     valley grass/heath on gentle low ground, exposed rock/scree on steep
+//     slopes, snow up high with a feathered line; macro variation + gentle AO).
+//     No roadside tint: a corridor-wide swath reads as a phantom road wherever
+//     roads run close (hairpins, dual carriageways) — the ribbon is the road.
+//     Where the pack carries buildings, an URBAN ground paint blends the splat
+//     toward asphalt/gravel town fabric under building-DENSE areas (see
+//     UrbanMask below) — towns stop reading as houses scattered on a lawn.
+//
+// Both callbacks are pure and thread-safe (HeightGrid + RoadNetwork queries are
+// read-only; the SplatRules is captured by value): safe for TileTerrain's async
+// bake. The pack and the RoadNetwork must OUTLIVE the returned provider (the
+// callbacks reference them); conformTo() must have run on the network first.
+//
+// Header-only, extras.
+
+#ifndef THREEPP_EXTRAS_TERRAIN_GEOTERRAIN_HPP
+#define THREEPP_EXTRAS_TERRAIN_GEOTERRAIN_HPP
+
+#include "threepp/math/MathUtils.hpp"
+#include "threepp/extras/road/RoadNetwork.hpp"
+#include "threepp/extras/terrain/GeoTerrainPack.hpp"
+#include "threepp/extras/terrain/TerrainSplat.hpp"
+#include "threepp/extras/terrain/TerrainTiles.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+#include <memory>
+#include <vector>
+
+namespace threepp::terrain {
+
+    // Tunables for the geodata provider. Heights are absolute metres (the pack's
+    // NN2000 datum); defaults suit a Norwegian fjord/mountain region.
+    struct GeoTerrainOptions {
+        // Sub-grid detail relief.
+        float detailAmplitude = 0.4f;// metres of extra fBm relief on near tiles
+        float detailFreq = 0.05f;    // 1/m base frequency (~20 m wavelength)
+
+        // Splat band boundaries (absolute metres).
+        float wetlandBand = 6.f;   // wetland-dark reaches this far above sea level
+        float grassHeightMax = 700.f;
+        float snowHeightMin = 1200.f;
+        float snowFeather = 90.f;
+
+        // BAKED-ROAD paint (the "terrain IS the road" pipeline — pair with
+        // carveRoads bakeSurface + RoadNetwork::buildBridgeMeshes): mix asphalt
+        // into the splat over the PAVED band only (RoadNetwork::pavedWeight —
+        // narrow feather, so stacked hairpins never merge into a phantom swath).
+        // A painted road is tile TEXTURE: mip/aniso filtering integrates it as
+        // it recedes, so distant roads fade smoothly instead of shimmering the
+        // way a sub-pixel ribbon's raster coverage does. Off by default —
+        // legacy callers keep the ribbon-is-the-road look unchanged.
+        bool paintRoads = false;
+        float roadEdgeFeather = 0.8f;                       // paint feather past the pavement edge (m)
+        std::array<float, 3> roadColor = {0.075f, 0.075f, 0.08f};// sRGB asphalt
+
+        // URBAN ground paint (packs with buildings): where built COVERAGE is
+        // dense, blend the splat toward two-tone asphalt/gravel town fabric,
+        // suppress band structure (no grass clumps between houses) and flatten
+        // the detail relief (town ground is graded). Density-gated — a lone
+        // mountain cabin never earns a grey halo, a town block does — and
+        // applied UNDER the road paint, so streets stay visible through town.
+        bool paintUrban = true;      // no-op when the pack has no buildings
+        float urbanCell = 4.f;       // mask raster cell (m)
+        float urbanBlurRadius = 28.f;// coverage smoothing radius (m)
+        float urbanCoverLo = 0.05f;  // built fraction where the paint starts
+        float urbanCoverHi = 0.20f;  // built fraction of full paint
+        float urbanMax = 0.85f;      // paint ceiling — gardens keep some ground tone
+        std::array<float, 3> urbanAsphalt = {0.085f, 0.085f, 0.09f};// sRGB street/lot
+        std::array<float, 3> urbanGravel = {0.185f, 0.175f, 0.155f};// sRGB yard/gravel
+    };
+
+    namespace detail {
+
+        // Self-contained hash value-noise / fBm (world-anchored, deterministic),
+        // used only for the sub-grid detail relief.
+        inline float geoHash01(int x, int y) {
+            unsigned int n = static_cast<unsigned int>(x) * 374761393u +
+                             static_cast<unsigned int>(y) * 668265263u + 0x9E3779B9u;
+            n = (n ^ (n >> 13)) * 1274126177u;
+            return static_cast<float>((n ^ (n >> 16)) & 0xffffffu) / static_cast<float>(0xffffff);
+        }
+        inline float geoVNoise(float x, float y) {
+            const int xi = static_cast<int>(std::floor(x)), yi = static_cast<int>(std::floor(y));
+            auto sm = [](float t) { return t * t * (3.f - 2.f * t); };
+            const float fx = sm(x - std::floor(x)), fy = sm(y - std::floor(y));
+            const float a = geoHash01(xi, yi), b = geoHash01(xi + 1, yi);
+            const float c = geoHash01(xi, yi + 1), d = geoHash01(xi + 1, yi + 1);
+            return (a + (b - a) * fx) + ((c + (d - c) * fx) - (a + (b - a) * fx)) * fy;
+        }
+        inline float geoFbm(float x, float y) {
+            return 0.55f * geoVNoise(x, y) + 0.30f * geoVNoise(x * 2.13f + 7.3f, y * 2.13f) +
+                   0.15f * geoVNoise(x * 4.7f, y * 4.7f + 3.1f);
+        }
+
+    }// namespace detail
+
+    // ── UrbanMask: smoothed built-coverage over the pack footprint ──────────
+    //
+    // A coarse world-space raster of "how built is the land here", 0..1:
+    // building footprints are rasterized as occupancy, box-blurred to a local
+    // COVERAGE fraction (radius ~ a town block), then soft-thresholded between
+    // urbanCoverLo and urbanCoverHi. Coverage — not proximity — is the gate:
+    // a lone cabin blurs to ~3% and stays natural ground, a dense block hits
+    // 30%+ and paints fully; suburbs land in between and read as the half
+    // garden / half street fabric they are. Built once at load (the mask is
+    // immutable after), sampled bilinearly by the provider callbacks.
+    struct UrbanMask {
+        int dim = 0;
+        float cell = 4.f;
+        float half = 0.f;
+        std::vector<float> w;// paint weight per cell, 0..1
+
+        float sample(float x, float z) const {
+            if (dim < 2) return 0.f;
+            const float fx = (x + half) / cell;
+            const float fz = (z + half) / cell;
+            const int ix = static_cast<int>(std::floor(fx));
+            const int iz = static_cast<int>(std::floor(fz));
+            if (ix < 0 || iz < 0 || ix >= dim - 1 || iz >= dim - 1) return 0.f;
+            const float tx = fx - static_cast<float>(ix);
+            const float tz = fz - static_cast<float>(iz);
+            const float* r0 = &w[static_cast<size_t>(iz) * dim + ix];
+            const float* r1 = r0 + dim;
+            const float a = r0[0] + (r0[1] - r0[0]) * tx;
+            const float b = r1[0] + (r1[1] - r1[0]) * tx;
+            return a + (b - a) * tz;
+        }
+    };
+
+    inline std::shared_ptr<const UrbanMask> buildUrbanMask(const GeoTerrainPack& pack,
+                                                           const GeoTerrainOptions& o = {}) {
+        if (pack.buildings.empty() || pack.region.worldSize <= 0.f) return nullptr;
+        auto mask = std::make_shared<UrbanMask>();
+        mask->cell = std::max(1.f, o.urbanCell);
+        mask->half = pack.region.worldSize * 0.5f;
+        mask->dim = static_cast<int>(std::ceil(pack.region.worldSize / mask->cell)) + 1;
+        const int dim = mask->dim;
+        const float cell = mask->cell;
+        const float half = mask->half;
+        mask->w.assign(static_cast<size_t>(dim) * dim, 0.f);
+        auto& w = mask->w;
+
+        // Occupancy: cell centres inside a footprint's outer ring (crossing
+        // number; courtyard holes count as built — they ARE town fabric).
+        for (const auto& b : pack.buildings) {
+            const auto& ring = b.outer;
+            if (ring.size() < 3) continue;
+            float minX = ring[0].x, maxX = ring[0].x, minZ = ring[0].y, maxZ = ring[0].y;
+            for (const auto& p : ring) {
+                minX = std::min(minX, p.x);
+                maxX = std::max(maxX, p.x);
+                minZ = std::min(minZ, p.y);
+                maxZ = std::max(maxZ, p.y);
+            }
+            const int ix0 = std::max(0, static_cast<int>(std::floor((minX + half) / cell)));
+            const int ix1 = std::min(dim - 1, static_cast<int>(std::ceil((maxX + half) / cell)));
+            const int iz0 = std::max(0, static_cast<int>(std::floor((minZ + half) / cell)));
+            const int iz1 = std::min(dim - 1, static_cast<int>(std::ceil((maxZ + half) / cell)));
+            for (int iz = iz0; iz <= iz1; ++iz) {
+                const float pz = -half + static_cast<float>(iz) * cell;
+                for (int ix = ix0; ix <= ix1; ++ix) {
+                    const float px = -half + static_cast<float>(ix) * cell;
+                    bool inside = false;
+                    for (size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++) {
+                        const Vector2& a = ring[i];
+                        const Vector2& c = ring[j];
+                        if ((a.y > pz) != (c.y > pz) &&
+                            px < (c.x - a.x) * (pz - a.y) / (c.y - a.y) + a.x)
+                            inside = !inside;
+                    }
+                    if (inside) w[static_cast<size_t>(iz) * dim + ix] = 1.f;
+                }
+            }
+        }
+
+        // Occupancy → local coverage fraction: two separable box-blur passes
+        // (≈ triangular kernel) at the block-scale radius.
+        const int r = std::max(1, static_cast<int>(std::lround(o.urbanBlurRadius / cell)));
+        std::vector<float> tmp(w.size());
+        const auto blurAxis = [&](const std::vector<float>& src, std::vector<float>& dst,
+                                  bool alongX) {
+            const float norm = 1.f / static_cast<float>(2 * r + 1);
+            for (int b = 0; b < dim; ++b) {
+                // Sliding-window mean along one row/column (clamped edges).
+                const auto at = [&](int a) -> const float& {
+                    const int c = std::clamp(a, 0, dim - 1);
+                    return alongX ? src[static_cast<size_t>(b) * dim + c]
+                                  : src[static_cast<size_t>(c) * dim + b];
+                };
+                float acc = 0.f;
+                for (int a = -r; a <= r; ++a) acc += at(a);
+                for (int a = 0; a < dim; ++a) {
+                    (alongX ? dst[static_cast<size_t>(b) * dim + a]
+                            : dst[static_cast<size_t>(a) * dim + b]) = acc * norm;
+                    acc += at(a + r + 1) - at(a - r);
+                }
+            }
+        };
+        blurAxis(w, tmp, true);
+        blurAxis(tmp, w, false);
+        blurAxis(w, tmp, true);
+        blurAxis(tmp, w, false);
+
+        // Coverage → paint weight (soft threshold).
+        const float lo = o.urbanCoverLo, hi = std::max(o.urbanCoverHi, o.urbanCoverLo + 1e-3f);
+        for (auto& v : w) {
+            const float t = std::clamp((v - lo) / (hi - lo), 0.f, 1.f);
+            v = t * t * (3.f - 2.f * t);
+        }
+        return mask;
+    }
+
+    // ── carveRoads: bake the road cut into the DEM grid (call ONCE at load) ──
+    //
+    // Rather than warping the height field at runtime (corridor flatten +
+    // trench — whose nearest-corridor composition had metre-scale seams that
+    // fine tiles faithfully reproduced as humps), edit the GRID so no terrain
+    // sample near a road sits above road level.
+    //
+    // For every grid cell within `pavedHalf + inflate` lateral metres of any
+    // conformed road centerline: cell = min(cell, ribbonSurface − clearance),
+    // feathered back to natural ground over `feather` metres beyond that.
+    // min() only CUTS (the uphill side); cells already below road level are
+    // untouched — no fake embankments (the ribbon's shoulders skirt the
+    // downhill side). Per cell the NEAREST segment wins, so stacked hairpin
+    // switchbacks each carve their own bench and never gouge each other.
+    //
+    // Sizing `inflate`: a coarse tile quad that straddles the road can lift an
+    // interpolated EDGE above road level even when no vertex is inside the
+    // corridor, so the full-cut band must cover at least one worst-case quad
+    // beyond the pavement edge. With the demos' tile setup (worldSize 8000,
+    // rootGrid 4, maxDepth 5, tileRes 96, splitFactor 1.2) and the road-tile
+    // refineBias 2.2, a road tile within ~660 m of the camera is ≤250 m wide
+    // (2.6 m quads) and within ~1450 m is ≤500 m (5.2 m quads). inflate = 6 m
+    // covers that 5.2 m worst case; beyond ~1.5 km a residual poke subtends
+    // well under a pixel.
+    //
+    // Call AFTER RoadNetwork::conformTo(rawGrid) — roads must conform to the
+    // REAL ground first; the carve then uses the conformed surface heights.
+    // Assumes the grid is centred on the origin (the region-pack contract).
+    struct RoadCarveOptions {
+        float inflate = 6.f;    // full-cut band beyond the pavement edge (m)
+        float feather = 6.f;    // cut→natural blend beyond the full-cut band (m)
+        float clearance = 0.40f;// terrain held this far below the ribbon surface (m).
+                                // Sized to swallow worst-case bicubic (Catmull-Rom)
+                                // overshoot next to carve walls (~0.1 m measured at
+                                // Trollstigen's stacked hairpins) with margin.
+        // BAKE mode (the "terrain IS the road" pipeline, used with
+        // GeoTerrainOptions::paintRoads + RoadNetwork::buildBridgeMeshes):
+        // instead of benching the terrain BELOW a ribbon, SET the paved band to
+        // the exact road surface — cut AND fill, dead flat across the pavement —
+        // feathered back to natural ground (embankments where the road runs
+        // above grade, exactly like a real roadbed). No clearance drop: with no
+        // ribbon to z-fight, the surface itself is the road. Bridge-classified
+        // segments never carve (the deck spans; ground below stays natural) and
+        // excluded segments (tunnels/ferries) never carve at all.
+        bool bakeSurface = false;
+        // Bake-mode FILL is ASYMMETRIC from the cut. Cutting (terrain above road
+        // level) must keep the full inflate+feather band — that is the tile-quad
+        // coverage guarantee above, and narrowing it lets uphill quads interpolate
+        // ABOVE the road and slice through the pavement (torn-asphalt artifacts).
+        // Filling (terrain below road level) has no such constraint: a quad edge
+        // sagging below the road is just the hillside falling away. So fill is
+        // confined to a NARROW shoulder band + short embankment taper — on steep
+        // sidehills the road hugs the slope on a tight fill wall instead of the
+        // huge flat berm the full band would build (Trollstigen: terrain drops
+        // ~27 m across the 24 m corridor; a 12 m-half-width flat shelf there reads
+        // as a dark raised bench). Only meaningful with bakeSurface.
+        float fillInflate = 2.f;// full-fill band beyond the pavement edge (m)
+        float fillFeather = 3.f;// fill→natural embankment taper beyond that (m)
+        float bakeClearance = 0.f;// bake mode: hold the baked bed this far below the
+                                // road grade (the driving ribbon rides kSurfaceRaise
+                                // above grade). The gap stops cut-wall bicubic
+                                // overshoot from poking the terrain up through the
+                                // ribbon; a driving demo wants ~0.25 m, a pure viewer
+                                // 0 (terrain == painted road, no shoulder step).
+    };
+
+    inline void carveRoads(HeightGrid& grid, const road::RoadNetwork& net,
+                           const RoadCarveOptions& o = {}) {
+        if (!grid.valid()) return;
+        const int dim = grid.dim();
+        const float step = grid.worldSize() / static_cast<float>(dim - 1);
+        const float half = grid.worldSize() * 0.5f;
+        auto& h = grid.data();
+
+        // Per-cell candidates (load-time transients; freed on return). Full-size
+        // planes keep the inner loop branch-cheap.
+        //   • bench/feather: NEAREST segment wins (stacked switchbacks never
+        //     gouge each other's slopes);
+        //   • hard cap: within pavedHalf + hardGuard of ANY segment the cell is
+        //     unconditionally clamped to that segment's ceiling (min over all) —
+        //     the bicubic support is ±2 cells, so a cell whose nearest segment
+        //     is the OTHER leg of a stacked hairpin could otherwise keep its
+        //     natural height and get pulled up under this road's pavement.
+        const float hardGuard = 2.f * step;// bicubic support radius. Deliberately
+        // NOT wider: at stacked hairpins a wider band reaches cells under the
+        // OTHER leg's pavement, carving deeper pits whose walls only increase
+        // Catmull-Rom overshoot (measured: 3·step tripled the residual pokes).
+        // The remaining ≤ ~0.1 m overshoot is absorbed by `clearance` instead.
+        const size_t n = static_cast<size_t>(dim) * dim;
+        std::vector<float> bestD(n, std::numeric_limits<float>::max());
+        std::vector<float> allowed(n, 0.f);// nearest winner's ribbonSurface − clearance
+        std::vector<float> innerR(n, 0.f); // nearest winner's full-cut lateral reach
+        std::vector<float> fillR(n, 0.f);  // nearest winner's full-FILL reach (bake mode)
+        std::vector<float> hardCap(n, std::numeric_limits<float>::max());
+
+        net.forEachSegmentFlagged([&](float ax, float az, float ha, float bx, float bz, float hb,
+                                      float pavedHalf, float /*corridorHalf*/, std::uint8_t flags) {
+            // Bridge decks span the ground (never carve it); excluded roads
+            // (tunnels/ferries) don't exist on the surface. Flags are always 0
+            // in legacy (non-profile) mode — behaviour unchanged there.
+            if (flags != 0) return;
+            const float reach = pavedHalf + o.inflate + o.feather;
+            const float hardReach = pavedHalf + hardGuard;
+            const int ix0 = std::max(0, static_cast<int>(std::floor((std::min(ax, bx) - reach + half) / step)));
+            const int ix1 = std::min(dim - 1, static_cast<int>(std::ceil((std::max(ax, bx) + reach + half) / step)));
+            const int iz0 = std::max(0, static_cast<int>(std::floor((std::min(az, bz) - reach + half) / step)));
+            const int iz1 = std::min(dim - 1, static_cast<int>(std::ceil((std::max(az, bz) + reach + half) / step)));
+            const float abx = bx - ax, abz = bz - az;
+            const float abLenSq = abx * abx + abz * abz;
+            for (int iz = iz0; iz <= iz1; ++iz) {
+                const float z = -half + static_cast<float>(iz) * step;
+                for (int ix = ix0; ix <= ix1; ++ix) {
+                    const float x = -half + static_cast<float>(ix) * step;
+                    float t = (abLenSq > 1e-12f) ? ((x - ax) * abx + (z - az) * abz) / abLenSq : 0.f;
+                    t = std::clamp(t, 0.f, 1.f);
+                    const float dx = x - (ax + t * abx), dz = z - (az + t * abz);
+                    const float d = std::sqrt(dx * dx + dz * dz);
+                    if (d >= reach) continue;
+                    const size_t idx = static_cast<size_t>(iz) * dim + ix;
+                    // Bake mode: the terrain roadbed sits bakeClearance BELOW the
+                    // conformed grade. The driving ribbon floats kSurfaceRaise
+                    // ABOVE the grade, so the total gap (kSurfaceRaise+bakeClearance)
+                    // keeps bicubic overshoot at steep cut walls from poking the
+                    // terrain up THROUGH the ribbon and launching the car — while
+                    // the ribbon and painted bed still line up to well under a curb.
+                    const float ceil = o.bakeSurface
+                                               ? ha + (hb - ha) * t - o.bakeClearance
+                                               : ha + (hb - ha) * t +
+                                                         road::RoadNetwork::kSurfaceRaise - o.clearance;
+                    if (d < hardReach) hardCap[idx] = std::min(hardCap[idx], ceil);
+                    if (d >= bestD[idx]) continue;
+                    bestD[idx] = d;
+                    allowed[idx] = ceil;
+                    innerR[idx] = pavedHalf + o.inflate;
+                    fillR[idx] = pavedHalf + o.fillInflate;
+                }
+            }
+        });
+
+        for (size_t i = 0; i < n; ++i) {
+            if (bestD[i] != std::numeric_limits<float>::max()) {
+                // Legacy: bench cut only (h > allowed), feathered to natural.
+                // Bake: cut AND fill, but ASYMMETRIC — the cut keeps the full
+                // inflate band (the tile-quad anti-poke guarantee), while the
+                // fill is confined to fillInflate + a short fillFeather taper so
+                // steep sidehills get a tight embankment, not a wide berm shelf.
+                if (o.bakeSurface && h[i] < allowed[i]) {
+                    const float w = (bestD[i] <= fillR[i])
+                                            ? 1.f
+                                            : 1.f - math::smoothstep(fillR[i], fillR[i] + o.fillFeather, bestD[i]);
+                    h[i] += (allowed[i] - h[i]) * w;
+                } else if (o.bakeSurface || h[i] > allowed[i]) {
+                    const float w = (bestD[i] <= innerR[i])
+                                            ? 1.f
+                                            : 1.f - math::smoothstep(innerR[i], innerR[i] + o.feather, bestD[i]);
+                    h[i] += (allowed[i] - h[i]) * w;
+                }
+            }
+            // Under-pavement guarantee (stacked hairpins). In bake mode a cell
+            // INSIDE its winning road's paved band must keep that exact surface
+            // — the other leg's cap would gouge a pit into this leg's roadway.
+            if (h[i] > hardCap[i] && !(o.bakeSurface && bestD[i] <= innerR[i]))
+                h[i] = hardCap[i];
+        }
+    }
+
+    // Norwegian slope/altitude splat rules over the pack's DEM. Curvature reads
+    // the raw grid (fixed eps → LOD-agnostic). Colours are sRGB (baked into an
+    // sRGB tile texture).
+    inline SplatRules makeNorwegianSplat(const GeoTerrainPack& pack, const GeoTerrainOptions& o = {}) {
+        const HeightGrid& grid = pack.grid;
+        SplatRules r;
+        r.height = [&grid](float x, float z) { return grid.sampleBilinear(x, z); };
+        r.curvEps = 3.5f;
+        r.curvScale = 55.f;
+        r.aoStrength = 0.15f;// gentle occlusion in the folds
+        r.aoMax = 0.28f;
+        r.macroEnabled = true;
+
+        const float sea = pack.region.seaLevel;
+
+        SplatLayer wetland;// boggy shore / valley-floor darkening near sea level
+        wetland.structureBand = 0;// grass-family structure (tufty bog)
+        wetland.color = {0.16f, 0.17f, 0.12f};
+        wetland.slopeLo = 0.f; wetland.slopeHi = 0.30f; wetland.slopeFeather = 0.06f;
+        wetland.heightLo = sea - 5.f;
+        wetland.heightHi = sea + o.wetlandBand;
+        wetland.heightFeather = 4.f;
+        wetland.concaveBias = 0.4f;
+        wetland.noiseAmpHeight = 2.5f;
+
+        SplatLayer grass;// valley grass/heath on gentle low ground
+        grass.structureBand = 0;
+        grass.color = {0.22f, 0.28f, 0.14f};
+        grass.slopeLo = 0.f; grass.slopeHi = 0.34f; grass.slopeFeather = 0.06f;
+        grass.heightHi = o.grassHeightMax;
+        grass.heightFeather = 120.f;
+        grass.concaveBias = 0.25f;// soil catches in hollows
+        grass.noiseAmpSlope = 0.03f;
+        grass.noiseAmpHeight = 40.f;
+
+        SplatLayer heath;// brown heath/fell above the grass, still gentle
+        heath.structureBand = 0;// still grass-family structure, browner colour
+        heath.color = {0.30f, 0.27f, 0.17f};
+        heath.slopeLo = 0.f; heath.slopeHi = 0.40f; heath.slopeFeather = 0.07f;
+        heath.heightLo = o.grassHeightMax - 120.f;
+        heath.heightHi = o.snowHeightMin;
+        heath.heightFeather = 150.f;
+        heath.noiseAmpHeight = 50.f;
+
+        SplatLayer scree;// talus on medium slopes
+        scree.structureBand = 2;
+        scree.color = {0.42f, 0.40f, 0.37f};
+        scree.slopeLo = 0.34f; scree.slopeHi = 0.58f; scree.slopeFeather = 0.07f;
+        scree.concaveBias = 0.9f;// collects in gullies
+        scree.noiseAmpSlope = 0.03f;
+
+        SplatLayer rock;// bare rock on the steep faces (fallback)
+        rock.structureBand = 1;
+        rock.color = {0.34f, 0.33f, 0.31f};
+        rock.slopeLo = 0.55f; rock.slopeHi = 1.f; rock.slopeFeather = 0.08f;
+        rock.convexBias = 0.8f;   // bare on convex crests
+        rock.weightFloor = 0.02f; // no texel resolves to grey
+
+        SplatLayer snow;// snow up high, low slope, feathered line
+        snow.structureBand = 3;
+        snow.color = {0.88f, 0.90f, 0.94f};
+        snow.slopeLo = 0.f; snow.slopeHi = 0.60f; snow.slopeFeather = 0.10f;
+        snow.heightLo = o.snowHeightMin;
+        snow.heightFeather = o.snowFeather;
+        snow.noiseAmpHeight = 70.f;// ragged snowline
+        snow.noiseFreq = 0.03f;
+
+        r.layers = {wetland, grass, heath, scree, rock, snow};
+        return r;
+    }
+
+    // Build the full TerrainProvider. `pack` and `network` must outlive it,
+    // network.conformTo() must already have run, and the grid should have been
+    // carved (carveRoads) so terrain near roads sits below the ribbons.
+    inline TerrainProvider makeGeoProvider(const GeoTerrainPack& pack,
+                                           const road::RoadNetwork& network,
+                                           const GeoTerrainOptions& o = {}) {
+        const HeightGrid& grid = pack.grid;
+        const SplatRules rules = makeNorwegianSplat(pack, o);
+        const float amp = o.detailAmplitude;
+        const float freq = o.detailFreq;
+
+        // Built-coverage mask for the urban paint (null when the pack has no
+        // buildings or the paint is off). shared_ptr: the provider's callbacks
+        // co-own it, so the mask lives exactly as long as the provider.
+        const std::shared_ptr<const UrbanMask> urban =
+                o.paintUrban ? buildUrbanMask(pack, o) : nullptr;
+
+        TerrainProvider prov;
+
+        // Height: pure bicubic of the (carved) DEM + corridor-faded sub-grid
+        // relief. NO runtime road warp: the road cut is baked into the grid by
+        // carveRoads, so the field is band-limited at DEM resolution and C1
+        // everywhere — nothing sub-quad-scale for a tile split to reveal. The
+        // relief also fades to zero approaching sea level: the DTM stores water
+        // as a flat seaLevel sheet, and noise there would dither the seabed up
+        // through the sea plane (patchy shoreline). Urban ground is graded
+        // flat too — the relief fades with built coverage.
+        const float sea = pack.region.seaLevel;
+        prov.height = [&grid, &network, urban, amp, freq, sea](float x, float z) {
+            const float base = grid.sampleBicubic(x, z);
+            const float cw = network.corridorWeight(x, z);
+            if (cw >= 0.999f) return base;// fully paved — keep it dead smooth
+            const float shore = std::clamp((base - (sea + 0.2f)) / 1.8f, 0.f, 1.f);
+            if (shore <= 0.f) return base;
+            float relief = (detail::geoFbm(x * freq, z * freq) - 0.5f) * 2.f * amp;
+            if (urban) relief *= 1.f - urban->sample(x, z);
+            return base + relief * (1.f - cw) * shore * shore * (3.f - 2.f * shore);
+        };
+
+        // Albedo: Norwegian splat, then (buildings) the urban town-fabric
+        // blend, then (paintRoads) asphalt over the paved band ON TOP — the
+        // paint order keeps streets readable through town. The road paint uses
+        // pavedWeight — pavement + a NARROW edge feather, never the shoulder
+        // corridor: a corridor-wide darkened swath reads as a phantom second
+        // road wherever roads run close or stack (hairpins, dual carriageways).
+        {
+            const bool paint = o.paintRoads;
+            const float edgeFeather = o.roadEdgeFeather;
+            const std::array<float, 3> roadCol = o.roadColor;
+            const std::array<float, 3> urbA = o.urbanAsphalt;
+            const std::array<float, 3> urbG = o.urbanGravel;
+            const float urbMax = o.urbanMax;
+            prov.albedo = [rules, &network, urban, paint, edgeFeather, roadCol, urbA, urbG,
+                           urbMax](float x, float z, float h, float slope, float* rgb) {
+                const Rgb c = rules.evaluate(x, z, h, slope);
+                rgb[0] = c[0];
+                rgb[1] = c[1];
+                rgb[2] = c[2];
+                if (urban) {
+                    const float uw = urban->sample(x, z) * urbMax;
+                    if (uw > 0.f) {
+                        // Two-tone fabric: ~30 m fBm patches alternate between
+                        // asphalt lots and gravel/paved yards, so towns get
+                        // block-scale variation instead of one flat grey.
+                        const float t = std::clamp(
+                                (detail::geoFbm(x * 0.033f, z * 0.033f) - 0.35f) / 0.3f, 0.f, 1.f);
+                        for (int i = 0; i < 3; ++i) {
+                            const float urb = urbG[i] + (urbA[i] - urbG[i]) * t;
+                            rgb[i] += (urb - rgb[i]) * uw;
+                        }
+                    }
+                }
+                if (paint) {
+                    const float w = network.pavedWeight(x, z, edgeFeather);
+                    rgb[0] += (roadCol[0] - rgb[0]) * w;
+                    rgb[1] += (roadCol[1] - rgb[1]) * w;
+                    rgb[2] += (roadCol[2] - rgb[2]) * w;
+                }
+            };
+        }
+
+        // Structure-band weights for the terrain shader's per-band texture
+        // sets. Suppressed over painted pavement (asphalt is smooth — grass
+        // clump / rock plate relief crawling across a road reads as damage)
+        // and over urban ground (same reasoning; this also keeps TerrainScatter
+        // tufts/stones out of town, since scatter samples these weights);
+        // the same masks the paint uses, so they can never disagree.
+        {
+            const float edgeFeather = o.roadEdgeFeather;
+            const bool paint = o.paintRoads;
+            prov.weights = [rules, &network, urban, edgeFeather, paint](float x, float z, float h,
+                                                                        float slope, float* w4) {
+                rules.evaluateWeights(x, z, h, slope, w4);
+                float keep = 1.f;
+                if (paint) keep *= 1.f - network.pavedWeight(x, z, edgeFeather);
+                if (urban) keep *= 1.f - urban->sample(x, z);
+                if (keep < 1.f) {
+                    w4[0] *= keep;
+                    w4[1] *= keep;
+                    w4[2] *= keep;
+                    w4[3] *= keep;
+                }
+            };
+        }
+
+        return prov;
+    }
+
+}// namespace threepp::terrain
+
+#endif//THREEPP_EXTRAS_TERRAIN_GEOTERRAIN_HPP

@@ -4,6 +4,7 @@
 #include "quickhull.hpp"
 
 #include <array>
+#include <iterator>
 
 using namespace threepp;
 
@@ -68,13 +69,16 @@ ConvexGeometry::ConvexGeometry(const std::vector<Vector3>& _points)
     const auto& facets = pimpl_->facets;
     for (const auto& f : facets) {
         const auto& n = f.normal_;
-        normals.emplace_back(n[0]);
-        normals.emplace_back(n[1]);
-        normals.emplace_back(n[2]);
 
-        auto& verts = f.vertices_;
-        for (const auto& it : verts) {
+        // One normal PER VERTEX, not per facet. This used to push a single
+        // normal per facet while pushing one position per facet vertex, so
+        // "normal" came out at a third the length of "position" (8 vs 24 for a
+        // simple hull) and anything binding both as per-vertex attributes read
+        // the normal buffer out of bounds. The hull is flat-shaded, so every
+        // vertex of a facet simply repeats that facet's normal.
+        for (const auto& it : f.vertices_) {
             vertices.insert(vertices.end(), it->begin(), it->end());
+            normals.insert(normals.end(), {n[0], n[1], n[2]});
         }
     }
 
@@ -83,6 +87,13 @@ ConvexGeometry::ConvexGeometry(const std::vector<Vector3>& _points)
     this->setAttribute("position", FloatBufferAttribute::create(vertices, 3));
     this->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
 }
+
+// Defined out-of-line here, where Impl is complete, so the unique_ptr<Impl>
+// deleter is instantiated in this TU rather than at every use site. Without
+// this, holders that construct a shared_ptr<ConvexGeometry> from a raw pointer
+// in a TU that only sees the forward-declared Impl (e.g. the pybind11 bindings)
+// fail with "invalid application of sizeof to incomplete type".
+ConvexGeometry::~ConvexGeometry() = default;
 
 std::shared_ptr<ConvexGeometry> ConvexGeometry::create(const std::vector<Vector3>& points) {
 

@@ -1,4 +1,7 @@
 
+#include "renderer_factory.hpp"
+
+#include "threepp/extras/SpriteInteractor.hpp"
 #include "threepp/threepp.hpp"
 
 #include <iostream>
@@ -8,40 +11,34 @@ using namespace std::string_literals;
 
 namespace {
 
-    void createHudSprites(HUD& hud) {
+    // Helper: configure a corner-anchored 75×75 screen-space sprite that
+    // logs to stdout when clicked. `anchor` and `pivot` should be the same
+    // corner — e.g. (0, 0) for the bottom-left, (1, 1) for the top-right —
+    // so the sprite's anchor point sits flush against the viewport corner.
+    std::shared_ptr<Sprite> makeHudSprite(
+            const std::shared_ptr<SpriteMaterial>& mat,
+            Vector2 anchor, Vector2 pivot, int id) {
+        auto sprite = Sprite::create(mat);
+        sprite->center.copy(pivot);
+        sprite->scale.set(75, 75, 1);
+        sprite->screenSpace = true;
+        sprite->screenAnchor.copy(anchor);
+        sprite->position.set(0, 0, 0);
+        sprite->onMouseUp = [id](int) {
+            std::cout << "Clicked on sprite " << id << std::endl;
+        };
+        return sprite;
+    }
+
+    void addHudSprites(Scene& scene) {
         TextureLoader tl;
         auto hudMaterial = SpriteMaterial::create();
-        hudMaterial->map = tl.load("data/textures/sprite0.png");
-        hudMaterial->map->offset.set(0.5, 0.5);
+        hudMaterial->map = tl.load(std::string(DATA_FOLDER) + "/textures/sprite0.png", ColorSpace::sRGB);
 
-        auto hudSprite1 = Sprite::create(hudMaterial);
-        hudSprite1->center.set(0, 1);
-        hudSprite1->scale.set(75, 75, 1);
-
-        auto hudSprite2 = Sprite::create(hudMaterial);
-        hudSprite2->center.set(1, 1);
-        hudSprite2->scale.set(75, 75, 1);
-
-        auto hudSprite3 = Sprite::create(hudMaterial);
-        hudSprite3->center.set(0, 0);
-        hudSprite3->scale.set(75, 75, 1);
-
-        auto hudSprite4 = Sprite::create(hudMaterial);
-        hudSprite4->center.set(1, 0);
-        hudSprite4->scale.set(75, 75, 1);
-
-        hud.add(hudSprite1, HUD::Options().setNormalizedPosition({0, 1}).setMargin({}).onMouseUp([](int) {
-            std::cout << "Clicked on sprite 1" << std::endl;
-        }));
-        hud.add(hudSprite2, HUD::Options().setNormalizedPosition({1, 1}).setMargin({}).onMouseUp([](int) {
-            std::cout << "Clicked on sprite 2" << std::endl;
-        }));
-        hud.add(hudSprite3, HUD::Options().setNormalizedPosition({0, 0}).setMargin({}).onMouseUp([](int) {
-            std::cout << "Clicked on sprite 3" << std::endl;
-        }));
-        hud.add(hudSprite4, HUD::Options().setNormalizedPosition({1, 0}).setMargin({}).onMouseUp([](int) {
-            std::cout << "Clicked on sprite 4" << std::endl;
-        }));
+        scene.add(makeHudSprite(hudMaterial, {0.f, 1.f}, {0.f, 1.f}, 1));// top-left
+        scene.add(makeHudSprite(hudMaterial, {1.f, 1.f}, {1.f, 1.f}, 2));// top-right
+        scene.add(makeHudSprite(hudMaterial, {0.f, 0.f}, {0.f, 0.f}, 3));// bottom-left
+        scene.add(makeHudSprite(hudMaterial, {1.f, 0.f}, {1.f, 0.f}, 4));// bottom-right
     }
 
     auto createSprites(const std::shared_ptr<SpriteMaterial>& material) {
@@ -61,13 +58,12 @@ namespace {
 
 int main() {
 
-    Canvas canvas{"Sprite", {{"aa", 4}, {"favicon", "data/textures/three.png"s}}};
+    Canvas canvas{"Sprite", {{"aa", 4}, {"favicon", std::string(DATA_FOLDER) + "/textures/three.png"s}}};
     auto size = canvas.size();
-    GLRenderer renderer(size);
-    renderer.autoClear = false;
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
+    scene->background = Color::aliceblue;
     auto camera = PerspectiveCamera::create(75, size.aspect(), 0.1f, 1000);
     camera->position.z = 8;
 
@@ -75,8 +71,7 @@ int main() {
 
     TextureLoader loader;
     auto material = SpriteMaterial::create();
-    material->map = loader.load("data/textures/three.png");
-    material->map->offset.set(0.5, 0.5);
+    material->map = loader.load(std::string(DATA_FOLDER) + "/textures/three.png", ColorSpace::sRGB);
 
     auto pickMaterial = material->clone<SpriteMaterial>();
 
@@ -86,15 +81,13 @@ int main() {
     auto helper = Mesh::create(SphereGeometry::create(0.1));
     scene->add(helper);
 
-    HUD hud(&canvas);
-    createHudSprites(hud);
+    addHudSprites(*scene);
+    SpriteInteractor spriteInteractor(canvas, *scene);
 
     canvas.onWindowResize([&](WindowSize newSize) {
         camera->aspect = newSize.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(newSize);
-
-        hud.setSize(newSize);
+        renderer->setSize(newSize);
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
@@ -108,7 +101,7 @@ int main() {
     Clock clock;
     Raycaster raycaster;
     Sprite* lastPicked = nullptr;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         if (lastPicked) {
             lastPicked->setMaterial(material);
             lastPicked->scale.set(1, 1, 1);
@@ -129,8 +122,6 @@ int main() {
             lastPicked->scale.set(1.2, 1.2, 1.2);
         }
 
-        renderer.clear();
-        renderer.render(*scene, *camera);
-        hud.apply(renderer);
+        renderer->render(*scene, *camera);
     });
 }

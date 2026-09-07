@@ -3,7 +3,7 @@
 #ifndef THREEPP_GLUTILS_HPP
 #define THREEPP_GLUTILS_HPP
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
 #include <glad/glad.h>
 #else
 #include <GL/gl.h>
@@ -43,7 +43,7 @@ namespace threepp::gl {
             case Format::LuminanceAlpha:
                 return GL_LUMINANCE_ALPHA;
             case Format::Depth:
-                return GL_DEPTH;
+                return GL_DEPTH_COMPONENT;
             case Format::DepthStencil:
                 return GL_DEPTH_STENCIL;
             case Format::Red:
@@ -63,7 +63,7 @@ namespace threepp::gl {
         }
     }
 
-    constexpr inline GLuint toGLType(Type p) {
+    constexpr GLuint toGLType(Type p) {
 
         switch (p) {
             case Type::UnsignedByte:
@@ -87,11 +87,35 @@ namespace threepp::gl {
                 return GL_UNSIGNED_INT;
             case Type::Float:
                 return GL_FLOAT;
+            case Type::HalfFloat:
+                return GL_HALF_FLOAT;
 
             case Type::UnsignedInt248:
                 return GL_UNSIGNED_INT_24_8;
             default:
                 return 0;
+        }
+    }
+
+    constexpr int numChannels(Format f) {
+        switch (f) {
+            case Format::Red:
+            case Format::RedInteger:
+            case Format::Alpha:
+            case Format::Luminance:
+            case Format::Depth:
+                return 1;
+            case Format::RG:
+            case Format::RGInteger:
+            case Format::LuminanceAlpha:
+            case Format::DepthStencil:
+                return 2;
+            case Format::RGB:
+            case Format::BGR:
+            case Format::RGBInteger:
+                return 3;
+            default:
+                return 4;
         }
     }
 

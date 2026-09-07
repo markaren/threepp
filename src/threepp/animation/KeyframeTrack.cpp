@@ -1,0 +1,298 @@
+
+#include "threepp/animation/KeyframeTrack.hpp"
+
+#include "threepp/animation/AnimationUtils.hpp"
+#include "threepp/math/Quaternion.hpp"
+#include "threepp/math/interpolants/CubicInterpolant.hpp"
+#include "threepp/math/interpolants/DiscreteInterpolant.hpp"
+#include "threepp/math/interpolants/LinearInterpolant.hpp"
+
+#include <cmath>
+#include <iostream>
+#include <stdexcept>
+
+using namespace threepp;
+
+namespace {
+
+
+}// namespace
+
+Interpolation KeyframeTrack::defaultInterpolation = Interpolation::Linear;
+
+KeyframeTrack::KeyframeTrack(std::string name, const std::vector<float>& times, const std::vector<float>& values, const std::optional<Interpolation>& interpolation)
+    : name_(std::move(name)),
+      times_(times),
+      values_(values) {
+
+    // Everything downstream divides by the time count (getValueSize) and
+    // indexes values_ in valueSize strides - an empty or mismatched track is
+    // not a playable state, only a deferred crash.
+    if (times_.empty()) {
+
+        throw std::invalid_argument("KeyframeTrack '" + name_ + "': no keyframe times");
+    }
+    if (values_.empty() || values_.size() % times_.size() != 0) {
+
+        throw std::invalid_argument("KeyframeTrack '" + name_ + "': value count " + std::to_string(values_.size()) +
+                                    " is not a positive multiple of the time count " + std::to_string(times_.size()));
+    }
+
+    setInterpolation(interpolation.value_or(defaultInterpolation));
+}
+
+KeyframeTrack& KeyframeTrack::shift(float timeOffset) {
+
+    if (timeOffset != 0) {
+
+        for (float& time : times_) {
+
+            time += timeOffset;
+        }
+    }
+
+    return *this;
+}
+
+KeyframeTrack& KeyframeTrack::scale(float timeScale) {
+
+    if (timeScale != 1) {
+
+        for (float& time : times_) {
+
+            time *= timeScale;
+        }
+    }
+
+    return *this;
+}
+
+KeyframeTrack& KeyframeTrack::trim(float startTime, float endTime) {
+
+    auto nKeys = times_.size();
+
+    int from = 0;
+    int to = static_cast<int>(nKeys) - 1;
+
+    while (static_cast<size_t>(from) != nKeys && times_[from] < startTime) {
+
+        ++from;
+    }
+
+    while (to != -1 && times_[to] > endTime) {
+
+        --to;
+    }
+
+    ++to;// inclusive -> exclusive bound
+
+    if (from != 0 || static_cast<size_t>(to) != nKeys) {
+
+        // empty tracks are forbidden, so keep at least one keyframe
+        if (from >= to) {
+
+            to = std::max(to, 1);
+            from = to - 1;
+        }
+
+        auto stride = static_cast<int>(this->getValueSize());
+        this->times_ = AnimationUtils::arraySlice(times_, from, to);
+        this->values_ = AnimationUtils::arraySlice(this->values_, from * stride, to * stride);
+    }
+
+    return *this;
+}
+
+KeyframeTrack& KeyframeTrack::optimize() {
+
+    // times or values may be shared with other tracks, so overwriting is unsafe
+    auto times = AnimationUtils::arraySlice(this->times_);
+    auto values = AnimationUtils::arraySlice(this->values_);
+    const auto stride = this->getValueSize();
+
+    const auto smoothInterpolation = this->getInterpolation() == Interpolation::Smooth;
+
+    const auto lastIndex = times.size() - 1;
+
+    auto writeIndex = 1;
+
+    for (unsigned i = 1; i < lastIndex; ++i) {
+
+        bool keep = false;
+
+        const auto& time = times[i];
+        const auto& timeNext = times[i + 1];
+
+        // remove adjacent keyframes scheduled at the same time
+
+        if (time != timeNext && (i != 1 || time != times[0])) {
+
+            if (!smoothInterpolation) {
+
+                // remove unnecessary keyframes same as their neighbors
+
+                auto offset = i * stride,
+                     offsetP = offset - stride,
+                     offsetN = offset + stride;
+
+                for (unsigned j = 0; j != stride; ++j) {
+
+                    const auto value = values[offset + j];
+
+                    if (value != values[offsetP + j] ||
+                        value != values[offsetN + j]) {
+
+                        keep = true;
+                        break;
+                    }
+                }
+
+            } else {
+
+                keep = true;
+            }
+        }
+
+        // in-place compaction
+
+        if (keep) {
+
+            if (i != writeIndex) {
+
+                times[writeIndex] = times[i];
+
+                const auto readOffset = i * stride,
+                           writeOffset = writeIndex * stride;
+
+                for (unsigned j = 0; j != stride; ++j) {
+
+                    values[writeOffset + j] = values[readOffset + j];
+                }
+            }
+
+            ++writeIndex;
+        }
+    }
+
+    // flush last keyframe (compaction looks ahead)
+
+    if (lastIndex > 0) {
+
+        times[writeIndex] = times[lastIndex];
+
+        for (unsigned readOffset = lastIndex * stride, writeOffset = writeIndex * stride, j = 0; j != stride; ++j) {
+
+            values[writeOffset + j] = values[readOffset + j];
+        }
+
+        ++writeIndex;
+    }
+
+    if (static_cast<size_t>(writeIndex) != times.size()) {
+
+        this->times_ = AnimationUtils::arraySlice(times, 0, writeIndex);
+        this->values_ = AnimationUtils::arraySlice(values, 0, writeIndex * stride);
+
+    } else {
+
+        this->times_ = times;
+        this->values_ = values;
+    }
+
+    return *this;
+}
+
+std::unique_ptr<Interpolant> KeyframeTrack::createInterpolant(std::vector<float>* result) const {
+
+   return createInterpolant_(times_, values_, getValueSize(), result);
+}
+
+size_t KeyframeTrack::getValueSize() const {
+
+    return values_.size() / times_.size();
+}
+
+void KeyframeTrack::makeAdditive() {
+
+    // Rebase every keyframe to a delta relative to the first keyframe, so the
+    // track can be accumulated additively on top of a base layer (port of
+    // three.js AnimationUtils.makeClipAdditive with referenceFrame 0).
+    const auto valueSize = getValueSize();
+    if (valueSize == 0 || values_.size() < valueSize) return;
+
+    const std::string type = ValueTypeName();
+    if (type == "bool" || type == "string") return;// not meaningfully additive
+
+    if (type == "quaternion") {
+        // reference := conjugate(normalize(firstFrameQuat)); value := reference * value
+        std::vector<float> ref(values_.begin(), values_.begin() + valueSize);// x,y,z,w
+        const float len = std::sqrt(ref[0] * ref[0] + ref[1] * ref[1] + ref[2] * ref[2] + ref[3] * ref[3]);
+        if (len > 0.f)
+            for (float& v : ref) v /= len;
+        ref[0] = -ref[0];
+        ref[1] = -ref[1];
+        ref[2] = -ref[2];// conjugate (w kept)
+        for (size_t j = 0; j + valueSize <= values_.size(); j += valueSize) {
+            Quaternion::multiplyQuaternionsFlat(values_, j, ref, 0, values_, j);
+        }
+    } else {
+        // numeric/vector/color: value := value - firstFrameValue (component-wise)
+        const std::vector<float> ref(values_.begin(), values_.begin() + valueSize);
+        for (size_t j = 0; j < values_.size(); ++j) {
+            values_[j] -= ref[j % valueSize];
+        }
+    }
+}
+
+void KeyframeTrack::setInterpolation(Interpolation interpolation) {
+
+    std::optional<InterpolantFactory> factoryMethod;
+
+    switch (interpolation) {
+        case Interpolation::Discrete:
+            factoryMethod = [this](const std::vector<float>& times, const std::vector<float>& values, int valueSize, std::vector<float>* result) {
+                return this->InterpolantFactoryMethodDiscrete(times, values, valueSize, result);
+            };
+            break;
+        case Interpolation::Linear:
+            factoryMethod = [this](const std::vector<float>& times, const std::vector<float>& values, int valueSize, std::vector<float>* result) {
+                return this->InterpolantFactoryMethodLinear(times, values, valueSize, result);
+            };
+            break;
+        case Interpolation::Smooth:
+            factoryMethod = [this](const std::vector<float>& times, const std::vector<float>& values, int valueSize, std::vector<float>* result) {
+                return this->InterpolantFactoryMethodSmooth(times, values, valueSize, result);
+            };
+            break;
+    }
+
+    if (!factoryMethod) {
+
+        const std::string message{"KeyframeTrack: Unsupported interpolation type: " +
+                                  ValueTypeName() + "keyframe track named " + name_};
+
+        if (!createInterpolant_) {
+
+            // fall back to default, unless the default itself is messed up
+            if (interpolation != defaultInterpolation) {
+
+                setInterpolation(defaultInterpolation);
+            } else {
+
+                throw std::runtime_error(message);
+            }
+        }
+
+        std::cerr << "THREE.KeyframeTrack: " << message << std::endl;
+        return;
+    }
+
+    // Record the mode, not just the factory. This assignment was missing
+    // entirely, and interpolation_ has no default initialiser, so every track
+    // ever built read an INDETERMINATE value out of getInterpolation(). That is
+    // undefined behaviour, and it is observable: optimize() branches on
+    // `getInterpolation() == Smooth` to decide whether to drop redundant
+    // keyframes, and the Python binding exposes it as `track.interpolation`.
+    interpolation_ = interpolation;
+    createInterpolant_ = *factoryMethod;
+}

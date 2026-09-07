@@ -1,0 +1,2021 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive : enable
+// Divergent bindless indexing: albedoMaps[] indices come from per-hit / per-ray
+// material data, so neighbouring invocations index DIFFERENT descriptors.
+// Without nonuniformEXT that is spec-UB — the compiler may assume the index is
+// wave-uniform and hoist ONE descriptor load for the whole wave, so whichever
+// lane "wins" defines every lane's texture (and the winner shifts with the TAA
+// jitter's wave composition → per-frame texture flicker that scales with
+// material diversity). Requires shaderSampledImageArrayNonUniformIndexing.
+#extension GL_EXT_nonuniform_qualifier : require
+// Subgroup vote: spatial dilation of the moving-occluder shadow flag
+// (analyticDirectSplit) — the outer penumbra's 1-2 ray economy rarely hits the
+// mover itself, so without the vote those pixels keep their long stale history
+// and trail the swept shadow as a faint ghost ring.
+#extension GL_KHR_shader_subgroup_vote : require
+
+// This pass owns the per-pixel dust march (applyParticleFog), so it carries
+// the r16f volume array (binding 69) the froxel pipelines do not. Must precede
+// every include that can reach particle_density.glsl.
+#define PD_LINEAR 1
+
+#include "vulkan_shared.h"  // MaterialDesc
+#include "instance_flags.glsl"// per-instance flag accessors + reactivity channels
+
+// Raster-first deferred shading. Shades the material G-buffer
+// from the raster prepass into a clean, analytic base + adds ray-traced
+// accents, writing linear HDR straight into the bloom sceneHdr image:
+//   • direct analytic lights (dir/point/spot) with ray-query HARD shadows,
+//   • emissive (flat material emissive × intensity),
+//   • split-sum specular: ray-query REFLECTIONS on near-mirror surfaces
+//     (reflected hits are fully shaded — lit + shadowed), prefiltered-env IBL
+//     on rough surfaces,
+//   • approximate diffuse IBL.
+//
+// Geometry fetch for the reflection hit uses a GeometryDesc (buffer-reference
+// vertex/normal/index buffers + barycentric interpolation) mirroring
+// GeometryDesc (VulkanGeometryState.hpp).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+const float PI         = 3.14159265358979;
+const float TWO_PI     = 6.28318530717959;
+// Surface offset along N (avoids self-shadow / self-reflection acne). NOT a
+// const: main() rescales it per-pixel from the shading point's world-coordinate
+// magnitude (see rtSelfEps rationale). A float32 ULP grows with |coord|, so the
+// fixed 1mm offset is swallowed by rounding at ~1e3-1e4 units and the sun's
+// tmin=0.0 shadow ray (shadowVis) self-intersects the surface → the plane
+// flickers under the directional light in large outdoor scenes. The per-pixel
+// rescale floors at 1e-3, so geometry within ~100 units of origin is unchanged.
+float SHADOW_EPS = 1e-3;
+
+// Foliage translucency (MaterialWithTranslucency) tuning. The direct term is a
+// wrapped back-light plus a view-dependent forward-scatter lobe; the ambient
+// term samples env irradiance at -N. Everything is gated behind translucency>0
+// (deferred_shade only, raster-primary hits) → zero cost/change when off.
+const float kTransScatterPower  = 4.0; // forward-scatter lobe tightness
+const float kTransScatterWeight = 0.5; // forward-scatter strength vs back-wrap
+const float kTransAmbient       = 0.4; // back-face env fill strength
+
+// Shadow-ratio history floor when the σ-step cut fires on a moving-caster edge.
+// Low enough to track the sweeping shadow (~half the old smudge), high enough
+// that no single 1-2 ray (binary) sample dominates → no salt-and-pepper dust.
+const float kShadowStepFloor    = 5.0;
+
+layout(set = 0, binding = 0) uniform CameraUbo {
+    mat4 viewInverse;
+    mat4 projInverse;
+    vec4 jitter;
+    vec4 camAux;// .x = parallel projection, .yzw = camera world forward
+} cam;
+#include "camera_ray.glsl"// camRayOrigin / camRayDir — perspective AND ortho
+
+// This pixel's primary ray, set once at the top of main() and read by the
+// included _NN stages below (they shade the point this ray landed on and have
+// no ndc of their own to rebuild it from). Under a perspective camera
+// gPrimaryOrigin is the eye — the value those sites read out of viewInverse[3]
+// before parallel projections existed.
+vec3 gPrimaryOrigin = vec3(0.0);
+vec3 gPrimaryDir    = vec3(0.0, 0.0, -1.0);
+// This pixel's integer coordinate, in the same global-invocation space every
+// other per-pixel term uses. A GLOBAL rather than a parameter because
+// applyParticleFog needs it for its spatial dither and is reached through
+// skyBackground(), which the MSAA sky-minority blend calls with no px of its
+// own; threading it down would grow four signatures to hand one value to one
+// hash. Set beside gPrimaryOrigin, so every reader below sees this pixel's.
+ivec2 gPixelCoord = ivec2(0);
+
+struct DirLight   { vec3 direction; vec3 color; };
+struct PointLight { vec3 position; float range; vec3 color; float decay; float radius; };
+struct SpotLight  { vec3 position; float range; vec3 color; float decay;
+                    vec3 direction; float cosAngleOuter; float cosAngleInner; float radius; };
+struct RectLight  { vec3 position; vec3 halfU; vec3 halfV; vec3 normal; vec3 color; };
+layout(set = 0, binding = 1, scalar) uniform LightsUbo {
+    vec3       ambient;
+    uint       dirCount;
+    DirLight   dirLights[8];
+    uint       pointCount;
+    uint       spotCount;
+    uint       rectCount;
+    PointLight pointLights[8];
+    SpotLight  spotLights[8];
+    RectLight  rectLights[4];
+} lights;
+
+layout(set = 0, binding = 2) uniform sampler2D  envTex;        // prefiltered PMREM mip chain
+layout(set = 0, binding = 3) uniform sampler2D  gbufNormalTex; // .xyz = n*0.5+0.5, .w = roughness (<0 = unlit)
+layout(set = 0, binding = 4) uniform sampler2D  gbufDepthTex;  // .x = Vulkan NDC z [0,1]
+layout(set = 0, binding = 5) uniform usampler2D gbufIdsTex;    // .x = instanceId+1 (0 == sky)
+layout(set = 0, binding = 6) uniform sampler2D  gbufAlbedoTex; // .rgb = albedo, .a = metalness
+// Not writeonly: dispatch B (shadeMode==1, per-sample edge shading) does a
+// read-modify-write accumulate (imageLoad + imageStore) into pixels dispatch
+// A already wrote. Dispatch A's own stores are still plain writes.
+layout(set = 0, binding = 7, rgba16f) uniform image2D outImage;
+layout(set = 0, binding = 8) uniform accelerationStructureEXT topAS;
+layout(set = 0, binding = 9, scalar) readonly buffer MatBuf  { MaterialDesc mats[]; };
+
+// Geometry fetch for reflection-hit normals + UVs — mirrors GeometryDesc (VulkanGeometryState.hpp).
+layout(buffer_reference, scalar) readonly buffer NormalBuf { float n[]; };
+layout(buffer_reference, scalar) readonly buffer IndexBuf  { uint  i[]; };
+layout(buffer_reference, scalar) readonly buffer UvBuf     { float u[]; };
+layout(buffer_reference, scalar) readonly buffer PackedAttrBuf { uint w[]; };
+struct GeometryDesc {
+    uint64_t vertexAddress;
+    uint64_t normalAddress;
+    uint64_t indexAddress;
+    uint64_t uvAddress;
+    uint64_t foamAddress;
+    uint64_t prevVertexAddress;
+    uint64_t colorAddress;// unused here, kept for layout match with GeometryDesc (VulkanGeometryState.hpp)
+    uint     indexed;
+    uint     flags;// bit 0: sticky moved flag (history gates), bit 1: normal is
+                   // oct-snorm16x2, bit 2: uv is unorm16x2, bit 3: color is unorm8x4
+};
+layout(set = 0, binding = 10, scalar) readonly buffer GeomDescBuf { GeometryDesc geoms[]; };
+
+// Octahedral decode — mirrors probe_common.glsl octDecode and the CPU encoder
+// in VulkanCoreGeometry.cpp (signNotZero convention).
+vec3 gfetchOctDecode(vec2 e) {
+    vec3 v = vec3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    if (v.z < 0.0) {
+        const vec2 s = vec2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
+        v.xy = (1.0 - abs(v.yx)) * s;
+    }
+    return normalize(v);
+}
+
+// Per-vertex fetches that honour GeometryDesc.flags bits 1..3.
+vec3 gfetchNormal(in GeometryDesc g, uint vid) {
+    if ((g.flags & 2u) != 0u) {
+        return gfetchOctDecode(unpackSnorm2x16(PackedAttrBuf(g.normalAddress).w[vid]));
+    }
+    NormalBuf nb = NormalBuf(g.normalAddress);
+    return vec3(nb.n[vid * 3 + 0], nb.n[vid * 3 + 1], nb.n[vid * 3 + 2]);
+}
+
+vec2 gfetchUv(in GeometryDesc g, uint vid) {
+    if ((g.flags & 4u) != 0u) {
+        return unpackUnorm2x16(PackedAttrBuf(g.uvAddress).w[vid]);
+    }
+    UvBuf ub = UvBuf(g.uvAddress);
+    return vec2(ub.u[vid * 2 + 0], ub.u[vid * 2 + 1]);
+}
+
+// Triangle indices, honouring flags bit 4 (uint16 indices, two per word).
+uvec3 gfetchTri(in GeometryDesc g, int primId) {
+    if (g.indexed == 0u)
+        return uvec3(primId * 3 + 0, primId * 3 + 1, primId * 3 + 2);
+    const uint base = uint(primId) * 3u;
+    if ((g.flags & 16u) != 0u) {
+        PackedAttrBuf ib = PackedAttrBuf(g.indexAddress);
+        return uvec3((ib.w[(base + 0u) >> 1u] >> (((base + 0u) & 1u) << 4u)) & 0xFFFFu,
+                     (ib.w[(base + 1u) >> 1u] >> (((base + 1u) & 1u) << 4u)) & 0xFFFFu,
+                     (ib.w[(base + 2u) >> 1u] >> (((base + 2u) & 1u) << 4u)) & 0xFFFFu);
+    }
+    IndexBuf ib = IndexBuf(g.indexAddress);
+    return uvec3(ib.i[base + 0u], ib.i[base + 1u], ib.i[base + 2u]);
+}
+// Bindless material textures (reflection hits sample these). Indexed by the
+// material's per-map texIndex.
+layout(set = 0, binding = 11) uniform sampler2D albedoMaps[kMaxMaterialTextures];
+// Emissive triangles (area-light NEE), packed as EmTri:
+// v0.xyz/area, v1.xyz/cumPower(CDF), v2.xyz/power, emission.rgb (per-frame
+// emissiveTriBuffers).
+struct EmTri {
+    vec4 v0;       // xyz = pos, w = area
+    vec4 v1;       // xyz = pos, w = cumPower (running power CDF)
+    vec4 v2;       // xyz = pos, w = power (lum × area)
+    vec4 emission; // xyz = emissive × intensity
+};
+layout(set = 0, binding = 12, scalar) readonly buffer EmissiveTriBuf { EmTri emissiveTris[]; };
+
+// Ocean FFT fine-cascade height (sub-mesh chop) + world-space foam accumulator.
+// Both fall back to 1×1 dummies (and the
+// tile-size push constants to 0) when no DisplacedMesh is in the scene, so the
+// thin-shell water branch's `tileSize > 0` gates skip sampling them entirely.
+layout(set = 0, binding = 13) uniform sampler2D oceanFineHeight;
+layout(set = 0, binding = 14) uniform sampler2D oceanFoamWorld;
+// Baked tileable foam detail (RG8, mipped): R = micro bubble brightness
+// (designed for a 4 m world mapping), G = ridged lace/filament pattern
+// (12 m mapping). Replaces the per-pixel procedural noise octaves in the
+// foam block — a sampled texture is band-limited at distance via its mip
+// chain (no shimmer under TAA) and 2 fetches replace ~20 hash evaluations.
+layout(set = 0, binding = 34) uniform sampler2D foamDetailTex;
+// 64×64 R8 void-and-cluster blue-noise tile. Used to dither the stochastic GI hemisphere directions
+// so the 1-spp residual is high-frequency (à-trous-removable) instead of the
+// low-frequency clumps white noise leaves behind — the AO speckle.
+layout(set = 0, binding = 35) uniform sampler2D blueNoiseTex;
+layout(set = 0, binding = 15) uniform sampler2D gbufUvTex;     // .rg = primary surface UV (emissive-map sample)
+// Demodulated diffuse-indirect irradiance (gatherEnv AO/GI, PRE-albedo). Written
+// here, spatially filtered + recombined by deferred_gi_filter.comp. vec4(0) where
+// the indirect is kept inline (sky/unlit/water/glass/sheen) so the filter adds
+// nothing there.
+// Write-target for THIS frame's accumulated demod GI (the denoise reads it; NEXT
+// frame reads it as the reproject history via binding 17).
+layout(set = 0, binding = 16, rgba16f) uniform image2D indirectImage;
+// GI reproject: prev accumulated GI (the OTHER frame-in-flight's indirect
+// = 1-frame history), the motion vector, and the prev world NORMALS for the
+// geometric disocclusion (NOT IDs — those are draw-order, see binding setup).
+layout(set = 0, binding = 17) uniform sampler2D giPrevTex;      // 1-frame GI history (reprojected)
+layout(set = 0, binding = 18) uniform sampler2D gbufMotionTex;  // .rg = NDC motion
+layout(set = 0, binding = 19) uniform sampler2D gbufNormalPrevTex;// prev world normals (geometric disocclusion)
+layout(set = 0, binding = 20, rg32f) uniform image2D momentsImage; // .r = SVGF E[L²] accumulator (r32 — the square overflows fp16 at lum≈256); .g = GI content-change trend (antilag)
+layout(set = 0, binding = 21) uniform sampler2D momentsPrevTex;   // PREV E[L²] (reprojected SVGF history)
+layout(set = 0, binding = 24) uniform sampler2D gbufDepthPrevTex; // PREV depth (depth-discontinuity disocclusion)
+layout(set = 0, binding = 55) uniform usampler2D gbufIdsPrevTex;  // PREV ids (.x = instanceId+1) — moving-mesh trailing-edge GI disocclusion
+layout(set = 0, binding = 25, rgba16f) uniform image2D reflectImage;// sharp mirror-ray reflection radiance (.rgb pre-weighted, .a=roughness); denoise blurs by roughness
+layout(set = 0, binding = 26) uniform sampler2D reflectPrevTex;   // PREV reflect (other fif) — temporal AA history
+// ReSTIR DI reservoir ping-pong (STORAGE images, GENERAL layout).
+// 27/28 = lightPos.xyz + lightType.w (rgba32f) write/read; 29/30
+// = W_sum/M/W/p_hat (rgba16f) write/read. READ = last frame's reservoir (temporal
+// reuse); WRITE = this frame's, persisted for next frame's read.
+layout(set = 0, binding = 27, rgba32f) uniform writeonly image2D reservoirPosWrite;
+layout(set = 0, binding = 28, rgba32f) uniform readonly  image2D reservoirPosRead;
+layout(set = 0, binding = 29, rgba16f) uniform writeonly image2D reservoirWWrite;
+layout(set = 0, binding = 30, rgba16f) uniform readonly  image2D reservoirWRead;
+// Reflection denoiser AUX (ReBLUR-style), ping-pong (mirrors reflect 25/26). 31 = CUR
+// write, 32 = PREV read. .x = history length (accumulated frames, →fast convergence +
+// noise proxy), .y = E[L²] of the reflection luma (→ temporal variance), .z = reflection
+// hit distance (→ distance-correct blur width). The reflection denoise (channel 1) reads
+// CUR to drive a variance/history/hit-distance blur: wide where noisy/unconverged/moving,
+// narrow where converged (preserves the lobe detail).
+layout(set = 0, binding = 31, rgba16f) uniform writeonly image2D reflAuxWrite;
+layout(set = 0, binding = 32) uniform sampler2D reflAuxPrevTex;
+// Scene fog (homogeneous medium) — the SAME per-frame GpuFogUbo LidarScanner
+// binds, so scene.fog drives both consumers from one source of truth.
+// waterSurfaceY caps the medium (underwater fog stops at the surface).
+layout(set = 0, binding = 33, scalar) uniform FogUbo {
+    vec3  sigmaT;        // per-channel extinction (1/world unit)
+    float enabled;       // 1.0 = fog active
+    vec3  color;         // inscatter tint = single-scattering albedo
+    float anisotropy;    // HG g (drives the volumetric beam phase when fog is on)
+    float waterSurfaceY; // world-Y of the water surface — the MURK clip; 1e30 = unbounded
+    vec3  worldUp;       // world up axis (= camera.up) for sky aerial perspective
+    // Air-medium profile — declared for offset alignment with GpuFogUbo; the
+    // shade pass reads the SAME values from the CloudUbo (clouds.hf*), which the
+    // froxel passes also bind. Present here so the murk fields below sit at their
+    // real buffer offsets.
+    float hfDensity;
+    float hfBaseY;
+    float hfFalloff;
+    // Underwater murk (setUnderwaterMurk) — a separate homogeneous medium clipped
+    // to BELOW waterSurfaceY (applyMurk). 0 density = off.
+    float murkDensity;
+    vec3  murkColor;
+} fog;
+
+// ── World-space irradiance probe grid (multi-bounce GI, opt-in) ─────────────
+// SH-L1 probes updated by probe_update.comp (ProbeGI pass). gatherEnv's GI
+// rays tap this at their HIT points, adding the hit's INDIRECT irradiance —
+// the bounce 2..∞ + through-the-opening sky term the 1-bounce giRadiance
+// deliberately omits (enclosed interiors otherwise stay near-black). The
+// grid UBO's `enabled` gates all sampling; buffers are dummies when off.
+// See probe_common.glsl for the storage layout + energy accounting.
+layout(set = 0, binding = 36, scalar) readonly buffer ProbeShBuf { vec4 probeSh[]; };
+layout(set = 0, binding = 37, scalar) uniform ProbeGridUbo {
+    vec3  origin;  float enabled;
+    vec3  spacing; float _pad0;
+    ivec3 dims;    int   _pad1;
+} probeGrid;
+// Octahedral depth store (Chebyshev visibility — see probe_common.glsl).
+layout(set = 0, binding = 54, scalar) readonly buffer ProbeDepthBuf { uint probeDepth[]; };
+
+// (Binding 56 retired — it carried a removed hybrid-SSR input; 55 lives on
+// above as gbufIdsPrevTex. Binding 57, the raster camera UBO, lives on for
+// cloud_march.comp's temporal reprojection — declared there, unused by this
+// shader.)
+
+// ── MSAA per-sample edge shading (dispatch B, shadeMode==1 only) ───────────
+// Raw MS raster attachments — bound only when setGbufferMsaa(2|4) is active;
+// 1x1 dummy MS views otherwise (same "always bound, harmlessly unused"
+// pattern as the ocean/foam dummy textures elsewhere in this shader).
+// texelFetch(tex, px, sampleIdx) reads ONE live sample directly, bypassing
+// the dominant-sample resolve gbuf_resolve.comp already did for dispatch A.
+layout(set = 0, binding = 38) uniform sampler2DMS  gbufNormalMS;
+layout(set = 0, binding = 39) uniform sampler2DMS  gbufDepthMS;
+layout(set = 0, binding = 40) uniform usampler2DMS gbufIdsMS;
+layout(set = 0, binding = 41) uniform sampler2DMS  gbufAlbedoMS;
+layout(set = 0, binding = 42) uniform sampler2DMS  gbufUvMS;
+
+// ── Denoised direct-shadow channel (ratio estimator, Heitz et al. 2018) ─────
+// The analytic dir/point/spot direct lighting is SPLIT: the UNSHADOWED sum U is
+// computed exactly (noise-free, → directUImage) while the shadowing is a 1-2 ray
+// stochastic estimate of the luminance-weighted visibility ratio
+//   R = Σ lum(c_i)·V_i / Σ lum(c_i)   ∈ [0,1]
+// accumulated temporally here (shadowVisImage, reprojected like the GI) and
+// à-trous-filtered by deferred_gi_filter, whose recombine adds U × R̃. R is
+// bounded and firefly-free — ideal denoiser food — so the penumbra converges
+// smooth instead of the static-dither grain the old always-inline path had,
+// and point/spot lights gain radius-driven soft shadows at the same flat cost.
+// .x = accumulated R, .y = E[R²] (temporal variance), .z = histLen, .w = trend
+// (content-change antilag — a sweeping shadow edge must cut history, because
+// the receiver's motion vectors can't see the OCCLUDER moving).
+layout(set = 0, binding = 43, rgba16f) uniform image2D shadowVisImage;
+layout(set = 0, binding = 44) uniform sampler2D shadowVisPrevTex;// prev fif (reproject history)
+layout(set = 0, binding = 45, rgba16f) uniform writeonly image2D directUImage;
+
+// ── Clustered lights (bindings 48/49, built by cluster_build.comp) ─────────
+// ALL scene point/spot lights (power-sorted, no 8-per-type cap) + per-cell
+// index lists over a 16×8×24 screen-tile × exponential-view-Z grid. The
+// analytic direct split below loops its own cell's lights instead of the UBO
+// arrays — the UBO's 8-per-type slots (the STRONGEST 8, same sort) remain the
+// source for every other consumer (reflection hits, GI rays, volumetric
+// beams, probes), where screen-space clusters can't apply.
+// KEEP IN SYNC with cluster_build.comp + GpuClusterLight (VulkanGpuLayouts.hpp).
+struct ClusterLight {
+    vec3  position;   float range;
+    vec3  color;      float decay;
+    vec3  direction;  float cosAngleOuter;// points carry -1.1/-1.05 → cone test = 1
+    float cosAngleInner;
+    float radius;                         // physical source radius (soft shadows)
+    float cullRadius;
+    float type;                           // 0 = point, 1 = spot
+};
+layout(set = 0, binding = 48, scalar) readonly buffer ClusterGridBuf { uint clusterGrid[]; };
+layout(set = 0, binding = 49, scalar) readonly buffer ClusterLightsBuf { ClusterLight clusterLights[]; };
+
+const uint  kClusterX = 16u, kClusterY = 8u, kClusterZ = 24u;
+const uint  kClusterMaxPerCell = 24u;
+const float kClusterZMin = 0.1, kClusterZMax = 1024.0;
+
+// ── Froxel volumetric lighting (binding 53, built by froxel_inject/integrate) ─
+// Front-to-back-integrated volumetric in-scatter LUT: sun shafts, spot beams
+// and point-light glow for the camera→(uv, viewDist) leg, in ONE trilinear
+// sample — replaces the per-pixel volumetricSpot/DirScatter marches. flags
+// bit 8 says the froxel passes ran this frame (medium present); the LUT holds
+// stale data otherwise. Surface extinction stays applySceneFog's analytic
+// Beer-Lambert — this LUT carries in-scatter only.
+// KEEP the grid constants IN SYNC with froxel_inject/integrate.comp.
+layout(set = 0, binding = 53) uniform sampler3D froxelLutTex;
+
+const float kFroxelZMin = 0.25, kFroxelZMax = 512.0;
+// (froxelInscatter() lives just below the push-constant block — it gates on pc.flags.)
+
+// ── Volumetric clouds (binding 58) ─────────────────────────────────────────
+// Far-field raymarched cloud-layer parameters (VulkanRenderer::setClouds). A
+// tiny always-bound UBO — clouds.enabled == 0 short-circuits cloudMarch(), so
+// the layer costs nothing and is image-identical to today when disabled. See
+// cloudMarch()/cloudDensity() in deferred_shade_60_fog_volumetrics.glsl.
+layout(set = 0, binding = 58, scalar) uniform CloudUbo {
+    float enabled;      // 1.0 = far cloud march active
+    float coverage;     // 0 = clear sky .. 1 = overcast
+    float density;      // density multiplier
+    float bottomY;      // shell base (world Y, m)
+    float topY;         // shell top (world Y, m)
+    float evolveSpeed;  // shape churn rate
+    float timeSec;      // wall-clock seconds (wind scroll + evolution)
+    float heteroActive; // 1.0 = heterogeneous near-field froxels (height fog on)
+    vec3  wind;         // m/s drift (xz used, y ignored)
+    float hfDensity;    // height-fog σ_t at baseY (0 = height fog off)
+    float hfBaseY;      // height-fog base world Y
+    float hfFalloff;    // height-fog exponential height scale (m)
+    float hfNoiseAmount;// 0 = smooth analytic .. 1 = fully noise-modulated
+    float shadowActive; // 1.0 = cloud shadow map valid this frame
+} clouds;
+
+// Half-res cloud march result (cloud_march.comp, binding 59). LINEAR sampler —
+// the full-res shade composites it with ONE bilinear upsample tap. rgb =
+// in-scatter, a = transmittance. Gated by clouds.enabled (off = col*1 + 0).
+layout(set = 0, binding = 61) uniform sampler2D cloudColorTex;// composited by compositeClouds() below the push block
+// This frame's cloud aux (binding 66): r=mean cloud depth, g=histLen,
+// b=scene distance the march clipped against, a=epoch. The depth-aware
+// upsample in cloudGather() needs r to reject taps whose cloud lies behind
+// the compositing pixel's own surface.
+layout(set = 0, binding = 66) uniform sampler2D cloudAuxTex;
+// Cloud shadow map (cloud_shadow.comp, binding 65) — top-down cloud
+// transmittance over an 8 km camera-centred square. Sampled by cloudShadowSample()
+// (deferred_shade_10_lighting_utils.glsl) to attenuate the sun on the ground.
+layout(set = 0, binding = 65) uniform sampler2D cloudShadowTex;
+
+// ParticleField density volumes (bindings 67/68 + the r16f mirrors at 69,
+// declared because PD_LINEAR is defined above). applyParticleFog marches the
+// r16f volumes per pixel — world-anchored, hardware trilinear — which is what
+// keeps dust view-independent and sharper than the froxel grid.
+#include "particle_density.glsl"
+
+// Splat reflection volumes (bindings 70/71) — the SECOND density table, baked
+// once per SplatCloud by SplatPass and marched by svLeg on the traced
+// reflection legs only. Never on the primary leg: SplatPass composites the real
+// thing there (see the header for the double-count this avoids).
+#include "splat_volume.glsl"
+
+#include "probe_common.glsl"// probeIrradiance()
+
+// Shared ShadePush block (vulkan_shared.h) — field docs + the flags bit
+// table live there. shadeMode == 1 is dispatch B (MSAA only): per-sample
+// shading at COMPLEX (edge) pixels — see main()'s top (tap selection) and
+// bottom (imageStore gating) for the shadeMode == 1 branches.
+layout(push_constant) uniform Pc { ShadePush pc; };
+
+// DEPTH-AWARE 2×2 upsample of the half-res cloud layer at this full-res pixel.
+// A plain bilinear tap bleeds across depth discontinuities: a full-res pixel
+// on a thin foreground object (a ship's mast) blends half-res texels whose
+// centres missed it and marched cloud kilometres BEHIND it — painting cloud
+// onto the object and haloing its silhouette. Each tap therefore only counts
+// when its cloud is actually IN FRONT of this pixel's surface (aux.r mean
+// cloud depth < sceneDist); taps carrying no cloud are the identity and are
+// always safe. All four rejected → identity (cloud fully behind the surface).
+// Sky pixels pass sceneDist=1e30 → nothing rejected → plain bilinear.
+// `meanDist` returns the coverage-weighted mean cloud DISTANCE (aux.r, ray units)
+// over the accepted cloud-bearing taps — sceneDist when no tap carries cloud —
+// so compositeClouds can fog the cloud in-scatter over the camera→cloud leg.
+vec4 cloudGather(ivec2 px, float sceneDist, out float meanDist) {
+    // Cloud march runs one thread per half-PANE pixel ((pc.width+1)/2 x ...),
+    // so the valid content spans the pane's half extent at the image origin —
+    // NOT the physical image extent (fullscreen the two coincide). Mapping by
+    // textureSize here would stretch the lookup across the whole image under a
+    // scissored pane render (see paneToPhys below).
+    const ivec2 hsz = ivec2(int(pc.width + 1u) / 2, int(pc.height + 1u) / 2);
+    const vec2  uv  = (vec2(px) + 0.5) / vec2(float(pc.width), float(pc.height));
+    const vec2  pos = uv * vec2(hsz) - 0.5;
+    const ivec2 b0  = ivec2(floor(pos));
+    const vec2  f   = pos - vec2(b0);
+    const vec4  wb  = vec4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y),
+                           (1.0 - f.x) * f.y,         f.x * f.y);
+    vec4  acc  = vec4(0.0);
+    float wSum = 0.0;
+    float dAcc = 0.0;// coverage-weighted mean cloud distance over cloud-bearing taps
+    float dW   = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        const ivec2 tp = clamp(b0 + ivec2(i & 1, i >> 1), ivec2(0), hsz - 1);
+        const vec4  c  = texelFetch(cloudColorTex, tp, 0);
+        const bool hasCloud = (c.a < 0.999) || any(greaterThan(c.rgb, vec3(1e-5)));
+        float cd = 0.0;
+        if (hasCloud) {
+            cd = texelFetch(cloudAuxTex, tp, 0).r;// aux.r = mean cloud depth (ray distance)
+            if (cd >= sceneDist) continue;        // cloud behind THIS pixel's surface → reject
+        }
+        acc  += wb[i] * c;
+        wSum += wb[i];
+        if (hasCloud) { dAcc += wb[i] * cd; dW += wb[i]; }
+    }
+    meanDist = (dW > 1e-4) ? dAcc / dW : sceneDist;
+    return (wSum > 1e-4) ? acc / wSum : vec4(0.0, 0.0, 0.0, 1.0);
+}
+// Forward decls — DEFINED later via the deferred_shade_*.glsl includes below.
+// compositeClouds is declared here (before those includes) but only CALLED from
+// main(), which is after them, so the definitions link in the same translation
+// unit. cam/clouds/fog/lights UBOs are already declared above.
+float heightFogOpticalDepth(vec3 a, vec3 b);// deferred_shade_60_fog_volumetrics.glsl
+vec3  sampleEnvLod(vec3 dir, float lod);    // deferred_shade_10_lighting_utils.glsl
+// Composite the upsampled half-res cloud layer (binding 61) over `col` at this
+// pixel. sceneDist = this pixel's own camera→surface distance (1e30 for sky).
+// A no-op when clouds are off, so the whole system is free/image-identical
+// when unused. rgb = in-scatter, a = transmittance.
+vec3 compositeClouds(vec3 col, ivec2 px, float sceneDist) {
+    if (clouds.enabled < 0.5) return col;
+    float meanDist;
+    const vec4 cl = cloudGather(px, sceneDist, meanDist);
+    // Composite the cloud exactly as before (byte-identical) when EITHER:
+    //   • no air-fog medium is present (nothing to fog), OR
+    //   • no cloud tap contributed here, so cloudGather returned meanDist ==
+    //     sceneDist (the sentinel). On a clear-SKY pixel sceneDist is 1e30, and
+    //     building camP+dir·1e30 would feed a 1e30 leg into heightFogOpticalDepth:
+    //     distance()² = 1e60 overflows fp32 → Inf, and Inf·0 → NaN when the closed
+    //     form's f underflows for a grazing sky ray ⇒ exp(-NaN)=NaN ⇒ the whole SKY
+    //     goes BLACK (angle-dependent, clouds-gated — the observed regression). With
+    //     no cloud gathered there is also no cloud radiance to fog, so this early
+    //     out is the exact result, not an approximation.
+    if (clouds.hfDensity <= 0.0 || meanDist >= sceneDist) return col * cl.a + cl.rgb;
+    // ── Fog the cloud IN-SCATTER over the camera→cloud leg ───────────────────
+    // The background `col` already carries its OWN full-path fog (applySkyFog for
+    // sky pixels, applyHeteroSurfaceFog for terrain/water) and composites through
+    // the cloud transmittance cl.a untouched. Only the cloud's own radiance is
+    // attenuated here — by the closed-form height-fog transmittance camera→cloud
+    // (the froxel LUT is NOT valid at the SKY pixels where clouds most often
+    // composite, so the analytic optical depth — the SAME one applyHeteroSurfaceFog
+    // integrates over the whole leg — stands in). The mist in front of the cloud
+    // also ADDS its haze, but only over the cloud-COVERED fraction (1-cl.a); the
+    // transparent fraction's haze already lives in `col`. This mirrors
+    // applyHeteroSurfaceFog's col*T + medAlbedo*fogLight*(1-T), so cloud, distant
+    // terrain and the fogged sky converge to ONE haze. fogT==1 when the medium is
+    // off (short-circuited above) → byte-identical col*cl.a + cl.rgb.
+    const vec2  uvp   = (vec2(px) + 0.5) / vec2(float(pc.width), float(pc.height));
+    const vec2  ndcp  = vec2(uvp.x * 2.0 - 1.0, -(uvp.y * 2.0 - 1.0)) + cam.jitter.xy;
+    const vec3  dirWS = camRayDir(ndcp);
+    const vec3  camP  = camRayOrigin(ndcp);
+    // Clamp the camera→cloud leg defensively: cloud_march caps mean cloud depth at
+    // 42 km, but a finite bound here means no future far-layer depth can overflow
+    // the closed form regardless (heightFogOpticalDepth also self-clamps len + od).
+    const vec3  cloudP = camP + dirWS * min(meanDist, 6.0e4);
+    const float fogT  = exp(-heightFogOpticalDepth(camP, cloudP));
+    const vec3  fogLight  = lights.ambient
+                          + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
+    const vec3  medAlbedo = (fog.enabled > 0.5) ? fog.color : vec3(1.0);
+    return col * cl.a
+         + cl.rgb * fogT
+         + medAlbedo * fogLight * ((1.0 - fogT) * (1.0 - cl.a));
+}
+
+// Set by shadowVis (in _10) when a committed shadow hit is a currently-MOVING
+// mesh (sticky GeometryDesc._pad): the receiver is under a SWEEPING shadow, so
+// the denoised shadow channel keeps its history short (statistics-free antilag —
+// see the sCap composition in the shadow temporal). Reset before, and captured
+// right after, the analyticDirectSplit visibility rays; later inline shadowVis
+// calls (reflection hits, translucency) don't pollute the captured value.
+bool gShadowMovingOccluder = false;
+// True when analyticDirectSplit replaced this pixel's visEst with the 16-ray
+// static-dithered sunShadowVis estimate (dwell/release top-up). The temporal
+// may then drop to cap 1 (pure per-frame — the denoise-off estimator, per-
+// frame stable by construction): with only 1-2 binary rays a cap-1 mean is
+// salt-and-pepper, so without the top-up the dwell floor stays at 2.
+bool gShadowSunTopUp = false;
+// Set per-ray by giRadiance when the 1-bounce hit lands on a currently-MOVING
+// mesh (sticky GeometryDesc._pad); gatherEnv folds the RAY-COUNT fraction into
+// gGiMovFrac. Ray-count, not luminance-weighted — a dark occlusion hit (the
+// car blocking a road pixel's sky = the soft AO blob around the car)
+// contributes no luminance but fully stale history. The GI temporal cuts its
+// cap while the fraction is significant (dwell), which also fixes the
+// departure side by construction: the deposit never gets deep, so the ground
+// the car just left recovers in ~3 frames instead of dragging the contact
+// darkening as a trailing smear (the artifact the RT-AO/GI toggle isolates;
+// the luminance-trend antilag alone is too weak here — the 1-spp gather's
+// noise drowns the trend signal that works for the low-variance channels).
+bool  gGiRayHitMoved = false;
+float gGiMovFrac     = 0.0;
+
+// ── Pane-UV → physical-UV rescale (split-screen) ────────────────────────────
+// Under a scissored pane render (setScissorTest + a sub-rect viewport) the
+// deferred pipeline renders PANE-SIZED content at the ORIGIN of the same
+// full-render-extent images used fullscreen. Every screen-space normalized
+// coordinate in this shader family ([0,1] over pc.width/height) must therefore
+// be rescaled by pane/physical before it touches a sampler, or the tap lands
+// at a stretched position — the visible symptom was shadow/GI history ghosts
+// offset from their casters in lidar_slam's split view. Fullscreen the ratio
+// is exactly 1.0 (w/w), so this is a no-op there. Applies ONLY to samplers
+// backed by render-extent images (gbuf*, *Prev, history); env/noise/froxel/
+// cloud-shadow textures live in their own spaces and take their uv raw.
+vec2 paneToPhys(sampler2D t, vec2 paneUv) {
+    return paneUv * vec2(float(pc.width), float(pc.height)) / vec2(textureSize(t, 0));
+}
+
+#include "deferred_shade_10_lighting_utils.glsl"
+#include "deferred_shade_20_restir_di.glsl"
+#include "deferred_shade_30_gi_gather.glsl"
+#include "deferred_shade_40_reflections.glsl"
+#include "deferred_shade_50_water_glass.glsl"
+#include "deferred_shade_60_fog_volumetrics.glsl"
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
+    const vec2 size = vec2(float(pc.width), float(pc.height));
+    const vec2 uv   = (vec2(px) + 0.5) / size;
+
+    // ── MSAA sample count (setGbufferMsaa; 0=1x/1=2x/2=4x, pc.flags bits 5-6) ──
+    const uint msaaCode = (pc.flags >> 5u) & 0x3u;
+    const int  K = (msaaCode == 2u) ? 4 : (msaaCode == 1u ? 2 : 1);
+
+    // ── Dispatch B (shadeMode==1, MSAA edge shading) gate + tap selection ──
+    // ids.w's bit 15 (packed by gbuf_resolve.comp) marks pixels where at
+    // least one raster sample fell outside the dominant surface cluster — an
+    // edge/silhouette pixel. Non-complex pixels are already fully correct
+    // from dispatch A (the dominant sample IS the only sample), so bail
+    // immediately: this keeps dispatch B's cost proportional to edge pixel
+    // count, not frame resolution.
+    // FALLBACK VARIANT (documented in the MSAA plan): rather than looping
+    // every non-dominant cluster, this shades AT MOST the single largest
+    // non-dominant cluster and folds the rest of the minority weight into
+    // it — 2-cluster pixels (~99% of real edges) are exact; 3+-cluster
+    // pixels get one representative sample standing in for the whole
+    // minority, a documented approximation.
+    const uint idsW0 = texelFetch(gbufIdsTex, px, 0).w;
+    const bool isComplex = (idsW0 & 0x8000u) != 0u;
+    if (pc.shadeMode == 1u && !isComplex) return;
+
+    // Coverage accounting at complex pixels — the three weights sum to
+    // exactly 1.0: dispatch A stores domWeight·lit PLUS skyEdgeW·sky (the
+    // sky needs no per-sample shading, it is a background colour dispatch A
+    // can evaluate itself — an earlier version skipped sky minorities
+    // entirely, which forfeited edge AA on exactly the most visible edges,
+    // every silhouette against the sky), and dispatch B adds geoMinW·lit
+    // for the non-sky minority. When dispatch B is NOT active (flags bit 7
+    // clear) the geometry-minority weight folds back into the dominant
+    // surface so no energy is lost.
+    const uint domMask0 = idsW0 & 0xFu;
+    float domWeight = 1.0;
+    float skyEdgeW  = 0.0;
+    if (pc.shadeMode == 0u && isComplex && K > 1) {
+        const uint domIdx0 = (idsW0 >> 4u) & 0x3u;
+        int skyCount = 0, geoMinCount = 0;
+        int repIdx = -1, repCount = 0;// dispatch B's minority representative (mirror its selection exactly)
+        for (int i = 0; i < K; ++i) {
+            if (i == int(domIdx0) || (domMask0 & (1u << uint(i))) != 0u) continue;
+            if (texelFetch(gbufIdsMS, px, i).x == 0u) { ++skyCount; continue; }
+            ++geoMinCount;
+            int count = 1;
+            for (int j = i + 1; j < K; ++j) {
+                if (j == int(domIdx0) || (domMask0 & (1u << uint(j))) != 0u) continue;
+                if (texelFetch(gbufIdsMS, px, j).x == texelFetch(gbufIdsMS, px, i).x) ++count;
+            }
+            if (count > repCount) { repCount = count; repIdx = i; }
+        }
+        skyEdgeW = float(skyCount) / float(K);
+        // Reserve the geometry-minority weight ONLY if dispatch B will actually
+        // pay it back. B bails without accumulating on UNLIT and OCEAN-WATER
+        // minority representatives (their shade paths own dispatch-A-only
+        // temporal state) — reserving weight B never pays is a dark rim on
+        // exactly those edges, so mirror B's rep selection + early-outs and
+        // fold the weight back into the dominant surface in those cases.
+        float geoMinW = 0.0;
+        if ((pc.flags & 128u) != 0u && repIdx >= 0) {
+            const uint repId    = texelFetch(gbufIdsMS, px, repIdx).x;
+            const bool repUnlit = texelFetch(gbufNormalMS, px, repIdx).w < 0.0;
+            const bool repWater = mats[repId - 1u].thinWalled != 0
+                                && mats[repId - 1u].transmission > 0.0
+                                && geoms[repId - 1u].foamAddress != 0ul;
+            if (!repUnlit && !repWater) geoMinW = float(geoMinCount) / float(K);
+        }
+        domWeight = 1.0 - skyEdgeW - geoMinW;
+    }
+
+    int msSampleIdx = -1;// >=0 selects the MS per-sample taps below
+    float msWeight = 1.0;// dispatch-B contribution weight (geo-minority population / K)
+    if (pc.shadeMode == 1u) {
+        const uint domMask = idsW0 & 0xFu;
+        const uint domIdx  = (idsW0 >> 4u) & 0x3u;
+        int bestCluster = -1, bestCount = 0, geoMinCount = 0;
+        for (int i = 0; i < K; ++i) {
+            if (i == int(domIdx) || (domMask & (1u << uint(i))) != 0u) continue;// skip dominant cluster members
+            if (texelFetch(gbufIdsMS, px, i).x == 0u) continue;// skip sky — dispatch A blends it as a background colour
+            ++geoMinCount;
+            int count = 1;
+            for (int j = i + 1; j < K; ++j) {
+                if (j == int(domIdx) || (domMask & (1u << uint(j))) != 0u) continue;
+                if (texelFetch(gbufIdsMS, px, j).x == texelFetch(gbufIdsMS, px, i).x) ++count;
+            }
+            if (count > bestCount) { bestCount = count; bestCluster = i; }
+        }
+        if (bestCluster < 0) return;// pure sky/geometry edge — dispatch A handled the whole pixel
+        msSampleIdx = bestCluster;
+        // Weight = the ENTIRE non-sky minority population (any 3rd cluster
+        // folds onto this representative — the documented fallback
+        // approximation). Must mirror dispatch A's reserved geoMinW exactly
+        // or the pixel gains/loses energy.
+        msWeight = float(geoMinCount) / float(K);
+    }
+
+    // Jitter-aware NDC. The G-buffer is rasterized with a sub-pixel jittered
+    // projection (TSR), so the depth at this pixel belongs to geometry whose
+    // UNJITTERED NDC is offset by the jitter. Add it back before reconstructing
+    // worldPos with the unjittered projInverse — without it, GRAZING surfaces
+    // reconstruct OFF the surface (the depth gradient is steep, so a sub-pixel NDC
+    // error becomes a large position error), the gatherEnv ray origin lands behind
+    // the surface → every ray occluded → the surface renders BLACK. cam.jitter.xy
+    // equals the gbuffer's Halton jitter (same haltonFrame_, same frame).
+    const vec2 ndc    = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + cam.jitter.xy;
+    // Where THIS pixel is looked at from. The eye under a perspective camera —
+    // unchanged — and this pixel's own near-plane point under a parallel one,
+    // which is what makes every camPos-relative term below (the view vector V,
+    // the fog and murk legs, the volumetric march origins, the foam LOD
+    // distance) come out right without each one growing its own ortho branch:
+    // the shading point lies on this ray, so camPos → worldPos IS the view leg.
+    const vec3 camPos = camRayOrigin(ndc);
+    gPrimaryOrigin    = camPos;
+    gPrimaryDir       = camRayDir(ndc);
+    gPixelCoord       = px;
+    const float maxLod = float(max(pc.envMipCount, 1u) - 1u);
+
+    const uint id = (msSampleIdx >= 0) ? texelFetch(gbufIdsMS, px, msSampleIdx).x
+                                        : texelFetch(gbufIdsTex, px, 0).x;// 0 == sky
+
+    if (id == 0u) {
+        // Dispatch B never shades sky (a sky sample can't be the "largest
+        // non-dominant cluster" of a real surface pixel in practice, but
+        // guard anyway — sky has no lit contribution to accumulate).
+        if (pc.shadeMode == 1u) return;
+        const vec3 dirWS = gPrimaryDir;
+        // Sky pixels march the beams too — a lighthouse beam against the night
+        // sky is exactly where the volumetric is most visible.
+        // COVERAGE-WEIGHTED at MSAA complex pixels: a sky-DOMINANT edge pixel
+        // reserves geoMinW for dispatch B exactly like the geometry path does.
+        // Storing the sky at full weight here let B add the geometry minority
+        // ON TOP (energy = 1 + geoMinW) — a bright rim hugging the sky side of
+        // every silhouette, glowing hardest where the sky/haze is bright.
+        // Sky radiance, then composite the volumetric cloud layer over it
+        // (clouds sit in front of the infinite sky background). Physical
+        // radiance shares the sky's value domain, so the skyPe scale below
+        // carries the clouds too — consistent under the solid-bg bypass.
+        vec3 skyRad = applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS);
+        skyRad = compositeClouds(skyRad, px, 1e30);// upsampled half-res cloud layer over the sky
+        // Dust in front of the sky. Without this the cloud is invisible against
+        // the background and only reads where it covers geometry — the whole
+        // silhouette of a dust curtain lives here.
+        skyRad = applyParticleFog(skyRad, camPos, dirWS, 1e30);
+        vec3 sky = skyRad * domWeight;
+        // SOLID-COLOUR background (flags bit 10): the bg is DISPLAY-referred
+        // (the exact clear colour, restored verbatim by the composite's sky
+        // bypass), not physical radiance — store it UNexposed so it lives in
+        // the same value domain as the pre-exposed geometry. Without this,
+        // any cross-pixel mixing into sky (DoF, bloom) gets amplified by
+        // 1/preExposure at the bypass → white silhouette rims. Legacy mode:
+        // preExp is 1.0 and both branches are identical.
+        const float skyPe = ((pc.flags & 1024u) != 0u) ? 1.0 : uintBitsToFloat(pc.preExpBits);
+        sky *= skyPe;
+        // Volumetric sun glow / god rays added on top → blooms THROUGH the
+        // haze. Per-pixel view-ray integral: full weight, independent of
+        // coverage. Sky = the full froxel range (the far marches were
+        // σ-extinct anyway) + the per-pixel spot beams (a lighthouse against
+        // the night sky). Physical radiance → always pre-exposed.
+        sky += (froxelInscatter(uv, kFroxelZMax)
+              + volumetricSpotScatter(camPos, dirWS, 2000.0, px)
+              + volumetricDirScatter(camPos, dirWS, 2000.0, px)) * uintBitsToFloat(pc.preExpBits);
+        imageStore(outImage, px, vec4(sky, 1.0));
+        imageStore(indirectImage, px, vec4(0.0));
+        imageStore(shadowVisImage, px, vec4(0.0));// cold-start marker for the ping-pong
+        imageStore(directUImage, px, vec4(0.0));
+        return;
+    }
+
+    const vec4  nTap   = (msSampleIdx >= 0) ? texelFetch(gbufNormalMS, px, msSampleIdx) : texelFetch(gbufNormalTex, px, 0);
+    const vec4  am     = (msSampleIdx >= 0) ? texelFetch(gbufAlbedoMS, px, msSampleIdx) : texelFetch(gbufAlbedoTex, px, 0);
+    const vec3  albedo = am.rgb;
+
+    // Unlit (MeshBasicMaterial, roughness sentinel < 0): emit base colour
+    // (fogged by primary distance — three.js fogs basic materials too).
+    if (nTap.w < 0.0) {
+        if (pc.shadeMode == 1u) return;// dispatch B: skip (rare — unlit minority sample at an edge)
+        const float depthU = texelFetch(gbufDepthTex, px, 0).x;
+        const vec4  vhU    = cam.projInverse * vec4(ndc, depthU, 1.0);
+        const vec3  wpU    = (cam.viewInverse * vec4(vhU.xyz / vhU.w, 1.0)).xyz;
+        // Same coverage weighting as the main path: dominant fraction + the
+        // sky minority blended here (dispatch B pays the geometry minority).
+        // Surface fog matches the lit path's dispatch (hetero air medium vs the
+        // vestigial homogeneous path) so an unlit MeshBasicMaterial fades to the
+        // same haze as everything else — no crisp unlit island in the mist. Then
+        // the underwater murk on the below-surface leg portion (no-op above water).
+        const float distU = length(wpU - camPos);
+        vec3 outU = applyParticleFog(
+                            applyMurk((clouds.heteroActive > 0.5)
+                                      ? applyHeteroSurfaceFog(albedo, uv, distU, camPos, wpU)
+                                      : applySceneFog(albedo, camPos, wpU), camPos, wpU),
+                            camPos, (wpU - camPos) / max(distU, 1e-6), distU) * domWeight;
+        if (skyEdgeW > 0.0) outU += skyEdgeW * skyBackground(ndc, camPos);
+        imageStore(outImage, px, vec4(outU * uintBitsToFloat(pc.preExpBits), 1.0));
+        imageStore(indirectImage, px, vec4(0.0));
+        imageStore(shadowVisImage, px, vec4(0.0));
+        imageStore(directUImage, px, vec4(0.0));
+        return;
+    }
+
+    // Reconstruct world position from depth.
+    const float depth    = (msSampleIdx >= 0) ? texelFetch(gbufDepthMS, px, msSampleIdx).x : texelFetch(gbufDepthTex, px, 0).x;
+    const vec4  viewH    = cam.projInverse * vec4(ndc, depth, 1.0);
+    const vec3  worldPos = (cam.viewInverse * vec4(viewH.xyz / viewH.w, 1.0)).xyz;
+
+    // World-scale-aware self-intersection offset for this pixel's shadow /
+    // reflection rays. Floored at 1e-3 (scenes within ~100 units unchanged),
+    // grows ~linearly past that so the sun's tmin=0.0 shadow ray clears the
+    // surface even when float precision at large |worldPos| swallows 1mm.
+    SHADOW_EPS = max(1e-3, max(max(abs(worldPos.x), abs(worldPos.y)), abs(worldPos.z)) * 1e-5);
+
+    vec3        N         = normalize(nTap.xyz * 2.0 - 1.0);// mutable: FFT chop below
+    // GEOMETRIC SPECULAR AA (Kaplanyan-style): widen the GGX roughness by the
+    // 4-neighbour G-buffer normal variance, so sub-pixel normal detail (dense
+    // normal maps, curvature, distant meshes) shades with the roughness its
+    // pixel footprint actually spans. At 1 spp under the Halton jitter a
+    // sub-pixel glint otherwise flips bright/dark every frame — an alternating
+    // input TAA can never converge (the "distant edges shimmer" bug; the
+    // original fix measured 4.5× lower consecutive-frame diff on the ocean
+    // harness). kernel² capped at 0.04 so macro geometry edges don't go matte.
+    float specAaKernelSq = 0.0;
+    {
+        const ivec2 saMax = ivec2(int(pc.width), int(pc.height)) - 1;
+        const ivec2 saOff[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1));
+        float varN = 0.0;
+        for (int i = 0; i < 4; ++i) {
+            const vec4 nn = texelFetch(gbufNormalTex, clamp(px + saOff[i], ivec2(0), saMax), 0);
+            if (nn.w <= 0.0) continue;// sky (0) / unlit (<0) neighbours carry no surface normal
+            const vec3 dn = normalize(nn.xyz * 2.0 - 1.0) - N;
+            varN += dot(dn, dn) * 0.25;
+        }
+        specAaKernelSq = min(2.0 * varN, 0.04);
+    }
+    const float roughMat  = clamp(nTap.w, 0.04, 1.0);
+    const float roughness = min(sqrt(roughMat * roughMat + specAaKernelSq), 1.0);
+    const float metalness = clamp(am.a, 0.0, 1.0);
+
+    const MaterialDesc pm = mats[id - 1u];
+    // Emissive: factor × emissive MAP. glTF sets emissiveFactor=(1,1,1) whenever
+    // an emissive texture is present (the MAP, not the factor, carries the actual
+    // emission), so applying the bare factor makes textured-emissive submeshes
+    // (e.g. the SWAT exoskeleton) glow full white. The primary UV comes from the
+    // G-buffer (gbuffer.frag attachment 3). Mirrors the reflection-hit path
+    // (hitTex at the hit UV); texIndex < 0 → factor unchanged (no regression).
+    const vec2 primUv     = (msSampleIdx >= 0) ? texelFetch(gbufUvMS, px, msSampleIdx).rg : texelFetch(gbufUvTex, px, 0).rg;
+    const vec3 emissive   = hitTex(pm.emissiveTexIndex, pm.uvTransformEmissive, primUv,
+                                   pm.emissive * pm.emissiveIntensity);
+
+    const vec3 V          = normalize(camPos - worldPos);
+    const bool shadowsOn  = (pc.flags & 1u) != 0u;
+    // Per-pixel RNG stream (frame-jittered) for emissive NEE; advanced through
+    // the primary + reflection shades so the draws decorrelate. TAA averages.
+    // Temporally stable (no `frame`) — same reasoning as gatherEnv: reflections /
+    // emissive-NEE settle to a fixed result instead of flickering. Different
+    // constant so this stream decorrelates from the AO/GI stream above.
+    uint seed = pcgHash(uint(px.x) ^ pcgHash(uint(px.y) ^ 0x85ebca6bu));
+
+    // ── FFT fine-cascade normal: recover the sub-mesh chop the rasterised wave
+    // geometry can't resolve, via an oceanFineHeight central-difference gradient.
+    // Gated on thin-shell + an active ocean (dummy tex + tile size 0 otherwise),
+    // so it's a no-op for every non-ocean surface. Must run before N is used.
+    // Removed sub-pixel FFT-chop slope variance, banked into the water roughness
+    // below (declared out here so it survives the block's scope).
+    float fineKernelSq = 0.0;
+    // MACRO surface normal — the gbuffer normal BEFORE the fine-cascade tilt
+    // (and before any stochastic jitter). shadeWater clamps its reflection ray
+    // against this plane; see the self-hit note there. Orientation-agnostic,
+    // so a rotated (Z-up) ocean works without a world-up assumption.
+    vec3 Nmacro = N;
+    // foamAddress gate — same ocean marker the water branch below uses, for the
+    // same reason its comment gives: glTF transmission glass is almost always
+    // thin-walled too (no KHR_volume → thinWalled), and oceanFineTileSize is
+    // scene-GLOBAL, so without it every thin-walled glass surface in an ocean
+    // scene had its normal flipped and tilted by wave slope sampled at its own
+    // worldPos.xz (the lantern glazing wobbled at ocean-wave frequency).
+    if (pm.thinWalled != 0 && pc.oceanFineTileSize > 0.0 && geoms[id - 1u].foamAddress != 0ul) {
+        // The FFT DisplacedMesh's gbuffer normal comes out INVERTED (pointing down
+        // into the water) → NdotV≈0 → Fresnel pinned at ~1 → the ocean read as a
+        // flat, dull sky reflection with NO depth gradient. Water is
+        // always viewed from above, so face the camera. Done BEFORE the fine-cascade
+        // perturbation so the chop tilt is added in the correct (up) frame.
+        if (dot(N, V) < 0.0) N = -N;
+        Nmacro = N;// post-flip, pre-tilt: the surface's own plane
+        const float invTile = 1.0 / pc.oceanFineTileSize;
+        const float eps     = pc.oceanFineTileSize / 32.0;
+        const float depsUV  = eps * invTile;
+        const vec2  uvW     = worldPos.xz * invTile;
+        const float hL = textureLod(oceanFineHeight, uvW + vec2(-depsUV, 0.0), 0.0).r * invTile;
+        const float hR = textureLod(oceanFineHeight, uvW + vec2( depsUV, 0.0), 0.0).r * invTile;
+        const float hD = textureLod(oceanFineHeight, uvW + vec2(0.0, -depsUV), 0.0).r * invTile;
+        const float hU = textureLod(oceanFineHeight, uvW + vec2(0.0,  depsUV), 0.0).r * invTile;
+        const vec2  grad = vec2(hR - hL, hU - hD) / (2.0 * eps);
+        // ── Distance filtering (LEAN-style specular AA for water) ──────────────
+        // oceanFineHeight is a single-mip texture (no prefilter), sampled here at
+        // a FIXED world-space eps regardless of distance. At the altitudes this
+        // water is viewed from (100 m – 2 km up) the fine cascade's metre-and-
+        // below wave detail sits far below the pixel footprint, so point-sampling
+        // its slope and shading a razor-sharp GGX lobe against it decorrelates the
+        // sun glint into a pure-noise speckle field. Fix: FADE the chop out of N
+        // as the pixel footprint outgrows the ~2·eps slope baseline, and BANK the
+        // removed slope variance into the water roughness (fineKernelSq) so the
+        // glint broadens into a coherent glitter sheen instead of aliasing. Near
+        // water (small footprint) keeps its full crisp sparkle.
+        // Under a PARALLEL projection the footprint doesn't grow with distance —
+        // projInverse[1][1] is already half the frustum height in world units,
+        // so the leg drops out and every pixel covers the same patch of water.
+        const float pixWorld = (cam.camAux.x > 0.5 ? 1.0 : length(worldPos - camPos))
+                             * 2.0 * cam.projInverse[1][1]
+                             / max(float(pc.height), 1.0);            // world m / pixel (FOV+res correct)
+        // The central-difference `tilt` measures wave slope at the ~2·eps (≈0.44 m)
+        // scale; once the pixel footprint outgrows that, the slope it samples is
+        // sub-pixel and must move from GEOMETRY (a razor-glinted N) into ROUGHNESS
+        // (a broadened glitter lobe), or the sun highlight aliases to speckle. The
+        // old fade completed at 12·eps (≈2.6 m/px) — but the demo views this ocean
+        // from 100 m–2 km up, where much of the water sits at 0.3–1.5 m/px: the
+        // chop stayed in N, razor-glinted, = the reported per-pixel noise. Complete
+        // the hand-off by ~5·eps so mid-distance water converts to sheen.
+        const float subPix   = smoothstep(0.5 * eps, 1.5 * eps, pixWorld);// 0 near → 1 sub-pixel
+        const vec3  tilt     = 0.5 * vec3(-grad.x, 0.0, -grad.y);
+        N = normalize(N + (1.0 - subPix) * tilt);
+        // σ_slope² ≈ 2·roughness²; move the faded-out tilt's variance into roughness
+        // so shadeWater's glint + reflection lobe broaden as the chop leaves N.
+        fineKernelSq = 2.0 * dot(tilt, tilt) * subPix;
+        // FOOTPRINT FLOOR. The fine-cascade slope alone is tiny for a calm sea
+        // (Phillips amplitude ∝ windSpeed⁴ → a 4 m/s coastal sea has a millimetric
+        // fine cascade), so banking only IT leaves effRough ≈ the base 0.03 and the
+        // razor sun lobe still glints the RASTERISED mesh normal — the coarse FFT
+        // vertex grid (here ~25 m verts over a 9.6 km tile) displaced by cascades
+        // 0/1, itself sub-pixel at 100 m–2 km and aliasing to the reported speckle.
+        // The fine-cascade fade can't touch that geometry normal, so floor the
+        // banked variance on the pixel FOOTPRINT: distant water always carries a
+        // broad-enough lobe to integrate the unresolved wave-normal distribution
+        // into a coherent glitter sheen. Near water (footprint ≤ ~0.25 m/px) floors
+        // at ~0 and keeps its crisp near-mirror sparkle. Independent of wave energy,
+        // so it holds for a glassy calm sea and a choppy one alike.
+        const float footRough = 0.45 * smoothstep(0.25, 4.0, pixWorld);
+        fineKernelSq = min(max(fineKernelSq, footRough * footRough), 0.25);
+    }
+
+    // ── OCEAN water surface only: analytic deep-water shade (Fresnel reflect ⊕
+    // absorption-tinted body + foam), replacing the opaque shade entirely. Gated
+    // on the per-mesh FOAM ATTRIBUTE (foamAddress) — i.e. an actual FFT-displaced
+    // DisplacedMesh — NOT just `thinWalled`. glTF glass is almost always
+    // thin-walled too (no KHR_volume → thinWalled), and routing it here painted
+    // it milky-teal ocean water instead of clear refraction. Thin-walled glass
+    // now falls through to the refractive glass branch below like closed glass.
+    if (pm.thinWalled != 0 && pm.transmission > 0.0 && geoms[id - 1u].foamAddress != 0ul) {
+        // Dispatch B skips water's minority-sample refinement (rare at an
+        // ocean's silhouette against sky/terrain, and shadeWater's own
+        // internal accumulation state is dispatch-A-only) — dispatch A's
+        // dominant-sample result stands alone for these pixels, same as
+        // pre-Phase-2 behaviour. Not a regression: msaa=1 never reaches here
+        // with shadeMode==1 at all.
+        if (pc.shadeMode == 1u) return;
+        vec3 wcol = shadeWater(worldPos, N, V, pm, int(id - 1u),
+                               shadowsOn, maxLod, pc.frame, seed, fineKernelSq, Nmacro);
+        // Coverage weighting as in the main path — water-dominant edge pixels
+        // reserve geoMinW for dispatch B and blend their own sky minority;
+        // the volumetric in-scatter is per-pixel and stays at full weight.
+        const float distW = length(worldPos - camPos);
+        wcol = applyParticleFog(
+                       applyMurk((clouds.heteroActive > 0.5)
+                                 ? applyHeteroSurfaceFog(wcol, uv, distW, camPos, worldPos)
+                                 : applySceneFog(wcol, camPos, worldPos), camPos, worldPos),
+                       camPos, (worldPos - camPos) / max(distW, 1e-6), distW) * domWeight;
+        if (skyEdgeW > 0.0) wcol += skyEdgeW * skyBackground(ndc, camPos);
+        // Volumetric in-scatter — the SAME three terms the opaque path adds
+        // below: froxel clustered point-light glow, per-pixel spot beams, and
+        // the per-pixel directional sun shafts / aerial glow. The sun term
+        // (volumetricDirScatter) was previously omitted here — a leftover from
+        // when the froxel LUT still carried directional in-scatter (the stale
+        // "sun shafts ... new on water" note). After directional moved to the
+        // per-pixel march (the grid blurred the shafts to nothing), water lost
+        // it entirely, so a scene whose ONLY light is the sun (spot_slam: no
+        // point/spot lights) showed effectively un-fogged water while the
+        // terrain got the full aerial glow.
+        wcol = compositeClouds(wcol, px, length(worldPos - camPos));// depth-aware cloud layer in front of the water
+        wcol += froxelInscatter(uv, max(-(viewH.z / viewH.w), 0.0))
+              + volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px)
+              + volumetricDirScatter(camPos, -V, length(worldPos - camPos), px);
+        imageStore(outImage, px, vec4(wcol * uintBitsToFloat(pc.preExpBits), 1.0));
+        imageStore(indirectImage, px, vec4(0.0));
+        imageStore(reflectImage, px, vec4(0.0));// water shades its own reflection inline
+        imageStore(shadowVisImage, px, vec4(0.0));// water shadows its own lighting inline
+        imageStore(directUImage, px, vec4(0.0));
+        return;
+    }
+
+    const float NdotV = max(dot(N, V), 1e-4);
+    vec3        F0    = mix(vec3(0.04) * pm.specularIntensity * pm.specularColor, albedo, metalness);
+    // Thin-film iridescence (KHR_materials_iridescence). Modulates F0 with the
+    // wavelength-dependent interference colour; lobe shape (GGX) is unchanged.
+    // Skipped when factor == 0 → non-iridescent surfaces pay only the branch.
+    if (pm.iridescence > 0.0) {
+        const vec3 irid = evalIridescence(1.0, pm.iridescenceIOR, NdotV,
+                                          pm.iridescenceThicknessNm, F0);
+        F0 = mix(F0, irid, pm.iridescence);
+    }
+    const vec3  shadowOrig = worldPos + N * SHADOW_EPS;
+
+    // Demodulated (binding 16, accumulated + denoised) vs INLINE diffuse indirect.
+    // demodIndirect (opaque, non-sheen) → the GI is demodulated, temporally
+    // accumulated + à-trous denoised. INLINE (transparent/glass/sheen) → the GI is
+    // used directly. Computed BEFORE gatherEnv so the gather picks the right path:
+    // stochastic real GI ONLY for the demod path (it gets accumulated/denoised);
+    // the INLINE path uses the DETERMINISTIC GI (1-spp would just be noisy there —
+    // that was the transparent-quad wobble).
+    const bool denoiseOn = (pc.flags & 4u) != 0u;
+    // Dispatch B forces the INLINE path (demodIndirect=false) — same
+    // precedent as glass/sheen: a self-contained pixel color with no
+    // dependency on the demod GI accumulator's cross-frame state, which
+    // dispatch B never writes (see the GI/SVGF gate near the end of main()).
+    const bool demodIndirect = pc.shadeMode != 1u && denoiseOn && (pm.transmission <= 0.0) &&
+                               (dot(pm.sheenColor, pm.sheenColor) <= 0.0);
+
+    // ADAPTIVE GI SAMPLE COUNT — probe the reprojected prev history length (binding
+    // 17 .a). Fresh / just-disoccluded pixels (low/zero history) carry all the
+    // 1-spp noise, so spend MORE rays there to converge them with SAMPLES (stays
+    // crisp) rather than a wide blur (which reads as a moving "cloud"). Converged
+    // pixels coast on 2 rays + temporal history. Cost only spikes in disoccluded
+    // regions during motion — exactly where it's needed and tolerable.
+    int giSpp = 3;
+    bool giSkip = false;// checkerboard carry (set in the adaptive block below)
+    int nSRays = 2;// shadow-ratio rays: 2 while fresh / in-penumbra, 1 converged
+    if (demodIndirect) {
+        const vec2 mv   = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).rg;
+        const vec2 pNdc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + mv;
+        const vec2 pUv  = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
+        float ph = 0.0;// prev histLen at the reprojected pixel (0 = off-screen / disoccluded ⇒ fresh)
+        if (all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)))) {
+            const vec3  pn = texture(gbufNormalPrevTex, paneToPhys(gbufNormalPrevTex, pUv)).xyz * 2.0 - 1.0;
+            const float surfD = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).b;    // this surface's prev NDC depth
+            const float bufD  = texture(gbufDepthPrevTex, paneToPhys(gbufDepthPrevTex, pUv)).x;// prev depth buffer at the reproject
+            const vec4  svh = cam.projInverse * vec4(pNdc, surfD, 1.0);
+            const vec4  bvh = cam.projInverse * vec4(pNdc, bufD, 1.0);
+            const float svz = svh.z / svh.w;
+            // same surface = loose normal match AND its own prev depth matches the
+            // buffer (depth is primary; loose normal avoids treating a deforming
+            // skinned surface as fresh → keeps its history → no dust).
+            if (dot(N, normalize(pn)) > 0.7 &&
+                abs(svz - bvh.z / bvh.w) <= 0.1 * max(abs(svz), 1e-3)) {
+                ph = texture(giPrevTex, paneToPhys(giPrevTex, pUv)).a;
+                // Shadow-channel adaptive rays: a CONVERGED pixel outside any
+                // penumbra (long history, near-zero temporal variance of the
+                // visibility ratio) coasts on 1 ray/frame; fresh/disoccluded
+                // and penumbra pixels (where E[R²]−R² stays > 0) keep 2 so
+                // they converge with samples instead of blur.
+                const vec4 sPrev = texture(shadowVisPrevTex, paneToPhys(shadowVisPrevTex, pUv));
+                if (sPrev.z >= 8.0 && (sPrev.y - sPrev.x * sPrev.x) < 0.005) nSRays = 1;
+            }
+        }
+        // EFFECTIVE history = min(prev history, the motion-scaled cap this pixel will
+        // get in the accumulation). So a fast camera PAN (no disocclusion, but a
+        // short effective history) ALSO gets more rays — killing the pan "cloud",
+        // not just disocclusions. Disoccl (ph=0) → 8, pan → 4, static → 2.
+        // WORLD-MOTION term: a body panel that is SCREEN-static but WORLD-moving
+        // (car paint under a chase/POV cam) has mv≈0 yet its GI integrand changes
+        // every frame as the surrounding trees/road/grass sweep past. A screen-only
+        // cap pins history at 48 and the 1/48 EMA chases a non-stationary signal
+        // forever (colour boil + lag), AND keeps the pixel in the 1-ray static tier.
+        // Fold in camera world motion (the chase-cam proxy reflReproject already
+        // uses) so these surfaces get a shorter responsive history and drop into the
+        // 2-ray tier — more samples on a tracking mean = less boil. Collapses to
+        // length(mv) when the camera is still (byte-identical static-settle).
+        const float giCamNdc = pc.camRot * 1.7 + 1.7 * pc.camDelta / max(length(worldPos - camPos), 0.25);
+        const float capF  = mix(48.0, 6.0, smoothstep(0.002, 0.03, max(length(mv), giCamNdc)));
+        const float effPh = min(ph, capF);
+        // Tiers 8/3/1 (was 8/4/2): converged static pixels ride 1 ray/frame —
+        // the TAA now actually converges statics, so the long-history tier can
+        // lean on accumulation instead of fresh rays.
+        giSpp = effPh < 4.0 ? 6 : (effPh < 16.0 ? 2 : 1);// 6/2/1 (was 8/3/1): flattens
+        // the motion cost spike — a fast pan puts the WHOLE frame in the mid
+        // tier, so its ray count dominates frame time exactly when input
+        // responsiveness matters most. With the checkerboard halving, the pan
+        // tier now costs ~the static tier; the SVGF variance blur carries the
+        // slightly higher fresh-pixel noise.
+        // CHECKERBOARD: with ≥8 frames of valid history, alternating pixels
+        // skip the ENTIRE gather + ReSTIR this frame and carry their
+        // accumulated history through — halves the gather cost at EVERY tier
+        // (including the expensive motion tiers, which the per-hit cuts
+        // didn't touch). Fresh/disoccluded pixels (effPh < 8) always trace,
+        // so convergence quality is unchanged where it matters.
+        giSkip = ((((px.x ^ px.y) ^ int(pc.frame)) & 1) == 1) && effPh >= 4.0;
+    }
+
+    // Diffuse indirect: visibility-gated env irradiance (RT, flags bit 1).
+    const bool aoOn = (pc.flags & 2u) != 0u;
+    if (!aoOn) giSkip = false;// checkerboard only pays off on the RT gather
+    vec3 diffInd;
+    if (pc.shadeMode == 1u) {
+        // Dispatch B: cheap deterministic fill only — no RT gather, no
+        // ReSTIR (both own dispatch-A-exclusive temporal state: the GI
+        // accumulator and the reservoir ping-pong). A minority sample's
+        // indirect term is a small correction at an edge pixel; the same
+        // cost/accuracy call as the inline reflection fold-in above. This is
+        // the GI-recombine-albedo approximation documented at the SVGF gate
+        // near the end of main().
+        // PROBE-GATED like the glass-retrace hit fill (same shape: a point
+        // shaded without rays). The raw env fill ignores occlusion, so in an
+        // ENCLOSED interior every silhouette's minority sliver carried
+        // full-sky irradiance on top of dispatch A's probe-dark surround —
+        // invisible outdoors (gated ≈ ungated), but auto-exposure gain on a
+        // dark interior amplified it into a lit white rim on every edge
+        // (Sponza + MSAA4 + auto-exposure). Saturated-confidence blend, same
+        // rationale as the retrace fill: a partially-valid interior
+        // neighbourhood is trusted outright; a starved one (conf → 0) means
+        // "unmeasured", not "dark" — fall back to the env fill, never black.
+        diffInd = sampleEnvLod(N, maxLod) + lights.ambient;
+        if (probeGrid.enabled > 0.5) {
+            float bConf;
+            const vec3 bFill = probeIrradianceConf(worldPos, N, bConf) * (1.0 / PI);
+            diffInd = mix(diffInd, bFill, smoothstep(0.0, 0.25, bConf));
+        }
+    } else if (giSkip) {
+        diffInd = vec3(0.0);// unused — the accumulation below carries history
+        // ReSTIR reservoirs PING-PONG (read prev fif, write curr): a skipped
+        // pixel must still pass its reservoir through, or next frame's read
+        // sees stale data in a checkerboard pattern.
+        if ((pc.flags & 8u) != 0u) {
+            imageStore(reservoirPosWrite, px, imageLoad(reservoirPosRead, px));
+            imageStore(reservoirWWrite,  px, imageLoad(reservoirWRead,  px));
+        }
+    } else if (aoOn) {
+        float openness;
+        gGiMovFrac = 0.0;// set by gatherEnv: fraction of GI rays hitting moving geometry
+        diffInd = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, demodIndirect, giSpp, openness) + lights.ambient * openness;
+    } else {
+        diffInd = sampleEnvLod(N, maxLod) + lights.ambient;
+    }
+    // ReSTIR DI emissive area lighting → DEMOD irradiance folded into the diffuse-
+    // indirect channel so it rides the SVGF temporal + à-trous denoise (the reservoir
+    // converges light selection; this denoises the 1-sample radiance). Added before
+    // the demod split so it flows through BOTH the denoise accum path AND the inline
+    // (denoise-off) path. restirEmissiveDI also persists this pixel's reservoir.
+    if (pc.shadeMode != 1u && !giSkip && (pc.flags & 8u) != 0u) {
+        const float rNdotV = max(dot(N, V), 1e-4);
+        diffInd += restirEmissiveDI(worldPos, N, rNdotV, F0, shadowsOn);// F0 already iridescence-modulated
+    }
+    const vec3 diffIndShade = demodIndirect ? vec3(0.0) : diffInd;
+
+    // ── Denoised direct-shadow channel (demod path only) ─────────────────────
+    // Split the analytic direct into the exact unshadowed sum U (directUImage)
+    // and a 1-2 ray visibility-ratio estimate (accumulated below, filtered +
+    // recombined as U × R̃ by deferred_gi_filter). The inline path (denoise off,
+    // glass/sheen, dispatch B) keeps the old fully-inline shadowed loops.
+    const bool shadowChannel = demodIndirect && shadowsOn;
+    vec3  directU = vec3(0.0);
+    float visEst  = 1.0;
+    bool  sOccMoved = false;// this pixel's shadow (or a subgroup neighbour's) hit a MOVING occluder
+    bool  sTopUp    = false;// visEst carries the 16-ray sunShadowVis top-up (cap-1 eligible)
+    if (shadowChannel) {
+        // Cluster slice by view-space -z (matches cluster_build's AABB axis).
+        const float clusterDist = max(-(viewH.z / viewH.w), 0.0);
+        gShadowMovingOccluder = false;
+        directU = analyticDirectSplit(worldPos, N, V, albedo, roughness, metalness, F0,
+                                      pm.sheenColor, pm.sheenRoughness, px, clusterDist,
+                                      nSRays, visEst);
+        sOccMoved = gShadowMovingOccluder;
+        sTopUp    = gShadowSunTopUp;
+        gSkipAnalyticDirect = true;// shadeDiffuseDirect: skip dir/point/spot loops
+    }
+
+    // Diffuse + direct (shadowed) + emissive-NEE + diffuse indirect + emissive.
+    vec3 lit = shadeDiffuseDirect(worldPos, N, V, albedo, roughness, metalness,
+                                  emissive, shadowsOn, diffIndShade,
+                                  pm.sheenColor, pm.sheenRoughness,
+                                  pm.specularIntensity, pm.specularColor,
+                                  pm.iridescence, pm.iridescenceIOR, pm.iridescenceThicknessNm, seed,
+                                  /*addEmissive=*/((pc.flags & 8u) == 0u),// ReSTIR on → emissive via main()/diffInd; off → coherent emissiveNEE here
+                                  /*cheapHit=*/false);// primary: exhaustive lights + full NEE
+    gSkipAnalyticDirect = false;// reflection/GI/glass hits below keep inline lights
+
+    // ── Foliage translucency (MaterialWithTranslucency) — RASTER PRIMARY ONLY ──
+    // Thin leaf cards transmit the light that reaches their BACK face, so a
+    // backlit canopy GLOWS instead of going flat-dark. Per directional (sun)
+    // light: a wrapped back-diffuse (peaks with the sun straight behind the leaf)
+    // plus a view-dependent forward-scatter halo (looking toward the sun THROUGH
+    // the leaf), gated by the SUN'S OWN shadow — plus a small env fill at -N for
+    // shaded interiors. Added straight into `lit` (a smooth, low-frequency term
+    // that needs no shadow-channel denoise). The demod shadow split
+    // (analyticDirectSplit) can't supply this visibility: it only sums the
+    // FRONT-lit hemisphere (dot(N,L) > 0) and returns visEst = 1 for exactly the
+    // backlit pixels translucency targets, so a shadowed backlit leaf would glow
+    // wrongly. One cheap sun shadow ray per translucent pixel is therefore the
+    // minimal correct cost — and it is paid ONLY where translucency > 0, so every
+    // existing opaque material is byte-for-byte unchanged (no new rays, no term).
+    // Ray-hit shading (reflections / GI / lidar / probes) never reaches main(), so
+    // those paths are untouched, matching the detail-layer precedent.
+    if (pm.translucency > 0.0) {
+        const vec3  tCol  = albedo * pm.translucencyColor;
+        vec3        tSum  = vec3(0.0);
+        for (uint i = 0u; i < lights.dirCount; ++i) {
+            const vec3  L    = normalize(lights.dirLights[i].direction);
+            const float ndl  = dot(N, L);
+            const float back = max(-ndl, 0.0);// sun behind the card
+            const float fwd  = pow(max(dot(V, -L), 0.0), kTransScatterPower) * kTransScatterWeight;
+            const float w    = back + fwd;
+            if (w <= 0.0) continue;
+            // Offset toward the LIGHT's side of the card, per light: the back-lit
+            // term fires exactly when L is on the -N side, and a +N (camera-side)
+            // origin re-crosses the card's own plane at t ≈ EPS/|ndl| — where the
+            // cutout alpha test re-samples this fragment's own solid texel and
+            // commits: vis was identically 0 and the whole wrapped back-light
+            // vanished whenever shadows were on (the backlit canopy read flat).
+            const vec3 tOrig = worldPos + ((ndl < 0.0) ? -N : N) * SHADOW_EPS;
+            const float vis = shadowsOn
+                    ? sunShadowVis(tOrig, L, pc.sunTanHalfAngle, /*cheapHit=*/true)
+                    : 1.0;
+            tSum += lights.dirLights[i].color * (w * vis);
+        }
+        // Back-face env fill: sky/env irradiance reaching the shaded underside so
+        // canopy interiors are dim, not dead black. Cheap env LOD tap (no rays).
+        const vec3 backEnv = sampleEnvLod(-N, maxLod);
+        lit += pm.translucency * tCol * (tSum + backEnv * kTransAmbient);
+    }
+
+    // Sharp surfaces trace the exact mirror ray; glossy surfaces GGX-importance-
+    // sample the reflection lobe so the reflection BLURS with roughness and
+    // shows real SCENE geometry — not just the prefiltered environment (the old
+    // behaviour, which cut RT reflections off at roughness 0.18 and fell back to
+    // env-only). Missed rays read the env at the roughness mip (pre-blurred). A
+    // few frame-jittered GGX samples + TAA converge it cleanly on static
+    // surfaces; the firefly clamp bounds glossy variance on moving ones. Above
+    // ~0.7 roughness the lobe is so wide that prefiltered-env IBL is both
+    // cheaper and indistinguishable, so RT bows out there.
+    // Specular env strategy: glossy/mirror surfaces (roughness ≲ 0.7) ray-trace
+    // real scene geometry (env at the roughness mip on miss); ROUGH surfaces take
+    // split-sum env-IBL specular off the PMREM below. The IBL fallback was once
+    // dropped because envTex was a plain mip chain (the HDRI sun mirrored as a
+    // blocky glare) — but EnvPrefilter has since GGX-prefiltered it (Karis
+    // PMREM), so the fallback is restored: without it every matte material had a
+    // Fresnel energy hole (rough metals read soot-black under bright HDRIs).
+    const vec3  R         = reflect(-V, N);
+    const vec2  ab        = envBRDFApprox(NdotV, roughness);
+    const float reflBlend = 1.0 - smoothstep(0.55, 0.70, roughness);
+    // ONE SHARP MIRROR RAY → the reflection buffer (binding 25). A single ray has
+    // NO discrete-GGX ghost copies (the doubled/tripled-object artifact the
+    // 8-sample spiral produced) and no per-sample noise. The reflection filter
+    // (deferred_refl_filter.comp) then BLURS this by roughness — the spatial blur
+    // IS the gloss — and recombines. Pre-weighted by the spec BRDF × reflBlend so
+    // the filter just blurs + adds. Glass/sheen reflect inline below (excluded).
+    const bool opaqueRefl = (pm.transmission <= 0.0) && (dot(pm.sheenColor, pm.sheenColor) <= 0.0);
+    // Rough remainder (1 − reflBlend): split-sum env specular off the GGX PMREM.
+    // No visibility term (the standard split-sum caveat) — the traced band keeps
+    // true occlusion; this only fills the ≥0.7-roughness matte range where the
+    // lobe is wide and prefiltered env is indistinguishable from tracing.
+    // PROBE-GI mode: apply SPECULAR OCCLUSION. The un-occluded PMREM lookup is
+    // exactly what made enclosed interiors read "lit with no light" — every
+    // rough wall received full-sky specular ambient regardless of visibility.
+    // The probe field measures the irradiance that ACTUALLY arrives, so its
+    // ratio to the unoccluded env irradiance is a smooth, converged local
+    // sky-visibility proxy: 1 outdoors (term unchanged), → 0 deep inside an
+    // enclosure (the leak dies; the probe-fed gather carries the real light).
+    // SHEEN surfaces take this env term too: they're excluded from the traced
+    // reflection channel (opaqueRefl, denoiser-channel ownership) but their
+    // inline shade (shadeDiffuseDirect + IBL sheen lobe) carries NO base-lobe
+    // specular env — a METALLIC sheen fabric (glTF sofa "Fringe": default
+    // metallicFactor 1, rough 0.8) has zero diffuse, so it rendered near-black.
+    // This add is inline (no channel conflict); transmission keeps its own path.
+    // Sheen has no traced band at ANY roughness, so it takes the env term at
+    // FULL weight (env-mip gloss stands in for the missing mirror ray);
+    // opaqueRefl keeps the usual rough remainder (1 − reflBlend).
+    const float envSpecW = opaqueRefl ? (1.0 - reflBlend) : 1.0;
+    if (pm.transmission <= 0.0 && envSpecW > 0.0) {
+        float envSpecVis = 1.0;
+        if (probeGrid.enabled > 0.5) {
+            // Pure measured ratio — NO validity-confidence floor. A conf-mix
+            // toward 1.0 here re-admitted (1−conf) of the full-sky specular on
+            // every interior wall (probes near walls are only partially valid)
+            // and measurably re-brightened the Sponza corridors the probe
+            // model had fixed. The starved-neighbourhood concern belongs to
+            // the glass retrace fill (probeHitFill), not this term.
+            const vec3  LUMW   = vec3(0.2126, 0.7152, 0.0722);
+            float conf;
+            const float actE   = dot(probeIrradianceConf(worldPos, N, conf), LUMW) * (1.0 / PI);
+            const float unoccE = dot(sampleEnvLod(N, maxLod), LUMW);
+            envSpecVis = clamp(actE / max(unoccE, 1e-5), 0.0, 1.0);
+            // …EXCEPT when the neighbourhood measured NOTHING (conf → 0: every
+            // trilinear probe invalid — inside geometry — or fully crushed).
+            // probeIrradiance then returns black meaning "unmeasured", and the
+            // raw ratio read that as "fully occluded": on ≥0.7-rough METALS
+            // (diffuse ≡ 0, this env split-sum is their ENTIRE shade) it
+            // painted probe-cell-sized black squares on models thinner than a
+            // grid cell (glTF AnisotropyStrengthTest / SheenWoodLeatherSofa /
+            // RecursiveSkeletons). The steep gate keeps the interior ratio
+            // untouched — a wall with ANY valid, visible probe has conf well
+            // above 0.1 — and only bails to unoccluded env where nothing
+            // measured at all (there the ratio is noise, not signal).
+            envSpecVis = mix(1.0, envSpecVis, smoothstep(0.0, 0.1, conf));
+        }
+        lit += sampleEnvLod(R, roughness * maxLod) * (F0 * ab.x + ab.y) * envSpecW * envSpecVis;
+    }
+    // ── Emitter-specular ESTIMATOR SPLIT by lobe width ──────────────────────
+    // specNEET: 0 = near-mirror (the BRDF ray owns emitter spec — tight lobe hits
+    // the emitter every frame, no variance, crisp lamp image), 1 = rough (the
+    // coherent emissiveSpecNEE owns it — deterministic, settles instantly; the
+    // ray's emitter self-emission is scaled out via gReflEmitterScale so nothing
+    // double-counts). The NEE add is faded by reflBlend so emitter spec follows
+    // the same ≥0.7-roughness specular cutoff as the rest of the spec model.
+    const float specNEET = smoothstep(0.10, 0.25, roughness);
+    if (opaqueRefl && reflBlend > 0.0 && specNEET > 0.0 && pc.emissiveCount > 0u) {
+        const float kS = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+        lit += (specNEET * reflBlend)
+             * emissiveSpecNEE(worldPos, N, V, NdotV, F0, roughness, kS, shadowsOn);
+    }
+    vec3 reflOut = vec3(0.0);
+    float reflHitT = -1.0;// reflected-content distance (see the trace below)
+    // CHECKERBOARD reflections (OPPOSITE parity to giSkip → an eligible pixel
+    // traces exactly ONE indirect channel per frame): with ≥4 frames of usable
+    // history, skip the whole traceRadiance chain and HOLD the accumulation.
+    // reflReproject's policy vetoes holding under CAMERA motion (near-mirror
+    // hard-resets, histCap < 1.5) — but that is NOT the only way a held reflection
+    // goes stale. At a STATIC camera reflecting MOVING content (an orbiting lamp /
+    // gem, a car driving past a parked mirror) the reproject succeeds, so the held
+    // half shows the moving object at its PREVIOUS position while the traced half
+    // shows it CURRENT — interleaved every frame into a DOUBLED, offset reflection
+    // (plus a visible checkerboard) that the sharp near-mirror blur cannot hide.
+    // So only checkerboard the STOCHASTIC/rough reflections (roughness ≥
+    // kReflStochastic 0.25): their wide roughness blur absorbs any held/traced
+    // alternation, and their GGX trace is where the 2× perf saving actually matters.
+    // Near-mirror DETERMINISTIC reflections trace fresh every frame — a single
+    // mirror ray, cheap, and stale-hold-free (the cause of the pbr_showcase double).
+    bool reflSkip = false;
+    if (demodIndirect && reflBlend > 0.0 && opaqueRefl && roughness >= 0.25 &&
+        ((((px.x ^ px.y) ^ int(pc.frame)) & 1) == 0)) {
+        vec2 rUv; float rCap;
+        if (reflReproject(uv, N, roughness, length(worldPos - camPos), rUv, rCap))
+            reflSkip = rCap >= 4.0 && texture(reflAuxPrevTex, paneToPhys(reflAuxPrevTex, rUv)).x >= 4.0;
+    }
+    if (reflBlend > 0.0 && opaqueRefl && !reflSkip) {
+        // Emitter self-emission scale for the ray (the other half of the split):
+        // (1−specNEET) for EVERYONE — near-mirror keeps the sharp BRDF-sampled
+        // lamp image, rough hands the energy to the NEE above. Safe for
+        // dielectrics because the scale is nonzero ONLY in the deterministic
+        // band (roughness < kReflStochastic — specNEET hits 1 at 0.25): the
+        // mirror ray is traced fresh every frame with zero variance, so the
+        // stochastic full-radiance speckles the old dielectric→0 rule guarded
+        // against cannot occur — the stochastic GGX band has scale 0 either
+        // way. The old hard 0 left roughness ≤ 0.10 dielectrics (below the
+        // specNEET ramp) with NO owner for emitter specular at all: a
+        // lacquered floor reflected a lamp as a dark, unlit object while the
+        // same floor at roughness 0.3 showed it — the Fresnel composite
+        // already keeps the dielectric's reflected lamp appropriately faint.
+        gReflEmitterScale = 1.0 - specNEET;
+        // GGX-importance-sample the reflection LOBE — but ONLY where it's WIDE
+        // (roughness ≥ kReflStochastic). A NARROW lobe at 1 spp is a spike train
+        // on any high-contrast reflected content (a lamp, a tight highlight: hit
+        // probability p ≪ 1 per frame → clamped binomial boiling that the narrow
+        // low-rough blur correctly refuses to smooth — the "speckles persist
+        // below 0.25" band). There the DETERMINISTIC mirror ray is the better
+        // estimator: a stable image every frame, with the reflection denoise's
+        // roughness-scaled blur AS the gloss (the original design). Where the
+        // lobe is wide, the stochastic sample is the better estimator: correct
+        // parallax + roughening, low-contrast per sample, wide blur, the SVGF
+        // temporal converges it — and emissiveSpecNEE owns emitter spec (the
+        // threshold aligns with specNEET's upper edge so the handoff is exact).
+        const float kReflStochastic = 0.25;
+        uint reflSeed = pcgHash(uint(px.x) + pcgHash(uint(px.y) + pcgHash(pc.frame * 2654435761u + 7u)));
+        // MOTION GUARD — a single per-frame GGX-importance sample only resolves once
+        // the temporal accumulation has averaged many frames of it. A glossy panel
+        // that is SCREEN-stationary but WORLD-moving (car paint under a chase / POV
+        // cam: the reflected trees, road and sky sweep past every frame) gets a SHORT
+        // reflection history — reflReproject folds camera world-motion into its cap
+        // and the content-antilag collapses it further — so the 1-spp lobe sample
+        // never converges and boils as F0-tinted speckle (worst on saturated coloured
+        // metals like rally-red paint). There the DETERMINISTIC mirror ray is the
+        // better estimator: identical every frame (zero sample noise), with the
+        // reflection denoise's roughness-scaled blur supplying the gloss and the
+        // content-antilag tracking the moving reflection. The stochastic lobe stays
+        // for SETTLED surfaces, whose long history converges it (parallax-correct
+        // roughening). The motion proxy mirrors reflReproject's mvLen (screen-space
+        // surface motion OR camera world motion) so the estimator choice matches the
+        // history the pixel will actually receive.
+        const vec2  reflMv     = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).rg;
+        const float reflCamNdc = pc.camRot * 1.7 + 1.7 * pc.camDelta / max(length(worldPos - camPos), 0.25);
+        const bool  reflMoving = max(length(reflMv), reflCamNdc) > 0.004;
+        // Ray-miss env LOD: the roughness-blurred PMREM mip — FLOORED while
+        // MOVING. On the moving path the deterministic mirror ray reads the env
+        // near-sharp while the reflection history is collapsed (1-6 frames), so
+        // an HDRI sun texel arrives at full radiance with nothing to average
+        // it; the clamp below only caps the spike, leaving clamp-bright "dust"
+        // sweeping across curved surfaces. Two extra mips spread the sun over
+        // ~16× the texels (each ~16× dimmer) exactly while the history can't
+        // converge; a settled view re-sharpens. Scaled in by roughness so true
+        // mirrors (roughness < 0.02) keep their exact sharp reflection.
+        const float missLod = max(roughness * maxLod,
+                                  reflMoving ? min(2.0, maxLod) * smoothstep(0.02, 0.10, roughness)
+                                             : 0.0);
+        vec3 Rd = (roughness < kReflStochastic || reflMoving)
+                      ? R : sampleGGXReflection(V, N, roughness, reflSeed);
+        // BELOW-HORIZON guard: plain NDF sampling (no VNDF) reflects under the
+        // surface for a good fraction of samples at grazing view / high roughness.
+        // Those rays start at shadowOrig pointing INTO the surface → graze the
+        // backside / floor at epsilon distance → dark+erratic samples = grain that
+        // no amount of denoising should have to absorb. Mirror fallback matches
+        // the bounce-continuation guard inside traceRadiance.
+        if (dot(Rd, N) <= 0.0) Rd = R;
+        vec3 r = traceRadiance(shadowOrig, Rd, shadowsOn, maxLod, missLod, reflSeed,
+                               /*cheapHits=*/true,// reflection channel: blur+temporal absorb
+                               /*probeHitFill=*/true);
+        // SPLATS IN THE MIRROR, glossy path — the water/glass legs' block
+        // (deferred_shade_50_water_glass.glsl:113), verbatim on this path's own
+        // ray and hit: the traced leg cannot see a SplatCloud (composited AFTER
+        // this shade), so the baked volume stands in for it. BEFORE the
+        // roughness clamp on purpose — the splat is reflected CONTENT, and a
+        // bright cloud takes the same anti-speckle ceiling as a bright sun
+        // texel. gTraceHitT is read before reflHitT latches it, and svLeg
+        // leaves it untouched.
+        if ((pc.flags & 4096u) != 0u) {
+            vec3 svEmis;
+            const float svT = svLeg(shadowOrig, Rd, gTraceHitT > 0.0 ? gTraceHitT : 1e30, svEmis);
+            r = r * svT + svEmis;
+        }
+        // Reflected-content distance for the denoiser's gloss-blur footprint:
+        // env miss → 0 (already lobe-filtered via missLod — no extra blur),
+        // geometry hit → its distance.
+        reflHitT = max(gTraceHitT, 0.0);
+        gReflEmitterScale = 1.0;
+        // Roughness-aware reflection clamp (moving/deterministic path only). A glossy
+        // surface integrates a bright point source — the sun, a sky-gap between trees —
+        // over its WHOLE BRDF lobe, so the peak is spread thin and dim. The stochastic
+        // lobe (settled surfaces) does that for free, but the DETERMINISTIC mirror ray
+        // used while MOVING reflects the source at FULL radiance and the gloss blur only
+        // smears it into a bright BLOB (the "env-map-probe" speckles on the moving car /
+        // floor). Cap the reflected radiance toward a glossy ceiling as roughness rises:
+        // near-mirror keeps the loose clamp (a sharp bright sun reflection IS correct);
+        // glossy paint dims bright sources to a lobe-appropriate peak. min() never loosens
+        // a tighter user fireflyClamp and stays 1e30-sentinel-safe; applied only on the
+        // deterministic path so the settled stochastic lobe integral stays unbiased.
+        const float reflClamp = reflMoving
+                ? min(pc.fireflyClamp, mix(30.0, 4.0, smoothstep(0.05, 0.30, roughness)))
+                : pc.fireflyClamp;
+        const float rl = max(max(r.r, r.g), r.b);
+        if (rl > reflClamp) r *= reflClamp / rl;
+        reflOut = r * (F0 * ab.x + ab.y) * reflBlend;
+    }
+    if (pc.shadeMode == 1u) {
+        // Dispatch B: fold the reflection term in INLINE (no reflSVGFTemporal —
+        // that's a cross-frame temporal accumulator keyed to the dominant-
+        // sample reflectImage channel; dispatch A owns it exclusively). The
+        // minority sample's reflection is a small correction at an edge
+        // pixel, not a full BRDF-lobe integral — inline-and-move-on is the
+        // right cost/accuracy tradeoff here.
+        lit += reflOut;
+    } else if (demodIndirect) {
+        // Denoise ON: temporally AA the sharp reflection, then hand it to the
+        // roughness-blur denoise pass. (Matte pixels run this too with cur=0 —
+        // keeping their history alive through per-frame roughness-map
+        // classification flips; the moving-mesh ID guard inside reflReproject
+        // is what keeps a moving glossy object's reflection from leaking into
+        // the matte ground it just vacated. A hard zero-store here instead
+        // cold-restarted every straddling pixel = "the car blinks".)
+        imageStore(reflectImage, px, reflSVGFTemporal(vec4(reflOut, roughness), px, uv, N, length(worldPos - camPos), reflSkip, reflHitT, gTraceHitMoved));
+    } else {
+        // Denoise OFF (or glass/sheen, where reflOut==0): inline sharp reflection.
+        lit += reflOut;
+        imageStore(reflectImage, px, vec4(0.0));
+    }
+
+    // ── Refractive glass (any transmissive surface that ISN'T the ocean) ──────
+    // Ocean water returned far above. Everything else with transmission — closed
+    // glass (spheres/bottles) AND thin-walled glass (glTF glass with no
+    // KHR_volume, the common case) — BLENDS a Fresnel reflect+refract glass look
+    // over the opaque shade, weighted by `transmission` (matches the path
+    // tracer's reflect/refract-vs-opaque split in expectation: transmission=1 →
+    // pure glass; 0.8 → 80% glass + 20% the opaque PBR above). shadeGlass does
+    // the 2-interface refraction either way (a thin shell just has a short
+    // in-glass path → minimal tint → near-clear).
+    // Dispatch B skips the additive/alpha-blend/glass refinement entirely —
+    // all three re-trace a full radiance path (traceRadiance/shadeGlass) and
+    // the glass branch also owns a reflectImage temporal slot exclusively
+    // via reflSVGFTemporal (dispatch-A state). A minority sample landing on
+    // transmissive geometry at an edge keeps dispatch A's dominant-sample
+    // result — same as the pre-Phase-2 (msaa=1) behaviour for that pixel,
+    // not a regression, just an untreated edge on (rare) glass/blend props.
+    if (pc.shadeMode != 1u) {
+        if (pm.transmission > 1.0) {
+            // ADDITIVE blend (muzzle flashes, sparks, energy glows). The surface
+            // GLOWS over the scene behind: dst = behind + src*strength. The opaque
+            // G-buffer already overwrote the scene behind this pixel, so re-trace a
+            // straight (-V) ray to recover it. Host encodes strength = transmission-1
+            // (transmission>1 is the additive marker).
+            const float strength = clamp(pm.transmission - 1.0, 0.0, 1.0);
+            const vec3  behind   = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed,
+                                                 /*cheapHits=*/false,// straight into lit, unblurred
+                                                 /*probeHitFill=*/false);// content behind a blend surface
+            lit = behind + lit * strength;
+        } else if (pm.transmission > 0.0) {
+            if (pm.ior < 1.05) {
+                // CLEAN ALPHA blend (transparent, opacity<1; host sets ior=1,
+                // transmission=1-opacity). Straight-through to the re-traced scene
+                // behind, blended by opacity — flat alpha, NO glass Fresnel/refraction
+                // darkening. (One transparent layer over opaque: the behind ray sees
+                // opaque geometry shaded as PBR; overlapping transparent isn't sorted.)
+                const float opacity = 1.0 - clamp(pm.transmission, 0.0, 1.0);
+                const vec3  behind  = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed,
+                                                    /*cheapHits=*/false,// straight into lit, unblurred
+                                                    /*probeHitFill=*/false);// content behind a blend surface
+                lit = mix(behind, lit, opacity);
+            } else {
+                // REAL refractive glass (ior>1). ONE sharp Fresnel reflect+refract
+                // sample (no ghost copies); the reflection denoise blurs it by the glass
+                // roughness (the frost) + recombines — same channel as opaque reflections.
+                const float gt       = clamp(pm.transmission, 0.0, 1.0);
+                const vec3  glassCol = shadeGlass(worldPos, N, V, pm, albedo, shadowsOn, maxLod, seed);
+                if (denoiseOn) {
+                    // Demodulate the mix(): hand glassCol·t to the reflection denoise
+                    // (which ADDS blur(reflect)) and scale the opaque base by (1-t), so
+                    // the recombine reconstructs mix(lit, blur(glass), t) — frosted.
+                    // Same clamped roughness as shadeGlass (see kGlassMaxRough) so the
+                    // denoise blur matches the lobe that produced the sample.
+                    const float gr = glassRough(pm.roughness);
+                    // .a NEGATIVE = glass marker: the denoise gives it a minimum AA blur
+                    // + an ID-based (not normal) edge stop so the blur smooths ACROSS the
+                    // curved surface — refraction is far more normal-sensitive than
+                    // reflection, so 1 ray aliases into blocky speckles without it.
+                    imageStore(reflectImage, px, reflSVGFTemporal(vec4(glassCol * gt, -gr), px, uv, N, length(worldPos - camPos), /*hold=*/false, /*hitT=*/-1.0, /*hitMoved=*/gTraceHitMoved));// glass: full rate (refraction aliases at half)
+                    lit = lit * (1.0 - gt);
+                } else {
+                    lit = mix(lit, glassCol, gt);// denoise off → inline (sharp, no frost)
+                }
+            }
+        }
+    }
+
+    // Volumetric spot/directional scatter is a per-PIXEL view-ray integral
+    // (independent of which G-buffer sample "won" that pixel) — dispatch A
+    // already added it once; dispatch B must NOT add it again (would double-
+    // count the beam/aerial contribution at every complex pixel). Fog
+    // extinction, in contrast, multiplies the surface radiance itself
+    // (different per sample's worldPos/albedo), so both dispatches apply it
+    // to their own `lit`.
+    // Surface extinction. HETEROGENEOUS air medium (scene.fog / setHeightFog):
+    // from the froxel LUT (per-slice height-fog σ) + closed-form beyond 512 m; the
+    // in-scatter is added below via froxelInscatter. The vestigial homogeneous
+    // branch runs only when no medium is present (a no-op then). The underwater
+    // murk (below-surface leg) composes on top; the beam march carries its own
+    // extinction either way.
+    {
+        const float distL = length(worldPos - camPos);
+        lit = applyParticleFog(
+                      applyMurk((clouds.heteroActive > 0.5)
+                                ? applyHeteroSurfaceFog(lit, uv, distL, camPos, worldPos)
+                                : applySceneFog(lit, camPos, worldPos), camPos, worldPos),
+                      camPos, (worldPos - camPos) / max(distL, 1e-6), distL);
+    }
+    if (pc.shadeMode == 1u) {
+        // Dispatch B: weighted accumulate into dispatch A's already-written
+        // pixel (which stored domWeight*lit for the SAME complex pixel — see
+        // domWeight above; domWeight + msWeight sums the K samples' cluster
+        // populations back to exactly K/K = 1.0 for the 2-cluster case).
+        // Safe read-modify-write — dispatch B is the ONLY writer at this
+        // point for complex pixels (dispatch A finished and barriered before
+        // dispatch B starts), and each pixel is touched by exactly one
+        // invocation, so there's no cross-invocation race.
+        const vec3 base = imageLoad(outImage, px).rgb;// already pre-exposed by dispatch A
+        // Dispatch A composited the cloud layer over its (coverage-weighted)
+        // result — this minority sample sits behind the same cloud, so its add
+        // must carry the cloud TRANSMITTANCE too (not the in-scatter: dispatch
+        // A already added that once). Without it, complex pixels under cloud
+        // grow a bright unattenuated geometry rim.
+        float cloudMeanDistUnused;
+        const float cloudT = (clouds.enabled > 0.5)
+                ? cloudGather(px, length(worldPos - camPos), cloudMeanDistUnused).a : 1.0;
+        imageStore(outImage, px, vec4(base + lit * (msWeight * cloudT * uintBitsToFloat(pc.preExpBits)), 1.0));
+    } else {
+        // Dispatch A: at a complex pixel, scale down by the dominant
+        // cluster's population fraction and blend the SKY minority's
+        // coverage right here (sky is a background colour — no per-sample
+        // shading needed; this is what anti-aliases every silhouette
+        // against the sky). Simple pixels and msaa=1 keep domWeight==1,
+        // skyEdgeW==0 — byte-identical to the pre-MSAA output.
+        vec3 outC = lit * domWeight;
+        if (skyEdgeW > 0.0) outC += skyEdgeW * skyBackground(ndc, camPos);
+        // DEPTH-AWARE cloud layer: march camera→surface and composite the cloud
+        // in-scatter/extinction in FRONT of the terrain (a drone above the deck
+        // sees clouds between it and the ground). tSceneMax = surface distance
+        // clips the march at the G-buffer depth. No-op when clouds are off.
+        outC = compositeClouds(outC, px, length(worldPos - camPos));// depth-aware cloud layer in front of the terrain
+        // Volumetric in-scatter is a per-PIXEL view-ray integral, independent
+        // of which G-buffer sample won — add it ONCE at FULL weight AFTER the
+        // coverage weighting. (It used to be folded into `lit` before the
+        // domWeight scale, which silently dimmed the beams/aerial glow by the
+        // minority coverage at every edge pixel — a dark fringe in fog.)
+        outC += froxelInscatter(uv, max(-(viewH.z / viewH.w), 0.0))// clustered point-light glow
+              + volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px)// crisp spot beams
+              + volumetricDirScatter(camPos, -V, length(worldPos - camPos), px);// sun shafts / aerial glow
+        imageStore(outImage, px, vec4(outC * uintBitsToFloat(pc.preExpBits), 1.0));
+    }
+    // Dispatch B never touches the GI/SVGF accumulator channels (indirect/
+    // momentsImage) — those are dispatch-A-exclusive temporal state keyed to
+    // the DOMINANT sample; a minority sample writing a second, DIFFERENT
+    // "current" value into the same pixel's accumulator would corrupt next
+    // frame's history for every consumer (denoise, GI reproject). This is
+    // the GI-recombine-albedo approximation noted in the MSAA plan: complex
+    // pixels' indirect lighting is entirely the dominant sample's — a static
+    // bias at edges, not fixed in this pass.
+    if (pc.shadeMode == 1u) return;
+
+    // SVGF TEMPORAL stage for the demod GI — now with REPROJECTION (kills motion
+    // ghosting). Read the 1-frame GI history (the OTHER fif index, giPrevTex) at
+    // the MOTION-REPROJECTED pixel, exp-moving-average the current stochastic GI
+    // into it with a history-length α (1/histLen → converged pixels barely change),
+    // and write the result for the denoise + next frame. DISOCCLUSION RESET: if the
+    // reprojected pixel is off-screen OR its prev mesh-ID ≠ this surface's, the
+    // history is stale → start fresh (α=1) so a moving / newly-revealed surface
+    // doesn't drag a ghost. NaN-guard the feedback. Motion convention matches
+    // taa_resolve exactly.
+    if (demodIndirect) {
+        const vec2 motionGL = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).rg;
+        const vec2 currNDC  = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+        const vec2 prevNDC  = currNDC + motionGL;
+        const vec2 prevUv   = vec2(prevNDC.x * 0.5 + 0.5, 0.5 - prevNDC.y * 0.5);
+        bool valid = all(greaterThanEqual(prevUv, vec2(0.0))) &&
+                     all(lessThanEqual(prevUv, vec2(1.0)));
+        // Per-instance ids texel: .y = stable per-object id (trailing-edge
+        // guard below), .z = flag bits (double-sided normal test + the
+        // persistent-deformer history cap at the bottom of this block).
+        const uvec4 giIds = (msSampleIdx >= 0) ? texelFetch(gbufIdsMS, px, msSampleIdx)
+                                               : texelFetch(gbufIdsTex, px, 0);
+        const uint giFlagsZ = giIds.z;
+        // GEOMETRIC (normal-based) JITTER-ROBUST DISOCCLUSION: the current surface's
+        // world normal must match SOMEWHERE in the 3×3 prev-normal neighbourhood at
+        // the reprojected pixel. Normals are draw-order-INDEPENDENT (so firing —
+        // which spawns a tracer and renumbers every instanceCustomIndex — does NOT
+        // false-reset, the bug an ID test had) AND camera-INDEPENDENT (so camera
+        // motion doesn't false-reset). The 3×3 absorbs the sub-pixel jitter coverage
+        // flip; a MOVING object that vacated this pixel reveals a differently-facing
+        // surface → no match → reset → the stale GI is cleared instead of trailing
+        // as a "dust cloud".
+        if (valid) {
+            const ivec2 ip = ivec2(prevUv * vec2(float(pc.width), float(pc.height)));
+            const ivec2 mx = ivec2(int(pc.width), int(pc.height)) - 1;
+            // DOUBLE-SIDED surfaces (ids flags bit 4): the raster flips N to
+            // face the viewer, so on cutout foliage the jittered coverage
+            // flips a pixel's normal SIGN frame to frame — a signed test then
+            // cold-starts the GI history EVERY frame (1-spp boil across a
+            // tree canopy, read as "flickering shadows"; single-siding the
+            // leaves measured 8× less frame-to-frame diff). ±N is the same
+            // surface for irradiance-history purposes, so compare
+            // orientation-agnostically. Single-sided geometry keeps the
+            // signed test (a wall's two faces ARE different surfaces).
+            const bool dsided = ifDoubleSided(giFlagsZ);
+            // JOINT normal+depth neighbourhood test. The depth check is the
+            // primary disocclusion (a view-Z jump = a different surface — kills
+            // the object-trail "dust" a normal test alone leaves), but sampled
+            // at a SINGLE texel it alternates valid/invalid with the sub-pixel
+            // jitter at every DEPTH EDGE (road-ribbon edges over their cut
+            // bench, silhouettes, grazing relief): the reproject rounds onto
+            // the neighbouring surface every other frame, resetting the GI
+            // history → permanent 1-spp edge flicker on ALL backends (measured
+            // p99 26/255 at a static converged camera; the exact mechanism of
+            // the "everything shakes" reports). So ask the same question the
+            // normal test already asks, jointly, over the 3×3: was THIS
+            // surface (normal AND my own prev view-Z) anywhere in the
+            // reprojected neighbourhood last frame? A truly vacated pixel has
+            // no matching texel → still resets; a jitter-rounded edge finds
+            // its surface one texel over → history survives.
+            const float surfD = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).b;// this surface's prev NDC depth
+            const vec4  svh   = cam.projInverse * vec4(prevNDC, surfD, 1.0);
+            const float svz   = svh.z / svh.w;
+            bool found = false;
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const ivec2 tp = clamp(ip + ivec2(dx, dy), ivec2(0), mx);
+                    const vec3 pn = texelFetch(gbufNormalPrevTex, tp, 0).xyz * 2.0 - 1.0;
+                    float nd = dot(N, normalize(pn));
+                    if (dsided) nd = abs(nd);
+                    if (nd <= 0.0) continue;// reject only GROSS (>90°) flips: a 45°
+                                            // threshold false-reset every frame on
+                                            // sloped/detail-normal terrain (jittered
+                                            // shading normal aliases past 45°) →
+                                            // distant-terrain boil. >0 still catches
+                                            // a wall's opposite face; depth (below)
+                                            // does the real surface discrimination.
+                    const float bufD = texelFetch(gbufDepthPrevTex, tp, 0).x;
+                    const vec4  bvh  = cam.projInverse * vec4(prevNDC, bufD, 1.0);
+                    if (abs(svz - bvh.z / bvh.w) <= 0.1 * max(abs(svz), 1e-3)) found = true;
+                }
+            }
+            valid = found;
+            // MOVING-MESH TRAILING-EDGE GUARD: the joint test above is deliberately
+            // permissive ("was my surface ANYWHERE in the 3×3?") and its depth
+            // tolerance is RELATIVE (10% of view-Z) — a low-profile moving object
+            // over ground (car over road: Δz≈1.2 m at 14 m view-Z → tolerance 1.4 m;
+            // feet over floor: Δz≈0.2 m) passes BOTH gates at its trailing edge, so
+            // the bilinear giPrevTex read blends the departed object's bright/dark
+            // GI history into the revealed ground = the "history edge smear" behind
+            // every moving car / the character's dust-trail feet. The ID compare is
+            // exact where depth is proportionally blind. Compares the STABLE
+            // per-object id (.y) and reads the prev texel's OWN moved-sticky bit
+            // (.z, kInstFlagMoving, stamped at draw time) — both identity-stable —
+            // NOT prev ids .x, which indexes the PREV frame's draw list and names
+            // the wrong entry in geoms[] after any topology renumber (terrain tile
+            // streaming removes a parent mid-list every few frames; the old
+            // geoms[pid-1] read went stale or out of range for the whole burst).
+            // Static scenes can't fire this (no moved bit), and a static tile
+            // swap keeps history because the departed parent was never moving.
+            // All 4 texels of the history read's bilinear footprint are checked —
+            // the snap texel alone leaves a 1-px bleed.
+            if (valid) {
+                const vec2  fpx = prevUv * vec2(float(pc.width), float(pc.height)) - 0.5;
+                const ivec2 fb  = ivec2(floor(fpx));
+                // Fire on OBJECT motion (prev texel's moved bit) or CAMERA
+                // TRANSLATION (pc.camDelta): parallax past a STATIC occluder
+                // (tree, pole) reveals ground with no moved bit anywhere, and
+                // the depth/normal gates are proportionally blind at driving
+                // distances — before the identity-stable ids, the global
+                // topology resets were accidentally masking this leak (history
+                // never lived long enough to smear); now the id mismatch IS a
+                // true surface change whenever the camera actually moved.
+                // Pure rotation reprojects exactly (no parallax) and stays
+                // lenient, so static contact edges don't churn.
+                const bool camMoved = pc.camDelta > 0.001;
+                for (int dy = 0; dy <= 1 && valid; ++dy)
+                    for (int dx = 0; dx <= 1 && valid; ++dx) {
+                        const uvec4 pids = texelFetch(gbufIdsPrevTex, clamp(fb + ivec2(dx, dy), ivec2(0), mx), 0);
+                        // Prev-SKY texels (.x == 0) are not "safe": sky pixels
+                        // stop accumulating, so their history holds whatever
+                        // surface last covered the texel — with history now
+                        // surviving topology changes, that can be many frames
+                        // old. A camera translating past a feathery silhouette
+                        // (fjord trees: most canopy pixels have mixed tree/sky
+                        // footprints) kept blending that STALE canopy back in —
+                        // the subtle "smooshing" on trees under motion. Reject
+                        // sky-footprint texels when the camera moved; a static
+                        // camera keeps its converged edge mix (same texel, same
+                        // blend, every frame — rejecting there would just make
+                        // silhouettes permanently noisy).
+                        const bool skyStale = pids.x == 0u && camMoved;
+                        const bool objChange = pids.x > 0u && pids.y != giIds.y && (ifMoving(pids.z) || camMoved);
+                        if (skyStale || objChange) valid = false;
+                    }
+            }
+        }
+        // Checkerboard carry: prefer the reprojected history; if this skip-
+        // frame pixel's reproject fails (rare gate mismatch), carry the
+        // same-pixel history rather than cold-starting on no data.
+        const vec4  prevT = valid ? texture(giPrevTex, paneToPhys(giPrevTex, prevUv))
+                                  : (giSkip ? texture(giPrevTex, paneToPhys(giPrevTex, uv)) : vec4(0.0));
+        const vec3  prev  = prevT.rgb;
+        valid = valid && all(lessThan(abs(prev), vec3(1e6)));// NaN/garbage guard
+        // fp16-SAFE clamp on the NEW sample: indirect + the à-trous ping-pongs
+        // are rgba16f (max 65504) and NOT pre-exposed (pre-exposure applies at
+        // the sceneHdr store). Physical light units (sun in klux) push the
+        // demodulated indirect past that — an unclamped accumulate stores Inf,
+        // the |prev| guard above then resets the history EVERY frame (permanent
+        // 1-frame GI = flicker) and E[L²]−E[L]² turns the SVGF variance NaN.
+        // Radiance this hot is beyond any exposure the tonemapper meets, so
+        // the clamp is visually free; prev ≤ the same bound by induction.
+        diffInd = min(diffInd, vec3(6.5e4));
+        // MOTION-SCALED temporal cap: a fixed cap can't be both clean (static needs
+        // a LONG history to average the 1-spp noise) and lag-free (motion needs a
+        // SHORT one, else the slow running mean trails the camera/object as a
+        // "cloud"). Scale the cap by the motion-vector magnitude — static pixels
+        // keep the long clean history; moving pixels get a short responsive one.
+        // Temporal analogue of the TAA velocity bump: decouples static cleanliness
+        // from motion lag (so we don't have to trade one for the other).
+        // Same camera-world-motion term as the adaptive-tier cap above (:2607): a
+        // screen-static / world-moving surface (chase-cam car paint) must NOT pin
+        // its history at 48 and chase a non-stationary GI integrand — fold in the
+        // camera world flow so it tracks. Collapses to length(motionGL) when the
+        // camera is still.
+        const float giCamNdc = pc.camRot * 1.7 + 1.7 * pc.camDelta / max(length(worldPos - camPos), 0.25);
+        // IRRADIANCE-REACTIVE content (sources + channel semantics:
+        // instance_flags.glsl — today: persistent per-frame deformers): the
+        // surface deforms EVERY frame, so |motionGL| swings across the
+        // smoothstep window with the wobble and the motion-scaled cap
+        // oscillates with it — dragging the blend alpha, the despeckle gate
+        // (histLen<8) and the variance fallback (histLen<4) along. That reads
+        // as per-frame pumping on soft bodies even at a steady frame rate.
+        // Pin a CONSTANT cap instead — the pumping came from the OSCILLATION,
+        // not from which gates are active. 6 sits INSIDE the despeckle range
+        // (histLen<8) so the outlier clamp runs steadily — a persistently-
+        // deforming 1-spp surface sheds isolated GI sparks every frame and
+        // NEEDS it (pinning at 10 disabled it: visible white speckle on soft
+        // bodies) — while staying above the spatial variance fallback (4).
+        // mix() on the [0..1] reactivity: exact motion-scaled cap at 0; at 1
+        // the pin may sit an ULP off 6.0 — both gates have miles of margin.
+        const float capF = mix(mix(48.0, 6.0, smoothstep(0.002, 0.03, max(length(motionGL), giCamNdc))),
+                               6.0, ifIrradianceReactivity(giFlagsZ));
+        // CONTENT-CHANGE TREND ANTILAG (moments .g) — the reflection/shadow
+        // channels' mechanism, applied to the GI accumulator (previously the only
+        // temporal channel WITHOUT one). The receiver's motion vectors can't see a
+        // MOVING OCCLUDER or a moving bounce source: ground the car just vacated
+        // reprojects "valid" while its accumulated gather is stale (the car's
+        // contact darkening / body bounce), so a long motion cap drags it as a
+        // dark/bright smear trailing the object (worst on near-screen-static
+        // ground in a chase cam, cap up to 48). Zero-mean 1-spp boil ALTERNATES
+        // around the mean (trend EMA → ~±0.2, no collapse); real content change
+        // pushes the SAME direction every frame (EMA → ±1) → cap collapses to 3 →
+        // the mean tracks the change in a few frames. Same smoothstep window as
+        // the reflection channel's trendCap.
+        // σ-NORMALISED deviation: the raw brightness-relative sdev treats a
+        // pixel's EXPECTED sampling fluctuation as content change. ReSTIR DI
+        // rides this channel as a 1-SAMPLE radiance whose visibility discards
+        // produce dark-frame RUNS (not zero-mean alternation!) near occluders —
+        // the raw sdev trended on them, collapsed the cap to 3, and the
+        // denoiser could no longer smooth ReSTIR at all: permanent boil on the
+        // Bistro lamp walls (bisected: pre-antilag beac67b5 clean). The channel
+        // already stores its own E[L²] (moments .r), so measure the deviation
+        // against the accumulated σ: a high-variance pixel (1-spp emitter
+        // sampling) gets a proportionally larger deadband — its flicker reads
+        // as noise — while a converged smooth pixel (chase-cam road) has σ≈0
+        // and keeps the antilag's full sensitivity. Worst case (σ stays large)
+        // a real content change degrades to the pre-antilag cap-48 fade — the
+        // exact behaviour the clean bisect reference had.
+        const float curLum  = dot(diffInd, vec3(0.2126, 0.7152, 0.0722));
+        const float prevLum = dot(prev, vec3(0.2126, 0.7152, 0.0722));
+        const vec2  prevM   = valid ? texture(momentsPrevTex, paneToPhys(momentsPrevTex, prevUv)).rg
+                                    : (giSkip ? texture(momentsPrevTex, paneToPhys(momentsPrevTex, uv)).rg : vec2(curLum * curLum, 0.0));
+        const float prevTr  = prevM.g;
+        const float prevSig = sqrt(max(prevM.r - prevLum * prevLum, 0.0));
+        const float sdev    = clamp((curLum - prevLum) / (0.05 + 0.25 * max(curLum, prevLum) + 2.0 * prevSig), -1.0, 1.0);
+        const float trend   = giSkip ? prevTr : mix(prevTr, sdev, 0.34);// ~3-frame EMA
+        float capTr         = mix(capF, 3.0, smoothstep(0.45, 0.9, abs(trend)));
+        // MOVING-CONTENT dwell cut (see gGiMovFrac decl): while this pixel's
+        // gather sees moving geometry, its irradiance is attached to the mover,
+        // not the surface — keep the history shallow so nothing is left to smear
+        // when the mover departs. Statistics-free where the trend (drowned by
+        // 1-spp gather noise) limps. The adaptive-spp tier reads the short
+        // history and supplies extra rays here (rays-follow-short-history).
+        // RELEASE with hysteresis: the dwell pin (histLen ≤ 3) doubles as the
+        // "was under moving content" marker — hold the short-history regime
+        // until the reprojected history agrees with the fresh gather (|sdev|
+        // gate; adaptive-spp gives these short-history pixels extra rays, so
+        // the comparison isn't 1-spp flicker), then let history regrow. Kills
+        // both the harmonic dark tail the growing histLen left behind a
+        // departing occluder AND the cap-regime stutter of a per-frame noisy
+        // flag.
+        const bool giRelease = valid && prevT.a <= 3.5 && abs(sdev) > 0.5;
+        if (gGiMovFrac > 0.1 || giRelease) capTr = min(capTr, 3.0);
+        // Skip frames carry the history UNCHANGED (no new sample → no histLen
+        // increment, no blend); trace frames accumulate as before.
+        const float histLen = giSkip ? max(prevT.a, 1.0)
+                            : (valid ? min(prevT.a + 1.0, capTr) : 1.0);
+        const vec3  accum   = giSkip ? prevT.rgb
+                            : (valid ? mix(prev, diffInd, 1.0 / histLen) : diffInd);
+        imageStore(indirectImage, px, vec4(accum, histLen));
+
+        // SVGF second moment E[L²] of the indirect luminance — accumulated with the
+        // SAME reproject + α, so the denoiser can form the TEMPORAL variance
+        // var = E[L²] - lum(accum)². A stable edge has low temporal var (preserve →
+        // crisp); flickering 1-spp noise has high var (blur → clean). E[L] needs no
+        // storage: luminance is linear, so lum(accum) (the running-mean GI's luma)
+        // IS the running-mean luminance E[L].
+        const float prevSq = prevM.r;// fetched with the trend (.rg) above
+        const float accSq  = giSkip ? prevSq : mix(prevSq, curLum * curLum, 1.0 / histLen);
+        imageStore(momentsImage, px, vec4(accSq, trend, 0.0, 0.0));
+
+        // ── Shadow-ratio temporal accumulation ───────────────────────────────
+        // Same reproject + disocclusion gates as the GI above (prevUv/valid are
+        // exactly the surface-identity tests the ratio needs). Two extra
+        // history cuts the GI doesn't have:
+        //   • TREND antilag (.w): the receiver's motion vectors can't see a
+        //     MOVING OCCLUDER, so a shadow sweeping across a static floor
+        //     reprojects "valid" and a long EMA would trail it as a smear.
+        //     Consistent same-sign deviations (visEst vs the running mean)
+        //     accumulate in a ~3-frame EMA; zero-mean sample noise cancels.
+        //     A firing trend collapses the cap → the mean tracks the edge.
+        //   • The motion-scaled cap (same term as the GI) for camera/receiver
+        //     motion. Static, settled penumbras keep the long clean history.
+        if (shadowChannel) {
+            // EDGE-AWARE 4-TAP (2×2) HISTORY FETCH — replaces the old history
+            // fetch's single-texel snap. NOTE: shadowVisPrevTex (like giPrevTex/
+            // gbufNormalPrevTex/gbufDepthPrevTex) is bound through gbufSampler_,
+            // which this pass creates NEAREST (DeferredShade.cpp ~line 46: "the
+            // shader uses texelFetch, sampler ignored, still required") — so the
+            // OLD `texture(shadowVisPrevTex, prevUv)` was already a nearest snap,
+            // not hardware bilinear. Under motion prevUv drifts continuously, and
+            // at a shadow boundary the nearest-neighbour rounding OCCASIONALLY
+            // snaps a shadowed pixel onto a LIT neighbour's full history value
+            // (R̃≈1) instead of its own — a 100%-weight contamination event that
+            // frame (vs. a small blended sliver), which then compounds through
+            // the EMA frame after frame (measured up to 7.5× at deep-shadow
+            // pixels). Manually gather the 4 integer-texel neighbours with their
+            // bilinear proximity weights so a genuine sub-pixel reproject blends
+            // a SMALL, bounded fraction of a neighbour instead of an all-or-
+            // nothing snap, then edge-stop each tap two ways before accepting it:
+            //   1) GEOMETRIC consistency — same predicates/thresholds as the GI
+            //      reproject above (depth-plane test via cam.projInverse, normal
+            //      dot with the same double-sided abs(dot) handling) — this is
+            //      what the GI reuses to reject a tap that landed on a DIFFERENT
+            //      surface (disocclusion / silhouette crossing).
+            //   2) VALUE-range consistency — geometry alone can't separate "same
+            //      floor, different shadow state" (a penumbra boundary on a flat
+            //      surface has NO depth/normal discontinuity to key off). The
+            //      spatial à-trous filter below (deferred_gi_filter.comp:
+            //      `wlS = exp(-abs(cS.x - sqS.x) / visPhi)`) already range-
+            //      stops this exact ratio signal by its own temporal variance —
+            //      reused here verbatim (same exp/variance-scale form). The
+            //      reference for "what value should this pixel's history be" is
+            //      the NEAREST tap's own stored ratio (nearV.x below) — the exact
+            //      value the OLD nearest-snap fetch would have used alone — NOT
+            //      this frame's visEst (1-2 ray Monte Carlo estimate, too noisy
+            //      per-frame to anchor a gate on). Anchoring on the nearest tap
+            //      means: agreeing neighbours blend in for a genuinely smoother
+            //      sub-pixel reproject; a neighbour on the OTHER side of a
+            //      shadow boundary disagrees with the nearest tap and is cut,
+            //      so the result degrades to (at worst) the same single-tap
+            //      value the old code already used — never worse, only smoother
+            //      when the 2×2 neighbourhood agrees.
+            // Renormalize by the surviving weight; if every tap is out (or
+            // off-screen), fall through to sValid=false below, matching how the
+            // GI path cold-starts on total invalidity.
+            vec4 sPrev = vec4(0.0);
+            bool sAnyTap = false;
+            if (valid) {
+                const vec2  texel   = prevUv * vec2(float(pc.width), float(pc.height)) - 0.5;
+                const ivec2 base    = ivec2(floor(texel));
+                const vec2  frac    = texel - vec2(base);
+                const ivec2 mx      = ivec2(int(pc.width), int(pc.height)) - 1;
+                // Re-derive dsided locally — the GI 3×3 pass above scopes its own
+                // copy inside its `if (valid)` block; giFlagsZ (the source flag) is
+                // still in scope here so this is the same bit test, not a new heuristic.
+                const bool  dsided  = ifDoubleSided(giFlagsZ);
+                const float surfD   = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).b;// this surface's prev NDC depth (shared by all 4 taps)
+                const vec4  svh     = cam.projInverse * vec4(prevNDC, surfD, 1.0);
+                const float svz     = svh.z / svh.w;
+                // Nearest tap = what the old `texture()` NEAREST fetch would have
+                // picked (GL/Vulkan NEAREST samples texel floor(uv*size), no
+                // half-texel offset) — the value anchor below.
+                const ivec2 nearTp  = clamp(ivec2(floor(prevUv * vec2(float(pc.width), float(pc.height)))), ivec2(0), mx);
+                const vec4  nearV   = texelFetch(shadowVisPrevTex, nearTp, 0);
+                const float nearVar = max(nearV.y - nearV.x * nearV.x, 0.0);
+                // Tight floor (measured: a looser 4x-of-variance floor matching
+                // deferred_gi_filter.comp's own visPhi scale left a residual bleed —
+                // this is a TEMPORAL accumulator, where a small per-frame leak
+                // compounds every frame instead of being re-filtered from a clean
+                // source each time like the spatial à-trous is, so it needs a much
+                // tighter stop than the one-shot spatial blur to stay put-together
+                // over hundreds of frames of camera motion).
+                const float nearPhi = 0.25 * sqrt(nearVar) + 1e-4;
+                float wSum = 0.0;
+                vec4  accTap = vec4(0.0);
+                for (int ty = 0; ty <= 1; ++ty) {
+                    for (int tx = 0; tx <= 1; ++tx) {
+                        const ivec2 tp = clamp(base + ivec2(tx, ty), ivec2(0), mx);
+                        const float bw = (tx == 0 ? (1.0 - frac.x) : frac.x) *
+                                         (ty == 0 ? (1.0 - frac.y) : frac.y);
+                        if (bw <= 0.0) continue;
+                        const vec3 pn = texelFetch(gbufNormalPrevTex, tp, 0).xyz * 2.0 - 1.0;
+                        float nd = dot(N, normalize(pn));
+                        if (dsided) nd = abs(nd);
+                        if (nd <= 0.7) continue;// same 45° gate as the GI 3×3 normal test
+                        const float bufD = texelFetch(gbufDepthPrevTex, tp, 0).x;
+                        const vec4  bvh  = cam.projInverse * vec4(prevNDC, bufD, 1.0);
+                        if (abs(svz - bvh.z / bvh.w) > 0.1 * max(abs(svz), 1e-3)) continue;// same depth-plane gate as the GI
+                        const vec4  tapV = texelFetch(shadowVisPrevTex, tp, 0);
+                        // Value-range stop vs the nearest tap (see comment above);
+                        // same exp/variance form as deferred_gi_filter.comp's wlS.
+                        const float wl = exp(-abs(nearV.x - tapV.x) / nearPhi);
+                        const float w  = bw * wl;
+                        if (w <= 1e-5) continue;
+                        accTap += w * tapV;
+                        wSum   += w;
+                    }
+                }
+                if (wSum > 1e-4) { sPrev = accTap / wSum; sAnyTap = true; }
+            }
+            // .z==0 = cold-start marker (sky/glass/off); the magnitude guards
+            // reject first-frame / garbage fp16 history (NaN compares false).
+            const bool sValid = sAnyTap && sPrev.z > 0.5 && sPrev.z < 4096.0 &&
+                                abs(sPrev.x) <= 1.5 && abs(sPrev.w) <= 1.5;
+            const float dev      = visEst - sPrev.x;
+            const float trend    = sValid ? mix(sPrev.w, dev, 0.34) : 0.0;
+            const float trendCut = smoothstep(0.10, 0.30, abs(trend));
+            // VARIANCE-GATED INSTANT CUT — the trend antilag above needs 2-3
+            // frames to charge and still leaves a cap-4..8 EMA, which reads as a
+            // dark smudge dragging ~10 frames behind a character's shadow
+            // sweeping across a floor (tps_shooter hero trail). The history
+            // already stores E[R²] (.y), so measure this frame's deviation in
+            // sigmas of the SETTLED history: a converged lit or umbra pixel has
+            // σ≈0, so the first frame the occluder's edge arrives (|dev|≈1) is
+            // a >4σ event and the history is cut SHORT that frame — the shadow
+            // tracks its caster with no charge-up lag. A static penumbra keeps
+            // σ≈0.5 (1-2 ray Bernoulli noise), so per-frame noise sits at ≤2σ
+            // and the long clean history is untouched (the 0.08 σ-floor also
+            // absorbs fp16 quantisation of E[R²]−E[R]²).
+            //
+            // The cut floors at kShadowStepFloor frames, NOT 1: a ground pixel
+            // the moving shadow just reached was a converged-LIT pixel, so the
+            // adaptive-ray tier gave it 1 ray/frame (a BINARY visEst∈{0,1}).
+            // Cutting to histLen=1 makes sAcc = that lone binary sample at full
+            // weight → salt-and-pepper "dusting" on the sweeping edge. Flooring
+            // at ~5 keeps every incoming 1-2 ray sample at ≤1/5 weight, so the
+            // edge CONVERGES over a few frames (smooth) instead of snapping to a
+            // single noisy sample — still ~half the old smudge's lag, and only
+            // where the σ-step actually fires.
+            const float sSigma   = sqrt(max(sPrev.y - sPrev.x * sPrev.x, 0.0)) + 0.08;
+            const float stepCut  = sValid ? smoothstep(2.0, 4.0, abs(dev) / sSigma) : 0.0;
+            const float sCapMot  = mix(32.0, 8.0, smoothstep(0.002, 0.03, max(length(motionGL), giCamNdc)));
+            // Compose the trend + step reductions as a MIN so neither can raise
+            // the cap above the other (a nested mix could: mix(4, floor, step)
+            // rises to `floor` when floor>4). Both collapse to sCapMot when idle.
+            // MOVING-OCCLUDER cut (sOccMoved): this pixel is shadowed by a mesh
+            // that is currently moving — a sweeping shadow cannot be temporally
+            // accumulated (ANY history trails it as a smear; shadow-map engines
+            // regenerate per frame for exactly this reason), so run it
+            // FRAMELESS: cap 1 when the visEst carries the 16-ray top-up
+            // (sTopUp) — the static-dithered sunShadowVis is per-frame stable
+            // by construction (the denoise-off path displays it raw), so it
+            // needs NO temporal smoothing, and any deeper cap leaves DISCRETE
+            // ghost outlines: a cap-2 EMA holds the previous frame's shadow at
+            // 50% (and 25% at two frames), which at fast per-frame shadow
+            // displacement reads as 1-2 separated shadow copies, not a smear.
+            // Cap 1 also recovers a vacated pixel in exactly one frame. Without
+            // the top-up (no sun share — point/spot casters) the floor stays 2:
+            // a cap-1 mean of 1-2 BINARY rays is salt-and-pepper dusting.
+            // Statistics-free on purpose: the trend needs frames to charge and
+            // the σ-step's variance estimate is degraded over a swept band (the
+            // feedback rewrites the mean but not E[R²]) — both limped exactly
+            // where this direct signal cuts instantly.
+            const float sCapTrend = mix(sCapMot, 4.0, trendCut);
+            const float sCapStep  = mix(sCapMot, kShadowStepFloor, stepCut);
+            float sCap            = min(sCapTrend, sCapStep);
+            // RELEASE with hysteresis: the dwell pin (histLen ≤ 2) doubles as a
+            // per-pixel MARKER "was under a moving shadow". Growing histLen out
+            // of a dwell while the mean is still stale fades the dark harmonically
+            // (1/n) — the long trail — so keep the pixel in the short-history
+            // regime until its history AGREES with the current estimate (which
+            // the was-dwell ray top-up makes a confident 16-ray value, so the
+            // comparison is meaningful, not 1-ray binary flicker). Converged →
+            // release ends, history regrows: a PARKED car's settled penumbra
+            // exits within a frame of agreement (no permanent noise), and the
+            // marker's hysteresis kills the cap-regime stutter a noisy per-frame
+            // flag caused at the shadow fringe.
+            // sTopUp-GATED: the release compare is only meaningful against the
+            // CONFIDENT (16-ray, sun-dominant) estimate. Without it (night /
+            // point-light scenes) a multi-light pixel's 1-2 ray visEst is a
+            // per-frame binary that never agrees with the mean within 0.1 —
+            // an ungated release TRAPPED those pixels at cap 2 forever
+            // (permanent shadow boil on the Bistro lamp walls).
+            const bool sRelease   = sTopUp && sValid && sPrev.z <= 2.5 && abs(visEst - sPrev.x) > 0.1;
+            if ((pc.flags & 512u) == 0u && (sOccMoved || sRelease))// bit 9 = dwell kill switch
+                sCap = min(sCap, sTopUp ? 1.0 : 2.0);
+            const float sHist    = sValid ? min(sPrev.z + 1.0, sCap) : 1.0;
+            const float sAcc     = sValid ? mix(sPrev.x, visEst, 1.0 / sHist) : visEst;
+            const float sSq      = sValid ? mix(sPrev.y, visEst * visEst, 1.0 / sHist) : visEst * visEst;
+            imageStore(shadowVisImage, px, vec4(sAcc, sSq, sHist, trend));
+        } else {
+            imageStore(shadowVisImage, px, vec4(0.0));// shadows off: recombine adds 0 (directU=0)
+        }
+    } else {
+        imageStore(indirectImage, px, vec4(0.0));// histLen=0 → next frame cold-starts
+        imageStore(momentsImage, px, vec4(0.0));
+        imageStore(shadowVisImage, px, vec4(0.0));// glass/sheen/inline: no shadow channel
+    }
+    // Unshadowed analytic direct for the recombine (U × R̃). UNWEIGHTED like
+    // indirect/reflect — the denoise applies recombineCoverage at consumption.
+    // vec3(0) whenever the channel is off, so the recombine adds nothing.
+    // fp16-SAFE clamp — same bound + rationale as the diffInd clamp above: the
+    // GGX peak at the 0.04 roughness floor times a physical-unit light pushes U
+    // past fp16 max (65504); an Inf store turns NaN at the recombine's dU × R̃
+    // whenever the filtered ratio is exactly 0 (converged umbra), and that NaN
+    // poisons the pixel's TAA history permanently.
+    imageStore(directUImage, px, vec4(min(directU, vec3(6.5e4)), 1.0));
+}

@@ -36,10 +36,10 @@ void PointLightHelper::update() {
 
     if (this->color) {
 
-        this->material()->as<MaterialWithColor>()->color.copy(*this->color);
+        this->materialAs<MaterialWithColor>()->color.copy(*this->color);
 
     } else {
 
-        this->material()->as<MaterialWithColor>()->color.copy(this->light->color);
+        this->materialAs<MaterialWithColor>()->color.copy(this->light->color);
     }
 }

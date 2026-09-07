@@ -3,9 +3,7 @@
 #ifndef THREEPP_GLINFO_HPP
 #define THREEPP_GLINFO_HPP
 
-#include <memory>
 #include <ostream>
-#include <vector>
 
 namespace threepp::gl {
 

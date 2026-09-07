@@ -1,3 +1,5 @@
+#include "renderer_factory.hpp"
+
 #include "threepp/threepp.hpp"
 
 #include <cmath>
@@ -55,8 +57,8 @@ int main() {
 
     auto geometry = IcosahedronGeometry::create(1, 3);
 
-    auto materialLeft = MeshStandardMaterial::create({{"color", Color::lightgrey}});
-    auto materialRight = MeshStandardMaterial::create({{"color", Color::gray}});
+    auto materialLeft = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color::lightgrey));
+    auto materialRight = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color::gray));
     materialRight->wireframe = true;
 
     auto meshLeft = Mesh::create(geometry, materialLeft);
@@ -76,15 +78,15 @@ int main() {
 
     OrbitControls controls(*camera, canvas);
 
-    GLRenderer renderer(canvas.size());
-    renderer.setScissorTest(true);
-    renderer.setClearAlpha(0);
-    renderer.setClearColor(0);
+    auto renderer = createRenderer(canvas);
+    renderer->setScissorTest(true);
+    renderer->setClearAlpha(0);
+    renderer->setClearColor(0);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     int sliderPos = canvas.size().width() / 2;
@@ -93,13 +95,13 @@ int main() {
     MyMouseListener listener{dragging, sliderPos, canvas, controls};
     canvas.addMouseListener(listener);
 
-    canvas.animate([&]() {
+    canvas.animate([&] {
         const auto size = canvas.size();
 
-        renderer.setScissor(0, 0, sliderPos, size.height());
-        renderer.render(sceneLeft, *camera);
+        renderer->setScissor(0, 0, sliderPos, size.height());
+        renderer->render(sceneLeft, *camera);
 
-        renderer.setScissor(sliderPos, 0, size.width() - sliderPos, size.height());
-        renderer.render(sceneRight, *camera);
+        renderer->setScissor(sliderPos, 0, size.width() - sliderPos, size.height());
+        renderer->render(sceneRight, *camera);
     });
 }

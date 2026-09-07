@@ -1,0 +1,505 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference    : require
+#extension GL_EXT_buffer_reference2   : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// ParticleField DEVICE EMITTER — Ownership::Renderer, plan F-C.
+//
+// One thread per SLOT, evaluating a CLOSED-FORM trajectory
+//
+//     position = f(seed, slot, t)
+//
+// and writing BOTH f(t) and f(t - dt) — this frame's positions and the
+// prevPositions the motion vectors reproject through — in the same dispatch.
+// That last point is the whole design in one line, and it is worth being
+// explicit about why:
+//
+//   • NO INTEGRATION STATE. There is no velocity buffer, no ping-pong pair,
+//     nothing that has to survive from frame to frame. A field resumes from
+//     nothing, seeks to any t, and gives the same bytes in two processes.
+//     Every value below is a pure function of this thread's slot index, the
+//     seed and t; the only inputs that are not compile-time constants arrive
+//     in a push constant.
+//   • MOTION VECTORS CANNOT GO STALE. The usual scheme — copy positions into
+//     prevPositions at the head of the frame — makes correctness depend on a
+//     copy landing in the right place in the command stream, which is the bug
+//     class feedback_vulkan_dynamic_geom_blas is about. Two evaluations of one
+//     function at two times cannot disagree about which frame they describe.
+//   • NO RING. The HostRing mode carries kFramesInFlight + 1 position buffers
+//     because a HOST write races an in-flight read. Here the writer is this
+//     dispatch, recorded into the same command buffer as every consumer and
+//     ordered against them by a barrier, so ONE device-local buffer is correct
+//     — the same argument the CUDA interop path makes for its single
+//     ExternalBuffer (commit 5584d2ab: "the GPU-to-GPU overlap is benign").
+//
+// ARCHETYPES ARE PARAMETERS, NOT VARIANTS. Snow, rain, embers and dust motes
+// are four points in the push block, so a scene with all four still records
+// four dispatches of this one pipeline.
+//
+// DISPATCH DOMAIN is the CPU-CONSTANT capacity (plan §1.3): the command buffer
+// never changes shape as particles come and go, because none of them ever do —
+// a slot outside its lifetime window writes the w < 0 sentinel and every
+// consumer drops it on the predicate it already tests.
+//
+// The positions written here are FIELD-LOCAL. Every consumer applies the
+// field's matrixWorld itself (the raster proxy's DrawInfo::model, the density
+// splat's pc.world), exactly as it does for a HostRing field, so a Renderer
+// field can be parented and moved without touching a parameter.
+
+layout(local_size_x = 64) in;
+
+// ParticlePos / physx::PxVec4 / GLSL vec4 under scalar layout are the same
+// 16 bytes — the identity the whole buffer contract is built on.
+layout(buffer_reference, scalar, buffer_reference_align = 16) writeonly buffer PosBuf { vec4 v[]; };
+
+// ── F5: the baked TOP-DOWN HEIGHT MAP ───────────────────────────────────────
+// One float per texel, field-LOCAL height of the first surface below the cloud.
+// A BUFFER and not an image, which is the whole reason this pass can read it:
+// images are reached by descriptor and never by buffer_reference (the mistake
+// F4's plan made about the density volumes — see that amendment's note 4), so a
+// height map baked into a 3D image would have cost this pipeline its
+// zero-descriptor property. A height field is one scalar per texel and has no
+// use for hardware filtering, so nothing is given up by storing it flat.
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer HeightBuf { float h[]; };
+
+// ── F4/F5: the per-field AUX RECORD ─────────────────────────────────────────
+// The push block below is 128 B EXACTLY — the range every Vulkan implementation
+// guarantees — and it was FULL: F4's follow feature spent the last two floats
+// (F2's reserve) on the follow centre. F5 needs a height-map address plus a
+// dozen lifecycle scalars and there is no room for one byte of it.
+//
+// So the two follow floats became ONE 64-bit address, and everything that is
+// neither hot nor universal moved behind it into a 64 B record written by
+// ParticleFieldPass::prepareFrame — the same move F3 made for BillboardParams
+// and F4 for BillboardView, for the same reason and with the same guarantee: a
+// buffer_reference is not a descriptor, so this pass still allocates no set,
+// writes no set, and cannot update one a frame in flight still names
+// (VUID-03047).
+//
+// A field that neither FOLLOWS nor rests pushes auxAddr == 0 and never
+// dereferences it — and because the two floats it replaced were both zero in
+// that case, such a field's push bytes are bit-identical to the pre-F5 ones.
+// KEEP IN SYNC with EmitAuxGpu in ParticleFieldPass.hpp.
+layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer EmitAux {
+    uint64_t heightAddr;  //  0  the bake; 0 = no surface interaction
+    float    followX;     //  8  field-LOCAL centre of the toroidal wrap box (F4)
+    float    followZ;     // 12
+    float    bakeOriginX; // 16  field-LOCAL min corner of the height map
+    float    bakeOriginZ; // 20
+    float    bakeInvCell; // 24  texels per metre
+    uint     bakeRes;     // 28  texels per axis
+    float    bakeMiss;    // 32  height reported off the map / where nothing hit
+    float    landBias;    // 36  metres above the surface the centre rests
+    float    restSeconds; // 40
+    float    restJitter;  // 44
+    float    fadeSeconds; // 48
+    float    splashSeconds;// 52  > 0: land as an expanding ring, not a rest
+    float    splashR0;    // 56  ring radius at impact, METRES; 0 = no splash
+    float    splashR1;    // 60  ring radius at the end of the splash
+};
+
+// Everything else rides in the push block and this pipeline has NO descriptor
+// set at all. Deliberate: a per-field descriptor write per frame is exactly the
+// VUID-03047 exposure ParticleFieldPass exists to avoid, and the whole emitter
+// state is O(1) bytes. The block is 128 B — the minimum every Vulkan
+// implementation guarantees.
+layout(push_constant, scalar) uniform Pc {
+    uint64_t posAddr;        // ParticlePos[capacity], device-local, single instance
+    uint64_t prevPosAddr;    // its sibling; written by THIS dispatch, same thread
+
+    vec3  spawnCenter;       // field-LOCAL birth box
+    float lifetime;          // period of one slot's cycle, seconds
+
+    vec3  spawnHalf;
+    float lifetimeJitter;    // +/- fraction of the period, per slot
+
+    vec3  velocity;          // EmitterParams::velocity + wind, summed host-side
+    float speedSpread;       // isotropic per-particle perturbation, m/s
+
+    vec3  accel;             // constant acceleration, m/s^2 (gravity / buoyancy)
+    float duty;              // alive fraction of the period, (0,1]
+
+    float driftAmp;          // metres
+    float driftFreq;         // Hz of the slowest sine
+    float driftGrowth;       // 0 = constant amplitude, 1 = ramps in over the life
+    float size;              // radius written into w
+
+    float sizeJitter;        // +/- fraction of size, per slot
+    float time;              // ABSOLUTE seconds, from the caller's clock. Never
+                             // a wall clock read inside the renderer: a capture
+                             // must be a function of its frame index alone.
+    float dt;                // the motion-vector interval; 0 freezes the field
+    // Slot count in bits 0..30; BIT 31 IS THE FOLLOW FLAG. Stealing a bit off a
+    // count that can never exceed a few million is what keeps this block at the
+    // 128 B EVERY implementation guarantees — the property the zero-descriptor
+    // design above is built on, and one a bool would have had to spend 4 B and
+    // a whole padding word to add.
+    uint  capacityAndFollow;
+
+    uint  seed;
+    float driftScale;        // spatial wavelength, metres; 0 = per-slot phase only
+    // -> EmitAux, above. 0 when the field neither follows nor rests, which is
+    // exactly the two zero floats this replaced.
+    uint64_t auxAddr;
+} pc;
+
+const float kTau = 6.28318530718;
+
+// ── The hash ────────────────────────────────────────────────────────────────
+// Bit-for-bit the same lowbias32 finaliser and the same stream mixing as
+// FireEffect.cpp's hashU/rnd01 on the host. Shared on purpose: F1's CPU emitter
+// and this one are the SAME model, so the port between them is a port and not a
+// redesign. No RNG object, no state, no order dependence — which a device
+// emitter cannot have anyway, since its threads run in whatever order they run
+// in, and which is what makes the field bit-reproducible.
+uint hashU(uint x) {
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// 24 bits -> [0,1). Exact in fp32, and never reaches 1.0.
+float rnd01(uint slot, uint stream) {
+    return float(hashU(slot * 0x9e3779b9u + stream * 0x85ebca6bu + pc.seed) >> 8) *
+           (1.0 / 16777216.0);
+}
+
+// Symmetric, [-1,1).
+float rndS(uint slot, uint stream) { return rnd01(slot, stream) * 2.0 - 1.0; }
+
+// Everything about a slot that does NOT depend on t. Drawn once and handed to
+// both evaluations, so the two samples are guaranteed to describe the same
+// particle — the failure mode a re-hash per call would invite.
+struct Slot {
+    vec3  spawn;
+    vec3  vel;
+    float period;
+    float life;
+    float birth;  // phase offset into the period, [0,1)
+    float ph1, ph2, ph3;
+    float fscale; // per-slot drift frequency scale
+    float kSpat;  // spatial wavenumber of the drift, 0 = decoupled
+};
+
+// The trajectory itself, as a function of the slot's AGE and of the ABSOLUTE
+// time the drift's sines are evaluated at.
+//
+// `tAbs` is passed rather than reconstructed from the age, and that is not
+// style: F5's landing solve walks this function at a dozen ages inside one
+// cycle, and the obvious way to do that — carry the cycle's birth time t0 and
+// pass t0 + age — is NOT bit-equal to passing t when the caller already has it,
+// because (t - age) + age is not t in fp32. evalAt above hands over the t it
+// was given, so every pre-F5 particle gets the pre-F5 bytes; the solve, whose
+// residual is milliseconds anyway, uses t0 + age.
+vec3 trajAt(Slot s, float tAbs, float age) {
+    const vec3 p = s.spawn + s.vel * age + (0.5 * age * age) * pc.accel;
+
+    // Sines with incommensurate frequencies: never repeats, needs no state, and
+    // is a pure function of t so a seek is free. The phase is offset by the
+    // BALLISTIC position (not the drifted one — that would be circular), which
+    // is what makes neighbouring particles wander together and reads as gusts
+    // moving through the volume rather than as per-flake jitter.
+    const float w = kTau * pc.driftFreq * s.fscale;
+    const vec3  q = p * s.kSpat;
+    // driftGrowth 0 keeps the amplitude constant (snow wobbles the same all the
+    // way down); 1 ramps it in over the life (an ember's base is steady and its
+    // tip wanders).
+    const float g = mix(1.0, clamp(age / max(s.life, 1e-4), 0.0, 1.0), pc.driftGrowth);
+    vec3 d;
+    d.x = 0.62 * sin(w * tAbs + s.ph1 + q.z) + 0.38 * sin(1.73 * w * tAbs + s.ph2 - q.x);
+    d.y = 0.30 * sin(1.21 * w * tAbs + s.ph3 + q.x);
+    d.z = 0.62 * cos(0.91 * w * tAbs + s.ph2 + q.x) + 0.38 * sin(1.37 * w * tAbs + s.ph3 - q.z);
+    return p + (pc.driftAmp * g) * d;
+}
+
+// One sample of the trajectory at an absolute time, plus the lifecycle
+// bookkeeping.
+//
+// `cycle` is the index of the slot's current repetition and is an OUTPUT
+// because the caller has to compare it across the two sample times: a slot that
+// crossed a cycle boundary between t - dt and t did not MOVE from its old
+// position to its new one, it was REBORN, and reprojecting across that
+// discontinuity paints one frame of a full-length streak through the scene.
+// `ageOut` is the age within that cycle, which F5's landing solve needs in
+// order to recover the cycle's own birth time.
+vec3 evalAt(Slot s, float t, out bool alive, out float cycle, out float ageOut) {
+    const float u   = t / s.period + s.birth;
+    const float n   = floor(u);// correct for negative t: u - floor(u) is in [0,1)
+    const float age = (u - n) * s.period;
+    cycle  = n;
+    alive  = age < s.life;
+    ageOut = age;
+    return trajAt(s, t, age);
+}
+
+// ── THE FOLLOW WRAP — weather that surrounds a MOVING camera ────────────────
+// The trajectory above is evaluated exactly as it always was; this folds the
+// RESULT into a lateral box centred on pc.follow*, so a field of finite extent
+// tiles the plane and the camera can walk out of it forever without leaving it.
+// F4 shipped the snowfall as a fixed 34 m patch and the user's verdict on the
+// scene was "a fixed grid that does nothing for the overall scene" — this is
+// that defect, and the closed form is where it gets fixed rather than by
+// re-anchoring the field (which slides every flake with the eye).
+//
+// WHY THE PERIOD IS THE SPAWN SLAB. mod() folds the real line onto one period,
+// and a distribution uniform over EXACTLY one period folds to a uniform
+// distribution. The spawn slab is uniform over [centre − half, centre + half]
+// in xz, so with period == 2·spawnHalf.xz the wrapped field is as even as the
+// unwrapped one, everywhere, forever. Any other period would fold two
+// half-densities onto one strip and leave a visible seam of double snowfall.
+// (The wind advection is a rigid translation of the whole field, which mod
+// likewise leaves uniform; the per-slot sine drift is a small smooth
+// perturbation that does not measurably bias it.)
+//
+// WHY BOTH SAMPLES USE THE SAME ORIGIN. A flake that does not cross the seam
+// between t − dt and t is displaced by exactly one lattice vector at both
+// samples, so pos − prevPos is EXACT: the motion vector is untouched by the
+// wrap and TAA sees the true velocity. A flake that DOES cross wraps at one
+// sample and not the other, and reports one frame of a box-length streak. That
+// is the cost, it is paid once per flake per crossing, and it is invisible:
+// the seam sits at the box edge, half the lateral extent away from the centre
+// (30+ m for a weather field), where every flake is past the mesh/billboard LOD
+// split and is drawn by the post-upscaler billboard pass — which has no
+// temporal history at all (F3 note 1). The pixels that could show the streak
+// are not in TAA.
+//
+// Y IS NOT WRAPPED, deliberately: falling is the trajectory, and a torus in y
+// would make a flake reappear at its own feet.
+vec2 wrapFollow(vec2 centre, vec2 xz) {
+    // 1e-3 floor: mod() by zero is a NaN, and a NaN position defeats every
+    // downstream bounds check instead of showing up as one bad flake
+    // (feedback_float_pi_sin_pow_nan). A degenerate spawn slab is an authoring
+    // error, not a reason to poison the field.
+    const vec2 period = max(2.0 * pc.spawnHalf.xz, vec2(1e-3));
+    const vec2 lo     = centre - 0.5 * period;
+    return lo + mod(xz - lo, period);
+}
+
+// ── F5: ANALYTIC SURFACE INTERACTION ────────────────────────────────────────
+// Snow rests where it lands and rain splashes there, and NONE of it costs the
+// closed form. The renderer bakes a top-down height map of the scene over this
+// field's lateral footprint (particle_height_bake.comp); the emitter solves,
+// inside f(seed, t), for the age at which this slot's own trajectory meets that
+// height under its own drifted xz, and clamps it there for a hashed while.
+// Landing, resting, fading and splashing are therefore still pure functions of
+// (seed, t) — determinism, seeking, exact motion vectors and zero per-particle
+// CPU all survive, which is the only reason this is worth doing analytically
+// instead of with a collision pass and a state buffer.
+//
+// The wrap centre and the follow flag ride in invocation-private globals rather
+// than through five signatures, the same call F0 made for gPixelCoord in
+// deferred_shade.comp. They are written once at the top of main() and read by
+// lateral() from inside the solve.
+bool gFollow = false;
+vec2 gCentre = vec2(0.0);
+
+// Where a trajectory point IS, laterally — which under the toroidal follow wrap
+// is not where the trajectory says it is. The landing has to be solved against
+// the surface under the WRAPPED point, because that is the one the eye sees.
+vec2 lateral(vec3 p) { return gFollow ? wrapFollow(gCentre, p.xz) : p.xz; }
+
+// The baked surface height under a lateral point, field-local.
+//
+// NEAREST, deliberately, and this is a correctness choice rather than a saved
+// instruction. Bilinear across a roof edge returns heights strictly between the
+// roof and the ground three metres below it, and a flake landing on that ramp
+// rests in mid air off the eaves. Nearest quantises the LANDING POINT in xz to
+// one texel and puts every flake on a surface that actually exists.
+float surfaceAt(EmitAux A, vec2 xz) {
+    const vec2 t = floor((xz - vec2(A.bakeOriginX, A.bakeOriginZ)) * A.bakeInvCell);
+    // Off the map is not "height zero" — it is "nothing to land on". bakeMiss is
+    // far below anything the trajectory reaches, so the solve reports no landing
+    // and the particle falls out of the world exactly as it did pre-F5.
+    if (!(t.x >= 0.0 && t.y >= 0.0 && t.x < float(A.bakeRes) && t.y < float(A.bakeRes)))
+        return A.bakeMiss;
+    return HeightBuf(A.heightAddr).h[uint(t.y) * A.bakeRes + uint(t.x)];
+}
+
+// Halvings of the [0, life] bracket in the landing solve. See solveLanding.
+const int kLandIters = 12;
+
+// The age at which this slot first meets the baked surface, or a value past its
+// life when it never does.
+//
+// BISECTION with a FIXED trip count and no early out. The height descent is
+// monotone once the slot has left the spawn slab — the drift's own vertical
+// term moves at 0.30·driftAmp·1.21·ω, which is an order of magnitude under any
+// authored fall speed — so exactly one sign change exists and halving finds it.
+// The loop carries no data-dependent CONTROL flow, only data-dependent selects,
+// so every thread in a subgroup costs the same and two runs cannot disagree.
+//
+// ERROR, and where it does and does not go. kLandIters halvings leave a landing
+// TIME error of life / 2^kLandIters: 3.4 ms on a 14 s snow lifetime, 0.5 ms on a
+// 1.9 s rain one. The landing HEIGHT carries none of it, because the caller
+// throws away the solved y and re-reads surfaceAt() at the solved xz — the
+// clamp is exact whatever the iteration count is. What the residual does reach
+// is the landing POINT, through the lateral drift: 3.4 ms of a 0.6 m/s wind is
+// 2 mm, three orders of magnitude inside the one texel that decides WHICH
+// surface the flake is on. The count is therefore set by the time, not by the
+// geometry, and 12 is already well past where either matters.
+float solveLanding(Slot s, EmitAux A, float t0) {
+    float lo = 0.0, hi = s.life;
+    const vec3 pEnd = trajAt(s, t0 + hi, hi);
+    // Never reaches a surface inside its life: the pre-F5 answer, and the right
+    // one for every flake over a hole in the map or over open water.
+    if (pEnd.y > surfaceAt(A, lateral(pEnd))) return hi + hi + 1.0;
+    for (int k = 0; k < kLandIters; ++k) {
+        const float mid   = 0.5 * (lo + hi);
+        const vec3  pm    = trajAt(s, t0 + mid, mid);
+        const bool  above = pm.y > surfaceAt(A, lateral(pm));
+        lo = above ? mid : lo;
+        hi = above ? hi  : mid;
+    }
+    return hi;// the earliest age known to be at or under the surface
+}
+
+// What a LANDED particle looks like `e` seconds after it landed: the RADIUS it
+// writes into w, and whether it is still alive.
+//
+// The whole post-impact life rides in that one number, and that is what keeps
+// it free downstream. w already IS the radius under WSemantic::Radius, so the
+// mesh proxy scales by it, the billboard sizes by it, and a fade needs no alpha
+// channel, no second buffer and no new consumer anywhere.
+//
+// A radius at or above splashR0 can only mean a SPLASH — the host sets that
+// threshold just past the largest radius the size jitter can produce, and
+// nothing else in the lifecycle ever grows a particle — which is exactly how
+// particlefield_billboard.vert recognises a ring without being told.
+bool landedState(float e, float hold, float fade, float r0, float r1,
+                 float baseRadius, out float radiusOut) {
+    if (r0 > 0.0) {// splash
+        const float u = clamp(e / max(hold, 1e-4), 0.0, 1.0);
+        radiusOut = mix(r0, r1, u);
+        return e < hold;
+    }
+    if (e <= hold) { radiusOut = baseRadius; return true; }
+    const float f = (e - hold) / max(fade, 1e-4);
+    radiusOut = baseRadius * max(1.0 - f, 0.0);
+    return f < 1.0;
+}
+
+void main() {
+    const uint i        = gl_GlobalInvocationID.x;
+    const uint capacity = pc.capacityAndFollow & 0x7fffffffu;
+    const bool follow   = (pc.capacityAndFollow & 0x80000000u) != 0u;
+    if (i >= capacity) return;
+
+    Slot s;
+    s.spawn = pc.spawnCenter +
+              pc.spawnHalf * vec3(rndS(i, 1u), rndS(i, 2u), rndS(i, 3u));
+    // Period floor: the host clamps `lifetime`, but lifetimeJitter == 1 would
+    // still reach zero on the unlucky slot, and a zero period is a division by
+    // zero that turns that particle into a NaN — which then defeats every
+    // downstream bounds check (feedback_float_pi_sin_pow_nan).
+    s.period = max(pc.lifetime * (1.0 + pc.lifetimeJitter * rndS(i, 4u)), 1e-4);
+    s.life   = s.period * pc.duty;
+    s.vel    = pc.velocity +
+               pc.speedSpread * vec3(rndS(i, 5u), rndS(i, 6u), rndS(i, 7u));
+    s.birth  = rnd01(i, 0u);
+    s.ph1    = rnd01(i, 8u) * kTau;
+    s.ph2    = rnd01(i, 9u) * kTau;
+    s.ph3    = rnd01(i, 10u) * kTau;
+    // Without a per-slot frequency scale every particle wobbles at the same
+    // rate and a large field visibly pulses in lockstep. 0.75..1.25 decorrelates
+    // them while keeping the field one weather rather than a crowd.
+    s.fscale = 0.75 + 0.5 * rnd01(i, 11u);
+    s.kSpat  = (pc.driftScale > 0.0) ? (kTau / pc.driftScale) : 0.0;
+
+    const float radius = max(pc.size * (1.0 + pc.sizeJitter * rndS(i, 12u)), 0.0);
+
+    // The aux record (follow centre + F5 surface block). Dereferenced only by
+    // the features that need it; a plain weather field pushes 0 here, touches
+    // no memory, and executes the pre-F5 arithmetic.
+    EmitAux    A       = EmitAux(pc.auxAddr);// a reference cannot be `const`
+    const bool haveAux = (pc.auxAddr != 0ul);
+    gFollow = follow;
+    if (haveAux) gCentre = vec2(A.followX, A.followZ);
+    const bool surface = haveAux && (A.heightAddr != 0ul);
+
+    bool  aliveNow, alivePrev;
+    float cycNow, cycPrev, ageNow, agePrev;
+    vec3       pNow  = evalAt(s, pc.time, aliveNow, cycNow, ageNow);
+    vec3       pPrev = evalAt(s, pc.time - pc.dt, alivePrev, cycPrev, agePrev);
+    float      radNow = radius, radPrev = radius;
+
+    // ── F5: land, rest, fade / splash ───────────────────────────────────────
+    // ONE solve per thread, not two, and that is load-bearing rather than an
+    // optimisation. The landing is a property of the CYCLE, so the two samples
+    // either share one — and then the same landing serves both, and serving
+    // both from the SAME vec3 is what makes a resting flake's pos and prevPos
+    // BIT-identical and its motion vector exactly zero, which is the truth
+    // about a flake lying on a roof — or they do not, and the rebirth collapse
+    // below overwrites prev with now regardless.
+    if (surface) {
+        const float t0    = pc.time - ageNow;// absolute t at this cycle's birth
+        const float aLand = solveLanding(s, A, t0);
+        if (aLand <= s.life) {
+            const vec3 pTouch = trajAt(s, t0 + aLand, aLand);
+            const vec2 lxz    = lateral(pTouch);
+            // Height READ, not solved: the bisection's whole residual is in the
+            // time, and the surface it converged onto is the exact one.
+            const vec3 pLand = vec3(lxz.x, surfaceAt(A, lxz) + A.landBias, lxz.y);
+
+            const bool  splash = A.splashR0 > 0.0;
+            // Hashed, because a field whose flakes all vanish together reads as
+            // a blink. Stream 13 is F5's; every stream below it is F2's.
+            const float hold   = splash
+                                  ? max(A.splashSeconds, 1e-4)
+                                  : max(A.restSeconds *
+                                                (1.0 + A.restJitter * rndS(i, 13u)), 0.0);
+            const float fade   = A.fadeSeconds;
+
+            if (ageNow >= aLand) {
+                float rr;
+                const bool live = landedState(ageNow - aLand, hold, fade,
+                                              A.splashR0, A.splashR1, radius, rr);
+                pNow     = pLand;
+                radNow   = rr;
+                aliveNow = aliveNow && live;
+            }
+            if (agePrev >= aLand) {
+                float rr;
+                const bool live = landedState(agePrev - aLand, hold, fade,
+                                              A.splashR0, A.splashR1, radius, rr);
+                pPrev     = pLand;
+                radPrev   = rr;
+                alivePrev = alivePrev && live;
+            }
+        }
+    }
+
+    // Reborn between the two samples: report zero motion rather than a streak
+    // from wherever the previous cycle ended. The same choice, for the same
+    // reason, that particlefield_gbuf.vert makes when a slot was dead last
+    // frame. At a 6 s lifetime and 60 Hz this is 0.3% of slots per frame.
+    //
+    // AFTER the landing clamp, which used cycNow's landing for BOTH samples:
+    // when the cycles differ that answer is wrong for prev, and this is what
+    // discards it.
+    if (cycNow != cycPrev) {
+        pPrev = pNow; alivePrev = aliveNow; radPrev = radNow;
+    }
+
+    // AFTER the rebirth collapse, so a reborn slot's two samples stay exactly
+    // equal (the same lattice vector applied to the same point) and still
+    // report zero motion. A LANDED particle's position is already wrapped (the
+    // solve landed it at a wrapped point on purpose), and mod is idempotent on
+    // a value already inside its period — and, decisively, both samples run the
+    // identical expression on the identical input, so they stay identical.
+    if (follow) {
+        pNow.xz  = wrapFollow(gCentre, pNow.xz);
+        pPrev.xz = wrapFollow(gCentre, pPrev.xz);
+    }
+
+    // w carries the radius when alive and the DEAD SENTINEL when not. Under
+    // WSemantic::InvMass the value is inert and only the sign is read; under
+    // WSemantic::Radius the mesh proxy scales by w / uniformRadius, which is
+    // where per-flake size variety comes from — and, since F5, where the rest
+    // fade and the splash ring's expansion live too.
+    PosBuf(pc.posAddr).v[i]     = vec4(pNow,  aliveNow  ? radNow  : -1.0);
+    PosBuf(pc.prevPosAddr).v[i] = vec4(pPrev, alivePrev ? radPrev : -1.0);
+}

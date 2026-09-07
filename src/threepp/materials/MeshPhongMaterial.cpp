@@ -5,8 +5,6 @@ using namespace threepp;
 
 MeshPhongMaterial::MeshPhongMaterial()
     : MaterialWithColor(0xffffff),
-      MaterialWithCombine(CombineOperation::Multiply),
-      MaterialWithFlatShading(false),
       MaterialWithSpecular(0x111111, 30),
       MaterialWithLightMap(1),
       MaterialWithAoMap(1),
@@ -14,8 +12,11 @@ MeshPhongMaterial::MeshPhongMaterial()
       MaterialWithBumpMap(1),
       MaterialWithNormalMap(NormalMapType::TangentSpace, {1, 1}),
       MaterialWithDisplacementMap(1, 0),
+      MaterialWithRefractionRatio(0.98f),// virtual base: must be named here
       MaterialWithReflectivity(1, 0.98f),
-      MaterialWithWireframe(false, 1) {}
+      MaterialWithWireframe(false, 1),
+      MaterialWithCombine(CombineOperation::Multiply),
+      MaterialWithFlatShading(false) {}
 
 
 std::string MeshPhongMaterial::type() const {
@@ -61,6 +62,7 @@ void MeshPhongMaterial::copyInto(threepp::Material& material) const {
     m->alphaMap = alphaMap;
 
     m->envMap = envMap;
+    m->envMapIntensity = envMapIntensity;
     m->combine = combine;
     m->reflectivity = reflectivity;
     m->refractionRatio = refractionRatio;
@@ -69,6 +71,9 @@ void MeshPhongMaterial::copyInto(threepp::Material& material) const {
     m->wireframeLinewidth = wireframeLinewidth;
 
     m->flatShading = flatShading;
+
+    m->morphTargets = morphTargets;
+    m->morphNormals = morphNormals;
 }
 
 std::shared_ptr<Material> MeshPhongMaterial::createDefault() const {
@@ -80,6 +85,54 @@ std::shared_ptr<MeshPhongMaterial> MeshPhongMaterial::create(const std::unordere
 
     auto m = std::shared_ptr<MeshPhongMaterial>(new MeshPhongMaterial());
     m->setValues(values);
+
+    return m;
+}
+
+std::shared_ptr<MeshPhongMaterial> MeshPhongMaterial::create(const Params& p) {
+
+    auto m = std::shared_ptr<MeshPhongMaterial>(new MeshPhongMaterial());
+
+    p.applyBaseTo(*m);
+
+    // Apply only the fields the caller set; everything else keeps the constructor default.
+    // Params stores each value in a `field_` member; the material's field is `field`.
+#define TPP_SET(field) \
+    if (p.field##_) m->field = *p.field##_;
+#define TPP_TEX(field) \
+    if (p.field##_) m->field = p.field##_;
+
+    TPP_SET(color)
+    TPP_SET(emissive)
+    TPP_SET(emissiveIntensity)
+    TPP_TEX(emissiveMap)
+    TPP_SET(wireframe)
+    TPP_SET(wireframeLinewidth)
+    TPP_SET(flatShading)
+    TPP_TEX(map)
+    TPP_TEX(aoMap)
+    TPP_SET(aoMapIntensity)
+    TPP_TEX(bumpMap)
+    TPP_SET(bumpScale)
+    TPP_TEX(lightMap)
+    TPP_SET(lightMapIntensity)
+    TPP_TEX(normalMap)
+    TPP_SET(normalMapType)
+    TPP_TEX(alphaMap)
+    TPP_TEX(specularMap)
+    TPP_SET(specular)
+    TPP_TEX(displacementMap)
+    TPP_SET(displacementBias)
+    TPP_SET(displacementScale)
+    TPP_SET(shininess)
+    TPP_TEX(envMap)
+    TPP_SET(combine)
+    TPP_SET(reflectivity)
+    TPP_SET(refractionRatio)
+    TPP_SET(normalScale)
+
+#undef TPP_SET
+#undef TPP_TEX
 
     return m;
 }

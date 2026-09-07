@@ -1,0 +1,60 @@
+#version 460
+#extension GL_EXT_scalar_block_layout                    : require
+#extension GL_EXT_buffer_reference                       : require
+#extension GL_EXT_buffer_reference2                      : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// Wind sway for a merged grass-field mesh, written directly into the BLAS
+// vertex buffer (host-mapped, the same memory the AS build reads). The path
+// tracer's BLAS-refit-in-place mechanism then refits the AS against the new
+// positions, so the whole field stays ONE TLAS instance — no per-instance
+// TLAS rebuild.
+//
+// One thread per vertex. Unlike water_displace.comp (which derives rest
+// positions from a regular grid), grass blades are scattered, so rest
+// positions are read from an immutable `restIn` buffer and the per-vertex
+// height fraction (0 at blade base, 1 at tip) from `hfracIn`. Only positions
+// are written; normals are left as built (grass shading tolerates a static
+// normal under sway, and skipping the normal write halves the traffic and
+// drops a barrier).
+//
+// The sway formula matches the GL grass vertex shader (forest_demo
+// grassVertexShader()) so all three backends look consistent: a per-blade
+// phase from world XZ, two octaves of gust, bend weighted by heightFrac^2 so
+// the base stays planted and the tip moves most.
+
+layout(local_size_x = 64) in;
+
+layout(buffer_reference, scalar) buffer RestBuf  { float v[]; };// rest xyz (read)
+layout(buffer_reference, scalar) buffer HFracBuf { float v[]; };// height fraction (read)
+layout(buffer_reference, scalar) buffer PosBuf   { float v[]; };// displaced xyz (write → BLAS)
+
+layout(push_constant, scalar) uniform Pc {
+    PosBuf   posOut;
+    RestBuf  restIn;
+    HFracBuf hfracIn;
+    uint     vertexCount;
+    float    time;
+    float    windStrength;
+    float    windDirX;
+    float    windDirZ;
+} pc;
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.vertexCount) return;
+
+    const uint b = i * 3u;
+    const float rx = pc.restIn.v[b + 0u];
+    const float ry = pc.restIn.v[b + 1u];
+    const float rz = pc.restIn.v[b + 2u];
+    const float hf = pc.hfracIn.v[i];
+
+    const float phase = pc.time * 1.6 + rx * 0.25 + rz * 0.25;
+    const float gust  = sin(phase) * 0.6 + sin(phase * 2.3 + 1.7) * 0.25;
+    const float bend  = gust * pc.windStrength * hf * hf;// base planted, tip sways
+
+    pc.posOut.v[b + 0u] = rx + pc.windDirX * bend;
+    pc.posOut.v[b + 1u] = ry;
+    pc.posOut.v[b + 2u] = rz + pc.windDirZ * bend;
+}

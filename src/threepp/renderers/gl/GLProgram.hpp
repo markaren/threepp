@@ -11,7 +11,7 @@
 
 namespace threepp {
 
-    class IGLRenderer;
+    class Renderer;
 
     namespace gl {
 
@@ -25,7 +25,7 @@ namespace threepp {
             int usedTimes = 1;
             int program = -1;
 
-            GLProgram(const IGLRenderer* renderer, std::string cacheKey, const ProgramParameters* parameters, GLBindingStates* bindingStates);
+            GLProgram(const Renderer* renderer, std::string cacheKey, const ProgramParameters* parameters, GLBindingStates* bindingStates);
 
             GLProgram(const GLProgram&) = delete;
             GLProgram(GLProgram&&) = delete;
@@ -45,7 +45,11 @@ namespace threepp {
 
             GLProgram() = default;
 
-            inline static int programIdCount{0};
+            // Deliberately NOT atomic, unlike the Object3D/BufferGeometry/Material/
+    // Texture counters: a GLProgram is only ever constructed while the GL
+    // context is current, and a GL context belongs to exactly one thread. There
+    // is no second thread that can reach this.
+    inline static int programIdCount{0};
         };
 
     }// namespace gl

@@ -52,15 +52,15 @@ void Line::computeLineDistances() {
     if (!geometry_->hasIndex()) {
 
         const auto positionAttribute = geometry_->getAttribute<float>("position");
-        std::vector<float> lineDistances{0};
+        int vertexCount = positionAttribute->count();
+        std::vector<float> lineDistances(vertexCount, 0.0f);
 
-        for (int i = 1, l = positionAttribute->count(); i < l; i++) {
+        for (int i = 1; i < vertexCount; i++) {
 
             positionAttribute->setFromBufferAttribute(_start, i - 1);
             positionAttribute->setFromBufferAttribute(_end, i);
 
-            lineDistances.push_back(lineDistances[i - 1]);
-            lineDistances[i] += _start.distanceTo(_end);
+            lineDistances[i] = lineDistances[i - 1] + _start.distanceTo(_end);
         }
 
         geometry_->setAttribute("lineDistance", FloatBufferAttribute::create(lineDistances, 1));
@@ -109,7 +109,7 @@ void Line::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
         const auto start = std::max(0, drawRange.start);
         const auto end = std::min(index->count(), (drawRange.start + drawRange.count));
 
-        for (unsigned i = start, l = end - 1; i < l; i += step) {
+        for (int i = start, l = end - 1; i < l; i += step) {
 
             const auto a = index->getX(i);
             const auto b = index->getX(i + 1);
@@ -141,7 +141,7 @@ void Line::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
         const auto start = std::max(0, drawRange.start);
         const auto end = std::min(positionAttribute->count(), (drawRange.start + drawRange.count));
 
-        for (unsigned i = start, l = end - 1; i < l; i += step) {
+        for (int i = start, l = end - 1; i < l; i += step) {
 
             positionAttribute->setFromBufferAttribute(vStart, i);
             positionAttribute->setFromBufferAttribute(vEnd, i + 1);

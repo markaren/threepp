@@ -4,7 +4,7 @@
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
-#include "threepp/core/InterleavedBufferAttribute.hpp"
+
 #include "threepp/math/Triangle.hpp"
 
 
@@ -114,34 +114,6 @@ Box3& Box3::setFromObject(Object3D& object, bool precise) {
     this->makeEmpty();
 
     return this->expandByObject(object, precise);
-}
-
-void Box3::setFromBufferAttribute(const InterleavedBufferAttribute& attribute) {
-    float minX = +Infinity<float>;
-    float minY = +Infinity<float>;
-    float minZ = +Infinity<float>;
-
-    float maxX = -Infinity<float>;
-    float maxY = -Infinity<float>;
-    float maxZ = -Infinity<float>;
-
-    for (unsigned i = 0;i< attribute.count(); i++) {
-
-        const float x = attribute.getX(i);
-        const float y = attribute.getY(i);
-        const float z = attribute.getZ(i);
-
-        if (x < minX) minX = x;
-        if (y < minY) minY = y;
-        if (z < minZ) minZ = z;
-
-        if (x > maxX) maxX = x;
-        if (y > maxY) maxY = y;
-        if (z > maxZ) maxZ = z;
-    }
-
-    this->min_.set(minX, minY, minZ);
-    this->max_.set(maxX, maxY, maxZ);
 }
 
 Box3 Box3::clone() const {

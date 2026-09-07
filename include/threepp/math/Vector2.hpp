@@ -4,19 +4,7 @@
 #define THREEPP_VECTOR2_HPP
 
 #include <ostream>
-/* Save and undefine possible `min`/`max` macros so member functions named
-   `min` / `max` are not interpreted as macro invocations. */
-#if defined(_MSC_VER) || defined(__GNUC__) || defined(__clang__)
-#pragma push_macro("min")
-#pragma push_macro("max")
-#endif
 
-#ifdef min
-#undef min
-#endif
-#ifdef max
-#undef max
-#endif
 namespace threepp {
 
     class Matrix3;
@@ -55,6 +43,8 @@ namespace threepp {
         Vector2& setY(float value);
 
         float& operator[](unsigned int index);
+
+        float operator[](unsigned int index) const;
 
         Vector2& copy(const Vector2& v);
 
@@ -182,15 +172,9 @@ namespace threepp {
             array[offset + 1] = this->y;
         }
 
-        operator std::pair<int, int>() const {
+        operator std::pair<int, int>() const;
 
-            return {static_cast<int>(x), static_cast<int>(y)};
-        }
-
-        operator std::pair<float, float>() const {
-
-            return {x, y};
-        }
+        operator std::pair<float, float>() const;
 
         friend std::ostream& operator<<(std::ostream& os, const Vector2& v) {
             os << "Vector2(x=" << v.x << ", y=" << v.y << ")";
@@ -202,7 +186,8 @@ namespace threepp {
     template<std::size_t N>
     auto get(const Vector2& p) {
         if constexpr (N == 0) return p.x;
-        else if constexpr (N == 1) return p.y;
+        else if constexpr (N == 1)
+            return p.y;
     }
 
 }// namespace threepp

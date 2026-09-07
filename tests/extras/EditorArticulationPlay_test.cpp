@@ -1,0 +1,826 @@
+// URDF robots simulated during Play.
+//
+// Two things this pins that nothing else does:
+//
+//   frame consistency  the visual Robot from URDFLoader::load and the PhysX
+//                       articulation from loadArticulation must agree on where a
+//                       link is. They share URDFLoader's frame handling, so no
+//                       Z-up->Y-up correction is applied - this test is what would
+//                       catch a silent double-rotation if that ever changed.
+//   the play seam       PhysicsPlaySession builds an articulation from a robot's
+//                       ArticulationConfig, holds the authored pose with the PD
+//                       drive, mirrors the solved joints back onto the visual
+//                       robot, skips a robot's links in the rigid-body scan, folds
+//                       a uniform scale into the build (the millimetre-URDF case)
+//                       and refuses a non-uniform one.
+//
+// Needs the PhysX SDK, so this target only exists where the SDK was found.
+
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
+
+#include "threepp/extras/editor/ArticulationConfig.hpp"
+#include "threepp/extras/editor/PhysicsConfig.hpp"
+#include "threepp/extras/editor/PhysicsPlaySession.hpp"
+#include "threepp/extras/editor/RobotConfig.hpp"
+
+#include "threepp/cameras/PerspectiveCamera.hpp"
+#include "threepp/loaders/URDFLoader.hpp"
+#include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/Robot.hpp"
+#include "threepp/scenes/Scene.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+using namespace threepp;
+using namespace threepp::editor;
+using Catch::Matchers::WithinAbs;
+
+namespace {
+
+    constexpr float kFrame = 1.f / 60.f;
+
+    // A three-link arm with one revolute and one prismatic joint, primitives only
+    // (box + cylinder collision), so the articulation builder can cook it and no
+    // external mesh file is needed. The revolute link starts horizontal (+Y at 0.3
+    // above the base), so gravity would swing it down without a drive holding it.
+    const char* kUrdf = R"(
+        <robot name="arm">
+          <link name="base_link">
+            <visual><geometry><box size="0.2 0.2 0.2"/></geometry></visual>
+            <collision><geometry><box size="0.2 0.2 0.2"/></geometry></collision>
+          </link>
+          <link name="upper_link">
+            <visual><geometry><box size="0.1 0.4 0.1"/></geometry></visual>
+            <collision><geometry><box size="0.1 0.4 0.1"/></geometry></collision>
+          </link>
+          <link name="slider_link">
+            <visual><geometry><box size="0.05 0.2 0.05"/></geometry></visual>
+            <collision><geometry><box size="0.05 0.2 0.05"/></geometry></collision>
+          </link>
+          <joint name="shoulder" type="revolute">
+            <parent link="base_link"/>
+            <child link="upper_link"/>
+            <origin xyz="0 0 0.3" rpy="0 0 0"/>
+            <axis xyz="0 0 1"/>
+            <limit lower="-2.0" upper="2.0"/>
+          </joint>
+          <joint name="extend" type="prismatic">
+            <parent link="upper_link"/>
+            <child link="slider_link"/>
+            <origin xyz="0 0.4 0" rpy="0 0 0"/>
+            <axis xyz="0 1 0"/>
+            <limit lower="0.0" upper="0.5"/>
+          </joint>
+        </robot>)";
+
+    // The same arm drawn in millimetres — every length x1000, every angle left
+    // alone. What a CAD export looks like when it lands in a metre scene.
+    const char* kUrdfMillimetres = R"(
+        <robot name="arm">
+          <link name="base_link">
+            <visual><geometry><box size="200 200 200"/></geometry></visual>
+            <collision><geometry><box size="200 200 200"/></geometry></collision>
+          </link>
+          <link name="upper_link">
+            <visual><geometry><box size="100 400 100"/></geometry></visual>
+            <collision><geometry><box size="100 400 100"/></geometry></collision>
+          </link>
+          <link name="slider_link">
+            <visual><geometry><box size="50 200 50"/></geometry></visual>
+            <collision><geometry><box size="50 200 50"/></geometry></collision>
+          </link>
+          <joint name="shoulder" type="revolute">
+            <parent link="base_link"/>
+            <child link="upper_link"/>
+            <origin xyz="0 0 300" rpy="0 0 0"/>
+            <axis xyz="0 0 1"/>
+            <limit lower="-2.0" upper="2.0"/>
+          </joint>
+          <joint name="extend" type="prismatic">
+            <parent link="upper_link"/>
+            <child link="slider_link"/>
+            <origin xyz="0 400 0" rpy="0 0 0"/>
+            <axis xyz="0 1 0"/>
+            <limit lower="0.0" upper="500.0"/>
+          </joint>
+        </robot>)";
+
+    // loadArticulation and the URDF re-parse both take a path, so the fixture has
+    // to be on disk. One temp file, reused by every test.
+    std::filesystem::path writeFixture() {
+        const auto dir = std::filesystem::temp_directory_path() / "threepp-articulation-test";
+        std::filesystem::create_directories(dir);
+        const auto path = dir / "arm.urdf";
+        std::ofstream(path, std::ios::trunc) << kUrdf;
+        return path;
+    }
+
+    std::filesystem::path writeMillimetreFixture() {
+        const auto dir = std::filesystem::temp_directory_path() / "threepp-articulation-test";
+        std::filesystem::create_directories(dir);
+        const auto path = dir / "arm_mm.urdf";
+        std::ofstream(path, std::ios::trunc) << kUrdfMillimetres;
+        return path;
+    }
+
+    std::shared_ptr<Robot> loadArm(const std::filesystem::path& path) {
+        URDFLoader loader;
+        return loader.load(path);
+    }
+
+    // A PARAMETERISED description: the upper link's length, and so where the distal joint sits,
+    // comes from a xacro argument. Two links only, revolute, primitives - the point is the arg,
+    // not the mechanism.
+    //
+    // The real case this stands in for is UR's ur.urdf.xacro, which derives its joint-limit and
+    // kinematics yaml PATHS from $(arg ur_type); expanded with the file's default the paths do
+    // not exist and nothing builds at all. An arg that moves a joint fails more quietly, which
+    // makes it the better regression: it is the silent version.
+    // NOTE the XML( ) delimiter rather than a bare R"( )": `$(arg reach)"` contains the sequence
+    // that would close the default one.
+    const char* kUrdfWithArgs = R"XML(
+        <robot name="arm" xmlns:xacro="http://www.ros.org/wiki/xacro">
+          <xacro:arg name="reach" default="0.1"/>
+          <link name="base_link">
+            <visual><geometry><box size="0.2 0.2 0.2"/></geometry></visual>
+            <collision><geometry><box size="0.2 0.2 0.2"/></geometry></collision>
+          </link>
+          <link name="upper_link">
+            <visual><geometry><box size="0.1 0.1 0.1"/></geometry></visual>
+            <collision><geometry><box size="0.1 0.1 0.1"/></geometry></collision>
+          </link>
+          <joint name="shoulder" type="revolute">
+            <parent link="base_link"/>
+            <child link="upper_link"/>
+            <origin xyz="0 0 $(arg reach)" rpy="0 0 0"/>
+            <axis xyz="0 1 0"/>
+            <limit lower="-2.0" upper="2.0"/>
+          </joint>
+        </robot>)XML";
+
+    std::filesystem::path writeArgFixture() {
+        const auto dir = std::filesystem::temp_directory_path() / "threepp-articulation-test";
+        std::filesystem::create_directories(dir);
+        const auto path = dir / "arm_args.urdf.xacro";
+        std::ofstream(path, std::ios::trunc) << kUrdfWithArgs;
+        return path;
+    }
+
+    Object3D* findByName(Object3D& root, const std::string& name) {
+        Object3D* found = nullptr;
+        root.traverse([&](Object3D& node) {
+            if (!found && node.name == name) found = &node;
+        });
+        return found;
+    }
+
+    // Author a robot into a scene: URDF reference + a joint pose + a Simulate opt-in.
+    std::shared_ptr<Robot> authorRobot(Scene& scene, const std::filesystem::path& path,
+                                       const std::vector<float>& pose, bool fixedBase = true,
+                                       std::vector<std::pair<std::string, std::string>> args = {}) {
+        URDFLoader loader;
+        if (!args.empty()) {
+            std::map<std::string, std::string> map;
+            for (const auto& [name, value] : args) map[name] = value;
+            loader.setArgs(map);
+        }
+        auto robot = loader.load(path);
+        RobotConfig rc;
+        rc.urdf = path.string();
+        rc.joints = pose;
+        rc.xacroArgs = std::move(args);
+        rc.write(*robot);
+        for (std::size_t i = 0; i < pose.size() && i < robot->numDOF(); ++i) {
+            robot->setJointValue(i, pose[i]);
+        }
+        ArticulationConfig ac;
+        ac.enabled = true;
+        ac.fixedBase = fixedBase;
+        ac.write(*robot);
+        scene.add(robot);
+        return robot;
+    }
+
+}// namespace
+
+
+TEST_CASE("A failed articulation load says why") {
+
+    // loadArticulation builds its own URDFLoader, uses it, and lets it die -
+    // so everything the parser worked out about the file (an xacro line
+    // number, an unreadable include, a document with no <robot> root) went
+    // with it, and the caller got back an empty result that says only "no".
+    // The result now carries the account out. python's load_articulation puts
+    // it in the exception, which is where a ROS node reads it.
+    const auto dir = std::filesystem::temp_directory_path() / "threepp-articulation-test";
+    std::filesystem::create_directories(dir);
+
+    PhysxWorld::Settings settings;
+    settings.fixedTimestep = kFrame;
+    settings.maxSubSteps = 1;
+
+    SECTION("a file that is not there") {
+
+        PhysxWorld world(settings);
+        const auto missing = dir / "no_such_robot.urdf";
+        std::error_code ec;
+        std::filesystem::remove(missing, ec);
+
+        auto built = loadArticulation(world, missing, URDFArticulationOptions{});
+        REQUIRE_FALSE(built.articulation);
+        REQUIRE_FALSE(built.error.empty());
+        CHECK(built.error.find("no_such_robot") != std::string::npos);
+        CHECK_FALSE(built.diagnostics.empty());
+    }
+
+    SECTION("a xacro that cannot expand") {
+
+        PhysxWorld world(settings);
+        const auto path = dir / "undefined_property.urdf.xacro";
+        // The undefined name is on line 4, which is what the assertion below
+        // reads back out of the message.
+        std::ofstream(path, std::ios::trunc) << R"XML(<?xml version='1.0'?>
+<robot name='x' xmlns:xacro='http://www.ros.org/wiki/xacro'>
+  <link name='base'><visual><geometry>
+    <box size='${nope} 1 1'/>
+  </geometry></visual></link>
+</robot>
+)XML";
+
+        auto built = loadArticulation(world, path, URDFArticulationOptions{});
+        REQUIRE_FALSE(built.articulation);
+        REQUIRE_FALSE(built.error.empty());
+        // The name it could not resolve AND the line it was on - the two
+        // things that turn "it failed" into a fix.
+        CHECK(built.error.find("nope") != std::string::npos);
+        CHECK(built.error.find(":4") != std::string::npos);
+    }
+
+    SECTION("a load that succeeds leaves the error empty") {
+
+        PhysxWorld world(settings);
+        const auto path = writeFixture();
+
+        URDFArticulationOptions opts;
+        opts.fixedBase = true;
+        opts.renderVisuals = false;
+        auto built = loadArticulation(world, path, opts);
+        REQUIRE(built.articulation);
+        // The invariant the field is documented with: empty exactly when the
+        // articulation came up. Diagnostics may still hold warnings, which is
+        // why the two are separate.
+        CHECK(built.error.empty());
+    }
+}
+
+TEST_CASE("The editor's failure log carries the parser's reason") {
+
+    // The log line at the end of the chain. URDFLoader keeps diagnostics so
+    // that "the editor puts lastError() in front of the user instead of a
+    // generic message" (its header's words) - but the session's robot import
+    // said "the URDF at X is unreadable" whatever the parser knew. A user
+    // whose xacro has a typo on line 4 should read exactly that.
+    const auto dir = std::filesystem::temp_directory_path() / "threepp-articulation-test";
+    std::filesystem::create_directories(dir);
+    const auto bad = dir / "bad_robot.urdf.xacro";
+    std::ofstream(bad, std::ios::trunc) << R"XML(<?xml version='1.0'?>
+<robot name='x' xmlns:xacro='http://www.ros.org/wiki/xacro'>
+  <link name='base'><visual><geometry>
+    <box size='${nope} 1 1'/>
+  </geometry></visual></link>
+</robot>
+)XML";
+
+    // The robot node is EMPTY on purpose: with an unloadable URDF there is no
+    // visual robot to import, but a document can still carry the config (a
+    // scene authored on a machine where the file existed, opened on one where
+    // it is broken), and the session must say something useful, not crash and
+    // not shrug.
+    Scene scene;
+    // Robot::create() would do as well; it exists now (the deserialiser needs
+    // it). It did not always, and the inherited Object3D::create() that spelling
+    // used to resolve to built a plain Object3D the session's as<Robot>()
+    // discovery walks straight past - hence the explicit make_shared here.
+    auto robot = std::make_shared<Robot>();
+    robot->name = "Broken";
+    RobotConfig rc;
+    rc.urdf = bad.string();
+    rc.write(*robot);
+    ArticulationConfig ac;
+    ac.enabled = true;
+    ac.write(*robot);
+    scene.add(robot);
+
+    PhysicsPlaySession session;
+    std::vector<std::string> logged;
+    session.setLogger([&](const std::string& line) { logged.push_back(line); });
+    session.start(scene);
+
+    const auto found = std::find_if(logged.begin(), logged.end(), [](const std::string& line) {
+        return line.find("Broken") != std::string::npos &&
+               line.find("nope") != std::string::npos &&
+               line.find(":4") != std::string::npos;
+    });
+    CHECK(found != logged.end());
+
+    session.stop();
+}
+
+TEST_CASE("The articulation and the visual robot agree on where a link is") {
+
+    const auto path = writeFixture();
+
+    // Build the visual robot at a non-trivial pose and read a distal link's world
+    // position; then build the articulation at the same pose and read the bound
+    // link's position. No Z-up->Y-up correction is applied to either, so they must
+    // match - a double-rotation would put them metres apart.
+    const std::vector<float> pose{0.6f, 0.2f};// revolute 0.6 rad, prismatic 0.2 m
+
+    auto visual = loadArm(path);
+    REQUIRE(visual);
+    for (std::size_t i = 0; i < pose.size() && i < visual->numDOF(); ++i) {
+        visual->setJointValue(i, pose[i]);
+    }
+    visual->updateMatrixWorld(true);
+    auto* visualLink = findByName(*visual, "slider_link");
+    REQUIRE(visualLink != nullptr);
+    Vector3 visualPos;
+    visualLink->getWorldPosition(visualPos);
+
+    PhysxWorld::Settings settings;
+    settings.fixedTimestep = kFrame;
+    settings.maxSubSteps = 1;
+    PhysxWorld world(settings);
+
+    URDFArticulationOptions opts;
+    opts.fixedBase = true;
+    opts.renderVisuals = false;
+    auto built = loadArticulation(world, path, opts);
+    REQUIRE(built.articulation);
+    REQUIRE(built.jointNames.size() == 2);
+    REQUIRE(built.links.size() == 2);
+
+    // Pose the articulation through the SAME name -> value mapping the play
+    // session uses (add order need not equal the visual joint order).
+    std::vector<float> dofPose(built.jointNames.size(), 0.f);
+    for (std::size_t d = 0; d < built.jointNames.size(); ++d) {
+        if (built.jointNames[d] == "shoulder") dofPose[d] = pose[0];
+        else if (built.jointNames[d] == "extend") dofPose[d] = pose[1];
+    }
+    built.articulation->setJointPositions(dofPose.data(), dofPose.size());
+    // One step so the bound-link poses reflect the applied cache.
+    world.step(kFrame);
+
+    // The slider link is the child of the "extend" joint; links are index-aligned
+    // with jointNames, so find that index and read the link's world position.
+    std::size_t extendIdx = built.jointNames.size();
+    for (std::size_t d = 0; d < built.jointNames.size(); ++d) {
+        if (built.jointNames[d] == "extend") extendIdx = d;
+    }
+    REQUIRE(extendIdx < built.links.size());
+    const Vector3 artPos = built.links[extendIdx].position();
+
+    CHECK_THAT(artPos.x, WithinAbs(visualPos.x, 2e-2f));
+    CHECK_THAT(artPos.y, WithinAbs(visualPos.y, 2e-2f));
+    CHECK_THAT(artPos.z, WithinAbs(visualPos.z, 2e-2f));
+}
+
+TEST_CASE("A fixed-base robot holds its authored pose under the drive") {
+
+    const auto path = writeFixture();
+    Scene scene;
+
+    // The shoulder is authored well off zero; gravity would pull the horizontal
+    // arm down if the drive were not holding it.
+    const std::vector<float> pose{0.8f, 0.1f};
+    auto robot = authorRobot(scene, path, pose, /*fixedBase*/ true);
+
+    PhysicsPlaySession physics;
+    physics.start(scene);
+    REQUIRE(physics.articulationCount() == 1);
+
+    for (int i = 0; i < 120; ++i) physics.update(kFrame);
+
+    // The visual robot's joints track the simulated ones, and the PD held the
+    // authored pose against gravity (a wider tolerance than the sensor tests, since
+    // a stiff-but-finite drive settles a little off target).
+    CHECK_THAT(robot->getJointValue(0), WithinAbs(0.8f, 0.15f));
+    // And it did not just fall to a limit.
+    CHECK(std::abs(robot->getJointValue(0)) > 0.4f);
+
+    physics.stop();
+    CHECK(physics.articulationCount() == 0);
+}
+
+TEST_CASE("The visual robot's joints track the articulation") {
+
+    const auto path = writeFixture();
+    Scene scene;
+
+    // Author both joints off zero; the drive holds them there and the visual
+    // robot must mirror whatever the articulation actually settled at, by NAME
+    // (the DOF add-order need not equal the visual joint order).
+    auto robot = authorRobot(scene, path, {0.7f, 0.3f}, /*fixedBase*/ true);
+
+    PhysicsPlaySession physics;
+    physics.start(scene);
+    const auto* played = physics.findArticulation(robot.get());
+    REQUIRE(played != nullptr);
+    REQUIRE(played->articulation != nullptr);
+
+    for (int i = 0; i < 120; ++i) physics.update(kFrame);
+
+    const auto positions = played->articulation->jointPositions();// DOF add-order
+    REQUIRE(positions.size() == 2);
+
+    // For each simulated joint, the visual robot's same-named joint mirrors it.
+    const auto info = robot->getArticulatedJointInfo();
+    bool checkedAny = false;
+    for (std::size_t d = 0; d < played->jointNames.size(); ++d) {
+        for (std::size_t v = 0; v < info.size(); ++v) {
+            if (info[v].name == played->jointNames[d]) {
+                CHECK_THAT(robot->getJointValue(v), WithinAbs(positions[d], 1e-3f));
+                checkedAny = true;
+            }
+        }
+    }
+    CHECK(checkedAny);
+    // And the shoulder is near its authored 0.7, so the mirror is of a real pose,
+    // not of a collapsed-to-zero one.
+    CHECK(std::abs(robot->getJointValue(0)) > 0.4f);
+
+    physics.stop();
+}
+
+TEST_CASE("Scaling a robot up multiplies its gravity load, and the density case says so") {
+
+    // Two mass regimes, two outcomes — measured before this test was written:
+    //
+    //             scale x1     x2            x4
+    //   density   0.003 rad    0.056 (x16)   1.2 rad - collapsed
+    //   authored  0.007 rad    0.014 (x2)    0.029 rad - holds
+    //
+    // A link with no <inertial><mass> takes density x volume, so scaling the
+    // robot up cubes its mass and the gravity torque grows with the FOURTH
+    // power of the scale, against drive gains that are constants from
+    // ArticulationConfig. An authored mass is deliberately never scaled (the
+    // millimetre-CAD contract: lengths in mm, masses already in kg), so there
+    // the torque grows only linearly and the drive keeps up. This pins both
+    // policies through their observable outcome, and the diagnostic that names
+    // the sagging one.
+    const char* kUrdfWithMass = R"(
+        <robot name="arm">
+          <link name="base_link">
+            <visual><geometry><box size="0.2 0.2 0.2"/></geometry></visual>
+            <collision><geometry><box size="0.2 0.2 0.2"/></geometry></collision>
+            <inertial><mass value="8.0"/><inertia ixx="0.05" iyy="0.05" izz="0.05" ixy="0" ixz="0" iyz="0"/></inertial>
+          </link>
+          <link name="upper_link">
+            <visual><geometry><box size="0.1 0.4 0.1"/></geometry></visual>
+            <collision><geometry><box size="0.1 0.4 0.1"/></geometry></collision>
+            <inertial><mass value="4.0"/><inertia ixx="0.06" iyy="0.01" izz="0.06" ixy="0" ixz="0" iyz="0"/></inertial>
+          </link>
+          <link name="slider_link">
+            <visual><geometry><box size="0.05 0.2 0.05"/></geometry></visual>
+            <collision><geometry><box size="0.05 0.2 0.05"/></geometry></collision>
+            <inertial><mass value="1.0"/><inertia ixx="0.004" iyy="0.001" izz="0.004" ixy="0" ixz="0" iyz="0"/></inertial>
+          </link>
+          <joint name="shoulder" type="revolute">
+            <parent link="base_link"/>
+            <child link="upper_link"/>
+            <origin xyz="0 0 0.3" rpy="0 0 0"/>
+            <axis xyz="0 0 1"/>
+            <limit lower="-2.0" upper="2.0"/>
+          </joint>
+          <joint name="extend" type="prismatic">
+            <parent link="upper_link"/>
+            <child link="slider_link"/>
+            <origin xyz="0 0.4 0" rpy="0 0 0"/>
+            <axis xyz="0 1 0"/>
+            <limit lower="0.0" upper="0.5"/>
+          </joint>
+        </robot>)";
+
+    const auto dir = std::filesystem::temp_directory_path() / "threepp-articulation-test";
+    std::filesystem::create_directories(dir);
+    const auto massPath = dir / "arm_mass.urdf";
+    std::ofstream(massPath, std::ios::trunc) << kUrdfWithMass;
+
+    struct Outcome {
+        float sag = -1.f;
+        bool warned = false;
+    };
+
+    const auto run = [&](const std::filesystem::path& p, float s) -> Outcome {
+        Scene scene;
+        auto robot = authorRobot(scene, p, {0.8f, 0.1f}, /*fixedBase*/ true);
+        robot->scale.set(s, s, s);
+        scene.updateMatrixWorld(true);
+
+        Outcome outcome;
+        PhysicsPlaySession physics;
+        physics.setLogger([&](const std::string& line) {
+            if (line.find("density x volume") != std::string::npos) outcome.warned = true;
+        });
+        physics.start(scene);
+        if (physics.articulationCount() != 1) return outcome;
+        for (int i = 0; i < 240; ++i) physics.update(kFrame);
+        outcome.sag = std::abs(0.8f - robot->getJointValue(0));
+        physics.stop();
+        return outcome;
+    };
+
+    // Density-derived masses at x4: the drive gives way, and the console said
+    // why before the first step ran.
+    const auto density = run(writeFixture(), 4.f);
+    CHECK(density.sag > 0.3f);
+    CHECK(density.warned);
+
+    // Authored masses at x4: still holding, nothing to warn about.
+    const auto authored = run(massPath, 4.f);
+    CHECK(authored.sag >= 0.f);
+    CHECK(authored.sag < 0.1f);
+    CHECK_FALSE(authored.warned);
+
+    // And at scale 1 the density robot neither sags nor warns - the diagnostic
+    // is about scale, not about the fallback itself.
+    const auto unscaled = run(writeFixture(), 1.f);
+    CHECK(unscaled.sag >= 0.f);
+    CHECK(unscaled.sag < 0.1f);
+    CHECK_FALSE(unscaled.warned);
+}
+
+TEST_CASE("A camera bolted to a link rides the simulated robot") {
+
+    // The robot-cell case: a camera (or any sensor host) parented to a link, so
+    // it sees what that link sees while the articulation drives it. Three things
+    // have to hold at once, and this pins all three — the last one is what a
+    // play/stop cycle used to break by rebuilding the subtree from the URDF.
+    const auto path = writeFixture();
+    Scene scene;
+
+    auto robot = authorRobot(scene, path, {0.f, 0.f}, /*fixedBase*/ true);
+    auto* link = findByName(*robot, "slider_link");
+    REQUIRE(link != nullptr);
+
+    auto eye = PerspectiveCamera::create(60.f, 1.f, 0.01f, 50.f);
+    eye->name = "WristCam";
+    eye->position.set(0.f, 0.f, 0.15f);// off the shoulder axis, so rotation moves it
+    link->add(eye);
+
+    scene.updateMatrixWorld(true);
+    Vector3 atRest;
+    eye->getWorldPosition(atRest);
+
+    // Drive both joints away from zero and let the articulation settle there.
+    robot->setJointValue(0, 0.9f);
+    robot->setJointValue(1, 0.3f);
+    auto config = *RobotConfig::read(*robot);
+    config.joints = robot->jointValues();
+    config.write(*robot);
+
+    PhysicsPlaySession physics;
+    physics.start(scene);
+    for (int i = 0; i < 120; ++i) physics.update(kFrame);
+
+    scene.updateMatrixWorld(true);
+    Vector3 whilePlaying;
+    eye->getWorldPosition(whilePlaying);
+
+    // 1. It is still where its link put it — the simulated pose reaches the
+    //    camera's world matrix, so a render from it looks down the real arm.
+    Vector3 linkAt;
+    link->getWorldPosition(linkAt);
+    CHECK(linkAt.distanceTo(whilePlaying) < 0.16f);// the 0.15 local offset
+
+    // 2. And that is a MOVED pose, not the rest pose it was bolted on at.
+    CHECK(atRest.distanceTo(whilePlaying) > 0.05f);
+
+    physics.stop();
+
+    // 3. The node is still there, still on its link, after Stop.
+    REQUIRE(link->parent != nullptr);
+    auto* survivor = findByName(*robot, "WristCam");
+    REQUIRE(survivor != nullptr);
+    CHECK(survivor->parent == link);
+}
+
+TEST_CASE("A PhysicsConfig on a robot link does not create a second body") {
+
+    const auto path = writeFixture();
+    Scene scene;
+
+    auto robot = authorRobot(scene, path, {0.0f, 0.0f}, /*fixedBase*/ true);
+
+    // Author a rigid body on a LINK of the articulated robot. It must be skipped:
+    // the articulation link is already the body there.
+    auto* link = findByName(*robot, "upper_link");
+    REQUIRE(link != nullptr);
+    PhysicsConfig pc;
+    pc.enabled = true;
+    pc.body = PhysicsConfig::Body::Dynamic;
+    pc.write(*link);
+
+    PhysicsPlaySession physics;
+    physics.start(scene);
+
+    CHECK(physics.articulationCount() == 1);
+    // No rigid body was created for the link (nor for any robot descendant).
+    CHECK(physics.bodyCount() == 0);
+    CHECK(physics.findActor(link) == nullptr);
+
+    physics.stop();
+}
+
+TEST_CASE("A non-uniformly scaled robot is skipped with a log line") {
+
+    const auto path = writeFixture();
+    Scene scene;
+
+    auto robot = authorRobot(scene, path, {0.0f, 0.0f}, /*fixedBase*/ true);
+    // A sphere, a capsule and a joint frame have no way to take a per-axis
+    // scale, so this one has to be refused rather than approximated.
+    robot->scale.set(2.f, 1.f, 2.f);
+
+    std::string logged;
+    PhysicsPlaySession physics;
+    physics.setLogger([&](const std::string& m) { logged += m + "\n"; });
+    physics.start(scene);
+
+    CHECK(physics.articulationCount() == 0);
+    CHECK(logged.find("scale") != std::string::npos);
+
+    physics.stop();
+}
+
+TEST_CASE("A millimetre robot scaled into a metre scene simulates in the right place") {
+
+    // The whole point of the units support, end to end: the SAME arm drawn in
+    // millimetres, dropped in at 0.001, must simulate where the metre arm does.
+    const auto metrePath = writeFixture();
+    const auto mmPath = writeMillimetreFixture();
+
+    const std::vector<float> metrePose{0.6f, 0.2f};    // rad, metres
+    const std::vector<float> mmPose{0.6f, 200.f};      // rad, millimetres - the
+                                                       // robot's own units, which
+                                                       // is what the document stores
+    constexpr float unit = 0.001f;
+
+    // Where the metre robot puts its distal link, kinematically.
+    auto metreVisual = loadArm(metrePath);
+    REQUIRE(metreVisual);
+    for (std::size_t i = 0; i < metrePose.size() && i < metreVisual->numDOF(); ++i) {
+        metreVisual->setJointValue(i, metrePose[i]);
+    }
+    metreVisual->updateMatrixWorld(true);
+    auto* metreLink = findByName(*metreVisual, "slider_link");
+    REQUIRE(metreLink != nullptr);
+    Vector3 expected;
+    metreLink->getWorldPosition(expected);
+
+    // The millimetre robot, scaled into the scene the way a user would.
+    Scene scene;
+    auto robot = authorRobot(scene, mmPath, mmPose, /*fixedBase*/ true);
+    robot->scale.set(unit, unit, unit);
+
+    std::string logged;
+    PhysicsPlaySession physics;
+    physics.setLogger([&](const std::string& m) { logged += m + "\n"; });
+    physics.start(scene);
+
+    INFO(logged);
+    REQUIRE(physics.articulationCount() == 1);
+
+    const auto* played = physics.findArticulation(robot.get());
+    REQUIRE(played != nullptr);
+    const auto* extend = played->linkFor("extend");
+    REQUIRE(extend != nullptr);
+
+    // A few frames so the drive settles and the bound poses are current.
+    for (int i = 0; i < 60; ++i) physics.update(kFrame);
+
+    // The articulation link sits where the metre robot's link does - the shapes,
+    // the joint frames and the prismatic offset were all built at scene size.
+    const Vector3 artPos = extend->position();
+    CHECK_THAT(artPos.x, WithinAbs(expected.x, 2e-2f));
+    CHECK_THAT(artPos.y, WithinAbs(expected.y, 2e-2f));
+    CHECK_THAT(artPos.z, WithinAbs(expected.z, 2e-2f));
+
+    // And the mirror came back in the ROBOT's units, not the scene's: a
+    // prismatic DOF solves in metres here, and the visual robot slides in
+    // millimetres. Without the conversion this reads ~0.2 instead of ~200 and
+    // the arm silently collapses to its zero pose on screen.
+    const auto info = robot->getArticulatedJointInfo();
+    std::size_t prismatic = info.size();
+    for (std::size_t v = 0; v < info.size(); ++v) {
+        if (info[v].name == "extend") prismatic = v;
+    }
+    REQUIRE(prismatic < info.size());
+    CHECK_THAT(robot->getJointValue(prismatic), WithinAbs(200.f, 40.f));
+
+    // Which is the same thing as saying the visual link agrees with the sim.
+    robot->updateMatrixWorld(true);
+    auto* visualLink = findByName(*robot, "slider_link");
+    REQUIRE(visualLink != nullptr);
+    Vector3 visualPos;
+    visualLink->getWorldPosition(visualPos);
+    CHECK_THAT(visualPos.x, WithinAbs(artPos.x, 3e-2f));
+    CHECK_THAT(visualPos.y, WithinAbs(artPos.y, 3e-2f));
+    CHECK_THAT(visualPos.z, WithinAbs(artPos.z, 3e-2f));
+
+    physics.stop();
+}
+
+TEST_CASE("An articulation is built with the caller's xacro arguments") {
+
+    const auto path = writeArgFixture();
+
+    PhysxWorld::Settings settings;
+    settings.fixedTimestep = kFrame;
+    settings.maxSubSteps = 1;
+
+    // PhysX allows ONE foundation per process, so the two worlds below are scoped rather than
+    // both held - the second cannot be constructed until the first is destroyed.
+    float withArgs = 0.f;
+    float withoutArgs = 0.f;
+
+    {
+        PhysxWorld world(settings);
+        // The fixture puts the shoulder joint at z = $(arg reach), default 0.1. Asking for 0.6
+        // has to move it: before opts.args existed, loadArticulation built its own URDFLoader and
+        // never called setArgs, so every caller silently got the file's defaults.
+        URDFArticulationOptions opts;
+        opts.fixedBase = true;
+        opts.renderVisuals = false;
+        opts.args = {{"reach", "0.6"}};
+
+        auto built = loadArticulation(world, path, opts);
+        REQUIRE(built.articulation);
+        REQUIRE(built.links.size() == 1);
+        world.step(kFrame);
+        withArgs = built.links[0].position().z;
+    }
+
+    {
+        // And the default is still the default when nobody asks - this is an override, not a
+        // requirement, and a file with no args must keep working.
+        PhysxWorld plain(settings);
+        URDFArticulationOptions bare;
+        bare.fixedBase = true;
+        bare.renderVisuals = false;
+        auto fallback = loadArticulation(plain, path, bare);
+        REQUIRE(fallback.articulation);
+        REQUIRE(fallback.links.size() == 1);
+        plain.step(kFrame);
+        withoutArgs = fallback.links[0].position().z;
+    }
+
+    CHECK_THAT(withArgs, WithinAbs(0.6f, 1e-3f));
+    CHECK_THAT(withoutArgs, WithinAbs(0.1f, 1e-3f));
+}
+
+TEST_CASE("Play simulates the robot the document describes, not the xacro's defaults") {
+
+    // The bug this pins: EditorApp::rearticulateRobots passes RobotConfig::argMap() when it
+    // rebuilds the VISUAL robot, so the viewport shows the arguments the document was imported
+    // with. PhysicsPlaySession did not, so the articulation was built from the same file with
+    // different arguments - one document, two robots, and only the invisible one was wrong.
+    const auto path = writeArgFixture();
+    Scene scene;
+
+    auto robot = authorRobot(scene, path, {0.0f}, /*fixedBase*/ true, {{"reach", "0.6"}});
+    REQUIRE(robot->numDOF() == 1);
+
+    PhysicsPlaySession physics;
+    physics.start(scene);
+    REQUIRE(physics.articulationCount() == 1);
+
+    for (int i = 0; i < 30; ++i) physics.update(kFrame);
+
+    // Where the visual robot has the joint, from the document's arguments.
+    robot->updateMatrixWorld(true);
+    auto* visualLink = findByName(*robot, "upper_link");
+    REQUIRE(visualLink != nullptr);
+    Vector3 visualPos;
+    visualLink->getWorldPosition(visualPos);
+    CHECK_THAT(visualPos.z, WithinAbs(0.6f, 1e-2f));
+
+    // And where the simulation has it: the link whose INBOUND joint is "shoulder" is upper_link.
+    // Same number, or the two are describing different robots.
+    const auto* played = physics.findArticulation(robot.get());
+    REQUIRE(played != nullptr);
+    const auto* link = played->linkFor("shoulder");
+    REQUIRE(link != nullptr);
+    CHECK_THAT(link->position().z, WithinAbs(visualPos.z, 2e-2f));
+
+    physics.stop();
+}

@@ -1,0 +1,43 @@
+#version 460
+
+// Cooley-Tukey butterfly twiddle-factor + input-index precompute table.
+// Dispatched ONCE per IFFT pipeline (table is reused for both horizontal and
+// vertical butterfly passes across all frames).
+//
+// Output texture is RGBA32F:
+//   .rg = twiddle factor (e^{-2πi · (j/b)·b / N})
+//   .ba = paired input indices (i, i+b)
+//
+// Dispatch dims: (logSize, textureSize/2 / 8) with workgroup_size(1, 8, 1).
+// The lower half (rows 0..N/2-1) gets +twiddle; the upper half
+// (rows N/2..N-1) gets the conjugate so subsequent passes can read
+// straight from the row.
+
+layout(local_size_x = 1, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform writeonly image2D PrecomputeBuffer;
+
+layout(push_constant) uniform Pc {
+    int textureSize;
+} pc;
+
+const float PI = 3.14159265358979;
+
+vec2 complexExp(vec2 a) {
+    return vec2(cos(a.y), sin(a.y)) * exp(a.x);
+}
+
+void main() {
+    const ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    const int b = pc.textureSize >> (id.x + 1);
+    const vec2 mult = 2.0 * PI * vec2(0.0, -1.0) / float(pc.textureSize);
+    const int i = (2 * b * (id.y / b) + (id.y % b)) % pc.textureSize;
+    const vec2 twiddle = complexExp(mult * vec2(float((id.y / b) * b)));
+
+    imageStore(PrecomputeBuffer,
+               id,
+               vec4(twiddle.x, twiddle.y, float(i), float(i + b)));
+    imageStore(PrecomputeBuffer,
+               ivec2(id.x, id.y + pc.textureSize / 2),
+               vec4(-twiddle.x, -twiddle.y, float(i), float(i + b)));
+}

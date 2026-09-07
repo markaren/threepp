@@ -1,23 +1,9 @@
 
-add_library(kine INTERFACE
-        "${CMAKE_CURRENT_SOURCE_DIR}/kine/Kine.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/kine/KineComponent.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/kine/KineLimit.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/kine/KineLink.hpp"
-
-        "${CMAKE_CURRENT_SOURCE_DIR}/kine/ik/CCDSolver.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/kine/ik/IKSolver.hpp"
-
-        "${CMAKE_CURRENT_SOURCE_DIR}/kine/joints/KineJoint.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/kine/joints/PrismaticJoint.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/kine/joints/RevoluteJoint.hpp"
-)
-target_include_directories(kine INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
-
-add_library(optimization INTERFACE
+add_library(threepp_optimization INTERFACE
         "${CMAKE_CURRENT_SOURCE_DIR}/optimization/DifferentialEvolution.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/optimization/ParticleSwarmOptimization.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/optimization/Problem.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/optimization/Optimizer.hpp"
 )
-target_include_directories(optimization INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
+add_library(optimization ALIAS threepp_optimization)
+target_include_directories(threepp_optimization INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")

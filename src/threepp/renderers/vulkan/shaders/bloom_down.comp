@@ -1,0 +1,101 @@
+#version 460
+
+// Bloom downsample — one level of the progressive pyramid (Jimenez "Next
+// Generation Post Processing in Call of Duty: Advanced Warfare"): 13-tap
+// filter, run repeatedly by the host (full → 1/2 → 1/4 → … → ~1/64). On the
+// FIRST level (firstLevel = 1) the taps are Karis-averaged (weight each 2×2
+// group by 1/(1+luma)) so a single bright sub-pixel sample can't explode into
+// a blocky bloom square, and the soft-knee bright pass + per-tap HDR clamp
+// run; deeper levels are plain 13-tap averages of already-filtered content.
+// Bilinear sampling fuses 4 source texels per fetch, so the 13-tap pattern
+// actually reads a 6×6 footprint.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D srcTex;                  // linear HDR
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D dstImg;// half res of src
+
+layout(push_constant) uniform Pc {
+    uint  srcW; uint srcH;  // source extent (for texel size)
+    uint  dstW; uint dstH;  // dest extent  (dispatch bounds)
+    float threshold;        // soft-knee bright-pass cutoff (linear HDR luma)
+    float clampMax;         // per-tap HDR cap (<= 0 disables) — temporal stability
+    uint  firstLevel;       // 1 = scene → level 0 (Karis + bright pass); 0 = deeper levels
+} pc;
+
+float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+// Karis weight on the first level only — deeper levels are already averaged,
+// and re-weighting them toward darker groups just leaks energy per level.
+float karis(vec3 c) { return pc.firstLevel != 0u ? 1.0 / (1.0 + luma(c)) : 1.0; }
+
+// Per-tap HDR clamp (hue-preserving), BEFORE the Karis combine. A tiny
+// near-mirror specular highlight (an analytic light reflected in a smooth
+// metal sphere) swings by orders of magnitude per frame as the TAA jitter
+// slides across the sub-pixel GGX peak; ACES hides that at the pixel, but
+// bloom integrates it into a halo whose radius visibly pulses. Capping each
+// tap makes every such frame saturate to the SAME value → stable halo.
+// Clamping after the Karis combine would NOT fix it: with only a few hot
+// texels the weighted average itself flips between ~0 (suppressed) and the
+// full HDR value as the footprint shifts. <= 0 disables (legacy behaviour).
+vec3 tap(vec2 uv) {
+    vec3 c = texture(srcTex, uv).rgb;
+    if (pc.clampMax > 0.0) {
+        const float br = max(c.r, max(c.g, c.b));
+        if (br > pc.clampMax) c *= pc.clampMax / br;
+    }
+    return c;
+}
+
+void main() {
+    const ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.dstW) || p.y >= int(pc.dstH)) return;
+
+    const vec2 uv = (vec2(p) + 0.5) / vec2(float(pc.dstW), float(pc.dstH));
+    const vec2 t  = 1.0 / vec2(float(pc.srcW), float(pc.srcH));
+
+    const vec3 a = tap(uv + t * vec2(-2, -2));
+    const vec3 b = tap(uv + t * vec2( 0, -2));
+    const vec3 c = tap(uv + t * vec2( 2, -2));
+    const vec3 d = tap(uv + t * vec2(-2,  0));
+    const vec3 e = tap(uv                   );
+    const vec3 f = tap(uv + t * vec2( 2,  0));
+    const vec3 g = tap(uv + t * vec2(-2,  2));
+    const vec3 h = tap(uv + t * vec2( 0,  2));
+    const vec3 i = tap(uv + t * vec2( 2,  2));
+    const vec3 j = tap(uv + t * vec2(-1, -1));
+    const vec3 k = tap(uv + t * vec2( 1, -1));
+    const vec3 l = tap(uv + t * vec2(-1,  1));
+    const vec3 m = tap(uv + t * vec2( 1,  1));
+
+    // Five overlapping 2×2 groups: centre (weight 0.5) + 4 corners (0.125).
+    const vec3 g0 = (j + k + l + m) * 0.25;// centre
+    const vec3 g1 = (a + b + d + e) * 0.25;// TL
+    const vec3 g2 = (b + c + e + f) * 0.25;// TR
+    const vec3 g3 = (d + e + g + h) * 0.25;// BL
+    const vec3 g4 = (e + f + h + i) * 0.25;// BR
+
+    // Karis-weighted combine (firefly suppression).
+    const float w0 = 0.5   * karis(g0);
+    const float w1 = 0.125 * karis(g1);
+    const float w2 = 0.125 * karis(g2);
+    const float w3 = 0.125 * karis(g3);
+    const float w4 = 0.125 * karis(g4);
+    vec3 res = (g0 * w0 + g1 * w1 + g2 * w2 + g3 * w3 + g4 * w4)
+             / max(w0 + w1 + w2 + w3 + w4, 1e-5);
+
+    // Soft-knee bright pass (FIRST level only): only highlights above
+    // `threshold` bloom, with a smooth ramp through the knee so there is no
+    // hard popping edge. Darks drop to ~0 so the additive composite leaves
+    // them crisp (the "punchy highlight glow" look, vs. a thresholdless
+    // veiling glare). Deeper levels carry already-thresholded content.
+    if (pc.firstLevel != 0u) {
+        const float br   = max(res.r, max(res.g, res.b));
+        const float knee = pc.threshold * 0.5 + 1e-5;
+        float soft = clamp(br - pc.threshold + knee, 0.0, 2.0 * knee);
+        soft = soft * soft / (4.0 * knee);
+        const float contrib = max(soft, br - pc.threshold) / max(br, 1e-5);
+        res *= max(contrib, 0.0);
+    }
+
+    imageStore(dstImg, p, vec4(res, 1.0));
+}

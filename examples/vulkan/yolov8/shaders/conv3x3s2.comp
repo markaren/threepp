@@ -1,0 +1,85 @@
+#version 450
+// Conv2d specialised k=3, stride=2, pad=1. 8x8x4 threads cover 8x8 output x 4
+// oc; a 17x17 input tile + 4x9 weight slab staged in shared memory per ic.
+// Bindings: 0 input, 1 weight (packed f16), 2 bias, 3 output.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(push_constant, std430) uniform PC {
+    uint in_c, out_c, in_h, in_w;
+    uint out_h, out_w, k_h, k_w;
+    uint stride_h, stride_w, pad_h, pad_w;
+    uint has_bias, has_silu, has_residual, _p2;
+} p;
+
+layout(std430, binding = 0) readonly buffer Inp  { float inp[]; };
+layout(std430, binding = 1) readonly buffer Wt   { uint  wt[]; };
+layout(std430, binding = 2) readonly buffer Bias { float bias[]; };
+layout(std430, binding = 3)          buffer Out  { float outp[]; };
+
+shared float in_tile[289];// 17 x 17
+shared float wt_slab[36]; // 4 oc x 9 kernel
+
+float load_weight(uint i) {
+    vec2 pr = unpackHalf2x16(wt[i >> 1u]);
+    return (i & 1u) == 1u ? pr.y : pr.x;
+}
+
+void main() {
+    uvec3 gid = gl_GlobalInvocationID;
+    uvec3 lid = gl_LocalInvocationID;
+    uvec3 wid = gl_WorkGroupID;
+    uint ox = gid.x, oy = gid.y, oc = gid.z;
+    uint tid = (lid.z * 8u + lid.y) * 8u + lid.x;
+
+    uint wg_ox = wid.x * 8u;
+    uint wg_oy = wid.y * 8u;
+    int in_base_x = int(wg_ox * 2u) - 1;// stride=2, pad=1
+    int in_base_y = int(wg_oy * 2u) - 1;
+
+    float sum = 0.0;
+    uint kstride = p.in_c * 9u;
+
+    for (uint ic = 0u; ic < p.in_c; ic++) {
+        uint i = tid;
+        while (i < 289u) {
+            uint ty = i / 17u;
+            uint tx = i % 17u;
+            int iy = in_base_y + int(ty);
+            int ix = in_base_x + int(tx);
+            float v = 0.0;
+            if (iy >= 0 && iy < int(p.in_h) && ix >= 0 && ix < int(p.in_w))
+                v = inp[ic * p.in_h * p.in_w + uint(iy) * p.in_w + uint(ix)];
+            in_tile[i] = v;
+            i += 256u;
+        }
+        if (tid < 36u) {
+            uint slab_oc = tid / 9u;
+            uint k_idx   = tid % 9u;
+            uint wt_oc   = wid.z * 4u + slab_oc;
+            wt_slab[tid] = (wt_oc < p.out_c) ? load_weight(wt_oc * kstride + ic * 9u + k_idx) : 0.0;
+        }
+        barrier();
+
+        if (ox < p.out_w && oy < p.out_h && oc < p.out_c) {
+            uint y0 = lid.y * 2u;
+            uint x0 = lid.x * 2u;
+            uint wo = lid.z * 9u;
+            sum += in_tile[(y0+0u)*17u + x0+0u] * wt_slab[wo+0u];
+            sum += in_tile[(y0+0u)*17u + x0+1u] * wt_slab[wo+1u];
+            sum += in_tile[(y0+0u)*17u + x0+2u] * wt_slab[wo+2u];
+            sum += in_tile[(y0+1u)*17u + x0+0u] * wt_slab[wo+3u];
+            sum += in_tile[(y0+1u)*17u + x0+1u] * wt_slab[wo+4u];
+            sum += in_tile[(y0+1u)*17u + x0+2u] * wt_slab[wo+5u];
+            sum += in_tile[(y0+2u)*17u + x0+0u] * wt_slab[wo+6u];
+            sum += in_tile[(y0+2u)*17u + x0+1u] * wt_slab[wo+7u];
+            sum += in_tile[(y0+2u)*17u + x0+2u] * wt_slab[wo+8u];
+        }
+        barrier();
+    }
+
+    if (ox < p.out_w && oy < p.out_h && oc < p.out_c) {
+        if (p.has_bias != 0u) sum += bias[oc];
+        if (p.has_silu != 0u) sum = sum / (1.0 + exp(-sum));
+        outp[oc * p.out_h * p.out_w + oy * p.out_w + ox] = sum;
+    }
+}

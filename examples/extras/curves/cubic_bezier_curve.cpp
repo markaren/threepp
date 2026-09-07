@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/extras/curves/CubicBezierCurve.hpp"
 #include "threepp/extras/curves/CubicBezierCurve3.hpp"
 #include "threepp/threepp.hpp"
@@ -38,7 +40,7 @@ namespace {
         auto curvePoints = curve.getPoints(50);
         const auto geometry = BufferGeometry::create();
         geometry->setFromPoints(curvePoints);
-        auto curveObject = Line::create(geometry, LineBasicMaterial::create({{"color", Color::red}}));
+        auto curveObject = Line::create(geometry, LineBasicMaterial::create(LineBasicMaterial::Params{}.color(Color::red)));
 
         curveObject->add(createSpheres(curvePoints));
         curveObject->castShadow = true;
@@ -81,8 +83,8 @@ namespace {
 int main() {
 
     Canvas canvas("CubicBezierCurve", {{"aa", 8}});
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
 
     auto scene = Scene::create();
     scene->background = Color::aliceblue;
@@ -118,10 +120,10 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
-    canvas.animate([&]() {
-        renderer.render(*scene, *camera);
+    canvas.animate([&] {
+        renderer->render(*scene, *camera);
     });
 }

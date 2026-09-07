@@ -1,8 +1,10 @@
+#include "renderer_factory.hpp"
+
 #include "threepp/math/Lut.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/threepp.hpp"
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 
 #include <algorithm>
 
@@ -90,7 +92,7 @@ int main() {
     Lut::addColorMap("rainbow", {{0.f, 0x0000ff}, {0.001f, 0x00ffff}, {0.02f, 0xffff00}, {0.2f, 0xff0000}, {1.f, Color::darkred}});
 
     Canvas canvas("Optimization", {{"aa", 6}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     Scene scene;
     scene.background = Color::aliceblue;
@@ -105,8 +107,8 @@ int main() {
     planeGeometry->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
     planeGeometry2->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
 
-    auto plane = Mesh::create(planeGeometry, MeshBasicMaterial::create({{"vertexColors", true}}));
-    auto wireframe = Mesh::create(planeGeometry2, MeshBasicMaterial::create({{"wireframe", true}}));
+    auto plane = Mesh::create(planeGeometry, MeshBasicMaterial::create(MeshBasicMaterial::Params{}.vertexColors(true)));
+    auto wireframe = Mesh::create(planeGeometry2, MeshBasicMaterial::create(MeshBasicMaterial::Params{}.wireframe(true)));
     wireframe->material()->depthTest = false;
     wireframe->material()->opacity = 0.25;
     wireframe->material()->transparent = true;
@@ -116,13 +118,13 @@ int main() {
 
     auto solutionMesh = InstancedMesh::create(
             CylinderGeometry::create(0.01, 0.01, maxHeight, 32),
-            MeshBasicMaterial::create({{"color", Color::greenyellow}}), 10);
+            MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(Color::greenyellow)), 10);
     solutionMesh->setCount(0);
     scene.add(solutionMesh);
 
     auto searchSpace = InstancedMesh::create(
             SphereGeometry::create(0.05),
-            MeshBasicMaterial::create({{"color", Color::black}}), 500);
+            MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(Color::black)), 500);
     searchSpace->setCount(algorithms[selectedAlgorithm]->size());
     scene.add(searchSpace);
 
@@ -166,9 +168,10 @@ int main() {
 
 
     float searchSpeed = 0.7;
-    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
+    RendererSettings settings(*renderer);
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({320, 0}, 0);
+        ImGui::SetNextWindowSize({0, 0}, 0);
 
         ImGui::Begin("Optimization");
         ImGui::SliderFloat("Search speed", &searchSpeed, 0.1, 1);
@@ -190,6 +193,7 @@ int main() {
             }
             ImGui::EndCombo();
         }
+        settings.drawCollapsed();
         ImGui::End();
     });
 
@@ -202,7 +206,7 @@ int main() {
     };
     canvas.setIOCapture(&capture);
 
-    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt) {
+    canvas.onKeyPressed([&](KeyEvent evt) {
         std::optional<int> key;
         if (evt.key == Key::NUM_1) {
             key = 0;
@@ -235,19 +239,18 @@ int main() {
             changeFunction(it->first);
         }
     });
-    canvas.addKeyListener(keyAdapter);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
 
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Matrix4 tmp;
     Clock clock;
     canvas.animate([&] {
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
         ui.render();
 
         if (clock.getElapsedTime() > (1 - searchSpeed)) {

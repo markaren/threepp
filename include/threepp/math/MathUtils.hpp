@@ -2,6 +2,7 @@
 #ifndef THREEPP_MATHUTILS_HPP
 #define THREEPP_MATHUTILS_HPP
 
+#include <algorithm>
 #include <limits>
 #include <numbers>
 #include <string>
@@ -36,10 +37,16 @@ namespace threepp::math {
     float damp(float x, float y, float lambda, float dt);
 
     // Converts degrees to radians.
-    float degToRad(float degrees);
+    constexpr inline float degToRad(float degrees) {
+
+        return degrees * DEG2RAD;
+    }
 
     // Converts radians to degrees.
-    float radToDeg(float radians);
+    constexpr inline float radToDeg(float radians) {
+
+        return radians * RAD2DEG;
+    }
 
     // Random integer in the interval [low, high].
     int randInt(int low, int high);
@@ -69,6 +76,12 @@ namespace threepp::math {
     }
 
     bool compareFloats(float f1, float f2, float eps = std::numeric_limits<float>::epsilon());
+
+    // Hermite smoothstep — returns 0 below e0, 1 above e1, smooth S-curve between.
+    constexpr inline float smoothstep(float e0, float e1, float x) {
+        const float t = std::clamp((x - e0) / (e1 - e0), 0.f, 1.f);
+        return t * t * (3.f - 2.f * t);
+    }
 
 }// namespace threepp::math
 

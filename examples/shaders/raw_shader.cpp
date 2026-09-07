@@ -13,7 +13,7 @@ int main() {
 
     Canvas canvas("Raw Shader demo");
 
-    GLRenderer renderer(canvas.size());
+    auto renderer = GLRenderer(canvas);
     renderer.checkShaderErrors = true;
 
     auto scene = Scene::create();
@@ -58,7 +58,7 @@ int main() {
     });
 
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         float t = clock.getElapsedTime();
 
         mesh->rotation.y = t * 0.5f;

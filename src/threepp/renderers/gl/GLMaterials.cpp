@@ -6,10 +6,14 @@
 #include "threepp/materials/MeshDepthMaterial.hpp"
 #include "threepp/materials/MeshDistanceMaterial.hpp"
 #include "threepp/materials/MeshMatcapMaterial.hpp"
+#include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshToonMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/materials/materials.hpp"
+#include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/textures/CubeTexture.hpp"
+
+#include <algorithm>
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -110,26 +114,26 @@ struct GLMaterials::Impl {
         // 12. clearcoat roughnessMap map
 
 
-        std::shared_ptr<Texture> uvScaleMap = nullptr;
+        Texture* uvScaleMap = nullptr;
 
         if (mapMaterial && mapMaterial->map) {
-            uvScaleMap = mapMaterial->map;
+            uvScaleMap = mapMaterial->map.get();
         } else if (specularMaterial && specularMaterial->specularMap) {
-            uvScaleMap = specularMaterial->specularMap;
+            uvScaleMap = specularMaterial->specularMap.get();
         } else if (displacementMaterial && displacementMaterial->displacementMap) {
-            uvScaleMap = displacementMaterial->displacementMap;
+            uvScaleMap = displacementMaterial->displacementMap.get();
         } else if (normalMaterial && normalMaterial->normalMap) {
-            uvScaleMap = normalMaterial->normalMap;
+            uvScaleMap = normalMaterial->normalMap.get();
         } else if (bumpMaterial && bumpMaterial->bumpMap) {
-            uvScaleMap = bumpMaterial->bumpMap;
+            uvScaleMap = bumpMaterial->bumpMap.get();
         } else if (roughnessMaterial && roughnessMaterial->roughnessMap) {
-            uvScaleMap = roughnessMaterial->roughnessMap;
+            uvScaleMap = roughnessMaterial->roughnessMap.get();
         } else if (metalnessMaterial && metalnessMaterial->metalnessMap) {
-            uvScaleMap = metalnessMaterial->metalnessMap;
+            uvScaleMap = metalnessMaterial->metalnessMap.get();
         } else if (alphaMaterial && alphaMaterial->alphaMap) {
-            uvScaleMap = alphaMaterial->alphaMap;
+            uvScaleMap = alphaMaterial->alphaMap.get();
         } else if (emissiveMaterial && emissiveMaterial->emissiveMap) {
-            uvScaleMap = emissiveMaterial->emissiveMap;
+            uvScaleMap = emissiveMaterial->emissiveMap.get();
         }
         // TODO clearcoat
 
@@ -180,7 +184,7 @@ struct GLMaterials::Impl {
     void refreshUniformsPhong(UniformMap& uniforms, MeshPhongMaterial* material) {
 
         uniforms.at("specular").value<Color>().copy(material->specular);
-        uniforms.at("shininess").value<float>() = std::max(material->shininess, (float) 1E-4);// to prevent pow( 0.0, 0.0 )
+        uniforms.at("shininess").value<float>() = std::max(material->shininess, static_cast<float>(1E-4));// to prevent pow( 0.0, 0.0 )
 
         if (material->emissiveMap) {
 
@@ -263,6 +267,69 @@ struct GLMaterials::Impl {
 
             uniforms["envMapIntensity"].value<float>() = material->envMapIntensity;
         }
+    }
+
+    void refreshUniformsPhysical(UniformMap& uniforms, MeshPhysicalMaterial* material, RenderTarget* transmissionRenderTarget) {
+
+        refreshUniformsStandard(uniforms, material);
+
+        uniforms.at("reflectivity").value<float>() = material->reflectivity;
+
+        uniforms.at("clearcoat").value<float>() = material->clearcoat;
+        uniforms.at("clearcoatRoughness").value<float>() = material->clearcoatRoughness;
+
+        uniforms.at("sheenColor").value<Color>().copy(material->sheenColor);
+        uniforms.at("sheenRoughness").value<float>() = material->sheenRoughness;
+
+        // Unconditional on purpose. materialProperties->uniforms points at the
+        // ONE global ShaderLib::physical.uniforms map shared by every
+        // standard/physical material, so a write skipped inside an `if` leaves
+        // whatever the previously drawn material put there.
+        uniforms.at("specularIntensity").value<float>() = material->specularIntensity;
+        uniforms.at("specularColor").value<Color>().copy(material->specularColor);
+
+        // Same clamps the Vulkan path applies: an IOR below 1 inverts Snell
+        // inside evalIridescence, a negative thickness is meaningless.
+        uniforms.at("iridescence").value<float>() = material->iridescence;
+        uniforms.at("iridescenceIOR").value<float>() = std::max(1.f, material->iridescenceIOR);
+        uniforms.at("iridescenceThicknessNm").value<float>() = std::max(0.f, material->iridescenceThicknessNm);
+
+        if (material->clearcoatMap) {
+            uniforms.at("clearcoatMap").setValue(material->clearcoatMap.get());
+        }
+
+        if (material->clearcoatRoughnessMap) {
+            uniforms.at("clearcoatRoughnessMap").setValue(material->clearcoatRoughnessMap.get());
+        }
+
+        if (material->clearcoatNormalMap) {
+            uniforms.at("clearcoatNormalScale").value<Vector2>().copy(material->clearcoatNormalScale);
+            uniforms.at("clearcoatNormalMap").setValue(material->clearcoatNormalMap.get());
+
+            if (material->side == Side::Back) {
+                uniforms.at("clearcoatNormalScale").value<Vector2>().negate();
+            }
+        }
+
+        uniforms.at("transmission").value<float>() = material->transmission;
+
+        if (material->transmissionMap) {
+            uniforms.at("transmissionMap").setValue(material->transmissionMap.get());
+        }
+
+        if (material->transmission > 0.0f && transmissionRenderTarget) {
+            uniforms.at("transmissionSamplerMap").setValue(transmissionRenderTarget->texture.get());
+            uniforms.at("transmissionSamplerSize").value<Vector2>().set(static_cast<float>(transmissionRenderTarget->width), static_cast<float>(transmissionRenderTarget->height));
+        }
+
+        uniforms.at("thickness").value<float>() = material->thickness;
+
+        if (material->thicknessMap) {
+            uniforms.at("thicknessMap").setValue(material->thicknessMap.get());
+        }
+
+        uniforms.at("attenuationDistance").value<float>() = material->attenuationDistance;
+        uniforms.at("attenuationColor").value<Color>().copy(material->attenuationColor);
     }
 
     void refreshUniformsMatcap(UniformMap& uniforms, MeshMatcapMaterial* material) {
@@ -372,11 +439,11 @@ struct GLMaterials::Impl {
         uniforms.at("opacity").value<float>() = material->opacity;
     }
 
-    void refreshUniformsPoints(UniformMap& uniforms, PointsMaterial* material, int pixelRatio, float height) {
+    void refreshUniformsPoints(UniformMap& uniforms, PointsMaterial* material, float pixelRatio, float height) {
 
         uniforms.at("diffuse").value<Color>().copy(material->color);
         uniforms.at("opacity").value<float>() = material->opacity;
-        uniforms.at("size").value<float>() = material->size * static_cast<float>(pixelRatio);
+        uniforms.at("size").value<float>() = material->size * pixelRatio;
         uniforms.at("scale").value<float>() = height * 0.5f;
 
         if (material->map) {
@@ -474,7 +541,7 @@ struct GLMaterials::Impl {
         }
     }
 
-    void refreshMaterialUniforms(UniformMap& uniforms, Material* material, int pixelRatio, int height) {
+    void refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height, RenderTarget* transmissionRenderTarget) {
 
         const auto type = material->type();
 
@@ -500,11 +567,17 @@ struct GLMaterials::Impl {
             refreshUniformsCommon(uniforms, m);
             refreshUniformsPhong(uniforms, m);
 
-        } else if (type == "MeshStandardMaterial") {
+        } else if (type == "MeshStandardMaterial" || type == "MeshPhysicalMaterial") {
 
             auto m = material->as<MeshStandardMaterial>();
             refreshUniformsCommon(uniforms, material);
-            refreshUniformsStandard(uniforms, m);
+
+            if (type == "MeshPhysicalMaterial") {
+                auto m = material->as<MeshPhysicalMaterial>();
+                refreshUniformsPhysical(uniforms, m, transmissionRenderTarget);
+            } else {
+                refreshUniformsStandard(uniforms, m);
+            }
 
         } else if (type == "MeshMatcapMaterial") {
 
@@ -536,7 +609,7 @@ struct GLMaterials::Impl {
 
         } else if (type == "ShadowMaterial") {
 
-            auto m = material->as<ShadowMaterial>();
+            const auto m = material->as<ShadowMaterial>();
             uniforms.at("color").value<Color>().copy(m->color);
             uniforms.at("opacity").value<float>() = material->opacity;
 
@@ -559,9 +632,9 @@ void GLMaterials::refreshFogUniforms(UniformMap& uniforms, FogVariant& fog) {
     return pimpl_->refreshFogUniforms(uniforms, fog);
 }
 
-void GLMaterials::refreshMaterialUniforms(UniformMap& uniforms, Material* material, int pixelRatio, int height) {
+void GLMaterials::refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height, RenderTarget* transmissionRenderTarget) {
 
-    pimpl_->refreshMaterialUniforms(uniforms, material, pixelRatio, height);
+    pimpl_->refreshMaterialUniforms(uniforms, material, pixelRatio, height, transmissionRenderTarget);
 }
 
 GLMaterials::GLMaterials(GLProperties& properties)

@@ -3,14 +3,12 @@
 
 #include "threepp/renderers/gl/GLUtils.hpp"
 
+#include "threepp/core/BufferAttribute.hpp"
 #include "threepp/core/InterleavedBufferAttribute.hpp"
 #include "threepp/materials/materials.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
-#include "threepp/core/InstancedInterleavedBuffer.hpp"
-#include "threepp/core/InstancedBufferGeometry.hpp"
-#include "threepp/core/InstancedBufferAttribute.hpp"
 
-#if EMSCRIPTEN
+#ifdef __EMSCRIPTEN__
 #include <GLES3/gl32.h>
 #endif
 
@@ -31,8 +29,8 @@ struct GLBindingStates::Impl {
     std::unordered_map<unsigned int, ProgramMap> bindingStates;
 
     explicit Impl(GLAttributes& attributes)
-        : maxVertexAttributes_(glGetParameteri(GL_MAX_VERTEX_ATTRIBS)),
-          attributes_(attributes),
+        : attributes_(attributes),
+          maxVertexAttributes_(glGetParameteri(GL_MAX_VERTEX_ATTRIBS)),
           defaultState_(createBindingState(std::nullopt)),
           currentState_(defaultState_) {}
 
@@ -141,11 +139,6 @@ struct GLBindingStates::Impl {
 
             if (cachedAttribute != geometryAttribute.get()) return true;
 
-            if(auto interleavedAttr = dynamic_cast<InterleavedBufferAttribute*>(geometryAttribute.get())) {
-                auto cachedInterleavedAttr = dynamic_cast<InterleavedBufferAttribute*>(cachedAttribute);
-                if (!cachedInterleavedAttr) return true;
-                if (interleavedAttr->data != cachedInterleavedAttr->data) return true;
-            }
             //          if (cachedAttribute.data != geometryAttribute.data) return true;
 
             ++attributesNum;
@@ -232,11 +225,11 @@ struct GLBindingStates::Impl {
 
         if (type == GL_INT || type == GL_UNSIGNED_INT) {
 
-            glVertexAttribIPointer(index, size, type, stride, (GLvoid*) offset);
+            glVertexAttribIPointer(index, size, type, stride, reinterpret_cast<void*>(offset));
 
         } else {
 
-            glVertexAttribPointer(index, size, type, normalized, stride, (GLvoid*) offset);
+            glVertexAttribPointer(index, size, type, normalized, stride, reinterpret_cast<void*>(offset));
         }
     }
 
@@ -274,16 +267,15 @@ struct GLBindingStates::Impl {
                         const auto stride = data->stride();
                         const auto offset = attr->offset;
 
-                        if (auto instancedBuffer = dynamic_cast<InstancedInterleavedBuffer*>(data.get())) {
+                        if (false /*data && data.isInstancedInterleavedBuffer*/) {
 
-                            enableAttributeAndDivisor( programAttribute, instancedBuffer->meshPerAttribute);
-                            
-                            if (auto instancedGeometry = dynamic_cast<InstancedBufferGeometry*>(geometry)) {
-                                if(!instancedGeometry->maxInstanceCount) {
-                                    int count = instancedBuffer->meshPerAttribute * instancedBuffer->count();
-                                    instancedGeometry->maxInstanceCount = count;
-                                }
-                            }
+                            //                        enableAttributeAndDivisor( programAttribute, data.meshPerAttribute );
+                            //
+                            //                        if ( geometry._maxInstanceCount === undefined ) {
+                            //
+                            //                            geometry._maxInstanceCount = data.meshPerAttribute * data.count;
+                            //
+                            //                        }
 
                         } else {
 
@@ -295,13 +287,13 @@ struct GLBindingStates::Impl {
 
                     } else {
 
-                        if (auto instancedAttribute = dynamic_cast<InstancedBufferAttribute*>(geometryAttribute.get())) {
-                            enableAttributeAndDivisor(programAttribute, instancedAttribute->meshPerAttribute);
-                            if(auto instancedGeometry = dynamic_cast<InstancedBufferGeometry*>(geometry)){
-                                if(!instancedGeometry->maxInstanceCount){
-                                    instancedGeometry->maxInstanceCount = instancedAttribute->meshPerAttribute * instancedAttribute->count();
-                                }
-                            }
+                        if (auto* instanced = dynamic_cast<InstancedBufferAttribute*>(geometryAttribute.get())) {
+
+                            // Per-instance: advance once every meshPerAttribute
+                            // instances rather than once per vertex. The instance
+                            // COUNT comes from the geometry (InstancedBufferGeometry),
+                            // not from here — this only sets the stepping.
+                            enableAttributeAndDivisor(programAttribute, instanced->meshPerAttribute);
 
                         } else {
 
@@ -326,10 +318,10 @@ struct GLBindingStates::Impl {
 
                     glBindBuffer(GL_ARRAY_BUFFER, buffer);
 
-                    glVertexAttribPointer(programAttribute + 0, 4, type, false, 64, (void*) 0);
-                    glVertexAttribPointer(programAttribute + 1, 4, type, false, 64, (void*) 16);
-                    glVertexAttribPointer(programAttribute + 2, 4, type, false, 64, (void*) 32);
-                    glVertexAttribPointer(programAttribute + 3, 4, type, false, 64, (void*) 48);
+                    glVertexAttribPointer(programAttribute + 0, 4, type, false, 64, reinterpret_cast<void*>(0));
+                    glVertexAttribPointer(programAttribute + 1, 4, type, false, 64, reinterpret_cast<void*>(16));
+                    glVertexAttribPointer(programAttribute + 2, 4, type, false, 64, reinterpret_cast<void*>(32));
+                    glVertexAttribPointer(programAttribute + 3, 4, type, false, 64, reinterpret_cast<void*>(48));
 
                 } else if (name == "instanceColor") {
 

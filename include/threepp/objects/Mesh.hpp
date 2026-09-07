@@ -42,6 +42,19 @@ namespace threepp {
     protected:
         std::shared_ptr<BufferGeometry> geometry_;
 
+        // The volumes raycast() uses to reject a ray before touching a single
+        // triangle, in this object's LOCAL space.
+        //
+        // Virtual because a SkinnedMesh's GEOMETRY bounds are its BIND pose,
+        // and glTF says a skinned mesh's node transform is ignored — the joints
+        // place every vertex — so the geometry sphere pushed through
+        // matrixWorld describes a volume nothing is drawn in. It overrides
+        // both with bounds measured off the posed skeleton.
+        //
+        // Null means "no early-out available"; the caller then tests triangles.
+        virtual const Sphere* raycastBoundingSphere();
+        virtual const Box3* raycastBoundingBox();
+
         std::shared_ptr<Object3D> createDefault() override;
     };
 

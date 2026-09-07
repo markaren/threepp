@@ -6,25 +6,30 @@
 #include <memory>
 
 #include "threepp/objects/Group.hpp"
+#include "threepp/loaders/Loader.hpp"
 
 namespace threepp {
 
     class MaterialCreator;
 
-    class OBJLoader {
+    class OBJLoader: public Loader<Group> {
 
     public:
         bool useCache = true;
 
         OBJLoader();
 
-        std::shared_ptr<Group> load(const std::filesystem::path& path, bool tryLoadMtl = true);
+        std::shared_ptr<Group> load(const std::filesystem::path& path) override {
+            return load(path, true);
+        }
+
+        std::shared_ptr<Group> load(const std::filesystem::path& path, bool tryLoadMtl);
 
         OBJLoader& setMaterials(const std::shared_ptr<MaterialCreator>& materials);
 
         void clearCache();
 
-        ~OBJLoader();
+        ~OBJLoader() override;
 
     private:
         struct Impl;

@@ -12,7 +12,6 @@ namespace threepp {
     class Sphere;
     class Plane;
     class Object3D;
-    class InterleavedBufferAttribute;
 
     /**
      * Represents an axis-aligned bounding box (AABB) in 3D space.
@@ -31,7 +30,7 @@ namespace threepp {
         Box3& set(const Vector3& min, const Vector3& max);
 
         Box3& set(float minX, float minY, float minZ, float maxX, float maxY, float maxZ);
-
+        
         Box3& setMin(const Vector3& min);
 
         Box3& setMax(const Vector3& max);
@@ -89,9 +88,6 @@ namespace threepp {
         // accounting for the object's, and children's, world transforms.
         // The function may result in a larger box than strictly necessary.
         Box3& setFromObject(Object3D& object, bool precise = false);
-
-
-        void setFromBufferAttribute(const InterleavedBufferAttribute& attribute);
 
         [[nodiscard]] Box3 clone() const;
 

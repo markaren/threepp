@@ -1,0 +1,90 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+// Splat stage 4b/6 — the stable scatter of the radix sort.
+//
+// hist[] now holds the exclusive prefix sum over the [bin][block] histogram, so
+// hist[bin * blocks + block] is the first output index this block's elements of
+// that bin occupy. All that is left is each element's rank AMONG ITS BLOCK's
+// elements of the same bin, and that rank has to follow the input order or the
+// sort stops being stable — and a sort that is not stable is not reproducible,
+// because equal keys (same tile, same depth bucket) would come out in whatever
+// order the hardware happened to schedule.
+//
+// So: thread t owns the CONTIGUOUS run [t*4, t*4+4) of the block, which makes
+// "thread order, then element order within a thread" exactly input order.
+// Phase A counts each thread's four digits privately (no atomics, no
+// contention), phase B scans those counts across threads per bin, phase C
+// re-walks the four in order and hands out ranks. Every step is a pure function
+// of the input.
+//
+// pc.arg0 = shift, pc.arg1 = block count, pc.arg2 = source side (0 = A, 1 = B).
+
+layout(local_size_x = 128) in;
+
+#include "splat_common.glsl"
+
+// [bin][thread] — 16 x 128 uints = 8 KB, comfortably inside the 32 KB every
+// desktop Vulkan device guarantees for a workgroup.
+shared uint sCnt[kRadixBins * kRadixThreads];
+
+void main() {
+    const uint tid   = gl_LocalInvocationID.x;
+    const uint block = gl_WorkGroupID.x;
+    const uint n     = g.entryCount;
+    const uint base  = block * kRadixBlock + tid * kRadixPerThread;
+
+    uint myKey[kRadixPerThread];
+    uint myVal[kRadixPerThread];
+    uint myBin[kRadixPerThread];
+    bool live[kRadixPerThread];
+
+    uint mine[kRadixBins];
+    for (uint b = 0u; b < kRadixBins; ++b) mine[b] = 0u;
+
+    for (uint k = 0u; k < kRadixPerThread; ++k) {
+        const uint idx = base + k;
+        live[k] = idx < n;
+        if (live[k]) {
+            myKey[k] = (pc.arg2 == 0u) ? keysA[idx] : keysB[idx];
+            myVal[k] = (pc.arg2 == 0u) ? valsA[idx] : valsB[idx];
+            myBin[k] = (myKey[k] >> pc.arg0) & (kRadixBins - 1u);
+            ++mine[myBin[k]];
+        } else {
+            myKey[k] = 0u;
+            myVal[k] = 0u;
+            myBin[k] = 0u;
+        }
+    }
+
+    for (uint b = 0u; b < kRadixBins; ++b) sCnt[b * kRadixThreads + tid] = mine[b];
+    barrier();
+
+    // Hillis-Steele inclusive scan across threads, all 16 bins at once.
+    for (uint off = 1u; off < kRadixThreads; off <<= 1u) {
+        uint add[kRadixBins];
+        for (uint b = 0u; b < kRadixBins; ++b)
+            add[b] = (tid >= off) ? sCnt[b * kRadixThreads + tid - off] : 0u;
+        barrier();
+        for (uint b = 0u; b < kRadixBins; ++b) sCnt[b * kRadixThreads + tid] += add[b];
+        barrier();
+    }
+
+    // Exclusive base for (bin, thread) = inclusive - own.
+    uint threadBase[kRadixBins];
+    for (uint b = 0u; b < kRadixBins; ++b)
+        threadBase[b] = sCnt[b * kRadixThreads + tid] - mine[b];
+
+    uint used[kRadixBins];
+    for (uint b = 0u; b < kRadixBins; ++b) used[b] = 0u;
+
+    for (uint k = 0u; k < kRadixPerThread; ++k) {
+        if (!live[k]) continue;
+        const uint b   = myBin[k];
+        const uint dst = hist[b * pc.arg1 + block] + threadBase[b] + used[b];
+        ++used[b];
+        if (pc.arg2 == 0u) { keysB[dst] = myKey[k]; valsB[dst] = myVal[k]; }
+        else               { keysA[dst] = myKey[k]; valsA[dst] = myVal[k]; }
+    }
+}

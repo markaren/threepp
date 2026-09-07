@@ -1,0 +1,37 @@
+#version 450
+// 2D max-pool with asymmetric padding (pad_t / pad_l). Workgroup 8x8x4.
+// Bindings: 0 input, 1 output. Params via push constant.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(push_constant, std430) uniform PC {
+    uint c, in_h, in_w, out_h;
+    uint out_w, k_h, k_w, stride_h;
+    uint stride_w, pad_t, pad_l, _p0;
+    uint _p1, _p2, _p3, _p4;
+} p;
+
+layout(std430, binding = 0) readonly buffer Inp { float inp[]; };
+layout(std430, binding = 1)          buffer Out { float outp[]; };
+
+void main() {
+    uint ox = gl_GlobalInvocationID.x;
+    uint oy = gl_GlobalInvocationID.y;
+    uint oc = gl_GlobalInvocationID.z;
+    if (ox >= p.out_w || oy >= p.out_h || oc >= p.c) return;
+
+    uint in_pitch  = p.in_h * p.in_w;
+    uint out_pitch = p.out_h * p.out_w;
+
+    float m = -3.4e38;
+    for (uint ky = 0u; ky < p.k_h; ky++) {
+        for (uint kx = 0u; kx < p.k_w; kx++) {
+            int iy = int(oy * p.stride_h + ky) - int(p.pad_t);
+            int ix = int(ox * p.stride_w + kx) - int(p.pad_l);
+            if (iy >= 0 && iy < int(p.in_h) && ix >= 0 && ix < int(p.in_w)) {
+                float v = inp[oc * in_pitch + uint(iy) * p.in_w + uint(ix)];
+                m = max(m, v);
+            }
+        }
+    }
+    outp[oc * out_pitch + oy * p.out_w + ox] = m;
+}

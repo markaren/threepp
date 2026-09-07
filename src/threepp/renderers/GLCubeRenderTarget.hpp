@@ -9,7 +9,7 @@
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/renderers/GLRenderTarget.hpp"
 #include "threepp/textures/CubeTexture.hpp"
-#include "threepp/renderers/IGLRenderer.hpp"
+#include "threepp/renderers/Renderer.hpp"
 namespace threepp {
 
     class GLCubeRenderTarget: public GLRenderTarget {
@@ -26,17 +26,17 @@ namespace threepp {
             if (options.format) this->texture->format = *options.format;
             if (options.type) this->texture->type = *options.type;
             if (options.anisotropy) this->texture->anisotropy = *options.anisotropy;
-            if (options.encoding) this->texture->encoding = *options.encoding;
+            if (options.encoding) this->texture->colorSpace = *options.encoding;
 
             this->texture->generateMipmaps = options.generateMipmaps;
             this->texture->minFilter = options.minFilter.value_or(Filter::Linear);
         }
 
-        void fromEquirectangularTexture(IGLRenderer& renderer, Texture& texture) {
+        void fromEquirectangularTexture(Renderer& renderer, Texture& texture) {
 
             this->texture->type = texture.type;
             this->texture->format = Format::RGBA;// see #18859
-            this->texture->encoding = texture.encoding;
+            this->texture->colorSpace = texture.colorSpace;
 
             this->texture->generateMipmaps = texture.generateMipmaps;
             this->texture->minFilter = texture.minFilter;
@@ -101,8 +101,13 @@ namespace threepp {
 
             const auto currentMinFilter = texture.minFilter;
 
+            const bool oldAutoClear = renderer.autoClear;
+            renderer.autoClear = true;
+
             auto camera = CubeCamera(1, 10, *this);
             camera.update(renderer, mesh);
+
+            renderer.autoClear = oldAutoClear;
 
             // Avoid blurred poles
             if (texture.minFilter == Filter::LinearMipmapLinear) texture.minFilter = Filter::Linear;

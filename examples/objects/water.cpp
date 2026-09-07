@@ -1,20 +1,23 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/objects/Water.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/objects/Sky.hpp"
 #include "threepp/threepp.hpp"
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include <cmath>
 
 using namespace threepp;
 
 int main() {
 
-    Canvas canvas("Water", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
-    renderer.checkShaderErrors = true;
-    renderer.toneMapping = ToneMapping::ACESFilmic;
+    Canvas canvas(Canvas::Parameters().title("Water").antialiasing(4));
+    auto renderer = createRenderer(canvas);
+    renderer->checkShaderErrors = true;
+    renderer->toneMapping = ToneMapping::ACESFilmic;
+    renderer->toneMappingExposure = 0.5f;
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(55, canvas.aspect(), 1, 2000);
@@ -38,7 +41,7 @@ int main() {
     scene->add(sphere);
 
     TextureLoader textureLoader{};
-    auto texture = textureLoader.load("data/textures/waternormals.jpg");
+    auto texture = textureLoader.load(std::string(DATA_FOLDER) + "/textures/waternormals.jpg");
     texture->wrapS = TextureWrapping::Repeat;
     texture->wrapT = TextureWrapping::Repeat;
 
@@ -61,14 +64,13 @@ int main() {
 
     auto sky = Sky::create();
     sky->scale.setScalar(10000);
-    auto& shaderUniforms = sky->material()->as<ShaderMaterial>()->uniforms;
+    auto& shaderUniforms = sky->materialAs<ShaderMaterial>()->uniforms;
     shaderUniforms.at("turbidity").value<float>() = 10;
     shaderUniforms.at("rayleigh").value<float>() = 1;
     shaderUniforms.at("mieCoefficient").value<float>() = 0.005;
     shaderUniforms.at("mieDirectionalG").value<float>() = 0.8;
     scene->add(sky);
 
-    Vector3 sun;
     float elevation = 2;
     float azimuth = 180;
 
@@ -84,13 +86,10 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
-    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
-        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
-        ImGui::Begin("Controls");
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         ImGui::SliderFloat("turbidity", &shaderUniforms.at("turbidity").value<float>(), 0, 20);
         ImGui::SliderFloat("rayleigh", &shaderUniforms.at("rayleigh").value<float>(), 0, 4);
         ImGui::SliderFloat("mieCoefficient", &shaderUniforms.at("mieCoefficient").value<float>(), 0, 0.1);
@@ -101,19 +100,12 @@ int main() {
         if (ImGui::SliderFloat("azimuth", &azimuth, -180, 180)) {
             computeSunPosition();
         }
-        ImGui::End();
-    });
-
-    IOCapture capture;
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
+    }, "Controls");
 
     Clock clock;
-    auto& timeUniform = water->material()->as<ShaderMaterial>()->uniforms.at("time");
-    canvas.animate([&]() {
-        float t = clock.getElapsedTime();
+    auto& timeUniform = water->materialAs<ShaderMaterial>()->uniforms.at("time");
+    canvas.animate([&] {
+        const auto t = clock.getElapsedTime();
 
         sphere->position.y = std::sin(t) * 20 + 5;
         sphere->rotation.x = t * 0.05f;
@@ -121,7 +113,7 @@ int main() {
 
         timeUniform.setValue(t);
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
 
         ui.render();
     });

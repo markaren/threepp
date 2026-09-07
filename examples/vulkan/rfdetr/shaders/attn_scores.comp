@@ -1,0 +1,27 @@
+#version 450
+// Self-attention scores: out[h,i,j] = scale * dot(Q[i,h], K[j,h]).
+// qkv is [M, 3D] interleaved [Q|K|V], each D = H*d. Bindings: 0 qkv, 1 out [H,M,M].
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint M, H, d, stride;
+    float scale;
+    uint _p0, _p1, _p2;
+} p;
+
+layout(std430, binding = 0) readonly buffer Qkv { float qkv[]; };// [M, 3D]
+layout(std430, binding = 1)          buffer Out { float outp[]; };// [H, M, M]
+
+void main() {
+    uint j = gl_GlobalInvocationID.x;// key index
+    uint i = gl_GlobalInvocationID.y;// query index
+    uint h = gl_GlobalInvocationID.z;// head
+    if (i >= p.M || j >= p.M || h >= p.H) return;
+
+    uint D = p.H * p.d;
+    uint qBase = i * p.stride + 0u * D + h * p.d;
+    uint kBase = j * p.stride + 1u * D + h * p.d;
+    float acc = 0.0;
+    for (uint k = 0u; k < p.d; k++) acc += qkv[qBase + k] * qkv[kBase + k];
+    outp[h * p.M * p.M + i * p.M + j] = acc * p.scale;
+}

@@ -1,0 +1,29 @@
+#version 450
+// Row-wise softmax along the last axis (numerically stable). One thread per
+// row (M rows of width N). Bindings: 0 x, 1 y. Params via push constant.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint M, N, _p0, _p1;
+} p;
+
+layout(std430, binding = 0) readonly buffer X { float x[]; };
+layout(std430, binding = 1)          buffer Y { float y[]; };
+
+void main() {
+    uint m = gl_GlobalInvocationID.x;
+    if (m >= p.M) return;
+    uint base = m * p.N;
+
+    float mx = x[base];
+    for (uint k = 1u; k < p.N; k++) mx = max(mx, x[base + k]);
+
+    float s = 0.0;
+    for (uint k = 0u; k < p.N; k++) {
+        float e = exp(x[base + k] - mx);
+        y[base + k] = e;
+        s += e;
+    }
+    float inv = 1.0 / s;
+    for (uint k = 0u; k < p.N; k++) y[base + k] *= inv;
+}

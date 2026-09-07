@@ -1,9 +1,15 @@
 
 #include "threepp/loaders/TextureLoader.hpp"
 
+#include "threepp/loaders/DDSLoader.hpp"
+#include "threepp/loaders/EXRLoader.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
+#include "threepp/loaders/RGBELoader.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <iostream>
+#include <mutex>
 #include <regex>
 #include <vector>
 
@@ -18,6 +24,14 @@ namespace {
         return std::regex_match(path, reg);
     }
 
+    // Cache key. The same source image can legitimately be loaded in different
+    // roles — sRGB base colour vs. linear data map (normal/ORM), flipped vs. not
+    // — and those are DIFFERENT textures. Keying on the name alone let the first
+    // load win and handed later callers the wrong colour-space/flip.
+    std::string cacheKey(const std::string& name, ColorSpace colorSpace, bool flipY) {
+        return name + '|' + std::to_string(static_cast<int>(colorSpace)) + (flipY ? "|1" : "|0");
+    }
+
 }// namespace
 
 struct TextureLoader::Impl {
@@ -25,6 +39,11 @@ struct TextureLoader::Impl {
     bool useCache_;
     ImageLoader imageLoader_;
     std::unordered_map<std::string, std::weak_ptr<Texture>> cache_;
+    // Guards cache_. A TextureLoader is shared across concurrent loads (FBXLoader
+    // keeps one instance, the app may drive several loadAsync threads, and
+    // FBXLoader now warms the cache from a decode thread pool), so every cache
+    // access must be serialised. The slow decode runs OUTSIDE this lock.
+    std::mutex mutex_;
 
     explicit Impl(bool useCache): useCache_(useCache) {}
 
@@ -44,11 +63,14 @@ struct TextureLoader::Impl {
         return tex;
     }
 
-    std::shared_ptr<Texture> load(const std::filesystem::path& path, bool flipY) {
+    std::shared_ptr<Texture> load(const std::filesystem::path& path, ColorSpace colorSpace, bool flipY) {
 
-        if (auto cachedTexture = checkCache(path.string())) {
-
-            return cachedTexture;
+        const std::string key = cacheKey(path.string(), colorSpace, flipY);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (auto cachedTexture = checkCache(key)) {
+                return cachedTexture;
+            }
         }
 
         if (!std::filesystem::exists(path)) {
@@ -56,40 +78,91 @@ struct TextureLoader::Impl {
             return nullptr;
         }
 
-        bool isJPEG = checkIsJPEG(path.string());
+        // Decode runs WITHOUT the lock held — it is the slow part, and keeping it
+        // unlocked is what lets parallel warm-up threads actually overlap.
+        std::shared_ptr<Texture> texture;
+        auto ext = path.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c){ return std::tolower(c); });
+        if (ext == ".dds") {
+            DDSLoader ddsLoader;
+            texture = ddsLoader.load(path);
+            if (texture) texture->colorSpace = colorSpace;
+        } else if (ext == ".exr" || ext == ".hdr") {
+            // HDR formats decode to linear float RGBA, not 8-bit. Without this
+            // branch a .hdr fell through to stb's LDR path, which tonemaps it to
+            // bytes and returns silently — a dim, clipped environment map that
+            // looks like a shading bug rather than a loading one.
+            //
+            // `colorSpace` is deliberately not applied: the pixels are already
+            // scene-linear, and tagging them sRGB would decode them twice.
+            if (ext == ".exr") {
+                EXRLoader exrLoader;
+                texture = exrLoader.load(path, flipY);
+            } else {
+                RGBELoader rgbeLoader;
+                texture = rgbeLoader.load(path, flipY);
+            }
+        } else {
+            const bool isJPEG = checkIsJPEG(path.string());
+            auto image = imageLoader_.load(path, isJPEG ? 3 : 4, flipY);
+            if (image) {
+                texture = Texture::create(*image);
+                texture->name = path.stem().string();
+                texture->format = isJPEG ? Format::RGB : Format::RGBA;
+                texture->colorSpace = colorSpace;
+                texture->needsUpdate();
+            }
+        }
+        if (!texture) return nullptr;
 
-        auto image = imageLoader_.load(path, isJPEG ? 3 : 4, flipY);
+        // Remembered so an exporter can reference the file instead of embedding
+        // a base64 copy of it. Set for both decode paths, and before the cache
+        // insert so every later sharer of this instance sees it too.
+        texture->sourceFile = path;
 
-        auto texture = Texture::create(*image);
-        texture->name = path.stem().string();
-
-        texture->format = isJPEG ? Format::RGB : Format::RGBA;
-        texture->needsUpdate();
-
-        if (useCache_) cache_[path.string()] = texture;
-
+        std::lock_guard<std::mutex> lock(mutex_);
+        // Re-check under the lock: another thread may have decoded the same key
+        // while we were decoding — prefer its cached instance so a shared path
+        // yields ONE Texture (one GPU upload) instead of one per racing thread.
+        if (auto cachedTexture = checkCache(key)) {
+            return cachedTexture;
+        }
+        if (useCache_) cache_[key] = texture;
         return texture;
     }
 
-    std::shared_ptr<Texture> loadFromMemory(const std::string& name, const std::vector<unsigned char>& data, bool flipY) {
+    std::shared_ptr<Texture> loadFromMemory(const std::string& name, const std::vector<unsigned char>& data,
+                                            ColorSpace colorSpace, bool flipY) {
 
-        if (auto cachedTexture = checkCache(name)) {
-
-            return cachedTexture;
+        const std::string key = cacheKey(name, colorSpace, flipY);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (auto cachedTexture = checkCache(key)) {
+                return cachedTexture;
+            }
         }
 
-        bool isJPEG = checkIsJPEG(name);
-
+        const bool isJPEG = checkIsJPEG(name);
         auto image = imageLoader_.load(data, isJPEG ? 3 : 4, flipY);
+        if (!image) return nullptr;
 
         auto texture = Texture::create(*image);
         texture->name = name;
-
         texture->format = isJPEG ? Format::RGB : Format::RGBA;
+        texture->colorSpace = colorSpace;
         texture->needsUpdate();
 
-        if (useCache_) cache_[name] = texture;
+        // These pixels have no file of their own — that is what "from memory"
+        // means — so the bytes they were decoded from are kept instead, with the
+        // row order they were decoded under. An exporter then has something
+        // original to store; see Texture::encodedSource.
+        texture->encodedSource = Texture::EncodedImage::from(data, flipY);
 
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (auto cachedTexture = checkCache(key)) {
+            return cachedTexture;
+        }
+        if (useCache_) cache_[key] = texture;
         return texture;
     }
 };
@@ -97,18 +170,30 @@ struct TextureLoader::Impl {
 TextureLoader::TextureLoader(bool useCache)
     : pimpl_(std::make_unique<Impl>(useCache)) {}
 
+std::shared_ptr<Texture> TextureLoader::load(const std::filesystem::path& path, ColorSpace colorSpace, bool flipY) {
+
+    return pimpl_->load(path, colorSpace, flipY);
+}
+
 std::shared_ptr<Texture> TextureLoader::load(const std::filesystem::path& path, bool flipY) {
 
-    return pimpl_->load(path, flipY);
+    return pimpl_->load(path, ColorSpace::NoColorSpace, flipY);
 }
 
 std::shared_ptr<Texture> TextureLoader::loadFromMemory(const std::string& name, const std::vector<unsigned char>& data, bool flipY) {
 
-    return pimpl_->loadFromMemory(name, data, flipY);
+    return pimpl_->loadFromMemory(name, data, ColorSpace::NoColorSpace, flipY);
+}
+
+std::shared_ptr<Texture> TextureLoader::loadFromMemory(const std::string& name, const std::vector<unsigned char>& data,
+                                                       ColorSpace colorSpace, bool flipY) {
+
+    return pimpl_->loadFromMemory(name, data, colorSpace, flipY);
 }
 
 void TextureLoader::clearCache() {
 
+    std::lock_guard<std::mutex> lock(pimpl_->mutex_);
     pimpl_->cache_.clear();
 }
 

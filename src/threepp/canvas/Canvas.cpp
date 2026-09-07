@@ -6,7 +6,7 @@
 #include "threepp/loaders/ImageLoader.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
 #include "threepp/utils/LoadGlad.hpp"
 #define GLFW_INCLUDE_NONE
 #else
@@ -15,22 +15,29 @@
 
 #include <GLFW/glfw3.h>
 
+#include <cstdlib>
 #include <iostream>
 #include <optional>
+#include <stdexcept>
+#include <string_view>
 
 using namespace threepp;
 
 namespace {
 
-#if EMSCRIPTEN
+#ifdef __EMSCRIPTEN__
     struct FunctionWrapper {
         std::function<void()> loopFunction;
+        std::function<void()> frameEndCallback;
 
-        explicit FunctionWrapper(std::function<void()> loopFunction)
-            : loopFunction(std::move(loopFunction)) {}
+        FunctionWrapper(std::function<void()> loopFunction, std::function<void()> frameEndCallback)
+            : loopFunction(std::move(loopFunction)), frameEndCallback(std::move(frameEndCallback)) {}
 
         void loop() {
             loopFunction();
+            if (frameEndCallback) {
+                frameEndCallback();
+            }
         }
     };
 
@@ -42,6 +49,10 @@ namespace {
 #else
     void setWindowIcon(GLFWwindow* window, std::optional<std::filesystem::path> customIcon) {
 
+#ifdef __APPLE__
+        return;// operation is not supported on macOS
+#endif
+
         ImageLoader imageLoader;
         std::optional<Image> favicon;
         if (customIcon) {
@@ -51,8 +62,8 @@ namespace {
         }
         if (favicon) {
             GLFWimage images[1];
-            images[0] = {static_cast<int>(favicon->width),
-                         static_cast<int>(favicon->height),
+            images[0] = {static_cast<int>(favicon->width()),
+                         static_cast<int>(favicon->height()),
                          favicon->data().data()};
             glfwSetWindowIcon(window, 1, images);
         }
@@ -130,6 +141,10 @@ namespace {
             case GLFW_KEY_INSERT: return Key::INSERT;
             case GLFW_KEY_DELETE: return Key::DEL;
 
+            case GLFW_KEY_LEFT_SHIFT: return Key::LEFT_SHIFT;
+            case GLFW_KEY_LEFT_CONTROL: return Key::LEFT_CONTROL;
+            case GLFW_KEY_LEFT_ALT: return Key::LEFT_ALT;
+
             default: return Key::UNKNOWN;
 
         }
@@ -139,18 +154,108 @@ namespace {
         std::cerr << "Error: " << description << std::endl;
     }
 
-    void initGLfw() {
-        static bool initialized = false;
+    static int& glfwRefCount() {
+        static int count = 0;
+        return count;
+    }
 
-        if (!initialized) {
-            initialized = true;
-
+    void initGLfw(bool headless) {
+        if (glfwRefCount()++ == 0) {
             glfwSetErrorCallback(error_callback);
-
+            (void) headless;
+#if !defined(__EMSCRIPTEN__) && defined(GLFW_PLATFORM)
+            // Pick the GLFW platform before the first glfwInit reads the hint.
+            // A headless canvas on a machine with no display server (cloud GPU
+            // instances: DISPLAY/WAYLAND_DISPLAY unset) selects the Null
+            // platform — glfwInit would otherwise fail outright on X11/Wayland,
+            // and a headless Vulkan canvas never needs the window system: its
+            // surface comes from VK_EXT_headless_surface (see VulkanContext).
+            // Windows and macOS always have a window system, so headless keeps
+            // the native platform (hidden window). THREEPP_GLFW_PLATFORM=null
+            // forces the Null platform anywhere, which is how the display-free
+            // path is exercised on a developer machine. The hint is sticky
+            // across init/terminate cycles, so the windowed case must reset it
+            // to ANY_PLATFORM.
+            bool wantNull = false;
+            if (const char* forced = std::getenv("THREEPP_GLFW_PLATFORM"); forced && *forced) {
+                wantNull = std::string_view{forced} == "null";
+            }
+#if !defined(_WIN32) && !defined(__APPLE__)
+            else if (headless) {
+                const char* x11 = std::getenv("DISPLAY");
+                const char* wl = std::getenv("WAYLAND_DISPLAY");
+                wantNull = (!x11 || !*x11) && (!wl || !*wl);
+            }
+#endif
+            glfwInitHint(GLFW_PLATFORM, wantNull ? GLFW_PLATFORM_NULL : GLFW_ANY_PLATFORM);
+#elif !defined(__EMSCRIPTEN__)
+            // GLFW before 3.4 has no platform selection and no Null platform:
+            // a display-less machine just fails in glfwInit below. Distro
+            // packages still ship 3.3 (Ubuntu 22.04), so an external GLFW can
+            // land here even though the vendored copy is 3.4.
+            if (const char* forced = std::getenv("THREEPP_GLFW_PLATFORM"); forced && std::string_view{forced} == "null") {
+                std::cerr << "Canvas: THREEPP_GLFW_PLATFORM=null ignored - GLFW "
+                          << GLFW_VERSION_MAJOR << '.' << GLFW_VERSION_MINOR
+                          << " predates the Null platform (needs 3.4)" << std::endl;
+            }
+#endif
             if (!glfwInit()) {
-                exit(EXIT_FAILURE);
+#if !defined(__EMSCRIPTEN__) && defined(GLFW_PLATFORM) && !defined(_WIN32) && !defined(__APPLE__)
+                // DISPLAY/WAYLAND_DISPLAY being set was only ever a hint that a
+                // window system is reachable, and it can lie: a dead X server
+                // leaves the variable behind (observed on Colab, where a failed
+                // Xorg experiment left DISPLAY=:1 and glfwInit died on "Failed
+                // to open display" with the GPU perfectly able to render). A
+                // headless canvas never needed the window system it just failed
+                // to reach, so retry on the Null platform instead of giving up.
+                if (headless && !wantNull) {
+                    glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_NULL);
+                    if (glfwInit()) {
+                        std::cerr << "Canvas: display server unreachable; headless "
+                                     "canvas continues on the GLFW Null platform"
+                                  << std::endl;
+                        return;
+                    }
+                }
+#elif !defined(__EMSCRIPTEN__) && !defined(_WIN32) && !defined(__APPLE__)
+                // Pre-3.4 GLFW has nowhere to fall back to. Say so, rather than
+                // leaving "glfwInit() failed" next to an X11 error on a machine
+                // whose only fault is having no display server.
+                if (headless) {
+                    std::cerr << "Canvas: a headless canvas needs a display server here - GLFW "
+                              << GLFW_VERSION_MAJOR << '.' << GLFW_VERSION_MINOR
+                              << " predates the Null platform (needs 3.4)" << std::endl;
+                }
+#endif
+                --glfwRefCount();
+                throw std::runtime_error("Canvas: glfwInit() failed");
             }
         }
+    }
+
+    void termGLfw() {
+        if (--glfwRefCount() == 0) {
+            glfwTerminate();
+        }
+    }
+
+    // The primary monitor's current video mode, in screen coordinates — the
+    // size a borderless-fullscreen window takes. Unlike monitor::monitorSize()
+    // this takes no GLFW reference of its own (it assumes glfwInit has already
+    // run, which it has by the time the Canvas ctor asks), so a fullscreen
+    // canvas still terminates GLFW when it is destroyed. Returns {0,0} if
+    // there is no monitor to ask, which the caller treats as "not fullscreen".
+    WindowSize primaryMonitorSize() {
+#ifdef __EMSCRIPTEN__
+        return monitor::monitorSize();
+#else
+        if (GLFWmonitor* m = glfwGetPrimaryMonitor()) {
+            if (const GLFWvidmode* mode = glfwGetVideoMode(m)) {
+                return {mode->width, mode->height};
+            }
+        }
+        return {0, 0};
+#endif
     }
 
 }// namespace
@@ -158,60 +263,167 @@ namespace {
 struct Canvas::Impl {
 
     Canvas& scope;
-    GLFWwindow* window;
+    GLFWwindow* window{nullptr};
 
     WindowSize size_;
     Vector2 lastMousePos_;
 
     bool close_{false};
-    bool exitOnKeyEscape_;
 
-    std::optional<std::function<void(WindowSize)>> resizeListener;
+    // Retained for lazy window creation (initWindow called on first animate).
+    Parameters params_;
+
+    std::vector<std::function<void(WindowSize)>> resizeListener;
+    std::vector<std::function<void(int monitor)>> monitorChangesListener;
+    std::function<void()> frameEndCallback_;
+    bool insideAnimateLoop_{false};
 
     explicit Impl(Canvas& scope, const Parameters& params)
-        : scope(scope), exitOnKeyEscape_(params.exitOnKeyEscape_) {
+        : scope(scope),
+          params_(params) {
 
-        initGLfw();
+        initGLfw(params.headless_);
 
-        if (params.size_) {
+        // Fullscreen takes the monitor's size and ignores any requested one.
+        // Headless wins over it: there is no window to make borderless, and a
+        // display-less machine has no monitor to measure.
+        const WindowSize screen = borderlessFullscreen() ? primaryMonitorSize() : WindowSize{0, 0};
+        if (screen.width() > 0 && screen.height() > 0) {
+            size_ = screen;
+        } else if (params.size_) {
             size_ = *params.size_;
         } else {
             const auto fullSize = monitor::monitorSize();
             size_ = {fullSize.width() / 2, fullSize.height() / 2};
         }
+    }
 
-#ifndef EMSCRIPTEN
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-        glfwWindowHint(GLFW_RESIZABLE, params.resizable_);
+    // Borderless windowed fullscreen requested AND applicable. Headless has no
+    // window at all, so it wins; see Parameters::fullscreen.
+    [[nodiscard]] bool borderlessFullscreen() const {
+        return params_.fullscreen_ && !params_.headless_;
+    }
 
-        glfwWindowHint(GLFW_VISIBLE, params.headless_ ? GLFW_FALSE : GLFW_TRUE);
+    void initWindow(GraphicsAPI api) {
+        if (window) return; // already initialised
+        params_.graphicsApi_ = api;
 
+#ifndef __EMSCRIPTEN__
+        // GLFW window hints are sticky, process-global state: whatever the last
+        // canvas asked for still applies to the next glfwCreateWindow. A Vulkan
+        // canvas sets GLFW_CLIENT_API=GLFW_NO_API, so without this reset a GL
+        // canvas created afterwards silently got a window with no GL context
+        // (and the same leak applied to GLFW_SAMPLES). Start from a known state.
+        glfwDefaultWindowHints();
+
+        if (api == GraphicsAPI::Vulkan) {
+            glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+        } else {
+            glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
+            glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+            glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+            glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+            glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        }
+        // Borderless windowed fullscreen: strip the decorations and pin the
+        // size. Deliberately NOT glfwCreateWindow(..., monitor, ...) — an
+        // exclusive-fullscreen window owns the display mode, cannot stay hidden
+        // until the first present (see deferShow below), and mode-switches the
+        // monitor on every alt-tab. An undecorated window covering the monitor
+        // looks the same and keeps all of that machinery intact.
+        const bool borderless = borderlessFullscreen();
+        if (borderless) {
+            glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+        }
+        glfwWindowHint(GLFW_RESIZABLE, borderless ? GLFW_FALSE : params_.resizable_);
+        // A Vulkan canvas starts hidden and is revealed by the renderer once it
+        // has presented a first frame (Canvas::showWindow). Device and pipeline
+        // setup leaves a visible window blank and unresponsive for seconds —
+        // long enough that the user clicks back to whatever launched the app,
+        // and the first real frame then surfaces in the background. GL windows
+        // paint within the same frame they appear, so they stay visible-on-create.
+        // A borderless-fullscreen GL window is also created hidden, so that it
+        // can be moved onto the monitor origin before it is ever painted —
+        // otherwise it flashes at GLFW's default (centred) position first. It
+        // is revealed at the end of this function, unlike a Vulkan canvas,
+        // which stays hidden until its renderer has presented.
+        // Manual placement. Fullscreen wins: it already owns the position (the
+        // monitor origin). Deliberately NOT the GLFW 3.4 position hints: those
+        // (like glfwSetWindowPos) place the CONTENT area, so (0, 0) tucks the
+        // title bar and border off the top of the screen. The API promises the
+        // OUTER frame instead, and the frame is only measurable once the window
+        // exists (glfwGetWindowFrameSize) — so placement always follows the
+        // borderless recipe: create hidden, measure, move, reveal. Wayland
+        // ignores the move (the protocol has no client-side positioning) and
+        // GLFW says so through the error callback.
+        const bool manualPos = params_.position_.has_value() && !borderless;
+        const bool deferShow = params_.headless_ || api == GraphicsAPI::Vulkan;
+        glfwWindowHint(GLFW_VISIBLE, (deferShow || borderless || manualPos) ? GLFW_FALSE : GLFW_TRUE);
+#else
+        // Browser: OpenGL (WebGL2) needs GLFW to create the WebGL context.
+        // Suppressing it left GLctx undefined and crashed the GL renderer on
+        // startup.
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_ES_API);
 #endif
 
-        if (params.antialiasing_ > 0) {
-            glfwWindowHint(GLFW_SAMPLES, params.antialiasing_);
+        if (params_.antialiasing_ > 0) {
+            glfwWindowHint(GLFW_SAMPLES, params_.antialiasing_);
         }
 
-        window = glfwCreateWindow(size_.width(), size_.height(), params.title_.c_str(), nullptr, nullptr);
+        window = glfwCreateWindow(size_.width(), size_.height(), params_.title_.c_str(), nullptr, nullptr);
         if (!window) {
-            glfwTerminate();
-            exit(EXIT_FAILURE);
+            termGLfw();
+            throw std::runtime_error(
+                    "Canvas: glfwCreateWindow failed for '" + params_.title_ + "' (requested " +
+                    (api == GraphicsAPI::Vulkan ? "Vulkan" : "OpenGL") + ")");
         }
 
-#if EMSCRIPTEN
+        // NOTE, because it is the root of a crash that took a while to find:
+        // size_ is what was REQUESTED and the platform is free to disagree.
+        // Windows clamps a window's client area to the desktop work area (a
+        // 1200-tall window on a 1200-tall monitor comes back 1181 tall with a
+        // taskbar on screen) and enforces a minimum width (a 64-wide window is
+        // really 120 wide). GLFW fires no resize callback for a size it only
+        // ever set once, at creation, so size_ keeps describing a window that
+        // never existed. Syncing it from glfwGetWindowSize here is NOT safe:
+        // size_ also drives the GL viewport and the camera aspect, and the
+        // small offscreen-style canvases the GL tests render into would start
+        // rendering at the platform's minimum width instead of the size they
+        // asked for. Consumers that pair this number with a driver-sized
+        // buffer must therefore ask the driver, not the canvas — see
+        // VulkanRenderer::writeFramebuffer and Impl::Impl, which both size
+        // from the swapchain extent for exactly this reason.
+
+#ifndef __EMSCRIPTEN__
+        if (borderless) {
+            // Cover the primary monitor from its own origin (which is NOT
+            // (0,0) on a multi-monitor desktop whose primary sits to the right
+            // of another screen).
+            int mx = 0, my = 0;
+            if (GLFWmonitor* m = glfwGetPrimaryMonitor()) {
+                glfwGetMonitorPos(m, &mx, &my);
+            }
+            glfwSetWindowPos(window, mx, my);
+            // The reveal waits until the icon and callbacks are installed
+            // below — see the end of this function.
+        } else if (manualPos) {
+            // The window was created hidden, so this move is never seen.
+            // Revealed at the end of this function.
+            moveFrameTo(params_.position_->first, params_.position_->second);
+        }
+#endif
+
+#ifdef __EMSCRIPTEN__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
-        EM_ASM({ document.title = UTF8ToString($0); }, params.title_.c_str());
+        EM_ASM({ document.title = UTF8ToString($0); }, params_.title_.c_str());
 #pragma GCC diagnostic pop
 #endif
 
         glfwSetWindowUserPointer(window, this);
 
-#ifndef EMSCRIPTEN
-        setWindowIcon(window, params.favicon_);
+#ifndef __EMSCRIPTEN__
+        setWindowIcon(window, params_.favicon_);
 #endif
 
         glfwSetKeyCallback(window, key_callback);
@@ -219,19 +431,43 @@ struct Canvas::Impl {
         glfwSetCursorPosCallback(window, cursor_callback);
         glfwSetScrollCallback(window, scroll_callback);
         glfwSetWindowSizeCallback(window, window_size_callback);
+        glfwSetWindowPosCallback(window, window_pos_callback);
         glfwSetDropCallback(window, drop_callback);
 
-        glfwMakeContextCurrent(window);
+        if (api == GraphicsAPI::OpenGL) {
+#ifndef __EMSCRIPTEN__
+            // Belt and braces for the hint reset above: a context-less window
+            // would otherwise fail deep inside glad with no useful message.
+            if (glfwGetWindowAttrib(window, GLFW_CLIENT_API) == GLFW_NO_API) {
+                throw std::runtime_error(
+                        "Canvas: OpenGL was requested for '" + params_.title_ +
+                        "' but the window was created without a GL context "
+                        "(GLFW_CLIENT_API=GLFW_NO_API leaked from a Vulkan canvas)");
+            }
+#endif
+            glfwMakeContextCurrent(window);
 
-#ifndef EMSCRIPTEN
-        loadGlad();
-        glfwSwapInterval(params.vsync_ ? 1 : 0);
+#ifndef __EMSCRIPTEN__
+            loadGlad();
+            glfwSwapInterval(params_.vsync_ ? 1 : 0);
 
-        if (params.antialiasing_ > 0) {
-            glEnable(GL_MULTISAMPLE);
+            if (params_.antialiasing_ > 0) {
+                glEnable(GL_MULTISAMPLE);
+            }
+
+            glEnable(GL_PROGRAM_POINT_SIZE);
+#endif
         }
 
-        glEnable(GL_PROGRAM_POINT_SIZE);
+#ifndef __EMSCRIPTEN__
+        // A borderless-fullscreen or manually placed window was created hidden
+        // only so it could be moved into place unseen; now that it is placed,
+        // iconed and wired up, reveal it. A canvas with a real reason to stay
+        // hidden (headless, or Vulkan waiting on its first present) is left
+        // alone.
+        if ((borderless || manualPos) && !deferShow) {
+            glfwShowWindow(window);
+        }
 #endif
     }
 
@@ -240,50 +476,95 @@ struct Canvas::Impl {
         return size_;
     }
 
-    void setSize(std::pair<int, int> size) const {
+    void setSize(std::pair<int, int> size) {
+
+        if (!window) {
+            params_.size(size);
+            return;
+        }
 
         glfwSetWindowSize(window, size.first, size.second);
     }
 
+#ifndef __EMSCRIPTEN__
+    // Position (x, y) as the OUTER frame's top-left corner, decorations
+    // included. GLFW's coordinate is the content area, so a raw
+    // glfwSetWindowPos(0, 0) tucks the title bar off the top of the screen;
+    // offsetting by the frame size keeps the whole window on it. An
+    // undecorated window (borderless fullscreen) has a zero frame, so this is
+    // exact there too.
+    void moveFrameTo(int x, int y) const {
+
+        int frameLeft = 0, frameTop = 0, frameRight, frameBottom;
+        glfwGetWindowFrameSize(window, &frameLeft, &frameTop, &frameRight, &frameBottom);
+        glfwSetWindowPos(window, x + frameLeft, y + frameTop);
+    }
+#endif
+
+    void setPosition(std::pair<int, int> position) {
+
+        if (!window) {
+            params_.position(position.first, position.second);
+            return;
+        }
+
+#ifndef __EMSCRIPTEN__
+        moveFrameTo(position.first, position.second);
+#endif
+    }
+
+    [[nodiscard]] std::pair<int, int> getPosition() const {
+
+#ifndef __EMSCRIPTEN__
+        if (window) {
+            int x, y;
+            glfwGetWindowPos(window, &x, &y);
+            int frameLeft = 0, frameTop = 0, frameRight, frameBottom;
+            glfwGetWindowFrameSize(window, &frameLeft, &frameTop, &frameRight, &frameBottom);
+            return {x - frameLeft, y - frameTop};
+        }
+#endif
+        return params_.position_.value_or(std::pair<int, int>{0, 0});
+    }
+
     bool animateOnce(const std::function<void()>& f) {
+
+        if (!window) initWindow(params_.graphicsApi_);
 
         if (close_ || glfwWindowShouldClose(window)) {
             close_ = true;
             return false;
         }
 
+        insideAnimateLoop_ = true;
         f();
+        insideAnimateLoop_ = false;
 
-        glfwSwapBuffers(window);
+        if (params_.graphicsApi_ == GraphicsAPI::OpenGL) {
+            glfwSwapBuffers(window);
+        } else if (frameEndCallback_) {
+            frameEndCallback_();
+        }
         glfwPollEvents();
 
         return true;
     }
 
     void animate(const std::function<void()>& f) {
-#if EMSCRIPTEN
-        // NOTE: wrapper must outlive this function call because
-        // emscripten_set_main_loop_arg only *registers* the callback
-        // and returns; the loop runs asynchronously from the browser.
-        // Using a stack-local wrapper + simulate_infinite_loop=true
-        // leaks an 'unwind' exception to JS and leaves a dangling ptr.
-        static FunctionWrapper* wrapper = nullptr;
-        if (wrapper) { delete wrapper; wrapper = nullptr; }
-        wrapper = new FunctionWrapper(f);
-        // fps=0  -> use requestAnimationFrame
-        // simulate_infinite_loop=false -> do NOT throw 'unwind', do NOT
-        // tear down main(); just schedule the loop and return.
-        emscripten_set_main_loop_arg(&emscriptenLoop, wrapper, 0, false);
-        // Keep the runtime alive even though main() returns, so the
-        // Embind bindings (loadModel, resize, ...) stay callable.
-        EM_ASM({ Module.noExitRuntime = true; });
+#ifdef __EMSCRIPTEN__
+        FunctionWrapper wrapper(f, frameEndCallback_);
+        emscripten_set_main_loop_arg(&emscriptenLoop, &wrapper, 0, true);
 #else
         while (animateOnce(f)) {}
 #endif
     }
 
     void onWindowResize(std::function<void(WindowSize)> f) {
-        this->resizeListener = std::move(f);
+        this->resizeListener.emplace_back(std::move(f));
+    }
+
+    void onMonitorChange(std::function<void(int)> f) {
+        this->monitorChangesListener.emplace_back(std::move(f));
     }
 
     void close() {
@@ -292,14 +573,58 @@ struct Canvas::Impl {
     }
 
     ~Impl() {
-        glfwDestroyWindow(window);
-        glfwTerminate();
+        if (window) {
+            // Hand the pointer back BEFORE the window goes away, for apps that
+            // grabbed it for mouse-look (GLFW_CURSOR_DISABLED + raw motion —
+            // see the FPS/TPS demos). The bundled GLFW does call enableCursor()
+            // from its destroy path, but GLFW 3.3.x does not (it only nulls
+            // _glfw.win32.disabledCursorWindow), so a system/older GLFW leaves
+            // the OS cursor hidden, clipped and in raw-motion mode after the
+            // process ends. Doing it here makes the release explicit and
+            // version-independent. Paths that never reach this destructor at
+            // all (std::exit, Ctrl+C, a crash) still have to release it
+            // themselves — the demos do so before their std::exit.
+            if (glfwRawMouseMotionSupported())// else GLFW_FEATURE_UNAVAILABLE
+                glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_FALSE);
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            glfwDestroyWindow(window);
+        }
+        termGLfw();
     }
+
+
+    static void window_pos_callback(GLFWwindow* w, int wx, int wy) {
+
+        auto p = static_cast<Impl*>(glfwGetWindowUserPointer(w));
+
+        int count;
+        GLFWmonitor** monitors = glfwGetMonitors(&count);
+
+        // For each monitor, get its bounds
+        for (int i = 0; i < count; ++i) {
+            int mx, my;
+            glfwGetMonitorPos(monitors[i], &mx, &my);
+            const GLFWvidmode* mode = glfwGetVideoMode(monitors[i]);
+            const int mw = mode->width;
+            const int mh = mode->height;
+
+            // Check if window is within this monitor's bounds
+            if (wx >= mx && wx < mx + mw && wy >= my && wy < my + mh) {
+                for (const auto& listener : p->monitorChangesListener) {
+                    listener(i);
+                }
+                break;
+            }
+        }
+    }
+
 
     static void window_size_callback(GLFWwindow* w, int width, int height) {
         auto p = static_cast<Impl*>(glfwGetWindowUserPointer(w));
         p->size_ = {width, height};
-        if (p->resizeListener) p->resizeListener.value().operator()(p->size_);
+        for (const auto& listener : p->resizeListener) {
+            listener(p->size_);
+        }
     }
 
 
@@ -336,7 +661,7 @@ struct Canvas::Impl {
 
         const auto p = static_cast<Impl*>(glfwGetWindowUserPointer(w));
 
-        if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS && p->exitOnKeyEscape_) {
+        if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS && p->params_.exitOnKeyEscape_) {
             glfwSetWindowShouldClose(w, GLFW_TRUE);
             return;
         }
@@ -408,14 +733,33 @@ float Canvas::aspect() const {
     return size().aspect();
 }
 
+void Canvas::exitOnKeyEscape(bool value) {
+    pimpl_->params_.exitOnKeyEscape_ = value;
+}
+
 void Canvas::setSize(std::pair<int, int> size) {
 
     pimpl_->setSize(size);
 }
 
+void Canvas::setPosition(std::pair<int, int> position) {
+
+    pimpl_->setPosition(position);
+}
+
+std::pair<int, int> Canvas::position() const {
+
+    return pimpl_->getPosition();
+}
+
 void Canvas::onWindowResize(std::function<void(WindowSize)> f) {
 
     pimpl_->onWindowResize(std::move(f));
+}
+
+void Canvas::onMonitorChange(std::function<void(int)> f) const {
+
+    pimpl_->onMonitorChange(std::move(f));
 }
 
 void Canvas::close() {
@@ -426,6 +770,51 @@ void Canvas::close() {
 void* Canvas::windowPtr() const {
 
     return pimpl_->window;
+}
+
+GraphicsAPI Canvas::graphicsApi() const {
+
+    return pimpl_->params_.graphicsApi_;
+}
+
+void Canvas::initWindow(GraphicsAPI api) {
+
+    pimpl_->initWindow(api);
+}
+
+bool Canvas::vsync() const {
+
+    return pimpl_->params_.vsync_;
+}
+
+int Canvas::samples() const {
+
+    return pimpl_->params_.antialiasing_;
+}
+
+bool Canvas::headless() const {
+
+    return pimpl_->params_.headless_;
+}
+
+void Canvas::setFrameEndCallback(std::function<void()> callback) {
+    pimpl_->frameEndCallback_ = std::move(callback);
+}
+
+void Canvas::showWindow() {
+
+#ifndef __EMSCRIPTEN__
+    // Never un-hide a headless canvas: hidden IS its contract, and on the GLFW
+    // Null platform there is nothing to show anyway.
+    if (pimpl_->params_.headless_) return;
+    if (!pimpl_->window) return;
+    if (glfwGetWindowAttrib(pimpl_->window, GLFW_VISIBLE)) return;
+    glfwShowWindow(pimpl_->window);
+#endif
+}
+
+bool Canvas::isInsideAnimateLoop() const {
+    return pimpl_->insideAnimateLoop_;
 }
 
 Canvas::~Canvas() = default;
@@ -475,6 +864,12 @@ Canvas::Parameters::Parameters(const std::unordered_map<std::string, ParameterVa
 
             headless(std::get<bool>(value));
             used = true;
+
+        } else if (key == "fullscreen") {
+
+            fullscreen(std::get<bool>(value));
+            used = true;
+
         }
 
         if (!used) {
@@ -505,6 +900,13 @@ Canvas::Parameters& Canvas::Parameters::size(WindowSize size) {
 Canvas::Parameters& Canvas::Parameters::size(int width, int height) {
 
     return this->size({width, height});
+}
+
+Canvas::Parameters& Canvas::Parameters::position(int x, int y) {
+
+    this->position_ = {x, y};
+
+    return *this;
 }
 
 Canvas::Parameters& Canvas::Parameters::antialiasing(int antialiasing) {
@@ -553,10 +955,16 @@ Canvas::Parameters& Canvas::Parameters::headless(bool flag) {
     return *this;
 }
 
+Canvas::Parameters& Canvas::Parameters::fullscreen(bool flag) {
 
-WindowSize monitor::monitorSize() {
+    fullscreen_ = flag;
 
-#if EMSCRIPTEN
+    return *this;
+}
+
+WindowSize monitor::monitorSize(int monitor) {
+
+#ifdef __EMSCRIPTEN__
     int width = EM_ASM_INT({
         return window.innerWidth;
     });
@@ -568,25 +976,27 @@ WindowSize monitor::monitorSize() {
     return {width, height};
 #else
 
-    initGLfw();
+    initGLfw(/*headless*/ false);
 
-    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+    int count;
+    auto monitors = glfwGetMonitors(&count);
+    const GLFWvidmode* mode = glfwGetVideoMode(monitors[monitor]);
 
     return {mode->width, mode->height};
 #endif
 }
 
-std::pair<float, float> monitor::contentScale() {
-#if EMSCRIPTEN
+std::pair<float, float> monitor::contentScale(int monitor) {
+#ifdef __EMSCRIPTEN__
     return {1, 1};//TODO
 #else
-    initGLfw();
+    initGLfw(/*headless*/ false);
 
-    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    int count;
+    auto monitors = glfwGetMonitors(&count);
 
     float xscale, yscale;
-    glfwGetMonitorContentScale(monitor, &xscale, &yscale);
+    glfwGetMonitorContentScale(monitors[monitor], &xscale, &yscale);
 
     return {xscale, yscale};
 #endif

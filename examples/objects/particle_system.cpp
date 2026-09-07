@@ -1,5 +1,7 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "renderer_factory.hpp"
+
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/objects/ParticleSystem.hpp"
 #include "threepp/threepp.hpp"
 
@@ -15,8 +17,8 @@ void initFirework(ParticleSystem::Settings& settings);
 int main() {
 
     Canvas canvas("Particle system", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
-    renderer.checkShaderErrors = true;
+    auto renderer = createRenderer(canvas);
+    renderer->checkShaderErrors = true;
 
     Scene scene;
     scene.background = Color::gray;
@@ -28,7 +30,7 @@ int main() {
     initFountain(engine.settings());
 
     engine.initialize();
-    scene.add(engine);
+    scene.addRef(engine);
 
     auto grid = GridHelper::create();
     scene.add(grid);
@@ -38,7 +40,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     int selectedIndex = 0;
@@ -48,10 +50,7 @@ int main() {
             {"fireball", initFireball},
             {"firework", initFirework}};
 
-    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
-        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
-        ImGui::Begin("Make selection");
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         if (ImGui::BeginCombo("Demos", demos[selectedIndex].first.c_str())) {
             for (int index = 0; index < demos.size(); ++index) {
                 const bool isSelected = (selectedIndex == index);
@@ -64,16 +63,15 @@ int main() {
             }
             ImGui::EndCombo();
         }
-        ImGui::End();
-    });
+    }, "Make selection");
 
 
     Clock clock;
-    canvas.animate([&]() {
-        float dt = clock.getDelta();
+    canvas.animate([&] {
+        const auto dt = clock.getDelta();
 
         engine.update(dt * 0.5f);
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
 
         ui.render();
     });
@@ -107,7 +105,7 @@ void initFountain(ParticleSystem::Settings& settings) {
             .setSizeTween({0, 1}, {0.1, 2});
 
     TextureLoader tl;
-    settings.texture = tl.load("data/textures/star.png");
+    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/star.png", ColorSpace::sRGB);
 }
 
 void initSmoke(ParticleSystem::Settings& settings) {
@@ -137,7 +135,7 @@ void initSmoke(ParticleSystem::Settings& settings) {
             .setSizeTween({0, 1}, {1, 10});
 
     TextureLoader tl;
-    settings.texture = tl.load("data/textures/smokeparticle.png");
+    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/smokeparticle.png", ColorSpace::sRGB);
 }
 
 void initFireball(ParticleSystem::Settings& settings) {
@@ -163,7 +161,7 @@ void initFireball(ParticleSystem::Settings& settings) {
             .setSizeTween({0, 1}, {0.1, 15});
 
     TextureLoader tl;
-    settings.texture = tl.load("data/textures/smokeparticle.png");
+    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/smokeparticle.png", ColorSpace::sRGB);
 }
 
 void initFirework(ParticleSystem::Settings& settings) {
@@ -192,5 +190,5 @@ void initFirework(ParticleSystem::Settings& settings) {
             .setSizeTween({0.3, 0.6, 1.3}, {0.5, 4, 0.1});
 
     TextureLoader tl;
-    settings.texture = tl.load("data/textures/spark.png");
+    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/spark.png", ColorSpace::sRGB);
 }

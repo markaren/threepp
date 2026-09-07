@@ -69,6 +69,8 @@ namespace threepp {
 
         [[nodiscard]] float getZoomScale() const;
 
+        [[nodiscard]] float getDistance() const;
+
         ~OrbitControls();
 
     private:

@@ -80,7 +80,7 @@ ShaderLib::ShaderLib()
                                       }
                               }),// clang-format on
 
-              ShaderChunk::instance().meshphong_vert(),
+              ShaderChunk::instance().meshphysical_vert(),
               ShaderChunk::instance().meshphysical_frag()},
       toon{
               mergeUniforms({// clang-format off
@@ -181,7 +181,11 @@ ShaderLib::ShaderLib()
               mergeUniforms({// clang-format off
                                       UniformsLib::instance().envmap,
                                       UniformMap{
-                                              {"opacity", Uniform(1.f)}
+                                              {"opacity", Uniform(1.f)},
+                                              // xyz = the camera's world forward, w = 1 under an
+                                              // orthographic camera. The w=0 default leaves the
+                                              // perspective path exactly as it was.
+                                              {"orthoDirection", Uniform(Vector4(0.f, 0.f, -1.f, 0.f))}
                                       }
                               }),// clang-format on
 
@@ -231,7 +235,13 @@ ShaderLib::ShaderLib()
                                               {"clearcoatRoughnessMap", Uniform()},
                                               {"clearcoatNormalScale", Uniform(Vector2(1,1))},
                                               {"clearcoatNormalMap", Uniform()},
-                                              {"sheen", Uniform(Color(0x000000))},
+                                              {"sheenColor", Uniform(Color(0x000000))},
+                                              {"sheenRoughness", Uniform(0.f)},
+                                              {"specularIntensity", Uniform(1.f)},
+                                              {"specularColor", Uniform(Color(0xffffff))},
+                                              {"iridescence", Uniform(0.f)},
+                                              {"iridescenceIOR", Uniform(1.3f)},
+                                              {"iridescenceThicknessNm", Uniform(400.f)},
                                               {"transmission", Uniform(0.f)},
                                               {"transmissionMap", Uniform()},
                                               {"transmissionSamplerSize", Uniform(Vector2(0,0))},

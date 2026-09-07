@@ -1,0 +1,627 @@
+#include "threepp/loaders/FBXLoader.hpp"
+
+#include "threepp/constants.hpp"
+#include "threepp/core/BufferAttribute.hpp"
+#include "threepp/core/BufferGeometry.hpp"
+#include "threepp/lights/DirectionalLight.hpp"
+#include "threepp/lights/PointLight.hpp"
+#include "threepp/lights/SpotLight.hpp"
+#include "threepp/loaders/DDSLoader.hpp"
+#include "threepp/loaders/TextureLoader.hpp"
+#include "threepp/materials/MeshPhongMaterial.hpp"
+#include "threepp/materials/MeshPhysicalMaterial.hpp"
+#include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/math/Matrix4.hpp"
+#include "threepp/objects/Group.hpp"
+#include "threepp/objects/Mesh.hpp"
+
+#include "ofbx.h"
+
+#include <algorithm>
+#include <atomic>
+#include <cctype>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <thread>
+#include <unordered_set>
+#include <vector>
+
+namespace threepp {
+
+    namespace {
+
+        // OpenFBX uses row-vector convention (translation in last row).
+        // Transposing gives the column-vector Matrix4 expected by threepp.
+        // Matrix4::set takes elements in row-major reading order.
+        Matrix4 toMatrix4(const ofbx::DMatrix& m) {
+            return Matrix4().set(
+                static_cast<float>(m.m[0]),  static_cast<float>(m.m[4]),  static_cast<float>(m.m[8]),  static_cast<float>(m.m[12]),
+                static_cast<float>(m.m[1]),  static_cast<float>(m.m[5]),  static_cast<float>(m.m[9]),  static_cast<float>(m.m[13]),
+                static_cast<float>(m.m[2]),  static_cast<float>(m.m[6]),  static_cast<float>(m.m[10]), static_cast<float>(m.m[14]),
+                static_cast<float>(m.m[3]),  static_cast<float>(m.m[7]),  static_cast<float>(m.m[11]), static_cast<float>(m.m[15]));
+        }
+
+        // Build a non-indexed BufferGeometry from one GeometryPartition.
+        // ofbx::triangulate() converts each polygon in the partition to triangles
+        // and returns face-vertex indices; Vec*Attributes::get() resolves
+        // both indexed and non-indexed storage transparently.
+        std::shared_ptr<BufferGeometry> buildPartitionGeometry(
+                const ofbx::GeometryData& geomData,
+                const ofbx::GeometryPartition& partition) {
+
+            const auto positions = geomData.getPositions();
+            const auto normals   = geomData.getNormals();
+            const auto uvs       = geomData.getUVs(0);
+            const bool hasNormals = normals.values != nullptr;
+            const bool hasUVs     = uvs.values != nullptr;
+
+            std::vector<float> posData;
+            std::vector<float> normData;
+            std::vector<float> uvData;
+            posData.reserve(partition.triangles_count * 9);
+            if (hasNormals) normData.reserve(partition.triangles_count * 9);
+            if (hasUVs)     uvData.reserve(partition.triangles_count * 6);
+
+            // Scratch buffer for triangulate() — sized for the largest polygon.
+            std::vector<int> triIndices(partition.max_polygon_triangles * 3);
+
+            for (int pi = 0; pi < partition.polygon_count; ++pi) {
+                const auto& polygon = partition.polygons[pi];
+                // Returns number of resulting indices (numTriangles * 3).
+                const int indexCount = static_cast<int>(ofbx::triangulate(geomData, polygon, triIndices.data()));
+                for (int ti = 0; ti < indexCount; ++ti) {
+                    const int fv = triIndices[ti];
+                    const auto p = positions.get(fv);
+                    posData.push_back(static_cast<float>(p.x));
+                    posData.push_back(static_cast<float>(p.y));
+                    posData.push_back(static_cast<float>(p.z));
+                    if (hasNormals) {
+                        const auto n = normals.get(fv);
+                        normData.push_back(static_cast<float>(n.x));
+                        normData.push_back(static_cast<float>(n.y));
+                        normData.push_back(static_cast<float>(n.z));
+                    }
+                    if (hasUVs) {
+                        const auto uv = uvs.get(fv);
+                        uvData.push_back(static_cast<float>(uv.x));
+                        uvData.push_back(static_cast<float>(uv.y));
+                    }
+                }
+            }
+
+            auto geometry = BufferGeometry::create();
+            // Capture whether the FBX supplied normals BEFORE moving normData
+            // out. FloatBufferAttribute::create now genuinely moves its rvalue
+            // argument, so re-reading normData.empty() afterwards would always
+            // be true and spuriously recompute (flat) normals, discarding the
+            // asset's authored smooth normals.
+            const bool hadNormals = !normData.empty();
+            geometry->setAttribute("position",
+                    FloatBufferAttribute::create(std::move(posData), 3));
+            if (hadNormals)
+                geometry->setAttribute("normal",
+                        FloatBufferAttribute::create(std::move(normData), 3));
+            if (!uvData.empty())
+                geometry->setAttribute("uv",
+                        FloatBufferAttribute::create(std::move(uvData), 2));
+            if (!hadNormals)
+                geometry->computeVertexNormals();
+
+            return geometry;
+        }
+
+        std::filesystem::path resolveTexturePath(
+                const ofbx::Texture* tex,
+                const std::filesystem::path& baseDir) {
+            if (!tex) return {};
+            char relBuf[512] = {};
+            char absBuf[512] = {};
+            tex->getRelativeFileName().toString(relBuf);
+            tex->getFileName().toString(absBuf);
+
+            for (char* p = relBuf; *p; ++p) if (*p == '\\') *p = '/';
+            for (char* p = absBuf; *p; ++p) if (*p == '\\') *p = '/';
+
+            // Strip leading "./" so filesystem::path joining works correctly.
+            auto stripDotSlash = [](const char* s) -> const char* {
+                return (s[0] == '.' && s[1] == '/') ? s + 2 : s;
+            };
+            const char* rel = stripDotSlash(relBuf);
+            const char* abs = absBuf;
+
+            // 1. baseDir + relative path (most common for well-packaged FBX files)
+            if (rel[0]) {
+                auto candidate = baseDir / rel;
+                if (std::filesystem::exists(candidate)) return candidate;
+            }
+            // 2. absolute path as stored (works when running on the original machine)
+            if (abs[0] && std::filesystem::exists(abs)) return abs;
+            // 3. filename-only from relative path, next to the FBX file
+            if (rel[0]) {
+                auto candidate = baseDir / std::filesystem::path(rel).filename();
+                if (std::filesystem::exists(candidate)) return candidate;
+            }
+            // 4. filename-only from absolute path, next to the FBX file
+            if (abs[0]) {
+                auto candidate = baseDir / std::filesystem::path(abs).filename();
+                if (std::filesystem::exists(candidate)) return candidate;
+            }
+            return {};
+        }
+
+        bool isSupportedImageFormat(const std::filesystem::path& p) {
+            auto ext = p.extension().string();
+            // FBX/DCC exports may store texture names with any-case extensions
+            // (Albedo.PNG, Normal.DDS). Lower-case before matching so they aren't
+            // rejected here, before the (already case-insensitive) TextureLoader
+            // ever sees them.
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            // stb_image handles most of these; ".webp" goes to the vendored libwebp
+            // decoder and ".dds" is routed to DDSLoader, both downstream in ImageLoader
+            // and TextureLoader respectively.
+            for (const auto* e : {".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".webp", ".hdr", ".pic", ".pnm", ".dds"})
+                if (ext == e) return true;
+            return false;
+        }
+
+        // Returns true when the filename suggests a PBR ORM-packed texture
+        // (R=AO, G=Roughness, B=Metalness).  This heuristic covers Unreal Engine
+        // exports (e.g. "_Specular") and common explicit ORM naming.
+        // Used only in MaterialMode::Auto; Phong/PBR override it via the loader flag.
+        bool looksLikeORM(const std::filesystem::path& p) {
+            const auto stem = p.stem().string();
+            // Case-insensitive search for known ORM suffixes/substrings.
+            auto ci = [&](const char* needle) {
+                auto it = std::search(stem.begin(), stem.end(),
+                                      needle, needle + std::strlen(needle),
+                                      [](char a, char b){ return std::tolower(a) == std::tolower(b); });
+                return it != stem.end();
+            };
+            return ci("_specular") || ci("_orm") || ci("_rma") || ci("_occlusionroughnessmetallic")
+                || ci("_roughness") || ci("_metalrough") || ci("_metallicrough");
+        }
+
+        // Load a texture from the given FBX texture slot, configure wrapping,
+        // and return it.  Returns nullptr if the slot is empty or unsupported.
+        std::shared_ptr<Texture> loadTex(const ofbx::Texture* slot,
+                                         const std::filesystem::path& baseDir,
+                                         TextureLoader& texLoader,
+                                         ColorSpace cs = ColorSpace::sRGB) {
+            if (!slot) return nullptr;
+            auto p = resolveTexturePath(slot, baseDir);
+            if (p.empty() || !isSupportedImageFormat(p)) return nullptr;
+            auto tex = texLoader.load(p, cs);
+            if (tex) {
+                tex->wrapS = TextureWrapping::Repeat;
+                tex->wrapT = TextureWrapping::Repeat;
+                tex->needsUpdate();
+            }
+            return tex;
+        }
+
+        // Parallel texture cache warm-up. stb_image decode is CPU-bound and was
+        // done serially per-material inside buildMaterial() — for a texture-heavy
+        // scene (Bistro: hundreds of 2K–4K maps) that serial decode dominates load
+        // time. Here we gather every UNIQUE texture path up front and decode them
+        // across a small thread pool INTO the (now thread-safe) TextureLoader
+        // cache, so the subsequent serial buildMaterial() pass only hits warm
+        // entries. Correctness: each unique (path, colour-space) pair is decoded
+        // exactly once and cached under a key that includes the colour space, so a
+        // texture reused as both an sRGB colour map and a linear data map yields
+        // the correct interpretation for each. Decode touches no GPU/GLFW state
+        // (uploads are deferred to first render), so it is safe off the main thread.
+        void warmTextureCacheParallel(const ofbx::IScene* scene,
+                                      const std::filesystem::path& baseDir,
+                                      TextureLoader& texLoader) {
+            struct Job { std::filesystem::path path; ColorSpace cs; };
+            std::vector<Job> jobs;
+            std::unordered_set<std::string> seen;
+
+            auto consider = [&](const ofbx::Texture* slot, ColorSpace cs) {
+                if (!slot) return;
+                auto p = resolveTexturePath(slot, baseDir);
+                if (p.empty() || !isSupportedImageFormat(p)) return;
+                // Key on (path, colour-space) so the same file used as both an
+                // sRGB and a linear map is warmed once per interpretation — matching
+                // the composite key TextureLoader now caches under.
+                const auto key = p.string() + '|' + std::to_string(static_cast<int>(cs));
+                if (seen.insert(key).second) jobs.push_back({std::move(p), cs});
+            };
+
+            const int meshCount = scene->getMeshCount();
+            for (int mi = 0; mi < meshCount; ++mi) {
+                const ofbx::Mesh* fbxMesh = scene->getMesh(mi);
+                const int matCount = fbxMesh->getMaterialCount();
+                for (int k = 0; k < matCount; ++k) {
+                    const ofbx::Material* mat = fbxMesh->getMaterial(k);
+                    if (!mat) continue;
+                    // Same slot→colour-space mapping buildMaterial/applyCommon use.
+                    consider(mat->getTexture(ofbx::Texture::DIFFUSE),  ColorSpace::sRGB);
+                    consider(mat->getTexture(ofbx::Texture::SPECULAR), ColorSpace::Linear);
+                    consider(mat->getTexture(ofbx::Texture::NORMAL),   ColorSpace::Linear);
+                    consider(mat->getTexture(ofbx::Texture::EMISSIVE), ColorSpace::sRGB);
+                }
+            }
+
+            if (jobs.empty()) return;
+
+            // Bounded pool: cap concurrent decodes so peak transient memory (a 4K
+            // RGBA decode is ~64 MB) stays sane even when two FBX files load at
+            // once (each runs its own pool). 8 is plenty — decode saturates memory
+            // bandwidth well before then. Atomic index = simple load balancing.
+            const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+            const unsigned nThreads = std::min({hw, 8u, static_cast<unsigned>(jobs.size())});
+            std::atomic<size_t> next{0};
+            auto worker = [&]() {
+                for (size_t i = next.fetch_add(1); i < jobs.size(); i = next.fetch_add(1)) {
+                    texLoader.load(jobs[i].path, jobs[i].cs);
+                }
+            };
+            std::vector<std::thread> pool;
+            pool.reserve(nThreads);
+            for (unsigned t = 0; t < nThreads; ++t) pool.emplace_back(worker);
+            for (auto& th : pool) th.join();
+        }
+
+        // Returns true when the material name or diffuse texture name suggests glass.
+        // Also covers the FBX opacity property for materials that set it explicitly.
+        bool looksLikeGlass(const ofbx::Material* mat, const std::filesystem::path& diffPath) {
+            // Explicit FBX opacity property
+            if (static_cast<float>(mat->getOpacity()) < 0.99f) return true;
+            // Name-based heuristic: material name or diffuse texture stem
+            auto ciContains = [](const std::string& s, const char* needle) {
+                return std::search(s.begin(), s.end(), needle, needle + std::strlen(needle),
+                                   [](char a, char b){ return std::tolower(a) == std::tolower(b); }) != s.end();
+            };
+            const std::string matName(mat->name);
+            for (const char* kw : {"glass", "window", "crystal", "transparent"}) {
+                if (ciContains(matName, kw)) return true;
+            }
+            if (!diffPath.empty()) {
+                const std::string stem = diffPath.stem().string();
+                for (const char* kw : {"glass", "window", "crystal"}) {
+                    if (ciContains(stem, kw)) return true;
+                }
+            }
+            return false;
+        }
+
+        // Returns true when the material or diffuse-texture name marks foliage —
+        // leaf/plant cards that need alpha cutout. Bistro's cutout mask lives in
+        // the GPU-compressed BaseColor DDS alpha, which the CPU-side
+        // hasCutoutAlpha() scan can't read (it bails on compressed images). The
+        // renderer DOES decode that alpha into its albedo atlas (bcnDecompress),
+        // so a name match is enough to enable Material::alphaTest and get correct
+        // cutout. Harmless on solid foliage parts (e.g. trunks): their alpha is
+        // opaque, so the cutoff discards nothing.
+        bool looksLikeFoliage(const ofbx::Material* mat, const std::filesystem::path& diffPath) {
+            auto ciContains = [](const std::string& s, const char* needle) {
+                return std::search(s.begin(), s.end(), needle, needle + std::strlen(needle),
+                                   [](char a, char b){ return std::tolower(a) == std::tolower(b); }) != s.end();
+            };
+            static const char* const kKeywords[] = {
+                "foliage", "leaf", "leaves", "plant", "tree", "ivy",
+                "hedge", "flower", "grass", "fern", "vine", "bush", "shrub"};
+            const std::string matName(mat->name);
+            for (const char* kw : kKeywords) if (ciContains(matName, kw)) return true;
+            if (!diffPath.empty()) {
+                const std::string stem = diffPath.stem().string();
+                for (const char* kw : kKeywords) if (ciContains(stem, kw)) return true;
+            }
+            return false;
+        }
+
+        // Apply normal map + emissive — shared between all material types.
+        // Opacity/transmission is handled per-branch.
+        template<typename M>
+        void applyCommon(M& m, const ofbx::Material* mat,
+                         const std::filesystem::path& baseDir,
+                         TextureLoader& texLoader,
+                         float emissiveScale) {
+            if (auto tex = loadTex(mat->getTexture(ofbx::Texture::NORMAL), baseDir, texLoader, ColorSpace::Linear)) {
+                m.normalMap   = tex;
+                m.normalScale = {1.0f, -1.0f};  // DirectX → OpenGL Y-flip
+            }
+
+            // Emissive. OpenFBX returns its struct default of white (1,1,1) /
+            // factor 1 when the FBX omits these properties — it can't report
+            // "absent" — so reading them unconditionally would make every
+            // non-emissive material glow. Treat a material as emissive only when
+            // it has an emissive texture or an explicit, non-default emissive
+            // colour. (A genuine white emitter with no texture is therefore
+            // skipped, which is rare; real assets either tint it or use a map.)
+            const auto ec = mat->getEmissiveColor();
+            const auto emissiveTex = loadTex(mat->getTexture(ofbx::Texture::EMISSIVE), baseDir, texLoader);
+            const bool ecBlack = ec.r <= 0.f && ec.g <= 0.f && ec.b <= 0.f;
+            const bool ecDefaultWhite = ec.r == 1.f && ec.g == 1.f && ec.b == 1.f;
+            if (emissiveTex || (!ecBlack && !ecDefaultWhite)) {
+                if (emissiveTex) {
+                    m.emissiveMap = emissiveTex;
+                    // A map modulates against the emissive colour; fall back to
+                    // white when the colour was left unset so the map stays visible.
+                    if (ecBlack) m.emissive.setHex(0xffffff);
+                    else         m.emissive.setRGB(ec.r, ec.g, ec.b);
+                } else {
+                    m.emissive.setRGB(ec.r, ec.g, ec.b);
+                }
+                m.emissiveIntensity = static_cast<float>(mat->getEmissiveFactor()) * emissiveScale;
+            }
+        }
+
+        std::shared_ptr<Material> buildMaterial(
+                const ofbx::Material* mat,
+                const std::filesystem::path& baseDir,
+                TextureLoader& texLoader,
+                FBXLoader::MaterialMode materialMode,
+                float emissiveScale) {
+            if (!mat) return MeshStandardMaterial::create();
+
+            // Decide whether the SPECULAR slot is an ORM-packed PBR texture or a
+            // traditional specular map. The loader flag overrides the filename guess.
+            const ofbx::Texture* specSlot = mat->getTexture(ofbx::Texture::SPECULAR);
+            const auto specPath = resolveTexturePath(specSlot, baseDir);
+            const bool hasSpecTex = !specPath.empty() && isSupportedImageFormat(specPath);
+            bool isPBR;
+            switch (materialMode) {
+                case FBXLoader::MaterialMode::Phong:
+                    isPBR = false;
+                    break;
+                case FBXLoader::MaterialMode::PBR:
+                    isPBR = hasSpecTex;
+                    break;
+                case FBXLoader::MaterialMode::Auto:
+                default:
+                    isPBR = hasSpecTex && looksLikeORM(specPath);
+                    break;
+            }
+
+            const auto dc = mat->getDiffuseColor();
+            const float opacity = static_cast<float>(mat->getOpacity());
+
+            // Resolve diffuse path for glass heuristic.
+            const auto diffPath = resolveTexturePath(mat->getTexture(ofbx::Texture::DIFFUSE), baseDir);
+            const bool isGlass = looksLikeGlass(mat, diffPath);
+            // Alpha cutout: name-keyword match for foliage (leaf cards etc, whose
+            // masks are often DXT5/explicit-alpha) OR a direct BC1 punch-through-
+            // alpha scan of the diffuse DDS -- this catches cutout materials the
+            // keyword list doesn't know about by name (chair lattice seats,
+            // wrought-iron railings/chains, mesh signage).
+            const bool needsAlphaCutout = looksLikeFoliage(mat, diffPath) || ddsHasCutoutAlpha(diffPath);
+
+            if (isPBR) {
+                // ---- PBR / MeshPhysicalMaterial --------------------------------
+                auto m = MeshPhysicalMaterial::create();
+                m->color.setRGB(dc.r, dc.g, dc.b);
+                if (auto tex = loadTex(mat->getTexture(ofbx::Texture::DIFFUSE), baseDir, texLoader)) {
+                    m->map = tex;
+                    m->color.setHex(0xffffff);
+                    if (needsAlphaCutout) {// cutout mesh/lattice/foliage → alpha test
+                        m->alphaTest = 0.5f;
+                        m->side      = Side::Double;// thin cutout surfaces visible from both faces
+                    }
+                }
+                if (auto tex = texLoader.load(specPath, ColorSpace::Linear)) {
+                    tex->wrapS = TextureWrapping::Repeat;
+                    tex->wrapT = TextureWrapping::Repeat;
+                    tex->needsUpdate();
+                    m->roughnessMap = tex;
+                    m->metalnessMap = tex;
+                    m->roughness    = 1.0f;  // texture drives; keep metalness default 0
+                }
+                applyCommon(*m, mat, baseDir, texLoader, emissiveScale);
+                if (isGlass) {
+                    m->transmission = opacity < 0.99f ? std::max(0.01f, 1.0f - opacity) : 1.0f;
+                    m->setIor(1.5f);
+                    m->side = Side::Double;
+                }
+                return m;
+            } else if (isGlass) {
+                // ---- Glass (no ORM) / MeshPhysicalMaterial ---------------------
+                auto m = MeshPhysicalMaterial::create();
+                m->color.setRGB(dc.r, dc.g, dc.b);
+                if (auto tex = loadTex(mat->getTexture(ofbx::Texture::DIFFUSE), baseDir, texLoader)) {
+                    m->map = tex;
+                    m->color.setHex(0xffffff);
+                }
+                m->transmission = opacity < 0.99f ? std::max(0.01f, 1.0f - opacity) : 1.0f;
+                m->setIor(1.5f);
+                // Clear glass → force smooth. MeshStandardMaterial defaults roughness
+                // to 1.0 and this branch has no roughness map to drive it down, so the
+                // renderer GGX-samples a wide rough lobe → the stochastic "boil" seen
+                // on wineglasses/bottles. Near-zero roughness makes it take the
+                // deterministic reflect/refract split instead (renderer clamps to its
+                // α≈0.02 floor). Frosted glass would need an authored roughness map.
+                m->roughness = 0.0f;
+                m->side = Side::Double;
+                applyCommon(*m, mat, baseDir, texLoader, emissiveScale);
+                return m;
+            } else {
+                // ---- Phong / MeshPhongMaterial ----------------------------------
+                auto m = MeshPhongMaterial::create();
+                m->color.setRGB(dc.r, dc.g, dc.b);
+                if (auto tex = loadTex(mat->getTexture(ofbx::Texture::DIFFUSE), baseDir, texLoader)) {
+                    m->map = tex;
+                    m->color.setHex(0xffffff);
+                    if (needsAlphaCutout) {// cutout mesh/lattice/foliage → alpha test
+                        m->alphaTest = 0.5f;
+                        m->side      = Side::Double;// thin cutout surfaces visible from both faces
+                    }
+                }
+                // Specular color + shininess from FBX material properties.
+                const auto sc = mat->getSpecularColor();
+                m->specular.setRGB(sc.r, sc.g, sc.b);
+                const double shin = mat->getShininess();
+                if (shin > 0.0) m->shininess = static_cast<float>(shin);
+                if (auto tex = loadTex(specSlot, baseDir, texLoader, ColorSpace::Linear))
+                    m->specularMap = tex;
+                applyCommon(*m, mat, baseDir, texLoader, emissiveScale);
+                if (opacity < 0.99f) {
+                    m->opacity     = std::max(0.01f, opacity);
+                    m->transparent = true;
+                    m->side        = Side::Double;
+                }
+                return m;
+            }
+        }
+
+    }// namespace
+
+    struct FBXLoader::Impl {
+        TextureLoader texLoader;
+    };
+
+    FBXLoader::FBXLoader() : pimpl_(std::make_unique<Impl>()) {}
+    FBXLoader::~FBXLoader() = default;
+
+    std::shared_ptr<Group> FBXLoader::load(const std::filesystem::path& path) {
+        if (!std::filesystem::exists(path)) {
+            std::cerr << "[FBXLoader] File does not exist: "
+                      << std::filesystem::absolute(path) << std::endl;
+            return nullptr;
+        }
+
+        std::ifstream file(path, std::ios::binary | std::ios::ate);
+        if (!file) {
+            std::cerr << "[FBXLoader] Cannot open: " << path << std::endl;
+            return nullptr;
+        }
+        const std::streamoff fileSize = file.tellg();
+        if (fileSize <= 0) {
+            std::cerr << "[FBXLoader] Empty or unreadable file: " << path << std::endl;
+            return nullptr;
+        }
+        file.seekg(0);
+        std::vector<ofbx::u8> data(static_cast<size_t>(fileSize));
+        file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(fileSize));
+        if (file.gcount() != static_cast<std::streamsize>(fileSize)) {
+            std::cerr << "[FBXLoader] Short read (" << file.gcount() << " of "
+                      << fileSize << " bytes): " << path << std::endl;
+            return nullptr;
+        }
+        file.close();
+
+        ofbx::IScene* scene = ofbx::load(
+                data.data(),
+                static_cast<ofbx::usize>(data.size()),
+                static_cast<ofbx::u16>(ofbx::LoadFlags::NONE));
+
+        if (!scene) {
+            std::cerr << "[FBXLoader] Parse error: " << ofbx::getError() << std::endl;
+            return nullptr;
+        }
+
+        const std::filesystem::path baseDir = path.parent_path();
+
+        // Decode every unique texture in parallel up front so the serial material
+        // build below hits warm (thread-safe) cache entries instead of decoding
+        // each map one-at-a-time — the dominant cost for texture-heavy scenes.
+        warmTextureCacheParallel(scene, baseDir, pimpl_->texLoader);
+
+        auto root = Group::create();
+        root->name = path.stem().string();
+
+        const int meshCount = scene->getMeshCount();
+        for (int mi = 0; mi < meshCount; ++mi) {
+            const ofbx::Mesh* fbxMesh = scene->getMesh(mi);
+            const ofbx::GeometryData& geomData = fbxMesh->getGeometryData();
+            if (!geomData.hasVertices()) continue;
+
+            const int partCount = geomData.getPartitionCount();
+            if (partCount == 0) continue;
+
+            Matrix4 worldMatrix;
+            worldMatrix.multiplyMatrices(
+                    toMatrix4(fbxMesh->getGlobalTransform()),
+                    toMatrix4(fbxMesh->getGeometricMatrix()));
+
+            if (partCount == 1) {
+                const auto part = geomData.getPartition(0);
+                if (part.triangles_count == 0) continue;
+
+                auto geometry = buildPartitionGeometry(geomData, part);
+                const ofbx::Material* mat = fbxMesh->getMaterialCount() > 0
+                        ? fbxMesh->getMaterial(0) : nullptr;
+                auto material = buildMaterial(mat, baseDir, pimpl_->texLoader, materialMode, emissiveScale);
+
+                auto mesh = Mesh::create(geometry, material);
+                mesh->name = fbxMesh->name;
+                mesh->applyMatrix4(worldMatrix);
+                root->add(mesh);
+            } else {
+                // One sub-mesh per partition (material group).
+                auto meshGroup = Group::create();
+                meshGroup->name = fbxMesh->name;
+                meshGroup->applyMatrix4(worldMatrix);
+
+                for (int pi = 0; pi < partCount; ++pi) {
+                    const auto part = geomData.getPartition(pi);
+                    if (part.triangles_count == 0) continue;
+                    auto geometry = buildPartitionGeometry(geomData, part);
+                    const ofbx::Material* mat = pi < fbxMesh->getMaterialCount()
+                            ? fbxMesh->getMaterial(pi) : nullptr;
+                    auto material = buildMaterial(mat, baseDir, pimpl_->texLoader, materialMode, emissiveScale);
+                    meshGroup->add(Mesh::create(geometry, material));
+                }
+                root->add(meshGroup);
+            }
+        }
+
+        // -----------------------------------------------------------------------
+        // Lights
+        // -----------------------------------------------------------------------
+        const int lightCount = scene->getLightCount();
+        for (int li = 0; li < lightCount; ++li) {
+            const ofbx::Light* fbxLight = scene->getLight(li);
+            if (!fbxLight) continue;
+
+            const auto fc = fbxLight->getColor();
+            const Color color(fc.r, fc.g, fc.b);
+            // FBX intensity is in percent (0-100+). Normalize to 0-1 range.
+            const float intensity = static_cast<float>(fbxLight->getIntensity()) / 100.0f;
+
+            std::shared_ptr<Object3D> lightNode;
+
+            switch (fbxLight->getLightType()) {
+                case ofbx::Light::LightType::POINT: {
+                    auto light = PointLight::create(color, intensity);
+                    lightNode = light;
+                    break;
+                }
+                case ofbx::Light::LightType::DIRECTIONAL: {
+                    auto light = DirectionalLight::create(color, intensity);
+                    lightNode = light;
+                    break;
+                }
+                case ofbx::Light::LightType::SPOT: {
+                    const float outerAngle = static_cast<float>(fbxLight->getOuterAngle())
+                                           * math::DEG2RAD;
+                    const float innerAngle = static_cast<float>(fbxLight->getInnerAngle())
+                                           * math::DEG2RAD;
+                    // penumbra = 1 - (inner/outer), clamped to [0,1]
+                    const float penumbra = (outerAngle > 0.0f)
+                            ? std::max(0.0f, std::min(1.0f, 1.0f - innerAngle / outerAngle))
+                            : 0.0f;
+                    auto light = SpotLight::create(color, intensity, 0.0f, outerAngle, penumbra);
+                    lightNode = light;
+                    break;
+                }
+                default:
+                    break;
+            }
+
+            if (lightNode) {
+                lightNode->name = fbxLight->name;
+                lightNode->applyMatrix4(toMatrix4(fbxLight->getGlobalTransform()));
+                root->add(lightNode);
+            }
+        }
+
+        scene->destroy();
+        return root;
+    }
+
+}// namespace threepp

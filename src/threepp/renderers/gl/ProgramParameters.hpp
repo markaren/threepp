@@ -3,16 +3,20 @@
 #define THREEPP_PROGRAMPARAMETERS_HPP
 
 #include "GLClipping.hpp"
-#include "GLLights.hpp"
+#include "threepp/renderers/common/Lights.hpp"
+#include "threepp/renderers/common/RendererCapabilities.hpp"
+#include "threepp/renderers/common/ShadowConfig.hpp"
 #include "threepp/core/Uniform.hpp"
 
 #include <optional>
 #include <string>
 #include <unordered_map>
-#include "threepp/renderers/IGLRenderer.hpp"
+
 namespace threepp {
 
     class Scene;
+    class Renderer;
+    class Texture;
 
     namespace gl {
 
@@ -34,20 +38,20 @@ namespace threepp {
             bool instancingColor{};
 
             bool supportsVertexTextures;
-            Encoding outputEncoding{};
+            ColorSpace outputEncoding{};
             bool map{};
-            Encoding mapEncoding{};
+            ColorSpace mapEncoding{};
             bool matcap{};
-            Encoding matcapEncoding{};
+            ColorSpace matcapEncoding{};
             bool envMap{};
             int envMapMode{};
-            Encoding envMapEncoding{};
+            ColorSpace envMapEncoding{};
             bool envMapCubeUV{};
             bool lightMap{};
-            Encoding lightMapEncoding{};
+            ColorSpace lightMapEncoding{};
             bool aoMap{};
             bool emissiveMap{};
-            Encoding emissiveMapEncoding{};
+            ColorSpace emissiveMapEncoding{};
             bool bumpMap{};
             bool normalMap{};
             bool objectSpaceNormalMap{};
@@ -63,7 +67,9 @@ namespace threepp {
 
             bool gradientMap{};
 
-            std::optional<Color> sheen;
+            bool sheen{};
+            bool pbrSpecular{};
+            bool iridescence{};
 
             bool transmission{};
             bool transmissionMap{};
@@ -89,6 +95,7 @@ namespace threepp {
             bool skinning{};
             size_t maxBones{};
             bool useVertexTexture{};
+            bool tetSkinning{};
 
             bool morphTargets{};
             bool morphNormals{};
@@ -112,7 +119,7 @@ namespace threepp {
             ShadowMap shadowMapType{};
 
             ToneMapping toneMapping{};
-            bool physicallyCorrectLights{};
+            bool useLegacyLights{};
 
             bool premultipliedAlpha{};
 
@@ -127,14 +134,22 @@ namespace threepp {
             UniformMap* uniforms = nullptr;
 
             ProgramParameters(
-                    const IGLRenderer& renderer,
+                    const Renderer& renderer,
+                    const ShadowConfig& shadowConfig,
+                    const RendererCapabilities& capabilities,
                     const GLClipping& clipping,
-                    const GLLights::LightState& lights,
+                    const Lights::LightState& lights,
                     size_t numShadows,
                     Object3D* object,
                     Scene* scene,
                     Material* material,
-                    const std::unordered_map<std::string, std::string>& shaderIDs);
+                    Texture* resolvedEnvMap,
+                    const std::unordered_map<std::string, std::string>& shaderIDs,
+                    // Colour space the fragment shader must encode into: the
+                    // bound render target's, or the renderer's when drawing to
+                    // the screen. Resolved by the caller, which is the only
+                    // side that knows what is currently bound.
+                    ColorSpace outputColorSpace);
 
             [[nodiscard]] std::string hash() const;
         };

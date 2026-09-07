@@ -40,7 +40,7 @@ GridHelper::GridHelper(unsigned int size, unsigned int divisions, const Color& c
     geometry_->setAttribute("position", FloatBufferAttribute::create(vertices, 3));
     geometry_->setAttribute("color", FloatBufferAttribute::create(colors, 3));
 
-    auto m = material()->as<LineBasicMaterial>();
+    auto m = materialAs<LineBasicMaterial>();
     m->vertexColors = true;
     m->toneMapped = false;
 }

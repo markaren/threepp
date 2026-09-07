@@ -1,0 +1,80 @@
+#version 450
+// 1x1 stride-1 conv == GEMM  C[M,N] = W[M,K] · X[K,N]  (M=out_c, N=out_pitch,
+// K=in_c). Register-blocked tiled SGEMM: 64x64 output tile per workgroup, each
+// of the 16x16 threads computes a 4x4 micro-tile in registers, so shared-memory
+// loads are reused across 16 outputs (vs 1 output/thread in the generic path).
+// Bindings: 0 X[K,N], 1 W[M,K], 2 bias[M], 3 out[M,N].
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint in_c, out_c, in_h, in_w;
+    uint out_h, out_w, k_h, k_w;
+    uint stride_h, stride_w, pad_h, pad_w;
+    uint has_bias, activation, _p0, _p1;
+} p;
+
+layout(std430, binding = 0) readonly buffer X    { float Xb[]; };// [K, N]
+layout(std430, binding = 1) readonly buffer W    { float Wb[]; };// [M, K]
+layout(std430, binding = 2) readonly buffer Bias { float bias[]; };
+layout(std430, binding = 3)          buffer Out  { float Ob[]; };// [M, N]
+
+const uint BM = 64u, BN = 64u, BK = 16u, TM = 4u, TN = 4u;
+shared float As[BK * BM];// As[k*BM + m] = W[bm0+m, k0+k]
+shared float Bs[BK * BN];// Bs[k*BN + n] = X[k0+k, bn0+n]
+
+float act(float v) {
+    if (p.activation == 1u) return max(0.0, v);
+    if (p.activation == 2u) return v / (1.0 + exp(-v));
+    return v;
+}
+
+void main() {
+    uint M = p.out_c, N = p.out_h * p.out_w, K = p.in_c;
+    uint bm0 = gl_WorkGroupID.y * BM;
+    uint bn0 = gl_WorkGroupID.x * BN;
+    uint tr = gl_LocalInvocationID.y;// 0..15
+    uint tc = gl_LocalInvocationID.x;// 0..15
+    uint tid = tr * 16u + tc;        // 0..255
+
+    float acc[TM][TN];
+    for (uint i = 0u; i < TM; i++)
+        for (uint j = 0u; j < TN; j++) acc[i][j] = 0.0;
+
+    uint numK = (K + BK - 1u) / BK;
+    for (uint kt = 0u; kt < numK; kt++) {
+        uint k0 = kt * BK;
+        // Cooperative load: 1024 elements each, 256 threads → 4 per thread.
+        for (uint r = 0u; r < 4u; r++) {
+            uint idx = tid + r * 256u;// 0..1023
+            uint k = idx / BM, m = idx % BM;
+            uint gm = bm0 + m, gk = k0 + k;
+            As[idx] = (gm < M && gk < K) ? Wb[gm * K + gk] : 0.0;
+        }
+        for (uint r = 0u; r < 4u; r++) {
+            uint idx = tid + r * 256u;
+            uint k = idx / BN, n = idx % BN;
+            uint gk = k0 + k, gn = bn0 + n;
+            Bs[idx] = (gk < K && gn < N) ? Xb[gk * N + gn] : 0.0;
+        }
+        barrier();
+        for (uint k = 0u; k < BK; k++) {
+            float aR[TM], bR[TN];
+            for (uint i = 0u; i < TM; i++) aR[i] = As[k * BM + tr * TM + i];
+            for (uint j = 0u; j < TN; j++) bR[j] = Bs[k * BN + tc * TN + j];
+            for (uint i = 0u; i < TM; i++)
+                for (uint j = 0u; j < TN; j++) acc[i][j] += aR[i] * bR[j];
+        }
+        barrier();
+    }
+
+    for (uint i = 0u; i < TM; i++) {
+        uint gm = bm0 + tr * TM + i;
+        if (gm >= M) continue;
+        float bv = (p.has_bias != 0u) ? bias[gm] : 0.0;
+        for (uint j = 0u; j < TN; j++) {
+            uint gn = bn0 + tc * TN + j;
+            if (gn >= N) continue;
+            Ob[gm * N + gn] = act(acc[i][j] + bv);
+        }
+    }
+}

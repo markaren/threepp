@@ -1,0 +1,207 @@
+// An InstancedMesh of grass blades animated by a GPU wind vertex shader.
+//
+// Each blade is a small tapered quad-strip; a ShaderMaterial bends it toward
+// the wind in the vertex stage (base planted, tip sways), so the whole field
+// animates for free on the GPU — no per-frame CPU matrix rewrites. Placement
+// is up to the caller: build the field with a blade count, then position each
+// blade with the inherited InstancedMesh::setMatrixAt(). Advance the wind clock
+// once per frame with setTime().
+//
+// Backends: GL (raster). The blades sway via the instanced ShaderMaterial path.
+// On the Vulkan backend use GrassMesh instead — it has no generic
+// ShaderMaterial path, so a GrassField renders there as a static (non-swaying)
+// instanced mesh.
+
+#ifndef THREEPP_GRASSFIELD_HPP
+#define THREEPP_GRASSFIELD_HPP
+
+#include "threepp/core/BufferGeometry.hpp"
+#include "threepp/extras/vegetation/GrassTiles.hpp"
+#include "threepp/materials/ShaderMaterial.hpp"
+#include "threepp/math/Vector2.hpp"
+#include "threepp/math/Vector3.hpp"
+#include "threepp/objects/InstancedMesh.hpp"
+
+#include <memory>
+#include <utility>
+#include <vector>
+
+namespace threepp {
+
+    class GrassField: public InstancedMesh {
+
+    public:
+        struct Params {
+            Vector2 windDir{0.8f, 0.6f};      // horizontal wind direction (world XZ)
+            float windStrength = 0.18f;       // sway amplitude
+            Vector3 topColor{0.30f, 0.42f, 0.14f};
+            Vector3 bottomColor{0.08f, 0.16f, 0.05f};
+            Vector3 sunColor{0.55f, 0.55f, 0.50f};
+            Vector3 ambient{0.30f, 0.34f, 0.30f};
+            Vector3 fogColor{0.70f, 0.75f, 0.80f};
+            float fogNear = 30.f;
+            float fogFar = 120.f;
+            int segments = 4;                 // blade tessellation (default geometry)
+        };
+
+        GrassField(const std::shared_ptr<BufferGeometry>& blade,
+                   const std::shared_ptr<ShaderMaterial>& material,
+                   size_t bladeCount)
+            : InstancedMesh(blade, material, bladeCount), windMaterial_(material) {}
+
+        // Advance the wind animation clock (seconds). Call once per frame.
+        void setTime(float seconds) {
+            windMaterial_->uniforms.at("time").setValue(seconds);
+        }
+
+        void setWind(float strength, const Vector2& dir) {
+            windMaterial_->uniforms.at("windStrength").setValue(strength);
+            windMaterial_->uniforms.at("windDir").setValue(dir);
+        }
+
+        void setFog(const Vector3& color, float near, float far) {
+            windMaterial_->uniforms.at("fogColor").setValue(color);
+            windMaterial_->uniforms.at("fogNear").setValue(near);
+            windMaterial_->uniforms.at("fogFar").setValue(far);
+        }
+
+        // sunColor/ambient are baked shader uniforms (see fragmentShader()), not a
+        // hookup to the scene's DirectionalLight/AmbientLight — callers that swap
+        // those for a day/night cycle must mirror the change here too, or the
+        // grass stays lit at its initial brightness regardless of scene lighting.
+        void setSunAmbient(const Vector3& sunColor, const Vector3& ambient) {
+            windMaterial_->uniforms.at("sunColor").setValue(sunColor);
+            windMaterial_->uniforms.at("ambient").setValue(ambient);
+        }
+
+        [[nodiscard]] ShaderMaterial& windMaterial() const { return *windMaterial_; }
+
+        static std::shared_ptr<GrassField> create(size_t bladeCount, const Params& params) {
+            // Bake the Params colours into the vertex colours too, so the
+            // geometry agrees with the shader's uniform gradient if it is ever
+            // reused with a vertexColors material. The GrassField shader itself
+            // reads only the uniforms, so this changes nothing on screen here.
+            vegetation::GrassBladeStyle style;
+            style.segments = params.segments;
+            style.bottomColor = params.bottomColor;
+            style.topColor = params.topColor;
+            return std::make_shared<GrassField>(
+                    vegetation::makeBladeGeometry(style), makeMaterial(params), bladeCount);
+        }
+
+        static std::shared_ptr<GrassField> create(size_t bladeCount) {
+            return create(bladeCount, Params{});
+        }
+
+        // A single tapered blade (origin at the base, unit height along +Y;
+        // scale per instance). Carries position / normal / uv / color so it also
+        // works with a standard vertexColors material if reused elsewhere.
+        //
+        // The template itself is shared with the merged/tiled GrassMesh bakes —
+        // see vegetation::detail::bladeTemplate (GrassTiles.hpp). This overload
+        // keeps the palette this helper has always baked (slightly brighter than
+        // the GrassBladeStyle default, which matches the fjord meadow); pass a
+        // GrassBladeStyle to makeBladeGeometry directly to choose.
+        static std::shared_ptr<BufferGeometry> bladeGeometry(int segments = 4) {
+            vegetation::GrassBladeStyle style;
+            style.segments = segments;
+            style.bottomColor = {0.06f, 0.13f, 0.04f};
+            style.topColor = {0.20f, 0.34f, 0.11f};
+            return vegetation::makeBladeGeometry(style);
+        }
+
+    private:
+        std::shared_ptr<ShaderMaterial> windMaterial_;
+
+        static std::shared_ptr<ShaderMaterial> makeMaterial(const Params& p) {
+            auto m = ShaderMaterial::create();
+            m->vertexShader = vertexShader();
+            m->fragmentShader = fragmentShader();
+            m->side = Side::Double;
+            m->uniforms["time"].setValue(0.f);
+            m->uniforms["windStrength"].setValue(p.windStrength);
+            m->uniforms["windDir"].setValue(p.windDir);
+            m->uniforms["topColor"].setValue(p.topColor);
+            m->uniforms["bottomColor"].setValue(p.bottomColor);
+            m->uniforms["sunColor"].setValue(p.sunColor);
+            m->uniforms["ambient"].setValue(p.ambient);
+            m->uniforms["fogColor"].setValue(p.fogColor);
+            m->uniforms["fogNear"].setValue(p.fogNear);
+            m->uniforms["fogFar"].setValue(p.fogFar);
+            return m;
+        }
+
+        // The blade sways toward windDir, weighted by height² (base planted, tip
+        // free). instanceMatrix is supplied by the InstancedMesh path on GL.
+        static const char* vertexShader() {
+            return R"(
+                uniform float time;
+                uniform float windStrength;
+                uniform vec2  windDir;
+                varying float vHeight;
+                varying float vFog;
+                void main() {
+                    vHeight = uv.y;
+                    vec3 p = position;
+                #ifdef USE_INSTANCING
+                    vec3 instPos = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
+                #else
+                    vec3 instPos = vec3(0.0);
+                #endif
+                    float phase = time * 1.6 + instPos.x * 0.25 + instPos.z * 0.25;
+                    float gust  = sin(phase) * 0.6 + sin(phase * 2.3 + 1.7) * 0.25;
+                    float bend  = gust * windStrength * vHeight * vHeight;
+                    p.x += windDir.x * bend;
+                    p.z += windDir.y * bend;
+                #ifdef USE_INSTANCING
+                    vec4 mv = modelViewMatrix * instanceMatrix * vec4(p, 1.0);
+                #else
+                    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+                #endif
+                    vFog = -mv.z;
+                    gl_Position = projectionMatrix * mv;
+                }
+            )";
+        }
+
+        // Self-contained shading (no IBL) keeps the thin blades from blowing out
+        // to white under a bright sky: a soft wrap + ambient, then distance fog.
+        //
+        // The tail of main() mirrors the standard materials (meshphysical_frag):
+        // tone-map and encode the LIT colour, THEN blend fog in output space.
+        //
+        // <encodings_fragment> is not optional on GL. There is no sRGB default
+        // framebuffer, so every material applies the OETF itself via the
+        // `linearToOutputTexel` function the program prefix injects. A
+        // hand-written ShaderMaterial that skips it writes linear values into a
+        // buffer that is then read as sRGB — roughly a 0.2 → 0.48 shift on
+        // mid-tones — so the blades render as near-black spikes standing in a
+        // correctly-encoded, much brighter terrain.
+        static const char* fragmentShader() {
+            return R"(
+                uniform vec3  topColor;
+                uniform vec3  bottomColor;
+                uniform vec3  sunColor;
+                uniform vec3  ambient;
+                uniform vec3  fogColor;
+                uniform float fogNear;
+                uniform float fogFar;
+                varying float vHeight;
+                varying float vFog;
+                void main() {
+                    vec3 base = mix(bottomColor, topColor, vHeight);
+                    gl_FragColor = vec4(base * (ambient + sunColor * 0.7), 1.0);
+
+                    #include <tonemapping_fragment>
+                    #include <encodings_fragment>
+
+                    float f = clamp((vFog - fogNear) / (fogFar - fogNear), 0.0, 1.0);
+                    gl_FragColor.rgb = mix(gl_FragColor.rgb, fogColor, f);
+                }
+            )";
+        }
+    };
+
+}// namespace threepp
+
+#endif// THREEPP_GRASSFIELD_HPP

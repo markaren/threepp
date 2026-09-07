@@ -1,0 +1,229 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+// Splat volume bake, stage 1 — one thread per splat, integer atomics into the
+// scratch (plans/splat-volume-reflections.md, Part 1, "the deposit model").
+//
+// A 3DGS cloud ALREADY IS a density field: a sum of anisotropic Gaussians with
+// opacity. Voxelizing it is a low-pass of the true representation, not a proxy
+// for one, and the DC spherical-harmonic term is baked radiance — so the volume
+// this writes is the same lighting model the primary rasterizer composites,
+// with the view-dependent orders dropped.
+//
+// DETERMINISM: every value below is a pure function of this thread's splat.
+// There is no RNG, no frame-keyed term, and the only cross-thread accumulation
+// is atomicAdd on a uint — see splat_bake_common.glsl for why that is the whole
+// argument. The two footprint loops sum in a FIXED order inside one thread, so
+// their float arithmetic is reproducible as well.
+
+layout(local_size_x = 256) in;
+
+#include "splat_bake_common.glsl"
+
+// Per-splat static geometry as SplatPass::uploadCloud packs it: 40 bytes,
+// scalar layout. KEEP IN SYNC with SplatGeom in splat_common.glsl and with
+// kGeomStride in SplatPass.cpp — this is the SAME buffer the tile rasterizer
+// reads, bound through a different set.
+struct SplatGeom {
+    vec3  mean;
+    float opacity;
+    float cov[6];// xx, xy, xz, yy, yz, zz
+};
+layout(set = 0, binding = 0, scalar) readonly buffer SplatBakeGeom { SplatGeom geom[]; };
+
+// SH, half-packed, two uints per coefficient — packHalf2x16(r, g) then
+// packHalf2x16(b, 0). Only coefficient 0 (the DC term) is read here.
+layout(set = 0, binding = 1, scalar) readonly buffer SplatBakeSh { uint sh[]; };
+
+const float PI = 3.14159265358979;
+const float kSqrt2Pi  = 2.5066282746310002; // sqrt(2*pi)
+const float kPow2Pi32 = 15.749609945722419;// (2*pi)^(3/2)
+
+// Largest footprint a single splat may cover, per axis. Past it the mass
+// spreads over the capped box: a floater or a background-sky splat gets
+// diffused, which is the failure mode we want out of the two available.
+const int kMaxFootprint = 8;
+
+// KEEP IN SYNC with SH_C0 in splat_common.glsl / threepp/splats/SplatSH.hpp
+// (SplatSH_test pins the decimals on both of those; this is a third copy that
+// exists because the bake cannot include the raster's header — see
+// splat_bake_common.glsl's opening note).
+const float SH_C0 = 0.28209479177387814;
+
+// KEEP IN SYNC with splatSrgbToLinear in splat_common.glsl. 3DGS coefficients
+// are fitted against sRGB-ENCODED training images, so the basis evaluates to a
+// DISPLAY-referred colour; the reflection legs composite in linear radiance, so
+// the decode happens HERE, once at bake time, rather than per march step.
+vec3 svSrgbToLinear(vec3 c) {
+    const vec3 lo = c / 12.92;
+    const vec3 hi = pow(max(c + 0.055, vec3(0.0)) / 1.055, vec3(2.4));
+    return mix(hi, lo, lessThanEqual(c, vec3(0.04045)));
+}
+
+// The splat's view-INDEPENDENT radiance, linear. The view-dependent orders are
+// deliberately dropped: a Fresnel-weighted, wave-perturbed reflection cannot
+// resolve them, and keeping them would mean a per-step SH evaluation against a
+// direction the bake does not have.
+vec3 svDcColorLinear(uint splat) {
+    const uint w  = splat * pc.shCoeffs * 2u;
+    const vec2 rg = unpackHalf2x16(sh[w]);
+    const vec2 b_ = unpackHalf2x16(sh[w + 1u]);
+    // +0.5 belongs to the evaluation, not the data (splats::SH_COLOR_OFFSET),
+    // and the max is what keeps the sRGB decode's linear segment off negative
+    // input for a coefficient that fits a colour below black.
+    const vec3 c = max(0.5 + SH_C0 * vec3(rg.x, rg.y, b_.x), vec3(0.0));
+    return svSrgbToLinear(c);
+}
+
+// One voxel's share. `sigma` is density in 1/local-metre; the colour counters
+// carry sigma*radiance so the resolve's divide recovers a sigma-weighted mean.
+void svDeposit(ivec3 c, float sigma, vec3 rgb) {
+    const uint qs = svFix(sigma);
+    if (qs == 0u) return;// below the Q20.12 quantum: this tap is not a medium
+    const uint idx = 4u * svVoxelIndex(uvec3(c));
+    atomicAdd(scratch[idx + 0u], qs);
+    const uint qr = svFix(sigma * rgb.r);
+    const uint qg = svFix(sigma * rgb.g);
+    const uint qb = svFix(sigma * rgb.b);
+    if (qr != 0u) atomicAdd(scratch[idx + 1u], qr);
+    if (qg != 0u) atomicAdd(scratch[idx + 2u], qg);
+    if (qb != 0u) atomicAdd(scratch[idx + 3u], qb);
+}
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.splatCount) return;
+
+    // Negated compares throughout, so a non-finite opacity/covariance exits
+    // here rather than reaching the atomics (splat_project.comp's rule).
+    const float opacity = geom[i].opacity;
+    if (!(opacity > 0.0)) return;
+
+    // ── amplitude: a central ray through the splat sees the splat's alpha ────
+    //     tau    = -ln(1 - alpha)                    target optical depth
+    //     sigbar = sqrt(trace(Sigma) / 3)            mean 1-sigma extent
+    //     k      = tau / (sqrt(2*pi) * sigbar)       peak density, 1/m
+    //     mass   = k * (2*pi)^(3/2) * sqrt(det Sigma)  integrated optical mass
+    //
+    // Anisotropy is collapsed to sigbar on purpose: a flat wall-splat becomes a
+    // fuzzy slab about a voxel thick, which at the blur level of a wave-
+    // perturbed, Fresnel-weighted reflection is invisible, and it is the trade
+    // that keeps the deposit one expression instead of an ellipsoid rasterizer.
+    // The honest cost is here rather than hidden: mass follows the TRUE
+    // Gaussian's sqrt(det Sigma) while the amplitude was calibrated on sigbar,
+    // so a very flat splat carries less optical mass than its own alpha
+    // suggests, and an exactly degenerate one (a zero scale) carries none.
+    const float alpha = min(opacity, 0.999);// -ln(0) guard
+    const float tau   = -log(1.0 - alpha);
+
+    const float xx = geom[i].cov[0], xy = geom[i].cov[1], xz = geom[i].cov[2];
+    const float yy = geom[i].cov[3], yz = geom[i].cov[4], zz = geom[i].cov[5];
+    const float tr = xx + yy + zz;
+    if (!(tr > 0.0)) return;
+    const float sigbar = sqrt(tr / 3.0);
+
+    const float det = xx * (yy * zz - yz * yz)
+                    - xy * (xy * zz - yz * xz)
+                    + xz * (xy * yz - yy * xz);
+    const float k    = tau / (kSqrt2Pi * sigbar);
+    const float mass = k * kPow2Pi32 * sqrt(max(det, 0.0));
+    if (!(mass > 0.0)) return;
+
+    // ── placement ───────────────────────────────────────────────────────────
+    const vec3 mean = geom[i].mean;
+    const vec3 boxMax = pc.boxMin + pc.boxSize;
+    const float reach = 3.0 * sigbar;
+    // SKIP, DON'T CLAMP. A stray a thousand units out must not smear the
+    // boundary voxels — the same rule pdSampleVolume documents for the dust
+    // volume (particle_density.glsl), for the same reason: a clamped read or a
+    // clamped write turns one outlier into a wall.
+    if (any(lessThan(mean + reach, pc.boxMin)) ||
+        any(greaterThan(mean - reach, boxMax))) return;
+
+    const vec3 rgb = svDcColorLinear(i);
+
+    // Voxel CENTRES at (i + 0.5) / res, so the continuous grid coordinate of a
+    // point is t*res - 0.5 — the same convention particle_density_scatter.comp
+    // splats with and pdSampleVolume inverts, which is what makes bake and
+    // sample each other's inverse.
+    const vec3 t  = (mean - pc.boxMin) / pc.boxSize;
+    const vec3 gc = t * vec3(pc.res) - 0.5;
+    const ivec3 resI = ivec3(pc.res);
+
+    // 3-sigma reach measured in voxels, per axis (the grid is anisotropic —
+    // the host sizes each axis from the box's own extent).
+    const vec3 rv = vec3(reach) / pc.voxelSize;
+
+    if (all(lessThanEqual(rv, vec3(0.5)))) {
+        // ── the common case: splat smaller than a voxel ─────────────────────
+        // At scan scale (128^3 over a building -> voxels of 10-30 cm, splats of
+        // 1-5 cm) this is nearly every splat. 8-tap trilinear, weights summing
+        // to exactly 1 wherever the stencil is inside the box, so the deposited
+        // optical mass does not depend on where inside its voxel the mean sits.
+        const vec3  g0 = floor(gc);
+        const vec3  f  = gc - g0;
+        const ivec3 b  = ivec3(g0);
+        const float sigma = mass / pc.voxelVolume;
+        for (int j = 0; j < 8; ++j) {
+            const ivec3 o = ivec3(j & 1, (j >> 1) & 1, (j >> 2) & 1);
+            const ivec3 c = b + o;
+            if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, resI))) continue;
+            const vec3 wt = mix(vec3(1.0) - f, f, vec3(o));
+            svDeposit(c, sigma * (wt.x * wt.y * wt.z), rgb);
+        }
+        return;
+    }
+
+    // ── splat larger than a voxel: loop its 3-sigma footprint ───────────────
+    // SEPARABLE, because the collapsed Gaussian is isotropic:
+    // exp(-|d|^2 / 2s^2) = product over the axes, so the box costs 3*8 exp()
+    // instead of 8^3 of them, and the normaliser is the product of the three
+    // axis sums exactly.
+    ivec3 lo = ivec3(floor(gc - rv));
+    ivec3 hi = ivec3(ceil(gc + rv));
+    // The cap, applied around the mean's own voxel: past kMaxFootprint the mass
+    // spreads over the capped box rather than over its true extent.
+    const ivec3 ctr = ivec3(floor(gc + 0.5));
+    lo = max(lo, ctr - (kMaxFootprint / 2));
+    hi = min(hi, ctr + (kMaxFootprint / 2 - 1));
+
+    const float invTwoSig2 = 1.0 / (2.0 * sigbar * sigbar);
+    float wx[kMaxFootprint], wy[kMaxFootprint], wz[kMaxFootprint];
+    float sx = 0.0, sy = 0.0, sz = 0.0;
+    for (int a = lo.x; a <= hi.x; ++a) {
+        const float d = pc.boxMin.x + (float(a) + 0.5) * pc.voxelSize.x - mean.x;
+        const float w = exp(-d * d * invTwoSig2);
+        wx[a - lo.x] = w;
+        sx += w;
+    }
+    for (int a = lo.y; a <= hi.y; ++a) {
+        const float d = pc.boxMin.y + (float(a) + 0.5) * pc.voxelSize.y - mean.y;
+        const float w = exp(-d * d * invTwoSig2);
+        wy[a - lo.y] = w;
+        sy += w;
+    }
+    for (int a = lo.z; a <= hi.z; ++a) {
+        const float d = pc.boxMin.z + (float(a) + 0.5) * pc.voxelSize.z - mean.z;
+        const float w = exp(-d * d * invTwoSig2);
+        wz[a - lo.z] = w;
+        sz += w;
+    }
+    const float wsum = sx * sy * sz;
+    if (!(wsum > 0.0)) return;
+
+    // The normaliser is taken over the WHOLE footprint, including voxels
+    // outside the image — whose share is then simply not deposited. Normalising
+    // over only the in-box voxels would pile a straddling splat's entire mass
+    // onto the boundary layer, which is the same failure clamping produces.
+    const float norm = mass / (wsum * pc.voxelVolume);
+
+    for (int z = max(lo.z, 0); z <= min(hi.z, resI.z - 1); ++z) {
+        for (int y = max(lo.y, 0); y <= min(hi.y, resI.y - 1); ++y) {
+            const float wzy = wz[z - lo.z] * wy[y - lo.y];
+            for (int x = max(lo.x, 0); x <= min(hi.x, resI.x - 1); ++x) {
+                svDeposit(ivec3(x, y, z), norm * wzy * wx[x - lo.x], rgb);
+            }
+        }
+    }
+}

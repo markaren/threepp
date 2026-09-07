@@ -4,10 +4,14 @@ include(CMakeFindDependencyMacro)
 
 if (NOT DEFINED EMSCRIPTEN AND @THREEPP_USE_EXTERNAL_GLFW@)
     find_dependency(glfw3 CONFIG)
+endif()
 
-    if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
-        add_library(glfw::glfw ALIAS glfw)
-    endif()
+# A Vulkan-enabled build links Vulkan::Vulkan PUBLIC and hands consumers
+# THREEPP_WITH_VULKAN, so the imported target has to exist on this side too —
+# public headers (ImguiContext.hpp, RendererSettings.hpp, the play sessions)
+# compile the Vulkan branches here.
+if (@THREEPP_WITH_VULKAN@)
+    find_dependency(Vulkan)
 endif()
 
 include(${CMAKE_CURRENT_LIST_DIR}/threepp-targets.cmake)

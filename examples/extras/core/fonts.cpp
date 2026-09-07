@@ -1,5 +1,7 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "renderer_factory.hpp"
+
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/lights/LightShadow.hpp"
 #include "threepp/loaders/FontLoader.hpp"
 #include "threepp/objects/Text.hpp"
@@ -9,49 +11,20 @@ using namespace threepp;
 
 namespace {
 
-    struct MyUI: public ImguiContext {
-
-    public:
-        explicit MyUI(void* ptr): ImguiContext(ptr) {}
-
-        [[nodiscard]] bool newSelection() const {
-            return lastSelectedIndex != selectedIndex;
-        }
-
-        [[nodiscard]] std::string selected() const {
-            return names[selectedIndex];
-        }
-
-    protected:
-        void onRender() override {
-
-            lastSelectedIndex = selectedIndex;
-
-            ImGui::SetNextWindowPos({}, 0, {});
-            ImGui::SetNextWindowSize({270, 0}, 0);
-
-            ImGui::Begin("Font");
-
-            if (ImGui::BeginCombo("Select Font", names[selectedIndex].c_str())) {
-                for (unsigned i = 0; i < names.size(); ++i) {
-                    const auto isSelected = (selectedIndex == i);
-                    if (ImGui::Selectable(names[i].c_str(), isSelected)) {
-                        selectedIndex = i;
-                    }
-                }
-                ImGui::EndCombo();
-            }
-
-            ImGui::End();
-        }
-
-    private:
-        int lastSelectedIndex = -1;
-        int selectedIndex = 4;
-        std::vector<std::string> names{
-                "gentilis_bold", "gentilis_regular", "helvetiker_bold",
-                "helvetiker_regular", "optimer_bold", "optimer_regular"};
+    std::vector<std::string> fonts{
+        "gentilis_bold.typeface.json", "gentilis_regular.typeface.json", "helvetiker_bold.typeface.json",
+        "helvetiker_regular.typeface.json", "optimer_bold.typeface.json", "optimer_regular.typeface.json",
+        "Roboto-Regular.ttf", "Roboto-Bold.ttf"
     };
+
+    std::filesystem::path getFontPath(const std::string& fontName) {
+        std::filesystem::path fontPath{std::string(DATA_FOLDER) + "/fonts"};
+        if (fontName.ends_with(".typeface.json")) {
+            return fontPath / "typeface" / fontName;
+        } else {
+            return fontPath / "truetype"  / fontName;
+        }
+    }
 
     auto createPlane() {
 
@@ -68,6 +41,7 @@ namespace {
     auto createAndAddLights(Scene& scene) {
 
         auto light = DirectionalLight::create();
+        light->intensity = 1.5f;
         light->position.set(15, 5, 15);
         light->lookAt(Vector3::ZEROS());
         light->castShadow = true;
@@ -77,7 +51,7 @@ namespace {
         scene.add(light);
 
         auto pointLight = PointLight::create();
-        pointLight->intensity = 0.2f;
+        pointLight->intensity = 0.3f;
         pointLight->position.set(0, 2, 10);
         scene.add(pointLight);
     }
@@ -87,12 +61,12 @@ namespace {
 int main() {
 
     std::string displayText = "threepp!";
-    std::filesystem::path fontPath{"data/fonts"};
+
 
     Canvas canvas("Fonts", {{"aa", 8}});
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = ShadowMap::PFCSoft;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
+    renderer->shadowMap().type = ShadowMap::PFCSoft;
 
     auto scene = Scene::create();
     scene->background = Color::black;
@@ -104,9 +78,9 @@ int main() {
     OrbitControls controls{*camera, canvas};
 
     FontLoader loader;
-    auto font = loader.load(fontPath / "optimer_bold.typeface.json");
+    auto font = loader.load(getFontPath(fonts.front()));
 
-    float textSize = 10;
+    constexpr float textSize = 10;
     std::shared_ptr<Text3D> textMesh3d;
     std::shared_ptr<Text2D> textMesh2d;
 
@@ -133,19 +107,34 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
 
-    MyUI ui(canvas.windowPtr());
+    // Font picker rides in the shared renderer-settings window (which also
+    // exposes tone map + shadow controls for the GL renderer).
+    int selectedIndex = 4;
+    int lastSelectedIndex = selectedIndex;
+    RendererSettingsUi ui(canvas, *renderer, [&] {
+        if (ImGui::BeginCombo("Select Font", fonts[selectedIndex].c_str())) {
+            for (unsigned i = 0; i < fonts.size(); ++i) {
+                const auto isSelected = (selectedIndex == i);
+                if (ImGui::Selectable(fonts[i].c_str(), isSelected)) {
+                    selectedIndex = i;
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }, "Font");
 
-    canvas.animate([&]() {
-        renderer.render(*scene, *camera);
+    canvas.animate([&] {
+        renderer->render(*scene, *camera);
 
         ui.render();
 
-        if (ui.newSelection()) {
-            font = loader.load(fontPath / std::string(ui.selected() + ".typeface.json"));
+        if (lastSelectedIndex != selectedIndex) {
+            lastSelectedIndex = selectedIndex;
+            font = loader.load(getFontPath(fonts[selectedIndex]));
             if (font) {
                 textMesh3d->setText(displayText, ExtrudeTextGeometry::Options(*font, textSize, 1));
                 textMesh2d->setText(displayText, TextGeometry::Options(*font, textSize));

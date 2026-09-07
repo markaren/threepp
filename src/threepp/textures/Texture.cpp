@@ -3,11 +3,27 @@
 
 #include "threepp/math/MathUtils.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 
 using namespace threepp;
 
+
+Texture::EncodedImage Texture::EncodedImage::from(std::vector<unsigned char> bytes, bool flipY) {
+
+    const auto is = [&](std::initializer_list<unsigned char> magic) {
+        return bytes.size() >= magic.size() &&
+               std::equal(magic.begin(), magic.end(), bytes.begin());
+    };
+
+    std::string extension;
+    if (is({0x89, 'P', 'N', 'G'})) extension = ".png";
+    else if (is({0xFF, 0xD8, 0xFF})) extension = ".jpg";
+    else return {};
+
+    return {std::make_shared<const std::vector<unsigned char>>(std::move(bytes)), std::move(extension), flipY};
+}
 
 Texture::Texture(std::vector<Image> image)
     : uuid_(math::generateUUID()),
@@ -32,6 +48,11 @@ const std::string& Texture::uuid() const {
     return uuid_;
 }
 
+void Texture::setUuid(const std::string& uuid) {
+
+    uuid_ = uuid;
+}
+
 Image& Texture::image() {
 
     if (images_.empty()) {
@@ -43,6 +64,13 @@ Image& Texture::image() {
 }
 
 const Image& Texture::image() const {
+
+    // Same contract as the mutable overload: an image-less texture is a valid
+    // construction state, and front() on the empty vector is UB, not an error.
+    if (images_.empty()) {
+
+        throw std::runtime_error("Error, no Image set for texture");
+    }
 
     return images_.front();
 }
@@ -183,6 +211,7 @@ Texture& Texture::copy(const Texture& source) {
     this->repeat.copy(source.repeat);
     this->center.copy(source.center);
     this->rotation = source.rotation;
+    this->texCoord = source.texCoord;
 
     this->matrixAutoUpdate = source.matrixAutoUpdate;
     this->matrix.copy(source.matrix);
@@ -190,7 +219,7 @@ Texture& Texture::copy(const Texture& source) {
     this->generateMipmaps = source.generateMipmaps;
     this->premultiplyAlpha = source.premultiplyAlpha;
     this->unpackAlignment = source.unpackAlignment;
-    this->encoding = source.encoding;
+    this->colorSpace = source.colorSpace;
 
     return *this;
 }

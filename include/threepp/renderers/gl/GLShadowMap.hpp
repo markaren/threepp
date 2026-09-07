@@ -7,9 +7,10 @@
 
 #include <memory>
 #include <vector>
+
 namespace threepp {
 
-    class IGLRenderer;
+    class Renderer;
     class Light;
     class Object3D;
     class Camera;
@@ -17,19 +18,13 @@ namespace threepp {
     namespace gl {
 
         class GLObjects;
+        struct GLTextures;
 
-        struct GLShadowMap {
+        struct GLShadowMap : public ShadowMapConfig {
 
-            bool enabled = false;
+            GLShadowMap(GLObjects& objects, GLTextures& textures);
 
-            bool autoUpdate = true;
-            bool needsUpdate = false;
-
-            ShadowMap type;
-
-            explicit GLShadowMap(GLObjects& objects);
-
-            void render(IGLRenderer& renderer, const std::vector<Light*>& lights, Object3D* scene, Camera* camera);
+            void render(Renderer& renderer, const std::vector<Light*>& lights, Object3D* scene, Camera* camera);
 
             ~GLShadowMap();
 

@@ -10,17 +10,23 @@
 
 #include "threepp/core/BufferAttribute.hpp"
 
+#include <atomic>
 #include <optional>
 #include <unordered_map>
-#include <any>
+
 namespace threepp {
 
     class BufferGeometry: public EventDispatcher {
 
     public:
-        const unsigned int id{++_id};
+        // Atomic, and 1-based as before (fetch_add returns the OLD value, so the
+        // +1 preserves the original `++_id` numbering). See Object3D::id for why:
+        // loaders build geometries on a detached worker thread.
+        const unsigned int id{_id.fetch_add(1, std::memory_order_relaxed) + 1};
 
-        const std::string uuid;
+        // Automatically assigned; only serialization round-trips (ObjectLoader)
+        // have a reason to overwrite it.
+        std::string uuid;
 
         std::string name;
 
@@ -32,7 +38,7 @@ namespace threepp {
         std::optional<Sphere> boundingSphere;
 
         DrawRange drawRange{0, std::numeric_limits<int>::max() / 2};
-        std::unordered_map<std::string, std::any> userData;
+
         BufferGeometry();
 
         BufferGeometry(const BufferGeometry&) = delete;
@@ -52,11 +58,35 @@ namespace threepp {
         BufferGeometry& setIndex(const ArrayLike& index) {
 
             this->index_ = IntBufferAttribute::create(index, 1);
+            ++attributesVersion_;
 
             return *this;
         }
 
+        // Move overload: takes ownership of the index array without copying it.
+        // Preferred by overload resolution for rvalue std::vector<unsigned int>
+        // arguments (an exact non-template match beats the ArrayLike template),
+        // so `setIndex(std::move(indices))` moves rather than copies.
+        BufferGeometry& setIndex(std::vector<unsigned int>&& index) {
+
+            this->index_ = IntBufferAttribute::create(std::move(index), 1);
+            ++attributesVersion_;
+
+            return *this;
+        }
+
+        // Internal STRUCTURAL version of the attribute set: bumped whenever an
+        // attribute (or the index, or a morph-attribute list) is added,
+        // replaced or removed — NOT when attribute *contents* mutate (that is
+        // BufferAttribute::version). Renderers use it to cache attribute
+        // lookups safely across frames: an unchanged value guarantees the
+        // attribute map still holds the same objects, so cached pointers
+        // cannot dangle. Plain polling — no user action ever required.
+        [[nodiscard]] unsigned int attributesVersion() const { return attributesVersion_; }
+
         BufferAttribute* getAttribute(const std::string& name);
+
+        [[nodiscard]] const BufferAttribute* getAttribute(const std::string& name) const;
 
         template<class T>
         TypedBufferAttribute<T>* getAttribute(const std::string& name) {
@@ -139,8 +169,9 @@ namespace threepp {
         std::unique_ptr<IntBufferAttribute> index_;
         std::unordered_map<std::string, std::shared_ptr<BufferAttribute>> attributes_;
         std::unordered_map<std::string, std::vector<std::shared_ptr<BufferAttribute>>> morphAttributes_;
+        unsigned int attributesVersion_ = 0;// see attributesVersion()
 
-        inline static unsigned int _id{0};
+        inline static std::atomic<unsigned int> _id{0};
     };
 
 }// namespace threepp

@@ -2,19 +2,49 @@
 #ifndef THREEPP_FLOAT_VIEW_HPP
 #define THREEPP_FLOAT_VIEW_HPP
 
+#include <algorithm>
 #include <functional>
-#include <optional>
-#include <ostream>
-#include <utility>
 
 namespace threepp {
 
-    // An internal wrapper around float that allows listeners to be notified about changes.
+    // An internal wrapper around float that notifies its owner when the value changes.
+    //
+    // float_view is implicitly convertible to float, so all non-mutating arithmetic,
+    // comparison and stream operations are inherited for free from the built-in float
+    // operators. Only the mutating operations (which notify) and clamp are defined here.
+    //
+    // The notification target is a pointer to a std::function owned by the parent
+    // (Euler/Quaternion), so a float_view stores only a float plus a pointer rather than an
+    // embedded std::function. Copying or moving a float_view transfers the value only: the
+    // notification target belongs to the parent at its fixed address, so a detached copy is
+    // intentionally left unwired (mutating it is a no-op rather than a dangling call).
     class float_view {
 
     public:
         float_view(float value = 0)
             : value_(value) {}
+
+        float_view(const float_view& o)
+            : value_(o.value_) {}
+
+        float_view(float_view&& o) noexcept
+            : value_(o.value_) {}
+
+        // Structural assignment transfers the value but keeps each side wired to its own
+        // parent; user-facing edits go through operator=(float), which notifies.
+        float_view& operator=(const float_view& o) {
+
+            value_ = o.value_;
+
+            return *this;
+        }
+
+        float_view& operator=(float_view&& o) noexcept {
+
+            value_ = o.value_;
+
+            return *this;
+        }
 
         operator float() const {
 
@@ -23,75 +53,40 @@ namespace threepp {
 
         float_view& operator=(float v) {
 
-            this->value_ = v;
-            if (f_) f_.value()();
+            value_ = v;
+            notify();
 
             return *this;
-        }
-
-        float operator*(float f) const {
-
-            return value_ * f;
-        }
-
-        float operator*(const float_view& f) const {
-
-            return value_ * f.value_;
         }
 
         float_view& operator*=(float f) {
 
             value_ *= f;
-            if (f_) f_.value()();
+            notify();
 
             return *this;
-        }
-
-        float operator/(float f) const {
-
-            return value_ / f;
         }
 
         float_view& operator/=(float f) {
 
             value_ /= f;
-            if (f_) f_.value()();
+            notify();
 
             return *this;
-        }
-
-        float operator+(float f) const {
-
-            return value_ + f;
-        }
-
-        float operator+(const float_view& f) const {
-
-            return value_ + f.value_;
         }
 
         float_view& operator+=(float f) {
 
             value_ += f;
-            if (f_) f_.value()();
+            notify();
 
             return *this;
-        }
-
-        float operator-(float f) const {
-
-            return value_ - f;
-        }
-
-        float operator-(const float_view& f) const {
-
-            return value_ - f.value_;
         }
 
         float_view& operator-=(float f) {
 
             value_ -= f;
-            if (f_) f_.value()();
+            notify();
 
             return *this;
         }
@@ -99,7 +94,7 @@ namespace threepp {
         float_view& operator++() {
 
             value_++;
-            if (f_) f_.value()();
+            notify();
 
             return *this;
         }
@@ -107,29 +102,9 @@ namespace threepp {
         float_view& operator--() {
 
             value_--;
-            if (f_) f_.value()();
+            notify();
 
             return *this;
-        }
-
-        bool operator==(float other) const {
-
-            return value_ == other;
-        }
-
-        bool operator!=(float other) const {
-
-            return value_ != other;
-        }
-
-        bool operator==(const float_view& other) const {
-
-            return value_ == other.value_;
-        }
-
-        bool operator!=(const float_view& other) const {
-
-            return value_ != other.value_;
         }
 
         constexpr float_view& clamp(float min, float max) {
@@ -139,19 +114,21 @@ namespace threepp {
             return *this;
         }
 
-        void setCallback(std::function<void()> f) {
+        // Observe a callback owned elsewhere; the referent must outlive this float_view.
+        void setCallback(const std::function<void()>& f) {
 
-            f_ = std::move(f);
+            onChange_ = &f;
         }
-
-        friend std::ostream& operator<<(std::ostream& os, const float_view& f) {
-            os << f.value_;
-            return os;
-        }
+        void setCallback(std::function<void()>&&) = delete;// a temporary would dangle
 
     private:
+        void notify() const {
+
+            if (onChange_ && *onChange_) (*onChange_)();
+        }
+
         float value_;
-        std::optional<std::function<void()>> f_;
+        const std::function<void()>* onChange_ = nullptr;
 
         friend class Euler;
         friend class Quaternion;

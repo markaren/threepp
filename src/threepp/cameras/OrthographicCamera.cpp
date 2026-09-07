@@ -9,6 +9,11 @@ OrthographicCamera::OrthographicCamera(float left, float right, float top, float
     OrthographicCamera::updateProjectionMatrix();
 }
 
+std::string OrthographicCamera::type() const {
+
+    return "OrthographicCamera";
+}
+
 void OrthographicCamera::setViewOffset(int fullWidth, int fullHeight, int x, int y, int width, int height) {
 
     if (this->view) {

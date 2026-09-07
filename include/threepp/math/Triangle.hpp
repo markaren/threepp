@@ -51,19 +51,19 @@ namespace threepp {
 
         [[nodiscard]] float getArea() const;
 
-        void getMidpoint(Vector3& target);
+        void getMidpoint(Vector3& target) const;
 
-        void getNormal(Vector3& target);
+        void getNormal(Vector3& target) const;
 
-        void getBarycoord(Vector3& point, Vector3& target);
+        void getBarycoord(Vector3& point, Vector3& target) const;
 
-        void getUV(const Vector3& point, const Vector2& uv1, const Vector2& uv2, const Vector2& uv3, Vector2& target);
+        void getUV(const Vector3& point, const Vector2& uv1, const Vector2& uv2, const Vector2& uv3, Vector2& target) const;
 
-        bool containsPoint(const Vector3& point);
+        [[nodiscard]] bool containsPoint(const Vector3& point) const;
 
-        bool isFrontFacing(const Vector3& direction);
+        [[nodiscard]] bool isFrontFacing(const Vector3& direction) const;
 
-        void closestPointToPoint(const Vector3& p, Vector3& target);
+        void closestPointToPoint(const Vector3& p, Vector3& target) const;
 
     private:
         Vector3 a_{};

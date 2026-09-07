@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/controls/DragControls.hpp"
 #include "threepp/threepp.hpp"
 
@@ -9,9 +11,9 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Drag controls");
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = ShadowMap::PFC;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
+    renderer->shadowMap().type = ShadowMap::PFC;
 
     PerspectiveCamera camera(60, canvas.aspect());
     camera.position.z = 25;
@@ -19,18 +21,16 @@ int main() {
     Scene scene;
     scene.background = Color(0xf0f0f0);
 
-    scene.add(AmbientLight::create(0xaaaaaa));
+    scene.add(AmbientLight::create(0xaaaaaa, 2.0f));
 
-    auto light = SpotLight::create(0xffffff, 1.f);
+    auto light = SpotLight::create(0xffffff, 4.f);
     light->position.set(0, 25, 50);
     light->angle = math::PI / 9;
-
     light->castShadow = true;
     light->shadow->camera->nearPlane = 10;
     light->shadow->camera->farPlane = 100;
     light->shadow->mapSize.x = 1024;
     light->shadow->mapSize.y = 1024;
-
     scene.add(light);
 
     auto group = Group::create();
@@ -41,7 +41,7 @@ int main() {
     std::vector<Object3D*> objects;
     for (unsigned i = 0; i < 200; i++) {
 
-        auto object = Mesh::create(geometry, MeshLambertMaterial::create({{"color", Color().randomize()}}));
+        auto object = Mesh::create(geometry, MeshLambertMaterial::create(MeshLambertMaterial::Params{}.color(Color().randomize())));
 
         object->position.x = math::randFloat() * 30 - 15;
         object->position.y = math::randFloat() * 15 - 7.5f;
@@ -66,11 +66,11 @@ int main() {
     DragControls controls(objects, camera, canvas);
     controls.rotateSpeed = 2;
 
-    struct HoverListener: public EventListener {
+    struct HoverListener: EventListener {
         void onEvent(Event& event) override {
 
-            auto target = static_cast<Object3D*>(event.target);
-            auto& color = target->material()->as<MaterialWithColor>()->color;
+            auto target = std::any_cast<Object3D*>(event.target);
+            auto& color = target->materialAs<MaterialWithColor>()->color;
 
             if (event.type == "hoveron") {
                 prevColor = color;
@@ -103,12 +103,12 @@ int main() {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
 
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     std::cout << "Press 'm' to switch between translate and rotate mode" << std::endl;
 
     canvas.animate([&] {
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
     });
 }

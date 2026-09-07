@@ -28,6 +28,13 @@ namespace threepp {
         VSM
     };
 
+    struct ShadowMapConfig {
+        bool enabled = false;
+        bool autoUpdate = true;
+        bool needsUpdate = false;
+        ShadowMap type = ShadowMap::PFC;
+    };
+
     enum class Side {
         Front,
         Back,
@@ -91,7 +98,17 @@ namespace threepp {
         Reinhard = 2,
         Cineon = 3,
         ACESFilmic = 4,
-        Custom = 5
+        Custom = 5,
+        // Khronos PBR Neutral (three.js NeutralToneMapping): compresses
+        // luminance while preserving a bright colour's hue, instead of ACES's
+        // path-to-white. Good for keeping coloured emitters/albedos from
+        // desaturating toward white at high intensity.
+        Neutral = 6,
+        // AgX (three.js AgXToneMapping): Sobotka's filmic sigmoid — the
+        // gentlest highlight rolloff of the set; holds saturated emitters
+        // without hue skew. NOTE: numeric value diverges from three.js
+        // (threepp assigned 6 to Neutral first).
+        AgX = 7
     };
 
     enum class Mapping {
@@ -162,19 +179,32 @@ namespace threepp {
         PingPong = 2202
     };
 
-    const int InterpolateDiscrete = 2300;
-    const int InterpolateLinear = 2301;
-    const int InterpolateSmooth = 2302;
-    const int ZeroCurvatureEnding = 2400;
-    const int ZeroSlopeEnding = 2401;
-    const int WrapAroundEnding = 2402;
-    const int NormalAnimationBlendMode = 2500;
-    const int AdditiveAnimationBlendMode = 2501;
+    enum class Interpolation {
+        Discrete,
+        Linear,
+        Smooth
+    };
+
+    enum class Ending {
+        ZeroCurvature,
+        ZeroSlope,
+        WrapAround
+    };
+
+    enum class AnimationBlendMode {
+        Normal,
+        Additive
+    };
+
     const int TrianglesDrawMode = 0;
     const int TriangleStripDrawMode = 1;
     const int TriangleFanDrawMode = 2;
 
-    enum class Encoding : int {
+    // Color space tag for textures and renderer output.
+    // NoColorSpace (-1) means "raw data, no transform" — used for normal maps,
+    // metallic/roughness, occlusion, and other non-color inputs.
+    enum class ColorSpace : int {
+        NoColorSpace = -1,
         Linear = 3000,
         sRGB = 3001,
         Gamma = 3007,
@@ -184,6 +214,13 @@ namespace threepp {
         RGBM16 = 3005,
         RGBD = 3006
     };
+
+    // three.js-style namespace constants for ergonomic use:
+    //   tex->colorSpace = SRGBColorSpace;
+    inline constexpr auto NoColorSpace        = ColorSpace::NoColorSpace;
+    inline constexpr auto LinearSRGBColorSpace = ColorSpace::Linear;
+    inline constexpr auto SRGBColorSpace      = ColorSpace::sRGB;
+    inline constexpr auto RGBEColorSpace      = ColorSpace::RGBE;
 
     enum class DepthPacking {
         Basic = 3200,

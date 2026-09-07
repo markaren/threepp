@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/loaders/CubeTextureLoader.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 #include "threepp/threepp.hpp"
@@ -8,14 +10,13 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Cubemap");
-    GLRenderer renderer(canvas.size());
-    renderer.checkShaderErrors = true;
+    auto renderer = createRenderer(canvas);
 
     PerspectiveCamera camera(50, canvas.aspect(), 0.1, 1000);
     camera.position.z = 10;
 
-    std::filesystem::path path("data/textures/cube/Bridge2");
-    std::array<std::filesystem::path, 6> urls{
+    std::filesystem::path path(std::string(DATA_FOLDER) + "/textures/cube/Bridge2");
+    std::array urls{
             // clang-format off
             path / "posx.jpg", path / "negx.jpg",
             path / "posy.jpg", path / "negy.jpg",
@@ -28,9 +29,11 @@ int main() {
 
     Scene scene;
     scene.background = reflectionCube;
+    scene.environment = reflectionCube;
 
-    auto material = MeshLambertMaterial::create();
-    material->envMap = reflectionCube;
+    auto material = MeshStandardMaterial::create();
+    material->metalness = 0.9;
+    material->roughness = 0.1;
     auto mesh = Mesh::create(SphereGeometry::create(0.5), material);
     scene.add(mesh);
 
@@ -47,10 +50,10 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     canvas.animate([&] {
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
     });
 }

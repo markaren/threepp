@@ -1,0 +1,162 @@
+
+#include "threepp/animation/AnimationMixer.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
+#include "threepp/lights/PointLight.hpp"
+#include "threepp/loaders/ImageLoader.hpp"
+#include "threepp/loaders/RGBELoader.hpp"
+#include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/materials/interfaces.hpp"
+#include "threepp/threepp.hpp"
+
+#include <cstring>
+
+using namespace threepp;
+
+int main(int argc, char** argv) {
+
+    Canvas canvas("Vulkan animation", {{"vsync", false}});
+
+    auto renderer = VulkanRenderer(canvas);
+    renderer.outputColorSpace = ColorSpace::sRGB;
+    renderer.toneMapping = ToneMapping::ACESFilmic;
+
+    // ---- Scene objects ----
+    TextureLoader tl;
+    auto tex = tl.load(std::string(DATA_FOLDER) + "/textures/uv_grid_opengl.jpg", ColorSpace::sRGB);
+
+    auto boxMesh = Mesh::create(
+            BoxGeometry::create(1.5f, 1.5f, 1.5f),
+            MeshStandardMaterial::create(MeshStandardMaterial::Params{}.map(tex).roughness(0.9f)));
+    boxMesh->position.set(-2.8f, 1.f, 3.f);
+
+    auto enclosingBox = Mesh::create(
+            BoxGeometry::create(),
+            MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(Color::black).side(Side::Back)));
+    enclosingBox->scale *= 200;
+
+    auto sphere1 = Mesh::create(
+            SphereGeometry::create(0.85f, 32, 32),
+            MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                          .color(Color::orangered)
+                                          .roughness(0.85f)
+                                          .emissive(Color::orangered)
+                                          .emissiveIntensity(5.8f)));
+    sphere1->position.set(2.8f, 2.f, -6.f);
+
+    auto sphere2 = Mesh::create(
+            SphereGeometry::create(0.85f, 32, 32),
+            MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                          .color(Color::steelblue)
+                                          .roughness(0.01f)
+                                          .metalness(0.9f)));
+    sphere2->position.set(2.8f, 1.f, 0.f);
+
+    auto glassSphere = Mesh::create(
+            SphereGeometry::create(0.45f, 32, 32),
+            MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}
+                                          .color(Color::pink)
+                                          .transmission(0.8f)
+                                          .ior(1.5f)
+                                          .roughness(0.1f)
+                                          .metalness(0.f)));
+    glassSphere->position.set(0.f, 0.2f, 3.f);
+
+    float floorSize = 32.f;
+    auto floor = Mesh::create(
+            PlaneGeometry::create(floorSize, floorSize),
+            MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                          .color(Color::darkgrey)
+                                          .roughness(0.99f)
+                                          .side(Side::Double)));
+    floor->rotation.x = -math::PI / 2.f;
+    floor->position.y = -1.f;
+
+    RGBELoader imgLoader;
+    auto envMap = imgLoader.load(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr");
+
+    Scene scene;
+    scene.background = envMap;
+    scene.environment = envMap;
+
+    scene.add(boxMesh);
+    scene.add(sphere1);
+    scene.add(sphere2);
+    scene.add(glassSphere);
+    scene.add(floor);
+    scene.add(enclosingBox);
+
+    auto grid = GridHelper::create(floorSize);
+    grid->position.y = -0.99f;
+    scene.add(grid);
+
+    ModelLoader loader;
+    auto stormTrooper = loader.load(std::string(DATA_FOLDER) + "/models/collada/stormtrooper/stormtrooper.dae");
+    stormTrooper->rotation.z = -math::PI;
+    stormTrooper->position.z = -4.f;
+    stormTrooper->position.y = -1.f;
+    stormTrooper->scale *= 0.8;
+    scene.add(stormTrooper);
+
+    std::unique_ptr<AnimationMixer> mixer;
+    if (!stormTrooper->animations.empty()) {
+        std::cout << "Loaded " << stormTrooper->animations.size() << " animation clip(s)." << std::endl;
+        mixer = std::make_unique<AnimationMixer>(*stormTrooper);
+        mixer->clipAction(stormTrooper->animations.front())->play();
+    }
+
+    // ---- Lights ----
+    auto pointLight = PointLight::create(Color::white, 0.9f);
+    pointLight->castShadow = true;
+    pointLight->shadow->bias = -0.005f;
+    pointLight->shadow->mapSize.set(1024, 1024);
+    pointLight->position.set(5.f, 6.f, -2.f);
+    scene.add(pointLight);
+
+
+    // ---- Camera + controls ----
+    PerspectiveCamera rtCam(60.f, canvas.aspect(), 0.1f, 300.f);
+    rtCam.position.set(0.f, 3.f, 8.f);
+    OrbitControls controls{rtCam, canvas};
+    controls.target.set(0.f, 0.f, 0.f);
+    controls.update();
+
+    // ---- UI ----
+    bool animate = true;
+    bool showEnclosingBox = true;
+
+    // Generic renderer settings (exposure, denoiser, debug views, ...) come
+    // from the shared panel; only the scene-specific toggles are added here.
+    RendererSettingsUi ui(canvas, renderer, [&] {
+        ImGui::Checkbox("AnimateBox", &animate);
+        ImGui::Checkbox("EnclosingBox", &showEnclosingBox);
+    }, "Vulkan");
+
+    canvas.onWindowResize([&](const WindowSize& ns) {
+        renderer.setSize(ns);
+        rtCam.aspect = canvas.aspect();
+        rtCam.updateProjectionMatrix();
+    });
+
+    Clock clock;
+    float elapsed = 0.f;
+
+    canvas.animate([&] {
+        const float dt = clock.getDelta();
+        elapsed += dt;
+
+        enclosingBox->visible = showEnclosingBox;
+
+        if (animate) {
+            if (mixer) mixer->update(dt);
+
+            boxMesh->rotation.y += dt * 0.6f;
+            boxMesh->rotation.x += dt * 0.3f;
+        }
+
+        controls.update();
+
+        renderer.render(scene, rtCam);
+
+        ui.render();
+    });
+}

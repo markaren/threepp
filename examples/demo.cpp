@@ -1,57 +1,15 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "renderer_factory.hpp"
+
+#include "threepp/canvas/Monitor.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
+#include "threepp/objects/TextSprite.hpp"
 #include "threepp/threepp.hpp"
+
+#include <array>
 
 using namespace threepp;
 
-
-struct MyGui: ImguiContext {
-
-    bool colorChanged = false;
-
-    explicit MyGui(const Canvas& canvas, const MeshBasicMaterial& m)
-        : ImguiContext(canvas.windowPtr()) {
-        colorBuf_[0] = m.color.r;
-        colorBuf_[1] = m.color.g;
-        colorBuf_[2] = m.color.b;
-        colorBuf_[3] = m.opacity;
-    }
-
-    void onRender() override {
-
-        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({0, 0}, 0);
-        ImGui::Begin("Plane transform");
-        ImGui::SliderFloat3("position", posBuf_.data(), -5.f, 5.f);
-        ImGui::SliderFloat3("rotation", eulerBuf_.data(), -180.f, 180.f);
-        ImGui::ColorEdit4("Color", colorBuf_.data());
-        colorChanged = ImGui::IsItemEdited();
-
-        ImGui::End();
-    }
-
-    const Vector3& position() {
-        pos_.fromArray(posBuf_);
-        return pos_;
-    }
-
-    const Euler& rotation() {
-        euler_.set(math::DEG2RAD * eulerBuf_[0], math::DEG2RAD * eulerBuf_[1], math::DEG2RAD * eulerBuf_[2]);
-        return euler_;
-    }
-
-    [[nodiscard]] const std::array<float, 4>& color() const {
-        return colorBuf_;
-    }
-
-private:
-    Vector3 pos_;
-    Euler euler_;
-
-    std::array<float, 3> posBuf_{};
-    std::array<float, 3> eulerBuf_{};
-    std::array<float, 4> colorBuf_{0, 0, 0, 1};
-};
 
 auto createBox() {
 
@@ -63,8 +21,8 @@ auto createBox() {
     auto box = Mesh::create(boxGeometry, boxMaterial);
 
     auto wiredBox = LineSegments::create(WireframeGeometry::create(*boxGeometry));
-    wiredBox->material()->as<LineBasicMaterial>()->depthTest = false;
-    wiredBox->material()->as<LineBasicMaterial>()->color = Color::gray;
+    wiredBox->materialAs<LineBasicMaterial>()->depthTest = false;
+    wiredBox->materialAs<LineBasicMaterial>()->color = Color::gray;
     box->add(wiredBox);
 
     return box;
@@ -99,8 +57,7 @@ auto createPlane() {
 int main() {
 
     Canvas canvas("threepp demo", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
-    renderer.autoClear = false;
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
     scene->background = Color::aliceblue;
@@ -114,62 +71,78 @@ int main() {
     box->add(sphere);
 
     auto plane = createPlane();
-    auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
+    auto planeMaterial = plane->materialAs<MeshBasicMaterial>();
     scene->add(plane);
 
-    HUD hud(canvas.size());
     FontLoader fontLoader;
     const auto font1 = fontLoader.defaultFont();
-    const auto font2 = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
+    const auto font2 = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/gentilis_regular.typeface.json");
 
-    TextGeometry::Options opts1(font1, 40 * monitor::contentScale().first);
-    auto hudText1 = Text2D(opts1, "Hello World!");
-    hudText1.setColor(Color::black);
-    hud.add(hudText1, HUD::Options());
+    // Screen-space text labels — Sprite::screenSpace + screenAnchor route
+    // these through the renderer's ortho overlay automatically, no separate
+    // HUD scene / camera / autoClear ritual. Anchor (0,0) = bottom-left of
+    // the viewport; (1,1) = top-right. position.xy is the pixel offset from
+    // the anchor (negative = "from the opposite edge", CSS-style). Resize
+    // is implicit — the renderer samples viewport size each frame.
+    auto hudText1 = TextSprite::create(font1, 40 * monitor::contentScale().first);
+    hudText1->setText("Hello World!");
+    hudText1->setColor(Color::black);
+    hudText1->setVerticalAlignment(TextSprite::VerticalAlignment::Above);
+    hudText1->screenSpace = true;
+    hudText1->screenAnchor.set(0.f, 0.f);
+    hudText1->position.set(5.f, 5.f, 0.f);
+    scene->add(hudText1);
 
-    TextGeometry::Options opts2(font2, 10 * monitor::contentScale().first, 1);
-    auto hudText2 = Text2D(opts2);
-    hudText2.setColor(Color::red);
-    hud.add(hudText2, HUD::Options()
-                              .setNormalizedPosition({1, 1})
-                              .setHorizontalAlignment(HUD::HorizontalAlignment::RIGHT)
-                              .setVerticalAlignment(HUD::VerticalAlignment::TOP));
+    auto hudText2 = TextSprite::create(font2, 10 * monitor::contentScale().first);
+    hudText2->setColor(Color::red);
+    hudText2->setVerticalAlignment(TextSprite::VerticalAlignment::Below);
+    hudText2->setHorizontalAlignment(TextSprite::HorizontalAlignment::Right);
+    hudText2->screenSpace = true;
+    hudText2->screenAnchor.set(1.f, 1.f);
+    hudText2->position.set(-5.f, -5.f, 0.f);
+    scene->add(hudText2);
 
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
-
-        hud.setSize(size);
+        renderer->setSize(size);
     });
 
-    MyGui ui(canvas, *planeMaterial);
-    ui.makeDpiAware();
+    // Plane-transform widgets ride in the shared renderer-settings window;
+    // the panel dispatches on the runtime-selected renderer (GL/Vulkan)
+    // and falls back to tone-map-only controls otherwise.
+    std::array<float, 3> posBuf{};
+    std::array<float, 3> eulerBuf{};
+    std::array<float, 4> colorBuf{planeMaterial->color.r, planeMaterial->color.g,
+                                  planeMaterial->color.b, planeMaterial->opacity};
+    bool colorChanged = false;
+    RendererSettingsUi ui(canvas, *renderer, [&] {
+        ImGui::SliderFloat3("position", posBuf.data(), -5.f, 5.f);
+        ImGui::SliderFloat3("rotation", eulerBuf.data(), -180.f, 180.f);
+        ImGui::ColorEdit4("Color", colorBuf.data());
+        colorChanged = ImGui::IsItemEdited();
+    }, "Plane transform");
+
 
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         const auto dt = clock.getDelta();
 
         box->rotation.y += 0.5f * dt;
 
-        hudText2.setText("Delta=" + std::to_string(dt));
-        hud.needsUpdate(hudText2);
+        hudText2->setText("Delta=" + std::to_string(dt));
 
-        renderer.clear();
-        renderer.render(*scene, *camera);
-        hud.apply(renderer);
-
+        renderer->render(*scene, *camera);
         ui.render();
 
-        plane->position.copy(ui.position());
-        plane->rotation.copy(ui.rotation());
+        plane->position.set(posBuf[0], posBuf[1], posBuf[2]);
+        plane->rotation.set(math::DEG2RAD * eulerBuf[0], math::DEG2RAD * eulerBuf[1], math::DEG2RAD * eulerBuf[2]);
 
-        if (ui.colorChanged) {
-            const auto& c = ui.color();
-            planeMaterial->color.fromArray(c);
-            planeMaterial->opacity = c[3];
-            planeMaterial->transparent = c[3] != 1;
+        if (colorChanged) {
+            planeMaterial->color.fromArray(colorBuf);
+            planeMaterial->opacity = colorBuf[3];
+            planeMaterial->transparent = colorBuf[3] != 1;
         }
     });
 }

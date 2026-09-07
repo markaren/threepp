@@ -17,6 +17,8 @@ namespace threepp {
 
         [[nodiscard]] std::string type() const override;
 
+        ~ConvexGeometry() override;
+
         static std::shared_ptr<ConvexGeometry> create(const std::vector<Vector3>& points);
 
     private:

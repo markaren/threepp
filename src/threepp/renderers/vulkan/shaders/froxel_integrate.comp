@@ -1,0 +1,140 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+#include "vulkan_shared.h"// ShadePush
+
+// Froxel volumetric lighting — INTEGRATE. One thread per froxel COLUMN walks
+// the depth slices front-to-back, folding each slice's in-scatter (from the
+// inject pass) behind the accumulated camera-leg transmittance with the
+// analytic homogeneous-segment integral, and writes the running total into
+// the 3D LUT. The shade pass then gets its whole volumetric term — sun
+// shafts, spot beams, point-light glow — from ONE trilinear sample at
+// (uv, sliceOf(viewDist)) instead of the per-pixel marches this replaces.
+// Transmittance uses the same GLOBAL homogeneous σ the old marchers used
+// (surface extinction stays applySceneFog's analytic Beer-Lambert — the LUT
+// carries in-scatter only).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform CameraUbo {
+    mat4 viewInverse;
+    mat4 projInverse;
+    vec4 jitter;
+    vec4 camAux;// .x = parallel projection — camera_ray.glsl reads it
+} cam;
+#include "camera_ray.glsl"// camViewPointAtDist — perspective AND ortho
+
+layout(set = 0, binding = 33, scalar) uniform FogUbo {
+    vec3  sigmaT;
+    float enabled;
+    vec3  color;
+    float anisotropy;
+    float waterSurfaceY;
+    vec3  worldUp;
+} fog;
+
+layout(set = 0, binding = 50, rgba16f) uniform readonly image3D froxelScatterImage;
+layout(set = 0, binding = 52, rgba16f) uniform writeonly image3D froxelLutImage;
+
+// Cloud + height-fog UBO (heterogeneous near-field medium). Matches the
+// deferred_shade / cloud_march / froxel_inject scalar block.
+layout(set = 0, binding = 58, scalar) uniform CloudUbo {
+    float enabled;
+    float coverage;
+    float density;
+    float bottomY;
+    float topY;
+    float evolveSpeed;
+    float timeSec;
+    float heteroActive;
+    vec3  wind;
+    float hfDensity;
+    float hfBaseY;
+    float hfFalloff;
+    float hfNoiseAmount;
+    float shadowActive;
+} clouds;
+
+// Shared ShadePush block (vulkan_shared.h) — this pass reads only the
+// fields it names; the host zero-fills the rest.
+layout(push_constant) uniform Pc { ShadePush pc; };
+
+// KEEP IN SYNC with froxel_inject.comp + deferred_shade.comp.
+const uint  kFroxelX = 128u, kFroxelY = 72u, kFroxelZ = 64u;
+const float kFroxelZMin = 0.25, kFroxelZMax = 512.0;
+
+float froxelDist(float s) {
+    return kFroxelZMin * pow(kFroxelZMax / kFroxelZMin, s / float(kFroxelZ));
+}
+
+#include "cloud_density.glsl"// mediumExtinction (hetero mode)
+
+// World position of a froxel column point at view distance `dist`. Via
+// camViewPointAtDist so a PARALLEL projection reconstructs correctly (the
+// hand-rolled dist/-pv.z scale drifted the sampled world position with slice
+// depth under ortho — wrong heights into the height-fog profile); the
+// perspective branch is formula-identical to what stood here.
+vec3 froxelWorld(vec2 uv, float dist) {
+    const vec2 ndc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+    return (cam.viewInverse * vec4(camViewPointAtDist(ndc, dist), 1.0)).xyz;
+}
+
+void main() {
+    const uvec2 col = gl_GlobalInvocationID.xy;
+    if (col.x >= kFroxelX || col.y >= kFroxelY) return;
+
+    // HOMOGENEOUS (today): one global σ (fog-driven, max'd with the explicit
+    // beam density). HETEROGENEOUS (setHeightFog): σ_t is evaluated PER SLICE
+    // from mediumExtinction at the slice-centre world position — the analytic
+    // per-slice density that couples the froxels to the far cloud march.
+    const bool  hetero    = clouds.heteroActive > 0.5;
+    const bool  fogDriven = fog.enabled > 0.5;
+    const float sigmaHom  = fogDriven ? max(dot(fog.sigmaT, vec3(1.0 / 3.0)), pc.volDensity)
+                                      : pc.volDensity;
+    const vec2  uv = (vec2(col) + 0.5) / vec2(float(kFroxelX), float(kFroxelY));
+
+    vec3  L = vec3(0.0);
+    float T = 1.0;
+    // PARTICLE-ONLY transmittance — the LUT's .a channel (see below). Stays
+    // exactly 1.0 for every slice when no ParticleField has a density
+    // representation this frame, which is what makes dust-free scenes
+    // image-identical to before phase 2.
+    float Tp = 1.0;
+    float z0 = 0.0;// slice 0 reaches the camera
+    for (uint k = 0u; k < kFroxelZ; ++k) {
+        const float z1  = froxelDist(float(k + 1u));
+        const float seg = z1 - z0;
+        const vec3  S   = imageLoad(froxelScatterImage, ivec3(col, k)).rgb;
+        // The two heterogeneous terms are evaluated SEPARATELY rather than
+        // through mediumExtinction: their sum drives the in-scatter integral
+        // below exactly as before, but the surface path needs the particle leg
+        // on its own (it applies the height-fog leg in closed form — see
+        // applyHeteroSurfaceFog).
+        float sigmaP = 0.0;
+        float sigma  = sigmaHom;
+        if (hetero) {
+            const vec3 x = froxelWorld(uv, 0.5 * (z0 + z1));
+            sigmaP = particleDensity(x);
+            sigma  = heightFogDensity(x, clouds.timeSec) + sigmaP;
+        }
+        if (sigma > 1e-6) {
+            // Analytic homogeneous segment: ∫ S·e^(-σt) dt over the slice.
+            L += T * S * ((1.0 - exp(-sigma * seg)) / sigma);
+            T *= exp(-sigma * seg);
+        } else {
+            L += T * S * seg;
+        }
+        if (sigmaP > 1e-6) Tp *= exp(-sigmaP * seg);
+        // .a carries the PARTICLE transmittance, not the total. The total was
+        // written here historically and read by nobody: the surface extinction
+        // in heterogeneous mode is the closed-form height-fog integral
+        // (applyHeteroSurfaceFog explains why the analytic form beats the LUT's
+        // per-slice quantisation for a smooth medium), and the sky/water legs
+        // use the same closed form. Dust is the opposite case — it is neither
+        // smooth nor analytic, and the LUT's front-to-back walk is already the
+        // exact integral of it — so the dead channel is where it belongs.
+        imageStore(froxelLutImage, ivec3(col, k), vec4(L, Tp));
+        z0 = z1;
+    }
+}

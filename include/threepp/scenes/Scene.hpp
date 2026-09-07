@@ -53,6 +53,8 @@ namespace threepp {
 
         bool autoUpdate = true;
 
+        [[nodiscard]] std::string type() const override;
+
         static std::shared_ptr<Scene> create();
     };
 

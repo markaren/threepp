@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>threepp · WASM Examples</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0a0a0f;
+    --surface: #111118;
+    --border: #1e1e2e;
+    --accent: #5fffb0;
+    --accent2: #a78bfa;
+    --text: #e2e8f0;
+    --muted: #4a5568;
+    --card-bg: #12121c;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: 48px 48px;
+    opacity: 0.4;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Glow blob */
+  body::after {
+    content: '';
+    position: fixed;
+    top: -200px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 800px;
+    height: 500px;
+    background: radial-gradient(ellipse, rgba(95,255,176,0.07) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    position: relative;
+    z-index: 1;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 80px 32px 120px;
+  }
+
+  header {
+    margin-bottom: 72px;
+  }
+
+  .label {
+    display: inline-block;
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--accent);
+    border: 1px solid rgba(95,255,176,0.25);
+    padding: 4px 10px;
+    border-radius: 2px;
+    margin-bottom: 20px;
+    animation: fadeUp 0.6s ease both;
+  }
+
+  h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: clamp(2.5rem, 6vw, 4.5rem);
+    font-weight: 800;
+    line-height: 1.0;
+    letter-spacing: -0.02em;
+    animation: fadeUp 0.6s 0.1s ease both;
+  }
+
+  h1 span {
+    color: var(--accent);
+  }
+
+  .subtitle {
+    margin-top: 16px;
+    font-size: 13px;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+    animation: fadeUp 0.6s 0.2s ease both;
+  }
+
+  .divider {
+    width: 48px;
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    margin: 32px 0;
+    animation: expandWidth 0.8s 0.3s ease both;
+  }
+
+  @keyframes expandWidth {
+    from { width: 0; opacity: 0; }
+    to { width: 48px; opacity: 1; }
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 16px;
+  }
+
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 24px;
+    text-decoration: none;
+    color: inherit;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.2s, transform 0.2s, background 0.2s;
+    animation: fadeUp 0.5s ease both;
+  }
+
+  .card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+
+  .card:hover {
+    border-color: rgba(95,255,176,0.3);
+    background: #161622;
+    transform: translateY(-2px);
+  }
+
+  .card:hover::before {
+    opacity: 1;
+  }
+
+  .card-index {
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.15em;
+  }
+
+  .card-name {
+    font-family: 'Syne', sans-serif;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text);
+    word-break: break-word;
+    transition: color 0.2s;
+  }
+
+  .card:hover .card-name {
+    color: var(--accent);
+  }
+
+  .card-arrow {
+    margin-top: auto;
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: color 0.2s, gap 0.2s;
+  }
+
+  .card:hover .card-arrow {
+    color: var(--accent);
+    gap: 10px;
+  }
+
+  .empty {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 80px 0;
+    color: var(--muted);
+    font-size: 13px;
+    letter-spacing: 0.1em;
+  }
+
+  footer {
+    margin-top: 80px;
+    padding-top: 32px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <div class="label">WebAssembly</div>
+    <h1>threepp<br><span>Examples</span></h1>
+    <p class="subtitle">// compiled with emscripten · running in your browser</p>
+    <div class="divider"></div>
+  </header>
+
+  <div class="grid" id="grid">
+    <!-- injected by cmake -->
+  </div>
+
+  <footer>
+    <span>threepp · WASM build</span>
+    <span id="count"></span>
+  </footer>
+</div>
+
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const grid = document.getElementById('grid');
+    const links = Array.from(document.querySelectorAll('#cmake-list a'));
+
+    if (links.length === 0) {
+      grid.innerHTML = '<div class="empty">// no examples found</div>';
+    } else {
+      links.forEach((a, i) => {
+        const name = a.textContent.trim();
+        const href = a.getAttribute('href');
+        const card = document.createElement('a');
+        card.href = href;
+        card.className = 'card';
+        card.style.animationDelay = `${0.3 + i * 0.05}s`;
+        card.innerHTML = `
+          <div class="card-index">${String(i + 1).padStart(2, '0')}</div>
+          <div class="card-name">${name}</div>
+          <div class="card-arrow">run example <span>→</span></div>
+        `;
+        grid.appendChild(card);
+      });
+      document.getElementById('count').textContent = `${links.length} example${links.length !== 1 ? 's' : ''}`;
+    }
+  });
+</script>
+
+<!-- CMake injects example links here as plain <a> tags inside a hidden list -->
+<ul id="cmake-list" style="display:none">
+@EXAMPLE_LINKS@
+</ul>
+</body>
+</html>

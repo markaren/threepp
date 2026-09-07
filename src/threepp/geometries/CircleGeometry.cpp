@@ -7,7 +7,8 @@
 using namespace threepp;
 
 
-CircleGeometry::CircleGeometry(const Params& params) {
+CircleGeometry::CircleGeometry(const Params& params)
+    : parameters(params) {
 
     // buffers
 

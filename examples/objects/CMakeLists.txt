@@ -1,21 +1,37 @@
 
 add_example(NAME "instancing" LINK_IMGUI WEB WEB_EMBED
-        "${PROJECT_SOURCE_DIR}/data/fonts@data/fonts"
+        "${THREEPP_DATA_DIR}/fonts@data/fonts"
 )
-if (TARGET "instancing")
-    target_include_directories("instancing" PRIVATE "${PROJECT_SOURCE_DIR}/examples/libs")
-endif ()
 
-add_example(NAME "sprite")
-add_example(NAME "lod" WEBWEB_EMBED
-        "${PROJECT_SOURCE_DIR}/data/fonts@data/fonts"
+add_example(NAME "sprite" WEB WEB_EMBED
+        "${THREEPP_DATA_DIR}/textures/sprite0.png@data/textures/"
+        "${THREEPP_DATA_DIR}/textures/three.png@data/textures/"
 )
-add_example(NAME "points" WEB)
+add_example(NAME "lod" WEB WEB_EMBED
+        "${THREEPP_DATA_DIR}/fonts@data/fonts"
+)
+add_example(NAME "points" LINK_IMGUI WEB)
+
+# Not WEB: SplatCloud's material is a RawShaderMaterial carrying its own
+# "#version 330 core", which a WebGL2 build cannot compile.
+add_example(NAME "gaussian_splats")
+# The one example that drives BOTH backends from one scene, so the GL path can
+# be the Vulkan path's correctness oracle (--vulkan). It needs no flag of its
+# own: THREEPP_WITH_VULKAN is PUBLIC on the threepp target, so linking it is
+# what tells a consumer which backends this build has.
 
 add_example(NAME "bones" LINK_IMGUI)
-add_example(NAME "decal" LINK_IMGUI LINK_ASSIMP)
+add_example(NAME "decal" LINK_IMGUI)
 add_example(NAME "water" LINK_IMGUI WEB WEB_EMBED
-        "${PROJECT_SOURCE_DIR}/data/textures/waternormals.jpg@data/textures/waternormals.jpg"
+        "${THREEPP_DATA_DIR}/textures/waternormals.jpg@data/textures/waternormals.jpg"
 )
 
-add_example(NAME "particle_system" LINK_IMGUI)
+add_example(NAME "particle_system" LINK_IMGUI WEB WEB_EMBED
+        "${THREEPP_DATA_DIR}/textures/star.png@data/textures/"
+        "${THREEPP_DATA_DIR}/textures/spark.png@data/textures/"
+        "${THREEPP_DATA_DIR}/textures/smokeparticle.png@data/textures/"
+)
+
+add_example(NAME "text_sprite" LINK_IMGUI WEB WEB_EMBED
+        "${THREEPP_DATA_DIR}/fonts@data/fonts"
+)

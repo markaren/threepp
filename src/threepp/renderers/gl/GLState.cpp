@@ -4,7 +4,7 @@
 #include "threepp/materials/Material.hpp"
 #include "threepp/renderers/gl/GLUtils.hpp"
 
-#if EMSCRIPTEN
+#ifdef __EMSCRIPTEN__
 #include <GLES3/gl32.h>
 #endif
 
@@ -299,8 +299,8 @@ gl::GLState::GLState(): maxTextures(glGetParameteri(GL_MAX_COMBINED_TEXTURE_IMAG
     glGetIntegerv(GL_SCISSOR_BOX, scissorParam);
     glGetIntegerv(GL_VIEWPORT, viewportParam);
 
-    currentScissor.set((float) scissorParam[0], (float) scissorParam[1], (float) scissorParam[2], (float) scissorParam[3]);
-    currentViewport.set((float) viewportParam[0], (float) viewportParam[1], (float) viewportParam[2], (float) viewportParam[3]);
+    currentScissor.set(static_cast<float>(scissorParam[0]), static_cast<float>(scissorParam[1]), static_cast<float>(scissorParam[2]), static_cast<float>(scissorParam[3]));
+    currentViewport.set(static_cast<float>(viewportParam[0]), static_cast<float>(viewportParam[1]), static_cast<float>(viewportParam[2]), static_cast<float>(viewportParam[3]));
 
     auto enableLambda = [&](int id) {
         enable(id);
@@ -646,7 +646,7 @@ void gl::GLState::setPolygonOffset(bool polygonOffset, std::optional<float> fact
 
         enable(GL_POLYGON_OFFSET_FILL);
 
-        if (factor && currentPolygonOffsetFactor != *factor || units && currentPolygonOffsetUnits != *units) {
+        if ((factor && currentPolygonOffsetFactor != *factor) || (units && currentPolygonOffsetUnits != *units)) {
 
             glPolygonOffset(*factor, *units);
 
@@ -674,7 +674,7 @@ void gl::GLState::setScissorTest(bool scissorTest) {
 
 void gl::GLState::activeTexture(std::optional<GLenum> glSlot) {
 
-    if (!glSlot) glSlot = (GLenum) (GL_TEXTURE0 + maxTextures - 1);
+    if (!glSlot) glSlot = static_cast<GLenum>(GL_TEXTURE0 + maxTextures - 1);
 
     if (currentTextureSlot != glSlot) {
 
@@ -696,7 +696,7 @@ void gl::GLState::bindTexture(int glType, std::optional<int> glTexture) {
         currentBoundTextures[*currentTextureSlot] = boundTexture;
     }
 
-    auto boundTexture = currentBoundTextures.at(*currentTextureSlot);
+    auto& boundTexture = currentBoundTextures.at(*currentTextureSlot);
 
     if (boundTexture.type != glType || boundTexture.texture != glTexture) {
 
@@ -723,6 +723,26 @@ void gl::GLState::unbindTexture() {
     }
 }
 
+void gl::GLState::purgeTexture(GLint glTexture) {
+
+    // Call this whenever a texture name is deleted. GL reverts the binding to 0
+    // in every unit the name was bound to, and then hands the same name back out
+    // of glGenTextures — so a cache entry left behind here would make the *next*
+    // texture to inherit the name skip its bind and sample unit 0 instead.
+    //
+    // three.js has no equivalent and needs none: a WebGLTexture is an object
+    // identity that is never reused after deletion, so its bind cache cannot
+    // produce a false hit. GLuint names are recycled, so ours can.
+    for (auto& [slot, boundTexture] : currentBoundTextures) {
+
+        if (boundTexture.texture == glTexture) {
+
+            boundTexture.type = std::nullopt;
+            boundTexture.texture = std::nullopt;
+        }
+    }
+}
+
 void gl::GLState::texImage2D(GLuint target, GLint level, GLint internalFormat, GLint width, GLint height, GLuint format, GLuint type, const void* pixels) {
 
     glTexImage2D(target, level, internalFormat, width, height, 0, format, type, pixels);
@@ -733,11 +753,16 @@ void gl::GLState::texImage3D(GLuint target, GLint level, GLint internalFormat, G
     glTexImage3D(target, level, internalFormat, width, height, depth, 0, format, type, pixels);
 }
 
+void gl::GLState::texCompressedImage2D(GLuint target, GLint level, GLuint internalFormat, GLint width, GLint height, GLsizei imageSize, const void* data) {
+
+    glCompressedTexImage2D(target, level, internalFormat, width, height, 0, imageSize, data);
+}
+
 void gl::GLState::scissor(const Vector4& scissor) {
 
     if (!currentScissor.equals(scissor)) {
 
-        glScissor((GLint) scissor.x, (GLint) scissor.y, (GLsizei) scissor.z, (GLsizei) scissor.w);
+        glScissor(static_cast<GLint>(scissor.x), static_cast<GLint>(scissor.y), static_cast<GLsizei>(scissor.z), static_cast<GLsizei>(scissor.w));
         currentScissor.copy(scissor);
     }
 }
@@ -746,7 +771,7 @@ void gl::GLState::viewport(const Vector4& viewport) {
 
     if (!currentViewport.equals(viewport)) {
 
-        glViewport((GLint) viewport.x, (GLint) viewport.y, (GLsizei) viewport.z, (GLsizei) viewport.w);
+        glViewport(static_cast<GLint>(viewport.x), static_cast<GLint>(viewport.y), static_cast<GLsizei>(viewport.z), static_cast<GLsizei>(viewport.w));
         currentViewport.copy(viewport);
     }
 }

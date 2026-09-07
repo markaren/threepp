@@ -183,9 +183,13 @@ namespace threepp {
 
             void unbindTexture();
 
+            void purgeTexture(int glTexture);
+
             void texImage2D(unsigned int target, int level, int internalFormat, int width, int height, unsigned int format, unsigned int type, const void* pixels);
 
             void texImage3D(unsigned int target, int level, int internalFormat, int width, int height, int depth, unsigned int format, unsigned int type, const void* pixels);
+
+            void texCompressedImage2D(unsigned int target, int level, unsigned int internalFormat, int width, int height, int imageSize, const void* data);
 
             //
 

@@ -3,8 +3,59 @@
 .cache
 
 build
+build-asan
 cmake-build-*
 compile_commands.json
-/.vs
-/examples/my
-/core.zip
+
+# CMakePresets.json is the project's, and is tracked. CMakeUserPresets.json is
+# yours: machine-specific paths, your own configurations. Presets in it may
+# `inherit` from the tracked ones. IDEs (CLion) write it for you.
+CMakeUserPresets.json
+
+# Python packaging / wheel-build artifacts (scikit-build-core)
+dist/
+wheelhouse/
+*.egg-info/
+__pycache__/
+
+# vcpkg manifest-mode install root. The wheel CI provisions PhysX here at the
+# repo root (wheels.yml); scikit-build-core's sdist also honours this file, so
+# the entry keeps a quarter-gigabyte SDK out of the tarball as well.
+vcpkg_installed/
+
+
+*.bin
+*.weights
+*.pt
+
+!data/**/*.bin
+
+imgui.ini
+
+# wgpu-native is fetched at configure time via cmake/FetchWgpuNative.cmake
+src/external/wgpu-native/
+
+temp/
+
+.claude
+
+#folder used locally for capturing screenshots of the rendered output, not needed in the repo
+aaa_caps
+
+# Local planning / strategy scratch docs — kept on disk, not tracked
+plans/
+
+# Local scratch capture/repro/profiling harnesses: auto-built (examples/vulkan/CMakeLists.txt
+# globs scratch/*.cpp) but never tracked. Only the README is committed, to document the convention.
+examples/vulkan/scratch/*
+!examples/vulkan/scratch/README.md
+
+# Generated Norwegian region packs (large DEM heightfields + road/preview data,
+# ~64 MB per pack). Regenerated from live open data via scripts/geodata; only the
+# README that documents how is tracked.
+geodata/*
+!geodata/README.md
+
+# misc local helpers
+_build_aaa.bat
+build_py.bat

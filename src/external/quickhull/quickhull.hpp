@@ -1,4 +1,4 @@
-﻿/* Quickhull algorithm implementation
+/* Quickhull algorithm implementation
  *
  * Copyright (c) 2014-2015, Anatoliy V. Tomilov
  * All rights reserved.

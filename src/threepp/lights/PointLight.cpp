@@ -44,6 +44,7 @@ void PointLight::copy(const Object3D& source, bool recursive) {
 
         this->distance = l->distance;
         this->decay = l->decay;
+        this->radius = l->radius;
     }
 }
 

@@ -1,0 +1,123 @@
+# Spot — terrain locomotion RL on GpuSim
+
+![Spot](spot.png)
+
+Reinforcement-learning locomotion for the Boston Dynamics Spot, trained **entirely inside threepp** on
+the batched direct-GPU PhysX backend (`threepp.rl.GpuSim`) with a compact owned PPO (`threepp.rl.PPO`),
+and deployed + rendered with threepp's own GL renderer. One engine for physics, training, and rendering.
+
+The headline result is **`spot_steps.pt` — a single generalist policy** that walks flat ground, negotiates
+rough/uneven terrain, and climbs discrete stairs up to **0.20 m risers**, while preserving the base gait's
+velocity/steering command-following and a symmetric (drift-free) gait.
+
+## How it works
+
+Locomotion is built in two stages, both trained from scratch inside threepp:
+
+**1. A clean-lineage base gait (`scratch_distillation/`).** The Isaac Lab Spot velocity walker (a
+TorchScript actor, 48-d proprioceptive obs → 12 joint targets) is used **only as a reward oracle** — an
+imitation penalty during training; its weights never enter the student. `train_scratch.py` trains an actor
+**from random init** into `scratch_flat_best.pt`: a flat-ground velocity walker with a **trot phase clock**
+(the obs carries `[sin(2π·phi), cos(2π·phi)]` so the policy self-phase-locks a gait), `normalize_obs=True`,
+and **stiff PD gains (90)**. Obs is 50-d = 48 proprio + 2 clock. Because no Isaac-derived weights survive,
+the deployed network is clean-lineage.
+
+**2. Terrain fine-tune.** Each terrain env **warm-starts** that base gait into a wider network whose
+observation also carries a **terrain height scan**. The 50 proprio+clock input columns are copied verbatim
+and the 46 new terrain columns (`base_above` + `scan`) zero-init, so the policy *begins* bit-identical to
+the flat clock walker. PPO then fine-tunes the whole gait on terrain. The objective is **velocity-command
+tracking** (exp-kernel on the commanded body-frame `[vx, vy, wz]`), plus a **scan-gated imitation anchor**
+that keeps the gait matched to the base walker on locally-flat ground so steering is never forgotten.
+
+```
+obs (96): lin_b(3) ang_b(3) proj_g(3) cmd(3) qpos(12) qvel(12) last_act(12) | clock(2) | base_above(1) | scan(45)
+          \_______________________ proprio (48) ______________________/
+action (12): joint targets = default_q + ACTION_SCALE * a   (Isaac order, unclamped)
+```
+
+The terrain `scan` is a **2-D heading-relative height grid** (45 = 9 forward x 5 lateral, ~1.1 m look-ahead),
+the same idea as IsaacLab's height scanner. In training it is the exact analytic terrain height (privileged).
+At deploy the viewers replace it with **onboard perception** — see "Seeing the terrain" below.
+
+The three terrain envs are **parallel fine-tunes of the same base gait**, not a cumulative chain — each
+warm-starts independently from `scratch_flat_best.pt` and they all share the exact same 96-d obs / action /
+reward contract, so any checkpoint transfers across all of them. `spot_steps.pt` (trained on the hardest
+terrain, discrete stairs) is the generalist the viewers default to.
+
+## Stages (each terrain: env + trainer + viewer)
+
+| Stage | env | trainer / viewer | what it adds |
+|---|---|---|---|
+| **base gait** | `scratch_distillation/` (`scratch_env.py` + `scratch_clock.py`) | `train_scratch.py` / `spot_deploy.py` | from-scratch clock walker on flat ground; Isaac teacher = reward oracle only |
+| **tents** | `spot_terrain_env.py` (`SpotTerrainEnv`) | `train_spot_stairs.py` / `play_spot_stairs.py` | velocity-tracking on graded up/down stair-tent terrain (`spot_terrain.pt`) |
+| **heightfield** | `spot_heightfield_env.py` | `train_spot_heightfield.py` / `play_spot_heightfield.py` | true continuous 2-D rough terrain (triangle-soup → `add_static_trimesh`), smooth at high amplitude (`spot_hf.pt`) |
+| **stairs** | `spot_steps_env.py` (`SpotStepsEnv`) | `train_spot_steps.py` / `play_spot_steps.py` | discrete risers (0.04→0.20 m) + an **adaptive per-env difficulty curriculum** (promote on clearing a tent, demote on falling) — yields `spot_steps.pt` |
+
+`spot_terrain_env.py` is also the shared module: it defines the sim constants, the 2-D scan grid, and the
+reward/reset helpers the other terrain envs import.
+
+Shared pieces: `spot_symmetry.py` / `spot_steps_symmetry.py` (left-right mirror + symmetry-augmentation
+loss, kills the lateral gait drift), and `spot_deploy.py` (deploys the base clock gait + the asset/robot
+construction layer everything imports). The viewers are CPU-deploy + GL render with hot-reload, keyboard
+steering, and a chase cam. `spot_slam.py` is a bonus demo — Spot walks procedural terrain while a
+body-mounted depth camera reconstructs a live marching-cubes SLAM surface over the ground truth.
+
+## Seeing the terrain (onboard perception in the viewers)
+
+In training the height scan is privileged (exact terrain), but no real robot has that. Every `play_*`
+viewer instead feeds the policy a scan derived from **onboard perception**, via `spot_depth_scan.py`:
+
+- A `threepp.DepthSensor` is mounted on the body looking **forward and down** (~40°), like Spot's real
+  depth cameras. Each control tick it renders the scene from that viewpoint and reprojects to a
+  world-space point cloud (the robot is hidden during the scan = perfect self-filtering).
+- The cloud is fused into an accumulating **2.5-D elevation map**; cells now beside/under/behind the
+  robot were *ahead* of it a moment ago, so they are remembered (a forward camera alone can't see them).
+- The 45-cell heading-relative grid is sampled from the map — a drop-in for the analytic scan.
+
+The viewers draw the raw point cloud and the policy's scan grid, and expose a range-noise slider.
+Pass `--analytic` to fall back to the privileged oracle for an A/B; `--noise M` sets sensor range noise.
+The deployed gait is essentially unchanged from the oracle, and survives several cm of range noise.
+
+## Run it
+
+```bash
+# 0. base gait — a from-scratch clock walker on flat ground (the Isaac walker is only a reward oracle)
+python scratch_distillation/train_scratch.py --envs 4096 --iters 4000   # -> scratch_flat_best.pt (50-d, stiff gains 90)
+python spot_deploy.py                                                    # drive that base gait on flat ground
+
+# selftest any terrain env (finiteness + a stable stand)
+K=64 python spot_steps_env.py
+
+# watch the generalist drive (hot-reloads spot_steps.pt; arrows/numpad steer, R resets)
+python play_spot_steps.py --level 3     # spawn at the 0.13 m riser band
+python play_spot_heightfield.py         # same policy on continuous rough terrain
+python play_spot_stairs.py              # ...and on the graded tent terrain
+
+# train each terrain fine-tune (all warm-start from scratch_flat_best.pt; identical 96-d contract)
+python train_spot_steps.py --iters 1500            # stairs + adaptive curriculum, symmetry on
+python train_spot_heightfield.py --iters 250       # continuous heightfield
+python train_spot_stairs.py --iters 1500           # graded tent terrain
+python train_spot_steps.py --score spot_steps.pt   # deterministic track / fell / riser level reached
+python train_spot_steps.py --eval  spot_steps.pt   # held-out per-command steering regression vs the base gait
+```
+
+Checkpoints (`*.pt`) are git-ignored — regenerate by training, or keep your own locally.
+
+## Notes / design choices
+
+- **Clean lineage** — the deployed network is trained from random init; the Isaac walker is only an
+  imitation reward oracle, so no Isaac-licensed weights enter the shipped policy.
+- **GpuSim is the enabler** — K Spots in one direct-GPU PhysX scene; the 48-d Isaac obs is assembled as
+  torch ops on the GPU state. ~35–40k env-steps/s at K=2048 on an RTX 4070.
+- **Privileged terrain scan in training, perception at deploy** — training uses the exact analytic
+  45-cell height grid (privileged, like IsaacLab's height scanner); the viewers estimate that same grid
+  from an onboard depth camera + elevation map (see "Seeing the terrain"). One obs contract, two sources.
+- **Drop-settle spawns** — the robot is placed referenced to the highest terrain under its footprint so a
+  foot never spawns inside the terrain (no depenetration jolt).
+- **CPU deploy / sim-to-sim** — viewers default to `tgs_pcm`/0.005 to match the GpuSim training contact
+  model; `--pgs` selects PhysX's default solver. Both transfer for this gait.
+- **Steering preservation** — best checkpoints are gated on a held-out flat-steering eval (vs the base
+  gait), not training reward; `--score`/`--eval` are the real acceptance tests.
+
+The PPO has a general `aux_loss` hook (used here for symmetry augmentation; also reusable for a
+behavioral-cloning / KL anchor to the teacher).

@@ -1,0 +1,84 @@
+#version 450
+// Detect head fused with the cv2.i.2 / cv3.i.2 k=1 convs. Each thread handles
+// one anchor and computes box_raw/cls_raw on the fly. Writes dense to
+// dets[anchor*6] (no atomic; CPU side filters by confidence).
+// Bindings: 0 feat_box, 1 feat_cls, 2 w_box(f16), 3 b_box, 4 w_cls(f16),
+//           5 b_cls, 6 dets.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint grid_h, grid_w, reg_max, num_classes;
+    float stride, conf_thresh, _p1, _p2;
+    uint in_c_box, in_c_cls, max_dets, _p4;
+} p;
+
+layout(std430, binding = 0) readonly buffer FeatBox { float feat_box[]; };
+layout(std430, binding = 1) readonly buffer FeatCls { float feat_cls[]; };
+layout(std430, binding = 2) readonly buffer WBox    { uint  w_box[]; };
+layout(std430, binding = 3) readonly buffer BBox    { float b_box[]; };
+layout(std430, binding = 4) readonly buffer WCls    { uint  w_cls[]; };
+layout(std430, binding = 5) readonly buffer BCls    { float b_cls[]; };
+layout(std430, binding = 6)          buffer Dets    { float dets[]; };
+
+float load_w_box(uint i) {
+    vec2 pr = unpackHalf2x16(w_box[i >> 1u]);
+    return (i & 1u) == 1u ? pr.y : pr.x;
+}
+float load_w_cls(uint i) {
+    vec2 pr = unpackHalf2x16(w_cls[i >> 1u]);
+    return (i & 1u) == 1u ? pr.y : pr.x;
+}
+
+void main() {
+    uint gx = gl_GlobalInvocationID.x;
+    uint gy = gl_GlobalInvocationID.y;
+    if (gx >= p.grid_w || gy >= p.grid_h) return;
+
+    uint hw         = p.grid_h * p.grid_w;
+    uint anchor_idx = gy * p.grid_w + gx;
+
+    float dist[4];
+    for (uint side = 0u; side < 4u; side++) {
+        float logits[16];// reg_max == 16
+        float max_v = -1.0e38;
+        for (uint i = 0u; i < p.reg_max; i++) {
+            uint oc = side * p.reg_max + i;
+            float s = b_box[oc];
+            uint w_base = oc * p.in_c_box;
+            for (uint ic = 0u; ic < p.in_c_box; ic++) {
+                s += feat_box[ic * hw + anchor_idx] * load_w_box(w_base + ic);
+            }
+            logits[i] = s;
+            if (s > max_v) max_v = s;
+        }
+        float sum_e = 0.0, wsum = 0.0;
+        for (uint i = 0u; i < p.reg_max; i++) {
+            float e = exp(logits[i] - max_v);
+            sum_e += e;
+            wsum  += e * float(i);
+        }
+        dist[side] = wsum / sum_e;
+    }
+
+    float cx = (float(gx) + 0.5) * p.stride;
+    float cy = (float(gy) + 0.5) * p.stride;
+
+    float max_cls = -1.0e38;
+    uint  cls_id  = 0u;
+    for (uint c = 0u; c < p.num_classes; c++) {
+        float s = b_cls[c];
+        uint w_base = c * p.in_c_cls;
+        for (uint ic = 0u; ic < p.in_c_cls; ic++) {
+            s += feat_cls[ic * hw + anchor_idx] * load_w_cls(w_base + ic);
+        }
+        if (s > max_cls) { max_cls = s; cls_id = c; }
+    }
+
+    uint base = anchor_idx * 6u;
+    dets[base + 0u] = cx - dist[0] * p.stride;
+    dets[base + 1u] = cy - dist[1] * p.stride;
+    dets[base + 2u] = cx + dist[2] * p.stride;
+    dets[base + 3u] = cy + dist[3] * p.stride;
+    dets[base + 4u] = 1.0 / (1.0 + exp(-max_cls));
+    dets[base + 5u] = float(cls_id);
+}

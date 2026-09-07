@@ -1,0 +1,32 @@
+#version 460
+
+// One vertical butterfly pass of the inverse FFT. Mirrors ifft_horizontal but
+// reads paired indices in the y direction. Dispatched log2(N) times after
+// all horizontal passes complete.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(push_constant) uniform Pc {
+    int step;
+} pc;
+
+layout(set = 0, binding = 0)        uniform sampler2D PrecomputedData;
+layout(set = 0, binding = 1)        uniform sampler2D InputBuffer;
+layout(set = 0, binding = 2, rg32f) uniform writeonly image2D OutputBuffer;
+
+vec2 complexMul(vec2 a, vec2 b) {
+    return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+
+void main() {
+    const ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    const vec4 data = texelFetch(PrecomputedData, ivec2(pc.step, id.y), 0);
+    const ivec2 idxIn = ivec2(int(data.b), int(data.a));
+
+    const vec2 input0 = texelFetch(InputBuffer, ivec2(id.x, idxIn.x), 0).xy;
+    const vec2 input1 = texelFetch(InputBuffer, ivec2(id.x, idxIn.y), 0).xy;
+
+    const vec2 result = input0 + complexMul(vec2(data.r, -data.g), input1);
+
+    imageStore(OutputBuffer, id, vec4(result, 0.0, 0.0));
+}

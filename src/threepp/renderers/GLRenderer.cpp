@@ -1,7 +1,7 @@
 
 #include "threepp/renderers/GLRenderer.hpp"
 
-#include "threepp/renderers/GLRenderTarget.hpp"
+#include "threepp/renderers/RenderTarget.hpp"
 
 #include "threepp/renderers/gl/GLAttributes.hpp"
 #include "threepp/renderers/gl/GLBackground.hpp"
@@ -18,10 +18,17 @@
 #include "threepp/renderers/gl/GLTextures.hpp"
 #include "threepp/renderers/gl/GLUtils.hpp"
 
+#include "threepp/renderers/common/RendererCapabilities.hpp"
+#include "threepp/renderers/common/ShadowConfig.hpp"
+
 #include "threepp/cameras/OrthographicCamera.hpp"
+#include "threepp/canvas/Canvas.hpp"
+#include "threepp/canvas/Monitor.hpp"
+#include "threepp/lights/RectAreaLightUniformsLib.hpp"
 #include "threepp/materials/RawShaderMaterial.hpp"
 
 #include "threepp/objects/Group.hpp"
+#include "threepp/core/InstancedBufferGeometry.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/LOD.hpp"
 #include "threepp/objects/Line.hpp"
@@ -30,19 +37,19 @@
 #include "threepp/objects/Points.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/objects/Sprite.hpp"
-#include "threepp/core/InstancedBufferGeometry.hpp"
+
 #include "threepp/utils/ImageUtils.hpp"
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
 #include "threepp/utils/LoadGlad.hpp"
 #else
 #include <GLES3/gl32.h>
 #endif
 
-#ifndef STB_IMAGE_WRITE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_IMPLEMENTATION
+// stb_image_write - implementation is compiled in utils/StbImageWrite.cpp.
 #include "stb_image_write.h"
-#endif
+
+#include <cmath>
 
 
 using namespace threepp;
@@ -56,7 +63,7 @@ struct GLRenderer::Impl {
 
         void onEvent(Event& event) override {
 
-            auto material = static_cast<Material*>(event.target);
+            const auto material = std::any_cast<Material*>(event.target);
 
             material->removeEventListener("dispose", *this);
 
@@ -79,12 +86,22 @@ struct GLRenderer::Impl {
     gl::GLRenderList* currentRenderList = nullptr;
     gl::GLRenderState* currentRenderState = nullptr;
 
+    // Screen-space sprite overlay queue. Collected during projectObject
+    // when a Sprite has screenSpace=true; drained after the regular
+    // opaque/transparent passes by renderScreenSpaceSprites. Empty list =
+    // zero overhead for scenes without screen-space content.
+    std::vector<Sprite*> screenSpaceSprites_;
+    // Internal ortho camera the screen-space pass projects through. Lazy-
+    // created on first use; bounds rebuilt each frame from getSize() so
+    // window resize is implicit.
+    std::shared_ptr<OrthographicCamera> screenSpaceCam_;
+
     std::vector<gl::GLRenderList*> renderListStack;
     std::vector<gl::GLRenderState*> renderStateStack;
 
     int _currentActiveCubeFace = 0;
     int _currentActiveMipmapLevel = 0;
-    GLRenderTarget* _currentRenderTarget = nullptr;
+    RenderTarget* _currentRenderTarget = nullptr;
     std::optional<unsigned int> _currentMaterialId;
 
     Camera* _currentCamera = nullptr;
@@ -96,7 +113,7 @@ struct GLRenderer::Impl {
 
     WindowSize _size;
 
-    int _pixelRatio = 1;
+    float _pixelRatio = 1;
 
     Vector4 _viewport;
     Vector4 _scissor;
@@ -138,37 +155,66 @@ struct GLRenderer::Impl {
     gl::GLCubeMaps cubemaps;
     gl::GLBackground background;
 
+    std::unique_ptr<RenderTarget> _transmissionRenderTarget;
+
     std::unique_ptr<gl::GLBufferRenderer> bufferRenderer;
     std::unique_ptr<gl::GLIndexedBufferRenderer> indexedBufferRenderer;
 
     gl::GLShadowMap shadowMap;
 
     Impl(GLRenderer& scope, const std::pair<int, int>& size, const Parameters& parameters)
-        : scope(scope), _size(size),
-          cubemaps(scope),
-          bufferRenderer(std::make_unique<gl::GLBufferRenderer>(_info)),
-          indexedBufferRenderer(std::make_unique<gl::GLIndexedBufferRenderer>(_info)),
-          clipping(properties),
+        : scope(scope),
+          _emptyScene(std::make_unique<Scene>()),
+          onMaterialDispose(this),
+          _size(size),
+          _currentDrawBuffers(GL_BACK),
           bindingStates(attributes),
           geometries(attributes, _info, bindingStates),
+          clipping(properties),
           textures(state, properties, _info),
-          objects(geometries, attributes, _info),
-          renderLists(properties),
-          shadowMap(objects),
           materials(properties),
-          background(scope, cubemaps, state, objects, parameters.premultipliedAlpha),
+          renderLists(properties),
+          objects(geometries, attributes, _info),
           programCache(bindingStates, clipping),
-          _currentDrawBuffers(GL_BACK),
-          _emptyScene(std::make_unique<Scene>()),
-          onMaterialDispose(this) {
+          cubemaps(scope),
+          background(scope, cubemaps, state, objects, parameters.premultipliedAlpha),
+          bufferRenderer(std::make_unique<gl::GLBufferRenderer>(_info)),
+          indexedBufferRenderer(std::make_unique<gl::GLIndexedBufferRenderer>(_info)),
+          shadowMap(objects, textures) {
 
         this->setViewport(0, 0, _size.width(), _size.height());
         this->setScissor(0, 0, _size.width(), _size.height());
+
+#ifdef __APPLE__
+        const auto [xScale, yScale] = monitor::contentScale();
+        if (xScale != 1 && xScale == yScale) {
+            setPixelRatio(xScale);
+        }
+#endif
+
+    }
+
+    void setPixelRatio(float value) {
+
+        _pixelRatio = value;
+        setSize(_size);
+    }
+
+    void setSize(const std::pair<int, int>& size) {
+
+        _size = size;
+
+        this->setViewport(0, 0, size.first, size.second);
     }
 
     [[nodiscard]] std::optional<unsigned int> getGlTextureId(Texture& texture) const {
 
         return textures.getGlTexture(texture);
+    }
+
+    [[nodiscard]] std::optional<unsigned int> getGlBufferId(BufferAttribute& attribute) const {
+
+        return attributes.get(&attribute).buffer;
     }
 
     void deallocateMaterial(Material* material) {
@@ -237,7 +283,9 @@ struct GLRenderer::Impl {
 
         auto& shadowsArray = currentRenderState->getShadowsArray();
 
+        shadowMap.autoUpdate = scope.shadowMapAutoUpdate;
         shadowMap.render(scope, shadowsArray, scene, camera);
+        scope.shadowMapAutoUpdate = shadowMap.autoUpdate;
 
         currentRenderState->setupLights();
         currentRenderState->setupLightsView(camera);
@@ -255,14 +303,30 @@ struct GLRenderer::Impl {
         // render scene
 
         auto& opaqueObjects = currentRenderList->opaque;
+        auto& transmissiveObjects = currentRenderList->transmissive;
         auto& transparentObjects = currentRenderList->transparent;
         //
         if (!opaqueObjects.empty()) renderObjects(opaqueObjects, scene, camera);
+        if (!transmissiveObjects.empty()) renderTransmissiveObjects(opaqueObjects, transmissiveObjects, scene, camera);
         if (!transparentObjects.empty()) renderObjects(transparentObjects, scene, camera);
+
+        // Screen-space sprite overlay. Drained after the main passes so
+        // these draws sit visually on top of all 3D content. List is
+        // populated during projectObject when a Sprite has screenSpace=true.
+        if (!screenSpaceSprites_.empty()) {
+            renderScreenSpaceSprites(scene);
+            screenSpaceSprites_.clear();
+        }
 
         //
 
         if (_currentRenderTarget) {
+
+            // Resolve multisample renderbuffers into the target's texture
+            // before anything samples it. Must precede the mipmap generation
+            // below, which reads that texture.
+
+            textures.updateMultisampleRenderTarget(_currentRenderTarget);
 
             // Generate mipmap if we're using any kind of mipmap filtering
 
@@ -437,21 +501,24 @@ struct GLRenderer::Impl {
 
             renderer->renderInstances(drawStart, drawCount, im->count());
 
-        } 
-        else if (auto g = dynamic_cast<InstancedBufferGeometry*>(geometry)) {
+        } else if (auto ig = dynamic_cast<InstancedBufferGeometry*>(geometry)) {
 
-            const auto instanceCount = std::min(g->instanceCount, g->maxInstanceCount.value());
+            // No _maxInstanceCount clamp, unlike three.js: that exists to guard
+            // an instanceCount raised past what the instanced attributes were
+            // allocated for, and here the attributes and the count are set
+            // together by the geometry's owner. An empty one draws nothing.
+            if (ig->instanceCount > 0) {
 
-            renderer->renderInstances(drawStart, drawCount, instanceCount);
+                renderer->renderInstances(drawStart, drawCount, static_cast<int>(ig->instanceCount));
+            }
 
-        } 
-        else {
+        } else {
 
             renderer->render(drawStart, drawCount);
         }
     }
 
-    void projectObject(Object3D* object, Camera* camera, unsigned int groupOrder, bool sortObjects) {
+    void projectObject(Object3D* object, Camera* camera, int groupOrder, bool sortObjects) {
         if (!object->visible) return;
 
         bool visible = object->layers.test(camera->layers);
@@ -477,7 +544,17 @@ struct GLRenderer::Impl {
 
             } else if (auto sprite = object->as<Sprite>()) {
 
-                if (!object->frustumCulled || _frustum.intersectsSprite(*sprite)) {
+                // Screen-space sprites bypass the regular opaque/transparent
+                // lists — they're drawn after main rendering through an
+                // internal ortho camera, with their world matrix synthesised
+                // from screenAnchor + viewport + position at draw time. They
+                // don't need frustum culling or sort-by-depth since they're
+                // overlaid 2D.
+                if (sprite->screenSpace) {
+                    if (sprite->material() && sprite->material()->visible) {
+                        screenSpaceSprites_.push_back(sprite);
+                    }
+                } else if (!object->frustumCulled || _frustum.intersectsSprite(*sprite)) {
 
                     if (sortObjects) {
 
@@ -546,6 +623,90 @@ struct GLRenderer::Impl {
         }
     }
 
+    void renderTransmissiveObjects(
+            const std::vector<gl::RenderItem*>& opaqueObjects,
+            const std::vector<gl::RenderItem*>& transmissiveObjects,
+            Object3D* scene, Camera* camera) {
+
+        if (!_transmissionRenderTarget) {
+
+            RenderTarget::Options options;
+            options.generateMipmaps = true;
+            options.minFilter = Filter::LinearMipmapLinear;
+            options.magFilter = Filter::Nearest;
+            options.wrapS = TextureWrapping::ClampToEdge;
+            options.wrapT = TextureWrapping::ClampToEdge;
+
+            _transmissionRenderTarget = RenderTarget::create(1024*2, 1024*2, options);
+        }
+
+        auto currentRenderTarget = _currentRenderTarget;
+        setRenderTarget(_transmissionRenderTarget.get(), 0, 0);
+        scope.clear(true, true, true);
+
+        renderObjects(opaqueObjects, scene, camera);
+
+        textures.updateRenderTargetMipmap(_transmissionRenderTarget.get());
+
+        setRenderTarget(currentRenderTarget, 0, 0);
+
+        renderObjects(transmissiveObjects, scene, camera);
+    }
+
+    // Drain screenSpaceSprites_, drawing each through an internal ortho
+    // camera sized to the current viewport. Sprite world matrices are
+    // synthesised from screenAnchor + viewport + position (CSS-style:
+    // negative offsets read as "from the opposite edge"). Depth test is
+    // disabled for the duration of the pass so screen-space sprites
+    // always sit visually on top of 3D content regardless of what's in
+    // the depth buffer.
+    void renderScreenSpaceSprites(Object3D* scene) {
+        const float w = static_cast<float>(_size.width());
+        const float h = static_cast<float>(_size.height());
+        if (w <= 0.f || h <= 0.f) return;
+
+        if (!screenSpaceCam_) {
+            screenSpaceCam_ = OrthographicCamera::create(0.f, w, h, 0.f, 0.1f, 10.f);
+            screenSpaceCam_->position.z = 1.f;
+        } else {
+            screenSpaceCam_->left   = 0.f;
+            screenSpaceCam_->right  = w;
+            screenSpaceCam_->top    = h;
+            screenSpaceCam_->bottom = 0.f;
+        }
+        screenSpaceCam_->updateProjectionMatrix();
+        screenSpaceCam_->updateMatrixWorld(true);
+
+        // Disable depth test for the pass — sprites always on top.
+        state.depthBuffer.setTest(false);
+
+        for (auto* sprite : screenSpaceSprites_) {
+            if (!sprite->visible) continue;
+
+            // Synthesise pixel-space world matrix from anchor + position.
+            // Save the user's matrixWorld and restore after the draw so the
+            // sprite's state is unchanged from external observers.
+            const float pxX = sprite->screenAnchor.x * w + static_cast<float>(sprite->position.x);
+            const float pxY = sprite->screenAnchor.y * h + static_cast<float>(sprite->position.y);
+            Matrix4 saved = *sprite->matrixWorld;
+            sprite->matrixWorld->compose(Vector3(pxX, pxY, 0.f),
+                                         sprite->quaternion,
+                                         sprite->scale);
+
+            const auto geometry = objects.update(sprite);
+            auto* material = sprite->material().get();
+            if (material && material->visible) {
+                renderObject(sprite, scene, screenSpaceCam_.get(),
+                             geometry, material, std::nullopt);
+            }
+
+            *sprite->matrixWorld = saved;
+        }
+
+        // Re-enable depth test for downstream / next-frame work.
+        state.depthBuffer.setTest(true);
+    }
+
     void renderObjects(const std::vector<gl::RenderItem*>& renderList, Object3D* scene, Camera* camera) {
 
         Material* overrideMaterial = nullptr;
@@ -582,6 +743,16 @@ struct GLRenderer::Impl {
         }
     }
 
+    // Colour space a fragment shader must encode into right now: the bound
+    // render target's, or the renderer's output space when drawing to the
+    // screen. Mirrors WebGLPrograms, which reads the current target's texture
+    // encoding for exactly this reason — an offscreen pass is an intermediate,
+    // not a display.
+    [[nodiscard]] ColorSpace currentOutputColorSpace() const {
+
+        return _currentRenderTarget ? _currentRenderTarget->texture->colorSpace : scope.outputColorSpace;
+    }
+
     gl::GLProgram* getProgram(Material* material, Object3D* _scene, Object3D* object) {
 
         auto* scene = _scene->as<Scene>();
@@ -594,23 +765,31 @@ struct GLRenderer::Impl {
 
         auto lightsStateVersion = lights.state.version;
 
-        auto parameters = gl::GLPrograms::getParameters(scope, clipping, material, lights.state, shadowsArray.size(), scene, object);
-        auto programCacheKey = gl::GLPrograms::getProgramCacheKey(scope, parameters);
+        ShadowConfig shadowCfg{shadowMap.enabled, shadowMap.type};
+        auto& glCaps = gl::GLCapabilities::instance();
+        RendererCapabilities caps;
+        caps.vertexTextures = glCaps.vertexTextures;
+        caps.floatVertexTextures = glCaps.floatVertexTextures;
+        caps.logarithmicDepthBuffer = glCaps.logarithmicDepthBuffer;
+        caps.maxVertexUniforms = glCaps.maxVertexUniforms;
 
-        auto& programs = materialProperties->programs;
-
-        // always update environment and fog - changing these trigger an getProgram call, but it's possible that the program doesn't change
-
+        // Resolve envMap through the PMREM pipeline BEFORE building program parameters.
+        // Mirrors three.js WebGLPrograms, which calls cubeuvmaps.get() inline when reading
+        // material.envMap — so parameters.envMapMode reflects the *resolved* mapping
+        // (e.g. CubeUVReflection for equirect sources), not the source equirect mapping.
         materialProperties->environment = material->is<MeshStandardMaterial>() ? scene->environment.get() : nullptr;
         materialProperties->fog = scene->fog;
         auto materialWithEnvMap = material->as<MaterialWithEnvMap>();
         if (materialWithEnvMap && materialWithEnvMap->envMap) {
-            cubemaps.get(materialWithEnvMap->envMap.get());
-            materialProperties->envMap = materialWithEnvMap->envMap.get();
+            materialProperties->envMap = cubemaps.getPMREM(materialWithEnvMap->envMap.get());
         } else {
-            cubemaps.get(materialProperties->environment);
-            materialProperties->envMap = materialProperties->environment;
+            materialProperties->envMap = cubemaps.getPMREM(materialProperties->environment);
         }
+
+        auto parameters = gl::GLPrograms::getParameters(scope, shadowCfg, caps, clipping, material, lights.state, shadowsArray.size(), scene, object, materialProperties->envMap, currentOutputColorSpace());
+        auto programCacheKey = gl::GLPrograms::getProgramCacheKey(scope, parameters);
+
+        auto& programs = materialProperties->programs;
 
         if (programs.empty()) {
 
@@ -648,7 +827,7 @@ struct GLRenderer::Impl {
 
         auto& uniforms = *materialProperties->uniforms;
 
-        if (!material->is<ShaderMaterial>() && !material->is<RawShaderMaterial>() || material->clipping) {
+        if ((!material->is<ShaderMaterial>() && !material->is<RawShaderMaterial>()) || material->clipping) {
 
             uniforms["clippingPlanes"] = clipping.uniform;
         }
@@ -672,6 +851,7 @@ struct GLRenderer::Impl {
             uniforms.at("spotLightShadows").setValue(lights.state.spotShadow);
             uniforms.at("pointLights").setValue(lights.state.point);
             uniforms.at("pointLightShadows").setValue(lights.state.pointShadow);
+            uniforms.at("rectAreaLights").setValue(lights.state.rectArea);
             uniforms.at("hemisphereLights").setValue(lights.state.hemi);
 
             uniforms.at("directionalShadowMap").setValue(lights.state.directionalShadowMap);
@@ -680,6 +860,13 @@ struct GLRenderer::Impl {
             uniforms.at("spotShadowMatrix").setValue(lights.state.spotShadowMatrix);
             uniforms.at("pointShadowMap").setValue(lights.state.pointShadowMap);
             uniforms.at("pointShadowMatrix").setValue(lights.state.pointShadowMatrix);
+
+            if (!lights.state.rectArea.empty()) {
+                auto& ltcLib = RectAreaLightUniformsLib::instance();
+                ltcLib.init();
+                uniforms.at("ltc_1").setValue(ltcLib.ltc_1().get());
+                uniforms.at("ltc_2").setValue(ltcLib.ltc_2().get());
+            }
         }
 
         auto progUniforms = program->getUniforms();
@@ -701,6 +888,8 @@ struct GLRenderer::Impl {
         materialProperties->numClippingPlanes = parameters.numClippingPlanes;
         materialProperties->numIntersection = parameters.numClipIntersection;
         materialProperties->vertexAlphas = parameters.vertexAlphas;
+        materialProperties->shadowMapEnabled = parameters.shadowMapEnabled;
+        materialProperties->shadowMapType = parameters.shadowMapType;
     }
 
     gl::GLProgram* setProgram(Camera* camera, Object3D* _scene, Material* material, Object3D* object) {
@@ -712,7 +901,7 @@ struct GLRenderer::Impl {
         bool isMeshLambertMaterial = material->type() == "MeshLambertMaterial";
         bool isMeshToonMaterial = material->type() == "MeshToonMaterial";
         bool isMeshPhongMaterial = material->type() == "MeshPhongMaterial";
-        bool isMeshStandardMaterial = material->type() == "MeshStandardMaterial";
+        bool isMeshStandardMaterial = material->type() == "MeshStandardMaterial" || material->type() == "MeshPhysicalMaterial";
         bool isShadowMaterial = material->type() == "ShadowMaterial";
         bool isShaderMaterial = material->is<ShaderMaterial>();
         bool isEnvMap = material->is<MaterialWithEnvMap>() && material->as<MaterialWithEnvMap>()->envMap;
@@ -721,21 +910,20 @@ struct GLRenderer::Impl {
 
         auto& fog = scene->fog;
         auto environment = isMeshStandardMaterial ? scene->environment : nullptr;
-        Encoding encoding = (_currentRenderTarget == nullptr) ? scope.outputEncoding : _currentRenderTarget->texture->encoding;
+        ColorSpace encoding = currentOutputColorSpace();
 
         Texture* envMap;
         auto materialWithEnvMap = material->as<MaterialWithEnvMap>();
         if (materialWithEnvMap && materialWithEnvMap->envMap) {
-            cubemaps.get(materialWithEnvMap->envMap.get());
-            envMap = materialWithEnvMap->envMap.get();
+            envMap = cubemaps.getPMREM(materialWithEnvMap->envMap.get());
         } else {
-            cubemaps.get(environment.get());
-            envMap = environment.get();
+            envMap = cubemaps.getPMREM(environment.get());
         }
+        // Untyped lookup — the typed getter is null for narrowed color attributes.
         bool vertexAlphas = material->vertexColors &&
                             object->geometry() &&
                             object->geometry()->hasAttribute("color") &&
-                            object->geometry()->getAttribute<float>("color")->itemSize() == 4;
+                            object->geometry()->getAttribute("color")->itemSize() == 4;
 
         auto materialProperties = properties.materialProperties.get(material);
         auto& lights = currentRenderState->getLights();
@@ -801,6 +989,22 @@ struct GLRenderer::Impl {
 
             } else if (materialProperties->vertexAlphas != vertexAlphas) {
 
+                needsProgramChange = true;
+
+            } else if (materialProperties->shadowMapEnabled !=
+                       (shadowMap.enabled && !currentRenderState->getShadowsArray().empty())) {
+
+                // USE_SHADOWMAP is a compile-time define, so toggling
+                // Renderer::shadowMap().enabled has to rebuild the program.
+                // Without this the shadow pass stopped running but the material
+                // kept sampling the shadow map, leaving the last-rendered
+                // shadows frozen on screen instead of disappearing.
+                needsProgramChange = true;
+
+            } else if (materialProperties->shadowMapEnabled && materialProperties->shadowMapType != shadowMap.type) {
+
+                // Likewise SHADOWMAP_TYPE_* — switching Basic/PCF/PCF-soft/VSM
+                // changes the sampling code, not a uniform.
                 needsProgramChange = true;
             }
 
@@ -934,6 +1138,13 @@ struct GLRenderer::Impl {
             }
         }
 
+        // Tet-skinning: bind the (per-frame updated) tet-position texture. Like the
+        // bone texture, set every frame since its contents change with the sim.
+        if (material->tetSkinning && material->tetTexture) {
+            p_uniforms->setValue("tetTexture", material->tetTexture.get(), &textures);
+            p_uniforms->setValue("tetTextureSize", material->tetTextureSize);
+        }
+
         if (refreshMaterial || materialProperties->receiveShadow != object->receiveShadow) {
 
             materialProperties->receiveShadow = object->receiveShadow;
@@ -970,7 +1181,7 @@ struct GLRenderer::Impl {
                 materials.refreshFogUniforms(m_uniforms, *fog);
             }
 
-            materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _size.height());
+            materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _size.height(), _transmissionRenderTarget.get());
 
             gl::GLUniforms::upload(materialProperties->uniformsList, m_uniforms, &textures);
         }
@@ -1009,6 +1220,7 @@ struct GLRenderer::Impl {
         uniforms.at("pointLightShadows").needsUpdate = value;
         uniforms.at("spotLights").needsUpdate = value;
         uniforms.at("spotLightShadows").needsUpdate = value;
+        uniforms.at("rectAreaLights").needsUpdate = value;
         uniforms.at("hemisphereLights").needsUpdate = value;
     }
 
@@ -1017,6 +1229,7 @@ struct GLRenderer::Impl {
         bool isMeshToonMaterial = material->type() == "MeshToonMaterial";
         bool isMeshPhongMaterial = material->type() == "MeshPhongMaterial";
         bool isMeshStandardMaterial = material->type() == "MeshStandardMaterial";
+        bool isMeshPhysicalMaterial = material->type() == "MeshPhysicalMaterial";
         bool isShadowMaterial = material->type() == "ShadowMaterial";
         bool isShaderMaterial = material->is<ShaderMaterial>();
         bool lights = false;
@@ -1026,11 +1239,11 @@ struct GLRenderer::Impl {
         }
 
         return isMeshLambertMaterial || isMeshToonMaterial || isMeshPhongMaterial ||
-               isMeshStandardMaterial || isShadowMaterial ||
+               isMeshStandardMaterial || isMeshPhysicalMaterial || isShadowMaterial ||
                (isShaderMaterial && lights);
     }
 
-    void setRenderTarget(GLRenderTarget* renderTarget, int activeCubeFace, int activeMipmapLevel) {
+    void setRenderTarget(RenderTarget* renderTarget, int activeCubeFace, int activeMipmapLevel) {
 
         _currentRenderTarget = renderTarget;
         _currentActiveCubeFace = activeCubeFace;
@@ -1045,7 +1258,16 @@ struct GLRenderer::Impl {
 
         if (renderTarget) {
 
-            framebuffer = *properties.renderTargetProperties.get(renderTarget)->glFramebuffer;
+            const auto* rtProps = properties.renderTargetProperties.get(renderTarget);
+            if (rtProps->glCubeFramebuffers) {
+                framebuffer = (*rtProps->glCubeFramebuffers)[activeCubeFace];
+            } else if (rtProps->glMultisampledFramebuffer) {
+                // Draws go to the multisampled attachments; the texture-backed
+                // framebuffer receives the resolve at the end of render().
+                framebuffer = *rtProps->glMultisampledFramebuffer;
+            } else {
+                framebuffer = *rtProps->glFramebuffer;
+            }
 
             _currentViewport.copy(renderTarget->viewport);
             _currentScissor.copy(renderTarget->scissor);
@@ -1094,13 +1316,20 @@ struct GLRenderer::Impl {
         state.viewport(_currentViewport);
         state.scissor(_currentScissor);
         state.setScissorTest(_currentScissorTest.value_or(false));
+
+        // The clear colour is encoded for the target it will be cleared into
+        // (GLBackground::setClear), so the value glClearColor holds belongs to
+        // the target that was bound when it was set. Re-encode it here, or a
+        // clear() issued straight after a bind — which is what RenderPass does —
+        // uses the previous target's encode.
+        background.refreshClear();
     }
 
     void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level) {
 
         const auto levelScale = std::pow(2, -level);
-        const auto width = static_cast<int>(texture.image().width * levelScale);
-        const auto height = static_cast<int>(texture.image().height * levelScale);
+        const auto width = static_cast<int>(texture.image().width() * levelScale);
+        const auto height = static_cast<int>(texture.image().height() * levelScale);
 
         textures.setTexture2D(texture, 0);
 
@@ -1111,11 +1340,15 @@ struct GLRenderer::Impl {
 
     std::vector<unsigned char> readRGBPixels() {
 
-        const auto [width, height] = _size;
+        // glReadPixels reads from the BOUND framebuffer: the current
+        // RenderTarget's FBO when one is set, else the default framebuffer —
+        // so the dimensions must come from the same source.
+        const int width  = _currentRenderTarget ? static_cast<int>(_currentRenderTarget->width) : _size.width();
+        const int height = _currentRenderTarget ? static_cast<int>(_currentRenderTarget->height) : _size.height();
 
-        std::vector<unsigned char> data(width * height * 3);
+        std::vector<unsigned char> data(static_cast<size_t>(width) * height * 3);
 
-        readPixels({0, 0}, _size, Format::RGB, data.data());
+        readPixels({0, 0}, {width, height}, Format::RGB, data.data());
 
         return data;
     }
@@ -1124,26 +1357,96 @@ struct GLRenderer::Impl {
 
         const auto glFormat = gl::toGLFormat(format);
 
+        // Callers pass tightly packed buffers (width * height * channels). The
+        // default GL_PACK_ALIGNMENT of 4 pads each destination row to a 4-byte
+        // boundary, so any format/width whose row stride isn't 4-aligned (RGB
+        // at width 1366 = 4098 bytes) drifts 2 bytes per row — the output
+        // skews diagonally and the per-row channel rotation grays the colors.
+        GLint prevAlign = 4;
+        glGetIntegerv(GL_PACK_ALIGNMENT, &prevAlign);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
+        // glReadPixels on a multisampled framebuffer is an error, and that is
+        // what a multisampled target has bound. Read the resolve framebuffer
+        // instead — render() has already blitted into it. Raw binds, and put
+        // back afterwards, so GLState's cache stays true (see
+        // GLTextures::updateMultisampleRenderTarget).
+        const bool multisampled = _currentRenderTarget && textures.getRenderTargetSamples(_currentRenderTarget) > 0;
+        if (multisampled) {
+            const auto* rtProps = properties.renderTargetProperties.get(_currentRenderTarget);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, *rtProps->glFramebuffer);
+        }
+
         // this was size.width(), size.width() before refactor.. I assume it was an error
         glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.first, size.second, glFormat, GL_UNSIGNED_BYTE, data);
+
+        if (multisampled) {
+            const auto* rtProps = properties.renderTargetProperties.get(_currentRenderTarget);
+            glBindFramebuffer(GL_FRAMEBUFFER, *rtProps->glMultisampledFramebuffer);
+        }
+
+        glPixelStorei(GL_PACK_ALIGNMENT, prevAlign);
     }
 
     void copyTextureToImage(Texture& texture) {
-#ifdef __EMSCRIPTEN__
-        std::cerr << "[GLRenderer] copyTextureToImage not available with Emscripten" << std::endl;
-        return;
-#endif
         textures.setTexture2D(texture, 0);
 
         auto& image = texture.image();
         auto& data = image.data();
-        const auto newSize = image.width * image.height * (texture.format == Format::RGB || texture.format == Format::BGR ? 3 : 4);
+        const auto channels = gl::numChannels(texture.format);
+        const auto newSize = static_cast<size_t>(image.width()) * image.height() * channels;
         data.resize(newSize);
 
+#ifdef __EMSCRIPTEN__
+        // WebGL lacks glGetTexImage; use a temporary FBO and glReadPixels instead.
+        // glReadPixels in WebGL only reliably supports GL_RGBA/GL_UNSIGNED_BYTE.
+        const auto texId = textures.getGlTexture(texture);
+        if (!texId) {
+            state.unbindTexture();
+            return;
+        }
 
-        // Only run this on desktop OpenGL, not in WebGL
+        // Unbind the texture from all texture units before attaching it to the
+        // temporary FBO.  WebGL2's framebuffer-completeness rules treat having
+        // the same texture simultaneously bound to a texture unit AND attached
+        // to the draw framebuffer as a feedback loop, which makes the FBO
+        // incomplete and causes glReadPixels to fail silently (all zeros).
+        state.unbindTexture();
+
+        GLuint fbo;
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, *texId, 0);
+
+        const int npixels = static_cast<int>(image.width()) * static_cast<int>(image.height());
+
+        if (channels == 4) {
+            glReadPixels(0, 0, image.width(), image.height(), GL_RGBA, GL_UNSIGNED_BYTE, data.data());
+        } else if (channels == 3) {
+            std::vector<unsigned char> rgba(npixels * 4);
+            glReadPixels(0, 0, image.width(), image.height(), GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+            for (int i = 0; i < npixels; ++i) {
+                data[i * 3 + 0] = rgba[i * 4 + 0];
+                data[i * 3 + 1] = rgba[i * 4 + 1];
+                data[i * 3 + 2] = rgba[i * 4 + 2];
+            }
+        } else {
+            // GL_RG/GL_RED readback is not guaranteed by WebGL2.
+            // Use the guaranteed RGBA path and pack into the target channel count.
+            std::vector<unsigned char> rgba(npixels * 4);
+            glReadPixels(0, 0, image.width(), image.height(), GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+            for (int i = 0; i < npixels; ++i) {
+                for (int c = 0; c < channels; ++c) {
+                    data[i * channels + c] = rgba[i * 4 + c];
+                }
+            }
+        }
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glDeleteFramebuffers(1, &fbo);
+#else
         glGetTexImage(GL_TEXTURE_2D, 0, gl::toGLFormat(texture.format), gl::toGLType(texture.type), data.data());
-
+#endif
 
         state.unbindTexture();
     }
@@ -1166,7 +1469,8 @@ struct GLRenderer::Impl {
         auto ext = filename.extension().string();
         std::ranges::transform(ext, ext.begin(), ::tolower);
         std::vector<unsigned char> data;
-        const auto [width, height] = _size;
+        const int width  = _currentRenderTarget ? static_cast<int>(_currentRenderTarget->width) : _size.width();
+        const int height = _currentRenderTarget ? static_cast<int>(_currentRenderTarget->height) : _size.height();
         if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp") {
             data = readRGBPixels();
             flipImage(data, 3, width, height);
@@ -1190,8 +1494,8 @@ struct GLRenderer::Impl {
         if (ext == ".bmp") {
             sucess = stbi_write_bmp(filename.string().c_str(), width, height, 3, data.data());
         }
-        if (sucess) {
-            std::cout << "Saved framebuffer to '" << absolute(filename) << "'" << std::endl;
+        if (!sucess) {
+            throw std::runtime_error("GLRenderer: failed to write framebuffer to " + filename.string());
         }
     }
 
@@ -1218,14 +1522,15 @@ struct GLRenderer::Impl {
     friend struct gl::GLShadowMap;
 };
 
+GLRenderer::GLRenderer(Canvas& canvas, const Parameters& parameters) {
 
-GLRenderer::GLRenderer(std::pair<int, int> size, const Parameters& parameters) {
+    canvas.initWindow(GraphicsAPI::OpenGL);
 
-#ifndef EMSCRIPTEN
-    loadGlad();// if Glad has yet to be loaded, do it now
+#ifndef __EMSCRIPTEN__
+    loadGlad();
 #endif
 
-    pimpl_ = std::make_unique<Impl>(*this, size, parameters);
+    pimpl_ = std::make_unique<Impl>(*this, canvas.size(), parameters);
 }
 
 
@@ -1249,15 +1554,14 @@ gl::GLState& GLRenderer::state() {
     return pimpl_->state;
 }
 
-int GLRenderer::getTargetPixelRatio() const {
+float GLRenderer::getTargetPixelRatio() const {
 
     return pimpl_->_pixelRatio;
 }
 
-void GLRenderer::setPixelRatio(int value) {
+void GLRenderer::setPixelRatio(float value) {
 
-    pimpl_->_pixelRatio = value;
-    this->setSize(pimpl_->_size);
+    pimpl_->setPixelRatio(value);
 }
 
 WindowSize GLRenderer::size() const {
@@ -1267,9 +1571,7 @@ WindowSize GLRenderer::size() const {
 
 void GLRenderer::setSize(const std::pair<int, int>& size) {
 
-    pimpl_->_size = size;
-
-    this->setViewport(0, 0, size.first, size.second);
+    pimpl_->setSize(size);
 }
 
 void GLRenderer::getDrawingBufferSize(Vector2& target) const {
@@ -1395,7 +1697,7 @@ void GLRenderer::renderBufferDirect(Camera* camera, Scene* scene, BufferGeometry
     pimpl_->renderBufferDirect(camera, scene, geometry, material, object, group);
 }
 
-void GLRenderer::setRenderTarget(GLRenderTarget* renderTarget, int activeCubeFace, int activeMipmapLevel) {
+void GLRenderer::setRenderTarget(RenderTarget* renderTarget, int activeCubeFace, int activeMipmapLevel) {
 
     pimpl_->setRenderTarget(renderTarget, activeCubeFace, activeMipmapLevel);
 }
@@ -1420,6 +1722,11 @@ void GLRenderer::copyTextureToImage(Texture& texture) {
     pimpl_->copyTextureToImage(texture);
 }
 
+void GLRenderer::setDepthMask(bool flag) {
+
+    pimpl_->state.depthBuffer.setMask(flag);
+}
+
 void GLRenderer::resetState() {
 
     pimpl_->reset();
@@ -1440,7 +1747,7 @@ int GLRenderer::getActiveMipmapLevel() const {
     return pimpl_->_currentActiveMipmapLevel;
 }
 
-GLRenderTarget* GLRenderer::getRenderTarget() {
+RenderTarget* GLRenderer::getRenderTarget() {
 
     return pimpl_->_currentRenderTarget;
 }
@@ -1448,6 +1755,11 @@ GLRenderTarget* GLRenderer::getRenderTarget() {
 std::optional<unsigned int> GLRenderer::getGlTextureId(Texture& texture) const {
 
     return pimpl_->getGlTextureId(texture);
+}
+
+std::optional<unsigned int> GLRenderer::getGlBufferId(BufferAttribute& buffer) const {
+
+    return pimpl_->getGlBufferId(buffer);
 }
 
 void GLRenderer::writeFramebuffer(const std::filesystem::path& filename) {

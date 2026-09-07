@@ -8,17 +8,23 @@
 #include "threepp/core/Uniform.hpp"
 #include "threepp/math/Plane.hpp"
 
+#include <atomic>
 #include <optional>
 #include <variant>
 
 namespace threepp {
 
-    typedef std::variant<bool, int, float, Vector2, Side, Blending, BlendFactor, BlendEquation, StencilFunc, StencilOp, CombineOperation, DepthFunc, NormalMapType, Color, std::string, std::shared_ptr<Texture>> MaterialValue;
+    typedef std::variant<bool, int, float, Vector2, Side, Blending, BlendFactor, BlendEquation, StencilFunc, StencilOp, CombineOperation, DepthFunc, DepthPacking, NormalMapType, Color, std::string, std::shared_ptr<Texture>> MaterialValue;
 
     class Material: public EventDispatcher {
 
     public:
-        const unsigned int id = materialId++;
+        // Atomic — see Object3D::id. This is the id whose collision bites
+        // hardest: GLRenderer gates "refreshMaterial" on
+        // `material->id != _currentMaterialId`, so two materials sharing an id
+        // means the second never uploads its uniforms and renders with the
+        // first's colour/roughness/maps.
+        const unsigned int id = materialId.fetch_add(1, std::memory_order_relaxed);
 
         std::string name;
 
@@ -27,6 +33,25 @@ namespace threepp {
         Blending blending = Blending::Normal;
         Side side{Side::Front};
         bool vertexColors = false;
+
+        // GPU tet-skinning (deformable/soft bodies): when enabled the vertex shader
+        // sets each vertex to a barycentric blend of 4 collision-tet positions read
+        // from tetTexture, addressed by the tetIndex/tetWeight vertex attributes.
+        // tetTexture holds world-space tet positions (1 RGB texel per tet, packed
+        // row-major into a tetTextureSize x tetTextureSize float texture). The rest
+        // pose enters through baked per-vertex attributes (the rest tet edge-matrix
+        // inverse), so the shader skins normals by the per-tet deformation gradient
+        // without a per-frame matrix inverse or a second rest-position texture.
+        bool tetSkinning = false;
+        std::shared_ptr<Texture> tetTexture;
+        int tetTextureSize = 0;
+
+        // Hint for temporal passes (Vulkan deferred TAA): this material's texture
+        // content animates every frame (scrolling UV offset, video texture, live
+        // DataTexture) WITHOUT geometric motion, so motion vectors cannot reproject
+        // it. Temporal accumulation holds a short history on these surfaces instead
+        // of smearing the moving pattern. No effect on GL.
+        bool textureAnimatedHint = false;
 
         float opacity = 1;
         bool transparent = false;
@@ -39,7 +64,10 @@ namespace threepp {
         std::optional<BlendEquation> blendEquationAlpha;
 
         DepthFunc depthFunc{DepthFunc::LessEqual};
+        // Whether to have depth test enabled when rendering this material. When the depth test is disabled, the depth write will also be implicitly disabled.
         bool depthTest = true;
+        // Whether rendering this material has any effect on the depth buffer.
+        // When drawing 2D overlays it can be useful to disable the depth writing in order to layer several things together without creating z-index artifacts.
         bool depthWrite = true;
 
         int stencilWriteMask = 0xff;
@@ -83,9 +111,14 @@ namespace threepp {
 
         [[nodiscard]] std::string uuid() const;
 
+        // Only serialization round-trips (ObjectLoader) have a reason to call this.
+        void setUuid(const std::string& uuid);
+
         [[nodiscard]] unsigned int version() const;
 
         void setValues(const std::unordered_map<std::string, MaterialValue>& values);
+
+        void copyCompatibleFrom(const Material& other);
 
         void dispose();
 
@@ -148,7 +181,7 @@ namespace threepp {
         bool disposed_ = false;
         std::string uuid_;
         unsigned int version_ = 0;
-        inline static unsigned int materialId = 0;
+        inline static std::atomic<unsigned int> materialId{0};
     };
 
 

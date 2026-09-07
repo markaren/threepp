@@ -87,7 +87,7 @@ float Plane::distanceToSphere(const Sphere& sphere) const {
 
 void Plane::projectPoint(const Vector3& point, Vector3& target) const {
 
-    target.copy(this->normal).multiplyScalar(-this->distanceToPoint(point)).add(point);
+    target.copy(point).addScaledVector(this->normal, this->distanceToPoint(point));
 }
 
 void Plane::intersectLine(const Line3& line, Vector3& target) const {
@@ -117,7 +117,7 @@ void Plane::intersectLine(const Line3& line, Vector3& target) const {
         return;
     }
 
-    target.copy(direction).multiplyScalar(t).add(line.start());
+    target.copy(line.start()).addScaledVector(direction, t);
 }
 
 bool Plane::intersectsLine(const Line3& line) const {

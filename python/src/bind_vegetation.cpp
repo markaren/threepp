@@ -1,0 +1,214 @@
+#include "bindings.hpp"
+
+#include "threepp/extras/vegetation/TreeGenerator.hpp"
+#include "threepp/extras/vegetation/TreeTextures.hpp"
+#include "threepp/textures/DataTexture.hpp"
+#include "threepp/textures/Texture.hpp"
+
+#include <pybind11/stl.h>
+
+namespace threepp_py {
+
+    void init_vegetation(py::module_& m) {
+
+        using namespace threepp;
+        using namespace threepp::vegetation;
+
+        py::enum_<CrownShape>(m, "CrownShape")
+                .value("Sphere",     CrownShape::Sphere)
+                .value("Ellipsoid",  CrownShape::Ellipsoid)
+                .value("Cone",       CrownShape::Cone)
+                .value("Hemisphere", CrownShape::Hemisphere)
+                .value("Cylinder",   CrownShape::Cylinder)
+                .export_values();
+
+        py::enum_<LeafStyle>(m, "LeafStyle")
+                .value("Quad",      LeafStyle::Quad)
+                .value("Cluster",   LeafStyle::Cluster)
+                .value("CrossQuad", LeafStyle::CrossQuad)
+                .value("Blob",      LeafStyle::Blob)
+                .value("Frond",     LeafStyle::Frond)
+                .export_values();
+
+        py::enum_<LeafShape>(m, "LeafShape")
+                .value("Ovate",      LeafShape::Ovate)
+                .value("Lobed",      LeafShape::Lobed)
+                .value("Serrate",    LeafShape::Serrate)
+                .value("Lanceolate", LeafShape::Lanceolate)
+                .export_values();
+
+        py::enum_<BarkStyle>(m, "BarkStyle")
+                .value("Furrowed", BarkStyle::Furrowed)
+                .value("Plated",   BarkStyle::Plated)
+                .value("Papery",   BarkStyle::Papery)
+                .export_values();
+
+        py::enum_<BranchingMode>(m, "BranchingMode")
+                .value("Colonise", BranchingMode::Colonise)
+                .value("Whorl",    BranchingMode::Whorl)
+                .export_values();
+
+        py::class_<TreeParams>(m, "TreeParams")
+                .def(py::init<>())
+                .def_readwrite("seed",               &TreeParams::seed)
+                .def_readwrite("trunk_height",       &TreeParams::trunkHeight)
+                .def_readwrite("trunk_radius",       &TreeParams::trunkRadius)
+                .def_readwrite("crown_shape",        &TreeParams::crownShape)
+                .def_readwrite("crown_radius_x",     &TreeParams::crownRadiusX)
+                .def_readwrite("crown_radius_z",     &TreeParams::crownRadiusZ)
+                .def_readwrite("crown_height",       &TreeParams::crownHeight)
+                .def_readwrite("attractor_count",    &TreeParams::attractorCount)
+                .def_readwrite("influence_distance", &TreeParams::influenceDistance)
+                .def_readwrite("kill_distance",      &TreeParams::killDistance)
+                .def_readwrite("segment_length",     &TreeParams::segmentLength)
+                .def_readwrite("max_iterations",     &TreeParams::maxIterations)
+                .def_readwrite("randomness",         &TreeParams::randomness)
+                .def_readwrite("tropism",            &TreeParams::tropism)
+                .def_readwrite("radius_exponent",    &TreeParams::radiusExponent)
+                .def_readwrite("min_branch_radius",  &TreeParams::minBranchRadius)
+                .def_readwrite("radial_segments",    &TreeParams::radialSegments)
+                .def_readwrite("leaf_style",         &TreeParams::leafStyle)
+                .def_readwrite("leaf_shape",         &TreeParams::leafShape)
+                .def_readwrite("leaf_size",          &TreeParams::leafSize)
+                .def_readwrite("leaf_density",       &TreeParams::leafDensity)
+                .def_readwrite("leaves_per_cluster", &TreeParams::leavesPerCluster)
+                .def_readwrite("leaf_spread",        &TreeParams::leafSpread)
+                .def_readwrite("leaf_clumping",      &TreeParams::leafClumping)
+                .def_readwrite("leaf_atlas_cells",   &TreeParams::leafAtlasCells)
+                .def_readwrite("leaf_droop",         &TreeParams::leafDroop)
+                .def_readwrite("pendant_length",     &TreeParams::pendantLength)
+                .def_readwrite("pendant_density",    &TreeParams::pendantDensity)
+                .def_readwrite("twig_shade",         &TreeParams::twigShade)
+                .def_readwrite("foliage_occlusion",  &TreeParams::foliageOcclusion)
+                .def_readwrite("branching_mode",         &TreeParams::branchingMode)
+                .def_readwrite("whorl_spacing",          &TreeParams::whorlSpacing)
+                .def_readwrite("branches_per_whorl",     &TreeParams::branchesPerWhorl)
+                .def_readwrite("whorl_jitter",           &TreeParams::whorlJitter)
+                .def_readwrite("branch_droop",           &TreeParams::branchDroop)
+                .def_readwrite("branch_tip_upturn",      &TreeParams::branchTipUpturn)
+                .def_readwrite("crown_profile_exponent", &TreeParams::crownProfileExponent)
+                .def_readwrite("side_twig_density",      &TreeParams::sideTwigDensity)
+                .def_readwrite("branch_length",          &TreeParams::branchLength)
+                .def_readwrite("trunk_lean",             &TreeParams::trunkLean)
+                .def_readwrite("trunk_bend",             &TreeParams::trunkBend)
+                .def_readwrite("trunk_twist",            &TreeParams::trunkTwist)
+                .def_readwrite("bark_bump_amp",          &TreeParams::barkBumpAmp)
+                .def_readwrite("bark_bump_lobes",        &TreeParams::barkBumpLobes)
+                .def_readwrite("bark_bump_amp2",         &TreeParams::barkBumpAmp2)
+                .def_readwrite("bark_bump_lobes2",       &TreeParams::barkBumpLobes2)
+                .def_readwrite("root_flare_asym",        &TreeParams::rootFlareAsym)
+                .def_readwrite("bark_style",             &TreeParams::barkStyle)
+                .def_property("bark_color",
+                        [](const TreeParams& p) {
+                            return std::vector<float>(p.barkColor.begin(), p.barkColor.end());
+                        },
+                        [](TreeParams& p, const std::vector<float>& c) {
+                            if (c.size() >= 3) p.barkColor = {c[0], c[1], c[2]};
+                        })
+                .def_property("leaf_color",
+                        [](const TreeParams& p) {
+                            return std::vector<float>(p.leafColor.begin(), p.leafColor.end());
+                        },
+                        [](TreeParams& p, const std::vector<float>& c) {
+                            if (c.size() >= 3) p.leafColor = {c[0], c[1], c[2]};
+                        });
+
+        py::class_<TreeGenerator>(m, "TreeGenerator")
+                .def(py::init<unsigned int>(), py::arg("seed") = 1337u)
+                .def("reseed", &TreeGenerator::reseed, py::arg("seed"))
+                .def_property_readonly("seed",       &TreeGenerator::seed)
+                .def_property_readonly("node_count", &TreeGenerator::nodeCount)
+                .def("build_skeleton", [](TreeGenerator& self, const TreeParams& tp) {
+                         py::gil_scoped_release release;
+                         self.buildSkeleton(tp);
+                     }, py::arg("params"))
+                .def("make_trunk_geometry", [](TreeGenerator& self, const TreeParams& tp) {
+                         py::gil_scoped_release release;
+                         return self.makeTrunkGeometry(tp);
+                     }, py::arg("params"))
+                .def("make_leaf_geometry", [](TreeGenerator& self, const TreeParams& tp) {
+                         py::gil_scoped_release release;
+                         return self.makeLeafGeometry(tp);
+                     }, py::arg("params"))
+                // Convenience: build skeleton then return trunk geometry in one call.
+                .def("create_trunk_geometry", [](TreeGenerator& self, const TreeParams& tp) {
+                         py::gil_scoped_release release;
+                         return self.createTrunkGeometry(tp);
+                     }, py::arg("params"))
+                // Convenience: return leaf geometry (requires build_skeleton called first).
+                .def("create_leaf_geometry", [](TreeGenerator& self, const TreeParams& tp) {
+                         py::gil_scoped_release release;
+                         return self.createLeafGeometry(tp);
+                     }, py::arg("params"));
+
+        // apply_preset(0..3, params) — Oak / Pine(Spruce, whorl conifer) / Birch / Willow
+        m.def("apply_tree_preset", [](int preset, TreeParams& p) {
+                  applyPreset(preset, p);
+              }, py::arg("preset"), py::arg("params"),
+              "Apply species preset: 0=Oak, 1=Pine/Spruce (whorl conifer, Frond leaves), 2=Birch, 3=Willow.");
+
+        // ── Procedural textures ──────────────────────────────────────────
+
+        m.def("make_leaf_texture",
+              [](unsigned int size, unsigned int seed, const std::vector<float>& color,
+                 LeafShape shape, int leafletsPerTwig, int variants) -> std::shared_ptr<Texture> {
+                  std::array<float, 3> c = {color.size() > 0 ? color[0] : 0.26f,
+                                            color.size() > 1 ? color[1] : 0.45f,
+                                            color.size() > 2 ? color[2] : 0.14f};
+                  py::gil_scoped_release release;
+                  return makeLeafClusterTexture(size, seed, c, shape, leafletsPerTwig, variants);
+              },
+              py::arg("size") = 256u, py::arg("seed") = 1337u,
+              py::arg("base_color") = std::vector<float>{0.26f, 0.45f, 0.14f},
+              py::arg("shape") = LeafShape::Ovate, py::arg("leaflets_per_twig") = 8,
+              py::arg("variants") = 2,
+              "RGBA leaf-sprig alpha-cutout DataTexture: a branchlet of small leaflets "
+              "with the given blade outline. `variants` is the atlas grid side and must "
+              "match TreeParams.leaf_atlas_cells. Use mat.alpha_test = 0.4.");
+
+        m.def("make_needle_frond_texture",
+              [](unsigned int size, unsigned int seed, const std::vector<float>& color,
+                 int variants) -> std::shared_ptr<Texture> {
+                  std::array<float, 3> c = {color.size() > 0 ? color[0] : 0.11f,
+                                            color.size() > 1 ? color[1] : 0.29f,
+                                            color.size() > 2 ? color[2] : 0.10f};
+                  py::gil_scoped_release release;
+                  return makeNeedleFrondTexture(size, seed, c, variants);
+              },
+              py::arg("size") = 256u, py::arg("seed") = 1337u,
+              py::arg("base_color") = std::vector<float>{0.11f, 0.29f, 0.10f},
+              py::arg("variants") = 2,
+              "RGBA conifer needle-frond alpha-cutout DataTexture. Pair with LeafStyle.Frond "
+              "+ BranchingMode.Whorl. `variants` is the atlas grid side and must match "
+              "TreeParams.leaf_atlas_cells. Use mat.alpha_test = 0.5.");
+
+        m.def("make_bark_textures",
+              [](unsigned int size, unsigned int seed, const std::vector<float>& color,
+                 BarkStyle style) -> py::tuple {
+                  std::array<float, 3> c = {color.size() > 0 ? color[0] : 0.34f,
+                                            color.size() > 1 ? color[1] : 0.24f,
+                                            color.size() > 2 ? color[2] : 0.16f};
+                  std::shared_ptr<DataTexture> alb, nrm;
+                  {
+                      py::gil_scoped_release release;
+                      std::tie(alb, nrm) = makeBarkTextures(size, seed, c, style);
+                  }// GIL reacquired before constructing Python objects
+                  std::shared_ptr<Texture> a = alb, n = nrm;
+                  return py::make_tuple(a, n);
+              },
+              py::arg("size") = 256u, py::arg("seed") = 1337u,
+              py::arg("base_color") = std::vector<float>{0.34f, 0.24f, 0.16f},
+              py::arg("style") = BarkStyle::Furrowed,
+              "Returns (albedo, normal) tiling bark Textures. `style` selects furrowed "
+              "(oak), plated (conifer) or papery-with-lenticels (birch).");
+
+        m.def("make_flower_texture",
+              [](unsigned int size, unsigned int seed) -> std::shared_ptr<Texture> {
+                  py::gil_scoped_release release;
+                  return makeFlowerTexture(size, seed);
+              },
+              py::arg("size") = 128u, py::arg("seed") = 1337u,
+              "RGBA wildflower alpha-cutout Texture. seed % 5 selects petal colour.");
+    }
+
+}// namespace threepp_py

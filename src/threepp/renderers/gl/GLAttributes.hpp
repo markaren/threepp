@@ -18,7 +18,7 @@ namespace threepp::gl {
 
         void updateBuffer(unsigned int buffer, BufferAttribute* attribute, unsigned int bufferType, int bytesPerElement);
 
-        Buffer get(BufferAttribute* attribute);
+        Buffer get(BufferAttribute* attribute) const;
 
         void remove(BufferAttribute* attribute);
 

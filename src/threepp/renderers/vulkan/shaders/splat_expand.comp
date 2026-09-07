@@ -1,0 +1,68 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+// Splat stage 3/6 — deterministic tile expansion.
+//
+// One thread per splat. Splat i owns the half-open index range
+// [offsets[i], offsets[i] + counts[i]) of the key list, which the prefix sum
+// already fixed, so the k-th tile it covers always lands at offsets[i] + k
+// regardless of scheduling. THAT is the determinism guarantee: there is no
+// atomic cursor anywhere in the expansion.
+//
+// The key is Open3D's (tileId << depthBits) | depthBucket. Ascending key
+// therefore groups by tile first and orders FRONT to back within a tile, which
+// is the order the raster loop early-outs on.
+//
+// The depth quantisation is the GL sort's tail-band scheme (splat_common.glsl's
+// splatDepthBucket, mirroring SplatCloud.cpp's three monotone segments). The
+// percentile interval comes from the CPU — a fixed-stride sample of the view
+// depths, the same estimator and the same p1/p99 the GL path uses — while the
+// exact min/max come from the projection pass's atomics. A single collapsed
+// tail is what repainted a scan's sky once already.
+
+layout(local_size_x = 256) in;
+
+#include "splat_common.glsl"
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= ubo.splatCount) return;
+
+    // One thread publishes the total the sort will run over. counts[] is still
+    // the raw per-splat count here (the scan wrote offsets[], not counts[]).
+    if (i == 0u) {
+        const uint last  = ubo.splatCount - 1u;
+        const uint total = offsets[last] + counts[last];
+        g.entryCount = min(total, ubo.budget);
+        if (total > ubo.budget) atomicAdd(g.overflow, total - ubo.budget);
+    }
+
+    const uint n = proj[i].tileCount;
+    if (n == 0u) return;
+
+    const float dMin = uintBitsToFloat(g.minDistBits);
+    const float dMax = uintBitsToFloat(g.maxDistBits);
+    // The CPU's percentiles are estimates from a sample; the GPU's bounds are
+    // exact. Clamp the former into the latter so the three segments stay
+    // ordered even when the sample missed the extremes.
+    const float pLo = clamp(ubo.percentile.x, dMin, dMax);
+    const float pHi = clamp(ubo.percentile.y, pLo, dMax);
+
+    const uint bucket = splatDepthBucket(proj[i].viewDist, dMin, dMax, pLo, pHi);
+
+    uint w = offsets[i];
+    for (uint ty = proj[i].tileY0; ty <= proj[i].tileY1; ++ty) {
+        for (uint tx = proj[i].tileX0; tx <= proj[i].tileX1; ++tx) {
+            // Truncation rather than corruption when the budget is short: the
+            // frame loses splats (and says so through g.overflow, which the
+            // host reports and then grows the budget for), it does not write
+            // past the allocation.
+            if (w >= ubo.budget) return;
+            const uint tileId = ty * ubo.tilesX + tx;
+            keysA[w] = (tileId << ubo.depthBits) | bucket;
+            valsA[w] = i;
+            ++w;
+        }
+    }
+}

@@ -1,0 +1,68 @@
+
+#ifndef THREEPP_INTERPOLANT_HPP
+#define THREEPP_INTERPOLANT_HPP
+
+#include <cmath>
+#include <optional>
+#include <utility>
+#include <vector>
+
+#include "threepp/constants.hpp"
+
+namespace threepp {
+
+    struct InterpolantSettings {
+        Ending endingStart{Ending::ZeroCurvature};
+        Ending endingEnd{Ending::ZeroCurvature};
+    };
+
+
+    typedef std::vector<float> Sample;
+
+    class Interpolant {
+
+    public:
+        // Optional per-instance override of the ending behaviour; null means
+        // "use DefaultSettings_". It had no initialiser and was never assigned by
+        // the constructor, so getSettings_() read an indeterminate pointer and
+        // then DEREFERENCED it — the boundary intervals of CubicInterpolant were
+        // reading whatever happened to be on the stack.
+        InterpolantSettings* settings = nullptr;
+
+        Interpolant(
+                Sample parameterPositions,
+                Sample sampleValues,
+                int sampleSize,
+                Sample* resultBuffer);
+
+        Sample evaluate(float t);
+
+        Sample copySampleValue_(size_t index) const;
+
+        virtual ~Interpolant() = default;
+
+    protected:
+        size_t _cachedIndex{0};
+        Sample parameterPositions;
+        Sample* resultBuffer;
+        Sample sampleValues;
+        int valueSize;
+
+        std::optional<InterpolantSettings> DefaultSettings_;
+
+        [[nodiscard]] std::optional<InterpolantSettings> getSettings_() const;
+
+        virtual Sample interpolate_(size_t i1, float t0, float t, float t1) = 0;
+
+        virtual void intervalChanged_([[maybe_unused]] size_t i1, [[maybe_unused]] float t0, [[maybe_unused]] float t1){};
+
+    private:
+        Sample _resultBuffer;
+
+        friend class AnimationAction;
+        friend class AnimationMixer;
+    };
+
+}// namespace threepp
+
+#endif//THREEPP_INTERPOLANT_HPP

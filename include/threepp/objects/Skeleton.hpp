@@ -26,6 +26,9 @@ namespace threepp {
 
         [[nodiscard]] std::string uuid() const;
 
+        // Only serialization round-trips (ObjectLoader) have a reason to call this.
+        void setUuid(const std::string& uuid);
+
         void init();
 
         void calculateInverses();

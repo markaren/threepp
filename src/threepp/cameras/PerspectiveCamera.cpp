@@ -14,6 +14,11 @@ PerspectiveCamera::PerspectiveCamera(float fov, float aspect, float near, float 
     PerspectiveCamera::updateProjectionMatrix();
 }
 
+std::string PerspectiveCamera::type() const {
+
+    return "PerspectiveCamera";
+}
+
 void PerspectiveCamera::setFocalLength(float focalLength) {
 
     /** see {@link http://www.bobatkins.com/photography/technical/field_of_view->html} */

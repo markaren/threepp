@@ -1,5 +1,7 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "renderer_factory.hpp"
+
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/threepp.hpp"
 
 #include <cmath>
@@ -45,8 +47,8 @@ namespace {
 int main() {
 
     Canvas canvas("Morphtargets");
-    GLRenderer renderer(canvas.size());
-    renderer.checkShaderErrors = true;
+    auto renderer = createRenderer(canvas);
+    renderer->checkShaderErrors = true;
 
     auto scene = Scene::create();
     scene->background = Color(0x8FBCD4);
@@ -58,7 +60,7 @@ int main() {
 
     scene->add(AmbientLight::create(0x8FBCD4, 0.4f));
 
-    auto pointLight = PointLight::create(0xffffff, 1.f);
+    auto pointLight = PointLight::create(0xffffff, 1.f, 0, 0);
     camera->add(pointLight);
 
     auto geometry = createGeometry();
@@ -84,26 +86,15 @@ int main() {
 
     OrbitControls controls{*camera, canvas};
 
-    auto ui = ImguiFunctionalContext(canvas.windowPtr(), [&] {
-        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
-
-        ImGui::Begin("Morphing");
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         ImGui::SliderFloat("sphere", &mesh->morphTargetInfluences().at(0), 0, 1);
         ImGui::SliderFloat("twist", &mesh->morphTargetInfluences().at(1), 0, 1);
-        ImGui::End();
-    });
-
-    IOCapture capture{};
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
+    }, "Morphing");
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
@@ -141,7 +132,7 @@ int main() {
             sphere->visible = true;
         }
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
 
         ui.render();
     });

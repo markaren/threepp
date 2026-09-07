@@ -1,0 +1,265 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+#include "vulkan_shared.h"// ShadePush
+
+// Far-field volumetric cloud march — HALF-RESOLUTION, temporally reprojected.
+//
+// One thread per HALF-res pixel raymarches the [clouds.bottomY, clouds.topY]
+// shell (Nubis/HZD-lite: dual-lobe HG phase, Beer light-march toward the sun,
+// powder term, env ambient graded by height) and writes vec4(in-scatter.rgb,
+// transmittance) at half res. The full-res deferred_shade then composites the
+// result with ONE bilinear upsample tap — this moves the ~48-step march (plus
+// its 5-tap sun light-march) off the per-pixel critical path, the ~4× win that
+// brings the cloud cost inside budget.
+//
+// TEMPORAL: the march also outputs a mean cloud depth; the world point at that
+// depth is reprojected into the PREVIOUS frame with rcam.prevVP and the prior
+// result is EMA-blended in, motion-shortening the history exactly like
+// froxel_inject (a jittered march + short history converges without ghosting;
+// under drone motion it accepts a little more noise over smear). History is a
+// per-FIF ping-pong (this frame writes slot f, reads the other slot).
+//
+// Shares the DeferredShade descriptor set (bindings 0/1/2/4/5/35/57/58) + push
+// block; new cloud bindings at 59-63.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform CameraUbo {
+    mat4 viewInverse;
+    mat4 projInverse;
+    vec4 jitter;
+    vec4 camAux;// .x = parallel projection, .yzw = camera world forward
+} cam;
+#include "camera_ray.glsl"// camRayOrigin / camRayDir — perspective AND ortho
+
+struct DirLight   { vec3 direction; vec3 color; };
+struct PointLight { vec3 position; float range; vec3 color; float decay; float radius; };
+struct SpotLight  { vec3 position; float range; vec3 color; float decay;
+                    vec3 direction; float cosAngleOuter; float cosAngleInner; float radius; };
+struct RectLight  { vec3 position; vec3 halfU; vec3 halfV; vec3 normal; vec3 color; };
+layout(set = 0, binding = 1, scalar) uniform LightsUbo {
+    vec3       ambient;
+    uint       dirCount;
+    DirLight   dirLights[8];
+    uint       pointCount;
+    uint       spotCount;
+    uint       rectCount;
+    PointLight pointLights[8];
+    SpotLight  spotLights[8];
+    RectLight  rectLights[4];
+} lights;
+
+layout(set = 0, binding = 2) uniform sampler2D  envTex;      // prefiltered PMREM
+layout(set = 0, binding = 4) uniform sampler2D  gbufDepthTex;// .x = Vulkan NDC z
+layout(set = 0, binding = 5) uniform usampler2D gbufIdsTex;  // .x = instanceId+1 (0 = sky)
+layout(set = 0, binding = 35) uniform sampler2D blueNoiseTex;
+
+layout(set = 0, binding = 57) uniform RasterCamUbo {
+    mat4 currVPjittered;
+    mat4 currVPunjittered;
+    mat4 prevVP;
+    vec4 jitter;
+    vec4 prevJitter;
+} rcam;
+
+layout(set = 0, binding = 58, scalar) uniform CloudUbo {
+    float enabled;
+    float coverage;
+    float density;
+    float bottomY;
+    float topY;
+    float evolveSpeed;
+    float timeSec;
+    float heteroActive;
+    vec3  wind;
+    float hfDensity;
+    float hfBaseY;
+    float hfFalloff;
+    float hfNoiseAmount;
+    float shadowActive;
+    float epoch;             // history generation — bumped on enable/reconfigure
+} clouds;
+
+// Cloud march outputs (half-res) + temporal history (other FIF).
+layout(set = 0, binding = 59, rgba16f) uniform writeonly image2D cloudColorImage;// rgb=in-scatter, a=transmittance
+layout(set = 0, binding = 60) uniform sampler2D cloudColorPrevTex;                // prev-frame color (reproject)
+layout(set = 0, binding = 62, rgba16f) uniform writeonly image2D cloudAuxImage;   // r=mean depth, g=histLen, b=scene dist, a=epoch
+layout(set = 0, binding = 63) uniform sampler2D cloudAuxPrevTex;                   // prev-frame aux
+
+// Shared ShadePush block (vulkan_shared.h) — this pass reads only the
+// fields it names; the host zero-fills the rest.
+layout(push_constant) uniform Pc { ShadePush pc; };
+
+const float PI = 3.14159265358979;
+
+#include "cloud_density.glsl"
+
+vec3 sampleEnvLod(vec3 dir, float lod) {
+    const float u = 0.5 + atan(dir.z, dir.x) / (2.0 * PI);
+    const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
+    return textureLod(envTex, vec2(u, v), lod).rgb;
+}
+float hgPhase(float mu, float g) {
+    const float g2 = g * g;
+    return (1.0 - g2) / (4.0 * PI * pow(max(1.0 + g2 - 2.0 * g * mu, 1e-4), 1.5));
+}
+
+// The far-field cloud march. ro/rd = world ray; tSceneMax caps to the nearest
+// opaque surface (depth-aware clipping — a drone above the deck sees clouds
+// BETWEEN it and the ground). Returns vec4(scat, T); outMeanDepth = extinction-
+// weighted mean march distance (for temporal reprojection + aerial keying).
+// outMeanDepth = -1 when the ray never enters the shell (grazing / geometry
+// fully in front): the caller must SKIP temporal reprojection then — a zero
+// depth would reproject the CAMERA POSITION through prevVP and inherit
+// whatever stale history lives at that garbage UV (the chase-cam ghost trails).
+vec4 cloudMarch(vec3 ro, vec3 rd, float maxLod, ivec2 px, float tSceneMax, out float outMeanDepth) {
+    outMeanDepth = -1.0;
+    if (abs(rd.y) < 1e-4) return vec4(0.0, 0.0, 0.0, 1.0);// grazing: no robust slab
+    const float tA = (clouds.bottomY - ro.y) / rd.y;
+    const float tB = (clouds.topY - ro.y) / rd.y;
+    float t0 = max(min(tA, tB), 0.0);
+    float t1 = max(tA, tB);
+    t1 = min(t1, min(tSceneMax, 42000.0));// far cap + scene-depth clip
+    if (t1 <= t0) return vec4(0.0, 0.0, 0.0, 1.0);
+
+    const int   STEPS = 48;
+    const float dt    = (t1 - t0) / float(STEPS);
+    const float jit   = fract(texelFetch(blueNoiseTex, px & 63, 0).r + float(pc.frame) * 0.6180339887);
+
+    vec3 sunDir = (lights.dirCount > 0u) ? normalize(lights.dirLights[0].direction)
+                                         : normalize(vec3(0.3, 0.85, 0.2));
+    vec3 sunCol = (lights.dirCount > 0u) ? lights.dirLights[0].color : vec3(1.6);
+    const vec3  ambTop = sampleEnvLod(vec3(0.0, 1.0, 0.0), max(maxLod - 1.0, 0.0));
+    const vec3  ambBot = sampleEnvLod(vec3(0.0, -0.3, 0.0), maxLod) * 0.6 + lights.ambient;
+    const float mu    = dot(rd, sunDir);
+    const float phase = mix(hgPhase(mu, 0.80), hgPhase(mu, -0.15), 0.5) * 4.0 * PI;
+
+    vec3  scat = vec3(0.0);
+    float T    = 1.0;
+    float depthSum = 0.0, wSum = 0.0;
+    const float time      = clouds.timeSec;
+    const float sigmaMul  = 0.05;
+    const float lightStep = 90.0;
+
+    for (int i = 0; i < STEPS; ++i) {
+        const float t = t0 + (float(i) + jit) * dt;
+        const vec3  p = ro + rd * t;
+        const float dens = cloudDensity(p, time);
+        if (dens > 0.001) {
+            const float sigma = dens * sigmaMul;
+            float sunDepth = 0.0;
+            for (int j = 0; j < 5; ++j) {
+                const vec3 lp = p + sunDir * (float(j) + 0.5) * lightStep;
+                sunDepth += cloudDensity(lp, time);
+            }
+            const float sunT   = exp(-sunDepth * sigmaMul * lightStep);
+            const float powder = 1.0 - exp(-dens * 3.2);
+            const vec3  sunLit = sunCol * (sunT * phase * mix(1.0, powder, 0.6));
+            const vec3  amb    = mix(ambBot, ambTop, clamp((p.y - clouds.bottomY) /
+                                     max(clouds.topY - clouds.bottomY, 1.0), 0.0, 1.0));
+            const vec3  src    = sunLit + amb;
+            const float stepT  = exp(-sigma * dt);
+            const float w      = T * (1.0 - stepT);
+            scat += src * w;
+            depthSum += t * w;
+            wSum     += w;
+            T    *= stepT;
+            if (T < 0.02) break;
+        }
+    }
+    // Empty shell: reproject at MID-shell — a stable far point. NEVER t0 (t0
+    // can be ~0 with the camera under the deck → camera-position reprojection).
+    outMeanDepth = (wSum > 1e-5) ? depthSum / wSum : 0.5 * (t0 + t1);
+    // Aerial perspective: distant clouds sink into the sky haze, keyed on the
+    // march-entry distance (~45 km scale).
+    const float aerial = 1.0 - exp(-t0 * 2.2e-5);
+    if (aerial > 0.001) {
+        const vec3 haze = sampleEnvLod(rd, maxLod) + lights.ambient;
+        scat = mix(scat, haze * (1.0 - T), aerial);
+        T    = mix(T, 1.0, aerial * 0.6);
+    }
+    return vec4(scat, T);
+}
+
+void main() {
+    const uint hw = (pc.width  + 1u) / 2u;
+    const uint hh = (pc.height + 1u) / 2u;
+    const ivec2 hp = ivec2(gl_GlobalInvocationID.xy);
+    if (uint(hp.x) >= hw || uint(hp.y) >= hh) return;
+
+    if (clouds.enabled < 0.5) {// off: publish the identity composite (col*1 + 0)
+        imageStore(cloudColorImage, hp, vec4(0.0, 0.0, 0.0, 1.0));
+        imageStore(cloudAuxImage,   hp, vec4(0.0));
+        return;
+    }
+
+    // Full-res UV at this half-res pixel centre → primary ray. cam.jitter.xy
+    // restores the G-buffer's Halton raster jitter (same convention as the
+    // main shade): the depth reconstruction below and the cloud ray must sit
+    // on the SAME raster ray, or tSceneMax clips against a mismatched surface
+    // at grazing geometry. (The march itself is blue-noise jittered along t.)
+    const vec2 uv  = (vec2(hp) + 0.5) / vec2(float(hw), float(hh));
+    const vec2 ndc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + cam.jitter.xy;
+    const vec3 rd     = camRayDir(ndc);
+    const vec3 camPos = camRayOrigin(ndc);
+    const float maxLod = float(max(pc.envMipCount, 1u) - 1u);
+
+    // Depth-aware clip: sky (id 0) → unbounded; else the surface ray-distance.
+    const uint id = textureLod(gbufIdsTex, uv, 0.0).x;
+    float tSceneMax = 1e30;
+    if (id != 0u) {
+        const float depth = textureLod(gbufDepthTex, uv, 0.0).x;
+        const vec4  viewH = cam.projInverse * vec4(ndc, depth, 1.0);
+        const vec3  wp    = (cam.viewInverse * vec4(viewH.xyz / viewH.w, 1.0)).xyz;
+        tSceneMax = length(wp - camPos);
+    }
+
+    float meanDepth;
+    vec4  cur = cloudMarch(camPos, rd, maxLod, hp, tSceneMax, meanDepth);
+
+    // ── Temporal reprojection + EMA ──────────────────────────────────────────
+    // Reproject the (extinction-weighted) cloud point into the previous frame's
+    // UNJITTERED screen with rcam.prevVP; blend the prior result in. Validity:
+    // a real shell hit this frame (meanDepth ≥ 0 — no-shell pixels must NOT
+    // accumulate: their identity output is exact every frame), in front of the
+    // prev camera, on-screen, same history EPOCH (rejects undefined first-enable
+    // contents and pre-reconfigure patterns), and a sane prev history value.
+    vec3  outScat = cur.rgb;
+    float outT    = cur.a;
+    float hist    = 1.0;
+    if (meanDepth >= 0.0) {
+        const vec3 wpMean = camPos + rd * meanDepth;
+        const vec4 pClip  = rcam.prevVP * vec4(wpMean, 1.0);
+        if (pClip.w > 1e-4) {
+            const vec2 pNdc = pClip.xy / pClip.w;
+            const vec2 pUv  = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
+            if (all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)))) {
+                const vec4 prevC = texture(cloudColorPrevTex, pUv);
+                const vec4 prevA = texture(cloudAuxPrevTex, pUv);// r=depth, g=histLen, b=sceneDist, a=epoch
+                const bool valid = prevA.g > 0.5 && prevA.g < 4096.0
+                                 && abs(prevA.a - clouds.epoch) < 0.5
+                                 && all(lessThan(abs(prevC.rgb), vec3(1e6)))
+                                 && prevC.a >= -0.01 && prevC.a <= 1.01;
+                if (valid) {
+                    // Motion-shortened cap (froxel_inject rule): a static view
+                    // converges long; drone motion drops it toward a few frames.
+                    const float motion = pc.camRot * 3.0 + pc.camDelta * 0.5;
+                    const float cap    = mix(24.0, 3.0, smoothstep(0.001, 0.02, motion));
+                    hist = min(prevA.g + 1.0, cap);
+                    const float k = 1.0 / hist;
+                    outScat = mix(prevC.rgb, cur.rgb, k);
+                    outT    = mix(prevC.a,   cur.a,   k);
+                }
+            }
+        }
+    }
+
+    imageStore(cloudColorImage, hp, vec4(outScat, outT));
+    // .b = the scene distance this march clipped against (fp16-clamped) — the
+    // shade's depth-aware upsample rejects taps whose cloud lies BEHIND its
+    // own pixel's surface. .a = epoch (history generation gate above).
+    imageStore(cloudAuxImage,   hp, vec4(max(meanDepth, 0.0), hist,
+                                         min(tSceneMax, 60000.0), clouds.epoch));
+}

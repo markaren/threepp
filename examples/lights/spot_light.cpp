@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/helpers/SpotLightHelper.hpp"
 #include "threepp/threepp.hpp"
@@ -26,7 +28,7 @@ namespace {
 
     auto createPlane() {
         const auto planeGeometry = PlaneGeometry::create(150, 150);
-        const auto planeMaterial = MeshPhongMaterial::create({{"color", Color::gray}, {"side", Side::Double}});
+        const auto planeMaterial = MeshPhongMaterial::create(MeshPhongMaterial::Params{}.color(Color::gray).side(Side::Double));
         auto plane = Mesh::create(planeGeometry, planeMaterial);
         plane->position.setY(-1);
         plane->rotateX(math::degToRad(-90));
@@ -40,8 +42,8 @@ namespace {
 int main() {
 
     Canvas canvas("SpotLight", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
@@ -51,12 +53,13 @@ int main() {
 
     auto light = SpotLight::create(Color::peachpuff);
     light->distance = 30;
+    light->intensity = 2.f;
     light->angle = math::degToRad(20);
     light->position.set(10, 10, 0);
     light->castShadow = true;
     scene->add(light);
 
-    scene->add(AmbientLight::create(0xffffff, 0.1f));
+    scene->add(AmbientLight::create(0xffffff, 0.01f));
 
     auto helper = SpotLightHelper::create(*light);
     scene->add(helper);
@@ -74,13 +77,13 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
-    canvas.animate([&]() {
-        float dt = clock.getDelta();
-        float t = clock.elapsedTime;
+    canvas.animate([&] {
+        const auto dt = clock.getDelta();
+        const auto t = clock.elapsedTime;
 
         knot->rotation.y += 0.5f * dt;
 
@@ -89,6 +92,6 @@ int main() {
 
         helper->update();
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 }

@@ -2,6 +2,7 @@
 
 #ifndef THREEPP_CAMERA_HPP
 #define THREEPP_CAMERA_HPP
+
 #include "threepp/core/Object3D.hpp"
 #include "threepp/math/Matrix4.hpp"
 
@@ -46,9 +47,9 @@ namespace threepp {
 
         void updateMatrixWorld(bool force = false) override;
 
-        void updateWorldMatrix(std::optional<bool> updateParents, std::optional<bool> updateChildren) override;
+        void updateWorldMatrix(bool updateParents, bool updateChildren) override;
 
-        virtual void updateProjectionMatrix() {};
+        virtual void updateProjectionMatrix() {}
     };
 
 }// namespace threepp

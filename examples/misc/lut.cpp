@@ -1,21 +1,25 @@
+#include "renderer_factory.hpp"
+
 #include "threepp/math/Lut.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/threepp.hpp"
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <ranges>
 
 using namespace threepp;
 
 namespace {
 
-    const float maxHeight = 2;
-    const float gridSize = 4;
+    constexpr float maxHeight = 2;
+    constexpr float gridSize = 4;
 
     void normalizeAndApplyLut(BufferGeometry& geometry) {
 
-        auto pos = geometry.getAttribute<float>("position");
+        const auto pos = geometry.getAttribute<float>("position");
 
         std::vector<float> yValues;
         yValues.reserve(pos->count());
@@ -29,12 +33,12 @@ namespace {
         }
 
         Lut::addColorMap("rainbow", {{0.f, 0x0000ff}, {0.001f, 0x00ffff}, {0.02f, 0xffff00}, {0.2f, 0xff0000}, {1.f, Color::darkred}});
-        Lut lut("rainbow", 256 * 256);
+        const Lut lut("rainbow", 256 * 256);
         auto colors = std::vector<float>(pos->count() * 3);
 
         for (auto i = 0, j = 0; i < pos->count(); i++, j += 3) {
 
-            float y = pos->getY(i);
+            const float y = pos->getY(i);
 
             Color c = lut.getColor(math::mapLinear(y, 0, maxHeight, 0, 1));
             c.toArray(colors, j);
@@ -52,7 +56,7 @@ namespace {
         x = math::mapLinear(x, -gridSize / 2, gridSize / 2, -2, 2);
         z = math::mapLinear(z, -gridSize / 2, gridSize / 2, -1, 3);
 
-        float a = 1, b = 100;
+        constexpr float a = 1, b = 100;
         return ((a - x) * (a - x)) + b * ((z - (x * x)) * (z - (x * x)));
     }
 
@@ -131,11 +135,11 @@ namespace {
 
     void applyFunc(BufferGeometry& geometry, const std::function<float(float, float)>& func) {
 
-        auto pos = geometry.getAttribute<float>("position");
+        const auto pos = geometry.getAttribute<float>("position");
 
         for (auto i = 0; i < pos->count(); i++) {
-            auto x = pos->getX(i);
-            auto z = pos->getZ(i);
+            const auto x = pos->getX(i);
+            const auto z = pos->getZ(i);
             pos->setY(i, func(x, z));
         }
 
@@ -147,7 +151,7 @@ namespace {
 int main() {
 
     Canvas canvas("Lut", {{"aa", 6}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     Scene scene;
     scene.background = Color::aliceblue;
@@ -162,8 +166,8 @@ int main() {
     planeGeometry->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
     planeGeometry2->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
 
-    auto plane = Mesh::create(planeGeometry, MeshBasicMaterial::create({{"vertexColors", true}}));
-    auto wireframe = Mesh::create(planeGeometry2, MeshBasicMaterial::create({{"wireframe", true}}));
+    auto plane = Mesh::create(planeGeometry, MeshBasicMaterial::create(MeshBasicMaterial::Params{}.vertexColors(true)));
+    auto wireframe = Mesh::create(planeGeometry2, MeshBasicMaterial::create(MeshBasicMaterial::Params{}.wireframe(true)));
     wireframe->material()->depthTest = false;
     wireframe->material()->opacity = 0.25;
     wireframe->material()->transparent = true;
@@ -195,13 +199,9 @@ int main() {
 
     changeFunction(functions.begin()->first);
 
-    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
-        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
-
-        ImGui::Begin("Lut");
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         if (ImGui::BeginCombo("Functions", selectedFunction.c_str())) {
-            for (const auto& [name, functor] : functions) {
+            for (const auto& name : functions | std::views::keys) {
                 if (ImGui::Selectable(name.c_str())) {
 
                     changeFunction(name);
@@ -209,19 +209,9 @@ int main() {
             }
             ImGui::EndCombo();
         }
-        ImGui::End();
-    });
+    }, "Lut");
 
-    IOCapture capture{};
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    capture.preventScrollEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
-
-    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt) {
+    canvas.onKeyPressed([&](KeyEvent evt) {
         std::optional<size_t> key;
         if (evt.key == Key::NUM_1) {
             key = 0;
@@ -254,17 +244,16 @@ int main() {
             changeFunction(it->first);
         }
     });
-    canvas.addKeyListener(keyAdapter);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
 
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     canvas.animate([&] {
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
         ui.render();
     });
 }

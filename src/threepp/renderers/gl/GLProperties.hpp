@@ -3,14 +3,16 @@
 #ifndef THREEPP_GLPROPERTIES_HPP
 #define THREEPP_GLPROPERTIES_HPP
 
+#include "threepp/constants.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 #include "GLUniforms.hpp"
 #include "threepp/core/Uniform.hpp"
 #include "threepp/materials/Material.hpp"
-#include "threepp/renderers/GLRenderTarget.hpp"
+#include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/textures/Texture.hpp"
 
+#include <array>
 #include <optional>
 #include <unordered_map>
 
@@ -30,7 +32,16 @@ namespace threepp::gl {
     struct RenderTargetProperties {
 
         std::optional<unsigned int> glFramebuffer;
+        std::optional<std::array<unsigned int, 6>> glCubeFramebuffers;
         std::optional<unsigned int> glDepthbuffer;
+
+        // Multisampled targets (RenderTarget::samples > 0) own a second
+        // framebuffer whose attachments are multisampled renderbuffers. Draws
+        // go there; glFramebuffer (the one holding the texture) only ever
+        // receives the resolve blit.
+        std::optional<unsigned int> glMultisampledFramebuffer;
+        std::optional<unsigned int> glColorRenderbuffer;
+        std::optional<unsigned int> glDepthRenderbuffer;
     };
 
     struct MaterialProperties {
@@ -48,13 +59,21 @@ namespace threepp::gl {
         Texture* envMap;
         Texture* environment;
 
-        std::optional<Encoding> outputEncoding;
+        std::optional<ColorSpace> outputEncoding;
         bool instancing{};
         bool skinning{};
         bool vertexAlphas{};
 
         bool needsLights{};
         bool receiveShadow{};
+
+        // The shadow configuration the current program was compiled against.
+        // USE_SHADOWMAP and SHADOWMAP_TYPE_* are baked into the shader, so a
+        // runtime change to Renderer::shadowMap() has to invalidate the program —
+        // otherwise the shadow pass stops running while the material keeps
+        // sampling the (now frozen) shadow map.
+        bool shadowMapEnabled{};
+        ShadowMap shadowMapType{};
 
         unsigned int lightsStateVersion{};
 
@@ -92,7 +111,7 @@ namespace threepp::gl {
     public:
         GLTypeProperties<Texture, TextureProperties> textureProperties;
         GLTypeProperties<Material, MaterialProperties> materialProperties;
-        GLTypeProperties<GLRenderTarget, RenderTargetProperties> renderTargetProperties;
+        GLTypeProperties<RenderTarget, RenderTargetProperties> renderTargetProperties;
 
         void dispose() {
 

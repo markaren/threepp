@@ -43,9 +43,9 @@ DirectionalLightHelper::DirectionalLightHelper(DirectionalLight& light, float si
 
 void DirectionalLightHelper::update() {
 
-    static Vector3 _v1;
-    static Vector3 _v2;
-    static Vector3 _v3;
+    static thread_local Vector3 _v1;
+    static thread_local Vector3 _v2;
+    static thread_local Vector3 _v3;
 
     _v1.setFromMatrixPosition(*this->light.matrixWorld);
     _v2.setFromMatrixPosition(*this->light.target().matrixWorld);
@@ -55,13 +55,13 @@ void DirectionalLightHelper::update() {
 
     if (this->color) {
 
-        this->lightPlane->material()->as<MaterialWithColor>()->color.copy(*this->color);
-        this->targetLine->material()->as<MaterialWithColor>()->color.copy(*this->color);
+        this->lightPlane->materialAs<MaterialWithColor>()->color.copy(*this->color);
+        this->targetLine->materialAs<MaterialWithColor>()->color.copy(*this->color);
 
     } else {
 
-        this->lightPlane->material()->as<MaterialWithColor>()->color.copy(this->light.color);
-        this->targetLine->material()->as<MaterialWithColor>()->color.copy(this->light.color);
+        this->lightPlane->materialAs<MaterialWithColor>()->color.copy(this->light.color);
+        this->targetLine->materialAs<MaterialWithColor>()->color.copy(this->light.color);
     }
 
     this->targetLine->lookAt(_v2);

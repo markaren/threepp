@@ -3,6 +3,7 @@
 #ifndef THREEPP_OBJECT3D_HPP
 #define THREEPP_OBJECT3D_HPP
 
+
 #include "threepp/math/Euler.hpp"
 #include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Matrix4.hpp"
@@ -15,6 +16,8 @@
 #include "misc.hpp"
 
 #include <any>
+#include <array>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -26,22 +29,39 @@ namespace threepp {
     struct Intersection;
     class Object3D;
     class BufferGeometry;
+    class AnimationClip;
 
     typedef std::function<void(void*, Object3D*, Camera*, BufferGeometry*, Material*, std::optional<GeometryGroup>)> RenderCallback;
 
     // This is the base class for most objects in three.js and provides a set of properties and methods for manipulating objects in 3D space.
     //Note that this can be used for grouping objects via the .add( object ) method which adds the object as a child, however it is better to use Group for this.
-    class Object3D: public EventDispatcher {
+    //
+    // enable_shared_from_this is for the Python bindings: pybind11 uses it to
+    // adopt the existing control block whenever a raw Object3D* crosses into
+    // Python (children/parent/traverse/...), so the wrapper shares ownership.
+    // Without it those wrappers are non-owning, and one that outlives its
+    // object segfaults on destruction: Mesh/Points/Line inherit Object3D
+    // virtually, so pybind11's instance deregistration must read the (dead)
+    // object's vtable to locate the base. Objects on the stack are fine as
+    // long as shared_from_this() is never called on them.
+    class Object3D: public EventDispatcher, public std::enable_shared_from_this<Object3D> {
 
     public:
         inline static Vector3 defaultUp{0, 1, 0};
         inline static bool defaultMatrixAutoUpdate{true};
 
         // Unique number for this object instance.
-        unsigned int id{_object3Did++};
+        // Atomic: loaders run on a worker thread (loadAsync detaches one), so
+        // objects are constructed concurrently with the main thread's. A torn
+        // read-modify-write here hands two objects the SAME id, and ids are used
+        // as identity downstream — GLRenderer skips re-uploading a material's
+        // uniforms when the id matches the last bound one, so a collision renders
+        // one material with another's parameters.
+        unsigned int id{_object3Did.fetch_add(1, std::memory_order_relaxed)};
 
-        // UUID of this object instance. This gets automatically assigned, so this shouldn't be edited.
-        const std::string uuid;
+        // UUID of this object instance. Automatically assigned; only serialization
+        // round-trips (ObjectLoader) have a reason to overwrite it.
+        std::string uuid;
 
         // Optional name of the object (doesn't need to be unique). Default is an empty string.
         std::string name;
@@ -72,9 +92,19 @@ namespace threepp {
         Matrix3 normalMatrix;
 
         // The local transform matrix.
-        std::shared_ptr<Matrix4> matrix;
+        //
+        // The Matrix4 lives by VALUE inside this object (matrixLocal_ below);
+        // this handle is a non-owning alias to it — no heap allocation, no
+        // refcount. The shared_ptr type is kept so the three.js-style aliasing
+        // stays source-compatible: helpers re-point it at another object's
+        // matrixWorld (`helper.matrix = light.matrixWorld`). An alias does NOT
+        // keep its target alive — the target must outlive the aliasing object
+        // (every in-tree helper already holds its target by reference/pointer
+        // and assumed exactly that).
+        std::shared_ptr<Matrix4> matrix{std::shared_ptr<Matrix4>{}, &matrixLocal_};
         // The global transform of the object. If the Object3D has no parent, then it's identical to the local transform .matrix.
-        std::shared_ptr<Matrix4> matrixWorld;
+        // Stored by value like `matrix` (see matrixWorldLocal_); same aliasing caveat.
+        std::shared_ptr<Matrix4> matrixWorld{std::shared_ptr<Matrix4>{}, &matrixWorldLocal_};
 
         // When this is set, it calculates the matrix of position, (rotation or quaternion) and scale every frame and also recalculates the matrixWorld property.
         // Default is Object3D::defaultMatrixAutoUpdate (true).
@@ -96,11 +126,22 @@ namespace threepp {
         // When this is set, it checks every frame if the object is in the frustum of the camera before rendering the object.
         // If set to false the object gets rendered every frame even if it is not in the frustum of the camera. Default is true.
         bool frustumCulled = true;
+        // Opt-out for the renderer's automatic mesh LOD (Vulkan setAutoLod).
+        // Set false on meshes that manage their own level of detail (e.g.
+        // TileTerrain quadtree tiles) — stacking automatic simplification on
+        // top of system-managed LOD flattens shading against neighbours at
+        // other levels for little performance return. Default is true
+        // (checked on the mesh itself, not inherited).
+        bool autoLod = true;
         // This value allows the default rendering order of scene graph objects to be overridden although opaque and transparent objects remain sorted independently.
         // When this property is set for an instance of Group, all descendants objects will be sorted and rendered together. Sorting is from lowest to highest renderOrder. Default value is 0.
-        unsigned int renderOrder = 0;
+        // Signed, as in three.js: a negative value pushes an object behind the
+        // default-ordered ones (the usual way to pin a skybox or backdrop).
+        int renderOrder = 0;
 
         std::unordered_map<std::string, std::any> userData;
+
+        std::vector<std::shared_ptr<AnimationClip>> animations;
 
         std::optional<RenderCallback> onBeforeRender;
         std::optional<RenderCallback> onAfterRender;
@@ -165,31 +206,43 @@ namespace threepp {
         // Adds object as child of this object. An arbitrary number of objects may be added.
         // Any current parent on an object passed in here will be removed, since an object can have at most one parent.
         // This version of add does NOT take ownership of the passed in object
-        virtual void add(Object3D& object);
+        virtual void addRef(Object3D& object);
 
         // Removes object as child of this object.
         virtual void remove(Object3D& object);
 
         // Removes this object from its current parent.
-        void removeFromParent();
+        //
+        // Returns the owning reference if the parent held one, so a caller can
+        // keep the object alive across the call:
+        //     auto kept = obj->removeFromParent();   // obj stays valid
+        // Discarding the result on an object the parent owned destroys it — the
+        // return value is the only thing keeping it alive. Returns nullptr when
+        // the object was attached with addRef() (parent never owned it) or had
+        // no parent.
+        std::shared_ptr<Object3D> removeFromParent();
 
         // Removes all child objects.
         void clear();
 
         // Searches through an object and its children, starting with the object itself, and returns the first with a matching name.
         // Note that for most objects the name is an empty string by default. You will have to set it manually to make use of this method.
+        //
+        // When T is given, the search is for the first node matching BOTH the name
+        // and the type. It used to resolve the first node matching the name only
+        // and then cast it, so getObjectByName<Mesh>("wheel") returned nullptr
+        // whenever any non-Mesh node named "wheel" (a Group, a Bone) came first in
+        // traversal order — a silent miss on a name that really was present.
         template<class T = Object3D>
         T* getObjectByName(const std::string& name) {
-            if (this->name == name) return dynamic_cast<T*>(this);
+
+            if (this->name == name) {
+                if (auto* self = dynamic_cast<T*>(this)) return self;
+            }
 
             for (const auto& child : this->children) {
 
-                auto object = child->getObjectByName(name);
-
-                if (object) {
-
-                    return dynamic_cast<T*>(object);
-                }
+                if (auto* found = child->getObjectByName<T>(name)) return found;
             }
 
             return nullptr;
@@ -227,9 +280,23 @@ namespace threepp {
         // Updates the local transform.
         void updateMatrix();
 
+        /**
+         * @brief Updates the transformation matrix in world space of this 3D object and its descendants.
+         *
+         * Also recomputes the local transformation matrix. The computation can be controlled with
+         * the matrixAutoUpdate and matrixWorldAutoUpdate flags.
+         *
+         * @param force When true, recomputation is forced even when matrixWorldNeedsUpdate is false. Default is false.
+         */
         virtual void updateMatrixWorld(bool force = false);
 
-        virtual void updateWorldMatrix(std::optional<bool> updateParents = std::nullopt, std::optional<bool> updateChildren = std::nullopt);
+        /**
+         * @brief An alternative to updateMatrixWorld with more control over ancestor and descendant updates.
+         *
+         * @param updateParents Whether ancestor nodes should be updated. Default is false.
+         * @param updateChildren Whether descendant nodes should be updated. Default is false.
+         */
+        virtual void updateWorldMatrix(bool updateParents = false, bool updateChildren = false);
 
         static std::shared_ptr<Object3D> create() {
 
@@ -267,6 +334,23 @@ namespace threepp {
             return dynamic_cast<const T*>(this) != nullptr;
         }
 
+        /**
+         * @brief Convenience for the common material()->as<T>() downcast.
+         *
+         * Returns this object's material viewed as T*, or nullptr if there is no material or it
+         * is not a T. T may be a concrete material (e.g. MeshStandardMaterial) or a capability
+         * mixin (e.g. MaterialWithColor). Null-safe (never dereferences a missing material) and
+         * returns nullptr rather than throwing on a type mismatch, so it doubles as a test:
+         *   if (auto* m = mesh->materialAs<MeshStandardMaterial>()) m->roughness = 0.4f;
+         */
+        template<class T>
+            requires std::is_base_of<Material, T>::value
+        [[nodiscard]] T* materialAs() const {
+
+            const auto m = material();
+            return m ? dynamic_cast<T*>(m.get()) : nullptr;
+        }
+
         virtual void copy(const Object3D& source, bool recursive = true);
 
         template<class T = Object3D>
@@ -287,9 +371,45 @@ namespace threepp {
         }
 
     private:
-        inline static unsigned int _object3Did{0};
+        inline static std::atomic<unsigned int> _object3Did{0};
+
+        // Unlink `object` from this node: drop it from `children`, clear its
+        // parent, fire "remove", and hand back the owning reference if this node
+        // held one. The caller decides whether that reference dies (destroying
+        // the object) or is kept. Shared by remove() and removeFromParent() so
+        // detach order is defined in exactly one place.
+        std::shared_ptr<Object3D> detachChild(Object3D& object);
 
         std::vector<std::shared_ptr<Object3D>> children_;
+
+        // updateMatrix() change-detection cache: the position/quaternion/scale
+        // values at the last compose, plus the matrix bytes that compose
+        // produced (so a direct user write to `matrix` is still clobbered on
+        // the next updateMatrix(), exactly like three.js). When neither moved,
+        // updateMatrix() is a 26-float compare instead of a compose — and by
+        // not raising matrixWorldNeedsUpdate it lets updateMatrixWorld() skip
+        // the world multiply for the whole unchanged subtree. Pure polling;
+        // no user-side notification ever required.
+        // When matrixAutoUpdate is false, updateMatrixWorld() reuses
+        // composedMatrix_ as a snapshot of the externally-driven `matrix`
+        // (helpers alias another object's matrixWorld) so external writes
+        // still raise matrixWorldNeedsUpdate; composedPqs_ is NaN-poisoned in
+        // that mode so re-enabling matrixAutoUpdate always recomposes.
+        std::array<float, 10> composedPqs_{};
+        std::array<float, 16> composedMatrix_{};
+        bool composedValid_ = false;
+
+        // Value storage for the public `matrix`/`matrixWorld` handles above.
+        // Keeping the payload in the object's own cache lines (instead of two
+        // per-node heap allocations) removes an indirection from every
+        // updateMatrix()/updateMatrixWorld() compare and every scene-prep
+        // matrixWorld read, and drops 2 allocs + ~2 control blocks per node.
+        // It also makes a moved-from object keep VALID matrices — the move
+        // constructor used to null the source's shared_ptrs while the parent's
+        // children list could still reference it (a guaranteed nullptr deref
+        // on the next traversal).
+        Matrix4 matrixLocal_;
+        Matrix4 matrixWorldLocal_;
     };
 
 }// namespace threepp

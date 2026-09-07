@@ -4,9 +4,9 @@
 #include "threepp/threepp.hpp"
 
 #include "Sphero.hpp"
-#include "KeyController.hpp"
+#include "SpheroKeyController.hpp"
 
-#include "threepp/renderers/GLRenderTarget.hpp"
+#include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/utils/ImageUtils.hpp"
 
 #include <iostream>
@@ -16,7 +16,7 @@ using namespace threepp;
 namespace {
 
     auto createSprite(const std::shared_ptr<Texture> &texture) {
-        auto spriteMaterial = MeshBasicMaterial::create({{"map", texture}});
+        auto spriteMaterial = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.map(texture));
         auto sprite = Mesh::create(PlaneGeometry::create(), spriteMaterial);
         sprite->scale.set(2, 2, 1);
 
@@ -24,7 +24,7 @@ namespace {
     }
 
     void addWalls(Scene &scene) {
-        auto wallMaterial = MeshStandardMaterial::create({{"color", Color::black}});
+        auto wallMaterial = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color::black));
         auto wall1 = Mesh::create(BoxGeometry::create(0.1, 1, 10), wallMaterial);
         wall1->position.set(-5, 0.5, 0);
         scene.add(wall1);
@@ -44,7 +44,7 @@ namespace {
 
         addWalls(scene);
 
-        auto sphereMaterial = MeshBasicMaterial::create({{"color", Color::blue}});
+        auto sphereMaterial = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(Color::blue));
         auto sphere1 = Mesh::create(SphereGeometry::create(2.f), sphereMaterial);
         sphere1->name = "target";
         sphere1->position.set(0, 2, 50);
@@ -59,7 +59,7 @@ int main() {
 
     Canvas canvas("Sphero simulator", {{"aa", 8}});
     auto size = canvas.size();
-    GLRenderer renderer(size);
+    auto renderer = GLRenderer(canvas);
     renderer.autoClear = false;
 
     Scene scene;
@@ -73,17 +73,16 @@ int main() {
 
     Sphero sphero;
     sphero.position.y = 0.25;
-    scene.add(sphero);
+    scene.addRef(sphero);
 
     camera.lookAt(sphero.position);
-    sphero.add(camera);
+    sphero.addRef(camera);
 
     auto &spheroCamera = sphero.camera();
     auto cameraHelper = CameraHelper::create(spheroCamera);
     scene.add(cameraHelper);
 
-    KeyController keyController(sphero);
-    canvas.addKeyListener(keyController);
+    SpheroKeyController keyController(sphero, canvas);
     std::cout << "Press 'r' to change driving mode. " << std::endl;
 
     OrbitControls controls(camera, canvas);
@@ -95,10 +94,10 @@ int main() {
     OrthographicCamera orthoCamera(-1, 1, 1, -1, 1, 10);
     orthoCamera.position.z = 1;
 
-    GLRenderTarget::Options opts;
+    RenderTarget::Options opts;
     opts.format = Format::RGB;
     opts.anisotropy = 16;
-    GLRenderTarget renderTarget(textureSize, textureSize, opts);
+    RenderTarget renderTarget(textureSize, textureSize, opts);
     orthoScene.add(createSprite(renderTarget.texture));
 
     canvas.onWindowResize([&](WindowSize newSize) {
@@ -135,9 +134,9 @@ int main() {
         renderer.render(scene, camera);
 
         renderer.clearDepth();
-        renderer.setViewport({0, 0}, {textureSize, textureSize});
+        renderer.setViewport(0, 0, textureSize, textureSize);
         renderer.render(orthoScene, orthoCamera);
-        renderer.setViewport({0, 0}, size);
+        renderer.setViewport(0, 0, size.width(), size.height());
 
         if (clock2.getElapsedTime() > imageRefreshInterval) {
 

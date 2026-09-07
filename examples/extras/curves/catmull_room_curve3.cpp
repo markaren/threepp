@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/threepp.hpp"
 
@@ -74,8 +76,8 @@ namespace {
 int main() {
 
     Canvas canvas("CatmullRoomCurve", {{"aa", 8}});
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
 
     auto scene = Scene::create();
     scene->background = 0xf0f0f0;
@@ -97,10 +99,10 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
-    canvas.animate([&]() {
-        renderer.render(*scene, *camera);
+    canvas.animate([&] {
+        renderer->render(*scene, *camera);
     });
 }

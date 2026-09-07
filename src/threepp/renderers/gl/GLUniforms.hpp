@@ -5,6 +5,7 @@
 
 #include "threepp/core/Uniform.hpp"
 
+#include <initializer_list>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -12,6 +13,18 @@
 namespace threepp::gl {
 
     struct GLTextures;
+
+    // True if any of the given values differs from the corresponding cache slot.
+    // Pure comparison, independent of any GL context, so it's directly unit-testable.
+    inline bool uniformCacheDiffers(const std::vector<float>& cache, std::initializer_list<float> values) {
+
+        std::size_t i = 0;
+        for (const float v : values) {
+            if (cache[i] != v) return true;
+            ++i;
+        }
+        return false;
+    }
 
     struct UniformObject {
 

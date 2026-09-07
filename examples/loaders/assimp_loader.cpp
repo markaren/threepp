@@ -1,4 +1,6 @@
 
+#include "renderer_factory.hpp"
+
 #include <threepp/loaders/AssimpLoader.hpp>
 #include <threepp/threepp.hpp>
 
@@ -10,34 +12,42 @@ namespace {
 
     auto loadGlb(AssimpLoader& loader) {
 
-        auto model = loader.load("data/models/gltf/zedm.glb");
+        auto model = loader.load(std::string(DATA_FOLDER) + "/models/gltf/zedm.glb");
         model->scale *= 50;
         return model;
     }
 
     auto loadObj(AssimpLoader& loader) {
 
-        auto model = loader.load("data/models/obj/female02/female02.obj");
+        auto model = loader.load(std::string(DATA_FOLDER) + "/models/obj/female02/female02.obj");
+        model->scale *= 0.5f;
         return model;
     }
 
     auto loadStl(AssimpLoader& loader) {
 
-        auto model = loader.load("data/models/stl/pr2_head_pan.stl");
-        model->scale *= 100;
+        auto model = loader.load(std::string(DATA_FOLDER) + "/models/stl/pr2_head_pan.stl");
+        model->scale *= 100.f;
+        return model;
+    }
+
+    auto loadDae(AssimpLoader& loader) {
+
+        auto model = loader.load(std::string(DATA_FOLDER) + "/models/collada/stormtrooper/stormtrooper.dae");
+        model->scale *= 15.f;
         return model;
     }
 
     auto addLights(Scene& scene) {
-        auto light1 = PointLight::create(0xffffff, 0.5f);
+        auto light1 = PointLight::create(0xffffff, 1.f, 0, 0);
         light1->position.set(45, 115, 25);
         scene.add(light1);
 
-        auto light2 = PointLight::create(0xffffff, 0.5f);
+        auto light2 = PointLight::create(0xffffff, 1.f, 0, 0);
         light2->position.set(-45, 115, 125);
         scene.add(light2);
 
-        auto light3 = PointLight::create(0xffffff, 0.5f);
+        auto light3 = PointLight::create(0xffffff, 1.f, 0, 0);
         light3->position.set(0, 25, -30);
         scene.add(light3);
     }
@@ -47,45 +57,46 @@ namespace {
 int main() {
 
     Canvas canvas{"Assimp loader", {{"aa", 4}}};
-    GLRenderer renderer(canvas.size());
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
+    renderer->setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
-    camera->position.set(0, 100, 175);
+    camera->position.set(0, 80, 175);
 
     std::cout << "Assimp version: " << AssimpLoader::getVersion() << std::endl;
     AssimpLoader loader;
     const auto glb = loadGlb(loader);
     const auto obj = loadObj(loader);
     const auto stl = loadStl(loader);
+    const auto dae = loadDae(loader);
 
     Box3 bb;
     bb.setFromObject(*obj);
 
+    const std::vector models{glb, obj, stl, dae};
     constexpr float sep = 50;
-    obj->position.x = -sep;
-
-    bb.getCenter(glb->position);
-    glb->position.x = sep;
-
-    bb.getCenter(stl->position);
-    stl->position.x = 0;
+    const float start = -sep * static_cast<float>(models.size() - 1) / 2.f;
+    for (int i = 0; i < static_cast<int>(models.size()); ++i) {
+        bb.getCenter(models[i]->position);
+        models[i]->position.x = start + sep * static_cast<float>(i);
+    }
 
     scene->add(glb);
     scene->add(obj);
     scene->add(stl);
+    scene->add(dae);
 
     addLights(*scene);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         const auto dt = clock.getDelta();
 
         for (const auto& child : scene->children) {
@@ -93,6 +104,6 @@ int main() {
             child->rotation.y += 1 * dt;
         }
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 }

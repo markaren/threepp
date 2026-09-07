@@ -1,5 +1,7 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "renderer_factory.hpp"
+
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/helpers/SkeletonHelper.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/threepp.hpp"
@@ -64,7 +66,7 @@ namespace {
         for (unsigned i = 0; i < sizing.segmentCount; i++) {
 
             auto bone = Bone::create();
-            bone->position.y = float(sizing.segmentHeight);
+            bone->position.y = static_cast<float>(sizing.segmentHeight);
             bones.emplace_back(bone);
             prevBone->add(bone);
             prevBone = bone;
@@ -75,37 +77,34 @@ namespace {
 
     auto createMesh(const std::shared_ptr<BufferGeometry>& geometry, const std::vector<std::shared_ptr<Bone>>& bones) {
 
-        auto material = MeshPhongMaterial::create({{"color", 0x156289},
-                                                   {"emissive", 0x072534},
-                                                   {"side", Side::Double},
-                                                   {"flatShading", true}});
+        auto material = MeshPhongMaterial::create(MeshPhongMaterial::Params{}.color(0x156289).emissive(0x072534).side(Side::Double).flatShading(true));
 
         auto mesh = SkinnedMesh::create(geometry, material);
         mesh->castShadow = true;
-        auto skeleton = Skeleton::create(bones);
+        const auto skeleton = Skeleton::create(bones);
 
         mesh->add(bones[0]);
 
         mesh->bind(skeleton);
 
-        auto skeletonHelper = SkeletonHelper::create(*mesh);
-        skeletonHelper->material()->as<LineBasicMaterial>()->linewidth = 2;
+        const auto skeletonHelper = SkeletonHelper::create(*mesh);
+        skeletonHelper->materialAs<LineBasicMaterial>()->linewidth = 2;
         mesh->add(skeletonHelper);
 
         return mesh;
     }
 
     auto initBones() {
-        float segmentHeight = 8;
-        int segmentCount = 4;
-        float height = segmentHeight * float(segmentCount);
-        float halfHeight = height * 0.5f;
+        constexpr float segmentHeight = 8;
+        constexpr int segmentCount = 4;
+        constexpr float height = segmentHeight * float(segmentCount);
+        constexpr float halfHeight = height * 0.5f;
 
-        Sizing sizing{segmentHeight, segmentCount, height, halfHeight};
+        const Sizing sizing{segmentHeight, segmentCount, height, halfHeight};
 
-        auto geometry = createGeometry(sizing);
+        const auto geometry = createGeometry(sizing);
         geometry->applyMatrix4(Matrix4().makeTranslation(0, halfHeight, 0));
-        auto bones = createBones(sizing);
+        const auto bones = createBones(sizing);
 
         auto mesh = createMesh(geometry, bones);
         mesh->scale.multiplyScalar(1);
@@ -114,15 +113,15 @@ namespace {
     }
 
     auto initPlane() {
-        int gridSize = 100;
+        constexpr int gridSize = 100;
         auto grid = GridHelper::create(gridSize, 10, Color::yellow);
 
-        auto geometry = PlaneGeometry::create(gridSize, gridSize);
-        auto material = ShadowMaterial::create();
+        const auto geometry = PlaneGeometry::create(gridSize, gridSize);
+        const auto material = ShadowMaterial::create();
         material->color = 0x000000;
         material->opacity = 0.2f;
 
-        auto plane = Mesh::create(geometry, material);
+        const auto plane = Mesh::create(geometry, material);
         plane->rotation.x = -math::PI / 2;
         plane->receiveShadow = true;
         grid->add(plane);
@@ -135,8 +134,8 @@ namespace {
 int main() {
 
     Canvas canvas("Bones");
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
 
     Scene scene;
     scene.background = Color(0x444444);
@@ -170,29 +169,19 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     bool animate{false};
-    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
-        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
-        ImGui::Begin("Options");
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         ImGui::Checkbox("animate", &animate);
-        ImGui::End();
-    });
-
-    IOCapture capture{};
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
+    }, "Options");
 
     Clock clock;
     canvas.animate([&] {
-        auto time = clock.getElapsedTime();
+        const auto time = clock.getElapsedTime();
 
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
         ui.render();
 
         if (animate) {

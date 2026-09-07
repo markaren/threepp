@@ -12,7 +12,29 @@ namespace threepp {
     class LatheGeometry: public BufferGeometry {
 
     public:
+        struct Params {
+            std::vector<Vector2> points;
+            unsigned int segments;
+            float phiStart;
+            float phiLength;
+
+            explicit Params(std::vector<Vector2> points = {},
+                            unsigned int segments = 12,
+                            float phiStart = 0,
+                            float phiLength = math::TWO_PI)
+                : points(std::move(points)), segments(segments), phiStart(phiStart), phiLength(phiLength) {}
+        };
+
+        // Construction parameters, kept so the geometry can be re-serialized in
+        // three.js' compact parametric form (see ObjectExporter).
+        const Params parameters;
+
         [[nodiscard]] std::string type() const override;
+
+        static std::shared_ptr<LatheGeometry> create(const Params& params) {
+
+            return std::shared_ptr<LatheGeometry>(new LatheGeometry(params.points, params.segments, params.phiStart, params.phiLength));
+        }
 
         template<class ArrayLike>
         static std::shared_ptr<LatheGeometry> create(const ArrayLike& points, unsigned int segments = 24, float phiStart = 0, float phiLength = math::TWO_PI) {

@@ -1,8 +1,10 @@
 
+#include "renderer_factory.hpp"
+
 #include "threepp/threepp.hpp"
 
 #include "threepp/audio/Audio.hpp"
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 
 #include <array>
 
@@ -40,8 +42,7 @@ namespace {
         shapeGeometry->center();
         shapeGeometry->scale(0.02f, 0.02f, 0.02f);
 
-        auto material = MeshBasicMaterial::create({{"color", Color::orange},
-                                                   {"side", Side::Double}});
+        auto material = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(Color::orange).side(Side::Double));
 
         auto mesh = Mesh::create(shapeGeometry, material);
         mesh->rotateZ(math::PI);
@@ -53,7 +54,7 @@ namespace {
 
 int main() {
     Canvas canvas("Audio demo");
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     Scene scene;
 
@@ -61,25 +62,22 @@ int main() {
     camera.position.z = -5;
 
     AudioListener listener;
-    PositionalAudio audio(listener, "data/sounds/376737_Skullbeatz___Bad_Cat_Maste.mp3");
+    PositionalAudio audio(listener, std::string(DATA_FOLDER) + "/sounds/376737_Skullbeatz___Bad_Cat_Maste.mp3");
     audio.setLooping(true);
     audio.play();
 
     auto audioNode = createSmiley();
-    audioNode->add(audio);
+    audioNode->addRef(audio);
     scene.add(audioNode);
 
-    camera.add(listener);
+    camera.addRef(listener);
 
     OrbitControls controls{camera, canvas};
 
     std::array<float, 3> audioPos{};
     bool play = audio.isPlaying();
     float volume = listener.getMasterVolume();
-    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
-        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
-        ImGui::Begin("Audio settings");
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         ImGui::SliderFloat("Volume", &volume, 0.f, 1.f);
         if (ImGui::IsItemEdited()) {
             listener.setMasterVolume(volume);
@@ -92,23 +90,16 @@ int main() {
         if (ImGui::IsItemEdited()) {
             audio.togglePlay();
         }
-        ImGui::End();
-    });
-
-    IOCapture capture{};
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
+    }, "Audio settings");
 
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     canvas.animate([&] {
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
 
         ui.render();
     });

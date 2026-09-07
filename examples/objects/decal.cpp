@@ -1,8 +1,10 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "renderer_factory.hpp"
+
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include <threepp/core/Raycaster.hpp>
 #include <threepp/geometries/DecalGeometry.hpp>
-#include <threepp/loaders/AssimpLoader.hpp>
+#include <threepp/loaders/ModelLoader.hpp>
 #include <threepp/threepp.hpp>
 
 
@@ -15,8 +17,8 @@ namespace {
         TextureLoader tl;
         auto decalMaterial = MeshPhongMaterial::create();
         decalMaterial->specular = 0x444444;
-        decalMaterial->map = tl.load("data/textures/decal/decal-diffuse.png");
-        decalMaterial->normalMap = tl.load("data/textures/decal/decal-normal.jpg");
+        decalMaterial->map = tl.load(std::string(DATA_FOLDER) + "/textures/decal/decal-diffuse.png", ColorSpace::sRGB);
+        decalMaterial->normalMap = tl.load(std::string(DATA_FOLDER) + "/textures/decal/decal-normal.jpg", ColorSpace::NoColorSpace);
         decalMaterial->normalScale.set(1, 1);
         decalMaterial->shininess = 30;
         decalMaterial->depthTest = true;
@@ -39,9 +41,9 @@ namespace {
             if (mouseDown) {
                 mouseDown = false;
                 return true;
-            } else {
-                return false;
             }
+
+            return false;
         }
 
         void onMouseDown(int button, const Vector2& pos) override {
@@ -59,40 +61,22 @@ namespace {
         bool mouseDown = false;
 
         void updateMousePos(Vector2 pos) {
-            auto size = canvas.size();
+            const auto size = canvas.size();
             mouse.x = (pos.x / static_cast<float>(size.width())) * 2 - 1;
             mouse.y = -(pos.y / static_cast<float>(size.height())) * 2 + 1;
         }
     };
 
-    struct MyGui: public ImguiContext {
-
-        bool clear = false;
-
-        explicit MyGui(const Canvas& canvas): ImguiContext(canvas.windowPtr()) {}
-
-        void onRender() override {
-
-            ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-            ImGui::SetNextWindowSize({100, 0}, 0);
-
-            ImGui::Begin("Options");
-            ImGui::Checkbox("Clear", &clear);
-
-            ImGui::End();
-        }
-    };
-
     void addLights(Scene& scene) {
 
-        auto light = AmbientLight::create(0x443333, 0.8f);
+        const auto light = AmbientLight::create(0x443333, 0.8f);
         scene.add(light);
 
-        auto light2 = DirectionalLight::create(0xffddcc, 1.f);
+        const auto light2 = DirectionalLight::create(0xffddcc, 1.4f);
         light2->position.set(1, 0.75, 0.5);
         scene.add(light2);
 
-        auto light3 = DirectionalLight::create(0xccccff, 1.f);
+        const auto light3 = DirectionalLight::create(0xccccff, 1.4f);
         light3->position.set(-1, 0.75, -0.5);
         scene.add(light3);
     }
@@ -102,7 +86,7 @@ namespace {
 int main() {
 
     Canvas canvas{"Decals", {{"aa", 8}}};
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
@@ -113,18 +97,17 @@ int main() {
     OrbitControls controls{*camera, canvas};
 
     TextureLoader tl;
-    AssimpLoader loader;
-    std::filesystem::path folder = "data/models/gltf/LeePerrySmith";
+    ModelLoader loader;
+    std::filesystem::path folder = std::string(DATA_FOLDER) + "/models/gltf/LeePerrySmith";
     auto model = loader.load(folder / "LeePerrySmith.glb");
     Mesh* mesh = nullptr;
     model->traverseType<Mesh>([&](Mesh& _) {
         mesh = &_;
-        auto mat = MeshPhongMaterial::create({{
-                {"map", tl.load(folder / "Map-COL.jpg", false)},
-                {"specularMap", tl.load(folder / "Map-SPEC.jpg", false)},
-                {"normalMap", tl.load(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg", false)},
-                {"shininess", 25.f},
-        }});
+        const auto mat = MeshPhongMaterial::create(MeshPhongMaterial::Params{}
+                .map(tl.load(folder / "Map-COL.jpg", ColorSpace::sRGB))
+                .specularMap(tl.load(folder / "Map-SPEC.jpg", ColorSpace::NoColorSpace))
+                .normalMap(tl.load(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg", ColorSpace::NoColorSpace))
+                .shininess(25.f));
         mesh->setMaterial(mat);
     });
     scene->add(model);
@@ -140,17 +123,14 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
-    MyGui ui(canvas);
+    bool clear = false;
+    RendererSettingsUi ui(canvas, *renderer, [&] {
+        ImGui::Checkbox("Clear", &clear);
+    }, "Options");
     std::vector<Mesh*> decals;
-
-    IOCapture capture{};
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
 
     Matrix4 mouseHelper;
     Vector3 position;
@@ -159,7 +139,7 @@ int main() {
     auto decalMat = decalMaterial();
 
     Raycaster raycaster;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         raycaster.setFromCamera(mouseListener.mouse, *camera);
         const auto intersects = raycaster.intersectObject(*mesh, false);
 
@@ -182,7 +162,7 @@ int main() {
 
             if (click) {
 
-                Vector3 scale = Vector3::ONES() * math::randFloat(0.6f, 1.2f);
+                const auto scale = Vector3::ONES() * math::randFloat(0.6f, 1.2f);
 
                 const auto mat = decalMat->clone<MeshPhongMaterial>();
                 mat->color.randomize();
@@ -193,14 +173,14 @@ int main() {
             }
         }
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
 
-        if (ui.clear) {
+        if (clear) {
             for (auto decal : decals) {
                 decal->removeFromParent();
             }
             decals.clear();
-            ui.clear = false;
+            clear = false;
         }
         ui.render();
     });

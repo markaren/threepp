@@ -1,41 +1,48 @@
+// URDF loader demo — loads a robot description and drives its joints from an
+// ImGui panel. Defaults to the bundled KUKA iiwa; pass any .urdf as the first
+// argument. The data pack bundles two more to try: urdf/crane3r.urdf (OBJ
+// visual meshes) and urdf/model.urdf (primitives only).
 
-#include <iostream>
-#include <threepp/extras/imgui/ImguiContext.hpp>
-#include <threepp/loaders/AssimpLoader.hpp>
+#include "renderer_factory.hpp"
+
+#include <threepp/extras/imgui/RendererSettings.hpp>
 #include <threepp/loaders/URDFLoader.hpp>
 #include <threepp/threepp.hpp>
+
+#include <cmath>
 
 using namespace threepp;
 
 int main(int argc, char** argv) {
 
-    if (argc != 2) {
-        std::cerr << "Usage: " << argv[0] << " <urdf file>" << std::endl;
-        return 1;
-    }
-
-    std::filesystem::path urdfPath = argv[1];
-    if (!exists(urdfPath)) {
-        std::cerr << "File not found: " << urdfPath << std::endl;
-        return 1;
+    std::filesystem::path urdfPath = std::filesystem::path(DATA_FOLDER) / "urdf" / "lbr_iiwa_14_r820.urdf";
+    if (argc > 1) {
+        urdfPath = argv[1];
+        if (!exists(urdfPath)) {
+            std::cerr << "File not found: " << urdfPath << std::endl;
+            return 1;
+        }
     }
 
     Canvas canvas{"URDF loader", {{"aa", 4}}};
-    GLRenderer renderer(canvas.size());
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
+    scene->background = Color::aliceblue;
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
     camera->position.z = 1;
 
     OrbitControls controls{*camera, canvas};
 
     auto light = HemisphereLight::create(Color::aliceblue, Color::grey);
+    light->intensity = 1.5f;
     scene->add(light);
 
+    auto ambientLight = AmbientLight::create(0xffffff, 0.3f);
+    scene->add(ambientLight);
+
     URDFLoader loader;
-    AssimpLoader assimpLoader;
-    auto robot = loader.load(assimpLoader, urdfPath);
+    auto robot = loader.load(urdfPath);
     robot->rotation.x = -math::PI / 2;
     robot->showColliders(false);
     scene->add(robot);
@@ -50,7 +57,7 @@ int main(int argc, char** argv) {
     bool animate{false};
     bool showColliders{false};
     const auto info = robot->getArticulatedJointInfo();
-    std::vector<float> jointValues = robot->jointValuesWithConversionFromRadiansToDeg();
+    std::vector<float> jointValues = robot->jointValues(true);
 
     auto axis = AxesHelper::create(size.length() * 0.1f);
     scene->add(axis);
@@ -60,12 +67,7 @@ int main(int argc, char** argv) {
         labels.emplace_back("j" + std::to_string(i + 1));
     }
 
-    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
-        ImGui::SetNextWindowPos({}, 0, {});
-        ImGui::SetNextWindowSize({230, 0}, 0);
-
-        ImGui::Begin("Settings");
-
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         ImGui::Checkbox("Animate", &animate);
         if (ImGui::Checkbox("Show Colliders", &showColliders)) {
             robot->showColliders(showColliders);
@@ -75,31 +77,23 @@ int main(int argc, char** argv) {
             const auto type = info[i].type;
             const auto minmax = robot->getJointRange(i, true);
             const bool isRevolute = type == Robot::JointType::Revolute;
-            const float min = minmax.first > (isRevolute ? -360.f : -1.f) ? minmax.first : (isRevolute ? -360.f : -1.f);
-            const float max = minmax.second < (isRevolute ? 360.f : 1.f) ? minmax.second : (isRevolute ? 360.f : 1.f);
+            const float min = minmax.min > (isRevolute ? -360.f : -1.f) ? minmax.min : (isRevolute ? -360.f : -1.f);
+            const float max = minmax.max < (isRevolute ? 360.f : 1.f) ? minmax.max : (isRevolute ? 360.f : 1.f);
             if (ImGui::SliderFloat(labels[i].c_str(), &jointValues[i], min, max)) {
                 robot->setJointValue(i, jointValues[i], isRevolute);
                 animate = false;
             }
         }
-
-        ImGui::End();
-    });
-
-    IOCapture capture{};
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
+    }, "Settings");
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
 
         if (animate) {
             for (auto i = 0; i < robot->numDOF(); ++i) {
@@ -108,11 +102,11 @@ int main(int argc, char** argv) {
             }
         }
 
-        auto m = robot->computeEndEffectorTransform(jointValues, true);
+        const auto m = robot->computeEndEffectorTransform(jointValues, true);
         axis->position.setFromMatrixPosition(m);
         axis->quaternion.setFromRotationMatrix(m);
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
         ui.render();
     });
 }

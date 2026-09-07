@@ -4,8 +4,11 @@
 #include "threepp/materials/RawShaderMaterial.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/utils/StringUtils.hpp"
+#include "threepp/renderers/gl/GLCapabilities.hpp"
 
 #include "threepp/renderers/shaders/ShaderLib.hpp"
+
+#include <algorithm>
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -42,18 +45,22 @@ GLPrograms::GLPrograms(GLBindingStates& bindingStates, GLClipping& clipping)
 
 
 ProgramParameters GLPrograms::getParameters(
-        IGLRenderer& renderer,
+        const Renderer& renderer,
+        const ShadowConfig& shadowConfig,
+        const RendererCapabilities& capabilities,
         const GLClipping& clipping,
         Material* material,
-        const GLLights::LightState& lights,
+        const Lights::LightState& lights,
         size_t numShadows,
         Scene* scene,
-        Object3D* object) {
+        Object3D* object,
+        Texture* resolvedEnvMap,
+        ColorSpace outputColorSpace) {
 
-    return {renderer, clipping, lights, numShadows, object, scene, material, shaderIDs};
+    return {renderer, shadowConfig, capabilities, clipping, lights, numShadows, object, scene, material, resolvedEnvMap, shaderIDs, outputColorSpace};
 }
 
-std::string GLPrograms::getProgramCacheKey(const IGLRenderer& renderer, const ProgramParameters& parameters) {
+std::string GLPrograms::getProgramCacheKey(const Renderer& renderer, const ProgramParameters& parameters) {
 
     std::vector<std::string> array;
 
@@ -84,7 +91,7 @@ std::string GLPrograms::getProgramCacheKey(const IGLRenderer& renderer, const Pr
             array.emplace_back(value);
         }
 
-        array.emplace_back(std::to_string(as_integer(renderer.outputEncoding)));
+        array.emplace_back(std::to_string(as_integer(renderer.outputColorSpace)));
         array.emplace_back(std::to_string(renderer.gammaFactor));
     }
 
@@ -110,7 +117,7 @@ UniformMap* GLPrograms::getUniforms(Material& material) {
     return nullptr;
 }
 
-GLProgram* GLPrograms::acquireProgram(const IGLRenderer& renderer, const ProgramParameters& parameters, const std::string& cacheKey) {
+GLProgram* GLPrograms::acquireProgram(const Renderer& renderer, const ProgramParameters& parameters, const std::string& cacheKey) {
 
     GLProgram* program = nullptr;
 

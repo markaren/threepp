@@ -1,8 +1,10 @@
 
 #include "DCMotor.hpp"
 #include "utility/Regulator.hpp"
+#include "renderer_factory.hpp"
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
+#include "threepp/objects/TextSprite.hpp"
 #include "threepp/threepp.hpp"
 
 #include <cmath>
@@ -59,7 +61,7 @@ namespace {
             auto boxGeometry = BoxGeometry::create(0.1, 0.5, 0.1);
             boxGeometry->translate(0, boxGeometry->height / 2, 0);
 
-            auto material = MeshBasicMaterial::create({{"color", 0x000000}});
+            auto material = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(0x000000));
 
             auto cylinder = Mesh::create(cylinderGeometry, material);
             auto box = Mesh::create(boxGeometry, material);
@@ -71,7 +73,7 @@ namespace {
 
         static std::shared_ptr<Mesh> createRing() {
             auto ringGeometry = RingGeometry::create(0.5f, 0.75f, 32, 8, math::PI / 2, math::PI);
-            auto mat = MeshBasicMaterial::create({{"color", Color::red}});
+            auto mat = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(Color::red));
             mat->opacity = 0.1f;
             mat->transparent = true;
 
@@ -85,8 +87,7 @@ int main() {
 
     Canvas canvas("MotorController", {{"aa", 6}});
     const auto size = canvas.size();
-    GLRenderer renderer(size);
-    renderer.autoClear = false;
+    auto renderer = createRenderer(canvas);
 
     Scene scene;
     scene.background = Color::white;
@@ -108,21 +109,28 @@ int main() {
     PIDRegulator controller(1.0, 0.1, 0.2);// Adjust PID gains as needed
 
     auto motorVisuals = VisualisationObject();
-    scene.add(motorVisuals);
-
-    HUD hud(canvas.size());
+    scene.addRef(motorVisuals);
 
     FontLoader fontLoader;
     auto font = fontLoader.defaultFont();
-    TextGeometry::Options opts(font, 20);
 
-    auto targetText = Text2D::create(opts, "Target position: " + std::to_string(targetPosition));
+    auto targetText = TextSprite::create(font, 20.f*monitor::contentScale().first);
+    targetText->setText("Target position: " + std::to_string(targetPosition));
     targetText->setColor(Color::black);
-    hud.add(targetText, HUD::Options().setNormalizedPosition({0.f, 0.05f}));
+    targetText->setVerticalAlignment(TextSprite::VerticalAlignment::Above);
+    targetText->screenSpace = true;
+    targetText->screenAnchor.set(0.f, 0.05f);     // 5% from bottom
+    targetText->position.set(5.f, 5.f, 0.f);
+    scene.add(targetText);
 
-    auto measuredText = Text2D::create(opts, "Measured position: " + std::to_string(math::radToDeg(motor.getPosition())));
+    auto measuredText = TextSprite::create(font, 20*monitor::contentScale().first);
+    measuredText->setText("Measured position: " + std::to_string(math::radToDeg(motor.getPosition())));
     measuredText->setColor(Color::black);
-    hud.add(measuredText, HUD::Options());
+    measuredText->setVerticalAlignment(TextSprite::VerticalAlignment::Above);
+    measuredText->screenSpace = true;
+    measuredText->screenAnchor.set(0.f, 0.f);     // bottom-left
+    measuredText->position.set(5.f, 5.f, 0.f);
+    scene.add(measuredText);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera.left = -frustumSize * size.aspect() / 2;
@@ -130,36 +138,30 @@ int main() {
         camera.top = frustumSize / 2;
         camera.bottom = -frustumSize / 2;
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     auto& params = controller.params();
-    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
-        ImGui::SetNextWindowPos({}, 0, {});
-        ImGui::SetNextWindowSize({}, 0);
-        ImGui::Begin("Motor Controller");
-
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         ImGui::Text("Target position");
         if (ImGui::SliderFloat("deg", &targetPosition, 0, 180)) {
-            targetText->setText("Target position: " + std::to_string(targetPosition), opts);
+            targetText->setText("Target position: " + std::to_string(targetPosition));
         }
         ImGui::Text("PID gains");
         ImGui::SliderFloat("kp", &params.kp, 0.01f, 10.f);
         ImGui::SliderFloat("ti", &params.ti, 0.001f, 2.f);
         ImGui::SliderFloat("td", &params.td, 0.001f, 2.f);
-
-        ImGui::End();
-    });
+    }, "Motor Controller");
 
 
     Clock clock;
     long long it{};
-    canvas.animate([&]() {
+    canvas.animate([&] {
         float dt = clock.getDelta();
         double measuredPosition = motor.getPosition();
 
         if (it++ % 10 == 2) {
-            measuredText->setText("Measured position: " + std::to_string(math::radToDeg(measuredPosition)), opts);
+            measuredText->setText("Measured position: " + std::to_string(math::radToDeg(measuredPosition)));
         }
 
         double error = math::degToRad(targetPosition) - measuredPosition;
@@ -167,9 +169,7 @@ int main() {
 
         motor.update(gain, dt);
 
-        renderer.clear();
-        renderer.render(scene, camera);
-        hud.apply(renderer);
+        renderer->render(scene, camera);
         ui.render();
 
         motorVisuals.setTargetPos(math::degToRad(targetPosition));

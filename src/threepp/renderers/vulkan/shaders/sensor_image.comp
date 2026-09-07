@@ -1,0 +1,96 @@
+#version 460
+
+// sensor_image.comp — the camera's final image formation: lens distortion and
+// sensor noise, applied to the FINISHED frame.
+//
+// WHY IT RUNS LAST. A lens bends everything the camera sees and a sensor
+// noises everything the lens projects. Anything applied earlier is only
+// applied to part of the picture:
+//
+//   * The overlay pass (particle billboards — chimney smoke and the like —
+//     plus Line/LineSegments, wireframe and overlay-tagged meshes) composites
+//     onto the swapchain AFTER the TAA resolve and RCAS. Warping in RCAS left
+//     that content unwarped while the scene under it moved, so overlays slid
+//     off the geometry they belong to, by more and more toward the frame edge.
+//   * TAA and the DLSS/FSR upscalers average successive frames, so noise
+//     injected before the resolve is quietly filtered back out and the sim
+//     reports a noise model it is not actually producing.
+//
+// Running here also keeps occlusion correct: the overlay still depth-tests
+// against the raster G-buffer in UNDISTORTED screen space, which is the space
+// that depth buffer is in. Distorting overlay vertices instead would have
+// compared them against unrelated depths.
+//
+// ImGui / the user overlay callback draw after this pass, so UI stays
+// undistorted and noise-free — also correct: a HUD is not in front of the lens.
+//
+// The source is a copy of the finished swapchain image (the caller snapshots
+// it), because a gather warp cannot run in place.
+
+#extension GL_GOOGLE_include_directive : enable
+
+#include "lens_distortion.glsl"// CPU twin: cameras/LensDistortion.hpp
+#include "sensor_noise.glsl"   // applySensorNoise
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D srcTex;         // snapshot of the finished frame
+layout(set = 0, binding = 1) uniform writeonly image2D dstImg; // swapchain (bgra8, no format)
+
+#define SENSOR_FLAG_DISTORT 1u
+#define SENSOR_FLAG_NOISE   2u
+
+layout(push_constant) uniform Pc {
+    uint  width;
+    uint  height;
+    uint  flags;
+    uint  lensModel;
+
+    vec4  normK;     // (fx/W, fy/H, cx/W, cy/H) — resolution independent
+    vec4  radial;    // k1..k4
+    vec2  tangential;// p1, p2
+
+    // Overscan: the scene was rendered with the frustum widened by this
+    // factor, so the ideal image extends past the output frame and barrel
+    // distortion can gather real geometry into the corners instead of
+    // clamped edge texels. 1.0 = no overscan. The ideal sample position is
+    // mapped back into the overscanned source about the principal point.
+    float overscan;
+
+    uint  frameSeed;
+    float fullWell;
+    float readNoise;
+    float darkElectrons;
+    float prnu;
+    float isoGain;
+} pc;
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
+
+    const vec2 texel = 1.0 / vec2(float(pc.width), float(pc.height));
+    const vec2 uv    = (vec2(px) + 0.5) * texel;
+
+    vec2 srcUv = uv;
+    if ((pc.flags & SENSOR_FLAG_DISTORT) != 0u) {
+        // sensor pixel -> normalized distorted -> normalized ideal -> uv
+        const vec2 pd = (uv - pc.normK.zw) / pc.normK.xy;
+        const vec2 p  = lensUndistort(int(pc.lensModel), pc.radial, pc.tangential, pd);
+        srcUv = p * pc.normK.xy + pc.normK.zw;
+        // The source covers `overscan` times the ideal field, centred on the
+        // principal point, so an ideal offset shrinks by that factor in it.
+        if (pc.overscan != 1.0) {
+            srcUv = pc.normK.zw + (srcUv - pc.normK.zw) / pc.overscan;
+        }
+    }
+
+    vec3 res = textureLod(srcTex, clamp(srcUv, vec2(0.0), vec2(1.0)), 0.0).rgb;
+
+    if ((pc.flags & SENSOR_FLAG_NOISE) != 0u) {
+        res = applySensorNoise(res, uvec2(px), pc.frameSeed, pc.fullWell, pc.readNoise,
+                               pc.darkElectrons, pc.prnu, pc.isoGain);
+    }
+
+    imageStore(dstImg, px, vec4(clamp(res, 0.0, 1.0), 1.0));
+}

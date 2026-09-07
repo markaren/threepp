@@ -6,7 +6,8 @@
 
 using namespace threepp;
 
-LatheGeometry::LatheGeometry(const std::vector<Vector2>& points, unsigned int segments, float phiStart, float phiLength) {
+LatheGeometry::LatheGeometry(const std::vector<Vector2>& points, unsigned int segments, float phiStart, float phiLength)
+    : parameters(points, segments, phiStart, phiLength) {
 
     // clamp phiLength so it's in range of [ 0, 2PI ]
 

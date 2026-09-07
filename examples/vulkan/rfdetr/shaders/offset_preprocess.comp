@@ -1,0 +1,39 @@
+#version 450
+// Deformable-attention offset preprocessing. raw offsets [Nq, H*L*P*2] → pixel-
+// space, scaled in-place: offset_x *= ref_w*0.5*W_l/P, offset_y *= ref_h*0.5*H_l/P.
+// Bindings: 0 refPts [Nq,4], 1 levels [L*2] (H,W), 2 offsets [Nq, H*L*P*2] in-place.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint Nq, numHeads, numLevels, numPoints;
+} p;
+
+layout(std430, binding = 0) readonly buffer Ref { float refPts[]; };// [Nq, 4]
+layout(std430, binding = 1) readonly buffer Lvl { uint  levels[]; };// [L*2]: H,W
+layout(std430, binding = 2)          buffer Off { float offsets[]; };
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    uint stride = p.numHeads * p.numLevels * p.numPoints * 2u;
+    uint total = p.Nq * stride;
+    if (idx >= total) return;
+    uint q = idx / stride;
+    uint rem = idx % stride;
+    uint pair = rem / 2u;
+    uint xy = rem % 2u;
+
+    uint lp = pair % (p.numLevels * p.numPoints);
+    uint l = lp / p.numPoints;
+
+    float ref_w = refPts[q * 4u + 2u];
+    float ref_h = refPts[q * 4u + 3u];
+    float Hl = float(levels[l * 2u + 0u]);
+    float Wl = float(levels[l * 2u + 1u]);
+    float P = float(p.numPoints);
+
+    if (xy == 0u) {
+        offsets[idx] = offsets[idx] / P * ref_w * 0.5 * Wl;
+    } else {
+        offsets[idx] = offsets[idx] / P * ref_h * 0.5 * Hl;
+    }
+}

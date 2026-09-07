@@ -258,7 +258,8 @@ namespace {
 PolyhedronGeometry::PolyhedronGeometry(
         const std::vector<float>& vertices,
         const std::vector<unsigned int>& indices,
-        float radius, unsigned int detail) {
+        float radius, unsigned int detail)
+    : radius(radius), detail(detail) {
 
     Helper h(vertices, indices, radius, detail);
 

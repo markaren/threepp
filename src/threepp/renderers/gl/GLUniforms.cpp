@@ -4,7 +4,7 @@
 #include "threepp/renderers/gl/UniformUtils.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
 #include <glad/glad.h>
 #else
 #include <GL/glew.h>
@@ -46,8 +46,8 @@ namespace {
 
         explicit SingleUniform(std::string id, ActiveUniformInfo activeInfo, int addr)
             : UniformObject(std::move(id)),
-              activeInfo(std::move(activeInfo)),
               addr(addr),
+              activeInfo(std::move(activeInfo)),
               setValueFun(getSingularSetter()) {
         }
 
@@ -174,7 +174,7 @@ namespace {
             float y = value[1];
 
             ensureCapacity(cache, 2);
-            if (cache[0] != x || cache[1] != y) {
+            if (uniformCacheDiffers(cache, {x, y})) {
 
                 glUniform2f(addr, x, y);
 
@@ -200,7 +200,7 @@ namespace {
             float z = value[2];
 
             ensureCapacity(cache, 3);
-            if (cache[0] != x || cache[1] != y || cache[2] != z) {
+            if (uniformCacheDiffers(cache, {x, y, z})) {
 
                 glUniform3f(addr, x, y, z);
 
@@ -230,7 +230,7 @@ namespace {
             float w = value[3];
 
             ensureCapacity(cache, 4);
-            if (cache[0] != x || cache[1] != y && cache[2] != z || cache[3] != w) {
+            if (uniformCacheDiffers(cache, {x, y, z, w})) {
 
                 glUniform4f(addr, x, y, z, w);
 
@@ -296,8 +296,8 @@ namespace {
 
         explicit PureArrayUniform(std::string id, ActiveUniformInfo activeInfo, int addr)
             : UniformObject(std::move(id)),
-              activeInfo(std::move(activeInfo)),
               addr(addr),
+              activeInfo(std::move(activeInfo)),
               setValueFun(getPureArraySetter()) {}
 
         void setValue(const UniformValue& value, GLTextures* textures) override {
@@ -443,7 +443,7 @@ namespace {
 
             if (isIndex) id = std::to_string(utils::parseInt(id) | 0);
 
-            if (!match[3].matched || subscript == "[" && matchEnd + 2 == pathLength) {
+            if (!match[3].matched || (subscript == "[" && matchEnd + 2 == pathLength)) {
 
                 // bare name or "pure" bottom-level array "[0]" suffix
                 if (!match[3].matched) {
@@ -500,7 +500,6 @@ void GLUniforms::upload(std::vector<UniformObject*>& seq, UniformMap& values, GL
 
         if (!v.needsUpdate || (v.needsUpdate && v.needsUpdate.value())) {
 
-            // note: always updating when .needsUpdate is undefined
             u->setValue(v.value(), textures);
         }
     }

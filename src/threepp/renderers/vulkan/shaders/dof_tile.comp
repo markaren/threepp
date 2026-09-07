@@ -1,0 +1,42 @@
+#version 460
+
+// DoF pass 2/4 — CoC tile max + dilate (see vulkan/DofPass.{hpp,cpp}).
+//
+// mode 0: reduce the half-res CoC into 8×8 tiles, keeping the tile's
+//   maximum NEAR extent (r = max(−coc, 0)) and FAR extent (g = max(coc, 0)).
+// mode 1: 3×3 tile dilate — a blurred object's bokeh reaches up to its CoC
+//   into NEIGHBOURING tiles, so the gather radius must see it (the classic
+//   scatter-as-gather tile trick, same as the motion-blur tile-max).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D srcTex;// mode 0: half rgb+coc, mode 1: tile rg
+layout(set = 0, binding = 1, rg16f) uniform writeonly image2D dstImg;
+
+layout(push_constant) uniform Pc {
+    uint srcW, srcH, dstW, dstH;
+    uint mode;// 0 = tile reduce (src = half image), 1 = 3×3 dilate (src = tiles)
+} pc;
+
+void main() {
+    const ivec2 tp = ivec2(gl_GlobalInvocationID.xy);
+    if (tp.x >= int(pc.dstW) || tp.y >= int(pc.dstH)) return;
+
+    vec2 m = vec2(0.0);// (maxNear, maxFar)
+    if (pc.mode == 0u) {
+        const ivec2 base = tp * 8;
+        for (int y = 0; y < 8; ++y)
+            for (int x = 0; x < 8; ++x) {
+                const ivec2 q = min(base + ivec2(x, y), ivec2(int(pc.srcW) - 1, int(pc.srcH) - 1));
+                const float c = texelFetch(srcTex, q, 0).a;
+                m = max(m, vec2(max(-c, 0.0), max(c, 0.0)));
+            }
+    } else {
+        for (int y = -1; y <= 1; ++y)
+            for (int x = -1; x <= 1; ++x) {
+                const ivec2 q = clamp(tp + ivec2(x, y), ivec2(0), ivec2(int(pc.srcW) - 1, int(pc.srcH) - 1));
+                m = max(m, texelFetch(srcTex, q, 0).rg);
+            }
+    }
+    imageStore(dstImg, tp, vec4(m, 0.0, 0.0));
+}

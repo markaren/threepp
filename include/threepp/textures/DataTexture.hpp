@@ -9,6 +9,7 @@ namespace threepp {
     class DataTexture: public Texture {
 
     public:
+
         void setData(const ImageData& data) {
 
             image().setData(data);
@@ -37,6 +38,8 @@ namespace threepp {
 
             this->generateMipmaps = false;
             this->unpackAlignment = 1;
+
+            // this->colorSpace = ColorSpace::sRGB;
 
             this->needsUpdate();
         }

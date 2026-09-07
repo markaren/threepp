@@ -1,0 +1,86 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference    : require
+#extension GL_EXT_buffer_reference2   : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// ParticleField density SCATTER — one thread per particle slot, plan §3.3.
+//
+// The cheapest per-particle representation in the design by an order of
+// magnitude: a few ALU and eight integer atomics, with NO dependence on screen
+// coverage, on the number of views, or on anything the CPU knows. The volume it
+// writes is world-anchored, so K cameras share this one dispatch.
+//
+// Dispatch domain is CPU-CONSTANT (capacity / 64 groups, §1.3): the live count
+// is read from the device here, not on the host, so the command buffer never
+// changes shape as particles come and go. A dead slot (w < 0, or a NaN — the
+// predicate is written negated so garbage past the sim's high-water mark reads
+// as dead) and a slot past liveCount both exit before touching memory.
+//
+// DETERMINISM: every value below is a pure function of this thread's particle,
+// and the accumulation is an INTEGER add, which is associative — so however the
+// GPU orders the atomics the voxel ends up with the same bits. See the header
+// of particle_density.glsl for the fixed-point scale and why it is Q20.12.
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0, r32ui) uniform coherent uimage3D densityImage;
+
+// ParticlePos / physx::PxVec4 / GLSL vec4 under scalar layout are the same
+// 16 bytes — the identity the whole buffer contract is built on.
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer PosBuf   { vec4 v[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4)  readonly buffer CountBuf { uint v[]; };
+
+// Everything per-field rides here rather than in a descriptor, for the same
+// reason particlefield_gbuf.vert takes its addresses by push constant: a
+// per-field descriptor write per frame is exactly the VUID-03047 exposure this
+// pass must not add.
+layout(push_constant, scalar) uniform Pc {
+    mat4     world;      // the field's matrixWorld (particles are usually already world)
+    uint64_t posAddr;    // ParticlePos[capacity], this frame's ring slot
+    uint64_t countAddr;  // FieldCountsGpu — .liveCount at word 0
+    vec3     boxMin;     // world min corner of the volume
+    vec3     boxInvSize; // 1 / (2 * halfExtent)
+    uint     res;        // voxels per axis
+    uint     capacity;
+    float    sigmaFixed; // DensityRepr::sigmaPerParticle * kParticleDensityScale
+    float    _pad;       // the uint64 members give the block 8-byte alignment;
+                         // spelled out so the host struct's tail padding and
+                         // this block are the same 120 bytes by construction
+} pc;
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.capacity) return;
+    if (i >= CountBuf(pc.countAddr).v[0]) return;
+
+    const vec4 P = PosBuf(pc.posAddr).v[i];
+    if (!(P.w >= 0.0)) return;// dead slot (and NaN-safe: NaN fails every compare)
+
+    const vec3 w = (pc.world * vec4(P.xyz, 1.0)).xyz;
+    const vec3 t = (w - pc.boxMin) * pc.boxInvSize;
+    if (any(lessThan(t, vec3(0.0))) || any(greaterThan(t, vec3(1.0)))) return;
+
+    // 8-tap trilinear splat. The weights sum to exactly 1 wherever the whole
+    // stencil is inside the box, so total optical mass is conserved no matter
+    // where inside its voxel a particle sits — which is what stops a slowly
+    // drifting cloud from flickering as particles cross voxel boundaries.
+    // Voxel CENTRES at (i + 0.5)/res; see pdSampleVolume, which inverts this.
+    const float R  = float(pc.res);
+    const vec3  g  = t * R - 0.5;
+    const vec3  g0 = floor(g);
+    const vec3  f  = g - g0;
+    const ivec3 b  = ivec3(g0);
+    const int   hi = int(pc.res) - 1;
+
+    for (int k = 0; k < 8; ++k) {
+        const ivec3 o = ivec3(k & 1, (k >> 1) & 1, (k >> 2) & 1);
+        const ivec3 c = b + o;
+        // Taps outside the box are DROPPED, not clamped: clamping would pile
+        // the whole boundary layer's mass onto the face voxels.
+        if (any(lessThan(c, ivec3(0))) || any(greaterThan(c, ivec3(hi)))) continue;
+        const vec3  wt = mix(vec3(1.0) - f, f, vec3(o));
+        const uint  q  = uint(pc.sigmaFixed * (wt.x * wt.y * wt.z) + 0.5);
+        if (q != 0u) imageAtomicAdd(densityImage, c, q);
+    }
+}

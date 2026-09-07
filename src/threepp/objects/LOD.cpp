@@ -33,7 +33,7 @@ LOD& LOD::addLevel(Object3D& object, float distance) {
 
     levels.insert(levels.begin() + l, {distance, &object});
 
-    this->add(object);
+    this->addRef(object);
 
     return *this;
 }
@@ -64,10 +64,15 @@ size_t LOD::getCurrentLevel() const {
     return _currentLevel;
 }
 
+const std::vector<Level>& LOD::getLevels() const {
+
+    return levels;
+}
+
 void LOD::update(Camera& camera) {
 
-    static Vector3 _v1;
-    static Vector3 _v2;
+    static thread_local Vector3 _v1;
+    static thread_local Vector3 _v2;
 
     if (levels.size() > 1) {
 

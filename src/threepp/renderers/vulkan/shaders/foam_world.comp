@@ -1,0 +1,382 @@
+#version 460
+#extension GL_EXT_scalar_block_layout                    : require
+#extension GL_EXT_buffer_reference                       : require
+#extension GL_EXT_buffer_reference2                      : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive                   : enable
+
+#include "ocean_cascade.glsl"// cascade-1 domain rotation (repeat-lattice break)
+
+// World-space foam accumulator. One texel = one fixed point in world XZ;
+// foam value is preserved frame-to-frame regardless of how the ocean's
+// vertices are laid out. This is the foundation for adaptive-resolution
+// ocean meshes: the mesh can re-tessellate however it likes and foam
+// stays where it was deposited.
+//
+// Coverage is the cascade-0 tile (typically 1000 m), REPEAT-sampled.
+// That matches the FFT's intrinsic periodicity — natural-foam crests
+// repeat with the FFT pattern, so wrapping at the tile boundary is
+// consistent with the wave field underneath. Texel size = tileSize /
+// res; at 2048² over 1000 m that's ≈0.49 m — fine enough to carry the
+// cascade-1 whitecap detail the fine Jacobian stencil extracts.
+//
+// Per frame: decay last frame's foam, recompute the three instant
+// sources at every texel, take the max, write to the current target.
+// Ping-pong via prevFoam (sampler) / currFoam (storage image) bindings.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// FFT cascades — needed to compute the Jacobian of the horizontal
+// displacement, which drives natural-wave whitewater foam.
+layout(set = 0, binding = 0) uniform sampler2D height0;
+layout(set = 0, binding = 1) uniform sampler2D displace0;
+layout(set = 0, binding = 2) uniform sampler2D height1;
+layout(set = 0, binding = 3) uniform sampler2D displace1;
+layout(set = 0, binding = 4) uniform sampler2D height2;
+layout(set = 0, binding = 5) uniform sampler2D displace2;
+
+// Foam accumulator — read previous value (imageLoad) and write the new
+// one (imageStore) on the same image. Each invocation only touches its
+// own texel, so there's no cross-thread race; ping-pong textures aren't
+// needed. deferred_shade.comp (oceanFoamWorld) samples this same image via a
+// separate sampler-typed descriptor for filtered reads at arbitrary world XZ.
+layout(set = 0, binding = 6, r32f) uniform image2D foam;
+
+// Per-disturbance point source — splatted into the foam texture with a
+// gaussian falloff. Layout matches DisplacedMesh::FoamDisturbance.
+struct DisturbPoint {
+    float worldX;
+    float worldZ;
+    float radius;
+    float intensity;
+};
+layout(buffer_reference, scalar) buffer DisturbBuf { DisturbPoint p[]; };
+
+// Historical wake sample — mirrors DisplacedMesh::WakeSample / the
+// matching struct in water_displace.comp.
+struct WakeSample {
+    float worldX;
+    float worldZ;
+    float sinYaw;
+    float cosYaw;
+    float speed;
+    float age;
+    float _p0;
+    float _p1;
+};
+layout(buffer_reference, scalar) buffer WakeTrailBuf { WakeSample s[]; };
+
+layout(push_constant, scalar) uniform Pc {
+    uint64_t disturbAddr;   // 0 = no disturbance buffer
+    uint64_t wakeTrailAddr; // 0 = no historical trail (falls back to current pose)
+    uint   foamRes;
+    float  foamTileSize;
+    float  tileSize0;
+    float  tileSize1;
+    float  tileSize2;
+    float  waveScale;
+    float  choppiness;
+    uint   cascadeMask;
+    float  hullCenterX;
+    float  hullCenterZ;
+    float  hullHalfLength;
+    float  hullHalfBeam;
+    float  hullSinYaw;
+    float  hullCosYaw;
+    float  forwardSpeed;
+    uint   disturbCount;
+    float  decay;
+    uint   wakeTrailCount;  // # valid samples in wakeTrailAddr
+    float  natFoamScale;    // scales NATURAL Jacobian whitecaps; wake/splats unaffected
+} pc;
+
+// Toroidal world-XZ delta: a − b, wrapped into (−tileSize/2, +tileSize/2].
+// The foam texture covers one cascade-0 tile and REPEAT-samples beyond,
+// so any boat/disturbance world position folds modulo `tileSize` into the
+// texel domain. Without this wrap, a boat at world (−200, 0) gets distance
+// ≈ tileSize from any texel covering its modular twin at (+800, 0) — and
+// the wake/disturbance gaussians fall to zero, so no foam appears at all.
+vec2 toroidalDelta(vec2 a, vec2 b, float tileSize) {
+    vec2 d = a - b;
+    return d - tileSize * floor(d / tileSize + 0.5);
+}
+
+// Horizontal displacement only — the Jacobian and the inverse-map never
+// need the height channel, so skip those fetches entirely (the height
+// bindings stay declared for descriptor-layout compatibility). `mask`
+// selects which cascades contribute, ANDed with the host's cascadeMask.
+vec2 sampleDispXZ(vec2 worldXZ, uint mask) {
+    vec2 d = vec2(0.0);
+    if ((mask & pc.cascadeMask & 1u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize0;
+        d += texture(displace0, worldXZ * invTile).rg * invTile;
+    }
+    if ((mask & pc.cascadeMask & 2u) != 0u) {
+        // Rotated domain + world back-rotation — must match water_displace.
+        const float invTile = 1.0 / pc.tileSize1;
+        d += oceanC1World(texture(displace1, oceanC1Domain(worldXZ) * invTile).rg) * invTile;
+    }
+    if ((mask & pc.cascadeMask & 4u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize2;
+        d += texture(displace2, worldXZ * invTile).rg * invTile;
+    }
+    return d * pc.choppiness;
+}
+
+// Bicubic B-spline RG fetch (4 bilinear taps, Sigg & Hadwiger). The Jacobian
+// below DIFFERENTIATES the displacement field; the derivative of a BILINEAR
+// texture is only piecewise-continuous (kinks at every texel boundary), and
+// the steep foam ramp amplifies those kinks into hard world-aligned ~1 m
+// squares baked into the foam accumulator (cascade-0 texel = tileSize0/res
+// ≈ 0.98 m — exactly the visible artifact). The B-spline kernel is C1, so
+// the fold field carries no cell boundaries to bake in.
+vec2 sampleBicubicRG(sampler2D tex, vec2 uv) {
+    const vec2 res = vec2(textureSize(tex, 0));
+    const vec2 st  = uv * res - 0.5;
+    const vec2 i   = floor(st);
+    const vec2 f   = st - i;
+    const vec2 f2  = f * f;
+    const vec2 f3  = f2 * f;
+    const vec2 w0  = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) * (1.0 / 6.0);
+    const vec2 w1  = (3.0 * f3 - 6.0 * f2 + 4.0)       * (1.0 / 6.0);
+    const vec2 w2  = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) * (1.0 / 6.0);
+    const vec2 w3  = f3 * (1.0 / 6.0);
+    const vec2 g0  = w0 + w1;
+    const vec2 g1  = w2 + w3;
+    const vec2 c0  = (i - 0.5 + w1 / g0) / res;
+    const vec2 c1  = (i + 1.5 + w3 / g1) / res;
+    const vec2 t00 = texture(tex, vec2(c0.x, c0.y)).rg;
+    const vec2 t10 = texture(tex, vec2(c1.x, c0.y)).rg;
+    const vec2 t01 = texture(tex, vec2(c0.x, c1.y)).rg;
+    const vec2 t11 = texture(tex, vec2(c1.x, c1.y)).rg;
+    return g0.y * (g0.x * t00 + g1.x * t10) + g1.y * (g0.x * t01 + g1.x * t11);
+}
+
+// Bicubic variant of sampleDispXZ — used ONLY inside the Jacobian stencil
+// (the inverse-map keeps the cheap bilinear path: kinks in the VALUE field
+// are second-order there and invisible).
+vec2 sampleDispXZSmooth(vec2 worldXZ, uint mask) {
+    vec2 d = vec2(0.0);
+    if ((mask & pc.cascadeMask & 1u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize0;
+        d += sampleBicubicRG(displace0, worldXZ * invTile) * invTile;
+    }
+    if ((mask & pc.cascadeMask & 2u) != 0u) {
+        // Rotated domain + world back-rotation — must match water_displace.
+        const float invTile = 1.0 / pc.tileSize1;
+        d += oceanC1World(sampleBicubicRG(displace1, oceanC1Domain(worldXZ) * invTile)) * invTile;
+    }
+    if ((mask & pc.cascadeMask & 4u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize2;
+        d += sampleBicubicRG(displace2, worldXZ * invTile) * invTile;
+    }
+    return d * pc.choppiness;
+}
+
+// 1 − J of (x,z) → (x,z) + Dxz over the masked cascades, central-differenced
+// at stencil half-width `eps`. Positive = the surface is compressing/folding
+// (a breaking crest); the stencil width sets which wavelengths register.
+float jacobianFold(vec2 p, uint mask, float eps) {
+    const vec2 dL = sampleDispXZSmooth(p + vec2(-eps, 0.0), mask);
+    const vec2 dR = sampleDispXZSmooth(p + vec2( eps, 0.0), mask);
+    const vec2 dD = sampleDispXZSmooth(p + vec2(0.0, -eps), mask);
+    const vec2 dU = sampleDispXZSmooth(p + vec2(0.0,  eps), mask);
+    const float inv2e = 0.5 / eps;
+    const float dDxDx = (dR.x - dL.x) * inv2e;
+    const float dDxDz = (dU.x - dD.x) * inv2e;
+    const float dDzDx = (dR.y - dL.y) * inv2e;
+    const float dDzDz = (dU.y - dD.y) * inv2e;
+    return 1.0 - ((1.0 + dDxDx) * (1.0 + dDzDz) - dDxDz * dDzDx);
+}
+
+void main() {
+    const uvec2 px = gl_GlobalInvocationID.xy;
+    if (px.x >= pc.foamRes || px.y >= pc.foamRes) return;
+
+    // World XZ this texel anchors. UV is [0,1)² mapped onto the foam tile.
+    const vec2 uv      = (vec2(px) + 0.5) / float(pc.foamRes);
+    const vec2 worldXZ = uv * pc.foamTileSize;
+
+    // ── Natural Jacobian foam ────────────────────────────────────────
+    // Foam must land where the crest is SEEN: shading samples this texture
+    // at the DISPLACED world XZ of the hit point, but the wave field is
+    // defined over reference (undisplaced) coordinates. Invert x = q + D(q)
+    // with two fixed-point iterations so the Jacobian is evaluated at the
+    // reference point whose displaced image is this texel — without this
+    // the foam sits off-crest by the full chop displacement.
+    vec2 q = worldXZ - sampleDispXZ(worldXZ, 0xFFu);
+    q      = worldXZ - sampleDispXZ(q, 0xFFu);
+
+    // Two-scale folding measure:
+    //   coarse — cascade 0 (1 km tile) at a ~2 m stencil: swell-crest foam.
+    //   fine   — cascade 1 (100 m tile) at a sub-metre stencil: the small
+    //            whitecaps that make a wind-blown sea read as alive. The old
+    //            single 3.9 m stencil over the summed field low-pass-filtered
+    //            these out entirely, which is why foam only ever appeared as
+    //            big soft swell blobs.
+    // Cascade 2 (8 m tile) is deliberately excluded: its Jacobian would stamp
+    // a visible 8 m repeating foam grid, and its wavelengths barely fold.
+    // First-order in the displacement gradients, fold terms add: the overlap
+    // (chop folding ON a breaking swell crest) saturates toward 1 — exactly
+    // where real whitewater is densest.
+    const float texel      = pc.foamTileSize / float(pc.foamRes);
+    // Coarse stencil at tileSize0/256 (≈4 m): folding is spectrally dominated
+    // by content near the cascade's Nyquist, so a texel-scale stencil measures
+    // a field of per-texel bumps. Combined with a steep ramp those deposited
+    // as saturated ~1 m squares aligned to the cascade-0 texel grid — the
+    // long-standing visible "foam texels" (≈1/30 of the 28 m vessel). The
+    // wide stencil measures swell-scale folding instead; sub-4 m whitecap
+    // detail belongs to cascade 1.
+    const float foldCoarse = jacobianFold(q, 1u, pc.tileSize0 / 256.0);
+    const float foldFine   = jacobianFold(q, 2u, max(pc.tileSize1 / 256.0, texel));
+    // GRADED ramps + soft-knee saturation (1 − e^−x). A near-binary threshold
+    // re-quantizes the band-limited fold field into hard texel-grid blobs no
+    // matter how smoothly it is sampled; graded deposits leave the shading
+    // lifecycle mask a real gradient to shape. Genuinely breaking crests
+    // (multi-texel folding, coarse+fine overlapping) still saturate toward 1.
+    // NOTE: the shading mask in deferred_shade.comp is
+    // calibrated to this curve (sheet solidifies from coverage ≈ 0.55) — they
+    // must be retuned TOGETHER or the ocean under/over-foams.
+    const float foamCoarse  = max(foldCoarse - 0.02, 0.0) / 0.12;
+    const float foamFine    = max(foldFine   - 0.03, 0.0) / 0.25;
+    // natFoamScale: the fold measure is scale-free (dimensionless displacement
+    // gradients), so a pond's cm-ripples "fold" as readily as ocean swell —
+    // but real short waves don't whitecap (surface tension damps them, which
+    // the model lacks). Ocean::create derives this from the tile scale so
+    // small water reads calm; it's also a live artistic knob (params.foamAmount).
+    const float foamInstant = pc.natFoamScale *
+            (1.0 - exp(-3.0 * (min(foamCoarse, 1.4) + 0.85 * min(foamFine, 1.0))));
+
+    // ── Vessel wake foam ─────────────────────────────────────────────
+    // Iterates the historical pose trail and takes MAX over each
+    // sample's contribution, so the foam line traces the boat's
+    // actual sailed curve through turns instead of snapping to the
+    // current heading every frame. Two contributions per sample:
+    //   A — straight foam trail behind the stern (gaussian × exp)
+    //   D — bow V-wedge ridge foam (sharp crest along the V boundary)
+    // Toroidal delta handles the cascade-tile wrap so the boat at
+    // negative world coords still gets foam at its modular twin texel.
+    //
+    // Falls back to a single current-pose evaluation when no trail is
+    // populated (no historical buffer set, or vessel just spawned).
+    float wakeFoam = 0.0;
+    if (pc.hullHalfLength > 0.0) {
+        if (pc.wakeTrailAddr != 0ul && pc.wakeTrailCount > 0u) {
+            WakeTrailBuf wt = WakeTrailBuf(pc.wakeTrailAddr);
+            for (uint si = 0u; si < pc.wakeTrailCount; ++si) {
+                const WakeSample s = wt.s[si];
+                const float sSpeed = abs(s.speed);
+                const float sGate  = smoothstep(0.5, 1.5, sSpeed);
+                if (sGate <= 0.0) continue;
+                const vec2 d = toroidalDelta(worldXZ,
+                                             vec2(s.worldX, s.worldZ),
+                                             pc.foamTileSize);
+                const float sLX = s.cosYaw * d.x - s.sinYaw * d.y;
+                const float sLZ = s.sinYaw * d.x + s.cosYaw * d.y;
+                const float sAgeFade = exp(-s.age / 5.0);
+                // A — foam trail behind stern (along the sample's local −Z).
+                const float sDistBehind = -sLZ - pc.hullHalfLength;
+                if (sDistBehind > 0.0) {
+                    const float lenDecay   = 30.0;
+                    const float beamSpread = pc.hullHalfBeam * 1.5;
+                    const float lateral    = exp(-(sLX * sLX) /
+                                                 (beamSpread * beamSpread));
+                    const float along      = exp(-sDistBehind / lenDecay);
+                    wakeFoam = max(wakeFoam,
+                                   sGate * 0.95 * along * lateral * sAgeFade);
+                }
+                // D — bow V-wedge ridge foam, gated by per-sample
+                // hullFade so foam doesn't appear under the boat's
+                // historical hull footprint.
+                const float sDistAft = pc.hullHalfLength - sLZ;
+                if (sDistAft > 0.0 && sDistAft < pc.hullHalfLength * 5.0) {
+                    const float uHull = clamp(-sLZ / pc.hullHalfLength, -1.0, 1.0);
+                    float sHalfBeamAtLZ;
+                    if (uHull <= 0.0) {
+                        sHalfBeamAtLZ = pc.hullHalfBeam *
+                                        pow(max(1.0 - uHull * uHull, 0.0), 0.6);
+                    } else {
+                        sHalfBeamAtLZ = pc.hullHalfBeam *
+                                        (1.0 - 0.25 * uHull * uHull);
+                    }
+                    const float sHullEdgeX = abs(sLX) - sHalfBeamAtLZ;
+                    const float sHullEdgeZ = abs(sLZ) - pc.hullHalfLength;
+                    const float sHullFade  = smoothstep(0.0, 2.0,
+                                                        max(sHullEdgeX, sHullEdgeZ));
+                    if (sHullFade <= 0.0) continue;
+                    const float tanAV     = 0.36;
+                    const float expectedX = tanAV * sDistAft;
+                    const float dRidge    = abs(abs(sLX) - expectedX);
+                    const float ridgeFoam = exp(-(dRidge * dRidge) / (0.5 * 0.5));
+                    const float alongDec  = exp(-sDistAft / (pc.hullHalfLength * 3.0));
+                    wakeFoam = max(wakeFoam,
+                                   sGate * 0.6 * ridgeFoam * alongDec * sAgeFade * sHullFade);
+                }
+            }
+        } else {
+            const float wakeSpeed = abs(pc.forwardSpeed);
+            const float wakeGate  = smoothstep(0.5, 1.5, wakeSpeed);
+            if (wakeGate > 0.0) {
+                const vec2 d = toroidalDelta(worldXZ,
+                                             vec2(pc.hullCenterX, pc.hullCenterZ),
+                                             pc.foamTileSize);
+                const float lX = pc.hullCosYaw * d.x - pc.hullSinYaw * d.y;
+                const float lZ = pc.hullSinYaw * d.x + pc.hullCosYaw * d.y;
+                const float distBehind = -lZ - pc.hullHalfLength;
+                if (distBehind > 0.0) {
+                    const float lenDecay   = 30.0;
+                    const float beamSpread = pc.hullHalfBeam * 1.5;
+                    const float lateral    = exp(-(lX * lX) / (beamSpread * beamSpread));
+                    const float along      = exp(-distBehind / lenDecay);
+                    wakeFoam = max(wakeFoam, wakeGate * 0.95 * along * lateral);
+                }
+                const float distAft = pc.hullHalfLength - lZ;
+                if (distAft > 0.0 && distAft < pc.hullHalfLength * 5.0) {
+                    const float uHull = clamp(-lZ / pc.hullHalfLength, -1.0, 1.0);
+                    float halfBeamAtLZ;
+                    if (uHull <= 0.0) {
+                        halfBeamAtLZ = pc.hullHalfBeam *
+                                       pow(max(1.0 - uHull * uHull, 0.0), 0.6);
+                    } else {
+                        halfBeamAtLZ = pc.hullHalfBeam * (1.0 - 0.25 * uHull * uHull);
+                    }
+                    const float hullEdgeX = abs(lX) - halfBeamAtLZ;
+                    const float hullEdgeZ = abs(lZ) - pc.hullHalfLength;
+                    const float curHullFade = smoothstep(0.0, 2.0,
+                                                         max(hullEdgeX, hullEdgeZ));
+                    const float tanAV     = 0.36;
+                    const float expectedX = tanAV * distAft;
+                    const float dRidge    = abs(abs(lX) - expectedX);
+                    const float ridgeFoam = exp(-(dRidge * dRidge) / (0.5 * 0.5));
+                    const float alongDec  = exp(-distAft / (pc.hullHalfLength * 3.0));
+                    wakeFoam = max(wakeFoam,
+                                   wakeGate * 0.6 * ridgeFoam * alongDec * curHullFade);
+                }
+            }
+        }
+    }
+
+    // ── External disturbance splats ───────────────────────────────────
+    float disturbFoam = 0.0;
+    if (pc.disturbAddr != 0ul && pc.disturbCount > 0u) {
+        DisturbBuf db = DisturbBuf(pc.disturbAddr);
+        for (uint k = 0u; k < pc.disturbCount; ++k) {
+            const DisturbPoint dp = db.p[k];
+            const vec2 dd = toroidalDelta(worldXZ,
+                                          vec2(dp.worldX, dp.worldZ),
+                                          pc.foamTileSize);
+            const float r2  = dp.radius * dp.radius;
+            if (r2 <= 0.0) continue;
+            const float d2  = dd.x * dd.x + dd.y * dd.y;
+            const float g   = dp.intensity * exp(-d2 / r2);
+            disturbFoam = max(disturbFoam, g);
+        }
+    }
+
+    // ── Combine + decay ──────────────────────────────────────────────
+    const float instantTotal = max(foamInstant, max(wakeFoam, disturbFoam));
+    const float prev         = imageLoad(foam, ivec2(px)).r;
+    const float result       = max(instantTotal, prev * pc.decay);
+
+    imageStore(foam, ivec2(px), vec4(result));
+}

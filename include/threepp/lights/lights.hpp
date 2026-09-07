@@ -6,6 +6,7 @@
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/lights/HemisphereLight.hpp"
 #include "threepp/lights/PointLight.hpp"
+#include "threepp/lights/RectAreaLight.hpp"
 #include "threepp/lights/SpotLight.hpp"
 
 #endif//THREEPP_LIGHTS_HPP

@@ -1,0 +1,57 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+// Splat stage 5 — size the sort from the data.
+//
+// The expansion total is a property of the FRAME (how many tiles each visible
+// splat covers), it lives on the GPU in g.entryCount, and the host cannot see
+// it before it has to record the dispatches that consume it. So every pass
+// after the expansion used to be dispatched for the worst case — entryBudget_,
+// which is splatCount * kEntriesPerSplat and never looks at the data.
+//
+// The tail blocks do read the count and exit, which sounds nearly free and is
+// not: measured on the 5.0M Sanctuaire scan at 960x600, the sort cost 7.9 ms
+// with the camera pointed at EMPTY SPACE — 7.9 ms to sort zero entries, out of
+// a 9.9 ms sort in the framed view. Launching the grind is the cost, not the
+// work it declines to do.
+//
+// One workgroup, one thread, run after the expansion barrier: read the count
+// and write the group counts the histogram, the scatter and the range pass
+// actually need. A count of 0 writes a group count of 0, which is a legal and
+// completely free vkCmdDispatchIndirect.
+//
+// pc.count = entryBudget_ (the ceiling the expansion clamped itself to).
+//
+// NOT sized from here, deliberately: the histogram's scan chain, whose per-level
+// counts AND scratch offsets are computed host-side in SplatPass::recordScan.
+// Making those dynamic needs per-level indirect args plus an offsets SSBO, and
+// it would buy little — the histogram is entryBudget_/32 words against the
+// hist+scatter passes' 8 x entries x 8 bytes of keys and payloads, so ~98 % of
+// the sort's traffic is already covered by the two dispatches sized here. The
+// scan still runs at worst-case extent over a histogram whose tail is ZEROED by
+// the host each pass (SplatPass.cpp) — which it must be, because the tail blocks
+// no longer run and their bins would otherwise be last frame's.
+
+layout(local_size_x = 1) in;
+
+#include "splat_common.glsl"
+
+void main() {
+    // The expansion reports what it WANTED in g.entryCount and separately
+    // counts what did not fit in g.overflow; the keys past the budget were
+    // never written, so the sort must cover the budget at most. This min() is
+    // what keeps a truncated frame behaving exactly as it did before.
+    const uint n = min(g.entryCount, pc.count);
+
+    // Histogram and scatter: kRadixBlock entries per workgroup, and both
+    // passes of all 8 rounds use the same extent, so one command serves them.
+    indirect[0] = (n + kRadixBlock - 1u) / kRadixBlock;
+    indirect[1] = 1u;
+    indirect[2] = 1u;
+
+    // Tile ranges: one thread per entry at 256 per workgroup.
+    indirect[3] = (n + 255u) / 256u;
+    indirect[4] = 1u;
+    indirect[5] = 1u;
+}

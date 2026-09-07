@@ -13,7 +13,7 @@ namespace threepp {
     class Spherical;
     class Quaternion;
     class Camera;
-    class InterleavedBufferAttribute;
+
     /*
      * Class representing a 3D vector.
      * A 3D vector is an ordered triplet of numbers (labeled x, y, and z),
@@ -63,6 +63,8 @@ namespace threepp {
         Vector3& setZ(float value);
 
         float& operator[](size_t index);
+
+        float operator[](size_t index) const;
 
         Vector3& copy(const Vector3& v);
 
@@ -226,8 +228,6 @@ namespace threepp {
 
         // Sets this vector's x, y and z components from index column of matrix.
         Vector3& setFromMatrix3Column(const Matrix3& m, unsigned int index);
-
-        Vector3& fromBufferAttribute(const InterleavedBufferAttribute& attribute, unsigned int index);
 
         [[nodiscard]] Vector3 clone() const;
 

@@ -22,6 +22,10 @@ namespace threepp {
                 : radius(radius), segments(segments), thetaStart(thetaStart), thetaLength(thetaLength) {}
         };
 
+        // Construction parameters, kept so the geometry can be re-serialized in
+        // three.js' compact parametric form (see ObjectExporter).
+        const Params parameters;
+
         [[nodiscard]] std::string type() const override;
 
         static std::shared_ptr<CircleGeometry> create(const Params& params);

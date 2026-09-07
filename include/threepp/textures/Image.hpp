@@ -2,39 +2,94 @@
 #ifndef THREEPP_IMAGE_HPP
 #define THREEPP_IMAGE_HPP
 
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
 
 namespace threepp {
 
-    typedef std::variant<std::vector<unsigned char>, std::vector<float>> ImageData;
+    // The pixel buffer a texture carries, in whichever CPU type the upload
+    // path wants: bytes (UnsignedByte), floats (Float), or raw half-float bits
+    // (HalfFloat — see threepp/extras/DataUtils.hpp for the conversion).
+    // uint16_t here always means half, never UnsignedShort: nothing in threepp
+    // uploads 16-bit integer pixel data, and giving the alternative one meaning
+    // keeps isHalfFloat() honest.
+    using ImageData = std::variant<std::vector<unsigned char>, std::vector<float>, std::vector<std::uint16_t>>;
 
     class Image {
 
     public:
-        unsigned int width;
-        unsigned int height;
-        unsigned int depth;
+        struct CompressedFormat {
+            uint32_t format;
+        };
+
+        std::optional<unsigned int> compressedFormat;
 
         Image(ImageData data, unsigned int width, unsigned int height)
-            : width(width), height(height), depth(0), data_(std::move(data)){};
+            : width_(width), height_(height), depth_(0), data_(std::move(data)) {}
 
         Image(ImageData data, unsigned int width, unsigned int height, unsigned int depth)
-            : width(width), height(height), depth(depth), data_(std::move(data)){};
+            : width_(width), height_(height), depth_(depth), data_(std::move(data)) {}
+
+        Image(std::vector<unsigned char> data, unsigned int width, unsigned int height,
+              CompressedFormat glCompressedFormat)
+            : width_(width), height_(height), depth_(0),
+              compressedFormat(glCompressedFormat.format),
+              data_(std::move(data)) {}
+
+        [[nodiscard]] unsigned int width() const noexcept { return width_; }
+        [[nodiscard]] unsigned int height() const noexcept { return height_; }
+        [[nodiscard]] unsigned int depth() const noexcept { return depth_; }
+
+        [[nodiscard]] bool isFloat() const noexcept {
+            return std::holds_alternative<std::vector<float>>(data_);
+        }
+
+        [[nodiscard]] bool isHalfFloat() const noexcept {
+            return std::holds_alternative<std::vector<std::uint16_t>>(data_);
+        }
+
+        // Bytes the pixel buffer holds, whichever CPU type it is. Textures are
+        // usually too small to be worth weighing; a splat cloud's SH texture is
+        // hundreds of megabytes, and a memory budget cannot weigh what it has
+        // no way to measure.
+        [[nodiscard]] std::size_t byteSize() const noexcept {
+            return std::visit([](const auto& v) {
+                return v.size() * sizeof(typename std::decay_t<decltype(v)>::value_type);
+            }, data_);
+        }
+
+        [[nodiscard]] int channels() const noexcept {
+            const size_t slices = depth_ > 0 ? depth_ : 1;
+            const size_t pixels = static_cast<size_t>(width_) * height_ * slices;
+            if (pixels == 0) return 0;
+            return std::visit([pixels](const auto& v) -> int {
+                return static_cast<int>(v.size() / pixels);
+            }, data_);
+        }
 
         void setData(ImageData data) {
-
             data_ = std::move(data);
         }
 
         template<class T = unsigned char>
         [[nodiscard]] std::vector<T>& data() {
+            return std::get<std::vector<T>>(data_);
+        }
 
+        template<class T = unsigned char>
+        [[nodiscard]] const std::vector<T>& data() const {
             return std::get<std::vector<T>>(data_);
         }
 
     private:
+        unsigned int width_;
+        unsigned int height_;
+        unsigned int depth_;
         ImageData data_;
     };
 

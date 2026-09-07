@@ -45,6 +45,19 @@ namespace threepp {
         std::function<void(int, Vector2)> f_;
     };
 
+    struct MouseDownListener: MouseListener {
+
+        explicit MouseDownListener(std::function<void(int, const Vector2&)> f)
+            : f_(std::move(f)) {}
+
+        void onMouseDown(int button, const Vector2& pos) override {
+            f_(button, pos);
+        }
+
+    private:
+        std::function<void(int, Vector2)> f_;
+    };
+
 }// namespace threepp
 
 

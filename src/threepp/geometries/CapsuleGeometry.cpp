@@ -21,6 +21,7 @@ namespace {
 
 CapsuleGeometry::CapsuleGeometry(const Params& params)
     : LatheGeometry(generatePoints(params.radius, params.length, params.capSegments), params.radialSegments),
+      parameters(params),
       radius(params.radius),
       length(params.length) {}
 

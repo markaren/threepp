@@ -13,17 +13,12 @@
 #include <limits>
 #include <unordered_map>
 #include <utility>
-#ifdef min
-#undef min
-#endif
-#ifdef max
-#undef max      
-#endif
+
 namespace {
 
     using Influence = std::pair<size_t, float>;
 
-    const auto MAX_SAFE_INTEGER = std::numeric_limits<unsigned int>::max();
+    const auto MAX_SAFE_INTEGER = (std::numeric_limits<unsigned int>::max)();
 
     bool numericalSort(const Influence& a, const Influence& b) {
         return a.first < b.first;

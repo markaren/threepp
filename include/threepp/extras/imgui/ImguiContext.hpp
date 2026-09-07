@@ -3,32 +3,123 @@
 #define THREEPP_IMGUI_HELPER_HPP
 
 #include <imgui.h>
-#ifdef _MSC_VER
-#include <windows.h>
-#include <imgui_impl_win32.h>
-#else
 #include <imgui_impl_glfw.h>
-#endif
 #include <imgui_impl_opengl3.h>
 
+#ifdef THREEPP_WITH_VULKAN
+#include <imgui_impl_vulkan.h>
+#include <threepp/renderers/VulkanRenderer.hpp>
+#endif
+
 #include <functional>
+#include <iostream>
+
+#include <threepp/canvas/Canvas.hpp>
 #include <threepp/canvas/Monitor.hpp>
+#include <threepp/renderers/Renderer.hpp>
 
 class ImguiContext {
 
 public:
-    explicit ImguiContext(void* window) {
+    explicit ImguiContext(void* window, bool useOpenGL = true) {
         ImGui::CreateContext();
-#ifdef _MSC_VER
-        ImGui_ImplWin32_InitForOpenGL((HWND) window);
+        if (useOpenGL) {
+            ImGui_ImplGlfw_InitForOpenGL(static_cast<GLFWwindow*>(window), true);
+#ifdef __EMSCRIPTEN__
+            ImGui_ImplOpenGL3_Init("#version 300 es");
 #else
-        ImGui_ImplGlfw_InitForOpenGL(static_cast<GLFWwindow*>(window), true);
+            ImGui_ImplOpenGL3_Init("#version 330 core");
 #endif
-#if EMSCRIPTEN
-        ImGui_ImplOpenGL3_Init("#version 300 es");
+            glInitialized_ = true;
+        } else {
+            ImGui_ImplGlfw_InitForOther(static_cast<GLFWwindow*>(window), true);
+        }
+
+        setFontScale(threepp::monitor::contentScale().first);
+    }
+
+    explicit ImguiContext(const threepp::Canvas& canvas)
+        : ImguiContext(canvas.windowPtr(), canvas.graphicsApi() == threepp::GraphicsAPI::OpenGL) {
+        canvas.onMonitorChange([this](int monitor) {
+            setFontScale(threepp::monitor::contentScale(monitor).first);
+        });
+    }
+
+    ImguiContext(const threepp::Canvas& canvas, threepp::Renderer& renderer)
+        : ImguiContext(canvas.windowPtr(), false) {
+
+#ifdef THREEPP_WITH_VULKAN
+        if (canvas.graphicsApi() == threepp::GraphicsAPI::Vulkan) {
+            vulkanRenderer_ = dynamic_cast<threepp::VulkanRenderer*>(&renderer);
+            if (vulkanRenderer_) {
+                auto device = static_cast<VkDevice>(vulkanRenderer_->nativeDevice());
+
+                // Small dedicated pool: a single combined-image-sampler is
+                // enough for the font atlas; ImGui_ImplVulkan_AddTexture grows
+                // it lazily for user textures.
+                VkDescriptorPoolSize poolSize{};
+                poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                poolSize.descriptorCount = 16;
+
+                VkDescriptorPoolCreateInfo poolInfo{};
+                poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+                poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+                poolInfo.maxSets = 16;
+                poolInfo.poolSizeCount = 1;
+                poolInfo.pPoolSizes = &poolSize;
+                vkCreateDescriptorPool(device, &poolInfo, nullptr, &vulkanDescriptorPool_);
+
+                VkFormat colorFormat = static_cast<VkFormat>(
+                        vulkanRenderer_->nativeSwapchainFormat());
+
+                VkPipelineRenderingCreateInfoKHR prCi{};
+                prCi.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR;
+                prCi.colorAttachmentCount = 1;
+                prCi.pColorAttachmentFormats = &colorFormat;
+
+                ImGui_ImplVulkan_InitInfo initInfo{};
+                initInfo.ApiVersion = VK_API_VERSION_1_3;
+                initInfo.Instance = static_cast<VkInstance>(vulkanRenderer_->nativeInstance());
+                initInfo.PhysicalDevice = static_cast<VkPhysicalDevice>(vulkanRenderer_->nativePhysicalDevice());
+                initInfo.Device = device;
+                initInfo.QueueFamily = vulkanRenderer_->graphicsQueueFamily();
+                initInfo.Queue = static_cast<VkQueue>(vulkanRenderer_->nativeGraphicsQueue());
+                initInfo.DescriptorPool = vulkanDescriptorPool_;
+                initInfo.MinImageCount = 2;
+                initInfo.ImageCount = vulkanRenderer_->imageCount();
+                initInfo.UseDynamicRendering = true;
+                initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+                initInfo.PipelineInfoMain.PipelineRenderingCreateInfo = prCi;
+
+                ImGui_ImplVulkan_Init(&initInfo);
+
+                vulkanRenderer_->setOverlayCallback([this](void* commandBuffer) {
+                    if (pendingDrawData_) {
+                        ImGui_ImplVulkan_RenderDrawData(
+                                pendingDrawData_,
+                                static_cast<VkCommandBuffer>(commandBuffer));
+                    }
+                });
+
+                vulkanInitialized_ = true;
+            }
+        } else
+#endif
+        {
+            // GL path — reinitialize for OpenGL (undo the InitForOther from delegated ctor)
+            ImGui_ImplGlfw_Shutdown();
+            ImGui_ImplGlfw_InitForOpenGL(static_cast<GLFWwindow*>(canvas.windowPtr()), true);
+#ifdef __EMSCRIPTEN__
+            ImGui_ImplOpenGL3_Init("#version 300 es");
 #else
-        ImGui_ImplOpenGL3_Init("#version 330 core");
+            ImGui_ImplOpenGL3_Init("#version 330 core");
 #endif
+            glInitialized_ = true;
+        }
+
+        canvas.onMonitorChange([this](int monitor) {
+            setFontScale(threepp::monitor::contentScale(monitor).first);
+        });
     }
 
     ImguiContext(ImguiContext&&) = delete;
@@ -36,52 +127,86 @@ public:
     ImguiContext& operator=(const ImguiContext&) = delete;
 
     void render() {
-        ImGui_ImplOpenGL3_NewFrame();
-#ifdef _MSC_VER
-        ImGui_ImplWin32_NewFrame();
-#else
-        ImGui_ImplGlfw_NewFrame();
+        if (!glInitialized_ && !vulkanInitialized_) return;
+
+        if (!dpiAwareIsConfigured_) {
+
+            ImGuiStyle& style = ImGui::GetStyle();
+            style = ImGuiStyle();
+            style.FontScaleDpi = dpiScale_;
+            style.ScaleAllSizes(dpiScale_);
+
+            dpiAwareIsConfigured_ = true;
+        }
+
+        if (glInitialized_) ImGui_ImplOpenGL3_NewFrame();
+#ifdef THREEPP_WITH_VULKAN
+        if (vulkanInitialized_) ImGui_ImplVulkan_NewFrame();
 #endif
+        ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
         onRender();
 
         ImGui::Render();
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+        if (glInitialized_) {
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        }
+#ifdef THREEPP_WITH_VULKAN
+        if (vulkanInitialized_) {
+            pendingDrawData_ = ImGui::GetDrawData();
+        }
+#endif
     }
 
     virtual ~ImguiContext() {
-        ImGui_ImplOpenGL3_Shutdown();
-#ifdef _MSC_VER
-        ImGui_ImplWin32_Shutdown();
-#else
-        ImGui_ImplGlfw_Shutdown();
+        if (glInitialized_) ImGui_ImplOpenGL3_Shutdown();
+#ifdef THREEPP_WITH_VULKAN
+        if (vulkanInitialized_) {
+            if (vulkanRenderer_) vulkanRenderer_->setOverlayCallback(nullptr);
+            // Drain any pending GPU work before tearing down ImGui's
+            // descriptor sets / pipelines.
+            vkDeviceWaitIdle(static_cast<VkDevice>(vulkanRenderer_->nativeDevice()));
+            ImGui_ImplVulkan_Shutdown();
+            if (vulkanDescriptorPool_) {
+                vkDestroyDescriptorPool(
+                        static_cast<VkDevice>(vulkanRenderer_->nativeDevice()),
+                        vulkanDescriptorPool_, nullptr);
+            }
+        }
 #endif
+        ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
+    }
+
+    void setFontScale(float scale) {
+        dpiAwareIsConfigured_ = false;
+        dpiScale_ = scale;
     }
 
     void makeDpiAware() {
 
-        if (!dpiAwareIsConfigured) {
+        std::cerr << "Deprecated function. Use setFontScale instead." << std::endl;
+    }
 
-            dpiAwareIsConfigured = true;
-
-            const auto [dpiScaleX, _] = threepp::monitor::contentScale();
-
-            ImGuiIO& io = ImGui::GetIO();
-            io.FontGlobalScale = dpiScaleX;// Assuming dpiScaleX = dpiScaleY
-
-            ImGuiStyle& style = ImGui::GetStyle();
-            style.ScaleAllSizes(dpiScaleX);
-        }
+    [[nodiscard]] float dpiScale() const {
+        return dpiScale_;
     }
 
 protected:
     virtual void onRender() = 0;
 
 private:
-    bool dpiAware = false;
-    bool dpiAwareIsConfigured = false;
+    bool glInitialized_ = false;
+    bool vulkanInitialized_ = false;
+    bool dpiAwareIsConfigured_ = true;
+    float dpiScale_ = 1.f;
+    ImDrawData* pendingDrawData_ = nullptr;
+#ifdef THREEPP_WITH_VULKAN
+    threepp::VulkanRenderer* vulkanRenderer_ = nullptr;
+    VkDescriptorPool vulkanDescriptorPool_ = VK_NULL_HANDLE;
+#endif
 };
 
 class ImguiFunctionalContext: public ImguiContext {
@@ -91,6 +216,13 @@ public:
         : ImguiContext(window),
           f_(std::move(f)) {}
 
+    explicit ImguiFunctionalContext(const threepp::Canvas& canvas, std::function<void()> f)
+        : ImguiContext(canvas),
+          f_(std::move(f)) {}
+
+    ImguiFunctionalContext(const threepp::Canvas& canvas, threepp::Renderer& renderer, std::function<void()> f)
+        : ImguiContext(canvas, renderer),
+          f_(std::move(f)) {}
 
 protected:
     void onRender() override {
