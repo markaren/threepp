@@ -345,3 +345,10 @@ The protocol: `run_protocol.py <folder> --assets <dir> --film` runs the control,
 processes at seed 0 and seeds 1 to 9 from the committed script (it refuses a dirty
 `crane_lift.py`), writes `protocol_meta.json` (git head, GPU, driver, every command line) and the
 films from the cited runs, then `analyze.py`.
+
+Late addition, 2026-09-07 (before the protocol): a hull IMU as a manifest row of its own, `imu`,
+the motion reference unit of a real crane. `tp.Imu` needs a PhysX body in its ancestry, so it rides a
+small kinematic body driven with the vessel's pose every frame; seeded MEMS noise exactly as
+`sensor_audit.py` seeds it, one sample per physics step (60 Hz), hashed sample by sample; the samples
+are saved as `imu` (N x 7: t, gyro xyz, accel xyz) beside the log in the npz. Checked on a 3 s run:
+the gyro's roll-rate peak matches the log's (0.0144 vs 0.0140 rad/s), mean acceleration 9.79 m/s^2.

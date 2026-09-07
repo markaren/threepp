@@ -27,6 +27,7 @@ Vulkan only.
 import json
 import math
 import os
+import struct
 import platform
 import sys
 import time
@@ -721,6 +722,7 @@ def op_target(t):
 
 rng = np.random.default_rng(SEED)
 FAN_SIGMA = 0.02                       # the tip sensor's seeded range noise, m
+IMU_HZ = 0.0                           # the hull IMU (motion reference unit): 0 = every physics substep, 60 Hz at one substep, as the audit harness samples
 AS_KP, AS_KD = 0.30, 0.40             # the LEGACY law (round 3): move the tip after the load. Kept for the record.
 AS_CLAMP, AS_CUTOUT = 1.2, 3.0         # correction clamp, and the swing beyond which the loop opens (runaway guard)
 sat_frames = [0]                       # frames with a joint at a POSITION limit
@@ -804,6 +806,7 @@ def antiswing_update(s_est, have_est, dt_sensor, state):
 #     mid-landing, and the visual hoist wire is drawn from the REAL tip to the real hook, so
 #     nothing on screen betrays it.
 px = {"world": None, "proxy": None, "body": None, "tip_body": None, "joint": None, "sensor": None,
+      "imu": None, "imu_rows": [], "imu_frame": [], "hull_body": None,
       "statics": None, "anchor": np.zeros(3), "centre": np.zeros(3), "tension": 0.0, "build_s": 0.0,
       "quat": None, "tilt": 0.0, "doors_excluded": [],
       "tower_min": 1e9, "tower_hit_t": None, "first_contact_t": None, "payout": 0.0, "max_stretch": 0.0,
@@ -844,6 +847,30 @@ def build_physx(tip):
         body.set_linear_damping(PHYSX_DAMP)
     sensor = tp.ContactSensor(proxy, rate_hz=0.0)
     w.register_sensor(sensor)
+    # The motion reference unit: an IMU on the hull at the vessel's origin (the point vessel_step
+    # rotates about), 100 Hz, seeded MEMS-class noise exactly as the paper's proprioceptive harness
+    # (sensor_audit.py) seeds it; a manifest row of its own, hashed sample by sample.
+    # The IMU needs a PhysX body in its ancestry: a small kinematic body rides the hull's pose
+    # (set_kinematic_target every frame from vessel_step's state), the way the twin surrogates
+    # its MRU; it sits at the vessel's origin, 36 m from the pickup, and never meets the load.
+    hull_mesh = tp.Mesh(tp.BoxGeometry(0.4, 0.4, 0.4), standard_material(0x202020))
+    hull_mesh.visible = False
+    hull_mesh.position.set(0.0, ves["y"], 0.0)
+    set_quat(hull_mesh.quaternion, vessel.quaternion)
+    hull_body = w.add(hull_mesh, density=1000.0, material=mat)
+    hull_body.set_kinematic(True)
+    px["hull_body"] = hull_body
+    mount = tp.Group()
+    hull_mesh.add(mount)
+    imu = tp.Imu(mount, rate_hz=IMU_HZ)
+    g = imu.gyro_noise
+    g.seed = SEED * 7919 + 1
+    imu.gyro_noise = g
+    a = imu.accel_noise
+    a.seed = (SEED * 7919 + 1) ^ 0x9E3779B97F4A7C15
+    imu.accel_noise = a
+    w.register_sensor(imu)
+    px["imu"] = imu
     t_cook = time.perf_counter()
     # The platform, the railing and the tower - but NOT the three doors. They are 1.09 m leaves
     # standing on the walking surface, and round 6's container came down on one and rested 0.49 m
@@ -936,7 +963,16 @@ def physx_step(tip, dt):
     px["payout"] = wire_len - wire0
     anchor_tip = tip - np.array([0.0, px["payout"], 0.0])
     px["tip_body"].set_kinematic_target(tp.Vector3(*anchor_tip))
+    if px["hull_body"] is not None:                       # the hull rides vessel_step's pose; the IMU reads it
+        px["hull_body"].set_kinematic_target(tp.Vector3(0.0, ves["y"], 0.0), vessel.quaternion)
     px["world"].step(dt)
+    px["imu_frame"] = []
+    if px["imu"] is not None:
+        for s in px["imu"].drain():
+            vals = (s.t, s.angular_velocity.x, s.angular_velocity.y, s.angular_velocity.z,
+                    s.linear_acceleration.x, s.linear_acceleration.y, s.linear_acceleration.z)
+            px["imu_frame"].append(vals)
+        px["imu_rows"].extend(px["imu_frame"])
     pos, quat = px["body"].position, px["body"].quaternion
     px["quat"] = quat
     f, _t = px["joint"].reaction()
@@ -1470,7 +1506,7 @@ def run_manifest(n, out, mode):
     renderer.event_camera_source = "final"
     renderer.event_camera_enabled = True
     keys = ["rgb", "aov.depth", "aov.normals", "aov.ids", "aov.motion", "aov.albedo",
-            "tip.rgb", "fan", "events.raw", "events.sorted", "traj", "vessel", "tension", "contact"]
+            "tip.rgb", "fan", "events.raw", "events.sorted", "traj", "vessel", "tension", "contact", "imu"]
     rows = {k: sa.Fnv() for k in keys}
     per_frame = {"rgb": [], "tip.rgb": []}
     import hashlib
@@ -1520,6 +1556,8 @@ def run_manifest(n, out, mode):
         # and the container's touchdown switch (ContactSensor's latched state).
         rows["tension"].update(np.float32(r[26]).tobytes())
         rows["contact"].update(np.uint8(r[22] > 0.5).tobytes())
+        for vals in px["imu_frame"]:                     # the hull IMU, every sample since the last frame
+            rows["imu"].update(struct.pack("<7d", *vals))
         if OP_PNG and mode == "op":
             _op_png(f, aovs["rgb"], tip_px)
     wall = time.perf_counter() - wall0
@@ -1586,7 +1624,8 @@ def run_manifest(n, out, mode):
     # log is the part that cannot be recomputed from anything else; a manifest that fails to
     # serialise (a numpy bool in the meta did exactly this once) must not take the log with it.
     if OP_OUT and mode == "op":
-        np.savez_compressed(OP_OUT[:-5] + ".npz", log=np.asarray(log_rows))
+        np.savez_compressed(OP_OUT[:-5] + ".npz", log=np.asarray(log_rows),
+                            imu=np.asarray(px["imu_rows"], np.float64).reshape(-1, 7))
     with open(out, "w") as fh:
         json.dump(manifest, fh, indent=1, default=_jsonable)
     for k, v in manifest["rows"].items():

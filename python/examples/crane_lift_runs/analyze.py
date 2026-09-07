@@ -12,7 +12,10 @@ Log columns (the .npz `log`): 0 t, 1-3 tip world, 4-6 hook world, 7-9 q (slew, l
 which has no load cell), 27-29 the container's CENTRE in the world and 30 its tilt in degrees
 (the angle its own up-axis makes with vertical; appended 2026-09-07, round 7, absent in rounds
 1-6; under --payload pbd the centre is the anchor minus the sling-plus-half-height drop and the
-tilt is identically zero, since that model's load cannot rotate).
+tilt is identically zero, since that model's load cannot rotate). The npz also carries `imu` (N x 7 float64: t, gyro xyz,
+accel xyz) from the hull IMU at 100 Hz, the motion reference unit, seeded MEMS noise as sensor_audit.py
+seeds it, on a kinematic body that rides the vessel's pose; a manifest row `imu` of its own (appended
+2026-09-07 late, absent before; empty under --payload pbd).
 
 Column 4-6, "hook", is whichever point the wire ends at in the payload model that produced the
 run: the pendulum bob under `--payload pbd` (rounds 1-5 and the pbd control of round 6), and the
