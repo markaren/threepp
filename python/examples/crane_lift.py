@@ -61,11 +61,13 @@ BUOY_PTS = [(-9.25, 41.35), (9.25, 41.35), (-9.25, -41.35), (9.25, -41.35)]   # 
 VESSEL_Y0 = -3.0                       # waterline sits 3 m up the hull: a laden vessel
 DECK_Y = 15.6 + VESSEL_Y0              # top of the hull mesh, where the crane pedestal stands
 CRANE_ON_VESSEL = (6.0, DECK_Y - 8.0, 25.0)    # the glb's Base sits 8 m up its own frame
-TURBINE_POS = (36.0, 0.0, 28.0)
+TURBINE_POS = (34.0, 0.0, 27.0)
 PLATFORM = np.array([TURBINE_POS[0] - 9.04, 20.3, TURBINE_POS[2] - 3.18])   # the landing target on the platform
-PICKUP = np.array([-11.6, DECK_Y, 38.2])        # where the container starts: the port quarter, 22 m from the king
-HOOK_ABOVE = 2.4                       # hook point above the container centre (glb)
-LOAD_H = 3.6 / 2                       # container half height (glb z)
+PICKUP = np.array([-6.0, DECK_Y, 36.0])         # where the container starts: the port quarter, 16 m from the king
+SLING_H = 2.6                          # hook to the container's top corners
+CONT_H = 3.11                          # the 20 ft container (Cargo_Container_Blue_Fixed.glb), origin at its bottom
+CONT_X, CONT_Z = 1.43, 3.50            # half width, half length
+LOAD_DROP = SLING_H + CONT_H           # hook to container bottom
 
 # ---- crane (Seaonics C25 envelope, from the twin) ---------------------------
 Q_MIN = np.array([-2.0 * math.pi, -1.379, 0.0]); Q_MAX = np.array([2.0 * math.pi, 0.873, 11.0])   # slew unwrapped; luff and telescope are the C25's
@@ -102,8 +104,8 @@ if not NO_CLOUDS:
 
 # ---- ocean -------------------------------------------------------------------
 OCEAN_SIZE = 2400.0
-ocean = tp.Ocean(size=OCEAN_SIZE, resolution=512, wind_speed=13.0, wind_theta=0.9,
-                 choppiness=0.78, wave_scale=2.0, fft_size=512, fetch=8e4)
+ocean = tp.Ocean(size=OCEAN_SIZE, resolution=512, wind_speed=13.5, wind_theta=0.9,
+                 choppiness=0.78, wave_scale=2.3, fft_size=512, fetch=8e4)
 ocean.params.tile_size_0 = 520.0
 ocean.params.tile_size_1 = 52.0
 ocean.params.tile_size_2 = 4.1
@@ -154,23 +156,27 @@ for nm in ("BoomWinchInlet", "BoomWinchOutlet", "OutletVis"):
     for ch in g.children:               # the glb's stretched wire cylinders: replaced by our own below
         ch.visible = False
 load_glb = crane_model.get_object_by_name("Load")
-crane_model.remove(load_glb)
+crane_model.remove(load_glb)                    # the glb's grey cube: replaced by a 20 ft container on four slings
 
-# The payload hangs in the world: pivot at the hook, container 2.4 m below it, facing the boom.
+# The payload hangs in the world: pivot at the hook, the container SLING_H below it, facing the boom.
 load_pivot = tp.Group()
-load_frame = tp.Group()
-load_frame.rotation.x = -math.pi / 2
-load_frame.rotation.z = -math.pi
-load_glb.position.set(0.0, 0.0, -HOOK_ABOVE)
-load_glb.rotation.set(0.0, 0.0, 0.0)
-load_frame.add(load_glb)
-load_pivot.add(load_frame)
+container = loader.load(os.path.join(ASSETS, "Cargo_Container_Blue_Fixed.glb"))
+for nm in ("LOD1", "LOD2"):
+    lod = container.get_object_by_name(nm)
+    if lod is not None:
+        lod.visible = False
+container.position.set(0.0, -LOAD_DROP, 0.0)
+load_pivot.add(container)
+hook_mesh = tp.Mesh(tp.SphereGeometry(0.22, 12, 8), standard_material(0x202020, roughness=0.4, metalness=0.9))
+load_pivot.add(hook_mesh)
 scene.add(load_pivot)
 load_meshes = []
-load_glb.traverse(lambda o: load_meshes.append(o) if isinstance(o, tp.Mesh) else None)
+container.traverse(lambda o: load_meshes.append(o) if isinstance(o, tp.Mesh) else None)
 LOAD_ID = 4040
 for mesh in load_meshes:
     renderer.set_instance_id(mesh, LOAD_ID)
+    mesh.material.color = 0x2b57a6            # the asset's colour map does not come through the loader; a blue box
+SLING_CORNERS = [np.array([sx * CONT_X, -SLING_H, sz * CONT_Z]) for sx in (-1, 1) for sz in (-1, 1)]
 
 # Wires: a unit cylinder along +Z, aimed with look_at and stretched with scale.z.
 wire_mat = standard_material(0x2a2a2a, roughness=0.5, metalness=0.8)
@@ -195,6 +201,7 @@ def aim_wire(w, a, b):
 
 
 hoist_wire = make_wire(0.05)
+slings = [make_wire(0.025) for _ in SLING_CORNERS]
 boom_wire_in = make_wire(0.06)
 boom_wire_out = make_wire(0.06)
 
@@ -212,6 +219,8 @@ fan_params = tp.LidarParams()
 fan_params.max_range = 60.0
 fan_params.detector_threshold = 0.0
 FAN_LAST = {}
+SENSOR_DROP = np.array([0.0, -0.9, 0.0])      # the sensor head hangs under the boom tip, clear of its mesh
+fan_seen = [0, 0]                              # (scans, scans that found the container)
 
 
 def wpos(o):
@@ -287,7 +296,7 @@ def ik(target, q0, iters=6):
 
 
 def actuate(q_cmd, dt):
-    """First-order hydraulic lag, then the C25 rate and acceleration limits (the twin's stepJointActuator)."""
+    """First-order drive lag (the crane is electric), then the C25 rate and acceleration limits (the twin's stepJointActuator)."""
     global q, q_vel, q_filt
     q_filt += (q_cmd - q_filt) * min(1.0, dt / TAU)
     v_des = np.clip((q_filt - q) / dt, -V_MAX, V_MAX)
@@ -303,7 +312,7 @@ PEND_SUB = 4
 
 
 def pendulum_step(tip, dt):
-    """Position-based: gravity, then the rod constraint to the tip, velocity from the corrected move."""
+    """Position-based: gravity, then the wire as a DISTANCE constraint (it can go slack, never push), velocity from the corrected move."""
     if pend["p"] is None:
         pend["p"] = tip + np.array([0.0, -wire_len, 0.0])
         return pend["p"]
@@ -314,7 +323,7 @@ def pendulum_step(tip, dt):
         p_new = p + v * h
         d = p_new - tip
         n = float(np.linalg.norm(d))
-        if n > 1e-6:
+        if n > wire_len:                          # taut: pull the hook back onto the sphere; slack: fall free
             p_new = tip + d * (wire_len / n)
         v = (p_new - p) / h
         p = p_new
@@ -330,26 +339,35 @@ def smooth(u):
 
 def op_target(t):
     """Nominal tip target in the world and the wire length, as a function of simulation time."""
-    hover_up = 3.0
-    A = PICKUP + np.array([0.0, wire0 + HOOK_ABOVE + LOAD_H, 0.0])            # tip above the pickup
-    B = PLATFORM + np.array([0.0, hover_up + HOOK_ABOVE + LOAD_H, 0.0])       # tip above the platform
+    hover_up = 2.0
+    A = PICKUP + np.array([0.0, wire0 + LOAD_DROP, 0.0])            # tip above the pickup, the container on the deck
+    B = PLATFORM + np.array([0.0, hover_up + LOAD_DROP, 0.0])       # tip above the platform
     if t < 4.0:
         return A, wire0
-    if t < 34.0:                                    # the transfer, lifting first then swinging out
-        u = smooth((t - 4.0) / 30.0)
-        p = A + (B - A) * u
-        p[1] += 2.5 * math.sin(math.pi * u)         # clear the bulwark
+    if t < 44.0:                                    # the transfer: a slew ROUND the king at the boom's reach, not a line over it
+        u = smooth((t - 4.0) / 40.0)
+        ra, rb = A[[0, 2]] - KING_XZ, B[[0, 2]] - KING_XZ
+        tha, thb = math.atan2(ra[1], ra[0]), math.atan2(rb[1], rb[0])
+        dth = (thb - tha + math.pi) % (2.0 * math.pi) - math.pi
+        th = tha + dth * u
+        r = float(np.linalg.norm(ra)) * (1.0 - u) + float(np.linalg.norm(rb)) * u
+        p = np.array([KING_XZ[0] + r * math.cos(th), A[1] * (1.0 - u) + B[1] * u, KING_XZ[1] + r * math.sin(th)])
+        p[1] += 1.0 * math.sin(math.pi * u)         # clear the bulwark
         return p, wire0
-    if t < 50.0:                                    # pay out until the container hovers 1 m over the grating
-        u = smooth((t - 34.0) / 16.0)
+    if t < 56.0:                                    # pay out until the container hovers 1 m over the grating
+        u = smooth((t - 44.0) / 12.0)
         return B, wire0 + (hover_up - 1.0) * u
     return B, wire0 + hover_up - 1.0
 
 
-wire0 = 10.0
+wire0 = 7.0
+KING_XZ = np.array([CRANE_ON_VESSEL[0], CRANE_ON_VESSEL[2]])   # the slew axis in the world at rest
 rng = np.random.default_rng(SEED)
 FAN_SIGMA = 0.02                       # the tip sensor's seeded range noise, m
-AS_KP, AS_KD = 0.55, 0.65             # anti-swing: move the tip after the load
+AS_KP, AS_KD = 0.30, 0.40             # anti-swing: move the tip after the load
+AS_CLAMP, AS_CUTOUT = 1.2, 3.0         # correction clamp, and the swing beyond which the loop opens (runaway guard)
+sat_frames = [0]                       # frames with a joint at its limit
+sat_joint = np.zeros(6, int)           # per joint: at min, at max
 swing_est = {"s": np.zeros(2), "ds": np.zeros(2), "seen": False}
 sensor_every = 3                       # 20 Hz
 frame_i = 0
@@ -362,16 +380,19 @@ antiswing_on = [not NO_ANTISWING]
 
 def tip_fan(tip):
     """The tip range sensor: one ray-traced dispatch straight down, the container found as the returns nearer than the deck."""
-    origins = np.repeat(tip[None].astype(np.float32), len(FAN_DIRS), 0)
+    o = tip + SENSOR_DROP
+    origins = np.repeat(o[None].astype(np.float32), len(FAN_DIRS), 0)
     r = renderer.scan_lidar(origins, FAN_DIRS, fan_params)
     hit = r["return_no"] > 0
     dist = r["distance"].astype(np.float64)
     dist = dist + rng.normal(0.0, FAN_SIGMA, dist.shape) * hit
     FAN_LAST["fan"] = np.concatenate([dist.astype(np.float32)[:, None], r["instance_id"][:, None].astype(np.float32)], 1)
-    near = hit & (dist < wire_len + HOOK_ABOVE + 2.0 * LOAD_H + 1.0) & (dist > 0.5)
+    near = hit & (dist < wire_len + LOAD_DROP + 1.0) & (dist > 0.5)
+    fan_seen[0] += 1
     if near.sum() < 4:
         return None
-    pts = tip[None] + FAN_DIRS[near].astype(np.float64) * dist[near][:, None]
+    fan_seen[1] += 1
+    pts = o[None] + FAN_DIRS[near].astype(np.float64) * dist[near][:, None]
     return pts.mean(0)
 
 
@@ -390,8 +411,10 @@ def step(dt=DT):
     if antiswing_on[0] and swing_est["seen"]:
         corr = AS_KP * swing_est["s"] + AS_KD * swing_est["ds"]
         n = float(np.linalg.norm(corr))
-        if n > 2.0:
-            corr *= 2.0 / n
+        if n > AS_CLAMP:
+            corr *= AS_CLAMP / n
+        if float(np.linalg.norm(swing_est["s"])) > AS_CUTOUT:
+            corr[:] = 0.0
         cmd[0] += corr[0]
         cmd[2] += corr[1]
     if NO_AMC:
@@ -399,6 +422,10 @@ def step(dt=DT):
     else:
         q_cmd = ik(cmd, q)
     actuate(q_cmd, dt)
+    if bool(np.any(q <= Q_MIN + 1e-6) or np.any(q >= Q_MAX - 1e-6)):
+        sat_frames[0] += 1
+        sat_joint[:3] += (q <= Q_MIN + 1e-6)
+        sat_joint[3:] += (q >= Q_MAX - 1e-6)
     tip_world = fk(q)
     hook = pendulum_step(tip_world, dt)
     load_world = hook
@@ -407,10 +434,13 @@ def step(dt=DT):
     load_pivot.update_matrix_world(True)
     # wires
     aim_wire(hoist_wire, tip_world, hook)
+    for w_, c_ in zip(slings, SLING_CORNERS):
+        v_ = load_pivot.local_to_world(tp.Vector3(*c_))
+        aim_wire(w_, hook, np.array([v_.x, v_.y, v_.z]))
     aim_wire(boom_wire_in, wpos(winch_in), wpos(in_target))
     aim_wire(boom_wire_out, wpos(winch_out), wpos(out_target))
     # the tip camera looks down the wire
-    tip_cam.position.set(*(tip_world + np.array([0.0, -0.3, 0.0])))
+    tip_cam.position.set(*(tip_world + SENSOR_DROP))
     tip_cam.look_at(*(tip_world + np.array([0.0, -20.0, 0.0])))
     # the tip sensor and the swing estimate (20 Hz, its own clock)
     if frame_i % sensor_every == 0 and frame_i > 2:
@@ -429,7 +459,7 @@ def step(dt=DT):
 # ---- cameras ---------------------------------------------------------------
 camera = tp.PerspectiveCamera(42.0, W / H, 0.3, 6000.0)
 SHOTS = {
-    "hero": ((-16.0, 9.0, 66.0), (15.0, 19.0, 26.0)),
+    "hero": ((-44.0, 11.0, 60.0), (14.0, 19.0, 26.0)),
     "deck": ((14.0, 24.0, 44.0), (10.0, 20.0, 26.0)),
     "turbine": ((60.0, 26.0, 62.0), (20.0, 22.0, 26.0)),
     "low": ((-8.0, 4.0, 60.0), (16.0, 22.0, 27.0)),
@@ -467,9 +497,10 @@ def op_report():
         return
     s = np.hypot(L[:, 4] - L[:, 1], L[:, 6] - L[:, 3])         # true horizontal swing, hook vs tip
     err = np.linalg.norm(L[:, 1:4] - L[:, 14:17], axis=1)      # tip vs its nominal target
-    print(f"lift: {L[-1, 0]:.1f} s, swing RMS {1e3 * math.sqrt((s ** 2).mean()):.0f} mm, max {1e3 * s.max():.0f} mm; "
+    print(f"lift: {L[-1, 0]:.1f} s, sensor saw the load in {fan_seen[1]}/{fan_seen[0]} scans, swing RMS {1e3 * math.sqrt((s ** 2).mean()):.0f} mm, max {1e3 * s.max():.0f} mm; "
           f"tip-target RMS {1e3 * math.sqrt((err ** 2).mean()):.0f} mm, max {1e3 * err.max():.0f} mm; "
-          f"heave span {L[:, 11].max() - L[:, 11].min():.2f} m, roll +-{math.degrees(np.abs(L[:, 13]).max()):.1f} deg")
+          f"heave span {L[:, 11].max() - L[:, 11].min():.2f} m, roll +-{math.degrees(np.abs(L[:, 13]).max()):.1f} deg; "
+          f"a joint at its limit in {sat_frames[0]}/{len(L)} frames (slew/luff/tel at min {sat_joint[:3].tolist()}, at max {sat_joint[3:].tolist()})")
 
 
 def run_manifest(n, out, mode):
@@ -488,6 +519,8 @@ def run_manifest(n, out, mode):
     keys = ["rgb", "aov.depth", "aov.normals", "aov.ids", "aov.motion", "aov.albedo",
             "tip.rgb", "fan", "events.raw", "events.sorted", "traj", "vessel"]
     rows = {k: sa.Fnv() for k in keys}
+    per_frame = {"rgb": [], "tip.rgb": []}
+    import hashlib
     n_events = 0
     wall0 = time.perf_counter()
     for f in range(n):
@@ -496,13 +529,16 @@ def run_manifest(n, out, mode):
                                          frame_time_us=int(sim_t * 1e6))
         aovs = renderer.read_aovs_typed(scene, camera, ["rgb", "depth", "normals", "instance_ids", "motion", "albedo"])
         rows["rgb"].update(sa.arr_bytes(aovs["rgb"]))
+        per_frame["rgb"].append(hashlib.sha256(sa.arr_bytes(aovs["rgb"])).hexdigest()[:16])
         rows["aov.depth"].update(sa.arr_bytes(aovs["depth"]))
         rows["aov.normals"].update(sa.arr_bytes(aovs["normals"]))
         rows["aov.ids"].update(sa.arr_bytes(aovs["instance_ids"]))
         rows["aov.motion"].update(sa.arr_bytes(aovs["motion"]))
         rows["aov.albedo"].update(sa.arr_bytes(aovs["albedo"]))
         if TIP_VIEW:
-            rows["tip.rgb"].update(sa.arr_bytes(renderer.read_view_rgb_pixels(TIP_VIEW)))
+            tv = sa.arr_bytes(renderer.read_view_rgb_pixels(TIP_VIEW))
+            rows["tip.rgb"].update(tv)
+            per_frame["tip.rgb"].append(hashlib.sha256(tv).hexdigest()[:16])
         if "fan" in FAN_LAST:
             rows["fan"].update(sa.arr_bytes(FAN_LAST.pop("fan")))
         ev, _ov = renderer.read_event_stream(max_events=4000000)
@@ -525,7 +561,9 @@ def run_manifest(n, out, mode):
             "gpu": next((getattr(renderer, a) for a in ("gpu_name", "device_name") if hasattr(renderer, a)), ""),
             "pins": {"sim_time": True, "auto_exposure": bool(renderer.auto_exposure)},
             "events": n_events, "wall_seconds": round(wall, 2),
+            "fan_scans": fan_seen[0], "fan_saw_load": fan_seen[1],
         },
+        "per_frame": per_frame,
         "rows": {k: v.row() if v.frames else "absent" for k, v in rows.items()},
     }
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)

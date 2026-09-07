@@ -1,0 +1,87 @@
+{
+ "meta": {
+  "threepp": "0.0.0+local",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "scene": "crane_lift",
+  "mode": "audit",
+  "frames": 120,
+  "warmup": 30,
+  "fps": 60,
+  "size": [
+   1280,
+   720
+  ],
+  "seed": 0,
+  "antiswing": true,
+  "amc": true,
+  "gpu": "",
+  "pins": {
+   "sim_time": true,
+   "auto_exposure": true
+  },
+  "events": 1248980,
+  "wall_seconds": 38.53
+ },
+ "rows": {
+  "rgb": {
+   "fnv": "714b4c4a2ecab138",
+   "bytes": 331776000,
+   "frames": 120
+  },
+  "aov.depth": {
+   "fnv": "ecbfafbfc25c260c",
+   "bytes": 442368000,
+   "frames": 120
+  },
+  "aov.normals": {
+   "fnv": "bfe16d3ba8d65270",
+   "bytes": 1327104000,
+   "frames": 120
+  },
+  "aov.ids": {
+   "fnv": "38015955f21a7cf6",
+   "bytes": 442368000,
+   "frames": 120
+  },
+  "aov.motion": {
+   "fnv": "0ad4cfce42afd77f",
+   "bytes": 884736000,
+   "frames": 120
+  },
+  "aov.albedo": {
+   "fnv": "c1ca5fbcfe191154",
+   "bytes": 442368000,
+   "frames": 120
+  },
+  "tip.rgb": {
+   "fnv": "5b110e526a4222d7",
+   "bytes": 46656000,
+   "frames": 120
+  },
+  "fan": {
+   "fnv": "a2c3c99722bd6b20",
+   "bytes": 257152,
+   "frames": 41
+  },
+  "events.raw": {
+   "fnv": "3aecab875ead92d0",
+   "bytes": 39967360,
+   "frames": 120
+  },
+  "events.sorted": {
+   "fnv": "18447f2f88883ada",
+   "bytes": 39967360,
+   "frames": 120
+  },
+  "traj": {
+   "fnv": "758beb9afc9bc360",
+   "bytes": 13440,
+   "frames": 120
+  },
+  "vessel": {
+   "fnv": "caa9b6365fc08bf4",
+   "bytes": 2880,
+   "frames": 120
+  }
+ }
+}
