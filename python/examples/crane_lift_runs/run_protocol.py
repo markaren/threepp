@@ -7,6 +7,8 @@ time, resumable: the open-loop control, N fresh processes at seed 0, and seeds 1
 Outputs follow analyze.py's names so `python analyze.py <out_folder>` reads them directly:
     op_s0_noas.json/.npz            the control (anti-swing off), seed 0
     op_s0_a.json ... op_s0_j.json   N fresh processes at seed 0 (replay: every row must agree)
+    op_s0_film.json/.npz            with --film: one more seed-0 process that also writes film_s0.mp4 and
+                                    hero_s0_*.png (kept separate so the N above share one configuration)
     op_s1.json ... op_s9.json       one process per seed (the fan-out of the trajectory)
 plus protocol_meta.json (git head, dirty state, GPU, driver, the exact command line per run,
 wall seconds) and one .log per run with the script's last lines.
@@ -57,7 +59,7 @@ def main():
     ap.add_argument("--allow-dirty", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-control", action="store_true")
-    ap.add_argument("--film", action="store_true", help="also write film_off.mp4 and film_s0_a.mp4 plus hero PNGs from the control and the first seed-0 process")
+    ap.add_argument("--film", action="store_true", help="also write films and hero PNGs: from the control, and from an EXTRA seed-0 process op_s0_film so the N replay processes stay identical in configuration")
     ap.add_argument("extra", nargs="*", help="arguments passed through to crane_lift.py (after --)")
     a = ap.parse_args()
     if not a.assets:
@@ -77,8 +79,9 @@ def main():
     if not a.no_control:
         jobs.append(("op_s0_noas", ["--seed", "0", "--no-antiswing"] + film("op_s0_noas", "off")))
     for k in range(a.processes):
-        name = f"op_s0_{'abcdefghijklmnopqrstuvwxyz'[k]}"
-        jobs.append((name, ["--seed", "0"] + (film(name, "s0_a") if k == 0 else [])))
+        jobs.append((f"op_s0_{'abcdefghijklmnopqrstuvwxyz'[k]}", ["--seed", "0"]))
+    if a.film:
+        jobs.append(("op_s0_film", ["--seed", "0"] + film("op_s0_film", "s0")))     # the eleventh process: the film run, compared like the others
     for s in range(1, a.seeds + 1):
         jobs.append((f"op_s{s}", ["--seed", str(s)]))
 

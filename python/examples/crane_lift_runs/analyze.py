@@ -106,7 +106,7 @@ def cross_track(p, ref):
 
 
 replay([f"audit_{k}.json" for k in "abcdefghij"], "audit, 120 frames")
-replay([f"op_s0_{k}.json" for k in "abcdefghij"], "the lift, seed 0")
+replay([f"op_s0_{k}.json" for k in "abcdefghij"] + ["op_s0_film.json"], "the lift, seed 0")
 
 L0 = log_of("op_s0_a.json")
 if L0 is not None:
