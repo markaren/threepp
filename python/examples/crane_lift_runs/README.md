@@ -123,6 +123,168 @@ reproduced in one frame, and the reason a tip event camera in the loop
 would use the shaded source or an albedo override. From the hero view:
 13 k (final) and 14 k (shaded) events per frame. No overflow anywhere.
 
+### Round 5, the feasible transfer, the landing and the integral law (`round5_demo/`)
+
+The scene changed in five places (`crane_lift.py`): defaults `--amc-kp 3 --ff-mode both`, the
+in-house TAA selected before the first frame (`aa: taa` in the manifest, no upscaler in the
+loop); a 60 s transfer instead of 40 s and a tip target over the platform that finally carries
+the WIRE as well as the sling drop (rounds 1-4 put the container 5.5 m UNDER the grating, inside
+the turbine base, and nothing in the log said so); the tip sensor gated on the container's
+instance id, its head moved 0.45 m outboard of the hoist wire and its centre taken as the
+mid-range of the returns in the load's own frame; the phase-1 integral law
+(`--law integral|legacy|off`, `--as-k`); and a grating contact so the container lands, sticks and
+lets the wire go slack, with a `landed` state that disengages the loop.
+
+The sensor was the round's real finding. On the wire's axis every one of the 784 rays left
+through the inside of the 0.05 m hoist-wire cylinder, so rounds 1-4 measured the WIRE, not the
+container - the near-vertical rays ran 0.5 to 6 m inside it and passed the range gate. That is
+the 0.84 / 0.53 gain of the plan's diagnosis, and it is why the swing estimate looked like half
+the swing: a point half way down the wire. Moved outboard and gated on the id, the fan carries
+about 170 container returns per scan and the estimate's gain is 1.02 to 1.05 with a mean bias of
+7 mm. The centroid of those returns is NOT the container's centre (the wire, hook and slings
+shadow the inboard half of the top face; the centroid sat 0.27 m outboard, gain 3.8), so the
+estimator takes the mid-range in the load frame instead.
+
+Five runs, seed 0, 76 s (4,560 frames), 1280 x 720, RTX 4070, 93 to 98 ms/frame. Swing is the
+horizontal hook-tip distance; the phases are 0-4 s hold, 4-64 s transfer, 64-76 s pay-out.
+
+| run | swing RMS/max | hold | transfer | pay-out | hook dev, pay-out before touchdown | settle | tip-target RMS | slew at rate limit | landed |
+|---|---|---|---|---|---|---|---|---|---|
+| loop open | **276 / 1041 mm** | 58 / 91 | 310 / 1041 | **51 / 107** | **36 mm** | 0.0 s | **123 mm** | 9.2 % | 73.67 s, 57 mm off |
+| integral k 0.5 | 879 / 2961 | 46 / 69 | 992 / 2961 | 66 / 178 | 89 mm | 0.0 s | 615 mm | 18.5 % | 73.67 s, **46 mm** off |
+| integral k 0.8 | 1071 / 3157 | 42 / 69 | 1207 / 3157 | 179 / 486 | 166 mm | 3.3 s | 728 mm | 20.7 % | 73.67 s, 104 mm off |
+| integral k 1.2 | 1197 / 3348 | **37 / 69** | 1331 / 3348 | 512 / 1164 | 312 mm | 10.0 s | 736 mm | 20.6 % | 73.70 s, 134 mm off |
+| legacy PD | 1128 / 2666 | 48 / 71 | 866 / 1896 | 2048 / 2666 | 2906 mm | never | 534 mm | 8.5 % | no |
+
+The loop still loses to the control, and the reason is measured this time: the SLEW HAS NO
+AUTHORITY LEFT during the transfer. The 60 s profile peaks at 0.0616 rad/s, 73 percent of the
+C25's 0.0838, exactly as phase 1 designed - but the motion compensation against the sea needs
+0.020 rad/s RMS and 0.052 rad/s at the 99th percentile of its own, so the slew is already at its
+rate limit in 9.2 percent of frames with the loop OPEN (36 percent between 20 and 34 s). Add the
+law's correction and it is 18 to 21 percent; the conditional anti-windup cannot hold, because
+saturation is intermittent and the integrator grows in the gaps until it reaches its 1.5 m clamp
+(measured: |u| max 1.50 m in all three integral runs). Below 16 s, where nothing saturates, the
+law does what phase 1 predicted: 55 mm RMS against the control's 83 to 114 mm, |u| under 0.19 m.
+The gain ordering is monotone - the smaller k, the less damage - so k = 0.5 is the pick, and it
+lands closest of all five runs (46 mm from the platform point). The legacy PD law diverges as it
+did in round 3 and never sets the container down.
+
+To make the transfer genuinely feasible the profile's peak must leave the compensation its
+0.05 rad/s: peak <= 0.034 rad/s, i.e. a transfer of 105 s or more (`--xfer`), or a shorter slew
+sweep than 141 degrees, or a pickup nearer the king. That is the next thing to try, and until it
+is tried the honest claim for E3 is the one the control run supports.
+
+Two more limits worth writing down. The landing point PLATFORM is the turbine glb's
+`CenterPoint (Should be at Landing Target)` node, and that node sits on the platform deck's
+south-west CORNER: the deck runs x 25.0 to 38.7, z 22.3 to 32.6 (13.7 x 10.3 m, walking surface
+y = 20.50 over plating at 20.30) away from it, so the container comes to rest with about half its
+length over the edge. The crane cannot do better - the deck's nearest point is 19.0 m from the
+king and the telescope is at 10.6 of 11 m there - so the fix is the vessel or the turbine three
+metres closer, not the controller. And the contact test is a 4.5 m radius about PLATFORM rather
+than the measured rectangle, which would reject the landing point itself by 4 cm.
+
+### Round 6, the deck, the operator's transfer, on-demand, and PhysX (`round6_physx/`)
+
+Four changes, each behind a flag with round 5 kept: `--geom new|old`, `--xfer-profile
+trapezoid|smooth`, `--engage ondemand|always`, `--payload physx|pbd`.
+
+**Geometry.** The turbine glb was measured rather than guessed: the RAILING encloses x -8.96 to
++4.69, z -4.72 to +5.62 about the turbine's own axis, the grating's walking surface is at
+y = 20.50, and the tower is a 3.08 m radius cylinder standing on that deck ON the turbine axis.
+So the deck is 13.65 x 10.34 m with a 6.2 m tower in the middle of it and only the -x arm is
+usable: 8.96 m from the near railing to the axis, **5.88 m of clear deck** between railing and
+tower surface. A 7.0 m container fits there only ACROSS the boom. The turbine moved from
+(34, 0, 27) to (30.10, 0, 24.55), which puts the landing point at (24.50, 20.50, 25.00),
+**18.50 m from the king** (round 5: 19.0 m, with the telescope at 10.6 of 11 m). The plan asked
+for the landing point 4.5 m inside the near railing; that is geometrically impossible here -
+4.5 m in is local x = -4.46 and the container's 1.43 m half-width then reaches 3.03 m from the
+axis, inside the 3.08 m tower. The compromise taken is 3.36 m inside the railing. Clearances:
+container's near face 1.93 m inside the near railing, both ends 1.67 m inside the side railings,
+boom tip 5.62 m from the tower axis, container's nearest FACE 1.09 m from the tower surface and
+its nearest CORNER 2.09 m. No joint reached a position limit in any of the six runs (0/3930).
+
+**The transfer.** A trapezoid instead of a smoothstep: ramp at the C25's 0.0838 rad/s^2 to 80
+percent of its 0.0838 rad/s rate limit, cruise, ramp down. Over the 137.5 deg sweep that is
+0.80 + 34.99 + 0.80 = **36.59 s**, and its length is a consequence rather than a choice. Luff and
+telescope stay on smoothsteps over the same interval. Phases: hold 0-4.00, transfer 4.00-40.59,
+**arrival hold 40.59-48.59**, pay-out 48.59-60.59, then hold (`--op 65`). The pay-out starts at a
+fixed time in every variant, so the runs are compared at equal times. The residual swing this
+leaves at arrival is **1068 mm** - two orders more than the smoothstep's, which is the point.
+
+**PhysX payload.** An invisible 2.86 x 3.11 x 7.00 m box proxy at 193 kg/m^3 (12.0 t) on ONE
+`Joint.Type.DISTANCE` tether (upper 6.0 m, lower 0, no stiffness) from a kinematic sphere at the
+boom tip; `add_static_trimesh_tree(turbine)` for the platform, railing and tower (13 colliders,
+0.01 s to cook, 0.01 s to build the whole world); `create_material(0.6, 0.5, 0.0)`;
+`ContactSensor(proxy)` as the touchdown switch and `Joint.reaction()` as the load cell (both
+manifest rows). No deck collider - the container hangs 0.3 m clear at t = 0. The tether reads
+118.6 kN carrying the load against mg = 117.7 kN and 0.00 kN once it is down, and stretches at
+most **25 mm over 6.0 m** (0.4 percent) with ONE substep per frame.
+
+Two joint-frame details. `Joint`'s constructor derives both local anchors from one world frame,
+so the container is created with its hook point AT the tip (baking anchors of (0,0,0) and
+(0, 4.155, 0)) and then `set_pose`d down to hang. And `Params.upper` is read once at creation
+with no way to reopen it, so rather than re-create the joint every centimetre of pay-out - which
+throws away the solver's warm start and restarts `reaction()`, the very signal the landing is
+detected with - the tether keeps its length and the KINEMATIC ANCHOR is lowered by the pay-out.
+Same motion, one pendulum period throughout, and the visual wire is drawn from the real tip.
+
+The container's heading is now fixed (`LOAD_YAW`): a distance joint transmits no torque, so a
+PhysX container keeps whatever heading it was picked up with (its quaternion's y stayed 0.00000
+over a whole lift), and the heading is chosen so the 7 m length lies across the boom at the
+landing. The tip fan widened to +-42 deg to cover metres of operator swing, and the estimator's
+yaw comes from that constant instead of the slew encoder.
+
+Six runs, seed 0, 65 s (3,930 frames), 1280 x 720, RTX 4070, 115 ms/frame. Swing is the
+horizontal distance from the tip to the CONTAINER'S ANCHOR.
+
+| run | hold | transfer | arrival hold | pay-out to touchdown | swing at T2 | at pay-out start | settle <0.25 m | touchdown | offset | on deck | tip-target | tower |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| open loop | 35 | 837 / 1565 | 516 / 1068 | 333 / 755 | 1068 | **461** | never | 58.92 s | 203 mm | yes | **198** | **struck, -0.07 m** |
+| k 0.3 | 35 | 837 / 1565 | 364 / 1068 | 369 / 709 | 1068 | 193 | 7.69 s | 56.60 s | 108 mm | yes | 216 | struck, -0.51 m |
+| **k 0.5** | 35 | 837 / 1565 | 324 / 1068 | 327 / 634 | 1068 | 167 | 7.67 s | 56.52 s | **78 mm** | yes | 226 | struck, -0.50 m |
+| k 0.8 | 35 | 837 / 1565 | 317 / 1068 | 321 / 595 | 1068 | 204 | 7.59 s | 56.55 s | 133 mm | yes | 237 | struck, -0.48 m |
+| k 0.5, engage always | 45 | **579** / 1548 | **320** / 645 | **115** / 222 | **378** | **52** | **5.87 s** | 58.88 s | 220 mm | yes | 681 | **never, +0.75 m** |
+| k 0.5, payload pbd | 58 | 638 / 1392 | 363 / 984 | 102 / 168 | 821 | 93 | 3.72 s | 58.88 s | 176 mm | yes | 225 | n/a |
+
+(mm RMS / max; the pay-out column stops at touchdown, after which the metric measures the tip's
+own correction offset against a load that is no longer moving.)
+
+The on-demand loop does beat the open loop where it acts: the swing at the moment the pay-out
+starts falls 461 to 167 mm at k = 0.5 (2.8x), the container reaches the deck 2.4 s sooner
+because it is hanging straighter, and it lands 78 mm from the point against 203 mm. k = 0.5 is
+the pick: k = 0.3 damps less and k = 0.8 lands wider with a bigger correction (|u| max 825 mm
+against 580).
+
+But the round's real finding is the one the control run made. **The operator's transfer swings
+the container into the tower at t = 40.33 s, 0.26 s BEFORE the arrival hold begins**, so the
+on-demand loop cannot prevent the strike - it is not yet engaged. Worse, once engaged it makes
+the strike deeper (-0.48 to -0.51 m of penetration against the control's -0.07 m), because the
+law's whole content is "move the tip toward the load" and the load is against an obstruction:
+the loop presses it in. The always-engaged run is the one that clears the tower entirely
+(minimum clearance +0.75 m, no contact at all before the pay-out) and settles to 52 mm by the
+start of the pay-out, and it pays for that with the tip 681 mm RMS off its nominal target and
+the slew on its rate limit in 50 percent of the transfer's frames against 34.9. So on-demand
+buys accuracy at the landing and always-on buys clearance from the structure, and neither is
+free.
+
+Two more measurements worth keeping. The tip sensor's gain reads **1.49 against the anchor and
+0.88 against the container's own centre** (1.04 in the pbd run, where they are the same point):
+that is geometry, not sensor error. A rigid container tilts with the rope, so its centre hangs
+on an effective pendulum of wire + 4.16 m while the anchor hangs on the wire alone, and the
+fan measures the top face. And **more PhysX substeps make this scene worse, not better**: at
+`--physx-sub 4` the transfer swing goes from 837/1565 to 965/2528 mm and the tower penetration
+from -0.50 to -0.69 m, because `set_kinematic_target` is called once per FRAME - PhysX moves the
+kinematic tip over ONE substep and then holds it still for the other three, which is a stair-step
+drive at four times the speed. One substep per frame is the right setting until the target is
+interpolated in an `on_pre_substep` callback.
+
+Open, for the next round: in the three on-demand runs the container comes to rest with its anchor
+0.49 m higher than a level box on the grating (26.70 m against 26.21 m; the control run rests at
+26.211 m, level to the millimetre), so it is perched on the deck furniture - the glb has three
+1.09 m doors and their plugs standing on the walking surface inside the railing - rather than
+bedded flat. Where the load comes down within a few tens of centimetres decides which. That, and
+the tower penetration depth, are the two things to look at before this scene is frozen.
+
 ## Next
 
 1. A swing law that damps (delayed feedback, or the twin's MRU feedforward),
@@ -137,3 +299,49 @@ would use the shaded source or an albedo override. From the hero view:
    frame.
 5. Asset clearance from Seaonics before any frame of this scene enters the
    paper or the video.
+
+
+## Rounds 7 and 8 (2026-09-07 night): the scene as frozen
+
+Lars's rule for the demo: it is a crane, and it uses sensors in the loop; everything else is
+simplified. Two findings of round 6 set the scene: the tower is a 3.08 m cylinder standing on the
+platform, so a 20 ft container beside it has about a metre of clearance and an operator's stop
+swings it into the tower; and the sea of rounds 1 to 7 was too aggressive for a lift.
+
+Round 7 (`round7_small/`, runs killed before completion): the payload is a 10 ft box (half the
+20 ft glb's length, 5 t; `--load 20ft` keeps the old one), the landing point is chosen for
+clearances (1.5 m to the tower surface, 1.0 m to every railing, clear of the three door leaves,
+which are also taken out of the collider set) and offset in +z so the box reads beside the tower
+in the hero frame; the turbine moved to (30.10, 0, 24.55) and the landing point is 18.5 m from the
+king. `meta.geom` carries `land_off`, `clear_rect`, `rail_margin`, `tower_r`.
+
+Round 8 (`round8_calm/`): the sea calmed (`--sea calm` is the default: wind 9 m/s, wave scale 1.3;
+the old sea is `--sea fresh`), the operator's stop softened (`--ramp 1.5` s instead of the drive's
+0.8 s limit), k = 0.5 on demand fixed (round 6's pick; no more sweeps). The look pass: the sun
+moved from in front of the lens behind the tower to behind the camera's left shoulder
+(SUN_DIR (-0.25, 0.50, 0.83)), exposure pinned at 0.90 by default (`--adapt-exposure` restores
+adaptation; E1's rendered-frame row is pinned, and one of three round-4 lifts differed in `rgb`
+with it adapting), 18 gulls abeam to port (`tp.Flock`, seeded, stepped on the sim clock, off
+with `--no-gulls`), the hero camera (-40, 9, 58) to (18, 19, 27), the tip inset lower right.
+
+Seed 0, 65 s, RTX 4070, TAA pinned, PhysX payload, one substep:
+
+| | transfer | arrival hold | swing at pay-out start | pay-out | landed | offset from the mark | tilt | contact |
+|---|---|---|---|---|---|---|---|---|
+| loop open | 422 mm RMS | 491 mm RMS | 444 mm | 517 mm RMS | 58.15 s | 686 mm | 0 deg | grating only; tower 1.02 m at the closest |
+| loop on (k 0.5, on demand) | 422 mm RMS | 240 mm RMS, under 150 mm 7.0 s after arrival | 108 mm | 72 mm RMS | 57.87 s | 20 mm | 0 deg | grating only; tower 0.94 m at the closest |
+
+The transfer is identical in both runs because the loop is off during it (the `vessel` row is
+the only manifest row the two runs share, as it should be). The sea in the run: heave span
+0.20 m, roll 0.64 deg; hold-phase tip error 13 mm. Tension 49 kN carrying the 5 t box, zero at
+rest.
+
+A gotcha found on the way: `renderer.read_aovs_typed(...)["rgb"]` already carries the displayed
+secondary view at its display rect, so the film composite that drew the inset itself produced
+two insets once the rect moved; the composite is now a no-op, and the `rgb` hash row includes the
+inset pixels. The round 8 films show the double inset; the protocol's films do not.
+
+The protocol: `run_protocol.py <folder> --assets <dir> --film` runs the control, ten fresh
+processes at seed 0 and seeds 1 to 9 from the committed script (it refuses a dirty
+`crane_lift.py`), writes `protocol_meta.json` (git head, GPU, driver, every command line) and the
+films from the cited runs, then `analyze.py`.

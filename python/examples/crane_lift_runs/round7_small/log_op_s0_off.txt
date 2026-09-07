@@ -1,0 +1,9 @@
+[VulkanContext] VK_EXT_headless_surface not available; headless canvas falls back to a hidden-window surface.
+[VulkanContext] picked GPU: NVIDIA GeForce RTX 4070
+[VulkanContext] ray query (VK_KHR_ray_query): enabled
+[VulkanContext] external memory export: enabled
+[VulkanContext] pipeline cache: WARM - loaded 7936695 bytes from C:\Users\LARSIV~1\AppData\Local\Temp\threepp_pipeline_cache.77abd077d8886e2c065f9e4b7ca3f1df.bin (pipelines reused)
+[threepp] DLSS: not available on this GPU/driver - falling back to FSR/TAA.
+[threepp] FSR 3.1 upscaler active (1280x720 display).
+[threepp] view 1: 480x270, 82.9 MB
+[vost#0:0/libx264 @ 0000019a87bb1e80] Multiple -pix_fmt options specified for stream 0, only the last option '-pix_fmt yuv420p' will be used.

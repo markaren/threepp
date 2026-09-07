@@ -2,6 +2,50 @@
 differing frame of the rendered rows, the seed spread of the lift, and the anti-swing control.
 
     python analyze.py <folder with audit_*.json, op_s0_{a,b,c}.json(.npz), op_s1.json, op_s0_noas.json>
+
+Log columns (the .npz `log`): 0 t, 1-3 tip world, 4-6 hook world, 7-9 q (slew, luff, telescope),
+10 wire length, 11 heave, 12 pitch, 13 roll, 14-16 nominal tip target, 17-18 sensor swing estimate,
+19-21 the MRU feedforward joint velocities q_dot_ff (appended 2026-09-07; absent in rounds 1-3),
+22 contact (0/1), 23 landed (0/1), 24-25 the anti-swing correction u in world x, z
+(appended 2026-09-07, round 5; absent in rounds 1-4), 26 hoist tension in newtons (appended
+2026-09-07, round 6; absent in rounds 1-5, and zero in any round-6 run made with --payload pbd,
+which has no load cell), 27-29 the container's CENTRE in the world and 30 its tilt in degrees
+(the angle its own up-axis makes with vertical; appended 2026-09-07, round 7, absent in rounds
+1-6; under --payload pbd the centre is the anchor minus the sling-plus-half-height drop and the
+tilt is identically zero, since that model's load cannot rotate).
+
+Column 4-6, "hook", is whichever point the wire ends at in the payload model that produced the
+run: the pendulum bob under `--payload pbd` (rounds 1-5 and the pbd control of round 6), and the
+CONTAINER'S OWN ANCHOR POINT - its top centre plus the sling height - under `--payload physx`.
+Round 6's container is a rigid body on a DISTANCE joint, so it tilts, and the anchor and the
+container's centre are no longer the same horizontal point: the centre hangs on an effective
+pendulum of wire + 4.16 m while the anchor hangs on the wire alone. The tip range sensor sees
+the CENTRE (columns 17-18), so |(17,18)| runs about 1.5x |swing| in a physx run by construction,
+not by sensor error; crane_lift.py's own report prints both ratios.
+
+Derived quantities the round-5 and round-6 tables use, all from those columns: the swing is the
+horizontal hook-tip distance, hypot(4-1, 6-3); the hook's nominal point is the tip target with
+the wire subtracted, (14, 15 - 10, 16); the wire slack is 10 - |(4,5,6) - (1,2,3)|; the sensor's
+gain is the median of |(17,18)| / |swing| over the frames carrying an estimate; the realised
+joint rates and accelerations are the first and second differences of 7-9 at 60 Hz, against
+V_MAX and A_MAX; the tether is slack (the load is down) where 26 falls to zero.
+
+The phase boundaries are in the manifest's meta.op. Rounds 1-4: hold 4 s, transfer 40 s, pay-out
+12 s. Round 5: 4 / 60 / 12 s. Round 6 adds an ARRIVAL HOLD between the transfer and the pay-out
+and the transfer's length follows from an acceleration-limited trapezoid rather than being
+chosen, so meta.op carries `boundaries` = [T1, T2, T3, T4] (4.00 / 40.59 / 48.59 / 60.59 s at
+the round-6 geometry) plus `t_arrive`, `profile`, `sweep_rad` and `xfer_peak_rate`. meta.geom
+carries the turbine placement, the measured deck rectangle and the tower; meta.payload the model,
+the container's mass, the PhysX substeps and the minimum container-to-tower clearance.
+
+Round 7 flies a 10 ft box (`--load 10ft|20ft`) and moves the landing point to where the round-7
+clearances hold (1.5 m to the tower surface, 1.0 m to every railing, no overlap with the three
+door leaves, which are also taken out of the collider set). meta.geom gains `land_off`,
+`clear_rect` (the rectangle the container's footprint must lie inside), `rail_margin`,
+`tower_margin` and the measured `doors`; meta.payload gains `load`, the box's half-extents,
+`doors_excluded`, the minimum railing and door clearances with the times they were crossed, and
+the resting attitude (`rest_tilt_deg`, `rest_anchor_above_level`, `in_clear_rect`). meta gains
+`joint_margin`: per joint, the smallest margin the run ever left to its position limits.
 """
 import glob
 import json
@@ -58,8 +102,8 @@ def cross_track(p, ref):
     return out
 
 
-replay(["audit_a.json", "audit_b.json", "audit_c.json"], "audit, 120 frames")
-replay(["op_s0_a.json", "op_s0_b.json", "op_s0_c.json"], "the lift, seed 0")
+replay([f"audit_{k}.json" for k in "abcdefghij"], "audit, 120 frames")
+replay([f"op_s0_{k}.json" for k in "abcdefghij"], "the lift, seed 0")
 
 L0 = log_of("op_s0_a.json")
 if L0 is not None:
@@ -71,8 +115,10 @@ if L0 is not None:
     Ln = log_of("op_s0_noas.json")
     if Ln is not None:
         sn = swing(Ln)
+        op = load("op_s0_a.json")["meta"].get("op", {})
+        t2 = op.get("t_hold", 4.0) + op.get("t_xfer", 40.0)     # the pay-out begins: 44 s in rounds 1-4, 64 s in round 5
         print(f"  without the anti-swing loop: swing RMS {1e3 * math.sqrt((sn ** 2).mean()):.0f} mm, max {1e3 * sn.max():.0f} mm "
-              f"(hold phase after 44 s: {1e3 * math.sqrt((sn[Ln[:, 0] > 44] ** 2).mean()):.0f} vs {1e3 * math.sqrt((s0[L0[:, 0] > 44] ** 2).mean()):.0f} mm RMS)")
+              f"(pay-out phase after {t2:.0f} s: {1e3 * math.sqrt((sn[Ln[:, 0] > t2] ** 2).mean()):.0f} vs {1e3 * math.sqrt((s0[L0[:, 0] > t2] ** 2).mean()):.0f} mm RMS)")
     seeds = [(k, log_of(f"op_s{k}.json")) for k in range(1, 10)]
     seeds = [(k, L) for k, L in seeds if L is not None]
     if seeds:

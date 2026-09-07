@@ -59,3 +59,7 @@ geodata/*
 # misc local helpers
 _build_aaa.bat
 build_py.bat
+
+# crane_lift run films: kept locally, never in the repository (the manifests, logs and frames are)
+python/examples/crane_lift_runs/**/*.mp4
+python/examples/crane_lift_r*snapshot.py

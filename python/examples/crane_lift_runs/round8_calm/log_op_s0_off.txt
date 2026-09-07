@@ -1,0 +1,59 @@
+[VulkanContext] VK_EXT_headless_surface not available; headless canvas falls back to a hidden-window surface.
+[VulkanContext] picked GPU: NVIDIA GeForce RTX 4070
+[VulkanContext] ray query (VK_KHR_ray_query): enabled
+[VulkanContext] external memory export: enabled
+[VulkanContext] pipeline cache: WARM - loaded 7936695 bytes from C:\Users\LARSIV~1\AppData\Local\Temp\threepp_pipeline_cache.77abd077d8886e2c065f9e4b7ca3f1df.bin (pipelines reused)
+[threepp] DLSS: not available on this GPU/driver - falling back to FSR/TAA.
+[threepp] FSR 3.1 upscaler active (1280x720 display).
+[threepp] view 1: 480x270, 82.9 MB
+[VulkanContext] present mode: MAILBOX
+[VulkanRenderer] geometry (1692 verts) dirty 3 frames in a row - graduated to the per-frame dynamic path (frame-cb refit, no drains)
+[vost#0:0/libx264 @ 0000020ccc5d29c0] Multiple -pix_fmt options specified for stream 0, only the last option '-pix_fmt yuv420p' will be used.
+start pose: slew 47 deg, luff 22 deg, telescope 3.4 m, tip error 0 mm
+physx: 10ft 5.0 t container (5000 kg at 161 kg/m3, 2.86 x 3.11 x 3.50 m) on a 6.0 m DISTANCE tether from a kinematic tip, 10 static trimeshes (0.01 s to cook), 1 substep(s) of 16.67 ms, damping 0.0; build 0.01 s
+physx: excluded from the collider set: Door (1), Door (2), Door (3) (kept visible; the doors are furniture, not structure)
+operation: hold 0-4.00 s, transfer 4.00-40.00 s (36.00 s, trapezoid, sweep 132.5 deg, peak slew 0.0670 rad/s = 80% of the limit), arrival hold 40.00-48.00 s, pay-out 48.00-60.00 s, then hold; --op >= 62.0
+geometry (new): turbine (30.1, 0.0, 24.55), landing point [23.85, 20.5, 26.55], 17.92 m from the king; deck rectangle x 21.14..34.79, z 19.83..30.17; landing point 2.71 m inside the near railing, tip to the tower axis 6.56 m, container's near face to the tower surface 2.05 m
+clearances with the 10ft box set down ON the landing point (2.86 x 3.50 m footprint x 22.42..25.28, z 24.80..28.30):
+  tower surface 1.75 m (asked 1.5); railings -x 1.28, +x 9.51, -z 4.97, +z 1.87 m (asked 1.0)
+  Door (1): x 34.41..35.02, z 24.12..25.31, y 20.50..21.59 -> gap 9.13 m, footprints clear
+  Door (2): x 29.21..30.40, z 29.59..30.16, y 20.50..21.59 -> gap 4.13 m, footprints clear
+  Door (3): x 21.08..22.28, z 21.61..22.17, y 20.50..21.59 -> gap 2.63 m, footprints clear
+  clear rectangle for the footprint: x 22.14..25.52 (3.38 m for a 2.86 m width, tolerance +-0.26 m), z 20.83..29.17; nominal landing inside: YES
+film: every 2nd frame of 3900 to C:/dev/threepp/python/examples/crane_lift_runs/round8_calm/film_off.mp4 at 30 fps, 1280x720 with the 480x270 tip inset
+png: arrival at t = 40.02 s (frame 2370) -> C:/dev/threepp/python/examples/crane_lift_runs/round8_calm/hero_off_arrival.png
+png: touchdown at t = 58.15 s (frame 3458) -> C:/dev/threepp/python/examples/crane_lift_runs/round8_calm/hero_off_touchdown.png
+png: maxswing 577 mm at t = 47.05 s -> C:/dev/threepp/python/examples/crane_lift_runs/round8_calm/hero_off_maxswing.png
+film: 1950 frames -> C:/dev/threepp/python/examples/crane_lift_runs/round8_calm/film_off.mp4, 1.1 ms/frame of composite + encode (1% of the run)
+  rgb            a535404779a3ecc9  frames=3900
+  aov.depth      156e57cfb2866cf8  frames=3900
+  aov.normals    0795399a3495a535  frames=3900
+  aov.ids        b6420a4cef0cc9a4  frames=3900
+  aov.motion     974fcfd7e322b5a4  frames=3900
+  aov.albedo     eaffdec42bc6cd34  frames=3900
+  tip.rgb        c8b443bd27f3460e  frames=3900
+  fan            e4b89f34ad4ac284  frames=1301
+  events.raw     cfa1ee8cb2c66380  frames=3900
+  events.sorted  07f449f09a094ec1  frames=3900
+  traj           224147453f163578  frames=3900
+  vessel         5a11c40d683a62b1  frames=3900
+  tension        d519397bd934aa29  frames=3900
+  contact        15aa4ec327e6d749  frames=3900
+op: 3900 frames after 30 warm-up, 95.7 ms/f, 26794183 events -> C:/dev/threepp/python/examples/crane_lift_runs/round8_calm/op_s0_off.json
+  hold     (0.0-4.0 s, 240 frames): swing RMS 13 mm, max 25 mm; tip-target RMS 13 mm; slew at the rate limit 0.0%
+  transfer (4.0-40.0 s, 2160 frames): swing RMS 422 mm, max 678 mm; tip-target RMS 89 mm; slew at the rate limit 12.1%
+  arrival  (40.0-48.0 s, 480 frames): swing RMS 491 mm, max 577 mm; tip-target RMS 25 mm; slew at the rate limit 0.0%
+  pay-out  (48.0-65.5 s, 1050 frames): swing RMS 594 mm, max 700 mm; tip-target RMS 25 mm; slew at the rate limit 0.0%
+  arrival: swing at T2 552 mm (first second RMS 538 mm, peak 577 mm); at the start of the pay-out 461 mm; settled under 150 mm never inside the arrival hold
+  tether: tension 49.2 kN carrying the load (49.0 kN = mg), 49.3 kN in the second before first contact (t = 55.82 s), 0.0 kN after; max stretch over the 6.0 m length 25 mm
+  clearance: container to the tower surface, min 1.02 m, never touched; no contact before the pay-out
+  clearance: to the nearest railing, min -3.50 m (never crossed below the railing top); to the nearest door (Door (3)), min 1.66 m (never overlapped)
+  at rest (last second): tilt 0.00 deg (max 0.00), anchor 26.211 m = +0.001 m against a box lying flat (26.210); footprint x 22.53..25.58, z 25.38..29.03; inside the clear rectangle (x 22.14..25.52, z 20.83..29.17): NO; tower 1.70 m, railing 1.14 m, door 3.21 m
+  MRU feedforward (both): |q_dot_ff| RMS slew/luff/tel 0.0493/0.0152/0.1782
+  sensor: the load in 1310/1310 scans, 84 returns per hit, estimate gain (median |s_est|/|s_true|) 1.455; against the container's own centre 0.881, against the anchor 1.447
+  LANDED at t = 58.15 s (10.15 s into the pay-out), container centre 686 mm from the platform point (dx +0.21, dz +0.65 m), INSIDE the deck rectangle; in contact for 582/3930 frames, max wire slack 0.50 m
+lift: 65.5 s, law off, swing RMS 471 mm, max 700 mm; tip-target RMS 68 mm, max 253 mm; heave span 0.20 m, roll +-0.6 deg; a joint at a position limit in 0/3930 frames (slew/luff/tel at min [0, 0, 0], at max [0, 0, 0]), at a rate limit in 262/3930 (6.7%), at an acceleration limit in 29/3930 (0.7%)
+  slew   range over the run [-1.4903, +0.8353] rad; margin to min 4.7928, to max 5.4479 rad (274.6 / 312.1 deg)
+  luff   range over the run [+0.3851, +0.7559] rad; margin to min 1.7641, to max 0.1171 rad (101.1 / 6.7 deg)
+  telesc range over the run [+3.2821, +10.0364] m; margin to min 3.2821, to max 0.9636 m
+[VulkanContext] pipeline cache: saved 7936695 bytes to C:\Users\LARSIV~1\AppData\Local\Temp\threepp_pipeline_cache.77abd077d8886e2c065f9e4b7ca3f1df.bin
