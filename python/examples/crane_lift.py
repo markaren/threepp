@@ -9,6 +9,7 @@ FFT ocean the renderer draws.
     python crane_lift.py --audit 120 --audit-out a.json      # the sensor-determinism row of THIS scene
     python crane_lift.py --op 76 --op-out op_s0.json --seed 0   # the closed lift (tip sensor -> anti-swing)
     python crane_lift.py --op 76 --op-film lift.mp4             # ... and every second frame to an mp4 at 30 fps
+    python crane_lift.py --op 76 --op-film lift.mp4 --op-panels lift_panels.npz   # ... plus the fan/event data for crane_lift_runs/sensor_film.py
     python crane_lift.py --op 76 --law legacy                   # ... the round-3 PD law instead of the integral one
     python crane_lift.py --op 65 --no-antiswing                 # ... the control run, loop open
     python crane_lift.py --op 76 --no-ff                        # ... with the MRU velocity feedforward off
@@ -47,6 +48,7 @@ AUDIT_OUT = cli_arg("--audit-out", "", str)
 OP = cli_arg("--op", 0.0, float)                 # the closed lift, seconds
 OP_OUT = cli_arg("--op-out", "", str)
 OP_FILM = cli_arg("--op-film", "", str)          # every frame of the lift to this mp4
+OP_PANELS = cli_arg("--op-panels", "", str)      # with --op-film: the sensor panels' raw data (events binned per film frame, every fan scan) to this npz
 SEED = cli_arg("--seed", 0, int)
 NO_ANTISWING = "--no-antiswing" in sys.argv
 NO_AMC = "--no-amc" in sys.argv
@@ -1515,6 +1517,16 @@ def run_manifest(n, out, mode):
     film_wall, film_frames = [0.0], [0]
     if writer is not None:
         print(f"film: every {FPS // FILM_FPS}nd frame of {n} to {OP_FILM} at {FILM_FPS} fps, {W}x{H} with the {CAM_W}x{CAM_H} tip inset")
+    # The sensor panels' raw data for crane_lift_runs/sensor_film.py, which draws the fan, the events and
+    # the IMU/load-cell traces over the film on the CPU afterwards (a layout iteration must not cost a GPU
+    # run). Events are binned 4x4 into per-film-frame count images of the two 60 Hz frames since the last
+    # film frame; every fan scan is kept whole (1024 x [range, id]); the IMU, the tension, the contact and
+    # the swing estimate are already in the run's npz log, keyed here by the log row of each film frame.
+    panels = None
+    if OP_PANELS and writer is not None:
+        EW, EH = W // 4, H // 4
+        panels = {"ew": EW, "eh": EH, "pos": [], "neg": [], "frame": [], "row": [], "t": [], "fan": [], "fan_frame": [],
+                  "acc_pos": np.zeros(EW * EH, np.int64), "acc_neg": np.zeros(EW * EH, np.int64)}
     wall0 = time.perf_counter()
     for f in range(n):
         step()
@@ -1539,10 +1551,30 @@ def run_manifest(n, out, mode):
             writer.append_data(film_composite(aovs["rgb"], tip_px))
             film_wall[0] += time.perf_counter() - _fw
             film_frames[0] += 1
+            if panels is not None:
+                panels["pos"].append(np.minimum(panels["acc_pos"], 255).astype(np.uint8).reshape(panels["eh"], panels["ew"]))
+                panels["neg"].append(np.minimum(panels["acc_neg"], 255).astype(np.uint8).reshape(panels["eh"], panels["ew"]))
+                panels["acc_pos"][:] = 0
+                panels["acc_neg"][:] = 0
+                panels["frame"].append(f)
+                panels["row"].append(len(log_rows) - 1)
+                panels["t"].append(float(log_rows[-1][0]))
         if "fan" in FAN_LAST:
-            rows["fan"].update(sa.arr_bytes(FAN_LAST.pop("fan")))
+            fan_now = FAN_LAST.pop("fan")
+            rows["fan"].update(sa.arr_bytes(fan_now))
+            if panels is not None:
+                panels["fan"].append(fan_now.copy())
+                panels["fan_frame"].append(f)
         ev, _ov = renderer.read_event_stream(max_events=4000000)
         n_events += int(ev.shape[0])
+        if panels is not None and ev.shape[0]:
+            _ix = np.minimum(ev[:, 0] >> 2, panels["ew"] - 1)
+            _iy = np.minimum(ev[:, 1] >> 2, panels["eh"] - 1)
+            _idx = _iy * panels["ew"] + _ix
+            _pm = ev[:, 2] > 0
+            _n = panels["ew"] * panels["eh"]
+            panels["acc_pos"] += np.bincount(_idx[_pm], minlength=_n)[:_n]
+            panels["acc_neg"] += np.bincount(_idx[~_pm], minlength=_n)[:_n]
         rows["events.raw"].update(sa.arr_bytes(np.ascontiguousarray(ev)))
         if ev.shape[0]:
             order = np.lexsort((ev[:, 2], ev[:, 0], ev[:, 1], ev[:, 3]))
@@ -1567,6 +1599,19 @@ def run_manifest(n, out, mode):
         writer.close()
         print(f"film: {film_frames[0]} frames -> {OP_FILM}, {1e3 * film_wall[0] / max(film_frames[0], 1):.1f} ms/frame "
               f"of composite + encode ({100.0 * film_wall[0] / wall:.0f}% of the run)")
+    if panels is not None and panels["frame"]:
+        os.makedirs(os.path.dirname(os.path.abspath(OP_PANELS)) or ".", exist_ok=True)
+        np.savez_compressed(OP_PANELS,
+                            ev_pos=np.stack(panels["pos"]), ev_neg=np.stack(panels["neg"]),
+                            ev_size=np.array([panels["ew"], panels["eh"]]), hero_size=np.array([W, H]),
+                            film_frame=np.asarray(panels["frame"]), log_row=np.asarray(panels["row"]),
+                            t=np.asarray(panels["t"]), film_fps=FILM_FPS,
+                            fan=(np.stack(panels["fan"]) if panels["fan"] else np.zeros((0, FAN_N * FAN_N, 2), np.float32)),
+                            fan_frame=np.asarray(panels["fan_frame"]), fan_n=FAN_N, fan_half=FAN_HALF, load_id=LOAD_ID,
+                            tip_rect=np.array([W - HUD_M - CAM_W, H - HUD_M - CAM_H, CAM_W, CAM_H]),
+                            boundaries=np.array([T1, T2, T3, T4]), t_land=(contact["t_land"] if contact["t_land"] is not None else -1.0))
+        print(f"panels: {len(panels['frame'])} film frames of {panels['ew']}x{panels['eh']} event bins, "
+              f"{len(panels['fan'])} fan scans -> {OP_PANELS}")
     _L = np.asarray(log_rows)
     _rest = _L[_L[:, 0] > _L[-1, 0] - 1.0] if len(_L) > 60 else _L
     _margin = [[float((_L[:, 7 + j] - Q_MIN[j]).min()), float((Q_MAX[j] - _L[:, 7 + j]).min())] for j in range(3)]
