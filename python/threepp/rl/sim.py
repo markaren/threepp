@@ -31,10 +31,21 @@ def _torch_cuda_context():
     Raises rather than returning 0 on failure: PhysxWorld treats cuda_context=0 as "make my
     own context", which silently produces the exact split-context failure this exists to
     prevent — so a failed lookup must be loud, not a silent fallback."""
-    try:
-        drv = ctypes.CDLL("nvcuda.dll")
-    except OSError as e:
-        raise RuntimeError("GpuSim: cannot load nvcuda.dll to read torch's CUDA context") from e
+    # The driver library by its platform name: nvcuda.dll on Windows, libcuda.so.1
+    # on Linux (first run there 2026-09-08, on IDUN). Tried in order rather than
+    # switched on sys.platform so a WSL or container oddity still gets a clear
+    # message naming both.
+    drv = None
+    errors = []
+    for name in ("nvcuda.dll", "libcuda.so.1"):
+        try:
+            drv = ctypes.CDLL(name)
+            break
+        except OSError as e:
+            errors.append(f"{name}: {e}")
+    if drv is None:
+        raise RuntimeError("GpuSim: cannot load the CUDA driver library to read torch's "
+                           "CUDA context (" + "; ".join(errors) + ")")
     drv.cuCtxGetCurrent.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
     drv.cuCtxGetCurrent.restype = ctypes.c_int
     ctx = ctypes.c_void_p()
