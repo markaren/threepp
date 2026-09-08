@@ -352,3 +352,31 @@ small kinematic body driven with the vessel's pose every frame; seeded MEMS nois
 `sensor_audit.py` seeds it, one sample per physics step (60 Hz), hashed sample by sample; the samples
 are saved as `imu` (N x 7: t, gyro xyz, accel xyz) beside the log in the npz. Checked on a 3 s run:
 the gyro's roll-rate peak matches the log's (0.0144 vs 0.0140 rad/s), mean acceleration 9.79 m/s^2.
+
+
+## The protocol on the frozen scene (2026-09-08, `round9_protocol/`, `round10_protocol/`)
+
+`run_protocol.py <dir> --assets <dir> --film`: the control, ten identical processes at seed 0, an
+eleventh that also writes the film, and seeds 1 to 9; 21 runs, about 2.6 h on the RTX 4070 (driver
+595.97), one GPU job at a time, the GPU otherwise unshared. Round 9 ran the anti-swing gain at the
+script's stale default 0.8 by omission (the runner passed none); round 10 at the chosen 0.5 from
+commit 77b38778 is the cited set (`data/e3_crane/` in the paper repository is a copy).
+
+Both rounds, eleven identical processes: eleven of the fifteen rows agree to the bit over 3,900
+frames (the five AOVs, the fan, the trajectory, the vessel, the tension, the contact, the IMU).
+The rendered frame took three states across the ten and the tip view two (the events follow the
+frame), and in both rounds the seven processes slowed by CPU contention from the desktop shared
+one state while the three unloaded ones split two to one: the paper's E1 load-case mechanism, a
+state selected in the first frames, here with the GPU unshared. A twelfth process (`op_s0_film2`,
+the split-screen candidate) took a fourth state.
+
+Round 10, seed 0: the container lands 20 mm from the mark, flat, inside the clear rectangle,
+with 72 mm RMS of swing in the pay-out; the control (loop open) lands 686 mm off with 517 mm RMS.
+Seeds 1 to 9: landing 16 to 42 mm from the mark; the container's path fans out from seed 0 by
+8 mm RMS and 21 mm at most from arrival to touchdown (3 mm RMS, 35 mm max over the whole run).
+Round 9 at gain 0.8 landed 261 mm off in every process (223 to 276 mm over the seeds).
+
+Two controls run 20 minutes apart on the unshared GPU before the batch already showed the frame's
+state behaviour (all other rows identical); a control overlapped by another session's CUDA and
+Vulkan renders differed also in the label images, the fan and the tip view, which the paper's box
+and fjord scenes never did under load. That case is open and outside the claim.

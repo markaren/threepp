@@ -1,0 +1,9 @@
+[VulkanContext] VK_EXT_headless_surface not available; headless canvas falls back to a hidden-window surface.
+[VulkanContext] picked GPU: NVIDIA GeForce RTX 4070
+[VulkanContext] ray query (VK_KHR_ray_query): enabled
+[VulkanContext] external memory export: enabled
+[threepp] DLSS: not available on this GPU/driver - falling back to FSR/TAA.
+[threepp] FSR 3.1 upscaler active (1280x720 display).
+[threepp] view 1: 480x270, 82.9 MB
+[VulkanRenderer] geometry (1692 verts) dirty 3 frames in a row - graduated to the per-frame dynamic path (frame-cb refit, no drains)
+[vost#0:0/libx264 @ 000001a451351ac0] Multiple -pix_fmt options specified for stream 0, only the last option '-pix_fmt yuv420p' will be used.
