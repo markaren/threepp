@@ -59,3 +59,6 @@ geodata/*
 # misc local helpers
 _build_aaa.bat
 build_py.bat
+
+#ignore video files, which are large and not needed in the repo
+*.mp4
