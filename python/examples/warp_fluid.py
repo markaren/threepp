@@ -15,7 +15,8 @@ nothing per frame.
 
     pip install warp-lang
     python warp_fluid.py                 # window; drag to orbit, Esc quits
-    python warp_fluid.py --n 400000      # more particles
+    python warp_fluid.py --n 400000      # more particles (a taller column)
+    python warp_fluid.py --scale 2       # 8x particles at half the spacing, same tank
     python warp_fluid.py --shot 6        # headless PNG at t=6s
     python warp_fluid.py --bench         # timed phase breakdown
     python warp_fluid.py --vulkan        # Vulkan renderer (RT reflections)
@@ -25,6 +26,20 @@ nothing per frame.
     python warp_fluid.py --iters 4 --rho 0   # plain Jacobi, no Chebyshev acceleration
     python warp_fluid.py --obstacle part.stl # collide an arbitrary mesh, not the box
     python warp_fluid.py --obstacle part.stl --obstacle-height 0.35 --sdf-res 128
+    python warp_fluid.py --dump out/s2 --scale 2 --seconds 8   # simulate only, positions to disk
+    python warp_fluid.py --replay out/s2 --vulkan --video 8    # render a dump, no simulation
+
+--dump runs the simulation with no window and no renderer and writes one file
+per frame into the directory: positions quantised to 16 bits against the
+frame's own bounding box (0.03 mm over the tank, against a spacing of
+millimetres) plus a meta.json with the resolution and step settings. --replay
+reads them back in place of sim_step, so every render mode (window, --shot,
+--video, --points) works unchanged on a machine that never ran the fluid. The
+split exists because the two halves want different hardware: the simulation
+scales with GPU memory bandwidth (an H100 holds tens of millions of
+particles), while the Vulkan renderer needs VK_KHR_ray_query, which datacenter
+GPUs do not expose. Velocities are not dumped, so --points replays with a flat
+colour. A replay takes --scale, --n and --obstacle from meta.json.
 
 Needs a CUDA device: the zero-copy surface path is CUDA/OpenGL interop.
 
@@ -42,11 +57,13 @@ particles at its surface, so it looks plausible while being an unsigned field --
 check the "closed" note the bake prints.
 """
 import atexit
+import json
 import math
 import os
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 # Make the built `threepp` module (in the parent python/ dir) importable.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -69,7 +86,29 @@ except ImportError:                  # older threepp builds have no CUDA<->Vulka
 # approximate forms are safe. Module-scoped: the surfacing kernels are untouched.
 wp.set_module_options({"fast_math": True})
 
-N = cli_arg("--n", 340_000, int)
+# Resolution multiplier. --scale k divides the particle spacing by k and, unless
+# --n overrides it, multiplies the count by k^3, so the tank, the dam-break
+# column and the paddle keep their geometry and the fluid is simply finer.
+# Raising --n alone does something different: the fill is footprint-first
+# (nx, nz from the tank, ny = N / (nx nz)), so extra particles at the same
+# spacing stack into a TALLER column -- 3M at the default spacing is a 2.5 m
+# head of water in a 1.1 m tank, which three Jacobi iterations cannot hold
+# (measured on an H100: 150% mean compression, |v| peaking at 440 m/s).
+SCALE = cli_arg("--scale", 1.0, float)
+N = cli_arg("--n", int(round(340_000 * SCALE ** 3)), int)
+# Simulate-only / render-only split (see the module docstring). A replay
+# reproduces the dump's fill exactly -- same --scale, same requested --n, same
+# obstacle -- because N is baked into the buffers the render paths address.
+DUMP = cli_arg("--dump", "", str)
+DUMP_SECONDS = cli_arg("--seconds", 6.0, float)
+REPLAY = cli_arg("--replay", "", str)
+_meta = None
+if REPLAY:
+    with open(os.path.join(REPLAY, "meta.json")) as _f:
+        _meta = json.load(_f)
+    SCALE = float(_meta["scale"])
+    N = int(_meta["n_requested"])
+N_REQUESTED = N
 BENCH = "--bench" in sys.argv
 SHOT = "--shot" in sys.argv
 SHOT_TIME = cli_arg("--shot", 6.0, float)
@@ -97,14 +136,17 @@ OPAQUE = "--opaque" in sys.argv   # debug: render the surface as a plain lit
 
 # --- fluid parameters ---------------------------------------------------------
 
-D = 0.009                    # rest particle spacing (m); the single
+D = 0.009 / SCALE            # rest particle spacing (m); the single
                              # resolution knob -- H, WALL_EPS, MAX_DP,
                              # rest density, CELL and the iso level all
                              # derive from it
 H = 2.0 * D                  # SPH support radius
 MASS = 1.0                   # unit mass; rest density is measured from a lattice
 DT = 1.0 / 60.0
-SUBSTEPS = cli_arg("--substeps", 2, int)
+# A finer spacing needs proportionally shorter substeps: the per-substep travel
+# at the tank's ~2-3 m/s must stay around one spacing, or particles skip whole
+# neighbour shells between projections. Default scales with --scale.
+SUBSTEPS = cli_arg("--substeps", max(2, int(round(2 * SCALE))), int)
 ITERATIONS = cli_arg("--iters", 3, int)               # density-constraint projections per substep
 # Chebyshev acceleration of the Jacobi projection (Wang 2015). RHO estimates
 # the spectral radius of the iteration; 0 disables it (plain Jacobi).
@@ -122,8 +164,8 @@ S_CORR_N = 4.0               # artificial-pressure exponent (solve_delta spells
                              # the power out as two multiplies)
 S_CORR_DQ = 0.20 * H
 JACOBI_RELAX = 0.4           # Jacobi projection over-corrects without this
-XSPH_C = 0.08                # viscosity: how much a particle adopts neighbour flow
-VORTICITY = 0.22             # curl restored after projection damps it
+XSPH_C = cli_arg("--xsph", 0.08, float)          # viscosity: how much a particle adopts neighbour flow
+VORTICITY = cli_arg("--vorticity", 0.22, float)  # curl restored after projection damps it
 V_MAX = 5.0                  # velocity clamp
 MAX_DP = 0.35 * D            # per-iteration position-correction bound
 GRAVITY = -9.81
@@ -159,6 +201,16 @@ BY1 = 0.26
 OBSTACLE = cli_arg("--obstacle", "", str)
 OBSTACLE_H = cli_arg("--obstacle-height", 0.0, float)  # 0 = fit the box's envelope
 SDF_RES = cli_arg("--sdf-res", 64, int)                # voxels on the long axis
+if REPLAY and _meta.get("obstacle"):
+    # The obstacle decides which lattice particles are dropped at seeding, so
+    # the replay must bake the same field; it is also what the picture shows.
+    if not OBSTACLE:
+        OBSTACLE = _meta["obstacle"]
+        OBSTACLE_H = float(_meta["obstacle_height"])
+        SDF_RES = int(_meta["sdf_res"])
+    if not os.path.isfile(OBSTACLE):
+        raise SystemExit(f"--replay: the dump was made with --obstacle {_meta['obstacle']}; "
+                         f"pass the same file (not found: {OBSTACLE})")
 
 # The dam-break column occupies [X0, FILL_X1] and collapses in the first second.
 # After that the paddle keeps the water moving.
@@ -667,11 +719,15 @@ p0 = p0[keep]
 rng = np.random.default_rng(17)
 p0 = (p0 + rng.uniform(-0.06 * D, 0.06 * D, p0.shape)).astype(np.float32)
 N = len(p0)
+if REPLAY and N != int(_meta["n"]):
+    raise SystemExit(f"--replay: the fill produced {N:,} particles but the dump holds "
+                     f"{int(_meta['n']):,}; the obstacle or the tank geometry differs "
+                     f"from the run that made it")
 
 # A cell fully inside the fluid collects (CELL/D)^3 particles; the surface sits
 # near half of that, so the iso-threshold follows the resolution automatically.
 ISO = 0.5 * (CELL / D) ** 3
-MAX_TRIS = cli_arg("--max-tris", 700_000, int)
+MAX_TRIS = cli_arg("--max-tris", int(700_000 * SCALE ** 2), int)  # surface area ~ 1/D^2
 
 print(f"fluid: {N:,} particles on {device} | grid {NGX}x{NGY}x{NGZ} cell={CELL} "
       f"iso={ISO:.2f}\n       rho0={RHO0:.4g} sum_grad2={SG2_REST:.4g} "
@@ -710,9 +766,76 @@ def paddle_extent(t):
     return BX0 + c, BX1 + c
 
 
+# --- dump / replay frame format --------------------------------------------------
+# One .npz per frame: uint16 positions quantised against the frame's own
+# bounding box, plus that box in float32. 6 bytes per particle; the step is
+# (extent / 65535), 0.03 mm for the 2.1 m tank, two orders under the spacing at
+# any --scale this runs at. Frame k holds the state AFTER sim_step k, so
+# sim_time = (k + 1) * DT when it is on screen -- the paddle is placed from
+# sim_time, and the replay advances it the same way.
+
+_dump_nonfinite_warned = False
+
+
+def write_dump_frame(path, pos):
+    global _dump_nonfinite_warned
+    if not np.isfinite(pos).all():
+        if not _dump_nonfinite_warned:
+            _dump_nonfinite_warned = True
+            print("  warning: non-finite positions in the dump (the simulation diverged); "
+                  "written as 0")
+        pos = np.nan_to_num(pos, nan=0.0, posinf=0.0, neginf=0.0)
+    lo = pos.min(axis=0).astype(np.float32)
+    hi = pos.max(axis=0).astype(np.float32)
+    span = np.maximum(hi - lo, np.float32(1e-6))
+    q = np.rint((pos - lo) * (np.float32(65535.0) / span)).astype(np.uint16)
+    np.savez(path, q=q, lo=lo, hi=hi)
+
+
+def read_dump_frame(path):
+    with np.load(path) as z:
+        lo, hi, q = z["lo"], z["hi"], z["q"]
+    return (q.astype(np.float32) * ((hi - lo) / np.float32(65535.0)) + lo).astype(np.float32)
+
+
+def dump_frame_path(directory, k):
+    return os.path.join(directory, f"f{k:06d}.npz")
+
+
+# Replay state: the reader thread keeps one frame ahead of the GPU, since
+# np.load and the dequantise release the GIL and take tens of milliseconds at
+# millions of particles.
+_replay = {"pool": None, "pending": None, "held": False}
+
+
+def replay_step():
+    """Stand-in for sim_step: load dumped frame `frame_no` into x."""
+    global sim_time, frame_no
+    total = int(_meta["frames"])
+    if frame_no >= total:
+        if not _replay["held"]:
+            _replay["held"] = True
+            print(f"replay: past the last dumped frame ({total}); holding it")
+        return
+    if _replay["pool"] is None:
+        _replay["pool"] = ThreadPoolExecutor(max_workers=1)
+        _replay["pending"] = _replay["pool"].submit(read_dump_frame,
+                                                    dump_frame_path(REPLAY, frame_no))
+    pos = _replay["pending"].result()
+    if frame_no + 1 < total:
+        _replay["pending"] = _replay["pool"].submit(read_dump_frame,
+                                                    dump_frame_path(REPLAY, frame_no + 1))
+    wp.copy(x, wp.array(pos, dtype=wp.vec3, device=device))
+    sim_time += DT
+    frame_no += 1
+
+
 def sim_step():
     """Advance one rendered frame of fluid."""
     global sim_time, frame_no
+    if REPLAY:
+        replay_step()
+        return
     dt = DT / SUBSTEPS
     for _ in range(SUBSTEPS):
         bx0, bx1 = paddle_extent(sim_time)
@@ -794,6 +917,43 @@ if PROBE:
                   f"{build_surface():9,d}")
     print(f"mean compression over run: {np.mean(comp_acc)*100:.3f}%  "
           f"(iters={ITERATIONS} rho={RHO_CHEB} relax={JACOBI_RELAX})")
+    sys.exit(0)
+
+
+if DUMP:
+    # Simulate-only, like --probe: no canvas, no renderer. The write of frame k
+    # (device readback done here, quantise + savez on a worker thread) overlaps
+    # the simulation of frame k + 1; the queue is one deep so a slow disk
+    # throttles the loop instead of filling memory.
+    os.makedirs(DUMP, exist_ok=True)
+    total = int(round(DUMP_SECONDS * 60))
+    meta = {"format": "warp_fluid dump", "version": 1,
+            "scale": SCALE, "n_requested": N_REQUESTED, "n": N, "d": D,
+            "dt": DT, "fps": 60, "substeps": SUBSTEPS, "iters": ITERATIONS,
+            "rho": RHO_CHEB, "frames": total,
+            "obstacle": OBSTACLE, "obstacle_height": OBSTACLE_H, "sdf_res": SDF_RES}
+    with open(os.path.join(DUMP, "meta.json"), "w") as f:
+        json.dump(meta, f, indent=1)
+    pool = ThreadPoolExecutor(max_workers=1)
+    pending = None
+    t0 = time.perf_counter()
+    for k in range(total):
+        sim_step()
+        pos = x.numpy()
+        if pending is not None:
+            pending.result()
+        pending = pool.submit(write_dump_frame, dump_frame_path(DUMP, k), pos)
+        if k % 60 == 0:
+            el = time.perf_counter() - t0
+            print(f"  frame {k}/{total}  ({el:.0f}s elapsed)", flush=True)
+    if pending is not None:
+        pending.result()
+    pool.shutdown()
+    el = time.perf_counter() - t0
+    nbytes = sum(os.path.getsize(dump_frame_path(DUMP, k)) for k in range(total))
+    print(f"dumped {total} frames of {N:,} particles in {el:.0f}s "
+          f"({1000.0 * el / max(total, 1):.0f} ms/frame) -> {DUMP}  "
+          f"{nbytes / 2**20:.0f} MB")
     sys.exit(0)
 
 
@@ -1367,10 +1527,17 @@ elif VIDEO:
     warm = 30 if VULKAN else 1        # let the dam break settle history before frame 0
     t0 = time.perf_counter()
     for i in range(warm):
-        frame()
+        # A replay has nothing to settle and every dumped frame is wanted, so
+        # the temporal passes converge on dump frame 0 instead of consuming
+        # frames: load it once, then re-render it.
+        if REPLAY and i:
+            refresh_surface()
+        else:
+            frame()
         renderer.render(scene, camera)
     for k in range(total):
-        frame()
+        if not (REPLAY and k == 0):     # replay: frame 0 is already loaded
+            frame()
         save_frame(os.path.join(outdir, f"f{k:05d}.png"))
         if k % 60 == 0:
             el = time.perf_counter() - t0
