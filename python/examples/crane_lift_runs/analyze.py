@@ -70,11 +70,17 @@ def replay(names, title):
     ms = [load(n) for n in names if os.path.exists(os.path.join(D, n))]
     if len(ms) < 2:
         return
-    print(f"{title}: {len(ms)} fresh processes")
+    walls = [m.get("meta", {}).get("wall_seconds", 0.0) for m in ms]
+    print(f"{title}: {len(ms)} fresh processes; wall s " + " ".join(f"{w:.0f}" for w in walls)
+          + ("   (a run well above the others may have shared the GPU)" if walls and max(walls) > 1.15 * min(walls) else ""))
     for key in ms[0]["rows"]:
         vals = [m["rows"][key]["fnv"] if isinstance(m["rows"][key], dict) else m["rows"][key] for m in ms]
         n = len(set(vals))
-        print(f"  {'OK  ' if n == 1 else 'DIFF'} {key:14s} {n} distinct of {len(ms)}")
+        groups = ""
+        if n > 1:                                        # which processes share which state
+            ids = {}
+            groups = " states: " + " ".join(f"{ids.setdefault(v, len(ids) + 1)}" for v in vals)
+        print(f"  {'OK  ' if n == 1 else 'DIFF'} {key:14s} {n} distinct of {len(ms)}{groups}")
     for key in ("rgb", "tip.rgb"):
         seqs = [m.get("per_frame", {}).get(key, []) for m in ms]
         if all(seqs) and len(set(tuple(s) for s in seqs)) > 1:
