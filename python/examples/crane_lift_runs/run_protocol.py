@@ -75,7 +75,8 @@ def main():
     base = [sys.executable, SCRIPT, "--op", str(a.op), "--size", a.size, "--assets", a.assets] + a.extra
 
     jobs = []
-    film = lambda name, tag: (["--op-film", os.path.join(a.out, f"film_{tag}.mp4"), "--op-png", os.path.join(a.out, f"hero_{tag}")] if a.film else [])
+    film = lambda name, tag: (["--op-film", os.path.join(a.out, f"film_{tag}.mp4"), "--op-png", os.path.join(a.out, f"hero_{tag}"),
+                              "--op-panels", os.path.join(a.out, f"panels_{tag}.npz")] if a.film else [])
     if not a.no_control:
         jobs.append(("op_s0_noas", ["--seed", "0", "--no-antiswing"] + film("op_s0_noas", "off")))
     for k in range(a.processes):

@@ -380,3 +380,26 @@ Two controls run 20 minutes apart on the unshared GPU before the batch already s
 state behaviour (all other rows identical); a control overlapped by another session's CUDA and
 Vulkan renders differed also in the label images, the fan and the tip view, which the paper's box
 and fjord scenes never did under load. That case is open and outside the claim.
+
+
+## The sensor film (2026-09-08 morning, `sensor_film.py`, `round10_protocol/op_s0_film3`)
+
+The cut of the night showed the rendered frame and the tip camera inset and nothing of the fan,
+the events or the IMU. `crane_lift.py --op-panels` now dumps what a compositor needs beside the
+film (the events binned 4x4 per film frame, every 32x32 fan scan, the log row of each film frame,
+the tip rect, the phase boundaries; 18 MB compressed, gitignored like the films), and
+`sensor_film.py` draws the panels over the film on the CPU afterwards, 1920x1080 from the 1280x720
+frame: the hull IMU (gyro and accelerometer), the hoist load cell with the contact switch's band,
+the fan's swing estimate with the loop's engaged state, the phase marks (arrival, pay-out,
+touchdown); the fan as a range image with the container's returns in orange, its centroid and the
+estimate in mm; the event camera of the hero view as the classic on/off picture with the count;
+and a label on the tip inset. Every number on screen is read from the run's files. A layout
+change is a re-run of this script, about two minutes for the whole film, not of the GPU.
+
+The film with the dump is a thirteenth process of the frozen scene, `op_s0_film3` (script at
+f58373b4, the dump code only; the simulation and the hash rows are untouched). Compared against
+the cited film run `op_s0_film` with `sensor_audit.py --compare`: the eleven sensor rows are
+bit-identical (the five AOVs, the fan, the trajectory, the vessel, the tension, the contact, the
+IMU), and the rendered frame, the tip view and the events differ, as between any two processes
+of this scene (the state mechanism above). So the panels in the film are drawn from the cited
+run's own sensor data, to the bit, over a frame that took its own state.
