@@ -174,7 +174,12 @@ namespace threepp_py {
                                  const std::array<float, 3>& forestFocus, int forestCap,
                                  bool scatter, float shellLevelStep, float shellExtent,
                                  bool bathymetry, float shoreSlope, float maxDepth,
-                                 unsigned int seed) {
+                                 unsigned int seed, bool buildings, bool pitchedRoofs,
+                                 bool measuredRoofs, bool urbanProps, bool cars, bool boats,
+                                 bool decks, float propsCellSize, float propsExtent,
+                                 int streamBudget, float forestDilate, int urbanForestCap,
+                                 float carMaxSlope, bool roadRibbon, float ribbonDistance,
+                                 bool landUsePaint, bool quayApron) {
                          GeoSceneOptions o;
                          o.packDir = packDir;
                          o.bands = bands;
@@ -190,6 +195,34 @@ namespace threepp_py {
                          o.shoreSlope = shoreSlope;
                          o.maxDepth = maxDepth;
                          o.seed = seed;
+                         // The urban layer. Every one of these is ALSO gated on
+                         // the pack carrying the data — a pack with no
+                         // buildings.json / landuse.json takes none of these
+                         // branches whatever is asked for here.
+                         o.buildings = buildings;
+                         o.pitchedRoofs = pitchedRoofs;
+                         o.measuredRoofs = measuredRoofs;
+                         o.urbanProps = urbanProps;
+                         o.cars = cars;
+                         o.boats = boats;
+                         o.decks = decks;
+                         o.propsCellSize = propsCellSize;
+                         o.propsExtent = propsExtent;
+                         o.streamBudget = streamBudget;
+                         o.forestDilate = forestDilate;
+                         o.urbanForestCap = urbanForestCap;
+                         o.carMaxSlope = carMaxSlope;
+                         // Roads: the painted bed is always on (it is part of
+                         // the terrain bake); these two are the NEAR-FIELD
+                         // ribbon on top of it, and the surveyed surfacing.
+                         o.roadRibbon = roadRibbon;
+                         o.ribbonDistance = ribbonDistance;
+                         o.landUsePaint = landUsePaint;
+                         // The harbour front. Off is the A/B, not a shortcut:
+                         // with it off the DTM's sea-level quay cells stay
+                         // water and the sink excavates them, which is what
+                         // puts the Skansekaia warehouses in the fjord.
+                         o.quayApron = quayApron;
                          // Loading a 4 km 1 m pack is seconds of I/O + a distance
                          // transform + shell/forest baking: hold no GIL for it,
                          // or a threaded caller stalls for the whole load.
@@ -204,8 +237,32 @@ namespace threepp_py {
                      py::arg("shell_level_step") = 2.f, py::arg("shell_extent") = 1200.f,
                      py::arg("bathymetry") = true, py::arg("shore_slope") = 0.35f,
                      py::arg("max_depth") = 180.f, py::arg("seed") = 4242u,
+                     py::arg("buildings") = true, py::arg("pitched_roofs") = true,
+                     py::arg("measured_roofs") = true, py::arg("urban_props") = true,
+                     py::arg("cars") = true, py::arg("boats") = true, py::arg("decks") = true,
+                     py::arg("props_cell_size") = 250.f, py::arg("props_extent") = 1500.f,
+                     py::arg("stream_budget") = 2, py::arg("forest_dilate") = 4.f,
+                     py::arg("urban_forest_cap") = 80000,
+                     // APPENDED, so every call already written keeps working.
+                     py::arg("car_max_slope") = 28.f,
+                     py::arg("road_ribbon") = true, py::arg("ribbon_distance") = 600.f,
+                     py::arg("land_use_paint") = true,
+                     py::arg("quay_apron") = true,
                      "Load a geodata region pack and build the whole terrain scene. "
-                     "Raises RuntimeError if the pack directory is missing or malformed.")
+                     "Raises RuntimeError if the pack directory is missing or malformed. "
+                     "`car_max_slope` (degrees) refuses a parked car on ground steeper than "
+                     "this: OSM parking polygons are drawn in plan view and some are draped "
+                     "over a mountainside. "
+                     "`road_ribbon` adds bridge decks plus near-field road geometry with crisp "
+                     "edges and lane markings, distance-culled at `ribbon_distance` metres — "
+                     "past that the asphalt painted into the terrain is the road. "
+                     "`land_use_paint` paints the surveyed town surfacing (parking, grass, "
+                     "pitches, quay concrete) into the splat. "
+                     "`quay_apron` raises the reclaimed harbour front out of the water before "
+                     "the bathymetry runs: a Kartverket DTM stores reclaimed land at exactly "
+                     "sea level (93.8% of ground inside the Alesund pack's pier polygons reads "
+                     "0.00 m), so without it the sink excavates the quay into the seabed and "
+                     "the harbour buildings stand with their walls in the fjord.")
                 .def("update", [](GeoScene& g, const Vector3& p) { g.update(p); }, py::arg("pos"),
                      "Once per frame, with the ACTIVE camera position: tile LOD + scatter.")
                 .def("update", [](GeoScene& g, const std::array<float, 3>& p) {
@@ -227,9 +284,25 @@ namespace threepp_py {
                          d["forest_sites"] = s.forestSites;
                          d["forest_cells"] = s.forestCells;
                          d["load_seconds"] = s.loadSeconds;
+                         d["buildings"] = s.buildings;
+                         d["building_tris"] = s.buildingTris;
+                         d["cars"] = s.cars;
+                         d["car_cells_live"] = s.carCellsLive;
+                         d["boats"] = s.boats;
+                         d["deck_runs"] = s.deckRuns;
+                         d["cars_rejected_slope"] = s.carsRejectedSlope;
+                         d["road_chunks"] = s.roadChunks;
+                         d["road_chunks_live"] = s.roadChunksLive;
+                         d["apron_cells"] = s.apronCells;
                          return d;
                      },
-                     "dict: tiles, baking, shell_tris, forest_sites, forest_cells, load_seconds.");
+                     "dict: tiles, baking, shell_tris, forest_sites, forest_cells, load_seconds, "
+                     "buildings, building_tris, cars, car_cells_live, boats, deck_runs, "
+                     "cars_rejected_slope, road_chunks, road_chunks_live, apron_cells. "
+                     "`cars` is the pack-wide placement count; `car_cells_live` is what is "
+                     "streamed in around the last update() position. Likewise `road_chunks` is "
+                     "every near-field ribbon chunk built pack-wide and `road_chunks_live` the "
+                     "ones inside ribbon_distance of that position.");
 
         // ── Free functions ────────────────────────────────────────────────────
         m.def("apply_terrain_preset",

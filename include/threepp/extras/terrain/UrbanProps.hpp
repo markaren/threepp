@@ -77,6 +77,21 @@ namespace threepp::terrain {
         float kerbOffset = 1.0f;    // beyond the paved half width
         float junctionClear = 8.f;  // no kerb car this close to a shared node
         float urbanMin = 0.3f;      // kerb parking needs a town around it
+        // A car cannot stand on a cliff. OSM land use is drawn in plan view and
+        // says nothing about the ground under it, so a `parking` polygon can be
+        // draped over a mountainside: the Ålesund pack has one of 2722 m² at
+        // world XZ (684, -85), on the Aksla slope where the ground is really a
+        // park and a stepped walkway, and the lot filler put rows of cars on
+        // what the film sees as a cliff face. Measured against the pack's own
+        // DEM (2 m grid), that polygon's ground climbs 40.0 → 97.9 m — 57.9 m of
+        // rise across a 50 m window — for a mean slope of 47.2° (p90 55.7°, max
+        // 59.4°). Every REAL car park in the pack is far below that: over all
+        // 223 parking polygons > 150 m², slope mean 7.6°, p50 6.9°, p90 15.5°,
+        // p98 21.2°, and the steepest legitimate one (the Fjellstua top car
+        // park at (824, -141)) is 15.5° mean / 28.9° p90. So the two populations
+        // are cleanly separated and 28° sits in the gap: it keeps every mapped
+        // lot in this pack and kills the mountainside.
+        float carMaxSlope = 28.f;// degrees, local ground gradient at the bay
 
         // Boats.
         bool boats = true;
@@ -128,7 +143,7 @@ namespace threepp::terrain {
         int carsLot = 0, carsLane = 0, carsKerb = 0, carCells = 0;
         int lotPolys = 0, lanePolys = 0;
         int boats = 0, marinas = 0;
-        int rejectRoof = 0, rejectSea = 0, rejectPaved = 0, rejectJunction = 0;
+        int rejectRoof = 0, rejectSea = 0, rejectSlope = 0, rejectPaved = 0, rejectJunction = 0;
         int rejectParkLane = 0, rejectParkKerb = 0, rejectRunGap = 0;
         size_t meshes = 0, triangles = 0;
     };
@@ -473,6 +488,10 @@ namespace threepp::terrain {
                 return std::make_pair(static_cast<int>(std::floor(x / o.cellSize)),
                                       static_cast<int>(std::floor(z / o.cellSize)));
             };
+            // The SINGLE choke point every car goes through — lot bays, kerb
+            // lanes and road kerbs all end here — which is why the ground gates
+            // live in it and nowhere else. `o.ground` is non-null: the function
+            // returned above if it was not.
             const auto place = [&](float x, float z, float fx, float fz, unsigned int seed) {
                 const float g = o.ground(x, z);
                 if (g < sea + 0.3f) {
@@ -482,6 +501,23 @@ namespace threepp::terrain {
                 if (o.footprints && o.footprints->inside(x, z)) {
                     ++st.rejectRoof;
                     return false;
+                }
+                // Ground gradient at the bay, by central differences. h = 3.5 m
+                // is chosen for the pack's 2 m DEM: a 1 m step reads the DEM's
+                // own interpolation noise as slope and would start rejecting
+                // flat lots, while a step much wider than a car averages the
+                // cliff away. Sampled last because it is four more provider
+                // height evaluations (DEM + carve + relief), the priciest test
+                // here. A gate at or above 89° is off, so skip the samples.
+                if (o.carMaxSlope < 89.f) {
+                    constexpr float h = 3.5f;
+                    const float dx = (o.ground(x + h, z) - o.ground(x - h, z)) / (2.f * h);
+                    const float dz = (o.ground(x, z + h) - o.ground(x, z - h)) / (2.f * h);
+                    const float deg = std::atan(std::sqrt(dx * dx + dz * dz)) * 57.2957795f;
+                    if (deg > o.carMaxSlope) {
+                        ++st.rejectSlope;
+                        return false;
+                    }
                 }
                 field.cells[cellOf(x, z)].push_back(
                         {x, g, z, fx, fz, urbanCarColor(detail::upHash01(seed, 0x51u, 0u))});
