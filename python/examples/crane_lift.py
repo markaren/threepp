@@ -54,7 +54,7 @@ NO_FF = "--no-ff" in sys.argv                    # the MRU velocity feedforward 
 FF_MODE = cli_arg("--ff-mode", "both", str)      # 'vessel' = cancel the vessel motion only, 'both' = + the target's own velocity
 AMC_KP = cli_arg("--amc-kp", 3.0, float)         # position-loop gain, 1/s; 0 selects the twin's raw v_des = (q_filt - q) / dt
 LAW = cli_arg("--law", "integral", str)          # anti-swing law: integral (the phase-1 design) | legacy (the round-3 PD) | off
-AS_K = cli_arg("--as-k", 0.8, float)             # the integral law's gain k, 1/s
+AS_K = cli_arg("--as-k", 0.5, float)             # the integral law's gain k, 1/s (0.5 = round 6's pick; round 9 ran the surrogate's 0.8 by omission)
 ENGAGE = cli_arg("--engage", "ondemand", str)    # when the law is closed: ondemand (on arrival, the cited use case) | always
 GEOM = cli_arg("--geom", "new", str)             # turbine placement: new (the landing point inside the deck) | old (round 5's corner)
 XFER_PROFILE = cli_arg("--xfer-profile", "trapezoid", str)   # the transfer's slew profile: trapezoid (operator) | smooth (round 5)
