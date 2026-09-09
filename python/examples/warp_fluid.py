@@ -1646,8 +1646,45 @@ scene.add(water)
 # something with a legible diameter. Both ride the still waterline, and neither
 # is simulated -- they are rulers, not physics.
 MARKERS = cli_arg("--markers", 0 if IS_REF else 1, int)
+
+
+def settled_waterline():
+    """Where the free surface ends up, which is NOT --depth.
+
+    --depth sets the FILL, and the beach then cuts a wedge out of it: the
+    remaining water spreads over the same footprint and settles lower. At
+    --wide 4 --beach 2 that is a ~3 cm drop, which floats 7.5 cm markers
+    clear of the surface and makes them look airborne.
+
+    Conserve volume instead. With a flat bed of length L and a beach of slope
+    m rising from BEACH_TOE, the water volume at height h is
+        V(h) = W * (L*h + h^2 / (2m))
+    so h solves a quadratic. N*D^3 is the lattice volume actually seeded
+    (already beach-cut), so this follows every flag automatically.
+    """
+    if not FLAT:
+        return FLOOR + 0.22
+    vol = N * D ** 3
+    width = Z1 - Z0
+    flat_len = max(BEACH_TOE - FILL_X0, 1e-6)
+    if BEACH_SLOPE <= 0.0:
+        return FLOOR + vol / (width * flat_len)
+    a = 0.5 / BEACH_SLOPE
+    b = flat_len
+    c = -vol / width
+    h = (-b + math.sqrt(b * b - 4.0 * a * c)) / (2.0 * a)
+    return FLOOR + min(h, DEPTH)
+
+
 if MARKERS:
-    _wl = FLOOR + (DEPTH if FLAT else 0.22)
+    # The RENDERED surface is not the fill depth. DensitySurface blurs the
+    # density field before marching cubes, which pulls the iso contour inward,
+    # so the visible water sits roughly a cell or two below where the particles
+    # are -- at --cell 2 that is 2-4 cm, half a lane-float diameter, and the
+    # markers floated in mid-air. Sink them by a cell and a bit of their own
+    # radius so they intersect the surface they are drawn against, not the one
+    # the physics thinks it has.
+    _wl = settled_waterline() - cli_arg("--marker-sink", 1.2 * CELL, float)
 
     # Buoys: 0.45 m across, half-submerged, every 4 m, clear of the piston.
     _bx0, _bx1, _bstep = X0 + 2.4, X1 - 0.6, 4.0
@@ -1657,7 +1694,7 @@ if MARKERS:
                              standard_material(0xff6a1f, 0.45), _nb)
     for i in range(_nb):
         _m = tp.Matrix4()
-        _m.set_position(_bx0 + i * _bstep, _wl, _bz)
+        _m.set_position(_bx0 + i * _bstep, _wl - 0.25 * 0.225, _bz)
         buoys.set_matrix_at(i, _m)
     buoys.instance_matrix_needs_update()
     buoys.cast_shadow = True
@@ -1673,14 +1710,15 @@ if MARKERS:
                             standard_material(0xffffff, 0.5), _nr)
     for i in range(_nr):
         _m = tp.Matrix4()
-        _m.set_position(_rx0 + i * _rstep, _wl, _rz)
+        _m.set_position(_rx0 + i * _rstep, _wl - 0.25 * 0.075, _rz)
         rope.set_matrix_at(i, _m)
         rope.set_color_at(i, tp.Color(0xf2f4f6 if (i // 2) % 2 == 0 else 0x1b6fb0))
     rope.instance_matrix_needs_update()
     rope.instance_color_needs_update()
     scene.add(rope)
 
-    print(f"scale chain: {_nb} buoys @ {_bstep:g} m, {_nr} lane floats @ {_rstep:g} m")
+    print(f"scale chain: {_nb} buoys @ {_bstep:g} m, {_nr} lane floats @ {_rstep:g} m, "
+          f"waterline {_wl:.3f} m (fill depth {DEPTH:.3f})")
 
 
 
