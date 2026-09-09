@@ -1632,6 +1632,58 @@ else:
 water.frustum_culled = False          # the CPU-side bounds never see GPU writes
 scene.add(water)
 
+# --- the scale chain ----------------------------------------------------------
+# A 34 m pool and a 3.4 km bay render identically when nothing in frame has a
+# known size: the first wide shot came back looking like open ocean, which is
+# pretty and says nothing about the thing the cluster was needed for. Apparent
+# size halving along a RECEDING LINE is the cue that fixes it, and it beats any
+# single prop -- a lone 1.8 m post at 33 m is four pixels.
+#
+# Two lines, both instanced (two draw calls for the lot): marker buoys at a
+# 4 m pitch down one side, and a swimming-lane rope at a 0.5 m pitch down the
+# other. The rope is the stronger cue because its spheres are small and dense,
+# so the eye reads the spacing collapse directly; the buoys give the near field
+# something with a legible diameter. Both ride the still waterline, and neither
+# is simulated -- they are rulers, not physics.
+MARKERS = cli_arg("--markers", 0 if IS_REF else 1, int)
+if MARKERS:
+    _wl = FLOOR + (DEPTH if FLAT else 0.22)
+
+    # Buoys: 0.45 m across, half-submerged, every 4 m, clear of the piston.
+    _bx0, _bx1, _bstep = X0 + 2.4, X1 - 0.6, 4.0
+    _nb = max(2, int((_bx1 - _bx0) / _bstep) + 1)
+    _bz = 0.79 * Z1
+    buoys = tp.InstancedMesh(tp.SphereGeometry(0.225, 20, 14),
+                             standard_material(0xff6a1f, 0.45), _nb)
+    for i in range(_nb):
+        _m = tp.Matrix4()
+        _m.set_position(_bx0 + i * _bstep, _wl, _bz)
+        buoys.set_matrix_at(i, _m)
+    buoys.instance_matrix_needs_update()
+    buoys.cast_shadow = True
+    scene.add(buoys)
+
+    # Lane rope: 0.15 m floats at a 0.5 m pitch, alternating blue and white the
+    # way a real one is -- the alternation is what makes the pitch countable
+    # once the spheres are only a pixel or two apart.
+    _rx0, _rx1, _rstep = X0 + 1.0, X1 - 0.4, 0.5
+    _nr = max(2, int((_rx1 - _rx0) / _rstep) + 1)
+    _rz = -0.68 * Z1
+    rope = tp.InstancedMesh(tp.SphereGeometry(0.075, 14, 10),
+                            standard_material(0xffffff, 0.5), _nr)
+    for i in range(_nr):
+        _m = tp.Matrix4()
+        _m.set_position(_rx0 + i * _rstep, _wl, _rz)
+        rope.set_matrix_at(i, _m)
+        rope.set_color_at(i, tp.Color(0xf2f4f6 if (i // 2) % 2 == 0 else 0x1b6fb0))
+    rope.instance_matrix_needs_update()
+    rope.instance_color_needs_update()
+    scene.add(rope)
+
+    print(f"scale chain: {_nb} buoys @ {_bstep:g} m, {_nr} lane floats @ {_rstep:g} m")
+
+
+
 
 def vk_on_frame():
     """Fill the renderer's OWN vertex buffers, in place. Runs inside render().
