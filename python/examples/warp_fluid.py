@@ -72,9 +72,10 @@ import numpy as np
 import warp as wp
 
 import threepp as tp
-from warp_common import (DensitySurface, bench_loop, cli_arg, encode_png_sequence,
-                         find_ffmpeg, pbf_constants,
-                         resize_handler, standard_material, write_radiance_hdr)
+from warp_common import (DensitySurface, Encoder, bench_loop, cli_arg,
+                         open_display, parse_size, pbf_constants,
+                         resize_handler, sky_env, standard_material,
+                         write_radiance_hdr)
 try:
     from threepp.cuda_interop import VkInteropArray
 except ImportError:                  # older threepp builds have no CUDA<->Vulkan interop
@@ -95,7 +96,45 @@ wp.set_module_options({"fast_math": True})
 # head of water in a 1.1 m tank, which three Jacobi iterations cannot hold
 # (measured on an H100: 150% mean compression, |v| peaking at 440 m/s).
 SCALE = cli_arg("--scale", 1.0, float)
-N = cli_arg("--n", int(round(340_000 * SCALE ** 3)), int)
+
+# --- the WIDE pool ------------------------------------------------------------
+# --scale k refines the SAME tank: D shrinks and the surfacing grid is
+# domain/CELL in each axis, so cost grows as k^3 and an 80 GB card runs out of
+# int32 in the marching cubes (715,827,882 nodes) before it runs out of memory.
+# --wide W does the other thing: it enlarges the tank FOOTPRINT at fixed D.
+# Particles grow with AREA and the surfacing grid grows in two of its three
+# axes, which is the only direction along which a big GPU buys a visibly bigger
+# scene rather than a bigger number in a log. At equal bytes the difference is
+# not close: 78 GB of widening is 834 m2 of water at 9 mm; 78 GB of refining is
+# 2.31 m2.
+#
+# And it is the SAFE direction. The comment above about 3M particles boiling is
+# about DEPTH, not count: --n is footprint-first, so 3M at D = 9 mm in a 1.1 m
+# tank is a 2.5 m tower. PBF's density constraint is local (H = 2D spans one
+# particle layer), so the residual follows the hydrostatic column. A pool a
+# hundred times wider at the SAME depth is no harder to solve than this one.
+WIDE = cli_arg("--wide", 1.0, float)        # footprint multiplier, both axes
+WIDE_X = cli_arg("--wide-x", WIDE, float)   # per-axis overrides; a canal is
+WIDE_Z = cli_arg("--wide-z", WIDE, float)   #   --wide-x 16 --wide-z 1
+W_AREA = WIDE_X * WIDE_Z                    # particles, triangles, surface area
+W_LIN = math.sqrt(W_AREA)                   # camera and sun distance
+# --fill flat fills the whole footprint to --depth instead of damming a column
+# into 38% of it. A dam break is a 2 m event: at --wide 16 the front travels
+# 2*sqrt(g*h) = 3.3 m/s and needs 20 s to cross 33.6 m, and long before it
+# arrives the tongue is thinner than the splat width, where water does not thin
+# -- it vanishes. A pool that is already full, driven by a full-width piston,
+# is the scene that survives being 34 m long.
+FLAT = cli_arg("--fill", "dam", str).lower() == "flat"
+DEPTH = cli_arg("--depth", 0.27, float)     # still water depth (m) under --fill flat
+# IS_REF is the promise that nothing changed for anyone who passes no new flag.
+# It gates the hash-grid dims, the camera, the look and the surfacing ceiling
+# back to their shipped values -- bit-exactly, because bucket assignment fixes
+# the neighbour iteration order and therefore the floating-point summation
+# order in every kernel. Do not tidy these branches away: they are what keeps
+# every previously recorded dump replaying to the same pixels.
+IS_REF = (WIDE_X == 1.0 and WIDE_Z == 1.0 and not FLAT)
+
+N = cli_arg("--n", int(round(340_000 * SCALE ** 3 * W_AREA)), int)
 # Simulate-only / render-only split (see the module docstring). A replay
 # reproduces the dump's fill exactly -- same --scale, same requested --n, same
 # obstacle -- because N is baked into the buffers the render paths address.
@@ -130,6 +169,10 @@ FRAMES = cli_arg("--frames", 0, int)
 # ffmpeg is absent). Offline: every sim frame is rendered, so the temporal
 # pipeline stays converged; works headless.
 VIDEO = cli_arg("--video", 0.0, float)
+# --egl forces the display-less EGL context (a cluster GPU node); --no-egl
+# forces a window. Default: EGL when Linux has no DISPLAY and one is available,
+# so a Slurm job needs no flag and a laptop is unaffected.
+EGL = True if "--egl" in sys.argv else (False if "--no-egl" in sys.argv else None)
 OPAQUE = "--opaque" in sys.argv   # debug: render the surface as a plain lit
                                   # solid, to separate a geometry problem
                                   # from a shading one
@@ -172,17 +215,33 @@ GRAVITY = -9.81
 
 # --- tank geometry ------------------------------------------------------------
 
-X0, X1 = -1.05, 1.05         # tank interior
-Z0, Z1 = -0.55, 0.55
+X0, X1 = -1.05 * WIDE_X, 1.05 * WIDE_X   # tank interior; --wide scales the
+Z0, Z1 = -0.55 * WIDE_Z, 0.55 * WIDE_Z   # FOOTPRINT at fixed spacing D
 FLOOR = 0.0
 WALL_EPS = 0.6 * D           # keep particle centres this far off a wall
+
+# A sloping shore at the +x end. A closed 34 m box is a bathtub: the wave train
+# reflects off a vertical wall with no loss and stands, and the whole pool
+# turns into one 41 s seiche. A beach shoals the train, breaks it, and gives
+# the far end of the shot something that reads as surf rather than as a wall.
+BEACH_RUN = cli_arg("--beach", 0.0, float)            # metres of shore at +x
+BEACH_SLOPE = (DEPTH / BEACH_RUN) if BEACH_RUN > 0.0 else 0.0
+BEACH_TOE = X1 - max(BEACH_RUN, 1.0e-6)
 
 # A block on the tank floor for the jet to break over. It must be a FINITE box:
 # an unbounded half-space would teleport every particle beneath it onto its
 # surface.
-BX0, BX1 = 0.15, 0.42
-BZ0, BZ1 = -0.30, 0.30
-BY1 = 0.26
+if FLAT:
+    # One 0.27 m paddle cannot stir 591 m2. Under a flat fill the box becomes a
+    # full-width piston at the -x end: the whole tank width moves, so the wave
+    # it makes is planar and crosses the pool instead of dispersing.
+    BX0, BX1 = X0 + 0.10, X0 + 0.55
+    BZ0, BZ1 = Z0, Z1
+    BY1 = DEPTH + 0.30
+else:
+    BX0, BX1 = 0.15 * WIDE_X, 0.42 * WIDE_X
+    BZ0, BZ1 = -0.30 * WIDE_Z, 0.30 * WIDE_Z
+    BY1 = 0.26          # a HEIGHT, not a footprint: --wide does not deepen the tank
 
 # --obstacle PATH swaps that box for an arbitrary triangle mesh, collided
 # through a signed distance field baked once at startup. The tank walls stay
@@ -214,9 +273,18 @@ if REPLAY and _meta.get("obstacle"):
 
 # The dam-break column occupies [X0, FILL_X1] and collapses in the first second.
 # After that the paddle keeps the water moving.
-FILL_X1 = -0.25
-PADDLE_AMP = 0.46            # sweep amplitude (m)
-PADDLE_PERIOD = 2.0          # seconds per full stroke; fast enough to throw a bow wave
+FILL_X1 = -0.25 * WIDE_X
+if FLAT:
+    # Amplitude and period must scale together or not at all: their ratio sets
+    # the wave height and steepness, which is a property of the water, not of
+    # how much of it there is.
+    PADDLE_AMP = cli_arg("--paddle-amp", 0.14, float)
+    PADDLE_PERIOD = cli_arg("--paddle-period", 2.4, float)
+else:
+    PADDLE_AMP = cli_arg("--paddle-amp", 0.46 * WIDE_X, float)
+    PADDLE_PERIOD = cli_arg("--paddle-period", 2.0 * WIDE_X, float)
+# A piston that starts at full stroke puts a step into shallow water. Ramp it.
+PADDLE_RAMP = cli_arg("--paddle-ramp", 1.0 if FLAT else 0.0, float)
 
 # --- SPH kernels ----------------------------------------------------------------
 
@@ -248,6 +316,9 @@ def collide(p: wp.vec3, bx0: float, bx1: float, vol: wp.uint64, ox: float,
     x = wp.min(wp.max(p[0], X0 + WALL_EPS), X1 - WALL_EPS)
     z = wp.min(wp.max(p[2], Z0 + WALL_EPS), Z1 - WALL_EPS)
     y = wp.max(p[1], FLOOR + WALL_EPS)
+    if BEACH_SLOPE > 0.0:
+        # The shore is a plane, so it is a clamp like every other wall here.
+        y = wp.max(y, FLOOR + WALL_EPS + (x - BEACH_TOE) * BEACH_SLOPE)
     if vol != wp.uint64(0):
         # --obstacle: one trilinear fetch yields distance AND gradient. The field
         # is baked in the mesh's REST frame, so the paddle sweep is undone on the
@@ -514,16 +585,33 @@ def shade_points(v: wp.array(dtype=wp.vec3), col: wp.array(dtype=wp.vec3)):
 
 # --- surfacing: particles -> density grid -> marching cubes -------------------
 
-CELL = 1.00 * D              # surface grid spacing (then blurred). Marching
+CELL = cli_arg("--cell", 1.00, float) * D   # surface grid spacing (then blurred). Marching
                              # cubes cannot emit a sheet thinner than roughly
                              # the combined splat+blur kernel width -- thinner
                              # water does not thin, it VANISHES -- so the cell
                              # is fine and the second blur round is narrowed,
                              # at the cost of more triangles.
 GX0, GY0, GZ0 = X0 - 0.05, FLOOR - 0.035, Z0 - 0.05
+# The shipped ceiling was 0.56 m with the comment "paddle spray never gets near
+# this". It does: a --probe 3 run of the shipped scene measures y_max = 0.896 m
+# at t = 1.20 s. A particle above the top plane deposits NO density at all
+# (warp_common._splat returns early), so it vanishes from the surface and pops
+# back on the way down, and marching cubes leaves the surface open up there.
+# IS_REF keeps the old value so recorded dumps still replay identically;
+# everything else gets a ceiling the water cannot reach.
+GRID_TOP = cli_arg("--grid-top", 0.56 if IS_REF else DEPTH + 0.95, float)
 NGX = int((X1 + 0.05 - GX0) / CELL) + 1
-NGY = int((0.56 - GY0) / CELL) + 1   # paddle spray never gets near this
+NGY = int((GRID_TOP - GY0) / CELL) + 1
 NGZ = int((Z1 + 0.05 - GZ0) / CELL) + 1
+if 3 * NGX * NGY * NGZ >= 2 ** 31:
+    # warp's marching cubes indexes nodes as ti*ny*nz*3 + tj*nz*3 + tk*3 + side
+    # in int32 and allocates wp.zeros(nx*ny*nz*3), so past 715,827,882 nodes it
+    # raises a ValueError from deep inside check_array_shape. Say it here, in
+    # terms of the flags that caused it.
+    raise SystemExit(
+        f"surfacing grid {NGX}x{NGY}x{NGZ} = {NGX * NGY * NGZ:,} nodes exceeds warp's "
+        f"int32 marching-cubes limit (715,827,882). Raise --cell (nodes fall as "
+        f"1/cell^3) or lower --grid-top.")
 
 # --- the --obstacle mesh ------------------------------------------------------
 
@@ -693,15 +781,46 @@ if OBSTACLE:
         print("          warning: no interior found, so the field cannot push a particle")
         print("                   back OUT of the mesh. Surface repulsion still works.")
 
-nx = int((FILL_X1 - X0 - 2.0 * WALL_EPS) / D)
 nz = int((Z1 - Z0 - 2.0 * WALL_EPS) / D)
-ny = max(1, N // (nx * nz))
-ix, iy, iz = np.meshgrid(np.arange(nx), np.arange(ny), np.arange(nz), indexing="ij")
-p0 = np.stack([
-    X0 + WALL_EPS + (ix.ravel() + 0.5) * D,
-    FLOOR + WALL_EPS + (iy.ravel() + 0.5) * D,
-    Z0 + WALL_EPS + (iz.ravel() + 0.5) * D,
-], axis=-1).astype(np.float32)
+if FLAT:
+    # DEPTH sets ny, not N: a flat pool is defined by how deep the water is,
+    # and the particle count follows from the footprint. Starting clear of the
+    # piston keeps the first frame from resolving an interpenetration.
+    FILL_X0 = BX1 + WALL_EPS
+    nx = int((X1 - WALL_EPS - FILL_X0) / D)
+    ny = max(1, int(round(DEPTH / D)))
+else:
+    FILL_X0 = X0 + WALL_EPS
+    nx = int((FILL_X1 - X0 - 2.0 * WALL_EPS) / D)
+    ny = max(1, N // (nx * nz))
+
+
+def seed_lattice(nx, ny, nz, chunk=1 << 22):
+    """The fill lattice, in chunks, straight into float32.
+
+    np.meshgrid + np.stack builds three int64 index grids and a float64
+    intermediate before the cast, which is ~84 bytes per lattice point: 17 GB
+    of HOST memory at 200M particles, single-threaded, for data that ends up as
+    12 bytes on the GPU. That OOMs a compute node before the GPU is touched.
+    Chunking writes the answer directly and peaks at a few hundred MB.
+    """
+    m = nx * ny * nz
+    out = np.empty((m, 3), np.float32)
+    for lo in range(0, m, chunk):
+        hi = min(lo + chunk, m)
+        i = np.arange(lo, hi, dtype=np.int64)
+        ix, r = np.divmod(i, ny * nz)
+        iy, iz = np.divmod(r, nz)
+        out[lo:hi, 0] = FILL_X0 + (ix + 0.5) * D
+        out[lo:hi, 1] = FLOOR + WALL_EPS + (iy + 0.5) * D
+        out[lo:hi, 2] = Z0 + WALL_EPS + (iz + 0.5) * D
+    return out
+
+
+p0 = seed_lattice(nx, ny, nz)
+if BEACH_SLOPE > 0.0:
+    # Drop what the shore already occupies, before it is ever a particle.
+    p0 = p0[p0[:, 1] >= FLOOR + WALL_EPS + (p0[:, 0] - BEACH_TOE) * BEACH_SLOPE]
 # drop the particles that would start inside the obstacle. Seeding happens at
 # t = 0, where the paddle offset is sin(0) == 0, so the rest frame the field was
 # baked in IS the world frame here -- no offset to undo.
@@ -727,11 +846,43 @@ if REPLAY and N != int(_meta["n"]):
 # A cell fully inside the fluid collects (CELL/D)^3 particles; the surface sits
 # near half of that, so the iso-threshold follows the resolution automatically.
 ISO = 0.5 * (CELL / D) ** 3
-MAX_TRIS = cli_arg("--max-tris", int(700_000 * SCALE ** 2), int)  # surface area ~ 1/D^2
-
-print(f"fluid: {N:,} particles on {device} | grid {NGX}x{NGY}x{NGZ} cell={CELL} "
-      f"iso={ISO:.2f}\n       rho0={RHO0:.4g} sum_grad2={SG2_REST:.4g} "
-      f"eps={EPS_CFM:.3g} k_corr={S_CORR_K:.3g}")
+# wp.MarchingCubes winds triangles so the CCW-implied normal points INTO the
+# density, i.e. opposite the outward -grad normal DensitySurface computes. Both
+# backends do `normal *= faceDirection` for a Side.Double material, so shipping
+# un-negated normals leaves the water's shading normal pointing DOWN. That does
+# not just darken the diffuse term -- it disables transmission: getIBLVolumeRefraction
+# refracts along the normal, so the refracted ray goes UP into the sky, samples
+# the backdrop above the horizon and returns nothing. Measured: with a bright RED
+# pool floor and transmission 1.0, the water showed exactly zero red.
+# Measured 2026-09-09: flipping this changes the shading (the water darkens)
+# but does NOT restore transmission, so the winding/normal question is real
+# but is NOT the see-through bug. Default left at the shipped value; the
+# flag stays so the A/B can be repeated.
+MC_SIGN = cli_arg("--mc-sign", 1.0, float)
+# Reverse the marching-cubes winding so the water's visible surface is
+# FRONT-facing. Without this a Side.Double transmissive material silently
+# renders with transmissionFactor == 0 (see DensitySurface.expand).
+# Reverse the marching-cubes winding so the water's visible surface is
+# FRONT-facing. wp.MarchingCubes winds triangles INTO the density, and the
+# deferred renderer traces the geometry to measure the glass chord through the
+# water -- with the winding inverted it cannot tell inside from outside, the
+# chord measures ~0, Beer-Lambert contributes nothing, and the pool renders as
+# colourless quicksilver from above while staying turquoise from below.
+# Flipping it restores the tropical colour and leaves every non-water surface
+# untouched. With the winding corrected the shipped -grad normals are already
+# aligned, so MC_SIGN stays 1.0.
+MC_FLIP = bool(cli_arg("--mc-flip", 1, int))
+# The default followed SCALE**2 and knew nothing about the footprint, so a
+# widened run kept the 700k of a 2 m tank against tens of millions of live
+# triangles. The clamp is safe (build_surface bounds it, _expand parks the
+# overflow and set_draw_range clamps the draw) but it truncates x-major -- it
+# cuts the pool off as a slab at the far end, which is exactly where a wide
+# shot is looking. The 6.0 is the measured triangles-per-area-per-cell^2 law
+# (4.7) with headroom.
+_AREA = (X1 - X0) * (Z1 - Z0)
+MAX_TRIS = cli_arg("--max-tris",
+                   int(700_000 * SCALE ** 2) if IS_REF
+                   else int(6.0 * _AREA / CELL ** 2), int)
 
 x = wp.array(p0, dtype=wp.vec3, device=device)
 v = wp.zeros(N, dtype=wp.vec3, device=device)
@@ -742,8 +893,53 @@ lam = wp.zeros(N, dtype=float, device=device)
 omega = wp.zeros(N, dtype=wp.vec3, device=device)
 vtmp = wp.zeros(N, dtype=wp.vec3, device=device)
 col = wp.zeros(N, dtype=wp.vec3, device=device)
-grid = wp.HashGrid(128, 128, 128, device)
+# wp.HashGrid(128,128,128) is not a capacity, it is a PERIODIC TILE: warp folds
+# world cells with x % dim_x, so at H = 18 mm cells the shipped grid tiles every
+# 2.304 m. The tank outgrows it at --wide 1.10, and at --wide 16 it folds 15:1
+# in x and 8:1 in z. Nothing breaks and nothing is reported -- every neighbour
+# loop re-tests r2 < H*H, so aliased candidates are distance-rejected -- it just
+# costs ~25x in the kernels that are already most of the frame.
+GRID_CELLS = cli_arg("--grid-cells", 1 << 28, int)   # bucket budget (2.0 GB)
+
+
+def hash_grid_dims():
+    """Bucket dims that cover the tank at the neighbour radius."""
+    if IS_REF and SCALE == 1.0:
+        # The shipped grid, kept exactly. Bucket assignment fixes the sort
+        # order of hash_grid_point_id, which fixes the summation order in every
+        # neighbour loop, so this is what makes a reference run bit-identical
+        # rather than merely equivalent. Do not tidy it away: it is what keeps
+        # old dumps replaying to the same pixels.
+        return [128, 128, 128]
+    d = [max(8, math.ceil(s / H) + 2)
+         for s in (X1 - X0, GRID_TOP - FLOOR, Z1 - Z0)]
+    while d[0] * d[1] * d[2] > GRID_CELLS:
+        # Fold Y first: the fluid is a shallow layer in a tall box, so a folded
+        # Y bucket collides occupied cells against EMPTY air. X and Z are
+        # densely occupied across the whole floor, where folding collides
+        # occupied against occupied -- the expensive kind.
+        if d[1] > 16:
+            d[1] = max(16, d[1] // 2)
+        else:
+            d[0 if d[0] >= d[2] else 2] //= 2
+    return d
+
+
+GDX, GDY, GDZ = hash_grid_dims()
+grid = wp.HashGrid(GDX, GDY, GDZ, device)
 grid.reserve(N)
+
+print(f"fluid: {N:,} particles on {device} | pool {X1 - X0:.2f} x {Z1 - Z0:.2f} m "
+      f"x {ny * D:.3f} m deep (--wide {WIDE_X:g}x{WIDE_Z:g}, "
+      f"{'flat' if FLAT else 'dam'}"
+      f"{f', beach {BEACH_RUN:g} m' if BEACH_RUN else ''})\n"
+      f"       surface grid {NGX}x{NGY}x{NGZ} = {NGX * NGY * NGZ / 1e6:.1f}M nodes "
+      f"@ {CELL * 1000:.1f} mm, top {GRID_TOP:.2f} m | iso={ISO:.2f} | "
+      f"max_tris {MAX_TRIS:,}\n"
+      f"       hash grid {GDX}x{GDY}x{GDZ} = {GDX * GDY * GDZ / 1e6:.1f}M buckets "
+      f"@ {H * 1000:.1f} mm cells, ~{N / 8e6:.1f}M occupied\n"
+      f"       rho0={RHO0:.4g} sum_grad2={SG2_REST:.4g} "
+      f"eps={EPS_CFM:.3g} k_corr={S_CORR_K:.3g} K={SUBSTEPS * ITERATIONS}")
 
 # Round one of the blur stays binomial so grid-aligned noise is killed
 # outright; round two is narrowed, which buys thinness without a new noise
@@ -757,7 +953,12 @@ frame_no = 0
 
 def paddle_offset(t):
     """Sweep displacement of the paddle along x at time t."""
-    return PADDLE_AMP * math.sin(2.0 * math.pi * t / PADDLE_PERIOD)
+    a = PADDLE_AMP
+    if PADDLE_RAMP > 0.0:
+        # A piston at full stroke from rest is a step function into 0.27 m of
+        # water: the first half-cycle makes a bore, not a wave.
+        a *= min(1.0, t / PADDLE_RAMP)
+    return a * math.sin(2.0 * math.pi * t / PADDLE_PERIOD)
 
 
 def paddle_extent(t):
@@ -903,6 +1104,7 @@ if PROBE:
     print(f"{'t':>6} {'|v|mean':>8} {'|v|max':>8} {'y_mean':>7} {'y_max':>7} "
           f"{'comp%':>7} {'cmax%':>7} {'tris':>9}")
     comp_acc = []
+    y_peak = 0.0
     for f in range(int(60 * cli_arg("--probe", 3.0, float))):
         sim_step()
         if f % 12 == 0:
@@ -912,11 +1114,25 @@ if PROBE:
             comp_acc.append(e.mean())
             vv = np.linalg.norm(v.numpy(), axis=1)
             yy = x.numpy()[:, 1]
+            y_peak = max(y_peak, float(yy.max()))
             print(f"{f/60.0:6.2f} {vv.mean():8.3f} {vv.max():8.3f} {yy.mean():7.3f} "
                   f"{yy.max():7.3f} {e.mean()*100:7.3f} {e.max()*100:7.2f} "
                   f"{build_surface():9,d}")
     print(f"mean compression over run: {np.mean(comp_acc)*100:.3f}%  "
-          f"(iters={ITERATIONS} rho={RHO_CHEB} relax={JACOBI_RELAX})")
+          f"(iters={ITERATIONS} rho={RHO_CHEB} relax={JACOBI_RELAX} "
+          f"substeps={SUBSTEPS} K={SUBSTEPS * ITERATIONS})")
+    # The surfacing grid has a lid, and a particle above it contributes NO
+    # density at all -- it does not thin, it vanishes, and marching cubes
+    # leaves the surface open at the top plane. That is invisible in the
+    # numbers and obvious in the render, so say it here where it is cheap.
+    if y_peak > GRID_TOP:
+        print(f"WARNING: water reached y = {y_peak:.3f} m but the surfacing grid ends "
+              f"at {GRID_TOP:.3f} m.\n"
+              f"         Everything above it is missing from the surface. "
+              f"Pass --grid-top {y_peak + 0.2:.1f} (costs "
+              f"{(int((y_peak + 0.2 - GY0) / CELL) + 1) / NGY:.1f}x the surfacing grid).")
+    else:
+        print(f"surfacing lid: water peaked at {y_peak:.3f} m, grid top {GRID_TOP:.3f} m -- clear.")
     sys.exit(0)
 
 
@@ -1026,16 +1242,54 @@ if VULKAN and not tp.vulkan_available():
     print("vulkan not available on this machine; falling back to OpenGL")
     VULKAN = False
 
-canvas = tp.Canvas("threepp x warp - fluid", width=1280, height=800,
-                   antialiasing=4,
-                   headless=(SHOT or BENCH or VIDEO > 0) and not FRAMES)
-if VULKAN:
-    renderer = tp.VulkanRenderer(canvas)
-else:
-    renderer = tp.GLRenderer(canvas)
+WIDTH, HEIGHT = parse_size(cli_arg("--size", "1280x800", str))
+# On a compute node there is no window system at all, so the GL context comes
+# from the driver through EGL and `canvas` is None. Everything below that needs
+# a window -- OrbitControls, ImGui, resize -- lives in the interactive branch,
+# which a headless run never reaches.
+display = open_display("threepp x warp - fluid", WIDTH, HEIGHT,
+                       vulkan=VULKAN, egl=EGL,
+                       headless=(SHOT or BENCH or VIDEO > 0) and not FRAMES)
+canvas = display.canvas
+renderer = display.renderer
+if display.context is not None:
+    print(f"rendering headless: {display.describe()}")
+    if not (VIDEO or SHOT or BENCH):
+        raise SystemExit(
+            "There is no window here, so there is nothing to interact with. Ask for a "
+            "render instead: --video S (S seconds to mp4), --shot, or --bench.")
+if not VULKAN:
     renderer.shadow_map_enabled = True
+# --murk declares an underwater medium, which makes shadeWater's above branch
+# use applyMurk and agree with the from-below path. It is OFF here on purpose:
+# the murk is a horizontal PLANE, so it tints everything below the waterline --
+# including the OUTSIDE of the tank, the table and the chairs, which are in air.
+# That model fits an ocean, where below the surface really is water; it does not
+# fit a pool standing on a table. The winding fix below colours the water
+# without touching anything that is not water (measured: the tank's outer wall
+# stays byte-identical).
+MURK_SIGMA = cli_arg("--murk", 0.0, float)          # 1/m; 0 = off
+MURK_COLOR = (0.055, 0.30, 0.36)
+if VULKAN and MURK_SIGMA > 0.0:
+    renderer.set_fog_water_surface_y(FLOOR + (DEPTH if FLAT else 0.29))
+    renderer.set_underwater_murk(MURK_SIGMA, tp.Color(*MURK_COLOR))
+
 renderer.tone_mapping = tp.ToneMapping.ACESFilmic
-renderer.tone_mapping_exposure = 0.95 if VULKAN else 1.15
+# Authored, not guessed: a film should state its exposure. The default is
+# the shipped value for each backend; --exposure overrides it.
+# Measured by sweeping exposure x env_map_intensity and looking at the frames
+# (scripts in the session scratchpad). The shipped GL value of 1.15 was
+# tuned for a 2 m tank lit by an indoor-pool HDRI and viewed from ABOVE,
+# where you are mostly looking THROUGH the water at a tiled floor. On a
+# grazing line over open water you are mostly looking at REFLECTIONS, and
+# 1.15 blows the surface to white.
+renderer.tone_mapping_exposure = cli_arg(
+    "--exposure", (0.95 if VULKAN else 1.40) if IS_REF else 0.35, float)
+
+SUN_POS = (2.4, 3.2, 4.2) if IS_REF else (X1 * 1.6, X1 * 0.30, Z1 * 0.40)
+# Low (about 10 deg) and at the FAR end, so the specular path runs the whole
+# length of the pool back into the lens. A high sun on flat water gives an
+# even sheen and no glitter, which is most of why the first frame read as milk.
 
 scene = tp.Scene()
 # The indoor-pool HDRI is Vulkan-only: the ray-traced path turns its bright
@@ -1043,17 +1297,49 @@ scene = tp.Scene()
 # transmission just floods with it and washes the water out, so GL keeps the
 # procedural sky.
 _pool_hdr = fetch_asset(POOL_HDR_URL, "threepp_indoor_pool_2k.hdr") if VULKAN else None
-env = tp.RGBELoader().load(_pool_hdr if _pool_hdr else make_sky_hdr(
-    os.path.join(tempfile.gettempdir(), "threepp_fluid_sky.hdr")))
+if IS_REF or VULKAN:
+    env = tp.RGBELoader().load(_pool_hdr if _pool_hdr else make_sky_hdr(
+        os.path.join(tempfile.gettempdir(), "threepp_fluid_sky.hdr")))
+else:
+    # A real sun disc, on the same direction as the key light, so the
+    # reflection, the glint and the shadows agree. This is the single
+    # biggest difference between water and blue gel at a grazing angle.
+    _sd = np.array(SUN_POS, dtype=np.float64)
+    _sd = _sd / np.linalg.norm(_sd)
+    env = sky_env(tuple(_sd), below_horizon=(0.22, 0.27, 0.31),
+                  below_nadir=(0.05, 0.06, 0.07))
 scene.environment = env
 scene.background = env
 
-camera = tp.PerspectiveCamera(46, canvas.aspect(), 0.01, 100)
-camera.position.set(1.20, 0.63, 1.34)
-camera.look_at(-0.02, 0.07, 0.0)
+# Length is the subject. The shipped camera sits 1.2 m from the origin with a
+# 46 deg lens: point that at a 34 m pool and you get a featureless mat to the
+# horizon with a visible far wall -- technically correct and completely flat.
+# A low eye just above the waterline, a long lens, and a target pinned to the
+# far end instead turn the length into the picture: the wave train recedes,
+# and apparent size halving with distance is the depth cue no single prop can
+# give you.
+DOLLY = cli_arg("--dolly", 0.0, float)      # camera speed along +x, m/s
+WLINE = DEPTH if FLAT else 0.07             # the waterline the shot is built on
+CAM_EYE = [X0 + 1.2, WLINE + 0.45, 0.06 * (Z1 - Z0)]
+CAM_TGT = (X1, WLINE - 0.06, -0.02 * (Z1 - Z0))
+camera = tp.PerspectiveCamera(46 if IS_REF else 30, display.aspect,
+                              0.01 * W_LIN, 100 * W_LIN)
+if IS_REF:
+    camera.position.set(1.20, 0.63, 1.34)
+    camera.look_at(-0.02, 0.07, 0.0)
+else:
+    camera.position.set(*CAM_EYE)
+    camera.look_at(*CAM_TGT)
+
+
+def camera_at(t):
+    """The dolly. Height fixed, target pinned to the far end."""
+    if DOLLY:
+        camera.position.set(CAM_EYE[0] + DOLLY * t, CAM_EYE[1], CAM_EYE[2])
+        camera.look_at(*CAM_TGT)
 
 sun = tp.DirectionalLight(0xfff3e0, 2.6)
-sun.position.set(2.4, 3.2, 4.2)
+sun.position.set(*SUN_POS)
 sun.cast_shadow = True
 scene.add(sun)
 scene.add(tp.HemisphereLight(0xbcd4ff, 0x2a2b28, 0.25))
@@ -1073,6 +1359,14 @@ scene.add(floor_mesh)
 # saturated colour reads as a bright stripe around the outside of the tank.
 _mosaic = fetch_asset(MOSAIC_URL, "threepp_pool_mosaic.jpg")
 TILE = 0.80            # world metres per mosaic sheet -> square tiles everywhere.
+# One environment level for the whole scene. It was only ever applied to the
+# water, so the liner and the walls kept full-strength image-based light --
+# and a bright neutral sky added to their DIFFUSE term swamps the chroma of
+# a blue mosaic. Measured: the tiles came back mean RGB 118/133/148 at
+# saturation 33, i.e. a grey checkerboard, from a texture that is solidly
+# blue. Lowering exposure only made it a darker grey (44/49/57, sat 15) --
+# proof it was the light being ADDED, not the exposure.
+ENV_I = cli_arg("--env-intensity", 1.0 if IS_REF else 0.25, float)
                        # Large rather than small: the ray-traced refraction
                        # samples the map at LOD 0, one ray per pixel, so fine
                        # tiles shatter into dark speckle under the rippled
@@ -1080,38 +1374,60 @@ TILE = 0.80            # world metres per mosaic sheet -> square tiles everywher
 
 
 def liner_material(w, h, mosaic):
-    m = standard_material(0xffffff if mosaic else 0x4ec9de, 0.5)
+    # --floor-color is a debug knob: a strongly off-hue liner makes it obvious
+    # at a glance whether the water is transmitting the floor or just tinted.
+    m = standard_material(cli_arg("--floor-color", 0xffffff if mosaic else 0x4ec9de, lambda v: int(v, 0)), 0.5)
+    m.env_map_intensity = ENV_I
     if mosaic:
         t = tp.TextureLoader().load(_mosaic, tp.ColorSpace.SRGB)
         t.wrap_s = t.wrap_t = tp.TextureWrapping.Repeat
         t.repeat = tp.Vector2(w / TILE, h / TILE)
+        # Texture.anisotropy defaults to 1, i.e. none. A wall of 4 cm tiles seen
+        # at a grazing angle then undersamples along the view direction and the
+        # pattern beats into ~26 cm blocks -- it renders as a black-and-white
+        # checkerboard rather than as a blue mosaic. Mipmaps alone do not fix it
+        # (they blur the other axis instead); anisotropic filtering does.
+        t.min_filter = tp.Filter.LinearMipmapLinear
+        t.mag_filter = tp.Filter.Linear
+        t.anisotropy = 16
         m.map = t
     return m
 
 
-# Mosaic on the WALLS, plain aqua on the FLOOR. The floor is what the body of
-# the water refracts, and this mosaic's saturated navy average drags the whole
-# pool dark and busy; the plain aqua floor keeps the water luminous while the
-# walls carry the tiled-pool identity at the rim and waterline.
+# Mosaic on the WALLS, plain aqua on the FLOOR (--floor-mosaic 1 to tile it).
+# The floor is what the body of the water refracts, and this mosaic's saturated
+# navy average drags the whole pool dark and busy; the plain aqua floor keeps
+# the water luminous while the walls carry the tiled-pool identity at the rim
+# and waterline.
+#
+# That matters MOST on Vulkan, where the water is ray-traced: darken what it
+# refracts and the refracted term goes dark, leaving mostly specular, and the
+# water reads as liquid metal instead of tropical. Measured as a regression
+# when the floor was tiled by default -- do not turn it on for the Vulkan path
+# without looking at a frame.
 liner = tp.Mesh(tp.PlaneGeometry(X1 - X0, Z1 - Z0),
-                liner_material(X1 - X0, Z1 - Z0, mosaic=False))
+                liner_material(X1 - X0, Z1 - Z0,
+                               mosaic=cli_arg("--floor-mosaic", 0, int) and _mosaic is not None))
 liner.rotate_x(-math.pi / 2)
 liner.position.set(0.5 * (X0 + X1), FLOOR + 0.0015, 0.5 * (Z0 + Z1))
 liner.receive_shadow = True
 scene.add(liner)
 
 # The walls get the liner too. Refracted rays that miss the floor hit the tank's
-# inner faces, and grey walls put grey right back into the water body.
+# inner faces, and grey walls put grey right back into the water body. The tiles
+# are an ordinary colour map, so both backends take them: GL's screen-space
+# transmission really does show the liner through the water, which is where the
+# tiled-pool identity reads.
 for sx, sz in ((1, 0), (-1, 0), (0, 1), (0, -1)):
     if sx:
         wl = tp.Mesh(tp.PlaneGeometry(Z1 - Z0, 0.20),
-                     liner_material(Z1 - Z0, 0.20, mosaic=VULKAN and _mosaic is not None))
+                     liner_material(Z1 - Z0, 0.20, mosaic=_mosaic is not None))
         wl.rotate_y(-sx * math.pi / 2)
         wl.position.set((X1 - 0.002) if sx > 0 else (X0 + 0.002), 0.10,
                         0.5 * (Z0 + Z1))
     else:
         wl = tp.Mesh(tp.PlaneGeometry(X1 - X0, 0.20),
-                     liner_material(X1 - X0, 0.20, mosaic=VULKAN and _mosaic is not None))
+                     liner_material(X1 - X0, 0.20, mosaic=_mosaic is not None))
         if sz > 0:
             wl.rotate_y(math.pi)
         wl.position.set(0.5 * (X0 + X1), 0.10,
@@ -1159,7 +1475,9 @@ for sx, sz in ((1, 0), (-1, 0), (0, 1), (0, -1)):
 # ground: its procedural sky is dull below the horizon, and its screen-space
 # refraction is tuned with the plane in place.
 if not VULKAN:
-    ground = tp.Mesh(tp.PlaneGeometry(60, 60), standard_material(0x848b94, 0.8))
+    _g = max(60.0, 3.0 * max(X1 - X0, Z1 - Z0))
+    ground = tp.Mesh(tp.PlaneGeometry(_g, _g),
+                     standard_material(0x848b94 if IS_REF else 0x3a4048, 0.8))
     ground.rotate_x(-math.pi / 2)
     ground.position.y = FLOOR - 0.032
     ground.receive_shadow = True
@@ -1214,6 +1532,11 @@ else:
         hview_nrm = [a.numpy() for a in host_nrm]
     geometry.set_attribute("position", np.zeros((cap, 3), np.float32))
     geometry.set_attribute("normal", np.tile(np.float32([0, 1, 0]), (cap, 1)))
+    # A marching-cubes soup has no natural parameterisation, so this geometry
+    # never carried uvs. --debug-uv adds a dummy set to test whether their
+    # ABSENCE is what stops the transmission branch running on this mesh.
+    if cli_arg("--debug-uv", 0, int):
+        geometry.set_attribute("uv", np.zeros((cap, 2), np.float32))
     geometry.set_draw_range(0, 3)
     wmat = tp.MeshStandardMaterial() if OPAQUE else tp.MeshPhysicalMaterial()
     # The backends tint transmitted light through different models, so the water
@@ -1228,25 +1551,83 @@ else:
     if OPAQUE:
         wmat.color = 0x3aa0c8
     else:
-        wmat.color = 0xcfeef5 if VULKAN else 0x8fd6e8
-    wmat.roughness = 0.04
+        wmat.color = cli_arg("--water-color",
+                             0xcfeef5 if VULKAN else 0x8fd6e8,
+                             lambda v: int(v, 0))
+    # GL has no ray tracing: transmission is a screen-space pre-pass, so a
+    # bright environment floods straight through and the water goes to milk.
+    # Measured on the first wide frame: RGB 193/209/217, saturation 29. A
+    # little roughness to spread the sun into a glitter track, and half the
+    # environment, is what puts the colour back.
+    wmat.roughness = cli_arg("--water-roughness", 0.04 if IS_REF else 0.05, float)
+    # 0.25 for the wide pool, not 1.0: a full-strength environment on a
+    # surface that big floods the far field pale and the glitter track
+    # disappears into it. Always settable, so the look can be swept.
+    wmat.env_map_intensity = ENV_I
     wmat.metalness = 0.0
     if not OPAQUE:
-        wmat.transmission = 1.0      # real screen-space refraction on the GL path
+        wmat.transmission = cli_arg("--transmission", 1.0, float)
         wmat.ior = 1.333
         # GL-only, all four: the Vulkan glass path reads none of them for this
         # mesh. Kept because they are exactly what makes the GL water work.
-        wmat.thickness = 0.55
+        # How far you can SEE INTO the water. The volume term is
+        # attenuation_color ^ (thickness / attenuation_distance), so 0.55 over
+        # 0.30 is colour^1.83 -- about (0.02, 0.27, 0.36) for this teal, i.e.
+        # red gone and two thirds of the rest with it. That is opaque by
+        # construction, and no amount of light makes a floor visible through it.
+        wmat.thickness = cli_arg("--water-thickness", 0.55 if IS_REF else 2.5, float)
         wmat.attenuation_color = tp.Color(0x1d7d92)
-        wmat.attenuation_distance = 0.30
+        # 0.30 m was tuned when GL's transmission contributed NOTHING, so the
+        # absorption was free. With the winding corrected it contributes, and
+        # colour^(0.55/0.30) eats ~98% of the red -- the water went dark and
+        # refused to carry the floor's colour. Vulkan keeps 0.30: its chord is
+        # traced, not the material thickness, and it already reads correctly.
+        wmat.attenuation_distance = cli_arg(
+            "--water-attenuation", (0.30 if VULKAN else 0.9) if IS_REF else 4.0, float)
         wmat.clearcoat = 0.25
         wmat.clearcoat_roughness = 0.12
-    wmat.side = tp.Side.Double
+    if cli_arg("--debug-glass", 0, int):
+        # The exact material the isolated probe transmits with: white, smooth,
+        # single-sided, thin, nothing else set. Same geometry, same scene --
+        # this separates "the material config" from "the mesh".
+        wmat = tp.MeshPhysicalMaterial()
+        wmat.color = 0xffffff
+        wmat.roughness = 0.0
+        wmat.metalness = 0.0
+        wmat.transmission = cli_arg("--transmission", 1.0, float)
+        wmat.ior = 1.333
+        # Side.Double, exactly like warp_water_balloon's water, which DOES
+        # transmit with this same marching-cubes geometry. Leaving it
+        # single-sided culls the surface (the winding is inward), which is what
+        # invalidated the first version of this test.
+        wmat.side = tp.Side.Double
+        wmat.transparent = False
+    else:
+        # wp.MarchingCubes winds triangles INTO the density, so the water's
+        # visible surface is BACK-facing. With Side.Double the shader does
+        # normal *= faceDirection from gl_FrontFacing, which flips the normal on
+        # exactly the fragments you can see -> NdotV clamps to 0 -> the
+        # transmission chunk's Fresnel weight goes to 1 -> transmissionFactor is
+        # exactly 0. That is why the water was never see-through.
+        _side = cli_arg("--water-side", "double", str).lower()
+        wmat.side = {"front": tp.Side.Front, "back": tp.Side.Back,
+                     "double": tp.Side.Double}[_side]
     # NOT transparent: the transmissive bucket is selected by transmission > 0
     # and the shader forces alpha to 1, so flipping this only risks sort issues.
     wmat.transparent = False
-    water = tp.Mesh(geometry, wmat)
-    water.cast_shadow = True
+    # --debug-plane-water swaps the marching-cubes surface for a flat quad at
+    # the waterline, same material, same everything else. It exists to isolate
+    # the GEOMETRY from the shading when transmission misbehaves.
+    if cli_arg("--debug-plane-water", 0, int):
+        _pg = tp.PlaneGeometry(X1 - X0, Z1 - Z0)
+        water = tp.Mesh(_pg, wmat)
+        water.rotate_x(-math.pi / 2)
+        water.position.set(0.5 * (X0 + X1), FLOOR + 0.22, 0.5 * (Z0 + Z1))
+    else:
+        water = tp.Mesh(geometry, wmat)
+    # A 34 m sheet casting into itself buys nothing and costs a shadow pass
+    # over the whole pool.
+    water.cast_shadow = IS_REF
 
 water.frustum_culled = False          # the CPU-side bounds never see GPU writes
 scene.add(water)
@@ -1270,7 +1651,8 @@ def vk_on_frame():
     vk_ntris are never consumed and shrinking frames need no re-degenerating.
     """
     if vk_ntris > 0:
-        surface.expand(vk_ntris, vk_interop[0].array, vk_interop[1].array)
+        surface.expand(vk_ntris, vk_interop[0].array, vk_interop[1].array, sign=MC_SIGN,
+                       flip_winding=MC_FLIP)
     wp.synchronize_device(device)
 
 
@@ -1313,7 +1695,8 @@ def arm_vulkan_interop():
     # fresh VRAM, and one launch here means a future consumer that forgets the
     # clamp reads a harmless off-screen point instead of uninitialised garbage
     # that happens to be finite.
-    surface.expand(0, vk_interop[0].array, vk_interop[1].array, dim=MAX_TRIS)
+    surface.expand(0, vk_interop[0].array, vk_interop[1].array, dim=MAX_TRIS, sign=MC_SIGN,
+                   flip_winding=MC_FLIP)
     wp.synchronize_device(device)
     # The pinned-host staging is dead weight now. Dropping it also makes a
     # stray trip through the host branch fail loudly rather than quietly write
@@ -1377,7 +1760,7 @@ def write_surface(ntris):
             geometry.update_attribute("normal", hview_nrm[p_slot][:p_rows])
             geometry.set_draw_range(0, 3 * p_tris)
         if ntris > 0:
-            surface.expand(ntris, stage_pos, stage_nrm)
+            surface.expand(ntris, stage_pos, stage_nrm, sign=MC_SIGN, flip_winding=MC_FLIP)
             rows = ntris * 3
             wp.copy(host_pos[vk_slot], stage_pos, count=rows)
             wp.copy(host_nrm[vk_slot], stage_nrm, count=rows)
@@ -1400,7 +1783,7 @@ def write_surface(ntris):
     if ntris > 0:
         dp = reg_pos.map(dtype=wp.vec3, shape=(MAX_TRIS * 3,))
         dn = reg_nrm.map(dtype=wp.vec3, shape=(MAX_TRIS * 3,))
-        surface.expand(ntris, dp, dn)
+        surface.expand(ntris, dp, dn, sign=MC_SIGN, flip_winding=MC_FLIP)
         reg_pos.unmap()
         reg_nrm.unmap()
     geometry.set_draw_range(0, 3 * ntris)
@@ -1518,13 +1901,18 @@ elif SHOT:
     save_frame("warp_fluid.png")
     print(f"simulated {SHOT_TIME:.1f} s, {nt:,} triangles [{BACKEND}], wrote warp_fluid.png")
 elif VIDEO:
-    # Offline video: every simulated frame is rendered and saved, so the
-    # temporal pipeline is always converged and there is no vsync, screen
-    # capture, or window involved -- the same path works on a headless server.
-    # Frames land in a temp dir; ffmpeg (if present) muxes warp_fluid.mp4.
-    outdir = tempfile.mkdtemp(prefix="warp_fluid_frames_")
+    # Offline video: every simulated frame is rendered, so the temporal pipeline
+    # is always converged and no vsync, screen capture or window is involved --
+    # the same path works on a headless cluster node.
+    #
+    # Straight down an x264 pipe, not a PNG per frame. At 3840x2160 a 10 s film
+    # is 600 frames, and the PNG round trip costs more than the render does:
+    # encode, write, read back, decode, for pixels that were already in memory.
+    # It is also tens of GB of intermediates on a filesystem shared with
+    # everyone else on the cluster.
     total = int(round(VIDEO * 60))
-    warm = 30 if VULKAN else 1        # let the dam break settle history before frame 0
+    warm = int(round(cli_arg("--warmup", 0.5 if IS_REF else 4.0, float) * 60))
+    enc = Encoder("warp_fluid.mp4", WIDTH, HEIGHT, 60, crf=16, preset="slow")
     t0 = time.perf_counter()
     for i in range(warm):
         # A replay has nothing to settle and every dumped frame is wanted, so
@@ -1534,23 +1922,23 @@ elif VIDEO:
             refresh_surface()
         else:
             frame()
-        renderer.render(scene, camera)
+        # Vulkan's probes, denoiser and upscaler need history; GL does not.
+        if i >= warm - (30 if VULKAN else 1):
+            renderer.render(scene, camera)
     for k in range(total):
         if not (REPLAY and k == 0):     # replay: frame 0 is already loaded
             frame()
-        save_frame(os.path.join(outdir, f"f{k:05d}.png"))
+        camera_at(k / 60.0)
+        renderer.render(scene, camera)
+        enc.send(renderer.read_pixels())
         if k % 60 == 0:
             el = time.perf_counter() - t0
-            print(f"  frame {k}/{total}  ({el:.0f}s elapsed)", flush=True)
-    print(f"rendered {total} frames in {time.perf_counter() - t0:.0f}s -> {outdir}")
-    ff = find_ffmpeg()
-    if ff:
-        encode_png_sequence(os.path.join(outdir, "f%05d.png"), "warp_fluid.mp4", 60,
-                            crf=18, ffmpeg=ff)
-        print(f"wrote warp_fluid.mp4 ({VIDEO:.0f}s @ 60fps, "
-              f"{os.path.getsize('warp_fluid.mp4') // 1024} KB)")
-    else:
-        print("ffmpeg not found -- frames left as PNGs in", outdir)
+            print(f"  frame {k}/{total}  ({el:.0f}s elapsed, "
+                  f"{wp.get_mempool_used_mem_high(device) / 2 ** 30:.1f} GB peak)",
+                  flush=True)
+    enc.close()
+    print(f"rendered {total} frames in {time.perf_counter() - t0:.0f}s -> "
+          f"warp_fluid.mp4 ({os.path.getsize('warp_fluid.mp4') // 1024} KB)")
 else:
     controls = tp.OrbitControls(camera, canvas)
     controls.enable_damping = True

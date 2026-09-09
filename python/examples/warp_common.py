@@ -51,6 +51,90 @@ def parse_size(text):
     return int(w), int(h)
 
 
+# --- where a demo draws ---------------------------------------------------------
+
+
+class Display:
+    """A renderer plus whatever it draws into: a window, or nothing at all.
+
+    On a workstation that is a Canvas. On a compute node there is no window
+    system to make one from -- GLFW falls back to its Null platform, whose only
+    GL context is OSMesa's software rasteriser -- so the context comes straight
+    from the driver through EGL instead, and `canvas` is None.
+
+    Demos that only render (a --video or --shot run) need nothing else. Demos
+    that want OrbitControls, ImGui or resize callbacks must guard on `canvas`,
+    which is exactly the set of things a headless run has no use for anyway.
+    """
+
+    def __init__(self, renderer, canvas, context, width, height, backend):
+        self.renderer = renderer
+        self.canvas = canvas      # None when the context came from EGL
+        self.context = context    # the EglContext, or None
+        self.width = width
+        self.height = height
+        self.backend = backend    # 'vulkan' | 'opengl'
+
+    @property
+    def aspect(self):
+        return self.width / self.height
+
+    @property
+    def headless(self):
+        return self.canvas is None
+
+    def describe(self):
+        if self.context is not None:
+            return (f"EGL {self.context.platform} | {self.context.renderer} | "
+                    f"hardware={self.context.hardware_accelerated}")
+        return f"canvas | {self.backend}"
+
+
+def open_display(title, width, height, *, vulkan=False, headless=False, egl=None):
+    """Build a renderer, choosing a window or a display-less EGL context.
+
+    egl=None  decide: EGL when there is no display server and one is available
+    egl=True  require EGL, and say why if it cannot be had
+    egl=False never EGL (the laptop path, unchanged)
+
+    The EGL drawable IS framebuffer 0, so it is sized to the render size --
+    a smaller one would clip the draw and make read_pixels return undefined
+    bytes with no error at all.
+    """
+    want_egl = egl
+    if want_egl is None:
+        no_display = sys.platform.startswith("linux") and not (
+            os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+        want_egl = no_display and getattr(tp, "HAS_EGL", False) and tp.egl_available()
+
+    if want_egl and vulkan:
+        raise SystemExit(
+            "--egl renders through OpenGL; the Vulkan renderer needs a Canvas (and on a "
+            "datacenter GPU it cannot run at all -- no VK_KHR_ray_query). Drop --vulkan.")
+
+    if want_egl:
+        if not getattr(tp, "HAS_EGL", False):
+            raise SystemExit("--egl: this threepp was built without the EGL path (not Linux?)")
+        if not tp.egl_available():
+            raise SystemExit(
+                "--egl: no usable EGL here -- libEGL did not load, or it reports no device. "
+                "On a login node that is expected; ask for a GPU.")
+        # Hardware is required by default: a context that comes up on llvmpipe
+        # renders correctly, succeeds, and wastes the whole GPU allocation.
+        # THREEPP_EGL_ALLOW_SOFTWARE=1 is for testing the pipeline on a machine
+        # without a GPU, and should never be set in a job.
+        allow_software = os.environ.get("THREEPP_EGL_ALLOW_SOFTWARE") == "1"
+        context = tp.EglContext(width=width, height=height,
+                                require_hardware=not allow_software)
+        renderer = tp.GLRenderer(context, width, height)
+        return Display(renderer, None, context, width, height, "opengl")
+
+    canvas = tp.Canvas(title, width=width, height=height, vsync=False, headless=headless)
+    renderer = tp.VulkanRenderer(canvas) if vulkan else tp.GLRenderer(canvas)
+    return Display(renderer, canvas, None, width, height,
+                   "vulkan" if vulkan else "opengl")
+
+
 def find_ffmpeg():
     """The ffmpeg binary on PATH, or imageio-ffmpeg's bundled one, or None."""
     ff = shutil.which("ffmpeg")
@@ -565,7 +649,7 @@ def _expand(verts: wp.array(dtype=wp.vec3),
             field: wp.array3d(dtype=float),
             ntris: int,
             origin: wp.vec3, inv_cell: float, nx: int, ny: int, nz: int,
-            sign: float, grain: float, grain_freq: float,
+            sign: float, flip: int, grain: float, grain_freq: float,
             out_pos: wp.array(dtype=wp.vec3),
             out_nrm: wp.array(dtype=wp.vec3)):
     # De-index into a triangle soup with a smooth normal per corner from the
@@ -605,8 +689,21 @@ def _expand(verts: wp.array(dtype=wp.vec3),
                           wp.noise(state, q + wp.vec3(-7.3, 3.9, 29.2))
                           + 0.5 * wp.noise(state, q2 + wp.vec3(-7.3, 3.9, 29.2)))
             n = wp.normalize(n + grain * nse)
-        out_pos[t * 3 + c] = p
-        out_nrm[t * 3 + c] = n * sign
+        # `flip` reverses the triangle winding. wp.MarchingCubes emits triangles
+        # wound INTO the density, so the OUTWARD face of the surface is
+        # back-facing to a camera outside it. That is not just a shading
+        # nuisance: with Side.Double the shader does normal *= faceDirection
+        # from gl_FrontFacing, so on every fragment you can actually see, the
+        # normal is flipped, NdotV clamps to 0, the transmission chunk's Fresnel
+        # weight goes to 1 and transmissionFactor becomes exactly 0 -- i.e. a
+        # transmissive material renders with NO transmission at all, silently.
+        # Reversing the winding here is the only fix; no material side setting
+        # helps (Side.Back flips it again via FLIP_SIDED, Side.Front culls it).
+        o = t * 3 + c
+        if flip != 0:
+            o = t * 3 + (2 - c)
+        out_pos[o] = p
+        out_nrm[o] = n * sign
 
 
 class DensitySurface:
@@ -662,7 +759,7 @@ class DensitySurface:
         return self.mc.indices.shape[0] // 3
 
     def expand(self, ntris, out_pos, out_nrm, dim=None, sign=1.0,
-               grain=0.0, grain_freq=30.0):
+               flip_winding=False, grain=0.0, grain_freq=30.0):
         """De-index `ntris` triangles into out_pos/out_nrm. `dim` overrides the
         launch size to also collapse the rows past ntris.
 
@@ -685,6 +782,7 @@ class DensitySurface:
         wp.launch(_expand, dim=ntris if dim is None else dim, device=self.device,
                   inputs=[self.mc.verts, self.mc.indices, self.field, ntris,
                           self.origin, self.inv_cell, nx, ny, nz, float(sign),
+                          int(bool(flip_winding)),
                           float(grain), float(grain_freq),
                           out_pos, out_nrm])
 
