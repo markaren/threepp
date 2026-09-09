@@ -980,6 +980,11 @@ class CatmullRomCurve3(Curve3):
     chordal: typing.ClassVar[CatmullRomCurve3.CurveType]  # value = <CurveType.chordal: 1>
     closed: bool
     curve_type: CatmullRomCurve3.CurveType
+    @staticmethod
+    def from_array(points: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], closed: bool = False, curve_type: CatmullRomCurve3.CurveType = CatmullRomCurve3.CurveType.centripetal, tension: typing.SupportsFloat | typing.SupportsIndex = 0.5) -> CatmullRomCurve3:
+        """
+        The constructor with `points` as an (N, 3) float array instead of a list of Vector3.
+        """
     def __init__(self, points: collections.abc.Sequence[Vector3] = [], closed: bool = False, curve_type: CatmullRomCurve3.CurveType = CatmullRomCurve3.CurveType.centripetal, tension: typing.SupportsFloat | typing.SupportsIndex = 0.5) -> None:
         ...
     def __repr__(self) -> str:
@@ -1325,9 +1330,21 @@ class Curve2:
         """
         divisions + 1 points, evenly spaced in t.
         """
+    def get_points_array(self, divisions: typing.SupportsInt | typing.SupportsIndex = 5) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        get_points as one (divisions + 1, D) float32 array.
+        """
+    def get_points_at(self, u: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        get_point_at for every arc-length fraction in the 1-D array u, as one (len(u), D) float32 array.
+        """
     def get_spaced_points(self, divisions: typing.SupportsInt | typing.SupportsIndex = 5) -> list[Vector2]:
         """
         divisions + 1 points, evenly spaced along the curve.
+        """
+    def get_spaced_points_array(self, divisions: typing.SupportsInt | typing.SupportsIndex = 5) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        get_spaced_points as one (divisions + 1, D) float32 array.
         """
     def get_tangent(self, t: typing.SupportsFloat | typing.SupportsIndex) -> Vector2:
         """
@@ -1336,6 +1353,10 @@ class Curve2:
     def get_tangent_at(self, u: typing.SupportsFloat | typing.SupportsIndex) -> Vector2:
         """
         Unit tangent at fraction u of the arc length.
+        """
+    def get_tangents_at(self, u: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        get_tangent_at for every arc-length fraction in the 1-D array u, as one (len(u), D) float32 array.
         """
     def update_arc_lengths(self) -> None:
         """
@@ -1370,9 +1391,21 @@ class Curve3:
         """
         divisions + 1 points, evenly spaced in t.
         """
+    def get_points_array(self, divisions: typing.SupportsInt | typing.SupportsIndex = 5) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        get_points as one (divisions + 1, D) float32 array.
+        """
+    def get_points_at(self, u: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        get_point_at for every arc-length fraction in the 1-D array u, as one (len(u), D) float32 array.
+        """
     def get_spaced_points(self, divisions: typing.SupportsInt | typing.SupportsIndex = 5) -> list[Vector3]:
         """
         divisions + 1 points, evenly spaced along the curve.
+        """
+    def get_spaced_points_array(self, divisions: typing.SupportsInt | typing.SupportsIndex = 5) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        get_spaced_points as one (divisions + 1, D) float32 array.
         """
     def get_tangent(self, t: typing.SupportsFloat | typing.SupportsIndex) -> Vector3:
         """
@@ -1381,6 +1414,10 @@ class Curve3:
     def get_tangent_at(self, u: typing.SupportsFloat | typing.SupportsIndex) -> Vector3:
         """
         Unit tangent at fraction u of the arc length.
+        """
+    def get_tangents_at(self, u: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        get_tangent_at for every arc-length fraction in the 1-D array u, as one (len(u), D) float32 array.
         """
     def update_arc_lengths(self) -> None:
         """
@@ -7643,6 +7680,11 @@ class SplatPoseSet:
     def value(self) -> int:
         ...
 class SplineCurve(Curve2):
+    @staticmethod
+    def from_array(points: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> SplineCurve:
+        """
+        The constructor with `points` as an (N, 2) float array instead of a list of Vector2.
+        """
     def __init__(self, points: collections.abc.Sequence[Vector2] = []) -> None:
         ...
     def __repr__(self) -> str:
