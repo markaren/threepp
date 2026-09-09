@@ -8,6 +8,7 @@
 
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/canvas/Canvas.hpp"
+#include "threepp/canvas/EglContext.hpp"
 #include "threepp/constants.hpp"
 #include "threepp/controls/OrbitControls.hpp"
 #include "threepp/controls/TransformControls.hpp"
@@ -209,6 +210,57 @@ namespace threepp_py {
            "Sensor-local unit ray directions, (beams * vertical_samples, 3), beam-major. The table "
            "a SonarSensor traces; also what to feed renderer.scan_lidar for a hand-rolled fan.");
 
+        // ---- EglContext ------------------------------------------------------
+        // Registered BEFORE GLRenderer on purpose: pybind11 bakes a signature at
+        // def() time, so a GLRenderer overload taking a context that is not yet
+        // known would render the argument as "threepp::EglContext" — which
+        // gen_stubs.py's IGNORE_INVALID_EXPRESSIONS regex then quietly degrades
+        // to "..." in the stub, with no build error.
+        py::class_<EglContext>(m, "EglContext")
+                .def(py::init([](int width, int height, int device, bool require_hardware, bool surfaceless) {
+                         EglContext::Parameters p;
+                         p.width = width;
+                         p.height = height;
+                         p.device = device;
+                         p.requireHardware = require_hardware;
+                         p.surfaceless = surfaceless;
+                         return std::make_unique<EglContext>(p);
+                     }),
+                     py::arg("width") = 1, py::arg("height") = 1, py::arg("device") = -1,
+                     py::arg("require_hardware") = true, py::arg("surfaceless") = false,
+                     "A hardware OpenGL context with no window system: no X server, no Wayland, no "
+                     "display of any kind. This is how a compute node renders.\n\n"
+                     "SIZE IT: with no render target bound the renderer draws into, and reads back "
+                     "from, framebuffer 0 - which here is the pbuffer. width/height must be at "
+                     "least the renderer's size, or readback returns undefined bytes silently. "
+                     "GLRenderer(context, w, h) checks this for you.\n\n"
+                     "require_hardware=True (the default) refuses a context whose renderer is a "
+                     "software rasteriser, because a job that renders on llvmpipe succeeds, looks "
+                     "correct, and wastes the whole GPU allocation.\n\n"
+                     "One context per process: GLAD's function pointers are process-wide.")
+                .def_property_readonly("renderer", &EglContext::renderer,
+                                       "GL_RENDERER - e.g. 'NVIDIA H100 80GB HBM3/PCIe/SSE2'")
+                .def_property_readonly("vendor", &EglContext::vendor)
+                .def_property_readonly("version", &EglContext::version)
+                .def_property_readonly("egl_vendor", &EglContext::eglVendor)
+                .def_property_readonly("egl_version", &EglContext::eglVersion)
+                .def_property_readonly("platform", &EglContext::platform,
+                                       "'device' or 'surfaceless'")
+                .def_property_readonly("device_index", &EglContext::deviceIndex)
+                .def_property_readonly("cuda_device_index", &EglContext::cudaDeviceIndex,
+                                       "CUDA ordinal of the bound GPU, or -1. EGL and CUDA device "
+                                       "order are different enumerations - on a multi-GPU node this "
+                                       "is how a render is matched to the GPU a tensor lives on.")
+                .def_property_readonly("drawable_width", &EglContext::drawableWidth)
+                .def_property_readonly("drawable_height", &EglContext::drawableHeight)
+                .def_property_readonly("hardware_accelerated", &EglContext::hardwareAccelerated)
+                .def("make_current", &EglContext::makeCurrent,
+                     "Rebind to the calling thread (and re-bind desktop GL, which is per-thread).")
+                .def_static("available", &EglContext::available,
+                            "True when libEGL loaded and reports at least one device.")
+                .def_static("device_count", &EglContext::deviceCount,
+                            "How many devices eglQueryDevicesEXT reports; 0 if EGL is unusable.");
+
         // ---- Canvas ----------------------------------------------------------
         // A GLFW window (or a hidden surface when headless=True). Construction is
         // exposed as keyword arguments rather than the fluent Parameters builder.
@@ -273,6 +325,35 @@ namespace threepp_py {
         py::class_<GLRenderer>(m, "GLRenderer")
                 .def(py::init([](Canvas& canvas) { return std::make_unique<GLRenderer>(canvas); }),
                      py::arg("canvas"), py::keep_alive<1, 2>())
+                // Headless on a compute node: the context comes from EglContext
+                // rather than a window. keep_alive<1,2> is what guarantees the
+                // context outlives the renderer — pybind11 releases an
+                // instance's patients only after the C++ destructor has run, so
+                // ~GLRenderer's GL deletes still have a current context.
+                .def(py::init([](EglContext& context, int width, int height) {
+                         if (context.drawableWidth() > 0 &&
+                             (context.drawableWidth() < width || context.drawableHeight() < height)) {
+                             throw std::invalid_argument(
+                                     "GLRenderer: the EglContext drawable is " +
+                                     std::to_string(context.drawableWidth()) + "x" +
+                                     std::to_string(context.drawableHeight()) +
+                                     ", smaller than the requested renderer size " +
+                                     std::to_string(width) + "x" + std::to_string(height) +
+                                     ". Without a render target the renderer draws into framebuffer 0 "
+                                     "-- the pbuffer -- so the draw would be clipped and read_pixels "
+                                     "would return undefined bytes with no error. Construct the "
+                                     "context as EglContext(" +
+                                     std::to_string(width) + ", " + std::to_string(height) + ").");
+                         }
+                         context.makeCurrent();
+                         return std::make_unique<GLRenderer>(std::pair<int, int>{width, height});
+                     }),
+                     py::arg("context"), py::arg("width"), py::arg("height"), py::keep_alive<1, 2>(),
+                     "Render with no window, against a hardware EGL context.\n\n"
+                     "    ctx = tp.EglContext(1920, 1080)\n"
+                     "    renderer = tp.GLRenderer(ctx, 1920, 1080)\n\n"
+                     "Raises ValueError if the context's drawable is smaller than the renderer, "
+                     "which would otherwise corrupt readback silently.")
                 .def("render", &GLRenderer::render, py::arg("scene"), py::arg("camera"))
                 .def("set_size", [](GLRenderer& r, int w, int h) { r.setSize({w, h}); }, py::arg("width"), py::arg("height"))
                 .def("set_pixel_ratio", &GLRenderer::setPixelRatio, py::arg("value"))
@@ -612,6 +693,19 @@ namespace threepp_py {
                 .def_readwrite("auto_rotate", &OrbitControls::autoRotate)
                 .def_readwrite("auto_rotate_speed", &OrbitControls::autoRotateSpeed)
                 .def("update", &OrbitControls::update);
+
+        // Mirrors HAS_VULKAN / vulkan_available in bind_vulkan.cpp. Compile-time
+        // and runtime are genuinely different questions here: the class is
+        // always present, but only Linux can make a context, and only a node
+        // with an EGL-capable driver has a device to bind.
+#if defined(__linux__)
+        m.attr("HAS_EGL") = true;
+#else
+        m.attr("HAS_EGL") = false;
+#endif
+        m.def("egl_available", &EglContext::available,
+              "True when a display-less hardware GL context can be made here: libEGL loaded and "
+              "at least one device reported. Use it to choose between EglContext and a Canvas.");
     }
 
 }// namespace threepp_py

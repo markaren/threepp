@@ -36,6 +36,14 @@ namespace threepp {
         /// constructor when using Canvas, as it handles lazy window init.
         explicit GLRenderer(Canvas& canvas, const Parameters& parameters = {});
 
+        /// Size-only constructor, for a GL context this renderer does not own
+        /// and a Canvas cannot provide: an EglContext on a display-less node
+        /// (see canvas/EglContext.hpp), or a context some host application has
+        /// already made current. The context MUST be current on this thread
+        /// before the call — nothing here creates one. Rendering targets a
+        /// framebuffer object, so no swapchain and no window is involved.
+        explicit GLRenderer(std::pair<int, int> size, const Parameters& parameters = {});
+
         GLRenderer(GLRenderer&&) = delete;
         GLRenderer(const GLRenderer&) = delete;
         GLRenderer& operator=(const GLRenderer&) = delete;

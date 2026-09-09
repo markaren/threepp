@@ -1614,6 +1614,21 @@ GLRenderer::GLRenderer(Canvas& canvas, const Parameters& parameters) {
     pimpl_ = std::make_unique<Impl>(*this, canvas.size(), parameters);
 }
 
+GLRenderer::GLRenderer(std::pair<int, int> size, const Parameters& parameters) {
+
+#ifndef __EMSCRIPTEN__
+    // No canvas, so nothing has created a context on our behalf: whoever built
+    // one (EglContext, or a host application) has already made it current, and
+    // loadGlad throws with that exact message if they have not. An EglContext
+    // has also already filled GLAD in through eglGetProcAddress, which is the
+    // loader we WANT — so ask first rather than resolving again through the
+    // GLX dispatch.
+    if (!gladLoaded()) loadGlad();
+#endif
+
+    pimpl_ = std::make_unique<Impl>(*this, size, parameters);
+}
+
 
 const gl::GLInfo& GLRenderer::info() {
 

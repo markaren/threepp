@@ -77,7 +77,22 @@ mkdir -p "$WORK"
 # ── 1. source ─────────────────────────────────────────────────────────────────
 say "1/5 source: $SRC ($BRANCH)"
 if [ -d "$SRC/.git" ]; then
+    # Report the commit AND say whether it is current. This phase used to only
+    # print, so a rerun after pushing new work happily rebuilt the OLD tree and
+    # announced success — the most expensive kind of quiet. UPDATE=1 fast-
+    # forwards; it is off by default because the tree may carry local patches
+    # (an scp'd diff is how work reaches this machine before it is pushed).
     echo "present: $(git -C "$SRC" log -1 --format='%h %s' 2>/dev/null)"
+    if [ -n "$(git -C "$SRC" status --porcelain 2>/dev/null)" ]; then
+        echo "NOTE: the checkout has local modifications; leaving them alone."
+    elif [ "${UPDATE:-0}" = "1" ]; then
+        git -C "$SRC" fetch origin "$BRANCH" && \
+            git -C "$SRC" merge --ff-only "origin/$BRANCH" && \
+            echo "updated to: $(git -C "$SRC" log -1 --format='%h %s')"
+    else
+        behind=$(git -C "$SRC" rev-list --count "HEAD..origin/$BRANCH" 2>/dev/null || echo 0)
+        [ "${behind:-0}" != "0" ] && echo "NOTE: $behind commit(s) behind origin/$BRANCH - rerun with UPDATE=1 to fast-forward."
+    fi
 else
     git clone -b "$BRANCH" https://github.com/markaren/threepp.git "$SRC"
 fi
@@ -176,7 +191,8 @@ EOF
 python - <<'EOF'
 import threepp as tp
 print("threepp:", tp.__file__)
-print("HAS_PHYSX", tp.HAS_PHYSX, "| HAS_VULKAN", tp.HAS_VULKAN)
+print("HAS_PHYSX", tp.HAS_PHYSX, "| HAS_VULKAN", tp.HAS_VULKAN, "| HAS_EGL", tp.HAS_EGL)
+print("egl_available:", tp.egl_available(), "(False on a login node is correct: no GPU driver there)")
 assert tp.HAS_PHYSX, "PhysX did not make it into the module"
 EOF
 
