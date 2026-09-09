@@ -6,6 +6,7 @@
 // in bind_objects.cpp does not apply.
 #include "bindings.hpp"
 
+#include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
 #include "threepp/extras/core/Shape.hpp"
@@ -13,13 +14,89 @@
 #include "threepp/extras/curves/LineCurve.hpp"
 #include "threepp/extras/curves/SplineCurve.hpp"
 
+#include <cstddef>
 #include <sstream>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <vector>
 
 using namespace threepp;
 
 namespace threepp_py {
 
     namespace {
+
+        using FloatArray = py::array_t<float, py::array::c_style | py::array::forcecast>;
+
+        // ── Array forms of the point API ───────────────────────────────────────
+        // A curve through N points costs N Python objects each way through the
+        // list-based API (a Vector3 per point in, a Vector3 per sample out). For
+        // a 500-point polyline that marshalling dwarfs the curve maths, so the
+        // constructors and the sampling calls also come in (N, D) float32 array
+        // form: Vector2 rows are (x, y), Vector3 rows (x, y, z).
+        template<class P>
+        constexpr py::ssize_t dim_of() {
+            return std::is_same_v<P, Vector3> ? 3 : 2;
+        }
+
+        template<class P>
+        void writeRow(float* row, const P& v) {
+            row[0] = v.x;
+            row[1] = v.y;
+            if constexpr (dim_of<P>() == 3) row[2] = v.z;
+        }
+
+        template<class P>
+        P readRow(const float* row) {
+            if constexpr (dim_of<P>() == 3) {
+                return P(row[0], row[1], row[2]);
+            } else {
+                return P(row[0], row[1]);
+            }
+        }
+
+        template<class P>
+        py::array_t<float> pointsToArray(const std::vector<P>& points) {
+            constexpr auto D = dim_of<P>();
+            py::array_t<float> out({static_cast<py::ssize_t>(points.size()), D});
+            float* d = out.mutable_data();
+            for (std::size_t i = 0; i < points.size(); ++i) writeRow(d + i * D, points[i]);
+            return out;
+        }
+
+        template<class P>
+        std::vector<P> arrayToPoints(const FloatArray& a, const char* what) {
+            constexpr auto D = dim_of<P>();
+            if (a.ndim() != 2 || a.shape(1) != D) {
+                throw std::invalid_argument(std::string(what) + ": expected an (N, " + std::to_string(D) +
+                                            ") float array");
+            }
+            std::vector<P> points;
+            points.reserve(static_cast<std::size_t>(a.shape(0)));
+            const float* d = a.data();
+            for (py::ssize_t i = 0; i < a.shape(0); ++i) points.push_back(readRow<P>(d + i * D));
+            return points;
+        }
+
+        // One sample per entry of the 1-D fraction array `u`, as an (len(u), D) array.
+        template<class T, class P, class Sample>
+        py::array_t<float> sampleAt(const T& curve, const FloatArray& u, const char* what, Sample sample) {
+            constexpr auto D = dim_of<P>();
+            if (u.ndim() != 1) {
+                throw std::invalid_argument(std::string(what) + ": u must be a 1-D array of arc-length fractions");
+            }
+            const py::ssize_t n = u.shape(0);
+            py::array_t<float> out({n, D});
+            float* d = out.mutable_data();
+            const float* uu = u.data();
+            P v;
+            for (py::ssize_t i = 0; i < n; ++i) {
+                sample(curve, uu[i], v);
+                writeRow(d + i * D, v);
+            }
+            return out;
+        }
 
         // Sampling API shared by every curve (threepp::Curve<T>). get_point takes
         // the curve parameter t; get_point_at takes a fraction of the arc length.
@@ -64,6 +141,34 @@ namespace threepp_py {
                     .def(
                             "get_spaced_points", [](const T& curve, unsigned int divisions) { return curve.getSpacedPoints(divisions); },
                             py::arg("divisions") = 5, "divisions + 1 points, evenly spaced along the curve.")
+                    // Array forms: the same samples as one (N, D) float32 array, with no
+                    // per-point Python object. get_points_at / get_tangents_at take the
+                    // arc-length fractions as a 1-D array (get_spaced_points is
+                    // get_points_at on an even grid).
+                    .def(
+                            "get_points_array", [](const T& curve, unsigned int divisions) {
+                                return pointsToArray(curve.getPoints(divisions));
+                            },
+                            py::arg("divisions") = 5, "get_points as one (divisions + 1, D) float32 array.")
+                    .def(
+                            "get_spaced_points_array", [](const T& curve, unsigned int divisions) {
+                                return pointsToArray(curve.getSpacedPoints(divisions));
+                            },
+                            py::arg("divisions") = 5, "get_spaced_points as one (divisions + 1, D) float32 array.")
+                    .def(
+                            "get_points_at", [](const T& curve, const FloatArray& u) {
+                                return sampleAt<T, P>(curve, u, "get_points_at",
+                                                      [](const T& c, float f, P& v) { c.getPointAt(f, v); });
+                            },
+                            py::arg("u"),
+                            "get_point_at for every arc-length fraction in the 1-D array u, as one (len(u), D) float32 array.")
+                    .def(
+                            "get_tangents_at", [](const T& curve, const FloatArray& u) {
+                                return sampleAt<T, P>(curve, u, "get_tangents_at",
+                                                      [](const T& c, float f, P& v) { c.getTangentAt(f, v); });
+                            },
+                            py::arg("u"),
+                            "get_tangent_at for every arc-length fraction in the 1-D array u, as one (len(u), D) float32 array.")
                     .def(
                             "get_length", [](const T& curve) { return curve.getLength(); },
                             "Total arc length, from the cached table.")
@@ -99,6 +204,18 @@ namespace threepp_py {
                      }),
                      py::arg("points") = std::vector<Vector3>{}, py::arg("closed") = false,
                      py::arg("curve_type") = CatmullRomCurve3::centripetal, py::arg("tension") = 0.5f)
+                // The constructor with the points as an (N, 3) float array. A named
+                // factory rather than an overload so that a list of Vector3 and an
+                // array never compete in overload resolution.
+                .def_static(
+                        "from_array", [](const FloatArray& points, bool closed,
+                                         CatmullRomCurve3::CurveType type, float tension) {
+                            return std::make_shared<CatmullRomCurve3>(
+                                    arrayToPoints<Vector3>(points, "CatmullRomCurve3.from_array"), closed, type, tension);
+                        },
+                        py::arg("points"), py::arg("closed") = false,
+                        py::arg("curve_type") = CatmullRomCurve3::centripetal, py::arg("tension") = 0.5f,
+                        "The constructor with `points` as an (N, 3) float array instead of a list of Vector3.")
                 // A list copy in both directions (pybind11's stl caster): assign
                 // the property to change the points, mutating what the getter
                 // returned changes nothing.
@@ -151,6 +268,11 @@ namespace threepp_py {
                          return std::make_shared<SplineCurve>(std::move(points));
                      }),
                      py::arg("points") = std::vector<Vector2>{})
+                .def_static(
+                        "from_array", [](const FloatArray& points) {
+                            return std::make_shared<SplineCurve>(arrayToPoints<Vector2>(points, "SplineCurve.from_array"));
+                        },
+                        py::arg("points"), "The constructor with `points` as an (N, 2) float array instead of a list of Vector2.")
                 .def_readwrite("points", &SplineCurve::points)
                 .def("__repr__", [](const SplineCurve& c) {
                     return "SplineCurve(points=" + std::to_string(c.points.size()) + ")";

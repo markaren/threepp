@@ -195,7 +195,12 @@ self-contained; what they share lives in [`examples/warp_common.py`](examples/wa
 - **Curves and 2-D shapes**: `CatmullRomCurve3`, `LineCurve3` (both `Curve3`),
   `LineCurve`, `SplineCurve`, `Path` (both `Curve2`) and `Shape` — the sampling
   API (`get_point`, `get_point_at`, `get_tangent`, `get_points`,
-  `get_spaced_points`, `get_length`) is shared by all of them.
+  `get_spaced_points`, `get_length`) is shared by all of them. For long
+  polylines use the array forms, which move no per-point Python objects:
+  `CatmullRomCurve3.from_array(points)` / `SplineCurve.from_array(points)` take
+  an `(N, 3)` / `(N, 2)` float array, and `get_points_at(u)`,
+  `get_tangents_at(u)`, `get_points_array(n)`, `get_spaced_points_array(n)`
+  return `(N, D)` float32 arrays.
 - **Materials**: `MeshStandard`, `MeshPhong`, `MeshLambert`, `MeshBasic`,
   `MeshNormal`, `Points`, `LineBasic`, `Sprite`, `Shadow` — concrete fields, the
   shared base fields (`opacity`, `transparent`, `side`, …), and texture-map slots
