@@ -1624,6 +1624,12 @@ GLRenderer::GLRenderer(std::pair<int, int> size, const Parameters& parameters) {
     // loader we WANT — so ask first rather than resolving again through the
     // GLX dispatch.
     if (!gladLoaded()) loadGlad();
+
+    // Canvas turns GL_PROGRAM_POINT_SIZE on when it makes its window; a context
+    // that did not come from a Canvas has had nobody do it. Without it a core
+    // profile rasterises every point at glPointSize (1 px) and ignores the
+    // gl_PointSize the points shader writes, so PointsMaterial.size does nothing.
+    glEnable(GL_PROGRAM_POINT_SIZE);
 #endif
 
     pimpl_ = std::make_unique<Impl>(*this, size, parameters);
