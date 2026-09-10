@@ -133,6 +133,21 @@ DEPTH = cli_arg("--depth", 0.27, float)     # still water depth (m) under --fill
 # order in every kernel. Do not tidy these branches away: they are what keeps
 # every previously recorded dump replaying to the same pixels.
 IS_REF = (WIDE_X == 1.0 and WIDE_Z == 1.0 and not FLAT)
+# WHICH END THE CAMERA STANDS AT, and it decides the whole shot.
+# The piston makes a wave that LEAVES at sqrt(g*h) = 1.63 m/s. Standing at the
+# piston end (--cam-from near, the first design) the camera watches the event
+# depart: over a 14 s run the front travels ~23 m away and the near field goes
+# glassy, which is exactly what the first 33.6 m film looked like. Standing at
+# the FAR end instead, the front approaches, grows and arrives during the shot,
+# and the crossing time becomes the drama instead of the problem.
+# --cam-from all is the third option and the default for a wide run: pull back
+# off the +x end and elevate until the ENTIRE pool is inside the frame. A low
+# eye at the waterline cannot ever show a pool as a pool -- the far end
+# compresses to a line and the side walls fall outside the lens -- so if you
+# want the footprint legible you have to pay for it with height.
+CAM_FROM = cli_arg("--cam-from", "near" if IS_REF else "all", str).lower()
+CAM_ALL = CAM_FROM == "all"
+CAM_FAR_END = CAM_FROM in ("far", "all")
 
 N = cli_arg("--n", int(round(340_000 * SCALE ** 3 * W_AREA)), int)
 # Simulate-only / render-only split (see the module docstring). A replay
@@ -189,7 +204,10 @@ DT = 1.0 / 60.0
 # A finer spacing needs proportionally shorter substeps: the per-substep travel
 # at the tank's ~2-3 m/s must stay around one spacing, or particles skip whole
 # neighbour shells between projections. Default scales with --scale.
-SUBSTEPS = cli_arg("--substeps", max(2, int(round(2 * SCALE))), int)
+SUBSTEPS = cli_arg("--substeps", max(3 if FLAT else 2, int(round(2 * SCALE))), int)
+# A flat pool gets K = 9 (3 substeps x 3 iterations), not 6. Measured on the
+# 4070: --wide 8 settles at 8.32% mean compression with K = 9, and --wide 4 sits
+# at 18.15% with K = 6. The first Idun film ran the K = 6 default.
 ITERATIONS = cli_arg("--iters", 3, int)               # density-constraint projections per substep
 # Chebyshev acceleration of the Jacobi projection (Wang 2015). RHO estimates
 # the spectral radius of the iteration; 0 disables it (plain Jacobi).
@@ -585,12 +603,19 @@ def shade_points(v: wp.array(dtype=wp.vec3), col: wp.array(dtype=wp.vec3)):
 
 # --- surfacing: particles -> density grid -> marching cubes -------------------
 
-CELL = cli_arg("--cell", 1.00, float) * D   # surface grid spacing (then blurred). Marching
+CELL = cli_arg("--cell", 1.00 if IS_REF else 1.5, float) * D   # surface grid spacing (then blurred). Marching
                              # cubes cannot emit a sheet thinner than roughly
                              # the combined splat+blur kernel width -- thinner
                              # water does not thin, it VANISHES -- so the cell
                              # is fine and the second blur round is narrowed,
                              # at the cost of more triangles.
+# That argument is the shipped dam break seen from 1.9 m, where a cell spans
+# several pixels. A wide shot turns it upside down: at --wide 8 from 16 m a
+# 9 mm cell is a fifth of a pixel, the thin tongue it protects cannot be seen,
+# and what CELL = D actually buys is ONE particle per cell -- a density field
+# made of shot noise, which the gradient normals turn into glints that re-roll
+# every frame. The first Idun film was twenty seconds of that. 1.5 D holds
+# ~3.4 particles per cell for 3.4x fewer nodes; --normal-blur does the rest.
 GX0, GY0, GZ0 = X0 - 0.05, FLOOR - 0.035, Z0 - 0.05
 # The shipped ceiling was 0.56 m with the comment "paddle spray never gets near
 # this". It does: a --probe 3 run of the shipped scene measures y_max = 0.896 m
@@ -944,8 +969,19 @@ print(f"fluid: {N:,} particles on {device} | pool {X1 - X0:.2f} x {Z1 - Z0:.2f} 
 # Round one of the blur stays binomial so grid-aligned noise is killed
 # outright; round two is narrowed, which buys thinness without a new noise
 # source.
+# --normal-blur N: N more binomial rounds of the field AFTER marching cubes, so
+# the triangles keep the detail above and only the shading normals see the
+# wider kernel. In a wide shot the grain is in the NORMAL, not the geometry --
+# the relief is sub-pixel, the tilt is not -- and a post-extraction blur cannot
+# thin a sheet, because the sheet is already out. Off for the reference, which
+# stays bit-identical. Measured with --tilt at the film's own 9 mm spacing and
+# K = 6, normal noise against the wave's tilt: --cell 1.0 unblurred (the first
+# Idun film) 0.303 rad vs 0.154, SNR 0.51; --cell 1.5 alone 0.137, SNR 0.93;
+# +4 rounds 0.046, SNR 2.0; +8 rounds 0.028, SNR 3.0. Eight is the default
+# because a cluster shot sits further away than any preview and has no MSAA.
+NORMAL_BLUR = cli_arg("--normal-blur", 0 if IS_REF else 8, int)
 surface = DensitySurface((GX0, GY0, GZ0), CELL, (NGX, NGY, NGZ), device,
-                         blur=(0.25, 0.125))
+                         blur=(0.25, 0.125), normal_blur=NORMAL_BLUR)
 
 sim_time = 0.0
 frame_no = 0
@@ -1286,7 +1322,8 @@ renderer.tone_mapping = tp.ToneMapping.ACESFilmic
 renderer.tone_mapping_exposure = cli_arg(
     "--exposure", (0.95 if VULKAN else 1.40) if IS_REF else 0.35, float)
 
-SUN_POS = (2.4, 3.2, 4.2) if IS_REF else (X1 * 1.6, X1 * 0.30, Z1 * 0.40)
+SUN_POS = ((2.4, 3.2, 4.2) if IS_REF else
+           ((X0 if CAM_FAR_END else X1) * 1.6, X1 * 0.30, Z1 * 0.40))
 # Low (about 10 deg) and at the FAR end, so the specular path runs the whole
 # length of the pool back into the lens. A high sun on flat water gives an
 # even sheen and no glitter, which is most of why the first frame read as milk.
@@ -1318,11 +1355,106 @@ scene.background = env
 # far end instead turn the length into the picture: the wave train recedes,
 # and apparent size halving with distance is the depth cue no single prop can
 # give you.
-DOLLY = cli_arg("--dolly", 0.0, float)      # camera speed along +x, m/s
+DOLLY = cli_arg("--dolly", 0.0, float)      # camera speed ALONG ITS OWN VIEW, m/s
 WLINE = DEPTH if FLAT else 0.07             # the waterline the shot is built on
-CAM_EYE = [X0 + 1.2, WLINE + 0.45, 0.06 * (Z1 - Z0)]
-CAM_TGT = (X1, WLINE - 0.06, -0.02 * (Z1 - Z0))
-camera = tp.PerspectiveCamera(46 if IS_REF else 30, display.aspect,
+CAM_DIR = -1.0 if CAM_FAR_END else 1.0      # +1 looks toward +x, -1 toward -x
+CAM_FOV = cli_arg("--fov", 46 if IS_REF else (40 if CAM_ALL else 30), float)
+CAM_EL = cli_arg("--cam-el", 14.0, float)   # degrees above the water, --cam-from all
+CAM_AZ = cli_arg("--cam-az", 12.0, float)   # degrees off the tank axis, ditto
+
+
+ZERO3 = np.zeros(3)
+
+
+def _view_fill(eye, tgt, pts, tanv, tanh):
+    """How much of the frame `pts` fills, and how far off-centre it sits.
+
+    Returns (fill, aim) with fill in units of "1.0 exactly touches an edge",
+    and aim a world-space direction: adding aim*distance to the target nulls
+    the offset, i.e. it is a tilt in both axes at once. BOTH axes matter --
+    centring only the vertical left the pool at 70% of the frame width, since
+    the rig sits a dozen degrees off the tank axis.
+    """
+    f = tgt - eye
+    f = f / np.linalg.norm(f)
+    r = np.cross(f, np.array([0.0, 1.0, 0.0]))
+    nr = np.linalg.norm(r)
+    if nr < 1e-9:
+        return 1e9, ZERO3
+    r = r / nr
+    u = np.cross(r, f)
+    d = pts - eye
+    zv = d @ f
+    if np.min(zv) <= 1e-3:                  # something is behind the lens
+        return 1e9, ZERO3
+    ax, ay = (d @ r) / zv, (d @ u) / zv
+    fill = max(np.max(np.abs(ax)) / tanh, np.max(np.abs(ay)) / tanv)
+    return fill, (0.5 * (np.max(ax) + np.min(ax)) * r
+                  + 0.5 * (np.max(ay) + np.min(ay)) * u)
+
+
+def fit_pool_camera():
+    """Solve the eye distance so the whole tank fits, then tilt to centre it.
+
+    --wide changes the footprint by a factor of sixteen in area, so a framing
+    typed in by hand is right for exactly one value of it. Binary-search the
+    distance along a fixed elevation/azimuth instead and the shot follows the
+    flag. The second loop nulls the vertical offset: aiming at the centroid of
+    a flat rectangle seen obliquely leaves it in the bottom third under an
+    empty sky, because perspective makes the near edge much the larger.
+    """
+    top = max(BY1, WLINE + 0.35)            # the piston is the tallest thing
+    pts = np.array([[x, y, z] for x in (X0, X1) for y in (FLOOR, top)
+                    for z in (Z0, Z1)], np.float64)
+    anchor = np.array([0.5 * (X0 + X1), WLINE, 0.5 * (Z0 + Z1)])
+    el, az = math.radians(CAM_EL), math.radians(CAM_AZ)
+    d = np.array([-CAM_DIR * math.cos(el) * math.cos(az),
+                  math.sin(el),
+                  math.cos(el) * math.sin(az)])
+    tanv = math.tan(math.radians(CAM_FOV) * 0.5)
+    tanh = tanv * display.aspect
+    off, dist = ZERO3.copy(), 10.0
+    for _ in range(6):
+        lo, hi = 0.5, 400.0
+        for _ in range(48):
+            mid = 0.5 * (lo + hi)
+            fill, _ = _view_fill(anchor + d * mid, anchor + off, pts, tanv, tanh)
+            if fill > 0.94:                 # a margin, so a wave crest has room
+                lo = mid
+            else:
+                hi = mid
+        dist = hi
+        _, aim = _view_fill(anchor + d * dist, anchor + off, pts, tanv, tanh)
+        off = off + aim * dist
+    return list(anchor + d * dist), tuple(anchor + off)
+
+
+if CAM_ALL:
+    CAM_EYE, CAM_TGT = fit_pool_camera()
+    # The eye-level shot wants a low sun at the far end and gets a glitter path
+    # for free. Lift the camera to 14 degrees and that same sun reflects clean
+    # over its head: the pool went black. A mirror surface sends the sun to the
+    # eye only from the MIRRORED direction, so derive it instead of typing it.
+    # l = (-v.x, v.y, -v.z) for v the direction from the pool to the camera; the
+    # +0.06 on the elevation walks the highlight away down the pool, turning a
+    # blob under the lens into a path that leads the eye to the wave maker.
+    _v = np.array(CAM_EYE) - np.array([0.0, WLINE, 0.0])
+    _v = _v / np.linalg.norm(_v)
+    _l = np.array([-_v[0], _v[1] + 0.06, -_v[2]])
+    SUN_POS = tuple(_l / np.linalg.norm(_l) * (6.0 * W_LIN))
+    if not VULKAN:
+        # The sky was built above from the sun this block just replaced; build
+        # it again, or the disc the water reflects is not where the light is.
+        env = sky_env(tuple(_l / np.linalg.norm(_l)), below_horizon=(0.22, 0.27, 0.31),
+                      below_nadir=(0.05, 0.06, 0.07))
+        scene.environment = env
+        scene.background = env
+else:
+    _cx = (X1 - 1.2) if CAM_FAR_END else (X0 + 1.2)
+    _tx = X0 if CAM_FAR_END else X1
+    CAM_EYE = [_cx, WLINE + 0.45, 0.06 * (Z1 - Z0)]
+    CAM_TGT = (_tx, WLINE - 0.06, -0.02 * (Z1 - Z0))
+camera = tp.PerspectiveCamera(CAM_FOV, display.aspect,
                               0.01 * W_LIN, 100 * W_LIN)
 if IS_REF:
     camera.position.set(1.20, 0.63, 1.34)
@@ -1335,7 +1467,7 @@ else:
 def camera_at(t):
     """The dolly. Height fixed, target pinned to the far end."""
     if DOLLY:
-        camera.position.set(CAM_EYE[0] + DOLLY * t, CAM_EYE[1], CAM_EYE[2])
+        camera.position.set(CAM_EYE[0] + DOLLY * CAM_DIR * t, CAM_EYE[1], CAM_EYE[2])
         camera.look_at(*CAM_TGT)
 
 sun = tp.DirectionalLight(0xfff3e0, 2.6)
@@ -1575,7 +1707,7 @@ else:
         # 0.30 is colour^1.83 -- about (0.02, 0.27, 0.36) for this teal, i.e.
         # red gone and two thirds of the rest with it. That is opaque by
         # construction, and no amount of light makes a floor visible through it.
-        wmat.thickness = cli_arg("--water-thickness", 0.55 if IS_REF else 2.5, float)
+        wmat.thickness = cli_arg("--water-thickness", 0.55 if IS_REF else (2.5 if VULKAN else 0.30), float)
         wmat.attenuation_color = tp.Color(0x1d7d92)
         # 0.30 m was tuned when GL's transmission contributed NOTHING, so the
         # absorption was free. With the winding corrected it contributes, and
@@ -1583,7 +1715,13 @@ else:
         # refused to carry the floor's colour. Vulkan keeps 0.30: its chord is
         # traced, not the material thickness, and it already reads correctly.
         wmat.attenuation_distance = cli_arg(
-            "--water-attenuation", (0.30 if VULKAN else 0.9) if IS_REF else 4.0, float)
+            "--water-attenuation", (0.30 if VULKAN else 0.9) if IS_REF else
+            (4.0 if VULKAN else 0.48), float)
+        # GL, wide: 0.30 / 0.48 keeps the Beer exponent of the old 2.5 / 4.0
+        # (0.625, so the tint is unchanged) with an eighth of the refraction
+        # lever. GL offsets its screen-space refraction sample by thickness
+        # along the refracted ray, so 2.5 m under 0.27 m of water threw every
+        # normal error tens of pixels. Vulkan traces its chord and keeps 4.0.
         wmat.clearcoat = 0.25
         wmat.clearcoat_roughness = 0.12
     if cli_arg("--debug-glass", 0, int):
@@ -1686,15 +1824,26 @@ if MARKERS:
     # the physics thinks it has.
     _wl = settled_waterline() - cli_arg("--marker-sink", 1.2 * CELL, float)
 
-    # Buoys: 0.45 m across, half-submerged, every 4 m, clear of the piston.
-    _bx0, _bx1, _bstep = X0 + 2.4, X1 - 0.6, 4.0
-    _nb = max(2, int((_bx1 - _bx0) / _bstep) + 1)
+    # Both lines are laid out FROM THE CAMERA BACKWARD, not from a fixed end of
+    # the tank. Reversing the shot moved the camera to +x, and a chain anchored
+    # at X1 then begins behind the lens: at --wide 4 the first several lane
+    # floats were behind the camera and the nearest buoy sat 0.8 m from it,
+    # filling a tenth of the frame. Anchoring at the eye keeps the near element
+    # at a fixed, legible distance whichever end the camera stands at, and the
+    # far element stops clear of the piston stroke.
+    _m_near = min(max(CAM_EYE[0] + 2.4 * CAM_DIR, X0 + 0.9), X1 - 0.4)
+    _m_far = (X0 + 1.2) if CAM_FAR_END else (X1 - 0.6)
+    _m_run = max(abs(_m_far - _m_near), 1e-6)
+
+    # Buoys: 0.45 m across, half-submerged, every 4 m.
+    _bstep = 4.0
+    _nb = max(2, int(_m_run / _bstep) + 1)
     _bz = 0.79 * Z1
     buoys = tp.InstancedMesh(tp.SphereGeometry(0.225, 20, 14),
                              standard_material(0xff6a1f, 0.45), _nb)
     for i in range(_nb):
         _m = tp.Matrix4()
-        _m.set_position(_bx0 + i * _bstep, _wl - 0.25 * 0.225, _bz)
+        _m.set_position(_m_near + i * _bstep * CAM_DIR, _wl - 0.25 * 0.225, _bz)
         buoys.set_matrix_at(i, _m)
     buoys.instance_matrix_needs_update()
     buoys.cast_shadow = True
@@ -1703,14 +1852,14 @@ if MARKERS:
     # Lane rope: 0.15 m floats at a 0.5 m pitch, alternating blue and white the
     # way a real one is -- the alternation is what makes the pitch countable
     # once the spheres are only a pixel or two apart.
-    _rx0, _rx1, _rstep = X0 + 1.0, X1 - 0.4, 0.5
-    _nr = max(2, int((_rx1 - _rx0) / _rstep) + 1)
+    _rstep = 0.5
+    _nr = max(2, int(_m_run / _rstep) + 1)
     _rz = -0.68 * Z1
     rope = tp.InstancedMesh(tp.SphereGeometry(0.075, 14, 10),
                             standard_material(0xffffff, 0.5), _nr)
     for i in range(_nr):
         _m = tp.Matrix4()
-        _m.set_position(_rx0 + i * _rstep, _wl - 0.25 * 0.075, _rz)
+        _m.set_position(_m_near + i * _rstep * CAM_DIR, _wl - 0.25 * 0.075, _rz)
         rope.set_matrix_at(i, _m)
         rope.set_color_at(i, tp.Color(0xf2f4f6 if (i // 2) % 2 == 0 else 0x1b6fb0))
     rope.instance_matrix_needs_update()
@@ -1719,6 +1868,18 @@ if MARKERS:
 
     print(f"scale chain: {_nb} buoys @ {_bstep:g} m, {_nr} lane floats @ {_rstep:g} m, "
           f"waterline {_wl:.3f} m (fill depth {DEPTH:.3f})")
+
+# The shot in one line, so a Slurm log says whether the wave could ever arrive.
+_c = math.sqrt(9.81 * max(DEPTH, 1e-6))
+# Under --cam-from all the eye sits OUTSIDE the tank, so the distance to it is
+# not the interesting number: the whole pool is in frame, and what matters is
+# when the front reaches the near wall. Clamp the eye into the tank to get it.
+_reach = abs(min(max(CAM_EYE[0], X0), X1) - (BX1 if FLAT else FILL_X1))
+print(f"shot: {CAM_FROM} "
+      f"(eye {CAM_EYE[0]:.1f} {CAM_EYE[1]:.1f} {CAM_EYE[2]:.1f}, fov {CAM_FOV:g}), "
+      f"wave speed {_c:.2f} m/s, front reaches the lens at t={_reach / _c:.1f} s "
+      f"(warm-up {cli_arg('--warmup', 0.5 if IS_REF else 4.0, float):.1f} s "
+      f"+ shot {VIDEO if VIDEO else SHOT_TIME:.1f} s)")
 
 
 
@@ -1988,6 +2149,36 @@ elif SHOT:
         nt = frame()
         if i >= total - warm:
             renderer.render(scene, camera)
+    if "--tilt" in sys.argv and nt > 0:
+        # The rendered normals, measured instead of judged: each upward vertex
+        # normal against the mean of its 5 cm bin. A wave's own normal turns by
+        # far less than that across 5 cm, so "noise" is nearly all shot noise
+        # and "wave" is the tilt of the bin means. No pixel size, MSAA or
+        # camera enters it -- which is exactly what fooled the look check that
+        # sent the first film to the cluster.
+        _p = wp.zeros(3 * nt, dtype=wp.vec3, device=device)
+        _n = wp.zeros(3 * nt, dtype=wp.vec3, device=device)
+        surface.expand(nt, _p, _n, sign=MC_SIGN, flip_winding=MC_FLIP)
+        P, Q = _p.numpy(), _n.numpy()
+        m = ((Q[:, 1] > 0.5) & (P[:, 0] > X0 + 0.6) & (P[:, 0] < X1 - 0.6)
+             & (np.abs(P[:, 2]) < Z1 - 0.3))
+        if int(m.sum()) < 100:
+            print("tilt: too few upward vertices to measure")
+        else:
+            P, Q = P[m], Q[m]
+            key = (np.floor(P[:, 0] / 0.05).astype(np.int64) * 100003
+                   + np.floor(P[:, 2] / 0.05).astype(np.int64))
+            _, inv = np.unique(key, return_inverse=True)
+            inv = inv.ravel()
+            M = np.zeros((int(inv.max()) + 1, 3))
+            np.add.at(M, inv, Q)
+            M /= np.linalg.norm(M, axis=1, keepdims=True)
+            noise = np.arccos(np.clip((Q * M[inv]).sum(1), -1.0, 1.0))
+            wave = np.arccos(np.clip(M[:, 1], -1.0, 1.0))
+            nr = float(np.sqrt((noise ** 2).mean()))
+            wr = float(np.sqrt((wave ** 2).mean()))
+            print(f"tilt: noise rms {nr:.4f} rad | wave rms (5 cm bins) {wr:.4f} rad | "
+                  f"SNR {wr / max(nr, 1e-9):.2f} | {int(m.sum()):,} verts")
     save_frame("warp_fluid.png")
     print(f"simulated {SHOT_TIME:.1f} s, {nt:,} triangles [{BACKEND}], wrote warp_fluid.png")
 elif VIDEO:
@@ -2002,7 +2193,14 @@ elif VIDEO:
     # everyone else on the cluster.
     total = int(round(VIDEO * 60))
     warm = int(round(cli_arg("--warmup", 0.5 if IS_REF else 4.0, float) * 60))
-    enc = Encoder("warp_fluid.mp4", WIDTH, HEIGHT, 60, crf=16, preset="slow")
+    # --out-size WxH renders at --size and area-downsamples in the encoder. The
+    # EGL pbuffer has no MSAA (a local Canvas gets 4x, which is why previews
+    # look cleaner than the cluster), and averaging several fully shaded
+    # samples per output pixel is the only anti-aliasing that averages SHADING.
+    OUT_SIZE = cli_arg("--out-size", "", str)
+    enc = Encoder("warp_fluid.mp4", WIDTH, HEIGHT, 60, crf=16, preset="slow",
+                  vf=(f"scale={OUT_SIZE.lower().replace('x', ':')}:flags=area"
+                      if OUT_SIZE else None))
     t0 = time.perf_counter()
     for i in range(warm):
         # A replay has nothing to settle and every dumped frame is wanted, so
@@ -2010,8 +2208,14 @@ elif VIDEO:
         # frames: load it once, then re-render it.
         if REPLAY and i:
             refresh_surface()
-        else:
+        elif VULKAN or i >= warm - 1:
             frame()
+        else:
+            # GL draws only the last warm-up frame, so surfacing the others is
+            # pure cost: the first Idun film ran 240 full-grid marching-cubes
+            # passes for pictures nobody drew. The sim never reads the surface,
+            # so skipping it changes no particle.
+            sim_step()
         # Vulkan's probes, denoiser and upscaler need history; GL does not.
         if i >= warm - (30 if VULKAN else 1):
             renderer.render(scene, camera)

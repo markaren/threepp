@@ -715,11 +715,16 @@ class DensitySurface:
     vec3 arrays -- host staging buffers or the renderer's own mapped ones.
     """
 
-    def __init__(self, origin, cell, dims, device, blur=(0.25, 0.125)):
+    def __init__(self, origin, cell, dims, device, blur=(0.25, 0.125),
+                 normal_blur=0, normal_axes=(0, 1, 2)):
         self.origin = wp.vec3(*origin)
         self.inv_cell = 1.0 / cell
         self.dims = tuple(int(d) for d in dims)
         self.blur = tuple(blur)
+        # Extra binomial rounds run AFTER marching cubes (see build()); 0 keeps
+        # every existing caller byte-identical.
+        self.normal_blur = int(normal_blur)
+        self.normal_axes = tuple(int(a) for a in normal_axes)
         self.device = device
         self.field = wp.zeros(self.dims, dtype=float, device=device)
         self._scratch = wp.zeros(self.dims, dtype=float, device=device)
@@ -756,7 +761,33 @@ class DensitySurface:
         if a is not self.field:
             wp.copy(self.field, a)
         self.mc.surface(self.field, iso)
+        if self.normal_blur:
+            self._smooth_for_normals()
         return self.mc.indices.shape[0] // 3
+
+    def _smooth_for_normals(self):
+        """Widen the field once the triangles are out, so only the normals see it.
+
+        expand() takes each normal from a +-1-cell central difference of this
+        same field. Seen from far enough that a cell is a fraction of a pixel,
+        the surface's RELIEF is sub-pixel and invisible, but its NORMAL is not:
+        the gradient of a field holding a few particles per cell tilts by
+        independent random amounts every couple of cells, the sun turns each
+        tilt into a glint, and the pattern re-rolls whenever particles move.
+        That reads as sandpaper that boils. Blurring before marching cubes
+        would fix it by thinning every sheet; blurring after cannot, because
+        the geometry is already extracted. The next build() zeroes the field,
+        so nothing downstream of expand() ever sees the widened copy.
+        """
+        nx, ny, nz = self.dims
+        a, b = self.field, self._scratch
+        for _ in range(self.normal_blur):
+            for axis in self.normal_axes:
+                wp.launch(_blur_axis, dim=self.dims, device=self.device,
+                          inputs=[a, b, axis, 0.25, nx, ny, nz])
+                a, b = b, a
+        if a is not self.field:
+            wp.copy(self.field, a)
 
     def expand(self, ntris, out_pos, out_nrm, dim=None, sign=1.0,
                flip_winding=True, grain=0.0, grain_freq=30.0):
