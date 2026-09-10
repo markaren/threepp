@@ -66,3 +66,6 @@ python/examples/crane_lift_r*snapshot.py
 python/examples/crane_lift_runs/**/panels_*.npz
 #ignore video files, which are large and not needed in the repo
 *.mp4
+# round 11 diagnostic frame dumps and overlays: local only (the manifests and logs are tracked)
+python/examples/crane_lift_runs/round11_diag*/*.npy
+python/examples/crane_lift_runs/round11_diag*/*.png

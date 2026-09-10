@@ -1,0 +1,119 @@
+{
+ "runs": {
+  "wh_msaa1_0": {
+   "variant": "wh_msaa1",
+   "cmd": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:/dev/threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "4",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--seed",
+    "0",
+    "--op-out",
+    "C:/dev/threepp-crane/python/examples/crane_lift_runs/round11_diag_r5\\wh_msaa1_0.json",
+    "--warmup-hash",
+    "--msaa1"
+   ],
+   "wall_s": 40.1,
+   "rc": 0,
+   "ok": true,
+   "finished": "2026-09-10 21:46:58"
+  },
+  "wh_msaa1_1": {
+   "variant": "wh_msaa1",
+   "cmd": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:/dev/threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "4",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--seed",
+    "0",
+    "--op-out",
+    "C:/dev/threepp-crane/python/examples/crane_lift_runs/round11_diag_r5\\wh_msaa1_1.json",
+    "--warmup-hash",
+    "--msaa1"
+   ],
+   "wall_s": 36.8,
+   "rc": 0,
+   "ok": true,
+   "finished": "2026-09-10 21:47:35"
+  },
+  "wh_msaa1_2": {
+   "variant": "wh_msaa1",
+   "cmd": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:/dev/threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "4",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--seed",
+    "0",
+    "--op-out",
+    "C:/dev/threepp-crane/python/examples/crane_lift_runs/round11_diag_r5\\wh_msaa1_2.json",
+    "--warmup-hash",
+    "--msaa1"
+   ],
+   "wall_s": 31.7,
+   "rc": 0,
+   "ok": true,
+   "finished": "2026-09-10 21:48:06"
+  },
+  "wh_msaa1_3": {
+   "variant": "wh_msaa1",
+   "cmd": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:/dev/threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "4",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--seed",
+    "0",
+    "--op-out",
+    "C:/dev/threepp-crane/python/examples/crane_lift_runs/round11_diag_r5\\wh_msaa1_3.json",
+    "--warmup-hash",
+    "--msaa1"
+   ],
+   "wall_s": 31.3,
+   "rc": 0,
+   "ok": true,
+   "finished": "2026-09-10 21:48:38"
+  },
+  "wh_msaa1_4": {
+   "variant": "wh_msaa1",
+   "cmd": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:/dev/threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "4",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--seed",
+    "0",
+    "--op-out",
+    "C:/dev/threepp-crane/python/examples/crane_lift_runs/round11_diag_r5\\wh_msaa1_4.json",
+    "--warmup-hash",
+    "--msaa1"
+   ],
+   "wall_s": 30.6,
+   "rc": 0,
+   "ok": true,
+   "finished": "2026-09-10 21:49:08"
+  }
+ }
+}

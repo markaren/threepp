@@ -82,6 +82,27 @@ NO_GULLS = "--no-gulls" in sys.argv               # the ambient flock off
 SEA = cli_arg("--sea", "calm", str)               # calm (the default: a working sea for a crane lift) | fresh (the rounds 1-7 sea, too aggressive)
 RAMP_S = cli_arg("--ramp", 1.5, float)            # the operator's joystick ramp, seconds (was 0.8 = the drive's own acceleration limit)
 NO_CLOUDS = "--no-clouds" in sys.argv          # bisection knob for the rendered-frame rows
+# Diagnostic knobs of 2026-09-10 for the open replay case (the frame took three states across ten identical
+# processes): off by default, so the frozen configuration of round 10 is unchanged.
+NO_AUTO_LOD = "--no-auto-lod" in sys.argv         # every mesh at full detail; no background LOD chains
+# The temporal reset after the warm-up frames is the audit's rule for every capture (sensor_audit.py does it;
+# the fjord and box rows of E1 were measured with it). Round 10 omitted it, and the rendered frame took
+# three states across ten identical processes: a secondary view added after a first render that drove
+# three internal frames seeds the primary view's shading histories differently at internal frame 4
+# (crane_lift_runs/round11_diag*, 2026-09-10). ON by default since then; --no-warmup-reset reproduces round 10.
+RESET_AFTER_WARMUP = "--no-warmup-reset" not in sys.argv
+SETTLE = cli_arg("--settle", 0, int)              # frames rendered after the warm-up WITHOUT stepping the world
+WARMUP_HASH = "--warmup-hash" in sys.argv          # hash the frame, the AOVs and the tip view on the first render and every warm-up frame
+DUMP_FRAMES = cli_arg("--dump-frames", "", str)    # <prefix>: write the first render, warm-up frames 0..3 and captured frame 0 as .npy
+DIAG = {"first": None, "warmup": []}
+NO_TIP = "--no-tip" in sys.argv                    # no secondary (tip) view at all
+FLUSH_FIRST = "--flush-first" in sys.argv          # set_flush_frames(1) before the first render, not after it
+NO_RESTIR = "--no-restir" in sys.argv              # pass isolation: ReSTIR DI off
+NO_DENOISE = "--no-denoise" in sys.argv            # pass isolation: the SVGF denoiser off
+NO_AO = "--no-ao" in sys.argv                      # pass isolation: ray-traced AO off
+NO_PROBE_GI = "--no-probe-gi" in sys.argv          # pass isolation: probe GI off
+HARD_SUN = "--hard-sun" in sys.argv                # pass isolation: hard sun shadows (angular radius 0)
+MSAA1 = "--msaa1" in sys.argv                      # pass isolation: G-buffer MSAA off (no minority-sample shade dispatch)
 if LAW not in ("integral", "legacy", "off"):
     sys.exit("--law is one of integral, legacy, off")
 if LAW == "off":
@@ -189,11 +210,47 @@ WIRE_MIN = 0.5
 # ---- renderer ---------------------------------------------------------------
 canvas = tp.Canvas("threepp - offshore crane lift", width=W, height=H, vsync=False, headless=HEADLESS)
 renderer = tp.VulkanRenderer(canvas)
+if NO_AUTO_LOD:
+    renderer.auto_lod = False
+if FLUSH_FIRST:
+    renderer.set_flush_frames(1)
+if NO_RESTIR:
+    renderer.restir_di = False
+if NO_DENOISE:
+    renderer.denoise = False
+if NO_AO:
+    renderer.deferred_ao = False
+if NO_PROBE_GI:
+    renderer.probe_gi = False
+
+
+def _arr_bytes(x):
+    return np.ascontiguousarray(np.asarray(x)).tobytes()
+
+
+def _hash_aovs(a, tip=None):
+    import hashlib
+    d = {k: hashlib.sha256(_arr_bytes(a[k])).hexdigest()[:16]
+         for k in ("rgb", "depth", "normals", "instance_ids", "motion", "albedo") if k in a}
+    if tip is not None:
+        d["tip"] = hashlib.sha256(_arr_bytes(tip)).hexdigest()[:16]
+    return d
+
+
+AOV_KEYS = ["rgb", "depth", "normals", "instance_ids", "motion", "albedo"]
+
+
+def _lod_row():
+    """[chains_ready, chains_queued, resident_bytes, entries at level 0..5] after the last render."""
+    s = renderer.auto_lod_stats
+    return ([int(s["chains_ready"]), int(s["chains_queued"]), int(s["index_bytes"] + s["blas_bytes"])]
+            + [int(v) for v in s["entries_per_level"]])
+
 renderer.tone_mapping = tp.ToneMapping.AgX
 renderer.tone_mapping_exposure = 0.80
 renderer.render_scale = 1.0
-renderer.gbuffer_msaa = 2
-renderer.sun_angular_radius = 0.55
+renderer.gbuffer_msaa = 1 if MSAA1 else 2
+renderer.sun_angular_radius = 0.0 if HARD_SUN else 0.55
 renderer.bloom_intensity = 0.08
 renderer.bloom_clamp = 12.0
 renderer.auto_exposure = True
@@ -1304,9 +1361,15 @@ def first_frames():
           f"nominal landing inside: {'YES' if in_clear_rect(_p, _yaw) else 'NO'}")
     del _p, _qi
     renderer.sim_time = 0.0
-    renderer.render(scene, camera)
+    if WARMUP_HASH or DUMP_FRAMES:
+        _a = renderer.read_aovs_typed(scene, camera, AOV_KEYS)
+        DIAG["first"] = _hash_aovs(_a)
+        if DUMP_FRAMES:
+            np.save(DUMP_FRAMES + "_first.npy", np.asarray(_a["rgb"]))
+    else:
+        renderer.render(scene, camera)
     ves["live"] = True
-    TIP_VIEW = renderer.add_view(tip_cam, CAM_W, CAM_H)
+    TIP_VIEW = None if NO_TIP else renderer.add_view(tip_cam, CAM_W, CAM_H)
     if TIP_VIEW:
         renderer.set_view_display_rect(TIP_VIEW, W - HUD_M - CAM_W, H - HUD_M - CAM_H, CAM_W, CAM_H)
 
@@ -1498,11 +1561,25 @@ def run_manifest(n, out, mode):
     import sensor_audit as sa
     renderer.set_flush_frames(1)
     place(camera, "hero")
+    lod_log = {"first": _lod_row(), "warmup": [], "settle": [], "frames": []}
     renderer.set_auto_exposure_speed(12.0)
-    for _ in range(WARMUP):
+    for _w in range(WARMUP):
         step()
-        renderer.render(scene, camera)
+        if WARMUP_HASH or DUMP_FRAMES:
+            _a = renderer.read_aovs_typed(scene, camera, AOV_KEYS)
+            _t = renderer.read_view_rgb_pixels(TIP_VIEW) if TIP_VIEW else None
+            DIAG["warmup"].append(_hash_aovs(_a, _t))
+            if DUMP_FRAMES and _w < 4:
+                np.save(f"{DUMP_FRAMES}_warm{_w}.npy", np.asarray(_a["rgb"]))
+        else:
+            renderer.render(scene, camera)
+        lod_log["warmup"].append(_lod_row())
     renderer.set_auto_exposure_speed(1.2)
+    for _ in range(SETTLE):                       # the world stands still; only the renderer runs
+        renderer.render(scene, camera)
+        lod_log["settle"].append(_lod_row())
+    if RESET_AFTER_WARMUP:
+        renderer.reset_temporal_history()
     renderer.set_event_camera_params(threshold=0.20, decay=0.88, min_luma=0.005, max_events_per_pixel=5,
                                      frame_time_us=int(sim_t * 1e6))
     renderer.event_camera_source = "final"
@@ -1533,6 +1610,9 @@ def run_manifest(n, out, mode):
         renderer.set_event_camera_params(threshold=0.20, decay=0.88, min_luma=0.005, max_events_per_pixel=5,
                                          frame_time_us=int(sim_t * 1e6))
         aovs = renderer.read_aovs_typed(scene, camera, ["rgb", "depth", "normals", "instance_ids", "motion", "albedo"])
+        lod_log["frames"].append(_lod_row())
+        if DUMP_FRAMES and f == 0:
+            np.save(DUMP_FRAMES + "_cap0.npy", np.asarray(aovs["rgb"]))
         rows["rgb"].update(sa.arr_bytes(aovs["rgb"]))
         per_frame["rgb"].append(hashlib.sha256(sa.arr_bytes(aovs["rgb"])).hexdigest()[:16])
         rows["aov.depth"].update(sa.arr_bytes(aovs["depth"]))
@@ -1546,6 +1626,8 @@ def run_manifest(n, out, mode):
             tv = sa.arr_bytes(tip_px)
             rows["tip.rgb"].update(tv)
             per_frame["tip.rgb"].append(hashlib.sha256(tv).hexdigest()[:16])
+            if DUMP_FRAMES and f == 0:
+                np.save(DUMP_FRAMES + "_cap0_tip.npy", np.asarray(tip_px))
         if writer is not None and f % (FPS // FILM_FPS) == 0:
             _fw = time.perf_counter()
             writer.append_data(film_composite(aovs["rgb"], tip_px))
@@ -1620,6 +1702,10 @@ def run_manifest(n, out, mode):
             "threepp": getattr(tp, "__version__", "?"), "platform": platform.platform(),
             "scene": "crane_lift", "mode": mode, "frames": n, "warmup": WARMUP, "fps": FPS, "size": [W, H],
             "seed": SEED, "antiswing": antiswing_on[0], "amc": not NO_AMC, "clouds": not NO_CLOUDS,
+            "no_auto_lod": NO_AUTO_LOD, "reset_after_warmup": RESET_AFTER_WARMUP, "settle": SETTLE,
+            "no_tip": NO_TIP, "flush_first": FLUSH_FIRST,
+            "no_restir": NO_RESTIR, "no_denoise": NO_DENOISE, "no_ao": NO_AO, "no_probe_gi": NO_PROBE_GI,
+            "hard_sun": HARD_SUN, "msaa1": MSAA1,
             "ff": not NO_FF, "ff_mode": "off" if NO_FF else FF_MODE, "amc_kp": AMC_KP or "1/dt", "aa": aa_path(),
             "law": LAW if antiswing_on[0] else "off", "as_k": AS_K, "as_gamma": AS_GAMMA, "as_umax": AS_UMAX,
             "engage": ENGAGE if antiswing_on[0] else "off",
@@ -1662,6 +1748,8 @@ def run_manifest(n, out, mode):
             "fan_scans": fan_seen[0], "fan_saw_load": fan_seen[1],
         },
         "per_frame": per_frame,
+        "lod": lod_log,
+        "diag": DIAG,
         "rows": {k: v.row() if v.frames else "absent" for k, v in rows.items()},
     }
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)

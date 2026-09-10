@@ -368,7 +368,7 @@ The rendered frame took three states across the ten and the tip view two (the ev
 frame), and in both rounds the seven processes slowed by CPU contention from the desktop shared
 one state while the three unloaded ones split two to one: the paper's E1 load-case mechanism, a
 state selected in the first frames, here with the GPU unshared. A twelfth process (`op_s0_film2`,
-the split-screen candidate) took a fourth state.
+the split-screen candidate) took a fourth state. (Round 11 below found the trigger and the omitted repair.)
 
 Round 10, seed 0: the container lands 20 mm from the mark, flat, inside the clear rectangle,
 with 72 mm RMS of swing in the pay-out; the control (loop open) lands 686 mm off with 517 mm RMS.
@@ -403,3 +403,57 @@ bit-identical (the five AOVs, the fan, the trajectory, the vessel, the tension, 
 IMU), and the rendered frame, the tip view and the events differ, as between any two processes
 of this scene (the state mechanism above). So the panels in the film are drawn from the cited
 run's own sensor data, to the bit, over a frame that took its own state.
+
+
+## Round 11 (2026-09-10 evening): the frame's states, diagnosed (`round11_diag*/`, on `dev`)
+
+The branch was merged onto `dev` first (the engine the paper's other measurements use; the
+physics log of a dev run is byte-identical to round 10's `op_s0_a` over the 270 rows compared).
+Short runs, `--op 4` (30 warm-up frames, 240 captured), one fresh process each, 27 to 39 s per
+run, launched by `round11_tools/run_diag.py`; the knobs are in `crane_lift.py`, all off by
+default so round 10's configuration is unchanged; `diag_report.py` and `wh_compare.py` group the
+manifests, `diff_frames.py` compares the frame dumps.
+
+What round 10 saw reproduces on dev: six baseline processes split 3/3 on the rendered frame and
+the tip view, on every captured frame from the first, with the five AOVs, the fan, the
+trajectory, the vessel, the tension, the contact and the IMU identical (`round11_diag/base_*`).
+
+- Not the auto-LOD: with it off the frame still splits (1 of 4); with it on, the chain timeline
+  (11 chains enqueued at warm-up frame 7 after the engine's quiet window, 8 finalized two per
+  frame by warm-up frame 10, 3 failed; 2 of 222 entries above level 0 at capture) is identical
+  in every process (`nolod_*`, the `lod` block of every manifest).
+- Where it starts: hashing the frame, the AOVs and the tip view on the first render and every
+  warm-up frame (`--warmup-hash`, `round11_diag_wh/`), the first render and warm-up frame 0 are
+  byte-identical between the groups; the groups part at warm-up frame 1, 61 pixels of 921,600,
+  on the railings, the ladder, the hull edges and the left border at the horizon (three of them
+  by more than 8 of 255, the rest by 1), and the difference then spreads through the histories
+  (125 pixels a frame later, 769 at the first captured frame). Warm-up frame 1 is the fourth
+  internal frame of the process: the script's first `render()` drives three internal frames
+  (`set_flush_frames` defaults to 3; the script set 1 only afterwards), the tip view is added
+  after it and created at internal frame 3, and the primary view parts at frame 4.
+- The trigger needs both the secondary view and that three-frame first render: no tip view,
+  6 of 6 identical (`round11_diag_r3/wh_notip_*`); `set_flush_frames(1)` before the first
+  render, 6 of 6 (`wh_ff1_*`); both, 4 of 4.
+- The passes: with any one of ReSTIR DI, ray-traced AO, probe GI or the soft sun (angular
+  radius 0) off, 5 of 5 identical (`round11_diag_r4/wh_norestir_*`, `wh_noao_*`,
+  `wh_noprobegi_*`, `wh_hardsun_*`); with the denoiser off the split remains (1 of 5,
+  `wh_nodenoise_*`); with the G-buffer MSAA off it remains too (1 of 5,
+  `round11_diag_r5/wh_msaa1_*`). The E1 box scene's load case needed ReSTIR, probe GI, the denoiser
+  or RTAO each; here the denoiser is not involved and the soft sun is.
+- The carrier: with 300 extra frames rendered after the warm-up without stepping the world
+  (`--settle 300`), the first captured frame agrees, the difference re-emerges for about fifty
+  moving frames and dies for three of four processes; the fourth stays different on every frame
+  (`settle_*`), the histories being fp16 accumulators.
+- The repair the audit prescribes: `renderer.reset_temporal_history()` after the warm-up
+  frames, which every E1 capture does and round 10 did not. With it, 4 of 4 identical on every
+  row and every frame (`reset_*`). It is on by default from this round (`--no-warmup-reset`
+  reproduces round 10).
+
+The engine-side mechanism (why the fourth frame, what the tip view's shade shares with the
+primary's under ReSTIR) is not pinned; the E1 box scene's second state under GPU load starts at
+frame 4 too and also needed ReSTIR, but the reset did not remove that one and it touched every
+lit pixel by 1 ulp, so the two are not shown to be the same defect.
+
+Round 12: the protocol of round 10 on the frozen script with the reset, `round12_protocol/`.
+Launched 2026-09-10 in the evening on the RTX 4070 (driver 595.97), the GPU otherwise unshared;
+the result is appended when the 21 runs are in.
