@@ -29,6 +29,27 @@
 // at the waterline, it keeps going down, so depth grows with distance from the
 // nearest land cell and saturates in open water. See makeBathymetry() below.
 //
+// THE URBAN LAYER. A pack fetched with --buildings/--landuse carries a town,
+// and until it is wired here a Python consumer gets a bare hill where Ålesund
+// is. Buildings, pier decks, parked cars and moored boats are therefore built
+// here too, each gated on the pack ACTUALLY carrying the data it needs — a
+// Norddal pack (no footprints, no land use) takes none of these branches and
+// behaves exactly as it did before they existed.
+//
+// THE STREETS. For a while the urban layer had a hole in it: GeoScene used the
+// RoadNetwork only to conform and carve the terrain and to answer pavedWeight()
+// gates, so a consumer got a town with NO STREETS IN IT — no asphalt-coloured
+// bed (gopt.roadColor was left at its literal default instead of the network's
+// own baked mean) and no near-field ribbon geometry at all. The demo has had
+// both since the hybrid landed. Both are here now; see the roadColor line in
+// build() and buildRoadRibbon() below.
+//
+// The urban layer is also what makes the FOREST correct. A CHM is DOM − DTM,
+// so over a town every roof is a 10 m "canopy peak"; without the town gates in
+// buildForest() the detector plants a spruce on all 8287 roofs in Ålesund.
+// The gates are not a refinement, they are the difference between a forest and
+// a bug — see the comment at the top of buildForest().
+//
 // Everything else is copied, not reinvented: same band sets, same cliff gate
 // (grid step <= 1.5 m), same shell parameters, same phase-3c forest LOD.
 
@@ -36,23 +57,29 @@
 #define THREEPP_EXTRAS_TERRAIN_GEOSCENE_HPP
 
 #include "threepp/extras/road/RoadNetwork.hpp"
+#include "threepp/extras/terrain/CellStreamer.hpp"
 #include "threepp/extras/terrain/CliffShell.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
+#include "threepp/extras/terrain/GeoBuildings.hpp"
 #include "threepp/extras/terrain/GeoTerrain.hpp"
 #include "threepp/extras/terrain/GeoTerrainPack.hpp"
 #include "threepp/extras/terrain/TerrainScatter.hpp"
 #include "threepp/extras/terrain/TerrainTiles.hpp"
+#include "threepp/extras/terrain/UrbanProps.hpp"
 #include "threepp/extras/vegetation/CanopyForest.hpp"
 #include "threepp/extras/vegetation/TreeTextures.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Group.hpp"
+#include "threepp/objects/Mesh.hpp"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace threepp::terrain {
@@ -83,6 +110,97 @@ namespace threepp::terrain {
         // is better spent dense near the subject than thin across the square.
         Vector3 focus{0.f, 0.f, 0.f};
 
+        // ── the urban layer ─────────────────────────────────────────────────
+        // All four gates below are ALSO gated on the pack: buildings need
+        // footprints (buildings.json), props need land use (landuse.json).
+        // Asking for them on a pack that has neither is not an error, it is a
+        // no-op, exactly like `forest` on a pack with no CHM.
+
+        // Extruded OSM footprints with nDSM-measured heights, batched into
+        // 500 m chunk meshes.
+        bool buildings = true;
+        bool pitchedRoofs = true; // gable heuristic on footprints with no roof block
+        bool measuredRoofs = true;// roof shapes read off the pack's 1 m DOM
+
+        // Pier decks, parked cars, moored boats — placed from the survey, never
+        // scattered. Cars are STREAMED by camera distance (a pack holds tens of
+        // thousands of them); decks and boats are a few hundred objects for the
+        // whole pack and are built once, because they are part of the LAND.
+        bool urbanProps = true;
+        bool cars = true;
+        bool boats = true;
+        bool decks = true;
+        float propsCellSize = 250.f;// one car draw per cell
+        float propsExtent = 1500.f; // car streaming radius from the camera
+        int streamBudget = 2;       // cell builds per update(), forest and cars alike
+        // Steepest ground a parked car is allowed to stand on, in degrees. OSM
+        // land use is drawn in plan view, so a `parking` polygon can be draped
+        // over a mountainside — the Ålesund pack has one at world XZ (684, -85)
+        // whose ground climbs 57.9 m across 50 m, mean slope 47.2°, where the
+        // reality is a park and a stepped walkway. Real car parks in that pack
+        // reach 21.2° at the 98th percentile over 223 polygons, so 28° sits in
+        // the gap: no mapped lot loses a car, the cliff loses all of them. See
+        // UrbanPropsOptions::carMaxSlope for the full measurement.
+        float carMaxSlope = 28.f;
+
+        // Footprint dilation for the forest's town gate. This is NOT padding:
+        // it is the registration offset between the Kartverket DOM and the OSM
+        // footprint, measured on the Ålesund pack. At 2 m a full ring of
+        // roof-edge "canopy" survives and the town grows a hedge on every eave.
+        float forestDilate = 4.f;
+        // Instance budget on an urban pack, where the forest streams per cell:
+        // this is a PER-CELL cap, so it is deliberately generous. The town's
+        // real bound is the streaming radius, not a global count.
+        int urbanForestCap = 80000;
+
+        // ── roads ────────────────────────────────────────────────────────────
+        // Roads are BAKED into the terrain — carveRoads() puts the bed at the
+        // conformed grade and the provider paints asphalt over the paved band —
+        // and that painted bed is what a distant road IS: tile texture, so mip
+        // and aniso filtering integrate it as it recedes instead of letting a
+        // sub-pixel ribbon's raster coverage shimmer.
+        //
+        // The ribbon CHUNKS below are the near-field half of that hybrid: real
+        // geometry a hair above the bed, carrying crisp edges and baked lane
+        // markings — "stand-on" quality that ~1 m splat texels cannot hold.
+        // They are distance-culled in update(); past the cut the painted bed
+        // alone carries the road. BRIDGE DECKS are always ribbon geometry and
+        // are never culled: there is no terrain under a span to paint.
+        //
+        // Gated on the pack actually carrying roads, like every other gate
+        // here: a pack with no roads.json takes none of this.
+        bool roadRibbon = true;
+        float ribbonDistance = 600.f;// the demo's NT_ROAD_RIBBON_DIST; 6 m road ≈ 5 px
+
+        // Surveyed town SURFACING painted into the splat — parking asphalt with
+        // bay stripes, grass and pitches that block the urban grey, gravel,
+        // quay concrete, breakwater rock. Without it the Fjellstua car park is a
+        // meadow with cars standing on it. (GeoTerrainOptions already defaults
+        // this on; the knob is here so a consumer can A/B the layer alone the
+        // way NT_NO_LANDUSE_PAINT does in the demo.)
+        bool landUsePaint = true;
+
+        // ── the quay apron ───────────────────────────────────────────────────
+        // A Kartverket DTM reads RECLAIMED LAND as water: the harbour front is
+        // stored at exactly seaLevel, with no relief at all. Measured on the
+        // Ålesund pack: 93.8% of sampled ground inside its 53 surveyed `pier`
+        // polygons reads exactly 0.00 m. That is not a cosmetic error, because
+        // everything downstream keys off "is this cell at sea level":
+        //   * makeBathymetry() seeds its distance transform with
+        //     `h <= seaLevel + 0.05f` = SEA, so the quay is not merely awash,
+        //     it is EXCAVATED into the seabed along with the fjord;
+        //   * UrbanProps builds a pier deck only where the ground is "wet"
+        //     (< sea + 0.5 m), so a deck gets built OVER the quay — see the
+        //     comment at UrbanProps.hpp:446, which already assumes this apron
+        //     exists ("a pier line that runs up onto the quay is already
+        //     ground (the apron raise gave it a surface)");
+        //   * and the buildings stand with their walls in the fjord, which is
+        //     the symptom norway_terrain names at its own apron block.
+        // So the raise happens HERE, in the facade, on the same terms the demo
+        // does it. Gated on the pack carrying buildings or land use, like every
+        // other urban gate: a bare fjord pack takes none of it.
+        bool quayApron = true;
+
         // Near-field instanced stones/tufts in the last ~55 m around the camera.
         // Demo parity default. Turn it off for a scene whose camera lives over
         // water: the cells would be built on the (sunk) seabed.
@@ -110,6 +228,16 @@ namespace threepp::terrain {
             int forestCells = 0;// LOD cells planted
             float loadSeconds = 0.f;
             std::uint64_t treeSignature = 0;// TerrainTiles::treeSignature(): which tiles, not how many
+            int buildings = 0;              // footprints extruded
+            std::size_t buildingTris = 0;
+            std::size_t cars = 0;// parked cars PLACED pack-wide (not the live ones)
+            int carCellsLive = 0;// car cells currently streamed in around the camera
+            int boats = 0;
+            int deckRuns = 0;
+            int carsRejectedSlope = 0;// bays refused for standing on a cliff
+            int roadChunks = 0;       // near-field ribbon chunks BUILT (pack-wide)
+            int roadChunksLive = 0;   // ...of those, visible after the last update()
+            int apronCells = 0;       // sea-level grid cells raised into reclaimed land
         };
 
         static std::shared_ptr<GeoScene> create(const GeoSceneOptions& opts) {
@@ -124,6 +252,12 @@ namespace threepp::terrain {
         void update(const Vector3& camPos) {
             if (tiles_) tiles_->update(camPos);
             if (scatter_) scatter_->update(camPos);
+            // Streamed content follows the LIVE camera. A ROI fixed at load
+            // time is a still-frame trick: fly two kilometres and the town is
+            // bare because the ROI never moved.
+            if (forestStream_) forestStream_->update(camPos);
+            if (carStream_) carStream_->update(camPos);
+            cullRoadRibbon(camPos);
         }
 
         // Provider height — the surface the tiles actually bake, i.e. DEM +
@@ -144,6 +278,8 @@ namespace threepp::terrain {
                 s.baking = tiles_->pendingBakes();
                 s.treeSignature = tiles_->treeSignature();
             }
+            if (forestStream_) s.forestCells = forestStream_->stats().active;
+            if (carStream_) s.carCellsLive = carStream_->stats().active;
             return s;
         }
 
@@ -273,6 +409,55 @@ namespace threepp::terrain {
             rco.bakeSurface = true;// the terrain IS the road (paint carries the look)
             carveRoads(pack_.grid, *network_, rco);
 
+            // ── quay apron ───────────────────────────────────────────────────
+            // See GeoSceneOptions::quayApron for WHY. Mechanically: every cell
+            // the DTM left at sea level that is under a building (footprints
+            // grown by 8 m — the apron is the YARD around the shed, not just
+            // its outline) or inside a surveyed pier/quay polygon becomes land
+            // 0.9 m above the water, and every breakwater cell a 1.5 m rock
+            // ridge. The heightfield gives that a short ramp at its edge rather
+            // than a vertical quay wall; at the ranges these packs are judged
+            // from that is the right trade, and it costs no extra geometry and
+            // leaves no seam with the tiles.
+            //
+            // THE ORDER IS THE POINT, and it is why this cannot be bolted on
+            // afterwards. It runs BEFORE the bathymetry / flat sink below, or
+            // the sink still classifies these cells as water and drops them
+            // into the seabed; and BEFORE makeGeoProvider() below, because the
+            // land-use paint takes the mask (gopt.apronMask) and paints the
+            // reclaimed land as concrete instead of letting a lawn run into
+            // the fjord.
+            std::shared_ptr<const FootprintMask> apronMask;
+            if (o.quayApron && reg.heightMin < 1.0f &&
+                (!pack_.buildings.empty() || pack_.hasLandUse())) {
+                const auto builtNear = buildFootprintMask(pack_, 8.f, 2.f);
+                const auto quayPoly = buildLandUseMask(pack_, {"pier", "quay"}, 0.f, 2.f);
+                const auto breakPoly = buildLandUseMask(pack_, {"breakwater"}, 0.f, 2.f);
+                if (builtNear || quayPoly || breakPoly) {
+                    const int gdim = pack_.grid.dim();
+                    const float gstep = pack_.grid.worldSize() / static_cast<float>(gdim - 1);
+                    const float ghalf = pack_.grid.worldSize() * 0.5f;
+                    auto apron = detail::geoMakeMask(reg.worldSize, gstep);
+                    auto& hh = pack_.grid.data();
+                    for (int iz = 0; iz < gdim && iz < apron->dim; ++iz) {
+                        const float z = -ghalf + static_cast<float>(iz) * gstep;
+                        for (int ix = 0; ix < gdim && ix < apron->dim; ++ix) {
+                            float& hv = hh[static_cast<std::size_t>(iz) * gdim + ix];
+                            if (hv > reg.seaLevel + 0.05f) continue;
+                            const float x = -ghalf + static_cast<float>(ix) * gstep;
+                            const bool rock = breakPoly && breakPoly->inside(x, z);
+                            if (!rock && !(builtNear && builtNear->inside(x, z)) &&
+                                !(quayPoly && quayPoly->inside(x, z)))
+                                continue;
+                            hv = reg.seaLevel + (rock ? 1.5f : 0.9f);
+                            apron->m[static_cast<std::size_t>(iz) * apron->dim + ix] = 1u;
+                            ++stats_.apronCells;
+                        }
+                    }
+                    apronMask = apron;
+                }
+            }
+
             // Bathymetry AFTER conform + carve: the road profile classification
             // must see the real DTM water level, and no roadbed cell is left at
             // sea level once bridges and ferry legs are excluded.
@@ -295,6 +480,20 @@ namespace threepp::terrain {
             gopt.wetlandBand = 6.f;
             gopt.paintRoads = true;
             gopt.roadEdgeFeather = 1.2f;// near-tile splat texels are ~0.6-1.3 m
+            // The far road is a flat tint mixed into the splat albedo. Take it
+            // from the SAME bake the near ribbon uses instead of the literal
+            // default: that default is a near-black matched to an older
+            // near-black ribbon, and any drift between the two makes the
+            // ribbonDistance hand-off STEP as a chunk winks out. This has to
+            // run after conformTo() — meanSurfaceColor reads the baked surface
+            // sets — and before makeGeoProvider() reads gopt.
+            gopt.roadColor = network_->meanSurfaceColor(road::SurfaceKind::Asphalt);
+            // Surveyed town surfacing (parking / grass / pitch / concrete /
+            // gravel / rock), plus the apron raised above: buildLandUsePaint()
+            // takes the mask and paints those reclaimed cells as quay concrete.
+            // Null on a pack with no harbour, which is the no-op path.
+            gopt.landUsePaint = o.landUsePaint;
+            gopt.apronMask = apronMask;
             gopt.paintUrban = true;
             // The shell OWNS the wall relief once it is on: a positive terrain
             // relief under it would poke through the shell's 0.35 m offset.
@@ -358,6 +557,12 @@ namespace threepp::terrain {
                 add(scatter_);
             }
 
+            // ── road ribbon ──────────────────────────────────────────────────
+            // Bridge decks + near-field ground chunks. Gated on the pack having
+            // roads: an empty network builds an empty group, which is harmless
+            // but still a Group in the graph and a mesh walk every frame.
+            if (o.roadRibbon && !pack_.roads.empty()) buildRoadRibbon(o);
+
             // ── cliff shell ──────────────────────────────────────────────────
             // The terrain is a heightfield: on a near-vertical wall every baked
             // tile texel is one stretched vertical column, so nothing baked on
@@ -387,19 +592,137 @@ namespace threepp::terrain {
             // The CHM (DOM − DTM) is a MEASUREMENT of where forest stands and
             // how tall it is; trees go exactly there instead of on a slope /
             // elevation rule that invents a forest. No CHM ⇒ no forest.
+            // ── buildings ────────────────────────────────────────────────────
+            // Packs fetched with --buildings carry OSM footprints plus a per-
+            // building roof block measured off the 1 m DOM. No footprints ⇒
+            // nothing to extrude, and the branch is skipped entirely.
+            if (o.buildings && !pack_.buildings.empty()) {
+                GeoBuildingsOptions bo;
+                bo.pitchedRoofs = o.pitchedRoofs;
+                bo.measuredRoofs = o.measuredRoofs;
+                GeoBuildingsStats bs;
+                bo.stats = &bs;
+                auto buildings = buildGeoBuildingMeshes(pack_, bo);
+                buildings->name = "geo_buildings";
+                stats_.buildings = bs.buildings;
+                stats_.buildingTris = bs.triangles;
+                add(buildings);
+            }
+
             if (o.forest && pack_.hasCanopy()) buildForest(o, reg);
+
+            // ── urban props ──────────────────────────────────────────────────
+            if (o.urbanProps && pack_.hasLandUse()) buildUrbanLayer(o, reg, gopt);
 
             stats_.loadSeconds = std::chrono::duration<float>(
                                          std::chrono::high_resolution_clock::now() - t0)
                                          .count();
         }
 
+        // ── road ribbon: bridge decks + distance-culled ground chunks ────────
+        // See the roadRibbon comment in GeoSceneOptions for WHY this is only
+        // the near field. Mechanically: the decks go in unconditionally (there
+        // is no terrain under a span for the paint to live on), the ground
+        // chunks are measured once here — bounding sphere per chunk, so the
+        // per-frame test is a distance and a subtraction — and switched on and
+        // off in cullRoadRibbon().
+        void buildRoadRibbon(const GeoSceneOptions& o) {
+            auto bridges = network_->buildBridgeMeshes();
+            bridges->name = "geo_road_bridges";
+            add(bridges);
+
+            roadChunks_ = network_->buildGroundChunkMeshes();
+            roadChunks_->name = "geo_road_chunks";
+            chunkCenters_.reserve(roadChunks_->children.size());
+            chunkRadii_.reserve(roadChunks_->children.size());
+            for (auto* child : roadChunks_->children) {
+                auto* mesh = child->as<Mesh>();
+                if (!mesh) continue;
+                auto geo = mesh->geometry();
+                geo->computeBoundingSphere();
+                chunkCenters_.emplace_back(child, geo->boundingSphere->center);
+                chunkRadii_.push_back(geo->boundingSphere->radius);
+            }
+            add(roadChunks_);
+            ribbonDist_ = o.ribbonDistance;
+            stats_.roadChunks = static_cast<int>(chunkCenters_.size());
+            // The startup cull, for the same reason the streamers prime their
+            // rings at o.focus: a headless render or a one-shot capture must not
+            // photograph every chunk in the pack at once because update() has
+            // not been called yet.
+            cullRoadRibbon(o.focus);
+        }
+
+        // Visible within ribbonDist_ of the camera, with 10% hysteresis so a
+        // chunk sitting on the boundary does not flip every frame. The distance
+        // is to the chunk's SURFACE (centre minus radius): a 240 m chunk seen
+        // end-on is 120 m nearer than its centre says, and culling on the centre
+        // pops the road out from under a camera standing on it.
+        void cullRoadRibbon(const Vector3& camPos) {
+            if (chunkCenters_.empty()) return;
+            int live = 0;
+            for (std::size_t i = 0; i < chunkCenters_.size(); ++i) {
+                auto* obj = chunkCenters_[i].first;
+                const float d = camPos.distanceTo(chunkCenters_[i].second) - chunkRadii_[i];
+                if (obj->visible) {
+                    if (d > ribbonDist_ * 1.1f) obj->visible = false;
+                } else if (d < ribbonDist_) {
+                    obj->visible = true;
+                }
+                if (obj->visible) ++live;
+            }
+            stats_.roadChunksLive = live;
+        }
+
         void buildForest(const GeoSceneOptions& o, const GeoRegion& reg) {
+            // ── TOWN GATES ───────────────────────────────────────────────────
+            // A CHM is DOM − DTM, so on an urban pack every BUILDING is a 10 m
+            // "canopy peak" and every ship, crane and pier crate is a taller
+            // one. Without the gates below the detector plants a spruce on
+            // every roof in Ålesund. Measured on that pack: 30.2% of land cells
+            // carry canopy >= 2.5 m, and 29.3% of those sit inside a footprint
+            // DILATED BY 4 M — the dilation is the DOM-vs-OSM registration
+            // offset, not padding.
+            const bool urbanPack = !pack_.buildings.empty() || pack_.hasLandUse();
+
+            // Rasters at the pack's own 2 m resolution. Both are null on a pack
+            // that carries no footprints / no land use, and a null mask is an
+            // open gate — which is why a fjord pack takes the same code path
+            // and comes out unchanged.
+            const auto fpMask = buildFootprintMask(pack_, o.forestDilate, 2.f);
+            // Decks and lots: a pier is not ground, a marina is water, and a
+            // parking lot or a football pitch is a surface nobody plants in.
+            const auto deckMask = buildLandUseMask(
+                    pack_, {"pier", "quay", "breakwater", "marina", "parking", "pitch"}, 1.f, 2.f);
+
             vegetation::CanopySiteOptions so;
             so.seaLevel = reg.seaLevel;
             so.centerX = o.focus.x;
             so.centerZ = o.focus.z;
             so.halfExtent = o.forestExtent;
+            if (urbanPack) {
+                // PACK-WIDE detection. A square ROI centred on the focus makes
+                // the trees a function of where the camera happened to start;
+                // detection is a one-off scan and a site is 16 bytes, so what
+                // has to be bounded is the GEOMETRY — the streamer's job below.
+                so.centerX = 0.f;
+                so.centerZ = 0.f;
+                so.halfExtent = 1e9f;
+                // 2 m grid: a 3x3 window is a 4 m crown spacing, which is a
+                // town tree. The 5x5 default is a plantation rule and it halves
+                // the garden crowns.
+                so.windowRadius = 1;
+                // Cranes, spires, masts and ship superstructure are the tall
+                // end of a CHM over a HARBOUR. On a fjord a 30 m peak is a
+                // spruce, so this cap belongs to the pack, not to the detector.
+                so.maxCanopyHeight = 28.f;
+                so.reject = [this, fpMask, deckMask](float x, float z) {
+                    if (fpMask && fpMask->inside(x, z)) return true;
+                    if (network_->pavedWeight(x, z, 1.0f) > 0.2f) return true;
+                    if (deckMask && deckMask->inside(x, z)) return true;
+                    return false;
+                };
+            }
             const auto sites = vegetation::detectTreeSites(pack_.canopy, pack_.grid, so);
             if (sites.empty()) return;
 
@@ -435,7 +758,7 @@ namespace threepp::terrain {
             canopyMat->translucency = 0.3f;
 
             vegetation::ForestLodOptions lo;
-            lo.cap = o.forestCap;
+            lo.cap = urbanPack ? o.urbanForestCap : o.forestCap;
             lo.cellSize = 128.f;
             lo.l0Distance = 300.f;
             lo.l1Distance = 800.f;
@@ -443,16 +766,162 @@ namespace threepp::terrain {
             lo.mesh.seaLevel = reg.seaLevel;
             lo.mesh.maxSlopeDeg = so.maxSlopeDeg;      // same gates as the sites,
             lo.mesh.minGroundHeight = so.minGroundHeight;// or the handoff grows new forest
+            if (urbanPack) {
+                // A town's tall trees are limes, maples, chestnuts and rowans,
+                // not Norway spruce: spruce needs BOTH height above sea and a
+                // stand around it. Aksla's plantation still gets conifers; the
+                // 16 m tree in a churchyard at 12 m becomes the broadleaf it
+                // is. Both terms are 0 on a fjord pack = the old rule.
+                lo.spruceMinElevation = 60.f;
+                lo.spruceMinStandHeight = 12.f;
+            }
 
-            auto forest = Group::create();
-            forest->name = "geo_canopy_forest";
-            // Bases come from the PROVIDER (relief + road carve + bathymetry
-            // included), not the raw DEM, or every trunk floats or sinks.
-            const auto st = vegetation::buildCanopyForestLod(*forest, sites, species, canopyMat,
-                                                            pack_.canopy, pack_.grid, prov_.height, lo);
-            stats_.forestSites = st.sites;
-            stats_.forestCells = st.cells;
-            add(forest);
+            if (!urbanPack) {
+                auto forest = Group::create();
+                forest->name = "geo_canopy_forest";
+                // Bases come from the PROVIDER (relief + road carve + bathymetry
+                // included), not the raw DEM, or every trunk floats or sinks.
+                const auto st = vegetation::buildCanopyForestLod(*forest, sites, species, canopyMat,
+                                                                 pack_.canopy, pack_.grid,
+                                                                 prov_.height, lo);
+                stats_.forestSites = st.sites;
+                stats_.forestCells = st.cells;
+                add(forest);
+                return;
+            }
+
+            // ── the town's forest is STREAMED ────────────────────────────────
+            // Pack-wide sites, but geometry only where the camera is. The cell
+            // is the unit of object count and the object count is the frame: a
+            // 2.5 km urban ROI built in one go is ~1500 cells and several
+            // thousand draws before a triangle is considered. Beyond the fine
+            // ring a whole 3x3 block collapses to one coarse cell — 9x fewer
+            // objects for crowns that are 2-4 px wide.
+            stats_.forestSites = static_cast<int>(sites.size());
+            lo.farCellSize = lo.cellSize * 3.f;
+
+            // Sites binned on the fine cell ONCE, so a cell build is a lookup
+            // and not a scan over the whole pack.
+            auto grid = std::make_shared<std::unordered_map<std::int64_t,
+                                                            std::vector<vegetation::TreeSite>>>();
+            const float gcs = lo.cellSize;
+            const auto gkey = [](int cx, int cz) {
+                return (static_cast<std::int64_t>(cx) << 32) ^ static_cast<std::uint32_t>(cz);
+            };
+            for (const auto& s : sites)
+                (*grid)[gkey(static_cast<int>(std::floor(s.x / gcs)),
+                             static_cast<int>(std::floor(s.z / gcs)))]
+                        .push_back(s);
+
+            auto speciesPtr = std::make_shared<std::array<vegetation::SpeciesVariants, 3>>(species);
+            auto heightFn = prov_.height;
+            auto builder = [this, grid, gkey, speciesPtr, canopyMat, heightFn, lo](
+                                   int level, int cx, int cz, float) -> std::shared_ptr<Object3D> {
+                std::vector<vegetation::TreeSite> sub;
+                const int span = level ? 3 : 1;
+                const int bx = level ? cx * 3 : cx, bz = level ? cz * 3 : cz;
+                for (int i = 0; i < span; ++i)
+                    for (int j = 0; j < span; ++j) {
+                        auto it = grid->find(gkey(bx + j, bz + i));
+                        if (it != grid->end())
+                            sub.insert(sub.end(), it->second.begin(), it->second.end());
+                    }
+                if (sub.empty()) return nullptr;
+                auto g = Group::create();
+                g->name = level ? "forest_coarse" : "forest_fine";
+                vegetation::ForestLodOptions co = lo;
+                co.coarseOnly = level != 0;
+                // Per-cell seed: the yaw stream restarts inside every build, so
+                // a shared seed gives every cell the same rotation sequence — a
+                // rhythm the eye finds on a hillside.
+                co.seed = lo.seed ^ (static_cast<unsigned int>(cx) * 73856093u) ^
+                          (static_cast<unsigned int>(cz) * 19349663u) ^
+                          (static_cast<unsigned int>(level) * 83492791u);
+                vegetation::buildCanopyForestLod(*g, sub, *speciesPtr, canopyMat, pack_.canopy,
+                                                 pack_.grid, heightFn, co);
+                return g;
+            };
+
+            CellStreamerOptions cso;
+            cso.fineCellSize = lo.cellSize;
+            cso.fineRadius = 800.f;
+            cso.coarseRadius = 1600.f;
+            cso.maxCellBuildsPerFrame = o.streamBudget;
+            forestStream_ = CellStreamer::create(builder, cso);
+            forestStream_->name = "geo_forest_stream";
+            add(forestStream_);
+            // The startup ring, in one go: a headless render or a --shot must
+            // not photograph a half-grown world before update() is ever called.
+            forestStream_->update(o.focus);
+            stats_.forestCells = forestStream_->stats().active;
+        }
+
+        // ── urban props: pier decks, parked cars, moored boats ───────────────
+        // Everything here is placed from the SURVEY, never scattered, and every
+        // placement passes the same gates the trees do (footprint, pavement,
+        // sea). The placement pass runs pack-wide — a lot 2 km away is still a
+        // lot — and only the car GEOMETRY is streamed: a placement is 32 bytes,
+        // the triangles for the same car are ~4 kB, and that ratio is the whole
+        // reason the two are separated. Decks and boats are not streamed at
+        // all; they are a few hundred objects for the whole pack and they are
+        // part of the LAND.
+        void buildUrbanLayer(const GeoSceneOptions& o, const GeoRegion& reg,
+                             const GeoTerrainOptions& gopt) {
+            // 1 m dilation only: a car parked hard against a wall is normal, a
+            // car INSIDE the wall is the failure this gate exists for.
+            const auto propFp = buildFootprintMask(pack_, 1.f, 2.f);
+            const auto propUrban = gopt.paintUrban ? buildUrbanMask(pack_, gopt) : nullptr;
+            // Mown ground. Footways, service roads and thin parking ribbons run
+            // straight through the town's parks, and a kerb car placed off one
+            // of them stands on the grass; 2 m of dilation covers the shoulder.
+            const auto propParks =
+                    buildLandUseMask(pack_, {"grass", "pitch", "playground", "cemetery"}, 2.f, 2.f);
+
+            UrbanPropsOptions po;
+            po.seaLevel = reg.seaLevel;
+            po.centerX = 0.f;// pack-wide placement; the streamer bounds the draws
+            po.centerZ = 0.f;
+            po.halfExtent = 1e9f;
+            po.cellSize = o.propsCellSize;
+            po.cars = o.cars;
+            po.boats = o.boats;
+            po.decks = o.decks;
+            po.carMaxSlope = o.carMaxSlope;
+            po.urban = propUrban.get();
+            po.footprints = propFp.get();
+            po.parks = propParks.get();
+            po.ground = prov_.height;
+
+            auto props = Group::create();
+            props->name = "geo_urban_props";
+            carField_ = std::make_shared<UrbanCarField>();
+            const auto ps = buildUrbanProps(*props, pack_, *network_, po, carField_.get());
+            add(props);
+            stats_.cars = carField_->count();
+            stats_.boats = ps.boats;
+            stats_.deckRuns = ps.deckLines;
+            stats_.carsRejectedSlope = ps.rejectSlope;
+
+            if (!o.cars) return;
+            auto carMat = makeUrbanCarMaterial();
+            CellStreamerOptions pso;
+            pso.fineCellSize = po.cellSize;
+            pso.fineRadius = o.propsExtent;
+            pso.coarseRadius = 0.f;// a car has no far tier: past the ring, nothing
+            pso.maxCellBuildsPerFrame = o.streamBudget;
+            auto carField = carField_;
+            carStream_ = CellStreamer::create(
+                    [carField, carMat](int, int cx, int cz, float) -> std::shared_ptr<Object3D> {
+                        const auto* cars = carField->at(cx, cz);
+                        if (!cars) return nullptr;
+                        return buildCarCellMesh(*cars, carMat,
+                                                "cars_" + std::to_string(cx) + "_" +
+                                                        std::to_string(cz));
+                    },
+                    pso);
+            carStream_->name = "geo_car_stream";
+            add(carStream_);
+            carStream_->update(o.focus);// the startup ring, like the forest's
         }
 
         // Order matters: pack_ and network_ are captured BY REFERENCE inside
@@ -464,6 +933,19 @@ namespace threepp::terrain {
         TerrainBandSet bandSet_;
         std::shared_ptr<TileTerrain> tiles_;
         std::shared_ptr<TerrainScatter> scatter_;
+        // Both streamers' builders capture `this` and read pack_ / prov_, so
+        // they must be destroyed BEFORE those — declaring them here, after the
+        // pack, is what guarantees it.
+        std::shared_ptr<CellStreamer> forestStream_;
+        std::shared_ptr<CellStreamer> carStream_;
+        std::shared_ptr<UrbanCarField> carField_;
+        // The ribbon chunk group and its per-chunk cull data. Raw Object3D* into
+        // roadChunks_->children is safe because the group is a member and is
+        // never rebuilt: the chunks are built once and only toggled.
+        std::shared_ptr<Group> roadChunks_;
+        std::vector<std::pair<Object3D*, Vector3>> chunkCenters_;
+        std::vector<float> chunkRadii_;
+        float ribbonDist_ = 600.f;
         Stats stats_;
     };
 

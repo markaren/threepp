@@ -201,6 +201,16 @@ OUT_DIR = cli_arg("--out-dir", ".", str)
 AA = cli_arg("--aa", 4, int)
 WARM = cli_arg("--warm", 60, int)
 NOSAN = "--no-sanitize" in sys.argv
+# The gravel bed's marching-cubes winding. wp.MarchingCubes winds INTO the
+# density; --mc-flip reverses it so the outside is front-facing and the shipped
+# -grad normals are already right. With it off the normals must go out negated
+# (sign -1) for the raster's double-sided flip to land them outward -- which
+# fixes the raster and nothing else: whatever traces the geometry (probe GI
+# reads the stored normal, the lidar the winding) still sees it inside-out. On
+# the spread the two render the same (at the renderer's noise floor); the flip
+# is the one that is right for every consumer.
+MC_FLIP = bool(cli_arg("--mc-flip", 1, int))
+MC_SIGN = 1.0 if MC_FLIP else -1.0
 LANE_COLOR = "--no-lane-color" not in sys.argv   # static colour under interop
 # The fourth lane. Opt-in: the MPM bed is a whole second solver in a frame that
 # already spends ~25 ms elsewhere. See "the gravel lane" below for the numbers.
@@ -1935,9 +1945,10 @@ class GravelBed:
     Surfacing is warp_mudsnow_mpm.py's route verbatim: density grid, marching
     cubes, then one expand that de-indexes the soup straight into the vertex
     buffers -- the renderer's own under --interop, a host staging pair
-    otherwise. `sign=-1.0` is not optional: wp.MarchingCubes winds the other
-    way round, and a Side.Double material's back-face flip would light outward
-    normals as pure black.
+    otherwise. It goes out with the winding reversed (MC_FLIP) -- not
+    optional: wp.MarchingCubes winds the other way round, and a Side.Double
+    material's back-face flip would otherwise light the outward normals as
+    pure black.
     """
 
     MAX_TRIS = cli_arg("--gravel-max-tris", 220_000, int)
@@ -2110,7 +2121,7 @@ class GravelBed:
         # watertight also makes it putty, and putty is the one thing crushed
         # stone must never look like: 0.8 of slope at 34/m is a 3 cm chip
         # breaking the specular up over every square metre of the spread.
-        self.surface.expand(ntris, pos, nrm, dim=dim, sign=-1.0,
+        self.surface.expand(ntris, pos, nrm, dim=dim, sign=MC_SIGN, flip_winding=MC_FLIP,
                             grain=0.80, grain_freq=34.0)
 
     def _on_frame(self):

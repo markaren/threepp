@@ -1498,9 +1498,13 @@ namespace threepp {
         //   Off — no extraction at all: raw env in every mip (legacy; the HDRI
         //     sun prefilters into blocky spec blobs), nothing injected.
         // Auto↔Always applies next frame; Off toggles force an env re-upload.
-        enum class EnvSunPolicy { Auto, Always, Off };
-        void setEnvSunPolicy(EnvSunPolicy policy);
-        [[nodiscard]] EnvSunPolicy envSunPolicy() const;
+        // The enum now lives on Renderer (the GL raster path implements the same
+        // policy); the alias keeps every `VulkanRenderer::EnvSunPolicy::…`
+        // spelling in the editor, the imgui settings panel, the bindings and the
+        // examples compiling unchanged.
+        using EnvSunPolicy = Renderer::EnvSunPolicy;
+        void setEnvSunPolicy(EnvSunPolicy policy) override;
+        [[nodiscard]] EnvSunPolicy envSunPolicy() const override;
 
         // Back-compat shim: true → Auto, false → Off.
         void setEnvSunExtraction(bool enabled);
@@ -1510,9 +1514,9 @@ namespace threepp {
         // TOWARD the sun and the disc's integrated energy Σ L·dΩ (linear RGB
         // irradiance). Use to ALIGN an explicit DirectionalLight with the HDRI
         // (e.g. so a raster renderer's shadow direction matches the sky).
-        [[nodiscard]] bool envSunFound() const;
-        [[nodiscard]] Vector3 envSunDirection() const;
-        [[nodiscard]] Vector3 envSunColor() const;
+        [[nodiscard]] bool envSunFound() const override;
+        [[nodiscard]] Vector3 envSunDirection() const override;
+        [[nodiscard]] Vector3 envSunColor() const override;
 
         // ── Automatic exposure (eye adaptation) ──────────────────────────────
         // When enabled the renderer samples the log2-luma histogram of the

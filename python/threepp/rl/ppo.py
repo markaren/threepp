@@ -280,30 +280,35 @@ class PPO:
             f_obs = b_obs.reshape(-1, *oshape); f_act = b_act.reshape(-1, A)
             f_logp = b_logp.reshape(-1); f_adv = adv.reshape(-1)
             n = f_obs.shape[0]
-            for _ in range(self.epochs):
-                idx = torch.randperm(n, device=dev)
-                kls = []
-                for s in range(0, n, self.mb):
-                    j = idx[s:s + self.mb]
-                    newlogp, ent, vnorm = self.ac.evaluate(f_obs[j], f_act[j])
-                    logratio = newlogp - f_logp[j]
-                    ratio = logratio.clamp(-20, 20).exp()
-                    pg = -torch.min(ratio * f_adv[j],
-                                    ratio.clamp(1 - self.clip, 1 + self.clip) * f_adv[j]).mean()
-                    v_clip = vold[j] + (vnorm - vold[j]).clamp(-self.clip, self.clip)
-                    vf = torch.max((vnorm - vtarg[j]).pow(2), (v_clip - vtarg[j]).pow(2)).mean()
-                    loss = pg + self.vfcoef * vf - self.entropy * ent.mean()
-                    if self.aux_loss is not None:                       # symmetry / BC anchor / etc.
-                        loss = loss + self.aux_loss(self.ac, f_obs[j])
-                    if not torch.isfinite(loss):
-                        continue
-                    self.opt.zero_grad(); loss.backward()
-                    torch.nn.utils.clip_grad_norm_(self.ac.parameters(), self.max_grad_norm)
-                    self.opt.step()
-                    kls.append(((ratio - 1) - logratio).detach().mean())   # Schulman low-var KL
-                # one host sync per epoch (not per minibatch) for the early-stop check
-                if self.target_kl is not None and kls and torch.stack(kls).mean().item() > self.target_kl:
-                    break
+            # The update needs autograd whatever the caller runs under: every
+            # trainer wraps its main() in @torch.no_grad() for the rollouts, and
+            # loss.backward() below raised 'does not require grad' inside it
+            # (found 2026-09-08 on the first IDUN run; reproduced on the laptop).
+            with torch.enable_grad():
+                for _ in range(self.epochs):
+                    idx = torch.randperm(n, device=dev)
+                    kls = []
+                    for s in range(0, n, self.mb):
+                        j = idx[s:s + self.mb]
+                        newlogp, ent, vnorm = self.ac.evaluate(f_obs[j], f_act[j])
+                        logratio = newlogp - f_logp[j]
+                        ratio = logratio.clamp(-20, 20).exp()
+                        pg = -torch.min(ratio * f_adv[j],
+                                        ratio.clamp(1 - self.clip, 1 + self.clip) * f_adv[j]).mean()
+                        v_clip = vold[j] + (vnorm - vold[j]).clamp(-self.clip, self.clip)
+                        vf = torch.max((vnorm - vtarg[j]).pow(2), (v_clip - vtarg[j]).pow(2)).mean()
+                        loss = pg + self.vfcoef * vf - self.entropy * ent.mean()
+                        if self.aux_loss is not None:                       # symmetry / BC anchor / etc.
+                            loss = loss + self.aux_loss(self.ac, f_obs[j])
+                        if not torch.isfinite(loss):
+                            continue
+                        self.opt.zero_grad(); loss.backward()
+                        torch.nn.utils.clip_grad_norm_(self.ac.parameters(), self.max_grad_norm)
+                        self.opt.step()
+                        kls.append(((ratio - 1) - logratio).detach().mean())   # Schulman low-var KL
+                    # one host sync per epoch (not per minibatch) for the early-stop check
+                    if self.target_kl is not None and kls and torch.stack(kls).mean().item() > self.target_kl:
+                        break
 
             if it % log_every == 0 or it == 1:
                 el = time.perf_counter() - t0

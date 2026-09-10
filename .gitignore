@@ -64,3 +64,5 @@ build_py.bat
 python/examples/crane_lift_runs/**/*.mp4
 python/examples/crane_lift_r*snapshot.py
 python/examples/crane_lift_runs/**/panels_*.npz
+#ignore video files, which are large and not needed in the repo
+*.mp4

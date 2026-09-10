@@ -109,6 +109,18 @@ struct TextureLoader::Impl {
                 texture = Texture::create(*image);
                 texture->name = path.stem().string();
                 texture->format = isJPEG ? Format::RGB : Format::RGBA;
+                // A three-byte-per-pixel image whose rows are not a multiple of
+                // four bytes long is misread by GL's default unpack alignment of
+                // 4: every row starts a byte or two early, the colour channels
+                // rotate down the image, and any local average comes out neutral.
+                // The large-scale pattern survives, so it does not look broken --
+                // it looks like a GREYSCALE version of the texture. Measured on a
+                // 1662-wide pool mosaic: rendered B/R 1.00 against the source's
+                // 1.56, while the same image at 1664 wide, or as a 4-channel PNG,
+                // was correct. DataTexture and FramebufferTexture already set 1.
+                if (texture->format == Format::RGB && (image->width() * 3u) % 4u != 0u) {
+                    texture->unpackAlignment = 1;
+                }
                 texture->colorSpace = colorSpace;
                 texture->needsUpdate();
             }
@@ -149,6 +161,11 @@ struct TextureLoader::Impl {
         auto texture = Texture::create(*image);
         texture->name = name;
         texture->format = isJPEG ? Format::RGB : Format::RGBA;
+        // Same unpack-alignment trap as the path overload above: three bytes per
+        // pixel and a width that is not a multiple of four loads as greyscale.
+        if (texture->format == Format::RGB && (image->width() * 3u) % 4u != 0u) {
+            texture->unpackAlignment = 1;
+        }
         texture->colorSpace = colorSpace;
         texture->needsUpdate();
 

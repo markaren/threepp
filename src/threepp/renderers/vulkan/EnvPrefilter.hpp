@@ -11,6 +11,7 @@
 #ifndef THREEPP_VULKAN_ENV_PREFILTER_HPP
 #define THREEPP_VULKAN_ENV_PREFILTER_HPP
 
+#include "threepp/renderers/common/EnvSunExtract.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
 #include <vulkan/vulkan.h>
@@ -36,15 +37,11 @@ namespace threepp::vulkan {
         EnvPrefilter(const EnvPrefilter&) = delete;
         EnvPrefilter& operator=(const EnvPrefilter&) = delete;
 
-        // Result of the optional HDRI sun extraction (see buildPmrem).
-        struct SunExtract {
-            bool  found            = false;
-            float dir[3]           = {0.f, 1.f, 0.f};// world dir TOWARD the sun (env mapping)
-            float colorE[3]        = {0.f, 0.f, 0.f};// disc irradiance E = Σ L·dΩ (RGB) — a
-                                                     // directional light of this color replaces
-                                                     // the disc's energy exactly
-            float angularRadiusDeg = 0.f;            // from the disc solid angle (Ω ≈ π·r²)
-        };
+        // Result of the optional HDRI sun extraction (see buildPmrem). The
+        // struct and the detector are backend-neutral and shared with the GL
+        // raster path; this alias keeps every `EnvPrefilter::SunExtract`
+        // spelling (and the vulkan Impl's envSun_ users) compiling.
+        using SunExtract = threepp::EnvSunExtract;
 
         // Allocate an env Image2D with a full GGX-prefiltered mip chain.
         // Uploads `pixels` (R32G32B32A32_SFLOAT equirect, `byteSize` bytes)

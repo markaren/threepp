@@ -239,6 +239,59 @@ namespace {
         }
     }
 
+    // Say so, once, when the context we just got draws on the CPU.
+    //
+    // This is not hypothetical and it is not cosmetic. A display-less Linux box
+    // with libOSMesa installed — which includes the compute nodes of at least
+    // one supercomputer — gives a headless GL canvas a context that comes up
+    // perfectly and rasterises in software. Every frame is correct, nothing
+    // fails, and a job renders on the CPU while holding a GPU nobody else can
+    // use. A line on stderr is the difference between noticing that in the
+    // first minute and noticing it in the invoice.
+    //
+    // THREEPP_REQUIRE_HARDWARE_GL=1 turns it into a throw, which is what a
+    // batch job wants: fail at once rather than produce a plausible film.
+    void warnIfSoftwareRenderer() {
+#ifndef __EMSCRIPTEN__
+        const auto* r = glGetString(GL_RENDERER);
+        if (!r) return;
+        const std::string renderer(reinterpret_cast<const char*>(r));
+
+        bool software = false;
+        for (const char* needle : {"llvmpipe", "lavapipe", "softpipe", "swrast",
+                                   "Software Rasterizer", "Mesa Offscreen"}) {
+            if (renderer.find(needle) != std::string::npos) software = true;
+        }
+        if (!software) return;
+
+        const char* strict = std::getenv("THREEPP_REQUIRE_HARDWARE_GL");
+        const std::string message =
+                "threepp: this OpenGL context is a SOFTWARE rasteriser (GL_RENDERER = \"" +
+                renderer +
+                "\"). Rendering will be correct and very slow, and on a GPU node it means the "
+                "GPU is idle. For a display-less machine use threepp::EglContext, which asks the "
+                "driver directly and refuses a software device by default.";
+
+        if (strict && std::string_view{strict} == "1") {
+            throw std::runtime_error(message + " (THREEPP_REQUIRE_HARDWARE_GL=1)");
+        }
+        std::cerr << message << std::endl;
+#endif
+    }
+
+    // True when GLFW is running on its Null platform, whose only OpenGL context
+    // is OSMesa's software rasteriser. That one fact changes which context
+    // hints are legal (see initWindow), so it is asked rather than assumed.
+    // glfwGetPlatform arrived with the platform selection in GLFW 3.4, so it is
+    // compiled out alongside the rest of that code.
+    bool onNullPlatform() {
+#if !defined(__EMSCRIPTEN__) && defined(GLFW_PLATFORM)
+        return glfwGetPlatform() == GLFW_PLATFORM_NULL;
+#else
+        return false;
+#endif
+    }
+
     // The primary monitor's current video mode, in screen coordinates — the
     // size a borderless-fullscreen window takes. Unlike monitor::monitorSize()
     // this takes no GLFW reference of its own (it assumes glfwInit has already
@@ -322,7 +375,18 @@ struct Canvas::Impl {
             glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
             glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
             glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-            glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+            // Forward-compatible is what macOS demands before it will hand out
+            // a 3.3 core context at all, and it costs nothing on WGL or GLX.
+            // OSMesa refuses it outright ("OSMesa: Forward-compatible contexts
+            // not supported", osmesa_context.c), and OSMesa is the only GL
+            // context the Null platform can create — so on a display-less
+            // machine this single hint failed EVERY headless GL canvas, with
+            // libOSMesa installed or not, behind the generic "glfwCreateWindow
+            // failed" below. Core profile and the 3.3 version do survive
+            // OSMesaCreateContextAttribs, so only this hint is dropped.
+            if (!onNullPlatform()) {
+                glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+            }
             glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
         }
         // Borderless windowed fullscreen: strip the decorations and pin the
@@ -372,7 +436,13 @@ struct Canvas::Impl {
 
         window = glfwCreateWindow(size_.width(), size_.height(), params_.title_.c_str(), nullptr, nullptr);
         if (!window) {
-            termGLfw();
+            // Deliberately NOT termGLfw() here. initWindow runs lazily, long
+            // after ~Impl has been armed, so the destructor releases the same
+            // reference on the way out — dropping it twice drove glfwRefCount
+            // to -1, and the NEXT canvas in the process then saw a non-zero
+            // count and skipped glfwInit entirely. That matters most in a
+            // long-lived host (the Python module) where one failed GL canvas
+            // silently broke every window created afterwards.
             throw std::runtime_error(
                     "Canvas: glfwCreateWindow failed for '" + params_.title_ + "' (requested " +
                     (api == GraphicsAPI::Vulkan ? "Vulkan" : "OpenGL") + ")");
@@ -448,7 +518,14 @@ struct Canvas::Impl {
             glfwMakeContextCurrent(window);
 
 #ifndef __EMSCRIPTEN__
-            loadGlad();
+            // Through GLFW's own getter, not GLAD's built-in one: this context
+            // was made by GLFW, so GLFW knows which API it came from and
+            // resolves against WGL, GLX, EGL or OSMesa accordingly. GLAD's
+            // gladLoadGL() instead dlopens libGL.so.1 and insists on
+            // glXGetProcAddressARB, which an OSMesa or EGL context does not
+            // feed — the second reason a display-less GL canvas could not work.
+            loadGlad(reinterpret_cast<GLADloadproc>(glfwGetProcAddress));
+            warnIfSoftwareRenderer();
             glfwSwapInterval(params_.vsync_ ? 1 : 0);
 
             if (params_.antialiasing_ > 0) {

@@ -761,11 +761,17 @@ namespace threepp::vulkan {
             vkGetPhysicalDeviceProperties2(physicalDevice_, &props2);
 
             // Probe for VK_KHR_ray_query — lets compute shaders trace inline
-            // rays (rayQueryEXT). Used by the raster-first deferred shading pass
-            // for hard shadow rays. Optional: ReferencePT doesn't need it, so a
-            // device that has the RT pipeline but not ray query still runs (the
-            // renderer falls RasterFirst back to ReferencePT). All current RT
-            // hardware exposes both.
+            // rays (rayQueryEXT). Every scene shading pass goes through it:
+            // deferred_shade.comp and its GI / reflection / water stages, the
+            // probe and froxel updates, RTAO, particle lighting. It used to be
+            // optional because ReferencePT could take over on a device with
+            // the RT pipeline but no ray query; that path tracer was deleted
+            // in June 2026, so such a device now has no pass that can light a
+            // frame — DeferredShade stays null and rewriteDeferredDescriptors
+            // dereferences it. Refuse here, with the reason. The device is
+            // real: NVIDIA's 575 driver on an H100 (IDUN, 2026-09-08) exposes
+            // all four KHR ray tracing extensions but not ray query. Datacenter
+            // parts have no RT cores.
             const auto pickedExtsRq = deviceExtensions(physicalDevice_);
             if (hasExtension(pickedExtsRq, VK_KHR_RAY_QUERY_EXTENSION_NAME)) {
                 VkPhysicalDeviceRayQueryFeaturesKHR rqFeat{};
@@ -778,6 +784,15 @@ namespace threepp::vulkan {
             }
             std::cerr << "[VulkanContext] ray query (VK_KHR_ray_query): "
                       << (rayQuerySupported_ ? "enabled" : "unavailable") << "\n";
+            if (!rayQuerySupported_) {
+                VkPhysicalDeviceProperties props{};
+                vkGetPhysicalDeviceProperties(physicalDevice_, &props);
+                throw std::runtime_error(
+                        std::string("[VulkanContext] ") + props.deviceName +
+                        " exposes the KHR ray tracing pipeline but not VK_KHR_ray_query. "
+                        "The Vulkan backend shades through inline ray queries and has no "
+                        "other lighting path, so it cannot render on this device.");
+            }
         }
 
         // Probe for exportable external memory (the platform handle extension;

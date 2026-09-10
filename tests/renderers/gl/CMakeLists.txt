@@ -33,6 +33,7 @@ if (THREEPP_WITH_GLFW)
 
     add_gl_render_test(GLRenderer_test)
     add_gl_render_test(GLFurnace_test)
+    add_gl_render_test(GLEnvSun_test)
     add_gl_render_test(GLShadowMap_test)
     add_gl_render_test(GLBackgroundOrtho_test)
     add_gl_render_test(GLSensorScan_test)

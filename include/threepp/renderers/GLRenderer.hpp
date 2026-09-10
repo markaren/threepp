@@ -36,6 +36,14 @@ namespace threepp {
         /// constructor when using Canvas, as it handles lazy window init.
         explicit GLRenderer(Canvas& canvas, const Parameters& parameters = {});
 
+        /// Size-only constructor, for a GL context this renderer does not own
+        /// and a Canvas cannot provide: an EglContext on a display-less node
+        /// (see canvas/EglContext.hpp), or a context some host application has
+        /// already made current. The context MUST be current on this thread
+        /// before the call — nothing here creates one. Rendering targets a
+        /// framebuffer object, so no swapchain and no window is involved.
+        explicit GLRenderer(std::pair<int, int> size, const Parameters& parameters = {});
+
         GLRenderer(GLRenderer&&) = delete;
         GLRenderer(const GLRenderer&) = delete;
         GLRenderer& operator=(const GLRenderer&) = delete;
@@ -88,6 +96,19 @@ namespace threepp {
         [[nodiscard]] std::vector<unsigned char> readRGBPixels() override;
 
         void dispose() override;
+
+        // --- HDRI sun (one-sun policy; see Renderer::EnvSunPolicy) ---
+        //
+        // The GL PMREM keeps the sun disc in strip 0 only and prefilters the
+        // glossy/rough strips from a sun-clamped copy, then this renderer pushes
+        // one shadowless DirectionalLight carrying the removed energy. Auto
+        // stands down when the scene pushed a visible DirectionalLight of its
+        // own, so the artist's sun keeps the shadow and the env stays sky-only.
+        void setEnvSunPolicy(EnvSunPolicy policy) override;
+        [[nodiscard]] EnvSunPolicy envSunPolicy() const override;
+        [[nodiscard]] bool envSunFound() const override;
+        [[nodiscard]] Vector3 envSunDirection() const override;
+        [[nodiscard]] Vector3 envSunColor() const override;
 
         // --- Additional GLRenderer-specific methods ---
 

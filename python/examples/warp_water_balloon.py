@@ -60,6 +60,15 @@ SLOWMO = cli_arg("--slowmo", 0.08, float)           # sim seconds per playback s
 FRAMES = cli_arg("--frames", 0, int)               # window: run N frames, print timing, exit
 HEADLESS = SHOT or VIDEO > 0.0
 W, H = parse_size(cli_arg("--size", "1280x720", str))
+# Reverse the marching-cubes winding so the water's visible surface is
+# FRONT-facing (see DensitySurface.expand). Wound inside-out, every fragment
+# you can see is a back face, the double-sided flip turns its normal away from
+# the camera, NdotV clamps to 0 and the glass path's Fresnel goes to 1: the
+# water renders as a chrome mirror with no transmission at all. The shipped
+# -grad normals agree with the corrected winding, so the sign stays 1.0.
+# (sign -1 without the flip also rescues THIS path, because shadeGlass
+# face-forwards its exit normal; the water path warp_fluid takes does not.)
+MC_FLIP = bool(cli_arg("--mc-flip", 1, int))
 FPS = 60
 
 if HEADLESS:
@@ -844,7 +853,7 @@ def refresh_geometry():
     # water
     ntris = build_surface()
     if ntris > 0:
-        surface.expand(ntris, stage_pos, stage_nrm)
+        surface.expand(ntris, stage_pos, stage_nrm, flip_winding=MC_FLIP)
         rows = ntris * 3
         wp.copy(host_pos, stage_pos, count=rows)
         wp.copy(host_nrm, stage_nrm, count=rows)
