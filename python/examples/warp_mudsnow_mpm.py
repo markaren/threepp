@@ -23,10 +23,10 @@ same three kernels and only their constitutive model differs.
 Both pits surface through their own particles -> density grid -> marching cubes
 (warp_common.DensitySurface) into two triangle-soup meshes. Positions AND the
 smooth density-gradient normals go straight into the renderer's own vertex
-buffers over CUDA/OpenGL interop -- nothing crosses host memory. The normals are
-published winding-aligned (expand's sign=-1.0): wp.MarchingCubes winds opposite
-the outward gradient, so the double-sided back-face flip would light outward
-normals as pure black.
+buffers over CUDA/OpenGL interop -- nothing crosses host memory. The triangles
+are published with their winding reversed (expand's flip_winding):
+wp.MarchingCubes winds opposite the outward gradient, so the double-sided
+back-face flip would otherwise light the outward normals as pure black.
 
     pip install warp-lang
     python warp_mudsnow_mpm.py                 # window; drag to orbit, Esc quits
@@ -74,6 +74,16 @@ WIDTH, HEIGHT = parse_size(cli_arg("--size", "1600x900", str))
 # Surfacing is ~a fifth of the frame; --surface-every 2 halves it at the cost of
 # a one-frame-stale mesh on odd frames.
 SURFACE_EVERY = cli_arg("--surface-every", 1, int)
+# Marching-cubes winding. wp.MarchingCubes winds INTO the density; --mc-flip
+# reverses it so the outside is front-facing and the shipped -grad normals are
+# already right. With it off the normals must go out negated (sign -1) for the
+# raster's double-sided flip to land them outward -- which fixes the raster and
+# nothing else: whatever traces the geometry (probe GI reads the stored normal,
+# the lidar the winding) still sees it inside-out. In this scene the two render
+# the same (GL byte-identical, Vulkan at its noise floor); the flip is the one
+# that is right for every consumer.
+MC_FLIP = bool(cli_arg("--mc-flip", 1, int))
+MC_SIGN = 1.0 if MC_FLIP else -1.0
 
 # --- the yard -----------------------------------------------------------------
 # Long in x, two lanes in z with a curb between them. Everything below is in
@@ -562,12 +572,12 @@ class Pit:
 
         The expand kernel writes positions and normals through the renderer's
         buffers (GL: interop-mapped VBOs here; Vulkan: the imported exports,
-        from the in-render callback), nothing via the host. sign=-1.0 is the
+        from the in-render callback), nothing via the host. MC_FLIP is the
         winding: marching cubes emits these triangles wound the other way
         round, and a double-sided material flips the shading normal on the
-        face the camera actually sees, so the attribute has to arrive
-        pre-flipped or every lit surface reads inside-out (pure black under
-        this scene's lights).
+        face the camera actually sees, so the soup has to go out re-wound or
+        every lit surface reads inside-out (pure black under this scene's
+        lights).
         """
         if self.vk is not None:
             # Zero copy: nothing to push. _vk_on_frame() expands from inside
@@ -590,7 +600,7 @@ class Pit:
         if self.ntris > 0:
             dp = self.reg[0].map(dtype=wp.vec3, shape=(MAX_TRIS * 3,))
             dn = self.reg[1].map(dtype=wp.vec3, shape=(MAX_TRIS * 3,))
-            self.surface.expand(self.ntris, dp, dn, sign=-1.0,
+            self.surface.expand(self.ntris, dp, dn, sign=MC_SIGN, flip_winding=MC_FLIP,
                                 grain=self.grain, grain_freq=self.grain_freq)
             self.reg[0].unmap()
             self.reg[1].unmap()
@@ -608,7 +618,8 @@ class Pit:
             if _stage is None:
                 _stage = (wp.zeros(MAX_TRIS * 3, dtype=wp.vec3, device=device),
                           wp.zeros(MAX_TRIS * 3, dtype=wp.vec3, device=device))
-            self.surface.expand(self.ntris, _stage[0], _stage[1], sign=-1.0,
+            self.surface.expand(self.ntris, _stage[0], _stage[1], sign=MC_SIGN,
+                                flip_winding=MC_FLIP,
                                 grain=self.grain, grain_freq=self.grain_freq)
             rows = 3 * self.ntris
             self.geometry.update_attribute("position", _stage[0][:rows].numpy())
@@ -622,7 +633,7 @@ class Pit:
         sequencing the CUDA write against the Vulkan frame that reads it."""
         if self.vk_ntris > 0:
             self.surface.expand(self.vk_ntris, self.vk[0].array, self.vk[1].array,
-                                sign=-1.0, grain=self.grain,
+                                sign=MC_SIGN, flip_winding=MC_FLIP, grain=self.grain,
                                 grain_freq=self.grain_freq)
         wp.synchronize_device(device)
 

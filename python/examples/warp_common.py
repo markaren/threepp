@@ -759,17 +759,20 @@ class DensitySurface:
         return self.mc.indices.shape[0] // 3
 
     def expand(self, ntris, out_pos, out_nrm, dim=None, sign=1.0,
-               flip_winding=False, grain=0.0, grain_freq=30.0):
+               flip_winding=True, grain=0.0, grain_freq=30.0):
         """De-index `ntris` triangles into out_pos/out_nrm. `dim` overrides the
         launch size to also collapse the rows past ntris.
 
-        `sign` multiplies the gradient normal. The default ships outward
-        (-grad) normals -- but wp.MarchingCubes winds its triangles the OTHER
-        way, so a Side.Double material's back-face flip (normal *= faceDirection,
-        both GL and Vulkan) turns them inward on every fragment seen from
-        outside, which lights the surface as pure black. A double-sided lit
-        consumer wants sign=-1.0: winding-aligned normals that the rasterizer's
-        flip lands outward.
+        `flip_winding` (on by default) reverses the winding wp.MarchingCubes
+        emits, which runs INTO the density, so the outside is front-facing and
+        the outward (-grad) normals shipped with `sign` 1.0 agree with it. Leave
+        both at their defaults. Wound the library's way, a Side.Double
+        material's back-face flip (normal *= faceDirection, both GL and Vulkan)
+        turns the normal away from the camera on every fragment seen from
+        outside: diffuse goes black and transmissive glass becomes a mirror.
+        sign=-1.0 with the flip off fixes the raster only -- whatever traces
+        the geometry (the Vulkan water chord, probe GI, a lidar) still reads it
+        inside-out.
 
         `grain` > 0 bends two octaves of world-space Perlin noise into the
         normal (amplitude `grain`, base feature size ~1/`grain_freq` metres).
