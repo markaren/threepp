@@ -455,5 +455,12 @@ frame 4 too and also needed ReSTIR, but the reset did not remove that one and it
 lit pixel by 1 ulp, so the two are not shown to be the same defect.
 
 Round 12: the protocol of round 10 on the frozen script with the reset, `round12_protocol/`.
-Launched 2026-09-10 in the evening on the RTX 4070 (driver 595.97), the GPU otherwise unshared;
-the result is appended when the 21 runs are in.
+Run 2026-09-10 21:51 to 2026-09-11 00:05 on the RTX 4070 (driver 595.97), commit ded788e4, the GPU
+otherwise unshared, 5.9 to 9.5 min per run: the eleven seed-0 processes (the ten and the film run,
+which also wrote the panels dump) agree on all fifteen rows over 3,900 frames, and on every frame of
+the rendered frame and the tip view. The trajectory is not round 10's: the fan seeds its sub-beam
+jitter from the renderer's sample index (`pc.rngSeed = sampleIndex`), which the reset restarts, so the
+loop follows a different sample sequence from the first scan after the capture starts (log row 38);
+the vessel and IMU rows equal round 10's to the bit. Seed 0 lands 15 mm from the mark (20 mm in round
+10), the control 686 mm; seeds 1 to 9 deviate from seed 0 by 3 mm RMS and 30 mm at most over the
+whole run (`analyze.py`). The paper's numbers are re-derived from this directory.
