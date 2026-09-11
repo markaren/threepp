@@ -1,0 +1,21 @@
+{
+ "tag": "perc0.02_s2",
+ "condition": "perc0.02",
+ "trainer_flags": "--perceive --perceive-noise 0.02",
+ "seed": 2,
+ "envs": 2048,
+ "iters": 3000,
+ "score_envs": 512,
+ "checkpoint": "spot_steps.pt",
+ "train_exit": 0,
+ "timed_out": false,
+ "train_seconds": 3417,
+ "score_seconds": 129,
+ "score_exit": 0,
+ "throughput": "58.0k steps/s",
+ "last_train_log": "        track_lin +2.731  track_ang +1.433  alive +0.050  roll -0.001  vz -0.003  angrate -0.030  scrape -0.000  arate -0.000  imit -0.072  fell -0.000 | track 1.863 | flat 1.874 | level 5.00/5 | clear 1.00 | fell 0.000",
+ "git": "9c8f368e",
+ "dirty_files": 5,
+ "node": "idun-01-03",
+ "slurm_job": "25351977_13"
+}

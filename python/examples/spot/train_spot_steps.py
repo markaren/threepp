@@ -33,7 +33,7 @@ from _common import (warmstart_scratch_to_terrain, sanity_walk, stochastic_flat_
 
 @torch.no_grad()
 def score_checkpoint(policy_path, k=512, device="cuda", steps=900, warm=200, height_source=None,
-                     perceive=None, seed=0):
+                     perceive=None, seed=0, perceive_noise=None, start_level=None, push_vel=0.0):
     """Deterministic track/flat/fell + the curriculum LEVEL it climbs to (how tall a riser it handles).
     The env starts every stair env at level 0 and promotes as the policy clears tents.
 
@@ -56,21 +56,39 @@ def score_checkpoint(policy_path, k=512, device="cuda", steps=900, warm=200, hei
           + ("" if (src == trained_on and see == saw) else
              f"  (MISMATCH: trained on {trained_on}, "
              f"{'perceived' if saw else 'privileged'} scan)"))
+    # Score-time map error: the checkpoint's own unless overridden (the robustness sweep scores one
+    # policy at several noise levels it was never trained at).
+    noise = float(meta.get("perceive_noise", 0.0)) if perceive_noise is None else float(perceive_noise)
     env = SpotStepsEnv(num_envs=k, device=device, height_source=None if see else src,
-                       perceive=see, perceive_noise=float(meta.get("perceive_noise", 0.0)))
+                       perceive=see, perceive_noise=noise, seed=seed, push_vel=push_vel)
+    if start_level is not None:
+        # The default scoring starts every lane at level 0 and climbs about one level in 900 steps,
+        # which never reaches the risers a converged policy was trained on: every checkpoint reads
+        # ~1.9 track / 0 falls. Pinning the START level puts the whole window on the hard stairs;
+        # demotion on a fall still applies, so `level` and `clear` become the discriminating numbers.
+        env.level.fill_(int(start_level))
+        print(f"start level {int(start_level)} (~{RISERS[int(start_level)]:.02f} m risers)"
+              + (f", shoves up to {push_vel} m/s" if push_vel > 0 else ""))
     pol = (lambda o: ac.act_mean(norm.norm(o))) if norm is not None else ac.act_mean
     obs = env.reset()
-    trk, flt, fl = [], [], []
+    trk, flt, fl, clr = [], [], [], []
     for t in range(steps):
         obs, _, _, _, _ = env.step(pol(obs))
         if t >= warm:
             trk.append(env.last_track); flt.append(env.last_flat_track); fl.append(env.last_fell)
+            clr.append(env.last_clear)
     m = lambda a: sum(a) / max(1, len(a))
     lvl = env.last_level
     riser = RISERS[min(int(round(lvl)), N_LEVELS - 1)]
     print(f"[score] {os.path.basename(policy_path)}  (deterministic, K={k}, {steps - warm} steps)")
     print(f"        track {m(trk):.3f}/2.0   flat {m(flt):.3f}/2.0   fell/step {m(fl):.4f}   "
-          f"curriculum level {lvl:.2f}/{N_LEVELS - 1}  (~{riser:.02f} m risers)")
+          f"curriculum level {lvl:.2f}/{N_LEVELS - 1}  (~{riser:.02f} m risers)   clear {m(clr):.3f}")
+    score_checkpoint.last = {"track": m(trk), "flat": m(flt), "fell": m(fl), "level": float(lvl),
+                             "clear": m(clr), "start_level": start_level, "push_vel": push_vel,
+                             "score_source": src, "score_perceive": bool(see), "score_noise": noise,
+                             "score_envs": k, "score_seed": seed,
+                             "trained_source": trained_on, "trained_perceive": saw,
+                             "trained_noise": float(meta.get("perceive_noise", 0.0))}
     return m(trk), m(flt), m(fl), lvl
 
 
@@ -140,19 +158,42 @@ def main():
                     help="score against this height source instead of the one the checkpoint was "
                          "trained on — the deliberate mismatch experiment (how much does the "
                          "difference between the two oracles cost a trained policy?)")
+    ap.add_argument("--score-noise", dest="score_noise", type=float, default=None,
+                    help="score with this elevation-map error (m) instead of the checkpoint's own; "
+                         "implies --score-perceive on")
+    ap.add_argument("--score-level", dest="score_level", type=int, default=None,
+                    help=f"start every lane at this curriculum level (0..{N_LEVELS - 1}) instead of "
+                         "climbing from 0 — the only way a 900-step score reaches the tall risers")
+    ap.add_argument("--score-push", dest="score_push", type=float, default=0.0,
+                    help="random shoves (m/s) during scoring, as --push-vel does in training")
+    ap.add_argument("--score-json", dest="score_json", default="",
+                    help="append the score as one JSON line to this file (the seed-array matrix)")
+    ap.add_argument("--seed", type=int, default=0,
+                    help="torch + env seed for training and scoring. Nothing in a run is seeded "
+                         "otherwise, so two runs of one config differ by the command sampler alone.")
     args = ap.parse_args()
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); sys.exit(0)
     if args.score:
+        see = None if not args.score_perceive else args.score_perceive == "on"
+        if args.score_noise is not None:
+            see = True
         score_checkpoint(args.score, k=args.score_envs,
                          height_source=args.score_source or None,
-                         perceive=None if not args.score_perceive else args.score_perceive == "on")
+                         perceive=see, seed=args.seed, perceive_noise=args.score_noise,
+                         start_level=args.score_level, push_vel=args.score_push)
+        if args.score_json:
+            import json
+            rec = {"checkpoint": os.path.basename(args.score), **score_checkpoint.last}
+            with open(args.score_json, "a") as f:
+                f.write(json.dumps(rec) + "\n")
         return
     if args.eval:
         eval_flat_steering(SpotStepsEnv, args.eval, k=args.score_envs,
                            height_source=True, seed=0); return
 
-    env = SpotStepsEnv(num_envs=args.envs, device="cuda", perceive=args.perceive,
+    torch.manual_seed(args.seed)
+    env = SpotStepsEnv(num_envs=args.envs, device="cuda", seed=args.seed, perceive=args.perceive,
                        perceive_noise=args.perceive_noise, graph=args.graph,
                        cadence_jitter=args.cadence_jitter,
                        push_vel=args.push_vel, push_prob=args.push_prob,
@@ -174,7 +215,7 @@ def main():
                     # so whether it came off the old heightfield -> stairs chain or straight off the
                     # scratch gait is not recoverable from the file — only guessable from its date.
                     "warmstart": os.path.basename(args.warmstart) if args.warmstart else "",
-                    "iters": args.iters, "envs": args.envs,
+                    "iters": args.iters, "envs": args.envs, "seed": args.seed,
                     "cadence_jitter": args.cadence_jitter,
                     "imit_anneal": args.imit_anneal,
                     "push_vel": args.push_vel, "push_prob": args.push_prob}, aux_loss=aux)

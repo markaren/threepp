@@ -250,3 +250,12 @@ under the robot, which it has already walked over, while the forward cells it ac
 94–98% directly visible. That is a quantitative version of what the viewers report qualitatively,
 and it is specific to this camera and this terrain: a lower mount, a narrower FOV, taller obstacles
 or real overhangs would all move it, and `spot_occlusion.py` is how you would find out.
+
+## Does the terrain source matter? A 25-run seed array
+
+Trained five conditions (analytic oracle, raycast oracle, camera-limited scan at 0 / 2 / 5 cm map
+error) x five seeds on the Idun H100 cluster, 3000 iterations each, and scored every checkpoint on
+a base and a hard matrix. All 25 converge to the same stairs competence; the raycast-trained
+policies track ~0.8% better on easy ground and training with map error buys robustness to map
+error. Tables, tests and per-run records: `results/spot_seed_array_2026_09/README.md`; the sweep
+itself is `scripts/idun/spot_array.slurm` + `spot_rescore.slurm` driving `score_matrix.py`.
