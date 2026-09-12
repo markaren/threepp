@@ -170,13 +170,20 @@ namespace threepp {
     // world's scene. world.step() drives the bound visual meshes.
     class Articulation {
     public:
-        Articulation(PhysxWorld& world, bool fixedBase, int solverPositionIters, bool disableSelfCollision)
+        // driveLimitsAreForces: PhysX treats a joint drive's maxForce as an IMPULSE per
+        // substep unless PxArticulationFlag::eDRIVE_LIMITS_ARE_FORCES is set, so a
+        // "115 N·m" cap on a 5 ms substep is really 23 kN·m. Default false keeps every
+        // existing checkpoint's plant unchanged; flip it at construction (before the
+        // articulation is in the scene) to make the cap a torque.
+        Articulation(PhysxWorld& world, bool fixedBase, int solverPositionIters, bool disableSelfCollision,
+                     bool driveLimitsAreForces = false)
             : world_(world) {
             using namespace ::physx;
             art_ = world_.physics().createArticulationReducedCoordinate();
             if (!art_) throw std::runtime_error("createArticulationReducedCoordinate failed");
             art_->setArticulationFlag(PxArticulationFlag::eFIX_BASE, fixedBase);
             if (disableSelfCollision) art_->setArticulationFlag(PxArticulationFlag::eDISABLE_SELF_COLLISION, true);
+            if (driveLimitsAreForces) art_->setArticulationFlag(PxArticulationFlag::eDRIVE_LIMITS_ARE_FORCES, true);
             if (solverPositionIters > 0) art_->setSolverIterationCounts(static_cast<PxU32>(solverPositionIters), 1);
         }
         ~Articulation() {
@@ -371,6 +378,17 @@ namespace threepp {
         [[nodiscard]] ::physx::PxArticulationReducedCoordinate* rawArt() const { return art_; }
         [[nodiscard]] bool finalized() const { return finalized_; }
         [[nodiscard]] std::size_t numDof() const { return joints_.size(); }
+
+        // Whether joint-drive maxForce is enforced as a force/torque (true) or as a
+        // per-substep impulse (false, PhysX's default). Read from the PhysX flag so a
+        // manifest records what actually ran; settable only before finalize().
+        [[nodiscard]] bool driveLimitsAreForces() const {
+            return static_cast<bool>(art_->getArticulationFlags() & ::physx::PxArticulationFlag::eDRIVE_LIMITS_ARE_FORCES);
+        }
+        void setDriveLimitsAreForces(bool on) {
+            if (finalized_) throw std::runtime_error("Articulation.drive_limits_are_forces: set it before finalize() (the articulation is already in the scene)");
+            art_->setArticulationFlag(::physx::PxArticulationFlag::eDRIVE_LIMITS_ARE_FORCES, on);
+        }
 
         // Batched joint I/O — one call reads/writes every revolute joint (in
         // add_link order). This is the hot path for vectorized RL: in the binding

@@ -50,6 +50,7 @@ namespace threepp {
         float maxForce = 1e6f;
         bool selfCollision = false;
         int solverPositionIterations = 12;
+        bool driveLimitsAreForces = false;  // enforce maxForce as a torque, not a per-substep impulse (see Articulation)
         bool renderVisuals = true;          // parent each link's <visual> under its collider so it renders as real meshes
         // Uniform length scale for the whole robot — a URDF drawn in millimetres
         // in a metre world is 0.001. Folded into the description before a single
@@ -196,7 +197,8 @@ namespace threepp {
         // Units, before anything is built from the description.
         scaleArticulationDesc(desc, opts.scale);
 
-        auto art = std::make_unique<Articulation>(world, opts.fixedBase, opts.solverPositionIterations, !opts.selfCollision);
+        auto art = std::make_unique<Articulation>(world, opts.fixedBase, opts.solverPositionIterations, !opts.selfCollision,
+                                                  opts.driveLimitsAreForces);
 
         const std::size_t n = desc.links.size();
         std::vector<Matrix4> worldT(n);                  // each link's world transform at the zero config

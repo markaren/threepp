@@ -8,7 +8,7 @@ import numpy.typing
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'FBXLoader', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'ParticleField', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'Ray', 'RayHit', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'SkeletonHelper', 'SoftBody', 'SogLoader', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
+__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'FBXLoader', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_EGL', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'ParticleField', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'Ray', 'RayHit', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'SkeletonHelper', 'SoftBody', 'SogLoader', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
 class AmbientLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
@@ -199,6 +199,14 @@ class Articulation:
         """
         Set all joint positions (DOF order) and zero velocities — e.g. place a cart-pole hanging straight down for a swing-up demo.
         """
+    @property
+    def drive_limits_are_forces(self) -> bool:
+        """
+        Whether every joint drive's max_force is enforced as a torque (True) or as a per-substep IMPULSE (False, PhysX's default: a 115 N·m cap on a 5 ms substep is really 23 kN·m). Read it into manifests; set it only before finalize().
+        """
+    @drive_limits_are_forces.setter
+    def drive_limits_are_forces(self, arg1: bool) -> None:
+        ...
     @property
     def link_names(self) -> list[str]:
         """
@@ -1892,6 +1900,70 @@ class EXRLoader:
         """
         Load an OpenEXR .exr equirectangular environment as a float Texture.
         """
+class EglContext:
+    @staticmethod
+    def available() -> bool:
+        """
+        True when libEGL loaded and reports at least one device.
+        """
+    @staticmethod
+    def device_count() -> int:
+        """
+        How many devices eglQueryDevicesEXT reports; 0 if EGL is unusable.
+        """
+    def __init__(self, width: typing.SupportsInt | typing.SupportsIndex = 1, height: typing.SupportsInt | typing.SupportsIndex = 1, device: typing.SupportsInt | typing.SupportsIndex = -1, require_hardware: bool = True, surfaceless: bool = False) -> None:
+        """
+        A hardware OpenGL context with no window system: no X server, no Wayland, no display of any kind. This is how a compute node renders.
+        
+        SIZE IT: with no render target bound the renderer draws into, and reads back from, framebuffer 0 - which here is the pbuffer. width/height must be at least the renderer's size, or readback returns undefined bytes silently. GLRenderer(context, w, h) checks this for you.
+        
+        require_hardware=True (the default) refuses a context whose renderer is a software rasteriser, because a job that renders on llvmpipe succeeds, looks correct, and wastes the whole GPU allocation.
+        
+        One context per process: GLAD's function pointers are process-wide.
+        """
+    def make_current(self) -> None:
+        """
+        Rebind to the calling thread (and re-bind desktop GL, which is per-thread).
+        """
+    @property
+    def cuda_device_index(self) -> int:
+        """
+        CUDA ordinal of the bound GPU, or -1. EGL and CUDA device order are different enumerations - on a multi-GPU node this is how a render is matched to the GPU a tensor lives on.
+        """
+    @property
+    def device_index(self) -> int:
+        ...
+    @property
+    def drawable_height(self) -> int:
+        ...
+    @property
+    def drawable_width(self) -> int:
+        ...
+    @property
+    def egl_vendor(self) -> str:
+        ...
+    @property
+    def egl_version(self) -> str:
+        ...
+    @property
+    def hardware_accelerated(self) -> bool:
+        ...
+    @property
+    def platform(self) -> str:
+        """
+        'device' or 'surfaceless'
+        """
+    @property
+    def renderer(self) -> str:
+        """
+        GL_RENDERER - e.g. 'NVIDIA H100 80GB HBM3/PCIe/SSE2'
+        """
+    @property
+    def vendor(self) -> str:
+        ...
+    @property
+    def version(self) -> str:
+        ...
 class ErosionType:
     """
     Members:
@@ -2676,8 +2748,19 @@ class GLRenderer:
     shadow_map_enabled: bool
     sort_objects: bool
     tone_mapping: ToneMapping
+    @typing.overload
     def __init__(self, canvas: Canvas) -> None:
         ...
+    @typing.overload
+    def __init__(self, context: EglContext, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Render with no window, against a hardware EGL context.
+        
+            ctx = tp.EglContext(1920, 1080)
+            renderer = tp.GLRenderer(ctx, 1920, 1080)
+        
+        Raises ValueError if the context's drawable is smaller than the renderer, which would otherwise corrupt readback silently.
+        """
     def clear(self, color: bool = True, depth: bool = True, stencil: bool = True) -> None:
         ...
     def gl_buffer_id(self, geometry: BufferGeometry, attribute: str) -> typing.Any:
@@ -2792,9 +2875,9 @@ class Gait:
     def value(self) -> int:
         ...
 class GeoScene(Group):
-    def __init__(self, pack_dir: str, bands: bool = True, cliff_shell: bool = True, forest: bool = True, forest_extent: typing.SupportsFloat | typing.SupportsIndex = 1100.0, forest_focus: typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(3)"] = [0.0, 0.0, 0.0], forest_cap: typing.SupportsInt | typing.SupportsIndex = 40000, scatter: bool = True, shell_level_step: typing.SupportsFloat | typing.SupportsIndex = 2.0, shell_extent: typing.SupportsFloat | typing.SupportsIndex = 1200.0, bathymetry: bool = True, shore_slope: typing.SupportsFloat | typing.SupportsIndex = 0.3499999940395355, max_depth: typing.SupportsFloat | typing.SupportsIndex = 180.0, seed: typing.SupportsInt | typing.SupportsIndex = 4242) -> None:
+    def __init__(self, pack_dir: str, bands: bool = True, cliff_shell: bool = True, forest: bool = True, forest_extent: typing.SupportsFloat | typing.SupportsIndex = 1100.0, forest_focus: typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(3)"] = [0.0, 0.0, 0.0], forest_cap: typing.SupportsInt | typing.SupportsIndex = 40000, scatter: bool = True, shell_level_step: typing.SupportsFloat | typing.SupportsIndex = 2.0, shell_extent: typing.SupportsFloat | typing.SupportsIndex = 1200.0, bathymetry: bool = True, shore_slope: typing.SupportsFloat | typing.SupportsIndex = 0.3499999940395355, max_depth: typing.SupportsFloat | typing.SupportsIndex = 180.0, seed: typing.SupportsInt | typing.SupportsIndex = 4242, buildings: bool = True, pitched_roofs: bool = True, measured_roofs: bool = True, urban_props: bool = True, cars: bool = True, boats: bool = True, decks: bool = True, props_cell_size: typing.SupportsFloat | typing.SupportsIndex = 250.0, props_extent: typing.SupportsFloat | typing.SupportsIndex = 1500.0, stream_budget: typing.SupportsInt | typing.SupportsIndex = 2, forest_dilate: typing.SupportsFloat | typing.SupportsIndex = 4.0, urban_forest_cap: typing.SupportsInt | typing.SupportsIndex = 80000, car_max_slope: typing.SupportsFloat | typing.SupportsIndex = 28.0, road_ribbon: bool = True, ribbon_distance: typing.SupportsFloat | typing.SupportsIndex = 600.0, land_use_paint: bool = True, quay_apron: bool = True) -> None:
         """
-        Load a geodata region pack and build the whole terrain scene. Raises RuntimeError if the pack directory is missing or malformed.
+        Load a geodata region pack and build the whole terrain scene. Raises RuntimeError if the pack directory is missing or malformed. `car_max_slope` (degrees) refuses a parked car on ground steeper than this: OSM parking polygons are drawn in plan view and some are draped over a mountainside. `road_ribbon` adds bridge decks plus near-field road geometry with crisp edges and lane markings, distance-culled at `ribbon_distance` metres — past that the asphalt painted into the terrain is the road. `land_use_paint` paints the surveyed town surfacing (parking, grass, pitches, quay concrete) into the splat. `quay_apron` raises the reclaimed harbour front out of the water before the bathymetry runs: a Kartverket DTM stores reclaimed land at exactly sea level (93.8% of ground inside the Alesund pack's pier polygons reads 0.00 m), so without it the sink excavates the quay into the seabed and the harbour buildings stand with their walls in the fjord.
         """
     def height_at(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> float:
         """
@@ -2826,7 +2909,7 @@ class GeoScene(Group):
     @property
     def stats(self) -> dict:
         """
-        dict: tiles, baking, shell_tris, forest_sites, forest_cells, load_seconds.
+        dict: tiles, baking, shell_tris, forest_sites, forest_cells, load_seconds, buildings, building_tris, cars, car_cells_live, boats, deck_runs, cars_rejected_slope, road_chunks, road_chunks_live, apron_cells. `cars` is the pack-wide placement count; `car_cells_live` is what is streamed in around the last update() position. Likewise `road_chunks` is every near-field ribbon chunk built pack-wide and `road_chunks_live` the ones inside ribbon_distance of that position.
         """
 class GrassMesh(Mesh):
     wind_dir: Vector2
@@ -6433,9 +6516,9 @@ class PhysxWorld:
         """
         Add every Mesh under `root` as its own static trimesh collider — e.g. turn an imported glTF environment straight into collision geometry. Returns a list.
         """
-    def create_articulation(self, fixed_base: bool = False, solver_position_iterations: typing.SupportsInt | typing.SupportsIndex = 8, disable_self_collision: bool = False) -> Articulation:
+    def create_articulation(self, fixed_base: bool = False, solver_position_iterations: typing.SupportsInt | typing.SupportsIndex = 8, disable_self_collision: bool = False, drive_limits_are_forces: bool = False) -> Articulation:
         """
-        Create a reduced-coordinate articulation (robot). fixed_base pins the root to the world (use for arms; leave false for free-floating bodies like a walking robot). Add links, then call finalize().
+        Create a reduced-coordinate articulation (robot). fixed_base pins the root to the world (use for arms; leave false for free-floating bodies like a walking robot). drive_limits_are_forces makes every joint's max_force a torque cap instead of PhysX's per-substep impulse cap (default False keeps existing checkpoints' plant unchanged). Add links, then call finalize().
         """
     def create_material(self, static_friction: typing.SupportsFloat | typing.SupportsIndex = 0.5, dynamic_friction: typing.SupportsFloat | typing.SupportsIndex = 0.5, restitution: typing.SupportsFloat | typing.SupportsIndex = 0.0, friction_combine: str = 'average', restitution_combine: str = 'average') -> PhysxMaterial:
         """
@@ -6445,7 +6528,7 @@ class PhysxWorld:
         """
         Create a deformable-volume material (Young's modulus Pa, Poisson's ratio, surface friction). Requires gpu_dynamics=True. Create ONE and share it across every add_soft_body that uses the same flesh — each call allocates a PxMaterial that lives until the world dies.
         """
-    def load_articulation(self, path: str, fixed_base: bool = False, base_position: typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(3)"] = [0.0, 0.0, 0.0], default_density: typing.SupportsFloat | typing.SupportsIndex = 1000.0, stiffness: typing.SupportsFloat | typing.SupportsIndex = 0.0, damping: typing.SupportsFloat | typing.SupportsIndex = 0.0, max_force: typing.SupportsFloat | typing.SupportsIndex = 1000000.0, self_collision: bool = False, solver_position_iterations: typing.SupportsInt | typing.SupportsIndex = 12, render_visuals: bool = True, scale: typing.SupportsFloat | typing.SupportsIndex = 1.0, args: collections.abc.Mapping[str, str] = {}) -> tuple[Articulation, list[Mesh], list[str]]:
+    def load_articulation(self, path: str, fixed_base: bool = False, base_position: typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(3)"] = [0.0, 0.0, 0.0], default_density: typing.SupportsFloat | typing.SupportsIndex = 1000.0, stiffness: typing.SupportsFloat | typing.SupportsIndex = 0.0, damping: typing.SupportsFloat | typing.SupportsIndex = 0.0, max_force: typing.SupportsFloat | typing.SupportsIndex = 1000000.0, self_collision: bool = False, solver_position_iterations: typing.SupportsInt | typing.SupportsIndex = 12, render_visuals: bool = True, scale: typing.SupportsFloat | typing.SupportsIndex = 1.0, args: collections.abc.Mapping[str, str] = {}, drive_limits_are_forces: bool = False) -> tuple[Articulation, list[Mesh], list[str]]:
         """
         Import a URDF/xacro as a finalized Articulation (one shared parser with the C++ URDFLoader — xacro supported). Returns (articulation, meshes, joint_names): the collider meshes are bound to the sim (add them to a scene to render), joint_names lists the actuated joints in drive-target order. Per-link handles are on the articulation itself: articulation.link('tool_link_name') resolves every URDF link name to its ArticulationLink (for add_force on a tool link, per-link poses...). Collision is primitive/bbox, mass from <inertial> (else default_density x volume); fixed joints are collapsed. stiffness/damping/max_force set a PD drive on every joint. scale reinterprets the file's length units (a millimetre URDF in a metre world is 0.001) - shapes, joint frames and prismatic limits are built scaled, masses stay as authored, and a prismatic DOF then reads and drives in the SCALED units. `args` are xacro argument overrides, the same name:=value pairs the xacro CLI takes - a parameterised description built without them expands to the FILE's defaults, which for many robots names config paths that do not exist.
         """
@@ -9733,6 +9816,10 @@ def data_texture(data: typing.Annotated[numpy.typing.ArrayLike, numpy.uint8], sr
     """
 def deg_to_rad(degrees: typing.SupportsFloat | typing.SupportsIndex) -> float:
     ...
+def egl_available() -> bool:
+    """
+    True when a display-less hardware GL context can be made here: libEGL loaded and at least one device reported. Use it to choose between EglContext and a Canvas.
+    """
 def euclidean_modulo(n: typing.SupportsFloat | typing.SupportsIndex, m: typing.SupportsFloat | typing.SupportsIndex) -> float:
     ...
 def float_texture(data: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> Texture:
@@ -9871,6 +9958,7 @@ Follower: BirdRole  # value = <BirdRole.Follower: 0>
 Frond: LeafStyle  # value = <LeafStyle.Frond: 4>
 Furrowed: BarkStyle  # value = <BarkStyle.Furrowed: 0>
 HAS_AUDIO: bool = True
+HAS_EGL: bool = False
 HAS_IMGUI: bool = True
 HAS_PHYSX: bool = True
 HAS_VULKAN: bool = True

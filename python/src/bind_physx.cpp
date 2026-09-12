@@ -344,6 +344,11 @@ namespace threepp_py {
                      "domain randomization; default uses the world's shared material. Returns an ArticulationLink.")
                 .def("finalize", &Articulation::finalize,
                      "Add the finished articulation to the scene. No links may be added afterwards.")
+                .def_property("drive_limits_are_forces", &Articulation::driveLimitsAreForces,
+                              &Articulation::setDriveLimitsAreForces,
+                              "Whether every joint drive's max_force is enforced as a torque (True) or as a "
+                              "per-substep IMPULSE (False, PhysX's default: a 115 N·m cap on a 5 ms substep "
+                              "is really 23 kN·m). Read it into manifests; set it only before finalize().")
                 .def("reset", &Articulation::reset, py::arg("position"), py::arg("quaternion") = Quaternion(),
                      "Episode reset: teleport the root to `position` with optional `quaternion` orientation "
                      "(default upright/identity), zero velocity, and zero all joint positions/velocities.")
@@ -1013,21 +1018,27 @@ namespace threepp_py {
                                        "Accumulated fixed-substep simulation time (s) — the clock stamped "
                                        "onto sensor samples.")
                 .def("create_articulation",
-                     [](PhysxWorld& w, bool fixed_base, int solver_position_iterations, bool disable_self_collision) {
-                         return std::make_unique<Articulation>(w, fixed_base, solver_position_iterations, disable_self_collision);
+                     [](PhysxWorld& w, bool fixed_base, int solver_position_iterations, bool disable_self_collision,
+                        bool drive_limits_are_forces) {
+                         return std::make_unique<Articulation>(w, fixed_base, solver_position_iterations,
+                                                               disable_self_collision, drive_limits_are_forces);
                      },
                      py::arg("fixed_base") = false, py::arg("solver_position_iterations") = 8,
-                     py::arg("disable_self_collision") = false, py::keep_alive<0, 1>(),
+                     py::arg("disable_self_collision") = false, py::arg("drive_limits_are_forces") = false,
+                     py::keep_alive<0, 1>(),
                      "Create a reduced-coordinate articulation (robot). fixed_base pins the root to the "
                      "world (use for arms; leave false for free-floating bodies like a walking robot). "
+                     "drive_limits_are_forces makes every joint's max_force a torque cap instead of PhysX's "
+                     "per-substep impulse cap (default False keeps existing checkpoints' plant unchanged). "
                      "Add links, then call finalize().")
                 .def("load_articulation",
                      [](PhysxWorld& w, const std::string& path, bool fixed_base,
                         const std::array<float, 3>& base_position, float default_density,
                         float stiffness, float damping, float max_force, bool self_collision,
                         int solver_position_iterations, bool render_visuals, float scale,
-                        const std::map<std::string, std::string>& args) {
+                        const std::map<std::string, std::string>& args, bool drive_limits_are_forces) {
                          URDFArticulationOptions opts;
+                         opts.driveLimitsAreForces = drive_limits_are_forces;
                          opts.args = args;
                          opts.fixedBase = fixed_base;
                          opts.basePosition = Vector3(base_position[0], base_position[1], base_position[2]);
@@ -1057,6 +1068,7 @@ namespace threepp_py {
                      py::arg("solver_position_iterations") = 12, py::arg("render_visuals") = true,
                      py::arg("scale") = 1.f,
                      py::arg("args") = std::map<std::string, std::string>{},
+                     py::arg("drive_limits_are_forces") = false,
                      // No keep_alive: the result is a tuple (can't be a weakref nurse). The returned
                      // articulation holds a PhysxWorld& — the caller must keep the world alive (urdf.py does).
                      "Import a URDF/xacro as a finalized Articulation (one shared parser with the C++ "
