@@ -34,7 +34,9 @@ GRAV = np.array([0.0, 0.0, -1.0])
 def v2_obs(art, last_act, cmd, ahead, h_here, phi):
     """96-d SpotStepsEnv obs: [proprio(48)|clock(2)|base_above(1)|scan(45)].
     `ahead` (45) + `h_here` come from EITHER the depth sensor or the oracle.
-    `phi` is the current phase scalar ∈ [0,1)."""
+    `phi` is the current phase scalar ∈ [0,1), or None for the stand-mode sentinel: a checkpoint trained with
+    stand_mode (meta 'stand_mode') was shown a (0,0) clock whenever its command was exactly (0,0,0), and the
+    caller then also holds phi where it is (SpotStepsEnv.on_step)."""
     rs, rv = art.root_state(), art.root_velocity()
     R = _quat_to_R(rs[3:7]); Rt = R.T
     lin_b, ang_b, proj_g = Rt @ rv[0:3], Rt @ rv[3:6], Rt @ GRAV
@@ -42,7 +44,7 @@ def v2_obs(art, last_act, cmd, ahead, h_here, phi):
     jv_isaac = art.joint_velocities()[isaac_to_add]
     qpos = jp_isaac - default_q
     z = float(rs[2])
-    clk = [math.sin(2 * math.pi * phi), math.cos(2 * math.pi * phi)]
+    clk = [0.0, 0.0] if phi is None else [math.sin(2 * math.pi * phi), math.cos(2 * math.pi * phi)]
     return np.concatenate([lin_b, ang_b, proj_g, cmd, qpos, jv_isaac, last_act,
                            clk, [z - h_here], ahead]).astype(np.float32)
 

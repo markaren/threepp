@@ -21,6 +21,12 @@ foot friction and payload, and device-side episode counters (episode_stats) that
 stability / validity instrument (spot_feet.py), a scan-offset counterfactual on the observation, and per-lane
 slope families (planar up / down / cross ramps from spot_slopes.py, with their own spawn and settle-health gate).
 
+Training course (opt-in, course=True; spot_course.py, 2026-09-13): contiguous lane blocks of flat / stairs / hills /
+cross-tilted bands / rough ground, six curriculum levels per family, per-family promotion, the IK stance and a held
+settle on every hills / cross / rough spawn (partial resets included), and the ingredients the course trains with, each
+behind its own switch: interval shoves on a device-side dv ramp, stand mode (a zero command freezes the clock and shows
+the policy a (0,0) clock), a foot-placement reward on stair treads, and an explicit terrain material for friction DR.
+
 New obs layout: [0:48] proprio | [48:50] clock | [50:51] base_above | [51:96] scan (45)  =  OBS_DIM=96.
 First 50 dims byte-identical to scratch_flat → warm-start copies cols [0:50], terrain cols zero-init.
 Anchor = scratch_flat_best.pt (50-d, norm-aware); stiff gains (90) on both training and deploy robots.
@@ -50,6 +56,7 @@ from scratch_clock import CLOCK0, CLOCK_DIM, GAIT_PERIOD, advance, clock_obs, re
 from scratch_env import STIFF_GAINS
 import spot_feet as sf
 import spot_slopes as ss
+import spot_course as sc
 
 OBS_DIM = 48 + CLOCK_DIM + 1 + N_SCAN   # = 96: [proprio(48)|clock(2)|base_above(1)|scan(45)]
 
@@ -107,7 +114,20 @@ STAT_KEYS = ("episodes", "timeouts", "terminations", "term_tilt", "term_low",
              "pushes", "pushed_episodes", "falls_after_push", "falls_pushed_episode", "out_of_lane")
 _LOC_EDGES = (0.0, N_UP * STEP_RUN, N_UP * STEP_RUN + LAND, TENT_LEN, TENT_LEN + RUNOUT)
 # lane_family names -> the spot_slopes family each builds. Stair and flat lanes build no slope geometry.
-LANE_FAMILIES = {"stairs": "flat", "flat": "flat", "slope_up": "up", "slope_down": "down", "cross": "cross"}
+LANE_FAMILIES = {"stairs": "flat", "flat": "flat", "slope_up": "up", "slope_down": "down", "cross": "cross",
+                 "hills": "flat", "cross_bands": "flat", "rough": "flat"}     # the last three are spot_course lanes
+assert sc.SPAWN_OFF == SPAWN_OFF, "spot_course.SPAWN_OFF has drifted from spot_steps_env.SPAWN_OFF"
+# Foot placement reward (w_place > 0): per touchdown on a stair tread, min(d_edge, PLACE_SAT) / PLACE_SAT, and
+# -PLACE_PERCH for a touchdown perched on a nosing (spot_feet.PERCH_RISE). 0.10 m is two thirds of the way to a 0.30 m
+# tread's centre: past it every placement is as good as any other, so the reward cannot pull feet onto the centre line.
+PLACE_SAT = 0.10
+PLACE_PERCH = 1.0
+# Stand mode (stand_mode=True): a stand env pays W_STAND * mean(joint_vel^2) per step, the cheap form of the stand-motion
+# penalty in plans/spot-frontier.md "Standing still". Measured 2026-09-13 (course smoke, K=256, 1200 steps, raycast_s4
+# parent act_mean, stand mode on): mean joint_vel^2 over 23k stand env-steps 1.22 rad^2/s^2 against 4.1-4.2 reward per
+# step, so 0.25 charges the parent's in-place motion ~0.31 per step (~7%).
+W_STAND = 0.25
+SPAWN_HOLD = 10      # control ticks a course IK spawn holds its joints at the start of every episode (= TD_ARM_TICKS)
 
 CONFIG = {"control_hz": CONTROL_HZ, "dt": DT, "substeps": SUBSTEPS, "spacing": SPACING,
           "terrain": "steps", "risers": list(RISERS), "n_up": N_UP, "step_run": STEP_RUN,
@@ -147,11 +167,13 @@ def _per_env(v, k, dtype, name):
     return a.copy()
 
 
-def _add_steps(world, k, spacing, is_stairs, risers_np, w=HALF_W_BOX, bands=None):
+def _add_steps(world, k, spacing, is_stairs, risers_np, w=HALF_W_BOX, bands=None, material=None):
     """Per STAIR lane: the band ladder — for each level j a tent at riser risers_np[j], placed at band
     j's x-offset (flat approach in front, run-out behind). Solid boxes from the ground up to each tread
     top. `bands` [k], when given, builds only that one band per lane: an eval world with frozen levels,
-    where each lane meets one tent and then flat ground, as the top rung always has."""
+    where each lane meets one tent and then flat ground, as the top rung always has. `material` (a
+    world.create_material object) is an added contact; None makes exactly the historical call."""
+    add = world.add_static if material is None else (lambda m: world.add_static(m, material))
     for i in range(k):
         if not bool(is_stairs[i]):
             continue
@@ -163,18 +185,18 @@ def _add_steps(world, k, spacing, is_stairs, risers_np, w=HALF_W_BOX, bands=None
                 h = (s + 1) * r
                 b = tp.Mesh(tp.BoxGeometry(STEP_RUN, w, h), tp.MeshStandardMaterial())
                 b.position.set(x0 + s * STEP_RUN + STEP_RUN * 0.5, y, h * 0.5)
-                world.add_static(b)
+                add(b)
             up_end = x0 + N_UP * STEP_RUN
             top = N_UP * r
             lb = tp.Mesh(tp.BoxGeometry(LAND, w, top), tp.MeshStandardMaterial())   # landing
             lb.position.set(up_end + LAND * 0.5, y, top * 0.5)
-            world.add_static(lb)
+            add(lb)
             land_end = up_end + LAND
             for s in range(N_UP - 1):                              # descend: tread s top at (n-1-s)*r
                 h = (N_UP - 1 - s) * r
                 b = tp.Mesh(tp.BoxGeometry(STEP_RUN, w, h), tp.MeshStandardMaterial())
                 b.position.set(land_end + s * STEP_RUN + STEP_RUN * 0.5, y, h * 0.5)
-                world.add_static(b)
+                add(b)
 
 
 class SpotStepsEnv(VecTask):
@@ -194,7 +216,10 @@ class SpotStepsEnv(VecTask):
                  push_lanes=None, push_window=100, foot_mu=None, foot_combine="min",
                  payload_kg=None, block_id=None, count_episodes=None, drive_limits_are_forces=False,
                  read_links=False, termination="legacy", instrument=False, scan_offset=None,
-                 lane_family=None, slope_deg=None, slope_material=None, slope_cross_mode="corrugate"):
+                 lane_family=None, slope_deg=None, slope_material=None, slope_cross_mode="corrugate",
+                 course=False, course_shares=None, rough_backend="trimesh", spawn_hold=SPAWN_HOLD,
+                 terrain_material=None, push_interval=(3.0, 8.0), push_dv_min=0.3, push_max=0.5,
+                 stand_mode=False, w_stand=W_STAND, w_place=0.0):
         """Everything after push_prob is opt-in, and its default reproduces the training world:
 
         risers         per-level riser ladder (None = RISERS). More levels also lengthen the ground
@@ -254,7 +279,39 @@ class SpotStepsEnv(VecTask):
                        run of cross lanes at one angle ONE plane, every lane pulling toward -y. Measured 2026-09-12
                        (spot_steps.pt, K=256): on corrugated lanes every cross episode ends in the gutter, 1.29-1.41 m
                        toward gravity at 5, 10, 15, 20 and 25 deg alike, so drift and sliding are capped there.
+        course         True: the training course (spot_course.py). The lanes are laid out as contiguous family blocks
+                       by `course_shares` (replaces lane_family / lane_types / flat_only), height_source defaults to
+                       'raycast' (required), block_id defaults to the family code (episode_stats rows per family), and
+                       the curriculum is per family: stairs as today; hills / cross / rough promote on walking their
+                       band's feature (spot_course.FEATURE_DIST) and demote on a fall short of it or a timeout under
+                       spot_course.DEMOTE_PROGRESS of the commanded forward distance. Every non-flat lane gets the stair
+                       lanes' commands (forward drive, a forced forward command at spawn) and, by default, the shoves.
+                       lane_family 'hills' | 'cross_bands' | 'rough' builds the same lanes without course=True (score_e0
+                       cells: with single_band each lane builds only its level's band).
+        course_shares  dict or 'flat=0.15,stairs=0.35,...' (spot_course.DEFAULT_SHARES).
+        rough_backend  'trimesh' (one cooked trimesh per rough lane; the BVH is that very Mesh) or 'heightfield'.
+        spawn_hold     control ticks a hills / cross / rough spawn holds its IK joints at the start of EVERY episode, so a
+                       partial reset (which has no settle) gets one too; the policy's action is overridden for those
+                       rows and ticks, last_act says what the drives held, and settle health is checked at the end of
+                       the window (episode_stats()['rows'][i]['spawn']['hold_*']).
+        terrain_material  None | a world.create_material 5-tuple for the ground, the tents and the hills / cross boxes (the
+                       rough colliders cannot take one from Python). Friction DR is this plus per-env foot_mu.
+        push_mode 'interval' (course training): per env a countdown drawn U(push_interval) s; when it runs out a shove of
+                       dv ~ U(push_dv_min, push_max) m/s, uniform horizontal direction, on push_lanes (default: every
+                       non-flat lane) and the countdown is redrawn. push_max is a device scalar the trainer ramps
+                       (set_push_max), so the value is never baked into anything.
+        stand_mode     a command of exactly (0,0,0) freezes the gait clock, shows the policy a (0,0) clock (a value
+                       sin/cos never takes), zeroes its imitation weight and charges w_stand * mean(joint_vel^2).
+                       The deploy side must send the same sentinel (_common.v2_obs(phi=None)).
+        w_place        > 0: the foot-placement reward on stair treads (PLACE_SAT, PLACE_PERCH), from the instrument's
+                       touchdowns; needs termination='honest' or instrument=True. Logged as reward term 'place'.
         """
+        if course:
+            if lane_family is not None or lane_types is not None or flat_only:
+                raise ValueError("course=True lays out its own lanes: pass none of lane_family, lane_types, flat_only")
+            lane_family = sc.lane_families(num_envs, course_shares)
+            if height_source is None:
+                height_source = "raycast"
         if height_source is None:              # perception needs the BVH, so it implies the raycast
             height_source = "raycast" if perceive else "analytic"
         if height_source not in ("analytic", "raycast"):
@@ -266,6 +323,7 @@ class SpotStepsEnv(VecTask):
         self.rays = None                       # set below when height_source == "raycast"
         self.percept = None                    # set below when perceive
         slope_code = None                      # [K] spot_slopes family per lane, when any lane is a slope lane
+        course_code = None                     # [K] spot_course family per lane, when any lane is a course terrain lane
         if lane_family is not None:
             if lane_types is not None or flat_only:
                 raise ValueError("pass one of lane_family, lane_types or flat_only")
@@ -288,6 +346,14 @@ class SpotStepsEnv(VecTask):
                 if graph:
                     raise ValueError("slope lanes need the raycast, whose Warp launches do not replay from a CUDA "
                                      "graph (results/spot_seed_array_2026_09/README.md:72-73)")
+            cc = sc.family_codes(fam)
+            if course or np.isin(cc, sc.IK_SPAWN).any():
+                course_code = cc
+                if np.isin(cc, sc.IK_SPAWN).any():
+                    if height_source != "raycast":
+                        raise ValueError("hills / cross_bands / rough lanes need height_source='raycast'")
+                    if perceive or graph:
+                        raise ValueError("course terrain lanes need the eager raycast: no perceive, no graph")
         elif lane_types is not None:
             if flat_only:
                 raise ValueError("pass lane_types or flat_only, not both")
@@ -335,6 +401,17 @@ class SpotStepsEnv(VecTask):
             ext = slope_lanes.ground_x_extent()      # the up approaches and down run-outs stand on the shared ground
             if ext is not None and (ext[0] < self.ground_extent[0] or ext[1] > self.ground_extent[1]):
                 raise ValueError(f"slope lanes need ground over x {ext}, the ground box covers {self.ground_extent}")
+        # Course terrain lanes (opt-in): the ground grows to the top band's spawn plus a whole episode at VX_HI, as a
+        # longer riser ladder does (hills bands are 7.9 m, so the top one ends 15 m past the stair strip).
+        self._course = course_lanes = None
+        if course_code is not None and np.isin(course_code, sc.IK_SPAWN).any():
+            course_lanes = self._course = sc.CourseLanes(course_code, SPACING, bands=bands, seed=seed,
+                                                         rough_backend=rough_backend)
+            x_hi = max(self.ground_extent[1], course_lanes.spawn_x_max() + STEPS_EPISODE_S * VX_HI + 2.0)
+            x_lo = min(self.ground_extent[0], -10.0)
+            ground_len, ground_cx = x_hi - x_lo, 0.5 * (x_lo + x_hi)
+            self.ground_extent = (x_lo, x_hi)
+        terrain_mat = []                                   # the explicit terrain material, kept alive with the env
         mu_np = None if foot_mu is None else _per_env(foot_mu, num_envs, np.float64, "foot_mu")
         pay_np = None if payload_kg is None else _per_env(payload_kg, num_envs, np.float64, "payload_kg")
         self.drive_limits_are_forces = dlf = bool(drive_limits_are_forces)
@@ -364,15 +441,29 @@ class SpotStepsEnv(VecTask):
                 from threepp.rl.raycast import CollectedWorld
                 world = CollectedWorld(world)
                 collector.append(world)
-            _flat_ground(world, num_envs, SPACING, length=ground_len, x_center=ground_cx)
-            _add_steps(world, num_envs, SPACING, is_stairs_np, risers_np, bands=bands)
+            if terrain_material is None:
+                _flat_ground(world, num_envs, SPACING, length=ground_len, x_center=ground_cx)
+                mat = None
+            else:
+                mat = world.create_material(*terrain_material)
+                terrain_mat.append(mat)
+                g = tp.Mesh(tp.BoxGeometry(ground_len, SPACING * num_envs + 20, 1.0), tp.MeshStandardMaterial())
+                g.position.set(float(ground_cx), SPACING * (num_envs - 1) * 0.5, -0.5)    # = _flat_ground's box
+                world.add_static(g, mat)
+            _add_steps(world, num_envs, SPACING, is_stairs_np, risers_np, bands=bands, material=mat)
             if slope_lanes is not None:
                 slope_lanes.build(world, slope_material)    # materials stay alive on slope_lanes
+            if course_lanes is not None:
+                course_lanes.build(world, material=mat, x_end=self.ground_extent[1],
+                                   bvh_sink=world.meshes if height_source == "raycast" else None)
 
         super().__init__(num_envs, lambda world, i: _SpotStepsRobot(world, i),
                          gravity=(0.0, 0.0, -9.81), spacing=SPACING, device=device, seed=seed,
-                         read_root=True, read_links=bool(read_links) or self._feet_on or slope_lanes is not None,
+                         read_root=True, read_links=(bool(read_links) or self._feet_on or slope_lanes is not None
+                                                     or course_lanes is not None),
                          build_world=_build, graph=graph)
+        self._terrain_mat = terrain_mat
+        self.terrain_material = terrain_material
         if height_source == "raycast":
             from threepp.rl.raycast import TerrainRays
             self.rays = TerrainRays.from_objects(collector[0].meshes, device=self.device, up="z")
@@ -385,6 +476,23 @@ class SpotStepsEnv(VecTask):
         self.grav = torch.tensor([0.0, 0.0, -1.0], device=dev)
         self.risers = torch.from_numpy(risers_np).to(dev)                 # [N_LEVELS]
         self.is_stairs = torch.from_numpy(is_stairs_np).to(dev)           # [K] bool
+        # The lanes that get the stair lanes' commands (forward drive, a forced forward command at spawn), are shoved by
+        # default and are NOT the steering-replay set the flat gate reads. The stair lanes themselves, unless a course
+        # lane exists, when it is every lane that is not flat. The same tensor object by default, so nothing changes.
+        self._cc = self._clear_k = self._band_len_k = self._ep_cmd = None
+        self._terrain_lane = self.is_stairs
+        if course_code is not None:
+            self._cc = torch.from_numpy(course_code).to(dev)
+            self._terrain_lane = self._cc != sc.FLAT
+            bl = np.where(course_code == sc.STAIRS, BAND_LEN, 0.0)
+            fd = np.full(num_envs, CLEAR_DIST)                             # flat lanes: the virtual tent, as today
+            if self._course is not None:
+                bl = np.where(np.isin(course_code, sc.IK_SPAWN), self._course.band_len(), bl)
+                fd = np.where(np.isin(course_code, sc.IK_SPAWN), self._course.feature_dist(), fd)
+            self._band_len_k = torch.from_numpy(bl).float().to(dev)
+            self._clear_k = torch.from_numpy(fd).float().to(dev)          # [K] per-lane 'crossed' distance
+            self._ep_cmd = self.env_state(())                             # commanded forward distance this episode
+            self._moves = torch.zeros(len(sc.FAMILIES), 3, dtype=torch.float64, device=dev)  # episodes, up, down
         self.gx, self.gy = scan_offsets(dev)                              # [N_SCAN] heading-relative grid offsets
         # Anchor = the clock-aware base gait (50-d, normalize_obs=True); frozen throughout.
         _scratch = os.path.join(_HERE, "scratch_distillation", "scratch_flat_best.pt")
@@ -424,10 +532,10 @@ class SpotStepsEnv(VecTask):
         self.push_vel = float(push_vel)
         self.push_prob = float(push_prob)
         self._push_buf = torch.zeros(num_envs, self.sim.batch.max_links, 3, device=dev)
-        if push_mode not in ("random", "once_on_tent"):
-            raise ValueError(f"push_mode must be 'random' or 'once_on_tent', got {push_mode!r}")
+        if push_mode not in ("random", "once_on_tent", "interval"):
+            raise ValueError(f"push_mode must be 'random', 'once_on_tent' or 'interval', got {push_mode!r}")
         self.push_mode = push_mode
-        self.push_lanes = (self.is_stairs.clone() if push_lanes is None else
+        self.push_lanes = (self._terrain_lane.clone() if push_lanes is None else
                            torch.from_numpy(_per_env(push_lanes, num_envs, bool, "push_lanes")).to(dev))
         self.push_window = int(push_window)
         # dv -> force needs the mass the base presents; a payload rides on the base, so it adds to it
@@ -441,6 +549,16 @@ class SpotStepsEnv(VecTask):
             # commands the sampler happened to draw before it
             self._push_g = torch.Generator(device=dev).manual_seed(int(seed) + 7919)
             self.push_trig_x = self.env_state(())
+        if push_mode == "interval":
+            # E1's interval shove curriculum (plans/spot-frontier.md): the countdown and the dv draw on their own stream,
+            # push_max on the device so the trainer's ramp is read, not baked in
+            lo, hi = (float(v) for v in push_interval)
+            if not 0.0 < lo <= hi:
+                raise ValueError(f"push_interval must be 0 < lo <= hi seconds, got {push_interval}")
+            self.push_interval, self.push_dv_min = (lo, hi), float(push_dv_min)
+            self._push_g = torch.Generator(device=dev).manual_seed(int(seed) + 7919)
+            self._push_max = torch.full((), float(push_max), device=dev)
+            self._push_cd = self.env_state((), init=0, dtype=torch.long)    # control ticks to the next shove
         # per-episode shove bookkeeping (both modes): how many landed, and the step of the last one
         self.n_push = self.env_state((), init=0, dtype=torch.long)
         self.push_step = self.env_state((), init=-1, dtype=torch.long)
@@ -462,6 +580,9 @@ class SpotStepsEnv(VecTask):
         # exists inside the step region — terminated() copies it into this persistent buffer so a
         # replayed graph writes the same address the counters later read.
         self._term_tilt = torch.zeros(num_envs, dtype=torch.bool, device=dev)
+        if block_id is None and course:
+            block_id = course_code                          # one counter row per family (block names: sc.FAMILIES)
+        self.block_names = list(sc.FAMILIES) if (course and block_id is course_code) else None
         self.block_id = (torch.zeros(num_envs, dtype=torch.long, device=dev) if block_id is None else
                          torch.from_numpy(_per_env(block_id, num_envs, np.int64, "block_id")).to(dev))
         self.n_blocks = int(self.block_id.max().item()) + 1
@@ -476,8 +597,21 @@ class SpotStepsEnv(VecTask):
         self._lanes = torch.bincount(cell, minlength=self.n_blocks * 2).cpu().numpy().reshape(-1, 2)
         self._scan_dx = (None if scan_offset is None else torch.from_numpy(np.nan_to_num(
             _per_env(scan_offset, num_envs, np.float32, "scan_offset"))).to(dev))
+        self._hold_row = self._ik_row = None                # rows that hold their spawn joints through a settle
         if self._slope_lanes is not None:
             self._init_slopes(slope_code)
+        if self._course is not None:
+            self._init_course_spawn(course_code, spawn_hold)
+        self.stand_mode, self.w_stand = bool(stand_mode), float(w_stand)
+        self.w_place = float(w_place)
+        self._place_buf = None
+        self._st_place = torch.zeros((), device=dev)
+        if self.w_place > 0.0 or course:
+            if not self._feet_on:
+                if self.w_place > 0.0:
+                    raise ValueError("w_place needs the touchdowns: termination='honest' or instrument=True")
+            else:
+                self._place_buf = torch.zeros(num_envs, device=dev)      # this tick's placement signal, unweighted
         self._istats = None
         if self._feet_on:
             self._init_instrument()
@@ -496,6 +630,11 @@ class SpotStepsEnv(VecTask):
     last_level = property(lambda self: self._st_level.item())
     last_fell = property(lambda self: self._st_fell.item())
     last_push = property(lambda self: self._st_push.item())
+    last_place = property(lambda self: self._st_place.item())    # unweighted placement signal per stair-lane step
+
+    def set_push_max(self, v):
+        """The interval shoves' dv ceiling (m/s), written through a device scalar like set_imit_weight."""
+        self._push_max.fill_(float(v))
 
     def on_pre_substep(self):
         """Shove a random subset, world-frame and horizontal, for one substep.
@@ -505,7 +644,11 @@ class SpotStepsEnv(VecTask):
         knocking the robot over before the episode starts measures nothing.
 
         push_mode 'once_on_tent' instead lands exactly one shove of push_dv per episode, where the
-        base first passes that episode's trigger x (see on_reset)."""
+        base first passes that episode's trigger x (see on_reset). push_mode 'interval' is _push_interval."""
+        if self.push_mode == "interval":
+            if not self.settling:
+                self._push_interval()
+            return
         if self.push_mode == "once_on_tent":
             if not self.settling:
                 self._push_once()
@@ -546,6 +689,30 @@ class SpotStepsEnv(VecTask):
         self._push_buf[:, 0, 0] = torch.cos(ang) * mag             # link 0 is the root (measured)
         self._push_buf[:, 0, 1] = torch.sin(ang) * mag
         self.sim.apply_link_force(self._push_buf)
+        self._st_push.copy_(fire.float().mean())
+        self.n_push += fire.long()
+        self.push_step.copy_(torch.where(fire, self.steps, self.push_step))
+
+    def _push_interval(self):
+        """The interval shove curriculum: every push lane counts down its own U(push_interval) s; at zero it takes one
+        shove of dv ~ U(push_dv_min, push_max) m/s in a uniform horizontal direction and redraws the countdown. No
+        boolean indexing and no host read; the three draws come off the env's own stream every tick, so where and
+        when a lane is shoved does not depend on the command sampler."""
+        dev = self.device
+        self._push_cd.sub_(1)
+        fire = self.push_lanes & (self._push_cd <= 0)
+        u = torch.rand(self.K, device=dev, generator=self._push_g)
+        ang = torch.rand(self.K, device=dev, generator=self._push_g) * (2.0 * math.pi)
+        nxt = torch.rand(self.K, device=dev, generator=self._push_g)
+        dv = self.push_dv_min + u * (self._push_max - self.push_dv_min).clamp_min(0.0)
+        mass = PUSH_MASS if self._push_mass is None else self._push_mass
+        mag = dv * fire.float() * (mass / (DT / SUBSTEPS))
+        self._push_buf.zero_()
+        self._push_buf[:, 0, 0] = torch.cos(ang) * mag             # link 0 is the root (measured)
+        self._push_buf[:, 0, 1] = torch.sin(ang) * mag
+        self.sim.apply_link_force(self._push_buf)
+        lo, hi = self.push_interval
+        self._push_cd.copy_(torch.where(fire, ((lo + (hi - lo) * nxt) / DT).long(), self._push_cd))
         self._st_push.copy_(fire.float().mean())
         self.n_push += fire.long()
         self.push_step.copy_(torch.where(fire, self.steps, self.push_step))
@@ -599,7 +766,7 @@ class SpotStepsEnv(VecTask):
         """Subset form, for the reset path. Runs eagerly — idx already cost a host sync."""
         if idx.numel() == 0:
             return
-        cmd, timer = self._sample_cmd(self.is_stairs[idx])
+        cmd, timer = self._sample_cmd(self._terrain_lane[idx])
         self.cmd[idx] = cmd
         self.cmd_timer[idx] = timer
 
@@ -607,15 +774,17 @@ class SpotStepsEnv(VecTask):
         """Step form: sample for every env, keep it only where the timer ran out. K*3 extra randoms
         instead of a nonzero, which is the trade that keeps the step graph-capturable."""
         due = self.cmd_timer <= 0
-        cmd, timer = self._sample_cmd(self.is_stairs)
+        cmd, timer = self._sample_cmd(self._terrain_lane)
         self.cmd.copy_(torch.where(due.unsqueeze(1), cmd, self.cmd))
         self.cmd_timer.copy_(torch.where(due, timer, self.cmd_timer))
 
     def _spawn_x(self, idx):
-        """Spawn x for the subset: stair lanes at their level's band approach; flat lanes anywhere flat."""
+        """Spawn x for the subset: stair lanes at their level's band approach; flat lanes anywhere flat. Course terrain
+        lanes spawn SPAWN_OFF into their level's band, whose length is their family's."""
         dev = self.sim.device
-        sx = self.level[idx].to(torch.float32) * self.band_len + SPAWN_OFF
-        flat = ~self.is_stairs[idx]
+        bl = self.band_len if self._band_len_k is None else self._band_len_k[idx]
+        sx = self.level[idx].to(torch.float32) * bl + SPAWN_OFF
+        flat = ~self._terrain_lane[idx]
         sx = torch.where(flat, torch.rand(idx.numel(), device=dev) * 3.0, sx)
         return sx
 
@@ -660,6 +829,7 @@ class SpotStepsEnv(VecTask):
         self._settle_bad = torch.zeros_like(self._settle_checked)
         self._settle_uprel = torch.ones(K, device=dev)
         self._settle_gap = torch.zeros(K, device=dev)
+        self._hold_row = self._slope_row
 
     def _slope_spawn(self, idx, sx, pose, q0):
         """The slope rows of a reset: spawn at SPAWN_U along the lane on spot_slopes' IK stance (every foot 5 mm above
@@ -678,15 +848,74 @@ class SpotStepsEnv(VecTask):
         self._spawn_bad[idx] += (slope & bad).long()
         return sx, q0
 
+    # ---- course terrain lanes (opt-in; see course and spot_course) -----------------------------------------------
+    def _init_course_spawn(self, code, hold):
+        """Spawn buffers for the hills / cross / rough rows (the slope lanes' ones, made here when no slope lane made
+        them) plus the hold window's own settle-health counters."""
+        K, dev = self.K, self.device
+        if self._hold_row is None:
+            self._slope_fk = sf.FootKin(dev)
+            self._settle_act = torch.zeros(K, ACT_DIM, device=dev)
+            self._spawn_nz = torch.ones(K, device=dev)
+            self._spawn_resets = torch.zeros(K, dtype=torch.long, device=dev)
+            self._spawn_bad = torch.zeros(K, dtype=torch.long, device=dev)
+            self._settle_checked = torch.zeros(K, dtype=torch.bool, device=dev)
+            self._settle_bad = torch.zeros_like(self._settle_checked)
+            self._settle_uprel = torch.ones(K, device=dev)
+            self._settle_gap = torch.zeros(K, device=dev)
+        self._ik_row = torch.from_numpy(np.isin(code, sc.IK_SPAWN)).to(dev)
+        self._hold_row = self._ik_row if self._hold_row is None else (self._hold_row | self._ik_row)
+        self.spawn_hold = int(hold)
+        self._hold_checks = torch.zeros(K, dtype=torch.long, device=dev)   # hold windows that ended, per env ...
+        self._hold_bad = torch.zeros(K, dtype=torch.long, device=dev)      # ... and how many ended in bad settle health
+
+    def _course_spawn(self, idx, sx, pose, q0):
+        """The hills / cross / rough rows of a reset: spot_slopes' IK stance at the spawn x (every foot 5 mm above the
+        terrain under it, the body tilted by half the plane fitted under the footprint), the action that holds those
+        joints remembered for the settle and the hold window, and IK / foot-gap failures counted. A partial reset has no
+        settle, so the policy is also handed the held joints as its last action, which is what a full reset's settle
+        leaves behind. Writes pose in place; returns the joint preset (add order). Other rows keep their values."""
+        ik = self._ik_row[idx]
+        sp = ss.spawn_pose(self.rays.heights, sx, self.lane_y[idx])      # fitted plane: rough ground has no closed form
+        pose.copy_(torch.where(ik[:, None], torch.cat([sp.quat, sp.pos], dim=1).to(pose.dtype), pose))
+        q0 = torch.where(ik[:, None], sp.joint_q[:, self.a2i].to(q0.dtype), q0)
+        hold = torch.where(ik[:, None], ss.settle_action(sp.joint_q).to(self._settle_act.dtype), self._settle_act[idx])
+        self._settle_act[idx] = hold
+        self._spawn_nz[idx] = torch.where(ik, sp.normal[:, 2].to(self._spawn_nz.dtype), self._spawn_nz[idx])
+        bad = ~sp.reachable.all(dim=1) | (sp.gap.max(dim=1).values > ss.CONTACT_TOL)
+        self._spawn_resets[idx] += ik.long()
+        self._spawn_bad[idx] += (ik & bad).long()
+        self.last_act[idx] = torch.where(ik[:, None], hold, self.last_act[idx])
+        self.prev_act[idx] = torch.where(ik[:, None], hold, self.prev_act[idx])
+        return q0
+
+    def _hold_check(self):
+        """settle_health on the course IK rows whose hold window ended this tick (every episode, full or partial reset),
+        normals by finite differences of the raycast. Counted per env, read per block in episode_stats()."""
+        due = self._ik_row & (self.steps == self.spawn_hold)
+        tips = self._slope_fk.tips(self.sim.link_pose)
+        ok, _, _ = ss.settle_health(self.up, tips, self.rays.heights, self._spawn_nz)
+        self._hold_checks += due.long()
+        self._hold_bad += (due & ~ok).long()
+
     def _settle_check(self):
         """spot_slopes.settle_health at the end of a full reset's settle: up_z >= 0.98 cos(slope fitted under the
         spawn) and all four feet within CONTACT_TOL of the plane along its normal. Latched per env (the next full
-        reset overwrites it; a partial reset has no settle to check), read per block in episode_stats()."""
+        reset overwrites it; a partial reset has no settle to check), read per block in episode_stats(). Course rows
+        take their normals from finite differences of the raycast (spot_slopes.settle_health's default)."""
         tips = self._slope_fk.tips(self.sim.link_pose)
-        nz = self._slope_lanes.normals(tips[..., 0], tips[..., 1])[..., 2]
-        ok, _, gap = ss.settle_health(self.up, tips, self.rays.heights, self._spawn_nz, normal_z=nz)
-        self._settle_checked.copy_(self._slope_row)
-        self._settle_bad.copy_(self._slope_row & ~ok)
+        if self._slope_lanes is not None:
+            nz = self._slope_lanes.normals(tips[..., 0], tips[..., 1])[..., 2]
+            ok, _, gap = ss.settle_health(self.up, tips, self.rays.heights, self._spawn_nz, normal_z=nz)
+        if self._ik_row is not None:
+            ok_c, _, gap_c = ss.settle_health(self.up, tips, self.rays.heights, self._spawn_nz)
+            if self._slope_lanes is None:
+                ok, gap = ok_c, gap_c
+            else:
+                ok = torch.where(self._ik_row, ok_c, ok)
+                gap = torch.where(self._ik_row[:, None], gap_c, gap)
+        self._settle_checked.copy_(self._hold_row)
+        self._settle_bad.copy_(self._hold_row & ~ok)
         self._settle_uprel.copy_(self.up / self._spawn_nz)
         self._settle_gap.copy_(gap.max(dim=1).values)
 
@@ -695,8 +924,11 @@ class SpotStepsEnv(VecTask):
         spawn geometry over every reset. A block is flagged when either failure share exceeds
         spot_slopes.SPAWN_FAIL_MAX, or when it has slope lanes and no settle was checked."""
         host = lambda t: t.cpu().numpy()
-        bid, row, chk, bad = host(self.block_id), host(self._slope_row), host(self._settle_checked), host(self._settle_bad)
+        bid, row, chk, bad = host(self.block_id), host(self._hold_row), host(self._settle_checked), host(self._settle_bad)
         res, unr, upr, gap = host(self._spawn_resets), host(self._spawn_bad), host(self._settle_uprel), host(self._settle_gap)
+        hck = hbd = None
+        if self._ik_row is not None:
+            hck, hbd = host(self._hold_checks), host(self._hold_bad)
         out = []
         for b in range(self.n_blocks):
             m = (bid == b) & row
@@ -710,6 +942,11 @@ class SpotStepsEnv(VecTask):
                         "max_foot_gap_m": float(gap[mc].max()) if n_chk else None,
                         "flagged": bool((m.any() and not n_chk) or (f_set or 0.0) > ss.SPAWN_FAIL_MAX
                                         or (f_unr or 0.0) > ss.SPAWN_FAIL_MAX)})
+            if hck is not None:            # course rows: the hold window at the start of every episode
+                n_h, n_hb = int(hck[m].sum()), int(hbd[m].sum())
+                out[-1].update({"hold_ticks": self.spawn_hold, "hold_checked": n_h, "hold_bad": n_hb,
+                                "hold_fail_frac": (n_hb / n_h) if n_h else None})
+                out[-1]["flagged"] = bool(out[-1]["flagged"] or (n_h and n_hb / n_h > ss.SPAWN_FAIL_MAX))
         return out
 
     # ---- the task ---------------------------------------------------------------
@@ -723,6 +960,8 @@ class SpotStepsEnv(VecTask):
         q0 = self.stand_q_add[idx]
         if self._slope_lanes is not None:                                  # slope rows: the IK stance on the plane
             sx, q0 = self._slope_spawn(idx, sx, pose, q0)
+        if self._course is not None:                                       # hills / cross / rough rows: the same stance
+            q0 = self._course_spawn(idx, sx, pose, q0)
         self.sim.set_root_state(idx, pose)
         self.sim.set_joint_state(idx, q0, torch.zeros(n, self.sim.dof, device=dev))
         if self.percept is not None:
@@ -734,7 +973,7 @@ class SpotStepsEnv(VecTask):
         self.ep_start_x[idx] = sx
         self._resample_cmd(idx)
         # stair lanes: force a forward command at spawn so the robot ATTEMPTS the tent (level evaluation)
-        st = idx[self.is_stairs[idx]]
+        st = idx[self._terrain_lane[idx]]
         if st.numel() > 0:
             self.cmd[st, 0] = torch.empty(st.numel(), device=dev).uniform_(0.5, VX_HI)
             self.cmd[st, 1:] = 0.0
@@ -745,25 +984,42 @@ class SpotStepsEnv(VecTask):
             u = torch.rand(n, device=dev, generator=self._push_g)
             tent0 = sx + (FLAT_APPROACH - SPAWN_OFF)
             self.push_trig_x[idx] = torch.where(self.is_stairs[idx], tent0 + u * TENT_LEN, sx + 1.0 + 5.0 * u)
+        if self.push_mode == "interval":
+            lo, hi = self.push_interval
+            u = torch.rand(n, device=dev, generator=self._push_g)
+            self._push_cd[idx] = ((lo + (hi - lo) * u) / DT).long()
 
     def act(self, a):
         # FULL policy action (not a residual): isaac -> add-order drive targets. The settle loop
         # feeds a=0, which lands exactly on the default stand targets.
-        if self.settling and self._slope_lanes is not None:
-            # slope rows hold their spawn joints through the settle (spot_slopes INTEGRATION 5); every other row
-            # keeps a = 0. last_act then says what the drives hold, which is what the policy is handed.
-            a = torch.where(self._slope_row[:, None], self._settle_act, a)
+        if self._hold_row is not None:
+            if self.settling:
+                # slope rows hold their spawn joints through the settle (spot_slopes INTEGRATION 5); every other row
+                # keeps a = 0. last_act then says what the drives hold, which is what the policy is handed.
+                a = torch.where(self._hold_row[:, None], self._settle_act, a)
+            elif self._ik_row is not None and self.spawn_hold > 0:
+                # course IK rows hold them for the first spawn_hold ticks of every episode, partial resets included
+                # (they have no settle). The policy's action for those rows and ticks is not the one executed: ~1.3%
+                # of an episode's samples, the price of not stepping part of a batch.
+                a = torch.where((self._ik_row & (self.steps < self.spawn_hold))[:, None], self._settle_act, a)
         self.prev_act.copy_(self.last_act)
         self.last_act.copy_(a)
         return (self.default_q + ACTION_SCALE * a)[:, self.a2i]
 
     def on_settled(self):
         self.up = up_z(self.sim.root_quat)
-        if self._slope_lanes is not None:
+        if self._hold_row is not None:
             self._settle_check()
 
     def on_step(self, s):
-        self.phi.copy_(advance(self.phi, period=self.period))                # clock after physics, before next obs
+        if self.stand_mode:
+            # a zero command freezes the clock where it is: the command in force over the step just simulated
+            stand = (self.cmd == 0.0).all(dim=1)
+            self.phi.copy_(torch.where(stand, self.phi, advance(self.phi, period=self.period)))
+        else:
+            self.phi.copy_(advance(self.phi, period=self.period))            # clock after physics, before next obs
+        if self._ep_cmd is not None:
+            self._ep_cmd += self.cmd[:, 0].clamp_min(0.0) * DT
         self.cmd_timer -= 1
         self._resample_due()
         if self._hold is not None:
@@ -789,14 +1045,20 @@ class SpotStepsEnv(VecTask):
             # the pull that would keep the cadence pinned however wide the jitter.
             off = (self.period - GAIT_PERIOD).abs() / (GAIT_PERIOD * self.cadence_jitter)
             self._w_imit = self._w_imit * (1.0 - off.clamp(0.0, 1.0))
+        if self.stand_mode:
+            # the teacher trots in place at a zero command, so it has no opinion worth copying about a stand
+            self._w_imit = self._w_imit * (self.cmd != 0.0).any(dim=1).float()
         self.ep_max_climb.copy_(torch.maximum(self.ep_max_climb, (x - self.ep_start_x).clamp_min(0.0)))
         # Latch how far off its lane centre the robot was the FIRST time it got past the tent, which
         # is where the in-lane half of a clear is read (see IN_LANE). A where, so the step stays
         # graph-capturable and costs no host sync.
-        self.clear_dy.copy_(torch.where((self.ep_max_climb > self.clear_dist) & (self.clear_dy < 0.0),
+        clear = self.clear_dist if self._clear_k is None else self._clear_k
+        self.clear_dy.copy_(torch.where((self.ep_max_climb > clear) & (self.clear_dy < 0.0),
                                         (y - self.lane_y).abs(), self.clear_dy))
         if self._feet_on:
             self._instrument_step(x, y)
+        if self._ik_row is not None and self.spawn_hold > 0:
+            self._hold_check()
 
     def terminated(self, s):
         tilt = self.up < 0.35
@@ -969,6 +1231,11 @@ class SpotStepsEnv(VecTask):
         d_edge = torch.nan_to_num(fr["d_edge"], nan=0.0)
         d_drop = torch.nan_to_num(fr["d_drop"], nan=0.0)
         across = torch.nan_to_num(fr["across"], nan=0.0)
+        if self._place_buf is not None:
+            # the placement signal (reward term 'place' when w_place > 0): a tread touchdown pays its distance to the
+            # nearer edge up to PLACE_SAT, one perched on a nosing (negative d_edge) costs PLACE_PERCH
+            self._place_buf.copy_(((tread & ~perched).float() * (d_edge.clamp(0.0, PLACE_SAT) / PLACE_SAT)
+                                   - (tread & perched).float() * PLACE_PERCH).sum(dim=1))
         stride = tips[:, :, 0] - self._lift_x
         d_rise = torch.where(self.cmd[:, 0:1] >= 0.0, fr["rise_fwd"], fr["rise_bwd"])
         stall = td & on & (d_rise < sf.STALL_DIST) & (stride.abs() < sf.STALL_STRIDE)
@@ -1075,19 +1342,73 @@ class SpotStepsEnv(VecTask):
             "imit": -self._imit_w * imit,
             "fell": -5.0 * s.terminated.float(),
         }
+        if self.w_place > 0.0:
+            terms["place"] = self.w_place * self._place_buf
+        if self.stand_mode:
+            terms["stand"] = -self.w_stand * (self.cmd == 0.0).all(dim=1).float() * s.joint_vel.pow(2).mean(dim=1)
         # Device-side, and read back only when a trainer asks (see the last_* properties). Masked
         # means rather than boolean indexing: a mask keeps the shapes static, which is what lets the
         # whole reward be replayed from a CUDA graph.
         trk = track_lin + track_ang
         self._st_fell.copy_(s.terminated.float().mean())
         self._st_track.copy_(trk.mean())
-        flat = (~self.is_stairs).float()
+        flat = (~self._terrain_lane).float()
         self._st_flat.copy_((trk * flat).sum() / flat.sum().clamp_min(1.0))
         st = self.is_stairs.float()
         self._st_level.copy_((self.level.float() * st).sum() / st.sum().clamp_min(1.0))
+        if self._place_buf is not None:
+            self._st_place.copy_((self._place_buf * st).sum() / st.sum().clamp_min(1.0))
         return terms
 
+    def _course_done(self, idx):
+        """The course curriculum for the envs ending now. Stair lanes exactly as on_done: promote on clearing the tent,
+        demote only if the robot never got near it, a fall does neither. Hills / cross / rough: promote on forward
+        progress past the band's feature (spot_course.FEATURE_DIST); progress is the episode's maximum, so a crossing
+        always came before any fall and a fall after it does not block the promotion. Demote when the feature was not
+        walked and the episode either ended in a fall or timed out under DEMOTE_PROGRESS of the commanded forward
+        distance (a robot commanded slower than the feature needs is not demoted for being slow). Flat lanes keep
+        level 0."""
+        code, prog = self._cc[idx], self.ep_max_climb[idx]
+        term = self.state.terminated[idx]
+        stair = code == sc.STAIRS
+        terr = (code != sc.FLAT) & ~stair
+        crossed = prog > self._clear_k[idx]
+        up = torch.where(stair, prog > self.clear_dist, terr & crossed)
+        slow = prog < sc.DEMOTE_PROGRESS * self._ep_cmd[idx]
+        dn = torch.where(stair, prog < self.reach_dist, terr & ~crossed & (term | slow))
+        if not self.freeze_level:
+            top = torch.where(stair, self.n_levels - 1, sc.N_LEVELS - 1)
+            self.level[idx] = torch.minimum((self.level[idx] + up.long() - dn.long()).clamp_min(0), top)
+        self._moves.index_add_(0, code, torch.stack([torch.ones_like(prog), up.float(), dn.float()], dim=1).double())
+        if bool(stair.any()):
+            self.last_clear = (prog[stair] > self.clear_dist).float().mean().item()
+        stf = self.is_stairs.float()
+        self._st_level.copy_((self.level.float() * stf).sum() / stf.sum().clamp_min(1.0))
+
+    def course_levels(self):
+        """Per course family (one host read): lanes, mean level, level histogram, and the episodes / promotions /
+        demotions since the last call ({} without course lanes)."""
+        if self._cc is None:
+            return {}
+        code, lvl = self._cc.cpu().numpy(), self.level.cpu().numpy()
+        mv = self._moves.cpu().numpy()
+        self._moves.zero_()
+        out = {}
+        for c, name in enumerate(sc.FAMILIES):
+            m = code == c
+            if c == sc.FLAT or not m.any():
+                continue
+            nl = self.n_levels if c == sc.STAIRS else sc.N_LEVELS
+            out[name] = {"lanes": int(m.sum()), "level": float(lvl[m].mean()),
+                         "hist": np.bincount(lvl[m], minlength=nl).tolist(),
+                         "episodes": int(mv[c, 0]), "promoted": int(mv[c, 1]), "demoted": int(mv[c, 2])}
+        return out
+
     def on_done(self, idx):
+        if self._cc is not None:
+            self._course_done(idx)
+            self._count(idx)
+            return
         # CURRICULUM update for STAIR envs ending now: promote on clearing the tent, demote only if the
         # robot never got near it. A fall does not demote.
         st = idx[self.is_stairs[idx]]
@@ -1115,7 +1436,7 @@ class SpotStepsEnv(VecTask):
         tilt = self._term_tilt[idx]
         pos = self.sim.root_position[idx]
         prog = self.ep_max_climb[idx]
-        crossed = prog > self.clear_dist
+        crossed = prog > (self.clear_dist if self._clear_k is None else self._clear_k[idx])
         cleared = crossed & (self.clear_dy[idx] < IN_LANE)       # in lane AT THE CROSSING (see on_step)
         inlane_end = (pos[:, 1] - self.lane_y[idx]).abs() < IN_LANE
         # band-relative x: 0 at this episode's tent start (a virtual one on flat lanes)
@@ -1175,7 +1496,7 @@ class SpotStepsEnv(VecTask):
         p = self._prog_sum.view(self.n_blocks, 2, self._ep_bins).cpu().numpy()
         ins = (None if self._istats is None else
                self._istats.view(self.n_blocks, 2, self._ep_bins, sf.WIDTH).sum(dim=2).cpu().numpy())
-        spawn = self._spawn_counts() if self._slope_lanes is not None else None
+        spawn = self._spawn_counts() if self._hold_row is not None else None
         rows = []
         for b in range(self.n_blocks):
             for lt, name in ((0, "stair"), (1, "flat")):
@@ -1183,6 +1504,8 @@ class SpotStepsEnv(VecTask):
                     continue
                 tot = c[b, lt].sum(axis=0)
                 row = {"block": b, "lane_type": name, "lanes": int(self._lanes[b, lt])}
+                if self.block_names is not None:
+                    row["block_name"] = self.block_names[b]
                 row.update({k: int(round(float(v))) for k, v in zip(STAT_KEYS, tot)})
                 row["progress_sum"] = float(p[b, lt].sum())
                 row["by_episode"] = [{k: int(round(float(v))) for k, v in zip(STAT_KEYS, c[b, lt, e])}
@@ -1219,6 +1542,8 @@ class SpotStepsEnv(VecTask):
             ahead = (self._terrain_h(px, py) - h_here[:, None]).clamp(-1.0, 1.0)
         base_above = (zz - h_here).unsqueeze(-1)
         clk = clock_obs(self.phi)                                          # [K,2] clock after last substep
+        if self.stand_mode:                  # the stand sentinel: (0,0) is a value sin/cos never takes
+            clk = torch.where((self.cmd == 0.0).all(dim=1, keepdim=True), torch.zeros_like(clk), clk)
         # Layout: [proprio(48)|clock(2)|base_above(1)|scan(45)] = 96-d
         # First 50 (proprio+clock) byte-identical to scratch_flat -> anchor reads obs[:,:50]
         obs = torch.cat([lin_b, ang_b, proj_g, self.cmd, qpos, jv_isaac, self.last_act,

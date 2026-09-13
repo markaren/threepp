@@ -89,9 +89,12 @@ def main():
     if args.shot and args.check == 0:
         args.check = 240
     dev = "cpu"
-    ac, norm, _ = load_policy(model, device=dev)
+    ac, norm, meta = load_policy(model, device=dev)
     pol = {"ac": ac, "norm": norm, "mt": os.path.getmtime(model), "reloads": 0}
-    print(f"[policy] {os.path.basename(model)}")
+    # Stand mode (train_spot_steps --stand-mode): the policy was shown a (0,0) clock with the clock frozen whenever its
+    # command was exactly zero, so the viewer must send the same sentinel or the policy trots in place off-distribution.
+    stand_mode = bool(meta.get("stand_mode", False))
+    print(f"[policy] {os.path.basename(model)}" + ("  (stand mode: a zero command sends the (0,0) clock)" if stand_mode else ""))
 
     if args.pgs:
         world = tp.PhysxWorld(gravity=tp.Vector3(0, 0, -9.81), fixed_timestep=0.002, max_substeps=20)
@@ -172,7 +175,11 @@ def main():
             vx = min(CRUISE, state["vx_hi"])
         rs0 = art.root_state(); R0 = _quat_to_R(rs0[3:7])
         yaw = math.atan2(float(R0[1, 0]), float(R0[0, 0]))
-        if turn != 0.0 or not state["hdg_hold"]:
+        stand = stand_mode and vx == 0.0 and vy == 0.0 and turn == 0.0
+        if stand:
+            # an exact zero command, heading re-locked here so the walk resumes without a correcting turn
+            wz = 0.0; state["hdg_lock"] = yaw
+        elif turn != 0.0 or not state["hdg_hold"]:
             wz = turn; state["hdg_lock"] = yaw
         else:
             if state["hdg_lock"] is None:
@@ -182,7 +189,7 @@ def main():
         cmd = np.array([vx, vy, wz], np.float32); state["cmd"] = (vx, vy, wz)
         ahead, h_here = scanner.scan(art.root_state()) if scanner is not None else analytic_scan(art, terr_h)
         with torch.no_grad():
-            obs = v2_obs(art, state["last_act"], cmd, ahead, h_here, state["phi"])
+            obs = v2_obs(art, state["last_act"], cmd, ahead, h_here, None if stand else state["phi"])
             obs_t = torch.from_numpy(obs)[None]                                # [1, 96]
             if pol["norm"] is not None:
                 obs_t = pol["norm"].norm(obs_t)
@@ -190,8 +197,9 @@ def main():
         state["last_act"] = a
         art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
         world.step(0.02)
-        # Advance clock AFTER the physics step (aligns with the next obs, same as training)
-        state["phi"] = (state["phi"] + 0.02 / GAIT_PERIOD) % 1.0
+        # Advance clock AFTER the physics step (aligns with the next obs, same as training); a stand holds it
+        if not stand:
+            state["phi"] = (state["phi"] + 0.02 / GAIT_PERIOD) % 1.0
 
     def render_chase():
         chase_cam(art, cam, rend, scene, BACK, HEIGHT, LAG)

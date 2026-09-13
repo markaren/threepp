@@ -4,6 +4,10 @@
     python train_spot_steps.py --score spot_steps.pt              # deterministic track/flat/fell + curriculum level
     python train_spot_steps.py --eval  spot_steps.pt              # flat-steering regression vs the base gait
 
+    # the mixed-terrain course (spot_course.py), continued from a 96-d raycast checkpoint:
+    python train_spot_steps.py --course --warmstart idun_runs/raycast_s4/spot_steps_latest.pt --iters 300 \
+        --shove-ramp 0.5,2.0,600 --foot-mu-dr 0.3,1.0,8 --stand-mode --w-place 10 --select final
+
 The curriculum (per-env level, promote on clearing the tent / demote only when the robot never reached
 it; a fall does not demote) lives in SpotStepsEnv.
 The warm-start transfers the 50-d clock base gait (scratch_flat_best.pt, normalize_obs=True, stiff gains)
@@ -14,6 +18,7 @@ import argparse
 import os
 import sys
 
+import numpy as np
 import torch
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -24,8 +29,9 @@ sys.path.insert(0, os.path.join(_HERE, "scratch_distillation"))
 
 import threepp as tp
 from spot_terrain_env import quat_rotate_inverse
-from spot_steps_env import (ACT_DIM, CONFIG, HIDDEN, N_LEVELS, OBS_DIM, RISERS, W_IMIT,
-                            SpotStepsEnv)
+from spot_steps_env import (ACT_DIM, CONFIG, HIDDEN, N_LEVELS, OBS_DIM, RISERS, W_IMIT, W_STAND, SPAWN_HOLD,
+                            PLACE_SAT, PLACE_PERCH, SpotStepsEnv)
+import spot_course as sc
 from spot_steps_symmetry import make_aux_loss
 from threepp.rl import PPO, load_policy
 from _common import (warmstart_scratch_to_terrain, sanity_walk, stochastic_flat_baseline,
@@ -162,12 +168,13 @@ def main():
     ap.add_argument("--perceive-noise", dest="perceive_noise", type=float, default=0.0,
                     help="elevation-map error (m) as a fixed per-cell bias, with --perceive")
     ap.add_argument("--height-source", dest="height_source", choices=("analytic", "raycast"),
-                    default="analytic",
+                    default=None,
                     help="where the terrain height (h_here + the 45-cell scan) comes from. "
                          "analytic = the closed-form tent formula; raycast = a ray into a Warp BVH "
                          "over the boxes actually added to the world (threepp.rl.raycast). The two "
                          "agree exactly inside a lane; the raycast also sees the neighbour's tent. "
-                         "It is recorded in the checkpoint meta, so --score/--eval follow it.")
+                         "It is recorded in the checkpoint meta, so --score/--eval follow it. Default: analytic, "
+                         "raycast with --course (which requires it).")
     ap.add_argument("--eval", default="")
     ap.add_argument("--score-envs", dest="score_envs", type=int, default=512,
                     help="envs for --score/--eval. 512 is the historical default; the run-to-run "
@@ -217,6 +224,47 @@ def main():
     ap.add_argument("--metrics", default="",
                     help="append one JSON line per log (PPO diagnostics, curriculum, counters) here "
                          "(default: metrics.jsonl next to --out)")
+    # ---- the mixed-terrain course and its training ingredients (2026-09-13). Every one is off by default. ----------
+    ap.add_argument("--course", action="store_true",
+                    help="train on spot_course's lanes: flat / stairs / hills / cross-tilted bands / rough ground, six "
+                         "levels per family, per-family promotion, IK-stance spawns held through a settle. Implies "
+                         "--height-source raycast, honest termination and real torque limits unless overridden.")
+    ap.add_argument("--course-shares", dest="course_shares", default="",
+                    help="lane shares, e.g. 'flat=0.15,stairs=0.35,hills=0.20,cross=0.15,rough=0.15' (the default)")
+    ap.add_argument("--rough-backend", dest="rough_backend", choices=sc.ROUGH_BACKENDS, default="trimesh",
+                    help="rough-ground collider: one cooked trimesh per lane (the BVH is that very mesh) or a height "
+                         "field, whose BVH copy measured a median 8.5 mm off the PhysX surface (spot_course.py), so "
+                         "the scan and the honest termination would not see what the feet touch")
+    ap.add_argument("--spawn-hold", dest="spawn_hold", type=int, default=SPAWN_HOLD,
+                    help="control ticks a hills / cross / rough spawn holds its IK joints at every episode start")
+    ap.add_argument("--termination", choices=("legacy", "honest"), default=None,
+                    help="legacy (up < 0.35 or base_above < 0.18) or honest (spot_feet: tilt held 0.2 s, or a base / "
+                         "upper-leg sample on the terrain; the knee end does not terminate). Default: honest with "
+                         "--course, legacy otherwise")
+    ap.add_argument("--drive-limits-are-forces", dest="drive_limits_are_forces",
+                    action=argparse.BooleanOptionalAction, default=None,
+                    help="joint effort caps as real torques (45/45/115 N·m). Default: on with --course, off otherwise "
+                         "(the impulse caps every earlier checkpoint trained on)")
+    ap.add_argument("--shove-ramp", dest="shove_ramp", default="",
+                    help="'start,end,iters': interval shoves (push_mode 'interval') on every non-flat lane, dv ~ U(dv_min, "
+                         "push_max) with push_max ramped linearly from start to end m/s over the first `iters` "
+                         "iterations (E1: 0.5,2.0,600). Empty = off. Not with --push-vel.")
+    ap.add_argument("--shove-interval", dest="shove_interval", default="3,8",
+                    help="'lo,hi' seconds between interval shoves, drawn per shove")
+    ap.add_argument("--shove-dv-min", dest="shove_dv_min", type=float, default=0.3)
+    ap.add_argument("--foot-mu-dr", dest="foot_mu_dr", default="",
+                    help="'lo,hi,n': each env's feet get one of n friction buckets spaced over [lo, hi] (restitution 0, "
+                         "'min' combine) and the ground, tents and course boxes an explicit --terrain-mu 'min' material "
+                         "(E1: 0.3,1.0,8). Rough-ground colliders keep the default material (0.5 'average'): the "
+                         "bindings take no material for a trimesh, so a foot there reads min(mu, 0.5). Empty = off.")
+    ap.add_argument("--terrain-mu", dest="terrain_mu", type=float, default=1.0)
+    ap.add_argument("--stand-mode", dest="stand_mode", action="store_true",
+                    help="a zero command freezes the gait clock and shows the policy a (0,0) clock, zeroes the "
+                         "imitation weight and charges --w-stand * mean(joint_vel^2). Deploy must send the same sentinel.")
+    ap.add_argument("--w-stand", dest="w_stand", type=float, default=W_STAND)
+    ap.add_argument("--w-place", dest="w_place", type=float, default=0.0,
+                    help=f"foot-placement reward on stair treads: per touchdown min(d_edge, {PLACE_SAT}) / {PLACE_SAT}, "
+                         f"-{PLACE_PERCH} if perched on a nosing. Needs honest termination (the touchdowns). 0 = off")
     args = ap.parse_args()
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); sys.exit(0)
@@ -245,11 +293,58 @@ def main():
         return
 
     torch.manual_seed(args.seed)
+    if args.course and (args.perceive or args.graph):
+        ap.error("--course needs the eager raycast: no --perceive, no --graph")
+    if args.shove_ramp and args.push_vel > 0:
+        ap.error("--shove-ramp and --push-vel are two shove modes; pick one")
+    termination = args.termination or ("honest" if args.course else "legacy")
+    dlf = args.drive_limits_are_forces if args.drive_limits_are_forces is not None else bool(args.course)
+    if args.w_place > 0 and termination != "honest":
+        ap.error("--w-place reads the honest termination's touchdowns: add --termination honest")
+    kw = {}
+    shove = None
+    if args.shove_ramp:
+        s0, s1, s_it = (float(v) for v in args.shove_ramp.split(","))
+        lo, hi = (float(v) for v in args.shove_interval.split(","))
+        shove = (s0, s1, int(s_it))
+        kw.update(push_mode="interval", push_interval=(lo, hi), push_dv_min=args.shove_dv_min, push_max=s0)
+    foot_mu_np = None
+    if args.foot_mu_dr:
+        m0, m1, mn = args.foot_mu_dr.split(",")
+        buckets = np.linspace(float(m0), float(m1), int(mn))
+        # its own seeded stream: which env gets which bucket is a function of --seed alone
+        foot_mu_np = buckets[np.random.default_rng(args.seed + 101).integers(0, len(buckets), args.envs)]
+        kw.update(foot_mu=foot_mu_np, foot_combine="min",
+                  terrain_material=(args.terrain_mu, args.terrain_mu, 0.0, "min", "min"))
+    if args.course:
+        kw.update(course=True, course_shares=args.course_shares or None, rough_backend=args.rough_backend,
+                  spawn_hold=args.spawn_hold)
+    if args.stand_mode:
+        kw.update(stand_mode=True, w_stand=args.w_stand)
+    if args.w_place > 0:
+        kw.update(w_place=args.w_place)
+    if termination != "legacy":
+        kw.update(termination=termination)
+    if dlf:
+        kw.update(drive_limits_are_forces=True)
+    height_source = args.height_source or ("raycast" if args.course else "analytic")
     env = SpotStepsEnv(num_envs=args.envs, device="cuda", seed=args.seed, perceive=args.perceive,
                        perceive_noise=args.perceive_noise, graph=args.graph,
                        cadence_jitter=args.cadence_jitter,
                        push_vel=args.push_vel, push_prob=args.push_prob,
-                       height_source=None if args.perceive else args.height_source)
+                       height_source=None if args.perceive else height_source, **kw)
+    if args.course:
+        fam = env._cc.cpu().numpy()
+        print("course lanes: " + ", ".join(f"{n} {int((fam == c).sum())}" for c, n in enumerate(sc.FAMILIES))
+              + f" | rough backend {args.rough_backend} ({env._course.n_rough_tris} tris), ground x {env.ground_extent}")
+    if shove is not None:
+        print(f"interval shoves: every U({args.shove_interval}) s on the non-flat lanes, dv U({args.shove_dv_min}, "
+              f"push_max), push_max {shove[0]} -> {shove[1]} m/s over iterations 0-{shove[2]}")
+    if foot_mu_np is not None:
+        print(f"foot friction DR: {args.foot_mu_dr} buckets 'min', terrain {args.terrain_mu} 'min' "
+              f"(rough colliders on the default material)")
+    print(f"termination {termination}, drive limits {'torques' if dlf else 'impulses'}"
+          + (", stand mode" if args.stand_mode else "") + (f", w_place {args.w_place}" if args.w_place > 0 else ""))
     if env.rays is not None:
         print(f"terrain height by raycast: {env.rays}")
     if env.percept is not None:
@@ -286,8 +381,20 @@ def main():
                     "init_level": args.init_level, "lr": args.lr, "horizon": args.horizon,
                     "entropy": args.entropy, "target_kl": args.target_kl, "epochs": args.epochs,
                     "minibatches": args.minibatches, "clip": args.clip, "sym_coef": args.sym_coef,
-                    "graph": args.graph, "gate": args.gate, "fell_max": args.fell_max},
+                    "graph": args.graph, "gate": args.gate, "fell_max": args.fell_max,
+                    # the course and its ingredients (2026-09-13); the deploy side reads stand_mode for the sentinel
+                    "course": bool(args.course), "course_shares": sc.parse_shares(args.course_shares or None)
+                    if args.course else None, "rough_backend": args.rough_backend if args.course else None,
+                    "spawn_hold": args.spawn_hold if args.course else None,
+                    "termination": termination, "drive_limits_are_forces": dlf,
+                    "shove_ramp": args.shove_ramp, "shove_interval": args.shove_interval if shove else "",
+                    "shove_dv_min": args.shove_dv_min if shove else None,
+                    "foot_mu_dr": args.foot_mu_dr, "terrain_mu": args.terrain_mu if args.foot_mu_dr else None,
+                    "stand_mode": bool(args.stand_mode), "w_stand": args.w_stand if args.stand_mode else None,
+                    "w_place": args.w_place, "place_sat": PLACE_SAT, "place_perch": PLACE_PERCH},
               aux_loss=aux)
+    if shove is not None:
+        ppo.meta["push_lanes"], ppo.meta["push_mode"] = "non-flat", "interval"
     if aux is not None:
         print(f"symmetry augmentation ON (coef {args.sym_coef})")
     if args.warmstart and os.path.exists(args.warmstart):
@@ -364,19 +471,55 @@ def main():
         print(f"{msg} | track {trk:.3f} | flat {ftrk:.3f}{'' if ok else ' LOW!'} | "
               f"level {lvl:.2f}/{N_LEVELS - 1} | clear {env.last_clear:.2f} | "
               f"fell {env.last_fell:.3f}{anneal}{mark}")
-        counters = {r["lane_type"]: {k: v for k, v in r.items() if k != "by_episode"}
-                    for r in env.episode_stats()["rows"]}
+        rows = env.episode_stats()["rows"]
+        if env.block_names is None:
+            counters = {r["lane_type"]: {k: v for k, v in r.items() if k not in ("by_episode", "instrument")}
+                        for r in rows}
+        else:
+            counters = {r["block_name"]: {k: v for k, v in r.items() if k not in ("by_episode", "instrument")}
+                        for r in rows}
+        course = {}
+        if args.course:
+            import spot_feet as sf
+            course = {"course_levels": env.course_levels(), "place_raw": env.last_place}
+            if shove is not None:
+                course["push_max"] = float(env._push_max.item())
+            for r in rows:
+                if r.get("block_name") == "stairs" and "instrument" in r:
+                    pl = sf.placement_summary(r["instrument"])
+                    course["placement_stairs"] = {d: {k: pl[d][k] for k in ("touchdowns", "median_d_edge",
+                                                                            "p_edge_lt05", "perched")}
+                                                  for d in ("asc", "desc")}
+            lv = course["course_levels"]
+            print("        course " + " | ".join(
+                f"{n} lvl {v['level']:.2f} (+{v['promoted']}/-{v['demoted']} of {v['episodes']})" for n, v in lv.items())
+                  + f" | place raw {env.last_place:+.4f}/stair-step"
+                  + (f" | push_max {course['push_max']:.2f}" if "push_max" in course else ""))
+            bad = {r["block_name"]: (r["spawn"]["unreachable"], r["spawn"].get("hold_bad"), r["spawn"].get("hold_checked"))
+                   for r in rows if "spawn" in r}
+            if bad:
+                course["spawn"] = {r["block_name"]: r["spawn"] for r in rows if "spawn" in r}
+                print("        spawn IK-bad / hold-bad of hold-checked: "
+                      + " | ".join(f"{n} {a}/{b} of {c}" for n, (a, b, c) in bad.items()))
         env.reset_stats(episodes=False)
         metric({"type": "log", **ppo.last_log, **ppo.diagnostics(), "track": trk, "flat": ftrk,
                 "level": lvl, "clear_legacy": env.last_clear, "fell": env.last_fell, "gate_ok": ok,
-                "imit_w": float(env._imit_w.item()), "saved_best": bool(mark), "counters": counters})
+                "imit_w": float(env._imit_w.item()), "saved_best": bool(mark), "counters": counters, **course})
 
     def snapshot(it):
         if it % args.snapshot_every == 0:
             ppo.save(f"{stem}_it{it:05d}.pt")
 
+    def on_iter(it):
+        if shove is not None:
+            # the shove ramp, applied for the NEXT iteration's rollouts: linear from start to end over iterations 0..n
+            s0, s1, n = shove
+            env.set_push_max(s0 + (s1 - s0) * min(1.0, it / max(n, 1)))
+        if args.snapshot_every > 0:
+            snapshot(it)
+
     ppo.learn(args.iters, log_every=LOG_EVERY, on_log=log,
-              on_iter=snapshot if args.snapshot_every > 0 else None)
+              on_iter=on_iter if (args.snapshot_every > 0 or shove is not None) else None)
     ppo.save(latest)
     if args.select == "final":
         ppo.save(args.out)

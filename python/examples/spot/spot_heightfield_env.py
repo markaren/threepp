@@ -75,18 +75,21 @@ def _taper(n, frac=0.15):
     return w
 
 
-def make_hf_grids(num_shapes=NUM_SHAPES, seed=0):
+def make_hf_grids(num_shapes=NUM_SHAPES, seed=0, x0=HF_X0, x1=HF_X1, nx=HF_NX, ny=HF_NY, half_w=HALF_W,
+                  taper=0.15):
     """`num_shapes` smooth 2-D noise height grids H[s, nx, ny] in [0,1], edge-tapered. xs/ys are the
-    world-local grid coordinates (y is lane-local: -HALF_W..HALF_W)."""
+    world-local grid coordinates (y is lane-local: -half_w..half_w). The keyword defaults are this env's tile;
+    spot_course.py asks for a band-sized one (the draws depend on num_shapes and seed alone, so a default call
+    returns exactly what it always did)."""
     rng = np.random.default_rng(seed)
-    xs = np.linspace(HF_X0, HF_X1, HF_NX).astype(np.float32)
-    ys = np.linspace(-HALF_W, HALF_W, HF_NY).astype(np.float32)
-    u = (xs - HF_X0) / (HF_X1 - HF_X0)
-    v = (ys + HALF_W) / (2.0 * HALF_W)
-    win = _taper(HF_NX)[:, None] * _taper(HF_NY)[None, :]
-    H = np.zeros((num_shapes, HF_NX, HF_NY), np.float32)
+    xs = np.linspace(x0, x1, nx).astype(np.float32)
+    ys = np.linspace(-half_w, half_w, ny).astype(np.float32)
+    u = (xs - x0) / (x1 - x0)
+    v = (ys + half_w) / (2.0 * half_w)
+    win = _taper(nx, taper)[:, None] * _taper(ny, taper)[None, :]
+    H = np.zeros((num_shapes, nx, ny), np.float32)
     for s in range(num_shapes):
-        h = np.zeros((HF_NX, HF_NY), np.float32)
+        h = np.zeros((nx, ny), np.float32)
         for fx, fy, w in HF_OCTAVES:
             px, py = rng.uniform(0.0, 2.0 * np.pi, 2)
             h += w * np.sin(2.0 * np.pi * fx * u[:, None] + px) * np.sin(2.0 * np.pi * fy * v[None, :] + py)

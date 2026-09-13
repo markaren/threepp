@@ -132,10 +132,25 @@ SLOPE_BLOCKS = {
     "SU15M": _blk(False, 0, 0.8, mu=1.0, slope="up", deg=15.0, material=SLOPE_MATERIAL),
     "SC15M": _blk(False, 0, 0.8, mu=1.0, slope="cross", deg=15.0, material=SLOPE_MATERIAL),
 }
-ALL_BLOCKS = {**BLOCKS, **EXTRA_BLOCKS, **SLOPE_BLOCKS}
+# Course cells (spot_course.py, 2026-09-13): rough ground by amplitude and hills by angle, one band per lane at a frozen
+# level, vx 0.8 held, honest termination, real torque limits. They are scored in a WORLD OF THEIR OWN (suite 'course',
+# <json stem>_course.jsonl), which `--suite showpiece` runs after the showpiece world unless --no-course: appended to the
+# showpiece world they would resize every block's lane share and change its numbers. 'success' there = walked the band's
+# feature (spot_course.FEATURE_DIST) within 1.3 m of the lane centre and never fell.
+def _course_blk(family, level):
+    return {**_blk(False, level, 0.8), "family": family}
+
+
+COURSE_BLOCKS = {
+    "RG05": _course_blk("rough", 1), "RG11": _course_blk("rough", 3), "RG17": _course_blk("rough", 5),   # amplitude, cm
+    "H08": _course_blk("hills", 1), "H16": _course_blk("hills", 3), "H25": _course_blk("hills", 5),      # ramp angle, deg
+}
+ALL_BLOCKS = {**BLOCKS, **EXTRA_BLOCKS, **SLOPE_BLOCKS, **COURSE_BLOCKS}
 SUITES = {"e0": list(BLOCKS),
-          "showpiece": ["S10", "S20", "S20V6", "S23", "S20X15", "P2", "P3", "FP4", "F", *SLOPE_BLOCKS]}
+          "showpiece": ["S10", "S20", "S20V6", "S23", "S20X15", "P2", "P3", "FP4", "F", *SLOPE_BLOCKS],
+          "course": list(COURSE_BLOCKS)}
 LANE_FAMILY = {None: "flat", "up": "slope_up", "down": "slope_down", "cross": "cross"}   # SpotStepsEnv lane_family
+COURSE_LANE_FAMILY = {"rough": "rough", "hills": "hills"}                                # = spot_course.LANE_FAMILY
 # Unscored lanes of a slope block's own family and angle on each side of it. Two, measured: on the up ramps
 # spot_steps.pt drifts one way (+y), ending +3.38 m from its lane on average at 20 deg and up to 4.48 m, which is the
 # outer edge of ONE guard lane (4.5 m) and the start of the cliff beside it.
@@ -147,10 +162,10 @@ SLOPE_GUARD = 2
 # cannot tell a policy that holds its line from one that slides. The off-surface gate (spot_slopes.OFF_SURFACE_MAX)
 # flags a cell whose robots slid off their block's plane (SC25 does).
 CROSS_MODE = "offset"
-SUITE_TERMINATION = {"e0": "legacy", "showpiece": "honest"}
+SUITE_TERMINATION = {"e0": "legacy", "showpiece": "honest", "course": "honest"}
 # The plant each suite is measured on unless the CLI says otherwise: e0 keeps the impulse caps so its job list
 # reproduces E0-lite; showpiece uses real torque limits, the agreed plant for every number from S0b on.
-SUITE_DRIVE_LIMITS = {"e0": False, "showpiece": True}
+SUITE_DRIVE_LIMITS = {"e0": False, "showpiece": True, "course": True}
 HASH_STEPS = (100, 600, 1200)
 BUFFER = "_buf"
 LOW_RUNG = "S10"               # printed first everywhere: it is what makes a 0.000 row interpretable
@@ -171,7 +186,8 @@ def layout(names, k, buffer=1, guard=SLOPE_GUARD):
     at a cliff (up to 20 m * sin(theta) beside a plateau, spot_slopes), so a scored slope lane never borders one.
     Guards take the buffer's block id and everything else from their block. Without slope blocks the arrays are
     exactly the historical ones."""
-    slope = [ALL_BLOCKS[b]["slope"] is not None for b in names]
+    # hills lanes meet a flat buffer at a cliff as a slope lane does, so they take guards too (rough lanes taper to 0)
+    slope = [ALL_BLOCKS[b]["slope"] is not None or ALL_BLOCKS[b].get("family") == "hills" for b in names]
     n_guard = 2 * guard * sum(slope)
     n_buf = buffer * (len(names) - 1) + n_guard
     w = [ALL_BLOCKS[b]["lanes"] for b in names]
@@ -198,7 +214,9 @@ def layout(names, k, buffer=1, guard=SLOPE_GUARD):
     return {"bid": bid, "stairs": pick("stairs", bool), "level": pick("level", np.int64), "hold": hold,
             "dv": pick("push_dv", np.float32), "mu": mu, "payload": pick("payload_kg", np.float64),
             "scan_dx": pick("scan_dx", np.float32), "names": list(names) + [BUFFER],
-            "family": ["stairs" if spec[j]["stairs"] else LANE_FAMILY[spec[j]["slope"]] for j in src],
+            "family": ["stairs" if spec[j]["stairs"] else
+                       (COURSE_LANE_FAMILY[spec[j]["family"]] if spec[j].get("family") else LANE_FAMILY[spec[j]["slope"]])
+                       for j in src],
             "deg": pick("deg", np.float64), "material": [spec[j]["material"] for j in src], "guard_lanes": n_guard}
 
 
@@ -311,12 +329,13 @@ def score(ckpt, label, seed, k=2048, names=None, episodes=2, cap=1700, json_path
     pol = (lambda o: ac.act_mean(norm.norm(o))) if norm is not None else ac.act_mean
     lay = layout(names, k)
     slope_on = any(ALL_BLOCKS[n]["slope"] for n in names)
+    course_on = any(ALL_BLOCKS[n].get("family") for n in names)
     if slope_on:
         import spot_slopes as ss
         assert SLOPE_MATERIAL == ss.GRIPPY, "score_e0.SLOPE_MATERIAL has drifted from spot_slopes.GRIPPY"
-    # without a slope cell the env gets exactly the historical lane_types call, so every e0 number is unchanged
+    # without a slope or course cell the env gets exactly the historical lane_types call, so every e0 number is unchanged
     lanes_kw = (dict(lane_family=lay["family"], slope_deg=lay["deg"], slope_material=lay["material"],
-                     slope_cross_mode=cross_mode) if slope_on else dict(lane_types=lay["stairs"]))
+                     slope_cross_mode=cross_mode) if (slope_on or course_on) else dict(lane_types=lay["stairs"]))
     t0 = time.perf_counter()
     with torch.no_grad():
         env = SpotStepsEnv(num_envs=k, device=device, seed=seed, height_source="raycast", perceive=False,
@@ -389,6 +408,11 @@ def score(ckpt, label, seed, k=2048, names=None, episodes=2, cap=1700, json_path
                "scan_dx": spec["scan_dx"], "lanes": lanes, "E": episodes, "slope": spec["slope"],
                "slope_deg": spec["deg"], "material": None if spec["material"] is None else list(spec["material"]),
                "measure_only": spec["measure_only"]}
+        if spec.get("family"):                        # course cells only, so no existing record changes shape
+            import spot_course as sc
+            code = sc.FAMILIES.index(spec["family"])
+            rec.update({"family": spec["family"], "course_value": sc.LEVEL_VALUE[code][spec["level"]],
+                        "course_unit": sc.LEVEL_UNIT[code], "feature_dist_m": sc.FEATURE_DIST[code]})
         rec.update({key: r[key] for key in STAT_KEYS})
         if "spawn" in r:
             rec["spawn"] = r["spawn"]
@@ -470,6 +494,20 @@ def score(ckpt, label, seed, k=2048, names=None, episodes=2, cap=1700, json_path
             head["surface_gate"] = {"max_offsurf_frac": ss.OFF_SURFACE_MAX, "flagged": off,
                                     "flagged_le_20deg": [n for n in off if ALL_BLOCKS[n]["deg"] <= 20.0],
                                     "offsurf_frac": {n: by_name[n]["stability"].get("offsurf_frac") for n in cells}}
+    if course_on:
+        import spot_course as sc
+        import spot_slopes as ss
+        cells = [n for n in names if ALL_BLOCKS[n].get("family")]
+        by_name = {rec["block"]: rec for rec in blocks_out}
+        head["course"] = {
+            "cells": {n: {k: by_name[n][k] for k in ("family", "level", "course_value", "course_unit", "feature_dist_m")}
+                      for n in cells},
+            "guard_lanes": lay["guard_lanes"], "rough_backend": env._course.rough_backend,
+            "spawn": "spot_slopes.spawn_pose (IK stance), joints held through the settle and the first spawn_hold ticks "
+                     "of every episode", "spawn_hold": env.spawn_hold,
+            "clearances": "vertical (honest termination, touchdowns, slip): rough ground has no closed-form normal"}
+        head["course_spawn_gate"] = {"max_fail_frac": ss.SPAWN_FAIL_MAX,
+                                     "flagged": [n for n in cells if (by_name[n].get("spawn") or {"flagged": True})["flagged"]]}
     print(f"[e0] {label} seed {seed}: K={k}, {len(names)} blocks ({suite}, {termination} termination), build "
           f"{t1 - t0:.1f} s, reset {t2 - t1:.1f} s, {steps} steps {t3 - t2:.1f} s "
           f"({(t3 - t2) / max(steps, 1) * 1e3:.1f} ms/step)  complete={complete}"
@@ -484,10 +522,13 @@ def score(ckpt, label, seed, k=2048, names=None, episodes=2, cap=1700, json_path
               + (f"  falls/push {fpp:.3f} ({rec['falls_after_push']}/{rec['pushes']})" if fpp is not None else ""))
         if rec.get("spawn"):
             sp = rec["spawn"]
-            print(f"        spawn {rec['slope']} {rec['slope_deg']:.0f} deg{' (measurement only)' if rec['measure_only'] else ''}"
+            what = (f"{rec['family']} {rec['course_value']:g} {rec['course_unit']}" if rec.get("family") else
+                    f"{rec['slope']} {rec['slope_deg']:.0f} deg")
+            print(f"        spawn {what}{' (measurement only)' if rec['measure_only'] else ''}"
                   f"{' material ' + str(rec['material']) if rec['material'] else ''}: settle bad {sp['settle_bad']}/"
                   f"{sp['settle_checked']}  IK/gap bad {sp['unreachable']}/{sp['resets']}  min up/cos "
                   f"{_f(sp['min_up_over_cos'])}  max foot gap {_f(sp['max_foot_gap_m'], 4)} m"
+                  + (f"  hold bad {sp['hold_bad']}/{sp['hold_checked']}" if "hold_checked" in sp else "")
                   + ("  !! FLAGGED: not a result" if sp["flagged"] else ""))
         if instrument:
             print_instrument(rec)
@@ -939,6 +980,9 @@ def main():
                     help="enforce the joint effort caps as torques (45/45/115 N·m); --no-drive-limits-are-forces "
                     "reads them as impulses (max_force/dt), the plant every existing checkpoint was trained on. "
                     "Default by suite: off for e0 (reproduces E0-lite), on for showpiece (the agreed plant)")
+    ap.add_argument("--no-course", dest="course", action="store_false",
+                    help="with --suite showpiece: skip the course cells' own world (suite 'course', "
+                         f"{','.join(COURSE_BLOCKS)}, written to <json stem>_course.jsonl)")
     ap.add_argument("--aggregate", default="", help="print the E0 tables for every JSONL under this root")
     ap.add_argument("--report-seed", dest="report_seed", type=int, default=2)
     ap.add_argument("--select-seed", dest="select_seed", type=int, default=1)
@@ -961,6 +1005,21 @@ def main():
         sys.exit(1)
     head, _ = out
     ok = head["complete"] and head["recount_ok"] is not False and head.get("npz_ok") is not False
+    if args.suite == "showpiece" and args.course and not args.blocks:
+        # the course cells in a world of their own, in a fresh process (one GpuSim per process, as every scorer here)
+        cmd = [sys.executable, "-u", os.path.abspath(__file__), args.checkpoint, "--suite", "course", "--label", label,
+               "--seed", str(args.seed), "--envs", str(args.envs), "--episodes", str(args.episodes), "--cap",
+               str(args.cap), "--td-every", str(args.td_every)]
+        if args.json:
+            cmd += ["--json", os.path.splitext(args.json)[0] + "_course.jsonl"]
+        cmd += (["--recount"] if args.recount else []) + (["--repeat"] if args.repeat else []) \
+            + ([] if args.instrument else ["--no-instrument"]) \
+            + ([] if args.termination is None else ["--termination", args.termination]) \
+            + ([] if args.drive_limits_are_forces is None else
+               ["--drive-limits-are-forces" if args.drive_limits_are_forces else "--no-drive-limits-are-forces"])
+        print(f"[e0] course cells in their own world: suite course, {','.join(COURSE_BLOCKS)}", flush=True)
+        rc = subprocess.call(cmd)
+        ok = ok and rc == 0
     sys.exit(0 if ok else 2)
 
 
