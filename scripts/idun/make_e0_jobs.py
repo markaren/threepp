@@ -2,6 +2,7 @@
 
     python scripts/idun/make_e0_jobs.py --out jobs.tsv                 # Idun paths (the defaults)
     python scripts/idun/make_e0_jobs.py --out jobs.tsv --per-task 5    # + the sbatch lines to run it
+    python scripts/idun/make_e0_jobs.py --suite showpiece --per-task 6 --out jobs.tsv   # the target's before rows
 
 One line per item: label <TAB> checkpoint <TAB> score seed <TAB> extras, where extras is a comma list
 of legacy (the hard:analytic reconciliation cell), steer (held-out flat steering), repeat (a same-seed
@@ -65,6 +66,38 @@ def items(runs, ctrl):
     return out
 
 
+def showpiece_items(runs, ctrl):
+    """The before rows for the decided target (plans/spot-frontier.md, Target), scored with
+    SCORE_ARGS='--suite showpiece' into their own OUT. Items (55): the 25 array runs' latest weights (E0-lite:
+    latest >= best) at S_sel and S_test, which give the between-run SD every E1 primary is sized from and the
+    rows the E1 parent is picked from; the shipped checkpoint and push2 at both seeds; one exact repeat of the
+    shipped checkpoint. Steering rides along at S_sel for the raycast runs (the best climbers, never
+    steering-scored) and the shipped reference. The pilot (task 0) is the determinism pair, push2, the two
+    draft-row policies and a test seed."""
+    arr = lambda tag: (f"{tag}:latest", f"{runs}/{tag}/spot_steps_latest.pt")
+    ctl = lambda name: (f"ctrl:{name}", f"{ctrl}/{name}.pt")
+    out = []
+
+    def add(pair, seed, extras=()):
+        out.append((pair[0], pair[1], seed, ",".join(extras) or "none"))
+
+    add(ctl("spot_steps"), S_SEL, ("steer",))
+    add(ctl("spot_steps"), S_SEL, ("repeat",))
+    add(ctl("spot_steps_push2"), S_SEL)
+    add(arr("raycast_s4"), S_SEL, ("steer",))
+    add(arr("analytic_s3"), S_SEL)
+    add(ctl("spot_steps"), S_TEST)
+    done = {(o[0], o[2]) for o in out}
+    for s in range(SEEDS_PER_CONDITION):
+        for c, _ in CONDITIONS:
+            pair = arr(f"{c}_s{s}")
+            for seed in (S_SEL, S_TEST):
+                if (pair[0], seed) not in done:
+                    add(pair, seed, ("steer",) if (seed == S_SEL and c == "raycast") else ())
+    add(ctl("spot_steps_push2"), S_TEST)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", default="/cluster/work/laht/spot_runs", help="the array's run root")
@@ -74,16 +107,21 @@ def main():
     # of 7 (plus the odd legacy/steer extra) sits around 10 min of the hour, and 125 items fit in 18
     # tasks — a single wave under the 20-GPU QOS.
     ap.add_argument("--per-task", dest="per_task", type=int, default=7)
+    ap.add_argument("--suite", choices=("e0", "showpiece"), default="e0",
+                    help="e0: the E0-lite list; showpiece: the decided target's before rows (showpiece_items)")
     args = ap.parse_args()
-    lines = items(args.runs.rstrip("/"), args.ctrl.rstrip("/"))
+    make = items if args.suite == "e0" else showpiece_items
+    lines = make(args.runs.rstrip("/"), args.ctrl.rstrip("/"))
     with open(args.out, "w", newline="\n") as f:
         for label, ckpt, seed, extras in lines:
             f.write(f"{label}\t{ckpt}\t{seed}\t{extras}\n")
     n_tasks = -(-len(lines) // args.per_task)
     print(f"{len(lines)} items -> {args.out}; PER_TASK={args.per_task} -> {n_tasks} tasks "
           f"(pilot = task 0, lines 1-{args.per_task})")
-    print(f"  sbatch --array=0 --export=ALL,PER_TASK={args.per_task} scripts/idun/spot_suite.slurm")
-    print(f"  sbatch --array=1-{n_tasks - 1}%20 --export=ALL,PER_TASK={args.per_task} scripts/idun/spot_suite.slurm")
+    # sbatch --export splits its list on commas, so the suite's settings travel in the environment instead
+    env = "" if args.suite == "e0" else "OUT=$WORK/spot_showpiece SCORE_ARGS='--suite showpiece' "
+    print(f"  {env}sbatch --array=0 --export=ALL,PER_TASK={args.per_task} scripts/idun/spot_suite.slurm")
+    print(f"  {env}sbatch --array=1-{n_tasks - 1}%20 --export=ALL,PER_TASK={args.per_task} scripts/idun/spot_suite.slurm")
 
 
 if __name__ == "__main__":
