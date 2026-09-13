@@ -33,9 +33,10 @@
 #SBATCH --account=share-ie-iir
 #SBATCH --partition=GPUQ
 #SBATCH --gres=gpu:1
-# Any of the three big GPUs, 6 cores, 32 GB: the loop uses ~3 cores, and an h100-only 12-core request left 3 of 4
-# array tasks pending on (Resources) behind one running task on 2026-09-13 (free GPUs sit on CPU-starved nodes).
-#SBATCH --constraint=h100|a100|h200
+# H100 or H200, 6 cores, 32 GB: the loop uses ~3 cores, and an h100-only 12-core request left 3 of 4
+# array tasks pending on (Resources) on 2026-09-13 (free GPUs sit on CPU-starved nodes). No A100: it ran this loop at
+# about half the H100 speed, and an array waits for its slowest task.
+#SBATCH --constraint=h100|h200
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=6
