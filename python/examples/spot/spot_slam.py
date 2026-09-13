@@ -36,6 +36,7 @@ from spot_terrain_env import VX_HI, VY_HI, WZ_HI
 from scratch_env import STIFF_GAINS
 from scratch_clock import GAIT_PERIOD
 from _common import v2_obs
+from spot_feet import cpu_foot_tips
 
 
 # SPOT_SCANSTATS=1 prints the 45-cell scan's spread every 60 frames — the check that the
@@ -811,7 +812,10 @@ def main():
         model_path = _latest if os.path.exists(_latest) else model_path
     ac, norm, _meta = load_policy(model_path, device="cpu")
     ac.eval()
-    print(f"[policy] {os.path.basename(model_path)}")
+    # A stand_mode checkpoint saw a (0,0) clock with the phase held whenever its command was exactly zero; without
+    # the same sentinel here it would trot in place off-distribution (play_spot_steps.py does the same).
+    stand_mode = bool(_meta.get("stand_mode", False))
+    print(f"[policy] {os.path.basename(model_path)}" + ("  (stand mode: no keys = stand still)" if stand_mode else ""))
 
     # ── terrain ───────────────────────────────────────────────────────────────
     print("[terrain] generating ...")
@@ -856,7 +860,23 @@ def main():
 
     _s = math.sqrt(2) / 2
     _spawn_quat = tp.Quaternion(0.0, 0.0, _s, _s)  # 90° CCW around Z
-    art.reset(tp.Vector3(SPAWN_X, SPAWN_Y, Z0 + h0 + 0.1), _spawn_quat)
+    # set_joint_positions writes PhysX DOF slots (every hip, then every upper leg, then every knee), NOT the add order
+    # joint_positions() reads back. Learn the slot of each add-order joint once on the fresh robot rather than trust a
+    # layout (measured 2026-09-13: add index i -> slot [0,4,8,1,5,9,2,6,10,3,7,11]).
+    art.set_joint_positions((np.arange(12) + 1).astype(np.float32))
+    _dof_slot = np.rint(np.asarray(art.joint_positions())).astype(int) - 1
+    STANCE_Z = 0.505   # base height that puts the stance's foot tips 5 mm above flat ground (spot_slopes.STANCE_PRESET)
+
+    def spawn_stance(ground_z):
+        """Teleport into the trained stance just above the ground. art.reset() alone zeroes every joint (straight
+        legs) and the old spawn dropped from Z0 = 0.72 m while settle() swung the legs into the stance mid-fall: the
+        base sagged to 0.32 m. In the stance at 0.505 m it bottoms out at 0.42 m, up_z 0.998 (CPU probe, flat)."""
+        art.reset(tp.Vector3(SPAWN_X, SPAWN_Y, ground_z + STANCE_Z), _spawn_quat)
+        dof = np.empty(12, np.float32)
+        dof[_dof_slot] = default_q[add_to_isaac]
+        art.set_joint_positions(dof)
+
+    spawn_stance(h0)
     settle()
     print("[spot] standing")
 
@@ -1003,12 +1023,17 @@ def main():
                                   pitch_deg=40.0, fov_y=90.0)
     if is_vulkan:
         rend.render(scene, camera)   # build an initial TLAS so prewarm's scans have geometry
-    scanner.prewarm(art.root_state())
+    scanner.prewarm(art.root_state(), foot_tips=cpu_foot_tips(art))   # seed the ground under the body from the feet
+    print(f"[scan] ground under the body seeded from the feet: h_here {scanner.h_here_last:.3f} m")
     slam    = SlamMapper(scene)
     trail   = PathTrail(scene)
     last_act    = np.zeros(12, np.float32)
-    ahead_cache = [np.zeros(45, np.float32)]   # last sensor reading; reused on skipped frames
-    h_here_cache= [h0]
+    # Start from a real reading of the seeded map, not zeros and h0: h0 is the generator's HIGHEST point under the
+    # footprint (6.564 m at the default spawn) while the feet stand at 6.19 m, so until the first in-loop scan landed
+    # the policy was told its body sat ~5 cm off the ground, and the first spawn fell (R worked: its caches were real).
+    _ahead0, _h_here0 = scanner.scan(art.root_state())
+    ahead_cache = [_ahead0]       # last sensor reading; reused on skipped frames
+    h_here_cache= [_h_here0]
 
     # ── state ─────────────────────────────────────────────────────────────────
     fc        = [0]
@@ -1016,6 +1041,7 @@ def main():
     hdg_lock  = [None]
     r_held    = [False]
     gphi      = [0.0]    # gait phase clock ∈ [0,1); advanced +0.02/GAIT_PERIOD per control tick
+    cmd_s     = np.zeros(2, np.float32)   # vx, vy after the acceleration limit (keys step 0 -> full speed in one tick)
     vx_hi     = [float(VX_HI)]    # live forward-speed cap (UI slider sets it)
 
     # ── bench state (untouched unless --bench) ────────────────────────────────
@@ -1039,16 +1065,18 @@ def main():
 
     def reset():
         rh = max(float(gen.height_at(SPAWN_X + dx, SPAWN_Y + dy, tparams)) for dx, dy in _FEET)
-        art.reset(tp.Vector3(SPAWN_X, SPAWN_Y, Z0 + rh + 0.02), _spawn_quat)
+        spawn_stance(rh)
         last_act[:] = 0.0
         hdg_lock[0] = None
         gphi[0] = 0.0
+        cmd_s[:] = 0.0
         settle(40)
         # A scan fired before the teleport is still in flight; harvesting it after the map is
         # cleared would fuse pre-reset terrain under the new pose. Collect and discard it.
         if getattr(scanner.sensor, "scan_pending", False):
             scanner.sensor.scan_collect(rend)
-        scanner.clear_map(); scanner.prewarm(art.root_state())
+        scanner.clear_map(); scanner.prewarm(art.root_state(), foot_tips=cpu_foot_tips(art))
+        ahead_cache[0], h_here_cache[0] = scanner.scan(art.root_state())   # the first ticks read this map, not the old pose's
         slam.clear()
         trail.clear()
 
@@ -1167,6 +1195,10 @@ def main():
             vx = (vx_hi[0] if down("W", "KP8") else 0.0) - (1.0 if down("S", "KP2") else 0.0)
             vy = (1.0 if down("A", "KP4") else 0.0) - (1.0 if down("D", "KP6") else 0.0)
             wz_key = (1.5 if down("Q", "KP7") else 0.0) - (1.5 if down("E", "KP9") else 0.0)
+        # Joystick-style smoothing: at most 3 m/s^2 (0 -> 1.5 m/s in 0.5 s). The clip lands exactly on the target,
+        # so releasing the keys still reaches an exact zero command and stand mode engages.
+        cmd_s[:] = cmd_s + np.clip(np.array([vx, vy], np.float32) - cmd_s, -0.06, 0.06)   # in place: frame() closes over it
+        vx, vy = float(cmd_s[0]), float(cmd_s[1])
 
         # heading hold
         rs  = art.root_state()
@@ -1181,8 +1213,11 @@ def main():
 
         # obs → policy → step
         if bench: _tm[0] = time.perf_counter()
+        stand = stand_mode and vx == 0.0 and vy == 0.0 and wz_key == 0.0
+        if stand:
+            wz = 0.0                             # training's stand command is exactly zero: no heading-hold turn
         cmd   = np.array([vx, vy, wz], np.float32)
-        obs   = v2_obs(art, last_act, cmd, ahead_cache[0], h_here_cache[0], gphi[0])
+        obs   = v2_obs(art, last_act, cmd, ahead_cache[0], h_here_cache[0], None if stand else gphi[0])
         with torch.no_grad():
             obs_t = torch.from_numpy(obs)[None]
             if norm is not None:
@@ -1193,7 +1228,8 @@ def main():
         if bench: _mark("policy")
         world.step(0.02)
         if bench: _mark("physics")
-        gphi[0] = (gphi[0] + 0.02 / GAIT_PERIOD) % 1.0
+        if not stand:                            # stand mode holds the phase where it stopped
+            gphi[0] = (gphi[0] + 0.02 / GAIT_PERIOD) % 1.0
         rs = art.root_state()
         if bench: _tm[0] = time.perf_counter()
         if fc[0] % MC_FRAMES == 0 and not (bench and os.environ.get("SPOT_BENCH_NO_MC")):
@@ -1310,6 +1346,10 @@ def main():
     print(__doc__)
     if bench:
         print(f"[bench] profiling {bench} frames (first {BENCH_WARMUP} are warmup) ...")
+    # Spawn exactly the way R does, as the last thing before the loop. The startup spawn runs seconds earlier, before
+    # the scene, trees and scanner exist, and still fell on its first ticks with the stance spawn and a seeded map;
+    # reset() is the path watched to stand (2026-09-13).
+    reset()
     t0 = time.perf_counter()
     canvas.animate(frame)
 

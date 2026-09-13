@@ -37,6 +37,7 @@ except Exception:
 sys.path.insert(0, os.path.join(_HERE, "scratch_distillation"))   # scratch_clock
 
 import threepp as tp
+from spot_feet import cpu_foot_tips
 from threepp.rl import load_policy
 from spot_deploy import (build_spot, fetch_assets, grid_texture, _quat_to_R,
                          default_q, add_to_isaac, isaac_to_add, ACTION_SCALE, Z0)
@@ -160,7 +161,7 @@ def main():
         art.reset(tp.Vector3(sx, 0.0, Z0 + h + 0.02)); state["last_act"] = np.zeros(12, np.float32)
         state["hdg_lock"] = None; state["phi"] = 0.0; settle(nsettle)
         if scanner is not None:                                       # forget stale terrain, then pre-fill from here
-            scanner.clear_map(); scanner.prewarm(art.root_state())
+            scanner.clear_map(); scanner.prewarm(art.root_state(), foot_tips=cpu_foot_tips(art))   # ground under the body from the feet
 
     def key_cmd():
         d = lambda *ks: any(canvas.is_key_down(k) for k in ks)

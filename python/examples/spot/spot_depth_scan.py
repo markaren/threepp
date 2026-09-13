@@ -152,10 +152,47 @@ class ForwardDepthScanner:
         self.H[:] = np.nan
         self.h_here_last = 0.0
 
-    def prewarm(self, rs, n=4):
-        """Populate the map from the current (stationary) pose so the first control step is not blind."""
+    def prewarm(self, rs, n=4, foot_tips=None, foot_r=0.028):
+        """Populate the map from the current (stationary) pose so the first control step is not blind.
+
+        A forward camera never sees the ground under or behind the body, and after clear_map() h_here fell back to
+        0.0 m: on spot_slam's terrain (6.5 m up at the spawn) the policy read a base height of ~7 m and every
+        observed cell as a 6.5 m wall until it had walked far enough to map the ground under itself (2026-09-13,
+        "it can't stand still until you have moved a few meters"). `foot_tips` ([4,3] world foot-tip centres, e.g.
+        spot_feet.cpu_foot_tips) seeds the never-seen cells under the body from the plane through the feet, which
+        a real robot knows from its leg kinematics."""
+        if foot_tips is not None:
+            self.seed_from_feet(rs, foot_tips, foot_r)
         for _ in range(n):
             self.scan(rs)
+
+    def seed_from_feet(self, rs, foot_tips, foot_r=0.028, half_x=0.6, half_y=0.4):
+        """Fill NEVER-SEEN cells within the body footprint (heading-aligned, +-half_x forward, +-half_y sideways)
+        with the least-squares plane through the foot contacts (tip centre minus the foot radius), and take h_here
+        from it. Cells the camera has observed are left alone."""
+        p = np.asarray(foot_tips, np.float64)
+        A = np.column_stack([np.ones(len(p)), p[:, 0], p[:, 1]])
+        coef = np.linalg.lstsq(A, p[:, 2] - foot_r, rcond=None)[0]
+        x, y = float(rs[0]), float(rs[1])
+        R = _quat_to_R(rs[3:7])
+        hx, hy = float(R[0, 0]), float(R[1, 0]); nrm = math.hypot(hx, hy) or 1.0
+        c, s = hx / nrm, hy / nrm
+        r = math.hypot(half_x, half_y)
+        i0 = max(0, int(math.floor((x - r - self.x0) / self.cell)))
+        i1 = min(self.nx - 1, int(math.floor((x + r - self.x0) / self.cell)))
+        j0 = max(0, int(math.floor((y - r - self.y0) / self.cell)))
+        j1 = min(self.ny - 1, int(math.floor((y + r - self.y0) / self.cell)))
+        self.h_here_last = float(coef[0] + coef[1] * x + coef[2] * y)
+        if i0 > i1 or j0 > j1:
+            return
+        gx = self.x0 + (np.arange(i0, i1 + 1) + 0.5) * self.cell      # cell centres (_accumulate floors into cells)
+        gy = self.y0 + (np.arange(j0, j1 + 1) + 0.5) * self.cell
+        X, Y = np.meshgrid(gx, gy, indexing="ij")
+        u = (X - x) * c + (Y - y) * s                                  # heading-frame forward
+        v = -(X - x) * s + (Y - y) * c                                 # heading-frame left
+        sub = self.H[i0:i1 + 1, j0:j1 + 1]                             # a view: writes land in the map
+        fill = (np.abs(u) <= half_x) & (np.abs(v) <= half_y) & np.isnan(sub)
+        sub[fill] = (coef[0] + coef[1] * X + coef[2] * Y)[fill].astype(np.float32)
 
     # ---------------------------------------------------------------- accumulate / sample
     def _accumulate(self, pts):
