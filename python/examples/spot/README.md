@@ -10,6 +10,14 @@ The headline result is **`spot_steps.pt` — a single generalist policy** that w
 rough/uneven terrain, and climbs discrete stairs up to **0.20 m risers**, while preserving the base gait's
 velocity/steering command-following and a symmetric (drift-free) gait.
 
+> **2026-09-13: `spot_steps.pt` is now the course policy** (`spot_course.py` wave 2, arm B seed 2): stairs,
+> hills, cross-slopes and rough ground with shoves, stand mode, command switches, messy resets, real torque
+> limits and a foot-placement reward. It is steadier under shoves and on cross-slopes and keeps its feet off
+> tread edges, at the cost of flat steering at 1.18 against the 1.10 gate. The scores quoted further down were
+> measured on the previous stairs-only policy (sha256 06d0716e..., in git history) unless they say otherwise.
+> Viewers must send its stand signal (a (0,0) clock at an exactly-zero command); `play_spot_steps.py`,
+> `spot_slam.py` and the C++ `spot_play` do.
+
 ## How it works
 
 Locomotion is built in two stages, both trained from scratch inside threepp:
