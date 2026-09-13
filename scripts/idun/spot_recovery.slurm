@@ -17,11 +17,13 @@
 #SBATCH --account=share-ie-iir
 #SBATCH --partition=GPUQ
 #SBATCH --gres=gpu:1
-#SBATCH --constraint=h100
+# Any of the three big GPUs, 6 cores, 32 GB: the loop uses ~3 cores, and an h100-only 12-core request left 3 of 4
+# array tasks pending on (Resources) behind one running task on 2026-09-13 (free GPUs sit on CPU-starved nodes).
+#SBATCH --constraint=h100|a100|h200
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=12
-#SBATCH --mem=48G
+#SBATCH --cpus-per-task=6
+#SBATCH --mem=32G
 #SBATCH --time=02:00:00
 #SBATCH --job-name=spotrecov
 #SBATCH --output=/cluster/work/laht/logs/spotrecov-%A_%a.out
