@@ -95,6 +95,34 @@ ROUGH_TAPER = 0.25               # raised-cosine edge window share: 1.2 m in x, 
 ROUGH_DIAGONAL = "ll_hh"         # BVH copy of a height field: each cell split (x0,y0)-(x1,y1)
 ROUGH_BACKENDS = ("trimesh", "heightfield")
 
+# Level ladders. 'pilot' is the ladder above (the 2026-09-13 pilot trained on it, and score_e0's course cells RG05 /
+# RG11 / RG17 / H08 / H16 / H25 name its values, so it stays the default of every world that is not course=True). 'hard'
+# is the wave-2 training ladder: the pilot reached the top level on stairs, cross and rough within 300 iterations, so the
+# top of those three moves up. Hills are unchanged: 25 deg is still unclimbed. The stair risers only apply to a
+# course=True world (SpotStepsEnv passes them as its riser ladder, so the tread closed form and the placement reward follow).
+LADDERS = {
+    "pilot": {"hills": HILL_DEGS, "cross": CROSS_DEGS, "rough": ROUGH_AMPS, "risers": None},
+    "hard": {"hills": HILL_DEGS, "cross": (5.0, 9.0, 13.0, 17.0, 21.0, 25.0),
+             "rough": (0.03, 0.07, 0.11, 0.15, 0.20, 0.25), "risers": (0.05, 0.09, 0.13, 0.17, 0.20, 0.23)},
+}
+EDGE_FOOT_DY = 0.21              # a stance foot's lateral offset (spot_feet: settled tips dy +-0.208..0.215)
+
+
+def cross_pivot(degs, spacing):
+    """The cross strip's centreline height for a ladder: CROSS_PIVOT, or the lowest 5 cm step that keeps the steepest
+    band's low edge 5 cm above the ground (0.60 m for the pilot's 20 deg, 0.75 m for 25 deg)."""
+    need = 0.5 * spacing * math.tan(math.radians(max(degs))) + 0.05
+    return max(CROSS_PIVOT, round(math.ceil(round(need / 0.05, 6)) * 0.05, 6))
+
+
+def cross_edge_steps(degs, spacing, dy=None):
+    """[len-1] height step where cross band j meets band j+1, at lateral offset dy (default the lane edge). Lane to lane
+    the corrugation makes it 0 at every x: neighbouring lanes' edges meet at one height (a gutter or a ridge)."""
+    dy = 0.5 * spacing if dy is None else dy
+    t = [math.tan(math.radians(d)) for d in degs]
+    return [dy * (t[j + 1] - t[j]) for j in range(len(t) - 1)]
+
+
 BAND_LEN = {HILLS: HILL_BAND, CROSS: CROSS_BAND, ROUGH: ROUGH_BAND}
 FEATURE_DIST = {HILLS: (HILL_APPROACH - SPAWN_OFF) + 2.0 * HILL_RUN + HILL_LAND,   # 6.3 m: past the down ramp
                 CROSS: CROSS_BAND - SPAWN_OFF,                                     # 4.3 m: the band's end
@@ -157,15 +185,22 @@ def family_codes(lane_family):
 class CourseLanes:
     """The hills / cross / rough lanes of one world: builds their colliders and answers the per-lane band length and
     feature distance. codes [K] course codes (FLAT and STAIRS lanes build nothing here); bands [K] or None: a lane builds
-    only that band (an eval world with frozen levels) instead of all N_LEVELS."""
+    only that band (an eval world with frozen levels) instead of all N_LEVELS. ladder: a LADDERS key."""
 
-    def __init__(self, codes, spacing, bands=None, seed=0, rough_backend="trimesh"):
+    def __init__(self, codes, spacing, bands=None, seed=0, rough_backend="trimesh", ladder="pilot"):
         if rough_backend not in ROUGH_BACKENDS:
             raise ValueError(f"rough_backend must be one of {ROUGH_BACKENDS}, got {rough_backend!r}")
+        if ladder not in LADDERS:
+            raise ValueError(f"ladder must be one of {list(LADDERS)}, got {ladder!r}")
         self.codes = np.asarray(codes, np.int64).reshape(-1)
         self.k, self.spacing = self.codes.shape[0], float(spacing)
         self.bands = None if bands is None else np.asarray(bands, np.int64).reshape(-1)
         self.rough_backend = rough_backend
+        self.ladder = ladder
+        lad = LADDERS[ladder]
+        self.hill_degs, self.cross_degs, self.rough_amps = lad["hills"], lad["cross"], lad["rough"]
+        self.level_value = {HILLS: self.hill_degs, CROSS: self.cross_degs, ROUGH: self.rough_amps}
+        self.cross_pivot = cross_pivot(self.cross_degs, self.spacing)
         # corrugation: alternate the tilt inside each contiguous run of cross lanes, so lane edges meet at one height
         run = np.zeros(self.k, np.int64)
         for i in range(1, self.k):
@@ -211,7 +246,7 @@ class CourseLanes:
             c, y = int(self.codes[i]), i * self.spacing
             if c == HILLS:
                 for j in self._levels(i):
-                    th = math.radians(HILL_DEGS[j])
+                    th = math.radians(self.hill_degs[j])
                     s, co, t = math.sin(th), math.cos(th), math.tan(th)
                     L, rise = HILL_RUN / co, HILL_RUN * t
                     T = HILL_RUN * s + ss.SLAB_MARGIN        # vertical drop T / cos exceeds the rise at the ramp top
@@ -229,13 +264,13 @@ class CourseLanes:
                 sg = float(self.cross_sign[i])
                 lv = list(self._levels(i))
                 for j in lv:
-                    th = math.radians(CROSS_DEGS[j])
+                    th = math.radians(self.cross_degs[j])
                     s, co, t = math.sin(th), math.cos(th), math.tan(th)
                     x0 = -CROSS_BACK if j == lv[0] else j * CROSS_BAND
                     x1 = x_end if j == lv[-1] else (j + 1) * CROSS_BAND
                     # thick enough that the underside is below the ground under the high edge: T/cos >= pivot + 1.5 tan + 0.1
-                    T = co * (CROSS_PIVOT + 0.5 * W * t + 0.1) + W * s
-                    top, n = (0.5 * (x0 + x1), y, CROSS_PIVOT), (0.0, -sg * s, co)
+                    T = co * (self.cross_pivot + 0.5 * W * t + 0.1) + W * s
+                    top, n = (0.5 * (x0 + x1), y, self.cross_pivot), (0.0, -sg * s, co)
                     _box(world, (x1 - x0, W / co, T), [top[a] - n[a] * 0.5 * T for a in range(3)], "x", sg * th,
                          material)
                     self.n_boxes += 1
@@ -257,7 +292,7 @@ class CourseLanes:
         z = np.zeros((per * len(lv) + 1, H.shape[2]), np.float32)
         for b, j in enumerate(lv):
             z[b * per: b * per + per + 1] = np.maximum(z[b * per: b * per + per + 1],
-                                                       H[int(self.rough_shape[i, j])] * ROUGH_AMPS[j])
+                                                       H[int(self.rough_shape[i, j])] * self.rough_amps[j])
         return lv[0] * ROUGH_BAND, z
 
     def _add_rough(self, world, i, y, bvh_sink):

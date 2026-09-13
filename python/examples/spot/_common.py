@@ -184,6 +184,14 @@ def eval_flat_steering(env_cls, policy_path, k=512, device="cuda", height_source
     if seed is not None:
         torch.manual_seed(seed)
     kw = {"height_source": meta.get("height_source", "analytic")} if height_source else {}
+    # A checkpoint trained on real torque limits is measured on them (the teacher runs on the same plant), and one
+    # trained in stand mode is shown the (0,0) clock at its zero command, as at deploy; the teacher never is (it has
+    # never seen the sentinel). Checkpoints without these meta keys build exactly the historical env.
+    stand = bool(meta.get("stand_mode", False))
+    if meta.get("drive_limits_are_forces"):
+        kw["drive_limits_are_forces"] = True
+    if stand:
+        kw["stand_mode"] = True
     env = env_cls(num_envs=k, device=device, flat_only=True, **kw)
     pol = (lambda o: ac.act_mean(norm.norm(o))) if norm is not None else ac.act_mean
     # Base gait teacher (50-d, norm-aware): compare against it so steering regression is defined
@@ -198,13 +206,17 @@ def eval_flat_steering(env_cls, policy_path, k=512, device="cuda", height_source
     worst = 0.0
     per_cmd = []
     for cmd in grid:
-        ep = env.measure_tracking(pol, cmd); et = env.measure_tracking(tea, cmd)
+        env.stand_mode = stand          # read at call time (eager): the policy's contract, then the teacher's
+        ep = env.measure_tracking(pol, cmd)
+        env.stand_mode = False
+        et = env.measure_tracking(tea, cmd)
         ratio = ep / max(et, 1e-6); worst = max(worst, ratio)
         per_cmd.append({"cmd": list(cmd), "policy_err": ep, "teacher_err": et, "ratio": ratio})
         flag = "" if ratio <= 1.10 else "  <- REGRESSED"
         print(f"   [{cmd[0]:+.1f},{cmd[1]:+.1f},{cmd[2]:+.1f}]     {ep:8.3f}    {et:8.3f}    {ratio:5.2f}{flag}")
     print(f"worst ratio {worst:.2f}  ->  {'PASS (steering preserved)' if worst <= 1.10 else 'FAIL (steering degraded)'}")
-    return {"worst": worst, "pass": worst <= 1.10, "per_cmd": per_cmd, "k": k, "seed": seed}
+    return {"worst": worst, "pass": worst <= 1.10, "per_cmd": per_cmd, "k": k, "seed": seed,
+            "stand_mode": stand, "drive_limits_are_forces": bool(kw.get("drive_limits_are_forces", False))}
 
 
 # ── symmetry augmentation ─────────────────────────────────────────────────────

@@ -7,6 +7,8 @@
     # the mixed-terrain course (spot_course.py), continued from a 96-d raycast checkpoint:
     python train_spot_steps.py --course --warmstart idun_runs/raycast_s4/spot_steps_latest.pt --iters 300 \
         --shove-ramp 0.5,2.0,600 --foot-mu-dr 0.3,1.0,8 --stand-mode --w-place 10 --select final
+    # wave 2 adds abrupt command switches and messy resets (and trains on the 'hard' ladder by default):
+    python train_spot_steps.py --course --warmstart ... --cmd-switch 3,8,0.3 --reset-noise 0.08,0.06,0.3 --w-place 30
 
 The curriculum (per-env level, promote on clearing the tent / demote only when the robot never reached
 it; a fall does not demote) lives in SpotStepsEnv.
@@ -262,6 +264,21 @@ def main():
                     help="a zero command freezes the gait clock and shows the policy a (0,0) clock, zeroes the "
                          "imitation weight and charges --w-stand * mean(joint_vel^2). Deploy must send the same sentinel.")
     ap.add_argument("--w-stand", dest="w_stand", type=float, default=W_STAND)
+    # ---- wave 2 (2026-09-13): what the pilot policy was not ready for in spot_slam: resets and a key jumping 0 -> full ---
+    ap.add_argument("--course-ladder", dest="course_ladder", choices=tuple(sc.LADDERS), default="hard",
+                    help="hills / cross / rough levels and the course stair risers (spot_course.LADDERS). hard (default): "
+                         "rough 0.03-0.25 m, cross 5-25 deg, risers 0.05-0.23 m, hills 4-25 deg; pilot: the 2026-09-13 "
+                         "pilot's ladder (rough 0.02-0.17, cross 4-20, the default risers)")
+    ap.add_argument("--cmd-switch", dest="cmd_switch", default="",
+                    help="'lo,hi,p_standgo': resample every env's command every U(lo, hi) s; with probability p_standgo "
+                         "the switch is abrupt (stand -> vx U(1.0, 1.5), or walking -> exactly 0), otherwise the usual "
+                         "sampler. Suggested 3,8,0.3. Empty = off (the CMD_MIN..CMD_MAX step timer)")
+    ap.add_argument("--reset-noise", dest="reset_noise", default="",
+                    help="'q_std,drop_max,v_max': joint preset + N(0, q_std) rad, spawn height + U(0, drop_max) m, base "
+                         "velocity U(-v_max, v_max) m/s per horizontal axis and yaw rate U(-0.5, 0.5) rad/s on every reset. "
+                         "Suggested 0.08,0.06,0.3. Empty = off")
+    ap.add_argument("--reset-nohold-frac", dest="reset_nohold_frac", type=float, default=0.3,
+                    help="with --reset-noise: the share of flat and stair resets that get no joint hold at all")
     ap.add_argument("--w-place", dest="w_place", type=float, default=0.0,
                     help=f"foot-placement reward on stair treads: per touchdown min(d_edge, {PLACE_SAT}) / {PLACE_SAT}, "
                          f"-{PLACE_PERCH} if perched on a nosing. Needs honest termination (the touchdowns). 0 = off")
@@ -319,6 +336,14 @@ def main():
     if args.course:
         kw.update(course=True, course_shares=args.course_shares or None, rough_backend=args.rough_backend,
                   spawn_hold=args.spawn_hold)
+    if args.course:
+        kw.update(course_ladder=args.course_ladder)
+    cmd_switch = tuple(float(v) for v in args.cmd_switch.split(",")) if args.cmd_switch else None
+    reset_noise = tuple(float(v) for v in args.reset_noise.split(",")) if args.reset_noise else None
+    if cmd_switch is not None:
+        kw.update(cmd_switch=cmd_switch)
+    if reset_noise is not None:
+        kw.update(reset_noise=reset_noise, reset_nohold_frac=args.reset_nohold_frac)
     if args.stand_mode:
         kw.update(stand_mode=True, w_stand=args.w_stand)
     if args.w_place > 0:
@@ -343,6 +368,15 @@ def main():
     if foot_mu_np is not None:
         print(f"foot friction DR: {args.foot_mu_dr} buckets 'min', terrain {args.terrain_mu} 'min' "
               f"(rough colliders on the default material)")
+    if args.course:
+        c = env._course
+        print(f"course ladder {args.course_ladder}: stair risers {list(env.riser_list)}, rough {list(c.rough_amps)} m, "
+              f"cross {list(c.cross_degs)} deg (pivot {c.cross_pivot:.2f} m), hills {list(c.hill_degs)} deg")
+    if cmd_switch is not None:
+        print(f"command switches every U({cmd_switch[0]:g}, {cmd_switch[1]:g}) s, abrupt stand<->go with p {cmd_switch[2]:g}")
+    if reset_noise is not None:
+        print(f"reset noise: q N(0, {reset_noise[0]:g}) rad, drop U(0, {reset_noise[1]:g}) m, v U(+-{reset_noise[2]:g}) m/s, "
+              f"no hold on {args.reset_nohold_frac:g} of flat/stair resets")
     print(f"termination {termination}, drive limits {'torques' if dlf else 'impulses'}"
           + (", stand mode" if args.stand_mode else "") + (f", w_place {args.w_place}" if args.w_place > 0 else ""))
     if env.rays is not None:
@@ -391,7 +425,13 @@ def main():
                     "shove_dv_min": args.shove_dv_min if shove else None,
                     "foot_mu_dr": args.foot_mu_dr, "terrain_mu": args.terrain_mu if args.foot_mu_dr else None,
                     "stand_mode": bool(args.stand_mode), "w_stand": args.w_stand if args.stand_mode else None,
-                    "w_place": args.w_place, "place_sat": PLACE_SAT, "place_perch": PLACE_PERCH},
+                    "w_place": args.w_place, "place_sat": PLACE_SAT, "place_perch": PLACE_PERCH,
+                    "course_ladder": args.course_ladder if args.course else None,
+                    "risers": list(env.riser_list),
+                    "course_values": ({"rough": list(env._course.rough_amps), "cross": list(env._course.cross_degs),
+                                       "hills": list(env._course.hill_degs)} if args.course else None),
+                    "cmd_switch": args.cmd_switch, "reset_noise": args.reset_noise,
+                    "reset_nohold_frac": args.reset_nohold_frac if reset_noise is not None else None},
               aux_loss=aux)
     if shove is not None:
         ppo.meta["push_lanes"], ppo.meta["push_mode"] = "non-flat", "interval"
@@ -501,6 +541,15 @@ def main():
                 course["spawn"] = {r["block_name"]: r["spawn"] for r in rows if "spawn" in r}
                 print("        spawn IK-bad / hold-bad of hold-checked: "
                       + " | ".join(f"{n} {a}/{b} of {c}" for n, (a, b, c) in bad.items()))
+        if cmd_switch is not None:
+            course["switches"] = env.switch_counts()
+            print("        switches (stand->go / go->stand of all): " + " | ".join(
+                f"{n} {v['stand_to_go']}/{v['go_to_stand']} of {v['switches']}" for n, v in course["switches"].items()))
+        if reset_noise is not None:
+            course["spawn_families"] = sf_ = env.spawn_families()
+            print("        spawn falls <=1 s held / unheld (hold-bad of checked): " + " | ".join(
+                f"{n} {v['early_falls_held']}/{v['held']} {v['early_falls_unheld']}/{v['resets'] - v['held']} "
+                f"({v['hold_bad']}/{v['hold_checked']})" for n, v in sf_.items()))
         env.reset_stats(episodes=False)
         metric({"type": "log", **ppo.last_log, **ppo.diagnostics(), "track": trk, "flat": ftrk,
                 "level": lvl, "clear_legacy": env.last_clear, "fell": env.last_fell, "gate_ok": ok,
