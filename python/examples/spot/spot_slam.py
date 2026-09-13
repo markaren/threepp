@@ -30,7 +30,7 @@ from threepp.rl import load_policy
 from threepp.utils import fetch_file
 from spot_deploy import (build_spot, fetch_assets,
                          _quat_to_R, _quat_from_R,
-                         default_q, isaac_to_add, add_to_isaac, ACTION_SCALE, Z0)
+                         default_q, isaac_to_add, add_to_isaac, ACTION_SCALE, Z0, LIM)
 from spot_depth_scan import ForwardDepthScanner
 from spot_terrain_env import VX_HI, VY_HI, WZ_HI
 from scratch_env import STIFF_GAINS
@@ -832,8 +832,15 @@ def main():
     if args.recovery_model:
         rec_ac, rec_norm, _rec_meta = load_policy(args.recovery_model, device="cpu")
         rec_ac.eval()
-        rec = (rec_ac, rec_norm)
-        print(f"[recovery] {os.path.basename(args.recovery_model)} takes over below up_z {RECOVER_UP}  (F = knock over)")
+        # The recovery checkpoint's own action scale and target clip while it drives (wave 2 trains at 0.5 / 1.0,
+        # clipped to the joint limits; a pilot meta has neither = 0.2 unclipped). The walking policy keeps ACTION_SCALE.
+        rec_scale = float(_rec_meta.get("action_scale", ACTION_SCALE))
+        rec_lo = np.array([LIM[j][0] for _ in range(4) for j in ("hx", "hy", "kn")], np.float32) \
+            if _rec_meta.get("target_clip", False) else None      # add order, as set_drive_targets takes them
+        rec_hi = np.array([LIM[j][1] for _ in range(4) for j in ("hx", "hy", "kn")], np.float32)
+        rec = (rec_ac, rec_norm, rec_scale, rec_lo, rec_hi)
+        print(f"[recovery] {os.path.basename(args.recovery_model)} takes over below up_z {RECOVER_UP}, action scale "
+              f"{rec_scale}{' clipped to the joint limits' if rec_lo is not None else ''}  (F = knock over)")
 
     # ── terrain ───────────────────────────────────────────────────────────────
     print("[terrain] generating ...")
@@ -1098,13 +1105,17 @@ def main():
             if up >= RECOVER_UP:
                 return False
             mode[0] = "recover"; settled[0] = 0
-            print(f"[recovery] up_z {up:.2f}: recovery policy takes over")
+            # last_act is in the driving policy's action units: keep the joint targets it stands for across the hand-over
+            last_act[:] *= ACTION_SCALE / rec[2]
+            print(f"[recovery] up_z {up:.2f}: recovery policy takes over (action scale {rec[2]}"
+                  f"{', clipped' if rec[3] is not None else ''})")
         speed = float(np.linalg.norm(art.root_velocity()[:3]))
         stood = up > 0.9 and z - ground > 0.40 and speed < 0.2
         settled[0] = settled[0] + 1 if stood else 0
         if settled[0] >= RECOVER_SETTLE:
             mode[0] = "walk"; hdg_lock[0] = None; cmd_s[:] = 0.0
-            print("[recovery] upright and settled: walking policy takes back")
+            last_act[:] *= rec[2] / ACTION_SCALE
+            print(f"[recovery] upright and settled: walking policy takes back (action scale {ACTION_SCALE})")
             return False
         obs = v2_obs(art, last_act, np.zeros(3, np.float32), np.zeros(45, np.float32), ground, None)
         with torch.no_grad():
@@ -1113,7 +1124,10 @@ def main():
                 obs_t = rec[1].norm(obs_t)
             a = rec[0].act_mean(obs_t)[0].numpy()
         last_act[:] = a
-        art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
+        tgt = (default_q + rec[2] * a)[add_to_isaac].astype(np.float32)
+        if rec[3] is not None:
+            tgt = np.clip(tgt, rec[3], rec[4])      # as spot_recovery_env.act clips them in training
+        art.set_drive_targets(tgt)
         return True
 
     def knock():

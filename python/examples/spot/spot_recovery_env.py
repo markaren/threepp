@@ -27,6 +27,23 @@ drives (the target follows the joints), so it lands the way a fall lands. Reward
 Promote on a success within the episode, demote on none. No fall terminations: only a numerical blow-up ends an episode.
 
 Success: up_z > SUCCESS_UP, base height > SUCCESS_Z, mean |q - stance| < SUCCESS_QERR, held SUCCESS_HOLD ticks (1 s).
+
+Wave 2 knobs (2026-09-13), each off by default so the defaults are the pilot bit for bit:
+  - action_scale S + target_clip: targets = default_q + S * action, clipped to the joint limits. The pilot's 0.2 left the
+    eval p95 torque at 10-25 N·m while the roll-over search needed the caps.
+  - w_prog W: potential-based progress shaping W * (gamma * phi(s') - phi(s)), phi = (1 - g_z) / 2 with g_z the z of
+    projected gravity in the body frame (-1 upright, +1 on the back): phi is 0 on the back, 0.5 on a side, 1 upright.
+    up_slope C: the upright term becomes W_UP * ((1 - C) phi^2 + C phi), whose slope on the back is W_UP * C instead
+    of the pilot's zero (0% back success in all four pilot runs).
+  - hard_frac F: a share F of the fallen resets draws an L3 start whatever the env's level, and those episodes neither
+    promote nor demote (only 6-58 of 2048 envs reached L3 in 1000 pilot iterations).
+  - fallen_effort_free: the torque / action-rate / joint-limit penalties are scaled by clamp((up_z - 0.3) / 0.6, 0, 1),
+    and w_down C pays -C per live tick while up_z < 0.5. Watching the pilot in spot_slam, "it kinda just gives up": while
+    down every attempt paid effort penalties and nothing paid partial progress, so lying still was the cheapest policy.
+  - gave_up (a metric, always on, never in obs or reward): the episode had >= 1 s in a row down (up_z < 0.5) with mean
+    |joint velocity| < 0.25 rad/s after the limp ticks. Calibrated 2026-09-13 at K=256 from L3 starts: zero actions (a
+    policy that stopped trying) count 98.4% gave up at a median 0.064 rad/s, while per-tick target jitter of 0.06 rad
+    already moves the joints at a median 1.34 rad/s and counts 0%.
 """
 import math
 import os
@@ -63,6 +80,10 @@ W_TORQUE, W_ARATE, W_LIMIT, W_IMPACT = 0.1, 0.005, 0.2, 0.05
 CONTACT_EVERY = 5                       # self-contact is measured every this many ticks (and counted x this)
 SPAWN_BLEND = (1.0, 0.8, 0.6, 0.45, 0.3, 0.15)   # redraw i pulls the joint draw this far from the stance
 TAU_BINS, TAU_W = 48, 2.5               # |torque| histogram 0..120 N·m per joint group, for p95
+OBS_LAST_ACT = slice(36, 48)            # last_act in the 96-d layout: lin_b, ang_b, proj_g, cmd (3 each), qpos, jv (12)
+DOWN_UP = 0.5                           # "not upright" for w_down and the gave-up metric (= spot_slam's RECOVER_UP)
+EFFORT_UP_LO, EFFORT_UP_SPAN = 0.3, 0.6  # fallen_effort_free: effort penalties x clamp((up_z - 0.3) / 0.6, 0, 1)
+GIVEUP_JV, GIVEUP_TICKS = 0.25, 50      # gave up: not upright and mean |joint velocity| < 0.25 rad/s for 1 s in a row
 CONFIG = {"task": "recovery", "control_hz": CONTROL_HZ, "dt": DT, "substeps": SUBSTEPS, "obs_dim": OBS_DIM,
           "act_dim": ACT_DIM, "episode_s": EPISODE_S, "limp_ticks": LIMP_TICKS, "stand_frac": STAND_FRAC,
           "n_levels": N_LEVELS, "stand_z": STAND_Z,
@@ -179,11 +200,20 @@ class SpotRecoveryEnv(VecTask):
     clip_actions = None
 
     def __init__(self, num_envs=2048, device="cuda", seed=0, self_collision=True, stand_frac=STAND_FRAC,
-                 init_level=0, freeze_level=False, count_episodes=None, limp_ticks=LIMP_TICKS):
+                 init_level=0, freeze_level=False, count_episodes=None, limp_ticks=LIMP_TICKS, action_scale=ACTION_SCALE,
+                 target_clip=False, w_prog=0.0, prog_gamma=0.99, up_slope=0.0, hard_frac=0.0, fallen_effort_free=False,
+                 w_down=0.0):
         """self_collision: legs collide with the body and each other (the point of this env; False is the walking plant).
         init_level int or [K]; freeze_level holds it (evaluation). count_episodes E: the counters take each env's first
-        E episodes only (None = all)."""
+        E episodes only (None = all). The wave 2 knobs (module docstring) default to the pilot: action_scale 0.2 without
+        a target clip, no progress shaping (prog_gamma must be the trainer's PPO gamma), the pilot's upright term, no hard
+        draws. fallen_effort_free: the torque / action-rate / joint-limit penalties are scaled by
+        clamp((up_z - 0.3) / 0.6, 0, 1), so trying costs nothing while down (the impact penalty stays whole). w_down C:
+        -C per live step while up_z < DOWN_UP, so lying still is strictly worse than trying."""
         self.self_collision = bool(self_collision)
+        self.action_scale, self.target_clip = float(action_scale), bool(target_clip)
+        self.w_prog, self.prog_gamma, self.up_slope = float(w_prog), float(prog_gamma), float(up_slope)
+        self.hard_frac, self.fallen_effort_free, self.w_down = float(hard_frac), bool(fallen_effort_free), float(w_down)
 
         class _Robot:
             def __init__(self_, world, i):
@@ -220,6 +250,11 @@ class SpotRecoveryEnv(VecTask):
         self.succ_tick = self.env_state((), init=-1, dtype=torch.long)       # tick the first 1 s hold began (-1: none)
         self.contact_ticks = self.env_state((), init=0, dtype=torch.long)
         self.tau_peak = self.env_state((3,))
+        self.still_run = self.env_state((), init=0, dtype=torch.long)       # consecutive down-and-motionless live ticks
+        self.gave_up = self.env_state((), init=False, dtype=torch.bool)
+        self.hard = torch.zeros(K, dtype=torch.bool, device=dev)            # this episode is a hard_frac L3 draw
+        self._phi = torch.zeros(K, device=dev)                              # uprightness potential now / a tick ago
+        self._phi_prev = torch.zeros(K, device=dev)
         self.up = torch.ones(K, device=dev)
         self._tgt = self.stance.expand(K, 12).clone()
         self._tau = torch.zeros(K, 12, device=dev)
@@ -228,8 +263,11 @@ class SpotRecoveryEnv(VecTask):
         self._tick = 0                                                      # control ticks stepped (host counter)
         self.count_episodes = None if count_episodes is None else int(count_episodes)
         self.ep_index = torch.zeros(K, dtype=torch.long, device=dev)
-        # counters per (level, start kind): episodes, success by 3 s, by 6 s, recovery-time sum, contact ticks, blow-ups
-        self._stats = torch.zeros(N_LEVELS, len(KIND_NAMES), 6, dtype=torch.float64, device=dev)
+        # counters per (level, start kind): episodes, success by 3 s, by 6 s, recovery-time sum, contact ticks, blow-ups,
+        # gave up. A hard_frac draw counts under L3, the level it started at.
+        self._stats = torch.zeros(N_LEVELS, len(KIND_NAMES), 7, dtype=torch.float64, device=dev)
+        self._hard = torch.zeros(4, dtype=torch.float64, device=dev)     # hard draws, of them above the env's level, eps, successes
+        self._prog = torch.zeros(4, dtype=torch.float64, device=dev)     # live ticks, sum and sum |.| of the progress term, sum w_down
         self._tau_hist = torch.zeros(3, TAU_BINS, dtype=torch.float64, device=dev)
         self._moves = torch.zeros(N_LEVELS, 3, dtype=torch.float64, device=dev)   # episodes, promoted, demoted
         self._spawn = torch.zeros(3, dtype=torch.float64, device=dev)            # resets, redraws, fell back to stance
@@ -272,6 +310,11 @@ class SpotRecoveryEnv(VecTask):
         lvl = self.level[idx]
         u = self._rand(n)
         stand = self._rand(n) < self.stand_frac
+        if self.hard_frac > 0:                  # drawn only when on, so the pilot's random stream is untouched
+            hard = ~stand & (self._rand(n) < self.hard_frac)
+            self._hard[:2] += torch.stack([hard.sum(), (hard & (lvl < N_LEVELS - 1)).sum()]).double()
+            lvl = torch.where(hard, N_LEVELS - 1, lvl)
+            self.hard[idx] = hard
         # kind by level: L0 / L1 tilt, L2 side or tilt 60-120, L3 back / side / random
         kind = torch.where(lvl <= 1, TILT, torch.where(lvl == 2, torch.where(u < 0.5, SIDE, TILT),
                            torch.where(u < 0.4, BACK, torch.where(u < 0.8, SIDE, RANDOM))))
@@ -306,16 +349,27 @@ class SpotRecoveryEnv(VecTask):
         self.kind[idx] = kind
         self._blowup[idx] = False
         self._spawn[0] += n
+        if self.w_prog > 0 or self.up_slope > 0:
+            # the new episode's potential, so its first progress term does not difference against the last episode's end
+            self._phi[idx] = self._potential(quat)
+
+    def _potential(self, q):
+        """phi = (1 - g_z) / 2, g_z = projected gravity's body-frame z: 0 on the back, 0.5 on a side, 1 upright."""
+        return 0.5 * (1.0 - quat_rotate_inverse(q, self.grav.expand(q.shape[0], 3))[:, 2])
 
     # ---- step -------------------------------------------------------------------------------------------------
     def act(self, a):
         limp = (self.steps < self.limp_ticks)[:, None]
         # limp: the drive target follows the joints, so the PD spring does nothing and the robot lands as it falls
-        a_limp = (self.sim.joint_pos[:, self.i2a] - self.default_q) / ACTION_SCALE
+        a_limp = (self.sim.joint_pos[:, self.i2a] - self.default_q) / self.action_scale
         a = torch.where(limp, a_limp, a)
         self.prev_act.copy_(self.last_act)
         self.last_act.copy_(a)
-        tgt = (self.default_q + ACTION_SCALE * a)[:, self.a2i]
+        tgt = (self.default_q + self.action_scale * a)[:, self.a2i]
+        if self.target_clip:
+            # the policy's targets stay inside the joint limits (at S = 1 an action of 3 would ask hy for 2.7 rad past the
+            # stance); the limp ticks keep following the joints, which a landing can push up to 0.056 rad past a limit
+            tgt = torch.where(limp, tgt, torch.maximum(torch.minimum(tgt, self.q_hi), self.q_lo))
         self._tgt.copy_(tgt)
         return tgt
 
@@ -333,6 +387,14 @@ class SpotRecoveryEnv(VecTask):
         self.succ_run.copy_(torch.where(ok, self.succ_run + 1, 0))
         first = (self.succ_tick < 0) & (self.succ_run >= SUCCESS_HOLD)
         self.succ_tick.copy_(torch.where(first, self.steps - (SUCCESS_HOLD - 1), self.succ_tick))
+        if self.w_prog > 0 or self.up_slope > 0:
+            self._phi_prev.copy_(self._phi)
+            self._phi.copy_(self._potential(q))
+        # gave up: down and nearly motionless for GIVEUP_TICKS in a row after the limp settle ("it kinda just gives up",
+        # Lars watching the pilot policy in spot_slam, 2026-09-13). A metric only: nothing here feeds obs or reward.
+        still = (self.up < DOWN_UP) & (jv.abs().mean(dim=1) < GIVEUP_JV) & (self.steps > self.limp_ticks)
+        self.still_run.copy_(torch.where(still, self.still_run + 1, 0))
+        self.gave_up.copy_(self.gave_up | (self.still_run >= GIVEUP_TICKS))
         grp = self._tau.abs().view(-1, 4, 3).amax(dim=1)                    # [K, 3] hx hy kn
         self.tau_peak.copy_(torch.maximum(self.tau_peak, grp))
         # [joint group, env x leg] bins: the add order is per leg (hx, hy, kn), so the group is the last axis
@@ -373,17 +435,36 @@ class SpotRecoveryEnv(VecTask):
         lv = self.sim.link_linvel
         lz = self.sim.link_pose[:, :9, 6]                                   # base, hips, upper legs
         hit = ((lv[:, :9].norm(dim=2) - 1.5).clamp_min(0.0) ** 2 * (lz < 0.2).float()).sum(dim=1)
+        if self.up_slope > 0:
+            c, phi = self.up_slope, self._phi
+            upright = W_UP * ((1.0 - c) * phi * phi + c * phi)
+        else:
+            upright = W_UP * ((up + 1.0) * 0.5) ** 2       # the pilot's: zero slope on the back
+        # effort gate: 1 upright, 0 below up_z 0.3 (fallen_effort_free), else no gate (the pilot)
+        eff = ((up - EFFORT_UP_LO) / EFFORT_UP_SPAN).clamp(0.0, 1.0) if self.fallen_effort_free else 1.0
         terms = {
-            "upright": W_UP * ((up + 1.0) * 0.5) ** 2,
+            "upright": upright,
             "height": W_HEIGHT * gate * (1.0 - (z - STAND_Z).abs() / 0.25).clamp(0.0, 1.0),
             "pose": W_POSE * gate * torch.exp(-(jp - self.stance).pow(2).mean(dim=1) / 0.1),
             "still": W_STILL * stood * torch.exp(-(self._lin_b.pow(2).sum(dim=1) + 0.25 * self._ang_b.pow(2).sum(dim=1)) / 0.1),
-            "torque": -W_TORQUE * (self._tau / self.cap).pow(2).mean(dim=1),
-            "arate": -W_ARATE * (a - self.prev_act).pow(2).mean(dim=1),
-            "limit": -W_LIMIT * ((0.1 - near).clamp_min(0.0) / 0.1).mean(dim=1),
+            "torque": -W_TORQUE * eff * (self._tau / self.cap).pow(2).mean(dim=1),
+            "arate": -W_ARATE * eff * (a - self.prev_act).pow(2).mean(dim=1),
+            "limit": -W_LIMIT * eff * ((0.1 - near).clamp_min(0.0) / 0.1).mean(dim=1),
             "impact": -W_IMPACT * hit,
         }
-        return {k: v * live for k, v in terms.items()}
+        # extra terms only when on: a zero term would still change the stacked sum's kernel and the stats line
+        if self.w_prog > 0:
+            # potential-based (Ng 1999) with the PPO gamma: a roll back -> side -> upright telescopes to +W, falling
+            # over to -W, and standing pays a (1 - gamma) W drain per step (0.05 at W 5 against 3.0 for standing)
+            terms["progress"] = self.w_prog * (self.prog_gamma * self._phi - self._phi_prev)
+        if self.w_down > 0:
+            terms["down"] = -self.w_down * (up < DOWN_UP).float()
+        out = {k: v * live for k, v in terms.items()}
+        if self.w_prog > 0 or self.w_down > 0:
+            pr = out.get("progress", torch.zeros_like(live))
+            self._prog += torch.stack([live.sum(), pr.sum(), pr.abs().sum(),
+                                       out.get("down", torch.zeros_like(live)).sum()]).double()
+        return out
 
     def observe(self, s):
         q = s.root_quat
@@ -409,12 +490,18 @@ class SpotRecoveryEnv(VecTask):
         s6 = st >= 0
         rt = torch.where(s6, st.double() * DT, 0.0)
         blow = self._blowup[idx]
-        m = torch.stack([torch.ones_like(s6), s3, s6, rt, self.contact_ticks[idx], blow], dim=1).double()
+        m = torch.stack([torch.ones_like(s6), s3, s6, rt, self.contact_ticks[idx], blow, self.gave_up[idx]], dim=1).double()
         if self.count_episodes:
             m = m * (self.ep_index[idx] < self.count_episodes).double()[:, None]
-        self._stats.view(-1, 6).index_add_(0, lvl * len(KIND_NAMES) + kind, m)
+        hard = self.hard[idx]
+        lvl_s = torch.where(hard, N_LEVELS - 1, lvl) if self.hard_frac > 0 else lvl
+        self._stats.view(-1, m.shape[1]).index_add_(0, lvl_s * len(KIND_NAMES) + kind, m)
+        if self.hard_frac > 0:
+            self._hard[2:] += torch.stack([hard.sum(), (hard & s6).sum()]).double()
         if not self.freeze_level:
             fallen = kind != STAND
+            if self.hard_frac > 0:
+                fallen = fallen & ~hard         # a forced L3 draw says nothing about the env's own level
             up_ = fallen & s6
             dn = fallen & ~s6
             self._moves.index_add_(0, lvl, torch.stack([fallen, up_ & (lvl < N_LEVELS - 1), dn & (lvl > 0)], 1).double())
@@ -436,11 +523,24 @@ class SpotRecoveryEnv(VecTask):
                     out["by_level_kind"][f"L{L}_{name}"] = {"episodes": int(e), "success_3s": s[L, k, 1] / e,
                                                           "success_6s": s[L, k, 2] / e,
                                                           "recovery_s": div(s[L, k, 3], s[L, k, 2]),
-                                                          "contact_ticks_per_ep": s[L, k, 4] / e, "blowups": int(s[L, k, 5])}
+                                                          "contact_ticks_per_ep": s[L, k, 4] / e, "blowups": int(s[L, k, 5]),
+                                                          "gave_up": s[L, k, 6] / e}
         fallen = s[:, 1:].sum(axis=(0, 1)); standing = s[:, 0].sum(axis=0)
         for tag, v in (("fallen", fallen), ("stand", standing)):
             out["total"][tag] = {"episodes": int(v[0]), "success_3s": div(v[1], v[0]), "success_6s": div(v[2], v[0]),
-                                 "recovery_s": div(v[3], v[2]), "contact_ticks_per_ep": div(v[4], v[0]), "blowups": int(v[5])}
+                                 "recovery_s": div(v[3], v[2]), "contact_ticks_per_ep": div(v[4], v[0]), "blowups": int(v[5]),
+                                 "gave_up": div(v[6], v[0])}
+        # gave up per L3 start kind, whatever level the episode was counted under in the training mix (hard draws are L3)
+        out["gave_up_L3"] = {name: div(s[N_LEVELS - 1, k, 6], s[N_LEVELS - 1, k, 0]) for k, name in enumerate(KIND_NAMES)
+                             if k in (BACK, SIDE, RANDOM)}
+        if self.hard_frac > 0:
+            hd = self._hard.cpu().numpy()
+            out["hard"] = {"draws": int(hd[0]), "above_level": int(hd[1]), "episodes": int(hd[2]),
+                           "success_6s": div(hd[3], hd[2])}
+        if self.w_prog > 0 or self.w_down > 0:
+            pg = self._prog.cpu().numpy()
+            out["shaping"] = {"live_ticks": int(pg[0]), "progress_mean": div(pg[1], pg[0]),
+                              "progress_mean_abs": div(pg[2], pg[0]), "down_mean": div(pg[3], pg[0])}
         p95 = []
         for g in range(3):
             c = np.cumsum(h[g]); tot = c[-1]
@@ -453,11 +553,18 @@ class SpotRecoveryEnv(VecTask):
         sp = self._spawn.cpu().numpy()
         out["spawn"] = {"resets": int(sp[0]), "self_penetration_redraws": int(sp[1]), "fell_back_to_stance": int(sp[2])}
         if reset:
-            self._stats.zero_(); self._tau_hist.zero_(); self._moves.zero_()
+            self._stats.zero_(); self._tau_hist.zero_(); self._moves.zero_(); self._hard.zero_(); self._prog.zero_()
         return out
 
+    def wave2_config(self):
+        """The wave 2 knobs as the checkpoint meta records them (a meta without them is the pilot)."""
+        return {"action_scale": self.action_scale, "target_clip": self.target_clip, "w_prog": self.w_prog,
+                "prog_gamma": self.prog_gamma, "up_slope": self.up_slope, "hard_frac": self.hard_frac,
+                "fallen_effort_free": self.fallen_effort_free, "w_down": self.w_down, "down_up": DOWN_UP,
+                "effort_up": [EFFORT_UP_LO, EFFORT_UP_SPAN], "giveup": {"jv": GIVEUP_JV, "ticks": GIVEUP_TICKS}}
+
     def config(self):
-        return {**super().config(), **CONFIG, "self_collision": self.self_collision}
+        return {**super().config(), **CONFIG, "self_collision": self.self_collision, **self.wave2_config()}
 
 
 if __name__ == "__main__":
