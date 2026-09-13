@@ -15,7 +15,7 @@
 //   spot_play --urdf R.urdf   # use a specific robot description
 //   spot_play --check 200     # headless smoke: walk forward, assert upright + moved
 //
-// DRIVE (body frame, +x fwd / +y left):  arrows move/strafe, N / M turn.
+// DRIVE (body frame, +x fwd / +y left):  arrows move/strafe, N / M turn, R reset.
 
 #include "SpotScene.hpp"
 #include "renderer_factory.hpp"
@@ -79,7 +79,18 @@ namespace {
 
         SpotRobot spot = loadSpot(world, urdf);
         SpotController ctrl(spot, policy);
-        ctrl.hold(world, 150);// stand up
+        ctrl.spawnStance(world, 0.f, 0.f, 0.f, 60);
+        // stand first: a zero command must hold position (a stand-mode policy gets the (0,0) clock here)
+        const auto s0 = spot.art->rootState();
+        float minZ = s0[2];
+        for (int i = 0; i < 100; ++i) {
+            ctrl.step(world, {0.f, 0.f, 0.f});
+            minZ = std::min(minZ, spot.art->rootState()[2]);
+        }
+        const auto s1 = spot.art->rootState();
+        std::cout << "[check] stand 100 ticks" << (policy.standMode() ? " (stand mode)" : "") << ": drift "
+                  << std::hypot(s1[0] - s0[0], s1[1] - s0[1]) << " m  min base z " << minZ << "\n";
+        const float x0 = s1[0];
         for (int i = 0; i < steps; ++i) ctrl.step(world, {1.0f, 0.0f, 0.0f});
 
         const auto rs = spot.art->rootState();
@@ -88,7 +99,7 @@ namespace {
         const float upZ = R[2][2];// body local-Z·world-Z; >0.5 => still upright
         const bool upright = upZ > 0.5f;
         const bool standing = rs[2] > 0.35f;
-        const bool moved = rs[0] > 0.2f;
+        const bool moved = rs[0] - x0 > 0.2f;
         std::cout << "[check] after " << steps << " fwd ticks: base=("
                   << rs[0] << "," << rs[1] << "," << rs[2] << ")  upZ=" << upZ
                   << "  upright=" << upright << " standing=" << standing << " moved=" << moved << "\n";
@@ -106,7 +117,7 @@ namespace {
 
         SpotRobot spot = loadSpot(world, urdf);// the URDF's own <visual> meshes render
         SpotController ctrl(spot, policy);
-        ctrl.hold(world, 150);
+        ctrl.spawnStance(world, 0.f, 0.f, 0.f, 60);
 
         Canvas canvas(Canvas::Parameters().title("threepp - Spot (native C++ policy)").size(1100, 640).antialiasing(4));
         auto renderer = createRenderer(canvas);
@@ -169,12 +180,32 @@ namespace {
         constexpr float BACK = 2.8f, HEIGHT = 1.5f, LAG = 0.08f;
         bool hasLock = false;
         float headingLock = 0.f;
+        std::array<float, 2> cmdS{0.f, 0.f};// vx, vy after the acceleration limit
+        bool rHeld = false;
+        if (policy.standMode()) std::cout << "[spot] stand mode: no keys = stand still\n";
 
         canvas.animate([&] {
+            if (keys.is(Key::R)) {// reset: back to the origin, in the stance
+                if (!rHeld) {
+                    ctrl.spawnStance(world, 0.f, 0.f, 0.f, 40);
+                    cmdS = {0.f, 0.f};
+                    hasLock = false;
+                }
+                rHeld = true;
+            } else {
+                rHeld = false;
+            }
+
             // velocity command [vx, vy, wz] in Spot's body frame (+x fwd, +y left)
-            const float vx = (keys.is(Key::UP) ? 1.5f : 0.f) - (keys.is(Key::DOWN) ? 1.0f : 0.f);
-            const float vy = (keys.is(Key::LEFT) ? 1.0f : 0.f) - (keys.is(Key::RIGHT) ? 1.0f : 0.f);
+            const float vxKey = (keys.is(Key::UP) ? 1.5f : 0.f) - (keys.is(Key::DOWN) ? 1.0f : 0.f);
+            const float vyKey = (keys.is(Key::LEFT) ? 1.0f : 0.f) - (keys.is(Key::RIGHT) ? 1.0f : 0.f);
             const float turn = (keys.is(Key::N) ? 1.5f : 0.f) - (keys.is(Key::M) ? 1.5f : 0.f);
+            // Joystick-style smoothing, at most 3 m/s^2 (0 -> 1.5 m/s in 0.5 s): a key used to step the command to full
+            // speed in one tick. The clamp lands exactly on the target, so releasing the keys still reaches an exact
+            // zero and a stand-mode policy stands.
+            cmdS[0] += std::clamp(vxKey - cmdS[0], -0.06f, 0.06f);
+            cmdS[1] += std::clamp(vyKey - cmdS[1], -0.06f, 0.06f);
+            const float vx = cmdS[0], vy = cmdS[1];
 
             const auto rs = spot.art->rootState();
             float R[3][3];
@@ -182,9 +213,14 @@ namespace {
             const float yaw = std::atan2(R[1][0], R[0][0]);
             // Hold heading when not actively turning (the policy only regulates
             // yaw RATE to 0, so any bias slowly spirals); a light P keeps it straight.
+            // A stand-mode policy standing still gets an exactly-zero command instead, as in training.
             float wz;
             if (turn != 0.f) {
                 wz = turn;
+                headingLock = yaw;
+                hasLock = true;
+            } else if (policy.standMode() && vx == 0.f && vy == 0.f) {
+                wz = 0.f;
                 headingLock = yaw;
                 hasLock = true;
             } else {

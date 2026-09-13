@@ -53,6 +53,10 @@ namespace spot {
     constexpr float STIFFNESS = 90.f;  // = scratch_env.STIFF_GAINS; Isaac's default 60 sags this plant
     constexpr float DAMPING = 1.5f;
     constexpr float MAX_FORCE = 115.f;// the knee's effort; uniform here (see the header note)
+    // Base height that puts the default stance's foot tips ~5 mm above flat ground (python spot_slopes.STANCE_PRESET).
+    // Spawning there IN the stance beats spawning straight-legged at Z0 and swinging the legs in mid-fall: the base of
+    // the Python plant sagged to 0.32 m that way and bottoms out at 0.42 m this way (CPU probe, 2026-09-13).
+    constexpr float STANCE_Z = 0.505f;
 
     // The policy's joint order, by URDF joint name: type-grouped, four legs each.
     constexpr std::array<const char*, 12> ISAAC_JOINTS{
@@ -109,6 +113,9 @@ namespace spot {
         opts.damping = DAMPING;
         opts.maxForce = MAX_FORCE;
         opts.solverPositionIterations = 12;
+        // max_force as a real torque, not a per-substep impulse (115 N·m was ~57 kN·m at the 2 ms step). The course
+        // policies trained that way; existing policies measured the same either way (S0b, plans/spot-frontier.md).
+        opts.driveLimitsAreForces = true;
         opts.selfCollision = false;// the primitive colliders overlap at the joints
         opts.renderVisuals = true; // parent each link's <visual> under its collider
 
@@ -163,7 +170,7 @@ namespace spot {
         SpotController(const SpotRobot& robot, const SpotPolicy& policy,
                        std::function<float(float, float)> terrainHeight = nullptr)
             : art_(*robot.art), map_(robot.isaacToSim), policy_(policy),
-              height_(std::move(terrainHeight)) {
+              height_(std::move(terrainHeight)), standMode_(policy.standMode()) {
             last_.fill(0.f);
             if (policy_.inputDim() != OBS_DIM) {
                 throw std::runtime_error("SpotController: policy expects " +
@@ -201,9 +208,14 @@ namespace spot {
             for (int i = 0; i < 12; ++i) o[k++] = jv[map_[i]];
             for (int i = 0; i < 12; ++i) o[k++] = last_[i];
 
-            const float ang = 2.0f * threepp::math::PI * phi_;
-            o[k++] = std::sin(ang);
-            o[k++] = std::cos(ang);
+            if (isStand(cmd)) {// the stand-mode sentinel (SpotStepsEnv, _common.v2_obs)
+                o[k++] = 0.f;
+                o[k++] = 0.f;
+            } else {
+                const float ang = 2.0f * threepp::math::PI * phi_;
+                o[k++] = std::sin(ang);
+                o[k++] = std::cos(ang);
+            }
 
             // Heading in the ground plane, from the body +x axis — the frame the scan
             // grid is expressed in (spot_terrain_env.scan_xy).
@@ -239,8 +251,26 @@ namespace spot {
             for (int i = 0; i < 12; ++i) tgt[map_[i]] = DEFAULT_Q[i] + ACTION_SCALE * a[i];
             art_.setDriveTargets(tgt.data(), tgt.size());
             world.step(0.02f);
-            // advance the phase clock AFTER the step so phi aligns with the NEXT obs
-            phi_ = std::fmod(phi_ + 0.02f / GAIT_PERIOD, 1.0f);
+            // advance the phase clock AFTER the step so phi aligns with the NEXT obs; a stand holds it where it stopped
+            if (!isStand(cmd)) phi_ = std::fmod(phi_ + 0.02f / GAIT_PERIOD, 1.0f);
+        }
+
+        // True when a stand-mode policy is commanded to stand: exactly zero on all three axes, as in training.
+        [[nodiscard]] bool isStand(const std::array<float, 3>& cmd) const {
+            return standMode_ && cmd[0] == 0.f && cmd[1] == 0.f && cmd[2] == 0.f;
+        }
+
+        // Teleport into the default stance just above the ground at (x, y) and hold it for holdTicks. reset()
+        // alone zeroes every joint (straight legs); the old start, straight-legged at Z0 with hold() swinging the
+        // legs into the stance mid-fall, is what toppled the viewers' first ticks.
+        void spawnStance(threepp::PhysxWorld& world, float x, float y, float groundZ = 0.f, int holdTicks = 40) {
+            learnDofSlots();
+            art_.reset(threepp::Vector3(x, y, groundZ + STANCE_Z));
+            std::vector<float> dof(art_.numDof(), 0.f);
+            for (int i = 0; i < 12; ++i) dof[slot_[map_[i]]] = DEFAULT_Q[i];
+            art_.setJointPositions(dof.data(), dof.size());
+            last_.fill(0.f);
+            hold(world, holdTicks);
         }
 
         // Hold the default stand pose for n ticks (settle on spawn).
@@ -257,10 +287,31 @@ namespace spot {
         [[nodiscard]] const std::array<float, 12>& lastAction() const { return last_; }
 
     private:
+        // setJointPositions writes PhysX articulation-cache slots, which need not follow the order jointPositions()
+        // reports (the Python plant reads back per leg but writes every hip, then every upper leg, then every knee).
+        // Learn each joint's slot once by writing distinct values and reading them back.
+        void learnDofSlots() {
+            if (!slot_.empty()) return;
+            const std::size_t n = art_.numDof();
+            std::vector<float> probe(n);
+            for (std::size_t i = 0; i < n; ++i) probe[i] = static_cast<float>(i + 1);
+            art_.setJointPositions(probe.data(), n);
+            const auto back = art_.jointPositions();
+            slot_.assign(n, -1);
+            for (std::size_t j = 0; j < n; ++j) {
+                const long s = std::lround(back[j]) - 1;
+                if (s < 0 || s >= static_cast<long>(n))
+                    throw std::runtime_error("SpotController: could not resolve the joint-position slots");
+                slot_[j] = static_cast<int>(s);
+            }
+        }
+
         threepp::Articulation& art_;
         std::array<int, 12> map_;// policy index -> DOF index
         const SpotPolicy& policy_;
         std::function<float(float, float)> height_;
+        bool standMode_ = false;// from the policy file's TPF1 trailer
+        std::vector<int> slot_;  // joint index (jointPositions order) -> setJointPositions slot
         std::array<float, 12> last_{};
         float phi_ = 0.f;// gait phase in [0,1), advanced +DT/GAIT_PERIOD each step()
     };

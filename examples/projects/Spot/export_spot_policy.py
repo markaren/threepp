@@ -123,9 +123,11 @@ def _apply_norm(obs, norm):
     return np.clip((obs - norm["mean"]) / np.sqrt(norm["var"] + 1e-8), -norm["clip"], norm["clip"])
 
 
-def write_tpnn(path, layers, norm=None):
+def write_tpnn(path, layers, norm=None, flags=0):
     """Flat binary. TPN1 = MLP only; TPN2 = leading norm block + MLP.
-       TPN2: magic 'TPN2', u32 normDim, f32[normDim] mean, f32[normDim] var, f32 clip, <then as TPN1>."""
+       TPN2: magic 'TPN2', u32 normDim, f32[normDim] mean, f32[normDim] var, f32 clip, <then as TPN1>.
+       flags != 0 appends the trailer 'TPF1' + u32 flags (bit 0 = stand mode); loaders that predate it
+       stop reading after the last layer, so the file stays readable by them."""
     with open(path, "wb") as f:
         if norm is None:
             f.write(b"TPN1")
@@ -144,6 +146,9 @@ def write_tpnn(path, layers, norm=None):
             f.write(struct.pack("<III", inp, out, act))
             f.write(np.ascontiguousarray(w, "<f4").tobytes())   # [out, in] row-major
             f.write(np.ascontiguousarray(b, "<f4").tobytes())
+        if flags:
+            f.write(b"TPF1")
+            f.write(struct.pack("<I", int(flags)))
 
 
 def write_ref(path, module, layers, in_dim, out_dim, n, norm=None, seed=0):
@@ -201,10 +206,15 @@ def main():
     print(f"[export] obs_dim {in_dim}  act_dim {out_dim}  layers {len(layers)}  "
           f"norm {'yes (TPN2)' if norm is not None else 'no (TPN1)'}")
 
+    # A checkpoint trained with stand_mode saw a (0,0) clock at an exactly-zero command; the C++ controller must
+    # send the same, so the flag travels in the file (SpotPolicy.hpp, TPF1 trailer).
+    flags = 1 if meta.get("stand_mode") else 0
+    print(f"[export] stand mode {'yes (TPF1 flags=1)' if flags else 'no'}")
+
     os.makedirs(args.out_dir, exist_ok=True)
     tpnn = os.path.join(args.out_dir, "spot_policy.tpnn")
     ref = os.path.join(args.out_dir, "spot_policy_ref.bin")
-    write_tpnn(tpnn, layers, norm)
+    write_tpnn(tpnn, layers, norm, flags)
     write_ref(ref, module, layers, in_dim, out_dim, args.ref_n, norm)
     print(f"[export] wrote {tpnn}  ({os.path.getsize(tpnn)} bytes)")
     print(f"[export] wrote {ref}  ({args.ref_n} obs/action pairs)")

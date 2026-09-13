@@ -25,6 +25,9 @@
 //       u32    act         // 0 = none, 1 = ELU(alpha=1)
 //       f32[outDim*inDim]  weight   (row-major [out, in], as torch nn.Linear.weight)
 //       f32[outDim]        bias
+//     [optional trailer, absent in older exports]
+//       char[4]  "TPF1";  u32 flags   bit 0 = stand mode: the policy was trained to stand still behind a
+//                                     (0,0) gait clock, phase held, whenever its command is exactly zero
 //
 // A forward pass on the Spot net is ~90k MACs — microseconds on one core — so
 // there is no reason to put it on the GPU for single-robot play. (Batched many-
@@ -100,8 +103,17 @@ namespace spot {
             if (!f) throw std::runtime_error("SpotPolicy: truncated file " + path);
             if (p.hasNorm_ && p.mean_.size() != p.layers_.front().in)
                 throw std::runtime_error("SpotPolicy: norm dim != layer-0 input dim in " + path);
+            char tag[4];// optional flags trailer; a file without one simply ends here
+            f.read(tag, 4);
+            if (f.gcount() == 4 && tag[0] == 'T' && tag[1] == 'P' && tag[2] == 'F' && tag[3] == '1') {
+                p.flags_ = readU32(f);
+                if (!f) throw std::runtime_error("SpotPolicy: truncated flags trailer in " + path);
+            }
             return p;
         }
+
+        // The deploy side must send a (0,0) clock and hold the phase at an exactly-zero command.
+        [[nodiscard]] bool standMode() const { return (flags_ & 1u) != 0; }
 
         [[nodiscard]] std::uint32_t inputDim() const { return layers_.empty() ? 0 : layers_.front().in; }
         [[nodiscard]] std::uint32_t outputDim() const { return layers_.empty() ? 0 : layers_.back().out; }
@@ -151,6 +163,7 @@ namespace spot {
         bool hasNorm_ = false;
         std::vector<float> mean_, var_;// obs normalizer stats (TPN2); applied before layer 0
         float clip_ = 10.0f;
+        std::uint32_t flags_ = 0;// TPF1 trailer bits (0 when the file has none)
     };
 
 }// namespace spot
