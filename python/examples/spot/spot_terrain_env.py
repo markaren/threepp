@@ -156,9 +156,11 @@ class SpotGpu:
         self.art, _ = build_spot(world, assets=None, base_xy=(0.0, i * spacing))
 
 
-def _flat_ground(world, k, spacing):
-    g = tp.Mesh(tp.BoxGeometry(60, spacing * k + 20, 1.0), tp.MeshStandardMaterial())
-    g.position.set(20.0, spacing * (k - 1) * 0.5, -0.5)     # top at z=0, spans the lane grid + forward travel
+def _flat_ground(world, k, spacing, length=60, x_center=20.0):
+    """One ground box, top at z=0, spanning the lane grid; `length` along x centred on `x_center`
+    (default x -10..50: the forward travel of the legacy layouts)."""
+    g = tp.Mesh(tp.BoxGeometry(length, spacing * k + 20, 1.0), tp.MeshStandardMaterial())
+    g.position.set(float(x_center), spacing * (k - 1) * 0.5, -0.5)
     world.add_static(g)
 
 

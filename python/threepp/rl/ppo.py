@@ -223,6 +223,22 @@ class PPO:
         self.opt = torch.optim.Adam(self.ac.parameters(), lr=lr)
         self.meta = {"obs_dim": self.obs_dim, "act_dim": act_dim, "hidden": list(hidden),
                      "image_shape": list(self.image_shape) if self.image_shape else None, **(meta or {})}
+        # Update diagnostics of the latest iteration, kept on the device and read back only when
+        # asked (diagnostics()), so logging them costs nothing between logs.
+        self._diag = None
+        self.last_log = {}
+
+    def diagnostics(self):
+        """The latest update's approx_kl (low-variance estimator, last epoch run), clip fraction
+        (share of samples whose ratio left [1-clip, 1+clip], over every minibatch), epochs actually
+        run before the target-KL break, explained variance of the pre-update value, mean log_std.
+        One host sync; {} before the first update."""
+        if self._diag is None:
+            return {}
+        d = self._diag
+        return {"approx_kl": float(d["approx_kl"]), "clip_frac": float(d["clip_frac"]),
+                "epochs_run": int(d["epochs_run"]), "explained_var": float(d["explained_var"]),
+                "log_std": float(d["log_std"])}
 
     def _normobs(self, obs):
         return obs if self.norm is None else self.norm.norm(obs)
@@ -231,7 +247,9 @@ class PPO:
         v = self.ac.value(nobs)
         return self.ret_norm.denorm(v) if self.ret_norm else v
 
-    def learn(self, iterations, log_every=10, on_log=None):
+    def learn(self, iterations, log_every=10, on_log=None, on_iter=None):
+        """Run `iterations` rollout+update cycles. on_log(msg) every `log_every` (self.last_log
+        holds the numbers behind msg); on_iter(it), when given, after every update."""
         dev, K, T, A = self.device, self.K, self.T, self.act_dim
         oshape = self.image_shape if self.is_image else (self.obs_dim,)
         odtype = torch.uint8 if self.is_image else torch.float32      # uint8 pixels save VRAM
@@ -280,6 +298,10 @@ class PPO:
             f_obs = b_obs.reshape(-1, *oshape); f_act = b_act.reshape(-1, A)
             f_logp = b_logp.reshape(-1); f_adv = adv.reshape(-1)
             n = f_obs.shape[0]
+            # diagnostics only: nothing below feeds back into the update
+            ev = 1.0 - (ret - b_vraw).var() / ret.var().clamp_min(1e-8)
+            clipped = torch.zeros((), device=dev); n_mb = 0; epochs_run = 0
+            kl_last = torch.zeros((), device=dev)
             # The update needs autograd whatever the caller runs under: every
             # trainer wraps its main() in @torch.no_grad() for the rollouts, and
             # loss.backward() below raised 'does not require grad' inside it
@@ -306,9 +328,16 @@ class PPO:
                         torch.nn.utils.clip_grad_norm_(self.ac.parameters(), self.max_grad_norm)
                         self.opt.step()
                         kls.append(((ratio - 1) - logratio).detach().mean())   # Schulman low-var KL
+                        clipped += ((ratio.detach() - 1.0).abs() > self.clip).float().mean(); n_mb += 1
+                    epochs_run += 1
+                    if kls:
+                        kl_last = torch.stack(kls).mean()
                     # one host sync per epoch (not per minibatch) for the early-stop check
-                    if self.target_kl is not None and kls and torch.stack(kls).mean().item() > self.target_kl:
+                    if self.target_kl is not None and kls and kl_last.item() > self.target_kl:
                         break
+            self._diag = {"approx_kl": kl_last.detach(), "clip_frac": clipped / max(n_mb, 1),
+                          "epochs_run": epochs_run, "explained_var": ev.detach(),
+                          "log_std": self.ac.log_std.detach().mean()}
 
             if it % log_every == 0 or it == 1:
                 el = time.perf_counter() - t0
@@ -316,12 +345,16 @@ class PPO:
                 rl = float(np.mean(recent_len[-400:])) if recent_len else float("nan")
                 msg = (f"it {it:4d} | ep_ret {rr:8.1f} | ep_len {rl:5.0f} | "
                        f"{total / el / 1e3:6.1f}k steps/s | {el:5.1f}s")
+                self.last_log = {"it": it, "ep_ret": rr, "ep_len": rl,
+                                 "steps_per_s": total / el, "elapsed_s": el}
                 stats = getattr(self.env, "stats_line", None)   # VecTask per-term reward means
                 extra = stats() if callable(stats) else ""
                 if extra:
                     msg += "\n        " + extra
                 (on_log or print)(msg)
                 recent_ret = recent_ret[-400:]; recent_len = recent_len[-400:]
+            if on_iter is not None:
+                on_iter(it)
         self.obs = obs
         return self.ac, self.norm, self.meta
 

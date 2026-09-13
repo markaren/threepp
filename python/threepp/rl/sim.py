@@ -105,8 +105,11 @@ class GpuSim:
             self.root_linvel = torch.zeros(self.K, 3, device=self.device)
             self.root_angvel = torch.zeros(self.K, 3, device=self.device)
         if self.read_links:
-            # every link's world pose + velocity, refreshed by read(). link 0 = root, then links
-            # in add_link order (NO DOF remap — these are per-LINK, not per-DOF). link_pose is PhysX
+            # every link's world pose + velocity, refreshed by read(). link 0 = root; the rest are in
+            # PhysX BREADTH-FIRST order on this direct-GPU path, NOT add_link order (Spot: hips 1-4,
+            # upper legs 5-8, lower legs 9-12, each fl/fr/hl/hr; measured 2026-09-12, see
+            # examples/spot/spot_feet.py). A CPU Articulation's links list IS add order. No DOF remap
+            # either: these are per-LINK, not per-DOF. link_pose is PhysX
             # layout [qx,qy,qz,qw, px,py,pz]. Use for foot kinematics (clearance/slip rewards):
             # a foot tip = link_position + rotate(link_quat, local_tip_offset). The reads write the
             # flat buffers in place, so the [K, max_links, ...] views below stay live across read().

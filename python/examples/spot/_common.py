@@ -173,7 +173,9 @@ def eval_flat_steering(env_cls, policy_path, k=512, device="cuda", height_source
     """Held-out steering regression on FLAT ground vs the scratch base gait (the real steering test).
 
     `env_cls` is the task's VecTask; `height_source=True` rebuilds it against the height source the
-    checkpoint records in its meta; `seed`, when given, pins the command sampler's generator."""
+    checkpoint records in its meta; `seed`, when given, pins the command sampler's generator.
+    Returns {"worst", "pass", "per_cmd": [{cmd, policy_err, teacher_err, ratio}], "k", "seed"} (it
+    also prints the table), so a caller can write it down rather than scrape it."""
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); return
     ac, norm, meta = load_policy(policy_path, device=device)
@@ -192,12 +194,15 @@ def eval_flat_steering(env_cls, policy_path, k=512, device="cuda", height_source
     print(f"flat-steering regression ({os.path.basename(policy_path)} vs base gait, K={k}):")
     print("   cmd[vx,vy,wz]      policy_err   teacher_err   ratio")
     worst = 0.0
+    per_cmd = []
     for cmd in grid:
         ep = env.measure_tracking(pol, cmd); et = env.measure_tracking(tea, cmd)
         ratio = ep / max(et, 1e-6); worst = max(worst, ratio)
+        per_cmd.append({"cmd": list(cmd), "policy_err": ep, "teacher_err": et, "ratio": ratio})
         flag = "" if ratio <= 1.10 else "  <- REGRESSED"
         print(f"   [{cmd[0]:+.1f},{cmd[1]:+.1f},{cmd[2]:+.1f}]     {ep:8.3f}    {et:8.3f}    {ratio:5.2f}{flag}")
     print(f"worst ratio {worst:.2f}  ->  {'PASS (steering preserved)' if worst <= 1.10 else 'FAIL (steering degraded)'}")
+    return {"worst": worst, "pass": worst <= 1.10, "per_cmd": per_cmd, "k": k, "seed": seed}
 
 
 # ── symmetry augmentation ─────────────────────────────────────────────────────

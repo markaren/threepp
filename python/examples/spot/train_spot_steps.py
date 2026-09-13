@@ -4,7 +4,8 @@
     python train_spot_steps.py --score spot_steps.pt              # deterministic track/flat/fell + curriculum level
     python train_spot_steps.py --eval  spot_steps.pt              # flat-steering regression vs the base gait
 
-The curriculum (per-env level, promote on clearing the tent / demote on a fall) lives in SpotStepsEnv.
+The curriculum (per-env level, promote on clearing the tent / demote only when the robot never reached
+it; a fall does not demote) lives in SpotStepsEnv.
 The warm-start transfers the 50-d clock base gait (scratch_flat_best.pt, normalize_obs=True, stiff gains)
 into the 96-d AC: input cols [0:50] copied (proprio+clock), terrain cols [50:96] zero-init; RunningNorm
 expanded with matching stats (terrain dims left at fresh default mean=0/var=1 so they adapt freely).
@@ -73,6 +74,11 @@ def score_checkpoint(policy_path, k=512, device="cuda", steps=900, warm=200, hei
     obs = env.reset()
     trk, flt, fl, clr = [], [], [], []
     for t in range(steps):
+        if t == warm:
+            # Start the episode counters where the averages below start, so the two describe the
+            # same window: an episode that ended inside the warm-up would otherwise be counted
+            # here and averaged nowhere, and this cell is the legacy reconciliation number.
+            env.reset_stats()
         obs, _, _, _, _ = env.step(pol(obs))
         if t >= warm:
             trk.append(env.last_track); flt.append(env.last_flat_track); fl.append(env.last_fell)
@@ -83,12 +89,30 @@ def score_checkpoint(policy_path, k=512, device="cuda", steps=900, warm=200, hei
     print(f"[score] {os.path.basename(policy_path)}  (deterministic, K={k}, {steps - warm} steps)")
     print(f"        track {m(trk):.3f}/2.0   flat {m(flt):.3f}/2.0   fell/step {m(fl):.4f}   "
           f"curriculum level {lvl:.2f}/{N_LEVELS - 1}  (~{riser:.02f} m risers)   clear {m(clr):.3f}")
+    # The counters are per episode, not per step: 'clear' above is the legacy sample-and-hold of the
+    # last done batch and is not an episode rate (kept for the committed tables).
+    counters = env.episode_stats()
+    for r in counters["rows"]:
+        n = r["episodes"]
+        if n == 0:
+            continue
+        # The shoves here are the legacy 'random' ones: at push_prob they land about every
+        # 1/push_prob steps, which is INSIDE the 2 s attribution window, so every fall on a shoved
+        # lane counts as one after a push and the ratio is not a causal rate. Only the one-shove-
+        # per-episode mode (score_e0) earns the unqualified name.
+        print(f"        {r['lane_type']:5s} episodes {n}: success {r['success'] / n:.3f}  "
+              f"cleared {r['cleared'] / n:.3f}  falls {r['terminations'] / n:.3f} "
+              f"(tilt {r['term_tilt']}, low {r['term_low']}; after clear {r['fell_after_clear']})"
+              + (f"  falls/push{'' if env.push_mode == 'once_on_tent' else ' (uncorrected)'} "
+                 f"{r['falls_after_push'] / r['pushes']:.4f} of {r['pushes']}"
+                 if r["pushes"] else ""))
     score_checkpoint.last = {"track": m(trk), "flat": m(flt), "fell": m(fl), "level": float(lvl),
                              "clear": m(clr), "start_level": start_level, "push_vel": push_vel,
                              "score_source": src, "score_perceive": bool(see), "score_noise": noise,
                              "score_envs": k, "score_seed": seed,
                              "trained_source": trained_on, "trained_perceive": saw,
-                             "trained_noise": float(meta.get("perceive_noise", 0.0))}
+                             "trained_noise": float(meta.get("perceive_noise", 0.0)),
+                             "counters": counters}
     return m(trk), m(flt), m(fl), lvl
 
 
@@ -171,6 +195,28 @@ def main():
     ap.add_argument("--seed", type=int, default=0,
                     help="torch + env seed for training and scoring. Nothing in a run is seeded "
                          "otherwise, so two runs of one config differ by the command sampler alone.")
+    ap.add_argument("--eval-json", dest="eval_json", default="",
+                    help="with --eval: also write the steering result (worst ratio + per-command "
+                         "errors) to this JSON file")
+    ap.add_argument("--select", choices=("trainstat", "final"), default="trainstat",
+                    help="what --out holds at the end. trainstat = the in-run best by level + "
+                         "0.01*track among gated logs (the historical rule; at a clamped level it is "
+                         "a max over single-step stochastic readings); final = the last weights.")
+    ap.add_argument("--snapshot-every", dest="snapshot_every", type=int, default=0,
+                    help="also save <out>_itNNNNN.pt every N iterations (0 = off), for scoring a "
+                         "learning curve afterwards")
+    ap.add_argument("--init-level", dest="init_level", type=int, default=None,
+                    help=f"start every stair lane at this curriculum level (0..{N_LEVELS - 1}) "
+                         "instead of 0 — skips the ~125-iteration re-climb of a continued run")
+    ap.add_argument("--entropy", type=float, default=0.0, help="PPO entropy coefficient")
+    ap.add_argument("--target-kl", dest="target_kl", type=float, default=0.02,
+                    help="PPO early-stop KL per epoch (<= 0 disables the stop)")
+    ap.add_argument("--epochs", type=int, default=5, help="PPO epochs per iteration")
+    ap.add_argument("--minibatches", type=int, default=4, help="PPO minibatches per epoch")
+    ap.add_argument("--clip", type=float, default=0.2, help="PPO ratio (and value) clip")
+    ap.add_argument("--metrics", default="",
+                    help="append one JSON line per log (PPO diagnostics, curriculum, counters) here "
+                         "(default: metrics.jsonl next to --out)")
     args = ap.parse_args()
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); sys.exit(0)
@@ -189,8 +235,14 @@ def main():
                 f.write(json.dumps(rec) + "\n")
         return
     if args.eval:
-        eval_flat_steering(SpotStepsEnv, args.eval, k=args.score_envs,
-                           height_source=True, seed=0); return
+        res = eval_flat_steering(SpotStepsEnv, args.eval, k=args.score_envs,
+                                 height_source=True, seed=0)
+        if args.eval_json and res is not None:
+            import json
+            with open(args.eval_json, "w") as f:
+                json.dump({"checkpoint": os.path.abspath(args.eval), **res}, f, indent=1)
+            print(f"steering -> {args.eval_json}")
+        return
 
     torch.manual_seed(args.seed)
     env = SpotStepsEnv(num_envs=args.envs, device="cuda", seed=args.seed, perceive=args.perceive,
@@ -204,11 +256,18 @@ def main():
         print(f"camera-limited scan: {env.percept}")
     if args.push_vel > 0:
         print(f"random shoves: up to {args.push_vel} m/s "
-              f"({args.push_vel * 24.0:.0f} N*s) at p={args.push_prob} per env per step")
+              f"({args.push_vel * 24.0:.0f} N*s) at p={args.push_prob} per env per step, stair lanes only")
+    if args.init_level is not None:
+        if not 0 <= args.init_level < N_LEVELS:
+            ap.error(f"--init-level must lie in 0..{N_LEVELS - 1}")
+        # Before PPO(...): its constructor runs the first reset(), which spawns each lane at env.level.
+        env.level.fill_(args.init_level)
+        print(f"curriculum starts at level {args.init_level} (~{RISERS[args.init_level]:.02f} m risers)")
     aux = make_aux_loss(args.sym_coef) if args.sym_coef > 0 else None
     # height_source rides in the meta so --score and --eval rebuild the env the way it was trained.
     ppo = PPO(env, ACT_DIM, hidden=HIDDEN, lr=args.lr, horizon=args.horizon, log_std_init=-1.5,
-              entropy=0.0, normalize_obs=True,
+              entropy=args.entropy, clip=args.clip, epochs=args.epochs, minibatches=args.minibatches,
+              target_kl=args.target_kl if args.target_kl > 0 else None, normalize_obs=True,
               meta={**CONFIG, "height_source": env.height_source, "perceive": args.perceive,
                     "perceive_noise": args.perceive_noise,
                     # Lineage: which gait this fine-tune started from. spot_steps.pt records none,
@@ -218,7 +277,17 @@ def main():
                     "iters": args.iters, "envs": args.envs, "seed": args.seed,
                     "cadence_jitter": args.cadence_jitter,
                     "imit_anneal": args.imit_anneal,
-                    "push_vel": args.push_vel, "push_prob": args.push_prob}, aux_loss=aux)
+                    "push_vel": args.push_vel, "push_prob": args.push_prob,
+                    # Which lanes the shoves hit. Not recorded before 2026-09-12, which is why
+                    # spot_steps_push.pt (flat lanes shoved) and _push2.pt (stair lanes only) carry
+                    # identical meta.
+                    "push_lanes": "stairs", "push_mode": "random",
+                    "select": args.select, "snapshot_every": args.snapshot_every,
+                    "init_level": args.init_level, "lr": args.lr, "horizon": args.horizon,
+                    "entropy": args.entropy, "target_kl": args.target_kl, "epochs": args.epochs,
+                    "minibatches": args.minibatches, "clip": args.clip, "sym_coef": args.sym_coef,
+                    "graph": args.graph, "gate": args.gate, "fell_max": args.fell_max},
+              aux_loss=aux)
     if aux is not None:
         print(f"symmetry augmentation ON (coef {args.sym_coef})")
     if args.warmstart and os.path.exists(args.warmstart):
@@ -247,10 +316,25 @@ def main():
     gate = args.gate * flat0
     print(f"flat-steering gate = {gate:.3f}  (= {args.gate:.2f} x warm-start STOCHASTIC flat tracking {flat0:.3f})")
 
-    latest = os.path.splitext(args.out)[0] + "_latest.pt"
+    import json
+    stem = os.path.splitext(args.out)[0]
+    latest = stem + "_latest.pt"
     best = [-1e9]
     seen = [0]
     LOG_EVERY = 20
+    metrics_path = args.metrics or os.path.join(os.path.dirname(os.path.abspath(args.out)), "metrics.jsonl")
+    # the checkpoints land here too, so make the directory before the first write rather than at the
+    # first save, 20 iterations in
+    for d in {os.path.dirname(os.path.abspath(args.out)), os.path.dirname(os.path.abspath(metrics_path))}:
+        os.makedirs(d, exist_ok=True)
+
+    def metric(rec):
+        with open(metrics_path, "a") as f:
+            f.write(json.dumps(rec, default=str) + "\n")
+
+    metric({"type": "start", "out": os.path.abspath(args.out), "argv": sys.argv[1:], "meta": ppo.meta,
+            "flat_gate": gate})
+    env.reset_stats(episodes=False)      # the counters below cover one log window each
 
     def log(msg):
         trk, ftrk, lvl = env.last_track, env.last_flat_track, env.last_level
@@ -273,17 +357,33 @@ def main():
             else:
                 anneal = " | imit HELD"
         mark = ""
-        if score > best[0] and ok:
+        if args.select == "trainstat" and score > best[0] and ok:
             best[0] = score
             ppo.save(args.out)
             mark = "  <- saved best"
         print(f"{msg} | track {trk:.3f} | flat {ftrk:.3f}{'' if ok else ' LOW!'} | "
               f"level {lvl:.2f}/{N_LEVELS - 1} | clear {env.last_clear:.2f} | "
               f"fell {env.last_fell:.3f}{anneal}{mark}")
+        counters = {r["lane_type"]: {k: v for k, v in r.items() if k != "by_episode"}
+                    for r in env.episode_stats()["rows"]}
+        env.reset_stats(episodes=False)
+        metric({"type": "log", **ppo.last_log, **ppo.diagnostics(), "track": trk, "flat": ftrk,
+                "level": lvl, "clear_legacy": env.last_clear, "fell": env.last_fell, "gate_ok": ok,
+                "imit_w": float(env._imit_w.item()), "saved_best": bool(mark), "counters": counters})
 
-    ppo.learn(args.iters, log_every=LOG_EVERY, on_log=log)
+    def snapshot(it):
+        if it % args.snapshot_every == 0:
+            ppo.save(f"{stem}_it{it:05d}.pt")
+
+    ppo.learn(args.iters, log_every=LOG_EVERY, on_log=log,
+              on_iter=snapshot if args.snapshot_every > 0 else None)
     ppo.save(latest)
-    print(f"saved -> {args.out} (best level-score {best[0]:.3f}, steering gate {gate:.3f}) + {latest} (final)")
+    if args.select == "final":
+        ppo.save(args.out)
+        print(f"saved -> {args.out} = {latest} (final weights, --select final) | metrics -> {metrics_path}")
+    else:
+        print(f"saved -> {args.out} (best level-score {best[0]:.3f}, steering gate {gate:.3f}) + {latest} (final)"
+              f" | metrics -> {metrics_path}")
     print(f"next: python {os.path.basename(__file__)} --score {args.out}")
 
 

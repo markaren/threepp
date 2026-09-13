@@ -48,8 +48,11 @@ HARD_CELLS = [
     ("hard:perceived:0.05", [*HARD, "--score-noise", "0.05"]),
     ("hard:perceived:0.10", [*HARD, "--score-noise", "0.10"]),
 ]
-CELL_SETS = {"base": CELLS, "hard": HARD_CELLS, "all": CELLS + HARD_CELLS}
-SCORES_FILE = {"base": "scores.jsonl", "hard": "scores_hard.jsonl", "all": "scores_all.jsonl"}
+# legacy1: hard:analytic alone, the reconciliation cell for the episode-counted suite (score_e0.py)
+# against the array's committed scores_hard.jsonl line 1. score_checkpoint now also writes counters.
+CELL_SETS = {"base": CELLS, "hard": HARD_CELLS, "all": CELLS + HARD_CELLS, "legacy1": HARD_CELLS[:1]}
+SCORES_FILE = {"base": "scores.jsonl", "hard": "scores_hard.jsonl", "all": "scores_all.jsonl",
+               "legacy1": "scores_legacy1.jsonl"}
 
 
 def score(ckpt, json_path, envs=512, seed=0, cells=None):

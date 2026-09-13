@@ -110,7 +110,8 @@ def _capsule(length, radius, center, direction, color):
     return m, vol
 
 
-def build_spot(world, assets=None, base_xy=(0.0, 0.0), gains=None, foot_material=None):
+def build_spot(world, assets=None, base_xy=(0.0, 0.0), gains=None, foot_material=None, payload_kg=0.0,
+               drive_limits_are_forces=False):
     """Build Spot as a PhysX articulation; returns (articulation, render meshes).
 
     Physics uses tuned Box/Capsule colliders (the URDF has no collision/inertial). If `assets`
@@ -122,15 +123,21 @@ def build_spot(world, assets=None, base_xy=(0.0, 0.0), gains=None, foot_material
     load and the body crouches), so the FROM-SCRATCH gait passes a stiffer set for a rigid stance.
     `foot_material` (from world.create_material) sets the shin/foot contact friction+restitution —
     grippy restitution-0 feet (vs the bouncy 0.5/0.5/0.2 default) for clean push-off; pass a per-env
-    material for friction domain randomization."""
+    material for friction domain randomization. `payload_kg` adds that much mass to the base box
+    (uniform density, so the centre of mass stays put), for payload cells."""
     gn = gains if gains is not None else GAINS
     ox, oy = float(base_xy[0]), float(base_xy[1])
+    # PhysX reads each joint's max_force as an IMPULSE unless drive_limits_are_forces is set, so the
+    # default plant's "45/115 N·m" caps are really max_force/dt (23,000 N·m at a 0.005 s substep). Off
+    # by default: every existing checkpoint keeps the plant it was trained on. The kwarg is only passed
+    # when it is on, so a threepp build older than the toggle (ad952992) still builds the default robot.
+    dl = {"drive_limits_are_forces": True} if drive_limits_are_forces else {}
     art = world.create_articulation(fixed_base=False, solver_position_iterations=12,
-                                    disable_self_collision=True)
+                                    disable_self_collision=True, **dl)
     bm = tp.Mesh(tp.BoxGeometry(0.70, 0.18, 0.19), tp.MeshStandardMaterial())
     bm.material.color = 0xffc24d
     bm.position.set(ox, oy, Z0)
-    base = art.add_link(bm, parent=None, density=MASS["base"] / (0.70 * 0.18 * 0.19))
+    base = art.add_link(bm, parent=None, density=(MASS["base"] + float(payload_kg)) / (0.70 * 0.18 * 0.19))
     if assets:
         _attach_obj(bm, (ox, oy, Z0), "base", 0xffc24d, assets)
     meshes = [bm]
