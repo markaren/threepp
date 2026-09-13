@@ -876,7 +876,14 @@ def main():
     terr_phys = tp.Mesh(terr_geo, tp.MeshStandardMaterial())
     world.add_static_trimesh(terr_phys)
 
-    art, meshes = build_spot(world, assets, gains=STIFF_GAINS)   # stiff gains (90) = base gait's plant
+    # The plant the policies trained on: real torque limits when the walking checkpoint says so (the course policies), and
+    # self-collision when a recovery policy is loaded (it trained with it on). Without them the viewer robot is stronger and
+    # its legs pass through its own body, which flatters a recovery (29 of 29 knock-overs got up that way, 2026-09-14).
+    _dlf = bool(_meta.get("drive_limits_are_forces", False)) or bool(args.recovery_model)
+    _selfc = bool(args.recovery_model) and bool(_rec_meta.get("self_collision", True))
+    art, meshes = build_spot(world, assets, gains=STIFF_GAINS,   # stiff gains (90) = base gait's plant
+                             drive_limits_are_forces=_dlf, self_collision=_selfc)
+    print(f"[spot] plant: torque limits {'real' if _dlf else 'impulse (legacy)'}, self-collision {'on' if _selfc else 'off'}")
 
     def settle(n=80):
         for _ in range(n):
