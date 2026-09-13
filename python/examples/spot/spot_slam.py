@@ -38,6 +38,13 @@ from scratch_clock import GAIT_PERIOD
 from _common import v2_obs
 from spot_feet import cpu_foot_tips
 
+# Fall recovery (--recovery-model, spot_recovery_env.py): the walking policy hands over when the body tips past
+# RECOVER_UP and takes control back once the robot has stood (up_z > 0.9, base 0.40 m above the ground) and been still
+# for RECOVER_SETTLE control ticks. F knocks Spot over: a KNOCK_IMPULSE N·s sideways shove applied 0.3 m above the base.
+RECOVER_UP = 0.5
+RECOVER_SETTLE = 25          # 0.5 s at 50 Hz
+KNOCK_IMPULSE = 150.0        # ~5 m/s on the 32 kg robot, above the centre of mass so it rolls
+
 
 # SPOT_SCANSTATS=1 prints the 45-cell scan's spread every 60 frames — the check that the
 # height scan the policy consumes is actually tracking terrain, independent of how it is drawn.
@@ -799,6 +806,11 @@ def main():
                     help="1200x720 window instead of fullscreen")
     ap.add_argument("--bench",     type=int, default=0, metavar="N",
                     help="profile N frames: vsync off, auto-walk forward, print timing summary, exit")
+    ap.add_argument("--recovery-model", dest="recovery_model", default="",
+                    help="fall-recovery policy (train_spot_recovery.py): takes over when Spot tips past up_z "
+                         f"{RECOVER_UP}, hands back once it has stood still for {RECOVER_SETTLE} ticks. F knocks Spot over")
+    ap.add_argument("--knock-at", dest="knock_at", type=int, default=0, metavar="TICK",
+                    help="with --shot: knock Spot over at this control tick of the headless walk (tests the hand-over)")
     args = ap.parse_args()
     assert tp.HAS_PHYSX, "needs a PhysX-enabled threepp build"
     headless = bool(args.shot)
@@ -816,6 +828,12 @@ def main():
     # the same sentinel here it would trot in place off-distribution (play_spot_steps.py does the same).
     stand_mode = bool(_meta.get("stand_mode", False))
     print(f"[policy] {os.path.basename(model_path)}" + ("  (stand mode: no keys = stand still)" if stand_mode else ""))
+    rec = None
+    if args.recovery_model:
+        rec_ac, rec_norm, _rec_meta = load_policy(args.recovery_model, device="cpu")
+        rec_ac.eval()
+        rec = (rec_ac, rec_norm)
+        print(f"[recovery] {os.path.basename(args.recovery_model)} takes over below up_z {RECOVER_UP}  (F = knock over)")
 
     # ── terrain ───────────────────────────────────────────────────────────────
     print("[terrain] generating ...")
@@ -1063,9 +1081,56 @@ def main():
         bench_t[key].append(now - _tm[0])
         _tm[0] = now
 
+    mode      = ["walk"]   # "walk" | "recover" (--recovery-model)
+    settled   = [0]        # consecutive recovered-and-still ticks
+    f_held    = [False]
+
+    def recovery_tick(rs):
+        """Hand-over logic, once per control tick: True when the recovery policy drives this tick (it has then acted).
+        The recovery policy sees the walking observation with a zero command, the (0,0) stand clock, a flat scan and
+        base_above against the terrain under the base, as it was trained (spot_recovery_env.observe)."""
+        if rec is None:
+            return False
+        x, y, z, qx, qy = float(rs[0]), float(rs[1]), float(rs[2]), float(rs[3]), float(rs[4])
+        up = 1.0 - 2.0 * (qx * qx + qy * qy)
+        ground = float(gen.height_at(x, y, tparams))
+        if mode[0] == "walk":
+            if up >= RECOVER_UP:
+                return False
+            mode[0] = "recover"; settled[0] = 0
+            print(f"[recovery] up_z {up:.2f}: recovery policy takes over")
+        speed = float(np.linalg.norm(art.root_velocity()[:3]))
+        stood = up > 0.9 and z - ground > 0.40 and speed < 0.2
+        settled[0] = settled[0] + 1 if stood else 0
+        if settled[0] >= RECOVER_SETTLE:
+            mode[0] = "walk"; hdg_lock[0] = None; cmd_s[:] = 0.0
+            print("[recovery] upright and settled: walking policy takes back")
+            return False
+        obs = v2_obs(art, last_act, np.zeros(3, np.float32), np.zeros(45, np.float32), ground, None)
+        with torch.no_grad():
+            obs_t = torch.from_numpy(obs)[None]
+            if rec[1] is not None:
+                obs_t = rec[1].norm(obs_t)
+            a = rec[0].act_mean(obs_t)[0].numpy()
+        last_act[:] = a
+        art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
+        return True
+
+    def knock():
+        """F: a sideways shove above the centre of mass, one substep of KNOCK_IMPULSE (add_force_at_pos is consumed by
+        the next fixed substep, so the force carrying the impulse is impulse / fixed_timestep)."""
+        rs = art.root_state()
+        left = _quat_to_R(rs[3:7])[:, 1].copy(); left[2] = 0.0
+        left /= max(np.linalg.norm(left), 1e-6)
+        f = left * (KNOCK_IMPULSE / 0.002)
+        art.link(0).add_force_at_pos(tp.Vector3(*[float(v) for v in f]),
+                                     tp.Vector3(float(rs[0]), float(rs[1]), float(rs[2]) + 0.3))
+        print("[knock] shoved sideways")
+
     def reset():
         rh = max(float(gen.height_at(SPAWN_X + dx, SPAWN_Y + dy, tparams)) for dx, dy in _FEET)
         spawn_stance(rh)
+        mode[0] = "walk"; settled[0] = 0
         last_act[:] = 0.0
         hdg_lock[0] = None
         gphi[0] = 0.0
@@ -1089,15 +1154,30 @@ def main():
 
     # ── headless ──────────────────────────────────────────────────────────────
     if headless:
+        # Spawn the way R and the interactive loop do. Without it the headless walk started from the startup spawn, which
+        # had already tipped to up_z 0.45 by the first tick and ended the 150-tick walk upside down (measured 2026-09-13,
+        # cb737743 + the recovery hand-over's [headless] line).
+        reset()
         cmd = np.array([1.0, 0.0, 0.0], np.float32)
         # Vulkan: scan() uses the TLAS from the last render(), so render before each scan.
         # GL: scan() re-renders internally anyway; the extra render() is a cheap no-op for screenshots.
         rend.render(scene, camera)
-        for i in range(150):
+        n_ticks = max(150, args.knock_at + 250) if (args.knock_at and rec is not None) else 150
+        up_min, modes = 1.0, []
+        for i in range(n_ticks):
             rs = art.root_state()
+            up_min = min(up_min, 1.0 - 2.0 * (float(rs[3]) ** 2 + float(rs[4]) ** 2))
+            if args.knock_at and i == args.knock_at:
+                print(f"[knock] tick {i}")
+                knock()
+            if not modes or modes[-1][1] != mode[0]:
+                modes.append((i, mode[0]))
             if i % SCAN_EVERY == 0:
                 rend.render(scene, camera)   # refresh TLAS for Vulkan
                 ahead, h_here = scanner.scan(rs)
+            if recovery_tick(rs):
+                world.step(0.02)
+                continue
             obs = v2_obs(art, last_act, cmd, ahead, h_here, gphi[0])
             with torch.no_grad():
                 obs_t = torch.from_numpy(obs)[None]
@@ -1109,6 +1189,10 @@ def main():
             world.step(0.02)
             gphi[0] = (gphi[0] + 0.02 / GAIT_PERIOD) % 1.0
         rs = art.root_state()
+        print(f"[headless] {n_ticks} ticks, min up_z {up_min:.2f}, final up_z "
+              f"{1.0 - 2.0 * (float(rs[3]) ** 2 + float(rs[4]) ** 2):.2f}"
+              + (f", knock at tick {args.knock_at}" if args.knock_at else "")
+              + (f", control by tick {modes + [(n_ticks, mode[0])]}" if rec is not None else ""))
         for _ in range(20):
             rend.render(scene, camera)
             ahead, h_here = scanner.scan(rs)
@@ -1146,6 +1230,8 @@ def main():
 
         rs = art.root_state()
         tp.imgui.text(f"pos  x={rs[0]:+.1f}  y={rs[1]:+.1f}  z={rs[2]:.2f} m")
+        if rec is not None:
+            tp.imgui.text(f"control: {mode[0]}   (F = knock over)")
         _, vx_hi[0] = tp.imgui.slider_float("forward speed vx (VX_HI)", vx_hi[0], 0.0, VX_HI)
         tp.imgui.separator()
         tp.imgui.text("Depth camera")
@@ -1216,19 +1302,27 @@ def main():
         stand = stand_mode and vx == 0.0 and vy == 0.0 and wz_key == 0.0
         if stand:
             wz = 0.0                             # training's stand command is exactly zero: no heading-hold turn
-        cmd   = np.array([vx, vy, wz], np.float32)
-        obs   = v2_obs(art, last_act, cmd, ahead_cache[0], h_here_cache[0], None if stand else gphi[0])
-        with torch.no_grad():
-            obs_t = torch.from_numpy(obs)[None]
-            if norm is not None:
-                obs_t = norm.norm(obs_t)
-            a = ac.act_mean(obs_t)[0].numpy()
-        last_act[:] = a
-        art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
+        if not bench:                            # F = knock Spot over (edge-triggered)
+            if down("F"):
+                if not f_held[0]: knock()
+                f_held[0] = True
+            else:
+                f_held[0] = False
+        recovering = recovery_tick(rs)           # the recovery policy acted this tick
+        if not recovering:
+            cmd   = np.array([vx, vy, wz], np.float32)
+            obs   = v2_obs(art, last_act, cmd, ahead_cache[0], h_here_cache[0], None if stand else gphi[0])
+            with torch.no_grad():
+                obs_t = torch.from_numpy(obs)[None]
+                if norm is not None:
+                    obs_t = norm.norm(obs_t)
+                a = ac.act_mean(obs_t)[0].numpy()
+            last_act[:] = a
+            art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
         if bench: _mark("policy")
         world.step(0.02)
         if bench: _mark("physics")
-        if not stand:                            # stand mode holds the phase where it stopped
+        if not stand and not recovering:         # stand mode holds the phase where it stopped
             gphi[0] = (gphi[0] + 0.02 / GAIT_PERIOD) % 1.0
         rs = art.root_state()
         if bench: _tm[0] = time.perf_counter()

@@ -111,7 +111,7 @@ def _capsule(length, radius, center, direction, color):
 
 
 def build_spot(world, assets=None, base_xy=(0.0, 0.0), gains=None, foot_material=None, payload_kg=0.0,
-               drive_limits_are_forces=False):
+               drive_limits_are_forces=False, self_collision=False):
     """Build Spot as a PhysX articulation; returns (articulation, render meshes).
 
     Physics uses tuned Box/Capsule colliders (the URDF has no collision/inertial). If `assets`
@@ -124,7 +124,14 @@ def build_spot(world, assets=None, base_xy=(0.0, 0.0), gains=None, foot_material
     `foot_material` (from world.create_material) sets the shin/foot contact friction+restitution —
     grippy restitution-0 feet (vs the bouncy 0.5/0.5/0.2 default) for clean push-off; pass a per-env
     material for friction domain randomization. `payload_kg` adds that much mass to the base box
-    (uniform density, so the centre of mass stays put), for payload cells."""
+    (uniform density, so the centre of mass stays put), for payload cells. `self_collision` lets the
+    legs collide with the body and with each other (off by default, as every walking checkpoint was
+    trained): a fallen robot rolling over must not swing a leg through its own body. Measured
+    2026-09-13 (recovery probes, CPU TGS 5 ms and a direct-GPU twin, real torque limits): the stance is
+    bit-identical either way (no self-contact in it), nothing explodes (same peak joint speeds over 512
+    random extreme poses), and the pairs that do touch are dominated by the upper leg against the base
+    box; a spawn with the legs already inside the body is kicked out at up to 27 m/s, so spawn clear of
+    self-penetration (spot_recovery_env)."""
     gn = gains if gains is not None else GAINS
     ox, oy = float(base_xy[0]), float(base_xy[1])
     # PhysX reads each joint's max_force as an IMPULSE unless drive_limits_are_forces is set, so the
@@ -133,7 +140,7 @@ def build_spot(world, assets=None, base_xy=(0.0, 0.0), gains=None, foot_material
     # when it is on, so a threepp build older than the toggle (ad952992) still builds the default robot.
     dl = {"drive_limits_are_forces": True} if drive_limits_are_forces else {}
     art = world.create_articulation(fixed_base=False, solver_position_iterations=12,
-                                    disable_self_collision=True, **dl)
+                                    disable_self_collision=not self_collision, **dl)
     bm = tp.Mesh(tp.BoxGeometry(0.70, 0.18, 0.19), tp.MeshStandardMaterial())
     bm.material.color = 0xffc24d
     bm.position.set(ox, oy, Z0)
