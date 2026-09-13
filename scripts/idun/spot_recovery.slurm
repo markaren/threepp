@@ -37,6 +37,8 @@
 # array tasks pending on (Resources) on 2026-09-13 (free GPUs sit on CPU-starved nodes). No A100: it ran this loop at
 # about half the H100 speed, and an array waits for its slowest task.
 #SBATCH --constraint=h100|h200
+# idun-01-01 cancelled one task (by uid 0) and hung another before the trainer printed a line, 2026-09-13/14.
+#SBATCH --exclude=idun-01-01
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=6

@@ -39,6 +39,8 @@
 # H100 or H200, 6 cores, 32 GB (see spot_recovery.slurm: an h100-only 12-core request queued array tasks
 # on (Resources) one at a time).
 #SBATCH --constraint=h100|h200
+# idun-01-01 cancelled one task (by uid 0) and hung another before the trainer printed a line, 2026-09-13/14.
+#SBATCH --exclude=idun-01-01
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=6
