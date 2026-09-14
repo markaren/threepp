@@ -9,7 +9,12 @@ The target rate limit defaults to the warm start's own (the shipped recovery: 10
 that leaves the jump signal in the clock channels alone (spot_jump_env.jump_mirror_obs).
 
 --eval runs one episode per env with a trigger at --eval-trigger s (dx: 30% zero, else uniform up to dx_max), then one
-episode per env with no trigger, deterministic, and writes both to the JSON (jump / nojump).
+episode per env with no trigger, then one jump per env from a crouched start, deterministic, and writes all three to
+the JSON (jump / nojump / crouch).
+
+Wave 2 flags (2026-09-14), off by default = the pilot: --w-vz (pay the peak upward base speed since the trigger) and
+--crouch-frac (a share of jump episodes starts crouched), --w-imit (track a crouch-push-tuck joint reference during the
+window); spot_jump_env.py's docstring says why.
 """
 import argparse
 import json
@@ -39,12 +44,12 @@ def summary(st):
     lines = [f"jump eps {j['episodes']}: jumped {fmt(j['jumped'])}  landed up {fmt(j['landed_up'])}  success "
              f"{fmt(j['success'])}  fell {fmt(j['fell'])}  flight {fmt(j['flight_s'], 2)} s  rise {fmt(j['rise_m'])} m  "
              f"clearance {fmt(j['clearance_m'])} m  |dx err| {fmt(j['dx_err_m'])} m  uncmd air/ep "
-             f"{fmt(j['uncmd_air_ticks_per_ep'], 2)}"]
+             f"{fmt(j['uncmd_air_ticks_per_ep'], 2)}  peak vz {fmt(j['vz_max'], 2)} m/s  rise(all) {fmt(j['rise_all_m'])} m"]
     for name, b in st["by_bucket"].items():
         lines.append(f"  {name:9s} eps {b['episodes']:5d}  jumped {fmt(b['jumped'])}  success {fmt(b['success'])}  fell "
                      f"{fmt(b['fell'])}  flight {fmt(b['flight_s'], 2)}  clear {fmt(b['clearance_m'])} (max "
                      f"{b['clearance_max_m']:.3f})  dx {fmt(b['dx_m'])} err {fmt(b['dx_err_m'])}  uncmd/ep "
-                     f"{fmt(b['uncmd_air_ticks_per_ep'], 2)}")
+                     f"{fmt(b['uncmd_air_ticks_per_ep'], 2)}  vz {fmt(b['vz_max'], 2)}")
     qw = " | ".join(f"{g} p95 {fmt(r['p95'], 1)} p99 {fmt(r['p99'], 1)} max {fmt(r['max'], 1)}"
                     for g, r in st["qd_window"].items() if r["samples"])
     qa = " | ".join(f"{g} p99 {fmt(r['p99'], 1)} max {fmt(r['max'], 1)}" for g, r in st["qd"].items() if r["samples"])
@@ -64,9 +69,10 @@ def evaluate(ckpt, k=2048, seed=0, trigger=1.0, json_path=""):
     res = {"checkpoint": os.path.abspath(ckpt), "envs": k, "seed": seed, "trigger_s": trigger,
            "action_scale": env.action_scale, "qd_max": env.qd_max,
            "meta": {kk: meta.get(kk) for kk in ("warmstart", "arm", "iters", "seed", "qd_max", "w_qd_excess", "lr",
-                                                "log_std_min", "jump_frac", "dx_max")}}
-    for name, frac in (("jump", 1.0), ("nojump", 0.0)):
-        env.jump_frac = frac
+                                                "log_std_min", "jump_frac", "dx_max", "w_vz", "crouch_frac",
+                                                "w_imit")}}
+    for name, frac, crouch in (("jump", 1.0, 0.0), ("nojump", 0.0, 0.0), ("crouch", 1.0, 1.0)):
+        env.jump_frac, env.crouch_frac = frac, crouch
         env.ep_index.zero_()
         obs = env.reset()
         env.jump_stats(reset=True)
@@ -77,10 +83,18 @@ def evaluate(ckpt, k=2048, seed=0, trigger=1.0, json_path=""):
         st = env.jump_stats(reset=False)
         st["steps_s"] = time.perf_counter() - t0
         res[name] = st
-        print(f"[eval {name}] {os.path.basename(ckpt)} K={k} trigger {trigger} s, targets <= {env.qd_max} rad/s\n        "
-              + summary(st) if name == "jump" else
-              f"[eval nojump] success (stood, never airborne) {fmt(st['by_bucket']['nojump']['success'])}  fell "
-              f"{fmt(st['by_bucket']['nojump']['fell'])}  uncmd air/ep {fmt(st['by_bucket']['nojump']['uncmd_air_ticks_per_ep'], 2)}")
+        if name == "jump":
+            print(f"[eval jump] {os.path.basename(ckpt)} K={k} trigger {trigger} s, targets <= {env.qd_max} rad/s\n        "
+                  + summary(st))
+        elif name == "nojump":
+            nj = st["by_bucket"]["nojump"]
+            print(f"[eval nojump] success (stood, never airborne) {fmt(nj['success'])}  fell {fmt(nj['fell'])}  uncmd air/ep "
+                  f"{fmt(nj['uncmd_air_ticks_per_ep'], 2)}")
+        else:
+            c = st["by_bucket"]["crouch"]
+            print(f"[eval crouch starts] jumped {fmt(c['jumped'])}  landed up {fmt(c['landed_up'])}  success {fmt(c['success'])}"
+                  f"  fell {fmt(c['fell'])}  flight {fmt(c['flight_s'], 2)} s  clearance {fmt(c['clearance_m'])} m  peak vz "
+                  f"{fmt(c['vz_max'], 2)} m/s")
     if json_path:
         os.makedirs(os.path.dirname(os.path.abspath(json_path)), exist_ok=True)
         with open(json_path, "w") as f:
@@ -108,6 +122,12 @@ def main():
                     help="clamp log_std >= this after every update (exploration floor, as recovery waves 2-3)")
     ap.add_argument("--jump-frac", dest="jump_frac", type=float, default=CONFIG["jump_frac"])
     ap.add_argument("--dx-max", dest="dx_max", type=float, default=DX_MAX)
+    ap.add_argument("--w-vz", dest="w_vz", type=float, default=0.0,
+                    help="pay W x the peak upward base speed since the trigger (wave 2)")
+    ap.add_argument("--crouch-frac", dest="crouch_frac", type=float, default=0.0,
+                    help="share of jump episodes that start crouched (wave 2)")
+    ap.add_argument("--w-imit", dest="w_imit", type=float, default=0.0,
+                    help="pay W x exp(-mean((q - q_ref)^2) / 0.1) per window tick for the jump reference (wave 2)")
     ap.add_argument("--self-collision", dest="self_collision", action=argparse.BooleanOptionalAction, default=True)
     ap.add_argument("--sym-coef", dest="sym_coef", type=float, default=1.0)
     ap.add_argument("--entropy", type=float, default=0.0)
@@ -145,7 +165,8 @@ def main():
     lr = args.lr if args.lr is not None else (1e-4 if warm else 3e-4)
     t0 = time.perf_counter()
     env = SpotJumpEnv(num_envs=args.envs, seed=args.seed, self_collision=args.self_collision, action_scale=scale,
-                      qd_max=qd, w_qd_excess=args.w_qd_excess, jump_frac=args.jump_frac, dx_max=args.dx_max)
+                      qd_max=qd, w_qd_excess=args.w_qd_excess, jump_frac=args.jump_frac, dx_max=args.dx_max,
+                      w_vz=args.w_vz, crouch_frac=args.crouch_frac, w_imit=args.w_imit)
     print(f"jump env: K={args.envs}, built in {time.perf_counter() - t0:.1f} s | {env.knob_config()}")
     meta = {**env.config(), "log_std_min": args.log_std_min, "warmstart": os.path.basename(args.warmstart) if warm else "",
             "warmstart_path": os.path.abspath(args.warmstart) if warm else "", "arm": args.arm, "iters": args.iters,

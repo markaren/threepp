@@ -36,6 +36,23 @@ not fallen, and standing still at the end: the recovery env's stand criterion he
 apex base rise, foot clearance (the lowest foot's highest point during the flight), forward distance and its error, and
 uncommanded airborne ticks; by command bucket (no jump / dx = 0 / dx <= 0.2 / dx > 0.2). Joint speeds over all live ticks
 (the recovery env's histogram) and over window ticks only (qd_window), since the jump's speeds hide in a standing average.
+
+Wave 2 knobs (2026-09-14), off by default so the defaults are the pilot. The pilot (spot_jump1, 4 x 1500 iterations, arms
+at 10 and 20 rad/s) never left the ground: 0 flights in ~25k training episodes per run, the rise term 0.004-0.05 per step
+(standing taller), every window missed, no falls. Exploration from the standing policy never finds a coordinated crouch
+and push, and the height max has no slope past full leg extension without one.
+  - w_vz W: W x the increase of the running max of the base's upward speed (capped at VZ_CAP) since the trigger, while the
+    jump is pending or in flight. It telescopes to W x the peak take-off speed, a slope all the way from standing up to a
+    jump (apex = vz^2 / 2g), and a bob cannot farm it.
+  - crouch_frac F: a share F of the jump episodes spawns crouched (the stance plus u x CROUCH_Q, u uniform in [0, 1], every
+    depth in between) with the trigger CROUCH_TRIGGER_S after the spawn: the stroke a push needs is given, not searched
+    for. Counted in their own bucket (crouch), outside the standing-start jump totals.
+  - w_imit W: W x exp(-mean((q - q_ref)^2) / IMIT_SIGMA2) per window tick, q_ref the stance plus REF_KEYS interpolated at
+    the tick since the trigger (crouch, hold, push, tuck, stand; the push is the open-loop probe hop that flew 0.38 s and
+    stayed up). A 150-iteration local check with w_vz 40 and crouch_frac 0.5 alone (K=1024) moved the peak upward speed
+    from 0.17 to 0.22 m/s on standing starts and 0.24 to 0.29 on crouched ones: a slope, but a take-off needs ~2 m/s.
+    The reference puts exploration on a jump; flight, landing and distance still say what a good one is.
+  - metrics, always on: peak upward base speed and height rise over every jump episode, not only those that flew.
 """
 import math
 import os
@@ -70,13 +87,22 @@ TAKEOFF_VZ = 0.2                       # a take-off needs the base rising: a fas
 SEG_HALF, SHIN_R = 0.15, 0.028         # lower-leg capsule half length and radius (build_spot)
 W_RISE, W_FLIGHT, W_LAND, W_DIST, W_MISS, W_UNCMD, W_FALL = 150.0, 3.0, 50.0, 30.0, 30.0, 3.0, 10.0
 DIST_SIGMA = 0.15
-BUCKETS = ("nojump", "dx0", "dx_short", "dx_long")   # dx_short: 0 < dx <= 0.2, dx_long: dx > 0.2
+VZ_CAP = 3.0                           # m/s: w_vz stops paying above this (0.46 m of apex)
+CROUCH_Q = (0.0, 0.3, -0.6)            # hx, hy, kn offsets from the stance at full crouch depth (the probes' crouch)
+CROUCH_TRIGGER_S = (0.12, 0.3)
+# w_imit's reference: joint offsets from the stance (hx, hy, kn, the same on every leg) at window ticks, linear in between
+REF_KEYS = ((0, (0.0, 0.0, 0.0)), (12, (0.0, 0.3, -0.6)), (16, (0.0, 0.3, -0.6)), (24, (0.0, -0.3, 0.6)),
+            (40, (0.0, 0.1, -0.3)), (60, (0.0, 0.0, 0.0)))
+IMIT_SIGMA2 = 0.1
+BUCKETS = ("nojump", "dx0", "dx_short", "dx_long", "crouch")   # dx_short: 0 < dx <= 0.2, dx_long: dx > 0.2; crouch: w2
 # per-episode counters: episodes, jumped, landed upright, success, fell, flight s, rise, clearance, dx achieved,
-# |dx err|, uncommanded air ticks
-NSTAT = 11
+# |dx err|, uncommanded air ticks, peak upward base speed and rise over every episode
+NSTAT = 13
 CONFIG = {"task": "jump", "control_hz": CONTROL_HZ, "dt": DT, "obs_dim": OBS_DIM, "act_dim": ACT_DIM,
           "episode_s": EPISODE_S, "settle_ticks": SETTLE_TICKS, "jump_frac": JUMP_FRAC, "trigger_s": list(TRIGGER_S),
-          "window_s": WINDOW_S, "window_ticks": WINDOW_TICKS, "dx_zero_frac": DX_ZERO_FRAC, "air_z": AIR_Z,
+          "window_s": WINDOW_S, "window_ticks": WINDOW_TICKS, "dx_zero_frac": DX_ZERO_FRAC, "air_z": AIR_Z, "vz_cap": VZ_CAP, "crouch_q": list(CROUCH_Q),
+          "crouch_trigger_s": list(CROUCH_TRIGGER_S),
+          "ref_keys": [[k, list(v)] for k, v in REF_KEYS], "imit_sigma2": IMIT_SIGMA2,
           "min_flight_ticks": MIN_FLIGHT_TICKS, "takeoff_vz": TAKEOFF_VZ, "land_up": LAND_UP, "fall": {"up": FALL_UP, "z": FALL_Z},
           "jump_weights": {"rise": W_RISE, "flight": W_FLIGHT, "land": W_LAND, "dist": W_DIST, "dist_sigma": DIST_SIGMA,
                            "miss": W_MISS, "uncmd": W_UNCMD, "fall": W_FALL},
@@ -90,24 +116,33 @@ class SpotJumpEnv(SpotRecoveryEnv):
 
     def __init__(self, num_envs=2048, device="cuda", seed=0, self_collision=True, action_scale=0.5, qd_max=10.0,
                  w_qd_excess=0.0, jump_frac=JUMP_FRAC, dx_max=DX_MAX, trigger_s=TRIGGER_S, count_episodes=None,
-                 freeze_level=True):
+                 freeze_level=True, w_vz=0.0, crouch_frac=0.0, w_imit=0.0):
         """jump_frac: share of episodes with a trigger; trigger_s (lo, hi) seconds, or a number for a fixed trigger
-        (evaluation). The plant and the target rate limit are the recovery env's (target clip on)."""
+        (evaluation). The plant and the target rate limit are the recovery env's (target clip on). w_vz, crouch_frac:
+        w_imit: the wave 2 knobs (module docstring)."""
         super().__init__(num_envs=num_envs, device=device, seed=seed, self_collision=self_collision, stand_frac=1.0,
                          init_level=0, freeze_level=True, count_episodes=count_episodes, limp_ticks=0,
                          action_scale=action_scale, target_clip=True, qd_max=qd_max, w_qd_excess=w_qd_excess)
         self.jump_frac, self.dx_max = float(jump_frac), float(dx_max)
+        self.w_vz, self.crouch_frac, self.w_imit = float(w_vz), float(crouch_frac), float(w_imit)
+        ref = np.zeros((WINDOW_TICKS, 3), np.float32)
+        vals = np.array([v for _, v in REF_KEYS], np.float32)
+        for g in range(3):
+            ref[:, g] = np.interp(np.arange(WINDOW_TICKS), [k for k, _ in REF_KEYS], vals[:, g])
+        self._ref = torch.from_numpy(np.tile(ref, (1, 4))).to(self.device)   # [window ticks, 12], add order per leg
         self.trigger_s = (float(trigger_s), float(trigger_s)) if np.ndim(trigger_s) == 0 else tuple(map(float, trigger_s))
         K, dev = num_envs, self.device
         self.trig = torch.full((K,), -1, dtype=torch.long, device=dev)     # trigger tick (-1: none this episode)
         self.dx_cmd = torch.zeros(K, device=dev)
         self.bucket = torch.zeros(K, dtype=torch.long, device=dev)
+        self.crouched = torch.zeros(K, dtype=torch.bool, device=dev)
         self.jstate = self.env_state((), init=PEND, dtype=torch.long)
         self.air_run = self.env_state((), init=0, dtype=torch.long)         # airborne ticks of the current flight
         self.flight_ticks = self.env_state((), init=0, dtype=torch.long)    # the counted flight's length
         self.jumped = self.env_state((), init=False, dtype=torch.bool)
         self.landed_up = self.env_state((), init=False, dtype=torch.bool)
         self.zmax = self.env_state(())
+        self.vzmax = self.env_state(())
         self.z_trig = self.env_state(())
         self.xy_trig = self.env_state((2,))
         self.fwd = self.env_state((2,))
@@ -117,6 +152,7 @@ class SpotJumpEnv(SpotRecoveryEnv):
         self.uncmd = self.env_state((), init=0, dtype=torch.long)
         self.fell = self.env_state((), init=False, dtype=torch.bool)
         self._rise = torch.zeros(K, device=dev)
+        self._vz_gain = torch.zeros(K, device=dev)
         self._fly_tick = torch.zeros(K, dtype=torch.bool, device=dev)
         self._uncmd_tick = torch.zeros(K, dtype=torch.bool, device=dev)
         self._land_bonus = torch.zeros(K, device=dev)
@@ -137,6 +173,23 @@ class SpotJumpEnv(SpotRecoveryEnv):
         yaw = quat_axis_angle(torch.tensor([[0.0, 0.0, 1.0]], device=dev).expand(n, 3), self._rand(n) * 2 * math.pi)
         quat = quat_mul(yaw, tilt)
         joints = (self.stance + 0.03 * self._randn(n, 12)).clamp(self.q_lo, self.q_hi)
+        jump = self._rand(n) < self.jump_frac
+        lo, hi = self.trigger_s
+        t = lo + self._rand(n) * (hi - lo)
+        zero = self._rand(n) < DX_ZERO_FRAC
+        dx = torch.where(zero, 0.0, self._rand(n) * self.dx_max)
+        trig = torch.where(jump, (t * CONTROL_HZ).round().long(), -1)
+        bucket = torch.where(~jump, 0, torch.where(zero, 1, torch.where(dx <= 0.2, 2, 3)))
+        crouch = torch.zeros(n, dtype=torch.bool, device=dev)
+        if self.crouch_frac > 0:                # drawn only when on, so the pilot's random stream is untouched
+            crouch = jump & (self._rand(n) < self.crouch_frac)
+            u = self._rand(n)
+            off = torch.tensor(CROUCH_Q, device=dev).repeat(4)             # add order: per leg hx, hy, kn
+            joints = torch.where(crouch[:, None], (joints + u[:, None] * off).clamp(self.q_lo, self.q_hi), joints)
+            clo, chi = CROUCH_TRIGGER_S
+            tc = clo + self._rand(n) * (chi - clo)
+            trig = torch.where(crouch, (tc * CONTROL_HZ).round().long(), trig)
+            bucket = torch.where(crouch, len(BUCKETS) - 1, bucket)
         pose = torch.zeros(n, 7, device=dev)
         pose[:, :4] = quat
         pose[:, 5] = self.lane_y[idx]
@@ -147,14 +200,10 @@ class SpotJumpEnv(SpotRecoveryEnv):
         # the rate limiter starts from the spawn joints (there are no limp ticks to hand it the landed ones)
         self.last_act[idx] = (joints[:, self.i2a] - self.default_q) / self.action_scale
         self._tgt[idx] = joints
-        jump = self._rand(n) < self.jump_frac
-        lo, hi = self.trigger_s
-        t = lo + self._rand(n) * (hi - lo)
-        self.trig[idx] = torch.where(jump, (t * CONTROL_HZ).round().long(), -1)
-        zero = self._rand(n) < DX_ZERO_FRAC
-        dx = torch.where(zero, 0.0, self._rand(n) * self.dx_max)
+        self.trig[idx] = trig
         self.dx_cmd[idx] = torch.where(jump, dx, 0.0)
-        self.bucket[idx] = torch.where(~jump, 0, torch.where(zero, 1, torch.where(dx <= 0.2, 2, 3)))
+        self.bucket[idx] = bucket
+        self.crouched[idx] = crouch
 
     # ---- step -------------------------------------------------------------------------------------------------
     def _window(self):
@@ -187,6 +236,12 @@ class SpotJumpEnv(SpotRecoveryEnv):
         new_max = torch.where(first, bz, torch.maximum(self.zmax, bz))
         self._rise.copy_(torch.where(rising & ~first, new_max - self.zmax, 0.0))
         self.zmax.copy_(torch.where(rising, new_max, self.zmax))
+        # peak upward base speed since the trigger: w_vz pays its increase; a metric always
+        vz = torch.nan_to_num(self.sim.root_linvel[:, 2], nan=0.0).clamp(0.0, VZ_CAP)
+        old_v = torch.where(first, 0.0, self.vzmax)
+        new_v = torch.maximum(old_v, vz)
+        self._vz_gain.copy_(torch.where(rising, new_v - old_v, 0.0))
+        self.vzmax.copy_(torch.where(rising, new_v, self.vzmax))
         # flight state machine
         takeoff = (st == PEND) & in_win & air & (self.sim.root_linvel[:, 2] > TAKEOFF_VZ)
         self.xy_takeoff.copy_(torch.where(takeoff[:, None], bxy, self.xy_takeoff))
@@ -246,6 +301,13 @@ class SpotJumpEnv(SpotRecoveryEnv):
             "uncmd": -W_UNCMD * self._uncmd_tick.float(),
             "fall": -W_FALL * (s.terminated & ~self._blowup).float(),
         }
+        if self.w_vz > 0:
+            terms["vz"] = self.w_vz * self._vz_gain
+        if self.w_imit > 0:
+            in_win, t = self._window()
+            k = t.clamp(0, WINDOW_TICKS - 1)
+            err = (self.sim.joint_pos - self.stance - self._ref[k]).pow(2).mean(dim=1)
+            terms["imit"] = self.w_imit * in_win.float() * torch.exp(-err / IMIT_SIGMA2)
         base.update({k: v * live for k, v in terms.items()})
         return base
 
@@ -270,7 +332,7 @@ class SpotJumpEnv(SpotRecoveryEnv):
                          (self.landed_up[idx] & stood & ~fell).double(), fell.double(),
                          jf * self.flight_ticks[idx].double() * DT, jf * rise.double(), jf * self.clear_max[idx].double(),
                          jf * self.dx_ach[idx].double(), jf * (self.dx_ach[idx] - self.dx_cmd[idx]).abs().double(),
-                         self.uncmd[idx].double()], dim=1)
+                         self.uncmd[idx].double(), self.vzmax[idx].double(), rise.double()], dim=1)
         # a no-jump episode succeeds by standing at the end without falling or leaving the ground
         nj = self.trig[idx] < 0
         m[:, 3] = torch.where(nj, (stood & ~fell & (self.uncmd[idx] == 0)).double(), m[:, 3])
@@ -298,12 +360,14 @@ class SpotJumpEnv(SpotRecoveryEnv):
                                       "flight_s": div(s[i, 5], jn), "rise_m": div(s[i, 6], jn),
                                       "clearance_m": div(s[i, 7], jn), "dx_m": div(s[i, 8], jn),
                                       "dx_err_m": div(s[i, 9], jn), "uncmd_air_ticks_per_ep": div(s[i, 10], e),
-                                      "rise_max_m": float(mx[i, 0]), "clearance_max_m": float(mx[i, 1])}
-        tj = s[1:].sum(axis=0)
+                                      "rise_max_m": float(mx[i, 0]), "clearance_max_m": float(mx[i, 1]),
+                                      "vz_max": div(s[i, 11], e), "rise_all_m": div(s[i, 12], e)}
+        tj = s[1:4].sum(axis=0)                                            # standing starts
         out["jump"] = {"episodes": int(tj[0]), "jumped": div(tj[1], tj[0]), "landed_up": div(tj[2], tj[0]),
                        "success": div(tj[3], tj[0]), "fell": div(tj[4], tj[0]), "flight_s": div(tj[5], tj[1]),
                        "rise_m": div(tj[6], tj[1]), "clearance_m": div(tj[7], tj[1]), "dx_err_m": div(tj[9], tj[1]),
-                       "uncmd_air_ticks_per_ep": div(tj[10], tj[0])}
+                       "uncmd_air_ticks_per_ep": div(tj[10], tj[0]), "vz_max": div(tj[11], tj[0]),
+                       "rise_all_m": div(tj[12], tj[0])}
         rec = self.recovery_stats(reset=reset)
         for k in ("qd", "cmd_qd_max_hx_hy_kn", "tau_p95_hx_hy_kn", "qd_excess", "spawn"):
             if k in rec:
@@ -323,7 +387,8 @@ class SpotJumpEnv(SpotRecoveryEnv):
 
     def knob_config(self):
         return {**super().knob_config(), "jump_frac": self.jump_frac, "dx_max": self.dx_max,
-                "trigger_s": list(self.trigger_s)}
+                "trigger_s": list(self.trigger_s), "w_vz": self.w_vz, "crouch_frac": self.crouch_frac,
+                "w_imit": self.w_imit}
 
     def config(self):
         return {**super().config(), **CONFIG, "self_collision": self.self_collision, **self.knob_config()}
