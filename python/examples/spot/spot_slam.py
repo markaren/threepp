@@ -8,6 +8,7 @@ to reconstruct the growing SLAM surface (semi-transparent blue) over the ground 
     python spot_slam.py --seed 7 --amplitude 0.20
     python spot_slam.py --shot out.png
     python spot_slam.py --film recovery.mp4       # headless scripted fall-recovery film (--film-dry checks it first)
+    python spot_slam.py --model idun_runs/spot_unified2/unifiedB_s0/spot_steps.pt  # one policy walks and jumps: J, while walking
 
 Controls: W/S = fwd/back  A/D = strafe  Q/E = turn  |  R = reset  |  mouse = orbit/zoom
 The interactive window opens FULLSCREEN; pass --windowed for a 1200x720 window instead.
@@ -859,6 +860,14 @@ def main():
     ap.add_argument("--no-recovery", dest="no_recovery", action="store_true",
                     help="walking policy only: no recovery hand-over, and the legacy viewer plant unless the walking "
                          "checkpoint trained with real torque limits")
+    ap.add_argument("--self-collision", dest="self_collision", choices=("auto", "on", "off"), default="auto",
+                    help="auto: on when a recovery policy is loaded (it trained with it); a walk + jump walker "
+                         "(train_spot_steps.py --jump) trained without it")
+    ap.add_argument("--headless-vx", dest="headless_vx", type=float, default=1.0,
+                    help="with --shot: the headless walk's forward command (0 = stand; --jump-at then jumps from a stand)")
+    ap.add_argument("--jump-at", dest="jump_at", type=int, default=0, metavar="TICK",
+                    help="with --shot and a walk + jump walker: press J at this control tick of the headless walk and log "
+                         "the flight, clearance, height, up_z and joint speeds over the jump window")
     ap.add_argument("--knock-at", dest="knock_at", type=int, default=0, metavar="TICK",
                     help="with --shot: trip Spot (G's push) at this control tick of the headless walk (tests the hand-over)")
     ap.add_argument("--trip-probe", dest="trip_probe", default="", metavar="OUT.json",
@@ -898,6 +907,14 @@ def main():
     # the same sentinel here it would trot in place off-distribution (play_spot_steps.py does the same).
     stand_mode = bool(_meta.get("stand_mode", False))
     print(f"[policy] {os.path.basename(model_path)}" + ("  (stand mode: no keys = stand still)" if stand_mode else ""))
+    # A walk + jump checkpoint (train_spot_steps.py --jump) reads 98 inputs: the walking 96 plus the jump flag and phase over
+    # the jump window that J starts, and it trained with a joint target rate limit (meta qd_max), applied here too.
+    walk_jump = bool(_meta.get("jump_obs", False))
+    walk_qd = float(_meta["qd_max"]) if _meta.get("qd_max") else None
+    walk_win = int(_meta.get("jump_window", 60))
+    if walk_jump or walk_qd:
+        print("[policy] " + (f"walk + jump: J jumps ({walk_win}-tick window, standing or walking), " if walk_jump else "")
+              + (f"joint targets <= {walk_qd:g} rad/s" if walk_qd else "no joint target limit"))
     rec = None
     if args.recovery_model:
         rec_ac, rec_norm, _rec_meta = load_policy(args.recovery_model, device="cpu")
@@ -954,6 +971,8 @@ def main():
     # its legs pass through its own body, which flatters a recovery (29 of 29 knock-overs got up that way, 2026-09-14).
     _dlf = bool(_meta.get("drive_limits_are_forces", False)) or bool(args.recovery_model)
     _selfc = bool(args.recovery_model) and bool(_rec_meta.get("self_collision", True))
+    if args.self_collision != "auto":
+        _selfc = args.self_collision == "on"
     art, meshes = build_spot(world, assets, gains=STIFF_GAINS,   # stiff gains (90) = base gait's plant
                              drive_limits_are_forces=_dlf, self_collision=_selfc)
     print(f"[spot] plant: torque limits {'real' if _dlf else 'impulse (legacy)'}, self-collision {'on' if _selfc else 'off'}")
@@ -1182,6 +1201,8 @@ def main():
     settled   = [0]        # consecutive recovered-and-still ticks
     f_held    = [False]
     g_held    = [False]
+    j_held    = [False]
+    wjump     = [-1]       # a walk + jump walker: ticks into the jump window J started (-1: none)
 
     def recovery_tick(rs):
         """Hand-over logic, once per control tick: True when the recovery policy drives this tick (it has then acted).
@@ -1195,7 +1216,7 @@ def main():
         if mode[0] == "walk":
             if up >= RECOVER_UP:
                 return False
-            mode[0] = "recover"; settled[0] = 0
+            mode[0] = "recover"; settled[0] = 0; wjump[0] = -1
             # last_act is in the driving policy's action units: keep the joint targets it stands for across the hand-over
             last_act[:] *= ACTION_SCALE / rec[2]
             print(f"[recovery] up_z {up:.2f}: recovery policy takes over (action scale {rec[2]}"
@@ -1227,6 +1248,36 @@ def main():
         art.set_drive_targets(tgt)
         return True
 
+    def walk_step(cmd, ahead, h_here, stand):
+        """One tick of the walking policy: its observation (plus the jump flag and phase for a walk + jump walker, as
+        spot_steps_env.observe appends them), the action, the joint target rate limit it trained with, the drive targets;
+        then the J window advances (the policy saw phase 0 .. window-1 / window, spot_steps_env._jump_step)."""
+        obs = v2_obs(art, last_act, cmd, ahead, h_here, None if stand else gphi[0])
+        if walk_jump:
+            w = 1.0 if wjump[0] >= 0 else 0.0
+            obs = np.concatenate([obs, np.array([w, max(wjump[0], 0) / walk_win * w], np.float32)])
+        with torch.no_grad():
+            obs_t = torch.from_numpy(obs)[None]
+            if norm is not None:
+                obs_t = norm.norm(obs_t)
+            a = ac.act_mean(obs_t)[0].numpy()
+        if walk_qd:
+            da = walk_qd * 0.02 / ACTION_SCALE
+            a = (last_act + np.clip(a - last_act, -da, da)).astype(np.float32)
+        last_act[:] = a
+        art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
+        if wjump[0] >= 0:
+            wjump[0] = wjump[0] + 1 if wjump[0] + 1 < walk_win else -1
+
+    def feet_clearance(rs):
+        """The lowest foot's height above the terrain under it (m), from the joint angles and the base pose through
+        build_spot's capsule chain (spot_recovery_env.leg_segments): the headless jump log's airborne test."""
+        from spot_recovery_env import leg_segments
+        q = torch.from_numpy(np.asarray(art.joint_positions(), np.float32))[None]
+        tips = leg_segments(q, samples=2)[0][0, 8:12, 1].numpy()     # lower legs' foot-end samples, body frame
+        w = tips @ _quat_to_R(rs[3:7]).T + np.asarray(rs[:3], float)
+        return min(float(t[2]) - 0.028 - float(gen.height_at(float(t[0]), float(t[1]), tparams)) for t in w)
+
     push_rng = np.random.default_rng(args.seed + 1)
 
     def push(kind, dv=None, quiet=False, side=None):
@@ -1254,7 +1305,7 @@ def main():
     def reset():
         rh = max(float(gen.height_at(SPAWN_X + dx, SPAWN_Y + dy, tparams)) for dx, dy in _FEET)
         spawn_stance(rh)
-        mode[0] = "walk"; settled[0] = 0
+        mode[0] = "walk"; settled[0] = 0; wjump[0] = -1
         last_act[:] = 0.0
         hdg_lock[0] = None
         gphi[0] = 0.0
@@ -1550,15 +1601,7 @@ def main():
                         print(f"[film] WARNING trip {k + 1}: no hand-back within {FILM_TIMEOUT} ticks")
                         ev["end"] = i + 50
             if not recovering:
-                cmd = np.array([float(cmd_s[0]), 0.0, wz], np.float32)
-                obs = v2_obs(art, last_act, cmd, ahead_cache[0], h_here_cache[0], None if stand else gphi[0])
-                with torch.no_grad():
-                    obs_t = torch.from_numpy(obs)[None]
-                    if norm is not None:
-                        obs_t = norm.norm(obs_t)
-                    a = ac.act_mean(obs_t)[0].numpy()
-                last_act[:] = a
-                art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
+                walk_step(np.array([float(cmd_s[0]), 0.0, wz], np.float32), ahead_cache[0], h_here_cache[0], stand)
             world.step(DT)
             t_sim += DT
             if not stand and not recovering:
@@ -1675,12 +1718,15 @@ def main():
         if args.film:
             run_film(args.film)
             return
-        cmd = np.array([1.0, 0.0, 0.0], np.float32)
+        cmd = np.array([args.headless_vx, 0.0, 0.0], np.float32)
         # Vulkan: scan() uses the TLAS from the last render(), so render before each scan.
         # GL: scan() re-renders internally anyway; the extra render() is a cheap no-op for screenshots.
         rend.render(scene, camera)
         n_ticks = max(150, args.knock_at + 250) if (args.knock_at and rec is not None) else 150
+        if args.jump_at and walk_jump:
+            n_ticks = max(n_ticks, args.jump_at + 350)
         up_min, modes, v_pre = 1.0, [], None
+        jl = {"ticks": 0, "air": 0, "clear": 0.0, "height": 0.0, "up": 1.0, "qd": np.zeros(3)}
         for i in range(n_ticks):
             rs = art.root_state()
             up_min = min(up_min, 1.0 - 2.0 * (float(rs[3]) ** 2 + float(rs[4]) ** 2))
@@ -1692,6 +1738,9 @@ def main():
                 dvb = np.asarray(art.root_velocity()[:3], float) - v_pre
                 print(f"[trip] base velocity change over that tick: {np.linalg.norm(dvb[:2]):.2f} m/s horizontal, "
                       f"{dvb[2]:+.2f} m/s vertical (whole-robot dv {TRIP_DV:g} m/s)")
+            if args.jump_at and walk_jump and i == args.jump_at:
+                wjump[0] = 0
+                print(f"[jump] tick {i}: J, command {cmd.tolist()}")
             if not modes or modes[-1][1] != mode[0]:
                 modes.append((i, mode[0]))
             if i % SCAN_EVERY == 0:
@@ -1700,21 +1749,29 @@ def main():
             if recovery_tick(rs):
                 world.step(0.02)
                 continue
-            obs = v2_obs(art, last_act, cmd, ahead, h_here, gphi[0])
-            with torch.no_grad():
-                obs_t = torch.from_numpy(obs)[None]
-                if norm is not None:
-                    obs_t = norm.norm(obs_t)
-                a = ac.act_mean(obs_t)[0].numpy()
-            last_act[:] = a
-            art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
+            stand_now = stand_mode and not cmd.any()
+            in_win = wjump[0] >= 0
+            walk_step(cmd, ahead, h_here, stand_now)
             world.step(0.02)
-            gphi[0] = (gphi[0] + 0.02 / GAIT_PERIOD) % 1.0
+            if in_win:
+                rs2 = art.root_state()
+                c = feet_clearance(rs2)
+                jl["ticks"] += 1; jl["air"] += int(c > 0.02); jl["clear"] = max(jl["clear"], c)
+                jl["height"] = max(jl["height"], float(rs2[2]) - float(gen.height_at(float(rs2[0]), float(rs2[1]), tparams)))
+                jl["up"] = min(jl["up"], 1.0 - 2.0 * (float(rs2[3]) ** 2 + float(rs2[4]) ** 2))
+                jl["qd"] = np.maximum(jl["qd"], np.abs(np.asarray(art.joint_velocities(), float)).reshape(4, 3).max(0))
+            if not stand_now:
+                gphi[0] = (gphi[0] + 0.02 / GAIT_PERIOD) % 1.0
         rs = art.root_state()
         print(f"[headless] {n_ticks} ticks, min up_z {up_min:.2f}, final up_z "
               f"{1.0 - 2.0 * (float(rs[3]) ** 2 + float(rs[4]) ** 2):.2f}"
               + (f", trip at tick {args.knock_at}" if args.knock_at else "")
               + (f", control by tick {modes + [(n_ticks, mode[0])]}" if rec is not None else ""))
+        if args.jump_at and walk_jump:
+            print(f"[jump] headless: {jl['ticks']} jump-window ticks, all feet clear of the ground {jl['air']} ticks "
+                  f"({jl['air'] * 0.02:.2f} s), lowest-foot clearance max {jl['clear']:.3f} m, base height above the ground "
+                  f"max {jl['height']:.3f} m, up_z min {jl['up']:.2f}, joint speed max hx/hy/kn "
+                  f"{np.round(jl['qd'], 1).tolist()} rad/s")
         for _ in range(20):
             rend.render(scene, camera)
             ahead, h_here = scanner.scan(rs)
@@ -1752,8 +1809,8 @@ def main():
 
         rs = art.root_state()
         tp.imgui.text(f"pos  x={rs[0]:+.1f}  y={rs[1]:+.1f}  z={rs[2]:.2f} m")
-        if rec is not None:
-            tp.imgui.text(f"control: {mode[0]}   (F = shove, G = trip)")
+        if rec is not None or walk_jump:
+            tp.imgui.text(f"control: {mode[0]}   (F shove, G trip{', J jump' if walk_jump else ''})")
         _, vx_hi[0] = tp.imgui.slider_float("forward speed vx (VX_HI)", vx_hi[0], 0.0, VX_HI)
         tp.imgui.separator()
         tp.imgui.text("Depth camera")
@@ -1786,7 +1843,7 @@ def main():
             if chg:
                 rend.fog_anisotropy = v
         tp.imgui.separator()
-        tp.imgui.text(f"{tp.imgui.get_framerate():.0f} fps   |   WASD+QE  F shove  G trip  mouse=orbit/zoom")
+        tp.imgui.text(f"{tp.imgui.get_framerate():.0f} fps   |   WASD+QE  F shove  G trip  J jump  mouse=orbit/zoom")
         tp.imgui.end()
 
     def frame():
@@ -1831,17 +1888,17 @@ def main():
                     held[0] = True
                 else:
                     held[0] = False
+            if walk_jump:                         # J = jump, standing or walking (edge-triggered): the walking policy jumps
+                if down("J"):
+                    if not j_held[0] and mode[0] == "walk" and wjump[0] < 0:
+                        wjump[0] = 0
+                        print(f"[jump] J: a {walk_win}-tick jump window at command vx {vx:.2f} vy {vy:.2f} wz {wz:.2f}")
+                    j_held[0] = True
+                else:
+                    j_held[0] = False
         recovering = recovery_tick(rs)           # the recovery policy acted this tick
         if not recovering:
-            cmd   = np.array([vx, vy, wz], np.float32)
-            obs   = v2_obs(art, last_act, cmd, ahead_cache[0], h_here_cache[0], None if stand else gphi[0])
-            with torch.no_grad():
-                obs_t = torch.from_numpy(obs)[None]
-                if norm is not None:
-                    obs_t = norm.norm(obs_t)
-                a = ac.act_mean(obs_t)[0].numpy()
-            last_act[:] = a
-            art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
+            walk_step(np.array([vx, vy, wz], np.float32), ahead_cache[0], h_here_cache[0], stand)
         if bench: _mark("policy")
         world.step(0.02)
         if bench: _mark("physics")
