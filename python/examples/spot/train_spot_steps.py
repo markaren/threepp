@@ -292,6 +292,14 @@ def main():
                     help="rate-limit the drive targets to V rad/s (spot_recovery_env's limit; default none)")
     ap.add_argument("--self-collision", dest="self_collision", action="store_true",
                     help="legs collide with the body and each other (the recovery and jump plant)")
+    ap.add_argument("--blowup-guard", dest="blowup_guard", action=argparse.BooleanOptionalAction, default=None,
+                    help="terminate and zero the reward of a robot whose state explodes, keep observations finite "
+                         "(default: on with --jump; spot_unified1 collapsed without it)")
+    ap.add_argument("--jump-teacher", dest="jump_teacher", default="",
+                    help="a spot_jump_env checkpoint (spot_jump2 jumpD_s0) whose actions the policy is pulled toward in "
+                         "jump windows at a zero command: an auxiliary loss on those minibatch rows, the teacher's "
+                         "observation rebuilt from the policy's (last_act and actions converted between action scales)")
+    ap.add_argument("--jump-teacher-coef", dest="jump_teacher_coef", type=float, default=1.0)
     ap.add_argument("--eval-jump-steps", dest="eval_jump_steps", type=int, default=0,
                     help="with --jump, after training: this many deterministic steps on the training env; jump and fall "
                          "counters -> <out stem>_jumpeval.json")
@@ -374,6 +382,11 @@ def main():
         kw.update(qd_max=args.qd_max)
     if args.self_collision:
         kw.update(self_collision=True)
+    guard = args.blowup_guard if args.blowup_guard is not None else jump is not None
+    if guard:
+        kw.update(blowup_guard=True)
+    if args.jump_teacher and jump is None:
+        ap.error("--jump-teacher needs --jump")
     height_source = args.height_source or ("raycast" if args.course else "analytic")
     env = SpotStepsEnv(num_envs=args.envs, device="cuda", seed=args.seed, perceive=args.perceive,
                        perceive_noise=args.perceive_noise, graph=args.graph,
@@ -503,6 +516,46 @@ def main():
         env.reset()
         print(f"CUDA-graph step ON — replay verified to "
               f"{env.verify_graph(steps=32):.1e} against a recomputed observation")
+    tl = [0.0, 0.0, 0]      # teacher loss sum, rows, minibatches with rows (per log window)
+    if args.jump_teacher:
+        from spot_deploy import ACTION_SCALE as _AS
+        t_ac, t_norm, t_meta = load_policy(args.jump_teacher, device="cuda")
+        t_scale = float(t_meta.get("action_scale", 0.5))
+        if t_meta.get("obs_dim") != OBS_DIM or int(t_meta.get("window_ticks", 60)) != 60:
+            ap.error(f"--jump-teacher must be a {OBS_DIM}-d spot_jump_env checkpoint with a 60-tick window")
+        sym_aux = ppo.aux_loss
+
+        def teacher_aux(ac, obs):
+            """In jump windows at a zero command, pull the policy's action toward the jump policy's. obs is PPO's
+            normalized minibatch; the teacher sees the walking layout with the jump signal in its clock channels, a zero
+            distance command, a flat scan and last_act in its own action units (spot_jump_env.observe)."""
+            out = sym_aux(ac, obs) if sym_aux is not None else obs.new_zeros(())
+            raw = ppo.norm.denorm(obs) if ppo.norm is not None else obs
+            m = (raw[:, 96] > 0.5) & (raw[:, 9:12].abs().amax(dim=1) < 1e-3)
+            n = int(m.sum())
+            if n == 0:
+                return out
+            r = raw[m]
+            t_obs = r[:, :OBS_DIM].clone()
+            t_obs[:, 9:12] = 0.0
+            t_obs[:, 36:48] = r[:, 36:48] * (_AS / t_scale)
+            t_obs[:, 48:50] = r[:, 96:98]
+            t_obs[:, 51:OBS_DIM] = 0.0
+            with torch.no_grad():
+                a_t = t_ac.act_mean(t_norm.norm(t_obs) if t_norm is not None else t_obs) * (t_scale / _AS)
+            loss = (ac.actor(ac._feat(obs[m])) - a_t).pow(2).mean()
+            tl[0] += float(loss.detach()) * n; tl[1] += n; tl[2] += 1
+            return out + args.jump_teacher_coef * loss
+
+        ppo.aux_loss = teacher_aux
+        import hashlib
+        with open(args.jump_teacher, "rb") as f_:
+            t_sha = hashlib.sha256(f_.read()).hexdigest()
+        ppo.meta.update(jump_teacher=os.path.basename(args.jump_teacher), jump_teacher_sha256=t_sha,
+                        jump_teacher_coef=args.jump_teacher_coef, jump_teacher_action_scale=t_scale)
+        print(f"jump teacher {args.jump_teacher} (sha {t_sha[:8]}, action scale {t_scale}): coef {args.jump_teacher_coef} on "
+              f"jump-window rows at a zero command")
+    ppo.meta["blowup_guard"] = bool(guard)
     sanity_walk(env, ppo.ac, ppo.norm)
     flat0 = stochastic_flat_baseline(env, ppo.ac, ppo.norm)
     gate = args.gate * flat0
@@ -602,7 +655,14 @@ def main():
                 f"{n} {v['windows']}: jumped {_f(v['jumped'])} landed {_f(v['landed_up'])} fell {_f(v['fell'])} flight "
                 f"{_f(v['flight_s'], 2)} s clear {_f(v['clearance_m'])} vz {_f(v['vz_max'], 2)}"
                 for n, v in js.items() if isinstance(v, dict) and n != "all")
-                  + f" | uncommanded flights/env-min {_f(js['uncommanded_flights_per_env_min'], 3)}")
+                  + f" | uncommanded flights/env-min {_f(js['uncommanded_flights_per_env_min'], 3)}"
+                  + (f" | teacher mse {tl[0] / tl[1]:.3f} over {int(tl[1])} rows" if tl[1] else "")
+                  + (f" | blow-ups {env.blowup_count(reset=False)}" if guard else ""))
+            if tl[1]:
+                course["jump_teacher"] = {"mse": tl[0] / tl[1], "rows": int(tl[1]), "minibatches": tl[2]}
+            tl[0] = tl[1] = 0.0; tl[2] = 0
+        if guard:
+            course["blowups"] = env.blowup_count(reset=True)
         env.reset_stats(episodes=False)
         metric({"type": "log", **ppo.last_log, **ppo.diagnostics(), "track": trk, "flat": ftrk,
                 "level": lvl, "clear_legacy": env.last_clear, "fell": env.last_fell, "gate_ok": ok,

@@ -109,6 +109,11 @@ J_IMIT_SIGMA2 = 0.1
 JUMP_OFF_TERMS = ("imit", "vz", "scrape", "stand")   # the teacher's gait, the vertical-speed and scrape penalties, the stand
 JUMP_BUCKETS = ("stand", "walk", "fast")             # the command at the trigger: zero, |vx| < 1 m/s, faster
 JUMP_OBS_DIM = OBS_DIM + 2
+# blowup_guard (opt-in): a robot whose state is non-finite or runs away terminates and earns nothing that tick, and every
+# observation is finite and within +-OBS_LIMIT. spot_unified1 (2026-09-14): one exploding robot (vz, angrate and stand
+# terms at -7e22 .. -1e28) wrecked the return scaling in all four runs, and ppo.py skips non-finite losses from then on.
+BLOWUP_V, BLOWUP_W, BLOWUP_JV = 30.0, 50.0, 150.0     # m/s base speed, rad/s base spin, rad/s any joint
+OBS_LIMIT = 1.0e3
 FOOT_DX = (0.30, 0.30, -0.30, -0.30)   # stance foot offsets for spawn clearance
 FOOT_DY = (0.17, -0.17, 0.17, -0.17)
 # A clear only counts if the robot was in its own lane WHEN IT CROSSED: CLEAR_DIST is x-progress
@@ -247,7 +252,7 @@ class SpotStepsEnv(VecTask):
                  terrain_material=None, push_interval=(3.0, 8.0), push_dv_min=0.3, push_max=0.5,
                  stand_mode=False, w_stand=W_STAND, w_place=0.0, course_ladder=None, cmd_switch=None,
                  reset_noise=None, reset_nohold_frac=0.3, jump=None, jump_obs=False, jump_lanes=None,
-                 w_jump_imit=2.0, qd_max=None, self_collision=False):
+                 w_jump_imit=2.0, qd_max=None, self_collision=False, blowup_guard=False):
         """Everything after push_prob is opt-in, and its default reproduces the training world:
 
         risers         per-level riser ladder (None = RISERS). More levels also lengthen the ground
@@ -357,6 +362,9 @@ class SpotStepsEnv(VecTask):
         qd_max         V rad/s: the drive targets move at most V * DT per control tick (spot_recovery_env's limit, in this
                        env's action units), outside the settle.
         self_collision the legs collide with the body and each other (the recovery and jump plant).
+        blowup_guard   terminate a robot with a non-finite state, base speed > BLOWUP_V, spin > BLOWUP_W or a joint
+                       faster than BLOWUP_JV, zero its reward terms that tick, and keep every observation finite within
+                       +-OBS_LIMIT (counted: blowup_count()).
         """
         course_ladder = course_ladder or ("hard" if course else "pilot")
         if course_ladder not in sc.LADDERS:
@@ -690,6 +698,9 @@ class SpotStepsEnv(VecTask):
         self.jump = None if jump is None else tuple(float(v) for v in jump)
         self.qd_max = float(qd_max) if qd_max else None
         self.w_jump_imit = float(w_jump_imit)
+        self.blowup_guard = bool(blowup_guard)
+        self._blowup = torch.zeros(num_envs, dtype=torch.bool, device=dev)
+        self._blow_n = torch.zeros((), dtype=torch.float64, device=dev)
         if self.jump is not None:
             if not (len(self.jump) == 2 and 0.0 < self.jump[0] <= self.jump[1]):
                 raise ValueError(f"jump must be (0 < lo <= hi seconds), got {jump}")
@@ -1223,6 +1234,14 @@ class SpotStepsEnv(VecTask):
             self._settle_check()
 
     def on_step(self, s):
+        if self.blowup_guard:
+            rp, rv, rw = self.sim.root_position, self.sim.root_linvel, self.sim.root_angvel
+            jp, jv = self.sim.joint_pos, self.sim.joint_vel
+            blow = (~torch.isfinite(rp).all(dim=1) | ~torch.isfinite(rv).all(dim=1) | ~torch.isfinite(rw).all(dim=1)
+                    | ~torch.isfinite(jp).all(dim=1) | ~torch.isfinite(jv).all(dim=1) | (rv.norm(dim=1) > BLOWUP_V)
+                    | (rw.norm(dim=1) > BLOWUP_W) | (jv.abs().amax(dim=1) > BLOWUP_JV))
+            self._blowup.copy_(blow)
+            self._blow_n += blow.sum().double()
         if self.stand_mode:
             # a zero command freezes the clock where it is: the command in force over the step just simulated
             stand = (self.cmd == 0.0).all(dim=1)
@@ -1359,7 +1378,7 @@ class SpotStepsEnv(VecTask):
     def jump_config(self):
         """What a checkpoint's meta records about the jump, the observation and the plant knobs (all None / False off)."""
         return {"obs_dim": self.obs_dim, "jump": list(self.jump) if self.jump else None, "jump_obs": self.jump_obs,
-                "qd_max": self.qd_max, "self_collision": self.self_collision,
+                "qd_max": self.qd_max, "self_collision": self.self_collision, "blowup_guard": self.blowup_guard,
                 **({"w_jump_imit": self.w_jump_imit, "jump_window": JUMP_WINDOW, "jump_min_steps": JUMP_MIN_STEPS,
                     "jump_air": JUMP_AIR, "jump_takeoff_vz": JUMP_TAKEOFF_VZ, "jump_min_flight": JUMP_MIN_FLIGHT,
                     "jump_land_up": JUMP_LAND_UP, "jump_vz_cap": JUMP_VZ_CAP,
@@ -1371,8 +1390,17 @@ class SpotStepsEnv(VecTask):
         tilt = self.up < 0.35
         self._term_tilt.copy_(tilt)          # the cause, for the counters (written through, graph-safe)
         if self.termination == "honest":
-            return self._honest_now          # set this tick by _instrument_step
-        return tilt | (self._base_above < 0.18)
+            out = self._honest_now           # set this tick by _instrument_step
+        else:
+            out = tilt | (self._base_above < 0.18)
+        return (out | self._blowup) if self.blowup_guard else out
+
+    def blowup_count(self, reset=True):
+        """blowup_guard: robot-ticks terminated as blow-ups since the last call."""
+        n = int(self._blow_n.item())
+        if reset:
+            self._blow_n.zero_()
+        return n
 
     # ---- the instrument (opt-in; see __init__ and spot_feet) ----------------------------------------------
     def _init_instrument(self):
@@ -1680,6 +1708,10 @@ class SpotStepsEnv(VecTask):
         self._st_level.copy_((self.level.float() * st).sum() / st.sum().clamp_min(1.0))
         if self._place_buf is not None:
             self._st_place.copy_((self._place_buf * st).sum() / st.sum().clamp_min(1.0))
+        if self.blowup_guard:
+            # an exploding robot earns nothing, and no term of any robot is non-finite
+            terms = {k: torch.where(self._blowup, torch.zeros_like(v), torch.nan_to_num(v, nan=0.0, posinf=0.0, neginf=0.0))
+                     for k, v in terms.items()}
         return terms
 
     def _course_done(self, idx):
@@ -1884,6 +1916,8 @@ class SpotStepsEnv(VecTask):
             else:
                 jch = torch.zeros(self.K, 2, device=self.device)
             obs = torch.cat([obs, jch], dim=1)
+        if self.blowup_guard:
+            obs = torch.nan_to_num(obs, nan=0.0, posinf=OBS_LIMIT, neginf=-OBS_LIMIT).clamp(-OBS_LIMIT, OBS_LIMIT)
         self._last_obs.copy_(obs)     # in place: reward_terms reads this, and a graph captures the
         return obs                    # address, so rebinding would strand it on a stale tensor
 

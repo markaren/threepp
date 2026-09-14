@@ -1,24 +1,30 @@
 #!/usr/bin/env bash
-# Spot WALK + JUMP in one policy on IDUN (train_spot_steps.py --jump, spot_steps_env JUMP_*): four variants, one GPU each.
-# Continue the shipped walking policy (python/examples/spot/spot_steps.pt, courseB_s2) on the course with jump triggers on
-# the flat lanes, widened 96 -> 98 inputs with zero weights on the jump channels; then 1500 deterministic steps on the
-# training env (jump + fall counters, <run>/spot_steps_jumpeval.json) and the flat steering eval against the base gait.
+# Spot WALK + JUMP in one policy on IDUN, wave 2 (train_spot_steps.py --jump, spot_steps_env JUMP_*): four variants, one
+# GPU each. Continue the shipped walking policy (python/examples/spot/spot_steps.pt, courseB_s2) on the course with jump
+# triggers on the flat lanes, widened 96 -> 98 inputs with zero weights on the jump channels, pulled toward the working jump
+# policy's actions in standing jump windows; then 1500 deterministic steps on the training env (jump + fall counters,
+# <run>/spot_steps_jumpeval.json) and the flat steering eval against the base gait.
 #
 #   mkdir -p /cluster/work/$USER/logs                                                          # ONCE
-#   sbatch --array=0-3 --export=ALL,ITERS=3000,RUNS_NAME=spot_unified1 scripts/idun/spot_unified.slurm
-#   sbatch --array=0-1 --export=ALL,ITERS=20,RUNS_NAME=spot_unified1_check scripts/idun/spot_unified.slurm
+#   sbatch --array=0-3 --export=ALL,ITERS=3000,RUNS_NAME=spot_unified2 scripts/idun/spot_unified.slurm
+#   sbatch --array=0-1 --export=ALL,ITERS=20,RUNS_NAME=spot_unified2_check scripts/idun/spot_unified.slurm
 #
-# Why: the jump works as its own policy (spot_jump2: 99-100% jumped and landed) but Lars wants it part of the overall
-# movement, not a separate policy handed control. Index -> variant, seed 0 each:
-#   0 = A  the walking plant as shipped (no joint target limit)
-#   1 = B  joint targets <= 10 rad/s (the recovery and jump plants' limit)
-#   2 = C  B + the jump reference at weight 5 (spot_jump2's best standing-start variant)
-#   3 = D  B + lr 3e-4 (spot_jump2's fastest learner)
-# All: course wave 2's flags (courseB: --w-place 30), flat lanes raised to 40% of the course (the jump lanes, and more
-# steering replay), self-collision on (the recovery plant), a jump trigger every U(2, 5) s after each 1.2 s window.
+# Wave 1 (spot_unified1, this script at ef9878ac: --self-collision, no teacher) walked at the shipped level for 600-1500
+# iterations, never jumped (flights in <= 0.2% of windows), then collapsed in every run: one robot's physics exploded (the
+# vz, angrate and stand terms read -7e22 .. -1e28), the return scaling broke, ppo.py skipped every non-finite loss after
+# (KL 0.0), and two runs overflowed PhysX's GPU found/lost pair buffers (one segfaulted). Wave 2: no self-collision (the
+# only ingredient all four shared that course wave 2 lacked), --blowup-guard (on with --jump), and --jump-teacher.
 #
-# Walltime: course wave 2 ran 40k steps/s on H100s (2000 iterations in ~3350 s); 3000 iterations = 197M steps = ~82 min,
-# plus the jump bookkeeping. Training gets the walltime minus EVAL_RESERVE_MIN; the jump eval and steering keep that slot.
+# Index -> variant, seed 0 each; all with the teacher spot_jump2 jumpD_s0 ($TEACHER):
+#   0 = A  joint targets <= 10 rad/s (the teacher's plant limit), teacher coef 1
+#   1 = B  <= 10 rad/s, teacher coef 0.3
+#   2 = C  <= 10 rad/s, teacher coef 3
+#   3 = D  no joint target limit (the walking plant as shipped), teacher coef 1
+# All: course wave 2's flags (courseB: --w-place 30), flat lanes at 40% of the course, a jump trigger every U(2, 5) s after
+# each 1.2 s window.
+#
+# Walltime: course wave 2 ran 40k steps/s on H100s; wave 1 ran 36-39k with the jump; 3000 iterations = 197M steps = ~88 min.
+# Training gets the walltime minus EVAL_RESERVE_MIN; the jump eval and steering keep that slot.
 # A task refuses a run directory that already holds a manifest.json (OVERWRITE=1 to allow).
 #
 #SBATCH --account=share-ie-iir
@@ -38,25 +44,26 @@ set -euo pipefail
 
 WORK=${WORK:-/cluster/work/$USER}
 SRC=${SRC:-$WORK/threepp}
-RUNS_NAME=${RUNS_NAME:-spot_unified1}
+RUNS_NAME=${RUNS_NAME:-spot_unified2}
 RUNS=${RUNS:-$WORK/$RUNS_NAME}
 PARENT=${PARENT:-$SRC/python/examples/spot/spot_steps.pt}
+TEACHER=${TEACHER:-$WORK/spot_jump2/jumpD_s0/spot_jump.pt}
 ENVS=${ENVS:-2048}
 ITERS=${ITERS:-3000}
 STEER_ENVS=${STEER_ENVS:-512}
 EVAL_JUMP_STEPS=${EVAL_JUMP_STEPS:-1500}
 COURSE_FLAGS=${COURSE_FLAGS:---course --course-shares flat=0.40,stairs=0.25,hills=0.15,cross=0.10,rough=0.10 --shove-ramp 0.5,2.0,600 --foot-mu-dr 0.3,1.0,8 --stand-mode --cmd-switch 3,8,0.3 --reset-noise 0.08,0.06,0.3 --w-place 30}
-JUMP_FLAGS=${JUMP_FLAGS:---jump 2,5 --self-collision}
+JUMP_FLAGS=${JUMP_FLAGS:---jump 2,5 --blowup-guard --jump-teacher $TEACHER}
 EXTRA=${EXTRA:-}
 EVAL_RESERVE_MIN=${EVAL_RESERVE_MIN:-15}
 SEED=${SEED:-0}
 
 ID=${SLURM_ARRAY_TASK_ID:-0}
 case "$ID" in
-    0) ARM=A; ARM_FLAGS="" ;;
-    1) ARM=B; ARM_FLAGS="--qd-max 10" ;;
-    2) ARM=C; ARM_FLAGS="--qd-max 10 --w-jump-imit 5" ;;
-    3) ARM=D; ARM_FLAGS="--qd-max 10 --lr 3e-4" ;;
+    0) ARM=A; ARM_FLAGS="--qd-max 10 --jump-teacher-coef 1" ;;
+    1) ARM=B; ARM_FLAGS="--qd-max 10 --jump-teacher-coef 0.3" ;;
+    2) ARM=C; ARM_FLAGS="--qd-max 10 --jump-teacher-coef 3" ;;
+    3) ARM=D; ARM_FLAGS="--jump-teacher-coef 1" ;;
     *) echo "!! no variant for array index $ID"; exit 1 ;;
 esac
 TAG="unified${ARM}_s${SEED}"
@@ -77,10 +84,12 @@ export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-8}
 trap 'rm -rf "$LS" 2>/dev/null || true' EXIT
 
 [ -s "$PARENT" ] || { echo "!! no parent checkpoint at $PARENT"; exit 1; }
+[ -s "$TEACHER" ] || { echo "!! no jump teacher at $TEACHER"; exit 1; }
 cd "$SRC/python/examples/spot"
 GIT=$(git -C "$SRC" rev-parse --short HEAD 2>/dev/null || echo unknown)
 DIRTY=$(git -C "$SRC" status --porcelain 2>/dev/null | wc -l)
 PARENT_SHA=$(sha256sum "$PARENT" | cut -d' ' -f1)
+TEACHER_SHA=$(sha256sum "$TEACHER" | cut -d' ' -f1)
 echo "== $TAG  seed=$SEED envs=$ENVS iters=$ITERS  flags='$COURSE_FLAGS $JUMP_FLAGS $ARM_FLAGS $EXTRA'  git=$GIT (+$DIRTY dirty)  node=$(hostname)"
 nvidia-smi --query-gpu=name,driver_version --format=csv,noheader || true
 
@@ -118,6 +127,7 @@ steer = json.load(open(sys.argv[2])) if os.path.exists(sys.argv[2]) else {}
 je = json.load(open(sys.argv[3])) if os.path.exists(sys.argv[3]) else {}
 json.dump({
     "tag": "$TAG", "arm": "$ARM", "seed": $SEED, "parent": "$PARENT", "parent_sha256": "$PARENT_SHA",
+    "teacher": "$TEACHER", "teacher_sha256": "$TEACHER_SHA",
     "trainer_flags": "$COURSE_FLAGS $JUMP_FLAGS $ARM_FLAGS $EXTRA".strip(), "envs": $ENVS, "iters": $ITERS, "runs": "$RUNS",
     "checkpoint": os.path.basename("$CKPT"), "train_exit": $TRC, "timed_out": $TIMED_OUT, "train_seconds": $((T1 - T0)),
     "throughput": "$STEPS_S", "last_train_log": """$LAST_LOG""",
