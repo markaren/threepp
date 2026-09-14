@@ -274,9 +274,18 @@ SUBDIV = int(cli_arg("--subdiv", 4, float))   # 4 = 2562 verts / 5120 faces,
                                  # every per-vertex and per-edge normaliser --
                                  # is derived from the mesh, so this is the one
                                  # number that has to change.
-BLOB = (3.6, 2.4, 2.0)           # semi-axes: 7.2 m long, 4.8 m deep, 4.0 m beam
+# One overall size knob, off by default (1.0 leaves every number below exactly
+# what it was). It exists so the SAME sculpt can be flown at a different scale
+# by a caller that imports this module -- the sea-drone co-design wants a ~3 m
+# body, not a 7 m one -- without a second copy of the geometry. Only the two
+# length triples scale: GZ_FLOOR, --cargo-y and --u-ref are absolute and the
+# caller passes its own.
+BLOB_SCALE = cli_arg("--blob-scale", 1.0, float)
+BLOB = tuple(BLOB_SCALE * v for v in (3.6, 2.4, 2.0))
+                                 # semi-axes: 7.2 m long, 4.8 m deep, 4.0 m beam
                                  # deeper than wide, so GM < 0: it WILL roll over
-BOX_HALF = (5.2, 2.6, 2.2)       # the soft envelope the shape may not leave
+BOX_HALF = tuple(BLOB_SCALE * v for v in (5.2, 2.6, 2.2))
+                                 # the soft envelope the shape may not leave
 DENSITY = 0.5                    # of water: it floats at half its own volume
 RHO_W = 1025.0
 GRAV = 9.81
@@ -700,18 +709,35 @@ def wave_resist(amp: wp.array2d(dtype=float),
 
 
 @wp.kernel
-def hull_fairness(x: wp.array(dtype=wp.vec3),
-                  offsets: wp.array(dtype=wp.int32),
-                  indices: wp.array(dtype=wp.int32),
-                  reg: wp.array(dtype=float)):
-    """Uniform Laplacian: how far each vertex is off its own 1-ring's average."""
+def hull_laplacian(x: wp.array(dtype=wp.vec3),
+                   offsets: wp.array(dtype=wp.int32),
+                   indices: wp.array(dtype=wp.int32),
+                   lap: wp.array(dtype=wp.vec3)):
+    """Uniform Laplacian: how far each vertex is off its own 1-ring's average.
+
+    TWO KERNELS, NOT ONE, and it matters (measured 2026-09-14): with the
+    dot product in the same kernel as this loop, Warp's tape (1.16 AND 1.17)
+    differentiates dot(d, d) at the loop accumulator's PRE-loop value, so the
+    fairness gradient came out with the wrong sign on many components and
+    up to 23x the true magnitude (central differences at two step sizes agree
+    to three digits; the adjoint did not). The accumulator leaves this kernel
+    through an array store; the nonlinear step reads it in the next one.
+    Linear uses of a loop accumulator are fine, so the subtraction stays."""
     i = wp.tid()
     s = offsets[i]
     e = offsets[i + 1]
     acc = wp.vec3(0.0, 0.0, 0.0)
     for k in range(s, e):
         acc += x[indices[k]]
-    d = x[i] - acc / float(wp.max(e - s, 1))
+    lap[i] = x[i] - acc / float(wp.max(e - s, 1))
+
+
+@wp.kernel
+def hull_fairness(lap: wp.array(dtype=wp.vec3),
+                  reg: wp.array(dtype=float)):
+    """Sum of squared Laplacians -- the nonlinear half, in its own kernel."""
+    i = wp.tid()
+    d = lap[i]
     wp.atomic_add(reg, 0, wp.dot(d, d))
 
 
@@ -1305,6 +1331,9 @@ class Sculptor:
         self.boxp = mk(1, float)
         self.loss = mk(1, float)
         self.gsm = [wp.zeros(self.n_verts, dtype=wp.vec3, device=d) for _ in range(2)]
+        # The Laplacian, stored between the two fairness kernels so the tape
+        # differentiates the square at the right point (see hull_laplacian).
+        self.lap = wp.zeros(self.n_verts, dtype=wp.vec3, device=d, requires_grad=True)
 
         self.pair = wp.array(self.pair_np, dtype=wp.int32, device=d)
         self.xsym = wp.zeros(self.n_verts, dtype=wp.vec3, device=d)
@@ -1610,8 +1639,10 @@ class Sculptor:
             wp.launch(wave_resist, dim=NTHETA, device=dev,
                       inputs=[self.wamp, self.sec3dt, self._wave_coef(self.u_run),
                               self.rwave])
+        wp.launch(hull_laplacian, dim=self.n_verts, device=dev,
+                  inputs=[self.x, self.offsets, self.indices, self.lap])
         wp.launch(hull_fairness, dim=self.n_verts, device=dev,
-                  inputs=[self.x, self.offsets, self.indices, self.reg])
+                  inputs=[self.lap, self.reg])
         wp.launch(hull_edges, dim=self.n_edges, device=dev,
                   inputs=[self.x, self.e0, self.e1, self.rest_len, self.reg])
         wp.launch(hull_box, dim=self.n_verts, device=dev,
