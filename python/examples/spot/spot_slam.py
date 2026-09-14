@@ -30,7 +30,7 @@ from threepp.rl import load_policy
 from threepp.utils import fetch_file
 from spot_deploy import (build_spot, fetch_assets,
                          _quat_to_R, _quat_from_R,
-                         default_q, isaac_to_add, add_to_isaac, ACTION_SCALE, Z0, LIM)
+                         default_q, isaac_to_add, add_to_isaac, ACTION_SCALE, Z0, LIM, MASS)
 from spot_depth_scan import ForwardDepthScanner
 from spot_terrain_env import VX_HI, VY_HI, WZ_HI
 from scratch_env import STIFF_GAINS
@@ -40,10 +40,23 @@ from spot_feet import cpu_foot_tips
 
 # Fall recovery (--recovery-model, spot_recovery_env.py): the walking policy hands over when the body tips past
 # RECOVER_UP and takes control back once the robot has stood (up_z > 0.9, base 0.40 m above the ground) and been still
-# for RECOVER_SETTLE control ticks. F knocks Spot over: a KNOCK_IMPULSE N·s sideways shove applied 0.3 m above the base.
+# for RECOVER_SETTLE control ticks.
+# Pushes are sized as a velocity change of the whole robot (impulse = total mass x dv), in a random sideways direction
+# jittered PUSH_JITTER_DEG. F = SHOVE: SHOVE_DV through the base's centre of mass; training shoves top out at 2 m/s, so the
+# walking policy should usually ride it out. G = TRIP: TRIP_DV at TRIP_HEIGHT above the base's centre of mass (the top of
+# the body), the smallest push that tips a standing Spot over reliably (--trip-probe); --knock-at uses the trip. The old F
+# was 150 N·s 0.3 m above the base, ~5 m/s on 28 kg: "it's like a tornado" (Lars, 2026-09-14).
 RECOVER_UP = 0.5
 RECOVER_SETTLE = 25          # 0.5 s at 50 Hz
-KNOCK_IMPULSE = 150.0        # ~5 m/s on the 32 kg robot, above the centre of mass so it rolls
+SHOVE_DV = 2.0               # m/s
+# Measured 2026-09-14 with --trip-probe (shipped walking policy standing, the plant --recovery-model builds, 10 trials per
+# step, +-10 deg jitter), at 0.095 m above the base's centre of mass: flat ground (--amplitude 0) tipped past up_z 0.5 in
+# 0/10 at 1 m/s, 6/10 at 1.5, 10/10 at 2; the default spawn terrain in 0/10 at 1, 1.5 and 2 m/s (min up_z 0.62-0.78) and
+# 10/10 at 2.5. So 2.5 m/s (70 N·s on 28 kg) is the smallest reliable trip on both, rounded up to 2.75. The 2 m/s shove
+# through the centre of mass tipped 0/10 on either (min up_z 0.78-0.92).
+TRIP_DV, TRIP_HEIGHT = 2.75, 0.095  # m/s, m
+PUSH_JITTER_DEG = 10.0
+TRIP_LADDER = (1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0)   # --trip-probe dv steps, m/s
 
 
 # SPOT_SCANSTATS=1 prints the 45-cell scan's spread every 60 frames — the check that the
@@ -808,12 +821,15 @@ def main():
                     help="profile N frames: vsync off, auto-walk forward, print timing summary, exit")
     ap.add_argument("--recovery-model", dest="recovery_model", default="",
                     help="fall-recovery policy (train_spot_recovery.py): takes over when Spot tips past up_z "
-                         f"{RECOVER_UP}, hands back once it has stood still for {RECOVER_SETTLE} ticks. F knocks Spot over")
+                         f"{RECOVER_UP}, hands back once it has stood still for {RECOVER_SETTLE} ticks. F shoves, G trips")
     ap.add_argument("--knock-at", dest="knock_at", type=int, default=0, metavar="TICK",
-                    help="with --shot: knock Spot over at this control tick of the headless walk (tests the hand-over)")
+                    help="with --shot: trip Spot (G's push) at this control tick of the headless walk (tests the hand-over)")
+    ap.add_argument("--trip-probe", dest="trip_probe", default="", metavar="OUT.json",
+                    help="headless: 10 trips of the standing walking policy per dv of TRIP_LADDER up to the first that "
+                         "tips it past up_z 0.5 in >= 8 of 10, then 10 F shoves; writes OUT.json and exits")
     args = ap.parse_args()
     assert tp.HAS_PHYSX, "needs a PhysX-enabled threepp build"
-    headless = bool(args.shot)
+    headless = bool(args.shot) or bool(args.trip_probe)
     bench    = int(args.bench)
 
     # ── assets ────────────────────────────────────────────────────────────────
@@ -838,9 +854,12 @@ def main():
         rec_lo = np.array([LIM[j][0] for _ in range(4) for j in ("hx", "hy", "kn")], np.float32) \
             if _rec_meta.get("target_clip", False) else None      # add order, as set_drive_targets takes them
         rec_hi = np.array([LIM[j][1] for _ in range(4) for j in ("hx", "hy", "kn")], np.float32)
-        rec = (rec_ac, rec_norm, rec_scale, rec_lo, rec_hi)
+        # and its target rate limit (wave 3, spot_recovery_env.act), none in a wave 2 or pilot meta
+        rec_qd = float(_rec_meta["qd_max"]) if _rec_meta.get("qd_max") else None
+        rec = (rec_ac, rec_norm, rec_scale, rec_lo, rec_hi, rec_qd, float(_rec_meta.get("dt", 0.02)))
         print(f"[recovery] {os.path.basename(args.recovery_model)} takes over below up_z {RECOVER_UP}, action scale "
-              f"{rec_scale}{' clipped to the joint limits' if rec_lo is not None else ''}  (F = knock over)")
+              f"{rec_scale}{' clipped to the joint limits' if rec_lo is not None else ''}, "
+              f"{f'joint targets <= {rec_qd:g} rad/s' if rec_qd else 'no joint target speed limit'}  (F = shove, G = trip)")
 
     # ── terrain ───────────────────────────────────────────────────────────────
     print("[terrain] generating ...")
@@ -884,6 +903,13 @@ def main():
     art, meshes = build_spot(world, assets, gains=STIFF_GAINS,   # stiff gains (90) = base gait's plant
                              drive_limits_are_forces=_dlf, self_collision=_selfc)
     print(f"[spot] plant: torque limits {'real' if _dlf else 'impulse (legacy)'}, self-collision {'on' if _selfc else 'off'}")
+    # Pushes are sized from the total mass. The bindings expose no articulation link mass, so this sums what build_spot built,
+    # link by link: each link's density is MASS / its collider's volume (box; capsule pi r^2 l + 4/3 pi r^3, the volumes PhysX
+    # integrates), so these are the masses PhysX computed.
+    _link_mass = [MASS["base"]] + [MASS[("hip", "uleg", "lleg")[(i - 1) % 3]] for i in range(1, len(art.links))]
+    robot_mass = float(sum(_link_mass))
+    print(f"[spot] total mass {robot_mass:.2f} kg over {len(_link_mass)} links: F shoves {SHOVE_DV:g} m/s "
+          f"({robot_mass * SHOVE_DV:.0f} N·s), G trips {TRIP_DV:g} m/s ({robot_mass * TRIP_DV:.0f} N·s at {TRIP_HEIGHT:g} m)")
 
     def settle(n=80):
         for _ in range(n):
@@ -1098,6 +1124,7 @@ def main():
     mode      = ["walk"]   # "walk" | "recover" (--recovery-model)
     settled   = [0]        # consecutive recovered-and-still ticks
     f_held    = [False]
+    g_held    = [False]
 
     def recovery_tick(rs):
         """Hand-over logic, once per control tick: True when the recovery policy drives this tick (it has then acted).
@@ -1115,7 +1142,8 @@ def main():
             # last_act is in the driving policy's action units: keep the joint targets it stands for across the hand-over
             last_act[:] *= ACTION_SCALE / rec[2]
             print(f"[recovery] up_z {up:.2f}: recovery policy takes over (action scale {rec[2]}"
-                  f"{', clipped' if rec[3] is not None else ''})")
+                  f"{', clipped' if rec[3] is not None else ''}"
+                  f"{f', joint targets <= {rec[5]:g} rad/s starting from the walking targets' if rec[5] else ''})")
         speed = float(np.linalg.norm(art.root_velocity()[:3]))
         stood = up > 0.9 and z - ground > 0.40 and speed < 0.2
         settled[0] = settled[0] + 1 if stood else 0
@@ -1130,6 +1158,11 @@ def main():
             if rec[1] is not None:
                 obs_t = rec[1].norm(obs_t)
             a = rec[0].act_mean(obs_t)[0].numpy()
+        if rec[5]:
+            # the training env's rate limit (spot_recovery_env.act): the target moves at most qd_max * dt per tick. last_act
+            # holds the action of the last targets, rescaled at the takeover, so the limiter starts from the walking targets
+            da = rec[5] * rec[6] / rec[2]
+            a = (last_act + np.clip(a - last_act, -da, da)).astype(np.float32)
         last_act[:] = a
         tgt = (default_q + rec[2] * a)[add_to_isaac].astype(np.float32)
         if rec[3] is not None:
@@ -1137,16 +1170,26 @@ def main():
         art.set_drive_targets(tgt)
         return True
 
-    def knock():
-        """F: a sideways shove above the centre of mass, one substep of KNOCK_IMPULSE (add_force_at_pos is consumed by
-        the next fixed substep, so the force carrying the impulse is impulse / fixed_timestep)."""
+    push_rng = np.random.default_rng(args.seed + 1)
+
+    def push(kind, dv=None, quiet=False):
+        """F ("shove"): SHOVE_DV through the base's centre of mass. G ("trip"): TRIP_DV at TRIP_HEIGHT above it. The
+        impulse is robot_mass x dv toward a random side of the body, jittered PUSH_JITTER_DEG, for one substep:
+        add_force_at_pos is consumed by the next fixed substep, so the force carrying the impulse is impulse / fixed_timestep.
+        -> (impulse N·s, dv m/s, height m)."""
+        dv = float(dv if dv is not None else (SHOVE_DV if kind == "shove" else TRIP_DV))
+        h = 0.0 if kind == "shove" else TRIP_HEIGHT
         rs = art.root_state()
-        left = _quat_to_R(rs[3:7])[:, 1].copy(); left[2] = 0.0
-        left /= max(np.linalg.norm(left), 1e-6)
-        f = left * (KNOCK_IMPULSE / 0.002)
+        left = _quat_to_R(rs[3:7])[:, 1].copy()
+        ang = (math.atan2(float(left[1]), float(left[0])) + (0.0 if push_rng.random() < 0.5 else math.pi)
+               + math.radians(PUSH_JITTER_DEG) * push_rng.uniform(-1.0, 1.0))
+        J = robot_mass * dv
+        f = np.array([math.cos(ang), math.sin(ang), 0.0]) * (J / 0.002)
         art.link(0).add_force_at_pos(tp.Vector3(*[float(v) for v in f]),
-                                     tp.Vector3(float(rs[0]), float(rs[1]), float(rs[2]) + 0.3))
-        print("[knock] shoved sideways")
+                                     tp.Vector3(float(rs[0]), float(rs[1]), float(rs[2]) + h))
+        if not quiet:
+            print(f"[{kind}] {dv:g} m/s sideways = {J:.1f} N·s on {robot_mass:.2f} kg, {h:g} m above the base's centre of mass")
+        return J, dv, h
 
     def reset():
         rh = max(float(gen.height_at(SPAWN_X + dx, SPAWN_Y + dy, tparams)) for dx, dy in _FEET)
@@ -1174,23 +1217,84 @@ def main():
             rend.save_frame(scene, camera, path)
 
     # ── headless ──────────────────────────────────────────────────────────────
+    def stand_ticks(n):
+        """n control ticks of the walking policy with a zero command (the stand clock for a stand-mode checkpoint),
+        scanning as the headless walk does -> the smallest up_z seen."""
+        up_min = 1.0
+        for i in range(n):
+            rs = art.root_state()
+            up_min = min(up_min, 1.0 - 2.0 * (float(rs[3]) ** 2 + float(rs[4]) ** 2))
+            if i % SCAN_EVERY == 0:
+                rend.render(scene, camera)
+                ahead_cache[0], h_here_cache[0] = scanner.scan(rs)
+            obs = v2_obs(art, last_act, np.zeros(3, np.float32), ahead_cache[0], h_here_cache[0],
+                         None if stand_mode else gphi[0])
+            with torch.no_grad():
+                obs_t = torch.from_numpy(obs)[None]
+                a = ac.act_mean(norm.norm(obs_t) if norm is not None else obs_t)[0].numpy()
+            last_act[:] = a
+            art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
+            world.step(0.02)
+            if not stand_mode:
+                gphi[0] = (gphi[0] + 0.02 / GAIT_PERIOD) % 1.0
+        return up_min
+
+    def run_trip_probe(path):
+        """--trip-probe: per dv of TRIP_LADDER, 10 trips of a standing Spot (reset, 0.5 s standing, the push, 2 s more),
+        stopping at the first dv that takes up_z below RECOVER_UP in >= 8 of 10; then 10 F shoves. No recovery policy
+        acts (the plant is still the one --recovery-model builds). -> JSON."""
+        import json
+
+        def trials(kind, dv, n=10):
+            ups = []
+            for _ in range(n):
+                reset()
+                stand_ticks(25)
+                push(kind, dv, quiet=True)
+                ups.append(stand_ticks(100))
+            fell = int(sum(u < RECOVER_UP for u in ups))
+            h = 0.0 if kind == "shove" else TRIP_HEIGHT
+            print(f"[trip-probe] {kind} {dv:g} m/s = {robot_mass * dv:.1f} N·s, {h:g} m above the base: up_z < {RECOVER_UP} "
+                  f"in {fell}/{n}  (min up_z {sorted(round(u, 2) for u in ups)})")
+            return {"kind": kind, "dv": dv, "impulse": robot_mass * dv, "height": h, "fell": fell, "trials": n, "up_min": ups}
+
+        res = {"amplitude": float(args.amplitude), "seed": args.seed, "robot_mass": robot_mass,
+               "trip_height": TRIP_HEIGHT, "jitter_deg": PUSH_JITTER_DEG, "policy": os.path.basename(model_path),
+               "plant": {"drive_limits_are_forces": _dlf, "self_collision": _selfc}, "trip": []}
+        for dv in TRIP_LADDER:
+            res["trip"].append(trials("trip", dv))
+            if res["trip"][-1]["fell"] >= 8:
+                break
+        res["shove"] = trials("shove", SHOVE_DV)
+        with open(path, "w") as f:
+            json.dump(res, f, indent=1)
+        print(f"[trip-probe] -> {path}")
+
     if headless:
         # Spawn the way R and the interactive loop do. Without it the headless walk started from the startup spawn, which
         # had already tipped to up_z 0.45 by the first tick and ended the 150-tick walk upside down (measured 2026-09-13,
         # cb737743 + the recovery hand-over's [headless] line).
         reset()
+        if args.trip_probe:
+            run_trip_probe(args.trip_probe)
+            return
         cmd = np.array([1.0, 0.0, 0.0], np.float32)
         # Vulkan: scan() uses the TLAS from the last render(), so render before each scan.
         # GL: scan() re-renders internally anyway; the extra render() is a cheap no-op for screenshots.
         rend.render(scene, camera)
         n_ticks = max(150, args.knock_at + 250) if (args.knock_at and rec is not None) else 150
-        up_min, modes = 1.0, []
+        up_min, modes, v_pre = 1.0, [], None
         for i in range(n_ticks):
             rs = art.root_state()
             up_min = min(up_min, 1.0 - 2.0 * (float(rs[3]) ** 2 + float(rs[4]) ** 2))
             if args.knock_at and i == args.knock_at:
-                print(f"[knock] tick {i}")
-                knock()
+                print(f"[trip] tick {i}")
+                v_pre = np.asarray(art.root_velocity()[:3], float).copy()
+                push("trip")
+            if v_pre is not None and i == args.knock_at + 1:
+                dvb = np.asarray(art.root_velocity()[:3], float) - v_pre
+                print(f"[trip] base velocity change over that tick: {np.linalg.norm(dvb[:2]):.2f} m/s horizontal, "
+                      f"{dvb[2]:+.2f} m/s vertical (whole-robot dv {TRIP_DV:g} m/s)")
             if not modes or modes[-1][1] != mode[0]:
                 modes.append((i, mode[0]))
             if i % SCAN_EVERY == 0:
@@ -1212,7 +1316,7 @@ def main():
         rs = art.root_state()
         print(f"[headless] {n_ticks} ticks, min up_z {up_min:.2f}, final up_z "
               f"{1.0 - 2.0 * (float(rs[3]) ** 2 + float(rs[4]) ** 2):.2f}"
-              + (f", knock at tick {args.knock_at}" if args.knock_at else "")
+              + (f", trip at tick {args.knock_at}" if args.knock_at else "")
               + (f", control by tick {modes + [(n_ticks, mode[0])]}" if rec is not None else ""))
         for _ in range(20):
             rend.render(scene, camera)
@@ -1252,7 +1356,7 @@ def main():
         rs = art.root_state()
         tp.imgui.text(f"pos  x={rs[0]:+.1f}  y={rs[1]:+.1f}  z={rs[2]:.2f} m")
         if rec is not None:
-            tp.imgui.text(f"control: {mode[0]}   (F = knock over)")
+            tp.imgui.text(f"control: {mode[0]}   (F = shove, G = trip)")
         _, vx_hi[0] = tp.imgui.slider_float("forward speed vx (VX_HI)", vx_hi[0], 0.0, VX_HI)
         tp.imgui.separator()
         tp.imgui.text("Depth camera")
@@ -1285,7 +1389,7 @@ def main():
             if chg:
                 rend.fog_anisotropy = v
         tp.imgui.separator()
-        tp.imgui.text(f"{tp.imgui.get_framerate():.0f} fps   |   WASD+QE  mouse=orbit/zoom")
+        tp.imgui.text(f"{tp.imgui.get_framerate():.0f} fps   |   WASD+QE  F shove  G trip  mouse=orbit/zoom")
         tp.imgui.end()
 
     def frame():
@@ -1323,12 +1427,13 @@ def main():
         stand = stand_mode and vx == 0.0 and vy == 0.0 and wz_key == 0.0
         if stand:
             wz = 0.0                             # training's stand command is exactly zero: no heading-hold turn
-        if not bench:                            # F = knock Spot over (edge-triggered)
-            if down("F"):
-                if not f_held[0]: knock()
-                f_held[0] = True
-            else:
-                f_held[0] = False
+        if not bench:                            # F = shove, G = trip (edge-triggered)
+            for key, held, kind in (("F", f_held, "shove"), ("G", g_held, "trip")):
+                if down(key):
+                    if not held[0]: push(kind)
+                    held[0] = True
+                else:
+                    held[0] = False
         recovering = recovery_tick(rs)           # the recovery policy acted this tick
         if not recovering:
             cmd   = np.array([vx, vy, wz], np.float32)

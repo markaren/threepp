@@ -15,6 +15,11 @@ Wave 2 flags (2026-09-13), all off by default = the pilot: --action-scale, --log
 a warm start also rescales the continued actor's output layer and the obs norm's last_act entries by 0.2 / S
 (--no-warm-rescale to skip), so the continued policy commands the same joint targets on its first tick: the shipped
 policy's last_act has std up to 2.3 action units, which unscaled at S = 1 would be 2.3 rad target swings.
+
+Wave 3 flags (2026-09-14), off by default = wave 2: --qd-max V rate-limits the drive targets to V rad/s and --w-qd-excess W
+penalizes measured joint speed above V; joint speed metrics are always logged and in the eval JSON. --eval-qd-max V
+evaluates a checkpoint under a cap it did not train with (0 = none; default: its own). A warm start from a wave 2 checkpoint
+at its own --action-scale needs no rescale (0.5 / 0.5 = 1), and the log says so.
 """
 import argparse
 import json
@@ -41,18 +46,30 @@ from spot_steps_symmetry import make_aux_loss
 PPO_GAMMA = 0.99                         # PPO's default gamma, which the progress shaping must use
 
 
+def qd_line(st):
+    """Joint speed per group after the limp ticks (|qd| p95 / p99 / max, share over 10 / 15 / 20 rad/s) and the fastest
+    commanded target, from recovery_stats."""
+    parts = [f"{g} p95 {r['p95']:.2f} p99 {r['p99']:.2f} max {r['max']:.1f} >10/15/20 {100 * r['over10']:.2f}/"
+             f"{100 * r['over15']:.2f}/{100 * r['over20']:.2f}%" for g, r in st["qd"].items() if r["samples"]]
+    cm = st["cmd_qd_max_hx_hy_kn"]
+    return (f"joint speed rad/s: {' | '.join(parts) or 'no live ticks'} | commanded target max hx/hy/kn "
+            f"{cm[0]:.2f}/{cm[1]:.2f}/{cm[2]:.2f}")
+
+
 @torch.no_grad()
-def evaluate(ckpt, k=2048, seed=0, self_collision=None, json_path="", levels=(1, 2)):
+def evaluate(ckpt, k=2048, seed=0, self_collision=None, json_path="", levels=(1, 2), qd_max=None):
     """One episode per env from fallen starts at level N_LEVELS-1, deterministic act_mean -> dict (and JSON). Then one
     episode per env from each of `levels` on the same env (after the L3 pass, so the L3 numbers are the pilot eval's
-    exactly), under by_level. The env takes the checkpoint's action scale and target clip (a pilot meta: 0.2, none)."""
+    exactly), under by_level. The env takes the checkpoint's action scale and target clip (a pilot meta: 0.2, none), and
+    its target rate limit unless qd_max says otherwise (0: none)."""
     ac, norm, meta = load_policy(ckpt, device="cuda")
     sc = bool(meta.get("self_collision", True)) if self_collision is None else bool(self_collision)
     scale, clip = float(meta.get("action_scale", ACTION_SCALE)), bool(meta.get("target_clip", False))
+    qd = meta.get("qd_max") if qd_max is None else (float(qd_max) or None)
     torch.manual_seed(seed)
     t0 = time.perf_counter()
     env = SpotRecoveryEnv(num_envs=k, seed=seed, self_collision=sc, stand_frac=0.0, init_level=N_LEVELS - 1,
-                          freeze_level=True, count_episodes=1, action_scale=scale, target_clip=clip)
+                          freeze_level=True, count_episodes=1, action_scale=scale, target_clip=clip, qd_max=qd)
     build_s = time.perf_counter() - t0
     pol = (lambda o: ac.act_mean(norm.norm(o))) if norm is not None else ac.act_mean
     steps = int(EPISODE_S * CONTROL_HZ) + 5
@@ -70,22 +87,24 @@ def evaluate(ckpt, k=2048, seed=0, self_collision=None, json_path="", levels=(1,
 
     st, steps_s = run(N_LEVELS - 1)
     res = {"checkpoint": os.path.abspath(ckpt), "envs": k, "seed": seed, "self_collision": sc, "level": N_LEVELS - 1,
-           "action_scale": scale, "target_clip": clip, "build_s": build_s, "steps": steps, "steps_s": steps_s,
+           "action_scale": scale, "target_clip": clip, "qd_max": qd, "build_s": build_s, "steps": steps, "steps_s": steps_s,
            "meta": {kk: meta.get(kk) for kk in ("warmstart", "arm", "iters", "seed", "self_collision", "lr", "action_scale",
                                                 "target_clip", "log_std_min", "w_prog", "up_slope", "hard_frac",
-                                                "fallen_effort_free", "w_down", "warm_rescale")},
+                                                "fallen_effort_free", "w_down", "warm_rescale", "qd_max", "w_qd_excess")},
            **st}
     by_level = {f"L{N_LEVELS - 1}": st}
     for L in levels:
         by_level[f"L{L}"], _ = run(L)
     res["by_level"] = {name: {"fallen": s["total"]["fallen"], "by_kind": s["by_level_kind"],
-                              "tau_p95_hx_hy_kn": s["tau_p95_hx_hy_kn"]} for name, s in sorted(by_level.items())}
+                              "tau_p95_hx_hy_kn": s["tau_p95_hx_hy_kn"], "qd": s["qd"],
+                              "cmd_qd_max_hx_hy_kn": s["cmd_qd_max_hx_hy_kn"]} for name, s in sorted(by_level.items())}
 
     def fmt(x, nd=3):
         return "n/a" if x is None else f"{x:.{nd}f}"
 
     tot = st["total"]["fallen"]
-    print(f"[eval] {os.path.basename(ckpt)}  K={k}  action scale {scale}{' clipped' if clip else ''}  fallen episodes "
+    print(f"[eval] {os.path.basename(ckpt)}  K={k}  action scale {scale}{' clipped' if clip else ''}"
+          f"{f', targets <= {qd:g} rad/s' if qd else ', no target rate limit'}  fallen episodes "
           f"{tot['episodes']}: success by 3 s {tot['success_3s']:.3f}  by 6 s {tot['success_6s']:.3f}  recovery "
           f"{tot['recovery_s'] or float('nan'):.2f} s  gave up {fmt(tot['gave_up'])}  blow-ups {tot['blowups']}"
           f"  self-contact ticks/ep {tot['contact_ticks_per_ep']:.1f}  p95 tau hx/hy/kn {st['tau_p95_hx_hy_kn']}")
@@ -95,7 +114,7 @@ def evaluate(ckpt, k=2048, seed=0, self_collision=None, json_path="", levels=(1,
     for name, r in res["by_level"].items():
         f = r["fallen"]
         print(f"        {name} starts: eps {f['episodes']:5d}  3 s {fmt(f['success_3s'])}  6 s {fmt(f['success_6s'])}  "
-              f"gave up {fmt(f['gave_up'])}")
+              f"gave up {fmt(f['gave_up'])}  recovery {fmt(f['recovery_s'], 2)} s\n          {qd_line(r)}")
     if json_path:
         os.makedirs(os.path.dirname(os.path.abspath(json_path)), exist_ok=True)
         with open(json_path, "w") as f:
@@ -154,11 +173,20 @@ def main():
     ap.add_argument("--fallen-effort-free", dest="fallen_effort_free", action="store_true",
                     help="torque / action-rate / joint-limit penalties x clamp((up_z - 0.3) / 0.6, 0, 1)")
     ap.add_argument("--w-down", dest="w_down", type=float, default=0.0, help="-C per live step while up_z < 0.5")
+    # ---- wave 3 (2026-09-14): every default is wave 2 ----
+    ap.add_argument("--qd-max", dest="qd_max", type=float, default=None,
+                    help="rate-limit the drive targets: at most V rad/s per joint, V * control dt per tick (default: none)")
+    ap.add_argument("--w-qd-excess", dest="w_qd_excess", type=float, default=0.0,
+                    help="-W mean((|qd| - qd_max)_+^2) on the measured joint speeds (needs --qd-max)")
+    ap.add_argument("--eval-qd-max", dest="eval_qd_max", type=float, default=None,
+                    help="with --eval: evaluate under this target rate limit (0 = none; default: the checkpoint's own)")
     args = ap.parse_args()
+    if args.w_qd_excess > 0 and not args.qd_max:
+        ap.error("--w-qd-excess penalizes joint speed above --qd-max: set --qd-max too")
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); sys.exit(0)
     if args.eval:
-        evaluate(args.eval, k=args.eval_envs, seed=args.seed, json_path=args.eval_json)
+        evaluate(args.eval, k=args.eval_envs, seed=args.seed, json_path=args.eval_json, qd_max=args.eval_qd_max)
         return
 
     torch.manual_seed(args.seed)
@@ -170,11 +198,11 @@ def main():
                           stand_frac=args.stand_frac, init_level=args.init_level, action_scale=scale,
                           target_clip=args.action_scale is not None, w_prog=args.w_prog, prog_gamma=PPO_GAMMA,
                           up_slope=args.up_slope, hard_frac=args.hard_frac, fallen_effort_free=args.fallen_effort_free,
-                          w_down=args.w_down)
+                          w_down=args.w_down, qd_max=args.qd_max, w_qd_excess=args.w_qd_excess)
     print(f"recovery env: K={args.envs}, self-collision {'on' if args.self_collision else 'off'}, built in "
-          f"{time.perf_counter() - t0:.1f} s | {env.wave2_config()}")
+          f"{time.perf_counter() - t0:.1f} s | {env.knob_config()}")
     aux = make_aux_loss(args.sym_coef) if args.sym_coef > 0 else None
-    meta = {**CONFIG, **env.wave2_config(), "log_std_min": args.log_std_min, "warm_rescale": None,
+    meta = {**CONFIG, **env.knob_config(), "log_std_min": args.log_std_min, "warm_rescale": None,
             "self_collision": args.self_collision, "warmstart": os.path.basename(args.warmstart) if warm else "",
             "warmstart_path": os.path.abspath(args.warmstart) if warm else "", "arm": args.arm, "iters": args.iters,
             "envs": args.envs, "seed": args.seed, "lr": lr, "horizon": args.horizon, "log_std_init": args.log_std_init,
@@ -211,6 +239,10 @@ def main():
             ppo.meta["warm_rescale"] = f
             print(f"warm rescale: actor output and norm last_act x {f:g} (action scale {src_meta.get('action_scale', ACTION_SCALE)}"
                   f" -> {scale})")
+        else:
+            print(f"warm start's action scale {src_meta.get('action_scale', ACTION_SCALE)} -> this run's {scale}: "
+                  f"{'the same, no rescale' if f == 1.0 else 'NOT rescaled (--no-warm-rescale)'}")
+        ppo.meta["warmstart_action_scale"] = float(src_meta.get("action_scale", ACTION_SCALE))
     else:
         print(f"fresh network, log_std {args.log_std_init}")
 
@@ -262,6 +294,11 @@ def main():
         if "shaping" in st:
             line += f" | shaping {st['shaping']}"
         print(line)
+        print(f"        {qd_line(st)}" + (f" | qd_excess {st['qd_excess']}" if "qd_excess" in st else ""))
+        if args.qd_max:
+            # the limiter checked from the targets it wrote (float32 round-off is ~1e-5 rad/s)
+            worst = max(st["cmd_qd_max_hx_hy_kn"])
+            assert worst <= args.qd_max + 1e-3, f"commanded target speed {worst:.4f} rad/s > --qd-max {args.qd_max}"
         metric({"type": "log", **ppo.last_log, **ppo.diagnostics(), **extra, **st})
 
     def on_iter(it):

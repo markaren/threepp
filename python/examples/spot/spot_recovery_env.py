@@ -44,6 +44,18 @@ Wave 2 knobs (2026-09-13), each off by default so the defaults are the pilot bit
     |joint velocity| < 0.25 rad/s after the limp ticks. Calibrated 2026-09-13 at K=256 from L3 starts: zero actions (a
     policy that stopped trying) count 98.4% gave up at a median 0.064 rad/s, while per-tick target jitter of 0.06 rad
     already moves the joints at a median 1.34 rad/s and counts 0%.
+
+Wave 3 knobs (2026-09-14), off by default so the defaults are wave 2 bit for bit. Watched in spot_slam, wave 2's
+recovery "does not seem physically possible": after the limp settle its joints reach |qd| p99 14-27 and max 34-72 rad/s
+(256 L3 starts), and only PhysX's default max joint velocity (100 rad/s, also the Isaac export's velocity_limit) caps them.
+  - qd_max V: the drive target moves at most V * DT per control tick. The limit acts on the action (V * DT / S), so
+    last_act, which the policy observes, is the action the drive actually holds; the joint-limit clip comes after it and
+    only shortens a step. Limp ticks are not limited (their target follows the joints), so each episode's limiter starts
+    from where the joints landed.
+  - w_qd_excess W: -W * mean((|qd| - V)_+^2) on the measured joint speeds, for the speed a target limit cannot stop
+    (gravity whips, bounces off the ground).
+  - joint speed metrics, always on: |qd| per joint group after the limp ticks (p95, p99, max, share over 10 / 15 / 20
+    rad/s) and the fastest commanded target speed between two policy-driven ticks, for the logs and the eval JSON.
 """
 import math
 import os
@@ -84,6 +96,9 @@ OBS_LAST_ACT = slice(36, 48)            # last_act in the 96-d layout: lin_b, an
 DOWN_UP = 0.5                           # "not upright" for w_down and the gave-up metric (= spot_slam's RECOVER_UP)
 EFFORT_UP_LO, EFFORT_UP_SPAN = 0.3, 0.6  # fallen_effort_free: effort penalties x clamp((up_z - 0.3) / 0.6, 0, 1)
 GIVEUP_JV, GIVEUP_TICKS = 0.25, 50      # gave up: not upright and mean |joint velocity| < 0.25 rad/s for 1 s in a row
+QD_BINS, QD_W = 400, 0.25               # |joint velocity| histogram 0..100 rad/s per joint group, for p95 / p99
+QD_OVER = (10.0, 15.0, 20.0)            # shares of live joint-speed samples above these (rad/s)
+JOINT_GROUPS = ("hx", "hy", "kn")
 CONFIG = {"task": "recovery", "control_hz": CONTROL_HZ, "dt": DT, "substeps": SUBSTEPS, "obs_dim": OBS_DIM,
           "act_dim": ACT_DIM, "episode_s": EPISODE_S, "limp_ticks": LIMP_TICKS, "stand_frac": STAND_FRAC,
           "n_levels": N_LEVELS, "stand_z": STAND_Z,
@@ -202,18 +217,23 @@ class SpotRecoveryEnv(VecTask):
     def __init__(self, num_envs=2048, device="cuda", seed=0, self_collision=True, stand_frac=STAND_FRAC,
                  init_level=0, freeze_level=False, count_episodes=None, limp_ticks=LIMP_TICKS, action_scale=ACTION_SCALE,
                  target_clip=False, w_prog=0.0, prog_gamma=0.99, up_slope=0.0, hard_frac=0.0, fallen_effort_free=False,
-                 w_down=0.0):
+                 w_down=0.0, qd_max=None, w_qd_excess=0.0):
         """self_collision: legs collide with the body and each other (the point of this env; False is the walking plant).
         init_level int or [K]; freeze_level holds it (evaluation). count_episodes E: the counters take each env's first
         E episodes only (None = all). The wave 2 knobs (module docstring) default to the pilot: action_scale 0.2 without
         a target clip, no progress shaping (prog_gamma must be the trainer's PPO gamma), the pilot's upright term, no hard
         draws. fallen_effort_free: the torque / action-rate / joint-limit penalties are scaled by
         clamp((up_z - 0.3) / 0.6, 0, 1), so trying costs nothing while down (the impact penalty stays whole). w_down C:
-        -C per live step while up_z < DOWN_UP, so lying still is strictly worse than trying."""
+        -C per live step while up_z < DOWN_UP, so lying still is strictly worse than trying. qd_max V (rad/s, None or 0 =
+        off): the drive targets are rate-limited to V; w_qd_excess W: -W mean((|qd| - V)_+^2), needs qd_max."""
         self.self_collision = bool(self_collision)
         self.action_scale, self.target_clip = float(action_scale), bool(target_clip)
         self.w_prog, self.prog_gamma, self.up_slope = float(w_prog), float(prog_gamma), float(up_slope)
         self.hard_frac, self.fallen_effort_free, self.w_down = float(hard_frac), bool(fallen_effort_free), float(w_down)
+        self.qd_max = float(qd_max) if qd_max else None
+        self.w_qd_excess = float(w_qd_excess)
+        if self.w_qd_excess > 0 and self.qd_max is None:
+            raise ValueError("w_qd_excess penalizes joint speed above qd_max: set qd_max too")
 
         class _Robot:
             def __init__(self_, world, i):
@@ -268,6 +288,10 @@ class SpotRecoveryEnv(VecTask):
         self._stats = torch.zeros(N_LEVELS, len(KIND_NAMES), 7, dtype=torch.float64, device=dev)
         self._hard = torch.zeros(4, dtype=torch.float64, device=dev)     # hard draws, of them above the env's level, eps, successes
         self._prog = torch.zeros(4, dtype=torch.float64, device=dev)     # live ticks, sum and sum |.| of the progress term, sum w_down
+        self._qd_hist = torch.zeros(3, QD_BINS, dtype=torch.float64, device=dev)   # live |qd| samples per joint group
+        self._qd_peak = torch.zeros(3, device=dev)
+        self._cmd_qd = torch.zeros(3, device=dev)                        # fastest commanded target speed per group, rad/s
+        self._qdx = torch.zeros(2, dtype=torch.float64, device=dev)      # live ticks, sum of the qd_excess term
         self._tau_hist = torch.zeros(3, TAU_BINS, dtype=torch.float64, device=dev)
         self._moves = torch.zeros(N_LEVELS, 3, dtype=torch.float64, device=dev)   # episodes, promoted, demoted
         self._spawn = torch.zeros(3, dtype=torch.float64, device=dev)            # resets, redraws, fell back to stance
@@ -349,6 +373,9 @@ class SpotRecoveryEnv(VecTask):
         self.kind[idx] = kind
         self._blowup[idx] = False
         self._spawn[0] += n
+        if self.qd_max and self.limp_ticks == 0:
+            # no limp ticks to hand the limiter the landed joints: start it at the spawn joints
+            self.last_act[idx] = (joints[:, self.i2a] - self.default_q) / self.action_scale
         if self.w_prog > 0 or self.up_slope > 0:
             # the new episode's potential, so its first progress term does not difference against the last episode's end
             self._phi[idx] = self._potential(quat)
@@ -362,6 +389,11 @@ class SpotRecoveryEnv(VecTask):
         limp = (self.steps < self.limp_ticks)[:, None]
         # limp: the drive target follows the joints, so the PD spring does nothing and the robot lands as it falls
         a_limp = (self.sim.joint_pos[:, self.i2a] - self.default_q) / self.action_scale
+        if self.qd_max:
+            # the rate limit, in action units: the target may move qd_max * dt per tick from the last tick's target, whose
+            # action last_act holds (the limp ones included, so the limiter starts from where the joints landed)
+            da = self.qd_max * self.dt / self.action_scale
+            a = self.last_act + (a - self.last_act).clamp(-da, da)
         a = torch.where(limp, a_limp, a)
         self.prev_act.copy_(self.last_act)
         self.last_act.copy_(a)
@@ -370,6 +402,10 @@ class SpotRecoveryEnv(VecTask):
             # the policy's targets stay inside the joint limits (at S = 1 an action of 3 would ask hy for 2.7 rad past the
             # stance); the limp ticks keep following the joints, which a landing can push up to 0.056 rad past a limit
             tgt = torch.where(limp, tgt, torch.maximum(torch.minimum(tgt, self.q_hi), self.q_lo))
+        # the fastest commanded target speed per joint group, between two policy-driven ticks (a limp target follows the
+        # falling joints and a reset jumps it): a metric only, read from the targets themselves
+        cmd = ((tgt - self._tgt).abs() / self.dt).view(-1, 4, 3).amax(dim=1) * (self.steps > self.limp_ticks)[:, None]
+        self._cmd_qd.copy_(torch.maximum(self._cmd_qd, cmd.amax(dim=0)))
         self._tgt.copy_(tgt)
         return tgt
 
@@ -395,6 +431,14 @@ class SpotRecoveryEnv(VecTask):
         still = (self.up < DOWN_UP) & (jv.abs().mean(dim=1) < GIVEUP_JV) & (self.steps > self.limp_ticks)
         self.still_run.copy_(torch.where(still, self.still_run + 1, 0))
         self.gave_up.copy_(self.gave_up | (self.still_run >= GIVEUP_TICKS))
+        # joint speed after the limp ticks, per joint group (the add order is per leg: hx, hy, kn); a metric only
+        live_q = self.steps > self.limp_ticks
+        if self.count_episodes:
+            live_q = live_q & (self.ep_index < self.count_episodes)
+        jva = torch.nan_to_num(jv.abs(), nan=0.0, posinf=1e3).view(-1, 4, 3)
+        qbins = torch.clamp((jva / QD_W).long(), 0, QD_BINS - 1).permute(2, 0, 1).reshape(3, -1)
+        self._qd_hist.scatter_add_(1, qbins, live_q.double()[:, None].expand(-1, 4).reshape(1, -1).expand(3, -1).contiguous())
+        self._qd_peak.copy_(torch.maximum(self._qd_peak, (jva.amax(dim=1) * live_q[:, None]).amax(dim=0)))
         grp = self._tau.abs().view(-1, 4, 3).amax(dim=1)                    # [K, 3] hx hy kn
         self.tau_peak.copy_(torch.maximum(self.tau_peak, grp))
         # [joint group, env x leg] bins: the add order is per leg (hx, hy, kn), so the group is the last axis
@@ -459,11 +503,16 @@ class SpotRecoveryEnv(VecTask):
             terms["progress"] = self.w_prog * (self.prog_gamma * self._phi - self._phi_prev)
         if self.w_down > 0:
             terms["down"] = -self.w_down * (up < DOWN_UP).float()
+        if self.w_qd_excess > 0:
+            # on the MEASURED joints, so a whip or a bounce that no target limit stops also costs
+            terms["qd_excess"] = -self.w_qd_excess * (self.sim.joint_vel.abs() - self.qd_max).clamp_min(0.0).pow(2).mean(dim=1)
         out = {k: v * live for k, v in terms.items()}
         if self.w_prog > 0 or self.w_down > 0:
             pr = out.get("progress", torch.zeros_like(live))
             self._prog += torch.stack([live.sum(), pr.sum(), pr.abs().sum(),
                                        out.get("down", torch.zeros_like(live)).sum()]).double()
+        if self.w_qd_excess > 0:
+            self._qdx += torch.stack([live.sum(), out["qd_excess"].sum()]).double()
         return out
 
     def observe(self, s):
@@ -552,19 +601,35 @@ class SpotRecoveryEnv(VecTask):
                                  for L in range(N_LEVELS) if mv[L, 0]}
         sp = self._spawn.cpu().numpy()
         out["spawn"] = {"resets": int(sp[0]), "self_penetration_redraws": int(sp[1]), "fell_back_to_stance": int(sp[2])}
+        hq, pk = self._qd_hist.cpu().numpy(), self._qd_peak.cpu().numpy()
+        qd = {}
+        for g, name in enumerate(JOINT_GROUPS):
+            c = np.cumsum(hq[g]); tot = c[-1]
+            pct = [float((np.searchsorted(c, p * tot) + 1) * QD_W) if tot else None for p in (0.95, 0.99)]
+            qd[name] = {"samples": int(tot), "p95": pct[0], "p99": pct[1], "max": float(pk[g]) if tot else None,
+                        **{f"over{int(v)}": (float(hq[g, int(round(v / QD_W)):].sum() / tot) if tot else None)
+                           for v in QD_OVER}}
+        out["qd"] = qd
+        out["cmd_qd_max_hx_hy_kn"] = [float(v) for v in self._cmd_qd.cpu().numpy()]
+        if self.w_qd_excess > 0:
+            qx = self._qdx.cpu().numpy()
+            out["qd_excess"] = {"live_ticks": int(qx[0]), "mean": div(qx[1], qx[0])}
         if reset:
             self._stats.zero_(); self._tau_hist.zero_(); self._moves.zero_(); self._hard.zero_(); self._prog.zero_()
+            self._qd_hist.zero_(); self._qd_peak.zero_(); self._cmd_qd.zero_(); self._qdx.zero_()
         return out
 
-    def wave2_config(self):
-        """The wave 2 knobs as the checkpoint meta records them (a meta without them is the pilot)."""
+    def knob_config(self):
+        """The wave 2 and 3 knobs as the checkpoint meta records them (a meta without them is the pilot; without qd_max,
+        wave 2)."""
         return {"action_scale": self.action_scale, "target_clip": self.target_clip, "w_prog": self.w_prog,
                 "prog_gamma": self.prog_gamma, "up_slope": self.up_slope, "hard_frac": self.hard_frac,
                 "fallen_effort_free": self.fallen_effort_free, "w_down": self.w_down, "down_up": DOWN_UP,
-                "effort_up": [EFFORT_UP_LO, EFFORT_UP_SPAN], "giveup": {"jv": GIVEUP_JV, "ticks": GIVEUP_TICKS}}
+                "effort_up": [EFFORT_UP_LO, EFFORT_UP_SPAN], "giveup": {"jv": GIVEUP_JV, "ticks": GIVEUP_TICKS},
+                "qd_max": self.qd_max, "w_qd_excess": self.w_qd_excess}
 
     def config(self):
-        return {**super().config(), **CONFIG, "self_collision": self.self_collision, **self.wave2_config()}
+        return {**super().config(), **CONFIG, "self_collision": self.self_collision, **self.knob_config()}
 
 
 if __name__ == "__main__":
