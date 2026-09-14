@@ -7,6 +7,7 @@ to reconstruct the growing SLAM surface (semi-transparent blue) over the ground 
     python spot_slam.py
     python spot_slam.py --seed 7 --amplitude 0.20
     python spot_slam.py --shot out.png
+    python spot_slam.py --film recovery.mp4       # headless scripted fall-recovery film (--film-dry checks it first)
 
 Controls: W/S = fwd/back  A/D = strafe  Q/E = turn  |  R = reset  |  mouse = orbit/zoom
 The interactive window opens FULLSCREEN; pass --windowed for a 1200x720 window instead.
@@ -89,6 +90,24 @@ MC_FRAMES  = 90      # trigger SLAM rebuild every N rendered frames
 GRASS_BLADES = 12000 # merged GrassMesh blade count (GPU-wind on Vulkan); tune for FPS
 GRASS_RADIUS = 42.0  # grass disk radius around spawn (fog hides >25 m anyway)
 HDR_URL = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/noon_grass_2k.hdr"
+
+# ── film (--film OUT.mp4) ─────────────────────────────────────────────────────
+# One continuous take, one frame per 0.02 s control tick (real time at 50 fps). The script is in ticks; the second trip
+# and the end are scheduled from the recovery hand-backs, so the take is as long as the recoveries make it.
+FILM_W, FILM_H, FILM_FPS = 1920, 1080, 50
+FILM_VX       = 1.0      # m/s walking command
+FILM_STAND0   = 100      # ticks standing before the walk
+FILM_SHOVE    = 300      # tick of the F shove
+FILM_TRIP1    = 500      # tick of the first G trip
+FILM_HB_STAND = 25       # ticks standing after a hand-back before walking on
+FILM_TRIP2    = 225      # ticks after the first hand-back: the second trip, from the other side
+FILM_END      = 325      # ticks after the second hand-back: the end of the take
+FILM_TIMEOUT  = 500      # ticks after a trip without a hand-back: give up on it
+FILM_FOV      = 40.0
+FILM_AZ       = (125.0, 235.0)   # camera azimuth from the course heading, deg: left-rear quarter, then right-rear
+FILM_DIST     = (3.6, 4.8)       # m to the target: walking, around a fall (6 m left the fallen robot too small)
+FILM_ELEV     = (15.0, 20.0)     # deg above the target: walking, around a fall
+FILM_EYE_CLEAR = 1.0             # m above the terrain under the eye, at least
 
 # ── bench (--bench N) ─────────────────────────────────────────────────────────
 BENCH_WARMUP = 120     # frames dropped from the statistics (pipeline/TAA/allocator warmup)
@@ -190,15 +209,20 @@ def build_tree_variants(seed):
             variants.append(dict(name=name, weight=weight, is_willow=(name == "willow"),
                                  trunk_geo=trunk_geo, leaf_geo=leaf_geo,
                                  trunk_mat=trunk_mat, leaf_mat=leaf_mat,
-                                 trunk_radius=tpar.trunk_radius))
+                                 trunk_radius=tpar.trunk_radius,
+                                 # rough crown extent, for the film camera's sightline test only
+                                 crown_r=max(float(tpar.crown_radius_x), float(tpar.crown_radius_z), 1.0),
+                                 trunk_h=float(tpar.trunk_height),
+                                 height=float(tpar.trunk_height) + float(tpar.crown_height)))
     print(f"[trees] built {len(variants)} variants ({len(TREE_SPECIES)} species x {VARIANTS_PER_SPECIES})")
     return variants
 
 
-def scatter_trees(scene, gen, params, variants, n=TREE_COUNT, seed=0, world=None, pond=None):
+def scatter_trees(scene, gen, params, variants, n=TREE_COUNT, seed=0, world=None, pond=None, placements=None):
     """Scatter trees drawn from a pre-built variant pool (build_tree_variants).
     When `world` is given, add a static box collider per trunk (a "tree stub")
     so Spot bumps into the trunks; the leafy canopy stays non-colliding.
+    `placements`, if a list, gets (x, y, ground z, crown radius, trunk height, height) per tree.
     Returns the list of collider proxy meshes (keep them alive)."""
     rng  = np.random.default_rng(seed)
     half = params.world_size / 2.0 - 4.0
@@ -243,6 +267,8 @@ def scatter_trees(scene, gen, params, variants, n=TREE_COUNT, seed=0, world=None
             stub.position.set(px, py, hz + 1.25)
             world.add_static(stub)
             proxies.append(stub)
+        if placements is not None:
+            placements.append((px, py, hz, v["crown_r"] * scale, v["trunk_h"] * scale, v["height"] * scale))
         placed += 1
     print(f"[trees] placed {placed}/{n}")
     return proxies
@@ -285,9 +311,10 @@ def make_rock_geometry(seed):
     return g
 
 
-def scatter_stones(scene, gen, params, n=35, seed=0, world=None, pond=None):
+def scatter_stones(scene, gen, params, n=35, seed=0, world=None, pond=None, placements=None):
     """Scatter boulders. When `world` is given, add a static sphere collider per
-    stone so Spot bumps into them. Returns the collider proxy meshes."""
+    stone so Spot bumps into them. `placements`, if a list, gets (x, y, ground z, radius).
+    Returns the collider proxy meshes."""
     rng  = np.random.default_rng(seed + 7)
     half = params.world_size / 2.0 - 4.0
     proxies = []
@@ -320,16 +347,19 @@ def scatter_stones(scene, gen, params, n=35, seed=0, world=None, pond=None):
             sph.position.set(px, py, hz + s * 0.30)
             world.add_static(sph)
             proxies.append(sph)
+        if placements is not None:
+            placements.append((px, py, hz, s * 0.8))
         placed += 1
     print(f"[stones] placed {placed}/{n}")
     return proxies
 
 
 # ── bushes (shrub-variant trees, like forest_demo) ────────────────────────────────
-def scatter_bushes(scene, gen, params, n=50, seed=0, pond=None):
+def scatter_bushes(scene, gen, params, n=50, seed=0, pond=None, placements=None):
     """Short trunk + wide low crown shrubs. Each of a handful of prototypes gets
     its own seed, crown shape/size, leaf colour and bark texture (mirrors the
-    tree variant pool) so the understory doesn't read as one shrub copy-pasted."""
+    tree variant pool) so the understory doesn't read as one shrub copy-pasted.
+    `placements`, if a list, gets (x, y, ground z, crown radius, height) per bush."""
     rng  = np.random.default_rng(seed + 3)
     half = params.world_size / 2.0 - 4.0
 
@@ -373,7 +403,8 @@ def scatter_bushes(scene, gen, params, n=50, seed=0, pond=None):
         leaf_mat.vertex_colors      = True
         leaf_mat.translucency       = 0.35   # backlit canopy glow (Vulkan deferred; no-op on GL)
         leaf_mat.translucency_color = tp.Color(0.55, 0.85, 0.30)
-        variants.append((trunk_geo, leaf_geo, trunk_mat, leaf_mat))
+        variants.append((trunk_geo, leaf_geo, trunk_mat, leaf_mat,
+                         r, float(tpar.trunk_height) + float(tpar.crown_height)))
 
     placed = attempts = 0
     while placed < n and attempts < n * 15:
@@ -384,8 +415,10 @@ def scatter_bushes(scene, gen, params, n=50, seed=0, pond=None):
         hz = float(gen.height_at(px, py, params))
         if _in_pond(px, py, hz, pond):       # keep bushes out of open water
             continue
-        trunk_geo, leaf_geo, trunk_mat, leaf_mat = variants[int(rng.integers(0, len(variants)))]
+        trunk_geo, leaf_geo, trunk_mat, leaf_mat, crown_r, top = variants[int(rng.integers(0, len(variants)))]
         s   = 0.7 + float(rng.uniform()) * 0.7
+        if placements is not None:
+            placements.append((px, py, hz, crown_r * s, top * s))
         yaw = float(rng.uniform(0, 2 * math.pi))
         for geo, mat in ((trunk_geo, trunk_mat), (leaf_geo, leaf_mat)):
             m = tp.Mesh(geo, mat)
@@ -831,11 +864,26 @@ def main():
     ap.add_argument("--trip-probe", dest="trip_probe", default="", metavar="OUT.json",
                     help="headless: 10 trips of the standing walking policy per dv of TRIP_LADDER up to the first that "
                          "tips it past up_z 0.5 in >= 8 of 10, then 10 F shoves; writes OUT.json and exits")
+    ap.add_argument("--film", default="", metavar="OUT.mp4",
+                    help=f"headless: render the scripted fall-recovery take (stand, walk, F shove, G trip, recovery, a "
+                         f"trip from the other side, recovery, walk away) at {FILM_W}x{FILM_H} {FILM_FPS} fps to OUT.mp4 "
+                         "(H.264 yuv420p); PNG frames go to OUT_frames/ and are deleted after the encode")
+    ap.add_argument("--film-keep-frames", dest="film_keep_frames", action="store_true",
+                    help="with --film: keep the PNG frames after the encode")
+    ap.add_argument("--film-dry", dest="film_dry", action="store_true",
+                    help="with --film: run the take without keeping frames and print the up_z / control-mode timeline "
+                         "and the camera sightline check")
+    ap.add_argument("--film-stills", dest="film_stills", default="", metavar="T1,T2,...",
+                    help="with --film: keep only the frames at these ticks, as OUT_still_TTTT.png, and no video")
+    ap.add_argument("--film-frames", dest="film_frames", type=int, default=0, metavar="N",
+                    help="with --film: stop after N frames (a cost measurement)")
+    ap.add_argument("--film-scale", dest="film_scale", type=float, default=0.75,
+                    help="with --film: renderer render_scale (FSR reconstructs to the film size)")
     args = ap.parse_args()
     if args.no_recovery or (args.recovery_model and not os.path.exists(args.recovery_model)):
         args.recovery_model = ""
     assert tp.HAS_PHYSX, "needs a PhysX-enabled threepp build"
-    headless = bool(args.shot) or bool(args.trip_probe)
+    headless = bool(args.shot) or bool(args.trip_probe) or bool(args.film)
     bench    = int(args.bench)
 
     # ── assets ────────────────────────────────────────────────────────────────
@@ -947,7 +995,7 @@ def main():
     # ── canvas + renderer ─────────────────────────────────────────────────────
     # --bench profiles the REAL interactive frame (window + ImGui); only vsync goes,
     # so the measured period is the frame's own cost rather than the display's.
-    _bw, _bh = 1200, 720
+    _bw, _bh = (FILM_W, FILM_H) if args.film else (1200, 720)
     # Interactive runs go fullscreen (--windowed opts out); --shot stays at the fixed
     # offscreen size. SPOT_BENCH_SIZE sizes the bench window explicitly, so it wins.
     _fullscreen = False #not headless and not args.windowed
@@ -968,7 +1016,7 @@ def main():
     # frame (p95) still fits the 16.7 ms vblank budget in foliage-dense views — 0.58
     # already drops ~3% of vblanks. SPOT_BENCH_KNOBS (below) can still override
     # render_scale so perf sweeps keep working.
-    rend.render_scale             = 0.5
+    rend.render_scale             = float(args.film_scale) if args.film else 0.5
     # if hasattr(rend, "gbuffer_msaa"):
     #     rend.gbuffer_msaa = 2
     if bench and os.environ.get("SPOT_BENCH_KNOBS"):
@@ -1032,9 +1080,12 @@ def main():
     # Trees + stones get static colliders (Spot bumps trunks/boulders); bushes stay
     # soft (walk-through). Keep the proxy meshes alive for the whole run.
     phys_proxies = []
-    phys_proxies += scatter_trees(scene, gen, tparams, tree_variants, seed=args.seed, world=world, pond=pond)
-    scatter_bushes(scene, gen, tparams, seed=args.seed, pond=pond)
-    phys_proxies += scatter_stones(scene, gen, tparams, seed=args.seed, world=world, pond=pond)
+    tree_places, bush_places, stone_places = [], [], []     # the --film camera's sightline test
+    phys_proxies += scatter_trees(scene, gen, tparams, tree_variants, seed=args.seed, world=world, pond=pond,
+                                  placements=tree_places)
+    scatter_bushes(scene, gen, tparams, seed=args.seed, pond=pond, placements=bush_places)
+    phys_proxies += scatter_stones(scene, gen, tparams, seed=args.seed, world=world, pond=pond,
+                                   placements=stone_places)
 
     print("[grass] building ...")
     grass_geo, n_grass = build_grass_field(gen, tparams, GRASS_BLADES, GRASS_RADIUS,
@@ -1178,17 +1229,20 @@ def main():
 
     push_rng = np.random.default_rng(args.seed + 1)
 
-    def push(kind, dv=None, quiet=False):
+    def push(kind, dv=None, quiet=False, side=None):
         """F ("shove"): SHOVE_DV through the base's centre of mass. G ("trip"): TRIP_DV at TRIP_HEIGHT above it. The
         impulse is robot_mass x dv toward a random side of the body, jittered PUSH_JITTER_DEG, for one substep:
         add_force_at_pos is consumed by the next fixed substep, so the force carrying the impulse is impulse / fixed_timestep.
-        -> (impulse N·s, dv m/s, height m)."""
+        side = +1 / -1 pushes exactly toward the body's left / right instead (--film). -> (impulse N·s, dv m/s, height m)."""
         dv = float(dv if dv is not None else (SHOVE_DV if kind == "shove" else TRIP_DV))
         h = 0.0 if kind == "shove" else TRIP_HEIGHT
         rs = art.root_state()
         left = _quat_to_R(rs[3:7])[:, 1].copy()
-        ang = (math.atan2(float(left[1]), float(left[0])) + (0.0 if push_rng.random() < 0.5 else math.pi)
-               + math.radians(PUSH_JITTER_DEG) * push_rng.uniform(-1.0, 1.0))
+        if side is not None:
+            ang = math.atan2(float(left[1]), float(left[0])) + (0.0 if side > 0 else math.pi)
+        else:
+            ang = (math.atan2(float(left[1]), float(left[0])) + (0.0 if push_rng.random() < 0.5 else math.pi)
+                   + math.radians(PUSH_JITTER_DEG) * push_rng.uniform(-1.0, 1.0))
         J = robot_mass * dv
         f = np.array([math.cos(ang), math.sin(ang), 0.0]) * (J / 0.002)
         art.link(0).add_force_at_pos(tp.Vector3(*[float(v) for v in f]),
@@ -1276,6 +1330,340 @@ def main():
             json.dump(res, f, indent=1)
         print(f"[trip-probe] -> {path}")
 
+    def run_film(out_path):
+        """--film: the scripted take (FILM_* above), one frame per control tick. Three modes run the identical loop, and
+        differ only in which frames they read back: all (PNG frames -> H.264), none (--film-dry: the up_z / control-mode
+        timeline and the sightline check) or the listed ticks (--film-stills). A dry run that rendered only the scan ticks
+        drifted from the rendered take by 80 ticks at the first hand-back (2026-09-14), so every mode renders every tick.
+        The SLAM wireframe and the 45-cell scan markers are off: at 1920x1080 the wireframe covers the ground and the
+        tree crowns and buries the fall; the depth camera's point cloud stays."""
+        import shutil, subprocess
+        from concurrent.futures import ThreadPoolExecutor
+        from PIL import Image
+        DT = 0.02
+        dry = bool(args.film_dry)
+        stills = sorted({int(s) for s in args.film_stills.split(",") if s.strip()})
+        full = not dry and not stills
+        base_path = os.path.splitext(os.path.abspath(out_path))[0]
+        frame_dir = base_path + "_frames"
+        # The walk's heading and the camera azimuth's zero: the spawn heading (+Y), re-chosen at every hand-back as the
+        # clear corridor nearest the way Spot faces (the old course if it faces within 30 deg of it). Turning far back at
+        # a crawl knocked it over again, and walking on blindly took it into a spruce (2026-09-14). The camera swings
+        # round after it on a smoothed copy.
+        course = [math.pi / 2]
+        cw, ch = canvas.size()
+        if (cw, ch) != (FILM_W, FILM_H):
+            print(f"[film] WARNING: canvas is {cw}x{ch}, not {FILM_W}x{FILM_H}")
+        camera.fov = FILM_FOV
+        camera.aspect = cw / max(ch, 1)
+        camera.update_projection_matrix()
+        slam.visible = False
+        scanner.show_grid = False
+        if getattr(scanner, "markers", None):
+            # show_grid only takes effect at the next scan, after frame 0: without this the pre-film reset's markers
+            # popped up for one frame. The group is in the scanner's self-filter list, so no scan ever saw it anyway.
+            scanner.marker_group.visible = False
+
+        # Everything that can hide the robot, as vertical cylinders (x, y, radius, z0, z1): trunks, crowns, bushes, stones.
+        cyl = []
+        for x, y, z, cr, th, ht in tree_places:
+            # crowns from near the ground and at least 0.3 x the height wide: the spruce skirts reach the grass, and the
+            # preset crown radius missed one Spot walked into (tick 1300, 2026-09-14)
+            cyl += [(x, y, 0.35, z, z + ht), (x, y, max(cr, 0.3 * ht), z + 0.3, z + ht)]
+        cyl += [(x, y, cr, z, z + ht) for x, y, z, cr, ht in bush_places]
+        cyl += [(x, y, r, z, z + 1.4 * r) for x, y, z, r in stone_places]
+        CY = np.asarray(cyl, np.float64).reshape(-1, 5)
+        solid = np.asarray([(x, y, 0.35) for x, y, *_ in tree_places] + [(x, y, r) for x, y, _, r in stone_places],
+                           np.float64).reshape(-1, 3)          # colliders the robot can walk into
+        _S = np.linspace(0.0, 1.0, 24)
+
+        def sight_blocked(eye, tgt):
+            """The eye -> target segment passes through an obstacle (its last 0.5 m skipped: that is the robot), or the eye
+            brushes one: within 1.5 m of the eye every obstacle counts 0.8 m bigger. Without that pad the opening shot sat
+            in a bush's leaves, which filled the right quarter of the frame for three seconds (2026-09-14)."""
+            d = tgt - eye
+            L = max(float(np.linalg.norm(d)), 1e-6)
+            s = _S * max(0.0, 1.0 - 0.5 / L)
+            P = eye[None] + s[:, None] * d[None]
+            pad = np.where(s * L < 1.5, 0.8, 0.0)[:, None]
+            dx, dy, pz = P[:, 0:1] - CY[None, :, 0], P[:, 1:2] - CY[None, :, 1], P[:, 2:3]
+            R = CY[None, :, 2] + pad
+            return bool(((dx * dx + dy * dy < R * R) & (pz > CY[None, :, 3] - pad) & (pz < CY[None, :, 4] + pad)).any())
+
+        def corridor(x, y, z, heading):
+            """Smallest gap (m) between the next 7 m of a straight walk on `heading` and anything at body height."""
+            k = np.arange(1, 15)[:, None] * 0.5
+            C = CY[CY[:, 3] < z + 0.3]
+            if not len(C):
+                return 1e9
+            return float((np.hypot(x + k * math.cos(heading) - C[None, :, 0],
+                                   y + k * math.sin(heading) - C[None, :, 1]) - C[None, :, 2]).min())
+
+        def ground(x, y):
+            return float(gen.height_at(float(x), float(y), tparams))
+
+        def lift(eye, tgt):
+            """Raise the eye FILM_EYE_CLEAR above the terrain under it, then until the sightline clears the terrain by 0.4 m."""
+            eye = eye.copy()
+            eye[2] = max(eye[2], ground(eye[0], eye[1]) + FILM_EYE_CLEAR)
+            for s in (0.15, 0.3, 0.45, 0.6, 0.75):
+                p = eye + s * (tgt - eye)
+                need = ground(p[0], p[1]) + 0.4 - p[2]
+                if need > 0.0:
+                    eye[2] += need / (1.0 - s)
+            return eye
+
+        def spring(x, v, goal, w):
+            """Critically damped second-order follow: no overshoot, no snap."""
+            v = v + (w * w * (goal - x) - 2.0 * w * v) * DT
+            return x + v * DT, v
+
+        def eye_for(tgt, az_deg, dist, elev_deg):
+            a, e = cam["course"] + math.radians(az_deg), math.radians(elev_deg)
+            return lift(tgt + dist * np.array([math.cos(a) * math.cos(e), math.sin(a) * math.cos(e), math.sin(e)]), tgt)
+
+        cam = {"off": 0.0, "nom_ok": 0, "blocked_goal": 0, "blocked_view": 0}
+
+        def camera_tick(rs, pulled, az_nom, first=False):
+            """Chase camera: target, distance, elevation and azimuth each spring to their goal, then the eye springs to
+            the pose they give. The azimuth goal leaves the nominal quarter only when that sightline is blocked, for the
+            nearest clear offset, and returns once the nominal has been clear for 25 ticks."""
+            p = np.array([float(rs[0]), float(rs[1]), float(rs[2]) + 0.1])
+            dist_goal, elev_goal = (FILM_DIST[1], FILM_ELEV[1]) if pulled else (FILM_DIST[0], FILM_ELEV[0])
+            if first:
+                cam.update(tgt=p, tv=np.zeros(3), dist=dist_goal, dv=0.0, elev=elev_goal, ev=0.0, az=az_nom, av=0.0,
+                           course=course[0], cv=0.0)
+            else:
+                cam["course"], cam["cv"] = spring(cam["course"], cam["cv"], course[0], 1.2)
+                cam["tgt"], cam["tv"] = spring(cam["tgt"], cam["tv"], p, 3.0)
+                cam["dist"], cam["dv"] = spring(cam["dist"], cam["dv"], dist_goal, 1.8)
+                cam["elev"], cam["ev"] = spring(cam["elev"], cam["ev"], elev_goal, 1.8)
+            tgt = cam["tgt"]
+            if sight_blocked(eye_for(tgt, az_nom + cam["off"], cam["dist"], cam["elev"]), tgt):
+                cam["blocked_goal"] += 1
+                for off in (0.0, 20.0, -20.0, 40.0, -40.0, 60.0, -60.0, 80.0, -80.0):
+                    if not sight_blocked(eye_for(tgt, az_nom + off, cam["dist"], cam["elev"]), tgt):
+                        cam["off"], cam["nom_ok"] = off, 0
+                        break
+            elif cam["off"] != 0.0:
+                clear = not sight_blocked(eye_for(tgt, az_nom, cam["dist"], cam["elev"]), tgt)
+                cam["nom_ok"] = cam["nom_ok"] + 1 if clear else 0
+                if cam["nom_ok"] >= 25:
+                    cam["off"] = 0.0
+            if first:
+                cam["az"] = az_nom + cam["off"]
+            else:
+                cam["az"], cam["av"] = spring(cam["az"], cam["av"], az_nom + cam["off"], 1.6)
+            goal = eye_for(tgt, cam["az"], cam["dist"], cam["elev"])
+            if first:
+                cam["eye"], cam["eyev"] = goal, np.zeros(3)
+            else:
+                cam["eye"], cam["eyev"] = spring(cam["eye"], cam["eyev"], goal, 4.0)
+                cam["eye"][2] = max(cam["eye"][2], ground(cam["eye"][0], cam["eye"][1]) + 0.5)   # never inside a hill
+            if sight_blocked(cam["eye"], tgt):
+                cam["blocked_view"] += 1
+            camera.position.set(*(float(v) for v in cam["eye"]))
+            camera.look_at(*(float(v) for v in tgt))
+
+        def up_of(rs):
+            return 1.0 - 2.0 * (float(rs[3]) ** 2 + float(rs[4]) ** 2)
+
+        if full:
+            os.makedirs(frame_dir, exist_ok=True)
+            for f in os.listdir(frame_dir):
+                if f.startswith("f") and f.endswith(".png"):
+                    os.remove(os.path.join(frame_dir, f))
+        pool = None if dry else ThreadPoolExecutor(max_workers=4)
+        pending = []
+        has_simtime = hasattr(rend, "sim_time")
+
+        trips, events, log = [], [], []          # trips: {tick, side, takeover, handback, up_min}
+        ev = {"trip2": None, "end": None}
+        last_hb, stand_until, shove_up = None, FILM_STAND0, 1.0
+        t_sim, n_frames, closest = 0.0, 0, 1e9
+        cost = {"render": 0.0, "read": 0.0, "save": 0.0}
+        rs = art.root_state()
+        camera_tick(rs, False, FILM_AZ[0], first=True)
+        grass.time = 0.0
+        if has_simtime:
+            rend.sim_time = 0.0
+        for _ in range(8):        # pipelines, and the FSR/TAA history at the first pose: no first-frame garbage
+            rend.render(scene, camera)
+        t_wall = time.perf_counter()
+        i = 0
+        while True:
+            if ev["end"] is not None and i >= ev["end"]:
+                break
+            if (args.film_frames and n_frames >= args.film_frames) or (stills and i > stills[-1]):
+                break
+            rs = art.root_state()
+            if i == FILM_SHOVE:
+                push("shove", side=-1)                           # away from the camera's side
+                events.append((i, "F shove toward the body's right"))
+            if i == FILM_TRIP1 or i == ev["trip2"]:
+                side = -1 if not trips else 1                    # the second from the other side
+                push("trip", side=side)
+                trips.append({"tick": i, "side": side, "takeover": None, "handback": None, "up_min": 1.0})
+                events.append((i, f"G trip {len(trips)} toward the body's {'right' if side < 0 else 'left'}"))
+            # the command: stand, or walk the course heading (slowing to turn when far off it); zero while recovering
+            R = _quat_to_R(rs[3:7])
+            err = (math.atan2(float(R[1, 0]), float(R[0, 0])) - course[0] + math.pi) % (2 * math.pi) - math.pi
+            vx_goal = 0.0 if (i < stand_until or mode[0] == "recover") else FILM_VX * float(np.clip(math.cos(err), 0.2, 1.0))
+            cmd_s[:] = cmd_s + np.clip(np.array([vx_goal, 0.0], np.float32) - cmd_s, -0.06, 0.06)
+            stand = stand_mode and float(cmd_s[0]) == 0.0 and vx_goal == 0.0
+            wz = 0.0 if stand else float(np.clip(-2.0 * err, -1.0, 1.0))
+            mode_before = mode[0]
+            recovering = recovery_tick(rs)
+            if mode[0] != mode_before:
+                tr = trips[-1] if trips else None
+                if mode[0] == "recover":
+                    if tr is not None and tr["takeover"] is None:
+                        tr["takeover"] = i
+                    events.append((i, f"recovery takes over (up_z {up_of(rs):.2f})"))
+                else:
+                    last_hb, stand_until = i, i + FILM_HB_STAND
+                    facing = course[0] + err                     # unwrapped: the camera swings the short way round
+                    cands = ([course[0]] if abs(err) <= math.radians(30.0) else []) + \
+                        [facing + math.radians(d) for d in (0, 15, -15, 30, -30, 45, -45, 60, -60, 75, -75, 90, -90)]
+                    gaps = [corridor(rs[0], rs[1], rs[2], h) for h in cands]
+                    k = next((j for j, g in enumerate(gaps) if g >= 1.2), int(np.argmax(gaps)))
+                    course[0] = cands[k]
+                    events.append((i, f"hand-back to walking, facing {math.degrees(err):+.0f} deg off the course; walks on "
+                                      f"{math.degrees(course[0] - facing):+.0f} deg from its facing ({gaps[k]:.1f} m clear)"))
+                    err = facing - course[0]
+                    if tr is not None and tr["handback"] is None:
+                        tr["handback"] = i
+                        if len(trips) == 1:
+                            ev["trip2"] = i + FILM_TRIP2
+                        else:
+                            ev["end"] = i + FILM_END
+            for k, tr in enumerate(trips):                      # a trip that did not floor it, or never got up
+                if tr["handback"] is None and i - tr["tick"] in (150, FILM_TIMEOUT):
+                    if tr["takeover"] is None and i - tr["tick"] == 150:
+                        print(f"[film] WARNING trip {k + 1} at tick {tr['tick']} did not tip Spot past up_z {RECOVER_UP}")
+                        tr["handback"] = -1
+                        if k == 0:
+                            ev["trip2"] = i + FILM_TRIP2
+                        else:
+                            ev["end"] = i + FILM_END
+                    elif i - tr["tick"] == FILM_TIMEOUT:
+                        print(f"[film] WARNING trip {k + 1}: no hand-back within {FILM_TIMEOUT} ticks")
+                        ev["end"] = i + 50
+            if not recovering:
+                cmd = np.array([float(cmd_s[0]), 0.0, wz], np.float32)
+                obs = v2_obs(art, last_act, cmd, ahead_cache[0], h_here_cache[0], None if stand else gphi[0])
+                with torch.no_grad():
+                    obs_t = torch.from_numpy(obs)[None]
+                    if norm is not None:
+                        obs_t = norm.norm(obs_t)
+                    a = ac.act_mean(obs_t)[0].numpy()
+                last_act[:] = a
+                art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
+            world.step(DT)
+            t_sim += DT
+            if not stand and not recovering:
+                gphi[0] = (gphi[0] + DT / GAIT_PERIOD) % 1.0
+            rs = art.root_state()
+            up = up_of(rs)
+            if trips and trips[-1]["handback"] is None:
+                trips[-1]["up_min"] = min(trips[-1]["up_min"], up)
+            if FILM_SHOVE <= i < FILM_TRIP1:
+                shove_up = min(shove_up, up)
+            if len(solid):
+                closest = min(closest, float(np.min(np.hypot(solid[:, 0] - rs[0], solid[:, 1] - rs[1]) - solid[:, 2])))
+
+            nxt = FILM_TRIP1 if not trips else (ev["trip2"] if len(trips) == 1 else None)
+            pulled = ((nxt is not None and i >= nxt - 40) or mode[0] == "recover"
+                      or (bool(trips) and i - trips[-1]["tick"] < 40) or (last_hb is not None and i - last_hb < 50))
+            az_nom = FILM_AZ[1] if (trips and trips[0]["handback"] is not None and i >= trips[0]["handback"] + 25) \
+                else FILM_AZ[0]
+            camera_tick(rs, pulled, az_nom)
+            grass.time = t_sim
+            if has_simtime:
+                rend.sim_time = t_sim
+
+            t0 = time.perf_counter()
+            rend.render(scene, camera)
+            t1 = time.perf_counter()
+            cost["render"] += t1 - t0
+            if full or i in stills:
+                px = rend.read_pixels()
+                t2 = time.perf_counter()
+                cost["read"] += t2 - t1
+                if n_frames == 0:
+                    print(f"[film] read_pixels {px.shape} {px.dtype}")
+                if full:
+                    path = os.path.join(frame_dir, f"f{n_frames:05d}.png")
+                    pending.append(pool.submit(lambda a=px, p=path: Image.fromarray(a).save(p, compress_level=1)))
+                    while len(pending) > 8:
+                        pending.pop(0).result()
+                else:
+                    path = f"{base_path}_still_{i:04d}.png"
+                    Image.fromarray(px).save(path)
+                    print(f"[film] still tick {i} (t {i * DT:.2f} s, up_z {up:.2f}, {mode[0]}) -> {path}")
+                cost["save"] += time.perf_counter() - t2
+                n_frames += 1
+            if i % SCAN_EVERY == 0:
+                # no point cloud while recovering: the tumbling depth camera sprays it over trees and sky (tick 950)
+                scanner.show_cloud = mode[0] != "recover"
+                ahead_cache[0], h_here_cache[0] = scanner.scan(rs)   # traces the TLAS of the render just above
+            if i % (25 if dry else 50) == 0:
+                el = time.perf_counter() - t_wall
+                line = (f"[film] tick {i:5d}  t {i * DT:6.2f} s  up_z {up:+.2f}  {mode[0]:<7}  pos ({rs[0]:+6.2f}, "
+                        f"{rs[1]:+6.2f}, {rs[2]:5.2f})  yaw off course {math.degrees(err):+4.0f}  "
+                        f"cam off {cam['off']:+.0f} dist {cam['dist']:.2f}"
+                        + (f"  {el / max(n_frames, 1) * 1000:.0f} ms/frame" if n_frames else ""))
+                print(line)
+            log.append((i, up, mode[0]))
+            i += 1
+
+        for f in pending:
+            f.result()
+        if pool is not None:
+            pool.shutdown()
+        wall = time.perf_counter() - t_wall
+        print(f"\n[film] {i} ticks = {i * DT:.2f} s simulated, {n_frames} frames, {wall:.1f} s wall")
+        if n_frames:
+            print("[film] per frame: " + "  ".join(f"{k} {v / n_frames * 1000:.1f} ms" for k, v in cost.items())
+                  + f"  | all-in {wall / n_frames * 1000:.1f} ms")
+        print("[film] events:")
+        for tick, what in events:
+            print(f"  tick {tick:5d}  t {tick * DT:6.2f} s  {what}")
+        print(f"  shove: min up_z {shove_up:+.2f} before the first trip")
+        ok = len(trips) == 2
+        for k, tr in enumerate(trips):
+            floored, got_up = tr["up_min"] < RECOVER_UP, (tr["handback"] or -1) >= 0
+            ok = ok and floored and got_up
+            print(f"  trip {k + 1} at tick {tr['tick']}: min up_z {tr['up_min']:+.2f} ({'floored' if floored else 'NOT floored'}), "
+                  f"takeover {tr['takeover']}, hand-back {tr['handback'] if got_up else 'NONE'}")
+        print("[film] control by tick: " + ", ".join(f"{t}:{m}" for k, (t, _, m) in enumerate(log)
+                                                     if k == 0 or log[k - 1][2] != m))
+        print(f"[film] camera: goal sightline blocked {cam['blocked_goal']} ticks, the view itself {cam['blocked_view']} "
+              f"ticks; the robot's base came within {closest:.2f} m of a trunk or stone")
+        print(f"[film] CHECK {'PASS' if ok else 'FAIL'}: both trips floor Spot and both recoveries hand back")
+        if not full or not n_frames:
+            return
+        exe = shutil.which("ffmpeg")
+        if not exe:
+            try:
+                import imageio_ffmpeg
+                exe = imageio_ffmpeg.get_ffmpeg_exe()
+            except Exception:
+                print(f"[film] no ffmpeg on PATH and no imageio-ffmpeg: frames kept in {frame_dir}")
+                return
+        cmd = [exe, "-y", "-hide_banner", "-loglevel", "error", "-framerate", str(FILM_FPS),
+               "-i", os.path.join(frame_dir, "f%05d.png"), "-c:v", "libx264", "-preset", "slow", "-crf", "20",
+               "-pix_fmt", "yuv420p", "-movflags", "+faststart", os.path.abspath(out_path)]
+        t0 = time.perf_counter()
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"[film] ffmpeg failed, frames kept in {frame_dir}:\n{r.stderr[-1500:]}")
+            return
+        print(f"[film] {out_path}: {n_frames} frames at {FILM_FPS} fps = {n_frames / FILM_FPS:.2f} s, "
+              f"{os.path.getsize(out_path) / 1e6:.1f} MB, encoded in {time.perf_counter() - t0:.1f} s")
+        if not args.film_keep_frames:
+            shutil.rmtree(frame_dir, ignore_errors=True)
+
     if headless:
         # Spawn the way R and the interactive loop do. Without it the headless walk started from the startup spawn, which
         # had already tipped to up_z 0.45 by the first tick and ended the 150-tick walk upside down (measured 2026-09-13,
@@ -1283,6 +1671,9 @@ def main():
         reset()
         if args.trip_probe:
             run_trip_probe(args.trip_probe)
+            return
+        if args.film:
+            run_film(args.film)
             return
         cmd = np.array([1.0, 0.0, 0.0], np.float32)
         # Vulkan: scan() uses the TLAS from the last render(), so render before each scan.
