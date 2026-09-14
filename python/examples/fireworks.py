@@ -99,11 +99,12 @@ Both were found by looking, not by reasoning:
 The billboards are fogged with the scene, so a scene's fog clamp applies to
 them too.
 
-Standalone check (a Vulkan build; headless, no display)::
+Standalone (a Vulkan build and a display)::
 
-    python fireworks.py                        # seven verification stills
-    python fireworks.py --shot fw.png --t 9.3
-    python fireworks.py --film fw.mp4          # -2 -> 13 s
+    python fireworks.py
+
+Drag to orbit, scroll to zoom. The show replays on a cycle, and SPACE fires
+the next one as soon as the last star has died out.
 """
 
 import math
@@ -549,43 +550,36 @@ class FireworkShow:
 
 
 # --------------------------------------------------------------------------- #
-#  Standalone verification scene
+#  Standalone demo
 #
 #  A shore at blue hour: sea, a slab of shingle with a few boulders on it for
-#  the flash to land on, and the mortar on the shingle. The camera is the
-#  reference lens the defaults were framed for -- 52 m above the mortar, 112 m
-#  out from it, aimed 9 degrees down over the water -- so a look tuned here
-#  transfers to any scene that watches from a similar range.
+#  the flash to land on, and the mortar on the shingle. The camera opens on
+#  the beach about 120 m from the mortar -- the range the defaults were sized
+#  for -- and is yours from there: drag to orbit, scroll to zoom. The show
+#  replays on a cycle, and SPACE fires the next one as soon as the last star
+#  has died out.
 # --------------------------------------------------------------------------- #
 if __name__ == "__main__":
-    from demo_common import Encoder, cli_arg, find_ffmpeg
+    from demo_common import resize_handler
 
     if not tp.HAS_VULKAN:
         print("This threepp build has no Vulkan backend "
               "(configure with -DTHREEPP_WITH_VULKAN=ON).")
         sys.exit(0)
 
-    SHOT = "--shot" in sys.argv
-    FILM = "--film" in sys.argv
-    OUT = cli_arg("--shot", "fireworks.png", str)
-    FILM_OUT = cli_arg("--film", "fireworks.mp4", str)
-    T = cli_arg("--t", 9.3, float)
-    W, H = cli_arg("--width", 1100, int), cli_arg("--height", 900, int)
-    FPS = 30
     SEA_Y = 0.0
     SHORE_Y = 2.3                       # the shingle the mortar stands on
     LAUNCH = (0.0, SHORE_Y + 0.6, 0.0)
+    LEAD = 1.0                          # quiet seconds before the first launch
+    PAUSE = 4.0                         # ... and after the last star is out
 
-    canvas = tp.Canvas("threepp - fireworks", width=W, height=H,
-                       vsync=False, headless=True)
+    canvas = tp.Canvas("threepp - fireworks", width=1280, height=800, vsync=False)
     renderer = tp.VulkanRenderer(canvas)
     renderer.tone_mapping = tp.ToneMapping.ACESFilmic
-    # The exposure is AUTHORED. Auto-exposure was measured not to move a
-    # headless Vulkan frame at all, and an offline capture wants one
-    # deterministic level anyway: every still here is comparable to every
-    # other because nothing metered them differently.
+    # The exposure is AUTHORED, not metered: auto-exposure was measured not to
+    # move a Vulkan frame, and a show this brief wants one steady level anyway.
     renderer.auto_exposure = False
-    renderer.tone_mapping_exposure = cli_arg("--exposure", 1.0, float)
+    renderer.tone_mapping_exposure = 1.0
     renderer.render_scale = 0.9
     renderer.gbuffer_msaa = 2
     renderer.bloom_intensity = 0.14
@@ -655,78 +649,33 @@ if __name__ == "__main__":
     scene.add(ocean)
 
     show = FireworkShow(scene, LAUNCH, FireworkShow.default_shells(0.0), seed=11)
+    show_end = max(sh.t_end for sh in show.shells)
 
-    cam = tp.PerspectiveCamera(38.0, W / float(H), 0.35, 3000)
+    camera = tp.PerspectiveCamera(38.0, canvas.aspect(), 0.35, 3000)
+    camera.position.set(-25.0, 14.0, -118.0)
+    controls = tp.OrbitControls(camera, canvas)
+    # Orbit about the burst zone, not the mortar: the bursts are what the
+    # camera is for, and this keeps them mid-frame at any distance.
+    controls.target = tp.Vector3(0.0, SHORE_Y + 42.0, 0.0)
+    controls.enable_damping = True
+    controls.min_distance = 15.0
+    controls.max_distance = 600.0
+    canvas.on_window_resize(resize_handler(camera, renderer))
 
-    def place(t):
-        # The reference lens, with a slow drift so a still is not a frame of a
-        # locked-off camera: 52 m above the mortar, 112 m out, aimed 9 deg down.
-        a = math.radians(4.0 + 0.9 * max(t + 1.0, 0.0))
-        cam.position.set(-12.0 + 10.0 * math.sin(a), SHORE_Y + 52.4,
-                         -116.5 + 4.0 * math.cos(a))
-        cam.look_at(tp.Vector3(-33.0, 22.0, 85.5))
+    clock = tp.Clock()
+    cycle = {"t0": 0.0}                 # clock time the current cycle began
 
-    def step(t):
-        renderer.sim_time = t
-        place(t)
+    def animate():
+        now = clock.get_elapsed_time()
+        t = now - cycle["t0"] - LEAD
+        # Restart only once the last star is out: a slot reborn while it is
+        # still alive would streak from the burst back to the mortar.
+        if t > show_end and (t > show_end + PAUSE or canvas.is_key_down("SPACE")):
+            cycle["t0"] = now
+            t = -LEAD
         show.update(t)
+        controls.update()
+        renderer.render(scene, camera)
 
-    def settle(t, lead=1.0):
-        """Walk INTO t at film rate, from `lead` seconds before it.
-
-        A still rendered cold is a lie: the velocity streak is (pos - previous
-        slot) and needs a real previous step, and the TAA history wants a few
-        frames of the same motion behind it.
-        """
-        dt = 1.0 / FPS
-        for k in range(int(lead * FPS), 0, -1):
-            step(t - k * dt)
-            renderer.render(scene, cam)
-        step(t)
-
-    if FILM:
-        if find_ffmpeg() is None:
-            sys.exit("--film needs ffmpeg on PATH (or `pip install imageio-ffmpeg`)")
-        t0, t1 = -2.0, 13.0
-        enc = Encoder(FILM_OUT, W, H, FPS, crf=18, preset="medium")
-        n = int((t1 - t0) * FPS)
-        for k in range(n):
-            step(t0 + k / FPS)
-            renderer.render(scene, cam)
-            enc.send(renderer.read_pixels())
-        enc.close()
-        print(f"wrote {FILM_OUT}  ({n} frames, {t0}-{t1} s)")
-
-    elif SHOT:
-        settle(T)
-        renderer.save_frame(scene, cam, OUT)
-        print(f"wrote {OUT}  (t={T:.2f}s)")
-
-    else:
-        # The verification set: one still per beat that has to work.
-        # The times matter. A shell 0.3 s after break is a compact ball however
-        # it is tuned -- that is what a break IS -- and judging the burst there
-        # says nothing about whether it opens. The frames that decide it are
-        # ~1 s (open, discrete stars) and ~2.5 s (falling, thinning, dying).
-        #
-        # And they are captured out of ONE continuous walk from t = -2, not one
-        # cold render each, for the reasons `settle` gives.
-        marks = {0.9: "ascent",       # shell 1 climbing, the streak reading
-                 1.55: "flash1",      # the break itself
-                 2.3: "open1",        # gold, 0.8 s open
-                 3.1: "fade1",        # embers falling, thinning out
-                 5.5: "burst2",       # the blue one, 0.8 s open
-                 9.3: "burst3",       # the finale, biggest
-                 10.6: "fall3"}       # falling, still well above the water
-        todo = sorted(marks)
-        t0, t1 = -2.0, 11.4
-        n = int((t1 - t0) * FPS)
-        for k in range(n + 1):
-            t = t0 + k / FPS
-            step(t)
-            renderer.render(scene, cam)
-            if todo and t + 0.5 / FPS >= todo[0]:
-                p = f"fw_{marks[todo[0]]}.png"
-                renderer.save_frame(scene, cam, p)
-                print(f"wrote {p}  (t={t:.2f}s, cue {todo[0]:.2f})")
-                todo.pop(0)
+    print("drag = orbit, scroll = zoom, SPACE = fire the next show")
+    canvas.animate(animate)

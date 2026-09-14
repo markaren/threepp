@@ -173,11 +173,11 @@ self-contained; what they share lives in [`examples/warp_common.py`](examples/wa
 | [`examples/warp_mudsnow_drive.py`](examples/warp_mudsnow_drive.py) | A Range Rover driven over Bekker-Wong ground: mud, snow, packed clay. |
 
 **Film kits** — reusable pieces a film imports. Renderer-only (no Warp); each
-has its own standalone check.
+runs standalone too.
 
 | Script | What it shows |
 | --- | --- |
-| [`examples/fireworks.py`](examples/fireworks.py) | `FireworkShow`: a staggered firework display as one `ParticleField` plus a `PointLight` per shell, closed-form in the scene clock so any frame can be seeked. Needs a Vulkan build; the stills are headless. |
+| [`examples/fireworks.py`](examples/fireworks.py) | `FireworkShow`: a staggered firework display as one `ParticleField` plus a `PointLight` per shell, closed-form in the scene clock so any frame can be seeked. Run it for the show over water, replaying; orbit it live. Needs a Vulkan build + display. |
 | [`examples/drone_rig.py`](examples/drone_rig.py) | `Drone` (attitude derived from the path), `Route` (authored legs, smoothed as a signal and held above terrain and canopy) and `FollowCamera` (precomputed and filtered the same way). Renderer-free smoke test. |
 
 **Inverse design** — an optimiser, not an animator, decides the shape.
