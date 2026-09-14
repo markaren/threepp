@@ -282,6 +282,19 @@ def main():
     ap.add_argument("--w-place", dest="w_place", type=float, default=0.0,
                     help=f"foot-placement reward on stair treads: per touchdown min(d_edge, {PLACE_SAT}) / {PLACE_SAT}, "
                          f"-{PLACE_PERCH} if perched on a nosing. Needs honest termination (the touchdowns). 0 = off")
+    # ---- walk + jump in one policy (2026-09-14): every default is the walking trainer as before ----
+    ap.add_argument("--jump", default="", metavar="LO,HI",
+                    help="a jump trigger every U(LO, HI) s on the flat lanes, the 98-d observation (the jump flag and phase "
+                         "appended) and the jump rewards (spot_steps_env JUMP_*); a 96-d warm start is widened with zero "
+                         "weights on the new inputs. Needs the honest termination (--course). '' = off")
+    ap.add_argument("--w-jump-imit", dest="w_jump_imit", type=float, default=2.0, help="the jump reference's weight")
+    ap.add_argument("--qd-max", dest="qd_max", type=float, default=None,
+                    help="rate-limit the drive targets to V rad/s (spot_recovery_env's limit; default none)")
+    ap.add_argument("--self-collision", dest="self_collision", action="store_true",
+                    help="legs collide with the body and each other (the recovery and jump plant)")
+    ap.add_argument("--eval-jump-steps", dest="eval_jump_steps", type=int, default=0,
+                    help="with --jump, after training: this many deterministic steps on the training env; jump and fall "
+                         "counters -> <out stem>_jumpeval.json")
     args = ap.parse_args()
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); sys.exit(0)
@@ -352,6 +365,15 @@ def main():
         kw.update(termination=termination)
     if dlf:
         kw.update(drive_limits_are_forces=True)
+    jump = tuple(float(v) for v in args.jump.split(",")) if args.jump else None
+    if jump is not None:
+        if termination != "honest":
+            ap.error("--jump reads the instrument's foot clearance: it needs the honest termination (--course)")
+        kw.update(jump=jump, w_jump_imit=args.w_jump_imit)
+    if args.qd_max:
+        kw.update(qd_max=args.qd_max)
+    if args.self_collision:
+        kw.update(self_collision=True)
     height_source = args.height_source or ("raycast" if args.course else "analytic")
     env = SpotStepsEnv(num_envs=args.envs, device="cuda", seed=args.seed, perceive=args.perceive,
                        perceive_noise=args.perceive_noise, graph=args.graph,
@@ -377,6 +399,11 @@ def main():
     if reset_noise is not None:
         print(f"reset noise: q N(0, {reset_noise[0]:g}) rad, drop U(0, {reset_noise[1]:g}) m, v U(+-{reset_noise[2]:g}) m/s, "
               f"no hold on {args.reset_nohold_frac:g} of flat/stair resets")
+    if jump is not None or args.qd_max or args.self_collision:
+        print(f"jump triggers every U({args.jump}) s on the flat lanes, obs {env.obs_dim}-d, reference weight "
+              f"{args.w_jump_imit}" if jump is not None else "no jump triggers",
+              f"| joint targets <= {args.qd_max} rad/s" if args.qd_max else "| no joint target limit",
+              f"| self-collision {'on' if args.self_collision else 'off'}")
     print(f"termination {termination}, drive limits {'torques' if dlf else 'impulses'}"
           + (", stand mode" if args.stand_mode else "") + (f", w_place {args.w_place}" if args.w_place > 0 else ""))
     if env.rays is not None:
@@ -431,7 +458,8 @@ def main():
                     "course_values": ({"rough": list(env._course.rough_amps), "cross": list(env._course.cross_degs),
                                        "hills": list(env._course.hill_degs)} if args.course else None),
                     "cmd_switch": args.cmd_switch, "reset_noise": args.reset_noise,
-                    "reset_nohold_frac": args.reset_nohold_frac if reset_noise is not None else None},
+                    "reset_nohold_frac": args.reset_nohold_frac if reset_noise is not None else None,
+                    **env.jump_config()},
               aux_loss=aux)
     if shove is not None:
         ppo.meta["push_lanes"], ppo.meta["push_mode"] = "non-flat", "interval"
@@ -439,7 +467,24 @@ def main():
         print(f"symmetry augmentation ON (coef {args.sym_coef})")
     if args.warmstart and os.path.exists(args.warmstart):
         src, src_norm, src_meta = load_policy(args.warmstart, device="cuda")
-        if src_meta.get("obs_dim") == OBS_DIM:
+        if src_meta.get("obs_dim") == OBS_DIM and env.obs_dim > OBS_DIM:
+            # a 96-d walking policy into the 98-d jump layout: its weights on the first 96 inputs, zeros on the new ones, so
+            # the first rollout walks exactly as the warm start did; the norm's new entries start at mean 0, var 1
+            own, n_wide = ppo.ac.state_dict(), 0
+            for name, v in src.state_dict().items():
+                if own[name].shape == v.shape:
+                    own[name].copy_(v)
+                else:
+                    own[name].zero_(); own[name][:, :v.shape[1]].copy_(v); n_wide += 1
+            ppo.ac.load_state_dict(own)
+            if ppo.norm is not None and src_norm is not None:
+                st_ = src_norm.state()
+                ppo.norm.mean[:OBS_DIM] = st_["mean"]; ppo.norm.var[:OBS_DIM] = st_["var"]
+                ppo.norm.mean[OBS_DIM:] = 0.0; ppo.norm.var[OBS_DIM:] = 1.0
+                ppo.norm.count, ppo.norm.clip = float(st_["count"]), float(st_["clip"])
+            print(f"continued from {os.path.basename(args.warmstart)} widened {OBS_DIM} -> {env.obs_dim} inputs "
+                  f"({n_wide} first layers, zero weights on the jump channels; actor+critic+log_std+norm)")
+        elif src_meta.get("obs_dim") == env.obs_dim:
             # Already a terrain policy, not the 50-d base gait: continue it whole. This is what a
             # heightfield -> stairs chain needs, and until now it could not be run at all — the
             # expander below asserts on anything that is not 50-d, so handing it spot_hf.pt
@@ -448,7 +493,7 @@ def main():
             if ppo.norm is not None and src_norm is not None:
                 ppo.norm.load(src_norm.state())
             print(f"continued from {os.path.basename(args.warmstart)} "
-                  f"({OBS_DIM}-d terrain policy: full actor+critic+log_std+norm)")
+                  f"({env.obs_dim}-d terrain policy: full actor+critic+log_std+norm)")
         else:
             warmstart_scratch_to_terrain(ppo.ac, ppo.norm,
                                          args.warmstart, n_keep=50, device="cuda")
@@ -550,6 +595,14 @@ def main():
             print("        spawn falls <=1 s held / unheld (hold-bad of checked): " + " | ".join(
                 f"{n} {v['early_falls_held']}/{v['held']} {v['early_falls_unheld']}/{v['resets'] - v['held']} "
                 f"({v['hold_bad']}/{v['hold_checked']})" for n, v in sf_.items()))
+        if jump is not None:
+            course["jump"] = js = env.jump_stats(reset=True)
+            _f = lambda v, n=3: "n/a" if v is None else f"{v:.{n}f}"
+            print("        jump " + " | ".join(
+                f"{n} {v['windows']}: jumped {_f(v['jumped'])} landed {_f(v['landed_up'])} fell {_f(v['fell'])} flight "
+                f"{_f(v['flight_s'], 2)} s clear {_f(v['clearance_m'])} vz {_f(v['vz_max'], 2)}"
+                for n, v in js.items() if isinstance(v, dict) and n != "all")
+                  + f" | uncommanded flights/env-min {_f(js['uncommanded_flights_per_env_min'], 3)}")
         env.reset_stats(episodes=False)
         metric({"type": "log", **ppo.last_log, **ppo.diagnostics(), "track": trk, "flat": ftrk,
                 "level": lvl, "clear_legacy": env.last_clear, "fell": env.last_fell, "gate_ok": ok,
@@ -570,6 +623,25 @@ def main():
     ppo.learn(args.iters, log_every=LOG_EVERY, on_log=log,
               on_iter=on_iter if (args.snapshot_every > 0 or shove is not None) else None)
     ppo.save(latest)
+    if jump is not None and args.eval_jump_steps > 0:
+        # the final weights, deterministic, on the training env as it ends (course levels, shove size, friction)
+        pol = (lambda o: ppo.ac.act_mean(ppo.norm.norm(o))) if ppo.norm is not None else ppo.ac.act_mean
+        env.reset_stats(episodes=True); env.jump_stats(reset=True)
+        obs = env.reset()
+        fl, ftk = [], []
+        for _ in range(args.eval_jump_steps):
+            obs, _, _, _, _ = env.step(pol(obs))
+            fl.append(env.last_fell); ftk.append(env.last_flat_track)
+        ev = {"checkpoint": os.path.abspath(latest), "steps": args.eval_jump_steps, "envs": args.envs,
+              "jump": env.jump_stats(reset=True), "fell_per_step": sum(fl) / len(fl), "flat_track": sum(ftk) / len(ftk),
+              "rows": [{k: v for k, v in r.items() if k not in ("by_episode", "instrument")}
+                       for r in env.episode_stats()["rows"]]}
+        with open(stem + "_jumpeval.json", "w") as f:
+            json.dump(ev, f, indent=1, default=str)
+        a_ = ev["jump"]["all"]
+        print(f"[jump eval] {args.eval_jump_steps} deterministic steps: windows {a_['windows']} jumped {a_['jumped']} landed "
+              f"{a_['landed_up']} fell {a_['fell']} | fell/step {ev['fell_per_step']:.4f} flat track {ev['flat_track']:.3f}"
+              f" -> {stem}_jumpeval.json")
     if args.select == "final":
         ppo.save(args.out)
         print(f"saved -> {args.out} = {latest} (final weights, --select final) | metrics -> {metrics_path}")

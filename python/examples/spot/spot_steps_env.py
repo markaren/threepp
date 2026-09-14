@@ -89,6 +89,26 @@ HALF_W_BOX = SPACING           # tent box width = full lane -> tents tile with n
 # three axes. Spot's total is ~32 kg; the legs lag, so the base sees less. Used to turn a shove
 # expressed as a velocity change into the force that delivers it.
 PUSH_MASS = 24.0
+
+# ---- the jump on command inside the walking task (opt-in: `jump`, `jump_obs`) ----------------------------------------
+# spot_jump_env.py learned a jump as its own policy (spot_jump2, 2026-09-14: 99-100% jumped and landed from standing).
+# Here the walking policy learns it: a trigger opens a JUMP_WINDOW-tick window and the observation grows two channels,
+# obs[96:98] = (1, ticks since the trigger / JUMP_WINDOW) in the window, else (0, 0). The walking command stays in force,
+# so a jump happens standing or walking. In the window the JUMP_OFF_TERMS walking terms are off and the jump terms pay.
+JUMP_WINDOW = 60                 # control ticks (1.2 s), = spot_jump_env.WINDOW_TICKS
+JUMP_MIN_STEPS = 50              # no trigger in an episode's first second (spawn holds, messy resets)
+JUMP_AIR = 0.02                  # every foot this far above the terrain under it (the instrument's feet_clear) = airborne
+JUMP_TAKEOFF_VZ = 0.2            # a take-off also needs the base rising (a fast crouch lifts the feet as the body drops)
+JUMP_MIN_FLIGHT = 5              # ticks: a shorter flight re-arms the jump
+JUMP_LAND_UP = 0.85
+JUMP_VZ_CAP = 3.0
+J_RISE, J_FLIGHT, J_LAND, J_MISS, J_VZ = 150.0, 3.0, 50.0, 30.0, 40.0
+J_REF_KEYS = ((0, (0.0, 0.0, 0.0)), (12, (0.0, 0.3, -0.6)), (16, (0.0, 0.3, -0.6)), (24, (0.0, -0.3, 0.6)),
+              (40, (0.0, 0.1, -0.3)), (60, (0.0, 0.0, 0.0)))          # = spot_jump_env.REF_KEYS
+J_IMIT_SIGMA2 = 0.1
+JUMP_OFF_TERMS = ("imit", "vz", "scrape", "stand")   # the teacher's gait, the vertical-speed and scrape penalties, the stand
+JUMP_BUCKETS = ("stand", "walk", "fast")             # the command at the trigger: zero, |vx| < 1 m/s, faster
+JUMP_OBS_DIM = OBS_DIM + 2
 FOOT_DX = (0.30, 0.30, -0.30, -0.30)   # stance foot offsets for spawn clearance
 FOOT_DY = (0.17, -0.17, 0.17, -0.17)
 # A clear only counts if the robot was in its own lane WHEN IT CROSSED: CLEAR_DIST is x-progress
@@ -226,7 +246,8 @@ class SpotStepsEnv(VecTask):
                  course=False, course_shares=None, rough_backend="trimesh", spawn_hold=SPAWN_HOLD,
                  terrain_material=None, push_interval=(3.0, 8.0), push_dv_min=0.3, push_max=0.5,
                  stand_mode=False, w_stand=W_STAND, w_place=0.0, course_ladder=None, cmd_switch=None,
-                 reset_noise=None, reset_nohold_frac=0.3):
+                 reset_noise=None, reset_nohold_frac=0.3, jump=None, jump_obs=False, jump_lanes=None,
+                 w_jump_imit=2.0, qd_max=None, self_collision=False):
         """Everything after push_prob is opt-in, and its default reproduces the training world:
 
         risers         per-level riser ladder (None = RISERS). More levels also lengthen the ground
@@ -327,6 +348,15 @@ class SpotStepsEnv(VecTask):
                        clean IK stance); flat and stair resets hold the default stance for spawn_hold ticks too, except a
                        share reset_nohold_frac of them, which get no hold and must catch themselves. Spawn falls per
                        family: spawn_families().
+        jump           (lo, hi) seconds: on the jump lanes (default the flat lanes) a jump trigger every U(lo, hi) s after the
+                       window closes (the first after JUMP_MIN_STEPS plus one draw), and the 98-d observation (module
+                       constants JUMP_*). Needs the instrument's foot clearance: termination='honest' or instrument=True.
+                       Counters per command bucket: jump_stats().
+        jump_obs       the 98-d observation with the jump channels at zero and no triggers (evaluating a jump checkpoint).
+        w_jump_imit    the jump reference's weight (J_REF_KEYS, as spot_jump_env's w_imit).
+        qd_max         V rad/s: the drive targets move at most V * DT per control tick (spot_recovery_env's limit, in this
+                       env's action units), outside the settle.
+        self_collision the legs collide with the body and each other (the recovery and jump plant).
         """
         course_ladder = course_ladder or ("hard" if course else "pilot")
         if course_ladder not in sc.LADDERS:
@@ -403,6 +433,8 @@ class SpotStepsEnv(VecTask):
         self.termination = termination
         self.instrument = bool(instrument)
         self._feet_on = self.instrument or termination == "honest"     # both need the link reads below
+        if jump is not None and not self._feet_on:
+            raise ValueError("jump reads the instrument's foot clearance: termination='honest' or instrument=True")
         risers_np = np.array(self.riser_list, np.float32)
         level0 = np.zeros(num_envs, np.int64)
         if init_level is not None:
@@ -443,6 +475,7 @@ class SpotStepsEnv(VecTask):
         mu_np = None if foot_mu is None else _per_env(foot_mu, num_envs, np.float64, "foot_mu")
         pay_np = None if payload_kg is None else _per_env(payload_kg, num_envs, np.float64, "payload_kg")
         self.drive_limits_are_forces = dlf = bool(drive_limits_are_forces)
+        self.self_collision = sc_on = bool(self_collision)
         foot_mats = {}
         # Stiff gains (90) = same plant the base gait scratch_flat_best.pt was trained on.
         class _SpotStepsRobot:
@@ -458,7 +491,7 @@ class SpotStepsEnv(VecTask):
                 if pay_np is not None and pay_np[i] != 0.0:
                     kw["payload_kg"] = float(pay_np[i])
                 self_.art, _ = build_spot(world, assets=None, base_xy=(0.0, i * SPACING),
-                                          gains=STIFF_GAINS, drive_limits_are_forces=dlf, **kw)
+                                          gains=STIFF_GAINS, drive_limits_are_forces=dlf, self_collision=sc_on, **kw)
         # Under "raycast" the builders write into a CollectedWorld, which forwards every call
         # to the real world and keeps the Mesh it was handed — so the BVH is built from the
         # boxes PhysX actually got, not from a second description of them.
@@ -553,7 +586,9 @@ class SpotStepsEnv(VecTask):
         self.ep_start_x = self.env_state(())
         self.ep_max_climb = self.env_state(())                             # forward distance this episode
         self.clear_dy = self.env_state((), init=-1.0)                      # |y - lane| when it crossed (-1 = not yet)
-        self._last_obs = torch.zeros(num_envs, OBS_DIM, device=dev)
+        self.jump_obs = bool(jump_obs) or jump is not None
+        self.obs_dim = JUMP_OBS_DIM if self.jump_obs else OBS_DIM
+        self._last_obs = torch.zeros(num_envs, self.obs_dim, device=dev)
         self.up = torch.zeros(num_envs, device=dev)
         self._resample_cmd(torch.arange(num_envs, device=dev))             # valid cmd before the first reset()
         # Per-env gait period. With one shared constant the policy can only vary stride LENGTH,
@@ -652,6 +687,39 @@ class SpotStepsEnv(VecTask):
         if self._course is not None or reset_noise is not None:
             self._init_course_spawn(course_code if course_code is not None else self._fam_k.cpu().numpy(), spawn_hold)
         self.stand_mode, self.w_stand = bool(stand_mode), float(w_stand)
+        self.jump = None if jump is None else tuple(float(v) for v in jump)
+        self.qd_max = float(qd_max) if qd_max else None
+        self.w_jump_imit = float(w_jump_imit)
+        if self.jump is not None:
+            if not (len(self.jump) == 2 and 0.0 < self.jump[0] <= self.jump[1]):
+                raise ValueError(f"jump must be (0 < lo <= hi seconds), got {jump}")
+            lanes = (self._fam_k == sc.FLAT) if jump_lanes is None else torch.as_tensor(np.asarray(jump_lanes, bool))
+            self._jump_lane = lanes.to(dev)
+            self.jump_t = self.env_state((), init=-1, dtype=torch.long)       # ticks since the trigger (-1: no window)
+            self.jump_cd = self.env_state((), init=0, dtype=torch.long)       # ticks to the next trigger
+            self.jstate = self.env_state((), init=0, dtype=torch.long)        # 0 pending, 1 flying, 2 landed
+            self.jflight = self.env_state((), init=0, dtype=torch.long)
+            self.jz0 = self.env_state(())
+            self.jzmax = self.env_state(())
+            self.jvzmax = self.env_state(())
+            self.jclear = self.env_state(())
+            self.jbucket = self.env_state((), init=0, dtype=torch.long)
+            self.jumped = self.env_state((), init=False, dtype=torch.bool)
+            self.jlanded = self.env_state((), init=False, dtype=torch.bool)
+            self._uair = self.env_state((), init=0, dtype=torch.long)
+            ref = np.zeros((JUMP_WINDOW, 3), np.float32)
+            vals = np.array([v for _, v in J_REF_KEYS], np.float32)
+            for g in range(3):
+                ref[:, g] = np.interp(np.arange(JUMP_WINDOW), [k for k, _ in J_REF_KEYS], vals[:, g])
+            self._jref = torch.from_numpy(np.tile(ref, (1, 4))).to(dev)        # [window, 12], add order per leg
+            self._j_rise = torch.zeros(num_envs, device=dev)
+            self._j_vz = torch.zeros(num_envs, device=dev)
+            self._j_fly = torch.zeros(num_envs, dtype=torch.bool, device=dev)
+            self._j_land = torch.zeros(num_envs, device=dev)
+            self._j_miss = torch.zeros(num_envs, dtype=torch.bool, device=dev)
+            # per bucket: windows, jumped, landed upright, missed, fell in the window, flight s, rise, clearance, peak vz
+            self._jst = torch.zeros(len(JUMP_BUCKETS), 9, dtype=torch.float64, device=dev)
+            self._juncmd = torch.zeros(2, dtype=torch.float64, device=dev)    # uncommanded flights, env ticks outside
         self.w_place = float(w_place)
         self._place_buf = None
         self._st_place = torch.zeros((), device=dev)
@@ -1122,10 +1190,18 @@ class SpotStepsEnv(VecTask):
             lo, hi = self.push_interval
             u = torch.rand(n, device=dev, generator=self._push_g)
             self._push_cd[idx] = ((lo + (hi - lo) * u) / DT).long()
+        if self.jump is not None:
+            lo, hi = self.jump
+            u = torch.rand(n, device=dev)
+            self.jump_cd[idx] = ((lo + (hi - lo) * u) / DT).long() + JUMP_MIN_STEPS
 
     def act(self, a):
         # FULL policy action (not a residual): isaac -> add-order drive targets. The settle loop
         # feeds a=0, which lands exactly on the default stand targets.
+        if self.qd_max is not None and not self.settling:
+            # the target rate limit, in action units (a hold below still sets its joints outright)
+            da = self.qd_max * DT / ACTION_SCALE
+            a = self.last_act + (a - self.last_act).clamp(-da, da)
         if self._hold_row is not None:
             if self.settling:
                 # slope rows hold their spawn joints through the settle (spot_slopes INTEGRATION 5); every other row
@@ -1192,8 +1268,104 @@ class SpotStepsEnv(VecTask):
                                         (y - self.lane_y).abs(), self.clear_dy))
         if self._feet_on:
             self._instrument_step(x, y)
+        if self.jump is not None:
+            self._jump_step()
         if self._hold_ep is not None and self.spawn_hold > 0:
             self._hold_check()
+
+    def _jump_step(self):
+        """Once per control tick after the instrument (feet_clear is this tick's): the flight state machine and the reward
+        pieces for the envs inside a window, the window's close and its counters, then new triggers. The policy sees
+        (1, jump_t / JUMP_WINDOW) from the trigger tick on (spot_jump_env's contract, minus the distance command)."""
+        K, dev = self.K, self.device
+        air = (self.feet_clear > JUMP_AIR).all(dim=1)
+        vz = torch.nan_to_num(self.sim.root_linvel[:, 2], nan=0.0)
+        ba = self._base_above
+        win = self.jump_t >= 0
+        st = self.jstate
+        active = win & (st <= 1)
+        new_z = torch.maximum(self.jzmax, ba)
+        self._j_rise.copy_(torch.where(active, new_z - self.jzmax, 0.0))
+        self.jzmax.copy_(torch.where(active, new_z, self.jzmax))
+        new_v = torch.maximum(self.jvzmax, vz.clamp(0.0, JUMP_VZ_CAP))
+        self._j_vz.copy_(torch.where(active, new_v - self.jvzmax, 0.0))
+        self.jvzmax.copy_(torch.where(active, new_v, self.jvzmax))
+        takeoff = win & (st == 0) & air & (vz > JUMP_TAKEOFF_VZ)
+        fly_air = win & ((st == 1) | takeoff) & air
+        self._j_fly.copy_(fly_air)
+        self.jclear.copy_(torch.where(fly_air, torch.maximum(self.jclear, self.feet_clear.min(dim=1).values), self.jclear))
+        touch = win & (st == 1) & ~air
+        counted = touch & (self.jflight >= JUMP_MIN_FLIGHT)
+        short = touch & ~counted
+        self._j_land.copy_((counted & (self.up > JUMP_LAND_UP)).float() * J_LAND)
+        self.jumped.copy_(self.jumped | counted)
+        self.jlanded.copy_(self.jlanded | (counted & (self.up > JUMP_LAND_UP)))
+        self.jflight.copy_(torch.where(fly_air, self.jflight + 1, torch.where(short, 0, self.jflight)))
+        self.jstate.copy_(torch.where(counted, 2, torch.where(takeoff, 1, torch.where(short, 0, st))))
+        # uncommanded flights, a metric: a run of JUMP_MIN_FLIGHT airborne ticks outside a window, counted once
+        self._uair.copy_(torch.where(air & ~win, self._uair + 1, 0))
+        self._juncmd[0] += (self._uair == JUMP_MIN_FLIGHT).sum().double()
+        self._juncmd[1] += (~win).sum().double()
+        # advance the windows; one closes JUMP_WINDOW ticks after its trigger
+        t = torch.where(win, self.jump_t + 1, self.jump_t)
+        closing = win & (t >= JUMP_WINDOW)
+        self._j_miss.copy_(closing & ~self.jumped)
+        self._jump_count(closing, torch.zeros_like(closing))
+        t = torch.where(closing, -1, t)
+        # triggers: the countdown ran out, no window open, past the episode's first second
+        cd = self.jump_cd - 1
+        trig = self._jump_lane & (t < 0) & (cd <= 0) & (self.steps > JUMP_MIN_STEPS)
+        lo, hi = self.jump
+        self.jump_cd.copy_(torch.where(trig, ((lo + (hi - lo) * torch.rand(K, device=dev)) / DT).long() + JUMP_WINDOW, cd))
+        self.jump_t.copy_(torch.where(trig, 0, t))
+        self.jstate.copy_(torch.where(trig, 0, self.jstate))
+        self.jflight.copy_(torch.where(trig, 0, self.jflight))
+        self.jz0.copy_(torch.where(trig, ba, self.jz0))
+        self.jzmax.copy_(torch.where(trig, ba, self.jzmax))
+        self.jvzmax.copy_(torch.where(trig, 0.0, self.jvzmax))
+        self.jclear.copy_(torch.where(trig, 0.0, self.jclear))
+        self.jumped.copy_(self.jumped & ~trig)
+        self.jlanded.copy_(self.jlanded & ~trig)
+        bucket = torch.where((self.cmd == 0.0).all(dim=1), 0, torch.where(self.cmd[:, 0].abs() < 1.0, 1, 2))
+        self.jbucket.copy_(torch.where(trig, bucket, self.jbucket))
+
+    def _jump_count(self, mask, fell):
+        """Close the windows in `mask` into the per-bucket counters (fell: those that ended in a fall)."""
+        m = mask.double()
+        j = (mask & self.jumped).double()
+        cols = torch.stack([m, j, (mask & self.jlanded).double(), (mask & ~self.jumped).double(), fell.double(),
+                            j * self.jflight.double() * DT, m * (self.jzmax - self.jz0).clamp_min(0.0).double(),
+                            j * self.jclear.double(), m * self.jvzmax.double()], dim=1)
+        self._jst.index_add_(0, self.jbucket, cols)
+
+    def jump_stats(self, reset=True):
+        """Per command bucket at the trigger (and all): windows, shares jumped / landed upright / missed / fell, mean
+        flight (of the jumps), rise, clearance (of the jumps) and peak upward speed; uncommanded flights per env-minute."""
+        s, u = self._jst.cpu().numpy(), self._juncmd.cpu().numpy()
+        div = lambda a, b: (float(a) / float(b)) if b else None
+
+        def row(v):
+            return {"windows": int(v[0]), "jumped": div(v[1], v[0]), "landed_up": div(v[2], v[0]), "missed": div(v[3], v[0]),
+                    "fell": div(v[4], v[0]), "flight_s": div(v[5], v[1]), "rise_m": div(v[6], v[0]),
+                    "clearance_m": div(v[7], v[1]), "vz_max": div(v[8], v[0])}
+
+        out = {name: row(s[i]) for i, name in enumerate(JUMP_BUCKETS)}
+        out["all"] = row(s.sum(axis=0))
+        out["uncommanded_flights_per_env_min"] = div(u[0], u[1] * DT / 60.0)
+        if reset:
+            self._jst.zero_(); self._juncmd.zero_()
+        return out
+
+    def jump_config(self):
+        """What a checkpoint's meta records about the jump, the observation and the plant knobs (all None / False off)."""
+        return {"obs_dim": self.obs_dim, "jump": list(self.jump) if self.jump else None, "jump_obs": self.jump_obs,
+                "qd_max": self.qd_max, "self_collision": self.self_collision,
+                **({"w_jump_imit": self.w_jump_imit, "jump_window": JUMP_WINDOW, "jump_min_steps": JUMP_MIN_STEPS,
+                    "jump_air": JUMP_AIR, "jump_takeoff_vz": JUMP_TAKEOFF_VZ, "jump_min_flight": JUMP_MIN_FLIGHT,
+                    "jump_land_up": JUMP_LAND_UP, "jump_vz_cap": JUMP_VZ_CAP,
+                    "jump_weights": {"rise": J_RISE, "flight": J_FLIGHT, "land": J_LAND, "miss": J_MISS, "vz": J_VZ},
+                    "jump_ref_keys": [[k, list(v)] for k, v in J_REF_KEYS], "jump_imit_sigma2": J_IMIT_SIGMA2,
+                    "jump_off_terms": list(JUMP_OFF_TERMS)} if self.jump is not None else {})}
 
     def terminated(self, s):
         tilt = self.up < 0.35
@@ -1481,6 +1653,21 @@ class SpotStepsEnv(VecTask):
             terms["place"] = self.w_place * self._place_buf
         if self.stand_mode:
             terms["stand"] = -self.w_stand * (self.cmd == 0.0).all(dim=1).float() * s.joint_vel.pow(2).mean(dim=1)
+        if self.jump is not None:
+            inw = self.jump_t >= 0
+            for name in JUMP_OFF_TERMS:
+                if name in terms:
+                    terms[name] = torch.where(inw, torch.zeros_like(terms[name]), terms[name])
+            k = self.jump_t.clamp(0, JUMP_WINDOW - 1)
+            err = (s.joint_pos - self.stand_q_add - self._jref[k]).pow(2).mean(dim=1)
+            terms["jrise"] = J_RISE * self._j_rise
+            terms["jvz"] = J_VZ * self._j_vz
+            terms["jflight"] = J_FLIGHT * self._j_fly.float()
+            terms["jland"] = self._j_land
+            terms["jmiss"] = -J_MISS * self._j_miss.float()
+            terms["jimit"] = self.w_jump_imit * inw.float() * torch.exp(-err / J_IMIT_SIGMA2)
+            fell = s.terminated & inw
+            self._jump_count(fell, fell)
         # Device-side, and read back only when a trainer asks (see the last_* properties). Masked
         # means rather than boolean indexing: a mask keeps the shapes static, which is what lets the
         # whole reward be replayed from a CUDA graph.
@@ -1690,6 +1877,13 @@ class SpotStepsEnv(VecTask):
         # First 50 (proprio+clock) byte-identical to scratch_flat -> anchor reads obs[:,:50]
         obs = torch.cat([lin_b, ang_b, proj_g, self.cmd, qpos, jv_isaac, self.last_act,
                          clk, base_above, ahead], dim=1)
+        if self.jump_obs:                    # [96:98] the jump flag and phase (jump_obs without triggers: zeros)
+            if self.jump is not None:
+                w = (self.jump_t >= 0).float()
+                jch = torch.stack([w, self.jump_t.clamp_min(0).float() / JUMP_WINDOW * w], dim=1)
+            else:
+                jch = torch.zeros(self.K, 2, device=self.device)
+            obs = torch.cat([obs, jch], dim=1)
         self._last_obs.copy_(obs)     # in place: reward_terms reads this, and a graph captures the
         return obs                    # address, so rebinding would strand it on a stale tensor
 

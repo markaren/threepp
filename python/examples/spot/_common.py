@@ -192,6 +192,13 @@ def eval_flat_steering(env_cls, policy_path, k=512, device="cuda", height_source
         kw["drive_limits_are_forces"] = True
     if stand:
         kw["stand_mode"] = True
+    # a walk + jump checkpoint reads the 98-d observation (its jump channels stay at zero here) on its own plant
+    if meta.get("jump_obs"):
+        kw["jump_obs"] = True
+    if meta.get("qd_max"):
+        kw["qd_max"] = float(meta["qd_max"])
+    if meta.get("self_collision"):
+        kw["self_collision"] = True
     env = env_cls(num_envs=k, device=device, flat_only=True, **kw)
     pol = (lambda o: ac.act_mean(norm.norm(o))) if norm is not None else ac.act_mean
     # Base gait teacher (50-d, norm-aware): compare against it so steering regression is defined
