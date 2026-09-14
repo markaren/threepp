@@ -198,8 +198,21 @@ DEFAULT_BRIEF = dict(
 
 
 def resistance(v, brief):
-    """R_T(V) = 0.5 rho V^2 S_wet (C_F(1+k) + C_R), ITTC-57 friction line."""
+    """R_T(V) = 0.5 rho V^2 S_wet (C_F(1+k) + C_R), ITTC-57 friction line.
+
+    `brief["hull"]["R_T"]` short-circuits it: a dict {speed: newtons} measured
+    off a real hull. That is how `codesign.py` hands the FROZEN sculpt's own
+    resistance to the pilot's grid search, so the grid and the coupled tape are
+    scoring the same two numbers. Keys may be floats or (after a json
+    round-trip) strings; a speed matches to 1e-9.
+    """
     hull = brief["hull"]
+    tbl = hull.get("R_T")
+    if tbl:
+        for key, val in tbl.items():
+            if abs(float(key) - v) < 1.0e-9:
+                return float(val)
+        raise KeyError(f"brief hull R_T table has no entry for V = {v}")
     re = max(abs(v) * hull["L"] / NU_WATER, 1.0e3)
     cf = 0.075 / (math.log10(re) - 2.0) ** 2
     ct = cf * (1.0 + hull["k_form"]) + hull["C_R"]
@@ -299,44 +312,74 @@ def k_pd(design: wp.array2d(dtype=F), pd: wp.array(dtype=F)):
     pd[i] = design[i, 1]
 
 
-@wp.kernel
-def k_newton(n_in: wp.array(dtype=F), kt: wp.array(dtype=F),
-             dkt: wp.array(dtype=F), jj: wp.array(dtype=F),
-             design: wp.array2d(dtype=F), rt: F, t_ded: F,
-             n_out: wp.array(dtype=F)):
-    """ONE self-propulsion iteration, one launch.
+@wp.func
+def _newton_step(n: F, d: F, kt: F, dkt: F, jj: F, rt: F, t_ded: F) -> F:
+    """ONE self-propulsion iteration.
 
         r(n)  = K_T(J(n)) rho n^2 D^4 (1 - t) - R_T
         r'(n) = rho D^4 (1 - t) n (2 K_T - J dK_T/dJ)      [dJ/dn = -J/n]
 
     K_T and dK_T/dJ arrive through arrays that k_poly wrote, so the only thing
-    this kernel does with a loop accumulator is read it. The step is limited to
-    half the current n, which cannot move the fixed point (the step is zero
-    there) but keeps a wild cell of the brute-force grid from stepping n
-    negative."""
-    i = wp.tid()
-    n = n_in[i]
-    d = design[i, 0]
+    this does with a loop accumulator is read it. The step is limited to half
+    the current n, which cannot move the fixed point (the step is zero there)
+    but keeps a wild cell of the brute-force grid from stepping n negative."""
     d2 = d * d
     fac = wp.float64(RHO) * d2 * d2 * (wp.float64(1.0) - t_ded)
-    r = kt[i] * fac * n * n - rt
-    rp = fac * n * (wp.float64(2.0) * kt[i] - jj[i] * dkt[i])
+    r = kt * fac * n * n - rt
+    rp = fac * n * (wp.float64(2.0) * kt - jj * dkt)
     if wp.abs(rp) < wp.float64(1.0e-9):
         rp = wp.float64(1.0e-9)
     step = wp.clamp(r / rp, wp.float64(-0.5) * n, wp.float64(0.5) * n)
-    n_out[i] = wp.clamp(n - step, wp.float64(0.05), wp.float64(400.0))
+    return wp.clamp(n - step, wp.float64(0.05), wp.float64(400.0))
+
+
+@wp.func
+def _residual(n: F, d: F, kt: F, rt: F, t_ded: F) -> F:
+    """|K_T rho n^2 D^4 (1-t) - R_T| / R_T, the convergence diagnostic."""
+    d2 = d * d
+    fac = wp.float64(RHO) * d2 * d2 * (wp.float64(1.0) - t_ded)
+    return wp.abs(kt * fac * n * n - rt) / wp.abs(rt)
+
+
+@wp.kernel
+def k_newton(n_in: wp.array(dtype=F), kt: wp.array(dtype=F),
+             dkt: wp.array(dtype=F), jj: wp.array(dtype=F),
+             design: wp.array2d(dtype=F), rt: F, t_ded: F,
+             n_out: wp.array(dtype=F)):
+    """The scalar-R_T launch: the pilot's, with R_T a host constant."""
+    i = wp.tid()
+    n_out[i] = _newton_step(n_in[i], design[i, 0], kt[i], dkt[i], jj[i], rt,
+                            t_ded)
+
+
+@wp.kernel
+def k_newton_a(n_in: wp.array(dtype=F), kt: wp.array(dtype=F),
+               dkt: wp.array(dtype=F), jj: wp.array(dtype=F),
+               design: wp.array2d(dtype=F), rt: wp.array(dtype=F),
+               ri: wp.int32, t_ded: F, n_out: wp.array(dtype=F)):
+    """The same iteration with R_T read from an ARRAY slot, so a hull that is
+    itself on the tape can supply it and the gradient reaches back into the
+    hull's vertices. Identical arithmetic -- one `wp.func`, two entry points --
+    so the pilot's gate keeps measuring the code the co-design runs."""
+    i = wp.tid()
+    n_out[i] = _newton_step(n_in[i], design[i, 0], kt[i], dkt[i], jj[i], rt[ri],
+                            t_ded)
 
 
 @wp.kernel
 def k_residual(n: wp.array(dtype=F), kt: wp.array(dtype=F),
                design: wp.array2d(dtype=F), rt: F, t_ded: F,
                res: wp.array(dtype=F)):
-    """|K_T rho n^2 D^4 (1-t) - R_T| / R_T, the convergence diagnostic."""
     i = wp.tid()
-    d = design[i, 0]
-    d2 = d * d
-    fac = wp.float64(RHO) * d2 * d2 * (wp.float64(1.0) - t_ded)
-    res[i] = wp.abs(kt[i] * fac * n[i] * n[i] - rt) / wp.abs(rt)
+    res[i] = _residual(n[i], design[i, 0], kt[i], rt, t_ded)
+
+
+@wp.kernel
+def k_residual_a(n: wp.array(dtype=F), kt: wp.array(dtype=F),
+                 design: wp.array2d(dtype=F), rt: wp.array(dtype=F),
+                 ri: wp.int32, t_ded: F, res: wp.array(dtype=F)):
+    i = wp.tid()
+    res[i] = _residual(n[i], design[i, 0], kt[i], rt[ri], t_ded)
 
 
 @wp.kernel
@@ -546,11 +589,15 @@ def _poly_pair(buf, jj, pd, op, k):
               outputs=[op.kt[k], op.dkt[k]])
 
 
-def _solve_op(buf, op, v_ship, brief):
-    """The self-propulsion solve at one ship speed, then the full state."""
+def _solve_op(buf, op, v_ship, brief, rt_arr=None, rt_idx=0):
+    """The self-propulsion solve at one ship speed, then the full state.
+
+    `rt_arr` (a float64 wp.array, slot `rt_idx`) replaces the host constant
+    R_T when the hull is on the same tape. Everything else is identical.
+    """
     dev, n = buf.device, buf.n_rows
     va = v_ship * (1.0 - brief["w"])
-    rt = resistance(v_ship, brief)
+    rt = 0.0 if rt_arr is not None else resistance(v_ship, brief)
     t_ded = brief["t"]
     wp.launch(k_n_init, dim=n, device=dev,
               inputs=[buf.design, va], outputs=[op.n[0]])
@@ -558,10 +605,16 @@ def _solve_op(buf, op, v_ship, brief):
         wp.launch(k_advance, dim=n, device=dev,
                   inputs=[op.n[k], buf.design, va], outputs=[op.j[k]])
         _poly_pair(buf, op.j[k], buf.pd, op, k)
-        wp.launch(k_newton, dim=n, device=dev,
-                  inputs=[op.n[k], op.kt[k], op.dkt[k], op.j[k], buf.design,
-                          rt, t_ded],
-                  outputs=[op.n[k + 1]])
+        if rt_arr is None:
+            wp.launch(k_newton, dim=n, device=dev,
+                      inputs=[op.n[k], op.kt[k], op.dkt[k], op.j[k], buf.design,
+                              rt, t_ded],
+                      outputs=[op.n[k + 1]])
+        else:
+            wp.launch(k_newton_a, dim=n, device=dev,
+                      inputs=[op.n[k], op.kt[k], op.dkt[k], op.j[k], buf.design,
+                              rt_arr, rt_idx, t_ded],
+                      outputs=[op.n[k + 1]])
     k = NEWTON_ITERS
     wp.launch(k_advance, dim=n, device=dev,
               inputs=[op.n[k], buf.design, va], outputs=[op.j[k]])
@@ -578,9 +631,14 @@ def _solve_op(buf, op, v_ship, brief):
     wp.launch(k_burrill, dim=n, device=dev,
               inputs=[op.thrust, op.n[k], buf.design, va],
               outputs=[op.sigma, op.tauc, op.ratio])
-    wp.launch(k_residual, dim=n, device=dev,
-              inputs=[op.n[k], op.kt[k], buf.design, rt, t_ded],
-              outputs=[op.res])
+    if rt_arr is None:
+        wp.launch(k_residual, dim=n, device=dev,
+                  inputs=[op.n[k], op.kt[k], buf.design, rt, t_ded],
+                  outputs=[op.res])
+    else:
+        wp.launch(k_residual_a, dim=n, device=dev,
+                  inputs=[op.n[k], op.kt[k], buf.design, rt_arr, rt_idx, t_ded],
+                  outputs=[op.res])
     op.kq = op.kq_raw
     return op
 
@@ -607,11 +665,13 @@ def chain(design, brief, buf=None, device="cuda:0", tape=None):
     return buf
 
 
-def _chain_body(buf, brief):
+def _chain_body(buf, brief, rt_arr=None):
+    """`rt_arr`, when given, is a 2-slot float64 array: [R_T(survey),
+    R_T(sprint)], written by a kernel upstream on the same tape."""
     dev, n = buf.device, buf.n_rows
     wp.launch(k_pd, dim=n, device=dev, inputs=[buf.design], outputs=[buf.pd])
-    _solve_op(buf, buf.survey, brief["V_survey"], brief)
-    _solve_op(buf, buf.sprint, brief["V_sprint"], brief)
+    _solve_op(buf, buf.survey, brief["V_survey"], brief, rt_arr, 0)
+    _solve_op(buf, buf.sprint, brief["V_sprint"], brief, rt_arr, 1)
     buf.loss.zero_()
     wp.launch(k_objective, dim=n, device=dev,
               inputs=[buf.design, buf.survey.power, buf.sprint.n[NEWTON_ITERS],
