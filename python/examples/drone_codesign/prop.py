@@ -175,14 +175,24 @@ def open_water_np(j, pd):
 # for the wave-making the hull sculpt will contribute as a Michell integral
 # once the hull joins this graph. Until it does, the hull is fixed and the
 # only thing gradient descent is allowed to move is the screw.
-DEFAULT_HULL = dict(L=3.0, S_wet=3.2, k_form=0.25, C_R=0.0020)
+# C_R is a residuary placeholder until the hull sculpt's Michell term joins;
+# 0.006 is a short hull at Fn ~0.37, not a slender one. The brief was chosen
+# (grid sweep, 2026-09-14) so that the cavitation constraint BINDS: the step-0
+# guess cavitates at sprint (Burrill 1.34), and the optimum sits at Burrill 1
+# with the diameter on the clearance bound and the pitch and depth interior.
+# With the earlier 4 m/s sprint / 0.40 m / C_R 0.002 nothing bound and the
+# optimiser only ran to the box corner (D_max, P/D 1.4).
+DEFAULT_HULL = dict(L=3.0, S_wet=3.2, k_form=0.25, C_R=0.0060)
 DEFAULT_BRIEF = dict(
-    V_survey=2.0, V_sprint=4.0, w=0.15, t=0.12,
+    V_survey=2.0, V_sprint=7.0, w=0.15, t=0.12,
     E_batt=5.0,                 # kWh
-    n_max=25.0,                 # rps
-    D_max=0.40,                 # m, tip clearance under a 0.5 m draft
-    depth_min=0.20, depth_max=0.45,     # m, shaft centre below the surface
-    lam_cav=10.0, lam_n=10.0, lam_box=100.0,
+    n_max=50.0,                 # rps: the motor's limit, checked at SPRINT
+                                # (the highest shaft speed; 3000 rpm)
+    D_max=0.25,                 # m, tip clearance under a ~0.35 m draft
+    depth_min=0.15, depth_max=0.30,     # m, shaft centre below the surface
+    # Soft hinges: the penalised optimum overshoots a binding constraint by
+    # ~1/lam (Burrill 1.0135 at lam 10, measured), so the weights are stiff.
+    lam_cav=100.0, lam_n=100.0, lam_box=100.0,
     hull=dict(DEFAULT_HULL),
 )
 
@@ -385,7 +395,7 @@ def k_burrill(thrust: wp.array(dtype=F), n: wp.array(dtype=F),
 
 @wp.kernel
 def k_objective(design: wp.array2d(dtype=F), p_survey: wp.array(dtype=F),
-                n_survey: wp.array(dtype=F), ratio_sprint: wp.array(dtype=F),
+                n_sprint: wp.array(dtype=F), ratio_sprint: wp.array(dtype=F),
                 range_ref: wp.array(dtype=F),
                 v_survey: F, e_batt_j: F, n_max: F, d_max: F,
                 depth_min: F, depth_max: F,
@@ -393,7 +403,7 @@ def k_objective(design: wp.array2d(dtype=F), p_survey: wp.array(dtype=F),
                 range_km: wp.array(dtype=F), loss_row: wp.array(dtype=F)):
     """range = V_survey E_batt / P_D(V_survey), and everything that is not
     allowed to be bought with it: cavitation at the sprint, shaft speed at the
-    survey, and the box. Hinges are squared, so a constraint that is satisfied
+    sprint (the motor's limit is met at the highest speed), and the box. Hinges are squared, so a constraint that is satisfied
     contributes neither value nor gradient."""
     i = wp.tid()
     rng = v_survey * e_batt_j / wp.max(p_survey[i], wp.float64(1.0e-6)) \
@@ -401,7 +411,7 @@ def k_objective(design: wp.array2d(dtype=F), p_survey: wp.array(dtype=F),
     range_km[i] = rng
     obj = -rng / range_ref[i]
     hc = wp.max(ratio_sprint[i] - wp.float64(1.0), wp.float64(0.0))
-    hn = wp.max(n_survey[i] / n_max - wp.float64(1.0), wp.float64(0.0))
+    hn = wp.max(n_sprint[i] / n_max - wp.float64(1.0), wp.float64(0.0))
     obj += lam_cav * hc * hc + lam_n * hn * hn
     d = design[i, 0]
     pd = design[i, 1]
@@ -604,7 +614,7 @@ def _chain_body(buf, brief):
     _solve_op(buf, buf.sprint, brief["V_sprint"], brief)
     buf.loss.zero_()
     wp.launch(k_objective, dim=n, device=dev,
-              inputs=[buf.design, buf.survey.power, buf.survey.n[NEWTON_ITERS],
+              inputs=[buf.design, buf.survey.power, buf.sprint.n[NEWTON_ITERS],
                       buf.sprint.ratio, buf.range_ref,
                       brief["V_survey"], brief["E_batt"] * 3.6e6,
                       brief["n_max"], brief["D_max"],
@@ -652,8 +662,8 @@ def binding(row, brief, tol=1.0e-3):
         out.append("D = D_min")
     if row["ratio_sprint"] >= 1.0 - tol:
         out.append("Burrill(sprint) = 1")
-    if row["n_survey"] >= brief["n_max"] * (1.0 - tol):
-        out.append("n_survey = n_max")
+    if row["n_sprint"] >= brief["n_max"] * (1.0 - tol):
+        out.append("n_sprint = n_max")
     if row["PD"] >= PD_HI * (1.0 - tol):
         out.append("P/D = P/D_hi")
     if row["PD"] <= PD_LO * (1.0 + tol):

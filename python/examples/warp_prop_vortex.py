@@ -663,10 +663,19 @@ if DESIGN_PATH:
               f"{float(DESIGN['EAR']) * 100:.0f}. Refusing to evaluate it with "
               f"the wrong tables.")
         raise SystemExit(2)
+    # Which operating point to render. The SPRINT is where the cavitation
+    # story is: the optimiser's Burrill constraint binds there, so iteration 0
+    # cavitates and the final design sits at inception. The survey point is
+    # the range picture. Default sprint.
+    DES_OP = cli_arg("--design-op", "sprint", str)
+    if DES_OP not in ("survey", "sprint"):
+        raise SystemExit(f"--design-op must be survey or sprint, not {DES_OP}")
     DES_D = float(DESIGN["D"])
     DES_PD = float(DESIGN["PD"])
-    DES_N = float(DESIGN["n_survey"])          # rev/s, the DESIGN's own shaft
-    DES_VA = float(DESIGN["V_survey"]) * (1.0 - float(DESIGN["w_mean"]))
+    DES_N = float(DESIGN[f"n_{DES_OP}"])       # rev/s, the DESIGN's own shaft
+    DES_V = float(DESIGN[f"V_{DES_OP}"])       # m/s through the water
+    DES_RATIO = float(DESIGN[f"burrill_ratio_{DES_OP}"])
+    DES_VA = DES_V * (1.0 - float(DESIGN["w_mean"]))
     DES_J = DES_VA / (DES_N * DES_D)
     # The demo's helm that lands on the same J at the demo's own diameter, and
     # the blade angle whose pitch ratio IS the design's -- pd_of is
@@ -682,7 +691,7 @@ if DESIGN_PATH:
     # depth while the demo keeps its own waterline for the picture. sigma is
     # then matched exactly (V_R^2 is scale-free at matched J and V_a).
     sys.argv += ["--rps", repr(DES_RPS), "--pitch", repr(DES_BETA),
-                 "--speed", repr(float(DESIGN["V_survey"])),
+                 "--speed", repr(DES_V),
                  "--wake-frac", repr(float(DESIGN["w_mean"])),
                  "--wake-peak", repr(float(DESIGN["w_peak"]))]
     DES_DEPTH = float(DESIGN["depth"])
@@ -690,10 +699,9 @@ if DESIGN_PATH:
     # card is drawing code over what this block decided.
     DES_CARD = (
         f"design iter {int(DESIGN['iteration'])}  D {DES_D:.2f} m  "
-        f"P/D {DES_PD:.2f}  n {DES_N * 60.0:.0f} rpm  "
-        f"eta_0 {float(DESIGN['eta0']):.2f}  "
-        f"range {float(DESIGN['range_km']):.0f} km  "
-        f"Burrill {float(DESIGN['burrill_ratio_survey']):.2f}",
+        f"P/D {DES_PD:.2f}  {DES_OP} {DES_V:.1f} m/s  n {DES_N * 60.0:.0f} rpm  "
+        f"Burrill {DES_RATIO:.2f}  |  survey eta_0 {float(DESIGN['eta0']):.2f}  "
+        f"range {float(DESIGN['range_km']):.0f} km",
         f"rendered at demo scale {D_PROP:.1f} m under similitude "
         f"(J, P/D matched; sigma at the design's h = {DES_DEPTH:.2f} m)")
 # ── THE WATER, AND THE pPRESSURE IT HAS TO GIVE UP ───────────────────────────
@@ -1292,18 +1300,20 @@ def burrill(st):
 if DESIGN is not None:
     _dst = PropState(RPS * 60.0, PITCH, V_A)
     _deta, _dratio = _dst.eta, burrill(_dst)[3]
-    _jeta = float(DESIGN["eta0"])
-    _jratio = float(DESIGN["burrill_ratio_survey"])
+    _jeta = float(DESIGN["eta0"])      # the JSON's eta_0 is the SURVEY point's
+    _jratio = DES_RATIO                # the rendered operating point's
     print(f"design: iter {int(DESIGN['iteration'])}  D {DES_D:.3f} m  "
           f"P/D {DES_PD:.3f}  n {DES_N:.3f} rps ({DES_N * 60.0:.0f} rpm)  "
-          f"V_a {DES_VA:.3f} m/s  h {float(DESIGN['depth']):.2f} m  "
+          f"{DES_OP} V_a {DES_VA:.3f} m/s  h {float(DESIGN['depth']):.2f} m  "
           f"eta_0 {_jeta:.3f}  P_D {float(DESIGN['P_D']):.0f} W  "
           f"range {float(DESIGN['range_km']):.1f} km  "
           f"Burrill {_jratio:.3f}   ->   demo helm: {DES_RPS:.3f} rps "
           f"({RPS * 60.0:.0f} rpm)  beta {DES_BETA:.2f} deg  J {DES_J:.4f}")
     _bad = []
-    for _nm, _a, _b in (("eta_0", _jeta, _deta),
-                        ("Burrill ratio", _jratio, _dratio)):
+    _checks = [("Burrill ratio", _jratio, _dratio)]
+    if DES_OP == "survey":            # eta_0 is only quoted at the survey point
+        _checks.insert(0, ("eta_0", _jeta, _deta))
+    for _nm, _a, _b in _checks:
         _rel = abs(_b - _a) / max(abs(_a), 1.0e-9)
         print(f"        similitude {_nm:>13}: design {_a:.5f}   demo "
               f"{_b:.5f}   {100.0 * _rel:.3f}%")
