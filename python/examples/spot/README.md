@@ -17,6 +17,12 @@ velocity/steering command-following and a symmetric (drift-free) gait.
 > measured on the previous stairs-only policy (sha256 06d0716e..., in git history) unless they say otherwise.
 > Viewers must send its stand signal (a (0,0) clock at an exactly-zero command); `play_spot_steps.py`,
 > `spot_slam.py` and the C++ `spot_play` do.
+>
+> **2026-09-14: `spot_recovery.pt` gets Spot back on its feet** (`spot_recovery_env.py` wave 3, arm A seed 1). From the
+> hardest fallen starts (40% on its back, 40% on a side, 20% any orientation) it stands again within 6 s in 100% of
+> 2048 trials, within 3 s in 97.8%, in about 1.4 s on average, with its joint targets rate-limited to 10 rad/s (measured
+> joint speed p99 10-14 rad/s). `spot_slam.py` loads it by default and hands over below up_z 0.5; F shoves (2 m/s), G
+> trips (2.75 m/s), `--no-recovery` turns it off.
 
 ## How it works
 

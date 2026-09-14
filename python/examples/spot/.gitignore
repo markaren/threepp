@@ -1,5 +1,6 @@
 ﻿*.pt
 !spot_steps.pt
+!spot_recovery.pt
 !scratch_distillation/scratch_flat_best.pt
 
 

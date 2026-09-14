@@ -819,15 +819,21 @@ def main():
                     help="1200x720 window instead of fullscreen")
     ap.add_argument("--bench",     type=int, default=0, metavar="N",
                     help="profile N frames: vsync off, auto-walk forward, print timing summary, exit")
-    ap.add_argument("--recovery-model", dest="recovery_model", default="",
+    ap.add_argument("--recovery-model", dest="recovery_model", default=os.path.join(_HERE, "spot_recovery.pt"),
                     help="fall-recovery policy (train_spot_recovery.py): takes over when Spot tips past up_z "
-                         f"{RECOVER_UP}, hands back once it has stood still for {RECOVER_SETTLE} ticks. F shoves, G trips")
+                         f"{RECOVER_UP}, hands back once it has stood still for {RECOVER_SETTLE} ticks. F shoves, G trips. "
+                         "Default: the shipped spot_recovery.pt beside this file (skipped if missing)")
+    ap.add_argument("--no-recovery", dest="no_recovery", action="store_true",
+                    help="walking policy only: no recovery hand-over, and the legacy viewer plant unless the walking "
+                         "checkpoint trained with real torque limits")
     ap.add_argument("--knock-at", dest="knock_at", type=int, default=0, metavar="TICK",
                     help="with --shot: trip Spot (G's push) at this control tick of the headless walk (tests the hand-over)")
     ap.add_argument("--trip-probe", dest="trip_probe", default="", metavar="OUT.json",
                     help="headless: 10 trips of the standing walking policy per dv of TRIP_LADDER up to the first that "
                          "tips it past up_z 0.5 in >= 8 of 10, then 10 F shoves; writes OUT.json and exits")
     args = ap.parse_args()
+    if args.no_recovery or (args.recovery_model and not os.path.exists(args.recovery_model)):
+        args.recovery_model = ""
     assert tp.HAS_PHYSX, "needs a PhysX-enabled threepp build"
     headless = bool(args.shot) or bool(args.trip_probe)
     bench    = int(args.bench)
