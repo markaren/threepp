@@ -627,6 +627,75 @@ D_PROP2 = D_PROP * D_PROP
 D_PROP4 = D_PROP2 * D_PROP2
 A_DISC = math.pi * R_TIP * R_TIP    # m2, the actuator disc
 EAR = 0.75                          # expanded area ratio, A_E / A_0
+# ── --design: A 0.3 m DRONE SCREW, RENDERED AT THIS DEMO'S 1.8 m SCALE ──────
+# The sea-drone co-design pilot (plans/idun-sea-drone-codesign.md) optimises a
+# survey drone's propeller in Warp and writes the winning design as JSON. This
+# demo is the only thing in the repo that can SHOW a propeller, and its hull,
+# cameras, particle budgets and murk are all authored at R_TIP 0.90 -- so the
+# design is not rescaled into the demo. Its NON-DIMENSIONAL operating point is
+# reproduced here instead, which is exact for everything the picture shows:
+#
+#   match J, P/D, V_a and the shaft depth h, and K_T, K_Q, eta_0 follow because
+#   the polynomials take nothing else; sigma_0.7R follows because V_R^2 =
+#   V_a^2 (1 + (0.7 pi / J)^2); tau_c and the disc loading T/A follow because
+#   T/A = K_T rho (V_a/J)^2 (4/pi). Only the ABSOLUTE thrust, torque, power and
+#   rpm differ between the two screws, and those the card quotes from the JSON
+#   rather than from the demo's own chain.
+#
+# So the whole flag is a change of HELM: one shaft speed, one blade angle, one
+# ship speed, one wake pair and one depth, pushed onto the command line the
+# demo already parses. Every constant below is then built exactly as it is for
+# a hand-typed run -- there is no second code path, and with no --design there
+# is not so much as a branch taken. The one number that cannot be carried over
+# is the blade count and area ratio: the B-series polynomials above are FOLDED
+# at B5-75 (see _fold), so a design that is not B5-75 is refused rather than
+# evaluated with the wrong tables.
+DESIGN_PATH = cli_arg("--design", "", str)
+DESIGN = None
+if DESIGN_PATH:
+    import json
+
+    with open(DESIGN_PATH) as _fh:
+        DESIGN = json.load(_fh)
+    if int(DESIGN["blades"]) != BLADES or abs(float(DESIGN["EAR"]) - EAR) > 1e-9:
+        print(f"--design: the open-water polynomials in this file are folded at "
+              f"B{BLADES}-{EAR * 100:.0f}; {DESIGN_PATH} is B{DESIGN['blades']}-"
+              f"{float(DESIGN['EAR']) * 100:.0f}. Refusing to evaluate it with "
+              f"the wrong tables.")
+        raise SystemExit(2)
+    DES_D = float(DESIGN["D"])
+    DES_PD = float(DESIGN["PD"])
+    DES_N = float(DESIGN["n_survey"])          # rev/s, the DESIGN's own shaft
+    DES_VA = float(DESIGN["V_survey"]) * (1.0 - float(DESIGN["w_mean"]))
+    DES_J = DES_VA / (DES_N * DES_D)
+    # The demo's helm that lands on the same J at the demo's own diameter, and
+    # the blade angle whose pitch ratio IS the design's -- pd_of is
+    # P/D = 0.7 pi tan(beta), so this is that function inverted, exactly.
+    DES_RPS = DES_VA / (DES_J * D_PROP)         # = DES_N * DES_D / D_PROP
+    DES_BETA = math.degrees(math.atan(DES_PD / (0.7 * math.pi)))
+    # Pushed onto argv rather than spliced into each default, so the demo's own
+    # cli_arg reads stay untouched and a flag typed by hand still wins: cli_arg
+    # takes the FIRST occurrence, and these are appended.
+    # Depth is NOT pushed: the design's shaft sits ~0.35 m down, and a 1.8 m
+    # screw at that submergence has its tips in the air. The static head is a
+    # scalar in the criterion, so CAV_MARGIN below is built from the design's
+    # depth while the demo keeps its own waterline for the picture. sigma is
+    # then matched exactly (V_R^2 is scale-free at matched J and V_a).
+    sys.argv += ["--rps", repr(DES_RPS), "--pitch", repr(DES_BETA),
+                 "--speed", repr(float(DESIGN["V_survey"])),
+                 "--wake-frac", repr(float(DESIGN["w_mean"])),
+                 "--wake-peak", repr(float(DESIGN["w_peak"]))]
+    DES_DEPTH = float(DESIGN["depth"])
+    # The two lines the card gets. Built here, beside the numbers, because the
+    # card is drawing code over what this block decided.
+    DES_CARD = (
+        f"design iter {int(DESIGN['iteration'])}  D {DES_D:.2f} m  "
+        f"P/D {DES_PD:.2f}  n {DES_N * 60.0:.0f} rpm  "
+        f"eta_0 {float(DESIGN['eta0']):.2f}  "
+        f"range {float(DESIGN['range_km']):.0f} km  "
+        f"Burrill {float(DESIGN['burrill_ratio_survey']):.2f}",
+        f"rendered at demo scale {D_PROP:.1f} m under similitude "
+        f"(J, P/D matched; sigma at the design's h = {DES_DEPTH:.2f} m)")
 # ── THE WATER, AND THE pPRESSURE IT HAS TO GIVE UP ───────────────────────────
 # Everything cavitation-related is here, and there is very little of it: three
 # fluid constants, one geometric one, and the margin they make. That margin is
@@ -646,6 +715,10 @@ G_ACC = 9.81
 # racing in a swell howls.
 DEPTH = cli_arg("--depth", 3.0, float)      # m of water over the shaft
 CAV_MARGIN = (P_ATM + RHO * G_ACC * DEPTH - P_VAP) / RHO    # m2/s2
+if DESIGN is not None:
+    # --design: the criterion's static head is the DESIGN's, the waterline
+    # stays the demo's (see the --design block for why the two must differ).
+    CAV_MARGIN = (P_ATM + RHO * G_ACC * DES_DEPTH - P_VAP) / RHO
 # ── ONE NUMBER, FOUR CONSUMERS ──────────────────────────────────────────────
 # The shaft centreline is y = 0, so "the surface" and "the submergence" are the
 # same quantity seen from the two ends, and there is now enough hanging off it
@@ -1205,6 +1278,43 @@ def burrill(st):
     tau_c = st.thrust / (0.5 * RHO * projected_area(st.pd) * vr2)
     line5 = BURRILL_5PCT * sigma ** BURRILL_P
     return sigma, tau_c, line5, max(tau_c, 0.0) / (BURRILL_INC * line5)
+
+
+# ── THE SIMILITUDE CHECK, AND WHY IT IS AN ASSERT AND NOT A COMMENT ─────────
+# --design claims that this demo's 1.8 m screw, at the derived helm, is the
+# drone's 0.3 m screw in every quantity the picture is made of. That claim is
+# CHECKABLE the moment PropState and burrill exist: run the demo's own chain at
+# the derived helm and it must reproduce the two numbers the optimiser wrote
+# into the JSON from its own chain. If it does not, one of the two files is
+# wrong about the same physics -- which is exactly the thing this pilot exists
+# to catch -- so it stops here with the two numbers side by side rather than
+# rendering a picture that is quietly of a different propeller.
+if DESIGN is not None:
+    _dst = PropState(RPS * 60.0, PITCH, V_A)
+    _deta, _dratio = _dst.eta, burrill(_dst)[3]
+    _jeta = float(DESIGN["eta0"])
+    _jratio = float(DESIGN["burrill_ratio_survey"])
+    print(f"design: iter {int(DESIGN['iteration'])}  D {DES_D:.3f} m  "
+          f"P/D {DES_PD:.3f}  n {DES_N:.3f} rps ({DES_N * 60.0:.0f} rpm)  "
+          f"V_a {DES_VA:.3f} m/s  h {float(DESIGN['depth']):.2f} m  "
+          f"eta_0 {_jeta:.3f}  P_D {float(DESIGN['P_D']):.0f} W  "
+          f"range {float(DESIGN['range_km']):.1f} km  "
+          f"Burrill {_jratio:.3f}   ->   demo helm: {DES_RPS:.3f} rps "
+          f"({RPS * 60.0:.0f} rpm)  beta {DES_BETA:.2f} deg  J {DES_J:.4f}")
+    _bad = []
+    for _nm, _a, _b in (("eta_0", _jeta, _deta),
+                        ("Burrill ratio", _jratio, _dratio)):
+        _rel = abs(_b - _a) / max(abs(_a), 1.0e-9)
+        print(f"        similitude {_nm:>13}: design {_a:.5f}   demo "
+              f"{_b:.5f}   {100.0 * _rel:.3f}%")
+        if _rel > 0.01:
+            _bad.append(_nm)
+    if _bad:
+        print(f"--design: the demo's own chain does not reproduce "
+              f"{' and '.join(_bad)} within 1%. That is a disagreement about "
+              f"the physics between {DESIGN_PATH} and this file, not a "
+              f"rendering problem. Stopping.")
+        raise SystemExit(2)
 
 
 def wake_lobe_k(st):
@@ -4100,6 +4210,189 @@ print(f"       prop:   B{BLADES}-{EAR * 100:.0f}, D {D_PROP:g} m, "
       f"grain {SPRITE_R0:g} m, flux {FLUX_P:g}, bright {BRIGHT:.5f}")
 
 
+# ── THE CARD, BUILT ONCE FOR EVERYTHING THAT COMPOSITES IT ──────────────────
+# The window has had the open-water diagram live under the sliders since the
+# polynomials landed, and the offline paths -- the thing anyone actually
+# watches -- did not, because imgui does not draw headless. So the panel is
+# composited onto the pixels instead, between read_pixels() and whatever
+# consumes them, in numpy and PIL.
+#
+# IT IS THE SAME DIAGRAM AND NOT A SECOND ONE. open_water_marks() is the single
+# source of the samples, the operating point and the validity flag; this is
+# drawing code over what it returns, exactly as draw_open_water() is. If the
+# card's dot and the window's dot ever disagreed, one of them would be lying
+# about the water.
+#
+# IT IS A FACTORY rather than a block inside --film because --shot --design
+# composites the SAME card -- a design render whose numbers were only on stdout
+# would be a picture of nothing in particular -- and a second copy of this
+# drawing code is the one duplication that would let the film and the design
+# stills disagree. PIL is imported inside it, so a run that never draws a card
+# never needs PIL, which is what it was before this moved.
+#
+# DRAWN AT 2x AND DOWNSAMPLED WITH LANCZOS, because a one-pixel polyline at
+# 1080p is a staircase and this card is the one part of the frame with no
+# motion blur, no depth of field and no grain to hide behind.
+#
+# THE STATIC HALF IS CACHED ON P/D, and that is what makes it cheap: the card,
+# the grid, the axes and the three curves only change when the pitch lever
+# moves, which in 3300 frames of film happens twice. What is redrawn every
+# frame is the vertical line, three dots and two lines of text.
+def build_card_drawer():
+    """`draw(px_rgb, st, rpm)`: composite the open-water card onto one frame."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    PS = max(H / 1080.0, 0.5)               # the card is sized at 1080p
+    # --design hangs two more lines under the readout and the first of them is
+    # a full design summary, so the card grows to hold them rather than
+    # shrinking the type: a card nobody can read is not a card.
+    PW, PH = (int(round((680 if DESIGN is not None else 460) * PS)),
+              int(round((306 if DESIGN is not None else 270) * PS)))
+    PMARGIN = int(round(26 * PS))
+    SS = 2                                  # the supersample
+    # plot box inside the card, in 1x card pixels
+    # The plot box inside the card, in 1x card pixels. The right edge stops
+    # short of the card so the last J tick can be CENTRED under its gridline
+    # and the axis still has room for its own name beside it.
+    BX0, BY0, BX1, BY1 = 46, 30, 428, 202
+    C_CARD = (9, 15, 19, 186)
+    C_EDGE = (120, 140, 152, 190)
+    C_GRID = (78, 92, 104, 120)
+    C_TEXT = (188, 202, 212, 255)
+    C_DIM = (132, 146, 158, 255)
+    C_WARN = (255, 176, 96, 255)
+    OW_PIL = tuple(tuple(int(round(255 * c)) for c in rgb) + (255,)
+                   for rgb in OW_RGB)
+
+    def _font(px, mono=False):
+        """A face that is actually there. consola/DejaVuSansMono is the readout
+        line's, because a proportional font makes the numbers dance in place as
+        they change and a readout that jitters is a readout nobody reads. The
+        bundled default is the fallback and it is legible at this size."""
+        for name in (("consola.ttf", "DejaVuSansMono.ttf") if mono
+                     else ("segoeui.ttf", "DejaVuSans.ttf")):
+            try:
+                return ImageFont.truetype(name, px)
+            except OSError:
+                pass
+        try:
+            return ImageFont.load_default(size=px)
+        except TypeError:
+            return ImageFont.load_default()
+
+    F_LAB = _font(int(round(13 * PS * SS)))
+    F_SML = _font(int(round(12 * PS * SS)))
+    F_NUM = _font(int(round(13 * PS * SS)), mono=True)
+    # The design lines are FITTED to the card, once: the summary is one long
+    # line by design (it is the title of the picture) and a hard-coded size
+    # would either overflow the card at 1080p or be unreadable at 800p.
+    F_DES = F_SML
+    if DESIGN is not None:
+        _probe = ImageDraw.Draw(Image.new("RGBA", (4, 4)))
+        avail = SS * (PW - PS * (BX0 + 10))     # supersampled px, left inset
+        for _px in range(13, 6, -1):
+            F_DES = _font(int(round(_px * PS * SS)), mono=True)
+            if max(_probe.textlength(t, font=F_DES) for t in DES_CARD) <= avail:
+                break
+    _bg_cache = {}
+
+    def _panel_px(j, v):
+        """(J, value) -> card pixels at the supersampled scale."""
+        return (SS * PS * (BX0 + (BX1 - BX0) * min(max(j, 0.0), OW_J_MAX)
+                           / OW_J_MAX),
+                SS * PS * (BY1 - (BY1 - BY0) * min(max(v, 0.0), OW_YMAX)
+                           / OW_YMAX))
+
+    def _panel_bg(pd, js, curves):
+        key = round(pd, 3)
+        hit = _bg_cache.get(key)
+        if hit is not None:
+            return hit
+        if len(_bg_cache) > 16:
+            _bg_cache.clear()
+        img = Image.new("RGBA", (PW * SS, PH * SS), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        s = SS * PS
+        d.rounded_rectangle([0, 0, PW * SS - 1, PH * SS - 1], radius=int(7 * s),
+                            fill=C_CARD, outline=(60, 74, 84, 150),
+                            width=max(int(s), 1))
+        for gv in (0.2, 0.4, 0.6, 0.8, 1.0):
+            y = _panel_px(0.0, gv)[1]
+            d.line([_panel_px(0.0, gv), _panel_px(OW_J_MAX, gv)],
+                   fill=C_GRID, width=max(int(s), 1))
+            d.text((s * (BX0 - 30), y - 8 * s), f"{gv:.1f}", font=F_SML,
+                   fill=C_DIM)
+        for gj in (0.5, 1.0, 1.5):
+            d.line([_panel_px(gj, 0.0), _panel_px(gj, OW_YMAX)],
+                   fill=C_GRID, width=max(int(s), 1))
+            d.text((_panel_px(gj, 0.0)[0], s * (BY1 + 4)), f"{gj:.1f}",
+                   font=F_SML, fill=C_DIM, anchor="mt")
+        d.rectangle([_panel_px(0.0, OW_YMAX), _panel_px(OW_J_MAX, 0.0)],
+                    outline=C_EDGE, width=max(int(s), 1))
+        for ys, col in zip(curves, OW_PIL):
+            d.line([_panel_px(j, v) for j, v in zip(js, ys)], fill=col,
+                   width=max(int(round(1.9 * s)), 1), joint="curve")
+        d.text((s * BX0, s * 7), f"open water   B{BLADES}-{EAR * 100:.0f}   "
+               f"P/D {pd:.3f}", font=F_LAB, fill=C_TEXT)
+        # The legend rides the top of the plot box, laid out left to right in
+        # the same order as the curves so the colours need no key.
+        xx = s * (BX0 + 6)
+        for lab, col in zip(OW_LABELS, OW_PIL):
+            d.text((xx, s * (BY0 + 4)), lab, font=F_SML, fill=col)
+            xx += d.textlength(lab, font=F_SML) + 14 * s
+        d.text((s * (BX1 + 16), s * (BY1 + 4)), "J", font=F_SML, fill=C_DIM,
+               anchor="lt")
+        _bg_cache[key] = img
+        return img
+
+    def draw_film_panel(px_rgb, st, rpm):
+        """Composite the diagram onto ONE frame, in place."""
+        js, curves, jc, vals, extrap = open_water_marks(st)
+        img = _panel_bg(st.pd, js, curves).copy()
+        d = ImageDraw.Draw(img)
+        s = SS * PS
+        ox = _panel_px(jc, 0.0)[0]
+        d.line([(ox, _panel_px(0.0, OW_YMAX)[1]), (ox, _panel_px(0.0, 0.0)[1])],
+               fill=(255, 255, 255, 110), width=max(int(s), 1))
+        for v, col in zip(vals, OW_PIL):
+            cx, cy = _panel_px(jc, v)
+            r = 3.6 * s
+            d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=col,
+                      outline=(255, 255, 255, 235), width=max(int(1.3 * s), 1))
+        d.text((s * BX0, s * (BY1 + 17)),
+               f"{rpm:5.0f} rpm  V_a {st.va:4.2f} m/s  J {jc:5.3f}",
+               font=F_NUM, fill=C_TEXT)
+        d.text((s * BX0, s * (BY1 + 34)),
+               f"K_T {vals[0]:5.3f}  10K_Q {vals[1]:5.3f}  eta_0 {vals[2]:5.3f}",
+               font=F_NUM, fill=C_TEXT)
+        wy = BY1 + 51
+        if DESIGN is not None:
+            # The design's OWN numbers -- absolute thrust, power, rpm and range
+            # are the only things that do not carry across the similitude, so
+            # they are quoted from the JSON and the second line says out loud
+            # what the picture is.
+            d.text((s * BX0, s * wy), DES_CARD[0], font=F_DES, fill=C_TEXT)
+            d.text((s * BX0, s * (wy + 17)), DES_CARD[1], font=F_SML,
+                   fill=C_DIM)
+            wy += 34
+        if extrap:
+            # The same sentence the window's panel says, for the same reason:
+            # the feather beat drives P/D to 0.19 and the regression was fitted
+            # over 0.5 to 1.4. A card that kept quoting three decimals there
+            # would be lying with precision.
+            d.text((s * BX0, s * wy),
+                   "outside B-series validity -- extrapolated",
+                   font=F_SML, fill=C_WARN)
+        card = _np.asarray(img.resize((PW, PH), Image.LANCZOS), _np.float32)
+        y0 = px_rgb.shape[0] - PH - PMARGIN
+        x0 = px_rgb.shape[1] - PW - PMARGIN
+        sub = px_rgb[y0:y0 + PH, x0:x0 + PW]
+        a = card[:, :, 3:4] * (1.0 / 255.0)
+        sub[:] = (sub * (1.0 - a) + card[:, :, :3] * a + 0.5).astype(_np.uint8)
+
+    return draw_film_panel
+
+
 def run_to(seconds):
     frames = int(round(seconds * FPS))
     t0 = time.perf_counter()
@@ -4184,7 +4477,7 @@ elif FILM:
     import glob
     import subprocess
 
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image        # the card's own PIL lives in build_card_drawer
 
     # CWD-relative, as --shot's own output is and as the other films are: an
     # 11-minute render should not land in the source tree because that is where
@@ -4546,148 +4839,10 @@ elif FILM:
         camera.look_at(*tgt)
 
     # ── THE DIAGRAM, ON THE FILM ────────────────────────────────────────────
-    # The window has had the open-water diagram live under the sliders since
-    # the polynomials landed, and the film -- the thing anyone actually watches
-    # -- did not, because imgui does not draw headless and the film has no UI
-    # to draw it into. So the panel is composited onto the pixels instead,
-    # between read_pixels() and the pipe to ffmpeg, in numpy and PIL.
-    #
-    # IT IS THE SAME DIAGRAM AND NOT A SECOND ONE. open_water_marks() is the
-    # single source of the samples, the operating point and the validity flag;
-    # this function is drawing code over what it returns, exactly as
-    # draw_open_water() is. If the film's dot and the window's dot ever
-    # disagreed, one of them would be lying about the water.
-    #
-    # DRAWN AT 2x AND DOWNSAMPLED WITH LANCZOS, because a one-pixel polyline
-    # at 1080p is a staircase and this card is the one part of the frame with
-    # no motion blur, no depth of field and no grain to hide behind.
-    #
-    # THE STATIC HALF IS CACHED ON P/D, and that is what makes it cheap: the
-    # card, the grid, the axes and the three curves only change when the pitch
-    # lever moves, which in 3300 frames of film happens twice. What is redrawn
-    # every frame is the vertical line, three dots and two lines of text.
-    PS = max(H / 1080.0, 0.5)               # the card is sized at 1080p
-    PW, PH = int(round(460 * PS)), int(round(270 * PS))
-    PMARGIN = int(round(26 * PS))
-    SS = 2                                  # the supersample
-    # plot box inside the card, in 1x card pixels
-    # The plot box inside the card, in 1x card pixels. The right edge stops
-    # short of the card so the last J tick can be CENTRED under its gridline
-    # and the axis still has room for its own name beside it.
-    BX0, BY0, BX1, BY1 = 46, 30, 428, 202
-    C_CARD = (9, 15, 19, 186)
-    C_EDGE = (120, 140, 152, 190)
-    C_GRID = (78, 92, 104, 120)
-    C_TEXT = (188, 202, 212, 255)
-    C_DIM = (132, 146, 158, 255)
-    C_WARN = (255, 176, 96, 255)
-    OW_PIL = tuple(tuple(int(round(255 * c)) for c in rgb) + (255,)
-                   for rgb in OW_RGB)
-
-    def _font(px, mono=False):
-        """A face that is actually there. consola/DejaVuSansMono is the readout
-        line's, because a proportional font makes the numbers dance in place as
-        they change and a readout that jitters is a readout nobody reads. The
-        bundled default is the fallback and it is legible at this size."""
-        for name in (("consola.ttf", "DejaVuSansMono.ttf") if mono
-                     else ("segoeui.ttf", "DejaVuSans.ttf")):
-            try:
-                return ImageFont.truetype(name, px)
-            except OSError:
-                pass
-        try:
-            return ImageFont.load_default(size=px)
-        except TypeError:
-            return ImageFont.load_default()
-
-    F_LAB = _font(int(round(13 * PS * SS)))
-    F_SML = _font(int(round(12 * PS * SS)))
-    F_NUM = _font(int(round(13 * PS * SS)), mono=True)
-    _bg_cache = {}
-
-    def _panel_px(j, v):
-        """(J, value) -> card pixels at the supersampled scale."""
-        return (SS * PS * (BX0 + (BX1 - BX0) * min(max(j, 0.0), OW_J_MAX)
-                           / OW_J_MAX),
-                SS * PS * (BY1 - (BY1 - BY0) * min(max(v, 0.0), OW_YMAX)
-                           / OW_YMAX))
-
-    def _panel_bg(pd, js, curves):
-        key = round(pd, 3)
-        hit = _bg_cache.get(key)
-        if hit is not None:
-            return hit
-        if len(_bg_cache) > 16:
-            _bg_cache.clear()
-        img = Image.new("RGBA", (PW * SS, PH * SS), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-        s = SS * PS
-        d.rounded_rectangle([0, 0, PW * SS - 1, PH * SS - 1], radius=int(7 * s),
-                            fill=C_CARD, outline=(60, 74, 84, 150),
-                            width=max(int(s), 1))
-        for gv in (0.2, 0.4, 0.6, 0.8, 1.0):
-            y = _panel_px(0.0, gv)[1]
-            d.line([_panel_px(0.0, gv), _panel_px(OW_J_MAX, gv)],
-                   fill=C_GRID, width=max(int(s), 1))
-            d.text((s * (BX0 - 30), y - 8 * s), f"{gv:.1f}", font=F_SML,
-                   fill=C_DIM)
-        for gj in (0.5, 1.0, 1.5):
-            d.line([_panel_px(gj, 0.0), _panel_px(gj, OW_YMAX)],
-                   fill=C_GRID, width=max(int(s), 1))
-            d.text((_panel_px(gj, 0.0)[0], s * (BY1 + 4)), f"{gj:.1f}",
-                   font=F_SML, fill=C_DIM, anchor="mt")
-        d.rectangle([_panel_px(0.0, OW_YMAX), _panel_px(OW_J_MAX, 0.0)],
-                    outline=C_EDGE, width=max(int(s), 1))
-        for ys, col in zip(curves, OW_PIL):
-            d.line([_panel_px(j, v) for j, v in zip(js, ys)], fill=col,
-                   width=max(int(round(1.9 * s)), 1), joint="curve")
-        d.text((s * BX0, s * 7), f"open water   B{BLADES}-{EAR * 100:.0f}   "
-               f"P/D {pd:.3f}", font=F_LAB, fill=C_TEXT)
-        # The legend rides the top of the plot box, laid out left to right in
-        # the same order as the curves so the colours need no key.
-        xx = s * (BX0 + 6)
-        for lab, col in zip(OW_LABELS, OW_PIL):
-            d.text((xx, s * (BY0 + 4)), lab, font=F_SML, fill=col)
-            xx += d.textlength(lab, font=F_SML) + 14 * s
-        d.text((s * (BX1 + 16), s * (BY1 + 4)), "J", font=F_SML, fill=C_DIM,
-               anchor="lt")
-        _bg_cache[key] = img
-        return img
-
-    def draw_film_panel(px_rgb, st, rpm):
-        """Composite the diagram onto ONE frame, in place."""
-        js, curves, jc, vals, extrap = open_water_marks(st)
-        img = _panel_bg(st.pd, js, curves).copy()
-        d = ImageDraw.Draw(img)
-        s = SS * PS
-        ox = _panel_px(jc, 0.0)[0]
-        d.line([(ox, _panel_px(0.0, OW_YMAX)[1]), (ox, _panel_px(0.0, 0.0)[1])],
-               fill=(255, 255, 255, 110), width=max(int(s), 1))
-        for v, col in zip(vals, OW_PIL):
-            cx, cy = _panel_px(jc, v)
-            r = 3.6 * s
-            d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=col,
-                      outline=(255, 255, 255, 235), width=max(int(1.3 * s), 1))
-        d.text((s * BX0, s * (BY1 + 17)),
-               f"{rpm:5.0f} rpm  V_a {st.va:4.2f} m/s  J {jc:5.3f}",
-               font=F_NUM, fill=C_TEXT)
-        d.text((s * BX0, s * (BY1 + 34)),
-               f"K_T {vals[0]:5.3f}  10K_Q {vals[1]:5.3f}  eta_0 {vals[2]:5.3f}",
-               font=F_NUM, fill=C_TEXT)
-        if extrap:
-            # The same sentence the window's panel says, for the same reason:
-            # the feather beat drives P/D to 0.19 and the regression was fitted
-            # over 0.5 to 1.4. A card that kept quoting three decimals there
-            # would be lying with precision.
-            d.text((s * BX0, s * (BY1 + 51)),
-                   "outside B-series validity -- extrapolated",
-                   font=F_SML, fill=C_WARN)
-        card = _np.asarray(img.resize((PW, PH), Image.LANCZOS), _np.float32)
-        y0 = px_rgb.shape[0] - PH - PMARGIN
-        x0 = px_rgb.shape[1] - PW - PMARGIN
-        sub = px_rgb[y0:y0 + PH, x0:x0 + PW]
-        a = card[:, :, 3:4] * (1.0 / 255.0)
-        sub[:] = (sub * (1.0 - a) + card[:, :, :3] * a + 0.5).astype(_np.uint8)
+    # It lives in build_card_drawer, up beside run_to, because --shot --design
+    # composites the same card onto its still and there must be exactly one of
+    # it. Everything that was here is there, unchanged.
+    draw_film_panel = build_card_drawer()
 
     # PRE-ROLL: settle the wake, the spin-up and the temporal history at the
     # opening helm and the opening framing, then throw it all away.
@@ -4798,7 +4953,18 @@ elif SHOT:
     frames, wall = run_to(SHOT_TIME)
     out = cli_arg("--out", "warp_prop_vortex_flat.png" if FLAT
                   else "warp_prop_vortex.png", str)
-    renderer.save_frame(scene, camera, out)
+    if DESIGN is None:
+        renderer.save_frame(scene, camera, out)
+    else:
+        # A design still gets the film's card, because the numbers that do NOT
+        # carry across the similitude -- thrust, torque, power, rpm, range --
+        # are only in the JSON, and a picture that does not quote them is a
+        # picture of an unnamed propeller. Same code, same pixels, one frame.
+        from PIL import Image
+
+        px = _np.array(renderer.read_pixels(), _np.uint8, order="C")
+        build_card_drawer()(px, state_now, omega_now * 60.0 / TWO_PI)
+        Image.fromarray(px).save(out)
     print(f"simulated {SHOT_TIME:.1f} s ({frames} frames) in {wall:.1f}s, wrote {out}")
 else:
     controls = tp.OrbitControls(camera, canvas)
