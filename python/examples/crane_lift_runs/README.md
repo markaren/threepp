@@ -499,3 +499,19 @@ Round 18 = round 12's protocol (`run_protocol.py ... --film`: the control, ten s
 processes, the film run, seeds 1 to 9) on commit bcc76258, launched 2026-09-15 18:37 on the
 RTX 4070 (driver 595.97), the GPU otherwise unshared. Results are appended below when the
 runs finish; every crane number in the paper is then re-derived from this directory.
+
+Round 18 results (2026-09-15 18:37 to 20:56, 21 runs, 5.9 to 7.6 min each, `protocol_meta.json`):
+the ten seed-0 processes and the film run agree on all fifteen rows over 3,900 frames and on every
+frame of the rendered frame and the tip view (`analyze.py round18_fansync`, `compare_round12.py`).
+The control run equals round 12's control on fourteen rows and every frame; only the fan row
+differs, the fan now sampling the container where it is, so the open-loop numbers are unchanged
+(arrival swing 552 mm, pay-out 594 mm RMS, landing 686 mm off the mark). With the loop closed the
+trajectory leaves round 12's at 40.02 s, the first fan sample the engaged controller reads, by
+17 mm RMS and 40 mm at most: seed 0 settles under 150 mm 7.06 s after arrival (5.56 s in round
+12), pays out at 59 mm RMS (54) and lands 28 mm off (15); seeds 1 to 9 land 25 to 43 mm off
+(9 to 28) and deviate from the seed-0 path by 5 mm RMS and 18 mm at most from arrival to
+touchdown (5 and 22). Every round-18 seed holds 149 to 151 mm of swing at the start of the
+pay-out where round 12's held 134 to 143: the old fan's one-frame-old container under the
+current tip origin was `swing - v_container * dt`, a velocity term of about 8 mm that damped the
+integral law a little; the corrected estimate has none. The paper's E2 numbers, `data/e3_crane`,
+Fig. 1 (41.6 s of `film_s0.mp4`) and the crane-path figure are re-derived from this directory.

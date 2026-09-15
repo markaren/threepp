@@ -1,0 +1,452 @@
+{
+ "git_head": "bcc762582d49",
+ "crane_lift_dirty": false,
+ "gpu": "NVIDIA GeForce RTX 4070, 595.97",
+ "platform": "win32",
+ "python": "3.14.6",
+ "base_command": [
+  "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+  "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+  "--op",
+  "65.0",
+  "--size",
+  "1280x720",
+  "--assets",
+  "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets"
+ ],
+ "runs": {
+  "op_s0_noas": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s0_noas.json",
+    "--seed",
+    "0",
+    "--no-antiswing",
+    "--op-film",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\film_off.mp4",
+    "--op-png",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\hero_off",
+    "--op-panels",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\panels_off.npz"
+   ],
+   "wall_seconds": 389.4,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 18:43:41"
+  },
+  "op_s0_a": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s0_a.json",
+    "--seed",
+    "0"
+   ],
+   "wall_seconds": 379.2,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 18:50:00"
+  },
+  "op_s0_b": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s0_b.json",
+    "--seed",
+    "0"
+   ],
+   "wall_seconds": 519.2,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 18:58:39"
+  },
+  "op_s0_c": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s0_c.json",
+    "--seed",
+    "0"
+   ],
+   "wall_seconds": 364.0,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 19:04:43"
+  },
+  "op_s0_d": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s0_d.json",
+    "--seed",
+    "0"
+   ],
+   "wall_seconds": 362.5,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 19:10:46"
+  },
+  "op_s0_e": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s0_e.json",
+    "--seed",
+    "0"
+   ],
+   "wall_seconds": 388.7,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 19:17:15"
+  },
+  "op_s0_f": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s0_f.json",
+    "--seed",
+    "0"
+   ],
+   "wall_seconds": 402.9,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 19:23:58"
+  },
+  "op_s0_g": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s0_g.json",
+    "--seed",
+    "0"
+   ],
+   "wall_seconds": 378.5,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 19:30:16"
+  },
+  "op_s0_h": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s0_h.json",
+    "--seed",
+    "0"
+   ],
+   "wall_seconds": 369.9,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 19:36:26"
+  },
+  "op_s0_i": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s0_i.json",
+    "--seed",
+    "0"
+   ],
+   "wall_seconds": 356.5,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 19:42:22"
+  },
+  "op_s0_j": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s0_j.json",
+    "--seed",
+    "0"
+   ],
+   "wall_seconds": 363.2,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 19:48:26"
+  },
+  "op_s0_film": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s0_film.json",
+    "--seed",
+    "0",
+    "--op-film",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\film_s0.mp4",
+    "--op-png",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\hero_s0",
+    "--op-panels",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\panels_s0.npz"
+   ],
+   "wall_seconds": 405.3,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 19:55:11"
+  },
+  "op_s1": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s1.json",
+    "--seed",
+    "1"
+   ],
+   "wall_seconds": 392.6,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 20:01:44"
+  },
+  "op_s2": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s2.json",
+    "--seed",
+    "2"
+   ],
+   "wall_seconds": 367.4,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 20:07:51"
+  },
+  "op_s3": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s3.json",
+    "--seed",
+    "3"
+   ],
+   "wall_seconds": 360.5,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 20:13:51"
+  },
+  "op_s4": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s4.json",
+    "--seed",
+    "4"
+   ],
+   "wall_seconds": 389.0,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 20:20:20"
+  },
+  "op_s5": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s5.json",
+    "--seed",
+    "5"
+   ],
+   "wall_seconds": 412.0,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 20:27:12"
+  },
+  "op_s6": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s6.json",
+    "--seed",
+    "6"
+   ],
+   "wall_seconds": 455.3,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 20:34:48"
+  },
+  "op_s7": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s7.json",
+    "--seed",
+    "7"
+   ],
+   "wall_seconds": 428.6,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 20:41:56"
+  },
+  "op_s8": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s8.json",
+    "--seed",
+    "8"
+   ],
+   "wall_seconds": 423.4,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 20:49:00"
+  },
+  "op_s9": {
+   "command": [
+    "C:\\Users\\Lars Ivar Hatledal\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift.py",
+    "--op",
+    "65.0",
+    "--size",
+    "1280x720",
+    "--assets",
+    "C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets",
+    "--op-out",
+    "C:\\dev\\threepp-crane\\python\\examples\\crane_lift_runs\\round18_fansync\\op_s9.json",
+    "--seed",
+    "9"
+   ],
+   "wall_seconds": 438.6,
+   "returncode": 0,
+   "ok": true,
+   "finished": "2026-09-15 20:56:18"
+  }
+ }
+}

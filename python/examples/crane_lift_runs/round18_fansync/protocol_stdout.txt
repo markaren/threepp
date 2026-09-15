@@ -1,0 +1,64 @@
+the lift, seed 0: 11 fresh processes; wall s 368 441 357 356 382 397 372 363 350 357 396   (a run well above the others may have shared the GPU)
+  OK   rgb            1 distinct of 11
+  OK   aov.depth      1 distinct of 11
+  OK   aov.normals    1 distinct of 11
+  OK   aov.ids        1 distinct of 11
+  OK   aov.motion     1 distinct of 11
+  OK   aov.albedo     1 distinct of 11
+  OK   tip.rgb        1 distinct of 11
+  OK   fan            1 distinct of 11
+  OK   events.raw     1 distinct of 11
+  OK   events.sorted  1 distinct of 11
+  OK   traj           1 distinct of 11
+  OK   vessel         1 distinct of 11
+  OK   tension        1 distinct of 11
+  OK   contact        1 distinct of 11
+  OK   imu            1 distinct of 11
+lift seed 0: 65 s, swing RMS 325 mm, max 678 mm; tip off its nominal target RMS 133 mm; heave span 0.20 m, roll +-0.6 deg
+  without the anti-swing loop: swing RMS 471 mm, max 700 mm (pay-out phase after 40 s: 564 vs 143 mm RMS)
+  seeds [1, 2, 3, 4, 5, 6, 7, 8, 9]: hook path deviation from seed 0, RMS 3 mm, max 33 mm; tip path 2 mm, 2 mm, 4 mm, 2 mm, 2 mm, 2 mm, 2 mm, 2 mm, 3 mm
+protocol: 21 runs of 65 s into C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync; git bcc762582d49; NVIDIA GeForce RTX 4070, 595.97
+  op_s0_noas   --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s0_noas.json --seed 0 --no-antiswing --op-film C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\film_off.mp4 --op-png C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\hero_off --op-panels C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\panels_off.npz
+  op_s0_noas   ok in 6.5 min
+  op_s0_a      --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s0_a.json --seed 0
+  op_s0_a      ok in 6.3 min
+  op_s0_b      --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s0_b.json --seed 0
+  op_s0_b      ok in 8.7 min
+  op_s0_c      --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s0_c.json --seed 0
+  op_s0_c      ok in 6.1 min
+  op_s0_d      --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s0_d.json --seed 0
+  op_s0_d      ok in 6.0 min
+  op_s0_e      --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s0_e.json --seed 0
+  op_s0_e      ok in 6.5 min
+  op_s0_f      --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s0_f.json --seed 0
+  op_s0_f      ok in 6.7 min
+  op_s0_g      --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s0_g.json --seed 0
+  op_s0_g      ok in 6.3 min
+  op_s0_h      --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s0_h.json --seed 0
+  op_s0_h      ok in 6.2 min
+  op_s0_i      --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s0_i.json --seed 0
+  op_s0_i      ok in 5.9 min
+  op_s0_j      --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s0_j.json --seed 0
+  op_s0_j      ok in 6.1 min
+  op_s0_film   --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s0_film.json --seed 0 --op-film C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\film_s0.mp4 --op-png C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\hero_s0 --op-panels C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\panels_s0.npz
+  op_s0_film   ok in 6.8 min
+  op_s1        --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s1.json --seed 1
+  op_s1        ok in 6.5 min
+  op_s2        --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s2.json --seed 2
+  op_s2        ok in 6.1 min
+  op_s3        --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s3.json --seed 3
+  op_s3        ok in 6.0 min
+  op_s4        --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s4.json --seed 4
+  op_s4        ok in 6.5 min
+  op_s5        --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s5.json --seed 5
+  op_s5        ok in 6.9 min
+  op_s6        --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s6.json --seed 6
+  op_s6        ok in 7.6 min
+  op_s7        --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s7.json --seed 7
+  op_s7        ok in 7.1 min
+  op_s8        --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s8.json --seed 8
+  op_s8        ok in 7.1 min
+  op_s9        --op 65.0 --size 1280x720 --assets C:/Users/Lars Ivar Hatledal/OneDrive - NTNU/Misc/2026-09-07_reproducibility-paper-alignment/2026-09-07_reproducibility-paper-alignment/crane_twin/crane_turbine_operation_threepp/assets --op-out C:\dev\threepp-crane\python\examples\crane_lift_runs\round18_fansync\op_s9.json --seed 9
+  op_s9        ok in 7.3 min
+
+analyze:
