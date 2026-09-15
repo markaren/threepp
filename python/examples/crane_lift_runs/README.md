@@ -464,3 +464,38 @@ loop follows a different sample sequence from the first scan after the capture s
 the vessel and IMU rows equal round 10's to the bit. Seed 0 lands 15 mm from the mark (20 mm in round
 10), the control 686 mm; seeds 1 to 9 deviate from seed 0 by 3 mm RMS and 30 mm at most over the
 whole run (`analyze.py`). The paper's numbers are re-derived from this directory.
+
+## Round 18 (2026-09-15): the tip fan's instant (`round18_fansync/`)
+
+The fan of rounds 1 to 12 was issued inside `step()`, before the frame's render. `scan_lidar`
+traces the acceleration structure and descriptor slot of the LAST SUBMITTED frame
+(`VulkanCoreFrame.cpp`, `scanLidarBegin`: no device drain, by design), so a scan issued before
+`render()` sees the previous frame's poses under this frame's beam origins: the fan ran one
+frame, 16.7 ms, behind the other fourteen streams of the same instant. Measured two ways:
+
+- `lag_probe.py`, standalone: a box moved 0.5 m per frame along one horizontal beam, the beam
+  scanned before and after every `render()`. 12 of 12 frames the pre-render scan returned the
+  previous frame's distance and the post-render scan the current one.
+- `--fan-lag-probe` in the crane itself: on every fan frame the same beam table is scanned
+  before and after the render, and the median change in hit height over the container's
+  returns is compared with the container's exact CPU rise between the two instants
+  (`probe/r1_after_probe`, `probe/r2_before_probe`, 15 s each, 310 scans, 75 to 104 returns per
+  scan): slope 1.005, RMS residual 1.25 mm against "previous build" and 4.41 mm against "same
+  build"; 206 of the 215 scans with a rise above 1 mm sit closer to the previous build
+  (`probe/lag_probe_scatter.png`). The residual is the roof's corrugation and tilt under the
+  container's horizontal motion, not a third instant.
+
+The fix (commit bcc76258): the fan block and the log row move out of `step()` into `sense()`,
+called from `after_render()` after every render, so the fan reads this frame's build. The
+controller reads the estimate at the next `step()` as before; the loop's latency is unchanged,
+only the sampled instant moves. `--fan-before-render` reproduces the round-12 ordering: a 15 s
+run (`probe/r0_before`) equals round 12's `op_s0_a` byte for byte over its 930 log rows, the IMU
+stream, the LOD log and the per-frame hashes of the rendered frame and the tip view; the probe's
+extra scans change nothing (`r0_before` == `r2_before_probe` on every row). Under the new
+ordering only log columns 17 and 18, the swing estimate, differ before the loop engages at
+40 s (up to 160 mm, the fan now seeing the container where it is).
+
+Round 18 = round 12's protocol (`run_protocol.py ... --film`: the control, ten seed-0
+processes, the film run, seeds 1 to 9) on commit bcc76258, launched 2026-09-15 18:37 on the
+RTX 4070 (driver 595.97), the GPU otherwise unshared. Results are appended below when the
+runs finish; every crane number in the paper is then re-derived from this directory.
