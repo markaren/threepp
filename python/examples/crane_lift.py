@@ -94,6 +94,19 @@ RESET_AFTER_WARMUP = "--no-warmup-reset" not in sys.argv
 SETTLE = cli_arg("--settle", 0, int)              # frames rendered after the warm-up WITHOUT stepping the world
 WARMUP_HASH = "--warmup-hash" in sys.argv          # hash the frame, the AOVs and the tip view on the first render and every warm-up frame
 DUMP_FRAMES = cli_arg("--dump-frames", "", str)    # <prefix>: write the first render, warm-up frames 0..3 and captured frame 0 as .npy
+DUMP_AOVS = cli_arg("--dump-aovs", "", str)        # <dir>: write captured frames 0..79 as f####.npz, the same arrays the row hashes are taken from
+DUMP_AOVS_N = cli_arg("--dump-aovs-n", 80, int)    # how many captured frames --dump-aovs writes
+DUMP_HEIGHTS = cli_arg("--dump-heights", "", str)  # <dir>: write ocean.sample_height on a fixed 64x64 grid for captured frames 0..DUMP_AOVS_N-1 as h####.npy
+DUMP_H_N = 64                                      # grid side of --dump-heights
+# The tip fan's place in the frame (2026-09-15, round 18). scan_lidar traces the acceleration structure of the
+# LAST SUBMITTED frame (VulkanCoreFrame.cpp, scanLidarBegin), so a scan issued before render() sees the previous
+# frame's poses under this frame's beam origins: one frame (16.7 ms) behind the other fourteen streams. Rounds 1 to
+# 12 scanned inside step(), before the render. The fan now scans AFTER the frame's render (after_render());
+# --fan-before-render reproduces the round-12 ordering, and --fan-lag-probe scans the same beam table both
+# before and after the render on every fan frame and records the hit-height difference against the
+# container's exact CPU motion (crane_lift_runs/round18_fansync/, with the standalone lag_probe.py).
+FAN_BEFORE_RENDER = "--fan-before-render" in sys.argv
+FAN_LAG_PROBE = "--fan-lag-probe" in sys.argv
 DIAG = {"first": None, "warmup": []}
 NO_TIP = "--no-tip" in sys.argv                    # no secondary (tip) view at all
 FLUSH_FIRST = "--flush-first" in sys.argv          # set_flush_frames(1) before the first render, not after it
@@ -302,6 +315,11 @@ ocean.material.attenuation_color = tp.Color(0.10, 0.28, 0.34)
 ocean.material.attenuation_distance = 4.0
 ocean.material.specular_intensity = 0.7
 scene.add(ocean)
+# --dump-heights: a fixed grid over the whole ocean tile, centred on the ocean's warp centre.
+# Only read (via ocean.sample_height, the CPU mirror of the GPU height field) when the option
+# is on; the grid itself is a pair of constant coordinate vectors, identical in every run.
+DUMP_H_X = np.linspace(ocean.warp.center_x - OCEAN_SIZE * 0.5, ocean.warp.center_x + OCEAN_SIZE * 0.5, DUMP_H_N)
+DUMP_H_Z = np.linspace(ocean.warp.center_z - OCEAN_SIZE * 0.5, ocean.warp.center_z + OCEAN_SIZE * 0.5, DUMP_H_N)
 floor = tp.Mesh(tp.PlaneGeometry(OCEAN_SIZE, OCEAN_SIZE), standard_material(0x03060a))
 floor.rotate_x(-math.pi / 2)
 floor.position.y = -60.0
@@ -460,6 +478,8 @@ fan_params = tp.LidarParams()
 fan_params.max_range = 60.0
 fan_params.detector_threshold = 0.0
 FAN_LAST = {}
+_cur = {}                                     # step()'s hook, target and correction, for sense() and the log row
+LAG_PROBE = {"rows": [], "centre_prev": None}   # --fan-lag-probe: [t, dcentre xyz, median dy_hit, n, spread] per fan frame
 SENSOR_DROP = np.array([0.0, -0.9, 0.0])      # the sensor head hangs under the boom tip, clear of its mesh
 # ... and OUTBOARD of the hoist wire. On the wire's axis (rounds 1-4) the head sits INSIDE the
 # 0.05 m wire cylinder: every ray leaves through the cylinder wall, so the fan measured the wire
@@ -1204,6 +1224,8 @@ def step(dt=DT):
     sim_t += dt
     renderer.sim_time = sim_t
     frame_i += 1
+    if PAYLOAD == "physx" and px.get("centre") is not None:
+        LAG_PROBE["centre_prev"] = px["centre"].copy()     # the container at the previous instant, for --fan-lag-probe
     vessel_step(dt)
     if gulls is not None:
         gulls.update(dt)
@@ -1271,13 +1293,38 @@ def step(dt=DT):
     _so = sensor_origin(tip_world)
     tip_cam.position.set(*_so)
     tip_cam.look_at(*(_so + np.array([0.0, -20.0, 0.0])))
-    # the tip sensor and the swing estimate (20 Hz, its own clock)
-    if frame_i % sensor_every == 0 and frame_i > 2:
+    _cur.update(hook=hook, target=target, corr=corr)
+    if FAN_LAG_PROBE and fan_frame():
+        LAG_PROBE["pre"] = fan_raw(tip_world)          # the round-12 instant: before this frame's render
+    if FAN_BEFORE_RENDER:
+        sense()
+
+
+def fan_frame():
+    """Is this a tip-fan frame? Every third at 60 Hz = 20 Hz, from the third frame."""
+    return frame_i % sensor_every == 0 and frame_i > 2
+
+
+def fan_raw(tip):
+    """The fan's beam table traced once, without noise and without touching the estimator or its rng: for the lag probe."""
+    o = sensor_origin(tip)
+    origins = np.repeat(o[None].astype(np.float32), len(FAN_DIRS), 0)
+    return renderer.scan_lidar(origins, FAN_DIRS, fan_params)
+
+
+def sense():
+    """The tip sensor and the swing estimate (20 Hz, its own clock), then the frame's log row.
+
+    Runs AFTER the frame's render by default (after_render()), so the fan's ray-traced dispatch reads
+    the scene build of THIS frame; see FAN_BEFORE_RENDER. The controller reads the estimate at the
+    next step() either way, so the loop's latency is unchanged; only the sampled instant moves."""
+    hook, target, corr = _cur["hook"], _cur["target"], _cur["corr"]
+    if fan_frame():
         c = tip_fan(tip_world)
         if c is not None:
             s = np.array([c[0] - tip_world[0], c[2] - tip_world[2]])
             if swing_est["seen"]:
-                swing_est["ds"] = (s - swing_est["s"]) / (sensor_every * dt)
+                swing_est["ds"] = (s - swing_est["s"]) / (sensor_every * DT)
             swing_est["s"] = s
             swing_est["seen"] = True
             # What the fan MEASURES is the container's own centre; what the operation's swing
@@ -1294,6 +1341,56 @@ def step(dt=DT):
                               swing_est["s"][0], swing_est["s"][1], *ff_last,
                               float(contact["on"]), float(contact["landed"]), corr[0], corr[1],
                               px["tension"], *px["centre"], px["tilt"]], np.float64))
+
+
+def after_render():
+    """What follows a frame's render: the fan and the log row (unless --fan-before-render did them in
+    step()), and the lag probe's second scan of the same beam table."""
+    if FAN_LAG_PROBE and fan_frame() and "pre" in LAG_PROBE:
+        pre, post = LAG_PROBE.pop("pre"), fan_raw(tip_world)
+        both = ((pre["return_no"] > 0) & (post["return_no"] > 0) &
+                (pre["instance_id"] == LOAD_ID) & (post["instance_id"] == LOAD_ID))
+        dy = post["position"][both, 1].astype(np.float64) - pre["position"][both, 1].astype(np.float64)
+        dc = ((px["centre"] - LAG_PROBE["centre_prev"])
+              if (PAYLOAD == "physx" and LAG_PROBE["centre_prev"] is not None) else np.zeros(3))
+        med = float(np.median(dy)) if dy.size else float("nan")
+        spread = float(np.abs(dy - med).max()) if dy.size else float("nan")
+        LAG_PROBE["rows"].append([sim_t, dc[0], dc[1], dc[2], med, float(dy.size), spread])
+    if not FAN_BEFORE_RENDER:
+        sense()
+
+
+def lag_probe_report():
+    """--fan-lag-probe: the fan's hit height after the render minus before it, against the container's exact
+    CPU rise between the two instants. A slope of 1 means the pre-render scan saw the PREVIOUS frame's build;
+    0 means both scans saw this frame's."""
+    P = np.asarray(LAG_PROBE["rows"], np.float64).reshape(-1, 7)
+    ok = np.isfinite(P[:, 4]) & (P[:, 5] >= 4)
+    P = P[ok]
+    if len(P) < 3:
+        print(f"fan lag probe: only {len(P)} fan frames with the container in both scans; nothing to report")
+        return
+    dy, dc = P[:, 4], P[:, 2]
+    slope = float(dy @ dc / (dc @ dc)) if dc @ dc > 0 else float("nan")
+
+    def rms(v):
+        return 1e3 * math.sqrt(float((v ** 2).mean()))
+
+    # The container's roof is not a plane (corrugation, tilt, edge beams that switch face), so the
+    # per-scan median carries a millimetre of scatter; the verdict is by the slope and by which
+    # hypothesis halves the residual, not by an exact match. Measured 2026-09-15 (round18_fansync/probe):
+    # slope 1.005, RMS 1.25 mm against the previous build vs 4.41 mm against the same build, 310 scans.
+    if slope > 0.8 and rms(dy - dc) < 0.5 * rms(dy):
+        verdict = "read the PREVIOUS frame's build (one frame behind)"
+    elif abs(slope) < 0.2 and rms(dy) < 0.5 * rms(dc):
+        verdict = "read THIS frame's build (no lag)"
+    else:
+        verdict = "is not explained by either hypothesis"
+    print(f"fan lag probe: {len(P)} fan frames; container rise per frame |dcentre_y| median {1e3 * np.median(np.abs(dc)):.3f} mm, "
+          f"max {1e3 * np.abs(dc).max():.3f} mm; hit height after minus before the render: median |dy_hit| "
+          f"{1e3 * np.median(np.abs(dy)):.3f} mm, within-scan spread max {1e3 * P[:, 6].max():.3f} mm; "
+          f"slope dy_hit/dcentre_y {slope:.4f}; RMS(dy_hit - dcentre_y) {rms(dy - dc):.3f} mm vs RMS(dy_hit) {rms(dy):.3f} mm "
+          f"-> the pre-render scan {verdict}")
 
 
 # ---- cameras ---------------------------------------------------------------
@@ -1573,6 +1670,7 @@ def run_manifest(n, out, mode):
                 np.save(f"{DUMP_FRAMES}_warm{_w}.npy", np.asarray(_a["rgb"]))
         else:
             renderer.render(scene, camera)
+        after_render()
         lod_log["warmup"].append(_lod_row())
     renderer.set_auto_exposure_speed(1.2)
     for _ in range(SETTLE):                       # the world stands still; only the renderer runs
@@ -1604,15 +1702,33 @@ def run_manifest(n, out, mode):
         EW, EH = W // 4, H // 4
         panels = {"ew": EW, "eh": EH, "pos": [], "neg": [], "frame": [], "row": [], "t": [], "fan": [], "fan_frame": [],
                   "acc_pos": np.zeros(EW * EH, np.int64), "acc_neg": np.zeros(EW * EH, np.int64)}
+    dump_wall = [0.0]
     wall0 = time.perf_counter()
     for f in range(n):
         step()
         renderer.set_event_camera_params(threshold=0.20, decay=0.88, min_luma=0.005, max_events_per_pixel=5,
                                          frame_time_us=int(sim_t * 1e6))
         aovs = renderer.read_aovs_typed(scene, camera, ["rgb", "depth", "normals", "instance_ids", "motion", "albedo"])
+        after_render()                               # the fan reads THIS frame's build; then the log row
         lod_log["frames"].append(_lod_row())
         if DUMP_FRAMES and f == 0:
             np.save(DUMP_FRAMES + "_cap0.npy", np.asarray(aovs["rgb"]))
+        if DUMP_AOVS and f < DUMP_AOVS_N:
+            _dw = time.perf_counter()
+            os.makedirs(DUMP_AOVS, exist_ok=True)
+            np.savez_compressed(os.path.join(DUMP_AOVS, f"f{f:04d}.npz"),
+                                **{k: np.ascontiguousarray(aovs[k]) for k in AOV_KEYS})
+            dump_wall[0] += time.perf_counter() - _dw
+        if DUMP_HEIGHTS and f < DUMP_AOVS_N:
+            _dw = time.perf_counter()
+            os.makedirs(DUMP_HEIGHTS, exist_ok=True)
+            _hg = np.empty((DUMP_H_N, DUMP_H_N), np.float64)
+            for _i in range(DUMP_H_N):
+                _z = float(DUMP_H_Z[_i])
+                for _j in range(DUMP_H_N):
+                    _hg[_i, _j] = float(ocean.sample_height(float(DUMP_H_X[_j]), _z))
+            np.save(os.path.join(DUMP_HEIGHTS, f"h{f:04d}.npy"), _hg)
+            dump_wall[0] += time.perf_counter() - _dw
         rows["rgb"].update(sa.arr_bytes(aovs["rgb"]))
         per_frame["rgb"].append(hashlib.sha256(sa.arr_bytes(aovs["rgb"])).hexdigest()[:16])
         rows["aov.depth"].update(sa.arr_bytes(aovs["depth"]))
@@ -1675,6 +1791,11 @@ def run_manifest(n, out, mode):
         if OP_PNG and mode == "op":
             _op_png(f, aovs["rgb"], tip_px)
     wall = time.perf_counter() - wall0
+    if DUMP_HEIGHTS:
+        print(f"dump-heights: {min(n, DUMP_AOVS_N)} frames of a {DUMP_H_N}x{DUMP_H_N} sample_height grid -> {DUMP_HEIGHTS}")
+    if DUMP_AOVS:
+        print(f"dump-aovs: {min(n, DUMP_AOVS_N)} frames -> {DUMP_AOVS}, {dump_wall[0]:.1f} s of the run's "
+              f"{wall:.1f} s; ms/frame {1e3 * wall / n:.1f} gross, {1e3 * (wall - dump_wall[0]) / n:.1f} net of the dump")
     if OP_PNG and mode == "op" and _png_peak[0] > 0.0:
         print(f"png: maxswing {1e3 * _png_peak[0]:.0f} mm at t = {_png_peak[1]:.2f} s -> {OP_PNG}_maxswing.png")
     if writer is not None:
@@ -1704,6 +1825,7 @@ def run_manifest(n, out, mode):
             "seed": SEED, "antiswing": antiswing_on[0], "amc": not NO_AMC, "clouds": not NO_CLOUDS,
             "no_auto_lod": NO_AUTO_LOD, "reset_after_warmup": RESET_AFTER_WARMUP, "settle": SETTLE,
             "no_tip": NO_TIP, "flush_first": FLUSH_FIRST,
+            "fan_before_render": FAN_BEFORE_RENDER, "fan_lag_probe": FAN_LAG_PROBE,
             "no_restir": NO_RESTIR, "no_denoise": NO_DENOISE, "no_ao": NO_AO, "no_probe_gi": NO_PROBE_GI,
             "hard_sun": HARD_SUN, "msaa1": MSAA1,
             "ff": not NO_FF, "ff_mode": "off" if NO_FF else FF_MODE, "amc_kp": AMC_KP or "1/dt", "aa": aa_path(),
@@ -1758,13 +1880,16 @@ def run_manifest(n, out, mode):
     # serialise (a numpy bool in the meta did exactly this once) must not take the log with it.
     if OP_OUT and mode == "op":
         np.savez_compressed(OP_OUT[:-5] + ".npz", log=np.asarray(log_rows),
-                            imu=np.asarray(px["imu_rows"], np.float64).reshape(-1, 7))
+                            imu=np.asarray(px["imu_rows"], np.float64).reshape(-1, 7),
+                            fan_lag_probe=np.asarray(LAG_PROBE["rows"], np.float64).reshape(-1, 7))
     with open(out, "w") as fh:
         json.dump(manifest, fh, indent=1, default=_jsonable)
     for k, v in manifest["rows"].items():
         print(f"  {k:14s} " + (v if isinstance(v, str) else f"{v['fnv']}  frames={v['frames']}"))
     print(f"{mode}: {n} frames after {WARMUP} warm-up, {1e3 * wall / n:.1f} ms/f, {n_events} events -> {out}")
     op_report()
+    if FAN_LAG_PROBE:
+        lag_probe_report()
 
 
 place(camera, SHOT if SHOT in SHOTS else "hero")
@@ -1783,6 +1908,7 @@ elif HEADLESS:
     for i in range(frames):
         step()
         renderer.render(scene, camera)
+        after_render()
     renderer.save_frame(scene, camera, OUT)
     print(f"simulated {SECONDS:.1f} s ({frames} frames) at {1e3 * (time.perf_counter() - t0) / frames:.1f} ms/f, wrote {OUT}")
     op_report()
@@ -1796,5 +1922,6 @@ else:
         step()
         controls.update()
         renderer.render(scene, camera)
+        after_render()
 
     canvas.animate(animate)
