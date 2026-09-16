@@ -9,9 +9,11 @@ rollout+update loop (ActorCritic / RunningNorm / compute_gae are also exported f
 loops). Importing this subpackage pulls in torch, so `import threepp` stays lightweight — you
 only pay for torch when you ask for threepp.rl.
 """
+from .cable import BatchedCables, CableRouting, link_index_map, quat_rotate
 from .ppo import PPO, ActorCritic, RunningNorm, compute_gae, load_policy, save_policy
 from .sim import GpuSim
 from .task import RobotState, VecTask, quat_to_frame
 
 __all__ = ["GpuSim", "VecTask", "RobotState", "quat_to_frame", "PPO", "ActorCritic",
-           "RunningNorm", "compute_gae", "save_policy", "load_policy"]
+           "RunningNorm", "compute_gae", "save_policy", "load_policy",
+           "CableRouting", "BatchedCables", "link_index_map", "quat_rotate"]

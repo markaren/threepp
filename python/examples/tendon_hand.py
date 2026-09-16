@@ -302,6 +302,12 @@ class Hand:
         self.links = {}          # name -> ArticulationLink
         self.dof_names = []      # add order
         self.cables = {}         # name -> TendonCable
+        # name -> the node list that cable was routed from. Recorded because TendonCable
+        # owns its nodes privately (it exposes counts and the resolved path, not the
+        # routing), and threepp.rl.cable needs the routing itself to rebuild the same law
+        # in torch for the direct-GPU batch. Written by _cable, so there is never a second
+        # description of the routing that could drift from the one actually laid.
+        self.routing = {}
         self.limits = {}         # name -> (lower, upper) radians
         self.meshes = []
         self._mat = material
@@ -422,8 +428,14 @@ class Hand:
         self.decor = []
 
     # -- tendons ------------------------------------------------------------------
-    def route(self):
+    def route(self, build=True):
         """Lay the 25 cables. Must run AFTER finalize(), because a cable reads live poses.
+
+        `build=False` records the routing into self.routing and creates NO TendonCable at
+        all. That is what the GPU path needs: TendonCable applies its forces through
+        addForce/addTorque, which PhysX rejects outright under the direct-GPU API, so a
+        cable object in a batched world would be a silent no-op sitting on a callback. The
+        routing is still the routing, and threepp.rl.cable evaluates it in torch instead.
 
         Five per finger, which is the Salisbury-Mason N+1 bound for 4 DOF: two flexors
         (FDP to the distal phalanx, FDS to the middle), one extensor, and a pair of
@@ -431,6 +443,7 @@ class Hand:
         both directions. --selftest checks the resulting torque space is genuinely
         positively spanned rather than trusting the count.
         """
+        self._build_cables = build
         for name, spec in FINGERS.items():
             self._finger_cables(name, spec)
         self._thumb_cables()
@@ -439,6 +452,9 @@ class Hand:
     def _cable(self, name, nodes, mode=None):
         """`nodes` is a path in order: (link, local_offset) for a via point, or
         ("wrap", link, centre, axis, radius) for a pulley the cable curves around."""
+        self.routing[name] = nodes
+        if not getattr(self, "_build_cables", True):
+            return None
         c = tp.TendonCable(self.world, mode or tp.TendonCable.Mode.TENSION)
         for nd in nodes:
             if nd[0] == "wrap":
