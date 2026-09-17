@@ -115,7 +115,7 @@ Once, on the login node:
 
     mkdir -p /cluster/work/$USER/logs /cluster/work/$USER/hand_runs
 
-Pilot first — two jobs, 100 iterations, about ten minutes:
+Pilot first — two jobs, 100 iterations, about 17 minutes on an H100:
 
     sbatch --array=0-1 --export=ALL,ITERS=100 scripts/idun/hand_array.slurm
 
