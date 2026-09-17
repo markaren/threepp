@@ -2290,12 +2290,6 @@ namespace threepp {
             // that reads it (VUID-vkCmdBeginRendering-pRenderingInfo-09588).
             return sceneHasFieldBillboards();
         }
-        // Free-running sub-pixel jitter sequence index for raster TAA. The
-        // active Halton(2,3) period is derived per frame from the upscale ratio
-        // (see jitterPhaseCount_) and applied as a modulo at the read sites, so
-        // the sequence length tracks renderScale (8 at native, more when
-        // upscaling) instead of a fixed 16.
-        uint32_t haltonFrame_ = 0;
         // G-buffer debug-view mode: blit one G-buffer channel onto the
         // swapchain instead of running the deferred shade. Lets us see the
         // raster output before the shade's ray-query integration.

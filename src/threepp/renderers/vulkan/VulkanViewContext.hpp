@@ -353,6 +353,16 @@ namespace threepp::vulkan::impl {
         float taaJitterTexels_[2]{};
         float rasterPrevJitter_[2]{};
         bool  rasterPrevJitterValid_ = false;
+        // Free-running sub-pixel jitter sequence index for this view's raster
+        // TAA. Per VIEW, not per renderer: uploadRasterCameraUbo runs once per
+        // camera per GPU frame, so a renderer-wide counter advanced by V+1 each
+        // frame and every camera saw only 8/gcd(V+1, 8) of the 8 native Halton
+        // phases (one secondary view: 4 phases each, whose biased mean shifted
+        // edges by a fixed sub-pixel amount on BOTH cameras). The active period
+        // is derived per frame from the upscale ratio (jitterPhaseCount_) and
+        // applied as a modulo at the read sites, so the sequence length tracks
+        // renderScale (8 at native, more when upscaling). uint32 wrap is harmless.
+        uint32_t haltonFrame_ = 0;
         // Camera WORLD motion this frame (translation m, forward-rotation
         // rad) for the deferred reflection history policy: a chase-cam
         // surface (car sunroof with a following camera) is

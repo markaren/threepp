@@ -632,7 +632,7 @@ namespace threepp {
             phaseCount = static_cast<uint32_t>(
                     fsr_->jitterPhaseCount(ext.width, viewOutExtent().width));
             if (phaseCount == 0u) phaseCount = 1u;
-            fsr_->jitterOffset(static_cast<int>(haltonFrame_ % phaseCount),
+            fsr_->jitterOffset(static_cast<int>(view().haltonFrame_ % phaseCount),
                                static_cast<int>(phaseCount), jx, jy);
             fsrJitterX_ = jx;
             fsrJitterY_ = jy;
@@ -655,7 +655,7 @@ namespace threepp {
         } else
 #endif
         {
-            const uint32_t hi = (haltonFrame_ % phaseCount) + 1u;
+            const uint32_t hi = (view().haltonFrame_ % phaseCount) + 1u;
             jx = halton_(hi, 2) - 0.5f;
             jy = halton_(hi, 3) - 0.5f;
         }
@@ -809,7 +809,7 @@ namespace threepp {
             phaseCount = static_cast<uint32_t>(
                     fsr_->jitterPhaseCount(ext.width, viewOutExtent().width));
             if (phaseCount == 0u) phaseCount = 1u;
-            fsr_->jitterOffset(static_cast<int>(haltonFrame_ % phaseCount),
+            fsr_->jitterOffset(static_cast<int>(view().haltonFrame_ % phaseCount),
                                static_cast<int>(phaseCount), jx, jy);
             fsrJitterX_ = jx;
             fsrJitterY_ = jy;
@@ -832,7 +832,7 @@ namespace threepp {
         } else
 #endif
         {
-            const uint32_t hi = (haltonFrame_ % phaseCount) + 1u;
+            const uint32_t hi = (view().haltonFrame_ % phaseCount) + 1u;
             jx = halton_(hi, 2) - 0.5f;
             jy = halton_(hi, 3) - 0.5f;
         }
@@ -968,7 +968,7 @@ namespace threepp {
         // every frame and the screen-door never converged under TAA. Wrapped at
         // 1024 so the float is always exact.
         ubo.prevJitter[2] = normalMapToksvig_ ? 1.f : 0.f;
-        ubo.prevJitter[3] = static_cast<float>(haltonFrame_ & 1023u);
+        ubo.prevJitter[3] = static_cast<float>(view().haltonFrame_ & 1023u);
 
         uploadHostVisible(ctx->allocator(), view().rasterCameraUbos[frame], &ubo, sizeof(ubo));
 
@@ -1023,11 +1023,12 @@ namespace threepp {
             std::memcpy(view().deferredCamPrevFwd_, fwd, sizeof(fwd));
             view().deferredCamPrevValid_ = true;
         }
-        // Free-running jitter index. The active Halton period is derived
+        // Free-running jitter index, one per view (ViewContext::haltonFrame_).
+        // The active Halton period is derived
         // per-read from the upscale ratio (jitterPhaseCount_) and applied as
         // a modulo, so the sequence length tracks renderScale instead of a
         // fixed 16. uint32 wrap is harmless — the modulo re-bases each frame.
-        haltonFrame_ = haltonFrame_ + 1u;
+        view().haltonFrame_ = view().haltonFrame_ + 1u;
 
         // Refresh the per-frame descriptor set. Bindings 0-2 (UBO,
         // motionMat, matDescs) are tiny, and motionMat/matDescs handles can

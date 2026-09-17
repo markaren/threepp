@@ -167,6 +167,11 @@ levels). There are two causes:
    Before any view exists, the primary alone reproduces the PNGs bit-exactly. Once the
    view exists, its edge pixels move by 7 to 22 levels. The mechanism is read from the
    code, not isolated experimentally.
+   Update 2026-09-17: isolated and fixed on branch `taa-jitter-per-view` (per-view
+   `haltonFrame_` in `ViewContext`). Measured with 1 and 3 twin views on the ON edge movies at
+   flush 1: before, the primary's edge pixels moved by up to 91 levels in 238 of 261 frames and
+   the primary and view carried opposite fixed x shifts (-0.14 / +0.19 px); after, the primary
+   is bit-identical to its no-view render and every view's lag and shift match the primary's.
 
 ### TAA effect
 
@@ -321,6 +326,7 @@ active axis is 1.222 rad/s, including the ramp.
 2. **Shared Halton counter.** A renderer-wide Halton index gives an eye 4 of 8 jitter
    phases when one view exists, and 2 or 1 phases with 3 or 7 views. Needs a per-view
    index in C++.
+   Fixed 2026-09-17 on branch `taa-jitter-per-view` (see the Phase 1 note above); merge pending.
 3. **TAA lag at high image speeds.** Measured only at 1.69 px/frame; re-check on the
    fast-flow scenarios before ruling out a TAA-off switch.
 4. **Direction biases.** T4c answers rightward ON edges (yaw leaks into pitch at 0.17 to

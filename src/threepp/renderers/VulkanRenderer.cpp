@@ -2225,6 +2225,10 @@ namespace threepp {
             v.rasterPrevVPValid_     = false;
             v.rasterPrevJitterValid_ = false;
             v.deferredCamPrevValid_  = false;
+            // The sub-pixel jitter phase is temporal state as well: the raster
+            // G-buffer of frame k depends on it, so two captures that began
+            // after different numbers of frames would disagree on every AOV.
+            v.haltonFrame_          = 0;
         });
         if (impl.probeGI_) impl.probeGI_->invalidateHistory();
         if (impl.occl_) impl.occl_->resetVisibility();
@@ -2237,10 +2241,6 @@ namespace threepp {
         // motion state, and FSR's history) here, so a capture that begins after
         // this call draws the same sequence in every run.
         impl.resetAccumulation();
-        // The sub-pixel jitter phase is temporal state as well: the raster
-        // G-buffer of frame k depends on it, so two captures that began after
-        // different numbers of frames would disagree on every AOV. Restart it.
-        impl.haltonFrame_ = 0;
         impl.pendingAccumulationReset_ = true;
         // The dynamic acceleration structures are temporal state too: a refit
         // chain's structure and its rebuild cadence depend on how many frames
