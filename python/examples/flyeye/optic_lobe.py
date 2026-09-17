@@ -7,6 +7,10 @@ Per cell i, explicit forward Euler, every term at time t (flyvis PPNeuronIGRSyna
 
 W is a sparse CSR matrix (row = post, col = pre, 1.5 M signed weights). x is non-zero
 only on R1..R8, which all receive the same BoxEye value for their column.
+
+Batch of B independent eyes: v is (B, N) and receptors (B, 721), or (721,) for the same
+input to every eye. The matvec is W @ relu(v).T, one SpMM for all eyes. The single-eye
+(N,) path is the Phase 0 code, unchanged.
 """
 
 from __future__ import annotations
@@ -42,14 +46,15 @@ class OpticLobe:
         self.cell_type = t(m["cell_type"].astype(np.int64))
         self.u, self.v_coord = t(m["u"].astype(np.int64)), t(m["v"].astype(np.int64))
         self._x = torch.zeros(self.n_nodes, dtype=dtype, device=self.device)
+        self._xb = None  # (B, N) input buffer of a batch
         self._tau_dt, self._inv_tau = None, None
         self.v = None
         self.reset()
 
     # -- state -----------------------------------------------------------------------------
-    def reset(self) -> torch.Tensor:
-        """flyvis initial state when none is given: v = bias."""
-        self.v = self.bias.clone()
+    def reset(self, batch: int | None = None) -> torch.Tensor:
+        """flyvis initial state when none is given: v = bias, (N,) or (batch, N)."""
+        self.v = self.bias.clone() if batch is None else self.bias.expand(batch, -1).clone()
         return self.v
 
     def _inv_tau_for(self, dt: float) -> torch.Tensor:
@@ -60,18 +65,36 @@ class OpticLobe:
         return self._inv_tau
 
     def step(self, receptors: torch.Tensor, dt: float) -> torch.Tensor:
-        """One Euler step with receptor input (721,) held for dt. Returns v (45669,)."""
-        x = self._x
+        """One Euler step with receptor input held for dt. Returns v.
+
+        receptors (721,) with v (N,) is the single eye. With v (B, N), receptors may be
+        (B, 721) or (721,); receptors (B, 721) on a single-eye state starts a batch from it.
+        """
+        receptors = receptors.to(device=self.device, dtype=self.dtype)
+        if self.v.dim() == 1 and receptors.dim() == 1:
+            x = self._x
+            x.zero_()
+            x[self.receptor_index] = receptors  # same value on R1..R8
+            syn = self.W @ torch.relu(self.v)
+            self.v = self.v + self._inv_tau_for(dt) * (-self.v + self.bias + syn + x) * dt
+            return self.v
+        if self.v.dim() == 1:
+            self.v = self.v.expand(len(receptors), -1).clone()
+        B = len(self.v)
+        if self._xb is None or self._xb.shape[0] != B:
+            self._xb = torch.zeros(B, self.n_nodes, dtype=self.dtype, device=self.device)
+        x = self._xb
         x.zero_()
-        x[self.receptor_index] = receptors.to(device=self.device, dtype=self.dtype)  # same value on R1..R8
-        syn = self.W @ torch.relu(self.v)
+        x[:, self.receptor_index] = receptors.expand(B, -1)[:, None, :]  # (B, 8, 721)
+        syn = (self.W @ torch.relu(self.v).T).T  # (B, N)
         self.v = self.v + self._inv_tau_for(dt) * (-self.v + self.bias + syn + x) * dt
         return self.v
 
     def fade_in(self, receptors0: torch.Tensor, dt: float, t_fade: float = 1.0) -> torch.Tensor:
         """flyvis fade_in_state: from v = bias, int(t_fade/dt) steps ramping the contrast of
-        the first frame up from grey 0.5: x_k = linspace(0, 1, n)[k] * (frame0 - 0.5) + 0.5."""
-        self.reset()
+        the first frame up from grey 0.5: x_k = linspace(0, 1, n)[k] * (frame0 - 0.5) + 0.5.
+        receptors0 (B, 721) fades in a batch of B eyes."""
+        self.reset(None if receptors0.dim() == 1 else len(receptors0))
         n = int(t_fade / dt)
         ramp = torch.linspace(0, 1, n, dtype=self.dtype, device=self.device)
         r0 = receptors0.to(device=self.device, dtype=self.dtype) - 0.5

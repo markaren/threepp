@@ -64,6 +64,64 @@ class HexLattice:
         ])  # (T, 721)
         return out[0] if single else out
 
+    # -- geometry of a pinhole eye ------------------------------------------------------------
+    def pixel_rc(self, size: int) -> torch.Tensor:
+        """(721, 2) int64 absolute (row, col) of each column centre in a size x size frame.
+
+        For size < 391 box_eye resizes the frame to 391 first, and the pixel is in that
+        resized 391 x 391 frame, not in the rendered one.
+        """
+        return self.centers + max(size, self.min_frame_size[0]) // 2
+
+    def column_ndc(self, size: int) -> torch.Tensor:
+        """(721, 2) float64 NDC (x right, y up) of each column centre.
+
+        Pixel centre convention of the projection: x = (col + 0.5) / S * 2 - 1,
+        y = 1 - (row + 0.5) / S * 2. The resize to 391 (bilinear, align_corners=False)
+        keeps pixel centres on the same NDC, so S = max(size, 391) covers both branches.
+        """
+        s = max(size, self.min_frame_size[0])
+        rc = self.pixel_rc(size).to(torch.float64)
+        return torch.stack([(rc[:, 1] + 0.5) / s * 2 - 1, 1 - (rc[:, 0] + 0.5) / s * 2], dim=1)
+
+    def column_rays(self, size: int, fov_deg: float, dtype=torch.float32) -> torch.Tensor:
+        """(721, 3) unit rays in the camera frame (-Z forward, +X right, +Y up), aspect 1."""
+        t = np.tan(np.radians(fov_deg) / 2)
+        ndc = self.column_ndc(size)
+        p = torch.cat([ndc * t, -torch.ones(len(ndc), 1, dtype=torch.float64)], dim=1)
+        return (p / p.norm(dim=1, keepdim=True)).to(dtype)
+
+    def column_tangents(self, size: int, fov_deg: float, dtype=torch.float32) -> torch.Tensor:
+        """(721, 2, 3) unit tangents on the sphere at each column: [:, 0] image-right, [:, 1] image-up.
+
+        d(ray)/d(pixel) for p = (x t, y t, -1) is (e - ray (ray . e)) / |p| with e = +X for
+        +col and +Y for -row; normalised. Right and up are orthogonal only on the axes.
+        """
+        d = self.column_rays(size, fov_deg, torch.float64)
+        e = torch.eye(3, dtype=torch.float64)[:2]  # +X, +Y
+        t = e[None] - d[:, None, :] * d[:, :2, None]  # (721, 2, 3)
+        return (t / t.norm(dim=2, keepdim=True)).to(dtype)
+
+
+_default_lattice: HexLattice | None = None
+
+
+def default_lattice() -> HexLattice:
+    global _default_lattice
+    if _default_lattice is None:
+        _default_lattice = HexLattice()
+    return _default_lattice
+
+
+def column_rays(size: int, fov_deg: float, dtype=torch.float32) -> torch.Tensor:
+    """HexLattice.column_rays on the packaged model's lattice."""
+    return default_lattice().column_rays(size, fov_deg, dtype)
+
+
+def column_tangents(size: int, fov_deg: float, dtype=torch.float32) -> torch.Tensor:
+    """HexLattice.column_tangents on the packaged model's lattice."""
+    return default_lattice().column_tangents(size, fov_deg, dtype)
+
 
 # PIL "L" conversion: L = (R*19595 + G*38470 + B*7471 + 0x8000) >> 16 (ITU-R 601-2 luma).
 def luma_u8(rgb: torch.Tensor) -> torch.Tensor:
