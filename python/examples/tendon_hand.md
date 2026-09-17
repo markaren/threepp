@@ -42,6 +42,15 @@ a CUDA graph would replay the cable math on frozen link poses.
 
     python play_tendon_hand.py tendon_hand_hold.pt --object sphere --seconds 6
     python play_tendon_hand.py tendon_hand_hold.pt --view
+    python play_tendon_hand.py tendon_hand_hold.pt --shots out/               # stills
+    python play_tendon_hand.py tendon_hand_hold.pt --film out/film_sphere/    # 60 fps sequence
+
+`--shots` and `--film` render headless, out of the SAME run that prints the hold numbers —
+not a replay, which would be a picture of a different grasp than the one the numbers describe.
+`--film` writes `frame_0001.png` … at 1280x720 and a `contact.png` contact sheet (3x2, six
+times across the episode). There is no ffmpeg in this tree; encode the sequence yourself:
+
+    ffmpeg -framerate 60 -i out/film_sphere/frame_%04d.png -c:v libx264 -pix_fmt yuv420p -crf 18 tendon_hand.mp4
 
 Runs the trained policy on the CPU hand with its REAL `TendonCable` cables — the same 25
 tensions, the reference implementation of the law they go through. It is the deploy path and
