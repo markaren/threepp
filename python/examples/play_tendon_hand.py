@@ -12,6 +12,12 @@ schedule) is read from the checkpoint's meta rather than re-declared, so the two
 
 Run:  python play_tendon_hand.py tendon_hand_hold.pt --view
       python play_tendon_hand.py tendon_hand_hold.pt --object sphere --seconds 6
+      python play_tendon_hand.py tendon_hand_hold.pt --shots out/ --shot-times 1.0,3.5,6.0
+
+--shots renders headless stills out of the SAME run that prints the hold numbers, on the same
+GL headless path tendon_hand.py's visual() uses. It is deliberately not a separate replay:
+a still taken from a second, differently-seeded run would be a picture of a different grasp
+than the one the numbers describe.
 """
 import argparse
 import math
@@ -29,6 +35,16 @@ import threepp as tp
 from tendon_hand import DT, Forearm, Hand, RopeView, VIEWS, _scene
 from tendon_hand_env import OBJ_TYPES, object_mesh
 from threepp.rl import load_policy
+
+
+# The still camera. Not one of tendon_hand.py's VIEWS: those are framed on the whole hand and
+# forearm, and at that distance the object in the palm is a few dozen pixels and the cables
+# around it are a colour smear. This looks down the same three-quarter volar-radial axis as
+# VIEWS["3q"] -- into the palm from the thumb side, which is the only direction that shows the
+# object, the curled fingers and the opposed thumb at once -- but from 0.21 m instead of 0.35,
+# aimed at the palm target rather than at the wrist.
+SHOT_TARGET = (0.052, -0.030, -0.004)
+SHOT_CAM = (0.155, -0.106, -0.124)
 
 
 def build(meta, kind, size_a, size_b, seed):
@@ -69,6 +85,10 @@ def main():
     ap.add_argument("--seconds", type=float, default=6.0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--view", action="store_true", help="window, with every cable drawn")
+    ap.add_argument("--shots", default=None, metavar="DIR",
+                    help="render headless PNG stills into DIR, no window")
+    ap.add_argument("--shot-times", default="1.0,3.5,6.0",
+                    help="seconds at which --shots writes a still")
     ap.add_argument("--size", default="1280x800")
     a = ap.parse_args()
 
@@ -97,23 +117,37 @@ def main():
     pull = np.zeros(3)
     pull_dir = np.zeros(3)
     body = art.link(0)
-    n_steps = int(round(a.seconds * hz))
+    shot_t = [float(s) for s in a.shot_times.split(",") if s.strip()] if a.shots else []
+    # Run at least long enough to reach the last still asked for, so --shots 8.0 does not
+    # silently write nothing.
+    n_steps = int(round(max(a.seconds, max(shot_t, default=0.0)) * hz))
+    shot_frame = {int(round(t * hz)): t for t in shot_t}
     every = max(1, int(round(meta["pull_resample_s"] * hz)))
 
     canvas = renderer = scene = cam = view = arm = None
-    if a.view:
+    if a.view or a.shots:
         w, h = (int(v) for v in a.size.split("x"))
-        canvas, renderer, scene, cam = _scene(w, h, False)
+        canvas, renderer, scene, cam = _scene(w, h, headless=not a.view)
         for m in hand.meshes:
             scene.add(m)
         scene.add(mesh)
-        arm, view = Forearm(scene, hand), RopeView(scene, hand)
-        pos, tgt = VIEWS["3q"]
+        # The Forearm belongs in the window and NOT in a close-up still. It extends every cable
+        # backwards to a motor bank 130 mm proximal, and at this framing those 25 straight rods
+        # cross the entire frame and sit on top of the palm -- measured on the first render,
+        # they were the most prominent thing in the picture and the grasp was behind them. The
+        # extension is decoration either way: the physics cable begins at a via point on the
+        # palm, which is the fixed root.
+        arm = Forearm(scene, hand) if a.view else None
+        view = RopeView(scene, hand)
+        pos, tgt = (VIEWS["3q"] if a.view else (SHOT_CAM, SHOT_TARGET))
         cam.position.set(*pos)
         cam.look_at(*tgt)
-        controls = tp.OrbitControls(cam, canvas)
-        controls.target = tp.Vector3(*tgt)
-        controls.enable_damping = True
+        if a.view:
+            controls = tp.OrbitControls(cam, canvas)
+            controls.target = tp.Vector3(*tgt)
+            controls.enable_damping = True
+    if a.shots:
+        os.makedirs(a.shots, exist_ok=True)
 
     state = {"i": 0}
 
@@ -166,6 +200,17 @@ def main():
             print(f"  t {(i+1)*dt:4.2f} s   |d| {d*1000:6.1f} mm   "
                   f"pull {np.linalg.norm(pull):4.2f} N   "
                   f"mean tension {tension.mean():5.2f} N")
+        if scene is not None:
+            # Rebuilt from the LIVE link poses every step, exactly as the CPU demo's rope view
+            # does, so what is in the still is what is pulling -- not a cable drawn from the
+            # routing and hoping the two agree.
+            view.update(arm.update() if arm is not None else None)
+            if (i + 1) in shot_frame:
+                renderer.render(scene, cam)
+                fn = os.path.join(a.shots, f"{a.object}_t{shot_frame[i+1]:.1f}.png")
+                renderer.save_frame(fn)
+                print(f"    wrote {fn}   |d| {d*1000:.1f} mm   "
+                      f"pull {np.linalg.norm(pull):.2f} N")
     held = worst < meta["drop_dist"]
     print(f"  worst offset {worst*1000:.1f} mm against a {meta['drop_dist']*1000:.0f} mm "
           f"limit -> {'HELD' if held else 'DROPPED'}")
