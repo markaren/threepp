@@ -6,11 +6,18 @@
 Scene, lighting, streaming warm-up, eyes and truth exactly as scenarios.py (imported, not
 modified) except the water: the benchmark's flat matte plane is replaced by a glassy FFT ocean
 (fjord_ocean below, warp_netpen.py's recipe over a GeoScene pack at a 3 m/s wind); --flat-water
-puts the plane back for comparison. The primary render is a 1920x1080 chase camera in world
-space, smoothed behind and above the vehicle. The vehicle Group carries the drone_rig.Drone
-model (its +Z forward turned to the vehicle's -Z, rotors ticked every frame) and the two 403 px,
-90 deg eyes yawed +45/-45, mounted EYE_AHEAD m ahead of the hull nose so the airframe is outside
-both fields of view.
+puts the plane back for comparison. The primary render is a 1920x1080, 70 deg chase camera in
+world space, smoothed 4 m behind and 1.4 m above the vehicle (5 m / 1.7 m in the dive), wide
+enough that the eye insets' content can be found inside the chase frame. The vehicle Group
+carries the drone_rig.Drone model (its +Z forward turned to the vehicle's -Z, rotors ticked every
+frame), the two 403 px, 90 deg eyes yawed +45/-45, mounted EYE_AHEAD m ahead of the hull nose so
+the airframe is outside both fields of view, and one coloured frustum wedge per eye (cyan L,
+orange R, the inset border colours) that only the chase view renders.
+
+Flight: hover, approach the wall at 14 m/s 45 m above the highest ground under the path (277 m
+above the fjord), brake, yaw 90 deg left, then dive at 15 m/s vertical (12 m/s forward) to 25 m
+above the water and fly level for 3.5 s; the header states the altitude above the sea level every
+frame and flight() audits the terrain clearance (the run aborts under 15 m AGL).
 
 Circuit per frame: receptors -> OpticLobe (member 000, both eyes batched) -> the repaired readout
 of repair.py (causal adaptation tau 2 s per column and subtype, then the 8 -> 2 map fitted on
@@ -57,8 +64,11 @@ SCORES = Path(r"C:\dev\_flyeye\repair\scores.json")
 W_PX, H_PX = 1920, 1080
 FPS = 30
 EYE_AHEAD = 0.40  # m ahead of the vehicle origin (hull nose at 0.085 m); the eyes see nothing behind their own plane
-CHASE_FOV = 42.0
-CHASE_BACK, CHASE_UP = 3.0, 0.95
+CHASE_FOV = 70.0  # vertical; wide enough that the chase frame holds roughly the union of the two 90 deg eyes
+CHASE_BACK, CHASE_UP = 4.0, 1.4
+EXTRA_TURN = 0.0  # deg of further yaw at the start of the dive (set from the terrain probe, see flight())
+EYE_COLORS = ((0, 230, 255), (255, 150, 30))  # eye L cyan, eye R orange: the wedges on the drone, the inset borders, the swatches
+WEDGE_LEN = 1.6  # m along each eye axis for the 90 x 90 deg frustum wedge drawn on the vehicle (2.2 ran off the 70 deg frame)
 FONT = r"C:\Windows\Fonts\segoeui.ttf"
 FONT_B = r"C:\Windows\Fonts\segoeuib.ttf"
 
@@ -139,6 +149,26 @@ class ChaseStage(S.Stage):
             c.position.set(0.0, 0.0, -EYE_AHEAD)
             self.vehicle.add(c)
             self.cams.append(c)
+        # the eyes drawn on the drone for the chase view: one 90 x 90 deg frustum wedge per eye, apex at the
+        # eye camera, WEDGE_LEN m along its axis, in the inset colour. Lines are overlay-pass only, so the
+        # eyes (secondary views) do not see them.
+        self.wedges = []
+        for yaw, rgb in zip(YAWS, EYE_COLORS):
+            Ry = rot((0, 1, 0), math.radians(yaw))
+            apex = np.array([0.0, 0.0, -EYE_AHEAD])
+            corners = [apex + Ry @ (np.array([sx, sy, -1.0]) * WEDGE_LEN) for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+            pts = []
+            for c in corners:
+                pts += [apex, c]
+            for i in range(4):
+                pts += [corners[i], corners[(i + 1) % 4]]
+            g = tp.BufferGeometry()
+            g.set_from_points([tp.Vector3(*[float(v) for v in p]) for p in pts])
+            m = tp.LineBasicMaterial()
+            m.color = tp.Color(rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0)
+            wedge = tp.LineSegments(g, m)
+            self.vehicle.add(wedge)
+            self.wedges.append(wedge)
         # the drone model: its authoring frame is forward +Z, the vehicle's forward is -Z
         self.holder = tp.Group()
         self.holder.rotation.y = math.pi
@@ -183,11 +213,17 @@ def smooth01(x):
 
 
 def flight(stage: S.Stage, cruise=14.0, start=320.0, stop=150.0, t_rest=1.0, t_acc=1.0, t_brake=1.5,
-           v_turn=0.0, turn_rate=90.0, t_turn=1.15, v_out=10.0, t_out=2.0, pilot=False):
+           v_turn=0.0, turn_rate=90.0, t_turn=1.15, v_out=12.0, t_out=3.5, dive_rate=15.0, alt_low=25.0,
+           t_dive_ramp=3.0, extra_turn=0.0, pilot=False):
     """Approach the wall at `cruise` m/s from `start` m, brake to v_turn (0 = hover) by `stop` m, yaw
-    left at turn_rate deg/s (0.15 s ramps, so 90 deg over 1.15 s) for t_turn s, accelerate to v_out
-    and fly level for t_out s.
-    -> dict(pos, R, w, v, speed, labels, info). Body frame as scenarios.py; exact integration."""
+    left at turn_rate deg/s (0.15 s ramps, so 90 deg over 1.15 s) for t_turn s. Then, over the fjord:
+    accelerate to v_out over 1 s while the vertical rate ramps (smoothstep, t_dive_ramp s) to
+    dive_rate m/s down, hold it, and ramp out so the dive ends alt_low m above stage.geo.sea_level;
+    extra_turn deg of further yaw at turn_rate (0.15 s ramps) at the start of the dive bends the
+    heading along the fjord. Then fly level for t_out s.
+    -> dict(pos, R, w, v, vy, speed, labels, info). Body frame as scenarios.py; exact integration.
+    info carries the clearance audit: min_agl (all frames), forward range to terrain at the end of the
+    level flight and the minimum forward range sampled every 0.5 s from the start of the dive."""
     R0 = S.heading_rotation(S.HEADING)
     fwd = np.array([S.HEADING[0], 0.0, S.HEADING[1]])
     hit = 0.0
@@ -202,19 +238,26 @@ def flight(stage: S.Stage, cruise=14.0, start=320.0, stop=150.0, t_rest=1.0, t_a
     d_acc = 0.5 * cruise * t_acc
     d_brake = 0.5 * (cruise + v_turn) * t_brake
     t_cruise = max(0.0, (d_straight - d_acc - d_brake) / cruise)
+    sea = float(stage.geo.sea_level)
+    drop = y - (sea + alt_low)
+    t_flat = max(0.0, drop / dive_rate - t_dive_ramp)  # smoothstep ramps integrate to half their length
+    t_dive = t_flat + 2 * t_dive_ramp
+    t_extra = extra_turn / turn_rate + 0.15 if extra_turn > 0 else 0.0
     segs = [("hover", t_rest), (f"accelerate to {cruise:g} m/s", t_acc), (f"approach {cruise:g} m/s", t_cruise),
             (f"brake to {v_turn:g} m/s" if v_turn > 0 else "brake to hover", t_brake),
             (f"yaw turn {turn_rate:g} deg/s", t_turn),
-            (f"accelerate to {v_out:g} m/s", 1.0), (f"level flight {v_out:g} m/s", t_out)]
+            (f"dive to {alt_low:g} m, {dive_rate:g} m/s down, {v_out:g} m/s forward", t_dive),
+            (f"level flight {v_out:g} m/s, {alt_low:g} m above the fjord", t_out)]
     bounds, k = [], 0
     for name, T in segs:
         n = int(round(T / DT))
         bounds.append((name, k, k + n))
         k += n
     n = k
-    speed, yaw = np.zeros(n), np.zeros(n)
+    speed, yaw, vy = np.zeros(n), np.zeros(n), np.zeros(n)
     for name, a, b in bounds:
         u = (np.arange(b - a) + 0.5) / max(b - a, 1)
+        t = (np.arange(b - a) + 0.5) * DT
         if name.startswith("accelerate to " + f"{cruise:g}"):
             speed[a:b] = cruise * smooth01(u)
         elif name.startswith("approach"):
@@ -224,28 +267,45 @@ def flight(stage: S.Stage, cruise=14.0, start=320.0, stop=150.0, t_rest=1.0, t_a
         elif name.startswith("yaw"):
             speed[a:b] = v_turn
             yaw[a:b] = math.radians(turn_rate) * np.array([S.ramp((i + 0.5) * DT, (b - a) * DT, 0.15) for i in range(b - a)])
-        elif name.startswith("accelerate to " + f"{v_out:g}"):
-            speed[a:b] = v_turn + (v_out - v_turn) * smooth01(u)
+        elif name.startswith("dive"):
+            T = (b - a) * DT
+            speed[a:b] = v_turn + (v_out - v_turn) * smooth01(t / 1.0)
+            vy[a:b] = -dive_rate * np.minimum(smooth01(t / t_dive_ramp), smooth01((T - t) / t_dive_ramp))
+            if t_extra > 0:
+                yaw[a:b] = math.radians(turn_rate) * np.array([S.ramp(tt, t_extra, 0.15) for tt in t])
         elif name.startswith("level"):
             speed[a:b] = v_out
     w = np.stack([np.zeros(n), yaw, np.zeros(n)], 1)
-    v = np.stack([np.zeros(n), np.zeros(n), -speed], 1)
+    v = np.stack([np.zeros(n), vy, -speed], 1)  # yaw-only R: body y is world y
     pos0 = np.array([S.FACE[0] - S.HEADING[0] * s0, y, S.FACE[1] - S.HEADING[1] * s0])
     pos, R = S.integrate(pos0, R0, w, v)
-    agl = np.array([p[1] - stage.geo.height_at(float(p[0]), float(p[2])) for p in pos[::5]])
-    info = dict(altitude=float(y), wall_s=float(hit), start_range=start, stop_range=stop, cruise=cruise,
-                min_agl=float(agl.min()), frames=n, seconds=n * DT, peak_yaw_deg_s=float(np.degrees(yaw.max())),
-                turn_deg=float(np.degrees(yaw.sum() * DT)))
-    return dict(pos=pos, R=R, w=w, v=v, speed=speed, labels=bounds, info=info)
+    agl = np.array([p[1] - stage.geo.height_at(float(p[0]), float(p[2])) for p in pos])
+    k_dive = bounds[5][1]
+    ranges = []
+    for k in range(k_dive, n, 50):
+        ranges.append(stage.range_geom(pos[k], -R[k][:, 2]))
+    ranges.append(stage.range_geom(pos[-1], -R[-1][:, 2]))
+    ranges = np.array(ranges, float)
+    ranges = np.where(np.isnan(ranges), np.inf, ranges)
+    info = dict(altitude=float(y), sea_level=sea, alt_low=alt_low, wall_s=float(hit), start_range=start, stop_range=stop,
+                cruise=cruise, v_out=v_out, dive_rate=dive_rate, t_dive=t_dive, extra_turn=extra_turn,
+                min_agl=float(agl.min()), min_agl_frame=int(agl.argmin()), min_agl_t=float(agl.argmin() * DT),
+                end_alt_above_sea=float(pos[-1][1] - sea), end_forward_range=float(ranges[-1]),
+                min_forward_range_from_dive=float(ranges.min()), frames=n, seconds=n * DT,
+                peak_yaw_deg_s=float(np.degrees(yaw.max())), turn_deg=float(np.degrees(yaw.sum() * DT)))
+    return dict(pos=pos, R=R, w=w, v=v, vy=vy, speed=speed, labels=bounds, info=info)
 
 
-def drone_attitude(speed, w, tau=0.12):
+def drone_attitude(speed, w, tau=0.12, vy=None, dive_rate=15.0):
     """Cosmetic airframe pitch/roll (rad) per frame from the body-frame profile: nose down by
-    atan(a_fwd / g) plus a cruise trim, bank into the yaw turn by atan(v w_yaw / g). The eyes and the
-    truth stay on the vehicle frame; only the model tilts."""
+    atan(a_fwd / g) plus a cruise trim, a further 12 deg nose down at the full dive rate, bank into
+    the yaw turn by atan(v w_yaw / g). The eyes and the truth stay on the vehicle frame; only the
+    model tilts."""
     n = len(speed)
     a_fwd = np.gradient(speed, DT)
-    pitch = np.clip(np.arctan2(a_fwd, 9.81) + np.radians(6.0) * speed / max(speed.max(), 1e-6), -0.45, 0.45)
+    dive = np.zeros(n) if vy is None else np.clip(-np.asarray(vy) / dive_rate, 0.0, 1.0)
+    pitch = np.clip(np.arctan2(a_fwd, 9.81) + np.radians(6.0) * speed / max(speed.max(), 1e-6) + np.radians(12.0) * dive,
+                    -0.45, 0.45)
     roll = np.clip(np.arctan2(speed * w[:, 1], 9.81), -0.6, 0.6)
     k = 1 - math.exp(-DT / tau)
     out = np.zeros((n, 2))
@@ -259,13 +319,20 @@ def drone_attitude(speed, w, tau=0.12):
 
 class ChaseCam:
     """Behind and above the vehicle, smoothed, aimed a little ahead and off-axis so the drone sits
-    in the free upper-left of the frame (the insets take the bottom and the right)."""
+    small in the lower middle of the free area (the insets take the bottom and the right) and the
+    70 deg frame holds most of what the two 90 deg eyes see."""
 
     def __init__(self, back=CHASE_BACK, up=CHASE_UP, tau_pos=0.45, tau_aim=0.2):
         self.back, self.up, self.tau_pos, self.tau_aim = back, up, tau_pos, tau_aim
         self.eye = self.aim = self.fwd = None
 
-    def __call__(self, pos, R):
+    def __call__(self, pos, R, back=None, up=None, ahead=3.0):
+        """back / up (m) override the construction framing for this frame (the dive and the low
+        flight pull the camera back and up so the water and the wall stay in frame with the drone);
+        ahead is the aim point distance along the smoothed heading. The eye and aim targets are
+        smoothed with tau_pos / tau_aim, so a change of framing eases in."""
+        back = self.back if back is None else back
+        up = self.up if up is None else up
         fwd = -R[:, 2]
         right = R[:, 0]
         if self.fwd is None:
@@ -275,8 +342,8 @@ class ChaseCam:
         f = self.fwd
         rgt = np.cross(f, [0, 1, 0])
         rgt /= np.linalg.norm(rgt)
-        eye_t = -f * self.back + np.array([0, self.up, 0]) + rgt * 0.30
-        aim_t = f * 2.0 + rgt * 0.42 - np.array([0, 0.58, 0])
+        eye_t = -f * back + np.array([0, up, 0]) + rgt * 0.30
+        aim_t = f * ahead + rgt * 0.42 - np.array([0, 0.58, 0])
         if self.eye is None:
             self.eye, self.aim = eye_t.copy(), aim_t.copy()
         self.eye += (eye_t - self.eye) * (1 - math.exp(-DT / self.tau_pos))
@@ -387,17 +454,21 @@ class Composer:
         # header
         y = self.box_text(dr, (24, 16), texts["title"], self.fb[40])
         self.box_text(dr, (24, y + 6), texts["sub"], self.f[26])
-        self.box_text(dr, (24, 118), texts["seg"], self.f[32], fill=(255, 220, 120))
+        y = self.box_text(dr, (24, 118), texts["seg"], self.f[32], fill=(255, 220, 120))
+        if texts.get("alt"):
+            self.box_text(dr, (24, y + 6), texts["alt"], self.f[32], fill=(255, 220, 120))
         # time, right-aligned in the chase area
         t = texts["time"]
         w = dr.textlength(t, font=self.f[30])
         self.box_text(dr, (self.COL_X - 24 - w, 16), t, self.f[30])
-        # eye labels
-        for e, yaw in enumerate(YAWS):
+        # eye labels, a colour swatch and a border in the eye's colour (matches its wedge on the drone)
+        for e, (yaw, col) in enumerate(zip(YAWS, EYE_COLORS)):
             y0 = e * (self.EYE + 4)
             dr.rectangle((self.COL_X, y0 + self.EYE - 34, self.COL_X + self.EYE, y0 + self.EYE), fill=(8, 9, 12))
-            dr.text((self.COL_X + 8, y0 + self.EYE - 32), f"eye {'L' if e == 0 else 'R'}   yaw {yaw:+.0f}   FOV 90 deg",
+            dr.rectangle((self.COL_X + 10, y0 + self.EYE - 27, self.COL_X + 30, y0 + self.EYE - 7), fill=col)
+            dr.text((self.COL_X + 40, y0 + self.EYE - 32), f"eye {'L' if e == 0 else 'R'}   yaw {yaw:+.0f}   90 deg",
                     font=self.f[22], fill=(255, 255, 255))
+            dr.rectangle((self.COL_X, y0, self.COL_X + self.EYE - 1, y0 + self.EYE - 1), outline=col, width=5)
         # legend text
         dr.text((1736, 626), "hue = direction", font=self.f[22], fill=(255, 255, 255))
         dr.text((1736, 654), "(red = right,", font=self.f[22], fill=(200, 200, 200))
@@ -492,6 +563,10 @@ def main(argv=None):
     ap.add_argument("--specular", type=float, default=0.55, help="ocean specular_intensity (dims the reflected shore and the sun glint)")
     ap.add_argument("--look", default="auto", choices=("auto", "ocean", "pond", "fjord"),
                     help="tp.Ocean material recipe; fjord adds volume scattering (glacial turquoise)")
+    ap.add_argument("--extra-turn", type=float, default=EXTRA_TURN,
+                    help="further yaw (deg) at the start of the dive, bending the heading along the fjord")
+    ap.add_argument("--alt-low", type=float, default=25.0, help="altitude above the sea level at the end of the dive, m")
+    ap.add_argument("--dive-rate", type=float, default=15.0, help="vertical rate in the dive, m/s")
     args = ap.parse_args(argv)
     args.out.mkdir(parents=True, exist_ok=True)
     name = args.name or ("chase_pilot" if args.pilot else "flyeye_chase_geiranger")
@@ -516,11 +591,19 @@ def main(argv=None):
     loom = Looming(SIZE, FOV, R_eyes)
     flow_box = AovFlow(lat, DT, SIZE, FOV, mode="box")
 
-    fl = flight(stage, pilot=args.pilot)
-    pos, R, w, v, speed, labels = fl["pos"], fl["R"], fl["w"], fl["v"], fl["speed"], fl["labels"]
+    fl = flight(stage, pilot=args.pilot, extra_turn=args.extra_turn, alt_low=args.alt_low, dive_rate=args.dive_rate)
+    pos, R, w, v, vy, speed, labels = fl["pos"], fl["R"], fl["w"], fl["v"], fl["vy"], fl["speed"], fl["labels"]
     n = len(pos)
     print("flight:", json.dumps(fl["info"]), "segments:", [(nm, a, b) for nm, a, b in labels])
-    att = drone_attitude(speed, w)
+    if fl["info"]["min_agl"] < 15.0:
+        raise SystemExit(f"flight path within 15 m of terrain: min AGL {fl['info']['min_agl']:.1f} m at t {fl['info']['min_agl_t']:.2f} s")
+    att = drone_attitude(speed, w, vy=vy, dive_rate=args.dive_rate)
+    sea = float(stage.geo.sea_level)
+    k_dive = labels[5][1]
+    # chase framing: CHASE_BACK / CHASE_UP (4 m / 1.4 m) aimed 3 m ahead for the approach, eased over 2 s to
+    # 5 m / 1.7 m aimed 3.5 m ahead for the dive and the low flight (water and wall in frame with the drone)
+    u_frame = smooth01((np.arange(n) - k_dive) * DT / 2.0)
+    cam_back, cam_up, cam_ahead = CHASE_BACK + 1.0 * u_frame, CHASE_UP + 0.3 * u_frame, 3.0 + 0.5 * u_frame
     seg_of = np.zeros(n, dtype=np.int32)
     for i, (_, a, b) in enumerate(labels):
         seg_of[a:b] = i
@@ -549,6 +632,10 @@ def main(argv=None):
             stills["brake"] = (a + b) // 2
         if nm.startswith("yaw"):
             stills["turn"] = (a + b) // 2
+        if nm.startswith("dive"):
+            stills["dive_start"] = a + 150
+            stills["dive"] = (a + b) // 2
+            stills["flare"] = b - 40
         if nm.startswith("level"):
             stills["level"] = (a + b) // 2
     if args.pilot:
@@ -563,7 +650,7 @@ def main(argv=None):
         stage.drone.root.rotation.set(float(att[k, 0]), 0.0, float(att[k, 1]))
         tick += DT
         stage.drone.tick(DT, tick, night=0.0)
-        stage.chase(*cam(pos[k], R[k]))
+        stage.chase(*cam(pos[k], R[k], back=float(cam_back[k]), up=float(cam_up[k]), ahead=float(cam_ahead[k])))
         stage.render()
         x = torch.stack([e.receptors() for e in stage.eyes])
         if k == 0:
@@ -581,9 +668,11 @@ def main(argv=None):
         stage.frames.sync()
         seg = labels[seg_of[k]][0]
         gauges = dict(true=np.degrees(w[k][[1, 0, 2]]), circuit=np.degrees(circ_s[[1, 0, 2]]), loom_true=lt, loom_circuit=loom_s)
+        alt = float(pos[k][1] - sea)
         texts = dict(title="threepp + flyvis connectome model",
                      sub="Lappalainen et al. 2024, FIB-25 / FIB-19 medulla connectome, member 000",
-                     seg=f"{seg}   |v| {speed[k]:4.1f} m/s",
+                     seg=f"{seg}   |v| {math.hypot(speed[k], vy[k]):4.1f} m/s",
+                     alt=f"alt {alt:.0f} m above the fjord" + (f"   sink {-vy[k]:.0f} m/s" if vy[k] < -0.5 else ""),
                      time=f"t {k * DT:5.2f} s   playback {playback}   100 Hz")
         if k % args.stride == 0:
             comp.frame(stage.frames.color, [e.color for e in stage.eyes], x, field, fb, gauges, texts)
