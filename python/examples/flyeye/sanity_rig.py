@@ -44,6 +44,8 @@ from flyeye.eye import EyeView, configure_sensor_renderer  # noqa: E402
 from flyeye.lattice import HexLattice  # noqa: E402
 from flyeye.optic_lobe import OpticLobe  # noqa: E402
 from flyeye.readouts import Looming, MotionField, RotationReadout  # noqa: E402
+from flyeye.truth import AovFlow  # noqa: E402
+from flyeye.video import VideoOut  # noqa: E402
 
 SIZE, FOV, DT = 403, 90.0, 0.01
 YAWS = (45.0, -45.0)
@@ -135,95 +137,8 @@ def quat(R):
     return x, y, z, w
 
 
-class AovFlow:
-    """Motion AOV (prevNDC - currNDC, GL NDC y up) at the column centres -> (2, 721) angular flow, rad/s."""
-
-    def __init__(self, lattice: HexLattice, dt: float):
-        rc = lattice.pixel_rc(SIZE)
-        self.rows, self.cols = rc[:, 0].cuda(), rc[:, 1].cuda()
-        self.ndc = lattice.column_ndc(SIZE).cuda()
-        self.tan = math.tan(math.radians(FOV) / 2)
-        self.tangents = lattice.column_tangents(SIZE, FOV, torch.float64).cuda()
-        self.dt = dt
-
-    def ray(self, ndc):
-        p = torch.cat([ndc * self.tan, -torch.ones_like(ndc[:, :1])], dim=1)
-        return p / p.norm(dim=1, keepdim=True)
-
-    def __call__(self, motion):
-        m = motion[self.rows, self.cols, :2].double()
-        flow3 = (self.ray(self.ndc) - self.ray(self.ndc + m)) / self.dt
-        return torch.einsum("ni,nki->kn", flow3, self.tangents)
-
-
 def to_rgb(color):
     return color[..., [2, 1, 0]].cpu().numpy()
-
-
-class VideoOut:
-    """--video: one column per eye; rows = the render, what the 721 receptor columns receive
-    (each hex cell filled with its BoxEye value), and the T4/T5 motion field (hue = image
-    direction, brightness = magnitude, full at 1.0). All composed on the GPU, piped to ffmpeg."""
-
-    GAP, TEXT = 4, 44
-
-    def __init__(self, path, lattice: HexLattice, n_eyes: int, fps: int = 100):
-        import subprocess
-
-        import imageio_ffmpeg
-        from PIL import Image, ImageDraw
-
-        self.Image, self.ImageDraw = Image, ImageDraw
-        rc = lattice.pixel_rc(SIZE).float().cuda()
-        yy, xx = torch.meshgrid(torch.arange(SIZE, device="cuda"), torch.arange(SIZE, device="cuda"), indexing="ij")
-        pix = torch.stack([yy.flatten(), xx.flatten()], 1).float()
-        d, i = zip(*(torch.cdist(c, rc).min(1) for c in pix.split(16384)))
-        self.index = torch.cat(i).view(SIZE, SIZE)  # nearest column per pixel
-        self.inside = (torch.cat(d) <= 8.5).view(SIZE, SIZE)  # outside the lattice stays black
-        self.n = n_eyes
-        self.W = n_eyes * SIZE + (n_eyes - 1) * self.GAP
-        self.H = self.TEXT + 3 * SIZE + 2 * self.GAP
-        self.W, self.H = self.W + self.W % 2, self.H + self.H % 2
-        self.proc = subprocess.Popen(
-            [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
-             "-s", f"{self.W}x{self.H}", "-r", str(fps), "-i", "-", "-c:v", "libx264", "-crf", "18",
-             "-pix_fmt", "yuv420p", str(path)], stdin=subprocess.PIPE)
-
-    @staticmethod
-    def field_rgb(f):
-        """(2, 721) image-space flow -> (721, 3) uint8, HSV with S = 1."""
-        h = (torch.atan2(f[1], f[0]) / (2 * math.pi)) % 1.0
-        v = f.norm(dim=0).clamp(0, 1)
-        k = (torch.tensor([5.0, 3.0, 1.0], device=f.device)[:, None] + 6 * h) % 6
-        rgb = v * (1 - torch.minimum(k, 4 - k).clamp(0, 1))
-        return (rgb.T * 255).to(torch.uint8)
-
-    def write(self, colors, receptors, field, line1, line2):
-        img = torch.zeros(self.H, self.W, 3, dtype=torch.uint8, device="cuda")
-        for e in range(self.n):
-            x0, y = e * (SIZE + self.GAP), self.TEXT
-            img[y:y + SIZE, x0:x0 + SIZE] = colors[e][..., [2, 1, 0]]
-            y += SIZE + self.GAP
-            g = (receptors[e].clamp(0, 1) * 255).to(torch.uint8)[self.index] * self.inside
-            img[y:y + SIZE, x0:x0 + SIZE] = g[..., None]
-            y += SIZE + self.GAP
-            img[y:y + SIZE, x0:x0 + SIZE] = self.field_rgb(field[e].float())[self.index] * self.inside[..., None]
-        im = self.Image.fromarray(img.cpu().numpy())
-        dr = self.ImageDraw.Draw(im)
-        dr.text((6, 4), line1, fill=(255, 255, 255))
-        dr.text((6, 22), line2, fill=(255, 255, 255))
-        for e, yaw in enumerate(YAWS):
-            x0 = e * (SIZE + self.GAP) + 4
-            for row, label in enumerate((f"eye yaw {yaw:+.0f} deg: render", "721 receptor columns (BoxEye input)",
-                                         "T4/T5 field: hue = direction, brightness = size")):
-                y = self.TEXT + row * (SIZE + self.GAP) + 4
-                dr.rectangle((x0 - 2, y - 2, x0 + 6 * len(label) + 2, y + 12), fill=(0, 0, 0))
-                dr.text((x0, y), label, fill=(255, 255, 255))
-        self.proc.stdin.write(im.tobytes())
-
-    def close(self):
-        self.proc.stdin.close()
-        self.proc.wait()
 
 
 def main(argv=None):
@@ -292,8 +207,8 @@ def run(args):
     ro_l = RotationReadout(SIZE, FOV, R_eyes, method="lstsq")
     loom = Looming(SIZE, FOV, R_eyes)
     loom_col = Looming(SIZE, FOV, R_eyes, opponent=False)
-    aov = AovFlow(lat, DT)
-    video = VideoOut(args.video, lat, len(eyes)) if args.video else None
+    aov = AovFlow(lat, DT, SIZE, FOV)
+    video = VideoOut(args.video, lat, len(eyes), size=SIZE, yaws=YAWS) if args.video else None
 
     w_true, speed, labels = schedule(args.rate, args.room, args.stop, args.speed)
     n = len(w_true)

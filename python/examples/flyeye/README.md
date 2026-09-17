@@ -20,6 +20,11 @@ one sparse matrix-vector product and a leaky-integrator update per step, read fr
 | `online_gate.py` | Phase 1 gate: the online eye against Phase 0, frames identical and live, flush sweep |
 | `timing.py` | Phase 1 timing table |
 | `sanity_rig.py` | Phase 1 readout sign check on a live two-eye rig |
+| `video.py` | `VideoOut`: mp4 of renders, receptor columns, T4/T5 field and true flow |
+| `truth.py` | Ground truth from the eye views' AOVs: `AovFlow` (box or centre, sky patched), `Footprint`, `ForwardRange`, `smooth_tau` |
+| `scenarios.py` | Phase 2 recordings: scripted two-eye vehicle over the Geiranger fjord wall, 7 scenarios x 3 lightings |
+| `tuning.py` | Phase 2 figure b: drifting gratings, TF and contrast tuning |
+| `calibrate.py` | Phase 2 figures a, c, d and the gate number, from the recordings (CPU, no rendering) |
 | `tools/export_flyvis.py`, `tools/flyvis_reference.py` | The only flyvis users (throwaway venv) |
 
 ## Phase 0 results (2026-09-17, RTX 4070, torch 2.12.1+cu126, Python 3.14)
@@ -331,6 +336,250 @@ active axis is 1.222 rad/s, including the ramp.
 8. **`render_edges.Stage` oddities.** It reports `volumetric_fog` True after setting it
    False, and prints "FSR 3.1 upscaler active" while `renderer.fsr` reads False. Neither
    affected any result here.
+
+## Phase 2 results (2026-09-17, same machine)
+
+### Gate
+
+**0.362.** In the best true-speed bin, 2-4 columns/s, 36.2 % of column-frames have a circuit
+direction within 45 deg of the true flow (N = 1,068,130; chance is 0.25). Per lighting:
+bright 0.355, dim 0.341, dark 0.389.
+
+Definition (`calibrate.py`):
+
+- Circuit: `MotionField` with unit gains (T4 + T5, x = b - a, y = c - d), per column, per frame.
+- Truth: `flow_box` (the 13x13 box mean of the motion AOV as angular flow, sky patched)
+  mapped to the pixel velocity of the column centre. The unit tangents are up to 18 deg off
+  orthogonal in the corners, and the circuit's x/y are the lattice's pixel axes.
+- Counted: scene columns (sky_frac < 0.5), true speed >= 0.25 columns/s (13 px), the first
+  0.3 s of every segment dropped, circuit 20 ms behind truth. The lag barely matters: over
+  0-60 ms the pooled accuracy moves from 0.3113 to 0.3117.
+- Best bin: log2 speed bins, N >= 20,000, all 21 runs pooled.
+- Equivalent TF: the receptor images' power-weighted mean spatial wavelength along lattice
+  columns is 13.0 columns (12.9-13.0 in every lighting). 2-4 columns/s is 0.15-0.31 Hz at
+  that wavelength, or 0.71 / 0.35 / 0.18 Hz for 4 / 8 / 16-column content.
+
+Side by side:
+
+| | value |
+|---|---|
+| gate, scene columns | 0.362 |
+| the same bin, all columns (sky included) | 0.361 |
+| the run's own rest field held fixed (a motion-blind baseline), same bin | 0.319 |
+| 19-column hex mean of the field vs the same mean of the truth, best bin (2-4 col/s) | 0.418 (bright 0.440, dim 0.399, dark 0.414) |
+| gratings at the best TF (4 Hz), 4/8/16 columns, time-averaged vector | 1.00 |
+| gratings at 4 Hz, per frame | 0.69 / 0.78 / 0.70 |
+
+The circuit gives usable direction on full-field gratings but not per column on this
+natural scene. Its per-frame vector beats a motion-blind baseline by only 4 points.
+
+### a. Direction accuracy (`figures/phase2_direction.png`)
+
+Everything below counts scene columns only, with lag 20 ms. Overall accuracy is 0.312
+(N = 9.06 M column-frames): bright 0.329, dim 0.299, dark 0.306. The median |error| is
+78 / 82 / 82 deg.
+
+By true speed (columns/s), lightings pooled:
+
+| 0.25-0.5 | 0.5-1 | 1-2 | 2-4 | 4-8 | 8-16 | 16-32 | 32-64 | 64-128 |
+|---|---|---|---|---|---|---|---|---|
+| 0.184 | 0.249 | 0.350 | **0.362** | 0.355 | 0.328 | 0.308 | 0.280 | 0.270 |
+
+- Accuracy is flat within 0.03 from 1 to 16 columns/s and falls on both sides. The dark
+  runs peak lower (0.389 at 2-4) and fall fastest (0.258 at 16-32).
+- By footprint Michelson contrast (0-0.05, 0.05-0.1, 0.1-0.2, 0.2-0.4, 0.4-0.8, 0.8-1):
+  0.187, 0.270, 0.313, 0.334, 0.333, 0.317. Contrast here rises as the light falls (AgX
+  toe), so it is not the circuit's effective contrast.
+- By scenario, bright / dim / dark:
+
+  | straight_3 | straight_10 | straight_30 | yaw | pitch | roll | approach |
+  |---|---|---|---|---|---|---|
+  | 0.37 / 0.37 / 0.57 | 0.35 / 0.30 / 0.44 | 0.34 / 0.29 / 0.33 | 0.38 / 0.34 / 0.35 | 0.30 / 0.28 / 0.19 | 0.32 / 0.29 / 0.20 | 0.31 / 0.29 / 0.30 |
+
+- By variant (overall): T4 + T5 0.312, T4 alone 0.287, T5 alone 0.252, 19-column mean
+  0.343, motion-blind rest field 0.287. T5 alone is at chance below 4 columns/s and peaks
+  at 16-32 columns/s (0.34).
+- Time-averaged vector per steady rotation segment (the grating figure's measure),
+  30 / 90 / 180 deg/s: bright 0.38 / 0.46 / 0.44, dim 0.32 / 0.36 / 0.33, dark 0.24 /
+  0.26 / 0.24.
+- Spatial maps (yaw +90 and fly 30 m/s, bright): accurate patches sit on terrain; the sky
+  rows (ringed) and the lowest rows read near 0. Scene-column accuracy in
+  those segments: 0.41 / 0.54 (left / right eye) for yaw +90, and 0.18 / 0.42 for 30 m/s.
+
+**Why per column fails: a static, pattern-dependent field.** In a static textured scene
+(the 0.7 s rest before each run) the field is already |f| = 0.080 at p50 and 0.16 at p90.
+During motion it is 0.08-0.12. The pattern part is biased to the right and up: in the
+bright rests T4b = 0.031 and T4c = 0.035, against T4a = 0.003 and T4d = 0.009. As a
+result, flows that point right or up score higher: yaw +90 0.47 against yaw -90 0.32, and
+pitch -90 (image up) 0.37 against pitch +90 0.26. The high dark straight_3 score (0.57)
+is this bias lining up with the mostly rightward true flow (mean +79 px/s), not motion
+sensing. Two corrections do not fix it:
+
+- Subtracting the per-type rest mean of the textured rests: yaw bright 0.377 to 0.379,
+  pitch 0.297 to 0.309, straight_3 0.369 to 0.319.
+- Offline rerun on the recorded receptors with every frame scaled to mean 0.5
+  (`C:\dev\_flyeye\scratch\p2_cal_meannorm.py`; the raw rerun reproduces the recorded field
+  to 7e-4): yaw bright 0.377 to 0.412, yaw dark 0.344 to 0.405, pitch bright 0.297 to
+  0.349, straight_30 bright 0.337 to 0.318.
+
+### b. Tuning (`figures/phase2_tuning.png`, `tuning.py`)
+
+Full-field drifting sinusoids on a 403 px, 90 deg eye (unlit plane, flush 1, 100 Hz). The
+render keeps the contrast: the fundamental reads 0.493-0.498 for nominal 0.5, flat across
+TF up to 33 px/frame. Wavelengths 2, 3, 4, 8, 16 columns; TF 0.25-16 Hz; c = 0.5.
+
+- **TF-tuned, not velocity-tuned.** Peak TF (T4 + T5, log-parabola) is 2.67 / 3.07 /
+  3.72 / 4.72 Hz at 3 / 4 / 8 / 16 columns: peak speeds 8.0 / 12.3 / 29.8 / 75.5
+  columns/s. Over 3-16 columns, the peak TF spreads 0.82 octaves while the peak speed
+  spreads 3.24 octaves (preferred minus null: 0.46 and 2.82).
+- 2 columns is the lattice's Nyquist period; its direction numbers are aliased (best 0.46).
+- Direction accuracy (time-averaged vector) at 4 Hz: 1.00 at 4, 8 and 16 columns; 0.91 at
+  3 columns (8 Hz). Per frame 0.69-0.78.
+- Contrast at 4 columns, 4 Hz: T4 preferred 0.021, 0.048, 0.102, 0.209, 0.356 at measured
+  contrast 0.05, 0.10, 0.20, 0.40, 0.79. That is roughly linear from 0.1 to 0.5 and
+  compressive at 0.8. Accuracy is 0.85 at c = 0.05 and 1.00 from 0.4.
+- Per type at 4 columns, 4 Hz: T4d (0.050) and T5b (0.051) are weak, as in Phase 0.
+
+### c. Rotation (`figures/phase2_rotation.png`)
+
+Matched and lstsq are identical on the symmetric rig (max difference 0). Gain is the
+steady-segment mean (first 0.3 s dropped, rest-subtracted) per rad/s, in a.u. R^2 is
+given two ways: over the six segment means against the rate, and over a lagged linear fit
+to the whole run.
+
+| lighting | axis | gain at 30 / 90 / 180 deg/s | R^2 segments | R^2 run | lag | max off/on |
+|---|---|---|---|---|---|---|
+| bright | yaw | 0.073 / 0.041 / 0.022 | 0.87 | 0.83 | 70 ms | 0.70 |
+| bright | pitch | 0.034 / 0.013 / 0.002 | 0.33 | 0.42 | 60 ms | 5.4 |
+| bright | roll | 0.060 / 0.028 / 0.011 | 0.74 | 0.69 | 80 ms | 0.76 |
+| dim | yaw | 0.055 / 0.033 / 0.019 | 0.89 | 0.85 | 70 ms | 0.94 |
+| dim | pitch | 0.023 / 0.003 / -0.005 | 0.26 | 0.01 | - | 4.5 |
+| dim | roll | 0.041 / 0.016 / 0.001 | 0.25 | 0.39 | 50 ms | 2.9 |
+| dark | yaw | 0.030 / 0.019 / 0.012 | 0.91 | 0.86 | 80 ms | 1.06 |
+| dark | pitch | 0.003 / -0.006 / -0.008 | 0.86 (wrong sign) | 0.48 (wrong sign) | - | 2.2 |
+| dark | roll | 0.011 / 0.001 / -0.006 | 0.55 | 0.28 | - | 32 |
+
+- **Signs right** on 18 / 14 / 10 of 18 segments (bright / dim / dark).
+- **Rest offset** (wx, wy, wz): bright (-0.023, +0.022, -0.008), dim (-0.029, +0.042,
+  -0.011), dark (-0.020, +0.056, -0.005). The yaw offset grows as the light falls.
+- **Saturation.** The gain halves from 30 to 90 deg/s and halves again to 180 deg/s
+  (TF tuning: 30 deg/s is about 10 columns/s, near the 3-4 Hz peak at 13-column content).
+- **Cross-talk**, row-normalised slopes of the segment means (row = true axis; wx wy wz):
+
+  | | bright | dim | dark |
+  |---|---|---|---|
+  | pitch run | 1, +0.58, +0.38 | 1, -0.66, +0.16 | 1, -0.22, +0.09 |
+  | yaw run | -0.52, 1, +0.03 | -0.70, 1, -0.02 | -0.89, 1, -0.13 |
+  | roll run | +0.27, +0.45, 1 | +0.50, +1.23, 1 | -0.09, -0.94, 1 |
+
+  Yaw leaks into pitch at -0.5 to -0.9 (Phase 1's T4c answering rightward ON edges).
+  Pitch is the weakest axis in every lighting.
+- **Translation leakage** (steady straight flight, rest-subtracted, bright): wy +0.0011 /
+  +0.0035 / +0.0096 a.u. at 3 / 10 / 30 m/s. At the 30 deg/s yaw gain that is 0.014 /
+  0.047 / 0.13 rad/s. The truth templates read 0.023 / 0.077 / 0.235 rad/s, because the
+  near mountainside is in the right eye only, so the circuit leaks about half what exact
+  flow would. Dim at 30 m/s: 0.0054 (0.10 rad/s). Dark: within 0.002.
+
+### d. Looming (`figures/phase2_looming.png`)
+
+Steady 15 m/s approach (frames 150-980, 1/tau 0.10 to 0.67 /s from the depth AOV). False
+alarms are measured on the rotation runs and the rest before the approach, from frame 30
+on. The straight flights close on the wall at 1/tau 0.007-0.09 /s, so they are reported
+apart.
+
+| | bright | dim | dark |
+|---|---|---|---|
+| first 0.3 s / last 0.3 s | 0.0015 / 0.0148 | 0 / 0.0022 | 0 / 0 |
+| peak (at 1/tau) | 0.0173 (0.59) | 0.0070 (0.56) | 0 |
+| corr with 1/tau (best lag) | 0.88 (0 ms) | 0.64 (0.65 at 290 ms) | undefined |
+| 90 % of the largest bin mean at 1/tau | 0.575 | 0.575 (noisy) | - |
+| rotation false alarms p99 / max | 0.044 / 0.057 (yaw) | 0.044 / 0.063 (roll) | 0.045 / 0.057 (yaw) |
+| straight flights max | 0.0055 (30 m/s) | 0 | 0 |
+| separating threshold | none: the approach peak is 0.30 of the rotation max | none | none |
+
+- **Bright.** Binned by 1/tau in 0.05 steps from 0.10, the looming means rise from 0.002 to
+  0.016 at 0.55-0.60 and flatten after that. Its slope is about 0.025 per 1/s.
+- **Truth.** The same readout on the true flow tracks 1/tau at r = 0.999 in every lighting,
+  peaking at 0.164. Its false-alarm maximum is 0.010 (roll). From the first steady frame
+  (1/tau 0.10, tau 10 s) the approach stays above that, and in the last 0.3 s it is 14.9x
+  higher. The straight flights read 0.0017 / 0.0053 / 0.017 on the true flow, in step with
+  their 1/tau.
+- **Circuit versus truth.** The circuit's looming is about 10x weaker than the truth's
+  (0.017 against 0.164) and vanishes in dim and dark. Rotations drive it 3x above its
+  approach peak, so no threshold on this signal separates an approach from a turn.
+
+### Scene, lighting, recordings (`scenarios.py`)
+
+- **Scene.** `geodata/geiranger`: a shelf on the south fjord wall at about 230 m, heading
+  north-east to a wall that rises about 190 m over 70 m. The mountainside is on the right
+  and the fjord on the left. A flat dark water plane sits at sea level. The site was chosen
+  by a numpy scan of three packs for a cliff with a flat land approach; the Norddal
+  candidate was a forested slope.
+- **Rig.** Two 403 px, 90 deg eyes at yaw +-45 deg, 100 Hz, flush 1, sim time pinned.
+  Every run starts with 1 s of rest.
+  - `straight_3`, `straight_10`, `straight_30`: 40 m above ground from 400 m out, 3 s
+    steady.
+  - `yaw`, `pitch`, `roll`: hover, +-30, +-90, +-180 deg/s.
+  - `approach`: 15 m/s from 150 m to 18 m, 45 m above the highest ground under the path.
+- **Lighting.** One sun from the south-west at 35 deg elevation plus a procedural sky, with
+  fixed exposure. bright / dim / dark scale sun and sky by 1 / 0.3 / 0.1. Tone mapping is
+  AgX, chosen by `--scout`: no clipping at bright, at the cost of a dark toe (24 % of dark
+  pixels at luma <= 5). Receptor p50: 0.35 / 0.17 / 0.055.
+- **Truth checks.** Rotation truth through the templates reads the scripted rate to
+  0.074 %. The motion AOV reads zero on sky even under rotation, so `AovFlow` puts -w x ray
+  there (without that, 25 % low). tau from depth against the heightfield ray-march: 0.31 %
+  median error on the approach. Rest flow is exactly 0. No pop-in; nearest surface
+  >= 8.6 m.
+- **TAA at fast flow.** Moving against converged static renders of the same pose, the
+  receptors differ by 0.003-0.005 (mean abs) at 30 m/s and at 180 deg/s.
+- **Data.** 21 runs, 903 MB, in `C:\dev\_flyeye\phase2`. Renders (stills, contact sheets,
+  mp4 per run) are in `C:\dev\_flyeye\renders\phase2`.
+
+### Reproduce
+
+```
+py -3.14 python/examples/flyeye/scenarios.py --scout      # tone mapping and sky checks, stills
+py -3.14 python/examples/flyeye/scenarios.py              # 21 runs, npz + json + mp4 + stills (about 25 min)
+py -3.14 python/examples/flyeye/tuning.py                 # gratings, figure b (about 5 min; --extra for 3 and 16 columns)
+py -3.14 python/examples/flyeye/calibrate.py              # figures a, c, d, calibrate.json (about 2 min, CPU)
+```
+
+### Open issues
+
+For Phase 3 (event camera comparison):
+
+1. **Score both sensors on the same terms.** Use per-column direction against pixel-velocity
+   truth, the speed bins, and the motion-blind rest-field baseline. The circuit's gate is
+   0.362 against a baseline of 0.319; an event-camera flow estimator needs the same
+   baseline to be comparable.
+2. **The static pattern response dominates per column.** In a static textured scene |f| is
+   0.08 at p50, about the size of the motion response, with a right/up bias (T4b, T4c).
+   Neither a per-type offset nor mean-luminance normalisation removes it (at most +6
+   points). Spatial pooling helps (19 columns: 0.418). Try a temporal high-pass on the
+   field, or a column-wise rest estimate from a moving average, before deciding whether
+   per-column flow is usable at all.
+3. **Pitch is the weak axis.** Yaw leaks into it at -0.5 to -0.9, and it has wrong signs in
+   dim and dark. A per-axis correction fitted on the yaw runs (or per-type gains fitted
+   against the pixel-velocity truth) is the next calibration step; fit on one lighting,
+   test on the others.
+4. **Low light.** Dark (receptor p50 0.055) halves the yaw gain and loses pitch and roll.
+   AgX's toe is part of it; the event camera sees the same frames, so compare at dim/dark
+   too.
+5. **The scene's content sits at 13-column wavelengths.** Rotations at 90-180 deg/s (30-60
+   columns/s) are above the TF peak, so the gain halves per octave there. A 5 deg/column eye
+   (the fly's scale) would halve image speeds.
+
+For Phase 5 (a looming reflex on the drone):
+
+6. **No usable looming threshold from the circuit on this scene.** The rotation runs reach
+   0.057-0.063 while the approach peaks at 0.017 (bright) and 0 (dark). The same readout on
+   the true flow separates cleanly (14.9x margin from tau 10 s). Before a reflex:
+   - gate looming by the rotation readout (suppress it while |w| is above a level),
+     or subtract the rotation template's field before the
+     radial projection;
+   - check the approach at 1/tau above 0.7 /s: the recorded approach stops at 18 m, and
+     Phase 1 saturated near 1 /s;
+   - retest at dim/dark light with a gain control ahead of the receptors.
 
 ## Receptor input convention
 
