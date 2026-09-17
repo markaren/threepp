@@ -166,6 +166,7 @@ class PullArrow:
     HEAD_L = 0.016
     MIN_N = 0.3                # below this the arrow is hidden rather than drawn as a stub
     N_PER_M = 0.01             # 1 cm per newton
+    MAX_M = 0.10               # and no longer than this
 
     def __init__(self, scene, colour=0xD81028):
         mat = tp.MeshStandardMaterial()
@@ -198,7 +199,10 @@ class PullArrow:
             self.shaft.visible = self.head.visible = False
             return
         u = np.asarray(force, dtype=float) / n
-        total = self.N_PER_M * n
+        # 1 cm per newton sized the arrow for the trained 8 N. A pull-to-failure take goes
+        # past 25 N, where the arrow would cross the frame and the HUD; the HUD carries the
+        # number, so the arrow stops growing at MAX_M.
+        total = min(self.N_PER_M * n, self.MAX_M)
         shaft_len = max(1e-4, total - self.HEAD_L)
         # The shaft starts at the object's CENTRE, so the arrow is attached in every frame
         # whatever the object is doing.
@@ -309,7 +313,7 @@ class Legend:
     the legend is the look and not a chart of it. A Group at the palm pivot, so one rotation
     about the roll axis moves the whole thing with the camera."""
 
-    def __init__(self, scene, font, t_max, pivot, axis, aspect, n=24):
+    def __init__(self, scene, font, t_max, pivot, axis, aspect, caption=None, n=24):
         self.axis = tp.Vector3(*(float(v) for v in _unit(axis)))
         self.group = tp.Group()
         self.group.position.set(*(float(v) for v in pivot))
@@ -331,9 +335,16 @@ class Legend:
             _aim(seg, a, b, radius)
             self.group.add(seg)
         H = tp.HorizontalAlignment
-        for text, at, align in (("slack", rel - right * (0.5 * length + 0.006 * k), H.Right),
-                                (f"{t_max:.0f} N", rel + right * (0.5 * length + 0.006 * k), H.Left),
-                                ("cable tension", rel + up * (0.011 * k), H.Center)):
+        labels = [("slack", rel - right * (0.5 * length + 0.006 * k), H.Right),
+                  (f"{t_max:.0f} N", rel + right * (0.5 * length + 0.006 * k), H.Left),
+                  ("cable tension", rel + up * (0.011 * k), H.Center)]
+        if caption:
+            # What is in the hand: the object, its mass, its friction. Top-left, level with
+            # the HUD: text sprites are not depth-tested against the hand, and the top-left
+            # is the one corner no finger reaches in any frame.
+            labels.append((caption, rel + up * ((LEGEND_DROP + 0.86) * half_h)
+                           - right * (0.5 * length + 0.02 * k), H.Left))
+        for text, at, align in labels:
             s = tp.TextSprite(font)
             s.set_text(text)
             s.set_horizontal_alignment(align)
@@ -501,6 +512,7 @@ def main():
     tension = np.zeros(len(names))
     pull = np.zeros(3)
     pull_dir = np.zeros(3)
+    t_drop = pull_at_drop = None      # set once the object leaves the hand; read in control()
     g_now = np.array(meta["gravity"], dtype=float)
     theta_now = 0.0
     body = art.link(0)
@@ -551,8 +563,8 @@ def main():
             hud.set_color(tp.Color(0x1A1F28))
             hud.set_world_scale(0.0075)
             scene.add(hud)
-            legend = Legend(scene, font, meta["t_max"], SHOT_TARGET, axis,
-                            render_w / render_h)
+            legend = Legend(scene, font, meta["t_max"], SHOT_TARGET, axis, render_w / render_h,
+                            caption=f"{a.object}  {body.mass*1000:.0f} g  friction {friction:.2f}")
             rig = ShotRig(cam, lights, hud, SHOT_TARGET, axis, legend)
     for d in (a.shots, a.film):
         if d:
@@ -569,6 +581,12 @@ def main():
         t = i * dt
         k = max(0.0, (t - pull_start) / (pull_full - pull_start))
         pull = pull_dir * min(pull_cap, meta["pull_max"] * k)
+        if t_drop is not None:
+            # The rig stops pulling once the object is out of the hand. The object still leaves
+            # fast: 26 N on 35 g is 750 m/s^2, and by the time the offset crosses the drop
+            # limit it is doing ~25 m/s, gone in a frame. The tail of the take is the empty
+            # hand with the pull it let go at on the HUD.
+            pull = np.zeros(3)
         theta_now, g_now = gravity(t)
         world.set_gravity(tp.Vector3(*g_now))
 
@@ -589,9 +607,13 @@ def main():
         return np.linalg.norm(np.array([mesh.position.x, mesh.position.y,
                                         mesh.position.z]) - target)
 
+    def pull_now():
+        """The pull on the HUD and in the log: frozen at the value it let go at."""
+        return pull_at_drop if t_drop is not None else float(np.linalg.norm(pull))
+
     def status(t, d):
         return (f"t {t:4.2f} s   |d| {d*1000:6.1f} mm   turned {math.degrees(theta_now):4.0f} deg"
-                f"   pull {np.linalg.norm(pull):4.2f} N   mean tension {tension.mean():5.2f} N")
+                f"   pull {pull_now():4.2f} N   mean tension {tension.mean():5.2f} N")
 
     if a.view:
         def loop():
@@ -611,7 +633,6 @@ def main():
           f"from {roll['t0']:.1f} s over {roll['dur']:.1f} s, held {roll['hang']:.1f} s; "
           f"{seconds:.1f} s at {hz} Hz")
     worst = 0.0
-    t_drop = pull_at_drop = None
     for i in range(n_steps):
         d = control()
         worst = max(worst, d)
@@ -627,7 +648,7 @@ def main():
             view.update(arm.update() if arm is not None else None)
             if arrow is not None:
                 p = np.array([mesh.position.x, mesh.position.y, mesh.position.z])
-                f = float(np.linalg.norm(pull))
+                f = pull_now()
                 arrow.update(p, pull)
                 rig.set(theta_now)
                 hud.set_text(f"t {t:4.2f} s    turned {math.degrees(theta_now):3.0f} deg    "

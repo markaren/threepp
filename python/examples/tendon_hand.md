@@ -126,6 +126,20 @@ bar; four are lost while hanging, at 4.5–5.0 s. Seed 2's own two losses are th
 22 g cylinder at friction 0.31. Seed 2 with the 34.6 g sphere of drop seed 0 holds with a worst
 offset of 31 mm, mean tension 10 N at rest rising to about 20 N through the turn and the pull.
 
+In a still or a film the ropes are coloured by their commanded tension, slate when slack
+through amber and red to warm white at 40 N, with the ramp as a legend bar bottom-left and the
+object's name, mass and friction top-left (both corners no finger reaches: text sprites are not
+depth-tested against the hand). `--pull-max N` carries the training ramp on past the trained
+8 N up to N, `--roll-hang S` keeps the hand turned over for S seconds, and `--until-drop S` ends
+the take S seconds after the object leaves the hand and prints the pull it let go at. That is a
+measurement of margin, not of skill: the policy never saw more than 8 N. Seed 2 at drop seed 0
+with a 14 s hang: the sphere lets go at 26.4 N, the capsule at 17.2 N, the bar at the 40 N cap
+palm-up after 19.5 s, and the box never, holding the 40 N cap for the whole 20 s; the cylinder is
+the known first-turn loss at 2.3 N.
+
+    python play_tendon_hand.py hand_runs/s2/tendon_hand_hold.pt --object sphere --seed 0 \
+        --pull-max 40 --roll-hang 14 --seconds 20 --until-drop 1.0 --film out/fail_sphere/
+
 `--shots` and `--film` render headless, out of the SAME run that prints the hold numbers —
 not a replay. The roll is rendered by turning the camera, the lights and the HUD about the palm
 by the roll angle: the hand is fixed and gravity turns, and the picture of that under a fixed
