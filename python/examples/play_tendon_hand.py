@@ -298,6 +298,12 @@ def build(meta, kind, dims, density, friction, seed):
     mesh = object_mesh(kind, dims)
     jitter = np.array([(rng.random() * 2 - 1) * 0.015, 0.0, (rng.random() * 2 - 1) * 0.015])
     mesh.position.set(*(target + jitter - g_hat * (0.03 + 0.03 * rng.random())))
+    # A random orientation, as the env drops them: a bar or cylinder dropped upright is an
+    # easier catch than the training distribution, and the hold rate here has to be
+    # comparable with the GPU's.
+    q = rng.normal(size=4)
+    q /= np.linalg.norm(q)
+    mesh.quaternion.set(*(float(v) for v in q))
     art = world.create_articulation(fixed_base=False)
     mat = world.create_material(friction, 0.9 * friction, 0.0, friction_combine="min")
     art.add_link(mesh, density=density, material=mat)

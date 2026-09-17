@@ -90,12 +90,15 @@ turned by `world.set_gravity` on the checkpoint's film schedule (pronation about
 from the training ranges with `--seed`. The log prints the turn angle beside the offset and the
 pull.
 
-The smoke checkpoint, evaluated with the mean action: on the GPU env over 5118 episodes with
-random schedules, hold 27.2 %, still held when turned over 58.5 % (the training log's 60 % /
-83 % are with exploration noise on); on the CPU hand with its real cables and the film schedule,
-5 of 20 runs held to 8 s and every one of the 20 carried its object through the half turn, the
-losses coming while hanging under the ramping pull. The two rates agree, so the port holds;
-the policy is what the Idun run is for.
+The smoke checkpoint, evaluated with the mean action: on the GPU env, hold 27.2 % and still held
+when turned over 58.5 % over 5118 episodes with random schedules, 20.6 % and 49.1 % over 5627
+with the film schedule on every env (the training log's 60 % / 83 % are with exploration noise
+on, which adds tension through the action clamp). On the CPU hand with its real cables and the
+film schedule, 20 runs over five shapes and four seeds with drop orientation randomized as in
+training: 5 held to 8 s, 18 were still holding when turned over, 12 were lost while hanging
+under the ramping pull and 3 during a turn. The hold rate matches the GPU's; the CPU loses fewer
+at the catch than the GPU env does in its first second, which is not explained. The policy is
+what the Idun run is for.
 
 `--shots` and `--film` render headless, out of the SAME run that prints the hold numbers —
 not a replay. The roll is rendered by turning the camera, the lights and the HUD about the palm
