@@ -107,6 +107,58 @@ def test_looming(rig):
     assert value(rotation([0, 1, 0], d, t))[0] < 0.01 * v
 
 
+def test_trainable_lobe_matches_optic_lobe():
+    """flyeye.train.model.TrainableLobe with the exported parameters is OpticLobe.
+
+    One step from the same state on the same receptors, both CPU float32: the retraining
+    runtime must start from the published member, or nothing downstream is comparable.
+    """
+    from flyeye.optic_lobe import OpticLobe
+    from flyeye.train.model import TrainableLobe
+
+    torch.manual_seed(0)
+    x = torch.rand(2, 721, dtype=torch.float32)
+    lobe = OpticLobe(device="cpu", dtype=torch.float32)
+    lobe.reset(2)
+    v0 = lobe.v.clone()
+    v_ref = lobe.step(x, 0.01).clone()
+
+    tl = TrainableLobe(device="cpu", dtype=torch.float32)
+    assert torch.allclose(tl.tau()[tl.node_type], lobe.time_const, atol=1e-7)
+    assert torch.allclose(tl.bias[tl.node_type], lobe.bias, atol=1e-7)
+    assert torch.allclose(tl.reset(2), v0, atol=1e-7)
+    with torch.no_grad():
+        inv_tau, bias_n = tl.node_params(0.01)
+        v = tl.step(v0, x, 0.01, tl.matrix(), inv_tau, bias_n)
+    assert (v - v_ref).abs().max().item() < 1e-6, (v - v_ref).abs().max().item()
+    # the explicit-gradient product is the same number as torch.sparse.mm on the same values
+    r = torch.relu(v0)
+    mats = tl.matrices()
+    assert (tl.spmm(r, mats) - torch.sparse.mm(tl.matrix(), r.T).T).abs().max().item() == 0.0
+
+
+def test_trainable_lobe_gradients():
+    """A loss through a two-step window puts a finite, non-zero gradient on every free group."""
+    from flyeye.train.decoder import LinearDecoder
+    from flyeye.train.model import TrainableLobe, unit_field
+
+    torch.manual_seed(0)
+    tl = TrainableLobe(device="cpu", dtype=torch.float32)
+    idx = tl.gather_index()
+    rest = torch.relu(tl.reset(1))[0, idx]
+    dec = LinearDecoder(rest, init=np.eye(8, 2, dtype=np.float32), source="test")
+    x = 0.5 + 0.1 * torch.rand(2, 1, 721)
+    rates, extra, v = tl.run_window(x, tl.reset(1), 0.01, idx, extra_index=tl.central_index())
+    assert rates.shape == (2, 1, 8, 721) and extra.shape == (2, 1, 65) and v.shape == (1, tl.n_nodes)
+    assert unit_field(rates, rest).shape == (2, 1, 2, 721)
+    (dec(rates) ** 2).mean().backward()
+    for name in ("log_tau", "bias", "strength"):
+        g = getattr(tl, name).grad
+        assert g is not None and torch.isfinite(g).all(), name
+        assert (g != 0).any() and g.norm().item() > 0, name
+    assert dec.W.grad is not None and torch.isfinite(dec.W.grad).all() and dec.W.grad.norm() > 0
+
+
 def test_vulkan_eye_smoke():
     """10 frames of a bright bar sliding past a 256 px eye view through EyeView + OpticLobe
     + MotionField.
