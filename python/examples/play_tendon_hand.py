@@ -49,21 +49,36 @@ SHOT_TARGET = (0.062, -0.022, 0.002)    # the palm, with the object sitting on i
 SHOT_DIR = (0.45, -0.78, -0.46)         # target -> camera: distal, above the palm, thumb side
 SHOT_DIST = 0.29
 SHOT_FOV = 38.0
-GROUND_Y = 0.075                        # the floor, BELOW the hand in the gravity sense
+# NO FLOOR AND NO SHADOW, and that is a decision with numbers behind it, not an omission.
+# Three attempts, each diagnosed by printing the shadow camera and measuring the hand in the
+# LIGHT'S frame rather than by staring at the render:
+#   1. light at its natural 0.47 m -- a directional light's shadow camera has a 0.5 near plane,
+#      so the whole hand sat in front of it and the map was empty.
+#   2. light at 1.9 m, ortho +-0.40, but aimed at the world ORIGIN while the hand lives 60 mm
+#      from it: the map was mostly empty space and what reached the floor were two small
+#      detached blobs, which is what the v2 stills show.
+#   3. aimed at the palm, ortho +-0.12 -- measured, the hand spans x [-0.035, +0.122] and
+#      y [-0.108, +0.031] in the light's frame, so the fingertips fell outside and only the
+#      part that fitted cast anything. At +-0.17 all 21 links are inside and the map is right,
+#      and the shadow is then invisible anyway: the light is nearly straight above the palm and
+#      so is the camera, so it lands squarely behind the hand, which occludes it.
+# Getting it right needs a light direction chosen for the shadow rather than for the modelling,
+# and a floor close enough to catch it without intersecting the fingers. That is a lighting
+# design problem, and a plain light background beats a wrong shadow, so the floor is out.
+KEY_OFFSET = (0.12, -1.10, 0.18)        # the key light, as an offset from the subject
 CABLE_XRAY = 0.85                       # the cables read as being inside the fingers
 
 
 def shot_scene(width, height, headless=True):
-    """A lit scene with a floor, for a picture someone who has not seen this hand can read.
+    """A lit scene for a picture someone who has not seen this hand can read.
 
     tendon_hand.py's own `_scene` is a dark studio void with a hard key: right for a cutaway
     poster of the mechanism, wrong here, where the subject is a grasp and the viewer needs a
-    ground to judge the hand against and enough fill to see finger volume.
+    light background and enough fill to see finger volume.
     """
     canvas = tp.Canvas("tendon hand", width=width, height=height, antialiasing=4,
                        headless=headless)
     renderer = tp.GLRenderer(canvas)
-    renderer.shadow_map_enabled = True
     renderer.tone_mapping = tp.ToneMapping.ACESFilmic
     scene = tp.Scene()
     scene.background = tp.Background(0xDFE3E8)
@@ -77,20 +92,11 @@ def shot_scene(width, height, headless=True):
 
     scene.add(tp.HemisphereLight(0xFFFFFF, 0x9AA4B0, 0.75))
     key = tp.DirectionalLight(0xFFF6EC, 2.1)
-    # Far out along the same direction, and that distance is the whole reason a shadow appears
-    # at all. A directional light's shadow camera has a default near plane of 0.5, and this
-    # scene is 0.2 m across: with the light at its natural 0.47 m the entire hand sat in front
-    # of the near plane, the shadow map was empty, and the hand floated on a flat grey field.
-    key.position.set(0.40, -1.80, 0.55)          # above the palm: it throws onto the floor
-    key.cast_shadow = True
-    # Wide enough for the SHADOW, not just the hand. At +-0.18 the hand fitted and its shadow
-    # did not: the contact patch fell outside the ortho box and came back torn into fragments
-    # in the corner of the frame, which reads as a rendering fault rather than as a shadow.
-    key.set_shadow_frustum(-0.40, 0.40, 0.40, -0.40)
-    key.set_shadow_bias(-0.0003)
+    key.position.set(*(np.array(SHOT_TARGET) + np.array(KEY_OFFSET)))
+    key.get_target().position.set(*SHOT_TARGET)
     scene.add(key)
     # A volar fill from the camera side so the finger undersides are not black, and a low rim
-    # from behind to separate the silhouette from the floor.
+    # from behind to separate the silhouette from the background.
     fill = tp.DirectionalLight(0xE6EEFF, 1.0)
     fill.position.set(-0.10, -0.26, -0.30)
     scene.add(fill)
@@ -98,17 +104,66 @@ def shot_scene(width, height, headless=True):
     rim.position.set(-0.30, 0.10, 0.26)
     scene.add(rim)
 
-    floor_mat = tp.MeshStandardMaterial()
-    floor_mat.color = tp.Color(0xA8AFB8)
-    floor_mat.roughness = 0.95
-    floor_mat.metalness = 0.0
-    floor_mat.side = tp.Side.Double
-    floor = tp.Mesh(tp.PlaneGeometry(2.0, 2.0), floor_mat)
-    floor.rotate_x(math.pi / 2)                  # normal along -Y, i.e. facing the hand
-    floor.position.y = GROUND_Y
-    floor.receive_shadow = True
-    scene.add(floor)
     return canvas, renderer, scene, cam
+
+
+class PullArrow:
+    """The disturbance force, as an arrow that is actually attached to the object.
+
+    tp.ArrowHelper's shaft is a LINE -- one pixel wide whatever the scene scale -- so in a
+    still all that survived was the cone: a red triangle floating near the hand with nothing
+    connecting it to anything. At t = 5.5 s in the first contact sheet it sat ABOVE the hand
+    and read as a stray mark. A 3 mm cylinder plus a proportionate cone is the whole fix.
+    """
+    SHAFT_R = 0.003
+    HEAD_R = 0.0075            # 2.5x the shaft radius
+    HEAD_L = 0.016
+    MIN_N = 0.3                # below this the arrow is hidden rather than drawn as a stub
+    N_PER_M = 0.01             # 1 cm per newton
+
+    def __init__(self, scene, colour=0xD81028):
+        mat = tp.MeshStandardMaterial()
+        mat.color = tp.Color(colour)
+        mat.roughness = 0.45
+        mat.metalness = 0.05
+        self.shaft = tp.Mesh(tp.CylinderGeometry(1.0, 1.0, 1.0, 16), mat)   # unit, scaled below
+        self.head = tp.Mesh(tp.ConeGeometry(self.HEAD_R, self.HEAD_L, 20), mat)
+        for m in (self.shaft, self.head):
+            m.visible = False
+            scene.add(m)
+
+    @staticmethod
+    def _aim(mesh, u):
+        """Rotate the mesh's own +Y (the axis both a cylinder and a cone run along) onto u."""
+        ax = np.cross((0.0, 1.0, 0.0), u)
+        s = float(np.linalg.norm(ax))
+        if s < 1e-9:
+            mesh.quaternion.set(0.0, 0.0, 0.0, 1.0) if u[1] > 0 else \
+                mesh.quaternion.set(1.0, 0.0, 0.0, 0.0)
+            return
+        ax = ax / s
+        ang = math.acos(max(-1.0, min(1.0, float(u[1]))))
+        mesh.quaternion.set_from_axis_angle(
+            tp.Vector3(float(ax[0]), float(ax[1]), float(ax[2])), ang)
+
+    def update(self, origin, force):
+        n = float(np.linalg.norm(force))
+        if n < self.MIN_N:
+            self.shaft.visible = self.head.visible = False
+            return
+        u = np.asarray(force, dtype=float) / n
+        total = self.N_PER_M * n
+        shaft_len = max(1e-4, total - self.HEAD_L)
+        # The shaft starts at the object's CENTRE, so the arrow is attached in every frame
+        # whatever the object is doing.
+        mid = np.asarray(origin, dtype=float) + u * (0.5 * shaft_len)
+        self.shaft.position.set(*mid)
+        self.shaft.scale.set(self.SHAFT_R, shaft_len, self.SHAFT_R)
+        self._aim(self.shaft, u)
+        self.head.position.set(*(np.asarray(origin, dtype=float)
+                                 + u * (shaft_len + 0.5 * self.HEAD_L)))
+        self._aim(self.head, u)
+        self.shaft.visible = self.head.visible = True
 
 
 def dress(hand, obj_mesh):
@@ -134,14 +189,11 @@ def dress(hand, obj_mesh):
         m.material.opacity = 1.0
         m.material.depth_write = True
         m.material.roughness = 0.65
-        m.cast_shadow = True
-        m.receive_shadow = True
     obj_mesh.material.transparent = False
     obj_mesh.material.opacity = 1.0
     obj_mesh.material.depth_write = True
     obj_mesh.material.roughness = 0.45
     obj_mesh.material.metalness = 0.05
-    obj_mesh.cast_shadow = True
 
 
 def xray(view):
@@ -297,9 +349,7 @@ def main():
             # The pull is the whole point of the second half of the episode and it is invisible
             # -- an 8 N force on a 30 g object is a picture of nothing. 1 cm per newton makes it
             # the same order of size as the hand, so a still shows what is being resisted.
-            arrow = tp.ArrowHelper(tp.Vector3(1, 0, 0), tp.Vector3(*target), 0.001,
-                                   tp.Color(0xD81028), 0.022, 0.016)
-            scene.add(arrow)
+            arrow = PullArrow(scene)
             hud = tp.TextSprite(tp.FontLoader().default_font())
             hud.set_color(tp.Color(0x1A1F28))
             hud.set_world_scale(0.0075)
@@ -369,11 +419,7 @@ def main():
             if arrow is not None:
                 p = np.array([mesh.position.x, mesh.position.y, mesh.position.z])
                 f = float(np.linalg.norm(pull))
-                arrow.position.set(*p)
-                if f > 1e-6:
-                    arrow.set_direction(tp.Vector3(*(pull / f)))
-                arrow.set_length(max(1e-4, 0.01 * f), 0.022, 0.016)   # 1 cm per newton
-                arrow.visible = f > 1e-6
+                arrow.update(p, pull)
                 hud.set_text(f"t {t:4.2f} s    pull {f:4.1f} N    "
                              f"{'held' if d < meta['drop_dist'] else 'DROPPED'}")
             if (i + 1) in shot_frame:
