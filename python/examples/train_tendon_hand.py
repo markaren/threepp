@@ -52,8 +52,12 @@ def main():
 
     torch.manual_seed(args.seed)
     env = TendonHandEnv(num_envs=args.envs, device="cuda", seed=args.seed)
+    # env.config(), not CONFIG: the env adds the cable and DOF ORDER to the contract, and the
+    # deploy script needs it to know which of the 25 numbers is which cable. Passing CONFIG
+    # here instead silently drops those two lists, because PPO only calls env.config() when it
+    # is given no meta at all.
     ppo = PPO(env, ACT_DIM, hidden=(256, 256), lr=args.lr, horizon=args.horizon,
-              log_std_init=-0.5, meta={**CONFIG, "seed": args.seed})
+              log_std_init=-0.5, meta={**env.config(), "seed": args.seed})
     print(f"training: K={args.envs}  iters={args.iters}  horizon={args.horizon}  "
           f"seed={args.seed}  cap={args.max_minutes} min  -> {args.out}")
 

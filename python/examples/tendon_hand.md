@@ -38,6 +38,17 @@ is not trivial), and measures thumb-to-index opposition under a scripted 35 N fi
 purpose: the per-step torch region calls into PhysX four times through the cable evaluation, so
 a CUDA graph would replay the cable math on frozen link poses.
 
+## Deploy, and the sim-to-sim check
+
+    python play_tendon_hand.py tendon_hand_hold.pt --object sphere --seconds 6
+    python play_tendon_hand.py tendon_hand_hold.pt --view
+
+Runs the trained policy on the CPU hand with its REAL `TendonCable` cables — the same 25
+tensions, the reference implementation of the law they go through. It is the deploy path and
+the end-to-end check on the port in one: after the 12-minute local smoke, the policy held all
+three shapes for the full 6 s against the full 7.97 N pull, 6.7 to 11.9 mm from the palm
+target, having only ever seen the torch cable.
+
 ## Idun
 
 Once, on the login node:

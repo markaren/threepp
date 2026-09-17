@@ -59,7 +59,11 @@ OBJ_DENSITY = 600.0
 ARC_POINTS = 8                # measured in tendon_hand_gpu_check.py gate A1a
 
 G_HAT = np.array([-v for v in FINGER_PAD], dtype=float)     # gravity direction, palm up
-GRAVITY = tuple(9.81 * G_HAT)
+# Plain Python floats, not numpy scalars: CONFIG is persisted into the policy checkpoint and
+# load_policy reads it with weights_only=True, which refuses numpy._core.multiarray.scalar.
+# A tuple() over a numpy array keeps the numpy element type, so the checkpoint loads in
+# training and then cannot be opened on the deploy side at all.
+GRAVITY = tuple(float(v) for v in 9.81 * G_HAT)
 
 # Where a held object sits, in the hand's base frame. MEASURED, not guessed: `--sanity` drops
 # an object into a fully slack hand and prints the offset it comes to rest at, and this is the
