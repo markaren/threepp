@@ -261,6 +261,11 @@ class ArticulationLink:
         Joint angular velocity (rad/s).
         """
     @property
+    def mass(self) -> float:
+        """
+        Mass (kg) PhysX computed for this link from its collider volume and the add_link density -- what a per-link gravity force on the direct-GPU path has to be scaled by, since write_link_force takes newtons at the centre of mass.
+        """
+    @property
     def position(self) -> Vector3:
         ...
     @property

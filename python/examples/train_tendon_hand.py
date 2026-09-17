@@ -1,10 +1,11 @@
-"""Train the tendon hand's palm-up hold on the GPU.
+"""Train the tendon hand's hold through the roll-over on the GPU.
 
     python train_tendon_hand.py --envs 4096 --iters 3000 --seed 0
 
-K hands and K objects in one PhysX direct-GPU scene; the 25 cables are re-resolved in torch
-every physics substep (threepp.rl.cable), and obs/reward/reset and the PPO update all stay on
-the GPU. The training loop lives in threepp.rl.PPO; this script builds the env and configures
+K hands and K randomized objects in one PhysX direct-GPU scene; the 25 cables are re-resolved
+in torch every physics substep (threepp.rl.cable), gravity is a per-env force so each env turns
+its hand over on its own schedule, and obs/reward/reset and the PPO update all stay on the
+GPU. The training loop lives in threepp.rl.PPO; this script builds the env and configures
 it, exactly as train_cartpole.py does.
 
 EAGER, not CUDA-graphed. The step's torch region calls into PhysX four times per control step

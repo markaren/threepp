@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Tendon-hand palm-up hold seed array on IDUN: N seeds, each job one H100, PPO on the
-# GPU-vectorized routed-cable hand. No rendering anywhere.
+# Tendon-hand roll-over hold seed array on IDUN: N seeds, each job one H100, PPO on the
+# GPU-vectorized routed-cable hand with per-env gravity and randomized objects. No rendering
+# anywhere.
 #
 #   mkdir -p /cluster/work/$USER/logs /cluster/work/$USER/hand_runs            # ONCE
 #   sbatch --array=0-7 scripts/idun/hand_array.slurm                           # 8 seeds

@@ -285,6 +285,10 @@ namespace threepp_py {
                 .def_property_readonly("quaternion", &ArticulationLink::quaternion)
                 .def_property_readonly("joint_position", &ArticulationLink::jointPosition, "Joint angle (radians).")
                 .def_property_readonly("joint_velocity", &ArticulationLink::jointVelocity, "Joint angular velocity (rad/s).")
+                .def_property_readonly("mass", [](const ArticulationLink& l) { return l.raw()->getMass(); },
+                                       "Mass (kg) PhysX computed for this link from its collider volume and the "
+                                       "add_link density -- what a per-link gravity force on the direct-GPU path "
+                                       "has to be scaled by, since write_link_force takes newtons at the centre of mass.")
                 .def("add_force", &ArticulationLink::addForce, py::arg("force"), "Apply an external force (N) to this link.")
                 .def("add_torque", &ArticulationLink::addTorque, py::arg("torque"),
                      "Apply an external torque (N·m) about this link's centre of mass.")
