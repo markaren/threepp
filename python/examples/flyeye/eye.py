@@ -17,7 +17,7 @@ Eye camera: a PerspectiveCamera with aspect 1 and vertical FOV fov_deg, looking 
 views below 391 px go through box_eye's bilinear resize to 391 first.
 
 Secondary views have no lens or sensor stage, no DLSS/FSR/DoF and no RCAS sharpen, but
-the temporal resolve (TAA) always runs on them.
+the temporal resolve (TAA) runs on them unless the eye asks for taa=False (set_view_taa).
 """
 
 from __future__ import annotations
@@ -78,11 +78,16 @@ def receptors_from_bgra(color: torch.Tensor, lattice: HexLattice) -> torch.Tenso
 class EyeView:
     """One persistent size x size secondary view and its live frame tensors."""
 
-    def __init__(self, renderer, camera, size: int = 403, lattice: HexLattice | None = None):
+    def __init__(self, renderer, camera, size: int = 403, lattice: HexLattice | None = None,
+                 taa: bool = True):
         self.renderer, self.camera, self.size = renderer, camera, int(size)
         self.handle = int(renderer.add_view(camera, self.size, self.size))
         if self.handle == 0:
             raise RuntimeError("add_view returned 0: render() once before creating an EyeView")
+        self.taa = bool(taa)
+        if not self.taa:
+            # unjittered raster and a passthrough resolve: no history, no edge lag
+            renderer.set_view_taa(self.handle, False)
         self.lattice = lattice if lattice is not None else HexLattice()
         # box_eye moves the column centres to the frame's device on every call; keep them
         # there so receptors() makes no host transfer

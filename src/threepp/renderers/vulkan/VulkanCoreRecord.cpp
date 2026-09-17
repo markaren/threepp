@@ -1671,7 +1671,11 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                 gpuTimings_->begin(cb, TP_TAA, currentFrame);
                 view().taa_->recordResolve(cb, currentFrame, imageIndex,
                                     regionRenderExt_.width, regionRenderExt_.height,
-                                    regionSwapExt_.width, regionSwapExt_.height, effAlpha, taaDtFrames,
+                                    regionSwapExt_.width, regionSwapExt_.height,
+                                    // setViewTaa(0, false), no upscaler: alpha 1 makes the
+                                    // resolve a copy of the current frame; the camera
+                                    // uploads already zeroed the jitter.
+                                    viewTaaOff() ? 1.0f : effAlpha, taaDtFrames,
                                     sharpenStrength_ > 0.0f, sharpenStrength_,
                                     view().taaSkyReproj_.data(),
                                     static_cast<uint32_t>(regionDstX_), static_cast<uint32_t>(regionDstY_),

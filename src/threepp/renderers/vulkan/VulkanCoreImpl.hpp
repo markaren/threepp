@@ -4483,6 +4483,14 @@ namespace threepp {
         bool     removeViewImpl(uint32_t handle);
         bool     setViewCameraImpl(uint32_t handle, Camera& camera);
         ViewContext* findView(uint32_t handle);
+        // TAA switched off for the CURRENT view (setViewTaa). A secondary
+        // never upscales, so its flag is final; the primary can only drop TAA
+        // while no upscaler runs, because DLSS and FSR reconstruct from the
+        // jitter. Read by both camera UBO uploads (the raster jitter gate)
+        // and by the two resolve calls (blend alpha 1 = passthrough).
+        [[nodiscard]] bool viewTaaOff() const {
+            return !view().taaEnabled && (view().secondary || !(useFsr() || useDlss()));
+        }
         // Allocate / free everything a SECONDARY view owns. Both assume the
         // device is idle.
         void createSecondaryViewResources(ViewContext& v);

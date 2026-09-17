@@ -685,7 +685,7 @@ namespace threepp {
         // active upscaler (even under MSAA, which otherwise rasterizes unjittered),
         // so the dispatch jitterOffset matches what was rendered. The gbuf-reading
         // event camera still wins. Must match uploadRasterCameraUbo.
-        const bool rasterJitterOn = !eventCamReadsGbuf() &&
+        const bool rasterJitterOn = !eventCamReadsGbuf() && !viewTaaOff() &&
                                     (useFsr() || useDlss() || gbufMsaaSamples_ <= 1);
         const float jClipX = rasterJitterOn ? 2.f * jx / float(ext.width)  : 0.f;
         const float jClipY = rasterJitterOn ? 2.f * jy / float(ext.height) : 0.f;
@@ -889,8 +889,10 @@ namespace threepp {
         // under MSAA (which otherwise rasterizes unjittered), so the dispatch
         // jitterOffset matches the render. The gbuf-reading event camera still
         // wins (a real DVS sees no jitter).
+        // setViewTaa(handle, false): unjittered raster, and the resolve
+        // passes the current frame through (viewTaaOff, blend alpha 1).
         const bool rasterJitterOn =
-                kRasterJitterEnabled && !eventCamReadsGbuf() &&
+                kRasterJitterEnabled && !eventCamReadsGbuf() && !viewTaaOff() &&
                 (useFsr() || useDlss() || gbufMsaaSamples_ <= 1);
         const float jClipX = rasterJitterOn ? 2.f * jx / float(ext.width)  : 0.f;
         const float jClipY = rasterJitterOn ? 2.f * jy / float(ext.height) : 0.f;

@@ -2887,6 +2887,18 @@ namespace threepp {
         return v && v->secondary && v->sensorSurfaces;
     }
 
+    bool VulkanRenderer::setViewTaa(uint32_t handle, bool enabled) {
+        auto* v = core()->findView(handle);
+        if (!v) return false;
+        v->taaEnabled = enabled;
+        return true;
+    }
+
+    bool VulkanRenderer::viewTaa(uint32_t handle) const {
+        auto* v = const_cast<Impl*>(core())->findView(handle);
+        return v && v->taaEnabled;
+    }
+
     bool VulkanRenderer::setViewSplats(uint32_t handle, bool enabled) {
         return core()->setViewSplatsImpl(handle, enabled);
     }

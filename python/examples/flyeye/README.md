@@ -195,6 +195,23 @@ the edge lags by about a quarter pixel (0.15 frame, 1/50 of a column). Fix the s
 Halton counter instead (a per-view index). Re-check the lag at Phase 2's fast flows: a
 0.15 frame lag at 10 px/frame would be about 1.5 px (extrapolated).
 
+Update 2026-09-17 (branch `taa-jitter-per-view`): there is now a per-view switch,
+`renderer.set_view_taa(handle, False)` or `EyeView(..., taa=False)` (handle 0 = the primary,
+honoured while DLSS/FSR are off). Off means unjittered raster and a passthrough resolve (blend
+alpha 1). Measured on the ON edge movies at flush 1 with the per-view Halton index in place
+(`C:/dev/_flyeye/jitter/taa_report.json`, `taa_check.py`):
+
+| speed (px/frame) | TAA on: lag / max error (px) | TAA off: lag / max error (px) |
+|---|---|---|
+| 1.69 | 0.21 / 0.83 | 0.00 / 0.50 |
+| 10.0 | 0.08 / 0.51 | 0 (rounding only) / 0.39 |
+
+The TAA lag does not grow with image speed (the resolve weights the current frame more under
+motion), so the 1.5 px extrapolation was wrong. Off, the only error is the rasterizer's pixel
+rounding (no anti-aliasing): at 10.01 px/frame the rounding phase drifts 0.01 px per frame and
+reads as a constant 0.2 px offset over one crossing, the same in all four directions. The
+primary with `set_view_taa(0, False)` renders the same frames as an off view.
+
 ### Timing (`timing.py`)
 
 RTX 4070, 128 px primary canvas, textured scene with lit spinning meshes. Eyes are 90 deg
@@ -329,6 +346,8 @@ active axis is 1.222 rad/s, including the ramp.
    Fixed 2026-09-17 on branch `taa-jitter-per-view` (see the Phase 1 note above); merge pending.
 3. **TAA lag at high image speeds.** Measured only at 1.69 px/frame; re-check on the
    fast-flow scenarios before ruling out a TAA-off switch.
+   Resolved 2026-09-17: 0.08 px at 10 px/frame (see the TAA update under Phase 1), and the
+   switch exists (`set_view_taa`, `EyeView(..., taa=False)`).
 4. **Direction biases.** T4c answers rightward ON edges (yaw leaks into pitch at 0.17 to
    0.34) and T4d is weak. on_right and on_down fail the 45 deg test. Calibrate
    `MotionField` gains, or a per-axis correction, against the scenarios.

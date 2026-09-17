@@ -805,6 +805,20 @@ namespace threepp_py {
                      [](PyVulkanRenderer& r, uint32_t handle) { return r.native().viewSensorSurfaces(handle); },
                      py::arg("handle"),
                      "Whether this view has asked for sensor-only surfaces.")
+                .def("set_view_taa",
+                     [](PyVulkanRenderer& r, uint32_t handle, bool enabled) {
+                         return r.native().setViewTaa(handle, enabled);
+                     },
+                     py::arg("handle"), py::arg("enabled"),
+                     "Temporal anti-aliasing on ONE view (0 = the primary). On by default. Off, "
+                     "the view rasterizes unjittered and its resolve passes the current frame "
+                     "through (blend alpha 1): no history, no sub-pixel lag, and no anti-aliasing. "
+                     "For sensor views scored against sub-pixel ground truth. The primary honours "
+                     "it only while DLSS and FSR are off. False for an unknown handle.")
+                .def("view_taa",
+                     [](PyVulkanRenderer& r, uint32_t handle) { return r.native().viewTaa(handle); },
+                     py::arg("handle"),
+                     "Whether temporal anti-aliasing is on for this view.")
                 // ── Splat depth AOV ──────────────────────────────────────
                 // The one G-buffer channel that is not always allocated: a
                 // full-res r32f per frame in flight, off unless asked for or

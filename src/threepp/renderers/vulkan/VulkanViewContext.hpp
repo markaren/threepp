@@ -189,6 +189,16 @@ namespace threepp::vulkan::impl {
         // sees them only if it asks AND the scene opted in
         // (Impl::sensorOnlySurfaces_).
         bool    sensorSurfaces = false;
+        // Temporal anti-aliasing for this view (VulkanRenderer::setViewTaa).
+        // ON by default. OFF means: no sub-pixel raster jitter, and the
+        // resolve runs with blend alpha 1 (history weight 0), so the output
+        // IS the current frame, a plain centre read of the shade output. A
+        // sensor that scores sub-pixel positions against ground truth wants
+        // that: the TAA history lags a moving edge by about 0.2 px at one
+        // GPU frame per step. The primary honours it only while no upscaler
+        // is active, because DLSS and FSR reconstruct from the jitter
+        // (Impl::viewTaaOff).
+        bool    taaEnabled = true;
         // May this view rasterize SplatClouds (VulkanRenderer::setViewSplats)?
         // Off by default because the splat sort scales with splat count rather
         // than view size, so a second view is a second full sort — an RGB

@@ -1697,7 +1697,7 @@ void VulkanRenderer::Impl::recordSecondaryViews(VkCommandBuffer cb) {
                 v.taa_->recordResolve(cb, currentFrame, /*imageIndex=*/0u,
                                       ptExt.width, ptExt.height,
                                       ext.width, ext.height,
-                                      taaBlendAlpha_, 1.0f,
+                                      viewTaaOff() ? 1.0f : taaBlendAlpha_, 1.0f,// setViewTaa: alpha 1 = passthrough
                                       /*sharpen=*/false, 0.f,
                                       v.taaSkyReproj_.data(),
                                       0u, 0u,

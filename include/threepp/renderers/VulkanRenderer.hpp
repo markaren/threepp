@@ -1203,6 +1203,20 @@ namespace threepp {
         bool setViewSensorSurfaces(uint32_t handle, bool enabled);
         [[nodiscard]] bool viewSensorSurfaces(uint32_t handle) const;
 
+        // Per-view temporal anti-aliasing switch. ON by default for every
+        // view. OFF: the view rasterizes unjittered and its resolve writes the
+        // current frame alone (blend alpha 1), so the output is the shade's
+        // plain centre read: no history, no sub-pixel lag. Meant for sensor
+        // views scored against sub-pixel ground truth (a moving edge lags
+        // about 0.2 px behind the model under TAA at one GPU frame per step
+        // and 1.7 px per frame, 0.08 px at 10 px per frame). It costs the
+        // anti-aliasing: silhouettes alias and thin detail shimmers. Handle 0
+        // is the primary; there the switch is honoured only while no
+        // upscaler (DLSS, FSR) is active, because both reconstruct from the
+        // jitter. Takes effect on the next frame; false for an unknown handle.
+        bool setViewTaa(uint32_t handle, bool enabled);
+        [[nodiscard]] bool viewTaa(uint32_t handle) const;
+
         // Per-view permission to rasterize SplatClouds. OFF by default, for
         // every view: the splat pass was primary-only until this existed, and
         // the reason was cost, not correctness. The radix sort scales with
