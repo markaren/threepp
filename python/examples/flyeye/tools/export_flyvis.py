@@ -9,6 +9,17 @@ downloaded), never in the threepp interpreter:
 
 Output: python/examples/flyeye/data/flyeye_model.npz (np.savez_compressed).
 
+Other ensemble members (flow/0000/000..049; the directory index IS the rank by minimum
+validation loss, 000 best: validation/loss.h5 is strictly increasing with the index):
+
+    ... export_flyvis.py --member 003 --out C:\\dev\\_flyeye\\ensemble\\models\\flow_0000_003.npz
+    ... export_flyvis.py --member 000,001,002 --out-dir C:\\dev\\_flyeye\\ensemble\\models
+    ... export_flyvis.py --model flow/0000/017 --out some.npz
+
+--out-dir writes <dir>/flow_0000_NNN.npz (the model path with "/" -> "_"). A model other
+than the default flow/0000/000 needs --out or --out-dir, so the committed model is never
+overwritten by accident. With no arguments the behaviour is unchanged.
+
 Everything the runtime needs to reproduce flyvis 1.2.0 exactly is in the npz:
 
   Dynamics (flyvis/network/dynamics.py:207-218 + network.py:404-411), per node i,
@@ -146,9 +157,9 @@ def build_input_convention(eye: BoxEye, dt_trained: float) -> dict:
     }
 
 
-def export(out: Path, check: bool = True) -> None:
+def export(out: Path, check: bool = True, model: str = MODEL) -> None:
     t0 = time.time()
-    model_dir = flyvis.results_dir / MODEL
+    model_dir = flyvis.results_dir / model
     nv = flyvis.NetworkView(model_dir)
     net = nv.init_network()
     chkpt = nv.get_checkpoint("best")
@@ -240,7 +251,7 @@ def export(out: Path, check: bool = True) -> None:
         type_names=type_names.astype("U16"),
         input_type_names=input_types.astype("U16"),
         dt_trained=np.float32(dt_trained),
-        model_path=np.array(MODEL),
+        model_path=np.array(model),
         checkpoint=np.array(str(Path(chkpt).relative_to(flyvis.results_dir)).replace("\\", "/")),
         flyvis_version=np.array(flyvis.__version__),
         connectome_file=np.array(str(conn.config.file)),
@@ -321,10 +332,32 @@ def self_check(net, eye, path: Path) -> None:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    ap.add_argument("--out", type=Path, default=None, help=f"output npz (default {DEFAULT_OUT} for {MODEL} only)")
+    ap.add_argument("--out-dir", type=Path, default=None, help="directory for <model path with _>.npz, one per model")
+    sel = ap.add_mutually_exclusive_group()
+    sel.add_argument("--member", default=None, help="flow/0000 member index NNN, or a comma list")
+    sel.add_argument("--model", default=None, help="model path relative to flyvis.results_dir, e.g. flow/0000/017")
     ap.add_argument("--no-check", action="store_true")
     args = ap.parse_args(argv)
-    export(args.out, check=not args.no_check)
+    if args.member:
+        models = [f"flow/0000/{int(m):03d}" for m in args.member.split(",") if m.strip()]
+    else:
+        models = [args.model or MODEL]
+    if args.out is not None and args.out_dir is not None:
+        ap.error("--out and --out-dir are exclusive")
+    if args.out is not None and len(models) > 1:
+        ap.error("several models need --out-dir")
+    for model in models:
+        if args.out_dir is not None:
+            out = args.out_dir / (model.replace("/", "_") + ".npz")
+        elif args.out is not None:
+            out = args.out
+        elif model == MODEL:
+            out = DEFAULT_OUT
+        else:
+            ap.error(f"{model} is not the default model: pass --out or --out-dir")
+        print(f"== export {model} -> {out}", flush=True)
+        export(out, check=not args.no_check, model=model)
 
 
 if __name__ == "__main__":

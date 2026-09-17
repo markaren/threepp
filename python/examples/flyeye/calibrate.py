@@ -4,6 +4,9 @@
 
 CPU only, no rendering. Writes <data>/calibrate.json and figures/phase2_{direction,rotation,looming}.png.
 
+The scoring rules live in scoring.py (importable; this script is their Phase 2 caller and still gives
+gate 0.3619, static baseline 0.3186, pooled-19 0.4177).
+
 Direction (figure a). Truth is flow_box (box-averaged angular flow on the column's unit
 image-right/up tangents), mapped to the pixel velocity of the column centre (px/s, x right,
 y up): the tangents are up to 18 deg off orthogonal in the corners, and the circuit's x/y
@@ -47,61 +50,17 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from flyeye import scoring  # noqa: E402
 from flyeye.lattice import HexLattice  # noqa: E402
+from flyeye.scoring import (AXIS, AXIS_NAMES, CONTRAST_EDGES, GATE_MIN_N, LAGS, LIGHTS, MIN_SPEED,  # noqa: E402,F401
+                            PX_PER_COLUMN, SCENARIOS, SKIP, SPEED_EDGES, angle, hex_pool, into_segment, pixel_map,
+                            segments, wrap_deg)
 
 HERE = Path(__file__).resolve().parent
-DATA = Path(r"C:\dev\_flyeye\phase2")
-SCENARIOS = ("straight_3", "straight_10", "straight_30", "yaw", "pitch", "roll", "approach")
-LIGHTS = ("bright", "dim", "dark")
+DATA = scoring.DATA
 VARIANTS = ("T4+T5", "T4", "T5", "pooled 19", "static")
-SKIP = 30  # 0.3 s at 100 Hz
-MIN_SPEED = 0.25  # columns/s
-LAGS = range(7)  # frames, 0..60 ms
-SPEED_EDGES = 2.0 ** np.arange(-2, 9)  # 0.25 .. 256 columns/s, 10 bins
-CONTRAST_EDGES = np.array([0, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0001])
-GATE_MIN_N = 20000
-PX_PER_COLUMN = 13.0
-AXIS = dict(pitch=0, yaw=1, roll=2)
-AXIS_NAMES = ("wx pitch", "wy yaw", "wz roll")
 GRATING_ACC = {4: 1.00, 8: 1.00, 16: 1.00}  # time-averaged, best TF 4 Hz (tuning.py report)
 GRATING_ACC_FRAME = {4: 0.69, 8: 0.78, 16: 0.70}
-
-
-def segments(z):
-    """[(name, first, end)] from the labels."""
-    out = []
-    for s in z["labels"]:
-        name, a, b = str(s).split("|")
-        out.append((name, int(a), int(b)))
-    return out
-
-
-def into_segment(z) -> np.ndarray:
-    """(T,) frames since the start of the frame's segment."""
-    k = np.arange(len(z["t"]))
-    first = np.array([a for _, a, _ in segments(z)])[z["seg"].astype(int)]
-    return k - first
-
-
-def pixel_map(lat: HexLattice, size=403, fov=90.0) -> np.ndarray:
-    """(721, 2, 2): tangent projections (right, up) of angular flow, rad/s -> pixel velocity px/s (x right, y up)."""
-    d = lat.column_rays(size, fov, torch.float64).numpy()
-    T = lat.column_tangents(size, fov, torch.float64).numpy()  # (721, 2, 3)
-    f = size / 2 / math.tan(math.radians(fov) / 2)
-    J = np.zeros((len(d), 2, 3))
-    J[:, 0, 0] = J[:, 1, 1] = f / -d[:, 2]
-    J[:, 0, 2] = f * d[:, 0] / d[:, 2] ** 2
-    J[:, 1, 2] = f * d[:, 1] / d[:, 2] ** 2
-    G = np.einsum("nki,nli->nkl", T, T)
-    return np.einsum("nki,nji,njl->nkl", J, T, np.linalg.inv(G))
-
-
-def hex_pool(lat: HexLattice, radius: int) -> np.ndarray:
-    """(721, 721) row-normalised mean over the columns within hex distance radius."""
-    u, v = lat.u.numpy(), lat.v.numpy()
-    du, dv = u[:, None] - u[None], v[:, None] - v[None]
-    A = ((np.abs(du) + np.abs(dv) + np.abs(du + dv)) // 2 <= radius).astype(np.float32)
-    return A / A.sum(1, keepdims=True)
 
 
 def circuit_fields(z) -> dict:
@@ -111,16 +70,8 @@ def circuit_fields(z) -> dict:
     return {"T4+T5": z["field"].astype(np.float32), "T4": t4, "T5": t5}
 
 
-def angle(v):
-    return np.arctan2(v[:, :, 1], v[:, :, 0])  # (T, B, 721)
-
-
-def wrap_deg(a):
-    return np.degrees((a + np.pi) % (2 * np.pi) - np.pi)
-
-
 def load(scen, light):
-    return np.load(DATA / f"{scen}_{light}.npz"), json.loads((DATA / f"{scen}_{light}.json").read_text())
+    return scoring.load(scen, light, DATA)
 
 
 # ---------------------------------------------------------------------------------------------- direction
@@ -136,34 +87,24 @@ def direction(lat, M):
     MAP_SEGS = {("yaw", "bright"): "yaw +90", ("straight_30", "bright"): "fly 30 m/s"}
     vlines = [np.nonzero(lat.v.numpy() == v)[0] for v in range(-6, 7)]
     P = hex_pool(lat, 2)
+    runs = scoring.Runs(DATA)
+    runs.M, runs.P = M, P
     for li, light in enumerate(LIGHTS):
         for si, scen in enumerate(SCENARIOS):
-            z, _ = load(scen, light)
-            T = len(z["t"])
-            vel = np.einsum("nkl,tbln->tbkn", M, z["flow_box"].astype(np.float64)).astype(np.float32)
+            run = runs[(scen, light)]
+            z = run.z
+            vel = run.vel
             fields = circuit_fields(z)
-            fields["static"] = np.broadcast_to(fields["T4+T5"][30:100].mean(0), fields["T4+T5"].shape)
-            fields["pooled 19"] = np.einsum("mn,tbkn->tbkm", P, fields["T4+T5"])
-            vel_pooled = np.einsum("mn,tbkn->tbkm", P, vel)
-            contrast = z["contrast"].astype(np.float32)
-            scene = z["sky_frac"].astype(np.float32) < 0.5
-            into = into_segment(z)
-            cbin = np.clip(np.digitize(contrast, CONTRAST_EDGES) - 1, 0, nC - 1)
-            truth = {}
-            for name, v in (("column", vel), ("pooled", vel_pooled)):
-                sp = np.hypot(v[:, :, 0], v[:, :, 1]) / PX_PER_COLUMN  # (T, B, 721)
-                truth[name] = (angle(v), sp, np.clip(np.digitize(sp, SPEED_EDGES) - 1, 0, nS - 1))
-            speed = truth["column"][1]
+            fields["static"] = scoring.held_baseline(fields["T4+T5"])
+            fields["pooled 19"] = scoring.pool_field(fields["T4+T5"], P)
+            scene = run.scene
+            speed = run.truth(False)[1]
             seg_names = [s[0] for s in segments(z)]
+            angles = {var: angle(f) for var, f in fields.items()}
             for lag in LAGS:
-                k = np.nonzero((into >= SKIP) & (np.arange(T) >= lag))[0]
-                kt = k - lag
                 for vi, var in enumerate(VARIANTS):
-                    ang_t, sp, sbin = truth["pooled" if var == "pooled 19" else "column"]
-                    ok = sp[kt] >= MIN_SPEED
-                    idx = ((scene[kt].astype(np.int64) * nS + sbin[kt]) * nC + cbin[kt])[ok]
-                    err = wrap_deg(angle(fields[var][k]) - ang_t[kt])
-                    hit = np.abs(err) < 45
+                    k, kt, err, hit, ok, idx = scoring.frame_hits(fields[var], run, lag, pooled=var == "pooled 19",
+                                                                  ang=angles[var])
                     base = (li, si, vi, lag)
                     hits[base] += np.bincount(idx, weights=hit[ok], minlength=2 * nS * nC).reshape(2, nS, nC)
                     total[base] += np.bincount(idx, minlength=2 * nS * nC).reshape(2, nS, nC)
@@ -294,143 +235,42 @@ def direction_summary(D):
 
 
 # ---------------------------------------------------------------------------------------------- rotation
-def fit(x, y):
-    A = np.stack([x, np.ones_like(x)], 1)
-    (g, c), *_ = np.linalg.lstsq(A, y, rcond=None)
-    r = y - A @ [g, c]
-    return float(g), float(c), float(1 - (r @ r) / max(((y - y.mean()) ** 2).sum(), 1e-30))
+fit = scoring.fit
 
 
 def rotation():
+    runs = scoring.Runs(DATA)
     out, series = {}, {}
     for light in LIGHTS:
         L = out.setdefault(light, {})
         for method in ("rot_matched", "rot_lstsq"):
+            rot = {(s, light): runs[(s, light)].arr(method) for s in AXIS}
+            S = scoring.score_rotation(rot, runs, lights=[light])[light]
             M = L.setdefault(method, {})
-            cross = np.zeros((3, 3))
             for scen, ax in AXIS.items():
-                z, _ = load(scen, light)
-                r, w = z[method].astype(np.float64), z["w_body"]
-                off = r[30:100].mean(0)
-                rs = r - off
-                best = None
-                for lag in range(31):
-                    k = np.arange(30 + lag, len(r))
-                    g, c, r2 = fit(w[k - lag, ax], r[k, ax])
-                    if best is None or r2 > best[3]:
-                        best = (lag, g, c, r2)
-                segs = []
-                for name, a, b in segments(z):
-                    if name == "rest":
-                        continue
-                    rate = math.radians(int(name.split()[1]))
-                    segs.append((rate, rs[a + SKIP:b].mean(0)))
-                rates = np.array([s[0] for s in segs])
-                means = np.array([s[1] for s in segs])  # (6, 3)
-                cross[ax] = (rates @ means) / (rates @ rates)
-                g6, c6, r2_6 = fit(rates, means[:, ax])
-                by_rate = {}
-                for rate, m in segs:
-                    by_rate.setdefault(f"{abs(round(math.degrees(rate)))}", []).append(m[ax] / rate)
-                M[scen] = dict(offset=off.round(4).tolist(), lag_ms=10 * best[0], gain_ts=round(best[1], 4),
-                               offset_ts=round(best[2], 4), r2_ts=round(best[3], 4),
-                               gain_seg=round(g6, 4), r2_seg=round(r2_6, 4),
-                               gain_by_rate={k: round(float(np.mean(v)), 4) for k, v in by_rate.items()},
-                               seg_means=[[round(math.degrees(rt)), *m.round(4).tolist()] for rt, m in segs],
-                               offaxis_over_onaxis_max=round(float(np.max(np.abs(np.delete(means, ax, 1)).max(1)
-                                                                          / np.maximum(np.abs(means[:, ax]), 1e-9))), 3))
+                M[scen] = {k: v for k, v in S[scen].items() if k != "signs_right"}
                 if method == "rot_matched":
-                    series[(light, scen)] = (rs[:, ax], w[:, ax], best[0])
-            M["cross_talk"] = cross.round(4).tolist()
-            M["cross_talk_row_normalised"] = (cross / np.diag(cross)[:, None]).round(3).tolist()
-            M["signs_right"] = int(sum(np.sign(s[1 + AXIS[sc]]) == np.sign(s[0]) for sc in AXIS
-                                       for s in M[sc]["seg_means"]))
-        # straight flights: translation leakage
-        for scen in ("straight_3", "straight_10", "straight_30"):
-            z, _ = load(scen, light)
-            name, a, b = [s for s in segments(z) if s[0] != "rest"][0]
-            full = z["speed"] >= z["speed"].max() - 1e-9
-            k = np.nonzero(full & (np.arange(len(full)) >= a + SKIP) & (np.arange(len(full)) < b))[0]
-            r = z["rot_matched"].astype(np.float64)
-            off = r[30:100].mean(0)
-            yaw_gain30 = L["rot_matched"]["yaw"]["gain_by_rate"]["30"]
-            L.setdefault("straight", {})[scen] = dict(
-                circuit=(r[k] - off).mean(0).round(4).tolist(), truth_box=z["rot_truth_box"][k].mean(0).round(4).tolist(),
-                circuit_rad_s_at_yaw30_gain=((r[k] - off).mean(0) / yaw_gain30).round(3).tolist())
-        L["matched_vs_lstsq_max_abs"] = float(max(np.abs(load(s, light)[0]["rot_matched"] - load(s, light)[0]["rot_lstsq"]).max()
+                    d = scoring.rotation_run(rot[(scen, light)], runs[(scen, light)], ax)
+                    series[(light, scen)] = (d["_rs"], runs[(scen, light)].arr("w_body")[:, ax], d["_lag"])
+            M["cross_talk"] = S["cross_talk"]
+            M["cross_talk_row_normalised"] = S["cross_talk_row_normalised"]
+            M["signs_right"] = S["signs_right"]
+        straight = {(s, light): runs[(s, light)].arr("rot_matched") for s in ("straight_3", "straight_10", "straight_30")}
+        L["straight"] = scoring.straight_leak(straight, runs, light, L["rot_matched"]["yaw"]["gain_by_rate"]["30"])
+        L["matched_vs_lstsq_max_abs"] = float(max(np.abs(runs[(s, light)].arr("rot_matched") - runs[(s, light)].arr("rot_lstsq")).max()
                                                   for s in SCENARIOS))
     return out, series
 
 
 # ---------------------------------------------------------------------------------------------- looming
+LOOM_KEYS = ("false_alarm", "approach", "threshold", "detect", "threshold_truth", "detect_truth")
+
+
 def looming():
-    out, series = {}, {}
-    for light in LIGHTS:
-        L = out.setdefault(light, {})
-        fa = {}
-        for scen in SCENARIOS:
-            z, _ = load(scen, light)
-            T = len(z["t"])
-            k = np.arange(30, T)
-            if scen == "approach":
-                name, a, b = segments(z)[1]
-                k = np.arange(30, a)  # rest before the approach
-            fa[scen] = dict(mean=float(z["loom"][k].mean()), p99=float(np.percentile(z["loom"][k], 99)),
-                            max=float(z["loom"][k].max()), truth_max=float(z["loom_truth"][k].max()))
-        L["false_alarm"] = {s: {kk: round(v, 5) for kk, v in d.items()} for s, d in fa.items()}
-        # straight flights close on the wall too (1/tau 0.007-0.09): reported, not used as false alarms
-        thr = max(d["max"] for s, d in fa.items() if not s.startswith("straight"))
-        thr_truth = max(d["truth_max"] for s, d in fa.items() if not s.startswith("straight"))
-        z, _ = load("approach", light)
-        name, a, b = segments(z)[1]
-        inv = np.where(np.isfinite(z["tau_depth"]), 1 / z["tau_depth"], 0.0)
-        loom, loomt = z["loom"].astype(np.float64), z["loom_truth"].astype(np.float64)
-        steady = z["speed"] >= z["speed"].max() - 1e-9
-        k = np.nonzero(steady & (np.arange(len(steady)) >= a + SKIP) & (np.arange(len(steady)) < b))[0]
-
-        def corr(x, y):
-            return float(np.corrcoef(x, y)[0, 1]) if x.std() > 0 and y.std() > 0 else float("nan")
-
-        best = max(((lag, corr(inv[k - lag], loom[k])) for lag in range(31)),
-                   key=lambda p: -1 if math.isnan(p[1]) else p[1])
-        edges = np.arange(0.1, 0.75, 0.05)
-        bi = np.digitize(inv[k], edges) - 1
-        bins = [float(loom[k][bi == i].mean()) if (bi == i).any() else float("nan") for i in range(len(edges) - 1)]
-        binst = [float(loomt[k][bi == i].mean()) if (bi == i).any() else float("nan") for i in range(len(edges) - 1)]
-        bm = np.array(bins)
-        sat = None
-        if np.nanmax(bm) > 0:
-            j = int(np.nonzero(bm >= 0.9 * np.nanmax(bm))[0][0])
-            sat = round(float(0.5 * (edges[j] + edges[j + 1])), 3)
-
-        def detect(x, th):
-            above = x[k] > th
-            if not above.any():
-                return None
-            stay = np.nonzero(~above)[0]
-            j = 0 if len(stay) == 0 else stay[-1] + 1
-            first = int(np.nonzero(above)[0][0])
-            late = x[k][-30:]
-            stays = j < len(k)
-            return dict(first_cross_inv_tau=round(float(inv[k][first]), 3), first_cross_tau_s=round(1 / max(inv[k][first], 1e-9), 2),
-                        stays_above_from_inv_tau=round(float(inv[k][j]), 3) if stays else None,
-                        stays_above_from_tau_s=round(1 / max(inv[k][j], 1e-9), 2) if stays else None,
-                        frames_above=int(above.sum()), frames=len(k), last_03s_mean=round(float(late.mean()), 5),
-                        margin_last_03s_over_threshold=round(float(late.mean() / th), 2) if th > 0 else None)
-
-        L["approach"] = dict(first_03s=round(float(loom[k[:30]].mean()), 5), steady_frames=[int(k[0]), int(k[-1]) + 1],
-                             last_03s=round(float(loom[k[-30:]].mean()), 5), peak=round(float(loom[k].max()), 5),
-                             peak_inv_tau=round(float(inv[k][np.argmax(loom[k])]), 3), inv_tau_range=[round(float(inv[k].min()), 3), round(float(inv[k].max()), 3)],
-                             corr_lag0=round(corr(inv[k], loom[k]), 3), best_lag_ms=10 * best[0], corr_best=round(best[1], 3),
-                             truth_corr=round(corr(inv[k], loomt[k]), 3), truth_peak=round(float(loomt[k].max()), 4),
-                             bin_edges=edges.round(2).tolist(), bin_means=[round(v, 5) for v in bins],
-                             truth_bin_means=[round(v, 4) for v in binst], saturation_inv_tau=sat,
-                             linear_slope_per_inv_tau=round(fit(inv[k], loom[k])[0], 4))
-        L["threshold"] = round(thr, 5)
-        L["detect"] = detect(loom, thr) if thr > 0 or loom[k].max() > 0 else None
-        L["threshold_truth"] = round(thr_truth, 5)
-        L["detect_truth"] = detect(loomt, thr_truth)
-        series[light] = (z["t"], loom, loomt, inv, a, b)
+    runs = scoring.Runs(DATA)
+    S = scoring.score_looming({key: runs[key].arr("loom") for key in runs.keys()}, runs)
+    out = {l: {k: S[l][k] for k in LOOM_KEYS} for l in LIGHTS}
+    series = {l: S[l]["_series"] for l in LIGHTS}
     return out, series
 
 

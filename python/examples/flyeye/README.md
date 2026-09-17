@@ -606,6 +606,126 @@ For Phase 5 (a looming reflex on the drone):
      Phase 1 saturated near 1 /s;
    - retest at dim/dark light with a gain control ahead of the receptors.
 
+## Readout repair round (2026-09-17, same machine)
+
+Offline on the Phase 2 recordings, no rendering: the recordings store the receptors and
+`t4t5_raw`, so readouts and other flyvis members replay from disk. Scoring is the Phase 2
+scoring, now importable as `scoring.py` (`calibrate.py` reproduces every Phase 2 number
+through it, 0 differences). Anything fitted against truth is fitted on the **bright** runs
+only and reported on dim and dark; every variant is also scored against **its own**
+motion-blind baseline: the same readout on the run's own rest frames 30-100, ping-pong
+repeated, with 10 s of settle dropped, so adaptation and normalisation are not credited for
+what a static scene scores. All adaptation is causal.
+
+### What was tried
+
+1. **Subtype directions from gratings** (`repair.py gratings`, procedural, 24 directions,
+   4 Hz, 8 columns). Member 000: T4a +178, T4b -6, T4c +62, T4d +70 (amplitude 0.019, not
+   directional), T5a +171, T5b +1, T5c +114, T5d -131 deg. Not the hex axes (+/-26.6, 90);
+   a/b lie on the image horizontal. Using the measured directions does not move the +20-30
+   deg peak of the Phase 2 error histogram: it comes from the static pattern field meeting
+   the scenarios' direction distribution, not from a rotated basis.
+2. **Removing the static pattern response**: opponent normalisation per pair
+   ((b - a) / (a + b + eps)), causal per-column EMA adaptation (tau 0.25-2 s), an 8 -> 2
+   least-squares map to the true direction (V2), and combinations. Opponent normalisation
+   flips pitch and roll signs in dim and dark; V2 alone reaches 0.50 but its own baseline is
+   0.49, i.e. it learns the static prior. Adaptation is what buys real motion: it drops the
+   absolute gate but drops the baseline to chance, and costs only 8-15 % of steady yaw gain
+   at tau 2 s.
+3. **Looming**: plain (L0), rotation-gated (L1: field minus templates x lstsq estimate),
+   divisive by total field RMS (L2) and by the rotation-field RMS (L2rot).
+4. **Ensemble** (`members.py`, `score_members.py`): the 10 best flyvis members by validation
+   loss (000-009; the flyvis directory number *is* the loss ranking) replayed over all 21
+   runs, plus the ensemble mean of the rest-subtracted `t4t5_raw` ("mean raw") and the mean
+   of the members' own readout fields ("mean field"). Member 000 replays its own recording to
+   float16 input rounding. Members differ a lot: 004 and 005 have all four T4 subtypes
+   reversed, 002/006/007/009 have a non-selective tonic T4b, and response scale spans 10x.
+
+### Result (full table: `score_members.py table`, every number in `C:\dev\_flyeye\repair\scores.json`)
+
+Gate = fraction of column-frames within 45 deg of the true direction in the best speed bin
+(N >= 20k), lag 20 ms, 21 runs pooled; chance 0.25. Phase 2 was 0.362 against 0.319.
+
+| member | P2 unit gate / base | rec adapt2+V2 gate / base / lift | rec test dim / dark | rec pooled-19 | rec R^2 bright yaw / pitch / roll | rec signs b / d / k | loom adapt0.5 unit L2rot margin b / d / k |
+|---|---|---|---|---|---|---|---|
+| 000 | 0.362 / 0.319 | 0.419 / 0.328 / +0.092 | 0.415 / 0.504 | 0.524 | +0.93 / +0.91 / +0.96 | 18 / 16 / 15 | 1.58 / 1.15 / 1.08 |
+| 001 | 0.486 / 0.307 | 0.431 / 0.262 / +0.169 | 0.443 / 0.377 | 0.499 | +0.80 / +0.85 / +0.88 | 18 / 18 / 16 | 0.63 / 0.62 / 0.65 |
+| 002 | 0.629 / 0.641 | 0.492 / 0.319 / +0.174 | 0.484 / 0.511 | 0.554 | +0.84 / +0.90 / +0.92 | 18 / 18 / 16 | 0.49 / 0.90 / 1.51 |
+| 003 | 0.574 / 0.589 | 0.449 / 0.259 / +0.190 | 0.461 / 0.432 | 0.530 | +0.92 / +0.85 / +0.91 | 18 / 18 / 18 | 0.43 / 0.20 / 0.29 |
+| 004 | 0.457 / 0.469 | 0.392 / 0.264 / +0.128 | 0.402 / 0.350 | 0.436 | +0.89 / +0.92 / +0.96 | 18 / 17 / 13 | 0.57 / 0.87 / 0.47 |
+| 005 | 0.622 / 0.621 | 0.405 / 0.241 / +0.163 | 0.397 / 0.431 | 0.496 | +0.91 / +0.82 / +0.90 | 18 / 18 / 16 | 0.34 / 0.52 / 0.66 |
+| 006 | 0.630 / 0.635 | 0.421 / 0.250 / +0.171 | 0.430 / 0.409 | 0.457 | +0.92 / +0.91 / +0.96 | 18 / 17 / 15 | 0.94 / 0.93 / 0.35 |
+| 007 | 0.353 / 0.335 | 0.381 / 0.283 / +0.098 | 0.384 / 0.468 | 0.463 | +0.90 / +0.92 / +0.97 | 15 / 15 / 15 | 0.69 / 1.07 / 1.09 |
+| 008 | 0.236 / 0.265 | 0.510 / 0.365 / +0.145 | 0.518 / 0.522 | 0.536 | +0.67 / +0.90 / +0.97 | 18 / 18 / 15 | 0.22 / 0.33 / 0.23 |
+| 009 | 0.624 / 0.640 | 0.502 / 0.319 / +0.183 | 0.474 / 0.504 | 0.559 | +0.85 / +0.92 / +0.97 | 17 / 17 / 12 | 0.59 / 0.64 / 0.55 |
+| mean raw | 0.634 / 0.632 | 0.417 / 0.208 / +0.209 | 0.415 / 0.418 | 0.454 | +0.91 / +0.85 / +0.93 | 18 / 18 / 18 | 0.64 / 0.57 / 0.55 |
+| mean field | - | 0.493 / 0.320 / +0.173 | 0.481 / 0.489 | 0.552 | +0.89 / +0.91 / +0.95 | 18 / 18 / 17 | 0.36 / 0.33 / 0.22 (V1a) |
+
+"rec adapt2+V2" = causal EMA adaptation, tau 2 s, per column and subtype, then an 8 -> 2
+least-squares map fitted on that member's own bright runs. The runner-up, tau 1 s, has a
+slightly larger lift but moves its best bin to 32-64 columns/s. The truth-free fallback
+(tau 1 s + that member's grating directions, gain 1/amplitude) gives a median lift of +0.057:
+a fitted map is what carries this.
+
+**Read the lift, never the gate alone.** Members 002, 003, 005, 006, 009 and the mean raw
+reach gates of 0.57-0.63 with the Phase 2 unit readout, but their own motion-blind baselines
+are the same number: that is a static-pattern prior, not motion. The same member with
+adaptation scores lower absolutely and higher against its baseline.
+
+### Best configuration
+
+- **Direction**: member 008 `rec adapt2+V2` at 0.510 (own baseline 0.365, lift +0.145) and
+  member 009 at 0.502 (0.319, +0.183) are the only rows above 0.5 on real motion, both in the
+  Phase 2 bin (2-4 columns/s, N 1.07 M). The **ensemble mean field** with the same readout is
+  the most consistent: 0.493 (baseline 0.320, lift +0.173), dim 0.481, dark 0.489, pooled-19
+  0.552, rotation R^2 0.89 / 0.91 / 0.95 and 18 / 18 / 17 right signs.
+- **Looming**: member 000 with adaptation tau 0.5 s, unit map, read as L2rot (Looming divided
+  by the rotation-field RMS) is the only configuration whose approach peak clears every
+  rotation false alarm in all three lightings: margin 1.58 / 1.15 / 1.08. No other member
+  clears 1.0 in bright (median 0.59), and the ensemble loses it (0.36).
+- Pitch is fixed everywhere: R^2 0.82-0.92 in bright for `rec` on all 10 members, against
+  0.33 in Phase 2, with right-sign gains in every lighting for most members.
+
+### Verdict: NO-GO on the joint criteria
+
+The criteria were: per-column gate > 0.5 **and** clearly above its own motion-blind baseline,
+**and** looming beating the rotation false alarms in bright. The best direction rows just
+reach 0.5 with a real lift (+0.15 to +0.18, three to four times Phase 2's +0.043), but no
+single configuration does that *and* separates looming: the member with looming (000) gates
+at 0.419, and the members that gate above 0.5 (008, 009) have looming margins of 0.22 and
+0.59. Pitch, the bonus, is met.
+
+So flyeye stands as a wide-field rotation sensor (yaw, pitch and roll all recovered with
+right signs and R^2 0.85-0.97 after the repair, in every lighting) plus a benchmark of a
+connectome-constrained visual model on rendered flight with exact truth. Per-column flow
+stays near half the frames inside 45 deg. The drone looming reflex (Phase 5) should be
+skipped. Phase 3 (event camera) is not warranted by this result alone; a Phase 6
+visualisation still is.
+
+Caveats: dim and dark are the same trajectories and scene under other lighting, so they test
+lighting generalisation only, not a new scene; the looming margins rest on one approach run
+per lighting and a single-frame peak; the best speed bin is chosen per variant (the fixed
+2-4 columns/s column of `score_members.py table` is the unselected comparison).
+
+Figure `figures/repair_round.png` (gate and own baseline per member x readout, motion lift,
+looming margins, rotation R^2), `figures/repair_member000.png` (the variant sweep on member
+000). Data-only videos (recorded receptors, Phase 2 field, repaired field, true flow, per
+eye) in `C:\dev\_flyeye\renders\repair`.
+
+### Reproduce
+
+```
+py -3.14 python/examples/flyeye/tools/export_flyvis.py --member 001,...,009 --out-dir C:\dev\_flyeye\ensemble\models
+py -3.14 python/examples/flyeye/members.py                 # replay the 10 members over the 21 recordings (about 5 min)
+py -3.14 python/examples/flyeye/repair.py gratings         # subtype directions of member 000
+py -3.14 python/examples/flyeye/repair.py variants         # the 21 readout / looming variants on member 000
+py -3.14 python/examples/flyeye/repair.py figure           # figures/repair_member000.png
+py -3.14 python/examples/flyeye/score_members.py score     # every member x readout (about 25 min, CUDA)
+py -3.14 python/examples/flyeye/score_members.py table     # the full table
+py -3.14 python/examples/flyeye/score_members.py figure    # figures/repair_round.png
+py -3.14 python/examples/flyeye/score_members.py video --member "mean field" --readout "rec adapt2+V2"
+```
+
 ## Receptor input convention
 
 This is what the pretrained models saw, recorded in the npz key `input_convention`.
