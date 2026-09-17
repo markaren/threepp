@@ -36,6 +36,9 @@ namespace threepp {
         /// constructor when using Canvas, as it handles lazy window init.
         explicit GLRenderer(Canvas& canvas, const Parameters& parameters = {});
 
+        /// Uses an existing OpenGL context, which must be current before construction.
+        explicit GLRenderer(const std::pair<int, int>& size, const Parameters& parameters = {});
+
         GLRenderer(GLRenderer&&) = delete;
         GLRenderer(const GLRenderer&) = delete;
         GLRenderer& operator=(const GLRenderer&) = delete;

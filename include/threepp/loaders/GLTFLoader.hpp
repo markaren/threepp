@@ -29,7 +29,7 @@ namespace threepp {
         // rather than assuming float. Set to false to restore the old
         // widen-everything behaviour.
         bool preserveNarrowAttributes = true;
-
+        std::optional<GLTFResult> load(const std::vector<uint8_t>& data, std::string ext, const std::filesystem::path& basePath = {});
         std::optional<GLTFResult> load(const std::filesystem::path& path);
 
     private:
