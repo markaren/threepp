@@ -83,7 +83,9 @@ SHOT_FOV = 38.0
 KEY_OFFSET = (0.12, -1.10, 0.18)        # the key light, as an offset from the subject
 FILL_POS = (-0.10, -0.26, -0.30)        # a volar fill from the camera side
 RIM_POS = (-0.30, 0.10, 0.26)           # a low rim from behind, for the silhouette
-HUD_POS = (0.02, -0.118, -0.01)         # above a 90 mm object standing on the palm
+HUD_POS = (0.02, -0.118, -0.01)         # above a 90 mm object standing on the palm (the old spot)
+HUD_DEPTH = 0.06                        # in front of the palm, as HUD_POS was
+HUD_UP = 0.96                           # of the half frame height at that depth
 CABLE_XRAY = 0.85                       # the cables read as being inside the fingers
 
 
@@ -110,7 +112,12 @@ class ShotRig:
         self.cam_up = np.array(SHOT_UP, dtype=float)
         self.light_rel = [np.asarray(p, dtype=float) - self.pivot for p in
                           (self.pivot + np.array(KEY_OFFSET), FILL_POS, RIM_POS)]
-        self.hud_rel = np.array(HUD_POS, dtype=float) - self.pivot
+        # The HUD on the view axis, centred, 6 cm in front of the palm and near the top edge of
+        # the frame at that depth -- the height HUD_POS had, above a 90 mm object on the palm.
+        right, up = screen_axes()
+        depth = SHOT_DIST - HUD_DEPTH
+        self.hud_rel = (_unit(SHOT_DIR) * HUD_DEPTH
+                        + up * (HUD_UP * depth * math.tan(math.radians(0.5 * SHOT_FOV))))
         self.set(0.0)
 
     def set(self, theta):
@@ -313,7 +320,7 @@ class Legend:
     the legend is the look and not a chart of it. A Group at the palm pivot, so one rotation
     about the roll axis moves the whole thing with the camera."""
 
-    def __init__(self, scene, font, t_max, pivot, axis, aspect, caption=None, n=24):
+    def __init__(self, scene, font, t_max, pivot, axis, aspect, caption=None, scale=1.0, n=24):
         self.axis = tp.Vector3(*(float(v) for v in _unit(axis)))
         self.group = tp.Group()
         self.group.position.set(*(float(v) for v in pivot))
@@ -342,14 +349,16 @@ class Legend:
             # What is in the hand: the object, its mass, its friction. Top-left, level with
             # the HUD: text sprites are not depth-tested against the hand, and the top-left
             # is the one corner no finger reaches in any frame.
-            labels.append((caption, rel + up * ((LEGEND_DROP + 0.86) * half_h)
+            # A bigger HUD is a taller HUD: the caption drops a row so the two do not touch.
+            row = 0.86 - 0.16 * (scale - 1.0)
+            labels.append((caption, rel + up * ((LEGEND_DROP + row) * half_h)
                            - right * (0.5 * length + 0.02 * k), H.Left))
         for text, at, align in labels:
             s = tp.TextSprite(font)
             s.set_text(text)
             s.set_horizontal_alignment(align)
             s.set_color(tp.Color(LEGEND_TEXT))
-            s.set_world_scale(0.0055 * k)
+            s.set_world_scale(0.0055 * k * scale)
             s.position.set(*(float(v) for v in at))
             self.group.add(s)
         scene.add(self.group)
@@ -455,6 +464,10 @@ def main():
                     help="keep ramping at the training slope past the trained pull, to this")
     ap.add_argument("--until-drop", type=float, default=None, metavar="S",
                     help="end the run S seconds after the object drops: a pull-to-failure take")
+    ap.add_argument("--hud-scale", type=float, default=1.0,
+                    help="HUD, legend and caption text size; 1.4 survives a phone screen")
+    ap.add_argument("--no-hud", action="store_true",
+                    help="no HUD, legend or caption: a clean plate for compositing")
     ap.add_argument("--view", action="store_true", help="window, with every cable drawn")
     ap.add_argument("--shots", default=None, metavar="DIR",
                     help="render headless PNG stills into DIR, no window")
@@ -558,13 +571,17 @@ def main():
             # -- an 8 N force on a 30 g object is a picture of nothing. 1 cm per newton makes it
             # the same order of size as the hand, so a still shows what is being resisted.
             arrow = PullArrow(scene)
-            font = tp.FontLoader().default_font()
-            hud = tp.TextSprite(font)
-            hud.set_color(tp.Color(0x1A1F28))
-            hud.set_world_scale(0.0075)
-            scene.add(hud)
-            legend = Legend(scene, font, meta["t_max"], SHOT_TARGET, axis, render_w / render_h,
-                            caption=f"{a.object}  {body.mass*1000:.0f} g  friction {friction:.2f}")
+            legend = None
+            if not a.no_hud:
+                font = tp.FontLoader().default_font()
+                hud = tp.TextSprite(font)
+                hud.set_horizontal_alignment(tp.HorizontalAlignment.Center)
+                hud.set_color(tp.Color(0x1A1F28))
+                hud.set_world_scale(0.0075 * a.hud_scale)
+                scene.add(hud)
+                legend = Legend(scene, font, meta["t_max"], SHOT_TARGET, axis,
+                                render_w / render_h, scale=a.hud_scale,
+                                caption=f"{a.object}  {body.mass*1000:.0f} g  friction {friction:.2f}")
             rig = ShotRig(cam, lights, hud, SHOT_TARGET, axis, legend)
     for d in (a.shots, a.film):
         if d:
@@ -651,9 +668,10 @@ def main():
                 f = pull_now()
                 arrow.update(p, pull)
                 rig.set(theta_now)
-                hud.set_text(f"t {t:4.2f} s    turned {math.degrees(theta_now):3.0f} deg    "
-                             f"pull {f:4.1f} N    "
-                             f"{'held' if d < meta['drop_dist'] else 'DROPPED'}")
+                if hud is not None:
+                    hud.set_text(f"t {t:4.2f} s    turned {math.degrees(theta_now):3.0f} deg    "
+                                 f"pull {f:4.1f} N    "
+                                 f"{'held' if d < meta['drop_dist'] else 'DROPPED'}")
             if (i + 1) in shot_frame:
                 renderer.render(scene, cam)
                 fn = os.path.join(a.shots, f"{a.object}_t{shot_frame[i+1]:.1f}.png")
