@@ -75,6 +75,12 @@ hand had turned fully over) and `pull` (mean pull at episode end). The 12-minute
 K=1024 on the 4060, made 74 iterations at 3.3k env-steps/s and ended at hold 60.4 %, inv 82.8 %,
 pull 6.49 N, still climbing at the cap — that is the case for the Idun run.
 
+The Idun array (2026-09-17, eight seeds, K=4096, 3000 iterations each, one H100 per seed, all
+finished) ended at hold 78.3–86.0 %, inv 89.5–93.6 %, pull 7.16–7.46 N across the seeds, with
+exploration noise on. The curve of seed 7 is typical: 59 % at iteration 100, 73 % at 400, flat
+near 72 % to 1600, then a slow climb to 82 % by 3000, still rising about one point per 300
+iterations at the end. The per-seed numbers are in the Idun section below.
+
 ## Deploy, and the sim-to-sim check
 
     python play_tendon_hand.py tendon_hand_hold.pt --object sphere --density 1000
@@ -100,12 +106,33 @@ under the ramping pull and 3 during a turn. The hold rate matches the GPU's; the
 at the catch than the GPU env does in its first second, which is not explained. The policy is
 what the Idun run is for.
 
+The Idun checkpoints on the same CPU tally (film schedule, five shapes, drop seeds 0–3, 20 runs
+per checkpoint, about 8.5 s per run):
+
+    for s in 0 1 2 3 4 5 6 7; do for o in sphere capsule box bar cylinder; do for k in 0 1 2 3; do
+        python play_tendon_hand.py hand_runs/s$s/tendon_hand_hold.pt --object $o --seed $k | tail -1
+    done; done; done
+
+Seed 2 holds 18 of 20 to the end and 18 of 20 at the full turn (offset under 120 mm at 3.0 s);
+seeds 3, 5 and 6 hold 17; seed 1 is the weakest at 13 (the table is in the Idun section). Over
+all 160 runs 127 held: sphere 23/32, capsule 27/32, box 26/32, bar 26/32, cylinder 25/32. Of the
+33 losses, not one was in the turn back or palm-up under the full 8 N pull, the phases the smoke
+checkpoint lost 12 of 20 to. Eight are the same run: the sphere with drop seed 3 (radius 16 mm,
+9.4 g) is never caught by any seed, it is 69 mm off the palm at 0.5 s before the policy has
+closed, a catch failure of that draw and not a hold failure. Twenty are lost in the first turn,
+between 1.5 and 3.0 s, most of them objects at friction 0.31–0.43 (the capsule, cylinder and box
+with drop seed 0 go in three or four seeds each) and the two heaviest, the 145 g box and the 175 g
+bar; four are lost while hanging, at 4.5–5.0 s. Seed 2's own two losses are that sphere and the
+22 g cylinder at friction 0.31. Seed 2 with the 34.6 g sphere of drop seed 0 holds with a worst
+offset of 31 mm, mean tension 10 N at rest rising to about 20 N through the turn and the pull.
+
 `--shots` and `--film` render headless, out of the SAME run that prints the hold numbers —
 not a replay. The roll is rendered by turning the camera, the lights and the HUD about the palm
 by the roll angle: the hand is fixed and gravity turns, and the picture of that under a fixed
 camera is a hand that turned under fixed gravity. `--film` writes `frame_0001.png` … at 1280x720
 and a `contact.png` contact sheet (3x2: settled, mid-turn, hanging, hanging at full pull,
-mid-turn back, the end). There is no ffmpeg in this tree; encode the sequence yourself:
+mid-turn back, the end). There is no ffmpeg in this tree; encode the sequence yourself (the
+`imageio-ffmpeg` pip package ships one, `python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())"`):
 
     ffmpeg -framerate 60 -i out/film_sphere/frame_%04d.png -c:v libx264 -pix_fmt yuv420p -crf 18 tendon_hand.mp4
 
@@ -133,6 +160,28 @@ when the hand had turned fully over, and `pull` the mean pull those episodes wer
 they ended. The pilot measured 13.2k env-steps/s on an H100 at K=4096 and horizon 32, 9.9 s per
 iteration, 101 iterations in 16.5 min. 3000 iterations are about 8.3 h, so the job's walltime is
 10 h; `--max-minutes` saves whatever is trained if a node is slower.
+
+The eight-seed array of 2026-09-17, every seed the full 3000 iterations. `log` columns are the
+last training log line (exploration noise on); `CPU` columns are the film-schedule tally on the
+reference hand described under Deploy, 20 runs per checkpoint:
+
+| seed | log hold | log inv | log pull | CPU held to 8 s | CPU held at full turn |
+|------|---------:|--------:|---------:|----------------:|----------------------:|
+| s0   |   79.6 % |  91.4 % |   7.26 N |           15/20 |                 16/20 |
+| s1   |   78.3 % |  89.8 % |   7.16 N |           13/20 |                 14/20 |
+| s2   |   86.0 % |  93.6 % |   7.46 N |           18/20 |                 18/20 |
+| s3   |   80.8 % |  92.0 % |   7.26 N |           17/20 |                 17/20 |
+| s4   |   82.0 % |  90.2 % |   7.23 N |           16/20 |                 16/20 |
+| s5   |   84.4 % |  91.5 % |   7.32 N |           17/20 |                 17/20 |
+| s6   |   81.7 % |  89.5 % |   7.20 N |           17/20 |                 18/20 |
+| s7   |   82.4 % |  92.0 % |   7.32 N |           14/20 |                 15/20 |
+
+The training log ranks the seeds only loosely: s5 is second in the log and tied third on the CPU,
+s7 is mid-table in the log and second to last on the CPU. Pick the film seed by the CPU tally.
+The checkpoints are 736 KB each; fetch the whole tree from your own machine, not from the login
+node:
+
+    scp -r <user>@idun-login1.hpc.ntnu.no:/cluster/work/<user>/hand_runs .
 
 Knobs, all through `--export=ALL,NAME=value`: `ENVS` (4096), `ITERS` (3000), `RESERVE_MIN` (5),
 `EXTRA` for extra trainer flags.
