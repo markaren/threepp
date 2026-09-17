@@ -39,7 +39,7 @@ sys.path.insert(0, os.path.dirname(_HERE))
 sys.path.insert(0, _HERE)
 
 import threepp as tp
-from tendon_hand import DT, Forearm, Hand, RopeView, VIEWS, _scene
+from tendon_hand import DT, Forearm, Hand, RopeView, VIEWS, _aim, _scene, _unit_cyl
 from tendon_hand_env import (OBJ_TYPES, gravity_at, object_desc, object_mesh, roll_theta,
                              sample_object)
 from threepp.rl import load_policy
@@ -103,8 +103,8 @@ class ShotRig:
     about the roll axis by the roll angle. set(0) is the framing every still before the roll
     existed was taken with."""
 
-    def __init__(self, cam, lights, hud, pivot, axis):
-        self.cam, self.lights, self.hud = cam, lights, hud
+    def __init__(self, cam, lights, hud, pivot, axis, legend=None):
+        self.cam, self.lights, self.hud, self.legend = cam, lights, hud, legend
         self.pivot, self.axis = np.asarray(pivot, dtype=float), _unit(axis)
         self.cam_rel = _unit(SHOT_DIR) * SHOT_DIST
         self.cam_up = np.array(SHOT_UP, dtype=float)
@@ -122,6 +122,8 @@ class ShotRig:
             light.position.set(*(self.pivot + R(rel)))
         if self.hud is not None:
             self.hud.position.set(*(self.pivot + R(self.hud_rel)))
+        if self.legend is not None:
+            self.legend.set(theta)
 
 
 def shot_scene(width, height, headless=True):
@@ -251,10 +253,108 @@ def xray(view):
         m.metalness = 0.0
 
 
-def contact_times(roll, seconds):
+# ---- the tendons, lit by tension -----------------------------------------------------------
+#
+# Coloured by finger, the ropes show the routing. The film is about the policy, and what the
+# policy does is tension, so each rope takes the colour of its commanded tension every frame:
+# slack ropes recede to slate, loaded ones go amber, then red, then white-hot at T_MAX. The
+# colour goes on the cable's material, which every segment of that rope shares, and the
+# emissive term rises with it so a loaded rope reads as lit rather than as painted. The
+# legend is a bar of the same rope under the hand, in the same material, turned by the
+# ShotRig with the camera so it stays put on screen while the hand turns over.
+TENSION_RAMP = ((0.00, 0x46577A), (0.30, 0xE8B23C), (0.65, 0xF04A1E), (1.00, 0xFFE6B4))
+# The legend sits on the view axis LEGEND_DEPTH in front of the palm, nearer the camera than
+# any part of the hand can reach, so it is never behind a finger; LEGEND_DROP of the frame's
+# half height below centre at that depth. Sizes are given at the palm's depth and scaled.
+LEGEND_DEPTH = 0.16                     # an extended fingertip reaches ~0.10 toward the camera
+LEGEND_DROP = 0.84
+LEGEND_LEFT = 0.55                      # of the half frame width: the corner no finger reaches
+LEGEND_LEN = 0.070
+LEGEND_RADIUS = 0.0022
+LEGEND_TEXT = 0x1A1F28
+
+
+def tension_colour(u):
+    """The ramp colour at u = T / T_MAX, piecewise linear between the stations."""
+    u = min(1.0, max(0.0, float(u)))
+    for (u0, c0), (u1, c1) in zip(TENSION_RAMP, TENSION_RAMP[1:]):
+        if u <= u1:
+            return tp.Color(c0).lerp(tp.Color(c1), (u - u0) / (u1 - u0))
+    return tp.Color(TENSION_RAMP[-1][1])
+
+
+def light_by_tension(mat, u):
+    c = tension_colour(u)
+    mat.color = c
+    mat.emissive = tp.Color(c.r, c.g, c.b)
+    mat.emissive_intensity = 0.15 + 0.85 * u ** 1.5
+
+
+def tint(view, names, tension, t_max):
+    """Recolour every rope from this step's filtered tensions, the ones the cables carry."""
+    for n, T in zip(names, tension):
+        light_by_tension(view.mats[n], float(T) / t_max)
+
+
+def screen_axes():
+    """World directions that are screen right and screen up in the still framing."""
+    f = -_unit(SHOT_DIR)
+    up = np.array(SHOT_UP, dtype=float)
+    up = _unit(up - np.dot(up, f) * f)
+    return _unit(np.cross(f, up)), up
+
+
+class Legend:
+    """The tension ramp as a bar of rope, 'slack' to T_MAX, with the rope's own material, so
+    the legend is the look and not a chart of it. A Group at the palm pivot, so one rotation
+    about the roll axis moves the whole thing with the camera."""
+
+    def __init__(self, scene, font, t_max, pivot, axis, aspect, n=24):
+        self.axis = tp.Vector3(*(float(v) for v in _unit(axis)))
+        self.group = tp.Group()
+        self.group.position.set(*(float(v) for v in pivot))
+        right, up = screen_axes()
+        depth = SHOT_DIST - LEGEND_DEPTH                  # legend to camera
+        k = depth / SHOT_DIST                             # same size on screen as at the palm
+        half_h = depth * math.tan(math.radians(0.5 * SHOT_FOV))
+        rel = (_unit(SHOT_DIR) * LEGEND_DEPTH - up * (LEGEND_DROP * half_h)
+               - right * (LEGEND_LEFT * half_h * aspect))
+        length, radius = LEGEND_LEN * k, LEGEND_RADIUS * k
+        for i in range(n):
+            m = tp.MeshStandardMaterial()
+            m.roughness = 0.4
+            m.metalness = 0.0
+            light_by_tension(m, i / (n - 1))
+            seg = tp.Mesh(_unit_cyl(), m)
+            a = rel + right * (length * (i / n - 0.5))
+            b = rel + right * (length * ((i + 1) / n - 0.5))
+            _aim(seg, a, b, radius)
+            self.group.add(seg)
+        H = tp.HorizontalAlignment
+        for text, at, align in (("slack", rel - right * (0.5 * length + 0.006 * k), H.Right),
+                                (f"{t_max:.0f} N", rel + right * (0.5 * length + 0.006 * k), H.Left),
+                                ("cable tension", rel + up * (0.011 * k), H.Center)):
+            s = tp.TextSprite(font)
+            s.set_text(text)
+            s.set_horizontal_alignment(align)
+            s.set_color(tp.Color(LEGEND_TEXT))
+            s.set_world_scale(0.0055 * k)
+            s.position.set(*(float(v) for v in at))
+            self.group.add(s)
+        scene.add(self.group)
+
+    def set(self, theta):
+        self.group.quaternion.set_from_axis_angle(self.axis, float(theta))
+
+
+def contact_times(roll, seconds, t_drop=None, pull_full=None):
     """Six moments that show the episode: settled, mid-turn, hanging, hanging at full pull,
-    mid-turn back, the end."""
+    mid-turn back, the end. For a take that ends at the drop: settled, mid-turn, at the
+    trained pull, just before the slip, the slip, the end."""
     t0, dur, hang = roll["t0"], roll["dur"], roll["hang"]
+    if t_drop is not None:
+        return (0.3, t0 + 0.5 * dur, pull_full or t0 + dur + 0.3,
+                max(t0 + dur + 0.3, t_drop - 0.6), max(0.3, t_drop - 0.05), seconds)
     return (0.3, t0 + 0.5 * dur, t0 + dur + 0.3, t0 + dur + hang - 0.2,
             t0 + 1.5 * dur + hang, seconds)
 
@@ -338,6 +438,12 @@ def main():
     ap.add_argument("--roll-axis", default=None,
                     help="x,y,z axis gravity turns about; default the finger axis (pronation)")
     ap.add_argument("--no-roll", action="store_true", help="gravity stays palm-up")
+    ap.add_argument("--roll-hang", type=float, default=None,
+                    help="seconds held turned over (default: the film schedule's)")
+    ap.add_argument("--pull-max", type=float, default=None, metavar="N",
+                    help="keep ramping at the training slope past the trained pull, to this")
+    ap.add_argument("--until-drop", type=float, default=None, metavar="S",
+                    help="end the run S seconds after the object drops: a pull-to-failure take")
     ap.add_argument("--view", action="store_true", help="window, with every cable drawn")
     ap.add_argument("--shots", default=None, metavar="DIR",
                     help="render headless PNG stills into DIR, no window")
@@ -368,7 +474,12 @@ def main():
         roll["axis"] = tuple(float(v) for v in a.roll_axis.split(","))
     if a.no_roll:
         roll["ang_deg"] = 0.0
+    if a.roll_hang is not None:
+        roll["hang"] = a.roll_hang
     axis = _unit(roll["axis"])
+    # The pull past the trained limit is the same ramp carried on: the policy never saw more
+    # than pull_max in training, so where it lets go is a measurement of margin, not of skill.
+    pull_cap = a.pull_max if a.pull_max is not None else float(meta["pull_max"])
     sched = tuple(torch.tensor(float(v)) for v in
                   (roll["t0"], roll["dur"], roll["hang"], math.radians(roll["ang_deg"])))
     axis_t = torch.tensor(axis, dtype=torch.float32)[None]
@@ -435,11 +546,14 @@ def main():
             # -- an 8 N force on a 30 g object is a picture of nothing. 1 cm per newton makes it
             # the same order of size as the hand, so a still shows what is being resisted.
             arrow = PullArrow(scene)
-            hud = tp.TextSprite(tp.FontLoader().default_font())
+            font = tp.FontLoader().default_font()
+            hud = tp.TextSprite(font)
             hud.set_color(tp.Color(0x1A1F28))
             hud.set_world_scale(0.0075)
             scene.add(hud)
-            rig = ShotRig(cam, lights, hud, SHOT_TARGET, axis)
+            legend = Legend(scene, font, meta["t_max"], SHOT_TARGET, axis,
+                            render_w / render_h)
+            rig = ShotRig(cam, lights, hud, SHOT_TARGET, axis, legend)
     for d in (a.shots, a.film):
         if d:
             os.makedirs(d, exist_ok=True)
@@ -453,8 +567,8 @@ def main():
             d = rng.normal(size=3)
             pull_dir = d / max(np.linalg.norm(d), 1e-6)
         t = i * dt
-        k = min(1.0, max(0.0, (t - pull_start) / (pull_full - pull_start)))
-        pull = pull_dir * (meta["pull_max"] * k)
+        k = max(0.0, (t - pull_start) / (pull_full - pull_start))
+        pull = pull_dir * min(pull_cap, meta["pull_max"] * k)
         theta_now, g_now = gravity(t)
         world.set_gravity(tp.Vector3(*g_now))
 
@@ -466,6 +580,8 @@ def main():
         tension = (1.0 - alpha) * tension + alpha * cmd
         for n, T in zip(names, tension):
             hand.cables[n].set_tension(float(T))
+        if view is not None:
+            tint(view, names, tension, meta["t_max"])
         for _ in range(sub):
             body.add_force(tp.Vector3(*pull))        # re-applied: PhysX clears it every step
             world.step(dt / sub)
@@ -495,17 +611,20 @@ def main():
           f"from {roll['t0']:.1f} s over {roll['dur']:.1f} s, held {roll['hang']:.1f} s; "
           f"{seconds:.1f} s at {hz} Hz")
     worst = 0.0
+    t_drop = pull_at_drop = None
     for i in range(n_steps):
         d = control()
         worst = max(worst, d)
+        t = (i + 1) * dt
+        if t_drop is None and d >= meta["drop_dist"]:
+            t_drop, pull_at_drop = t, float(np.linalg.norm(pull))
         if (i + 1) % 30 == 0:
-            print("  " + status((i + 1) * dt, d))
+            print("  " + status(t, d))
         if scene is not None:
             # Rebuilt from the LIVE link poses every step, exactly as the CPU demo's rope view
             # does, so what is in the still is what is pulling -- not a cable drawn from the
             # routing and hoping the two agree.
             view.update(arm.update() if arm is not None else None)
-            t = (i + 1) * dt
             if arrow is not None:
                 p = np.array([mesh.position.x, mesh.position.y, mesh.position.z])
                 f = float(np.linalg.norm(pull))
@@ -523,11 +642,21 @@ def main():
             if a.film:
                 renderer.render(scene, cam)
                 renderer.save_frame(os.path.join(a.film, f"frame_{i+1:04d}.png"))
+        if a.until_drop is not None and t_drop is not None and t >= t_drop + a.until_drop:
+            break
+    n_done = state["i"]
     if a.film:
-        contact_sheet(a.film, contact_times(roll, seconds), hz, n_steps)
+        contact_sheet(a.film, contact_times(roll, n_done * dt, t_drop, pull_full), hz, n_done)
     held = worst < meta["drop_dist"]
     print(f"  worst offset {worst*1000:.1f} mm against a {meta['drop_dist']*1000:.0f} mm "
           f"limit -> {'HELD' if held else 'DROPPED'}")
+    if pull_cap > meta["pull_max"]:
+        if t_drop is None:
+            print(f"  pull to failure: held to the {pull_cap:.1f} N cap over {n_done * dt:.2f} s "
+                  f"(trained to {meta['pull_max']:.0f} N)")
+        else:
+            print(f"  pull to failure: dropped at {pull_at_drop:.2f} N, t {t_drop:.2f} s "
+                  f"(trained to {meta['pull_max']:.0f} N)")
 
 
 if __name__ == "__main__":
