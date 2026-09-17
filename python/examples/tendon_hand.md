@@ -130,9 +130,9 @@ Outputs land in `/cluster/work/$USER/hand_runs/s<SEED>/` as `tendon_hand_hold.pt
 
 `hold` is the fraction of episodes that reached the full 8 s, `inv` the fraction still holding
 when the hand had turned fully over, and `pull` the mean pull those episodes were carrying when
-they ended. The pilot's `steps/s` sizes the array: 3000 iterations at K=4096 and horizon 32 are
-393M env-steps, and the job's walltime is 3 h with `--max-minutes` saving whatever is trained if
-that is not enough; raise `--time` or lower `ITERS` from the pilot's rate.
+they ended. The pilot measured 13.2k env-steps/s on an H100 at K=4096 and horizon 32, 9.9 s per
+iteration, 101 iterations in 16.5 min. 3000 iterations are about 8.3 h, so the job's walltime is
+10 h; `--max-minutes` saves whatever is trained if a node is slower.
 
 Knobs, all through `--export=ALL,NAME=value`: `ENVS` (4096), `ITERS` (3000), `RESERVE_MIN` (5),
 `EXTRA` for extra trainer flags.

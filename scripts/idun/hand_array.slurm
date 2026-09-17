@@ -6,7 +6,11 @@
 #   mkdir -p /cluster/work/$USER/logs /cluster/work/$USER/hand_runs            # ONCE
 #   sbatch --array=0-7 scripts/idun/hand_array.slurm                           # 8 seeds
 #   sbatch --array=0-7%20 ...                                                  # cap at the QOS's 20 GPUs
-#   sbatch --array=0-1 --export=ALL,ITERS=100 scripts/idun/hand_array.slurm    # 2-job pilot, ~10 min
+#   sbatch --array=0-1 --export=ALL,ITERS=100 scripts/idun/hand_array.slurm    # 2-job pilot, ~17 min
+#
+# Measured 2026-09-17 on an H100 at K=4096, horizon 32: 13.2k env-steps/s, 9.9 s per iteration,
+# 101 iterations in 16.5 min. 3000 iterations are about 8.3 h, hence the 10 h walltime; the
+# trainer's --max-minutes saves at walltime minus RESERVE_MIN if a node is slower.
 #
 # Index -> seed, one to one. Every run trains from scratch: there is no warm start for this
 # task, because the cable law makes the plant different from anything already on disk.
@@ -34,7 +38,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=48G
-#SBATCH --time=03:00:00
+#SBATCH --time=10:00:00
 #SBATCH --job-name=handarr
 #SBATCH --output=/cluster/work/laht/logs/handarr-%A_%a.out
 #SBATCH --error=/cluster/work/laht/logs/handarr-%A_%a.out
@@ -72,7 +76,7 @@ echo "== $TAG  seed=$SEED  envs=$ENVS iters=$ITERS  git=$GIT (+$DIRTY dirty)  no
 nvidia-smi --query-gpu=name,driver_version --format=csv,noheader || true
 
 # ---- train ---------------------------------------------------------------------------------------
-LIMIT_MIN=$(( ( (${SLURM_JOB_END_TIME:-0} > 0 ? SLURM_JOB_END_TIME - $(date +%s) : 3*3600) / 60 ) - RESERVE_MIN ))
+LIMIT_MIN=$(( ( (${SLURM_JOB_END_TIME:-0} > 0 ? SLURM_JOB_END_TIME - $(date +%s) : 10*3600) / 60 ) - RESERVE_MIN ))
 [ "$LIMIT_MIN" -gt 10 ] || LIMIT_MIN=10
 T0=$(date +%s)
 set +e
