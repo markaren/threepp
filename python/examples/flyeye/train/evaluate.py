@@ -159,6 +159,20 @@ def rest_magnitude(field: np.ndarray, run: sc.Run) -> tuple[np.ndarray, int]:
     return m[run.scene[keep]].astype(np.float32), int(keep.sum())
 
 
+def moving_magnitude(field: np.ndarray, run: sc.Run, lag=LAG) -> np.ndarray:
+    """|field| where the truth is moving, on the same column-frames the gate counts.
+
+    The field's overall scale is arbitrary and a refitted lobe does not keep it, so the
+    static response is only interpretable next to the moving response of the same model.
+    """
+    _, sp, _ = run.truth(False)
+    k = np.nonzero((run.into >= sc.SKIP) & (np.arange(run.T) >= lag))[0]
+    kt = k - lag
+    ok = (sp[kt] >= sc.MIN_SPEED) & run.scene[kt]
+    f = field[k]
+    return np.hypot(f[:, :, 0], f[:, :, 1])[ok].astype(np.float32)
+
+
 def score_model(name: str, ckpt: Path, decoder_kind=None, dec_state=None, device="cuda",
                 scenarios=TEST_SCEN, lag=LAG) -> dict:
     """Replay one checkpoint over all 21 recordings and score every readout it supports."""
@@ -179,6 +193,7 @@ def score_model(name: str, ckpt: Path, decoder_kind=None, dec_state=None, device
     Cb = {r: {} for r in readouts}
     rot = {r: {} for r in readouts}
     restmag = {r: [] for r in readouts}
+    movemag = {r: [] for r in readouts}
     test_keys = [(s, l) for l in sc.LIGHTS for s in scenarios]
 
     for key in runs.keys():
@@ -203,6 +218,7 @@ def score_model(name: str, ckpt: Path, decoder_kind=None, dec_state=None, device
                 Cp[r][key] = sc.direction_counts(sc.pool_field(f[r], run.P), run, [lag], pooled=True)
                 m, _ = rest_magnitude(f[r], run)
                 restmag[r].append(m)
+                movemag[r].append(moving_magnitude(f[r], run, lag)[::7])
         if key in test_keys:  # the motion-blind baseline: this model on the run's own rest, repeated
             brates = replay(lobe, idx8 if decoder_kind != "flyvis" else torch.cat([idx8, idx_dec]),
                             rest_receptors(rec))[SETTLE:]
@@ -228,6 +244,7 @@ def score_model(name: str, ckpt: Path, decoder_kind=None, dec_state=None, device
         p = sc.gate_from_counts(Cp[r], lag_index=0, scenarios=scenarios)
         R = sc.score_rotation(rot[r], runs)
         m = np.concatenate(restmag[r]) if restmag[r] else np.zeros(1, np.float32)
+        mv = np.concatenate(movemag[r]) if movemag[r] else np.zeros(1, np.float32)
         out["readouts"][r] = dict(
             gate=g["value"], bin=g["bin"], n=g["n"], baseline=b["value"], lift=round(g["value"] - b["value"], 4),
             fixed_bin_gate=g["by_speed"][FIXED_BIN], fixed_bin_base=b["by_speed"][FIXED_BIN],
@@ -240,7 +257,9 @@ def score_model(name: str, ckpt: Path, decoder_kind=None, dec_state=None, device
             gain_seg={l: {s: R[l][s]["gain_seg"] for s in sc.AXIS} for l in R},
             signs={l: R[l]["signs_right"] for l in R},
             rest_p50=round(float(np.median(m)), 5), rest_p90=round(float(np.quantile(m, 0.9)), 5),
-            rest_mean=round(float(m.mean()), 5), rest_n=int(m.size))
+            rest_mean=round(float(m.mean()), 5), rest_n=int(m.size),
+            moving_p50=round(float(np.median(mv)), 5), moving_p90=round(float(np.quantile(mv, 0.9)), 5),
+            rest_over_moving_p50=round(float(np.median(m) / max(float(np.median(mv)), 1e-12)), 4))
     out["seconds"] = round(time.time() - t0, 1)
     return out
 
@@ -300,7 +319,8 @@ def print_row(name, r, key):
     d = r["readouts"][key]
     print(f"{name:26s} {key:4s} gate {d['gate']:.4f} ({d['bin']}) base {d['baseline']:.4f} lift {d['lift']:+.4f} | "
           f"2-4 col/s {d['fixed_bin_gate']:.4f}/{d['fixed_bin_base']:.4f} ({d['fixed_bin_lift']:+.4f}) | "
-          f"pool19 {d['pooled_19']:.4f} | rest p50 {d['rest_p50']:.4f} p90 {d['rest_p90']:.4f} | "
+          f"pool19 {d['pooled_19']:.4f} | rest p50 {d['rest_p50']:.4f} p90 {d['rest_p90']:.4f} "
+          f"move p50 {d['moving_p50']:.4f} ratio {d['rest_over_moving_p50']:.3f} | "
           f"R2 {d['r2_seg']['bright']} signs {d['signs']}", flush=True)
 
 
@@ -342,7 +362,9 @@ def figure(path: Path = FIGURE, results: Path = RESULTS, logs=()):
 
     # 3. gate and baseline on held-out flights
     ax = fig.add_subplot(gs[0, 2:4])
-    rows = [(n, r, S[n]["readouts"][r]) for n in names for r in S[n]["readouts"]]
+    # member 000's unit readout is the same number in every "000 + <x> decoder" run; keep it once
+    rows = [(n, r, S[n]["readouts"][r]) for n in names for r in S[n]["readouts"]
+            if not (r == "unit" and n.startswith("000 +"))]
     x = np.arange(len(rows))
     ax.bar(x - 0.19, [d["gate"] for _, _, d in rows], 0.36, color="#0072b2", label="gate (best bin)")
     ax.bar(x + 0.19, [d["fixed_bin_gate"] for _, _, d in rows], 0.36, color="#56b4e9", label="gate (2-4 columns/s)")
@@ -352,7 +374,7 @@ def figure(path: Path = FIGURE, results: Path = RESULTS, logs=()):
     for xi, (_, _, d) in zip(x, rows):
         ax.text(xi, max(d["gate"], d["fixed_bin_gate"]) + 0.008, f"{d['lift']:+.3f}", ha="center", fontsize=8)
     ax.axhline(0.25, color="k", lw=0.6, ls=":")
-    ax.set_xticks(x, [f"{n}\n{r}" for n, r, _ in rows], fontsize=8)
+    ax.set_xticks(x, [f"{n} / {r}" for n, r, _ in rows], fontsize=8, rotation=28, ha="right")
     ax.set_ylabel("fraction within 45 deg")
     ax.set_title("Held-out flights (straight_30, pitch, approach; all lightings): gate vs its own baseline\n"
                  "the number above each pair is the lift in the best bin")
@@ -365,7 +387,7 @@ def figure(path: Path = FIGURE, results: Path = RESULTS, logs=()):
     ax.axhline(0, color="k", lw=0.6)
     ax.axhline(0.25, color="k", lw=0.6, ls="--")
     ax.text(len(rows) - 0.5, 0.255, "proposed +0.25", ha="right", fontsize=8)
-    ax.set_xticks(x, [f"{n}\n{r}" for n, r, _ in rows], fontsize=7, rotation=20, ha="right")
+    ax.set_xticks(x, [f"{n} / {r}" for n, r, _ in rows], fontsize=7, rotation=28, ha="right")
     ax.set_ylabel("gate minus own baseline")
     ax.set_title("Lift (wide = best bin, narrow = 2-4 columns/s)")
 
@@ -374,9 +396,11 @@ def figure(path: Path = FIGURE, results: Path = RESULTS, logs=()):
     ax.bar(x - 0.19, [d["rest_p50"] for _, _, d in rows], 0.36, color="#444444", label="p50")
     ax.bar(x + 0.19, [d["rest_p90"] for _, _, d in rows], 0.36, color="#999999", label="p90")
     ax.set_yscale("log")
-    ax.set_xticks(x, [f"{n}\n{r}" for n, r, _ in rows], fontsize=7, rotation=20, ha="right")
+    ax.plot(x, [d["rest_over_moving_p50"] for _, _, d in rows], "D", color="#d55e00", ms=5,
+            label="p50 rest / p50 moving")
+    ax.set_xticks(x, [f"{n} / {r}" for n, r, _ in rows], fontsize=7, rotation=28, ha="right")
     ax.set_ylabel("|field| at rest, held-out runs")
-    ax.set_title("Static response on held-out rests")
+    ax.set_title("Static response on held-out rests\n(the field's scale is arbitrary; the diamonds are the ratio)")
     ax.legend(fontsize=8)
 
     # 6. rotation R^2
@@ -445,10 +469,12 @@ def figure(path: Path = FIGURE, results: Path = RESULTS, logs=()):
     # 11. the numbers
     ax = fig.add_subplot(gs[2, 3])
     ax.axis("off")
-    lines = [f"{'model / readout':30s} {'gate':>6s} {'base':>6s} {'lift':>6s} {'2-4':>6s} {'b2-4':>6s} {'rest50':>7s}"]
+    lines = [f"{'model / readout':30s} {'gate':>6s} {'base':>6s} {'lift':>6s} {'2-4':>6s} {'b2-4':>6s} "
+             f"{'rest50':>7s} {'r/mov':>6s}"]
     for n, r, d in rows:
         lines.append(f"{(n + ' / ' + r)[:30]:30s} {d['gate']:6.3f} {d['baseline']:6.3f} {d['lift']:+6.3f} "
-                     f"{d['fixed_bin_gate']:6.3f} {d['fixed_bin_base']:6.3f} {d['rest_p50']:7.4f}")
+                     f"{d['fixed_bin_gate']:6.3f} {d['fixed_bin_base']:6.3f} {d['rest_p50']:7.4f} "
+                     f"{d['rest_over_moving_p50']:6.3f}")
     lines += ["", "held out: straight_30, pitch, approach, all lightings; lag 20 ms",
               "base = the same model and readout on the run's own rest, repeated"]
     for n in gn:

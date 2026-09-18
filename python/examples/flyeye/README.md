@@ -726,6 +726,143 @@ py -3.14 python/examples/flyeye/score_members.py figure    # figures/repair_roun
 py -3.14 python/examples/flyeye/score_members.py video --member "mean field" --readout "rec adapt2+V2"
 ```
 
+## Retraining (2026-09-18, same machine)
+
+### What and why
+
+flyvis fits the connectome-constrained model by gradient descent on Sintel clips: the wiring,
+synapse counts and signs are fixed by the connectome, and the free parameters are about 700
+floats, shared per cell type (`time_const`, `bias`, 65 each) and per edge type
+(`syn_strength`, 604). Sintel always moves, so that task never penalised a response to a
+still scene. The repair round above found the opposite of what a motion detector should do:
+member 000's per-column T4/T5 field in a still textured scene is as large as its response to
+motion, and every readout that fixes the direction also lifts its own motion-blind baseline.
+
+The hypothesis I tested here: refitting the SAME free parameters, under the SAME constraints,
+on rendered flight that contains rest periods and exact per-column truth gives a model whose
+T4/T5 suppress static patterns and whose per-column flow is usable. The alternative is that
+the model class cannot do it and the gate stays near 0.5 whatever the data.
+
+### How
+
+`train/model.py` is `optic_lobe.py` with the three groups as `nn.Parameter`s (tau learned as
+log tau and clamped at dt in the forward, `syn_strength` clamped at 0 as flyvis's
+`Network.clamp` does), truncated BPTT over 50-frame windows at dt 0.01 with the state carried
+detached, and checkpoints written in `data/flyeye_model.npz`'s format so `OpticLobe`,
+`members.py` and `score_members.py` load them unchanged. `torch.sparse.mm` does
+backpropagate into a sparse tensor's values, but on this matrix (1.51 M non-zeros, batch 8)
+it costs 25 ms against 0.35 ms for the forward, so `model.SpMM` writes the two gradients out
+and the loop runs at 3.2 to 3.5 steps/s instead of 0.02.
+
+Two decoders, both implemented. `linear` is the repair round's shared 8 to 2 map from the
+rest-subtracted T4/T5 rates, with no adaptation stage, so any suppression of a static pattern
+has to happen inside the circuit. `flyvis` is `DecoderGAVP` reproduced from the flyvis 1.2.0
+wheel with the source lines quoted in `train/decoder.py`: shape [8, 2], a 5 x 5 kernel masked
+to a hex, batch norm, Softplus, dropout 0.5, the normalising extra channel, the 34
+`output_cell_types`, the `l2norm` objective and the activity penalty on `bias`.
+
+Training split: `straight_3`, `straight_10`, `yaw` and `roll` in all three lightings (12
+recordings, 8220 frames x 2 eyes). Held out: `straight_30`, `pitch` and `approach` in all
+three lightings. Handoff 5b is the reason the hold-out is by trajectory: bright, dim and dark
+share scene and trajectory, so holding lighting out tests lighting only.
+
+Three runs, 9.5 minutes of GPU each (28.5 minutes in total, the smoke's cap): `linear` with
+the target in columns/s and MSE, `linear` with a unit-direction target and MSE, and `flyvis`
+with `l2norm` and the activity penalty.
+
+### Result: the gate goes up and the motion-blind baseline goes up with it
+
+Held-out flights, lag 20 ms, gate in the best speed bin over the model's OWN motion-blind
+baseline (the same model and readout driven by the run's own rest frames, ping-ponged, with
+10 s of settle dropped). The 2-4 columns/s column is the fixed bin every earlier table used.
+
+| model | readout | gate | own base | lift | 2-4 col/s gate / base / lift | pooled-19 |
+|---|---|---|---|---|---|---|
+| member 000 | unit | 0.366 | 0.321 | **+0.045** | 0.362 / 0.284 / +0.079 | 0.437 |
+| member 000 | trained linear (unit target) | 0.457 | 0.448 | **+0.010** | 0.424 / 0.381 / +0.043 | 0.617 |
+| retrained (unit target) | unit | 0.543 | 0.559 | **-0.016** | 0.543 / 0.559 / -0.016 | 0.557 |
+| retrained (unit target) | its own decoder | 0.615 | 0.644 | **-0.029** | 0.561 / 0.568 / -0.007 | 0.627 |
+| retrained (columns target) | unit | 0.320 | 0.289 | +0.031 | 0.279 / 0.265 / +0.013 | 0.312 |
+| retrained (columns target) | its own decoder | 0.490 | 0.483 | +0.007 | 0.345 / 0.350 / -0.005 | 0.554 |
+| retrained (flyvis) | unit | 0.274 | 0.280 | -0.006 | 0.250 / 0.282 / -0.032 | 0.295 |
+| retrained (flyvis) | its own decoder | 0.603 | 0.586 | +0.017 | 0.354 / 0.310 / +0.044 | 0.609 |
+
+The absolute gate rises to 0.54 and 0.62, past everything the repair round reached, and the
+lift falls to zero or below. This is the failure mode section 5b warned about, now produced
+by gradient descent rather than by a fitted readout: the circuit learns the scene's static
+flow prior, which scores on rest frames exactly as well as on moving ones.
+
+### The circuit stops being a motion detector
+
+Gratings on the checkpoints (24 directions, 4 Hz, 8 columns; DSI as repair's vector mean and
+as preferred minus null):
+
+| | T4a | T4b | T4c | T4d | T5a | T5b | T5c | T5d | TF peak |
+|---|---|---|---|---|---|---|---|---|---|
+| before (000) | 0.60 / 0.84 | 0.63 / 1.00 | 0.60 / 0.80 | 0.52 / 0.68 | 0.47 / 0.54 | 0.26 / 0.26 | 0.80 / 1.00 | 0.46 / 0.53 | 6.0 Hz |
+| after unit | 0.17 / 0.25 | 0.07 / 0.00 | 0.16 / 0.20 | dead | 0.10 / 0.16 | 0.36 / 0.39 | 0.65 / 0.79 | 0.23 / 0.30 | 2.0 Hz |
+| after columns | 0.24 / 0.35 | 0.80 / 1.00 | 0.67 / 0.96 | dead | 0.28 / 0.12 | 0.39 / 1.00 | 0.46 / 0.61 | 0.38 / 0.52 | 4.0 Hz |
+| after flyvis | 0.25 / 0.44 | 0.29 / 0.50 | 0.28 / 0.57 | dead | 0.23 / 1.00 | 0.33 / 0.50 | 0.99 / 1.00 | 0.17 / 0.99 | 4.0 Hz |
+
+T4d's grating amplitude falls to exactly 0 in all three runs; it was already the weakest
+subtype at 0.019. Preferred angles move by 25 to 90 degrees. The static response does not
+fall: on the held-out rests |field| p50 goes from 0.086 (member 000) to 6.02, 0.258 and 0.188,
+and since the field's overall scale is not fixed by anything, the meaningful number is the
+ratio of the rest response to the moving response, which goes from 0.97 to 1.10, 1.03 and
+0.83.
+
+Rotation with the unit readout, R^2 over the six steady segments in bright, and the number of
+right signs out of 18 per lighting: member 000 yaw 0.87, pitch 0.33, roll 0.74 with 18/14/10;
+after the unit run 0.40 / 0.84 / 0.46 with 6/10/9; after the columns run 0.78 / 0.77 / 0.80
+with 18/14/10; after flyvis 0.52 / 0.86 / 0.99 with 3/6/6. Two of the three runs lose the
+sign of the wide-field rotation readout, which is the one thing flyeye did well.
+
+### Verdict on the smoke: the proposed criteria are not met
+
+The criteria were a lift above +0.25 with the unit readout, a 3x drop in the rest-frame
+|field|, and DSI above 0.5 on T4a/b and T5a/b. The best lift is -0.016 (and +0.031 in the
+run whose loss never came down), the rest response rises in every run, and the DSI collapses.
+Nine and a half minutes on one GPU is a smoke test and not a training run, so this does not
+show that the model class cannot do it. What it does show is the shape of the failure: the
+task as posed is won faster by learning the scene prior than by learning motion, and nothing
+in an MSE or l2norm loss on per-column flow stops that. A fuller run needs a loss or a data
+set that makes the prior worthless, which means many scenes and many routes, not more steps
+on these 12 recordings.
+
+Figure `figures/retrain_smoke.png` (loss curves, the static response during training, gate
+against own baseline on held-out flights, lift, static response on held-out rests, rotation,
+DSI, TF tuning, preferred angles, parameter drift, and the table). Data in
+`C:\dev\_flyeye\retrain\` (`results.json` and one directory per run with `model_final.npz`,
+`decoder_final.pt` and `log.json`).
+
+### Parameter drift after 9.5 minutes
+
+| run | tau relative L2 | largest relative tau change | bias L2 | syn L2 / L2(0) | strengths at 0 (start 31) | newly 0 |
+|---|---|---|---|---|---|---|
+| linear, columns | 0.64 | 0.22 (C2) | 0.077 | 0.28 | 23 | 6 |
+| linear, unit | 1.63 | 0.67 (R7) | 0.148 | 0.41 | 30 | 13 |
+| flyvis | 1.08 | 0.43 (C2) | 0.124 | 0.17 | 23 | 23 |
+
+The types whose time constants move most are C2, Mi1, R7, R8, Mi15 and the Tm/TmY family; in
+the flyvis run T4a and T4b themselves move by -0.29 and -0.27. Biases move by at most 0.11
+(Mi11). Six to 23 edge types are driven to exactly 0 and a similar number leave 0, so the
+count of zero strengths moves both ways.
+
+### Reproduce
+
+```
+py -3.14 python/examples/flyeye/train/train.py --dry                     # 50 steps, gradient check
+py -3.14 python/examples/flyeye/train/train.py --run linear --decoder linear --target columns --streams 24 --minutes 9.5
+py -3.14 python/examples/flyeye/train/train.py --run unit   --decoder linear --target unit    --streams 24 --minutes 9.5
+py -3.14 python/examples/flyeye/train/train.py --run flyvis --decoder flyvis --streams 24 --minutes 9.5
+py -3.14 python/examples/flyeye/train/evaluate.py score --name "000 unit" --ckpt python/examples/flyeye/data/flyeye_model.npz
+py -3.14 python/examples/flyeye/train/evaluate.py score --name "retrained unit" --ckpt C:/dev/_flyeye/retrain/unit/model_final.npz \
+    --decoder linear --dec-state C:/dev/_flyeye/retrain/unit/decoder_final.pt
+py -3.14 python/examples/flyeye/train/evaluate.py gratings --name "after unit" --ckpt C:/dev/_flyeye/retrain/unit/model_final.npz
+py -3.14 python/examples/flyeye/train/evaluate.py figure --logs C:/dev/_flyeye/retrain/*/log.json
+py -3.14 python/examples/flyeye/train/evaluate.py table
+```
+
 ## Receptor input convention
 
 This is what the pretrained models saw, recorded in the npz key `input_convention`.
