@@ -175,7 +175,7 @@ def spread(paths, out_dir, pen_r=7.0):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=os.path.join(HERE, "..", "..", "aaa_caps", "netpen", "e3"))
+    ap.add_argument("--out", default=os.path.join(HERE, "..", "..", "..", "aaa_caps", "netpen", "e3"))
     ap.add_argument("--seconds", type=float, default=60.0)
     ap.add_argument("--repeat", type=int, default=10, help="fresh processes at the same seed")
     ap.add_argument("--seeds", type=int, default=10, help="sensor-noise seeds, one process each")

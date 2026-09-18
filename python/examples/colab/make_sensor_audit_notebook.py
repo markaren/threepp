@@ -1,6 +1,6 @@
 """Generate threepp_sensor_audit.ipynb: the RA-L paper's cross-GPU determinism row.
 
-The notebook installs threepp on a Colab T4, runs examples/sensor_audit.py in
+The notebook installs threepp on a Colab T4, runs examples/probes/sensor_audit.py in
 two fresh subprocesses, compares them (the "fresh process, T4" cells of the
 reproducibility matrix), and compares against a manifest recorded on the
 development machine (RTX 4070, Windows) for the cross-machine row.
@@ -8,7 +8,7 @@ development machine (RTX 4070, Windows) for the cross-machine row.
     python make_sensor_audit_notebook.py [--baseline rtx4070.json]
 
 Regenerate rather than hand-edit: the audit script is embedded verbatim from
-../sensor_audit.py and the setup cell is shared with threepp_colab.ipynb.
+../probes/sensor_audit.py and the setup cell is shared with threepp_colab.ipynb.
 """
 import argparse
 import json
@@ -60,7 +60,7 @@ def main():
     setup_cell = setup_cell.replace(
         form_anchor,
         form_anchor + 'USE_TESTPYPI = False  # @param {type:"boolean"}  (a release candidate on TestPyPI)\n', 1)
-    audit_src = open(os.path.join(HERE, "..", "sensor_audit.py"), encoding="utf-8").read()
+    audit_src = open(os.path.join(HERE, "..", "probes", "sensor_audit.py"), encoding="utf-8").read()
     baseline = open(a.baseline, encoding="utf-8").read().strip() if os.path.exists(a.baseline) else None
 
     cells = [
@@ -95,7 +95,7 @@ is exactly the replay condition the audit measures.
         code(setup_cell),
         md("""## 2 - The audit script
 
-Written to disk verbatim from the repository (`python/examples/sensor_audit.py`).
+Written to disk verbatim from the repository (`python/examples/probes/sensor_audit.py`).
 It builds the scripted scene, drives every clock from the frame index, hashes
 each stream over 120 frames, and writes a JSON manifest. Rows the installed wheel
 cannot produce are reported as `absent`, never as a match.

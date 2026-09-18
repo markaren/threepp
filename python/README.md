@@ -115,7 +115,7 @@ display is only required for the on-screen examples.
 | [`examples/imu_demo.py`](examples/imu_demo.py) | **Headless IMU** — a box dropped onto the floor with an `Imu` mounted off-CoM; prints the physics-truth table (free fall ~0, at rest ~+9.81). Needs a PhysX build; no display. |
 | [`examples/cartpole/train_cartpole.py`](examples/cartpole/train_cartpole.py) / [`play_cartpole.py`](examples/cartpole/play_cartpole.py) | **GPU-vectorized RL end to end** — a `VecTask` cartpole swing-up trained with the owned `threepp.rl` PPO (committed checkpoint included; `play` renders the result). Needs a PhysX GPU build + torch. |
 | [`examples/spot/`](examples/spot) | **Quadruped RL family** — Spot locomotion policies (steps, stairs, heightfield), sim-to-sim deploy into the editor, depth scanning; see its [README](examples/spot/README.md). |
-| [`examples/smoke_test.py`](examples/smoke_test.py) | Assertion-based regression test of the whole surface; prints `ALL OK`. |
+| [`examples/probes/smoke_test.py`](examples/probes/smoke_test.py) | Assertion-based regression test of the whole surface; prints `ALL OK`. |
 
 ```sh
 cd python
@@ -147,8 +147,7 @@ module docstring.
 | --- | --- |
 | [`examples/urdf_arm.py`](examples/urdf_arm.py) | Import any URDF as a PhysX articulation and wave its joints. |
 | [`examples/stewart_balancer.py`](examples/stewart_balancer.py) | A 6-leg Stewart platform balancing a ball along a rose curve: LQR + IK + stepper dynamics. |
-| [`examples/tendon_hand.py`](examples/tendon_hand.py) | A tendon-driven anthropomorphic hand, built so the mechanics are right. |
-| [`examples/tendon_probe.py`](examples/tendon_probe.py) | Measures what PhysX articulation tendons actually do, before building a hand on them. |
+| [`examples/tendon_hand/`](examples/tendon_hand) | A tendon-driven anthropomorphic hand, built so the mechanics are right, and a GPU-trained policy that holds on with it through a roll-over; see its [README](examples/tendon_hand/README.md). |
 
 **Warp films** — NVIDIA Warp simulation rendered live by threepp. Each is
 self-contained; what they share lives in [`examples/warp_common.py`](examples/warp_common.py).
@@ -167,7 +166,7 @@ self-contained; what they share lives in [`examples/warp_common.py`](examples/wa
 | [`examples/warp_nebula_vk.py`](examples/warp_nebula_vk.py) | The same nebula as a VOLUME, through the Vulkan particle sprites. |
 | [`examples/warp_prop_vortex.py`](examples/warp_prop_vortex.py) | A twin-screw stern cavitating underwater. |
 | [`examples/warp_sailboat.py`](examples/warp_sailboat.py) | A sailboat whose sails are Warp cloth, sailing the FFT ocean in the mist. |
-| [`examples/warp_netpen.py`](examples/warp_netpen.py) | Net-pen inspection ROV: a torn Warp-cloth net, tether, sonar and camera insets, a school of salmon. |
+| [`examples/netpen/`](examples/netpen) | Net-pen inspection ROV: a torn Warp-cloth net, tether, sonar and camera insets, a school of salmon, and the closed sonar loop (E3) built on it; see its [README](examples/netpen/README.md). |
 | [`examples/warp_mudsnow.py`](examples/warp_mudsnow.py) | Deformable ground: the same boots and rolling ball, in mud and in snow. |
 | [`examples/warp_mudsnow_mpm.py`](examples/warp_mudsnow_mpm.py) | The same ground as MLS-MPM granular material. |
 | [`examples/warp_mudsnow_drive.py`](examples/warp_mudsnow_drive.py) | A Range Rover driven over Bekker-Wong ground: mud, snow, packed clay. |
@@ -186,6 +185,17 @@ runs standalone too.
 | --- | --- |
 | [`examples/warp_hull_sculpt.py`](examples/warp_hull_sculpt.py) | Differentiable hull sculpting: gradient descent designs a hull, live in the water. |
 | [`examples/lidar_sculpt.py`](examples/lidar_sculpt.py) | Sculpting against a sensor: a body reshaped to hide from, or shout at, the engine's own LIDAR. |
+
+**Probes** — instruments, not demos: each answers one question and prints (or
+writes) the answer. They live in [`examples/probes/`](examples/probes) with
+`smoke_test.py` above; see its [README](examples/probes/README.md).
+
+| Script | What it measures |
+| --- | --- |
+| [`examples/probes/sensor_audit.py`](examples/probes/sensor_audit.py) | Sensor replay audit for any machine that can `pip install threepp`: does every sensor stream replay bit for bit across fresh processes and GPUs. |
+| [`examples/probes/multiview_bench.py`](examples/probes/multiview_bench.py) | E2: same-instant multi-view — the temporal-coherence triptych and the frame-time curve for 1 to 8 views. |
+| [`examples/probes/tendon_probe.py`](examples/probes/tendon_probe.py) | Measures what PhysX articulation tendons actually do, before building a hand on them. |
+| [`examples/probes/idun_egl_smoke.py`](examples/probes/idun_egl_smoke.py) | Hardware OpenGL on a display-less GPU node through EGL, and a check that the GPU drew it. |
 
 ## What's exposed
 
@@ -326,7 +336,7 @@ cd python
 pytest
 ```
 
-[`examples/smoke_test.py`](examples/smoke_test.py) is a dependency-light
+[`examples/probes/smoke_test.py`](examples/probes/smoke_test.py) is a dependency-light
 standalone alternative that prints `ALL OK`.
 
 ### Type stubs (IDE autocomplete)

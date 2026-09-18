@@ -16,7 +16,12 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_EX = os.path.dirname(_HERE)                 # python/examples
+_PY = os.path.dirname(_EX)                   # python
+for _p in (os.path.join(_EX, "probes"), _HERE, _EX, _PY):   # probes: sensor_audit
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import numpy as np
 import warp as wp
@@ -37,7 +42,7 @@ FILM = FILM or FILM_TEST                             # --film-test on its own us
 # cloth net, the sonar). Renders N frames of one film cut on the simulation
 # clock, headless, and folds every stream into a manifest in
 # sensor_audit.py's format, so two fresh processes are judged by
-#   python sensor_audit.py --compare a.json b.json
+#   python ../probes/sensor_audit.py --compare a.json b.json
 AUDIT = cli_arg("--audit", 0, int)
 AUDIT_OUT = cli_arg("--audit-out", "", str)
 AUDIT_CUT = cli_arg("--audit-cut", 1, int)            # 1 = the sonar cut: the ROV at the net, sonar live
@@ -55,8 +60,7 @@ E3_LIVE = [None]                                      # the live vehicle; None =
 HEADLESS = bool(SHOT) or FILM or FILM_BENCH or AUDIT > 0 or E3 > 0
 SECONDS = cli_arg("--seconds", 6.0, float)
 W, H = parse_size(cli_arg("--size", "1600x900", str))
-CAP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                       "aaa_caps", "netpen")
+CAP_DIR = os.path.join(os.path.dirname(_PY), "aaa_caps", "netpen")
 OUT = cli_arg("--out", os.path.join(CAP_DIR, f"{SHOT}.png"), str)
 FILM_OUT = cli_arg("--film", os.path.join(CAP_DIR, "netpen_film.mp4"), str)
 PROFILE = "--profile" in sys.argv
@@ -69,7 +73,7 @@ NET_INTEROP = "--net-interop" in sys.argv         # opt-in repro: four interop m
 # FETCHED CENTRED ON THAT POINT, so the pack origin IS the site and the pen
 # stays exactly where it has always been -- at the world origin, WATER_Y 0.
 # Nothing about the pen, the barge or the ROV moves; the world grows around it.
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT = os.path.dirname(_PY)
 TERRAIN = "--terrain" in sys.argv
 TERRAIN_DIR = cli_arg("--terrain", os.path.join(ROOT, "geodata", "norddal"), str)
 if TERRAIN and not os.path.isfile(os.path.join(TERRAIN_DIR, "region.json")):

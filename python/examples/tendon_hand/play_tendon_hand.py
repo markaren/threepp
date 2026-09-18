@@ -35,7 +35,7 @@ import numpy as np
 import torch
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(_HERE))
+sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))    # python/
 sys.path.insert(0, _HERE)
 
 import threepp as tp
@@ -475,7 +475,7 @@ def main():
                     help="seconds at which --shots writes a still")
     ap.add_argument("--film", default=None, metavar="DIR",
                     help="60 fps PNG sequence of the whole episode at 1280x720, plus a "
-                         "contact sheet; encode it with the ffmpeg line in tendon_hand.md")
+                         "contact sheet; encode it with the ffmpeg line in README.md")
     ap.add_argument("--size", default="1280x800")
     a = ap.parse_args()
 

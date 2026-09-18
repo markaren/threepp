@@ -51,7 +51,7 @@
 // stiffness is zero" — survivable at all.
 //
 // TWO THINGS THE HEADER DOES NOT SETTLE, both measured by the probe in
-// python/examples/tendon_probe.py rather than assumed here:
+// python/examples/probes/tendon_probe.py rather than assumed here:
 //   * Do the LIMITS see `offset`? The spring block says rest is compared against
 //     "accumulated length plus the tendon offset" (:528-529); the limit block
 //     says limits act on "the accumulated length" (:551). If limits ignore

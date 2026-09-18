@@ -6,7 +6,7 @@ which is the whole point of the mechanism: there is no room for a motor in a fin
 the motors live in the forearm and the fingers are moved by tension.
 
 WHY THE CABLES ARE threepp.TendonCable AND NOT A PhysX TENDON. Measured, on a two-link
-finger, in python/examples/tendon_probe.py:
+finger, in python/examples/probes/tendon_probe.py:
 
   * A PxArticulationSpatialTendon's interior attachments set the LENGTH but exert NO
     FORCE, exactly as PxArticulationTendon.h:405-407 says. At a 0.9 rad bend its
@@ -74,7 +74,7 @@ import math
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import numpy as np
 import threepp as tp

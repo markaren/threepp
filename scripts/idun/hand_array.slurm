@@ -69,7 +69,7 @@ export TMPDIR="$LS/tmp"
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-8}
 trap 'rm -rf "$LS" 2>/dev/null || true' EXIT
 
-cd "$SRC/python/examples"
+cd "$SRC/python/examples/tendon_hand"
 GIT=$(git -C "$SRC" rev-parse --short HEAD 2>/dev/null || echo unknown)
 DIRTY=$(git -C "$SRC" status --porcelain 2>/dev/null | wc -l)
 echo "== $TAG  seed=$SEED  envs=$ENVS iters=$ITERS  git=$GIT (+$DIRTY dirty)  node=$(hostname)"

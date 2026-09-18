@@ -7914,7 +7914,7 @@ class TendonCable:
     """
     A tendon that behaves like a CABLE: routed over via points, pull-only, with a real tension number and optional routing friction.
     
-    Neither PhysX tendon is a routed cable, measured on a two-link finger (python/examples/tendon_probe.py): a spatial tendon's interior attachments set the length but exert no force, so its generalized force matches the gradient taken with the via point FROZEN to 0.07 deg and sits 21.06 deg from a real cable; a fixed tendon has no geometry at all. This applies the true frictionless-pulley force at every via point, so torque = -T dL/dq exactly -- measured at 0.02% of magnitude and 0.001 deg of direction against the analytic gradient.
+    Neither PhysX tendon is a routed cable, measured on a two-link finger (python/examples/probes/tendon_probe.py): a spatial tendon's interior attachments set the length but exert no force, so its generalized force matches the gradient taken with the via point FROZEN to 0.07 deg and sits 21.06 deg from a real cable; a fixed tendon has no geometry at all. This applies the true frictionless-pulley force at every via point, so torque = -T dL/dq exactly -- measured at 0.02% of magnitude and 0.001 deg of direction against the analytic gradient.
     
     Runs on the CPU physics path only: PhysX rejects link forces under direct-GPU, so batched GPU RL would need the SDK tendons instead.
     """

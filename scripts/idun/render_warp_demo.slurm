@@ -107,7 +107,7 @@ ffmpeg -hide_banner -encoders 2>/dev/null | grep -q ' libx264 ' \
 command -v ffprobe >/dev/null || { echo "FAIL: no ffprobe"; exit 3; }
 
 echo "=== preflight: hardware GL through EGL ==="
-python "$SRC/python/examples/idun_egl_smoke.py" --width 256 --height 256 \
+python "$SRC/python/examples/probes/idun_egl_smoke.py" --width 256 --height 256 \
     || { echo "FAIL: no hardware EGL context on this node"; exit 4; }
 
 # ------------------------------------------------------------- preflight #2 --

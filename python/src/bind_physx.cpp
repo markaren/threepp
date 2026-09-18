@@ -549,7 +549,7 @@ namespace threepp_py {
                                       "A tendon that behaves like a CABLE: routed over via points, pull-only, "
                                       "with a real tension number and optional routing friction.\n\n"
                                       "Neither PhysX tendon is a routed cable, measured on a two-link finger "
-                                      "(python/examples/tendon_probe.py): a spatial tendon's interior "
+                                      "(python/examples/probes/tendon_probe.py): a spatial tendon's interior "
                                       "attachments set the length but exert no force, so its generalized force "
                                       "matches the gradient taken with the via point FROZEN to 0.07 deg and "
                                       "sits 21.06 deg from a real cable; a fixed tendon has no geometry at "

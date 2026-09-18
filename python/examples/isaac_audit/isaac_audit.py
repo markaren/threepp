@@ -1,4 +1,4 @@
-"""The sensor-determinism audit, applied to Isaac Sim (4.5 as the pip package; 6.1 as the standalone package).
+r"""The sensor-determinism audit, applied to Isaac Sim (4.5 as the pip package; 6.1 as the standalone package).
 
 The same question the paper asks of threepp and of Gazebo: does every sensor
 stream of one scripted scene replay to the bit across fresh processes? One
@@ -13,7 +13,7 @@ named.
 
     D:\isaac-venv\Scripts\python.exe isaac_audit.py --frames 120 --out a.json --d3d12   (4.5, pip)
     D:\isaacsim\python.bat isaac_audit.py --frames 120 --out a.json                    (6.1, standalone)
-    python sensor_audit.py --compare a.json b.json
+    python ../probes/sensor_audit.py --compare a.json b.json
 
 Isaac Sim 6.x moves isaacsim.core.api and the isaacsim.sensors.{camera,physics,rtx} extensions to
 extsDeprecated; they still load but must be enabled by name (done below, recorded in meta). The

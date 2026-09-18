@@ -12,6 +12,8 @@ render*.png
 
 examples/*.png
 examples/*.npy
+examples/tendon_hand/*.png
+examples/tendon_hand/out/
 demo_cube.stl
 
 # Legacy artifacts from the experimental RL branch (not part of this package)

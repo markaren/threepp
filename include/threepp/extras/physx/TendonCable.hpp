@@ -2,7 +2,7 @@
 // tension and optional routing friction.
 //
 // WHY THIS EXISTS ALONGSIDE ArticulationTendon.hpp. PhysX ships two tendon primitives
-// and neither is a routed cable. Measured, not inferred (python/examples/tendon_probe.py,
+// and neither is a routed cable. Measured, not inferred (python/examples/probes/tendon_probe.py,
 // each number reproducible from that script):
 //
 //   * A spatial tendon's interior attachments set the LENGTH but exert NO FORCE, exactly
