@@ -2133,41 +2133,50 @@ namespace threepp {
             }
         };
 
-    }// anonymous namespace
-
-    // ===========================================================================
-    //  GLTFLoader public API
-    // ===========================================================================
-    std::optional<GLTFResult> GLTFLoader::load(const std::vector<uint8_t>& data, std::string ext,
-                                            const fs::path& basePath) {
-        try {
+        // Shared by both public overloads. Throws, so each caller can report the
+        // failure in its own words (a file load names the file). GLB is told
+        // apart from JSON by its magic rather than by a file extension, which
+        // in-memory data does not have.
+        GLTFResult parseBytes(const std::vector<uint8_t>& data, const fs::path& basePath,
+                              bool preserveNarrowAttributes) {
             GLTFParser parser;
             parser.basePath = basePath;
             parser.buffers = {};
             parser.preserveNarrowAttributes = preserveNarrowAttributes;
 
-            // lowercase extension
-            for (auto& c : ext) c = static_cast<char>(std::tolower(c));
-
-            if (ext == ".glb") {
+            uint32_t magic = 0;
+            if (data.size() >= sizeof(magic)) std::memcpy(&magic, data.data(), sizeof(magic));
+            if (magic == GLB_MAGIC) {
                 return parser.parseGLB(data);
             }
 
             // .gltf — plain JSON
             std::string jsonText(data.begin(), data.end());
             return parser.parseGLTF(jsonText);
+        }
+
+    }// anonymous namespace
+
+    // ===========================================================================
+    //  GLTFLoader public API
+    // ===========================================================================
+
+    std::optional<GLTFResult> GLTFLoader::load(const std::vector<uint8_t>& data, const fs::path& basePath) {
+        try {
+            return parseBytes(data, basePath, preserveNarrowAttributes);
         } catch (const std::exception& e) {
             std::cerr << "[GLTFLoader] Error loading from memory: " << e.what() << "\n";
             return std::nullopt;
         }
     }
+
     std::optional<GLTFResult> GLTFLoader::load(const fs::path& path) {
         try {
             std::ifstream f(path, std::ios::binary);
             if (!f) throw std::runtime_error("Cannot open file: " + path.string());
             std::vector<uint8_t> data = readAllBytes(f, path);
 
-            return load(data, path.extension().string(), path.parent_path());
+            return parseBytes(data, path.parent_path(), preserveNarrowAttributes);
         } catch (const std::exception& e) {
             std::cerr << "[GLTFLoader] Error loading " << path << ": " << e.what() << "\n";
             return std::nullopt;

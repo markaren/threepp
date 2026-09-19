@@ -13,6 +13,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -592,4 +593,93 @@ TEST_CASE("GLTFLoader skips primitives with out-of-range accessors") {
     REQUIRE(geom->getAttribute<float>("position")->count() == 3);
     REQUIRE(geom->hasIndex());
     CHECK(geom->getIndex()->array().size() == 3);
+}
+
+TEST_CASE("GLTFLoader loads from memory") {
+    Bin bin;
+    bin.put<float>({0.f, 0.f, 0.f, 2.f, 0.f, 0.f, 0.f, 3.f, 0.f});
+
+    // `buffer0` is spliced in as buffer 0's definition, so the same document
+    // can carry its bytes in the GLB BIN chunk, a data: URI or an external file.
+    auto makeJson = [&](const std::string& buffer0) {
+        return R"({
+          "asset":{"version":"2.0"},
+          "buffers":[{)" + buffer0 + R"("byteLength":36}],
+          "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36}],
+          "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"}],
+          "meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],
+          "nodes":[{"mesh":0}],
+          "scenes":[{"nodes":[0]}]
+        })";
+    };
+    auto toBytes = [](const std::string& s) { return std::vector<uint8_t>(s.begin(), s.end()); };
+
+    auto checkTriangle = [](const std::optional<GLTFResult>& res) {
+        REQUIRE(res);
+        auto* mesh = firstMesh(res->scene.get());
+        REQUIRE(mesh);
+        auto* pos = mesh->geometry()->getAttribute<float>("position");
+        REQUIRE(pos);
+        REQUIRE(pos->count() == 3);
+        CHECK(pos->array()[3] == 2.f);// vertex 1 x
+        CHECK(pos->array()[7] == 3.f);// vertex 2 y
+    };
+
+    GLTFLoader loader;
+
+    SECTION("GLB bytes") {
+        checkTriangle(loader.load(makeGlb(makeJson(""), bin.data)));
+    }
+
+    SECTION(".gltf JSON with a data: URI buffer") {
+        static const char* tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        std::string b64;// 36 bytes, a multiple of 3, so no padding to handle
+        for (size_t i = 0; i < bin.data.size(); i += 3) {
+            const uint32_t v = (bin.data[i] << 16) | (bin.data[i + 1] << 8) | bin.data[i + 2];
+            for (int s = 18; s >= 0; s -= 6) b64 += tbl[(v >> s) & 63];
+        }
+        checkTriangle(loader.load(toBytes(makeJson(
+                R"("uri":"data:application/octet-stream;base64,)" + b64 + R"(",)"))));
+    }
+
+    SECTION("external buffer is resolved against basePath") {
+        const auto dir = fs::temp_directory_path();
+        const std::string binName = "threepp_gltf_test_mem_" + std::to_string(g_counter++) + ".bin";
+        {
+            std::ofstream out(dir / binName, std::ios::binary | std::ios::trunc);
+            out.write(reinterpret_cast<const char*>(bin.data.data()),
+                      static_cast<std::streamsize>(bin.data.size()));
+        }
+        auto res = loader.load(toBytes(makeJson(R"("uri":")" + binName + R"(",)")), dir);
+        fs::remove(dir / binName);
+        checkTriangle(res);
+    }
+
+    SECTION("garbage is rejected cleanly") {
+        CHECK_FALSE(loader.load(toBytes("not a gltf")).has_value());
+        CHECK_FALSE(loader.load(std::vector<uint8_t>{}).has_value());
+    }
+}
+
+TEST_CASE("GLTFLoader recognises a GLB by content, not by file extension") {
+    Bin bin;
+    bin.put<float>({0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f});
+    std::string json = R"({"asset":{"version":"2.0"},
+      "buffers":[{"byteLength":36}],
+      "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36}],
+      "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"}],
+      "meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],
+      "nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}]})";
+
+    auto glbPath = writeTempGlb(makeGlb(json, bin.data));
+    auto path = glbPath;
+    path.replace_extension(".bin");
+    fs::rename(glbPath, path);
+
+    GLTFLoader loader;
+    auto res = loader.load(path);
+    fs::remove(path);
+
+    REQUIRE(res);
+    CHECK(firstMesh(res->scene.get()) != nullptr);
 }
