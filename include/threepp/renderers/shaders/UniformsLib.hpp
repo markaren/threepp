@@ -29,7 +29,10 @@ namespace threepp::shaders {
 
         UniformMap envmap{
                 {"envMap", Uniform()},
-                {"flipEnvMap", Uniform(false)},
+                // A float, and a MULTIPLIER on the sampled direction's x, not a
+                // flag: the shader does vec3( flipEnvMap * reflectVec.x, ... ).
+                // The two legal values are -1 and +1.
+                {"flipEnvMap", Uniform(1.f)},
                 {"reflectivity", Uniform(1.f)},
                 {"refractionRatio", Uniform(0.98f)},
                 {"maxMipMapLevel", Uniform(0)}};

@@ -126,7 +126,7 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
         // CubeReflection mapping (samplerCube path). The uniform carries the same ptr.
         shaderMaterial->envMap = resolvedShared;
         shaderMaterial->uniforms.at("envMap").setValue(cubeBackground);
-        shaderMaterial->uniforms.at("flipEnvMap").setValue(cubeBackground->_needsFlipEnvMap);
+        shaderMaterial->uniforms.at("flipEnvMap").setValue(cubeBackground->_needsFlipEnvMap ? -1.f : 1.f);
 
         if (currentBackground != &background.value() || currentBackgroundVersion != tex->version() || currentTonemapping != renderer.toneMapping) {
 

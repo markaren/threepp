@@ -18,7 +18,15 @@ namespace threepp {
         explicit GLCubeRenderTarget(int size, const Options& options = {})
             : GLRenderTarget(size, size, options) {
 
-            this->texture = CubeTexture::create();
+            auto cubeTexture = CubeTexture::create();
+
+            // A cube we RENDERED is already in three.js's right-handed world, so
+            // it must not get the left-handed-cube-map correction that a LOADED
+            // cube map needs. Same line as r129's WebGLCubeRenderTarget. Without
+            // it, an equirect converted to a cube here comes out mirrored in x.
+            cubeTexture->_needsFlipEnvMap = false;
+
+            this->texture = cubeTexture;
             if (options.mapping) this->texture->mapping = *options.mapping;
             if (options.wrapS) this->texture->wrapS = *options.wrapS;
             if (options.wrapT) this->texture->wrapT = *options.wrapT;

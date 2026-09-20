@@ -75,7 +75,12 @@ struct GLMaterials::Impl {
             auto cubeTexture = dynamic_cast<CubeTexture*>(envMap);
 
             uniforms.at("envMap").setValue(envMap);
-            uniforms.at("flipEnvMap").value<bool>() = cubeTexture && cubeTexture->_needsFlipEnvMap;
+            // -1 / +1, not a bool. Writing true/false uploaded 1.0 where the flip
+            // was needed, so a loaded cube map (which always needs it) came out
+            // mirrored in x, and would have uploaded 0.0 where it was not, which
+            // collapses the sampled direction onto the yz plane entirely.
+            uniforms.at("flipEnvMap").value<float>() =
+                    (cubeTexture && cubeTexture->_needsFlipEnvMap) ? -1.f : 1.f;
 
             auto reflectiveMaterial = dynamic_cast<MaterialWithReflectivity*>(material);
             if (reflectiveMaterial) {

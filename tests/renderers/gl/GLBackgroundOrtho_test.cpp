@@ -99,30 +99,61 @@ TEST_CASE("turning the orthographic camera selects the face it faces", "[gl][bac
     Scene scene;
     scene.background = Background(makeFaceColouredCube());
 
-    // Now looking down -X from +X, so the camera faces the -X face (green).
-    // Pins that the direction tracks the camera rather than being hard-coded,
-    // and that a rotated camera is still covered edge to edge — the box is
-    // axis-aligned in world space, so its coverage has to survive rotation.
-    OrthographicCamera camera(-10, 10, 10, -10, 0.1f, 100);
-    camera.position.set(5, 0, 0);
-    camera.lookAt(0, 0, 0);
+    // Now looking down -X from +X. Pins that the direction tracks the camera
+    // rather than being hard-coded, and that a rotated camera is still covered
+    // edge to edge — the box is axis-aligned in world space, so its coverage has
+    // to survive rotation.
+    //
+    // The face is the +X one (RED), not -X, and that is correct. Cube maps are
+    // specified in a LEFT-handed coordinate system (the RenderMan convention GL
+    // inherited); three.js and threepp are right-handed. The conversion is a
+    // negation of x at sample time, which is what makes a loaded cube map appear
+    // UNMIRRORED — and necessarily swaps which slot the ±X directions land in.
+    // three.js says so itself in CubeTexture: "environment maps used in three.js
+    // appear to have px and nx swapped". Getting the unmirrored image matters;
+    // the label swap is the price, and it is r129's price too.
+    //
+    // This case therefore pins the SIGN of flipEnvMap, which is a float
+    // multiplier and not a flag: +1 would show green here, and 0 — what writing
+    // a bool `false` uploads — would collapse the sampled direction onto the yz
+    // plane and show a seam rather than one flat colour.
+    auto faceUnderCamera = [&](const Vector3& eye) {
+        OrthographicCamera camera(-10, 10, 10, -10, 0.1f, 100);
+        camera.position.copy(eye);
+        camera.lookAt(0, 0, 0);
 
-    const auto pixels = renderWithGL(scene, camera, kClear);
-    REQUIRE(pixels.size() == DATA_SIZE);
+        const auto pixels = renderWithGL(scene, camera, kClear);
+        REQUIRE(pixels.size() == DATA_SIZE);
 
-    int clearPixels = 0;
-    for (int i = 0; i < PIXEL_COUNT; ++i) {
-        const int r = pixels[i * 3], g = pixels[i * 3 + 1], b = pixels[i * 3 + 2];
-        if (r < 40 && g < 40 && b < 40) ++clearPixels;
+        int clearPixels = 0;
+        for (int i = 0; i < PIXEL_COUNT; ++i) {
+            const int r = pixels[i * 3], g = pixels[i * 3 + 1], b = pixels[i * 3 + 2];
+            if (r < 40 && g < 40 && b < 40) ++clearPixels;
+        }
+        INFO("pixels still showing the clear colour: " << clearPixels << " / " << PIXEL_COUNT);
+        REQUIRE(clearPixels == 0);
+
+        // One flat colour: excludes a collapsed sample direction.
+        INFO("brightness variance: " << brightnessVariance(pixels));
+        REQUIRE(brightnessVariance(pixels) < 1.0);
+
+        return averageColor(pixels);
+    };
+
+    {
+        const auto avg = faceUnderCamera({5, 0, 0});// viewing along -X
+        INFO("looking along -X, average colour: " << avg.r << ", " << avg.g << ", " << avg.b);
+        REQUIRE(avg.r > 200);
+        REQUIRE(avg.g < 40);
+        REQUIRE(avg.b < 40);
     }
-    INFO("pixels still showing the clear colour: " << clearPixels << " / " << PIXEL_COUNT);
-    REQUIRE(clearPixels == 0);
-
-    const auto avg = averageColor(pixels);
-    INFO("average colour: " << avg.r << ", " << avg.g << ", " << avg.b);
-    REQUIRE(avg.g > 200);
-    REQUIRE(avg.r < 40);
-    REQUIRE(avg.b < 40);
+    {
+        const auto avg = faceUnderCamera({-5, 0, 0});// viewing along +X
+        INFO("looking along +X, average colour: " << avg.r << ", " << avg.g << ", " << avg.b);
+        REQUIRE(avg.g > 200);
+        REQUIRE(avg.r < 40);
+        REQUIRE(avg.b < 40);
+    }
 }
 
 TEST_CASE("a perspective camera still sees the environment on every side", "[gl][background]") {
