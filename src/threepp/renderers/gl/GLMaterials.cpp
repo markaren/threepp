@@ -573,7 +573,7 @@ struct GLMaterials::Impl {
         }
     }
 
-    void refreshFogUniforms(UniformMap& uniforms, FogVariant& fog) {
+    void refreshFogUniforms(UniformMap& uniforms, FogVariant& fog, ColorSpace outputColorSpace) {
 
         // The fog mix runs LAST in the fragment shader, after tonemapping and
         // encodings (the r129 chunk order) -- i.e. in OUTPUT space -- while
@@ -584,17 +584,34 @@ struct GLMaterials::Impl {
         // horizon line, the property scenes are designed around. Without it,
         // full fog converged to EOTF(authored) -- near-black for any dusk
         // haze -- while the background stayed at the authored value.
+        //
+        // Which encode, though, depends on WHERE this pass is drawing. The
+        // shader's linearToOutputTexel is compiled from the bound target's colour
+        // space, and a RenderTarget defaults to NoColorSpace, for which that
+        // transform is the identity. Encoding to sRGB unconditionally therefore
+        // put an sRGB value into a linear buffer for every offscreen pass -- an
+        // EffectComposer, the transmission backdrop, a mirror target -- roughly
+        // trebling the fog there, and reopening against the background clear the
+        // very horizon seam this encode exists to close, because GLBackground
+        // already chooses ITS encode from the bound target (see setClear).
+        auto encode = [&](const Color& authored) {
+            Color c;
+            c.copy(authored);
+            ColorManagement::workingToColorSpace(c, outputColorSpace);
+            return c;
+        };
+
         if (fog.index() == 0) {
 
             auto& f = std::get<Fog>(fog);
-            uniforms.at("fogColor").value<Color>().copyLinearToSRGB(f.color);
+            uniforms.at("fogColor").value<Color>().copy(encode(f.color));
 
             uniforms.at("fogNear").value<float>() = f.nearPlane;
             uniforms.at("fogFar").value<float>() = f.farPlane;
         } else {
 
             auto& f = std::get<FogExp2>(fog);
-            uniforms.at("fogColor").value<Color>().copyLinearToSRGB(f.color);
+            uniforms.at("fogColor").value<Color>().copy(encode(f.color));
 
             uniforms.at("fogDensity").value<float>() = f.density;
         }
@@ -703,9 +720,9 @@ struct GLMaterials::Impl {
     }
 };
 
-void GLMaterials::refreshFogUniforms(UniformMap& uniforms, FogVariant& fog) {
+void GLMaterials::refreshFogUniforms(UniformMap& uniforms, FogVariant& fog, ColorSpace outputColorSpace) {
 
-    return pimpl_->refreshFogUniforms(uniforms, fog);
+    return pimpl_->refreshFogUniforms(uniforms, fog, outputColorSpace);
 }
 
 void GLMaterials::refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height, RenderTarget* transmissionRenderTarget) {

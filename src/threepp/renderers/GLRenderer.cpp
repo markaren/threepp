@@ -1282,7 +1282,7 @@ struct GLRenderer::Impl {
 
             if (fog && material->fog) {
 
-                materials.refreshFogUniforms(m_uniforms, *fog);
+                materials.refreshFogUniforms(m_uniforms, *fog, currentOutputColorSpace());
             }
 
             materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _size.height(), _transmissionRenderTarget.get());

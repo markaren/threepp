@@ -22,7 +22,7 @@ namespace threepp::gl {
 
         explicit GLMaterials(GLProperties& properties);
 
-        void refreshFogUniforms(UniformMap& uniforms, FogVariant& fog);
+        void refreshFogUniforms(UniformMap& uniforms, FogVariant& fog, ColorSpace outputColorSpace);
 
         void refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height, RenderTarget* transmissionRenderTarget = nullptr);
 
