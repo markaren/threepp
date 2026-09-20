@@ -682,7 +682,18 @@ struct GLRenderer::Impl {
 
                         for (const auto& group : groups) {
 
-                            const auto groupMaterial = materials.at(group.materialIndex).get();
+                            // r129 indexes with [], which yields undefined for a
+                            // group whose materialIndex runs past the list, and
+                            // then skips it on the null test below. .at() throws
+                            // first, so the null test could never fire and a
+                            // geometry with more groups than materials — routine
+                            // in imported models, and in any code that adds a
+                            // group before its material — took the render down
+                            // with std::out_of_range instead of drawing the
+                            // groups that do have a material.
+                            if (group.materialIndex >= materials.size()) continue;
+
+                            const auto groupMaterial = materials[group.materialIndex].get();
 
                             if (groupMaterial && groupMaterial->visible) {
 

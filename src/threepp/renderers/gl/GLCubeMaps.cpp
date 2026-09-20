@@ -29,9 +29,48 @@ namespace {
 }// namespace
 
 GLCubeMaps::GLCubeMaps(GLRenderer& renderer)
-    : renderer(renderer) {}
+    : renderer(renderer), onSourceDispose_(this) {}
 
-GLCubeMaps::~GLCubeMaps() = default;
+void GLCubeMaps::watch(Texture* texture) {
+
+    if (watched_.insert(texture).second) {
+        texture->addEventListener("dispose", onSourceDispose_);
+    }
+}
+
+void GLCubeMaps::forget(Texture* texture) {
+
+    cubemaps.erase(texture);
+    pmrems.erase(texture);
+    watched_.erase(texture);
+}
+
+void GLCubeMaps::SourceTextureEventListener::onEvent(Event& event) {
+
+    const auto texture = std::any_cast<Texture*>(event.target);
+
+    texture->removeEventListener("dispose", *this);
+
+    scope_->forget(texture);
+}
+
+GLCubeMaps::~GLCubeMaps() {
+
+    // The listener holds a raw `this`, so every subscription has to be dropped
+    // before this object goes away. A source texture routinely outlives the
+    // renderer (a scene holds it), and its destructor dispatches "dispose".
+    unwatchAll();
+}
+
+void GLCubeMaps::unwatchAll() {
+
+    // Every pointer in here belongs to a live texture: ~Texture dispatches
+    // "dispose", which runs forget() and takes it out of this set.
+    for (auto* texture : watched_) {
+        texture->removeEventListener("dispose", onSourceDispose_);
+    }
+    watched_.clear();
+}
 
 Texture* GLCubeMaps::get(Texture* texture) {
 
@@ -58,6 +97,7 @@ Texture* GLCubeMaps::get(Texture* texture) {
                     auto renderTarget = std::make_unique<GLCubeRenderTarget>(image.height() / 2);
                     renderTarget->fromEquirectangularTexture(renderer, *texture);
                     cubemaps[texture] = std::move(renderTarget);
+                    watch(texture);
 
                     renderer.setRenderTarget(currentRenderTarget);
 
@@ -135,6 +175,7 @@ Texture* GLCubeMaps::getPMREM(Texture* texture) {
 
     auto* result = pmrem->texture.get();
     pmrems[texture] = PmremEntry{std::move(pmrem), sun};
+    watch(texture);
     // The clamped copy is prefilter scratch — a second full-res RGBA32F upload
     // for the life of the env otherwise. Letting it die here disposes the GL
     // texture (Texture's destructor dispatches "dispose").
@@ -156,6 +197,7 @@ void GLCubeMaps::disposePMREMs() {
 
 void GLCubeMaps::dispose() {
 
+    unwatchAll();
     cubemaps.clear();
     pmrems.clear();
     pmremGenerator.reset();
