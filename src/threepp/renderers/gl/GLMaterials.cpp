@@ -439,6 +439,13 @@ struct GLMaterials::Impl {
         uniforms.at("opacity").value<float>() = material->opacity;
     }
 
+    void refreshUniformsDash(UniformMap& uniforms, LineDashedMaterial* material) {
+
+        uniforms.at("dashSize").value<float>() = material->dashSize;
+        uniforms.at("totalSize").value<float>() = material->dashSize + material->gapSize;
+        uniforms.at("scale").value<float>() = material->scale;
+    }
+
     void refreshUniformsPoints(UniformMap& uniforms, PointsMaterial* material, float pixelRatio, float height) {
 
         uniforms.at("diffuse").value<Color>().copy(material->color);
@@ -610,6 +617,17 @@ struct GLMaterials::Impl {
 
             auto m = material->as<LineBasicMaterial>();
             refreshUniformsLine(uniforms, m);
+
+        } else if (type == "LineDashedMaterial") {
+
+            // The dispatch is on the exact type string, so a LineDashedMaterial
+            // never matched "LineBasicMaterial" above and left every one of its
+            // uniforms at the ShaderLib defaults: white, opaque, dashSize 1,
+            // totalSize 2, scale 1. r129 nests this inside the line branch
+            // (WebGLMaterials.js refreshUniformsDash).
+            auto m = material->as<LineDashedMaterial>();
+            refreshUniformsLine(uniforms, m);
+            refreshUniformsDash(uniforms, m);
 
         } else if (type == "PointsMaterial") {
 
