@@ -1058,8 +1058,20 @@ struct GLRenderer::Impl {
 
                 needsProgramChange = true;
 
-            } else if (fog && material->fog && materialProperties->fog && !(fog.value() == materialProperties->fog.value())) {
+            } else if (material->fog &&
+                       (fog.has_value() != materialProperties->fog.has_value() ||
+                        (fog && !(fog.value() == materialProperties->fog.value())))) {
 
+                // USE_FOG is a compile-time define, so the program has to be
+                // rebuilt when a scene's fog APPEARS or DISAPPEARS, not only when
+                // one fog is swapped for a different one. Requiring both sides to
+                // be engaged — as this did — is blind to exactly those two
+                // transitions: assigning Scene::fog to a scene that had none left
+                // USE_FOG undefined and the fog never showed up, and clearing it
+                // left the old program in place so the fog never went away.
+                // r129 compares `materialProperties.fog !== fog`, either side
+                // nullable. Line 862 already stores the whole optional, so the
+                // presence test here is against a value that tracks it.
                 needsProgramChange = true;
 
             } else if (materialProperties->numClippingPlanes &&
