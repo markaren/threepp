@@ -441,6 +441,41 @@ struct GLMaterials::Impl {
     }
 
 
+    // r129 WebGLMaterials.js refreshUniformsNormal. MeshNormalMaterial has no
+    // colour and no diffuse map; what it does carry is the three surface-detail
+    // maps, and leaving their samplers unassigned is not merely inert — the
+    // upload reads an empty variant and throws.
+    void refreshUniformsNormal(UniformMap& uniforms, MeshNormalMaterial* material) {
+
+        auto& bumpMap = material->bumpMap;
+        if (bumpMap) {
+
+            uniforms.at("bumpMap").setValue(bumpMap.get());
+            uniforms.at("bumpScale").value<float>() = material->bumpScale;
+            if (material->side == Side::Back) {
+                uniforms.at("bumpScale").value<float>() *= -1;
+            }
+        }
+
+        auto& normalMap = material->normalMap;
+        if (normalMap) {
+
+            uniforms.at("normalMap").setValue(normalMap.get());
+            uniforms.at("normalScale").value<Vector2>().copy(material->normalScale);
+            if (material->side == Side::Back) {
+                uniforms.at("normalScale").value<Vector2>().negate();
+            }
+        }
+
+        auto& displacementMap = material->displacementMap;
+        if (displacementMap) {
+
+            uniforms.at("displacementMap").setValue(displacementMap.get());
+            uniforms.at("displacementScale").value<float>() = material->displacementScale;
+            uniforms.at("displacementBias").value<float>() = material->displacementBias;
+        }
+    }
+
     void refreshUniformsLine(UniformMap& uniforms, LineBasicMaterial* material) {
 
         uniforms.at("diffuse").value<Color>().copy(material->color);
@@ -620,6 +655,12 @@ struct GLMaterials::Impl {
             auto m = material->as<MeshDistanceMaterial>();
             refreshUniformsCommon(uniforms, m);
             refreshUniformsDistance(uniforms, m);
+
+        } else if (type == "MeshNormalMaterial") {
+
+            auto m = material->as<MeshNormalMaterial>();
+            refreshUniformsCommon(uniforms, m);
+            refreshUniformsNormal(uniforms, m);
 
         } else if (type == "LineBasicMaterial") {
 
