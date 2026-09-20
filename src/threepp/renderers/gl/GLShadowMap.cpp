@@ -263,8 +263,15 @@ struct GLShadowMap::Impl {
             resultWithLineWidth->linewidth = materialWithLineWidth->linewidth;
         }
 
+        // `result`, not `material`: these three belong to the distance variant we
+        // are about to render the shadow map with, not to the object's own
+        // material. Casting the source material to MeshDistanceMaterial always
+        // failed in any ordinary scene, so nothing was set at all and
+        // referencePosition stayed at the world ORIGIN with the default near/far
+        // — a point light's shadow then encoded distance from the origin rather
+        // than from the light. r129 tests result.isMeshDistanceMaterial.
         if (light->type() == "PointLight") {
-            if (auto distanceMaterial = material->as<MeshDistanceMaterial>()) {
+            if (auto distanceMaterial = result->as<MeshDistanceMaterial>()) {
                 distanceMaterial->referencePosition.setFromMatrixPosition(*light->matrixWorld);
                 distanceMaterial->nearDistance = shadowCameraNear;
                 distanceMaterial->farDistance = shadowCameraFar;
