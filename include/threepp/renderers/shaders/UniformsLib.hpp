@@ -35,7 +35,7 @@ namespace threepp::shaders {
                 {"flipEnvMap", Uniform(1.f)},
                 {"reflectivity", Uniform(1.f)},
                 {"refractionRatio", Uniform(0.98f)},
-                {"maxMipMapLevel", Uniform(0)}};
+                {"maxMipLevel", Uniform(0)}};
 
         UniformMap aomap{
                 {"aoMap", Uniform()},
@@ -43,7 +43,7 @@ namespace threepp::shaders {
 
         UniformMap lightmap{
                 {"lightMap", Uniform()},
-                {"lightMapIntesity", Uniform(1.f)}};
+                {"lightMapIntensity", Uniform(1.f)}};
 
         UniformMap emissivemap{
                 {"emissiveMap", Uniform()}};

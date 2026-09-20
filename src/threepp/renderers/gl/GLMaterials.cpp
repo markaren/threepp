@@ -90,7 +90,10 @@ struct GLMaterials::Impl {
 
             const auto maxMipMapLevel = properties.textureProperties.get(envMap)->maxMipLevel;
             if (maxMipMapLevel) {
-                uniforms["maxMipLevel"].value<int>() = *maxMipMapLevel;
+                // .at, not operator[]: the registry now carries this key under the
+                // name the shader declares, so a future mismatch should throw here
+                // rather than silently insert a uniform nothing reads.
+                uniforms.at("maxMipLevel").value<int>() = *maxMipMapLevel;
             }
         }
 
