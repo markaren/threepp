@@ -57,20 +57,17 @@ namespace threepp::gl {
 
             auto length = objectInfluences.size();
 
-            std::vector<Influence> influences;
+            // A reference, not a copy: the cached list is sized once per geometry
+            // and reused, and taking a copy meant the cache could never grow. It
+            // is keyed on the GEOMETRY, so the same list serves every object
+            // sharing that geometry — and those objects can have influence arrays
+            // of different lengths, or grow one after the fact. Whenever `length`
+            // exceeded the cached size, the collect loop below ran off the end.
+            auto& influences = influencesList[geometry->id];
 
-            if (influencesList.contains(geometry->id)) {
+            for (size_t i = influences.size(); i < length; ++i) {
 
-                influences = influencesList.at(geometry->id);
-
-            } else {
-
-                for (unsigned i = 0; i < length; i++) {
-
-                    influences.emplace_back(i, 0.f);
-                }
-
-                influencesList[geometry->id] = influences;
+                influences.emplace_back(i, 0.f);
             }
 
             // Collect influences
@@ -87,7 +84,12 @@ namespace threepp::gl {
 
             for (unsigned i = 0; i < 8; i++) {
 
-                if (i < length && influences.at(i).second > 0) {
+                // `!= 0`, not `> 0`. r129 tests this slot for TRUTHINESS
+                // (`influences[i][1]`), so a NEGATIVE influence is kept — which
+                // is the whole point of one: it extrapolates away from a target
+                // rather than toward it. Dropping negatives here made every such
+                // morph render exactly as if its influence were zero.
+                if (i < length && influences.at(i).second != 0.f) {
 
                     workInfluences[i].first = influences.at(i).first;
                     workInfluences[i].second = influences.at(i).second;
@@ -123,15 +125,23 @@ namespace threepp::gl {
                 std::string morphTarget_i = "morphTarget" + std::to_string(i);
                 std::string morphNormal_i = "morphNormal" + std::to_string(i);
 
-                if (index != MAX_SAFE_INTEGER && value > 0) {
+                // Same truthiness test as above, for the same reason.
+                if (index != MAX_SAFE_INTEGER && value != 0.f) {
 
-                    if (morphTargets && geometry->getAttribute(morphTarget_i) != (*morphTargets)[index].get()) {
+                    // `index` indexes the OBJECT's influence array; the morph
+                    // attribute lists belong to the GEOMETRY. An object carrying
+                    // more influences than the geometry has morph targets — which
+                    // nothing prevents, and which a shared geometry makes easy —
+                    // indexed these out of bounds, with operator[] on a vector.
+                    if (morphTargets && index < morphTargets->size() &&
+                        geometry->getAttribute(morphTarget_i) != (*morphTargets)[index].get()) {
 
                         auto attr = morphTargets->at(index);
                         geometry->setAttribute(morphTarget_i, attr);
                     }
 
-                    if (morphNormals && geometry->getAttribute(morphNormal_i) != (*morphNormals)[index].get()) {
+                    if (morphNormals && index < morphNormals->size() &&
+                        geometry->getAttribute(morphNormal_i) != (*morphNormals)[index].get()) {
 
                         auto attr = morphNormals->at(index);
                         geometry->setAttribute(morphNormal_i, attr);
