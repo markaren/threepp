@@ -506,17 +506,24 @@ void gl::GLState::setBlending(
 
     // custom blending
 
-    std::optional<BlendEquation> blendEquationAlpha_ = blendEquationAlpha;
-    if (!blendEquationAlpha_) {
-        blendEquationAlpha_ = blendEquation;
+    // r129 REASSIGNS the parameters here rather than taking copies, and then
+    // compares and uploads those same names below. The port made copies and went
+    // on dereferencing the originals, which are EMPTY for the ordinary case: a
+    // material asking for additive blending sets the colour factors and leaves
+    // Material's three optional alpha variants at their nullopt default.
+    // Dereferencing those read garbage, and the conversion threw "Unknown
+    // equation: 0" out of the middle of the frame.
+    //
+    // These are by-value optionals, so reassigning is safe and keeps the state
+    // cache below comparing resolved values against resolved values, as r129 does.
+    if (!blendEquationAlpha) {
+        blendEquationAlpha = blendEquation;
     }
-    std::optional<BlendFactor> blendSrcAlpha_ = blendSrcAlpha;
-    if (!blendSrcAlpha_) {
-        blendSrcAlpha_ = blendSrc;
+    if (!blendSrcAlpha) {
+        blendSrcAlpha = blendSrc;
     }
-    std::optional<BlendFactor> blendDstAlpha_ = blendDstAlpha;
-    if (!blendDstAlpha_) {
-        blendDstAlpha_ = blendDst;
+    if (!blendDstAlpha) {
+        blendDstAlpha = blendDst;
     }
 
     if (blendEquation != currentBlendEquation || blendEquationAlpha != currentBlendEquationAlpha) {
