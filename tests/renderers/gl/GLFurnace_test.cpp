@@ -221,3 +221,98 @@ TEST_CASE("Furnace: GL analytic sun-disc irradiance matches closed form", "[furn
     INFO("sun-plate analytic 99, GL: " << c);
     CHECK(std::abs(c - 99.0) < 10.0);
 }
+
+// The METAL furnace — the case none of the above covers, and the one that shows
+// whether the indirect specular lobe conserves energy.
+//
+// Every case above uses metalness 0, where the diffuse lobe carries almost all
+// the energy and hides what the specular lobe is doing. Worse, at Le = 1 an
+// energy-conserving answer lands exactly on the byte ceiling, so 255 cannot be
+// told apart from an energy GAIN. This case fixes both: metalness 1 (no diffuse
+// lobe at all, so the reading IS the specular lobe) at Le = 0.5 (so the correct
+// answer, 127.5, has headroom on both sides).
+//
+// A white metal in a white furnace must return the furnace, at every roughness —
+// that is the definition of energy conservation, independent of the BRDF. With
+// the single-scatter split-sum alone this swept 0.96 of the furnace at roughness
+// 0 down to 0.45 at roughness 1; <bsdfs> computeMultiscattering adds the energy
+// of the later bounces back.
+//
+// The flatness check is the load-bearing one: a term that merely rescales the
+// specular lobe could hit 127 at one roughness, but only a correct compensation
+// holds it across the whole sweep.
+namespace {
+
+    std::shared_ptr<Texture> makeConstantEnvAt(float le) {
+        constexpr int W = 8, H = 4;
+        std::vector<float> data(W * H * 4, le);
+        Image img{std::move(data), static_cast<unsigned>(W), static_cast<unsigned>(H), 0};
+        auto tex = Texture::create(img);
+        tex->format = Format::RGBA;
+        tex->type = Type::Float;
+        tex->colorSpace = ColorSpace::Linear;
+        tex->mapping = Mapping::EquirectangularReflection;
+        tex->needsUpdate();
+        return tex;
+    }
+
+    double furnaceRead(float roughness, float metalness, float le) {
+        auto scene = Scene::create();
+        scene->background = Color(0, 0, 0);
+        scene->environment = makeConstantEnvAt(le);
+
+        auto mat = MeshStandardMaterial::create();
+        mat->color = Color(1, 1, 1);
+        mat->roughness = roughness;
+        mat->metalness = metalness;
+        scene->add(Mesh::create(SphereGeometry::create(1.f, 64, 48), mat));
+
+        auto camera = PerspectiveCamera::create(45, 1.f, 0.1f, 100.f);
+        camera->position.set(0, 0, 2.4f);
+        camera->lookAt(Vector3{0, 0, 0});
+
+        GLRenderer renderer(glCanvas());
+        renderer.outputColorSpace = ColorSpace::NoColorSpace;
+        renderer.toneMapping = ToneMapping::None;
+        renderer.toneMappingExposure = 1.f;
+        renderer.setClearColor(Color(0, 0, 0));
+        renderer.render(*scene, *camera);
+        return centerPixel(renderer.readRGBPixels(), RT_WIDTH, RT_HEIGHT).r;
+    }
+
+}// namespace
+
+TEST_CASE("Furnace: GL white METAL returns the furnace at every roughness", "[furnace]") {
+
+    constexpr float kLe = 0.5f;
+    const double target = kLe * 255.0;// 127.5
+
+    double lo = 1e9, hi = -1e9;
+    for (int i = 0; i <= 8; ++i) {
+        const float r = static_cast<float>(i) / 8.f;
+        const double v = furnaceRead(r, 1.f, kLe);
+        INFO("roughness " << r << " -> " << v << " (furnace " << target << ")");
+        CHECK(std::abs(v - target) < 4.0);
+        lo = std::min(lo, v);
+        hi = std::max(hi, v);
+    }
+
+    INFO("across the roughness sweep: min " << lo << ", max " << hi);
+    CHECK(hi - lo < 4.0);
+}
+
+// The dielectric complement, measured rather than clipped. A white albedo-1
+// dielectric must also return exactly the furnace: the diffuse lobe has to be
+// reduced by whatever the specular lobe took, or the surface emits more light
+// than falls on it. At Le = 1 this reads 255 whether the answer is 1.0 or 1.3.
+TEST_CASE("Furnace: GL white dielectric does not exceed the furnace", "[furnace]") {
+
+    constexpr float kLe = 0.5f;
+    const double target = kLe * 255.0;
+
+    for (float r : {0.f, 0.5f, 1.f}) {
+        const double v = furnaceRead(r, 0.f, kLe);
+        INFO("roughness " << r << " -> " << v << " (furnace " << target << ")");
+        CHECK(std::abs(v - target) < 4.0);
+    }
+}

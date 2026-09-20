@@ -183,11 +183,15 @@ void RE_IndirectSpecular_Physical( const in vec3 radiance, const in vec3 irradia
 	float clearcoatInv = 1.0 - clearcoatDHR;
 
 	// Both indirect specular and indirect diffuse light accumulate here.
-	// Uses three.js r155+ EnvironmentBRDF (split-sum F0*brdf.x + F90*brdf.y)
-	// rather than the older roughness-dependent Fresnel + multi-scattering
-	// approach (both functions are gone from <bsdfs> now). That Fresnel pumped
-	// grazing-angle reflection on rough surfaces (e.g. asphalt) far above what
-	// looks correct.
+	//
+	// The single-scatter split-sum (F0*fab.x + F90*fab.y) is only part of the
+	// answer: it loses the light that bounces more than once inside the
+	// microsurface, and the diffuse lobe must be reduced by whatever the specular
+	// lobe actually took. Without both corrections a white metal in a white
+	// furnace read 0.45 instead of 1.0 at roughness 1, while a white dielectric
+	// read MORE than the furnace it was standing in. See <bsdfs>
+	// computeMultiscattering for why this is not a return to r129's
+	// roughness-dependent Fresnel.
 	vec3 cosineWeightedIrradiance = irradiance * RECIPROCAL_PI;
 
 	#ifdef USE_IRIDESCENCE
@@ -196,10 +200,17 @@ void RE_IndirectSpecular_Physical( const in vec3 radiance, const in vec3 irradia
 		vec3 iblF0 = material.specularF0;
 	#endif
 
-	vec3 envBRDF = BRDF_Specular_GGX_Environment( geometry.viewDir, geometry.normal, iblF0, material.specularF90, material.specularRoughness );
+	vec3 singleScattering = vec3( 0.0 );
+	vec3 multiScattering = vec3( 0.0 );
 
-	reflectedLight.indirectSpecular += clearcoatInv * radiance * envBRDF;
-	reflectedLight.indirectDiffuse += material.diffuseColor * cosineWeightedIrradiance;
+	computeMultiscattering( geometry.normal, geometry.viewDir, material.specularRoughness, iblF0, material.specularF90, singleScattering, multiScattering );
+
+	vec3 totalScattering = singleScattering + multiScattering;
+	vec3 diffuse = material.diffuseColor * ( 1.0 - max( max( totalScattering.r, totalScattering.g ), totalScattering.b ) );
+
+	reflectedLight.indirectSpecular += clearcoatInv * radiance * singleScattering;
+	reflectedLight.indirectSpecular += multiScattering * cosineWeightedIrradiance;
+	reflectedLight.indirectDiffuse += diffuse * cosineWeightedIrradiance;
 
 	#ifdef USE_SHEEN
 

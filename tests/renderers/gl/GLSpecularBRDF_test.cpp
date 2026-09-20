@@ -293,11 +293,14 @@ TEST_CASE("Iridescence: GL 550nm film is strongly chromatic", "[brdf][iridescenc
 // At normal incidence Schlick_to_F0 is the identity (x5 = 0), which makes this
 // closed-form too. With the 4000 nm achromatic film over Le = 20:
 //   integrateSpecularBRDF( 1, 0.5 ) = ( 0.723263, 0.001737 )
-//   plain: 20 * ( 0.04     * 0.723263 + 0.001737 ) = 0.6133 -> byte 156
-//   film:  20 * ( 0.021943 * 0.723263 + 0.001737 ) = 0.3521 -> byte  90
+//   plain: 20 * totalScattering( 0.04     ) = 0.6282 -> byte 160
+//   film:  20 * totalScattering( 0.021943 ) = 0.3589 -> byte  92
 // A missing Schlick_to_F0 (feeding the raw Fresnel straight in) happens to
 // agree here BY CONSTRUCTION at dotNV = 1; what this pins is that the IBL lobe
 // mixes at all rather than ignoring iridescence, which it did before.
+//
+// The fixture's base colour is black, so diffuseColor is zero and the indirect
+// diffuse lobe contributes nothing — the reading is the specular lobes alone.
 TEST_CASE("Iridescence: GL env specular uses the folded iridescence F0", "[brdf][iridescence]") {
     auto plain = makeFixture(0.f);
     plain.scene->environment = makeConstantEnv(20.f);
@@ -311,8 +314,23 @@ TEST_CASE("Iridescence: GL env specular uses the folded iridescence F0", "[brdf]
     const double lit = renderFixture(film).r;
 
     const double brdfX = 0.723263, brdfY = 0.001737;
-    const double expectedBase = 20.0 * (0.04 * brdfX + brdfY) * 255.0;
-    const double expectedFilm = 20.0 * (IRID_C0_4000NM * brdfX + brdfY) * 255.0;
+
+    // The shader's <bsdfs> computeMultiscattering, in doubles. Both lobes, since
+    // the environment is constant: radiance and cosineWeightedIrradiance are both
+    // Le there, so the reading is Le * ( singleScatter + multiScatter ). Modelling
+    // only the single-scatter half leaves this ~4 bytes short and pins the shader
+    // to a BRDF that loses energy.
+    const auto totalScattering = [&](double f0) {
+        const double FssEss = f0 * brdfX + /*F90 = 1*/ brdfY;
+        const double Ess = brdfX + brdfY;
+        const double Ems = 1.0 - Ess;
+        const double Favg = f0 + (1.0 - f0) * (1.0 / 21.0);
+        const double Fms = FssEss * Favg / (1.0 - Ems * Favg);
+        return FssEss + Fms * Ems;
+    };
+
+    const double expectedBase = 20.0 * totalScattering(0.04) * 255.0;
+    const double expectedFilm = 20.0 * totalScattering(IRID_C0_4000NM) * 255.0;
     INFO("env plain analytic " << expectedBase << " GL " << base
                                << " | env film analytic " << expectedFilm << " GL " << lit);
     CHECK(std::abs(base - expectedBase) < 3.0);

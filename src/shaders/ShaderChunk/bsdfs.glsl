@@ -298,6 +298,42 @@ vec3 BRDF_Specular_GGX_Environment( const in vec3 viewDir, const in vec3 normal,
 
 } // validated
 
+// The split-sum term above is SINGLE scatter: it accounts for light that leaves
+// the microsurface after one bounce and drops everything that bounces again. The
+// loss grows with roughness, and for a metal (no diffuse lobe to make it up) it is
+// the whole error — measured on the GL white furnace, a white metal returned 0.96
+// of the environment at roughness 0 but only 0.45 at roughness 1, so a rough metal
+// rendered grey in a uniformly white world.
+//
+// Kulla & Conty, "Revisiting Physically Based Shading at Imageworks" (2017): add
+// the energy of the further bounces back as a second lobe, weighted by the energy
+// the single-scatter term is missing (Ems) and by the average Fresnel over the
+// hemisphere (Favg; 1/21 is the closed-form integral of the Schlick term).
+//
+// This is the same construction current three.js uses (computeMultiscattering). It
+// does NOT bring back r129's roughness-dependent Fresnel, which is the thing that
+// used to pump grazing-angle reflections on rough surfaces: the single-scatter term
+// here is still the plain DFG fit.
+void computeMultiscattering( const in vec3 normal, const in vec3 viewDir, const in float roughness, const in vec3 specularColor, const in float specularF90, inout vec3 singleScatter, inout vec3 multiScatter ) {
+
+	float dotNV = saturate( dot( normal, viewDir ) );
+
+	vec2 fab = integrateSpecularBRDF( dotNV, roughness );
+
+	vec3 FssEss = specularColor * fab.x + specularF90 * fab.y;
+
+	float Ess = fab.x + fab.y;
+	float Ems = 1.0 - Ess;
+
+	vec3 Favg = specularColor + ( 1.0 - specularColor ) * 0.047619;// 1/21
+
+	vec3 Fms = FssEss * Favg / ( 1.0 - Ems * Favg );
+
+	singleScatter += FssEss;
+	multiScatter += Fms * Ems;
+
+}
+
 float G_BlinnPhong_Implicit( /* const in float dotNL, const in float dotNV */ ) {
 
 	// geometry term is (n dot l)(n dot v) / 4(n dot l)(n dot v)
