@@ -1526,7 +1526,18 @@ struct GLRenderer::Impl {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glDeleteFramebuffers(1, &fbo);
 #else
+        // Same trap readPixels documents above, and worse here: `data` was just
+        // resized to exactly width * height * channels, so with the default
+        // GL_PACK_ALIGNMENT of 4 any row stride that is not 4-aligned (RGB at any
+        // odd width) makes glGetTexImage pad every row and write PAST the end of
+        // the vector, as well as skewing what does land in it.
+        GLint prevAlign = 4;
+        glGetIntegerv(GL_PACK_ALIGNMENT, &prevAlign);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
         glGetTexImage(GL_TEXTURE_2D, 0, gl::toGLFormat(texture.format), gl::toGLType(texture.type), data.data());
+
+        glPixelStorei(GL_PACK_ALIGNMENT, prevAlign);
 #endif
 
         state.unbindTexture();
