@@ -285,7 +285,16 @@ namespace threepp::terrain {
 
         [[nodiscard]] std::string type() const override { return "GeoScene"; }
 
-        ~GeoScene() override = default;
+        ~GeoScene() override {
+            // The member order at the bottom of this class is necessary and not
+            // sufficient. tiles_ is also a CHILD of this group, and Object3D's
+            // child list is a base-class member: it lets go of the TileTerrain
+            // only after pack_ and network_ have been destroyed, and any other
+            // holder of that shared_ptr (a Python variable) can keep it longer
+            // still. Its bake workers call prov_, which reads both by reference.
+            // So finish them here, while everything they read is still alive.
+            if (tiles_) tiles_->drainBakes();
+        }
 
     private:
         GeoScene() = default;
@@ -926,7 +935,8 @@ namespace threepp::terrain {
 
         // Order matters: pack_ and network_ are captured BY REFERENCE inside
         // prov_'s callbacks, and tiles_/scatter_ hold copies of prov_. Declaring
-        // them first means they are destroyed last.
+        // them first means they are destroyed last AMONG THE MEMBERS. It does not
+        // cover tiles_' worker threads: see the destructor.
         GeoTerrainPack pack_;
         std::unique_ptr<road::RoadNetwork> network_;
         TerrainProvider prov_;

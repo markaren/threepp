@@ -32,6 +32,7 @@ add_test_executable(PointCloud_test)
 add_test_executable(Sensor_test)
 add_test_executable(VisionSensor_test)
 add_test_executable(SonarModel_test)
+add_test_executable(TerrainTilesShutdown_test)
 
 # extras/uav: SITL wire codec, loopback socket path, and the NED<->threepp
 # frame mapping — PhysX-free. The test drives its own raw UDP sender against

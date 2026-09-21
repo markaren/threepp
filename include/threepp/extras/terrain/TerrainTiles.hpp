@@ -302,6 +302,31 @@ namespace threepp::terrain {
         // Bakes RUNNING on workers right now. A finished bake that is waiting
         // for its swap gate no longer counts: see releaseSlot().
         [[nodiscard]] int pendingBakes() const { return inFlight_; }
+
+        // Block until every bake RUNNING on a worker has returned, and start no
+        // more. For whoever owns what the provider's callbacks read.
+        //
+        // The provider is a bag of std::functions, and its captures are the
+        // owner's business: GeoScene's read its terrain pack and its road
+        // network by reference. This object cannot outlive-proof that by
+        // itself. Its own destructor does wait for its workers (a std::async
+        // future blocks in its destructor), but that only helps if the captured
+        // data is still there when it runs, and a TileTerrain that was add()ed to
+        // a parent is kept alive by the parent's child list, which is an Object3D
+        // BASE-class member: it is released after every member of the owning
+        // class is already gone. Measured: closing a --terrain window mid-stream
+        // killed the process with an access violation on a bake worker inside
+        // RoadNetwork::pavedWeight, the network having just been destroyed.
+        //
+        // Call it first thing in the owner's destructor. Deferred (sync-mode)
+        // bakes have not started and are simply dropped. update() is a no-op
+        // afterwards as far as new bakes go.
+        void drainBakes() {
+            closed_ = true;
+            for (auto& r : roots_) drainRec(*r);
+            for (auto& f : graveyard_) waitIfRunning(f);
+        }
+
         // FNV-1a over (level, x0, z0) of every tile with a live mesh, in tree
         // order. Two runs with equal tile counts can still hold different
         // trees (the split/merge dead band keeps whatever state a node
@@ -633,7 +658,20 @@ namespace threepp::terrain {
             return std::sqrt(best);
         }
 
+        static void waitIfRunning(std::future<BakeData>& f) {
+            // wait() on a DEFERRED future would run the bake here and now, which
+            // is the opposite of the point.
+            if (f.valid() && f.wait_for(std::chrono::seconds(0)) == std::future_status::timeout) f.wait();
+        }
+
+        void drainRec(Node& n) {
+            waitIfRunning(n.baking);
+            for (auto& k : n.kid)
+                if (k) drainRec(*k);
+        }
+
         void requestBake(Node& n) {
+            if (closed_) return;// drainBakes(): the provider's data is going away
             if (n.mesh || n.baking.valid()) return;
             if (inFlight_ >= o_.maxBakesInFlight) return;// retry next update
             ++inFlight_;
@@ -1137,6 +1175,7 @@ namespace threepp::terrain {
         int inFlight_ = 0;
         int activeTiles_ = 0;
         int swapsLeft_ = 0;
+        bool closed_ = false;// drainBakes() was called: no new bakes
     };
 
 }// namespace threepp::terrain
