@@ -3454,6 +3454,9 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
             d.alphaCutoff = 0.0f;// disabled by default; any-hit short-circuits on alphaCutoff <= 0
             d.transmission = 0.0f;// opaque by default
             d.ior          = 1.5f;// glass-typical default; only consulted when transmission > 0
+            // ior of a surface that is NOT refractive at all (flat alpha blend,
+            // additive glow). Shader twin: isFlatAlphaBlend().
+            constexpr float kFlatBlendIor = 0.0f;
             d.transmissionTexIndex = -1;
             d.clearcoat = 0.0f;// no coat by default; lobe is skipped when clearcoat == 0
             d.clearcoatRoughness = 0.0f;
@@ -3572,17 +3575,20 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
             // correct since additive blending has no physical analogue.
             if (mat->blending == Blending::Additive && d.transmission == 0.0f) {
                 d.transmission = 1.0f + std::clamp(mat->opacity, 0.0f, 1.0f);
-                d.ior          = 1.0f;
+                d.ior          = kFlatBlendIor;
             }
             // Alpha-blend transparency (transparent=true, opacity<1) has no
-            // physical analogue in a ray tracer, so treat it as stochastic pass-through:
-            // with probability (1-opacity) the ray continues straight through
-            // (ior=1 → refract returns the incident direction unchanged, F=0).
-            // Deferred reads ior≈1 as the "clean alpha blend" marker (vs ior>1
-            // real refractive glass).
+            // physical analogue in a ray tracer, so treat it as pass-through:
+            // (1-opacity) of what is behind, straight on, no Fresnel split.
+            // Deferred reads ior == 0 as the "flat alpha blend" marker (see
+            // isFlatAlphaBlend in the shade). It was ior = 1, which is a value a
+            // real material can have: KHR_materials_ior 1.0 with transmission 1
+            // (the front of the glTF sample SunglassesKhronos lenses) was read as
+            // "alpha blend at opacity 0" and drawn invisible, tint and all. A real
+            // ior is clamped to >= 1 above, so 0 cannot collide.
             if (d.transmission == 0.0f && mat->transparent && mat->opacity < 1.0f) {
                 d.transmission = 1.0f - mat->opacity;
-                d.ior          = 1.0f;
+                d.ior          = kFlatBlendIor;
             }
             // BLEND mode with texture alpha (alphaMode=BLEND, opacity=1.0):
             // alphaCutoff=-1.0 sentinel triggers per-texel stochastic blend in

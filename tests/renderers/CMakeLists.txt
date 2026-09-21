@@ -217,6 +217,15 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanRecycledAddress_test COMMAND VulkanRecycledAddress_test)
     set_tests_properties(VulkanRecycledAddress_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # Glass with ior exactly 1.0 (glTF sample SunglassesKhronos, lens front) was
+    # taken for a flat alpha blend at opacity 0, whose marker WAS ior = 1, and not
+    # drawn. Also gates the thin film on glass, which the glass Fresnel ignored.
+    add_executable(VulkanIorOneGlass_test VulkanIorOneGlass_test.cpp)
+    target_link_libraries(VulkanIorOneGlass_test PRIVATE threepp)
+    target_include_directories(VulkanIorOneGlass_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME VulkanIorOneGlass_test COMMAND VulkanIorOneGlass_test)
+    set_tests_properties(VulkanIorOneGlass_test PROPERTIES SKIP_RETURN_CODE 42)
+
     add_executable(VulkanCameraModel_test VulkanCameraModel_test.cpp)
     target_link_libraries(VulkanCameraModel_test PRIVATE threepp)
     target_include_directories(VulkanCameraModel_test PRIVATE "${PROJECT_SOURCE_DIR}/src")

@@ -816,8 +816,30 @@ const int   kGlassSamples = 1;// ONE sharp Fresnel reflect+refract sample → NO
 
 // Effective glass shading/blur roughness — used by shadeGlass AND the demod
 // recombine below; both must agree or the denoise blur mismatches the lobe.
-float glassRough(float matRoughness) {
-    return clamp(matRoughness, kGlassFrost, kGlassMaxRough);
+// Roughness frosts what comes THROUGH by scattering it at the interface, and an
+// interface with no index contrast cannot scatter: at ior 1 every microfacet
+// refracts straight on. three.js's applyIorToRoughness, same ramp (full by ior
+// 1.5). glTF sample TransmissionRoughnessTest's "1.0 - Air" row is sharp from its
+// smooth end to its rough one for this reason. The floor stays: the lobe maths and
+// the filter's negative-alpha glass marker both need a roughness above zero.
+float glassRough(float matRoughness, float ior) {
+    return clamp(matRoughness * clamp(ior * 2.0 - 2.0, 0.0, 1.0), kGlassFrost, kGlassMaxRough);
+}
+
+// Reflectance of the glass surface at cosine c: Schlick from the ior, and under a
+// thin film (KHR_materials_iridescence) the film's interference reflectance in
+// its place, by the iridescence factor. The opaque shade has applied the film to
+// its F0 all along; glass weights the opaque shade by (1 − transmission) and takes
+// its whole reflection from here, where the Fresnel was a scalar from the ior
+// alone — so a film on glass did nothing. It matters most where it is the ONLY
+// reflector: SunglassesKhronos coats an ior 1.0 lens (r0 = 0, no reflection of its
+// own) with an ior 2 film, and that film is the entire mirror finish.
+// evalIridescence returns the reflectance AT the angle, so it is used as is.
+vec3 glassFresnel(float r0, float c, float iridescence, float iridescenceIOR, float iridescenceThicknessNm) {
+    vec3 F = vec3(r0 + (1.0 - r0) * pow(1.0 - c, 5.0));
+    if (iridescence > 0.0)
+        F = mix(F, min(evalIridescence(1.0, iridescenceIOR, c, iridescenceThicknessNm, vec3(r0)), vec3(1.0)), iridescence);
+    return F;
 }
 
 vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
@@ -833,7 +855,7 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
     // them — "no recursive reflections"). The reflection itself is the
     // multi-bounce traceRadiance, so it's genuinely recursive (reflected
     // metal/glossy reflects on too).
-    const float gr      = glassRough(pm.roughness);
+    const float gr      = glassRough(pm.roughness, ior);
     // Env MISSES (sky) read a slightly blurred mip so the HDR sun's single hot
     // texel doesn't speckle on curved glass (the env is plain equirect mips,
     // not a smooth PMREM). The old 0.30 floor smeared the whole sky into the
@@ -853,7 +875,7 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
         vec3 Ns = ggxHalfVectorFib(N, gr, s, kGlassSamples);// distinct per-iteration Fibonacci sample
         if (dot(Ns, V) <= 0.0) Ns = N;// reject back-facing microfacets
         const float NdotV = max(dot(Ns, V), 1e-4);
-        const float F     = r0 + (1.0 - r0) * pow(1.0 - NdotV, 5.0);
+        const vec3  F     = glassFresnel(r0, NdotV, pm.iridescence, pm.iridescenceIOR, pm.iridescenceThicknessNm);
 
         // Reflection (sky + scene) — multi-bounce / recursive.
         const vec3 R = reflect(-V, Ns);
@@ -974,7 +996,7 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
             const vec3  H = normalize(V + L);
             const float D = distGGX(max(dot(N, H), 0.0), gr);
             const float G = geomSmithG1(NdotV, kG) * geomSmithG1(NdotL, kG);
-            const float F = r0 + (1.0 - r0) * pow(1.0 - max(dot(V, H), 0.0), 5.0);
+            const vec3  F = glassFresnel(r0, max(dot(V, H), 0.0), pm.iridescence, pm.iridescenceIOR, pm.iridescenceThicknessNm);
             // spec·NdotL = D·G·F / (4·NdotV·NdotL) · NdotL
             glint += lights.dirLights[i].color * (D * G * F / max(4.0 * NdotV, 1e-4)) * vis;
         }

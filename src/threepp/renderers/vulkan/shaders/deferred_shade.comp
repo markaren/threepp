@@ -1728,8 +1728,8 @@ void main() {
                                                  /*envInt=*/1.0);// TRANSMITTED content, not this surface's IBL
             lit = behind + lit * strength;
         } else if (pm.transmission > 0.0) {
-            if (pm.ior < 1.05) {
-                // CLEAN ALPHA blend (transparent, opacity<1; host sets ior=1,
+            if (isFlatAlphaBlend(pm.ior)) {
+                // CLEAN ALPHA blend (transparent, opacity<1; host sets ior=0,
                 // transmission=1-opacity). Straight-through to the re-traced scene
                 // behind, blended by opacity — flat alpha, NO glass Fresnel/refraction
                 // darkening. (One transparent layer over opaque: the behind ray sees
@@ -1742,7 +1742,7 @@ void main() {
                                                     /*envInt=*/1.0);// TRANSMITTED content, not this surface's IBL
                 lit = mix(behind, lit, opacity);
             } else {
-                // REAL refractive glass (ior>1). ONE sharp Fresnel reflect+refract
+                // REAL glass (any real ior, 1.0 included). ONE sharp Fresnel reflect+refract
                 // sample (no ghost copies); the reflection denoise blurs it by the glass
                 // roughness (the frost) + recombines — same channel as opaque reflections.
                 // factor × MAP (glTF: the map's R channel). The host has uploaded
@@ -1760,7 +1760,7 @@ void main() {
                     // the recombine reconstructs mix(lit, blur(glass), t) — frosted.
                     // Same clamped roughness as shadeGlass (see kGlassMaxRough) so the
                     // denoise blur matches the lobe that produced the sample.
-                    const float gr = glassRough(pm.roughness);
+                    const float gr = glassRough(pm.roughness, max(pm.ior, 1.0));
                     // .a NEGATIVE = glass marker: the denoise gives it a minimum AA blur
                     // + an ID-based (not normal) edge stop so the blur smooths ACROSS the
                     // curved surface — refraction is far more normal-sensitive than

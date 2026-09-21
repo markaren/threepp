@@ -375,6 +375,15 @@ float sheenBaseShare(vec3 sheenColor, float sheenAlbedo) {
     return 1.0 - max(max(sheenColor.r, sheenColor.g), sheenColor.b) * sheenAlbedo;
 }
 
+// A FLAT ALPHA BLEND, as opposed to real glass. Both arrive as transmission > 0;
+// the host marks the blend (opacity < 1 → transmission = 1 − opacity) with
+// ior = 0, which no material can have: a real ior is clamped to ≥ 1 on upload.
+// The marker used to be ior ≈ 1 (< 1.05), and that IS a real ior: glTF sample
+// SunglassesKhronos gives the front of its lenses KHR_materials_ior 1.0 with
+// transmission 1 and a near-black base colour, and they were drawn as an alpha
+// blend at opacity 0 — not there at all, black only from behind.
+bool isFlatAlphaBlend(float ior) { return ior < 0.5; }
+
 // ── Thin-film iridescence (KHR_materials_iridescence, Belcour & Barla 2017).
 // The deferred base BRDF omitted
 // this, so soap-film / oil-slick / nacre F0 read as plain dielectric. Modulates

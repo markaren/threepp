@@ -268,9 +268,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // and carry the remainder through in the same direction.
         //   • blend quads (alphaCutoff < 0, no transmission — alpha quads, text
         //     decals): α = texel alpha,
-        //   • flat alpha blend (host: transmission = 1−opacity, ior = 1):
+        //   • flat alpha blend (host: transmission = 1−opacity, ior = 0):
         //     α = opacity · texel alpha (the texel only when alphaCutoff < 0),
-        //   • glass (transmission t, ior > 1): the covered part shades opaque
+        //   • glass (transmission t, a real ior): the covered part shades opaque
         //     by (1−t) and transmits t·tint STRAIGHT through — a secondary ray
         //     gets no Fresnel split or refraction (thin-shell approximation),
         //   • additive (transmission > 1): glows by its strength, passes fully.
@@ -291,8 +291,8 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                 hitPass  = vec3(1.0);
             } else {
                 const float t    = clamp(hm.transmission, 0.0, 1.0);
-                const vec3  tint = (hm.ior < 1.05) ? vec3(1.0)
-                                                   : hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
+                const vec3  tint = isFlatAlphaBlend(hm.ior) ? vec3(1.0)
+                                                            : hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
                 hitAlpha = cov * (1.0 - t);
                 hitPass  = vec3(1.0 - cov) + cov * t * tint;
             }
