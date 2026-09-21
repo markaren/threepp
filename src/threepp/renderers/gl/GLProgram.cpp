@@ -740,6 +740,30 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
 
     if (renderer->checkShaderErrors) {
 
+        // The STATUS, not just the log. Reading only the info log cannot tell a
+        // failure from a warning, and cannot see a failure at all when the driver
+        // leaves the log empty — so a shader that did not compile produced a
+        // program that silently drew nothing, with no way to find out why.
+        // r129 checks COMPILE_STATUS per shader and LINK_STATUS for the program.
+        const auto reportShader = [](GLuint shader, const char* stage) {
+            GLint compiled = GL_FALSE;
+            glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+            if (compiled == GL_TRUE) return;
+
+            GLint len = 0;
+            glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &len);
+            std::string msg(len > 0 ? static_cast<size_t>(len) : 0, '\0');
+            if (len > 0) glGetShaderInfoLog(shader, len, nullptr, msg.data());
+
+            std::cerr << "[threepp] the " << stage << " shader failed to COMPILE: " << msg << std::endl;
+        };
+
+        reportShader(glVertexShader, "vertex");
+        reportShader(glFragmentShader, "fragment");
+
+        GLint linked = GL_FALSE;
+        glGetProgramiv(program, GL_LINK_STATUS, &linked);
+
         int length;
         glGetProgramiv(program, GL_INFO_LOG_LENGTH, &length);
 
@@ -749,7 +773,15 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
             msg.resize(length);
             glGetProgramInfoLog(program, length, nullptr, &msg.front());
 
-            std::cerr << "[Shader error] " << msg << std::endl;
+            std::cerr << (linked == GL_TRUE ? "[threepp] shader program warning: "
+                                            : "[threepp] shader program failed to LINK: ")
+                      << msg << std::endl;
+
+        } else if (linked != GL_TRUE) {
+
+            std::cerr << "[threepp] shader program failed to LINK, and the driver "
+                         "gave no info log"
+                      << std::endl;
         }
     }
 

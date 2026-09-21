@@ -403,9 +403,17 @@ namespace {
                             [&](std::vector<std::unordered_map<std::string, NestedUniformValue>*> arg) {
                                 for (auto& u : seq) {
                                     const auto index = utils::parseInt(u->id);
+                                    // The null test below is r129's tolerance for a
+                                    // sequence shorter than the one the program was
+                                    // compiled for — in JS, arg[index] is simply
+                                    // undefined. Indexing a vector past its end is
+                                    // not: it reads out of bounds and then tests
+                                    // whatever that was as a pointer, so the guard
+                                    // could never do its job.
+                                    if (index < 0 || static_cast<size_t>(index) >= arg.size()) continue;
                                     auto value = arg[index];
                                     if (!value) continue;
-                                    u->setValue(*arg[index], textures);
+                                    u->setValue(*value, textures);
                                 }
                             }},
                     value);

@@ -61,7 +61,12 @@ namespace threepp {
         ToneMapping toneMapping{ToneMapping::None};
         float toneMappingExposure = 1.0f;
 
-        bool checkShaderErrors = false;
+        // On, as in three.js (WebGLRenderer.js: `debug: { checkShaderErrors: true }`).
+        // Off, a shader that fails to compile produces a program that silently
+        // draws nothing — the single most expensive way to lose an afternoon in a
+        // renderer. It only reports real failures and non-empty driver logs, so a
+        // healthy scene stays quiet.
+        bool checkShaderErrors = true;
 
         // --- Core rendering ---
 
