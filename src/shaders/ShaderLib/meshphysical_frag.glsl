@@ -130,6 +130,17 @@ void main() {
 
 	vec3 outgoingLight = totalDiffuse + totalSpecular + totalEmissiveRadiance;
 
+	#ifdef CLEARCOAT
+
+		// See clearcoatSpecular in <lights_physical_pars_fragment>.
+		float dotNVcc = saturate( dot( geometry.clearcoatNormal, geometry.viewDir ) );
+
+		vec3 Fcc = F_Schlick( vec3( DEFAULT_SPECULAR_COEFFICIENT ), 1.0, dotNVcc );
+
+		outgoingLight = outgoingLight * ( 1.0 - material.clearcoat * Fcc ) + clearcoatSpecular * material.clearcoat;
+
+	#endif
+
 	gl_FragColor = vec4( outgoingLight, diffuseColor.a );
 
 	#include <tonemapping_fragment>

@@ -15,6 +15,7 @@
 
 #include "gl_test_helpers.hpp"
 
+#include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/textures/Texture.hpp"
 
@@ -314,5 +315,52 @@ TEST_CASE("Furnace: GL white dielectric does not exceed the furnace", "[furnace]
         const double v = furnaceRead(r, 0.f, kLe);
         INFO("roughness " << r << " -> " << v << " (furnace " << target << ")");
         CHECK(std::abs(v - target) < 4.0);
+    }
+}
+
+// The two LAYERED lobes, clearcoat and sheen, in the same furnace.
+namespace {
+
+    // Fraction of the furnace returned at the centre of the sphere.
+    double layerRead(const std::shared_ptr<MeshPhysicalMaterial>& mat, float le) {
+        auto scene = Scene::create();
+        scene->background = Color(0, 0, 0);
+        scene->environment = makeConstantEnvAt(le);
+        scene->add(Mesh::create(SphereGeometry::create(1.f, 64, 48), mat));
+
+        auto camera = makeFurnaceCamera();
+
+        GLRenderer renderer(glCanvas());
+        renderer.outputColorSpace = ColorSpace::NoColorSpace;
+        renderer.toneMapping = ToneMapping::None;
+        renderer.setClearColor(Color(0, 0, 0));
+        renderer.render(*scene, *camera);
+        return centerPixel(renderer.readRGBPixels(), RT_WIDTH, RT_HEIGHT).r / (le * 255.0);
+    }
+
+}// namespace
+
+// A coat can only reflect light or pass it on to the base, so a white albedo-1
+// dielectric UNDER a clearcoat still returns at most the furnace. r129's model
+// dimmed the base by a per-light reflectance guess smaller than what the coat
+// reflected, and did not dim the indirect diffuse at all: 1.043 of the furnace at
+// coat roughness 0.05. r155 and r185 attenuate everything beneath the coat by its
+// Fresnel term, once, in <meshphysical_frag>.
+TEST_CASE("Furnace: GL clearcoat does not add light", "[furnace]") {
+
+    for (float baseRoughness : {0.2f, 1.f}) {
+        for (float coatRoughness : {0.05f, 0.5f, 1.f}) {
+            auto mat = MeshPhysicalMaterial::create();
+            mat->color = Color(1, 1, 1);
+            mat->metalness = 0.f;
+            mat->roughness = baseRoughness;
+            mat->clearcoat = 1.f;
+            mat->clearcoatRoughness = coatRoughness;
+
+            const double v = layerRead(mat, 0.5f);
+            INFO("base roughness " << baseRoughness << ", coat roughness " << coatRoughness << " -> " << v << " of the furnace");
+            CHECK(v < 1.012);// one byte of headroom at Le = 0.5
+            CHECK(v > 0.93); // and the coat must not eat the base either
+        }
     }
 }

@@ -36,12 +36,18 @@ struct PhysicalMaterial {
 #define MAXIMUM_SPECULAR_COEFFICIENT 0.16
 #define DEFAULT_SPECULAR_COEFFICIENT 0.04
 
-// Clear coat directional hemishperical reflectance (this approximation should be improved)
-float clearcoatDHRApprox( const in float roughness, const in float dotNL ) {
-
-	return DEFAULT_SPECULAR_COEFFICIENT + ( 1.0 - DEFAULT_SPECULAR_COEFFICIENT ) * ( pow( 1.0 - dotNL, 5.0 ) * pow( 1.0 - roughness, 2.0 ) );
-
-}
+// The coat's own reflection, kept OUT of reflectedLight and composited over
+// everything else at the end of <meshphysical_frag>:
+//
+//   outgoing * ( 1 - clearcoat * Fcc ) + clearcoatSpecular * clearcoat
+//
+// This is the r155/r185 model. r129's, which this replaces, dimmed the layers
+// underneath by a per-light "directional hemispherical reflectance" guess
+// (clearcoatDHRApprox) that was smaller than what the coat actually reflected,
+// and skipped the indirect diffuse and multiscatter terms altogether, so a coated
+// white dielectric returned up to 1.043 of a white furnace. One Fresnel factor,
+// applied once to the whole base, cannot hand out more than came in.
+vec3 clearcoatSpecular = vec3( 0.0 );
 
 #if NUM_RECT_AREA_LIGHTS > 0
 
@@ -111,13 +117,7 @@ void RE_Direct_Physical( const in IncidentLight directLight, const in GeometricC
 
 		#endif
 
-		float clearcoatDHR = material.clearcoat * clearcoatDHRApprox( material.clearcoatRoughness, ccDotNL );
-
-		reflectedLight.directSpecular += ccIrradiance * material.clearcoat * BRDF_Specular_GGX( directLight, geometry.viewDir, geometry.clearcoatNormal, vec3( DEFAULT_SPECULAR_COEFFICIENT ), 1.0, material.clearcoatRoughness );
-
-	#else
-
-		float clearcoatDHR = 0.0;
+		clearcoatSpecular += ccIrradiance * BRDF_Specular_GGX( directLight, geometry.viewDir, geometry.clearcoatNormal, vec3( DEFAULT_SPECULAR_COEFFICIENT ), 1.0, material.clearcoatRoughness );
 
 	#endif
 
@@ -133,11 +133,11 @@ void RE_Direct_Physical( const in IncidentLight directLight, const in GeometricC
 		float dotVH = saturate( dot( directLight.direction, halfDir ) );
 		vec3 F = mix( F_Schlick( material.specularF0, material.specularF90, dotVH ), material.iridescenceFresnel, material.iridescence );
 
-		reflectedLight.directSpecular += ( 1.0 - clearcoatDHR ) * irradiance * BRDF_Specular_GGX_Fresnel( directLight, geometry.viewDir, geometry.normal, F, material.specularRoughness );
+		reflectedLight.directSpecular += irradiance * BRDF_Specular_GGX_Fresnel( directLight, geometry.viewDir, geometry.normal, F, material.specularRoughness );
 
 	#else
 
-		reflectedLight.directSpecular += ( 1.0 - clearcoatDHR ) * irradiance * BRDF_Specular_GGX( directLight, geometry.viewDir, geometry.normal, material.specularF0, material.specularF90, material.specularRoughness );
+		reflectedLight.directSpecular += irradiance * BRDF_Specular_GGX( directLight, geometry.viewDir, geometry.normal, material.specularF0, material.specularF90, material.specularRoughness );
 
 	#endif
 
@@ -146,7 +146,7 @@ void RE_Direct_Physical( const in IncidentLight directLight, const in GeometricC
 		// r119 chunk this replaces put it in an #else and swapped GGX out entirely,
 		// which cost sheen materials their whole specular highlight. No albedo
 		// scaling, matching the Vulkan deferred path.
-		reflectedLight.directSpecular += ( 1.0 - clearcoatDHR ) * irradiance * BRDF_Specular_Sheen(
+		reflectedLight.directSpecular += irradiance * BRDF_Specular_Sheen(
 			material.sheenRoughness,
 			directLight.direction,
 			geometry,
@@ -154,7 +154,7 @@ void RE_Direct_Physical( const in IncidentLight directLight, const in GeometricC
 		);
 	#endif
 
-	reflectedLight.directDiffuse += ( 1.0 - clearcoatDHR ) * irradiance * BRDF_Diffuse_Lambert( material.diffuseColor );
+	reflectedLight.directDiffuse += irradiance * BRDF_Diffuse_Lambert( material.diffuseColor );
 }
 
 void RE_IndirectDiffuse_Physical( const in vec3 irradiance, const in GeometricContext geometry, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {
@@ -167,20 +167,9 @@ void RE_IndirectSpecular_Physical( const in vec3 radiance, const in vec3 irradia
 
 	#ifdef CLEARCOAT
 
-		float ccDotNV = saturate( dot( geometry.clearcoatNormal, geometry.viewDir ) );
-
-		reflectedLight.indirectSpecular += clearcoatRadiance * material.clearcoat * BRDF_Specular_GGX_Environment( geometry.viewDir, geometry.clearcoatNormal, vec3( DEFAULT_SPECULAR_COEFFICIENT ), 1.0, material.clearcoatRoughness );
-
-		float ccDotNL = ccDotNV;
-		float clearcoatDHR = material.clearcoat * clearcoatDHRApprox( material.clearcoatRoughness, ccDotNL );
-
-	#else
-
-		float clearcoatDHR = 0.0;
+		clearcoatSpecular += clearcoatRadiance * BRDF_Specular_GGX_Environment( geometry.viewDir, geometry.clearcoatNormal, vec3( DEFAULT_SPECULAR_COEFFICIENT ), 1.0, material.clearcoatRoughness );
 
 	#endif
-
-	float clearcoatInv = 1.0 - clearcoatDHR;
 
 	// Both indirect specular and indirect diffuse light accumulate here.
 	//
@@ -208,7 +197,7 @@ void RE_IndirectSpecular_Physical( const in vec3 radiance, const in vec3 irradia
 	vec3 totalScattering = singleScattering + multiScattering;
 	vec3 diffuse = material.diffuseColor * ( 1.0 - max( max( totalScattering.r, totalScattering.g ), totalScattering.b ) );
 
-	reflectedLight.indirectSpecular += clearcoatInv * radiance * singleScattering;
+	reflectedLight.indirectSpecular += radiance * singleScattering;
 	reflectedLight.indirectSpecular += multiScattering * cosineWeightedIrradiance;
 	reflectedLight.indirectDiffuse += diffuse * cosineWeightedIrradiance;
 
