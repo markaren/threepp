@@ -316,14 +316,29 @@ float D_Charlie(float NdotH, float roughness) {
 float V_Neubelt(float NdotV, float NdotL) {
     return clamp(1.0 / (4.0 * (NdotL + NdotV - NdotL * NdotV)), 0.0, 1.0);
 }
+// Directional albedo of the lobe above, for the environment term. The three.js
+// r185 fit, which returns the albedo itself; kept identical to the GL copy in
+// src/shaders/ShaderChunk/bsdfs.glsl. The r136 fit this replaces divided by PI
+// inside because three.js multiplied it by an irradiance of PI * L, while the
+// gather multiplies it by diffuseIndirect, which is already L: PI came off
+// twice and an env-lit fabric got about a fifth of its sheen (0.027 where the
+// integrated albedo is 0.141 at roughness 1; this fit gives 0.164).
 float IBLSheenBRDF(float dotNV, float roughness) {
-    const float r2 = roughness * roughness;
-    const float a = roughness < 0.25 ? -339.2 * r2 + 161.4 * roughness - 25.9
-                                     :   -8.48 * r2 +  14.3 * roughness -  9.95;
-    const float b = roughness < 0.25 ?   44.0 * r2 -  23.7 * roughness +  3.26
-                                     :    1.97 * r2 -   3.27 * roughness +  0.72;
-    const float DG = exp(a * dotNV + b) + (roughness < 0.25 ? 0.0 : 0.1 * (roughness - 0.25));
-    return clamp(DG / PI, 0.0, 1.0);
+    const float r2   = roughness * roughness;
+    const float rInv = 1.0 / (roughness + 0.1);
+    const float a = -1.9362 + 1.0678 * roughness + 0.4573 * r2 - 0.8469 * rInv;
+    const float b = -0.6014 + 0.5538 * roughness - 0.4670 * r2 - 0.1255 * rInv;
+    return clamp(exp(a * dotNV + b), 0.0, 1.0);
+}
+// The share of the incoming light the BASE lobes still receive under a sheen
+// layer: the sheen sits on top, so what it reflects never gets to the base.
+// Adding the lobe without taking that out returned more light than arrived (GL
+// furnace: a white base with a white sheen read 1.24 over the disc, 1.34 at the
+// rim, at sheen roughness 1). The r185 form, kept identical to the GL copy in
+// <lights_physical_pars_fragment>: one scalar from the brightest sheen channel,
+// so a coloured sheen errs on the losing side, never the gaining one.
+float sheenBaseShare(vec3 sheenColor, float sheenAlbedo) {
+    return 1.0 - max(max(sheenColor.r, sheenColor.g), sheenColor.b) * sheenAlbedo;
 }
 
 // ── Thin-film iridescence (KHR_materials_iridescence, Belcour & Barla 2017).
@@ -510,10 +525,16 @@ vec3 evalLight(vec3 N, vec3 V, vec3 L, float NdotV, vec3 F0, vec3 albedo,
     const vec3  kd    = (vec3(1.0) - F) * (1.0 - metalness);
     const vec3  diff  = kd * albedo / PI;
     // KHR_materials_sheen Charlie lobe (matches shade_common's per-light sheen).
-    vec3 sheen = vec3(0.0);
-    if (dot(sheenColor, sheenColor) > 0.0)
+    vec3  sheen     = vec3(0.0);
+    float baseShare = 1.0;
+    if (dot(sheenColor, sheenColor) > 0.0) {
         sheen = sheenColor * D_Charlie(NdotH, sheenRoughness) * V_Neubelt(NdotV, NdotL);
-    return (diff + spec + sheen) * NdotL;
+        // The larger of the two albedos, as r185 does: the lobe is evaluated for
+        // this view AND this light direction.
+        baseShare = sheenBaseShare(sheenColor, max(IBLSheenBRDF(NdotV, sheenRoughness),
+                                                   IBLSheenBRDF(NdotL, sheenRoughness)));
+    }
+    return ((diff + spec) * baseShare + sheen) * NdotL;
 }
 
 // ── RNG + RT ambient occlusion / env GI ─────────────────────────────────────

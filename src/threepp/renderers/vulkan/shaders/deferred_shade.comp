@@ -1514,8 +1514,14 @@ void main() {
         // split-sum lookup is the surface's whole environment answer -- leaving
         // it unscaled would make the knob inert on exactly the materials that
         // need it most.
+        // A sheen surface takes this term at full weight (above), and it is a
+        // BASE lobe: it gets only what the sheen layer left. 1.0 without sheen.
+        const float envSpecBaseShare =
+                (dot(pm.sheenColor, pm.sheenColor) > 0.0)
+                        ? sheenBaseShare(pm.sheenColor, IBLSheenBRDF(NdotV, pm.sheenRoughness))
+                        : 1.0;
         lit += sampleEnvLod(R, roughness * maxLod) * (F0 * ab.x + ab.y) * envSpecW * envSpecVis
-             * pm.envMapIntensity;
+             * pm.envMapIntensity * envSpecBaseShare;
     }
     // ── Emitter-specular ESTIMATOR SPLIT by lobe width ──────────────────────
     // specNEET: 0 = near-mirror (the BRDF ray owns emitter spec — tight lobe hits

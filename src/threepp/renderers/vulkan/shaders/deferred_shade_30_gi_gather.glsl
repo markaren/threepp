@@ -410,11 +410,16 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
     // Diffuse indirect (caller-supplied): visibility-gated env irradiance for
     // the primary surface, crude env IBL for reflected hits. Only modulates the
     // indirect term — direct lights have their own shadows.
-    lit += diffuseIndirect * diffuseColor;
     // Env/IBL sheen — grazing-rim fabric glow under image-based light. This is
     // what actually shows on an env-lit fabric (e.g. the satin cushion), where
-    // there's no analytic light for the per-light Charlie lobe above.
-    if (dot(sheenColor, sheenColor) > 0.0)
-        lit += sheenColor * IBLSheenBRDF(NdotV, sheenRoughness) * diffuseIndirect;
+    // there's no analytic light for the per-light Charlie lobe above. The diffuse
+    // base under it gets only what the sheen left (see sheenBaseShare).
+    if (dot(sheenColor, sheenColor) > 0.0) {
+        const float sheenAlbedo = IBLSheenBRDF(NdotV, sheenRoughness);
+        lit += diffuseIndirect * diffuseColor * sheenBaseShare(sheenColor, sheenAlbedo);
+        lit += sheenColor * sheenAlbedo * diffuseIndirect;
+    } else {
+        lit += diffuseIndirect * diffuseColor;
+    }
     return lit;
 }
