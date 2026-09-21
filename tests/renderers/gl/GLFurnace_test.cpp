@@ -321,8 +321,12 @@ TEST_CASE("Furnace: GL white dielectric does not exceed the furnace", "[furnace]
 // The two LAYERED lobes, clearcoat and sheen, in the same furnace.
 namespace {
 
-    // Fraction of the furnace returned at the centre of the sphere.
-    double layerRead(const std::shared_ptr<MeshPhysicalMaterial>& mat, float le) {
+    // Fraction of the furnace returned at pixel (x, y); the centre of the sphere
+    // by default. The sphere overfills the 64 px frame (projected radius 35 px), so
+    // (9, 9) on the diagonal sits at 0.90 of the radius: the RIM, which is where a
+    // Fresnel- or albedo-weighted layer differs most from its reading at the centre.
+    double layerRead(const std::shared_ptr<MeshPhysicalMaterial>& mat, float le,
+                     int x = RT_WIDTH / 2, int y = RT_HEIGHT / 2) {
         auto scene = Scene::create();
         scene->background = Color(0, 0, 0);
         scene->environment = makeConstantEnvAt(le);
@@ -335,7 +339,8 @@ namespace {
         renderer.toneMapping = ToneMapping::None;
         renderer.setClearColor(Color(0, 0, 0));
         renderer.render(*scene, *camera);
-        return centerPixel(renderer.readRGBPixels(), RT_WIDTH, RT_HEIGHT).r / (le * 255.0);
+        const auto px = renderer.readRGBPixels();
+        return px[(static_cast<size_t>(y) * RT_WIDTH + x) * 3] / (le * 255.0);
     }
 
 }// namespace
@@ -362,5 +367,71 @@ TEST_CASE("Furnace: GL clearcoat does not add light", "[furnace]") {
             CHECK(v < 1.012);// one byte of headroom at Le = 0.5
             CHECK(v > 0.93); // and the coat must not eat the base either
         }
+    }
+}
+
+// Black base, white sheen, so what is left after subtracting the same material
+// without sheen IS the environment sheen lobe, and in a uniform furnace that is the
+// sheen's directional albedo. Integrating BRDF_Specular_Sheen over the hemisphere
+// gives 0.141 at sheenRoughness 1 and 0.056 at 0.6. The r136 fit paired with an
+// irradiance already divided by PI returned 0.027 and 0.013; r155's pairing of the
+// same fit would give 0.084 and 0.042. Le = 3 because the lobe is a few percent of
+// the furnace, which at Le = 0.5 is one or two bytes.
+TEST_CASE("Furnace: GL environment sheen returns the sheen albedo", "[furnace]") {
+
+    const auto sheenLobe = [](float sheenRoughness) {
+        auto bare = MeshPhysicalMaterial::create();
+        bare->color = Color(0, 0, 0);
+        bare->metalness = 0.f;
+        bare->roughness = 1.f;
+
+        auto sheen = MeshPhysicalMaterial::create();
+        sheen->color = Color(0, 0, 0);
+        sheen->metalness = 0.f;
+        sheen->roughness = 1.f;
+        sheen->sheenColor = Color(1, 1, 1);
+        sheen->sheenRoughness = sheenRoughness;
+
+        return layerRead(sheen, 3.f) - layerRead(bare, 3.f);
+    };
+
+    const double at1 = sheenLobe(1.f);
+    INFO("sheenRoughness 1.0 -> " << at1 << " (integrated albedo 0.141)");
+    CHECK(at1 > 0.11);
+    CHECK(at1 < 0.19);
+
+    const double at06 = sheenLobe(0.6f);
+    INFO("sheenRoughness 0.6 -> " << at06 << " (integrated albedo 0.056)");
+    CHECK(at06 > 0.035);
+    CHECK(at06 < 0.075);
+}
+
+// The sheen lies ON the base, so the base can only receive what the sheen did not
+// reflect. Adding the lobe without taking that out of the base made a WHITE base
+// with a white sheen return more than the furnace: 1.16 at the centre and 1.34 at
+// the rim at sheen roughness 1, where the sheen's albedo is largest. r185 scales
+// every base lobe by 1 - max3( sheenColor ) * albedo; in a furnace that is exact
+// for a white sheen, base * ( 1 - albedo ) + albedo = 1 wherever base = 1.
+//
+// The black-base case above cannot see this, because there the base has nothing
+// to give back. Read at the centre AND the rim: the centre alone passed a
+// clearcoat that was still wrong at grazing angles once before.
+TEST_CASE("Furnace: GL sheen does not add light to a white base", "[furnace]") {
+
+    for (float sheenRoughness : {0.3f, 0.6f, 1.f}) {
+        auto mat = MeshPhysicalMaterial::create();
+        mat->color = Color(1, 1, 1);
+        mat->metalness = 0.f;
+        mat->roughness = 1.f;
+        mat->sheenColor = Color(1, 1, 1);
+        mat->sheenRoughness = sheenRoughness;
+
+        const double centre = layerRead(mat, 0.5f);
+        const double rim = layerRead(mat, 0.5f, 9, 9);
+        INFO("sheenRoughness " << sheenRoughness << " -> centre " << centre << ", rim " << rim << " of the furnace");
+        CHECK(centre < 1.012);// one byte of headroom at Le = 0.5
+        CHECK(centre > 0.93);
+        CHECK(rim < 1.012);
+        CHECK(rim > 0.93);
     }
 }

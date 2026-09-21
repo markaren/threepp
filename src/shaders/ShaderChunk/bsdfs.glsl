@@ -414,14 +414,22 @@ vec3 BRDF_Specular_Sheen( const in float roughness, const in vec3 L, const in Ge
 
 // Analytic fit to the sheen directional albedo, for the environment lobe. This is
 // what carries an env-lit fabric, where no analytic light drives the Charlie lobe.
+//
+// The r185 fit, which returns the albedo itself. The r136 one this replaces
+// divided by PI inside, because three.js multiplied it by `irradiance` (PI * L);
+// the caller here multiplies by irradiance / PI, so the lobe was divided by PI
+// twice and an env-lit fabric got about a fifth of its sheen. Integrating
+// BRDF_Specular_Sheen above over the hemisphere gives 0.141 at roughness 1 and
+// 0.056 at 0.6; this fit gives 0.164 and 0.052, the old pairing 0.027 and 0.013.
+//
+// The Vulkan copy (deferred_shade_10_lighting_utils.glsl) carries the same fit.
 float IBLSheenBRDF( const in float dotNV, const in float roughness ) {
 	float r2 = roughness * roughness;
-	float a = roughness < 0.25 ? -339.2 * r2 + 161.4 * roughness - 25.9
-	                           :   -8.48 * r2 +  14.3 * roughness -  9.95;
-	float b = roughness < 0.25 ?   44.0 * r2 -  23.7 * roughness +  3.26
-	                           :    1.97 * r2 -   3.27 * roughness +  0.72;
-	float DG = exp( a * dotNV + b ) + ( roughness < 0.25 ? 0.0 : 0.1 * ( roughness - 0.25 ) );
-	return saturate( DG / PI );
+	float rInv = 1.0 / ( roughness + 0.1 );
+	float a = -1.9362 + 1.0678 * roughness + 0.4573 * r2 - 0.8469 * rInv;
+	float b = -0.6014 + 0.5538 * roughness - 0.4670 * r2 - 0.1255 * rInv;
+	float DG = exp( a * dotNV + b );
+	return saturate( DG );
 }
 
 #endif

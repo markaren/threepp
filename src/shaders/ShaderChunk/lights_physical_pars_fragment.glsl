@@ -49,6 +49,27 @@ struct PhysicalMaterial {
 // applied once to the whole base, cannot hand out more than came in.
 vec3 clearcoatSpecular = vec3( 0.0 );
 
+#ifdef USE_SHEEN
+
+// The share of the incoming light the BASE lobes still receive under a sheen
+// layer. The sheen sits on top, so whatever it reflects never gets to the base;
+// adding the lobe without taking that out made a white base with a white sheen
+// return 1.24 of a white furnace over the disc and 1.34 at the rim (sheen
+// roughness 1). `albedo` is the sheen's directional albedo, IBLSheenBRDF.
+//
+// The r185 form. One scalar for all three channels, from the brightest sheen
+// channel, so a coloured sheen dims the base a little more than it has to: the
+// error is on the losing side, never the gaining one. In a furnace the result is
+// exact for a white sheen: base * ( 1 - albedo ) + albedo = 1 wherever base = 1.
+float sheenEnergyComp( const in vec3 sheenColor, const in float albedo ) {
+
+	// Spelled out: <common> only defines max3 when HIGH_PRECISION is off.
+	return 1.0 - max( max( sheenColor.r, sheenColor.g ), sheenColor.b ) * albedo;
+
+}
+
+#endif
+
 #if NUM_RECT_AREA_LIGHTS > 0
 
 	void RE_Direct_RectArea_Physical( const in RectAreaLight rectAreaLight, const in GeometricContext geometry, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {
@@ -121,6 +142,29 @@ void RE_Direct_Physical( const in IncidentLight directLight, const in GeometricC
 
 	#endif
 
+	#ifdef USE_SHEEN
+
+		// KHR_materials_sheen: the Charlie lobe sits ON TOP of the base BRDF. The
+		// r119 chunk this replaces put it in an #else and swapped GGX out entirely,
+		// which cost sheen materials their whole specular highlight.
+		reflectedLight.directSpecular += irradiance * BRDF_Specular_Sheen(
+			material.sheenRoughness,
+			directLight.direction,
+			geometry,
+			material.sheenColor
+		);
+
+		// BEFORE the base lobes, and scaling what is left for them: see
+		// sheenEnergyComp. The larger of the two albedos, as r185 does, because the
+		// lobe is evaluated for this view AND this light direction. The clearcoat
+		// above keeps its own irradiance; the coat lies over the sheen, not under it.
+		float sheenAlbedoV = IBLSheenBRDF( saturate( dot( geometry.normal, geometry.viewDir ) ), material.sheenRoughness );
+		float sheenAlbedoL = IBLSheenBRDF( dotNL, material.sheenRoughness );
+
+		irradiance *= sheenEnergyComp( material.sheenColor, max( sheenAlbedoV, sheenAlbedoL ) );
+
+	#endif
+
 	#ifdef USE_IRIDESCENCE
 
 		// three.js parity: the thin-film Fresnel is evaluated once at the VIEW
@@ -141,25 +185,20 @@ void RE_Direct_Physical( const in IncidentLight directLight, const in GeometricC
 
 	#endif
 
-	#ifdef USE_SHEEN
-		// KHR_materials_sheen: the Charlie lobe sits ON TOP of the base BRDF. The
-		// r119 chunk this replaces put it in an #else and swapped GGX out entirely,
-		// which cost sheen materials their whole specular highlight. No albedo
-		// scaling, matching the Vulkan deferred path.
-		reflectedLight.directSpecular += irradiance * BRDF_Specular_Sheen(
-			material.sheenRoughness,
-			directLight.direction,
-			geometry,
-			material.sheenColor
-		);
-	#endif
-
 	reflectedLight.directDiffuse += irradiance * BRDF_Diffuse_Lambert( material.diffuseColor );
 }
 
 void RE_IndirectDiffuse_Physical( const in vec3 irradiance, const in GeometricContext geometry, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {
 
-	reflectedLight.indirectDiffuse += irradiance * BRDF_Diffuse_Lambert( material.diffuseColor );
+	vec3 diffuse = irradiance * BRDF_Diffuse_Lambert( material.diffuseColor );
+
+	#ifdef USE_SHEEN
+
+		diffuse *= sheenEnergyComp( material.sheenColor, IBLSheenBRDF( saturate( dot( geometry.normal, geometry.viewDir ) ), material.sheenRoughness ) );
+
+	#endif
+
+	reflectedLight.indirectDiffuse += diffuse;
 
 }
 
@@ -197,19 +236,27 @@ void RE_IndirectSpecular_Physical( const in vec3 radiance, const in vec3 irradia
 	vec3 totalScattering = singleScattering + multiScattering;
 	vec3 diffuse = material.diffuseColor * ( 1.0 - max( max( totalScattering.r, totalScattering.g ), totalScattering.b ) );
 
-	reflectedLight.indirectSpecular += radiance * singleScattering;
-	reflectedLight.indirectSpecular += multiScattering * cosineWeightedIrradiance;
-	reflectedLight.indirectDiffuse += diffuse * cosineWeightedIrradiance;
-
 	#ifdef USE_SHEEN
 
 		// Env/IBL sheen — the grazing rim glow that carries a fabric lit only by an
 		// environment. Driven by the same cosine-weighted irradiance the diffuse
 		// lobe uses, as in the Vulkan gather.
-		float sheenDotNV = saturate( dot( geometry.normal, geometry.viewDir ) );
-		reflectedLight.indirectSpecular += material.sheenColor * IBLSheenBRDF( sheenDotNV, material.sheenRoughness ) * cosineWeightedIrradiance;
+		float sheenAlbedo = IBLSheenBRDF( saturate( dot( geometry.normal, geometry.viewDir ) ), material.sheenRoughness );
+		reflectedLight.indirectSpecular += material.sheenColor * sheenAlbedo * cosineWeightedIrradiance;
+
+		// The base lobes below get what the sheen left. Not the sheen line above,
+		// and not the clearcoat, which lies over the sheen.
+		float baseShare = sheenEnergyComp( material.sheenColor, sheenAlbedo );
+
+	#else
+
+		float baseShare = 1.0;
 
 	#endif
+
+	reflectedLight.indirectSpecular += baseShare * radiance * singleScattering;
+	reflectedLight.indirectSpecular += baseShare * multiScattering * cosineWeightedIrradiance;
+	reflectedLight.indirectDiffuse += baseShare * diffuse * cosineWeightedIrradiance;
 
 }
 
