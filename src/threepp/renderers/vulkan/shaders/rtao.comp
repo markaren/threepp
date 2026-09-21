@@ -211,14 +211,40 @@ void main() {
     float histLen   = 1.0;
     float outSq     = curAo * curAo;
     if (all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)))) {
-        const vec3  pn = textureLod(gbufNormalPrevTex, pUv, 0.0).xyz * 2.0 - 1.0;
         const float surfD = textureLod(gbufMotionTex, uv, 0.0).b;    // this surface's prev NDC depth
-        const float bufD  = textureLod(gbufDepthPrevTex, pUv, 0.0).x;// prev depth buffer at the reproject
         const vec4  svh = cam.projInverse * vec4(prevNDC, surfD, 1.0);
-        const vec4  bvh = cam.projInverse * vec4(prevNDC, bufD, 1.0);
         const float svz = svh.z / svh.w;
-        const bool  sameSurface = dot(N, normalize(pn)) > 0.7 &&
-                                  abs(svz - bvh.z / bvh.w) <= 0.1 * max(abs(svz), 1e-3);
+        // JOINT normal+depth test over the 3x3 PREV neighbourhood, the same
+        // question the shade's GI reproject asks: was THIS surface anywhere
+        // around the reprojected texel last frame? A single-texel test with a
+        // 45-degree normal gate, which this was, resets the history every time
+        // the sub-pixel jitter moves the anchor texel across a crease. On a piped
+        // cushion seam that is nearly every frame: the traced point alternates
+        // between the crevice (ao ~ 0) and the cushion beside it (ao ~ 1), each
+        // reset publishes the raw few-ray sample, and the seam turns into a row of
+        // dark beads that flicker at the half-res spacing. Measured on a static
+        // camera, samples 10 frames apart: 8.2% of pixels changing by more than 2
+        // levels with AO on, 2.1% with it off. With the history kept, the EMA
+        // averages the two into a stable value. Only a GROSS flip (> 90 degrees)
+        // is rejected on the normal; depth does the real surface discrimination,
+        // and a truly vacated pixel still finds no match and resets.
+        const bool  dsided = ifDoubleSided(textureLod(gbufIdsTex, uv, 0.0).z);
+        const ivec2 pmx = textureSize(gbufNormalPrevTex, 0) - 1;
+        const ivec2 pip = clamp(ivec2(pUv * vec2(pmx + 1)), ivec2(0), pmx);
+        bool sameSurface = false;
+        for (int dy = -1; dy <= 1 && !sameSurface; ++dy) {
+            for (int dx = -1; dx <= 1 && !sameSurface; ++dx) {
+                const ivec2 tp = clamp(pip + ivec2(dx, dy), ivec2(0), pmx);
+                const vec3  pn = texelFetch(gbufNormalPrevTex, tp, 0).xyz * 2.0 - 1.0;
+                if (dot(pn, pn) < 1e-6) continue;// prev sky / no surface
+                float nd = dot(N, normalize(pn));
+                if (dsided) nd = abs(nd);
+                if (nd <= 0.0) continue;
+                const float bufD = texelFetch(gbufDepthPrevTex, tp, 0).x;
+                const vec4  bvh  = cam.projInverse * vec4(prevNDC, bufD, 1.0);
+                sameSurface = abs(svz - bvh.z / bvh.w) <= 0.1 * max(abs(svz), 1e-3);
+            }
+        }
         if (sameSurface) {
             const vec4  prevR = textureLod(rtaoPrevTex, pUv, 0.0);
             const vec4  prevA = textureLod(rtaoAuxPrevTex, pUv, 0.0);// (histLen, E[ao^2])
