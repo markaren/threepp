@@ -28,12 +28,29 @@
 	vec3 f0 = material.specularF0;
 	vec3 f90 = vec3( material.specularF90 );
 
-	// Per glTF KHR_materials_transmission, transmitted light is tinted by volume
-	// attenuation only. Some assets ship baseColor=(0,0,0) as "clear glass" relying
-	// on alphaMode=BLEND; lerp the albedo toward white when it is near-black so the
-	// refracted background still passes through.
-	float albedoLum = max( max( diffuseColor.r, diffuseColor.g ), diffuseColor.b );
-	vec3 transmissionAlbedo = mix( vec3( 1.0 ), diffuseColor.rgb, smoothstep( 0.0, 0.1, albedoLum ) );
+	// KHR_materials_transmission: the base colour filters what comes through, so
+	// a black base colour is BLACK glass, not clear glass (glTF sample
+	// SunglassesKhronos: lenses at 0.009 and 0.016, alphaMode OPAQUE). This used
+	// to lerp a near-black tint to white, for assets that pair a black base
+	// colour with alphaMode BLEND and a low alpha (smoked car windows) — and it
+	// cleared every dark glass along with them.
+	//
+	// What those assets ask for is COVERAGE. The spec composite under alpha is
+	//   a * [ (1-t) * diffuse + t * tint * behind ] + (1-a) * behind
+	// and this pass writes alpha = 1, so fold it into the two knobs the mix
+	// below consumes, exactly as the Vulkan host does:
+	//   t' = 1 - a (1-t),   tint' = ( a t tint + 1-a ) / t'.
+	// Only for an alpha-blended material: glTF ignores alpha in OPAQUE mode.
+	vec3 transmissionAlbedo = diffuseColor.rgb;
+
+	#ifdef TRANSMISSION_COVERAGE
+
+		float coverage = saturate( diffuseColor.a );
+		float foldedTransmission = 1.0 - coverage * ( 1.0 - totalTransmission );
+		transmissionAlbedo = ( coverage * totalTransmission * transmissionAlbedo + vec3( 1.0 - coverage ) ) / max( foldedTransmission, 1e-4 );
+		totalTransmission = foldedTransmission;
+
+	#endif
 
 	vec3 f_transmission = getIBLVolumeRefraction(
 		normal, v, viewDir, roughnessFactor, transmissionAlbedo, f0, f90,

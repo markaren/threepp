@@ -158,6 +158,7 @@ ProgramParameters::ProgramParameters(
 
     transmission =transmissionMaterial && transmissionMaterial->transmission > 0;
     transmissionMap = transmissionMaterial && transmissionMaterial->transmissionMap;
+    transmissionCoverage = transmission && material->transparent;
     thicknessMap = thicknessMaterial && thicknessMaterial->thicknessMap;
 
     if (combineMaterial) {
@@ -275,6 +276,7 @@ std::string ProgramParameters::hash() const {
 
     s << std::to_string(transmission) << '\n';
     s << std::to_string(transmissionMap) << '\n';
+    s << std::to_string(transmissionCoverage) << '\n';
     s << std::to_string(thicknessMap) << '\n';
 
     s << (combine.has_value() ? std::to_string(as_integer(*combine)) : std::string("undefined")) << '\n';

@@ -73,6 +73,7 @@ namespace threepp {
 
             bool transmission{};
             bool transmissionMap{};
+            bool transmissionCoverage{};// transmissive AND alpha-blended: alpha is coverage
             bool thicknessMap{};
 
             std::optional<CombineOperation> combine;

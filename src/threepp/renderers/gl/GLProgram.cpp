@@ -603,6 +603,7 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
                     parameters->iridescence ? "#define USE_IRIDESCENCE" : "",
                     parameters->transmission ? "#define USE_TRANSMISSION" : "",
                     parameters->transmissionMap ? "#define USE_TRANSMISSIONMAP" : "",
+                    parameters->transmissionCoverage ? "#define TRANSMISSION_COVERAGE" : "",
                     parameters->thicknessMap ? "#define USE_THICKNESSMAP" : "",
 
                     parameters->vertexTangents ? "#define USE_TANGENT" : "",
