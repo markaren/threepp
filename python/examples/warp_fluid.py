@@ -74,7 +74,7 @@ import warp as wp
 import threepp as tp
 from warp_common import (DensitySurface, Encoder, bench_loop, cli_arg,
                          open_display, parse_size, pbf_constants,
-                         resize_handler, sky_env, standard_material,
+                         resize_handler, standard_material,
                          write_radiance_hdr)
 try:
     from threepp.cuda_interop import VkInteropArray
@@ -1329,22 +1329,9 @@ SUN_POS = ((2.4, 3.2, 4.2) if IS_REF else
 # even sheen and no glitter, which is most of why the first frame read as milk.
 
 scene = tp.Scene()
-# The indoor-pool HDRI is Vulkan-only: the ray-traced path turns its bright
-# warm interior into reflections, refracted light and sparkle. GL's screen-space
-# transmission just floods with it and washes the water out, so GL keeps the
-# procedural sky.
-_pool_hdr = fetch_asset(POOL_HDR_URL, "threepp_indoor_pool_2k.hdr") if VULKAN else None
-if IS_REF or VULKAN:
-    env = tp.RGBELoader().load(_pool_hdr if _pool_hdr else make_sky_hdr(
-        os.path.join(tempfile.gettempdir(), "threepp_fluid_sky.hdr")))
-else:
-    # A real sun disc, on the same direction as the key light, so the
-    # reflection, the glint and the shadows agree. This is the single
-    # biggest difference between water and blue gel at a grazing angle.
-    _sd = np.array(SUN_POS, dtype=np.float64)
-    _sd = _sd / np.linalg.norm(_sd)
-    env = sky_env(tuple(_sd), below_horizon=(0.22, 0.27, 0.31),
-                  below_nadir=(0.05, 0.06, 0.07))
+_pool_hdr = fetch_asset(POOL_HDR_URL, "threepp_indoor_pool_2k.hdr")
+env = tp.RGBELoader().load(_pool_hdr if _pool_hdr else make_sky_hdr(
+    os.path.join(tempfile.gettempdir(), "threepp_fluid_sky.hdr")))
 scene.environment = env
 scene.background = env
 
@@ -1442,13 +1429,6 @@ if CAM_ALL:
     _v = _v / np.linalg.norm(_v)
     _l = np.array([-_v[0], _v[1] + 0.06, -_v[2]])
     SUN_POS = tuple(_l / np.linalg.norm(_l) * (6.0 * W_LIN))
-    if not VULKAN:
-        # The sky was built above from the sun this block just replaced; build
-        # it again, or the disc the water reflects is not where the light is.
-        env = sky_env(tuple(_l / np.linalg.norm(_l)), below_horizon=(0.22, 0.27, 0.31),
-                      below_nadir=(0.05, 0.06, 0.07))
-        scene.environment = env
-        scene.background = env
 else:
     _cx = (X1 - 1.2) if CAM_FAR_END else (X0 + 1.2)
     _tx = X0 if CAM_FAR_END else X1
@@ -1599,21 +1579,11 @@ for sx, sz in ((1, 0), (-1, 0), (0, 1), (0, -1)):
     w.receive_shadow = True
     scene.add(w)
 
-# No ground plane on Vulkan. Wave facets tilted toward the camera reflect
-# DOWNWARD, and refracted rays exiting the tank sweep BELOW it; a grey plane
-# there answers "grey" to every one of them. With it gone the same rays miss,
-# and an env miss samples the HDRI's below-horizon content at raw HDR radiance
-# -- the pool hall's warm tiles and its real turquoise water. GL keeps the
-# ground: its procedural sky is dull below the horizon, and its screen-space
-# refraction is tuned with the plane in place.
-if not VULKAN:
-    _g = max(60.0, 3.0 * max(X1 - X0, Z1 - Z0))
-    ground = tp.Mesh(tp.PlaneGeometry(_g, _g),
-                     standard_material(0x848b94 if IS_REF else 0x3a4048, 0.8))
-    ground.rotate_x(-math.pi / 2)
-    ground.position.y = FLOOR - 0.032
-    ground.receive_shadow = True
-    scene.add(ground)
+# No ground plane: the HDRI's floor is the ground. Wave facets tilted toward
+# the camera reflect DOWNWARD, and refracted rays exiting the tank sweep BELOW
+# it; a grey plane there answers "grey" to every one of them. With it gone the
+# same rays miss, and an env miss samples the HDRI's below-horizon content at
+# raw HDR radiance -- the pool hall's warm tiles and its real turquoise water.
 
 geometry = tp.BufferGeometry()
 reg_pos = None
