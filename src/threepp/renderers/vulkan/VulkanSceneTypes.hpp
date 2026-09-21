@@ -180,6 +180,20 @@ namespace threepp::vulkan::impl {
     // (position/normal additions ARE detected via the flag bits below).
     struct SnapNode {
         Object3D* obj = nullptr;
+        // Process-unique ids of obj, its geometry and its material, compared
+        // alongside the pointers. A pointer alone cannot tell the object it was
+        // recorded from apart from a NEW one the allocator placed at the dead
+        // one's address, and everything below leans on "same address ⇒ same
+        // object": the typed views would be the wrong type, and the recycled
+        // material's parameters would never be read. Replacing a mesh (or
+        // rebuilding a scene) frees and allocates same-sized objects back to
+        // back, which is exactly when addresses repeat.
+        // Left 0 where there is no geometry / material: the pointer compare
+        // already separates null from non-null, so the id only has to decide
+        // between two objects at one address.
+        unsigned int objId  = 0;
+        unsigned int geomId = 0;
+        unsigned int matId  = 0;
         // Typed views of obj, resolved by the full pass's dynamic_casts.
         // Object3D is a VIRTUAL base, so the replay walk cannot
         // static_cast down — it reuses these instead (same object at the

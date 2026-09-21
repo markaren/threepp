@@ -649,6 +649,20 @@ namespace threepp::vulkan::impl {
         const void* mesh;
         const void* geom;
         const void* mat;
+        // Process-unique ids of the three objects above (Object3D::id,
+        // BufferGeometry::id, Material::id), compared WITH the pointers. The
+        // pointers alone cannot tell a live object from a new one the allocator
+        // placed at a dead one's address, and a mesh, geometry and material that
+        // are freed and recreated between two frames (a rebuilt scene, a replaced
+        // model) come back at the same addresses with the same version 0.
+        // Measured with a furnace that built a fresh sphere per case: the entry
+        // matched, and the PREVIOUS case's roughness went on being rendered. The
+        // textures below get the same protection by holding the shared_ptr; that
+        // is not available for the mesh, which the traversal hands over as a
+        // plain reference and which need not be shared_ptr-owned at all.
+        unsigned int meshId = 0;
+        unsigned int geomId = 0;
+        unsigned int matId  = 0;
         // Texture fingerprint slots hold the shared_ptr (not just the raw
         // pointer) so the comparison can't be fooled by an allocator
         // recycling a freed Texture's address for a brand-new Texture: a

@@ -51,7 +51,10 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
             bool ok = true;
             scene.traverseVisible([&](Object3D& o) {
                 if (!ok) return;
-                if (cur >= sceneSnapshot_.size() || sceneSnapshot_[cur].obj != &o) {
+                // Address AND id: see SnapNode. `o` is live, so reading its id is
+                // safe whatever used to be at this address.
+                if (cur >= sceneSnapshot_.size() || sceneSnapshot_[cur].obj != &o ||
+                    sceneSnapshot_[cur].objId != o.id) {
                     ok = false;
                     return;
                 }
@@ -76,15 +79,21 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
                     auto geom = sn.line ? sn.line->geometry() : sn.pts->geometry();
                     auto matL = sn.line ? sn.line->material() : sn.pts->material();
                     const bool matHidden = matL && !matL->visible;
-                    if (geom.get() != sn.geom ||
+                    if (geom.get() != sn.geom || (geom && geom->id != sn.geomId) ||
                         (sn.geomB && sn.geomB->attributesVersion() != sn.attrVer) ||
                         matHidden != ((sn.flags & kSnapMatHidden) != 0u)) ok = false;
                     return;
                 }
                 Mesh* m = sn.mesh;
-                if (m->geometry().get() != sn.geom || m->material().get() != sn.mat) {
-                    ok = false;
-                    return;
+                {
+                    const auto geomNow = m->geometry();
+                    const auto matNow = m->material();
+                    if (geomNow.get() != sn.geom || matNow.get() != sn.mat ||
+                        (geomNow && geomNow->id != sn.geomId) ||
+                        (matNow && matNow->id != sn.matId)) {
+                        ok = false;
+                        return;
+                    }
                 }
                 if (sn.geomB && sn.geomB->attributesVersion() != sn.attrVer) {
                     ok = false;// attribute added/replaced/removed → full pass re-derives
@@ -587,6 +596,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             scene.traverseVisible([&](Object3D& o) {
                 SnapNode sn{};
                 sn.obj = &o;
+                sn.objId = o.id;
                 // three.js parity — LOD level selection (GLRenderer::
                 // projectObject runs lod.update(camera) as it projects).
                 // traverseVisible is PRE-ORDER: this LOD's children are
@@ -616,6 +626,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     sn.line  = line;
                     sn.geom  = geom.get();
                     sn.geomB = geom.get();
+                    if (geom) sn.geomId = geom->id;
                     if (geom) sn.attrVer = geom->attributesVersion();
                     const bool matHidden = line->material() && !line->material()->visible;
                     if (matHidden) sn.flags |= kSnapMatHidden;
@@ -643,6 +654,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     sn.pts   = pts;
                     sn.geom  = geom.get();
                     sn.geomB = geom.get();
+                    if (geom) sn.geomId = geom->id;
                     if (geom) sn.attrVer = geom->attributesVersion();
                     const bool matHidden = pts->material() && !pts->material()->visible;
                     if (matHidden) sn.flags |= kSnapMatHidden;
@@ -681,6 +693,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 sn.geom      = m->geometry().get();
                 sn.geomB     = m->geometry().get();
                 sn.mat       = m->material().get();
+                sn.geomId    = sn.geomB ? sn.geomB->id : 0u;
+                sn.matId     = sn.mat ? sn.mat->id : 0u;
                 sn.wf        = wf;
                 sn.basic     = dynamic_cast<const MeshBasicMaterial*>(sn.mat);
                 sn.instCount = inst ? static_cast<int32_t>(inst->count()) : -1;
@@ -1343,6 +1357,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 if (prevValid) {
                     const auto& p = prevSceneFingerprint[i];
                     if (p.mesh == m && p.mat == matPtr && p.geom == geomPtr &&
+                        p.meshId == m->id && p.geomId == m->geometry()->id &&
+                        p.matId == (matPtr ? matPtr->id : 0u) &&
                         p.instanceIndex == en.instanceIndex &&
                         p.matVersion == matVer && p.geomVersion == geomVer) {
                         // Texture pointers + pbr live on the material; matVersion
@@ -1362,6 +1378,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     fp.mesh = m;
                     fp.geom = geomPtr;
                     fp.mat  = matPtr;
+                    fp.meshId = m->id;
+                    fp.geomId = m->geometry()->id;
+                    fp.matId  = matPtr ? matPtr->id : 0u;
                     fp.matVersion = matVer;
                     fp.geomVersion = geomVer;
                     fp.matTyped  = matPtr;
@@ -1568,6 +1587,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     const auto& a = currFp[i];
                     const auto& b = prevSceneFingerprint[i];
                     if (a.mesh != b.mesh || a.geom != b.geom || a.mat != b.mat ||
+                        // Same addresses, different objects (see MeshFingerprint):
+                        // STRUCTURAL, so the rebuild's liveCheck prune drops the
+                        // dead objects' GPU resources before anything is looked
+                        // up by those addresses again.
+                        a.meshId != b.meshId || a.geomId != b.geomId || a.matId != b.matId ||
                         // TLAS membership flip (wireframe/overlay toggled) — the
                         // instance set changed, so a refit would MODE_UPDATE with
                         // a different instance count than the last build (spec

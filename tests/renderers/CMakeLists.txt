@@ -207,6 +207,16 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanFramebufferWrite_test COMMAND VulkanFramebufferWrite_test)
     set_tests_properties(VulkanFramebufferWrite_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # A mesh, geometry and material that are freed and recreated between two
+    # frames come back at the same addresses, at version 0 again. The scene sync
+    # compared exactly those, took the unchanged fast path, and went on rendering
+    # the PREVIOUS material. Gates the unique-id compare that tells them apart.
+    add_executable(VulkanRecycledAddress_test VulkanRecycledAddress_test.cpp)
+    target_link_libraries(VulkanRecycledAddress_test PRIVATE threepp)
+    target_include_directories(VulkanRecycledAddress_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME VulkanRecycledAddress_test COMMAND VulkanRecycledAddress_test)
+    set_tests_properties(VulkanRecycledAddress_test PROPERTIES SKIP_RETURN_CODE 42)
+
     add_executable(VulkanCameraModel_test VulkanCameraModel_test.cpp)
     target_link_libraries(VulkanCameraModel_test PRIVATE threepp)
     target_include_directories(VulkanCameraModel_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
