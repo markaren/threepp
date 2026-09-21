@@ -63,11 +63,22 @@ namespace threepp::gl {
             // sharing that geometry — and those objects can have influence arrays
             // of different lengths, or grow one after the fact. Whenever `length`
             // exceeded the cached size, the collect loop below ran off the end.
+            //
+            // Rebuilt on ANY size mismatch, as r129 does (`influences.length !==
+            // length`), not only grown. The collect loop rewrites [0, length) and
+            // the sort then ranks the WHOLE list, so slots left over from a longer
+            // object outranked this object's own influences and it was drawn with
+            // the other object's morph weights.
             auto& influences = influencesList[geometry->id];
 
-            for (size_t i = influences.size(); i < length; ++i) {
+            if (influences.size() != length) {
 
-                influences.emplace_back(i, 0.f);
+                influences.clear();
+
+                for (size_t i = 0; i < length; ++i) {
+
+                    influences.emplace_back(i, 0.f);
+                }
             }
 
             // Collect influences

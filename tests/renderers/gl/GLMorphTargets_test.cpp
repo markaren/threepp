@@ -101,3 +101,50 @@ TEST_CASE("more influences than the geometry has morph targets is not fatal") {
     INFO("4 influences -> centre x " << centre << ", 1 influence -> " << at1);
     CHECK(std::abs(centre - at1) < 2.0);
 }
+
+TEST_CASE("a shorter influence array does not inherit a longer one's leftovers") {
+
+    // Two meshes on ONE geometry, because the influence cache is keyed on the
+    // geometry. `longer` carries [0.5, 1]; ranked by magnitude that leaves
+    // (target 0, 0.5) in slot 1. `shorter` has the single influence 0 and only
+    // rewrites slot 0, so a cache that is grown but never rebuilt ranks the
+    // leftover first and draws `shorter` half way to a target it never asked for.
+    // r129 rebuilds the list whenever the lengths differ.
+    const double at0 = renderAtInfluence(0.f);
+
+    auto geo = morphingQuad();
+    geo->getOrCreateMorphAttribute("position")->push_back(FloatBufferAttribute::create(quadAt(kTargetX), 3));
+
+    auto mat = MeshBasicMaterial::create();
+    mat->color = Color(0xffffff);
+    mat->morphTargets = true;
+
+    auto longer = Mesh::create(geo, mat);
+    longer->morphTargetInfluences() = {0.5f, 1.f};
+
+    auto shorter = Mesh::create(geo, mat);
+    shorter->morphTargetInfluences() = {0.f};
+
+    auto scene = Scene::create();
+    scene->add(longer);
+    scene->add(shorter);
+
+    PerspectiveCamera camera(50, 1.f, 0.1f, 100.f);
+    camera.position.set(0, 0, 4.f);
+    camera.lookAt({0, 0, 0});
+
+    GLRenderer renderer(glCanvas());
+    renderer.setClearColor(Color(0x000000));
+
+    shorter->visible = false;
+    renderer.render(*scene, camera);// fills the cache from `longer`
+
+    longer->visible = false;
+    shorter->visible = true;
+    renderer.render(*scene, camera);
+
+    const double centre = quadCentreX(renderer.readRGBPixels());
+
+    INFO("influence 0 alone -> centre x " << at0 << ", after a longer sibling -> " << centre);
+    CHECK(std::abs(centre - at0) < 2.0);
+}
