@@ -97,3 +97,35 @@ TEST_CASE("disposing an environment texture mid-session leaves the renderer usab
     REQUIRE(px.size() == DATA_SIZE);
     CHECK(maxPixelBrightness(px) > 0);
 }
+
+TEST_CASE("an environment disposed and then used again is still released when it dies") {
+
+    // Texture::dispose() used to fire once and latch. A texture that is disposed
+    // and then rendered with AGAIN is uploaded again, and both caches rebuild
+    // their entries and subscribe again. Behind the latch that texture then died
+    // silently: its GL objects were never released, and the cube-map cache was
+    // left holding the address of a dead texture, which its own teardown
+    // dereferences (measured: this case ended in an access violation). Unlike the
+    // two cases above this one is observable, because the texture count only
+    // comes down if the event actually fires.
+    auto env = equirectEnv(0.5f);
+    auto cam = camera();
+
+    GLRenderer renderer(glCanvas());
+
+    auto scene = sceneWith(env);
+    renderer.render(*scene, *cam);
+
+    env->dispose();
+    renderer.render(*scene, *cam);// uploaded, converted and prefiltered a second time
+
+    const auto held = renderer.info().memory.textures;
+
+    scene->environment = nullptr;
+    env.reset();
+
+    INFO("textures held before the environment died: " << held << ", after: " << renderer.info().memory.textures);
+    CHECK(renderer.info().memory.textures < held);
+
+    REQUIRE_NOTHROW(renderer.render(*scene, *cam));
+}

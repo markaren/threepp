@@ -1618,8 +1618,14 @@ struct GLRenderer::Impl {
 
         renderLists.dispose();
         renderStates.dispose();
-        properties.dispose();
+        // Before properties: properties.dispose() walks a COPY of its texture
+        // keys and disposes each one, and disposing an equirect source makes the
+        // cube-map cache drop the render targets built from it. Their textures
+        // die on the spot while the copy still lists them, and the walk would go
+        // on to call dispose() on freed memory. Emptied first, the cache has
+        // already unsubscribed and its targets are already gone from the keys.
         cubemaps.dispose();
+        properties.dispose();
         objects.dispose();
         bindingStates.dispose();
     }

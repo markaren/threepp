@@ -102,10 +102,16 @@ void Texture::updateMatrix() {
 
 void Texture::dispose() {
 
-    if (!disposed_) {
-        disposed_ = true;
-        this->dispatchEvent("dispose", this);
-    }
+    // Every call, as in three.js. This used to fire once and latch, and the latch
+    // outlived whatever the first dispose was for. Tearing a renderer down
+    // disposes every texture it knows (GLProperties::dispose), so a texture that
+    // went on to a SECOND renderer could never tell that one it was gone: the
+    // second renderer's listener stayed registered past the renderer's death. The
+    // same went for a texture disposed by hand and then used again, which died
+    // without a word and left the caches keyed on a raw Texture* holding its
+    // address. Every subscriber removes itself when called, so a repeat dispatch
+    // reaches nobody.
+    this->dispatchEvent("dispose", this);
 }
 
 // void Texture::transformUv(Vector2& uv) const {

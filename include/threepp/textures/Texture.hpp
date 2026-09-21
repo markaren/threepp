@@ -168,7 +168,6 @@ namespace threepp {
         std::vector<Image> images_;
         std::vector<Image> mipmaps_;
 
-        bool disposed_{false};
         unsigned int version_{0};
 
         inline static std::atomic<unsigned int> textureId{0};
