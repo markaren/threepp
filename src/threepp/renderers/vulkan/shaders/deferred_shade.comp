@@ -1745,7 +1745,14 @@ void main() {
                 // REAL refractive glass (ior>1). ONE sharp Fresnel reflect+refract
                 // sample (no ghost copies); the reflection denoise blurs it by the glass
                 // roughness (the frost) + recombines — same channel as opaque reflections.
-                const float gt       = clamp(pm.transmission, 0.0, 1.0);
+                // factor × MAP (glTF: the map's R channel). The host has uploaded
+                // transmissionMap and filled transmissionTexIndex all along, and
+                // nothing sampled it, so a stained-glass shade was glass through
+                // its lead came as well as its panes. No map → factor unchanged.
+                const float gt       = clamp(pm.transmission
+                                             * hitTex(pm.transmissionTexIndex, pm.uvTransformTransmission,
+                                                      primUv, vec3(1.0)).r,
+                                             0.0, 1.0);
                 const vec3  glassCol = shadeGlass(worldPos, N, V, pm, albedo, shadowsOn, maxLod, seed);
                 if (denoiseOn) {
                     // Demodulate the mix(): hand glassCol·t to the reflection denoise
@@ -1763,6 +1770,15 @@ void main() {
                 } else {
                     lit = mix(lit, glassCol, gt);// denoise off → inline (sharp, no frost)
                 }
+                // The surface's OWN emission is not part of what transmission
+                // replaces. `lit` carries it (shadeDiffuseDirect starts from it), so
+                // the two blends above scaled it by (1 - gt) along with the opaque
+                // shade, and at transmission 1 that is zero: a lit stained-glass
+                // shade (glTF sample StainedGlassLamp: emissive map, transmission 1)
+                // went dark where GL and three.js show it glowing. KHR_materials_
+                // transmission swaps out the DIFFUSE term only; emission stays at
+                // full weight. Put back the share that was taken.
+                lit += emissive * gt;
             }
         }
     }
