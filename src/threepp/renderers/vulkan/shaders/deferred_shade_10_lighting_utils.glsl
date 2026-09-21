@@ -384,6 +384,22 @@ float sheenBaseShare(vec3 sheenColor, float sheenAlbedo) {
 // blend at opacity 0 — not there at all, black only from behind.
 bool isFlatAlphaBlend(float ior) { return ior < 0.5; }
 
+// Normal-incidence reflectance of a DIELECTRIC, from its index of refraction:
+// ((n-1)/(n+1))^2, times KHR_materials_specular. three.js r185's
+//   min( pow2( ( ior - 1 ) / ( ior + 1 ) ) * specularColor, 1 ) * specularIntensity.
+// This was the constant 0.04 at every site that needs it, which is the value at
+// n = 1.5 and nowhere else: water (1.33) reflects 0.020, sapphire (1.76) 0.076,
+// diamond (2.42) 0.172, and n = 1 nothing at all. glTF sample IORTestGrid is a
+// column of black spheres that differ in nothing but this, and they all looked
+// the same. The default ior is 1.5, so a material that never set one is unmoved.
+// ior < 1 is not an ior: it is the flat-blend marker above (or a material type
+// that has none), and those keep the default.
+vec3 dielectricF0(float ior, float specularIntensity, vec3 specularColor) {
+    const float n = ior < 1.0 ? 1.5 : ior;
+    const float r = (n - 1.0) / (n + 1.0);
+    return min(vec3(r * r) * specularColor, vec3(1.0)) * specularIntensity;
+}
+
 // ── Thin-film iridescence (KHR_materials_iridescence, Belcour & Barla 2017).
 // The deferred base BRDF omitted
 // this, so soap-film / oil-slick / nacre F0 read as plain dielectric. Modulates

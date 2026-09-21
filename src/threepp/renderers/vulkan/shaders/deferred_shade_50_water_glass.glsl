@@ -697,7 +697,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 const vec3  foamLit  = shadeDiffuseDirect(P, N, V, foamCol, foamRough, 0.0,
                                                           vec3(0.0), doShadows, foamDiff,
                                                           vec3(0.0), 0.0,
-                                                          1.0, vec3(1.0),
+                                                          vec3(0.04),
                                                           0.0, 1.3, 0.0, seed,
                                                           /*addEmissive=*/true,// foam: no iridescence
                                                           /*cheapHit=*/false);
@@ -767,7 +767,7 @@ void traceGlassInterior(vec3 origin, vec3 dir, float maxLod, bool doShadows, ino
                                                         hm.emissive * hm.emissiveIntensity,
                                                         doShadows, diffInd,
                                                         hm.sheenColor, hm.sheenRoughness,
-                                                        hm.specularIntensity, hm.specularColor,
+                                                        dielectricF0(hm.ior, hm.specularIntensity, hm.specularColor),
                                                         hm.iridescence, hm.iridescenceIOR, hm.iridescenceThicknessNm, seed,
                                                         /*addEmissive=*/true, /*cheapHit=*/true);
                 overT *= (1.0 - a);

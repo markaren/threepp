@@ -1125,7 +1125,8 @@ void main() {
                                    pm.emissive * pm.emissiveIntensity);
 
     const float NdotV = max(dot(N, V), 1e-4);
-    vec3        F0    = mix(vec3(0.04) * pm.specularIntensity * pm.specularColor, albedo, metalness);
+    const vec3  dielF0 = dielectricF0(pm.ior, pm.specularIntensity, pm.specularColor);
+    vec3        F0    = mix(dielF0, albedo, metalness);
     // Thin-film iridescence (KHR_materials_iridescence). Modulates F0 with the
     // wavelength-dependent interference colour; lobe shape (GGX) is unchanged.
     // Skipped when factor == 0 → non-iridescent surfaces pay only the branch.
@@ -1359,7 +1360,7 @@ void main() {
     vec3 lit = shadeDiffuseDirect(worldPos, N, V, albedo, roughness, metalness,
                                   emissive, shadowsOn, diffIndShade,
                                   pm.sheenColor, pm.sheenRoughness,
-                                  pm.specularIntensity, pm.specularColor,
+                                  dielF0,
                                   pm.iridescence, pm.iridescenceIOR, pm.iridescenceThicknessNm, seed,
                                   /*addEmissive=*/((pc.flags & 8u) == 0u),// ReSTIR on → emissive via main()/diffInd; off → coherent emissiveNEE here
                                   /*cheapHit=*/false);// primary: exhaustive lights + full NEE

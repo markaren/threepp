@@ -371,7 +371,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                                               hEmissive * gReflEmitterScale,
                                               doShadows, hitDiffInd,
                                               hm.sheenColor, hm.sheenRoughness,
-                                              hm.specularIntensity, hm.specularColor,
+                                              dielectricF0(hm.ior, hm.specularIntensity, hm.specularColor),
                                               hm.iridescence, hm.iridescenceIOR, hm.iridescenceThicknessNm, seed,
                                               /*addEmissive=*/true,// reflected hit: no per-pixel reservoir → coherent emissiveNEE
                                               /*cheapHit=*/cheapHits);// caller decides (see header comment)
@@ -387,7 +387,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         }
 
         const float hitNdotV = max(dot(hitN, hitV), 1e-4);
-        const vec3  hitF0 = mix(vec3(0.04) * hm.specularIntensity * hm.specularColor, hAlbedo, hMetal);
+        const vec3  hitF0 = mix(dielectricF0(hm.ior, hm.specularIntensity, hm.specularColor), hAlbedo, hMetal);
         const vec2  hitAB = envBRDFApprox(hitNdotV, hRough);
         const vec3  specW = envSpecularWeight(hitF0, hitAB);// specular throughput for the next bounce
         const vec3  hitR  = reflect(-hitV, hitN);

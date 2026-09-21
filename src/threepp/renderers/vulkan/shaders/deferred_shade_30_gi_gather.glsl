@@ -173,11 +173,11 @@ bool gSkipAnalyticDirect = false;
 vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
                         float metalness, vec3 emissive, bool doShadows, vec3 diffuseIndirect,
                         vec3 sheenColor, float sheenRoughness,
-                        float specularIntensity, vec3 specularColor,
+                        vec3 dielF0,// dielectricF0(ior, specularIntensity, specularColor)
                         float iridescence, float iridescenceIOR, float iridescenceThicknessNm,
                         inout uint seed, bool addEmissive, bool cheapHit) {
     const float NdotV = max(dot(N, V), 1e-4);
-    vec3        F0           = mix(vec3(0.04) * specularIntensity * specularColor, albedo, metalness);
+    vec3        F0           = mix(dielF0, albedo, metalness);
     // Thin-film iridescence (KHR_materials_iridescence) — shift the Fresnel base
     // before any lobe uses it so the direct analytic lighting matches the path
     // tracer. Skipped when factor == 0 (non-iridescent surfaces pay only the branch).

@@ -226,6 +226,14 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanIorOneGlass_test COMMAND VulkanIorOneGlass_test)
     set_tests_properties(VulkanIorOneGlass_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # A dielectric's reflectance follows its ior: ((n-1)/(n+1))^2, not the constant
+    # 0.04 the deferred shade used at every site (glTF sample IORTestGrid).
+    add_executable(VulkanDielectricIor_test VulkanDielectricIor_test.cpp)
+    target_link_libraries(VulkanDielectricIor_test PRIVATE threepp)
+    target_include_directories(VulkanDielectricIor_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME VulkanDielectricIor_test COMMAND VulkanDielectricIor_test)
+    set_tests_properties(VulkanDielectricIor_test PROPERTIES SKIP_RETURN_CODE 42)
+
     add_executable(VulkanCameraModel_test VulkanCameraModel_test.cpp)
     target_link_libraries(VulkanCameraModel_test PRIVATE threepp)
     target_include_directories(VulkanCameraModel_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
