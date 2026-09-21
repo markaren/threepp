@@ -108,6 +108,12 @@ namespace {
             0x00, 0xc2, 0x0c, 0xff, 0xff, 0xff, 0x67, 0x00, 0x00, 0x1e, 0xef, 0x04, 0xfc, 0x73, 0x1c, 0x53,
             0xcc, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82};
 
+    // A lossless 2x2 RGBA WebP: red, green / blue, white (row-major, top row first).
+    const std::vector<uint8_t> kWebp2x2 = {
+            0x52, 0x49, 0x46, 0x46, 0x1a, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+            0x56, 0x50, 0x38, 0x4c, 0x0e, 0x00, 0x00, 0x00, 0x2f, 0x01, 0x40, 0x00,
+            0x00, 0x98, 0xff, 0xf9, 0x9f, 0xff, 0xfe, 0x87, 0xc2, 0x03};
+
 }// namespace
 
 TEST_CASE("GLTFLoader decodes attribute and index values") {
@@ -389,6 +395,80 @@ TEST_CASE("GLTFLoader maps a NEAREST sampler to Filter::Nearest") {
     CHECK(mat->map->minFilter == Filter::Nearest);
     // A non-mipmap min filter disables mipmap generation.
     CHECK(mat->map->generateMipmaps == false);
+}
+
+// EXT_texture_webp keeps the image index INSIDE the extension, and an asset that
+// lists the extension as required has no top-level `source` at all. Read only from
+// the top level, such a texture had no image and the model came up untextured
+// without a word (Khronos sample SheenWoodLeatherSofa: a plain white sofa on every
+// backend). ImageLoader has decoded WebP since the splat work; the loader just never
+// looked where the index is.
+TEST_CASE("GLTFLoader reads a texture's image from EXT_texture_webp") {
+    Bin bin;
+    size_t posOff = bin.put<float>({0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f});
+    size_t uvOff = bin.put<float>({0.f, 0.f, 1.f, 0.f, 0.f, 1.f});
+    size_t idxOff = bin.put<uint16_t>({0, 1, 2});
+    size_t webpOff = bin.putBytes(kWebp2x2);
+    size_t pngOff = bin.putBytes(kPng2x2);
+
+    // Texture 0: the extension alone, as a file that REQUIRES it is written.
+    // Texture 1: the extension beside a PNG fallback; the WebP one must win.
+    std::string json = R"({
+      "asset":{"version":"2.0"},
+      "extensionsUsed":["EXT_texture_webp"],
+      "extensionsRequired":["EXT_texture_webp"],
+      "buffers":[{"byteLength":)" + std::to_string(bin.data.size()) + R"(}],
+      "bufferViews":[
+        {"buffer":0,"byteOffset":)" + std::to_string(posOff) + R"(,"byteLength":36},
+        {"buffer":0,"byteOffset":)" + std::to_string(uvOff) + R"(,"byteLength":24},
+        {"buffer":0,"byteOffset":)" + std::to_string(idxOff) + R"(,"byteLength":6},
+        {"buffer":0,"byteOffset":)" + std::to_string(webpOff) + R"(,"byteLength":)" + std::to_string(kWebp2x2.size()) + R"(},
+        {"buffer":0,"byteOffset":)" + std::to_string(pngOff) + R"(,"byteLength":)" + std::to_string(kPng2x2.size()) + R"(}],
+      "accessors":[
+        {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+        {"bufferView":1,"componentType":5126,"count":3,"type":"VEC2"},
+        {"bufferView":2,"componentType":5123,"count":3,"type":"SCALAR"}],
+      "images":[{"bufferView":3,"mimeType":"image/webp"},{"bufferView":4,"mimeType":"image/png"}],
+      "textures":[
+        {"extensions":{"EXT_texture_webp":{"source":0}}},
+        {"source":1,"extensions":{"EXT_texture_webp":{"source":0}}}],
+      "materials":[
+        {"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}},
+        {"pbrMetallicRoughness":{"baseColorTexture":{"index":1}}}],
+      "meshes":[
+        {"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":1},"indices":2,"material":0}]},
+        {"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":1},"indices":2,"material":1}]}],
+      "nodes":[{"mesh":0},{"mesh":1}],
+      "scenes":[{"nodes":[0,1]}]
+    })";
+
+    auto path = writeTempGlb(makeGlb(json, bin.data));
+    GLTFLoader loader;
+    auto res = loader.load(path);
+    fs::remove(path);
+
+    REQUIRE(res);
+    std::vector<Mesh*> meshes;
+    collectMeshes(res->scene.get(), meshes);
+    REQUIRE(meshes.size() == 2);
+
+    for (auto* mesh : meshes) {
+        auto mat = std::dynamic_pointer_cast<MeshStandardMaterial>(mesh->material());
+        REQUIRE(mat);
+        REQUIRE(mat->map);
+        const auto& img = mat->map->image();
+        REQUIRE(img.width() == 2);
+        REQUIRE(img.height() == 2);
+        // Decoded as RGBA. Both images start with a red texel; they differ in the
+        // LAST one, white in the WebP and yellow in the PNG fallback, so its blue
+        // channel pins WHICH of the two images texture 1 took.
+        const auto& px = img.data<unsigned char>();
+        REQUIRE(px.size() == 16);
+        CHECK(px[0] == 255);
+        CHECK(px[1] == 0);
+        CHECK(px[2] == 0);
+        CHECK(px[3 * 4 + 2] == 255);
+    }
 }
 
 TEST_CASE("GLTFLoader does not include an unreachable node's mesh") {

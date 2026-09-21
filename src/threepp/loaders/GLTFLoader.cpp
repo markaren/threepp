@@ -828,6 +828,23 @@ namespace threepp {
 
                 const auto& texDef = gltf["textures"][texIdx];
                 int imageIdx = texDef.value("source", -1);
+                // EXT_texture_webp keeps the WebP image's index INSIDE the
+                // extension. The top-level `source` beside it is the PNG/JPEG
+                // fallback for readers that cannot decode WebP, and an asset that
+                // lists the extension as REQUIRED leaves it out altogether
+                // (Khronos sample SheenWoodLeatherSofa: all 13 textures). Read
+                // only from the top level, such a texture had no image at all, and
+                // the model came up untextured on every backend without a word.
+                // ImageLoader has decoded WebP since the splat work (it sniffs the
+                // RIFF/WEBP magic, so the bytes need no other help from here), so
+                // the extension's image is the one to prefer, as the spec asks of
+                // a reader that supports it.
+                if (const auto ext = texDef.find("extensions"); ext != texDef.end()) {
+                    if (const auto webp = ext->find("EXT_texture_webp");
+                        webp != ext->end() && webp->contains("source")) {
+                        imageIdx = (*webp)["source"].get<int>();
+                    }
+                }
                 if (imageIdx < 0) return nullptr;
 
                 std::vector<uint8_t> encoded;
