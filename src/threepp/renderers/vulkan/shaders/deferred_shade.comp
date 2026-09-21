@@ -1520,7 +1520,7 @@ void main() {
                 (dot(pm.sheenColor, pm.sheenColor) > 0.0)
                         ? sheenBaseShare(pm.sheenColor, IBLSheenBRDF(NdotV, pm.sheenRoughness))
                         : 1.0;
-        lit += sampleEnvLod(R, roughness * maxLod) * (F0 * ab.x + ab.y) * envSpecW * envSpecVis
+        lit += sampleEnvLod(R, roughness * maxLod) * envSpecularWeight(F0, ab) * envSpecW * envSpecVis
              * pm.envMapIntensity * envSpecBaseShare;
     }
     // ── Emitter-specular ESTIMATOR SPLIT by lobe width ──────────────────────
@@ -1672,7 +1672,7 @@ void main() {
                 : pc.fireflyClamp;
         const float rl = max(max(r.r, r.g), r.b);
         if (rl > reflClamp) r *= reflClamp / rl;
-        reflOut = r * (F0 * ab.x + ab.y) * reflBlend;
+        reflOut = r * envSpecularWeight(F0, ab) * reflBlend;
     }
     if (pc.shadeMode == 1u) {
         // Dispatch B: fold the reflection term in INLINE (no reflSVGFTemporal —

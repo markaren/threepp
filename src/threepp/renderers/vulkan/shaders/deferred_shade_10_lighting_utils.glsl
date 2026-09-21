@@ -286,6 +286,40 @@ vec2 envBRDFApprox(float NdotV, float r) {
     const float a004 = min(v.x * v.x, exp2(-9.28 * NdotV)) * v.x + v.y;
     return vec2(-1.04, 1.04) * a004 + v.zw;
 }
+// The ENVIRONMENT specular weight of a surface: the split-sum single-scatter term
+// plus the energy of the later bounces. `ab` is envBRDFApprox for the same NdotV
+// and roughness.
+//
+// F0 * ab.x + ab.y alone is SINGLE scatter: light that leaves the microsurface
+// after one bounce, with everything that bounces again dropped. The loss grows
+// with roughness, and a metal has no diffuse lobe to make it up. Measured in a
+// white furnace (scratch/vk_furnace), a white metal returned 0.965 of the
+// environment at roughness 0, 0.718 at 0.5 and 0.444 at 1.0, where it must return
+// all of it at every roughness. Above roughness 0.7 this term is a surface's
+// whole environment answer (the traced band has faded out), which is exactly
+// where the loss peaks: the "rough metals read soot-black" the IBL fallback in
+// main() was written around.
+//
+// Kulla & Conty 2017, in the form three.js uses (computeMultiscattering), and the
+// same arithmetic as the GL copy in <bsdfs>: Ems is the energy single scatter
+// misses, Favg the hemispherical average of the Schlick Fresnel (1/21 is its
+// closed form), and the geometric series sums the bounces. One difference from
+// GL, on purpose: GL drives the extra term with the cosine IRRADIANCE, this
+// drives it with the same reflected radiance as the first bounce. The irradiance
+// here lives in the denoised, albedo-demodulated GI channel, and a shading weight
+// should not reach into the denoiser. In a uniform environment the two are
+// identical; under a real one this follows the reflection direction slightly
+// more than GL does (the choice Filament ships).
+//
+// F90 = 1, as everywhere else in this file. Environment terms only: the direct
+// lobe in evalLight stays single scatter, as GL's does.
+vec3 envSpecularWeight(vec3 F0, vec2 ab) {
+    const vec3  FssEss = F0 * ab.x + ab.y;
+    const float Ems    = 1.0 - (ab.x + ab.y);
+    const vec3  Favg   = F0 + (1.0 - F0) * 0.047619;// 1/21
+    const vec3  Fms    = FssEss * Favg / (1.0 - Ems * Favg);
+    return FssEss + Fms * Ems;
+}
 vec3 sampleEnvLod(vec3 dir, float lod) {
     const float u = 0.5 + atan(dir.z, dir.x) / TWO_PI;
     const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;

@@ -389,7 +389,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         const float hitNdotV = max(dot(hitN, hitV), 1e-4);
         const vec3  hitF0 = mix(vec3(0.04) * hm.specularIntensity * hm.specularColor, hAlbedo, hMetal);
         const vec2  hitAB = envBRDFApprox(hitNdotV, hRough);
-        const vec3  specW = hitF0 * hitAB.x + hitAB.y;// specular throughput for the next bounce
+        const vec3  specW = envSpecularWeight(hitF0, hitAB);// specular throughput for the next bounce
         const vec3  hitR  = reflect(-hitV, hitN);
         // Stop bouncing on rough surfaces, the last bounce, or when the specular
         // throughput is negligible — cap off with prefiltered-env specular.
