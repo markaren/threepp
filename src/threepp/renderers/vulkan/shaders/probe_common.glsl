@@ -193,6 +193,21 @@ vec3 probeIrradianceConf(vec3 P, vec3 N, out float conf) {
     // irradiance (wSum ≤ 1e-3 → vec3(0) below) must read as unmeasured, not
     // as a trusted black.
     conf = (wSum > 1e-3 && wGeo > 1e-4) ? clamp(wSum / wGeo, 0.0, 1.0) : 0.0;
+    // ...and on how much ANY probe could see the point at all. The ratio above is
+    // a share: eight probes that all sit behind the surface and behind a wall
+    // carry crushed weights, and the division hands them back full confidence. So
+    // "none of them can SEE the point" read as conf = 1 whenever those probes were
+    // valid, which is exactly what a CLOSED DOUBLE-SIDED mesh produces: a
+    // double-sided back is a legitimate shading side, so the probes sealed inside
+    // it are never marked invalid (probe_update), they measure black, and the
+    // mesh's OUTSIDE read a fully trusted black. The grid is fitted to the scene
+    // AABB with its probes inside it, so a scene that is one such object has
+    // nothing else: glTF sample XmpMetadataRoundedCube rendered its flat faces
+    // grey to black where GL, and a single-sided copy of the same file, were
+    // light. Measured on that cube: wGeo < 0.03 across the flat faces, >= 0.3
+    // wherever a probe outside the shell could see the surface, 0.1 .. 0.3 in a
+    // few healthy spots along the rounded edges. The ramp sits between the two.
+    conf *= smoothstep(0.03, 0.1, wGeo);
     return (wSum > 1e-3) ? sum / wSum : vec3(0.0);
 }
 

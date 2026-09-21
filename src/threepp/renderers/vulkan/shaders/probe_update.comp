@@ -336,9 +336,15 @@ vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
 // depth blend saturates it at probeMaxDist()); backface hits report 0.2× the
 // true distance (DDGI convention: an in-wall probe's depth then shadows
 // everything, belt-and-braces with validity).
+//
+// sealedDark = 1 when the ray ended on the BACK of a DOUBLE-sided surface and no
+// first-order light (analytic lights, emitters) reached that point. Such a hit is
+// shaded normally and costs nothing by itself; main() only uses it to recognise
+// a probe that is sealed inside a closed double-sided mesh.
 vec3 probeRayRadiance(vec3 origin, vec3 dir, bool doShadows, inout uint seed,
-                      out float backface, out float hitDist) {
-    backface = 0.0;
+                      out float backface, out float sealedDark, out float hitDist) {
+    backface   = 0.0;
+    sealedDark = 0.0;
     hitDist  = 1e30;
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskOpaque, origin, 1e-4, dir, 1e30);
@@ -369,7 +375,11 @@ vec3 probeRayRadiance(vec3 origin, vec3 dir, bool doShadows, inout uint seed,
             return vec3(0.0);
         }
         // Double/back-sided surfaces (curtains, foliage cards) are legitimate
-        // shading sides — flip like giRadiance does, no validity penalty.
+        // shading sides — flip like giRadiance does, no validity penalty for the
+        // hit itself. A DOUBLE-sided back is remembered for the sealed-in test
+        // below; not a Back-sided one (sideMode 1), where the side behind the
+        // normal is the ONLY rendered side, as in a room modelled inside-out.
+        if (hm.sideMode == 2) sealedDark = 1.0;
         hitN = -hitN;
     }
     const vec3 hitP = origin + dir * tHit;
@@ -437,6 +447,11 @@ vec3 probeRayRadiance(vec3 origin, vec3 dir, bool doShadows, inout uint seed,
     }
     // Emitter 1-bounce at the hit (same 2-sample NEE giRadiance uses).
     lit += diff * emissiveIrradiance(hitP, hitN, 2, doShadows);
+    // First-order light reached this point: whatever it is the inside of, it
+    // is not sealed off. Tested BEFORE the feedback tap, which leaks a little
+    // light through a thin shell from the probes outside it and would make a
+    // sealed interior read "dim" instead of "dark".
+    if (max(max(lit.r, lit.g), lit.b) > 1e-6) sealedDark = 0.0;
     // FEEDBACK: the hit surface's own indirect — last update's probe field.
     // This single tap is the multi-bounce recursion (bounce N reads N-1).
     lit += diff * probeIrradiance(hitP, hitN);
@@ -450,6 +465,7 @@ shared vec3  sX[kRays];
 shared vec3  sY[kRays];
 shared vec3  sZ[kRays];
 shared float sBack[kRays];
+shared float sSealedDark[kRays];// back of a double-sided surface, no first-order light
 shared vec3  sDir[kRays]; // ray directions — the depth texels gather over these
 shared float sDist[kRays];// ray-hit distances (Chebyshev depth)
 shared float sHist;       // EMA history snapshot — read once BEFORE thread 0
@@ -480,7 +496,8 @@ void main() {
 
     uint seed = pcgHash(pIdx * 9781u + pc.frame * 26699u + ri * 40009u + 0x9e3779b9u);
     float back, hitDist;
-    vec3 L = probeRayRadiance(probePos, dir, (pc.flags & 1u) != 0u, seed, back, hitDist);
+    float sealedDark;
+    vec3 L = probeRayRadiance(probePos, dir, (pc.flags & 1u) != 0u, seed, back, sealedDark, hitDist);
     // Same 6.0 luminance cap the gather applies to giRadiance — bounds a
     // sun-through-crack spike so one ray can't swing the whole probe.
     const float ll = max(max(L.r, L.g), L.b);
@@ -491,6 +508,7 @@ void main() {
     sY[ri]    = L * dir.y;
     sZ[ri]    = L * dir.z;
     sBack[ri] = back;
+    sSealedDark[ri] = sealedDark;
     sDir[ri]  = dir;
     sDist[ri] = hitDist;
     if (ri == 0u) sHist = probeSh[pIdx * 4u + 1u].a;
@@ -532,11 +550,14 @@ void main() {
 
     vec3 a00 = vec3(0.0), aX = vec3(0.0), aY = vec3(0.0), aZ = vec3(0.0);
     float backFrac = 0.0;
+    float sealedFrac = 0.0;
     for (uint i = 0u; i < kRays; ++i) {
         a00 += s00[i]; aX += sX[i]; aY += sY[i]; aZ += sZ[i];
         backFrac += sBack[i];
+        sealedFrac += max(sBack[i], sSealedDark[i]);
     }
     backFrac /= float(kRays);
+    sealedFrac /= float(kRays);
     // Monte-Carlo SH projection over the uniform sphere (pdf = 1/4π):
     // L_lm = (4π/N)·Σ L_i·Y_lm(ω_i);  Y00 = 0.282095, Y1c = 0.488603·comp.
     const float w00 = (4.0 * PI / float(kRays)) * 0.28209479;
@@ -546,7 +567,26 @@ void main() {
     // DDGI-style probe state: mostly-backface probes sit inside geometry —
     // exclude them from interpolation (their SH is near-black and would
     // darken/leak through walls).
-    const float validity = 1.0 - smoothstep(0.25, 0.6, backFrac);
+    //
+    // SEALED IN: a probe inside a CLOSED double-sided mesh never trips the test
+    // above, because a double-sided back is a legitimate shading side and is
+    // deliberately not counted. It sees the unlit inside of that mesh in every
+    // direction, measures black, and stays valid, and a surface on the OUTSIDE
+    // that happens to weight it reads a trusted black (glTF sample
+    // XmpMetadataRoundedCube: dark ticks along its rounded edges, one per probe
+    // row). probeIrradianceConf stops trusting a neighbourhood none of whose
+    // probes can see the point; this removes the probes that can.
+    //
+    // Two conditions, both nearly total. "Nearly every ray ended on an inside":
+    // a probe behind a curtain or in a tree crown sees double-sided backs on about
+    // half its rays at most and must stay valid. "And no first-order light reached
+    // any of those points": a room modelled with double-sided walls seals its
+    // probes in just as completely, and they are its whole indirect light; what
+    // tells the two apart is that light gets into a room. The cost is a
+    // double-sided space lit ONLY by bounce, which loses its probes and falls back
+    // to the env fill its own sky visibility has already closed.
+    const float validity = (1.0 - smoothstep(0.25, 0.6, backFrac))
+                         * (1.0 - smoothstep(0.85, 0.98, sealedFrac));
 
     // EMA blend: 1/(count+1) bootstraps a cleared grid in one update, then
     // settles at 1/32 — enough hysteresis to hide the 64-ray estimate's noise
