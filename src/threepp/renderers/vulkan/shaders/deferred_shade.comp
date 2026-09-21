@@ -1323,6 +1323,29 @@ void main() {
     } else {
         diffInd = sampleEnvLod(N, maxLod) + lights.ambient + hemiAmbient(N);
     }
+    // The diffuse base gets what the environment specular LEFT. The specular
+    // lobe below takes envSpecularWeight(F0, ab) of the environment; adding the
+    // indirect diffuse at full albedo on top returned more light than arrived,
+    // most where Fresnel is largest (white furnace, smooth white dielectric:
+    // 1.012 at the centre, 1.063 at 0.9 of the radius). r185's form, same as the
+    // GL copy in <lights_physical_pars_fragment>: one scalar from the brightest
+    // channel.
+    //
+    // It is NOT folded into the irradiance that goes to the denoiser, which is
+    // the obvious place and was tried. On a smooth surface the share dives to
+    // zero at the silhouette, the GI filter's blur drags that dark edge inward,
+    // and the rim of the same sphere read 0.881 (exact, denoiser off: 1.000).
+    // The denoised path hands it to the filter's recombine instead, per pixel and
+    // unfiltered, in directUImage's unused alpha; the inline path applies it to
+    // what it shades with. The ReSTIR emissive irradiance added below rides the
+    // same share in both paths. It is direct light with its own (1 − F), so that
+    // is a slight under-count on emitter-lit rims, kept so that the denoiser on
+    // and off agree; dividing it back out would put 1/share on a noisy term.
+    float diffBaseShare;
+    {
+        const vec3 envSpec = envSpecularWeight(F0, envBRDFApprox(NdotV, roughness));
+        diffBaseShare = 1.0 - max(max(envSpec.r, envSpec.g), envSpec.b);
+    }
     // ReSTIR DI emissive area lighting → DEMOD irradiance folded into the diffuse-
     // indirect channel so it rides the SVGF temporal + à-trous denoise (the reservoir
     // converges light selection; this denoises the 1-sample radiance). Added before
@@ -1332,7 +1355,7 @@ void main() {
         const float rNdotV = max(dot(N, V), 1e-4);
         diffInd += restirEmissiveDI(worldPos, N, rNdotV, F0, shadowsOn);// F0 already iridescence-modulated
     }
-    const vec3 diffIndShade = demodIndirect ? vec3(0.0) : diffInd;
+    const vec3 diffIndShade = demodIndirect ? vec3(0.0) : diffInd * diffBaseShare;
 
     // ── Denoised direct-shadow channel (demod path only) ─────────────────────
     // Split the analytic direct into the exact unshadowed sum U (directUImage)
@@ -2328,5 +2351,6 @@ void main() {
     // past fp16 max (65504); an Inf store turns NaN at the recombine's dU × R̃
     // whenever the filtered ratio is exactly 0 (converged umbra), and that NaN
     // poisons the pixel's TAA history permanently.
-    imageStore(directUImage, px, vec4(min(directU, vec3(6.5e4)), 1.0));
+    // .a: the indirect-diffuse share for the recombine (see diffBaseShare).
+    imageStore(directUImage, px, vec4(min(directU, vec3(6.5e4)), demodIndirect ? diffBaseShare : 1.0));
 }

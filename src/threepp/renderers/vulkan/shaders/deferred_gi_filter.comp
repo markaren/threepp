@@ -309,9 +309,13 @@ void main() {
         // bounded ratio were filtered, so albedo/texture detail stays crisp.
         const vec4 am           = texelFetch(gbufAlbedoTex, px, 0);
         const vec3 diffuseColor = am.rgb * (1.0 - am.a);
-        const vec3 dU           = imageLoad(directUImage, px).rgb;
+        // .a = what the environment specular left for the diffuse base: view-
+        // dependent and steep at a smooth silhouette, so the shade passes it
+        // around the filter rather than through it (deferred_shade, diffBaseShare).
+        const vec4 dUa          = imageLoad(directUImage, px);
+        const vec3 dU           = dUa.rgb;
         const vec3 cur          = imageLoad(outImage, px).rgb;
-        imageStore(outImage, px, vec4(cur + (fC * diffuseColor + dU * clamp(fS, 0.0, 1.0))
+        imageStore(outImage, px, vec4(cur + (fC * diffuseColor * dUa.a + dU * clamp(fS, 0.0, 1.0))
                                             * fogTransmittance(camPos, Pc) * recombineCoverage(px)
                                             * uintBitsToFloat(pc.preExpBits), 1.0));
     } else if (pc.dstMode == 0u) {
