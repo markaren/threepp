@@ -2986,9 +2986,10 @@ void VulkanRenderer::Impl::recordTlasRefit(VkCommandBuffer cb,
                     VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                     &tlasBuild, &instanceCount, &sizes);
 
-            // Persistent scratch (sized once; build ≥ update). The TLAS build is
-            // ordered after the prior frame's by submit order, so REUSE is safe.
-            // GROWTH is not: this runs mid-record, and the previous frame's
+            // Persistent scratch (sized once; build ≥ update). REUSE is safe
+            // because recordDeformAndTlas opens with a barrier ordering this
+            // frame's AS builds after the previous frame's builds and ray
+            // queries — submission order alone would not. GROWTH is not: this runs mid-record, and the previous frame's
             // cmdBuildAccelerationStructures may still be in flight reading the
             // old buffer at the address it captured. Destroying it here is a
             // use-after-free (a device-lost / TDR class of multi-second hitch on

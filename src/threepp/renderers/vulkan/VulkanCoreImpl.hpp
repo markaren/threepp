@@ -2344,6 +2344,17 @@ namespace threepp {
         VkCommandPool                                cmdPool = VK_NULL_HANDLE;
         std::array<VkCommandBuffer, kFramesInFlight> cmdBuffers{};
         std::array<VkSemaphore,     kFramesInFlight> imageAvailable{};
+        // The stages the submit waits imageAvailable at (endFrame) AND the
+        // srcStageMask of every barrier that first touches the acquired image.
+        // They must be the same set: a barrier's layout transition is ordered
+        // after the semaphore wait only when its first scope includes a waited
+        // stage. The UNDEFINED transitions used TOP_OF_PIPE, which is not one,
+        // so the presentation engine could still be reading an image this
+        // frame was already transitioning (syncval WAR vs vkAcquireNextImageKHR).
+        static constexpr VkPipelineStageFlags2 kAcquireWaitStages =
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT |
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
         // Present-wait semaphores are PER SWAPCHAIN IMAGE (indexed by the
         // acquired image index), not per frame-in-flight: a binary semaphore
         // handed to vkQueuePresentKHR stays "in use" until the presentation

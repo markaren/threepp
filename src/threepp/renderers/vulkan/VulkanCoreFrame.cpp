@@ -1085,7 +1085,7 @@ bool VulkanRenderer::Impl::beginFrameOrthoOnly() {
             {
                 VkImageMemoryBarrier2 b{};
                 b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                b.srcStageMask  = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                b.srcStageMask  = kAcquireWaitStages;// chain to the acquire wait
                 b.srcAccessMask = 0;
                 b.dstStageMask  = VK_PIPELINE_STAGE_2_CLEAR_BIT;
                 b.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
@@ -1178,10 +1178,10 @@ void VulkanRenderer::Impl::endFrame() {
             // blit paths (TRANSFER, which subsumes CLEAR/COPY/BLIT), the TAA and
             // upscale stores (COMPUTE) and the overlay/ImGui dynamic-rendering
             // passes (COLOR_ATTACHMENT_OUTPUT). Deliberately not ALL_COMMANDS, so
-            // the frame's offscreen work still overlaps the acquire.
-            waitInfo.stageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT |
-                                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            // the frame's offscreen work still overlaps the acquire. The first
+            // barrier on the image must name these same stages as its source
+            // (kAcquireWaitStages), or its transition is not behind this wait.
+            waitInfo.stageMask = kAcquireWaitStages;
 
             // Per-IMAGE, not per-frame: safe to re-signal only once this image
             // index has been re-acquired, which is exactly when the prior

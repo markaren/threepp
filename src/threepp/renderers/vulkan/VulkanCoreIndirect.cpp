@@ -954,7 +954,7 @@ namespace threepp {
         // for the compute storage write.
         VkImageMemoryBarrier2 toGeneral{};
         toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        toGeneral.srcStageMask  = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+        toGeneral.srcStageMask  = kAcquireWaitStages;// chain to the acquire wait
         toGeneral.srcAccessMask = 0;
         toGeneral.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
         toGeneral.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;

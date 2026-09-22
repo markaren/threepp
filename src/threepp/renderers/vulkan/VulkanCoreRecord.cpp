@@ -44,6 +44,37 @@ void VulkanRenderer::Impl::updatePaneRegion() {
 }
 
 void VulkanRenderer::Impl::recordDeformAndTlas(VkCommandBuffer cb) {
+            // ── Cross-frame order for the in-place AS writes below ─────────
+            // The TLAS, its storage and its refit scratch, and every deformer's
+            // BLAS, are ONE object shared by both frames in flight, rebuilt IN
+            // PLACE. Submission order alone orders nothing: without a barrier
+            // this frame's build may overwrite them while the previous frame's
+            // ray queries (compute: shade, rtao, probes, froxels) or its lidar
+            // trace still traverse them (WAR), or while its own build is still
+            // writing them (WAW). The deformer branches' compute→AS barriers
+            // used to cover this by accident; a frame whose only change was
+            // rigid motion recorded none, and syncval reports both hazards on
+            // the TLAS buffer (VulkanValidation_test, steady state). Only on
+            // frames that build something — a bare barrier is not free.
+            if (pendingTlasRefit_ || !pendingDynamicGeomRefits_.empty() ||
+                !pendingSkinnedRebuilds_.empty() || !pendingTetRebuilds_.empty() ||
+                !pendingDisplacedDeforms_.empty() || !pendingGrassDeforms_.empty()) {
+                VkMemoryBarrier2 mb{};
+                mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                                   VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+                mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+                mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+                mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                   VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+                VkDependencyInfo dep{};
+                dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.memoryBarrierCount = 1;
+                dep.pMemoryBarriers    = &mb;
+                vkCmdPipelineBarrier2(cb, &dep);
+            }
+
             // ── Graduated per-frame dynamic plain meshes ───────────────────
             // CPU deformers that rebake their vertices every frame (Flock's
             // merged bird mesh) — staging upload + vertex/normal copies +
@@ -370,11 +401,16 @@ void VulkanRenderer::Impl::recordDeformAndTlas(VkCommandBuffer cb) {
                 gpuTimings_->begin(cb, vulkan::TP_TlasRefit, currentFrame);
                 recordTlasRefit(cb, pendingTlasInstances_, pendingTlasFullBuild_);
                 gpuTimings_->end(cb, vulkan::TP_TlasRefit, currentFrame);
+                // COMPUTE, not only RAY_TRACING_SHADER: every TLAS reader in the
+                // frame is a ray query in a compute shader (shade, rtao, probes,
+                // froxels, particle lighting). RAY_TRACING_SHADER alone ordered
+                // only the lidar pipeline, which barriers for itself anyway.
                 VkMemoryBarrier2 mb{};
                 mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
                 mb.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
                 mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-                mb.dstStageMask  = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
                 mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
                 VkDependencyInfo dep{};
                 dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
@@ -849,7 +885,7 @@ bool VulkanRenderer::Impl::recordEventsOnlyFrame(VkCommandBuffer cb, uint32_t im
                 // tail comment at line 11892).
                 VkImageMemoryBarrier2 toGen{};
                 toGen.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                toGen.srcStageMask  = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                toGen.srcStageMask  = kAcquireWaitStages;// chain to the acquire wait
                 toGen.srcAccessMask = 0;
                 toGen.dstStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
                 toGen.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
@@ -929,7 +965,7 @@ void VulkanRenderer::Impl::recordSwapchainPrepare(VkCommandBuffer cb, uint32_t i
             // (binding 1 was redirected away from the swapchain view).
             VkImageMemoryBarrier2 toGeneral{};
             toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            toGeneral.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+            toGeneral.srcStageMask = kAcquireWaitStages;// chain to the acquire wait
             toGeneral.srcAccessMask = 0;
             toGeneral.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
                                      VK_PIPELINE_STAGE_2_TRANSFER_BIT;
@@ -2194,10 +2230,13 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                         post[1].image = img;
                         // MS color: discard (loadOp DONT_CARE, the inject
                         // covers every pixel) — WAR vs the previous frame's
-                        // resolve read.
+                        // resolve read, and WAW vs its attachment writes: the
+                        // pass draws into this image, so a discard transition
+                        // with no source access left those writes free to land
+                        // after it (syncval WAW vs vkCmdEndRendering).
                         post[2] = post[1];
                         post[2].srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                        post[2].srcAccessMask = 0;
+                        post[2].srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
                         post[2].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
                         post[2].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
                         post[2].image = overlayMsColor_.image;
