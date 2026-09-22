@@ -2860,8 +2860,13 @@ if not GL:
           f"{'zero-copy CUDA -> Vulkan' if armed == len(strips) else 'mixed / host copy'}"
           f" ({armed}/{len(strips)} armed)")
     if gravel is not None:
-        print(f"  gravel bed surface: "
-              f"{'zero-copy CUDA -> Vulkan' if gravel.arm(renderer) else 'host copy'}")
+        g_armed = gravel.arm(renderer)
+        print(f"  gravel bed surface: {'zero-copy CUDA -> Vulkan' if g_armed else 'host copy'}")
+        # On the host route the bed is still a re-triangulated soup (one changed
+        # cell shifts every later vertex slot), so declare it the way arm() does
+        # for interop -- else the whole bed downstream of a wheel boils.
+        if not g_armed and hasattr(renderer, "set_stable_correspondence"):
+            renderer.set_stable_correspondence(gravel.mesh, False)
 for s in strips:
     s.publish()
 if gravel is not None:

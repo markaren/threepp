@@ -1008,6 +1008,11 @@ if VULKAN:
     print("vulkan surface route: " + {2: "zero-copy CUDA -> Vulkan",
                                       1: "mixed (see notes above)",
                                       0: "host copy"}[armed])
+    # A pit left on the host route is the same re-triangulated soup, and needs
+    # the same declaration or it boils wherever the plough changed the surface.
+    for pit in (snow_pit, mud_pit):
+        if getattr(pit, "vk", None) is None and hasattr(renderer, "set_stable_correspondence"):
+            renderer.set_stable_correspondence(pit.mesh, False)
 snow_pit.publish(renderer)
 mud_pit.publish(renderer)
 

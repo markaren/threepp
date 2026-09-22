@@ -573,14 +573,27 @@ def _expand(verts: wp.array(dtype=wp.vec3),
             # Micro-relief the blurred density field cannot carry: two octaves
             # of world-space Perlin bent into the normal. Position-keyed, so it
             # is stable frame to frame and rides the surface as it flows.
-            q = p * grain_freq
-            q2 = p * (grain_freq * 2.6)
+            #
+            # BAND-LIMITED to the mesh. The noise is sampled once per VERTEX and
+            # the rasterizer interpolates it across each triangle, so an octave
+            # finer than ~2.5 cells is aliased -- and marching cubes splits every
+            # grid-aligned face along the same diagonal, so the aliasing comes
+            # back as parallel diagonal streaks (identical on GL and Vulkan; it
+            # is not a temporal artefact). Each octave's frequency is clamped to
+            # the mesh's Nyquist-with-margin, and the second octave fades out
+            # instead of collapsing onto the first.
+            f_max = inv_cell / 2.5
+            f1 = wp.min(grain_freq, f_max)
+            f2 = wp.min(grain_freq * 2.6, f_max)
+            w2 = 0.5 * wp.clamp((f_max - grain_freq * 2.6) / (0.5 * f_max) + 1.0, 0.0, 1.0)
+            q = p * f1
+            q2 = p * f2
             nse = wp.vec3(wp.noise(state, q)
-                          + 0.5 * wp.noise(state, q2),
+                          + w2 * wp.noise(state, q2),
                           wp.noise(state, q + wp.vec3(19.1, 47.7, 11.3))
-                          + 0.5 * wp.noise(state, q2 + wp.vec3(19.1, 47.7, 11.3)),
+                          + w2 * wp.noise(state, q2 + wp.vec3(19.1, 47.7, 11.3)),
                           wp.noise(state, q + wp.vec3(-7.3, 3.9, 29.2))
-                          + 0.5 * wp.noise(state, q2 + wp.vec3(-7.3, 3.9, 29.2)))
+                          + w2 * wp.noise(state, q2 + wp.vec3(-7.3, 3.9, 29.2)))
             n = wp.normalize(n + grain * nse)
         # `flip` reverses the triangle winding. wp.MarchingCubes emits triangles
         # wound INTO the density, so the OUTWARD face of the surface is
@@ -703,7 +716,9 @@ class DensitySurface:
         The blurred density field yields a surface smoother than any granular
         material really is -- a uniform specular over it reads as moulded
         plastic; position-keyed micro-relief breaks the highlight up without
-        touching the geometry.
+        touching the geometry. It is per VERTEX, so it is band-limited to ~2.5
+        cells (see _expand): relief finer than the mesh needs the per-PIXEL
+        route, `grain_detail_texture` on the material's detail layer.
         """
         nx, ny, nz = self.dims
         wp.launch(_expand, dim=ntris if dim is None else dim, device=self.device,
@@ -712,6 +727,65 @@ class DensitySurface:
                           int(bool(flip_winding)),
                           float(grain), float(grain_freq),
                           out_pos, out_nrm])
+
+
+def grain_detail_texture(size=256, stones=144, relief=1.0, seed=3):
+    """A tileable (size, size, 4) uint8 detail NORMAL + ROUGHNESS tile of packed
+    stones, for a material's `detail_normal_map` (build it with
+    `tp.data_texture(arr, srgb=False)`).
+
+    This is the per-PIXEL grain a marching-cubes soup cannot carry in its
+    vertex normals (the vertex route aliases into diagonal streaks once the
+    relief is finer than ~2.5 cells). The Vulkan G-buffer projects it
+    triplanar and world-anchored with stochastic tiling, so it needs no UVs
+    and shows no repeat. GL ignores the detail layer.
+
+    Layout per the detail-layer contract: RGB = tangent-space normal, 0.5 flat;
+    A = roughness modulation, 0.5 neutral (crevices rougher, stone crowns a
+    touch smoother). `stones` is the count per tile, so one stone is about
+    1 / (detail_repeat * sqrt(stones)) metres across.
+    """
+    rng = np.random.default_rng(seed)
+    pts = rng.random((stones, 2))
+    lift = rng.uniform(0.55, 1.0, stones)              # stones sit at different heights
+    u = (np.arange(size) + 0.5) / size
+    X, Y = np.meshgrid(u, u, indexing="xy")
+    P = np.stack([X.ravel(), Y.ravel()], -1)
+    f1 = np.full(len(P), 9.0)
+    f2 = np.full(len(P), 9.0)
+    who = np.zeros(len(P), np.int64)
+    for i0 in range(0, stones, 32):                      # periodic Worley F1/F2
+        d = P[:, None, :] - pts[None, i0:i0 + 32, :]
+        d -= np.round(d)                                  # wrap: the tile repeats
+        dist = np.sqrt((d * d).sum(-1))
+        for j in range(dist.shape[1]):
+            dj = dist[:, j]
+            closer = dj < f1
+            f2 = np.where(closer, f1, np.minimum(f2, dj))
+            who = np.where(closer, i0 + j, who)
+            f1 = np.where(closer, dj, f1)
+    cell = 1.0 / math.sqrt(stones)
+    edge = (f2 - f1) / cell                               # 0 on a joint, ~1 mid-stone
+    crown = np.clip(edge / 0.55, 0.0, 1.0)
+    h = lift[who] * np.sqrt(crown * (2.0 - crown))        # rounded, flat-ish tops
+    # A little sub-stone roughness so a crown is not a mirror-smooth dome.
+    k = np.fft.fftfreq(size)
+    KX, KY = np.meshgrid(k, k, indexing="xy")
+    spec = rng.normal(size=(size, size)) + 1j * rng.normal(size=(size, size))
+    fine = np.real(np.fft.ifft2(spec * np.exp(-((KX ** 2 + KY ** 2) * (size / 18.0) ** 2))))
+    fine /= max(np.abs(fine).max(), 1e-9)
+    h = h.reshape(size, size) + 0.08 * fine
+    # Normal from the periodic gradient, in tile units (height ~ one stone tall).
+    s = relief * size * cell * 0.5
+    gx = (np.roll(h, -1, 1) - np.roll(h, 1, 1)) * 0.5 * s
+    gy = (np.roll(h, -1, 0) - np.roll(h, 1, 0)) * 0.5 * s
+    n = np.stack([-gx, -gy, np.ones_like(h)], -1)
+    n /= np.linalg.norm(n, axis=-1, keepdims=True)
+    rough = 0.5 + 0.35 * (1.0 - crown.reshape(size, size)) - 0.15 * crown.reshape(size, size)
+    out = np.empty((size, size, 4), np.uint8)
+    out[..., :3] = np.clip((n * 0.5 + 0.5) * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    out[..., 3] = np.clip(rough * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    return out
 
 
 def pbf_constants(d, h, mass, s_corr_dq, s_corr_n):
