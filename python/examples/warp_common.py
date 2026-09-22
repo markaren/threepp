@@ -12,6 +12,7 @@ Warp-free pieces (command line, the ffmpeg pipe, a material helper) live in
 Nothing here reads the command line on its own; the examples decide their
 flags and pass values in.
 """
+import atexit
 import math
 import os
 import sys
@@ -918,6 +919,104 @@ def arm_particle_interop(renderer, scene, camera, field, launch_fn, n, device,
     field.set_live_count(n)
     return ParticleInterop(interop, imported_pos, imported_col,
                            host_pos, host_col, device_copy)
+
+
+class SoupInterop:
+    """Publish slices of a device-resident vertex soup into meshes' vertex buffers.
+
+    `parts` is [(mesh, start, count)]: that mesh draws soup vertices
+    [start, start + count). Call publish() after every sim step that rewrote
+    `pos` / `nrm`.
+
+    Zero-copy leg (enable_vertex_interop): the renderer calls back once per
+    mesh inside render(), after the frame fence, and the callback copies that
+    mesh's slice device to device into the renderer's own position and normal
+    allocations. Nothing crosses the bus, and render() records no upload. Host
+    leg (CPU device, no memory export, or interop=False): publish() does what
+    the demos always did, .numpy() then update_attribute per part.
+
+    A mesh's record, and so the allocation to export, only exists after the
+    frame it is first drawn, so publish() keeps polling (one call returning
+    None per frame until the first render; the frames before go the host way).
+    A partial or failed arm is retried a few times, then the host leg stays.
+    """
+
+    ARM_TRIES = 8
+
+    def __init__(self, renderer, device, pos, nrm, parts, interop=True):
+        self.renderer, self.device = renderer, device
+        self.pos, self.nrm = pos, nrm
+        self.parts = [(m, int(s), int(c)) for m, s, c in parts]
+        self.on = False
+        self.route = "host copy"
+        self._tries = self.ARM_TRIES if (interop and device.is_cuda
+                                         and hasattr(renderer, "enable_vertex_interop")) else 0
+        self._vk = []
+
+    def publish(self):
+        if not self.on and self._tries > 0:
+            self._try_arm()
+        if self.on:
+            return                           # render() pulls it, in the callbacks
+        p, n = self.pos.numpy(), self.nrm.numpy()
+        for m, s, c in self.parts:
+            m.geometry.update_attribute("position", p[s:s + c])
+            m.geometry.update_attribute("normal", n[s:s + c])
+
+    def _try_arm(self):
+        try:
+            from threepp.cuda_interop import VkInteropArray
+        except ImportError:
+            self._tries = 0
+            return
+        enabled = []
+        try:
+            for k, (m, s, c) in enumerate(self.parts):
+                h = self.renderer.enable_vertex_interop(m, self._callback(k))
+                if h is None:                    # not drawn yet: poll again next frame
+                    raise LookupError
+                enabled.append(m)
+                self._vk.append((VkInteropArray(h[0][0], h[0][1], wp.vec3, c, self.device),
+                                 VkInteropArray(h[1][0], h[1][1], wp.vec3, c, self.device)))
+        except Exception as e:                   # noqa: BLE001
+            self._release(enabled)
+            if enabled or not isinstance(e, LookupError):
+                self._tries -= 1                 # a partial or failed arm: give it a few more
+                if self._tries <= 0:
+                    print(f"  note: vertex interop did not arm ({e!r}); host copy route")
+            return
+        self.on = True
+        self.route = "zero-copy CUDA -> Vulkan"
+        atexit.register(self.close)
+
+    def _callback(self, k):
+        def on_frame():
+            # MUST be synchronous: host ordering is the only thing sequencing
+            # these writes against the frame that reads them.
+            if k < len(self._vk):
+                vp, vn = self._vk[k]
+                _, s, c = self.parts[k]
+                wp.copy(vp.array, self.pos, 0, s, c)
+                wp.copy(vn.array, self.nrm, 0, s, c)
+                wp.synchronize_device(self.device)
+        return on_frame
+
+    def _release(self, meshes):
+        # Drop the CUDA mappings BEFORE the renderer frees the memory they map.
+        vk, self._vk = self._vk, []
+        for a, b in vk:
+            a.close()
+            b.close()
+        for m in meshes:
+            try:
+                self.renderer.disable_vertex_interop(m)
+            except Exception:                    # noqa: BLE001
+                pass
+
+    def close(self):
+        if self.on:
+            self.on = False
+            self._release([m for m, _, _ in self.parts])
 
 
 # --- run loops -----------------------------------------------------------------
