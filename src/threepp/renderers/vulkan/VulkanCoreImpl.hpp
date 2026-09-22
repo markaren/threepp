@@ -349,6 +349,12 @@ namespace threepp {
         // geomVersion-mismatch rebuild of the same geometry must stay unpacked,
         // or interop would silently break under the producer.
         std::unordered_set<const BufferGeometry*> forceUnpackedGeoms_;
+        // Geometries whose producer declared, through setStableCorrespondence,
+        // that vertex id i is NOT the same surface point frame to frame (a
+        // host-uploaded marching-cubes soup). buildBlasFor stamps the record's
+        // interopWorldStatic from this set, so the declaration outlives record
+        // rebuilds; pruned with the record like forceUnpackedGeoms_.
+        std::unordered_set<const BufferGeometry*> worldStaticGeoms_;
         // Lazily built on the first enableVertexInterop — most scenes never own
         // one, and it costs a pipeline + descriptor pool. See
         // vulkan/VertexSanitizePipeline.{hpp,cpp}.
@@ -2717,6 +2723,7 @@ namespace threepp {
         enableVertexInterop(const Mesh& mesh, std::function<void()> deviceCopy, bool validate,
                             bool stableCorrespondence);
         void disableVertexInterop(const Mesh& mesh);
+        void setStableCorrespondence(const Mesh& mesh, bool stable);
         // The record backing `mesh` for interop purposes, or null. Interop is a
         // plain-mesh feature: skinned / tet / displaced / grass / morphed meshes
         // already have a per-frame GPU producer of their own that would overwrite

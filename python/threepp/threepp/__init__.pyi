@@ -4934,6 +4934,12 @@ class MeshStandardMaterial(Material):
     color: Color
     depth_test: bool
     depth_write: bool
+    detail_map: Texture | None
+    detail_normal_map: Texture | None
+    detail_normal_scale: float
+    detail_repeat: float
+    detail_rough_strength: float
+    detail_strength: float
     displacement_map: Texture
     emissive: Color
     emissive_map: Texture
@@ -9142,6 +9148,10 @@ class VulkanRenderer:
     def disable_vertex_interop(self, mesh: Mesh) -> None:
         """
         Release the exports and return the mesh to the CPU attribute path. STOP the foreign writes first — nothing here can wait on a CUDA stream. Close the importing VkInteropArrays before calling this.
+        """
+    def set_stable_correspondence(self, mesh: Mesh, stable: bool) -> None:
+        """
+        enable_vertex_interop's stable_correspondence switch for the HOST attribute path (update_attribute). stable=False for a mesh re-uploaded every frame as a re-triangulated soup (marching cubes): its vertex slots are not the same surface points frame to frame, so per-vertex motion vectors are noise and the temporal passes boil wherever the soup changed. The mesh then reprojects as world-static. Remembered per geometry; may be called before the first render.
         """
     def enable_frame_interop(self, view: typing.SupportsInt | typing.SupportsIndex = 0, channels: collections.abc.Iterable = ('color', 'depth')) -> list:
         """

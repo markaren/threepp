@@ -2435,6 +2435,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // dead one's address, and a stale mark would then quietly
                         // un-pack an unrelated mesh.
                         forceUnpackedGeoms_.erase(it->first);
+                        worldStaticGeoms_.erase(it->first);// same hazard, same fix
                         it = blasCache.erase(it);
                     } else {
                         ++it;

@@ -2590,6 +2590,10 @@ namespace threepp {
         core()->disableVertexInterop(mesh);
     }
 
+    void VulkanRenderer::setStableCorrespondence(const Mesh& mesh, bool stable) {
+        core()->setStableCorrespondence(mesh, stable);
+    }
+
     std::vector<VulkanRenderer::FrameInteropExport>
     VulkanRenderer::enableFrameInterop(uint32_t viewHandle,
                                        const std::vector<FrameChannel>& channels) {

@@ -492,6 +492,11 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             rec->blasBuiltFlags = blasBuild.flags;
             rec->lastDrawStart  = geom.drawRange.start;
             rec->lastDrawCount  = geom.drawRange.count;
+            // Host-path declaration of unstable vertex correspondence (see
+            // setStableCorrespondence). Stamped here, the one funnel, so a
+            // rebuilt record keeps it. Interop records get theirs from
+            // enableVertexInterop, which runs after this.
+            if (worldStaticGeoms_.count(&geom) != 0) rec->interopWorldStatic = true;
 
             return rec;
         }
@@ -1257,6 +1262,44 @@ void VulkanRenderer::Impl::disableVertexInterop(const Mesh& mesh) {
                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
             }
+        }
+
+void VulkanRenderer::Impl::setStableCorrespondence(const Mesh& mesh, bool stable) {
+            const auto geomSp = mesh.geometry();
+            if (!geomSp) return;
+            // Remembered per geometry first: buildBlasFor stamps every record it
+            // makes for this geometry from the set, so a call made before the
+            // first render (no record yet) or a later capacity rebuild both
+            // come out right without anything else to remember.
+            if (stable) {
+                worldStaticGeoms_.erase(geomSp.get());
+            } else {
+                worldStaticGeoms_.insert(geomSp.get());
+            }
+            auto it = blasCache.find(geomSp.get());
+            if (it == blasCache.end() || !it->second) return;
+            auto& rec = *it->second;
+            // An interop record's flag belongs to enableVertexInterop's caller.
+            if (rec.interop) return;
+            if (rec.interopWorldStatic == !stable) return;
+            rec.interopWorldStatic = !stable;
+            // The raster DrawInfo re-reads the flag from the record whenever the
+            // draw inputs are rebuilt; the RT side reads the entries-indexed
+            // GeometryDesc mirror, which is only rewritten on a structural
+            // rebuild -- so republish prevVertexAddress in place, the same way
+            // enableVertexInterop's unpacked swap does.
+            for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
+                const MeshEntry& en = lastVisibleEntries_[i];
+                if (en.isOverlay || !en.mesh) continue;
+                if (en.mesh->geometry().get() != geomSp.get()) continue;
+                if (i >= geomDescsCached_.size()) continue;
+                geomDescsCached_[i].prevVertexAddress =
+                        (rec.prevVertex.handle != VK_NULL_HANDLE && stable)
+                                ? rec.prevVertex.address
+                                : rec.vertex.address;
+                markGeomDescsDirty(static_cast<uint32_t>(i));
+            }
+            ++drawInputsVersion_;
         }
 
 void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer::Impl::GeomRefreshOp>& ops) {

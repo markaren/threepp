@@ -191,7 +191,25 @@ namespace threepp_py {
                 .def_readwrite("alpha_map", &MeshStandardMaterial::alphaMap)
                 .def_readwrite("bump_map", &MeshStandardMaterial::bumpMap)
                 .def_readwrite("displacement_map", &MeshStandardMaterial::displacementMap)
-                .def_readwrite("env_map", &MeshStandardMaterial::envMap);
+                .def_readwrite("env_map", &MeshStandardMaterial::envMap)
+                // The world-anchored detail layer (MaterialWithDetailMap): a
+                // per-PIXEL triplanar, stochastically tiled albedo and
+                // normal/roughness tap that needs no UVs -- the only way to put
+                // grain on a marching-cubes soup finer than its triangles.
+                // Vulkan deferred G-buffer only; GL ignores it.
+                .def_readwrite("detail_map", &MeshStandardMaterial::detailMap,
+                               "LINEAR albedo modulation texture, 0.5 = neutral.")
+                .def_readwrite("detail_repeat", &MeshStandardMaterial::detailRepeat,
+                               "Detail repeats per world metre (albedo AND normal layers).")
+                .def_readwrite("detail_strength", &MeshStandardMaterial::detailStrength,
+                               "0..1 strength of the detail albedo modulation.")
+                .def_readwrite("detail_normal_map", &MeshStandardMaterial::detailNormalMap,
+                               "LINEAR RGBA: RGB tangent-space normal (0.5 = flat), A = roughness "
+                               "modulation (0.5 = neutral). Inert when None.")
+                .def_readwrite("detail_normal_scale", &MeshStandardMaterial::detailNormalScale,
+                               "Tangent-space xy perturbation scale of the detail normal.")
+                .def_readwrite("detail_rough_strength", &MeshStandardMaterial::detailRoughStrength,
+                               "0..1 strength of the detail roughness modulation.");
 
         // ---- MeshPhysicalMaterial -------------------------------------------
         // Extends Standard with the transmissive / clearcoat / attenuation set —

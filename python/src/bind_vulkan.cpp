@@ -1299,6 +1299,18 @@ namespace threepp_py {
                      "Release the exports and return the mesh to the CPU attribute path. STOP "
                      "the foreign writes first — nothing here can wait on a CUDA stream. Close "
                      "the importing VkInteropArrays before calling this.")
+                .def("set_stable_correspondence",
+                     [](PyVulkanRenderer& r, const Mesh& mesh, bool stable) {
+                         r.native().setStableCorrespondence(mesh, stable);
+                     },
+                     py::arg("mesh"), py::arg("stable"),
+                     "enable_vertex_interop's stable_correspondence switch for the HOST "
+                     "attribute path (update_attribute). stable=False for a mesh re-uploaded "
+                     "every frame as a re-triangulated soup (marching cubes): its vertex slots "
+                     "are not the same surface points frame to frame, so per-vertex motion "
+                     "vectors are noise and the temporal passes boil wherever the soup "
+                     "changed. The mesh then reprojects as world-static. Remembered per "
+                     "geometry; may be called before the first render.")
                 // ── Zero-copy FRAMES OUT (Vulkan -> CUDA) ─────────────────────
                 // The reverse direction: the renderer publishes what it drew
                 // into external-memory buffers a torch policy reads as tensors.

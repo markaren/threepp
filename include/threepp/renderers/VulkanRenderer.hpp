@@ -1015,6 +1015,19 @@ namespace threepp {
         // foreign writes into the exported memory first.
         void disableVertexInterop(const Mesh& mesh);
 
+        // The stableCorrespondence switch above, for the HOST attribute path:
+        // a mesh whose position attribute is re-uploaded every frame by
+        // update_attribute as a re-triangulated soup (marching cubes, where one
+        // changed cell shifts every later vertex slot) has no per-vertex
+        // history either, and without this its per-vertex motion vectors are
+        // noise wherever the triangle count changed upstream -- the temporal
+        // passes then reproject from the wrong places and the disturbed region
+        // (and everything emitted after it) boils. stable = false makes the
+        // mesh reproject as world-static, exactly like an interop soup.
+        // Remembered per geometry, so it may be called before the first render
+        // and survives the record being rebuilt; stable = true undoes it.
+        void setStableCorrespondence(const Mesh& mesh, bool stable);
+
         // ── Frame zero-copy interop (Vulkan → CUDA), "frames out" ────────────
         // The reverse direction of enableVertexInterop: instead of a foreign
         // producer writing geometry the renderer reads, the renderer publishes
