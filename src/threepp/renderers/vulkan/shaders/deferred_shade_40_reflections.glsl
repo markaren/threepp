@@ -107,6 +107,56 @@ vec3 sampleGGXReflectionFib(vec3 V, vec3 N, float roughness, int s, int count) {
     return reflect(-V, ggxHalfVectorFib(N, roughness, s, count));
 }
 
+// The environment a glossy lobe sees, from 8 stratified lobe directions
+// instead of one: the glossy primary reflection's escape term, which was
+// sampleEnvLod(Rd, lod) along its single GGX-sampled ray Rd. Same lobe (this
+// V and N, NDF-sampled half-vectors, below-horizon samples folded to the
+// mirror direction), same lod, so the SAME expectation — the converged look
+// does not move — at a fraction of the variance: 8 texture reads, no rays.
+//
+// The single read was grain that never settled. The lod is the roughness-
+// prefiltered PMREM mip, so the reflection denoiser treats an env miss as
+// final and does not blur it, and under a moving camera the rough band's
+// history is capped at 6-24 frames. Against a studio HDRI (bright softbox
+// strips on a dark dome) a lobe ray at roughness 0.26 lands on or off a strip
+// at random, every pixel, every frame (per-sample std 1.6-2.9x the mean at a
+// grazing view): a dark glossy table read as a mottled, sparkling plane
+// throughout a camera move. The caller rotates the set along a low-discrepancy
+// path through the frames, so a held view keeps converging on the lobe.
+//
+// Why 8: the cost is linear, ~0.04 ms per read on a 1080p frame that is all
+// rough floor. On that table under the film's camera move, 4 reads still left
+// a faint mottle, 16 were clean at +0.68 ms, and 8 come close to 16 for +0.3.
+//
+// Not sampleEnvLod(R, lod), the split-sum value the IBL band uses: the PMREM
+// is filtered with V = N, and a grazing view's real lobe is stretched far
+// wider than that — on the table it read 2-3x darker than the lobe. Not a
+// FIXED set of directions either: against thin bright strips its error is
+// tens of percent, coherent across pixels, and slides with the view. `rot`
+// rotates the set per pixel and per frame (Cranley-Patterson; blue noise from
+// the caller), so that error is noise the temporal accumulation averages out.
+vec3 envLobeGGX(vec3 V, vec3 N, float roughness, float lod, vec2 rot) {
+    const int   K = 8;
+    const float a = roughness * roughness;
+    const vec3  R = reflect(-V, N);
+    const vec3  up = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    const vec3  T  = normalize(cross(up, N));
+    const vec3  B  = cross(N, T);
+    vec3 sum = vec3(0.0);
+    for (int s = 0; s < K; ++s) {
+        // ggxHalfVectorFib's set (stratified elevation, golden-angle azimuth), rotated.
+        const float u1   = fract((float(s) + 0.5) / float(K) + rot.x);
+        const float phi  = float(s) * 2.39996323 + TWO_PI * rot.y;
+        const float cosT = sqrt((1.0 - u1) / (1.0 + (a * a - 1.0) * u1));
+        const float sinT = sqrt(max(0.0, 1.0 - cosT * cosT));
+        const vec3  H    = normalize(T * (sinT * cos(phi)) + B * (sinT * sin(phi)) + N * cosT);
+        vec3 d = reflect(-V, H);
+        if (dot(d, N) <= 0.0) d = R;
+        sum += sampleEnvLod(d, lod);
+    }
+    return sum * (1.0 / float(K));
+}
+
 // MULTI-BOUNCE specular reflection (or refraction-continuation). Follows the ray
 // through up to REFL_MAX_BOUNCES reflective hits: at each hit it adds the
 // surface's diffuse + direct (shadowed) shading weighted by the running specular
@@ -165,6 +215,16 @@ bool gTraceHitMoved = false;
 // reflection sets this.
 bool gTraceSkipWater = false;
 
+// Escape before any reflective bounce, handed back instead of shaded. When the
+// caller sets gTraceDeferMiss, a ray that leaves the scene with b == 0 adds
+// NOTHING for the environment and leaves its throughput in gTraceMissTput
+// (zero = it hit something, or never escaped), so the caller can put in a
+// lower-variance estimate of that environment term (envLobeGGX, which says
+// why). Pass-throughs (glass, cutouts) keep b == 0 and the ray's direction,
+// so a ray that escapes through a glass bowl is handed back too, tinted.
+bool gTraceDeferMiss = false;
+vec3 gTraceMissTput  = vec3(0.0);
+
 // Sky-visibility scale for the env hit fill on probeHitFill=false traces.
 // Stamped by the transmission callers (shadeGlass, the additive/alpha-blend
 // behind-views) with probeEnvFillVis at the transmitting surface; 1.0 for
@@ -217,6 +277,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     float curMissLod = missLod;
     gTraceHitT = -1.0;
     gTraceHitMoved = false;
+    gTraceMissTput = vec3(0.0);
     // Reset the moving-occluder shadow flag so it observes ONLY this trace's
     // shadow rays (safe: the shadow channel captured its value right after
     // analyticDirectSplit, before any reflection/glass tracing).
@@ -229,7 +290,8 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskAll, o, 1e-3, d, 1e30);
         while (rayQueryProceedEXT(rq)) {}
         if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
-            radiance += tput * sampleEnvLod(d, curMissLod) * envInt;// escaped → environment
+            if (b == 0 && gTraceDeferMiss) gTraceMissTput = tput;// the caller shades it
+            else radiance += tput * sampleEnvLod(d, curMissLod) * envInt;// escaped → environment
             break;
         }
         const int          hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
@@ -432,6 +494,8 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             const vec3 nFace = -d;
             const vec3 fill = sampleEnvLod(nFace, maxLod) + lights.ambient + hemiAmbient(nFace);
             radiance += tput * lastCutout * fill * (1.0 / PI) * envInt;
+        } else if (b == 0 && gTraceDeferMiss) {
+            gTraceMissTput = tput;// the caller shades it, as in the miss branch
         } else {
             radiance += tput * sampleEnvLod(d, curMissLod) * envInt;
         }
