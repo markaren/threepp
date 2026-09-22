@@ -1814,14 +1814,14 @@ void main() {
                                              * hitTex(pm.transmissionTexIndex, pm.uvTransformTransmission,
                                                       primUv, vec3(1.0)).r,
                                              0.0, 1.0);
-                const vec3  glassCol = shadeGlass(worldPos, N, V, pm, albedo, shadowsOn, maxLod, seed);
+                const vec3  glassCol = shadeGlass(worldPos, N, V, pm, albedo, roughMat, shadowsOn, maxLod, seed);
                 if (denoiseOn) {
                     // Demodulate the mix(): hand glassCol·t to the reflection denoise
                     // (which ADDS blur(reflect)) and scale the opaque base by (1-t), so
                     // the recombine reconstructs mix(lit, blur(glass), t) — frosted.
                     // Same clamped roughness as shadeGlass (see kGlassMaxRough) so the
                     // denoise blur matches the lobe that produced the sample.
-                    const float gr = glassRough(pm.roughness, max(pm.ior, 1.0));
+                    const float gr = glassRough(roughMat, max(pm.ior, 1.0));
                     // .a NEGATIVE = glass marker: the denoise gives it a minimum AA blur
                     // + an ID-based (not normal) edge stop so the blur smooths ACROSS the
                     // curved surface — refraction is far more normal-sensitive than

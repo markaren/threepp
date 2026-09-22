@@ -718,16 +718,25 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
 //     the behind-ray shade the blocker instead of mistaking it for an exit
 //     face (which bent the ray with the blocker's normal and never shaded it).
 // miss=true if the ray escapes the scene.
+// `origin` is the entry point ON the glass surface, not pushed inside it. Real
+// glassware walls are 1-2 mm, and the old start (pushed SHADOW_EPS = 1 mm in,
+// then a 1 mm tMin) stepped over any wall thinner than ~2 mm along the ray: the
+// "exit" became the candle or the far wall and Beer-Lambert ran over the whole
+// interior. glTF GlassHurricaneCandleHolder (1.2 mm walls, attenuationDistance
+// 1 mm) went deep blue above the bulge, near-black under the rim.
 void traceGlassInterior(vec3 origin, vec3 dir, float maxLod, bool doShadows, inout uint seed,
                         out vec3 hitP, out vec3 hitN, out float dist, out bool miss, out bool blocked,
                         inout vec3 over, inout float overT) {
     vec3  o         = origin;
     float travelled = 0.0;
+    // A few float ULPs at the SHADOW_EPS world scale: enough not to re-hit the
+    // triangle `o` sits on, far below any wall thickness.
+    const float tMin = SHADOW_EPS * 0.05;
     miss = false; blocked = false;
     hitP = origin; hitN = vec3(0.0, 1.0, 0.0); dist = 0.0;
     for (int s = 0; s < 4; ++s) {
         rayQueryEXT rq;
-        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskAll, o, 1e-3, dir, 1e30);
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskAll, o, tMin, dir, 1e30);
         while (rayQueryProceedEXT(rq)) {}
         if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
             miss = true; hitP = o; dist = travelled;
@@ -744,7 +753,19 @@ void traceGlassInterior(vec3 origin, vec3 dir, float maxLod, bool doShadows, ino
         hitP = o + dir * tHit;
         dist = travelled + tHit;
 
-        if (hm.transmission > 0.0) return;// exit interface (glass back face / nested glass)
+        if (hm.transmission > 0.0) {
+            // The entry point is reconstructed from depth and can sit a hair in
+            // FRONT of its triangle, so the first segment may meet the entry face
+            // itself. Inside the glass the exit face is met from behind (its
+            // outward normal along the ray); a face met head-on right at the start
+            // is the entry face. Step onto it and go on.
+            if (s == 0 && tHit < SHADOW_EPS && dot(hitN, dir) < 0.0) {
+                o = hitP;
+                travelled += tHit;
+                continue;
+            }
+            return;// exit interface (glass back face / nested glass)
+        }
 
         if (hm.alphaCutoff > 0.0) {// cutout: holes pass, solid texels block
             if (hitTexAlpha(hm.albedoTexIndex, hm.uvTransform, uv) < hm.alphaCutoff) {
@@ -842,7 +863,12 @@ vec3 glassFresnel(float r0, float c, float iridescence, float iridescenceIOR, fl
     return F;
 }
 
-vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
+// matRough is the pixel's G-buffer roughness (factor x roughness map), not
+// pm.roughness: glTF leaves roughnessFactor at 1 when a map carries it, and the
+// factor alone frosted every such glass to the kGlassMaxRough cap, which the
+// reflection filter then blurred (GlassHurricaneCandleHolder: a clear pane with
+// frosted stripes read as one soft, milky shell).
+vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matRough,
                 bool doShadows, float maxLod, inout uint seed) {
     const float ior     = max(pm.ior, 1.0);
     // Explicit square — same negative-base pow() rationale as shadeWater above.
@@ -855,7 +881,7 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
     // them — "no recursive reflections"). The reflection itself is the
     // multi-bounce traceRadiance, so it's genuinely recursive (reflected
     // metal/glossy reflects on too).
-    const float gr      = glassRough(pm.roughness, ior);
+    const float gr      = glassRough(matRough, ior);
     // Env MISSES (sky) read a slightly blurred mip so the HDR sun's single hot
     // texel doesn't speckle on curved glass (the env is plain equirect mips,
     // not a smooth PMREM). The old 0.30 floor smeared the whole sky into the
@@ -929,7 +955,7 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
                 vec3 exitP, exitN; float inDist; bool exitMiss, blockedInside;
                 vec3  overC = vec3(0.0);
                 float overT = 1.0;
-                traceGlassInterior(P - N * SHADOW_EPS, dIn, maxLod, doShadows, seed,
+                traceGlassInterior(P, dIn, maxLod, doShadows, seed,
                                    exitP, exitN, inDist, exitMiss, blockedInside, overC, overT);
                 vec3 dOut;
                 if (exitMiss) {
