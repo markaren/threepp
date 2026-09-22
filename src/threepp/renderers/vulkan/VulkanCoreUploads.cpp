@@ -327,17 +327,28 @@ namespace threepp {
 
         // Fast path: nothing that affects the world-space emissive CDF
         // has changed since the last rebuild. World-space tri positions
-        // depend on mesh world matrices + emissive material values; both
-        // are tracked by meshMovedBits_ (set on xfm OR mat OR bone change).
+        // depend on the EMITTERS' world matrices + emissive material values.
         // Camera motion does NOT invalidate. Bistro / Sponza static
         // frames hit this path and skip the per-tri walk entirely; the
         // walk is O(visible-emissive-meshes × tris) per frame and was
         // CPU-bound on Bistro before this cache.
-        const bool anyMeshMoved =
-                std::any_of(meshMovedBits_.begin(), meshMovedBits_.end(),
-                            [](uint32_t v) { return v != 0u; });
+        // Only a moved EMITTER counts (cachedEmissiveEntryBits_, recorded by
+        // the last walk). Any moved bit used to count, and moved bits are
+        // set every frame by bones, ocean displacement, grass wind, morphs
+        // and physics, so one spinning non-emissive prop re-walked every
+        // emissive triangle each frame: 0.02 -> 5.6 ms of CPU on the sweep
+        // bench's night scene, 161 -> 84 fps. An entry that BECOMES an
+        // emitter is not in the mask; a material change invalidates the
+        // cache instead (ensureSceneBuilt's material patch), as does a
+        // structural rebuild.
+        bool emitterMoved = false;
+        {
+            const size_t nw = std::min(meshMovedBits_.size(), cachedEmissiveEntryBits_.size());
+            for (size_t w = 0; w < nw && !emitterMoved; ++w)
+                emitterMoved = (meshMovedBits_[w] & cachedEmissiveEntryBits_[w]) != 0u;
+        }
         const bool entriesUnchanged = (cachedEmissiveEntryCount_ == entries.size());
-        if (!anyMeshMoved && entriesUnchanged && cachedGlowOnlyVersion_ == glowOnlyVersion_) {
+        if (!emitterMoved && entriesUnchanged && cachedGlowOnlyVersion_ == glowOnlyVersion_) {
             emissiveTriCountThisFrame_   = cachedEmissiveTriCount_;
             emissiveTotalPowerThisFrame_ = cachedEmissiveTotalPower_;
             if (cachedEmissiveTriCount_ == 0) {
@@ -364,6 +375,8 @@ namespace threepp {
         std::vector<float> lights;// 16 floats per light, kept only while under the cap
         lights.reserve(kEmissiveCoverMaxLights * 16);
         uint32_t lightCount = 0;// every emissive instance, capped or not
+        // Which entries this walk read as emitters: the fast path's gate.
+        std::vector<uint32_t> emitterBits((entries.size() + 31u) / 32u, 0u);
 
         // Per SPAN: the emissive verdict is a per-MESH fact, read off the
         // expansion-cached MaterialWithEmissive* (material pointer swaps force
@@ -405,6 +418,10 @@ namespace threepp {
 
             for (uint32_t sj = 0; sj < sp.count; ++sj) {
             const MeshEntry& en = entries[sp.first + sj];
+            {
+                const uint32_t ei = sp.first + sj;
+                emitterBits[ei >> 5u] |= 1u << (ei & 31u);
+            }
             const float* M = en.worldMatrix.data();// column-major 4x4
             auto xform = [&](float x, float y, float z, float& wx, float& wy, float& wz) {
                 wx = M[0] * x + M[4] * y + M[8]  * z + M[12];
@@ -498,6 +515,7 @@ namespace threepp {
         cachedEmissiveTriCount_       = triCount;
         cachedEmissiveTotalPower_     = cumPower;
         cachedEmissiveEntryCount_     = entries.size();
+        cachedEmissiveEntryBits_      = std::move(emitterBits);
         cachedGlowOnlyVersion_        = glowOnlyVersion_;
         cachedEmissiveVersion_++;
         // Force per-frame upload below; mark this slot as up-to-date

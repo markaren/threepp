@@ -2208,6 +2208,14 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 tlasInstanceFlags(was) != tlasInstanceFlags(md) ||
                                 alphaMaskGroup(was) != alphaMaskGroup(md))
                                 instClassChanged = true;
+                            // The emitter walk's inputs, copied verbatim from the
+                            // same MaterialWithEmissive fields it reads. A change
+                            // re-walks: this is how an entry that BECOMES an
+                            // emitter (and so is in no emitter mask) gets found.
+                            if (!patchMatDescs || was.emissiveIntensity != md.emissiveIntensity ||
+                                was.emissive[0] != md.emissive[0] || was.emissive[1] != md.emissive[1] ||
+                                was.emissive[2] != md.emissive[2])
+                                cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
                             matDescsCached_[i] = md;
                             // The dirty RANGE is recorded where the write is, so
                             // the two can never drift. entryMatDirty is set for a

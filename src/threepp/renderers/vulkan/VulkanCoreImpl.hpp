@@ -1072,6 +1072,9 @@ namespace threepp {
         uint32_t cachedEmissiveTriCount_ = 0;
         float    cachedEmissiveTotalPower_ = 0.0f;
         size_t   cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
+        // Entries the last walk found emissive, as meshMovedBits_ words: only a
+        // moved emitter invalidates the cache (buildAndUploadEmissiveTris).
+        std::vector<uint32_t> cachedEmissiveEntryBits_;
         uint32_t cachedEmissiveVersion_ = 0;
         // Objects whose emissive glows but is not sampled as a light
         // (setEmissiveCastsLight), keyed by Object3D::id like classIds_. The
