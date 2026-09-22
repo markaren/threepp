@@ -337,7 +337,7 @@ namespace threepp {
                 std::any_of(meshMovedBits_.begin(), meshMovedBits_.end(),
                             [](uint32_t v) { return v != 0u; });
         const bool entriesUnchanged = (cachedEmissiveEntryCount_ == entries.size());
-        if (!anyMeshMoved && entriesUnchanged) {
+        if (!anyMeshMoved && entriesUnchanged && cachedGlowOnlyVersion_ == glowOnlyVersion_) {
             emissiveTriCountThisFrame_   = cachedEmissiveTriCount_;
             emissiveTotalPowerThisFrame_ = cachedEmissiveTotalPower_;
             if (cachedEmissiveTriCount_ == 0) {
@@ -376,6 +376,7 @@ namespace threepp {
             if (e0.isOverlay) continue;// raster-overlay only — no emissive contribution to the traced scene
             if (e0.sensorOnly) continue;// sensor target — lights nothing
             if (!e0.mesh) continue;
+            if (isGlowOnly(*e0.mesh)) continue;// glows, is not a light (setEmissiveCastsLight)
             const MaterialWithEmissive* em = e0.lodEmissive;
             if (!em) continue;
             const float emR = em->emissive.r * em->emissiveIntensity;
@@ -497,6 +498,7 @@ namespace threepp {
         cachedEmissiveTriCount_       = triCount;
         cachedEmissiveTotalPower_     = cumPower;
         cachedEmissiveEntryCount_     = entries.size();
+        cachedGlowOnlyVersion_        = glowOnlyVersion_;
         cachedEmissiveVersion_++;
         // Force per-frame upload below; mark this slot as up-to-date
         // after the memcpy, leaving the other slot stale until its turn.
@@ -512,6 +514,27 @@ namespace threepp {
                           cachedEmissiveData_.size() * sizeof(float));
         emissiveBufferVersion_[frame] = cachedEmissiveVersion_;
         return grew;
+    }
+
+    void VulkanRenderer::Impl::setEmissiveCastsLight(const Object3D& obj, bool castsLight) {
+        const bool changed = castsLight ? glowOnlyObjects_.erase(obj.id) != 0
+                                        : glowOnlyObjects_.insert(obj.id).second;
+        if (!changed) return;
+        ++glowOnlyVersion_;// the emitter list is rebuilt on the next frame
+        // The scene build stamps GeometryDesc.flags bit 4 from the set, but the
+        // entries-indexed GeometryDesc mirror is only rewritten on a structural
+        // rebuild, so republish the bit in place for an object already drawn
+        // (the way setStableCorrespondence republishes prevVertexAddress).
+        const size_t n = std::min(lastVisibleEntries_.size(), geomDescsCached_.size());
+        for (size_t i = 0; i < n; ++i) {
+            const MeshEntry& en = lastVisibleEntries_[i];
+            if (en.isOverlay || !en.mesh || en.mesh->id != obj.id) continue;
+            const uint32_t f  = geomDescsCached_[i].flags;
+            const uint32_t nf = castsLight ? (f & ~16u) : (f | 16u);
+            if (nf == f) continue;
+            geomDescsCached_[i].flags = nf;
+            markGeomDescsDirty(static_cast<uint32_t>(i));
+        }
     }
 
     // Grow motionMatBuffers[frame] in-place if the current scene's

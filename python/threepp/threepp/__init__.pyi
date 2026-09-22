@@ -9334,6 +9334,10 @@ class VulkanRenderer:
         """
         Lift/gamma/gain wheels + saturation + contrast, baked into a 33^3 LUT applied after the tone map. Defaults = identity = off.
         """
+    def set_emissive_casts_light(self, object: Object3D, casts_light: bool) -> None:
+        """
+        casts_light=False: the object's emissive glows but is not a light. It still shows on its surface, in reflections and through glass, and lights what is near it through the diffuse GI bounce, but it leaves the emitter list that ReSTIR DI and the emitter NEE sample (a shadow ray per sample, rebuilt on the CPU whenever the mesh moves). For a faint self-glow over many small triangles that list is nearly all cost. Keyed by object id; may be called before the object is added. Default True.
+        """
     def set_event_camera_params(self, threshold: typing.SupportsFloat | typing.SupportsIndex = 0.15000000596046448, decay: typing.SupportsFloat | typing.SupportsIndex = 0.8500000238418579, min_luma: typing.SupportsFloat | typing.SupportsIndex = 0.004999999888241291, max_events_per_pixel: typing.SupportsInt | typing.SupportsIndex = 5, frame_time_us: typing.SupportsInt | typing.SupportsIndex = 0) -> None:
         """
         Contrast threshold in log-intensity units (0.15 fires on almost any

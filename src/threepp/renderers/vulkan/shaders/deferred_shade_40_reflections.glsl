@@ -429,8 +429,12 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                 hitDiffInd *= gEnvFillVis;
             }
         }
+        // gReflEmitterScale hands an emitter's reflected glow to emissiveSpecNEE;
+        // a glow-only emissive (GeometryDesc bit 4) is in no emitter list, so it
+        // keeps all of it here.
+        const float hEmScale = ((geoms[hitId].flags & 16u) != 0u) ? 1.0 : gReflEmitterScale;
         radiance += tput * hitAlpha * shadeDiffuseDirect(hitP, hitN, hitV, hAlbedo, hRough, hMetal,
-                                              hEmissive * gReflEmitterScale,
+                                              hEmissive * hEmScale,
                                               doShadows, hitDiffInd,
                                               hm.sheenColor, hm.sheenRoughness,
                                               dielectricF0(hm.ior, hm.specularIntensity, hm.specularColor),
@@ -640,5 +644,11 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
     // analytic direct at the hit nor emitter emission, so nothing double-
     // counts (see probe_common.glsl). vec3(0) when probeGrid.enabled == 0.
     lit += diff * probeIrradiance(hitP, hitN);
+    // A glow-only emissive (setEmissiveCastsLight, GeometryDesc bit 4) is in no
+    // emitter list, so neither ReSTIR DI nor any NEE above carries its light:
+    // a GI ray that lands on it is the one path its glow has to what is near
+    // it. Keep its emission here, where every other emitter's is suppressed.
+    if ((geoms[hitId].flags & 16u) != 0u)
+        lit += hitTex(hm.emissiveTexIndex, hm.uvTransformEmissive, hitUv, hm.emissive * hm.emissiveIntensity);
     return lit;
 }

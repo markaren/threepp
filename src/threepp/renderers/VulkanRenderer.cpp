@@ -1480,6 +1480,10 @@ namespace threepp {
         ++core()->drawInputsVersion_;// class id rides DrawInfoGpu::flags bits 8..15
     }
 
+    void VulkanRenderer::setEmissiveCastsLight(const Object3D& obj, bool castsLight) {
+        core()->setEmissiveCastsLight(obj, castsLight);
+    }
+
     void VulkanRenderer::setEventCameraEnabled(bool enabled) {
         auto& impl = *core();
         if (enabled == impl.eventCamEnabled_) return;

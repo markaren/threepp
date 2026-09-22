@@ -588,6 +588,9 @@ namespace threepp::vulkan::impl {
         // packed data (bit1 nrm oct-snorm16x2 / bit2 uv unorm16x2 / bit3
         // col unorm8x4). Shaders mask accordingly; a bare `!= 0` test on
         // this word is WRONG for the moved gate.
+        // Bit 4: the instance's emissive glows but is not a light
+        // (setEmissiveCastsLight): it is not in the emitter list, so a ray
+        // hit on it keeps its own emission.
         uint32_t flags;
     };
 

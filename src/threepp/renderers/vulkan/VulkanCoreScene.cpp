@@ -2178,16 +2178,30 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                     // hit against a coarser BLAS misindexes the
                                     // still-LOD0 index buffer. `indexed` rides along: a
                                     // level of a non-indexed soup record IS an indexed
-                                    // fetch. Patched into the buffer itself below, only
-                                    // on a frame where a level actually changed. When
-                                    // the record has NO chain, lodSel0 already equals
-                                    // what the full rebuild wrote — skip the patch.
+                                    // fetch. Reconciled on EVERY fill, not only while
+                                    // the record has a chain: an in-place vertex edit
+                                    // destroys the chain (lodChainDoomed), and the
+                                    // mirror still held the destroyed level's index
+                                    // address and indexed = 1 — every secondary hit on
+                                    // the mesh then fetched its triangles through a
+                                    // FREED index buffer while the raster drew LOD0.
+                                    // A deforming soup that had sat still long enough
+                                    // to get a chain (a film's warm-up renders) was
+                                    // refracted and reflected as crumpled garbage
+                                    // until the next structural rebuild. Two compares
+                                    // per entry; the upload is marked per entry, only
+                                    // when something differs.
                                     const auto lodSel = perEntryLod ? selectLodGeom(*rec, en.lodLevel)
                                                                     : lodSel0;
                                     blasAddr = lodSel.asAddress;
-                                    if (perEntryLod && i < geomDescsCached_.size()) {
-                                        geomDescsCached_[i].indexAddress = lodSel.indexAddress;
-                                        geomDescsCached_[i].indexed = lodSel.indexed ? 1u : 0u;
+                                    if (i < geomDescsCached_.size()) {
+                                        auto& gd = geomDescsCached_[i];
+                                        const uint32_t ix = lodSel.indexed ? 1u : 0u;
+                                        if (gd.indexAddress != lodSel.indexAddress || gd.indexed != ix) {
+                                            gd.indexAddress = lodSel.indexAddress;
+                                            gd.indexed      = ix;
+                                            markGeomDescsDirty(static_cast<uint32_t>(i));
+                                        }
                                     }
                                 }
                                 VkAccelerationStructureInstanceKHR inst{};
@@ -2949,7 +2963,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 }
                 // Bit 0 (moved-sticky) is stamped per frame in VulkanCoreFrame;
                 // seed it 0 here and carry the packed-attribute bits above it.
-                gdesc.flags = recPtr->packedMask << 1;
+                // Bit 4: an emissive that glows but is not a light
+                // (setEmissiveCastsLight) — its ray hits keep their emission.
+                gdesc.flags = (recPtr->packedMask << 1) | (isGlowOnly(*en.mesh) ? 16u : 0u);
                 geomDescs[i] = gdesc;
                 // Read-only: assignment of auto ids stays in the indirect draw
                 // builder so this cannot renumber what the Ids AOV reports.

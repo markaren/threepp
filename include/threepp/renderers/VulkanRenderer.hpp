@@ -311,6 +311,23 @@ namespace threepp {
         void setObjectInstanceId(const Object3D& obj, uint32_t instanceId);
         void setObjectClassId(const Object3D& obj, uint32_t classId);
 
+        // ── An emissive that glows but is not a light ─────────────────────
+        // By default every emissive mesh is also a light: its triangles join
+        // the emitter list that ReSTIR DI and the emitter NEE loops sample, a
+        // shadow ray per sample, at every shaded point, reflection hit and
+        // glass hit, and that list is rebuilt on the CPU whenever the mesh
+        // moves or deforms. For a lamp that is the point. For a faint
+        // self-glow spread over a great many small triangles it is all cost:
+        // warp_gummy_rain's candies (259k triangles at emissive 0.18) spent
+        // most of the frame on it. castsLight = false takes the object out of
+        // that list. Its emissive still shows on its surface, in reflections
+        // and through glass, and it still lights what is near it through the
+        // diffuse GI bounce (a GI ray that lands on it keeps its emission),
+        // but nothing samples it as a light. Keyed by Object3D::id like the
+        // ids above, so it may be called before the object is added; takes
+        // effect on the next render. castsLight = true restores the default.
+        void setEmissiveCastsLight(const Object3D& obj, bool castsLight);
+
         // ── GPU event camera (DVS) detector ───────────────────────────────
         struct EventCameraParams {
             float    threshold        = 0.15f;

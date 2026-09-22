@@ -148,7 +148,8 @@ struct GeometryDesc {
     uint64_t colorAddress;// unused here, kept for layout match with GeometryDesc (VulkanGeometryState.hpp)
     uint     indexed;
     uint     flags;// bit 0: sticky moved flag (history gates), bit 1: normal is
-                   // oct-snorm16x2, bit 2: uv is unorm16x2, bit 3: color is unorm8x4
+                   // oct-snorm16x2, bit 2: uv is unorm16x2, bit 3: color is unorm8x4,
+                   // bit 4: emissive glows but is not a light (not in the emitter list)
 };
 layout(set = 0, binding = 10, scalar) readonly buffer GeomDescBuf { GeometryDesc geoms[]; };
 

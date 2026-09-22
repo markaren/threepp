@@ -1093,9 +1093,10 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
                                               ? recPtr->color.address
                                               : 0ull;
                     gd.indexed = lodSel0.indexed ? 1u : 0u;
-                    // Preserve bit 0 (moved-sticky); the fresh record is
-                    // unpacked, so the packed bits above it all clear.
-                    gd.flags = (gd.flags & 1u) | (recPtr->packedMask << 1);
+                    // Only the packed-attribute bits (1..3) change: the fresh
+                    // record is unpacked, so they clear. Bit 0 (moved-sticky)
+                    // and bit 4 (glow-only, setEmissiveCastsLight) stay.
+                    gd.flags = (gd.flags & ~14u) | (recPtr->packedMask << 1);
                     markGeomDescsDirty(static_cast<uint32_t>(i));
                 }
                 // The DrawInfo skip signature cannot see this swap either — on

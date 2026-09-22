@@ -1035,6 +1035,17 @@ namespace threepp {
         float    cachedEmissiveTotalPower_ = 0.0f;
         size_t   cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
         uint32_t cachedEmissiveVersion_ = 0;
+        // Objects whose emissive glows but is not sampled as a light
+        // (setEmissiveCastsLight), keyed by Object3D::id like classIds_. The
+        // emitter walk skips them; GeometryDesc.flags bit 4 tells the ray hits
+        // to keep their emission. glowOnlyVersion_ is bumped on every change so
+        // the cached emitter list above is rebuilt.
+        std::unordered_set<unsigned int> glowOnlyObjects_;
+        uint32_t glowOnlyVersion_       = 0;
+        uint32_t cachedGlowOnlyVersion_ = 0;
+        [[nodiscard]] bool isGlowOnly(const Object3D& o) const {
+            return !glowOnlyObjects_.empty() && glowOnlyObjects_.count(o.id) != 0;
+        }
         std::array<uint32_t, kFramesInFlight> emissiveBufferVersion_{};
         // (prevWorldMats hash map replaced by the entry-aligned
         //  prevWorldByEntry_ / prevWorldValidByEntry_ vectors — identity-
@@ -2724,6 +2735,7 @@ namespace threepp {
                             bool stableCorrespondence);
         void disableVertexInterop(const Mesh& mesh);
         void setStableCorrespondence(const Mesh& mesh, bool stable);
+        void setEmissiveCastsLight(const Object3D& obj, bool castsLight);
         // The record backing `mesh` for interop purposes, or null. Interop is a
         // plain-mesh feature: skinned / tet / displaced / grass / morphed meshes
         // already have a per-frame GPU producer of their own that would overwrite

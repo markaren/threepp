@@ -901,6 +901,18 @@ namespace threepp_py {
                      py::arg("object"), py::arg("class_id"),
                      "Tag an object with a semantic class id (0..255) for read_class_ids(). "
                      "Objects sharing a class id share a semantic label.")
+                .def("set_emissive_casts_light",
+                     [](PyVulkanRenderer& r, const Object3D& obj, bool casts_light) {
+                         r.native().setEmissiveCastsLight(obj, casts_light);
+                     },
+                     py::arg("object"), py::arg("casts_light"),
+                     "casts_light=False: the object's emissive glows but is not a light. It "
+                     "still shows on its surface, in reflections and through glass, and lights "
+                     "what is near it through the diffuse GI bounce, but it leaves the emitter "
+                     "list that ReSTIR DI and the emitter NEE sample (a shadow ray per sample, "
+                     "rebuilt on the CPU whenever the mesh moves). For a faint self-glow over "
+                     "many small triangles that list is nearly all cost. Keyed by object id; "
+                     "may be called before the object is added. Default True.")
                 .def("read_normals_float", &PyVulkanRenderer::read_normals_float,
                      py::arg("scene"), py::arg("camera"),
                      "World-space unit normals as (H, W, 3) float32, components in [-1, 1] "
