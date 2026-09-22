@@ -187,13 +187,23 @@ void main() {
         // frames at rest. NOT scaled by footGeom: that projected-footprint
         // ratio is sized for the near-mirror band — at roughness 0.4 even a
         // hit half a metre in front of the surface wants a lobe tens of pixels
-        // wide, so the widening saturates. Env misses are already
-        // lobe-filtered by missLod (aux .w == 0) and stay sharp.
-        const float hitGate     = hitW < 0.0 ? 1.0 : (hitW <= 1e-3 ? 0.0 : 1.0);
-        const float stochT      = isGlass ? 0.0 : smoothstep(0.20, 0.30, rough) * (1.0 - convT) * hitGate;
+        // wide, so the widening saturates. Env misses count too: in this band
+        // the shade no longer returns one lookup at missLod but a rotated
+        // 8-read lobe estimate (envLobeGGX), a fresh sample every frame.
+        const float stochBand   = isGlass ? 0.0 : smoothstep(0.20, 0.30, rough);
+        const float stochT      = stochBand * (1.0 - convT);
         const float widenT      = max(max(noiseT, detT), stochT);
         const float narrowSigma = clamp(baseSigma, 0.6, 1.3);// converged floor (mild, roughness-aware)
-        const float sigma       = clamp(mix(narrowSigma, baseSigma, widenT), 0.6, 5.0);
+        // How wide an UNCONVERGED pixel may go. The dielectric cap (dielSigma,
+        // roughness clipped to 0.16) keeps reflected detail crisp in the sharp
+        // band, but in the stochastic band it left a dielectric's 1-spp lobe a
+        // 1.3 px kernel at any history: warp_gummy_rain's lacquered table
+        // (roughness 0.26) carried visible grain for as long as the camera
+        // moved and for ~64-300 frames after it stopped. There, widen to the
+        // lobe as a metal does (rough * 16). Converged pixels (widenT -> 0)
+        // keep narrowSigma, so a settled view looks exactly as before.
+        const float wideSigma   = mix(baseSigma, max(baseSigma, rough * 16.0), stochBand);
+        const float sigma       = clamp(mix(narrowSigma, wideSigma, widenT), 0.6, 5.0);
         const float inv2s2  = 1.0 / (2.0 * sigma * sigma);
         // PERF: size the kernel to what σ actually reaches — sharp reflections use a
         // tiny kernel, only frosted/rough surfaces pay for the wide one.

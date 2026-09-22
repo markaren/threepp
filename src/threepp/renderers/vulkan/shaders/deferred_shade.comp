@@ -1642,8 +1642,17 @@ void main() {
         // ~16× the texels (each ~16× dimmer) exactly while the history can't
         // converge; a settled view re-sharpens. Scaled in by roughness so true
         // mirrors (roughness < 0.02) keep their exact sharp reflection.
+        // CURVED surfaces only (specAaKernelSq: the 4-neighbour normal variance,
+        // exactly 0 on a plane). The dust needs the reflection direction to
+        // change from pixel to pixel; a flat floor has none to sweep, and on one
+        // the floor was a material change: jelly_wreck's floor (roughness 0.16,
+        // lod 1.1 -> 2) read ~6 sRGB steps dimmer in its bright pool and brighter
+        // toward the horizon for as long as the camera moved, and a rough table
+        // filled its history with the blurrier reflection, then crawled back
+        // for hundreds of frames after the camera stopped (1/n accumulation).
+        const float curvT   = smoothstep(0.0, 1e-4, specAaKernelSq);
         const float missLod = max(roughness * maxLod,
-                                  reflMoving ? min(2.0, maxLod) * smoothstep(0.02, 0.10, roughness)
+                                  reflMoving ? min(2.0, maxLod) * smoothstep(0.02, 0.10, roughness) * curvT
                                              : 0.0);
         vec3 Rd = (roughness < kReflStochastic)
                       ? R : sampleGGXReflection(V, N, roughness, reflSeed);
@@ -1666,6 +1675,7 @@ void main() {
                                // environment, so its envMapIntensity applies.
                                /*envInt=*/pm.envMapIntensity);
         gTraceDeferMiss = false;
+        vec3 rEnv = vec3(0.0);// the escape's environment, kept apart for the moving clamp below
         if (any(greaterThan(gTraceMissTput, vec3(0.0)))) {
             // Blue noise across pixels, an R2 sequence through the frames: every
             // pixel walks a low-discrepancy path through the rotations, so a
@@ -1675,7 +1685,7 @@ void main() {
             const vec2 bn  = vec2(blueNoiseDef(uvec2(px), 0u, 0u),
                                   blueNoiseDef(uvec2(px) + uvec2(17u, 41u), 0u, 0u));
             const vec2 rot = fract(bn + float(pc.frame & 0xFFFFu) * vec2(0.7548776662, 0.5698402910));
-            r += gTraceMissTput * envLobeGGX(V, N, roughness, missLod, rot) * pm.envMapIntensity;
+            rEnv = gTraceMissTput * envLobeGGX(V, N, roughness, missLod, rot) * pm.envMapIntensity;
         }
         // SPLATS IN THE MIRROR, glossy path — the water/glass legs' block
         // (deferred_shade_50_water_glass.glsl:113), verbatim on this path's own
@@ -1688,7 +1698,8 @@ void main() {
         if ((pc.flags & 4096u) != 0u) {
             vec3 svEmis;
             const float svT = svLeg(shadowOrig, Rd, gTraceHitT > 0.0 ? gTraceHitT : 1e30, svEmis);
-            r = r * svT + svEmis;
+            r    = r * svT + svEmis;
+            rEnv = rEnv * svT;
         }
         // Reflected-content distance for the denoiser's gloss-blur footprint:
         // env miss → 0 (already lobe-filtered via missLod — no extra blur),
@@ -1708,11 +1719,19 @@ void main() {
         // lobe-appropriate peak. min() never loosens a tighter user fireflyClamp
         // and stays 1e30-sentinel-safe; moving-only so the settled lobe integral
         // stays unbiased.
-        const float reflClamp = reflMoving
-                ? min(pc.fireflyClamp, mix(30.0, 4.0, smoothstep(0.05, 0.30, roughness)))
-                : pc.fireflyClamp;
+        // Not on rEnv, the rough band's escaped environment: that is 8 lobe reads
+        // of the prefiltered mip (envLobeGGX), already lobe-integrated, not a
+        // single sample, and clamping it only while moving made the reflection of
+        // a softbox dimmer in motion than at rest. The settled clamp (the user's
+        // fireflyClamp) still covers the total, exactly as before.
+        if (reflMoving) {
+            const float mc = min(pc.fireflyClamp, mix(30.0, 4.0, smoothstep(0.05, 0.30, roughness)));
+            const float rh = max(max(r.r, r.g), r.b);
+            if (rh > mc) r *= mc / rh;
+        }
+        r += rEnv;
         const float rl = max(max(r.r, r.g), r.b);
-        if (rl > reflClamp) r *= reflClamp / rl;
+        if (rl > pc.fireflyClamp) r *= pc.fireflyClamp / rl;
         reflOut = r * envSpecularWeight(F0, ab) * reflBlend;
     }
     if (pc.shadeMode == 1u) {
