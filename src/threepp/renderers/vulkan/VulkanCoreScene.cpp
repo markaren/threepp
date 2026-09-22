@@ -2081,170 +2081,13 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         }
                     }
 
-                    if (!matricesSame || bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny || interopDirtyAny || lodChangedThisFrame_) {
-                        THREEPP_CPUPROF("scene.7_tlasRefitFill");
-                        // TLAS refit: needed when instance transforms change
-                        // (matricesSame=false) AND when any skinned BLAS was
-                        // just rebuilt — the TLAS's per-instance wrapped AABB
-                        // is recomputed from the current BLAS extents on
-                        // refit, picking up pose-deformed silhouettes that
-                        // would otherwise be clipped by the stale TLAS AABB.
-                        // BLAS handles + buffer addresses are unchanged so
-                        // geomDescs / matDescs stay valid; we just rewrite the
-                        // tlasInstancesBuffer in place and call MODE_UPDATE.
-                        // EXCEPT auto-LOD: a level switch DOES change which
-                        // BLAS (and which index buffer) an entry's instance
-                        // references — see the plain-geometry branch below
-                        // and the geomDescsCached_ patch after this loop.
-                        // Persistent scratch (swapped with pendingTlasInstances_
-                        // below) so both vectors keep their capacity — a fresh
-                        // ~5 MB allocation per moving frame at 100k instances
-                        // otherwise.
-                        auto& instances = tlasInstanceScratch_;
-                        instances.clear();
-                        instances.reserve(entries.size());
-                        // instanceCustomIndex == entry index (matches the entries-
-                        // indexed geomDescs/matDescs built in the full rebuild);
-                        // overlay/skipped entries push no instance, exactly as
-                        // their geomDescs/matDescs slots are left default.
-                        //
-                        // Per SPAN: the BLAS resolve, visibility mask and LOD
-                        // eligibility are per-MESH — one lookup per span, not
-                        // one per instance. Per-entry work is the transform
-                        // write (+ per-entry LOD selection only when the span's
-                        // record actually has a chain).
-                        for (const auto& sp : entrySpans_) {
-                            const MeshEntry& e0 = entries[sp.first];
-                            if (e0.isOverlay) continue;// raster-overlay only
-                            // Same visibility-group rule as the full rebuild:
-                            // blend/transmissive (non-water) → alpha mask so
-                            // occlusion queries skip them, camera-parented
-                            // viewmodels → no-shadow mask.
-                            uint8_t spanMask = kRayMaskOpaque;
-                            if (sp.first < matDescsCached_.size() && !e0.isDisplaced) {
-                                const auto& cmd = matDescsCached_[sp.first];
-                                if (cmd.transmission > 0.0f || cmd.alphaCutoff < 0.0f)
-                                    spanMask = kRayMaskAlpha;
-                            }
-                            if (e0.camAttached) spanMask = kRayMaskNoShadow;
-                            if (e0.sensorOnly)
-                                spanMask = sensorOnlySurfaces_ ? kRayMaskSensorOnly : 0u;
-                            const bool isDeformer = e0.isSkinned || e0.isDisplaced ||
-                                                    e0.isGrass || e0.isTet || e0.isMorphed;
-                            BlasRecord* rec = nullptr;
-                            bool perEntryLod = false;
-                            LodGeomSel lodSel0{};
-                            if (!isDeformer) {
-                                const BufferGeometry* geomKey = e0.mesh->geometry().get();
-                                auto it = blasCache.find(geomKey);
-                                if (it == blasCache.end()) continue;// shouldn't happen on transform-only
-                                rec = it->second.get();
-                                perEntryLod = !rec->lodLevels.empty();
-                                lodSel0 = selectLodGeom(*rec, 0);
-                            }
-                            for (uint32_t j = 0; j < sp.count; ++j) {
-                                const size_t i = size_t(sp.first) + j;
-                                const MeshEntry& en = entries[i];
-                                VkDeviceAddress blasAddr = 0;
-                                if (en.isSkinned) {
-                                    auto* sm = static_cast<SkinnedMesh*>(en.mesh);
-                                    if (!sm->skeleton || sm->skeleton->bones.empty()) continue;
-                                    auto smIt = skinnedMeshStates.find(sm);
-                                    if (smIt == skinnedMeshStates.end()) continue;
-                                    blasAddr = smIt->second->blas->address;
-                                } else if (en.isDisplaced) {
-                                    auto* dm = static_cast<DisplacedMesh*>(en.mesh);
-                                    auto dmIt = displacedStates.find(dm);
-                                    if (dmIt == displacedStates.end()) continue;
-                                    blasAddr = dmIt->second->blas->address;
-                                } else if (en.isGrass) {
-                                    auto* gm = static_cast<GrassMesh*>(en.mesh);
-                                    auto gIt = grassStates.find(gm);
-                                    if (gIt == grassStates.end()) continue;
-                                    blasAddr = gIt->second->blas->address;
-                                } else if (en.isTet) {
-                                    auto tIt = tetMeshStates.find(en.mesh);
-                                    if (tIt == tetMeshStates.end()) continue;
-                                    blasAddr = tIt->second->blas->address;
-                                } else if (en.isMorphed) {
-                                    auto mIt = morphedMeshStates.find(en.mesh);
-                                    if (mIt == morphedMeshStates.end()) continue;
-                                    blasAddr = mIt->second->blas->address;
-                                } else {
-                                    // RT secondary hits (reflections/GI/lidar/probe
-                                    // update) read GeometryDesc::indexAddress keyed by
-                                    // gl_PrimitiveID from whichever BLAS this instance
-                                    // references — it must track the SAME level, or a
-                                    // hit against a coarser BLAS misindexes the
-                                    // still-LOD0 index buffer. `indexed` rides along: a
-                                    // level of a non-indexed soup record IS an indexed
-                                    // fetch. Reconciled on EVERY fill, not only while
-                                    // the record has a chain: an in-place vertex edit
-                                    // destroys the chain (lodChainDoomed), and the
-                                    // mirror still held the destroyed level's index
-                                    // address and indexed = 1 — every secondary hit on
-                                    // the mesh then fetched its triangles through a
-                                    // FREED index buffer while the raster drew LOD0.
-                                    // A deforming soup that had sat still long enough
-                                    // to get a chain (a film's warm-up renders) was
-                                    // refracted and reflected as crumpled garbage
-                                    // until the next structural rebuild. Two compares
-                                    // per entry; the upload is marked per entry, only
-                                    // when something differs.
-                                    const auto lodSel = perEntryLod ? selectLodGeom(*rec, en.lodLevel)
-                                                                    : lodSel0;
-                                    blasAddr = lodSel.asAddress;
-                                    if (i < geomDescsCached_.size()) {
-                                        auto& gd = geomDescsCached_[i];
-                                        const uint32_t ix = lodSel.indexed ? 1u : 0u;
-                                        if (gd.indexAddress != lodSel.indexAddress || gd.indexed != ix) {
-                                            gd.indexAddress = lodSel.indexAddress;
-                                            gd.indexed      = ix;
-                                            markGeomDescsDirty(static_cast<uint32_t>(i));
-                                        }
-                                    }
-                                }
-                                VkAccelerationStructureInstanceKHR inst{};
-                                const auto& e = en.worldMatrix;
-                                for (int r = 0; r < 3; ++r) {
-                                    for (int c = 0; c < 4; ++c) {
-                                        inst.transform.matrix[r][c] = e[c * 4 + r];
-                                    }
-                                }
-                                inst.instanceCustomIndex = static_cast<uint32_t>(i);
-                                inst.mask = spanMask;
-                                inst.instanceShaderBindingTableRecordOffset = 0;
-                                inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-                                inst.accelerationStructureReference = blasAddr;
-                                instances.push_back(inst);
-                            }
-                        }
-                        if (lodChangedThisFrame_ && !geomDescsCached_.empty()) {
-                            // geomDescsCached_ was patched in place above; the
-                            // per-frame-in-flight ring carries it to the GPU
-                            // stall-free — renderFrame flushes THIS frame's
-                            // slot right after its fence signals (before any
-                            // recording that consumes it), the other slot when
-                            // its frame comes around. Same model as matDescs;
-                            // this replaced a vkDeviceWaitIdle per switch
-                            // frame, which hitched exactly when the camera
-                            // was moving.
-                            //
-                            // WHOLE-ARRAY on purpose, unlike the matDescs patch:
-                            // the entries this touched are chosen inside the TLAS
-                            // instance fill above, the frame's hottest loop, and
-                            // a level switch is already paying for BLAS
-                            // re-references. 64 B/entry with a bounded audience
-                            // is not worth a mark in there.
-                            markGeomDescsWhole();
-                        }
-                        const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || morphDirtyAny || geomDirtyAny || lodChangedThisFrame_;
-                        // Stage the refit; recordCommandBuffer records it into the
-                        // frame cb after the deformable BLAS rebuilds (no drain).
-                        pendingTlasInstances_.swap(instances);// scratch keeps its capacity
-                        pendingTlasFullBuild_ = blasDeformed;
-                        pendingTlasRefit_ = true;
-                    }
+                    // Material patch FIRST, then the TLAS fill: the fill derives each
+                    // instance's ray mask and FORCE_OPAQUE flag from matDescsCached_, so
+                    // it must read THIS frame's materials. A patched entry whose
+                    // visibility class flipped (a blinker crossing the emitter threshold,
+                    // opacity dropping below 1) sets instClassChanged, which forces the
+                    // fill even on a frame with no motion, and a full build.
+                    bool instClassChanged = false;
                     if (!materialValuesSame) {
                         THREEPP_CPUPROF("scene.8_matDescPatch");
                         // Material-values-only update: rebuild MaterialDescs into
@@ -2358,6 +2201,13 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             if (auto tex = terrainNormalTexOf(*m)) {
                                 md.terrainNormalTexIndex = ensureMaterialTexture(tex);
                             }
+                            // Compared against the desc being replaced; on the full
+                            // fallback that desc is a default, so assume a change.
+                            const MaterialDesc& was = matDescsCached_[i];
+                            if (!patchMatDescs ||
+                                tlasInstanceFlags(was) != tlasInstanceFlags(md) ||
+                                alphaMaskGroup(was) != alphaMaskGroup(md))
+                                instClassChanged = true;
                             matDescsCached_[i] = md;
                             // The dirty RANGE is recorded where the write is, so
                             // the two can never drift. entryMatDirty is set for a
@@ -2367,6 +2217,175 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             markMatDescsDirty(static_cast<uint32_t>(i));
                         }
                         cacheCullFlags(matDescsCached_);
+                    }
+                    if (!matricesSame || bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny || interopDirtyAny || lodChangedThisFrame_ || instClassChanged) {
+                        THREEPP_CPUPROF("scene.7_tlasRefitFill");
+                        // TLAS refit: needed when instance transforms change
+                        // (matricesSame=false) AND when any skinned BLAS was
+                        // just rebuilt — the TLAS's per-instance wrapped AABB
+                        // is recomputed from the current BLAS extents on
+                        // refit, picking up pose-deformed silhouettes that
+                        // would otherwise be clipped by the stale TLAS AABB.
+                        // BLAS handles + buffer addresses are unchanged so
+                        // geomDescs / matDescs stay valid; we just rewrite the
+                        // tlasInstancesBuffer in place and call MODE_UPDATE.
+                        // EXCEPT auto-LOD: a level switch DOES change which
+                        // BLAS (and which index buffer) an entry's instance
+                        // references — see the plain-geometry branch below
+                        // and the geomDescsCached_ patch after this loop.
+                        // Persistent scratch (swapped with pendingTlasInstances_
+                        // below) so both vectors keep their capacity — a fresh
+                        // ~5 MB allocation per moving frame at 100k instances
+                        // otherwise.
+                        auto& instances = tlasInstanceScratch_;
+                        instances.clear();
+                        instances.reserve(entries.size());
+                        // instanceCustomIndex == entry index (matches the entries-
+                        // indexed geomDescs/matDescs built in the full rebuild);
+                        // overlay/skipped entries push no instance, exactly as
+                        // their geomDescs/matDescs slots are left default.
+                        //
+                        // Per SPAN: the BLAS resolve, visibility mask and LOD
+                        // eligibility are per-MESH — one lookup per span, not
+                        // one per instance. Per-entry work is the transform
+                        // write (+ per-entry LOD selection only when the span's
+                        // record actually has a chain).
+                        for (const auto& sp : entrySpans_) {
+                            const MeshEntry& e0 = entries[sp.first];
+                            if (e0.isOverlay) continue;// raster-overlay only
+                            // Same visibility-group rule as the full rebuild:
+                            // blend/transmissive (non-water) → alpha mask so
+                            // occlusion queries skip them, camera-parented
+                            // viewmodels → no-shadow mask.
+                            uint8_t spanMask = kRayMaskOpaque;
+                            VkGeometryInstanceFlagsKHR spanFlags =
+                                    VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+                            if (sp.first < matDescsCached_.size()) {
+                                const auto& cmd = matDescsCached_[sp.first];
+                                if (!e0.isDisplaced && alphaMaskGroup(cmd)) spanMask = kRayMaskAlpha;
+                                spanFlags = tlasInstanceFlags(cmd);
+                            }
+                            if (e0.camAttached) spanMask = kRayMaskNoShadow;
+                            if (e0.sensorOnly)
+                                spanMask = sensorOnlySurfaces_ ? kRayMaskSensorOnly : 0u;
+                            const bool isDeformer = e0.isSkinned || e0.isDisplaced ||
+                                                    e0.isGrass || e0.isTet || e0.isMorphed;
+                            BlasRecord* rec = nullptr;
+                            bool perEntryLod = false;
+                            LodGeomSel lodSel0{};
+                            if (!isDeformer) {
+                                const BufferGeometry* geomKey = e0.mesh->geometry().get();
+                                auto it = blasCache.find(geomKey);
+                                if (it == blasCache.end()) continue;// shouldn't happen on transform-only
+                                rec = it->second.get();
+                                perEntryLod = !rec->lodLevels.empty();
+                                lodSel0 = selectLodGeom(*rec, 0);
+                            }
+                            for (uint32_t j = 0; j < sp.count; ++j) {
+                                const size_t i = size_t(sp.first) + j;
+                                const MeshEntry& en = entries[i];
+                                VkDeviceAddress blasAddr = 0;
+                                if (en.isSkinned) {
+                                    auto* sm = static_cast<SkinnedMesh*>(en.mesh);
+                                    if (!sm->skeleton || sm->skeleton->bones.empty()) continue;
+                                    auto smIt = skinnedMeshStates.find(sm);
+                                    if (smIt == skinnedMeshStates.end()) continue;
+                                    blasAddr = smIt->second->blas->address;
+                                } else if (en.isDisplaced) {
+                                    auto* dm = static_cast<DisplacedMesh*>(en.mesh);
+                                    auto dmIt = displacedStates.find(dm);
+                                    if (dmIt == displacedStates.end()) continue;
+                                    blasAddr = dmIt->second->blas->address;
+                                } else if (en.isGrass) {
+                                    auto* gm = static_cast<GrassMesh*>(en.mesh);
+                                    auto gIt = grassStates.find(gm);
+                                    if (gIt == grassStates.end()) continue;
+                                    blasAddr = gIt->second->blas->address;
+                                } else if (en.isTet) {
+                                    auto tIt = tetMeshStates.find(en.mesh);
+                                    if (tIt == tetMeshStates.end()) continue;
+                                    blasAddr = tIt->second->blas->address;
+                                } else if (en.isMorphed) {
+                                    auto mIt = morphedMeshStates.find(en.mesh);
+                                    if (mIt == morphedMeshStates.end()) continue;
+                                    blasAddr = mIt->second->blas->address;
+                                } else {
+                                    // RT secondary hits (reflections/GI/lidar/probe
+                                    // update) read GeometryDesc::indexAddress keyed by
+                                    // gl_PrimitiveID from whichever BLAS this instance
+                                    // references — it must track the SAME level, or a
+                                    // hit against a coarser BLAS misindexes the
+                                    // still-LOD0 index buffer. `indexed` rides along: a
+                                    // level of a non-indexed soup record IS an indexed
+                                    // fetch. Reconciled on EVERY fill, not only while
+                                    // the record has a chain: an in-place vertex edit
+                                    // destroys the chain (lodChainDoomed), and the
+                                    // mirror still held the destroyed level's index
+                                    // address and indexed = 1 — every secondary hit on
+                                    // the mesh then fetched its triangles through a
+                                    // FREED index buffer while the raster drew LOD0.
+                                    // A deforming soup that had sat still long enough
+                                    // to get a chain (a film's warm-up renders) was
+                                    // refracted and reflected as crumpled garbage
+                                    // until the next structural rebuild. Two compares
+                                    // per entry; the upload is marked per entry, only
+                                    // when something differs.
+                                    const auto lodSel = perEntryLod ? selectLodGeom(*rec, en.lodLevel)
+                                                                    : lodSel0;
+                                    blasAddr = lodSel.asAddress;
+                                    if (i < geomDescsCached_.size()) {
+                                        auto& gd = geomDescsCached_[i];
+                                        const uint32_t ix = lodSel.indexed ? 1u : 0u;
+                                        if (gd.indexAddress != lodSel.indexAddress || gd.indexed != ix) {
+                                            gd.indexAddress = lodSel.indexAddress;
+                                            gd.indexed      = ix;
+                                            markGeomDescsDirty(static_cast<uint32_t>(i));
+                                        }
+                                    }
+                                }
+                                VkAccelerationStructureInstanceKHR inst{};
+                                const auto& e = en.worldMatrix;
+                                for (int r = 0; r < 3; ++r) {
+                                    for (int c = 0; c < 4; ++c) {
+                                        inst.transform.matrix[r][c] = e[c * 4 + r];
+                                    }
+                                }
+                                inst.instanceCustomIndex = static_cast<uint32_t>(i);
+                                inst.mask = spanMask;
+                                inst.instanceShaderBindingTableRecordOffset = 0;
+                                inst.flags = spanFlags;
+                                inst.accelerationStructureReference = blasAddr;
+                                instances.push_back(inst);
+                            }
+                        }
+                        if (lodChangedThisFrame_ && !geomDescsCached_.empty()) {
+                            // geomDescsCached_ was patched in place above; the
+                            // per-frame-in-flight ring carries it to the GPU
+                            // stall-free — renderFrame flushes THIS frame's
+                            // slot right after its fence signals (before any
+                            // recording that consumes it), the other slot when
+                            // its frame comes around. Same model as matDescs;
+                            // this replaced a vkDeviceWaitIdle per switch
+                            // frame, which hitched exactly when the camera
+                            // was moving.
+                            //
+                            // WHOLE-ARRAY on purpose, unlike the matDescs patch:
+                            // the entries this touched are chosen inside the TLAS
+                            // instance fill above, the frame's hottest loop, and
+                            // a level switch is already paying for BLAS
+                            // re-references. 64 B/entry with a bounded audience
+                            // is not worth a mark in there.
+                            markGeomDescsWhole();
+                        }
+                        const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || morphDirtyAny || geomDirtyAny || lodChangedThisFrame_;
+                        // Stage the refit; recordCommandBuffer records it into the
+                        // frame cb after the deformable BLAS rebuilds (no drain).
+                        pendingTlasInstances_.swap(instances);// scratch keeps its capacity
+                        // A class flip rebuilds rather than updates: whether an
+                        // update may change instance flags is not worth betting a
+                        // traversal on, and it only happens on the flip frame.
+                        pendingTlasFullBuild_ = blasDeformed || instClassChanged;
+                        pendingTlasRefit_ = true;
                     }
                     // Anything that reached one of the change branches above
                     // reshapes the DrawInfo/indirect content — invalidate the
@@ -2905,7 +2924,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 inst.instanceCustomIndex = static_cast<uint32_t>(i);
                 inst.mask = kRayMaskOpaque;// placeholder; set to Opaque/Alpha once md is built below
                 inst.instanceShaderBindingTableRecordOffset = 0;
-                inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+                inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;// + FORCE_OPAQUE below
                 // en.lodLevel==0 for every deformer/exempt entry (auto-LOD
                 // selection above only ever sets it on plain cached
                 // geometry), so this passthrough is a no-op for them —
@@ -3057,9 +3076,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                     ? (sensorOnlySurfaces_ ? kRayMaskSensorOnly : 0u)
                             : en.camAttached
                                     ? kRayMaskNoShadow// FP viewmodel: visible, never occludes
-                                    : (!en.isDisplaced && (md.transmission > 0.0f || md.alphaCutoff < 0.0f))
+                                    : (!en.isDisplaced && alphaMaskGroup(md))
                                               ? kRayMaskAlpha
                                               : kRayMaskOpaque;
+                    instances.back().flags = tlasInstanceFlags(md);
                 }
             }
 

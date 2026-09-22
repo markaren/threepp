@@ -381,7 +381,9 @@ namespace threepp {
         // currentFrame. The structural full build (buildTlas) writes all slots.
         Buffer tlasInstancesBuffers[kFramesInFlight];
         // Persistent scratch for the in-frame TLAS refit (sized once; reused —
-        // the frame command buffers execute in submit order so it never races).
+        // safe only because recordDeformAndTlas orders each frame's AS builds
+        // after the previous frame's with a barrier; submit order alone is not
+        // an execution dependency).
         Buffer tlasRefitScratch_{};
         VkDeviceSize tlasRefitScratchSize_ = 0;
         // Instance count of the TLAS's last full BUILD. A MODE_UPDATE with any
@@ -404,6 +406,42 @@ namespace threepp {
         // Bringing it into Impl scope here keeps the existing
         // `MaterialDesc md{};` call sites unchanged.
         using MaterialDesc = threepp::vulkan_pt::MaterialDesc;
+
+        // TLAS instance flags for an entry, from the MaterialDesc its shaders
+        // read (mats[instanceCustomIndex]). Every BLAS is built non-opaque so
+        // alpha-cutout casters yield candidates, which made EVERY solid
+        // triangle a shadow, emitter-NEE, ReSTIR or probe-shadow ray met a
+        // round trip to the shader to read its material and confirm it. Those
+        // five queries are all terminate-on-first-hit visibility tests, and for
+        // a material that none of them can reject each one confirms
+        // unconditionally — so FORCE_OPAQUE hands the RT core the same answer
+        // without the round trip. "None can reject" is exactly: not an
+        // emitter (the emitter loops skip emissive >= 0.05; shadowOccludes
+        // skips >= 1), not transmissive, not a blend (alphaCutoff < 0), and no
+        // live cutout (alphaCutoff > 0 with an albedo texture). KEEP IN SYNC
+        // with shadowOccludes (deferred_shade_10_lighting_utils.glsl,
+        // probe_update.comp) and the emitter-skip tests. Rays that already
+        // pass gl_RayFlagsOpaqueEXT are unaffected. THREEPP_NO_FORCE_OPAQUE
+        // turns it off (A/B and bisecting).
+        [[nodiscard]] static VkGeometryInstanceFlagsKHR tlasInstanceFlags(const MaterialDesc& m) {
+            static const bool disabled = std::getenv("THREEPP_NO_FORCE_OPAQUE") != nullptr;
+            VkGeometryInstanceFlagsKHR f = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+            if (disabled) return f;
+            const float emMax = std::max({m.emissive[0] * m.emissiveIntensity,
+                                          m.emissive[1] * m.emissiveIntensity,
+                                          m.emissive[2] * m.emissiveIntensity});
+            const bool alwaysOccludes = emMax < 0.05f && !(m.transmission > 0.0f) &&
+                                        !(m.alphaCutoff < 0.0f) &&
+                                        (m.albedoTexIndex < 0 || m.alphaCutoff == 0.0f);
+            if (alwaysOccludes) f |= VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR;
+            return f;
+        }
+        // The ray-mask half of the same per-material classification (see the
+        // visibility groups in vulkan_shared.h). Water (displaced) stays in the
+        // opaque group whatever its material says.
+        [[nodiscard]] static bool alphaMaskGroup(const MaterialDesc& m) {
+            return m.transmission > 0.0f || m.alphaCutoff < 0.0f;
+        }
 
         // ── Per-slot dirty state for the entries-indexed desc rings ──────────
         // What one frame-in-flight slot still owes the GPU: either the whole
