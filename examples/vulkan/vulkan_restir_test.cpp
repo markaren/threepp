@@ -15,6 +15,10 @@
 //   R  — toggle ReSTIR DI
 //   D  — toggle denoiser
 //   A  — toggle light animation
+//
+// Capture (noise measurements, plans/jewel-room-noise.md):
+//   --shot <path.png> [--frames N] [--seq K] [--animate 0|1] [--restir 0|1]
+//   [--denoise 0|1] [--fixed-dt]
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/geometries/OctahedronGeometry.hpp"
@@ -28,6 +32,12 @@
 
 #include <array>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <iostream>
+#include <memory>
+#include <string>
 
 using namespace threepp;
 
@@ -375,7 +385,31 @@ namespace {
 
 }// namespace
 
-int main() {
+int main(int argc, char** argv) {
+
+    // Dev capture (noise measurements): --shot <path.png> settles --frames N
+    // frames (default 240), writes the frame and exits. --seq K instead writes
+    // K CONSECUTIVE frames <stem>_00.png ... from --frames on (temporal pairs).
+    // --animate/--restir/--denoise 0|1 set the startup toggles (defaults 1 1 1).
+    // --fixed-dt advances the orbit by 1/60 s per frame and pins the renderer's
+    // sim clock, so GPU load does not change how far the balls move per frame.
+    // Exits by closing the canvas (not std::exit) so the renderer's destructor
+    // saves the pipeline cache and the next capture starts warm.
+    std::string shotPath;
+    int shotFrames = 240, shotFrame = 0;
+    int seqN = 0;
+    int optAnimate = 1, optRestir = 1, optDenoise = 1;
+    bool fixedDt = false;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
+        else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        else if (a == "--seq" && i + 1 < argc) seqN = std::atoi(argv[++i]);
+        else if (a == "--animate" && i + 1 < argc) optAnimate = std::atoi(argv[++i]);
+        else if (a == "--restir" && i + 1 < argc) optRestir = std::atoi(argv[++i]);
+        else if (a == "--denoise" && i + 1 < argc) optDenoise = std::atoi(argv[++i]);
+        else if (a == "--fixed-dt") fixedDt = true;
+    }
 
     Canvas canvas("VulkanRenderer — The Jewel Room (ReSTIR test)",
                   {{"vsync", false}});
@@ -389,8 +423,8 @@ int main() {
     // Denoiser on by default for the "polished" look; off gives the raw signal
     // so the variance difference with DI on/off is clearly visible without the
     // atrous smoothing absorbing it.
-    renderer.setDenoise(true);
-    renderer.setRestirDIEnabled(true);
+    renderer.setDenoise(optDenoise != 0);
+    renderer.setRestirDIEnabled(optRestir != 0);
     renderer.setFireflyClamp(20.0f);
 
     // ── Scene ──────────────────────────────────────────────────────────────────
@@ -423,10 +457,17 @@ int main() {
     OrbitControls controls{camera, canvas};
     controls.target.set(0.f, 3.5f, 0.f);
     controls.update();
+    // A capture must not move: a stray scroll over the window as it pops up
+    // dollies the camera and the run no longer compares with the others.
+    controls.enabled = shotPath.empty();
 
     // ── State ──────────────────────────────────────────────────────────────────
-    bool animating = true;
+    bool animating = optAnimate != 0;
     float orbitTime = 0.f;
+    double simTime = 0.0;
+    // A frozen capture (--animate 0) parks the balls where the animated
+    // capture's first written frame has them, so both measure the same scene.
+    if (!shotPath.empty() && !animating) orbitTime = float(shotFrames) / 60.f * 0.35f;
 
     // Hotkeys toggle through the renderer getters so they stay in sync with
     // edits made in the shared settings panel.
@@ -440,21 +481,25 @@ int main() {
     // ── ImGui overlay ──────────────────────────────────────────────────────────
     // Generic renderer settings (exposure, ReSTIR, denoiser, ...) come from
     // the shared panel; only the scene-specific widgets are added here.
-    RendererSettingsUi ui(canvas, renderer, [&] {
-        ImGui::TextDisabled("[R] ReSTIR DI");
-        ImGui::TextDisabled("[A] animate  [D] denoise");
-        ImGui::Separator();
+    // Interactive runs only: the capture path must not draw UI into the frame.
+    std::unique_ptr<RendererSettingsUi> ui;
+    if (shotPath.empty()) {
+        ui = std::make_unique<RendererSettingsUi>(canvas, renderer, [&] {
+            ImGui::TextDisabled("[R] ReSTIR DI");
+            ImGui::TextDisabled("[A] animate  [D] denoise");
+            ImGui::Separator();
 
-        ImGui::Checkbox("Animate (A)", &animating);
+            ImGui::Checkbox("Animate (A)", &animating);
 
-        ImGui::Separator();
-        ImGui::TextDisabled("Ring (L to R):");
-        ImGui::TextDisabled("  Gold mirror / Rough copper");
-        ImGui::TextDisabled("  Crystal (dispersion) / Amber glass");
-        ImGui::TextDisabled("  Piano black (clearcoat) / Emerald glass");
-        ImGui::TextDisabled("  Chrome / Red velvet (sheen)");
-        ImGui::TextDisabled("Centre: Sapphire glass");
-    }, "The Jewel Room");
+            ImGui::Separator();
+            ImGui::TextDisabled("Ring (L to R):");
+            ImGui::TextDisabled("  Gold mirror / Rough copper");
+            ImGui::TextDisabled("  Crystal (dispersion) / Amber glass");
+            ImGui::TextDisabled("  Piano black (clearcoat) / Emerald glass");
+            ImGui::TextDisabled("  Chrome / Red velvet (sheen)");
+            ImGui::TextDisabled("Centre: Sapphire glass");
+        }, "The Jewel Room");
+    }
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);
@@ -465,22 +510,45 @@ int main() {
     // ── Render loop ────────────────────────────────────────────────────────────
     Clock clock;
     canvas.animate([&] {
-        const float dt = clock.getDelta();
+        const float wallDt = clock.getDelta();
+        const float dt = fixedDt ? 1.f / 60.f : wallDt;
+        if (fixedDt) {
+            simTime += 1.0 / 60.0;
+            renderer.setSimTime(simTime);
+        }
 
-        // Animate orbiting emissive lights
-        if (animating) {
-            orbitTime += dt * 0.35f;
-            for (auto& o : orbiters) {
-                const float a = orbitTime + o.phase;
-                o.mesh->position.set(o.radius * std::cos(a), o.height,
-                                     o.radius * std::sin(a));
-            }
+        // Animate orbiting emissive lights (placed every frame, so a run that
+        // starts frozen shows them on their orbit rather than at the origin)
+        if (animating) orbitTime += dt * 0.35f;
+        for (auto& o : orbiters) {
+            const float a = orbitTime + o.phase;
+            o.mesh->position.set(o.radius * std::cos(a), o.height,
+                                 o.radius * std::sin(a));
         }
 
         controls.update();
 
         renderer.render(scene, camera);
 
-        ui.render();
+        if (shotPath.empty()) {
+            ui->render();
+        } else if (++shotFrame >= shotFrames) {
+            auto path = std::filesystem::path(shotPath);
+            if (seqN > 0) {// --seq: consecutive frames <stem>_00.png ...
+                const int k = shotFrame - shotFrames;
+                char suffix[16];
+                std::snprintf(suffix, sizeof(suffix), "_%02d", k);
+                path = path.parent_path() / (path.stem().string() + suffix + path.extension().string());
+                renderer.writeFramebuffer(path);
+                std::cout << "wrote " << path.string() << std::endl;
+                if (k + 1 >= seqN) canvas.close();
+            } else {
+                renderer.writeFramebuffer(path);
+                std::cout << "wrote " << path.string() << std::endl;
+                canvas.close();
+            }
+        }
     });
+
+    return 0;
 }
