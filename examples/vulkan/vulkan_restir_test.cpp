@@ -18,7 +18,7 @@
 //
 // Capture (noise measurements, plans/jewel-room-noise.md):
 //   --shot <path.png> [--frames N] [--seq K] [--animate 0|1] [--restir 0|1]
-//   [--denoise 0|1] [--fixed-dt]
+//   [--denoise 0|1] [--dlss 0|1] [--fixed-dt]
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/geometries/OctahedronGeometry.hpp"
@@ -391,6 +391,8 @@ int main(int argc, char** argv) {
     // frames (default 240), writes the frame and exits. --seq K instead writes
     // K CONSECUTIVE frames <stem>_00.png ... from --frames on (temporal pairs).
     // --animate/--restir/--denoise 0|1 set the startup toggles (defaults 1 1 1).
+    // --dlss 0 hands the frame to the built-in TAA resolve instead of DLSS
+    // (DLAA here), so the denoiser's own temporal behaviour is visible.
     // --fixed-dt advances the orbit by 1/60 s per frame and pins the renderer's
     // sim clock, so GPU load does not change how far the balls move per frame.
     // Exits by closing the canvas (not std::exit) so the renderer's destructor
@@ -398,7 +400,7 @@ int main(int argc, char** argv) {
     std::string shotPath;
     int shotFrames = 240, shotFrame = 0;
     int seqN = 0;
-    int optAnimate = 1, optRestir = 1, optDenoise = 1;
+    int optAnimate = 1, optRestir = 1, optDenoise = 1, optDlss = 1;
     bool fixedDt = false;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -408,6 +410,7 @@ int main(int argc, char** argv) {
         else if (a == "--animate" && i + 1 < argc) optAnimate = std::atoi(argv[++i]);
         else if (a == "--restir" && i + 1 < argc) optRestir = std::atoi(argv[++i]);
         else if (a == "--denoise" && i + 1 < argc) optDenoise = std::atoi(argv[++i]);
+        else if (a == "--dlss" && i + 1 < argc) optDlss = std::atoi(argv[++i]);
         else if (a == "--fixed-dt") fixedDt = true;
     }
 
@@ -425,6 +428,7 @@ int main(int argc, char** argv) {
     // atrous smoothing absorbing it.
     renderer.setDenoise(optDenoise != 0);
     renderer.setRestirDIEnabled(optRestir != 0);
+    renderer.setDlss(optDlss != 0);
     renderer.setFireflyClamp(20.0f);
 
     // ── Scene ──────────────────────────────────────────────────────────────────
