@@ -2302,9 +2302,11 @@ void main() {
                         const vec4  bvh  = cam.projInverse * vec4(prevNDC, bufD, 1.0);
                         if (abs(svz - bvh.z / bvh.w) > 0.1 * max(abs(svz), 1e-3)) continue;// same depth-plane gate as the GI
                         const vec4  tapV = texelFetch(shadowVisPrevTex, tp, 0);
+                        if (tapV.x < 0.0) continue;// no-ratio marker (unlit last frame): not a vote
                         // Value-range stop vs the nearest tap (see comment above);
                         // same exp/variance form as deferred_gi_filter.comp's wlS.
-                        const float wl = exp(-abs(nearV.x - tapV.x) / nearPhi);
+                        // A no-ratio nearest tap gives no range reference: accept the tap on geometry alone.
+                        const float wl = (nearV.x < 0.0) ? 1.0 : exp(-abs(nearV.x - tapV.x) / nearPhi);
                         const float w  = bw * wl;
                         if (w <= 1e-5) continue;
                         accTap += w * tapV;
@@ -2313,87 +2315,96 @@ void main() {
                 }
                 if (wSum > 1e-4) { sPrev = accTap / wSum; sAnyTap = true; }
             }
-            // .z==0 = cold-start marker (sky/glass/off); the magnitude guards
-            // reject first-frame / garbage fp16 history (NaN compares false).
-            const bool sValid = (pc.flags & 8192u) == 0u &&// stale-history frame: fresh
-                                sAnyTap && sPrev.z > 0.5 && sPrev.z < 4096.0 &&
-                                abs(sPrev.x) <= 1.5 && abs(sPrev.w) <= 1.5;
-            const float dev      = visEst - sPrev.x;
-            const float trend    = sValid ? mix(sPrev.w, dev, 0.34) : 0.0;
-            const float trendCut = smoothstep(0.10, 0.30, abs(trend));
-            // VARIANCE-GATED INSTANT CUT — the trend antilag above needs 2-3
-            // frames to charge and still leaves a cap-4..8 EMA, which reads as a
-            // dark smudge dragging ~10 frames behind a character's shadow
-            // sweeping across a floor (tps_shooter hero trail). The history
-            // already stores E[R²] (.y), so measure this frame's deviation in
-            // sigmas of the SETTLED history: a converged lit or umbra pixel has
-            // σ≈0, so the first frame the occluder's edge arrives (|dev|≈1) is
-            // a >4σ event and the history is cut SHORT that frame — the shadow
-            // tracks its caster with no charge-up lag. A static penumbra keeps
-            // σ≈0.5 (1-2 ray Bernoulli noise), so per-frame noise sits at ≤2σ
-            // and the long clean history is untouched (the 0.08 σ-floor also
-            // absorbs fp16 quantisation of E[R²]−E[R]²).
-            //
-            // The cut floors at kShadowStepFloor frames, NOT 1: a ground pixel
-            // the moving shadow just reached was a converged-LIT pixel, so the
-            // adaptive-ray tier gave it 1 ray/frame (a BINARY visEst∈{0,1}).
-            // Cutting to histLen=1 makes sAcc = that lone binary sample at full
-            // weight → salt-and-pepper "dusting" on the sweeping edge. Flooring
-            // at ~5 keeps every incoming 1-2 ray sample at ≤1/5 weight, so the
-            // edge CONVERGES over a few frames (smooth) instead of snapping to a
-            // single noisy sample — still ~half the old smudge's lag, and only
-            // where the σ-step actually fires.
-            const float sSigma   = sqrt(max(sPrev.y - sPrev.x * sPrev.x, 0.0)) + 0.08;
-            const float stepCut  = sValid ? smoothstep(2.0, 4.0, abs(dev) / sSigma) : 0.0;
-            const float sCapMot  = mix(32.0, 8.0, smoothstep(0.002, 0.03, max(length(motionGL), giCamNdc)));
-            // Compose the trend + step reductions as a MIN so neither can raise
-            // the cap above the other (a nested mix could: mix(4, floor, step)
-            // rises to `floor` when floor>4). Both collapse to sCapMot when idle.
-            // MOVING-OCCLUDER cut (sOccMoved): this pixel is shadowed by a mesh
-            // that is currently moving — a sweeping shadow cannot be temporally
-            // accumulated (ANY history trails it as a smear; shadow-map engines
-            // regenerate per frame for exactly this reason), so run it
-            // FRAMELESS: cap 1 when the visEst carries the 16-ray top-up
-            // (sTopUp) — the static-dithered sunShadowVis is per-frame stable
-            // by construction (the denoise-off path displays it raw), so it
-            // needs NO temporal smoothing, and any deeper cap leaves DISCRETE
-            // ghost outlines: a cap-2 EMA holds the previous frame's shadow at
-            // 50% (and 25% at two frames), which at fast per-frame shadow
-            // displacement reads as 1-2 separated shadow copies, not a smear.
-            // Cap 1 also recovers a vacated pixel in exactly one frame. Without
-            // the top-up (no sun share — point/spot casters) the floor stays 2:
-            // a cap-1 mean of 1-2 BINARY rays is salt-and-pepper dusting.
-            // Statistics-free on purpose: the trend needs frames to charge and
-            // the σ-step's variance estimate is degraded over a swept band (the
-            // feedback rewrites the mean but not E[R²]) — both limped exactly
-            // where this direct signal cuts instantly.
-            const float sCapTrend = mix(sCapMot, 4.0, trendCut);
-            const float sCapStep  = mix(sCapMot, kShadowStepFloor, stepCut);
-            float sCap            = min(sCapTrend, sCapStep);
-            // RELEASE with hysteresis: the dwell pin (histLen ≤ 2) doubles as a
-            // per-pixel MARKER "was under a moving shadow". Growing histLen out
-            // of a dwell while the mean is still stale fades the dark harmonically
-            // (1/n) — the long trail — so keep the pixel in the short-history
-            // regime until its history AGREES with the current estimate (which
-            // the was-dwell ray top-up makes a confident 16-ray value, so the
-            // comparison is meaningful, not 1-ray binary flicker). Converged →
-            // release ends, history regrows: a PARKED car's settled penumbra
-            // exits within a frame of agreement (no permanent noise), and the
-            // marker's hysteresis kills the cap-regime stutter a noisy per-frame
-            // flag caused at the shadow fringe.
-            // sTopUp-GATED: the release compare is only meaningful against the
-            // CONFIDENT (16-ray, sun-dominant) estimate. Without it (night /
-            // point-light scenes) a multi-light pixel's 1-2 ray visEst is a
-            // per-frame binary that never agrees with the mean within 0.1 —
-            // an ungated release TRAPPED those pixels at cap 2 forever
-            // (permanent shadow boil on the Bistro lamp walls).
-            const bool sRelease   = sTopUp && sValid && sPrev.z <= 2.5 && abs(visEst - sPrev.x) > 0.1;
-            if ((pc.flags & 512u) == 0u && (sOccMoved || sRelease))// bit 9 = dwell kill switch
-                sCap = min(sCap, sTopUp ? 1.0 : 2.0);
-            const float sHist    = sValid ? min(sPrev.z + 1.0, sCap) : 1.0;
-            const float sAcc     = sValid ? mix(sPrev.x, visEst, 1.0 / sHist) : visEst;
-            const float sSq      = sValid ? mix(sPrev.y, visEst * visEst, 1.0 / sHist) : visEst * visEst;
-            imageStore(shadowVisImage, px, vec4(sAcc, sSq, sHist, trend));
+            if (visEst < 0.0) {
+                // NO DIRECT LIGHT here (analyticDirectSplit's no-ratio marker):
+                // nothing to accumulate. Store the marker with histLen 0 so the
+                // filter skips this pixel as a tap, and a pixel that becomes lit
+                // next frame (a jittering normal-map bevel) cold-starts instead of
+                // inheriting a placeholder.
+                imageStore(shadowVisImage, px, vec4(-1.0, 0.0, 0.0, 0.0));
+            } else {
+                // .z==0 = cold-start marker (sky/glass/off); the magnitude guards
+                // reject first-frame / garbage fp16 history (NaN compares false).
+                const bool sValid = (pc.flags & 8192u) == 0u &&// stale-history frame: fresh
+                                    sAnyTap && sPrev.z > 0.5 && sPrev.z < 4096.0 &&
+                                    abs(sPrev.x) <= 1.5 && abs(sPrev.w) <= 1.5;
+                const float dev      = visEst - sPrev.x;
+                const float trend    = sValid ? mix(sPrev.w, dev, 0.34) : 0.0;
+                const float trendCut = smoothstep(0.10, 0.30, abs(trend));
+                // VARIANCE-GATED INSTANT CUT — the trend antilag above needs 2-3
+                // frames to charge and still leaves a cap-4..8 EMA, which reads as a
+                // dark smudge dragging ~10 frames behind a character's shadow
+                // sweeping across a floor (tps_shooter hero trail). The history
+                // already stores E[R²] (.y), so measure this frame's deviation in
+                // sigmas of the SETTLED history: a converged lit or umbra pixel has
+                // σ≈0, so the first frame the occluder's edge arrives (|dev|≈1) is
+                // a >4σ event and the history is cut SHORT that frame — the shadow
+                // tracks its caster with no charge-up lag. A static penumbra keeps
+                // σ≈0.5 (1-2 ray Bernoulli noise), so per-frame noise sits at ≤2σ
+                // and the long clean history is untouched (the 0.08 σ-floor also
+                // absorbs fp16 quantisation of E[R²]−E[R]²).
+                //
+                // The cut floors at kShadowStepFloor frames, NOT 1: a ground pixel
+                // the moving shadow just reached was a converged-LIT pixel, so the
+                // adaptive-ray tier gave it 1 ray/frame (a BINARY visEst∈{0,1}).
+                // Cutting to histLen=1 makes sAcc = that lone binary sample at full
+                // weight → salt-and-pepper "dusting" on the sweeping edge. Flooring
+                // at ~5 keeps every incoming 1-2 ray sample at ≤1/5 weight, so the
+                // edge CONVERGES over a few frames (smooth) instead of snapping to a
+                // single noisy sample — still ~half the old smudge's lag, and only
+                // where the σ-step actually fires.
+                const float sSigma   = sqrt(max(sPrev.y - sPrev.x * sPrev.x, 0.0)) + 0.08;
+                const float stepCut  = sValid ? smoothstep(2.0, 4.0, abs(dev) / sSigma) : 0.0;
+                const float sCapMot  = mix(32.0, 8.0, smoothstep(0.002, 0.03, max(length(motionGL), giCamNdc)));
+                // Compose the trend + step reductions as a MIN so neither can raise
+                // the cap above the other (a nested mix could: mix(4, floor, step)
+                // rises to `floor` when floor>4). Both collapse to sCapMot when idle.
+                // MOVING-OCCLUDER cut (sOccMoved): this pixel is shadowed by a mesh
+                // that is currently moving — a sweeping shadow cannot be temporally
+                // accumulated (ANY history trails it as a smear; shadow-map engines
+                // regenerate per frame for exactly this reason), so run it
+                // FRAMELESS: cap 1 when the visEst carries the 16-ray top-up
+                // (sTopUp) — the static-dithered sunShadowVis is per-frame stable
+                // by construction (the denoise-off path displays it raw), so it
+                // needs NO temporal smoothing, and any deeper cap leaves DISCRETE
+                // ghost outlines: a cap-2 EMA holds the previous frame's shadow at
+                // 50% (and 25% at two frames), which at fast per-frame shadow
+                // displacement reads as 1-2 separated shadow copies, not a smear.
+                // Cap 1 also recovers a vacated pixel in exactly one frame. Without
+                // the top-up (no sun share — point/spot casters) the floor stays 2:
+                // a cap-1 mean of 1-2 BINARY rays is salt-and-pepper dusting.
+                // Statistics-free on purpose: the trend needs frames to charge and
+                // the σ-step's variance estimate is degraded over a swept band (the
+                // feedback rewrites the mean but not E[R²]) — both limped exactly
+                // where this direct signal cuts instantly.
+                const float sCapTrend = mix(sCapMot, 4.0, trendCut);
+                const float sCapStep  = mix(sCapMot, kShadowStepFloor, stepCut);
+                float sCap            = min(sCapTrend, sCapStep);
+                // RELEASE with hysteresis: the dwell pin (histLen ≤ 2) doubles as a
+                // per-pixel MARKER "was under a moving shadow". Growing histLen out
+                // of a dwell while the mean is still stale fades the dark harmonically
+                // (1/n) — the long trail — so keep the pixel in the short-history
+                // regime until its history AGREES with the current estimate (which
+                // the was-dwell ray top-up makes a confident 16-ray value, so the
+                // comparison is meaningful, not 1-ray binary flicker). Converged →
+                // release ends, history regrows: a PARKED car's settled penumbra
+                // exits within a frame of agreement (no permanent noise), and the
+                // marker's hysteresis kills the cap-regime stutter a noisy per-frame
+                // flag caused at the shadow fringe.
+                // sTopUp-GATED: the release compare is only meaningful against the
+                // CONFIDENT (16-ray, sun-dominant) estimate. Without it (night /
+                // point-light scenes) a multi-light pixel's 1-2 ray visEst is a
+                // per-frame binary that never agrees with the mean within 0.1 —
+                // an ungated release TRAPPED those pixels at cap 2 forever
+                // (permanent shadow boil on the Bistro lamp walls).
+                const bool sRelease   = sTopUp && sValid && sPrev.z <= 2.5 && abs(visEst - sPrev.x) > 0.1;
+                if ((pc.flags & 512u) == 0u && (sOccMoved || sRelease))// bit 9 = dwell kill switch
+                    sCap = min(sCap, sTopUp ? 1.0 : 2.0);
+                const float sHist    = sValid ? min(sPrev.z + 1.0, sCap) : 1.0;
+                const float sAcc     = sValid ? mix(sPrev.x, visEst, 1.0 / sHist) : visEst;
+                const float sSq      = sValid ? mix(sPrev.y, visEst * visEst, 1.0 / sHist) : visEst * visEst;
+                imageStore(shadowVisImage, px, vec4(sAcc, sSq, sHist, trend));
+            }
         } else {
             imageStore(shadowVisImage, px, vec4(0.0));// shadows off: recombine adds 0 (directU=0)
         }

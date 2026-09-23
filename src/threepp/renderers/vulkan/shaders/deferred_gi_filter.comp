@@ -176,6 +176,10 @@ void main() {
     // (contact shadows stay crisp); fresh/disoccluded or occluder-swept pixels
     // have high variance → loose stop → the 1-2 ray noise blurs away.
     vec2  cS = readSrcShadow(px);
+    // No-ratio marker (analyticDirectSplit: nothing lit here). Such a pixel is
+    // neither filtered nor a tap for its neighbours: its ratio would be a
+    // placeholder, and a lit bevel/leaf edge next to it must not average it in.
+    const bool noRatio = cS.x < 0.0;
     float varS;
     if (pc.srcMode == 0u) {
         const vec4 sv = imageLoad(shadowVisImage, px);
@@ -186,6 +190,7 @@ void main() {
                 const ivec2 q = clamp(px + ivec2(dx, dy), ivec2(0), mx);
                 if (texelFetch(gbufIdsTex, q, 0).x == 0u) continue;
                 const float v = imageLoad(shadowVisImage, q).x;
+                if (v < 0.0) continue;// no-ratio marker: not a sample
                 s += v; s2 += v * v; n += 1.0;
             }
             const float m = s / max(n, 1.0);
@@ -254,19 +259,21 @@ void main() {
         // Shadow-ratio plane: shared geometric weights (wn/wz/hk), its own
         // variance-guided range stop on R.
         const vec2  sqS = (dx == 0 && dy == 0) ? cS : readSrcShadow(q);
-        const float wlS = exp(-abs(cS.x - sqS.x) / visPhi);
-        const float wS  = wn * wz * hk * wlS;
-        const float vqS = (pc.srcMode == 0u) ? varS : sqS.y;
-        sumS  += sqS.x * wS;
-        sumWS += wS;
-        sumVS += wS * wS * vqS;
+        if (!noRatio && sqS.x >= 0.0) {// a no-ratio neighbour has nothing to vote with
+            const float wlS = exp(-abs(cS.x - sqS.x) / visPhi);
+            const float wS  = wn * wz * hk * wlS;
+            const float vqS = (pc.srcMode == 0u) ? varS : sqS.y;
+            sumS  += sqS.x * wS;
+            sumWS += wS;
+            sumVS += wS * wS * vqS;
+        }
     }
     fC = sumW > 0.0 ? sumC / sumW : cC.rgb;
     // Variance propagation: pass 0 stores the center estimate (no neighbour
     // variance available); later passes carry the à-trous-filtered variance.
     fV = (pc.srcMode == 0u) ? variance
        : (sumW > 0.0 ? sumV / (sumW * sumW) : variance);
-    fS  = sumWS > 0.0 ? sumS / sumWS : cS.x;
+    fS  = noRatio ? -1.0 : (sumWS > 0.0 ? sumS / sumWS : cS.x);// the marker survives every pass
     fVS = (pc.srcMode == 0u) ? varS
         : (sumWS > 0.0 ? sumVS / (sumWS * sumWS) : varS);
     }// !wideSkip

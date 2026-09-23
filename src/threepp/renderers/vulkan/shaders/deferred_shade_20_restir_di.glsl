@@ -518,8 +518,22 @@ vec3 analyticDirectSplit(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         U += c;
         lw[nL] = dot(c, LUM); wSum += lw[nL]; ++nL;
     }
+    // NOTHING LIT (every N.L <= 0, every cluster light out of range or cone):
+    // this pixel HAS NO shadow ratio. It used to return 1.0 here on the
+    // grounds that U x R = 0 makes the value irrelevant. But the ratio plane
+    // is filtered SPATIALLY (deferred_gi_filter.comp) and TEMPORALLY (the
+    // shadowVis gather in deferred_shade.comp), and a lit normal-map bevel or
+    // cutout-leaf edge whose neighbours are such pixels averaged their
+    // placeholder 1.0 into its own 0 and lit up with UNSHADOWED sun: the
+    // Bistro "bright edges with the denoiser on" (sun-coloured outlines on
+    // every stone-block joint and hedge leaf inside a shadowed wall; those
+    // pixels' G-buffer normal flips with the jitter, so their history is
+    // reset every frame and the filter sits in its wide spatial-variance
+    // regime). -1 is the no-ratio marker: both filters skip such a pixel as
+    // a tap, and the recombine's clamp() makes it 0 (U is 0 there anyway).
+    visEst = -1.0;
+    if (wSum <= 1e-8) return U;
     visEst = 1.0;
-    if (wSum <= 1e-8) return U;// nothing lit → ratio irrelevant (U×R = 0)
     const vec3 orig = P + N * SHADOW_EPS;
     float vAcc = 0.0;
     for (int s = 0; s < nRays; ++s) {
