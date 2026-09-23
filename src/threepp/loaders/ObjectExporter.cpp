@@ -1857,10 +1857,41 @@ void ObjectExporter::save(Object3D& object, const std::filesystem::path& path, c
         return;
     }
 
-    std::ofstream out(path, std::ios::binary);
-    if (!out) {
-        throw std::runtime_error("[ObjectExporter] unable to open file for writing: " + path.string());
+    // Built before the target is opened: write() throws on content it cannot
+    // encode (a name that is not valid UTF-8 fails in json::dump), and opening
+    // the target first would already have truncated the previous save to zero
+    // bytes. Written to a temp file and renamed over the target, as
+    // ZipWriter::writeTo does, so a short write leaves the old file whole too.
+    const auto document = write(object, resolved, nullptr);
+
+    auto temp = path;
+    temp += ".tmp";
+
+    {
+        std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            throw std::runtime_error("[ObjectExporter] unable to open file for writing: " + temp.string());
+        }
+
+        out.write(document.data(), static_cast<std::streamsize>(document.size()));
+        out.flush();
+
+        if (!out) {
+
+            out.close();
+            std::error_code ignored;
+            std::filesystem::remove(temp, ignored);
+            throw std::runtime_error("[ObjectExporter] short write to: " + temp.string());
+        }
     }
 
-    out << write(object, resolved, nullptr);
+    std::error_code ec;
+    std::filesystem::rename(temp, path, ec);
+    if (ec) {
+
+        std::error_code ignored;
+        std::filesystem::remove(temp, ignored);
+        throw std::runtime_error("[ObjectExporter] cannot rename '" + temp.string() + "' onto '" +
+                                 path.string() + "': " + ec.message());
+    }
 }

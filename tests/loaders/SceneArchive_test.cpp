@@ -316,3 +316,39 @@ TEST_CASE("A linked subtree an archive cannot carry is embedded, and says so") {
     REQUIRE(parsed != nullptr);
     CHECK(findByUuid<Mesh>(*parsed, imported->uuid) != nullptr);
 }
+
+TEST_CASE("A save that fails leaves the previous file as it was") {
+
+    // write() throws on a name that is not valid UTF-8 (json::dump refuses it).
+    // Both formats must build the document before touching the target, so the
+    // last good save survives the failed one byte for byte, with no temp file
+    // left next to it.
+    const auto dir = std::filesystem::temp_directory_path() / "threepp-scene-save-failure-test";
+    std::filesystem::create_directories(dir);
+
+    for (const auto* name : {"scene.json", "scene.tpz"}) {
+
+        const auto path = dir / name;
+        std::filesystem::remove(path);
+
+        auto scene = Scene::create();
+        auto box = Mesh::create(BoxGeometry::create(), MeshStandardMaterial::create());
+        box->name = "box";
+        scene->add(box);
+
+        ObjectExporter exporter;
+        exporter.save(*scene, path);
+
+        const auto before = fileBytes(path);
+        REQUIRE(!before.empty());
+
+        box->name = "\xff\xfe";
+        CHECK_THROWS(exporter.save(*scene, path));
+
+        CHECK(fileBytes(path) == before);
+
+        auto temp = path;
+        temp += ".tmp";
+        CHECK(!std::filesystem::exists(temp));
+    }
+}
