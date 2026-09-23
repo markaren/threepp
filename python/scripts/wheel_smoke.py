@@ -8,7 +8,23 @@ config.yml's linux job guards against with its EditorConveyor_test assertion).
 No GL context is created here — CI runners have no display, and physics is
 deliberately CPU-only headless, which is exactly why it CAN be tested here.
 """
+import pathlib
+
 import threepp as tp
+
+# Every .py module in the source package must be in the installed one. The
+# expectation comes from the source tree next to this script, not from a list:
+# python/CMakeLists.txt's install rules are what can drift. Presence is checked
+# rather than import, since several modules import torch or warp at top level.
+source_pkg = pathlib.Path(__file__).resolve().parents[1] / "threepp"
+installed_pkg = pathlib.Path(tp.__file__).resolve().parent
+assert installed_pkg != source_pkg, f"imported threepp from the source tree ({source_pkg}), not the wheel"
+missing = sorted(
+    p.relative_to(source_pkg).as_posix()
+    for p in source_pkg.rglob("*.py")
+    if "__pycache__" not in p.parts and not (installed_pkg / p.relative_to(source_pkg)).is_file()
+)
+assert not missing, f"modules missing from the wheel: {missing}"
 
 print("HAS_IMGUI :", tp.HAS_IMGUI)
 print("HAS_PHYSX :", tp.HAS_PHYSX)

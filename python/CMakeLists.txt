@@ -246,15 +246,14 @@ endif ()
 install(TARGETS threepp_py
         LIBRARY DESTINATION threepp COMPONENT python_module
         RUNTIME DESTINATION threepp COMPONENT python_module)
-# Every top-level file in python/threepp/ must be named here: one left out is
-# silently ABSENT from the wheel, with no build error. That is how the CUDA
-# interop shipped half-broken -- the module had enable_vertex_interop, but
-# `from threepp.cuda_interop import VkInteropArray` raised ImportError for every
-# wheel user, so the zero-copy path was unreachable outside a source checkout.
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/threepp/__init__.py"
-              "${CMAKE_CURRENT_SOURCE_DIR}/threepp/urdf.py"
-              "${CMAKE_CURRENT_SOURCE_DIR}/threepp/utils.py"
-              "${CMAKE_CURRENT_SOURCE_DIR}/threepp/cuda_interop.py"
+# Every top-level .py in python/threepp/ is globbed rather than listed: a file
+# left out of a hand-kept list is silently ABSENT from the wheel, with no build
+# error. That shipped cuda_interop half-broken once (ImportError for every wheel
+# user), and later torch_frames, terrain_deform and granular_mpm. Globbing *.py
+# only keeps the dev-built .pyd/.dll/.pdb next to them out of the wheel.
+# wheel_smoke.py checks the installed package against the source tree.
+file(GLOB _threepp_py_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/threepp/*.py")
+install(FILES ${_threepp_py_sources}
               "${CMAKE_CURRENT_SOURCE_DIR}/threepp/py.typed"
         DESTINATION threepp COMPONENT python_module)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/threepp/rl"
