@@ -228,7 +228,7 @@ layout(set = 0, binding = 35) uniform sampler2D blueNoiseTex;
 layout(set = 0, binding = 15) uniform sampler2D gbufUvTex;     // .rg = primary surface UV (emissive-map sample)
 // Demodulated diffuse-indirect irradiance (gatherEnv AO/GI, PRE-albedo). Written
 // here, spatially filtered + recombined by deferred_gi_filter.comp. vec4(0) where
-// the indirect is kept inline (sky/unlit/water/glass/sheen) so the filter adds
+// the indirect is kept inline (sky/unlit/water/glass) so the filter adds
 // nothing there.
 // Write-target for THIS frame's accumulated demod GI (the denoise reads it; NEXT
 // frame reads it as the reproject history via binding 17).
@@ -333,6 +333,10 @@ layout(set = 0, binding = 42) uniform sampler2DMS  gbufUvMS;
 layout(set = 0, binding = 43, rgba16f) uniform image2D shadowVisImage;
 layout(set = 0, binding = 44) uniform sampler2D shadowVisPrevTex;// prev fif (reproject history)
 layout(set = 0, binding = 45, rgba16f) uniform writeonly image2D directUImage;
+// The GI recombine's per-pixel demodulation colour: what deferred_gi_filter
+// multiplies the filtered diffuse irradiance by (base diffuse under the sheen
+// share, plus the sheen lobe, all times diffBaseShare). vec3(0) off the demod path.
+layout(set = 0, binding = 77, rgba16f) uniform writeonly image2D demodColorImage;
 
 // ── Clustered lights (bindings 48/49, built by cluster_build.comp) ─────────
 // ALL scene point/spot lights (power-sorted, no 8-per-type cap) + per-cell
@@ -874,6 +878,7 @@ void main() {
         imageStore(indirectImage, px, vec4(0.0));
         imageStore(shadowVisImage, px, vec4(0.0));// cold-start marker for the ping-pong
         imageStore(directUImage, px, vec4(0.0));
+        imageStore(demodColorImage, px, vec4(0.0));
         return;
     }
 
@@ -912,6 +917,7 @@ void main() {
         imageStore(indirectImage, px, vec4(0.0));
         imageStore(shadowVisImage, px, vec4(0.0));
         imageStore(directUImage, px, vec4(0.0));
+        imageStore(demodColorImage, px, vec4(0.0));
         return;
     }
 
@@ -1082,6 +1088,7 @@ void main() {
         imageStore(reflectImage, px, vec4(0.0));// water shades its own reflection inline
         imageStore(shadowVisImage, px, vec4(0.0));// water shadows its own lighting inline
         imageStore(directUImage, px, vec4(0.0));
+        imageStore(demodColorImage, px, vec4(0.0));
         return;
     }
 
@@ -1139,19 +1146,23 @@ void main() {
     const vec3  shadowOrig = worldPos + N * SHADOW_EPS;
 
     // Demodulated (binding 16, accumulated + denoised) vs INLINE diffuse indirect.
-    // demodIndirect (opaque, non-sheen) → the GI is demodulated, temporally
-    // accumulated + à-trous denoised. INLINE (transparent/glass/sheen) → the GI is
-    // used directly. Computed BEFORE gatherEnv so the gather picks the right path:
-    // stochastic real GI ONLY for the demod path (it gets accumulated/denoised);
-    // the INLINE path uses the DETERMINISTIC GI (1-spp would just be noisy there —
-    // that was the transparent-quad wobble).
+    // demodIndirect (opaque, sheen included) → the GI is demodulated, temporally
+    // accumulated + à-trous denoised, and the recombine multiplies it by this
+    // pixel's demodColor (base diffuse, sheen lobe, env-specular share). INLINE
+    // (transparent/glass) → the GI is used directly. Computed BEFORE gatherEnv so
+    // the gather picks the right path: stochastic real GI ONLY for the demod path
+    // (it gets accumulated/denoised); the INLINE path uses the DETERMINISTIC GI
+    // (1-spp would just be noisy there — that was the transparent-quad wobble).
     const bool denoiseOn = (pc.flags & 4u) != 0u;
     // Dispatch B forces the INLINE path (demodIndirect=false) — same
-    // precedent as glass/sheen: a self-contained pixel color with no
+    // precedent as glass: a self-contained pixel color with no
     // dependency on the demod GI accumulator's cross-frame state, which
     // dispatch B never writes (see the GI/SVGF gate near the end of main()).
-    const bool demodIndirect = pc.shadeMode != 1u && denoiseOn && (pm.transmission <= 0.0) &&
-                               (dot(pm.sheenColor, pm.sheenColor) <= 0.0);
+    // Sheen used to be excluded here too, because the recombine rebuilt its
+    // factor from the G-buffer albedo and a scalar and the sheen response is
+    // a vec3; the one-sample ReSTIR emissive light then reached a velvet
+    // pixel raw and sparkled every frame. demodColor carries the vec3 now.
+    const bool demodIndirect = pc.shadeMode != 1u && denoiseOn && (pm.transmission <= 0.0);
 
     // ADAPTIVE GI SAMPLE COUNT — probe the reprojected prev history length (binding
     // 17 .a). Fresh / just-disoccluded pixels (low/zero history) carry all the
@@ -1337,7 +1348,7 @@ void main() {
     // zero at the silhouette, the GI filter's blur drags that dark edge inward,
     // and the rim of the same sphere read 0.881 (exact, denoiser off: 1.000).
     // The denoised path hands it to the filter's recombine instead, per pixel and
-    // unfiltered, in directUImage's unused alpha; the inline path applies it to
+    // unfiltered, folded into demodColor (below); the inline path applies it to
     // what it shades with. The ReSTIR emissive irradiance added below rides the
     // same share in both paths. It is direct light with its own (1 − F), so that
     // is a slight under-count on emitter-lit rims, kept so that the denoiser on
@@ -1347,6 +1358,17 @@ void main() {
         const vec3 envSpec = envSpecularWeight(F0, envBRDFApprox(NdotV, roughness));
         diffBaseShare = 1.0 - max(max(envSpec.r, envSpec.g), envSpec.b);
     }
+    // The recombine's factor for the filtered irradiance: the exact vec3 the
+    // inline gather applies to diffInd·diffBaseShare (deferred_shade_30_gi_gather,
+    // the sheen branch at its end), so a sheen pixel can take the denoised path.
+    // Without sheen it is diffBaseShare·albedo·(1 − metalness), what the
+    // recombine rebuilt from the G-buffer before.
+    const bool  hasSheen    = dot(pm.sheenColor, pm.sheenColor) > 0.0;
+    const float sheenAlbedo = hasSheen ? IBLSheenBRDF(NdotV, pm.sheenRoughness) : 0.0;
+    const float sheenBase   = hasSheen ? sheenBaseShare(pm.sheenColor, sheenAlbedo) : 1.0;
+    const vec3  demodColor  = demodIndirect
+        ? diffBaseShare * (albedo * (1.0 - metalness) * sheenBase + pm.sheenColor * sheenAlbedo)
+        : vec3(0.0);
     // ReSTIR DI emissive area lighting → DEMOD irradiance folded into the diffuse-
     // indirect channel so it rides the SVGF temporal + à-trous denoise (the reservoir
     // converges light selection; this denoises the 1-sample radiance). Added before
@@ -1362,7 +1384,7 @@ void main() {
     // Split the analytic direct into the exact unshadowed sum U (directUImage)
     // and a 1-2 ray visibility-ratio estimate (accumulated below, filtered +
     // recombined as U × R̃ by deferred_gi_filter). The inline path (denoise off,
-    // glass/sheen, dispatch B) keeps the old fully-inline shadowed loops.
+    // glass, dispatch B) keeps the old fully-inline shadowed loops.
     const bool shadowChannel = demodIndirect && shadowsOn;
     vec3  directU = vec3(0.0);
     float visEst  = 1.0;
@@ -1753,7 +1775,7 @@ void main() {
         // cold-restarted every straddling pixel = "the car blinks".)
         imageStore(reflectImage, px, reflSVGFTemporal(vec4(reflOut, roughness), px, uv, N, length(worldPos - camPos), reflSkip, reflHitT, gTraceHitMoved));
     } else {
-        // Denoise OFF (or glass/sheen, where reflOut==0): inline sharp reflection.
+        // Denoise OFF (or glass, where reflOut==0): inline sharp reflection.
         lit += reflOut;
         imageStore(reflectImage, px, vec4(0.0));
     }
@@ -2378,7 +2400,7 @@ void main() {
     } else {
         imageStore(indirectImage, px, vec4(0.0));// histLen=0 → next frame cold-starts
         imageStore(momentsImage, px, vec4(0.0));
-        imageStore(shadowVisImage, px, vec4(0.0));// glass/sheen/inline: no shadow channel
+        imageStore(shadowVisImage, px, vec4(0.0));// glass/inline: no shadow channel
     }
     // Unshadowed analytic direct for the recombine (U × R̃). UNWEIGHTED like
     // indirect/reflect — the denoise applies recombineCoverage at consumption.
@@ -2388,6 +2410,8 @@ void main() {
     // past fp16 max (65504); an Inf store turns NaN at the recombine's dU × R̃
     // whenever the filtered ratio is exactly 0 (converged umbra), and that NaN
     // poisons the pixel's TAA history permanently.
-    // .a: the indirect-diffuse share for the recombine (see diffBaseShare).
+    // .a: the indirect-diffuse share (see diffBaseShare). The recombine no
+    // longer reads it; it takes the share from demodColor, stored next.
     imageStore(directUImage, px, vec4(min(directU, vec3(6.5e4)), demodIndirect ? diffBaseShare : 1.0));
+    imageStore(demodColorImage, px, vec4(demodColor, 0.0));
 }

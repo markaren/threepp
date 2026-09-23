@@ -62,6 +62,10 @@ namespace threepp::vulkan {
             const VkImageView* directU       = nullptr;// [framesInFlight] storage
             const VkImageView* shadowAtrousA = nullptr;// [framesInFlight] storage (rg16f)
             const VkImageView* shadowAtrousB = nullptr;// [framesInFlight] storage (rg16f)
+            // Per-pixel demodulation colour for the GI recombine (binding 77):
+            // what the filtered diffuse irradiance is multiplied by (base
+            // diffuse colour, the sheen lobe's share, the env-specular share).
+            const VkImageView* demodColor    = nullptr;// [framesInFlight] storage (rgba16f)
             const VkImageView* sceneHdr   = nullptr;// [framesInFlight] output (storage)
             // Scene fog (homogeneous medium) — the per-frame UBO
             // (GpuFogUbo: sigmaT/enabled/color/anisotropy/waterSurfaceY).
@@ -351,7 +355,7 @@ namespace threepp::vulkan {
         // sceneHdr. Two pipelines run back to back over the same descriptor set:
         //   • giFilterPipe_   — SVGF variance-guided à-trous over the demodulated
         //     diffuse GI (binding 16) + the co-filtered soft-shadow visibility
-        //     ratio, then recombine blur(GI)·albedo + directU×R̃ into sceneHdr.
+        //     ratio, then recombine blur(GI)·demodColor + directU×R̃ into sceneHdr.
         //   • reflFilterPipe_ — separable roughness-guided gloss reconstruction
         //     of the 1-mirror-ray reflection (binding 25), then recombine.
         // Both recombines carry fog extinction, MSAA coverage weighting, and

@@ -27,7 +27,7 @@
 // filtered through the passes (sum(w^2*var) / (sum w)^2).
 //
 // Ping-pong (rgb=GI, a=variance) between two scratch images; the last pass
-// recombines blur(GI)*albedo + directU*Rtilde into sceneHdr (with fog extinction,
+// recombines blur(GI)*demodColor + directU*Rtilde into sceneHdr (with fog extinction,
 // MSAA coverage weighting, and pre-exposure). The demodulated design means only
 // the low-frequency irradiance is touched - texture/direct lighting stay crisp.
 
@@ -48,6 +48,9 @@ layout(set = 0, binding = 23, rgba16f) uniform image2D atrousB;
 // the color/BRDF untouched (Heitz et al. 2018 split).
 layout(set = 0, binding = 43, rgba16f) uniform image2D shadowVisImage;      // feedback rewrites .x
 layout(set = 0, binding = 45, rgba16f) uniform readonly image2D directUImage;
+// The shade's per-pixel demodulation colour (.rgb): what the filtered diffuse
+// irradiance is multiplied by at the recombine. vec3(0) off the demod path.
+layout(set = 0, binding = 77, rgba16f) uniform readonly image2D demodColorImage;
 layout(set = 0, binding = 46, rg16f)   uniform image2D shadowAtrousA;       // x=R, y=variance
 layout(set = 0, binding = 47, rg16f)   uniform image2D shadowAtrousB;
 
@@ -302,20 +305,20 @@ void main() {
     const float fV16 = min(fV, 6.5e4);
 
     if (pc.dstMode == 2u) {
-        // Recombine: sceneHdr += blur(indirect) · diffuseColor (matches
-        // shadeDiffuseDirect's albedo·(1-metalness)) + directU × R̃ (the
-        // denoised-shadow split: exact unshadowed analytic direct × the
-        // filtered visibility ratio). Only the demodulated irradiance and the
-        // bounded ratio were filtered, so albedo/texture detail stays crisp.
-        const vec4 am           = texelFetch(gbufAlbedoTex, px, 0);
-        const vec3 diffuseColor = am.rgb * (1.0 - am.a);
-        // .a = what the environment specular left for the diffuse base: view-
-        // dependent and steep at a smooth silhouette, so the shade passes it
-        // around the filter rather than through it (deferred_shade, diffBaseShare).
-        const vec4 dUa          = imageLoad(directUImage, px);
-        const vec3 dU           = dUa.rgb;
+        // Recombine: sceneHdr += blur(indirect) · demodColor + directU × R̃
+        // (the denoised-shadow split: exact unshadowed analytic direct × the
+        // filtered visibility ratio). demodColor is the shade's per-pixel
+        // factor, the same one the inline gather applies: albedo·(1-metalness)
+        // under the sheen share plus the sheen lobe, times what the environment
+        // specular left for the diffuse base (view-dependent and steep at a
+        // smooth silhouette, so the shade passes it around the filter rather
+        // than through it; deferred_shade, diffBaseShare). Only the demodulated
+        // irradiance and the bounded ratio were filtered, so albedo/texture
+        // detail stays crisp.
+        const vec3 demodColor   = imageLoad(demodColorImage, px).rgb;
+        const vec3 dU           = imageLoad(directUImage, px).rgb;
         const vec3 cur          = imageLoad(outImage, px).rgb;
-        imageStore(outImage, px, vec4(cur + (fC * diffuseColor * dUa.a + dU * clamp(fS, 0.0, 1.0))
+        imageStore(outImage, px, vec4(cur + (fC * demodColor + dU * clamp(fS, 0.0, 1.0))
                                             * fogTransmittance(camPos, Pc) * recombineCoverage(px)
                                             * uintBitsToFloat(pc.preExpBits), 1.0));
     } else if (pc.dstMode == 0u) {

@@ -212,6 +212,7 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             std::array<VkImageView, kFramesInFlight> reflAuxViews{};
             std::array<VkImageView, kFramesInFlight> shadowVisViews{};
             std::array<VkImageView, kFramesInFlight> directUViews{};
+            std::array<VkImageView, kFramesInFlight> demodColorViews{};
             std::array<VkImageView, kFramesInFlight> shadowAtrousAViews{};
             std::array<VkImageView, kFramesInFlight> shadowAtrousBViews{};
             std::array<VkImageView, kFramesInFlight> froxelScatterViews{};
@@ -258,6 +259,7 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
                 reflAuxViews[f]  = view().rasterGbufs[f].reflAux.view;
                 shadowVisViews[f]     = view().rasterGbufs[f].shadowVis.view;
                 directUViews[f]       = view().rasterGbufs[f].directU.view;
+                demodColorViews[f]    = view().rasterGbufs[f].demodColor.view;
                 shadowAtrousAViews[f] = view().rasterGbufs[f].shadowAtrousA.view;
                 shadowAtrousBViews[f] = view().rasterGbufs[f].shadowAtrousB.view;
                 froxelScatterViews[f] = view().rasterGbufs[f].froxelScatter.view;
@@ -299,6 +301,7 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             in.reflAux          = reflAuxViews.data();
             in.shadowVis        = shadowVisViews.data();
             in.directU          = directUViews.data();
+            in.demodColor       = demodColorViews.data();
             in.shadowAtrousA    = shadowAtrousAViews.data();
             in.shadowAtrousB    = shadowAtrousBViews.data();
             in.clusterGrid      = clusterGridBufs.data();

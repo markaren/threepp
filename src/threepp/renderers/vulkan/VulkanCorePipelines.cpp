@@ -237,6 +237,7 @@ void VulkanRenderer::Impl::destroyRasterGbufImages() {
                 destroyImage2D(ctx->allocator(), d, g.reflAux);
                 destroyImage2D(ctx->allocator(), d, g.shadowVis);
                 destroyImage2D(ctx->allocator(), d, g.directU);
+                destroyImage2D(ctx->allocator(), d, g.demodColor);
                 destroyImage2D(ctx->allocator(), d, g.shadowAtrousA);
                 destroyImage2D(ctx->allocator(), d, g.shadowAtrousB);
                 destroyImage2D(ctx->allocator(), d, g.froxelScatter);
@@ -610,6 +611,12 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 g.directU = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                                                     VK_IMAGE_ASPECT_COLOR_BIT, N("directU"));
+                // The GI recombine's per-pixel demodulation colour (what the
+                // filtered diffuse irradiance is multiplied by). Written by the
+                // shade, read by deferred_gi_filter in the same frame.
+                g.demodColor = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                       VK_IMAGE_USAGE_STORAGE_BIT,
+                                                       VK_IMAGE_ASPECT_COLOR_BIT, N("demodColor"));
                 g.shadowAtrousA = createAttachmentImage2D(w, h, VK_FORMAT_R16G16_SFLOAT,
                                                           VK_IMAGE_USAGE_STORAGE_BIT,
                                                           VK_IMAGE_ASPECT_COLOR_BIT, N("shadowAtrousA"));
@@ -824,6 +831,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 pushInit(g.reflAux.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.shadowVis.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.directU.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.demodColor.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.shadowAtrousA.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.shadowAtrousB.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.froxelScatter.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)

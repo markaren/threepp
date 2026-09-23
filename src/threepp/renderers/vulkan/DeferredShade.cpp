@@ -32,7 +32,7 @@ namespace threepp::vulkan {
     // that no validation layer can see). Both tables are std::array of this
     // size now, filled through .at(), and the fill count is checked, so the
     // failure mode is a loud throw at init instead.
-    constexpr uint32_t kDeferredBindingCount = 76;
+    constexpr uint32_t kDeferredBindingCount = 77;
 
     // ParticleField density volumes bound at once (binding 67 is an array of
     // this many). KEEP IN SYNC with kMaxDensityFields in
@@ -226,6 +226,9 @@ namespace threepp::vulkan {
         set(74, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // rtao CUR sampled (shade upsample)
         set(75, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // rtaoAux CUR (rtao.comp writes)
         set(76, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // rtaoAux PREV (history)
+        // Per-pixel demodulation colour for the GI recombine (the shade writes
+        // it, deferred_gi_filter multiplies the filtered irradiance by it).
+        set(77, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // demodColor (rgba16f, current frame only)
 
         // Exact fit is the contract: a new binding must bump
         // kDeferredBindingCount, and rewriteDescriptors must gain the matching
@@ -730,6 +733,9 @@ namespace threepp::vulkan {
             VkDescriptorImageInfo directUInfo{};
             directUInfo.imageView   = in.directU[f];
             directUInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo demodColorInfo{};
+            demodColorInfo.imageView   = in.demodColor[f];
+            demodColorInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
             VkDescriptorImageInfo shadowAtrAInfo{};
             shadowAtrAInfo.imageView   = in.shadowAtrousA[f];
             shadowAtrAInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -956,6 +962,7 @@ namespace threepp::vulkan {
             setw(73, 74, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &rtaoCurSampledInfo, nullptr);
             setw(74, 75, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &rtaoAuxCurInfo,     nullptr);
             setw(75, 76, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &rtaoAuxPrevInfo,    nullptr);
+            setw(76, 77, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &demodColorInfo,     nullptr);
             vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
         }
     }

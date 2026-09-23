@@ -52,6 +52,7 @@ namespace threepp::vulkan::impl {
         Image2D       reflAux;      // rgba16f — reflection-denoiser auxiliary (ping-pong, mirrors `reflect`: STORAGE write + SAMPLED prev-frame read)
         Image2D       shadowVis;    // rgba16f — denoised-shadow channel accumulator (.x=visibility ratio, .y=E[R²], .z=histLen, .w=trend); STORAGE + SAMPLED, ping-ponged like indirect
         Image2D       directU;      // rgba16f — unshadowed analytic direct (dir/point/spot) for the denoise recombine (U × R̃); STORAGE, current frame only
+        Image2D       demodColor;   // rgba16f — per-pixel demodulation colour the GI recombine multiplies the filtered diffuse irradiance by (base diffuse, sheen lobe, env-specular share); STORAGE, current frame only
         Image2D       shadowAtrousA;// rg16f — shadow-ratio à-trous ping-pong (x=R, y=variance); STORAGE scratch
         Image2D       shadowAtrousB;// rg16f — shadow-ratio à-trous ping-pong (the other half)
         Image2D       froxelScatter;// rgba16f 3D (128×72×64, FIXED size) — froxel in-scatter accumulator (.a=histLen); STORAGE + SAMPLED, ping-ponged like indirect
