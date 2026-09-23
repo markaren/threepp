@@ -188,9 +188,15 @@ vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool 
     // (a deforming chrome shell on a roughness-0.4 steel bed: speckled bed for
     // as long as the shell moved). Short cap instead (6, the fast-motion cap)
     // and let the content-change antilag below catch genuine jumps.
+    // The STOCHASTIC band (roughness >= the shade's kReflStochastic 0.25, one
+    // GGX-sampled ray) ramps from that 6 back to the ordinary cap by 0.45: a
+    // flat 6 on a 1-spp lobe re-capped every frame a ray lands on a mover never
+    // converges (Jewel Room copper 0.38 and chrome 0.26 boiled while the four
+    // balls orbited). The deterministic band below 0.25 is untouched.
     if (hitMoved) {
         const float viewDepT = 1.0 - smoothstep(0.05, 0.30, rough);// 1 = mirror-like
-        histCap = mix(min(histCap, 6.0), 1.0, viewDepT);
+        const float roughT   = smoothstep(0.25, 0.45, rough);// stochastic band: the lobe averages the mover
+        histCap = mix(mix(min(histCap, 6.0), 1.0, viewDepT), histCap, roughT);
         if (histCap < 1.5) valid = false;
     }
     const vec4 prevR = valid ? texture(reflectPrevTex, paneToPhys(reflectPrevTex, pUv)) : vec4(0.0);
