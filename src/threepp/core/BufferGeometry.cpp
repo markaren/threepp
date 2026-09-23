@@ -682,10 +682,9 @@ std::shared_ptr<BufferGeometry> BufferGeometry::clone() const {
 
 void BufferGeometry::dispose() {
 
-    if (!disposed_) {
-        disposed_ = true;
-        this->dispatchEvent("dispose", this);
-    }
+    // Every call, as in three.js and Texture::dispose; see Material::dispose.
+    // GLGeometries' teardown disposes every geometry it knows.
+    this->dispatchEvent("dispose", this);
 }
 
 BufferGeometry::~BufferGeometry() {

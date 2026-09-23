@@ -103,10 +103,8 @@ void InstancedMesh::setMatrixAt(size_t index, const Matrix4& matrix) const {
 
 void InstancedMesh::dispose() {
 
-    if (!disposed) {
-        disposed = true;
-        dispatchEvent("dispose", this);
-    }
+    // Every call, as in three.js and Texture::dispose; see Material::dispose.
+    dispatchEvent("dispose", this);
 }
 
 void InstancedMesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {

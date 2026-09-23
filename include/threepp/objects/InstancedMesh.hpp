@@ -62,7 +62,6 @@ namespace threepp {
 
     private:
         Mesh _mesh;
-        bool disposed{false};
 
         size_t count_;
         size_t maxCount_;

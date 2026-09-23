@@ -30,10 +30,13 @@ unsigned int Material::version() const {
 }
 
 void Material::dispose() {
-    if (!disposed_) {
-        disposed_ = true;
-        dispatchEvent("dispose", this);
-    }
+
+    // Every call, as in three.js and Texture::dispose. A one-shot latch was set
+    // by the first dispose, which is often a renderer's teardown
+    // (GLProperties::dispose), so a second renderer, or a material disposed and
+    // then used again, was never told when it was gone. Every subscriber
+    // removes itself when called, so a repeat dispatch reaches nobody.
+    dispatchEvent("dispose", this);
 }
 
 void Material::needsUpdate() {

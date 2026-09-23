@@ -165,7 +165,6 @@ namespace threepp {
         static std::shared_ptr<BufferGeometry> create();
 
     private:
-        bool disposed_ = false;
         std::unique_ptr<IntBufferAttribute> index_;
         std::unordered_map<std::string, std::shared_ptr<BufferAttribute>> attributes_;
         std::unordered_map<std::string, std::vector<std::shared_ptr<BufferAttribute>>> morphAttributes_;

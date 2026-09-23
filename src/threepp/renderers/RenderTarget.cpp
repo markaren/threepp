@@ -45,9 +45,8 @@ void RenderTarget::setSize(unsigned int width, unsigned int height, unsigned int
         this->texture->image() = Image(std::vector<unsigned char>{}, width, height, depth);
 
         // Tell the backend to drop the GPU resources sized for the old
-        // dimensions. Deliberately not dispose(): that latches on `disposed` so
-        // the destructor can't double-fire, and a target has to survive being
-        // resized more than once — a composer resized twice would otherwise
+        // dimensions; it re-creates them at the new size on next use. This has
+        // to happen on every resize: a composer resized twice would otherwise
         // keep rendering into framebuffers of the first new size.
         this->dispatchEvent("dispose", this);
     }
@@ -77,11 +76,8 @@ RenderTarget& RenderTarget::copy(const RenderTarget& source) {
 
 void RenderTarget::dispose() {
 
-    if (!disposed) {
-
-        disposed = true;
-        this->dispatchEvent("dispose", this);
-    }
+    // Every call, as in three.js and Texture::dispose; see Material::dispose.
+    this->dispatchEvent("dispose", this);
 }
 
 RenderTarget::~RenderTarget() {

@@ -838,3 +838,39 @@ TEST_CASE("GL: an sRGB-tagged render target is encoded") {
     INFO("sRGB target: " << offscreen.r << " (expect ~188)");
     CHECK(std::abs(offscreen.r - 188.0) < 3.0);
 }
+
+TEST_CASE("GL: a geometry and material that outlive one renderer are released by the next") {
+
+    // A renderer's teardown disposes every geometry and material it knows.
+    // dispose() used to fire only on its first call, so the next renderer to
+    // draw them was never told when they died: its geometry count stayed up,
+    // and its own teardown disposed a material that no longer existed.
+    auto geometry = BoxGeometry::create();
+    auto material = MeshBasicMaterial::create();
+    auto mesh = Mesh::create(geometry, material);
+
+    auto scene = Scene::create();
+    scene->add(mesh);
+    auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
+    camera->position.z = 5;
+
+    {
+        GLRenderer first(glCanvas());
+        first.render(*scene, *camera);
+    }
+
+    GLRenderer second(glCanvas());
+    second.render(*scene, *camera);
+    const auto held = second.info().memory.geometries;
+    REQUIRE(held > 0);
+
+    scene->remove(*mesh);
+    mesh.reset();
+    geometry.reset();// ~BufferGeometry dispatches "dispose"
+    material.reset();
+
+    INFO("geometries held before: " << held << ", after: " << second.info().memory.geometries);
+    CHECK(second.info().memory.geometries == held - 1);
+
+    REQUIRE_NOTHROW(second.render(*scene, *camera));
+}

@@ -84,9 +84,6 @@ namespace threepp {
         static std::unique_ptr<RenderTarget> create(unsigned int width, unsigned int height, const Options& options);
 
         ~RenderTarget() override;
-
-    protected:
-        bool disposed = false;
     };
 
     // Backward-compatible alias

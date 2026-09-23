@@ -178,7 +178,6 @@ namespace threepp {
         virtual bool setValue(const std::string& key, const MaterialValue& value);
 
     private:
-        bool disposed_ = false;
         std::string uuid_;
         unsigned int version_ = 0;
         inline static std::atomic<unsigned int> materialId{0};

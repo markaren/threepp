@@ -1,5 +1,6 @@
 
 add_test_executable(BufferAttribute_test)
+add_test_executable(Dispose_test)
 add_test_executable(EventDispatcher_test)
 add_test_executable(InstanceIds_test)
 add_test_executable(Layers_test)
