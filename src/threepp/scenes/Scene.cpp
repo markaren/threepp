@@ -12,9 +12,27 @@ std::string Scene::type() const {
     return "Scene";
 }
 
+void Scene::copy(const Object3D& source, bool recursive) {
+    Object3D::copy(source, recursive);
+
+    if (const auto s = source.as<Scene>()) {
+
+        background = s->background;
+        environment = s->environment;
+        fog = s->fog;
+        overrideMaterial = s->overrideMaterial;
+        autoUpdate = s->autoUpdate;
+    }
+}
+
 std::shared_ptr<Scene> Scene::create() {
 
     return std::make_shared<Scene>();
+}
+
+std::shared_ptr<Object3D> Scene::createDefault() {
+
+    return create();
 }
 
 Background::Background() {}

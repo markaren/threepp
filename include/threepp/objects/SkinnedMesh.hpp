@@ -53,9 +53,15 @@ namespace threepp {
         const Box3& posedBoundingBox();
         const Sphere& posedBoundingSphere();
 
+        // Shares the source's skeleton, as three.js does; a copy with its own
+        // bones needs them cloned and bound separately.
+        void copy(const Object3D& source, bool recursive = true) override;
+
     protected:
         const Sphere* raycastBoundingSphere() override;
         const Box3* raycastBoundingBox() override;
+
+        std::shared_ptr<Object3D> createDefault() override;
 
     private:
         // Marked stale by updateMatrixWorld; filled by the two accessors above.

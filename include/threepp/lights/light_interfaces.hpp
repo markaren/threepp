@@ -32,6 +32,15 @@ namespace threepp {
 
         virtual ~LightWithTarget() = default;
 
+    protected:
+        // A copy aims at the same object as its source. The default target
+        // cannot be moved through this interface, so there is nothing to copy
+        // when the source has none.
+        void copyTarget(const LightWithTarget& source) {
+
+            this->target_ = source.target_;
+        }
+
     private:
         Object3D* target_ = nullptr;
         Object3D defaultTarget;

@@ -33,6 +33,8 @@ namespace threepp {
 
     protected:
         PointLight(const Color& color, std::optional<float> intensity, float distance, float decay);
+
+        std::shared_ptr<Object3D> createDefault() override;
     };
 
 }// namespace threepp

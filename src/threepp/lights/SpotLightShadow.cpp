@@ -7,6 +7,15 @@ using namespace threepp;
 SpotLightShadow::SpotLightShadow()
     : LightShadow(std::make_unique<PerspectiveCamera>(50.f, 1.f, 0.5f, 500.f)) {}
 
+void SpotLightShadow::copy(const LightShadow& source) {
+    LightShadow::copy(source);
+
+    if (const auto s = dynamic_cast<const SpotLightShadow*>(&source)) {
+
+        focus = s->focus;
+    }
+}
+
 void SpotLightShadow::updateMatrices(Light& _light) {
 
     auto light = _light.as<SpotLight>();

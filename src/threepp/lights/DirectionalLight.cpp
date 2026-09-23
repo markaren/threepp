@@ -28,7 +28,11 @@ void DirectionalLight::dispose() {
 void DirectionalLight::copy(const Object3D& source, bool recursive) {
     Light::copy(source, recursive);
 
-    // TODO
+    if (const auto l = source.as<DirectionalLight>()) {
+
+        shadow->copy(*l->shadow);
+        copyTarget(*l);
+    }
 }
 
 std::shared_ptr<DirectionalLight> DirectionalLight::create(const Color& color, std::optional<float> intensity) {

@@ -46,12 +46,19 @@ namespace threepp {
 
         void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) override;
 
+        void copy(const Object3D& source, bool recursive = true) override;
+
         static std::shared_ptr<InstancedMesh> create(
                 std::shared_ptr<BufferGeometry> geometry,
                 std::shared_ptr<Material> material,
                 size_t count);
 
         ~InstancedMesh() override;
+
+    protected:
+        // Sized from this mesh's capacity, so copy() can fill the instance
+        // buffers in place.
+        std::shared_ptr<Object3D> createDefault() override;
 
     private:
         Mesh _mesh;

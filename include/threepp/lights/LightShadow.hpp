@@ -52,6 +52,10 @@ namespace threepp {
 
         void dispose();
 
+        // Copies the settings (bias, radius, map size, the shadow camera's
+        // projection), not the rendered map.
+        virtual void copy(const LightShadow& source);
+
         virtual ~LightShadow();
 
     protected:

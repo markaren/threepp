@@ -146,6 +146,34 @@ void InstancedMesh::raycast(const Raycaster& raycaster, std::vector<Intersection
     }
 }
 
+void InstancedMesh::copy(const Object3D& source, bool recursive) {
+    Mesh::copy(source, recursive);
+
+    if (const auto m = source.as<InstancedMesh>()) {
+
+        instanceMatrix_->copy(*m->instanceMatrix_);
+        instanceMatrix_->needsUpdate();
+
+        if (m->instanceColor_) {
+
+            if (instanceColor_) {
+
+                instanceColor_->copy(*m->instanceColor_);
+                instanceColor_->needsUpdate();
+            } else {
+
+                instanceColor_ = m->instanceColor_->clone();
+            }
+        }
+
+        count_ = m->count_;
+        maxCount_ = m->maxCount_;
+
+        boundingBox = m->boundingBox;
+        boundingSphere = m->boundingSphere;
+    }
+}
+
 InstancedMesh::~InstancedMesh() {
     dispose();
 }
@@ -156,6 +184,11 @@ std::shared_ptr<InstancedMesh> InstancedMesh::create(
         size_t count) {
 
     return std::make_shared<InstancedMesh>(std::move(geometry), std::move(material), count);
+}
+
+std::shared_ptr<Object3D> InstancedMesh::createDefault() {
+
+    return create(nullptr, nullptr, maxCount_);
 }
 
 void InstancedMesh::computeBoundingBox() {

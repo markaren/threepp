@@ -25,6 +25,25 @@ std::string SkinnedMesh::type() const {
     return "SkinnedMesh";
 }
 
+void SkinnedMesh::copy(const Object3D& source, bool recursive) {
+    Mesh::copy(source, recursive);
+
+    if (const auto m = source.as<SkinnedMesh>()) {
+
+        bindMode = m->bindMode;
+        bindMatrix.copy(m->bindMatrix);
+        bindMatrixInverse.copy(m->bindMatrixInverse);
+        skeleton = m->skeleton;
+
+        posedBoundsDirty_ = true;
+    }
+}
+
+std::shared_ptr<Object3D> SkinnedMesh::createDefault() {
+
+    return create(nullptr, nullptr);
+}
+
 void SkinnedMesh::bind(const std::shared_ptr<Skeleton>& skeleton, std::optional<Matrix4> bindMatrix) {
 
     this->skeleton = skeleton;

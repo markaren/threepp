@@ -39,10 +39,15 @@ namespace threepp {
         // Updates the camera projection matrix. Must be called after any change of parameters.
         void updateProjectionMatrix() override;
 
+        void copy(const Object3D& source, bool recursive = true) override;
+
         static std::shared_ptr<OrthographicCamera> create(
                 float left = -1, float right = 1,
                 float top = 1, float bottom = -1,
                 float near = 0.1f, float far = 2000);
+
+    protected:
+        std::shared_ptr<Object3D> createDefault() override;
     };
 
 }// namespace threepp

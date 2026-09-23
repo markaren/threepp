@@ -50,6 +50,11 @@ namespace threepp {
         void updateWorldMatrix(bool updateParents, bool updateChildren) override;
 
         virtual void updateProjectionMatrix() {}
+
+        void copy(const Object3D& source, bool recursive = true) override;
+
+    protected:
+        std::shared_ptr<Object3D> createDefault() override;
     };
 
 }// namespace threepp

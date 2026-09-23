@@ -51,6 +51,9 @@ namespace threepp {
     protected:
         RectAreaLight(const Color& color, std::optional<float> intensity, float width, float height);
 
+        // Sized from this light: width and height are fixed at construction.
+        std::shared_ptr<Object3D> createDefault() override;
+
     private:
         std::shared_ptr<Mesh> mesh_;
     };

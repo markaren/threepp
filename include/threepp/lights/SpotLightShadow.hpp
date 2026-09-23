@@ -15,6 +15,8 @@ namespace threepp {
 
         void updateMatrices(Light& light) override;
 
+        void copy(const LightShadow& source) override;
+
         static std::shared_ptr<SpotLightShadow> create();
 
     protected:

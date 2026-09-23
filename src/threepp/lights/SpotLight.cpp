@@ -48,6 +48,9 @@ void SpotLight::copy(const Object3D& source, bool recursive) {
         this->penumbra = l->penumbra;
         this->decay = l->decay;
         this->radius = l->radius;
+
+        shadow->copy(*l->shadow);
+        copyTarget(*l);
     }
 }
 

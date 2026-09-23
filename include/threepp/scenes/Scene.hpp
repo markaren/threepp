@@ -55,7 +55,14 @@ namespace threepp {
 
         [[nodiscard]] std::string type() const override;
 
+        // Background, environment, fog and override material are shared with
+        // the source, not cloned.
+        void copy(const Object3D& source, bool recursive = true) override;
+
         static std::shared_ptr<Scene> create();
+
+    protected:
+        std::shared_ptr<Object3D> createDefault() override;
     };
 
 }// namespace threepp

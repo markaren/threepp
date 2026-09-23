@@ -21,6 +21,9 @@ namespace threepp {
         static std::shared_ptr<LineSegments> create(
                 const std::shared_ptr<BufferGeometry>& geometry = nullptr,
                 const std::shared_ptr<Material>& material = nullptr);
+
+    protected:
+        std::shared_ptr<Object3D> createDefault() override;
     };
 
 }// namespace threepp

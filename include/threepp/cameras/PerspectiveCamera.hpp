@@ -97,9 +97,14 @@ namespace threepp {
 
         void updateProjectionMatrix() override;
 
+        void copy(const Object3D& source, bool recursive = true) override;
+
         static std::shared_ptr<PerspectiveCamera> create(
                 float fov = 60, float aspect = 1,
                 float near = 0.1, float far = 2000);
+
+    protected:
+        std::shared_ptr<Object3D> createDefault() override;
     };
 
 }// namespace threepp

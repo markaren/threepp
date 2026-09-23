@@ -21,3 +21,8 @@ std::shared_ptr<LineLoop> LineLoop::create(const std::shared_ptr<BufferGeometry>
 
     return std::make_shared<LineLoop>(geometry, (material));
 }
+
+std::shared_ptr<Object3D> LineLoop::createDefault() {
+
+    return create();
+}

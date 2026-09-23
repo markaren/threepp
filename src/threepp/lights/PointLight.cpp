@@ -45,10 +45,17 @@ void PointLight::copy(const Object3D& source, bool recursive) {
         this->distance = l->distance;
         this->decay = l->decay;
         this->radius = l->radius;
+
+        shadow->copy(*l->shadow);
     }
 }
 
 std::shared_ptr<PointLight> PointLight::create(const Color& color, std::optional<float> intensity, float distance, float decay) {
 
     return std::shared_ptr<PointLight>(new PointLight(color, intensity, distance, decay));
+}
+
+std::shared_ptr<Object3D> PointLight::createDefault() {
+
+    return create();
 }

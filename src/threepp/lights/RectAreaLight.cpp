@@ -63,10 +63,28 @@ void RectAreaLight::updateMatrixWorld(bool force) {
 }
 
 void RectAreaLight::copy(const Object3D& source, bool recursive) {
-    Light::copy(source, recursive);
+    Light::copy(source, false);
+
+    if (!recursive) return;
+
+    // The source's emissive quad is a child like any other, but this light
+    // built its own in the constructor; cloning it too would draw two.
+    const auto l = source.as<RectAreaLight>();
+    const Object3D* quad = l ? l->mesh_.get() : nullptr;
+
+    for (const auto& child : source.children) {
+
+        if (child == quad) continue;
+        this->add(child->clone());
+    }
 }
 
 std::shared_ptr<RectAreaLight> RectAreaLight::create(const Color& color, std::optional<float> intensity, float width, float height) {
 
     return std::shared_ptr<RectAreaLight>(new RectAreaLight(color, intensity, width, height));
+}
+
+std::shared_ptr<Object3D> RectAreaLight::createDefault() {
+
+    return create(color, intensity, width, height);
 }

@@ -70,6 +70,18 @@ void LightShadow::dispose() {
     }
 }
 
+void LightShadow::copy(const LightShadow& source) {
+
+    camera->copy(*source.camera, false);
+    camera->updateProjectionMatrix();
+
+    bias = source.bias;
+    normalBias = source.normalBias;
+    radius = source.radius;
+    mapSize.copy(source.mapSize);
+    autoUpdate = source.autoUpdate;
+}
+
 LightShadow::~LightShadow() {
 
     dispose();

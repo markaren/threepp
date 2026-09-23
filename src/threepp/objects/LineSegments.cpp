@@ -52,3 +52,8 @@ std::shared_ptr<LineSegments> LineSegments::create(
 
     return std::make_shared<LineSegments>(geometry, (material));
 }
+
+std::shared_ptr<Object3D> LineSegments::createDefault() {
+
+    return create();
+}
