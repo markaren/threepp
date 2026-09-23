@@ -75,6 +75,12 @@ namespace threepp::gl {
         bool shadowMapEnabled{};
         ShadowMap shadowMapType{};
 
+        // Likewise TONE_MAPPING (and the operator's function) and
+        // USE_LEGACY_LIGHTS: changing Renderer::toneMapping or useLegacyLights
+        // after the material was drawn has to rebuild its program.
+        ToneMapping toneMapping{ToneMapping::None};
+        bool useLegacyLights{};
+
         unsigned int lightsStateVersion{};
 
         std::vector<UniformObject*> uniformsList;

@@ -74,3 +74,46 @@ TEST_CASE("ToneMapping: GL AgX is not the Linear fallback", "[tonemapping]") {
     CHECK(toneMappedByte(1.f, ToneMapping::Linear) > 250.0);
     CHECK(toneMappedByte(1.f, ToneMapping::AgX) < 200.0);
 }
+
+// Tone mapping is compiled into each material's program (TONE_MAPPING and the
+// operator's function), so changing Renderer::toneMapping after a material has
+// been drawn has to rebuild that program. The program-change check compared
+// neither toneMapping nor useLegacyLights, so the first program stayed in use
+// and the change had no effect on anything already drawn.
+TEST_CASE("ToneMapping: changing it on a live renderer rebuilds drawn materials", "[tonemapping]") {
+    auto scene = Scene::create();
+    scene->background = Color(0, 0, 0);
+
+    auto mat = MeshBasicMaterial::create();
+    mat->color = Color(1.f, 1.f, 1.f);
+    scene->add(Mesh::create(PlaneGeometry::create(4, 4), mat));
+
+    auto camera = OrthographicCamera::create(-1, 1, 1, -1, 0.1f, 10.f);
+    camera->position.set(0, 0, 2);
+    camera->lookAt(Vector3{0, 0, 0});
+
+    GLRenderer renderer(glCanvas());
+    renderer.outputColorSpace = ColorSpace::NoColorSpace;
+    renderer.setClearColor(Color(0, 0, 0));
+
+    const auto centre = [&] {
+        renderer.render(*scene, *camera);
+        const auto px = renderer.readRGBPixels();
+        REQUIRE(px.size() == DATA_SIZE);
+        return centerPixel(px, RT_WIDTH, RT_HEIGHT).r;
+    };
+
+    renderer.toneMapping = ToneMapping::None;
+    const double none = centre();
+
+    renderer.toneMapping = ToneMapping::AgX;
+    const double agx = centre();
+
+    renderer.toneMapping = ToneMapping::None;
+    const double noneAgain = centre();
+
+    INFO("None " << none << ", then AgX " << agx << " (analytic 150), then None " << noneAgain);
+    CHECK(none > 250.0);
+    CHECK(std::abs(agx - 150.0) < 2.0);
+    CHECK(noneAgain > 250.0);
+}

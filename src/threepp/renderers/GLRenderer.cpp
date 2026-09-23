@@ -982,6 +982,8 @@ struct GLRenderer::Impl {
         materialProperties->vertexAlphas = parameters.vertexAlphas;
         materialProperties->shadowMapEnabled = parameters.shadowMapEnabled;
         materialProperties->shadowMapType = parameters.shadowMapType;
+        materialProperties->toneMapping = parameters.toneMapping;
+        materialProperties->useLegacyLights = parameters.useLegacyLights;
     }
 
     gl::GLProgram* setProgram(Camera* camera, Object3D* _scene, Material* material, Object3D* object) {
@@ -1109,6 +1111,17 @@ struct GLRenderer::Impl {
 
                 // Likewise SHADOWMAP_TYPE_* — switching Basic/PCF/PCF-soft/VSM
                 // changes the sampling code, not a uniform.
+                needsProgramChange = true;
+
+            } else if (materialProperties->toneMapping !=
+                       (material->toneMapped ? scope.toneMapping : ToneMapping::None)) {
+
+                // TONE_MAPPING and the operator are compiled into the program;
+                // same expression as ProgramParameters.
+                needsProgramChange = true;
+
+            } else if (materialProperties->useLegacyLights != scope.useLegacyLights) {
+
                 needsProgramChange = true;
             }
 
