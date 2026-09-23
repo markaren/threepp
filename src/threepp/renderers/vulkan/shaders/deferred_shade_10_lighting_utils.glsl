@@ -193,11 +193,20 @@ vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool 
     // flat 6 on a 1-spp lobe re-capped every frame a ray lands on a mover never
     // converges (Jewel Room copper 0.38 and chrome 0.26 boiled while the four
     // balls orbited). The deterministic band below 0.25 is untouched.
+    // The cut applies to the STORED history (capStore, aux .x), i.e. to the
+    // frames AFTER this one; this frame's sample blends at the ordinary weight
+    // (capBlend). Cutting this frame's blend history made the weight depend on
+    // what the sample hit: on a rough surface the hits on a moving emitter are
+    // the bright samples, so the mean was pulled toward them (Jewel Room
+    // chrome, roughness 0.26: animated minus frozen 7.6 -> 6.1 levels). A cap
+    // below 1.5 is still a full reset (mirror-like).
+    const float capBlend = histCap;
+    float       capStore = histCap;
     if (hitMoved) {
         const float viewDepT = 1.0 - smoothstep(0.05, 0.30, rough);// 1 = mirror-like
         const float roughT   = smoothstep(0.25, 0.45, rough);// stochastic band: the lobe averages the mover
-        histCap = mix(mix(min(histCap, 6.0), 1.0, viewDepT), histCap, roughT);
-        if (histCap < 1.5) valid = false;
+        capStore = mix(mix(min(histCap, 6.0), 1.0, viewDepT), histCap, roughT);
+        if (capStore < 1.5) valid = false;
     }
     const vec4 prevR = valid ? texture(reflectPrevTex, paneToPhys(reflectPrevTex, pUv)) : vec4(0.0);
     if (valid && any(greaterThan(abs(prevR.rgb), vec3(1e6)))) valid = false;// garbage guard
@@ -208,7 +217,7 @@ vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool 
         // to the number of REAL samples, so the running mean stays unbiased at
         // half rate.
         const vec4 pa = texture(reflAuxPrevTex, paneToPhys(reflAuxPrevTex, pUv));
-        imageStore(reflAuxWrite, px, vec4(clamp(pa.x, 1.0, histCap), pa.y, pa.z, pa.w));
+        imageStore(reflAuxWrite, px, vec4(clamp(pa.x, 1.0, capStore), pa.y, pa.z, pa.w));
         return vec4(prevR.rgb, cur.a);
     }
     float histLen, moment, trend, hitW;
@@ -245,7 +254,7 @@ vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool 
         // pop → regrow → slash). Alternating boil EMAs to ~±0.2, DC-biased edge
         // boil reaches ~0.6 (mild cap, settling barely touched); real content
         // change pegs |trend| ≈ 1 → cap ~3 → re-blends at content rate.
-        const float trendCap = mix(histCap, 3.0, smoothstep(0.45, 0.9, abs(trend)));
+        const float trendCap = mix(capBlend, 3.0, smoothstep(0.45, 0.9, abs(trend)));
         histLen = max(min(pa.x + 1.0, trendCap), 1.0);
         const float a = 1.0 / histLen;
         accum   = mix(prevR.rgb, cur.rgb, a);
@@ -280,7 +289,7 @@ vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool 
         histLen = 1.0; accum = cur.rgb; moment = curLum * curLum; trend = 0.0;
         hitW    = hitEnc;
     }
-    imageStore(reflAuxWrite, px, vec4(histLen, moment, trend, hitW));
+    imageStore(reflAuxWrite, px, vec4(min(histLen, capStore), moment, trend, hitW));
     return vec4(accum, cur.a);
 }
 
