@@ -2316,6 +2316,75 @@ int main(int argc, char** argv) {
                   "below the water surface the air fog does not attenuate the "
                   "billboards (the air medium stops at the waterline)");
 
+            // Leg 4: the water surface BETWEEN the camera and a good share of
+            // the sparks (camera 1.4 m, water 1.35 m, sparks from 0.6 m up), so
+            // those legs cross the waterline and the clip has to scale each one
+            // to its above-water part. Bracketed rather than analytic: the
+            // byte-domain contribution is not linear in the transmittance, but
+            // it must sit strictly between leg 2 (the whole leg in fog) and
+            // leg 3 (no air fog at all).
+            renderer.setFogWaterSurfaceY(1.35f);
+            sparks->billboardRepr().enabled = false;
+            for (int i = 0; i < 20; ++i) frame();
+            const auto crossOff = renderer.readRGBPixels();
+            sparks->billboardRepr().enabled = true;
+            for (int i = 0; i < 20; ++i) frame();
+            const auto crossOn = renderer.readRGBPixels();
+            renderer.setFogWaterSurfaceY(1e30f);
+
+            const double crossAdd = contribution(crossOn, crossOff);
+            const double crossPos = (clearAdd > fogAdd) ? (crossAdd - fogAdd) / (clearAdd - fogAdd) : -1.0;
+            std::printf("[info] billboard fog across the waterline: added luma %.0f "
+                        "(ratio to clear %.3f; %.2f of the way from whole-leg fog to none)\n",
+                        crossAdd, clearAdd > 0.0 ? crossAdd / clearAdd : -1.0, crossPos);
+            check(crossPos > 0.15 && crossPos < 0.85,
+                  "a billboard leg that crosses the water surface carries the air "
+                  "fog over its above-water part only (between whole-leg fog and none)");
+
+            // Leg 5: the same clip in the deferred shade, which hands the
+            // integral two POINTS (height_fog.glsl's vec3 form) rather than two
+            // heights and a length. The ground (y = 0) comes back, dark so the
+            // haze brightens it, and its fogging is read with no billboards at
+            // three water levels: unset (the whole camera->ground leg in air),
+            // 0.7 m (every leg half in air; the clip lands on the crossing) and
+            // above the camera (no air fog). The middle reading must sit
+            // strictly between the other two.
+            const auto lumaSum = [](const std::vector<unsigned char>& px) {
+                double s = 0.0;
+                for (const unsigned char v : px) s += v;
+                return s;
+            };
+            sparks->billboardRepr().enabled = false;
+            const auto groundMat = std::dynamic_pointer_cast<MeshStandardMaterial>(ground->material());
+            const Color groundColorWas = groundMat->color;
+            groundMat->color = Color(0.08f, 0.08f, 0.08f);
+            ground->visible = true;
+
+            for (int i = 0; i < 20; ++i) frame();
+            const double groundFull = lumaSum(renderer.readRGBPixels());
+            renderer.setFogWaterSurfaceY(0.7f);
+            for (int i = 0; i < 20; ++i) frame();
+            const double groundCross = lumaSum(renderer.readRGBPixels());
+            renderer.setFogWaterSurfaceY(100.f);
+            for (int i = 0; i < 20; ++i) frame();
+            const double groundNone = lumaSum(renderer.readRGBPixels());
+            renderer.setFogWaterSurfaceY(1e30f);
+
+            ground->visible = false;
+            groundMat->color = groundColorWas;
+
+            const double groundSpan = groundFull - groundNone;
+            const double groundPos  = (groundSpan != 0.0) ? (groundCross - groundNone) / groundSpan : -1.0;
+            std::printf("[info] shade-pass fog on the ground: luma sum whole leg %.0f, "
+                        "half leg %.0f, none %.0f (%.2f of the way from none to whole)\n",
+                        groundFull, groundCross, groundNone, groundPos);
+            check(std::abs(groundSpan) > groundNone * 0.01,
+                  "the air fog visibly changes the dark ground (the shade-pass "
+                  "check has something to measure)");
+            check(groundPos > 0.2 && groundPos < 0.9,
+                  "in the deferred shade a camera->surface leg that crosses the "
+                  "water surface carries the air fog over its above-water part only");
+
             // Back to a clear scene for everything downstream.
             VulkanRenderer::HeightFogSettings none;
             none.density = 0.f;

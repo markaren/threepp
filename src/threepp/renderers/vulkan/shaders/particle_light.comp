@@ -217,7 +217,7 @@ float cloudShadowSample(vec3 worldPos) {
 // waterline: murkPathLength below covers the submerged part of the leg.
 #include "height_fog.glsl"
 float heightFogOpticalDepth(vec3 a, vec3 b) {
-    return heightFogLegOpticalDepth(a.y, b.y, distance(a, b), clouds.hfDensity, clouds.hfFalloff,
+    return heightFogLegOpticalDepth(a, b, clouds.hfDensity, clouds.hfFalloff,
                                     clouds.hfBaseY, fog.waterSurfaceY);
 }
 

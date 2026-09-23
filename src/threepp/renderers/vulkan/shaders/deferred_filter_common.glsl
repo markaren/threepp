@@ -94,7 +94,7 @@ vec3 camOriginAt(ivec2 q) {
 // mean, exactly what a recombine extinction wants). Zero when height fog is off.
 #include "height_fog.glsl"
 float heightFogOpticalDepth(vec3 a, vec3 b) {
-    return heightFogLegOpticalDepth(a.y, b.y, distance(a, b), fog.hfDensity, fog.hfFalloff,
+    return heightFogLegOpticalDepth(a, b, fog.hfDensity, fog.hfFalloff,
                                     fog.hfBaseY, fog.waterSurfaceY);
 }
 

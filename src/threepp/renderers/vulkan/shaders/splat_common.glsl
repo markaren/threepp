@@ -482,7 +482,7 @@ uint splatDepthBucket(float dist, float dMin, float dMax, float pLo, float pHi) 
 // Clipped at the waterline: splatMurkPathLength covers the submerged part.
 #include "height_fog.glsl"
 float splatHeightFogOd(vec3 a, vec3 b) {
-    return heightFogLegOpticalDepth(a.y, b.y, distance(a, b), clouds.hfDensity, clouds.hfFalloff,
+    return heightFogLegOpticalDepth(a, b, clouds.hfDensity, clouds.hfFalloff,
                                     clouds.hfBaseY, fog.waterSurfaceY);
 }
 

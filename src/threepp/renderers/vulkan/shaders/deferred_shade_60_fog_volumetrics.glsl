@@ -46,7 +46,7 @@ float fogPathLength(vec3 a, vec3 b) {
 // carry an extinction the shade never applied and glow through the murk.
 #include "height_fog.glsl"
 float heightFogOpticalDepth(vec3 a, vec3 b) {
-    return heightFogLegOpticalDepth(a.y, b.y, distance(a, b), clouds.hfDensity, clouds.hfFalloff,
+    return heightFogLegOpticalDepth(a, b, clouds.hfDensity, clouds.hfFalloff,
                                     clouds.hfBaseY, fog.waterSurfaceY);
 }
 // Surface fog in heterogeneous mode: CLOSED-FORM height-fog extinction over the
