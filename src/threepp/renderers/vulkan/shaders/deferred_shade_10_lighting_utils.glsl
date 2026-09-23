@@ -227,8 +227,18 @@ vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool 
         // trend, cut history multiplicatively → the channel re-blends at
         // content rate; once the content settles, the trend decays and history
         // regrows to the full static cap (settling unharmed).
+        // STOCHASTIC band: normalised by the accumulated SAMPLE deviation too
+        // (aux .y = E[L^2]), as the GI channel's detector is. A rough lobe's 1-spp
+        // GGX sample lands on a bright strip or a dark wall at random, so without
+        // it |sdev| saturated on noise, the trend sat above 0.45 and the cap was
+        // pinned at 3 in a static scene (Jewel Room copper, roughness 0.38, never
+        // converged). Only a stochastic lobe sample carries that per-frame noise:
+        // mirror-like surfaces and glass (marker roughness <= 0.14) trace
+        // deterministic directions and keep the plain detector (the refl
+        // filter's stochBand ramp, 0.20..0.30).
         const float prevLum = dot(prevR.rgb, vec3(0.2126, 0.7152, 0.0722));
-        const float sdev = clamp((curLum - prevLum) / (0.05 + 0.25 * max(curLum, prevLum)), -1.0, 1.0);
+        const float prevSig = sqrt(max(pa.y - prevLum * prevLum, 0.0));
+        const float sdev = clamp((curLum - prevLum) / (0.05 + 0.25 * max(curLum, prevLum) + 2.0 * prevSig * smoothstep(0.20, 0.30, rough)), -1.0, 1.0);
         trend = mix(pa.z, sdev, 0.34);// ~3-frame EMA, carried in aux .z
         // Smooth trend→cap mapping (a hard threshold + multiplicative cut made a
         // relaxation oscillator out of pixels hovering at the boundary: slash →
