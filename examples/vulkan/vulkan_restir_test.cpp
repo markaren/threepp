@@ -434,7 +434,7 @@ int main(int argc, char** argv) {
     if (optDlss == 0) renderer.setFsr(false);// before setDlss: it would create FSR
     renderer.setDlss(optDlss != 0);
     const bool taaSet = renderer.setViewTaa(0, optTaa != 0);// primary; honoured only with no upscaler
-    renderer.setFireflyClamp(20.0f);
+    renderer.setFireflyClamp(1.0f);
     if (!shotPath.empty()) {
         std::cout << "resolve: dlss " << renderer.dlss() << " fsr " << renderer.fsr()
                   << " taa " << renderer.viewTaa(0) << (taaSet ? "" : " (no primary view)") << std::endl;
