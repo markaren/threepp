@@ -3014,6 +3014,13 @@ namespace threepp {
         // stays at -1 here — caller patches it after `ensureMaterialTexture`.
         static MaterialDesc materialFromMesh(const Mesh& m);
 
+        // three.js parity: InstancedMesh::instanceColor multiplies the
+        // material's diffuse color per instance (color_vertex.glsl). Folded
+        // into the entry's own MaterialDesc, which every consumer (raster
+        // G-buffer, traced hits, lidar) already indexes per entry. No-op for
+        // plain meshes and for instanced meshes that never set a color.
+        static void applyInstanceColor(MaterialDesc& md, const MeshEntry& en);
+
         static std::shared_ptr<Texture> emissiveTexOf(const Mesh& m) {
             auto mat = m.material();
             if (!mat) return nullptr;

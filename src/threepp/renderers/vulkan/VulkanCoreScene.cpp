@@ -1670,6 +1670,27 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     }
                 }
                 }
+                // Instance colors live in the per-entry MaterialDescs (see
+                // applyInstanceColor), but no fingerprint sees them: they are
+                // neither a material version nor a geometry attribute. Poll
+                // the attribute per span and route a change through the
+                // material-values patch. Only consumed when structuralSame; a
+                // structural rebuild re-derives every desc and re-records.
+                for (auto& sp : entrySpans_) {
+                    if (!sp.inst) continue;
+                    const FloatBufferAttribute* col = sp.inst->instanceColor();
+                    const unsigned int colVer = col ? col->version : ~0u;
+                    if (col == sp.instColorAttr && colVer == sp.instColorVersion) continue;
+                    sp.instColorAttr    = col;
+                    sp.instColorVersion = colVer;
+                    materialValuesSame = false;
+                    const size_t lastW = (size_t(sp.first) + sp.count - 1) >> 5;
+                    if (lastW >= meshMovedBits_.size()) meshMovedBits_.resize(lastW + 1, 0u);
+                    for (uint32_t i = sp.first; i < sp.first + sp.count; ++i) {
+                        entryMatDirty[i] = true;
+                        meshMovedBits_[i >> 5] |= (1u << (i & 31u));
+                    }
+                }
                 if (structuralSame) {
                     if (bonesDirtyAny) {
                         // Re-skin every SkinnedMesh whose pose changed and
@@ -2132,12 +2153,27 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // (overlay skip matches), so identical Material* pointers
                         // produce identical materialAssetIdx values frame-to-frame.
                         std::unordered_map<const Material*, uint32_t> matAssetMap;
+                        // One-entry memo of the material's desc (before the
+                        // per-entry instance color). A dirty instanced span is
+                        // N consecutive entries sharing one Material, and an
+                        // instance-color edit dirties all of them; without the
+                        // memo each re-runs materialFromMesh + the texture-of
+                        // walk. Patch mode only: materialAssetIdx is copied per
+                        // entry from the cache, so the memoised desc is valid
+                        // for every entry of the same Material.
+                        const Material* memoMat = nullptr;
+                        MaterialDesc memoMd{};
                         for (size_t i = 0; i < entries.size(); ++i) {
                             const MeshEntry& en = entries[i];
                             if (en.isOverlay) continue;// raster-overlay only — no MaterialDesc slot
                             if (patchMatDescs && !entryMatDirty[i]) continue;// unchanged → keep cached desc
                             Mesh* m = en.mesh;
-                            MaterialDesc md = materialFromMesh(*m);
+                            MaterialDesc md;
+                            if (patchMatDescs && memoMat && m->material().get() == memoMat) {
+                                md = memoMd;
+                                md.materialAssetIdx = matDescsCached_[i].materialAssetIdx;
+                            } else {
+                            md = materialFromMesh(*m);
                             if (patchMatDescs) {
                                 // Material* unchanged → its dedup index is stable.
                                 md.materialAssetIdx = matDescsCached_[i].materialAssetIdx;
@@ -2201,6 +2237,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             if (auto tex = terrainNormalTexOf(*m)) {
                                 md.terrainNormalTexIndex = ensureMaterialTexture(tex);
                             }
+                            memoMat = m->material().get();
+                            memoMd  = md;
+                            }
+                            applyInstanceColor(md, en);
                             // Compared against the desc being replaced; on the full
                             // fallback that desc is a default, so assume a change.
                             const MaterialDesc& was = matDescsCached_[i];
@@ -3069,6 +3109,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     }
                     matDescMemo.emplace(matKey, md);
                 }
+                // After the memo: the memo holds the material's desc, the
+                // instance color is per entry.
+                applyInstanceColor(md, en);
                 matDescs[i] = md;
                 // Visibility group (see vulkan_shared.h): blend/transmissive
                 // surfaces move to the alpha mask so pure-visibility occlusion
@@ -3125,6 +3168,12 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             matDescsCached_ = matDescs;
             for (auto& d : matDescsDirty_) d.clear();
             cacheCullFlags(matDescs);
+            // matDescs just folded in every span's current instance colors.
+            for (auto& sp : entrySpans_) {
+                if (!sp.inst) continue;
+                sp.instColorAttr    = sp.inst->instanceColor();
+                sp.instColorVersion = sp.instColorAttr ? sp.instColorAttr->version : ~0u;
+            }
 
             // Topology rebuild vs temporal history. Nothing consumed ACROSS
             // frames keys on the entry order any more: the reproject guards
@@ -3482,6 +3531,18 @@ void VulkanRenderer::Impl::collectSplatClouds(Object3D& scene, Camera& camera) {
             }
         }
 
+
+void VulkanRenderer::Impl::applyInstanceColor(MaterialDesc& md, const MeshEntry& en) {
+            if (!en.isInstanced) return;
+            const auto* attr = static_cast<const InstancedMesh*>(en.mesh)->instanceColor();
+            if (!attr) return;
+            const auto& a = attr->array();
+            const size_t o = static_cast<size_t>(en.instanceIndex) * 3u;
+            if (o + 3u > a.size()) return;
+            md.albedo[0] *= a[o];
+            md.albedo[1] *= a[o + 1];
+            md.albedo[2] *= a[o + 2];
+        }
 
 VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const Mesh& m) {
             MaterialDesc d{};

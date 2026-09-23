@@ -243,7 +243,15 @@ namespace threepp::vulkan::impl {
         // contract the GL backend's attribute upload already requires.
         std::array<float, 16> meshWorld{};// mesh->matrixWorld at last refresh
         unsigned int instMatVersion = ~0u;// instanceMatrix()->version at last refresh
-        bool movedThisFrame = false;      // set by the lean refresh; consumed by
+        // instanceColor state last folded into this span's MaterialDescs.
+        // Same contract as instMatVersion: setColorAt + instanceColor()->
+        // needsUpdate(). The attribute pointer is tracked too because
+        // InstancedMesh creates it lazily on the first setColorAt. Left at
+        // the defaults by the expansion; the full rebuild records it, and the
+        // diff records it when it patches the descs.
+        const FloatBufferAttribute* instColorAttr = nullptr;
+        unsigned int instColorVersion = ~0u;
+        bool movedThisFrame = false;     // set by the lean refresh; consumed by
                                           // the diff, motion matrices and TLAS refit
         // True while the motionMat scratch holds non-identity blocks for this
         // span (set when a moved span writes real deltas; the next static

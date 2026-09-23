@@ -185,6 +185,13 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanInstanceExpand_test COMMAND VulkanInstanceExpand_test)
     set_tests_properties(VulkanInstanceExpand_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # InstancedMesh::setColorAt tints each instance (per-entry MaterialDesc
+    # albedo), set before the first frame, created late, and edited in place.
+    add_executable(VulkanInstanceColor_test VulkanInstanceColor_test.cpp)
+    target_link_libraries(VulkanInstanceColor_test PRIVATE threepp)
+    add_test(NAME VulkanInstanceColor_test COMMAND VulkanInstanceColor_test)
+    set_tests_properties(VulkanInstanceColor_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # ParticleField phase 0: the entity must be ONE entry whatever its capacity.
     # Asserts the three O(entries) CPU phases stay flat from a 10k- to a
     # 300k-particle field (read straight out of the CPU phase profiler), that a
