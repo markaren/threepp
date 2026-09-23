@@ -2293,6 +2293,29 @@ int main(int argc, char** argv) {
                   "unfogged; F4 routes the transmittance through the per-view "
                   "record rather than a descriptor set)");
 
+            // Leg 3: the same medium with the water surface above the camera and
+            // the sparks. The air medium stops at the waterline (height_fog.glsl),
+            // so a wholly submerged leg carries none of it; the murk owns that
+            // part of the leg and is off here. The billboards must add what they
+            // add in clear air. The billboard copy of the integral used to lack
+            // the clip and dimmed them as in leg 2.
+            renderer.setFogWaterSurfaceY(100.f);
+            sparks->billboardRepr().enabled = false;
+            for (int i = 0; i < 20; ++i) frame();
+            const auto wetOff = renderer.readRGBPixels();
+            sparks->billboardRepr().enabled = true;
+            for (int i = 0; i < 20; ++i) frame();
+            const auto wetOn = renderer.readRGBPixels();
+            renderer.setFogWaterSurfaceY(1e30f);
+
+            const double wetAdd = contribution(wetOn, wetOff);
+            std::printf("[info] billboard fog below the waterline: added luma %.0f "
+                        "(ratio to clear %.3f)\n",
+                        wetAdd, clearAdd > 0.0 ? wetAdd / clearAdd : -1.0);
+            check(clearAdd > 0.0 && std::abs(wetAdd - clearAdd) < clearAdd * 0.05,
+                  "below the water surface the air fog does not attenuate the "
+                  "billboards (the air medium stops at the waterline)");
+
             // Back to a clear scene for everything downstream.
             VulkanRenderer::HeightFogSettings none;
             none.density = 0.f;

@@ -213,21 +213,12 @@ float cloudShadowSample(vec3 worldPos) {
     return texture(cloudShadowTex, suv).r;
 }
 
-// Closed-form exponential-height-fog optical depth over [a,b] — KEEP IN SYNC
-// with heightFogOpticalDepth in deferred_shade_60_fog_volumetrics.glsl /
-// deferred_filter_common.glsl / particle.frag (same clamps, same Taylor guard).
+// Closed-form exponential-height-fog optical depth over [a,b], clipped at the
+// waterline: murkPathLength below covers the submerged part of the leg.
+#include "height_fog.glsl"
 float heightFogOpticalDepth(vec3 a, vec3 b) {
-    if (clouds.hfDensity <= 0.0) return 0.0;
-    const float H   = max(clouds.hfFalloff, 1e-3);
-    const float ya  = max(a.y - clouds.hfBaseY, 0.0);
-    const float yb  = max(b.y - clouds.hfBaseY, 0.0);
-    const float len = min(distance(a, b), 1.0e7);
-    const float ea = exp(-ya / H);
-    const float eb = exp(-yb / H);
-    const float x  = (yb - ya) / H;
-    const float f  = (abs(x) < 1e-3) ? (ea * (1.0 - 0.5 * x + x * x * (1.0 / 6.0)))
-                                     : ((ea - eb) / x);
-    return min(clouds.hfDensity * len * f, 80.0);
+    return heightFogLegOpticalDepth(a.y, b.y, distance(a, b), clouds.hfDensity, clouds.hfFalloff,
+                                    clouds.hfBaseY, fog.waterSurfaceY);
 }
 
 // Leg length clipped to BELOW the water surface — mirrors fogPathLength.
@@ -443,6 +434,8 @@ void main() {
             const vec3  x = camPos + rd * t;
             const float sigmaX = clouds.hfDensity * exp(-max(x.y - clouds.hfBaseY, 0.0) / H);
             if (sigmaX <= 1e-7) continue;
+            // A submerged step scatters no air, as in the shade pass's march.
+            if (fog.waterSurfaceY < 1e29 && x.y < fog.waterSurfaceY) continue;
             const float trCam = exp(-heightFogOpticalDepth(camPos, x));
             if (trCam < 0.003) break;
             vec3 stepSum = vec3(0.0);

@@ -1,4 +1,5 @@
 #version 460
+#extension GL_GOOGLE_include_directive : enable
 
 // Particle billboard fragment shader. Mirrors the GL ParticleSystem fragment
 // shader (modulate per-particle vertex color × particle texture) and the HUD
@@ -183,25 +184,12 @@ vec3 toneMap(vec3 c, uint mode, float exposure) {
 }
 
 // Closed-form exponential-height-fog optical depth along [camY, partY] over the
-// leg of length `len`. Numerically-stable (1−e^{−x})/x form (avoids the fp32
-// cancellation of e^{-ya}−e^{-yb} when the falloff is huge / near-uniform).
-// KEEP IN SYNC with heightFogOpticalDepth in the deferred shaders.
+// leg of length `len`, clipped at the waterline: murkOpticalDepth below covers
+// the submerged part of the leg.
+#include "height_fog.glsl"
 float airOpticalDepth(float camY, float partY, float len) {
-    if (ofog.hfDensity <= 0.0) return 0.0;
-    const float H  = max(ofog.hfFalloff, 1e-3);
-    const float ya = max(camY  - ofog.hfBaseY, 0.0);
-    const float yb = max(partY - ofog.hfBaseY, 0.0);
-    // Overflow-safe difference form (ea−eb)/x + Taylor near x→0, with a finite leg
-    // clamp + saturated optical depth so no exp(-od) ever sees Inf/NaN (particle
-    // legs are finite, but this KEEPS IN SYNC with heightFogOpticalDepth in
-    // deferred_shade_60_fog_volumetrics.glsl / deferred_filter_common.glsl).
-    const float clampedLen = min(len, 1.0e7);
-    const float ea = exp(-ya / H);
-    const float eb = exp(-yb / H);
-    const float x  = (yb - ya) / H;
-    const float f  = (abs(x) < 1e-3) ? (ea * (1.0 - 0.5 * x + x * x * (1.0 / 6.0)))
-                                     : ((ea - eb) / x);
-    return min(ofog.hfDensity * clampedLen * f, 80.0);
+    return heightFogLegOpticalDepth(camY, partY, len, ofog.hfDensity, ofog.hfFalloff,
+                                    ofog.hfBaseY, ofog.waterSurfaceY);
 }
 
 // Homogeneous underwater-murk optical depth over the BELOW-waterSurfaceY portion

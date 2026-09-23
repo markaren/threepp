@@ -86,43 +86,16 @@ vec3 camOriginAt(ivec2 q) {
     return camRayOrigin(ndc);
 }
 
-// Closed-form exponential-height-fog optical depth along [a,b] — KEEP IN SYNC
-// with heightFogOpticalDepth in deferred_shade_60_fog_volumetrics.glsl. Ignores
-// the noise modulation (a smooth mean, exactly what a recombine extinction
-// wants). Zero when height fog is off.
+// Closed-form exponential-height-fog optical depth along [a,b], clipped at the
+// waterline. The same function as the shade pass's heightFogOpticalDepth
+// (deferred_shade_60_fog_volumetrics.glsl): this extinction is what the
+// GI/reflection recombine multiplies its added radiance by, so it has to match
+// what the shade applied to the base. Ignores the noise modulation (a smooth
+// mean, exactly what a recombine extinction wants). Zero when height fog is off.
+#include "height_fog.glsl"
 float heightFogOpticalDepth(vec3 a, vec3 b) {
-    if (fog.hfDensity <= 0.0) return 0.0;
-    // AIR-MEDIUM WATERLINE CLIP — the shade-side twin's block verbatim, and it
-    // has to stay that way: this extinction is what the GI/reflection recombine
-    // multiplies its added radiance by, so a clip here that the shade does not
-    // make (or the reverse) leaks recombined light through the murk. See the
-    // shade-side comment for why the profile needs clipping at all (it clamps to
-    // constant σ0 below baseY, filling the water column at full density).
-    vec3 pa = a, pb = b;
-    if (fog.waterSurfaceY < 1e29) {
-        const float wa = a.y - fog.waterSurfaceY;
-        const float wb = b.y - fog.waterSurfaceY;
-        if (wa < 0.0 && wb < 0.0) return 0.0;                  // wholly submerged
-        const float tc = wa / (wa - wb);                       // surface crossing
-        if (wa < 0.0)      pa = mix(a, b, tc);
-        else if (wb < 0.0) pb = mix(a, b, tc);
-    }
-    const float H   = max(fog.hfFalloff, 1e-3);
-    const float ya  = max(pa.y - fog.hfBaseY, 0.0);
-    const float yb  = max(pb.y - fog.hfBaseY, 0.0);
-    // Clamp the leg (distance()² overflows fp32 for a sentinel/near-infinite end
-    // point → Inf, then Inf·0 → NaN) and saturate the optical depth so every
-    // exp(-od) sees a finite value. KEEP IN SYNC with the shade shader.
-    const float len = min(distance(pa, pb), 1.0e7);
-    // Overflow-safe DIFFERENCE form (ea−eb)/x with a Taylor fallback near x→0 —
-    // ea, eb ≤ 1 (never overflow), avoids the fp32 cancellation of a huge-H profile.
-    // KEEP IN SYNC with deferred_shade_60_fog_volumetrics.glsl.
-    const float ea = exp(-ya / H);
-    const float eb = exp(-yb / H);
-    const float x  = (yb - ya) / H;
-    const float f  = (abs(x) < 1e-3) ? (ea * (1.0 - 0.5 * x + x * x * (1.0 / 6.0)))
-                                     : ((ea - eb) / x);
-    return min(fog.hfDensity * len * f, 80.0);
+    return heightFogLegOpticalDepth(a.y, b.y, distance(a, b), fog.hfDensity, fog.hfFalloff,
+                                    fog.hfBaseY, fog.waterSurfaceY);
 }
 
 // Fog transmittance over the camera→surface leg — the GI/reflection recombine

@@ -1,4 +1,5 @@
 #version 460
+#extension GL_GOOGLE_include_directive       : enable
 #extension GL_EXT_scalar_block_layout    : require
 #extension GL_EXT_buffer_reference       : require
 #extension GL_EXT_buffer_reference2      : require
@@ -265,29 +266,12 @@ vec3 viewOf(vec4 p) {
 }
 
 // ── F4: fog attenuation on a billboard ──────────────────────────────────────
-// A DELIBERATE SECOND COPY of particle.frag's overlay-fog closed forms, which
-// are themselves in sync with heightFogOpticalDepth in
-// deferred_shade_60_fog_volumetrics.glsl. Copied rather than shared because the
-// legacy billboard path must stay byte-identical (the parent plan requires it
-// untouched) and folding these onto a header would recompile it; the same
-// deliberate-duplication call F3 note 6 made for the display curves. If a third
-// copy ever appears, that is the moment to merge all of them.
-//
-// Numerically-stable (e^a − e^b)/x form: the plain difference of exponentials
-// cancels catastrophically in fp32 when the falloff is large (near-uniform fog),
-// which is exactly the fjord's murk.
+// Air-medium optical depth over the camera→particle leg, clipped at the
+// waterline: bbMurkOpticalDepth below covers the submerged part of the leg.
+#include "height_fog.glsl"
 float bbAirOpticalDepth(BbView V, float partY, float len) {
-    if (V.hfDensity <= 0.0) return 0.0;
-    const float H  = max(V.hfFalloff, 1e-3);
-    const float ya = max(V.camWorldY - V.hfBaseY, 0.0);
-    const float yb = max(partY       - V.hfBaseY, 0.0);
-    const float clampedLen = min(len, 1.0e7);
-    const float ea = exp(-ya / H);
-    const float eb = exp(-yb / H);
-    const float x  = (yb - ya) / H;
-    const float f  = (abs(x) < 1e-3) ? (ea * (1.0 - 0.5 * x + x * x * (1.0 / 6.0)))
-                                     : ((ea - eb) / x);
-    return min(V.hfDensity * clampedLen * f, 80.0);
+    return heightFogLegOpticalDepth(V.camWorldY, partY, len, V.hfDensity, V.hfFalloff,
+                                    V.hfBaseY, V.waterSurfaceY);
 }
 
 // Homogeneous murk over the BELOW-waterSurfaceY portion of the leg only.

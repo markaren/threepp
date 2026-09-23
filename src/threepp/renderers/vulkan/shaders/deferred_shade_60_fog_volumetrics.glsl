@@ -40,59 +40,14 @@ float fogPathLength(vec3 a, vec3 b) {
 // ── Heterogeneous height-fog surface extinction (setHeightFog) ───────────────
 // Closed-form exponential-height-fog optical depth along [a,b] (ignores the
 // noise modulation — a smooth mean is exactly what the FAR remainder wants).
+// Clipped at the waterline, so the air medium does not fill the water column
+// on top of the murk. deferred_filter_common.glsl's recombine extinction calls
+// the same function: if the two differed, the GI/reflection recombine would
+// carry an extinction the shade never applied and glow through the murk.
+#include "height_fog.glsl"
 float heightFogOpticalDepth(vec3 a, vec3 b) {
-    if (clouds.hfDensity <= 0.0) return 0.0;
-    // ── THE AIR MEDIUM STOPS AT THE WATERLINE ────────────────────────────────
-    // The profile below clamps to a CONSTANT σ0 under baseY (the max()es on
-    // ya/yb), so with a water surface present the whole submerged column would
-    // carry the air medium at full base density: a squall's mist hazing the
-    // underwater view, layered on top of the murk that already owns that leg.
-    // Clip the segment to its ABOVE-water portion instead — air above, murk
-    // below, one medium per leg portion and no double count. waterSurfaceY
-    // unset (1e30) leaves both endpoints alone, so a scene that never calls
-    // setFogWaterSurfaceY runs the pre-clip arithmetic textually.
-    // KEEP IN SYNC with deferred_filter_common.glsl's twin: the GI/reflection
-    // recombine multiplies by the extinction computed THERE, and an unclipped
-    // recombine glows its added radiance straight through the murk.
-    vec3 pa = a, pb = b;
-    if (fog.waterSurfaceY < 1e29) {
-        const float wa = a.y - fog.waterSurfaceY;
-        const float wb = b.y - fog.waterSurfaceY;
-        if (wa < 0.0 && wb < 0.0) return 0.0;                  // wholly submerged
-        const float tc = wa / (wa - wb);                       // surface crossing
-        if (wa < 0.0)      pa = mix(a, b, tc);
-        else if (wb < 0.0) pb = mix(a, b, tc);
-    }
-    const float H   = max(clouds.hfFalloff, 1e-3);
-    const float ya  = max(pa.y - clouds.hfBaseY, 0.0);
-    const float yb  = max(pb.y - clouds.hfBaseY, 0.0);
-    // Clamp the leg so a sentinel / near-infinite end point can NEVER overflow.
-    // compositeClouds fogs the cloud in-scatter over camP→(camP+dir·meanDist); on
-    // a clear-SKY pixel meanDist falls back to sceneDist = 1e30, and distance()
-    // SQUARES the components: (1e30)² = 1e60 ≫ fp32 max (3.4e38) → Inf. That Inf
-    // then poisons the product below — Inf·f = Inf, or Inf·0 = NaN when f underflows
-    // for a grazing/long leg (camera high above a shallow layer, ya/H ≳ 87 ⇒ ea→0)
-    // — and exp(-NaN) = NaN blacks out the whole sky. 1e7 m dwarfs any real scene
-    // leg; beyond it e^{-od} is already 0, so the clamp is invisible when legit.
-    const float len = min(distance(pa, pb), 1.0e7);
-    // ∫ σ0 e^{-max(y,base)/H} ds along the segment (y linear in s):
-    //   σ0·len·(e^{-ya/H} − e^{-yb/H})/((yb−ya)/H).
-    // ea, eb both ≤ 1 (arguments ≤ 0) so they NEVER overflow. The DIFFERENCE form
-    // (ea−eb)/x is exact everywhere except x→0, where it subtracts two near-equal
-    // fp32 values — catastrophic cancellation when H is HUGE (the near-uniform
-    // default scene.fog profile; banded thick uniform fog + mis-weighted the
-    // GI/reflection recombine). There the Taylor series of (1−e^{−x})/x is exact.
-    // KEEP IN SYNC with deferred_filter_common.glsl and particle.frag.
-    const float ea = exp(-ya / H);
-    const float eb = exp(-yb / H);
-    const float x  = (yb - ya) / H;
-    const float f  = (abs(x) < 1e-3) ? (ea * (1.0 - 0.5 * x + x * x * (1.0 / 6.0)))
-                                     : ((ea - eb) / x);
-    // Saturate the optical depth: exp(-80) ≈ 1.8e-35 ≈ 0, so anything thicker is
-    // fully extinct anyway. With len already finite the product is finite, so this
-    // guarantees a FINITE, non-NaN result at every caller's exp(-od) (the general
-    // fog-hardening rule: no exp(-opticalDepth) is ever fed an Inf/NaN).
-    return min(clouds.hfDensity * len * f, 80.0);
+    return heightFogLegOpticalDepth(a.y, b.y, distance(a, b), clouds.hfDensity, clouds.hfFalloff,
+                                    clouds.hfBaseY, fog.waterSurfaceY);
 }
 // Surface fog in heterogeneous mode: CLOSED-FORM height-fog extinction over the
 // WHOLE camera→surface leg + the ambient/skylight in-scatter fade toward the haze.

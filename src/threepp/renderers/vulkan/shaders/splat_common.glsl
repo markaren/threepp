@@ -462,10 +462,10 @@ uint splatDepthBucket(float dist, float dMin, float dMax, float pLo, float pHi) 
 // ── Fog over the camera -> splat leg ────────────────────────────────────────
 // The ANALYTIC form of every fog term that puts light back INTO this leg:
 // exponential height-fog extinction with ambient in-scatter, the murk below a
-// water surface, and the sun's single-scattering glow. KEEP IN SYNC with
-// heightFogOpticalDepth / fogPathLength / volumetricDirScatter in
-// deferred_shade_60_fog_volumetrics.glsl and particle_light.comp — same
-// clamps, same Taylor guard, same HG phase.
+// water surface, and the sun's single-scattering glow. The height-fog optical
+// depth is the shared height_fog.glsl function; KEEP IN SYNC with
+// fogPathLength / volumetricDirScatter in deferred_shade_60_fog_volumetrics.glsl
+// and particle_light.comp — same HG phase.
 //
 // Still NOT mirrored, both additive: the froxel LUT's integrated point-light
 // glow (needs the froxel volume + cluster grid this pass does not bind), and
@@ -479,18 +479,11 @@ uint splatDepthBucket(float dist, float dMin, float dMax, float pLo, float pHi) 
 // in lit air faded to black, the one failure a "slightly dimmer" gap cannot
 // produce.
 
+// Clipped at the waterline: splatMurkPathLength covers the submerged part.
+#include "height_fog.glsl"
 float splatHeightFogOd(vec3 a, vec3 b) {
-    if (clouds.hfDensity <= 0.0) return 0.0;
-    const float H   = max(clouds.hfFalloff, 1e-3);
-    const float ya  = max(a.y - clouds.hfBaseY, 0.0);
-    const float yb  = max(b.y - clouds.hfBaseY, 0.0);
-    const float len = min(distance(a, b), 1.0e7);
-    const float ea = exp(-ya / H);
-    const float eb = exp(-yb / H);
-    const float x  = (yb - ya) / H;
-    const float f  = (abs(x) < 1e-3) ? (ea * (1.0 - 0.5 * x + x * x * (1.0 / 6.0)))
-                                     : ((ea - eb) / x);
-    return min(clouds.hfDensity * len * f, 80.0);
+    return heightFogLegOpticalDepth(a.y, b.y, distance(a, b), clouds.hfDensity, clouds.hfFalloff,
+                                    clouds.hfBaseY, fog.waterSurfaceY);
 }
 
 float splatMurkPathLength(vec3 a, vec3 b) {
