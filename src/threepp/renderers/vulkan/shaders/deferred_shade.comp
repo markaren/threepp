@@ -284,7 +284,7 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
     vec3  murkColor;
 } fog;
 
-// ── World-space irradiance probe grid (multi-bounce GI, opt-in) ─────────────
+// ── World-space irradiance probe grid (multi-bounce GI, on by default) ──────
 // SH-L1 probes updated by probe_update.comp (ProbeGI pass). gatherEnv's GI
 // rays tap this at their HIT points, adding the hit's INDIRECT irradiance —
 // the bounce 2..∞ + through-the-opening sky term the 1-bounce giRadiance
@@ -666,6 +666,8 @@ float murkSunCaustic(vec3 P, vec3 L);
 // Its sibling: bends L to the in-water direction for a submerged P and returns
 // the in-water leg transmittance (1.0, L untouched, everywhere else).
 float murkSunLeg(vec3 P, inout vec3 L);
+// gi_bounce.glsl's directional-light leg at a GI hit: the murk leg above.
+float giSunLeg(vec3 P, inout vec3 L) { return murkSunLeg(P, L); }
 
 #include "deferred_shade_10_lighting_utils.glsl"
 #include "deferred_shade_20_restir_di.glsl"

@@ -114,55 +114,16 @@ float rectFormFactor(vec3 N, vec3 P, vec3 c0, vec3 c1, vec3 c2, vec3 c3) {
     return max(f * (1.0 / TWO_PI), 0.0);
 }
 
+// distFalloff, lightPickWeight, pickAnalyticLight and giHitDirect (the GI
+// bounce's direct light), shared with probe_update.comp.
+#include "gi_bounce.glsl"
+
 // Emissive + direct analytic lights (optionally shadowed) + approximate
 // diffuse IBL (× ambient occlusion). Shared by the primary surface and the
 // reflection hit (so
 // reflected geometry is lit + shadowed). Does NOT add the specular lobe — the
 // caller adds it (RT reflection for the primary, env IBL for the hit) to avoid
 // recursion.
-// Pick weight for the single-light estimators (cheapHit / giRadiance):
-// premultiplied colour luminance (= intensity), distance-attenuated for
-// point/spot. ZERO-power lights (e.g. the ocean's day-mode moon + lighthouse
-// beam at intensity 0 — uploaded regardless) get ZERO pick probability; a
-// uniform pick wasted most samples on them and flickered the water
-// reflections dark. The pick pdf w/W is compensated exactly (×W/w) → any
-// positive weight set is unbiased; proportional weights just cut variance.
-float lightPickWeight(uint gi, vec3 P) {
-    const vec3 LUM = vec3(0.2126, 0.7152, 0.0722);
-    if (gi < lights.dirCount) {
-        return dot(lights.dirLights[gi].color, LUM);
-    } else if (gi < lights.dirCount + lights.pointCount) {
-        const uint i = gi - lights.dirCount;
-        const vec3 d = lights.pointLights[i].position - P;
-        return dot(lights.pointLights[i].color, LUM) / (1.0 + dot(d, d));
-    }
-    const uint i = gi - lights.dirCount - lights.pointCount;
-    const vec3 d = lights.spotLights[i].position - P;
-    return dot(lights.spotLights[i].color, LUM) / (1.0 + dot(d, d));
-}
-
-// Power-proportional single-light pick. Returns the global light index (or
-// 0xFFFFFFFF when no light has power) and writes the exact compensation
-// factor W/w_pick.
-uint pickAnalyticLight(vec3 P, inout uint seed, out float wPick) {
-    wPick = 1.0;
-    const uint nL = lights.dirCount + lights.pointCount + lights.spotCount;
-    if (nL == 0u) return 0xFFFFFFFFu;
-    float wSum = 0.0;
-    for (uint i = 0u; i < nL; ++i) wSum += lightPickWeight(i, P);
-    if (wSum <= 1e-8) return 0xFFFFFFFFu;
-    const float xi = rnd(seed) * wSum;
-    float acc = 0.0;
-    for (uint i = 0u; i < nL; ++i) {
-        const float w = lightPickWeight(i, P);
-        acc += w;
-        if (xi <= acc && w > 1e-8) {
-            wPick = wSum / w;
-            return i;
-        }
-    }
-    return 0xFFFFFFFFu;// numeric edge: treat as no pick
-}
 
 // Set by the PRIMARY demod path only (never at reflection/GI hits): the
 // dir/point/spot loops below are skipped because the denoised-shadow channel

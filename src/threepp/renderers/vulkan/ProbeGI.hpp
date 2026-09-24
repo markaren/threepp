@@ -19,7 +19,7 @@
 // pipeline + descriptor pool, recordDispatch(cb, ...). Buffers exist from
 // construction (the SH store is ~1 MB) so the deferred set can always bind
 // them; the grid UBO's `enabled` flag gates all sampling when the feature is
-// off (VulkanRenderer::setProbeGI, default OFF).
+// off (VulkanRenderer::setProbeGI, default ON).
 
 #ifndef THREEPP_VULKAN_PROBE_GI_HPP
 #define THREEPP_VULKAN_PROBE_GI_HPP

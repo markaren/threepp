@@ -580,18 +580,7 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
     return 0.0;
 }
 
-// Distance term of the point/spot falloff, d^decay. decay is a per-light uniform
-// copied verbatim from the host, so it round-trips through the UBO bit-exact and
-// the two values that occur in practice — PointLight's default 1 and the physical
-// inverse-square 2 — can be matched with == and evaluated without pow()'s log2/exp2
-// pair. Avoiding pow() also removes a source of cross-vendor drift: GLSL specifies
-// pow() only to 16 ULP and every driver lowers it differently, while d and d*d are
-// exact everywhere. decay 0 (and any authored fractional decay) still takes pow.
-float distFalloff(float d, float decay) {
-    if (decay == 1.0) return d;
-    if (decay == 2.0) return d * d;
-    return pow(d, decay);
-}
+// distFalloff (point/spot d^decay): gi_bounce.glsl, included by _30.
 
 // Cook-Torrance specular + Lambert diffuse for one analytic light direction L.
 vec3 evalLight(vec3 N, vec3 V, vec3 L, float NdotV, vec3 F0, vec3 albedo,

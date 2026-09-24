@@ -78,7 +78,7 @@ namespace threepp {
             asdep.pMemoryBarriers = &asbar;
             vkCmdPipelineBarrier2(cb, &asdep);
         }
-        // ── Probe-GI update (opt-in) ─────────────────────────────────────
+        // ── Probe-GI update (on by default, setProbeGI) ─────────────────
         // Refresh a round-robin window of world-space irradiance probes
         // BEFORE the shade so this frame's gather taps a current grid.
         // Runs after the AS barrier above (the probe rays traverse the

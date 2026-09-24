@@ -38,8 +38,11 @@
 // DDGI's ping-pong semantics, and the ~5 MB/update copy is what bit-exact
 // replay costs.
 //
-// Hit shading is copied from deferred_shade.comp (giRadiance and its helpers)
-// in the house "copied verbatim" style — keep the two in lockstep.
+// The hit's direct light (analytic lights + emitter NEE) comes from
+// gi_bounce.glsl, which giRadiance includes as well. The geometry fetch, RNG,
+// shadow test and emissiveIrradiance below are copies of
+// deferred_shade.comp's; emissiveIrradiance differs on purpose (fixed 6.0
+// firefly clamp), as does shadowVis (no moving-occluder flag).
 
 layout(local_size_x = 64) in;// kProbeRays — must match ProbeGI::kRaysPerProbe
 
@@ -256,41 +259,6 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
             gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
 }
 
-// ── Analytic-light pick (verbatim from deferred_shade.comp) ─────────────────
-float lightPickWeight(uint gi, vec3 P) {
-    const vec3 LUM = vec3(0.2126, 0.7152, 0.0722);
-    if (gi < lights.dirCount) {
-        return dot(lights.dirLights[gi].color, LUM);
-    } else if (gi < lights.dirCount + lights.pointCount) {
-        const uint i = gi - lights.dirCount;
-        const vec3 d = lights.pointLights[i].position - P;
-        return dot(lights.pointLights[i].color, LUM) / (1.0 + dot(d, d));
-    }
-    const uint i = gi - lights.dirCount - lights.pointCount;
-    const vec3 d = lights.spotLights[i].position - P;
-    return dot(lights.spotLights[i].color, LUM) / (1.0 + dot(d, d));
-}
-
-uint pickAnalyticLight(vec3 P, inout uint seed, out float wPick) {
-    wPick = 1.0;
-    const uint nL = lights.dirCount + lights.pointCount + lights.spotCount;
-    if (nL == 0u) return 0xFFFFFFFFu;
-    float wSum = 0.0;
-    for (uint i = 0u; i < nL; ++i) wSum += lightPickWeight(i, P);
-    if (wSum <= 1e-8) return 0xFFFFFFFFu;
-    const float xi = rnd(seed) * wSum;
-    float acc = 0.0;
-    for (uint i = 0u; i < nL; ++i) {
-        const float w = lightPickWeight(i, P);
-        acc += w;
-        if (xi <= acc && w > 1e-8) {
-            wPick = wSum / w;
-            return i;
-        }
-    }
-    return 0xFFFFFFFFu;
-}
-
 // ── Emitter diffuse NEE (deferred_shade's emissiveIrradiance; the firefly
 // clamp is the fixed 6.0 the GI channel uses — no pc.fireflyClamp here) ─────
 vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
@@ -326,6 +294,13 @@ vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
     }
     return sum;
 }
+
+// gi_bounce.glsl's directional-light leg: the probe pass has no murk.
+float giSunLeg(vec3 P, inout vec3 L) { return 1.0; }
+
+// distFalloff, the analytic-light pick and giHitDirect, shared with
+// deferred_shade.comp's giRadiance.
+#include "gi_bounce.glsl"
 
 // ── One probe ray (giRadiance's shading + the probe feedback tap) ───────────
 // Returns the radiance arriving at the probe from `dir`. Emitter EMISSION at
@@ -396,58 +371,9 @@ vec3 probeRayRadiance(vec3 origin, vec3 dir, bool doShadows, inout uint seed,
                              (hm.uvTransformRoughMetal * vec3(hitUv, 1.0)).xy, 0.0).b;
     const vec3 diff = hAlbedo * (1.0 - hMetal) * (1.0 / PI);
 
-    // Direct analytic light at the hit — mirrors giRadiance: loop ALL lights
-    // when few (deterministic), 1-pick with exact compensation when many.
-    vec3 lit = vec3(0.0);
-    const uint nLights = lights.dirCount + lights.pointCount + lights.spotCount;
-    const bool pickOne = nLights > 8u;
-    float wL = 1.0;
-    const uint pick = pickOne ? pickAnalyticLight(hitP, seed, wL) : 0xFFFFFFFFu;
-
-    for (uint i = 0u; i < lights.dirCount; ++i) {
-        if (pickOne && i != pick) continue;
-        const vec3  L   = normalize(lights.dirLights[i].direction);
-        const float ndl = dot(hitN, L);
-        if (ndl <= 0.0) continue;
-        const float vis = doShadows ? shadowVis(shadowOrig, L, 1e30) : 1.0;
-        lit += diff * ndl * lights.dirLights[i].color * (vis * wL);
-    }
-    for (uint i = 0u; i < lights.pointCount; ++i) {
-        if (pickOne && (lights.dirCount + i) != pick) continue;
-        vec3        toL  = lights.pointLights[i].position - hitP;
-        const float dist = length(toL);
-        if (dist < 1e-4) continue;
-        toL /= dist;
-        const float ndl = dot(hitN, toL);
-        if (ndl <= 0.0) continue;
-        float atten = 1.0 / max(pow(dist, lights.pointLights[i].decay), 0.01);
-        const float range = lights.pointLights[i].range;
-        if (range > 0.0) { const float tt = dist / range; const float t4 = tt*tt*tt*tt; const float wnd = max(1.0 - t4, 0.0); atten *= wnd * wnd; }
-        if (atten <= 1e-6) continue;
-        const float vis = doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
-        lit += diff * ndl * lights.pointLights[i].color * (atten * vis * wL);
-    }
-    for (uint i = 0u; i < lights.spotCount; ++i) {
-        if (pickOne && (lights.dirCount + lights.pointCount + i) != pick) continue;
-        vec3        toL  = lights.spotLights[i].position - hitP;
-        const float dist = length(toL);
-        if (dist < 1e-4) continue;
-        toL /= dist;
-        const float ndl = dot(hitN, toL);
-        if (ndl <= 0.0) continue;
-        const float spotCos   = dot(-toL, lights.spotLights[i].direction);
-        const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter,
-                                           lights.spotLights[i].cosAngleInner, spotCos);
-        if (spotAtten <= 0.0) continue;
-        float atten = spotAtten / max(pow(dist, lights.spotLights[i].decay), 0.01);
-        const float range = lights.spotLights[i].range;
-        if (range > 0.0) { const float tt = dist / range; const float t4 = tt*tt*tt*tt; const float wnd = max(1.0 - t4, 0.0); atten *= wnd * wnd; }
-        if (atten <= 1e-6) continue;
-        const float vis = doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
-        lit += diff * ndl * lights.spotLights[i].color * (atten * vis * wL);
-    }
-    // Emitter 1-bounce at the hit (same 2-sample NEE giRadiance uses).
-    lit += diff * emissiveIrradiance(hitP, hitN, 2, doShadows);
+    // Analytic lights + emitter NEE at the hit (gi_bounce.glsl, the same
+    // shading giRadiance uses).
+    vec3 lit = giHitDirect(hitP, hitN, shadowOrig, diff, doShadows, seed);
     // First-order light reached this point: whatever it is the inside of, it
     // is not sealed off. Tested BEFORE the feedback tap, which leaks a little
     // light through a thin shell from the probes outside it and would make a

@@ -2052,7 +2052,7 @@ namespace threepp {
         // its SH buffer + grid UBO back the deferred set's bindings 36/37, so
         // it must exist whenever deferredShade_ does. probeGIEnabled_ gates the
         // per-frame update dispatch AND the shader-side sampling (grid UBO
-        // enable) — default OFF (opt-in via VulkanRenderer::setProbeGI).
+        // enable) — default ON (VulkanRenderer::setProbeGI(false) turns it off).
         // probeGridDirty_ re-fits the grid to the scene AABB after each
         // structural scene rebuild (new/removed meshes ⇒ new bounds).
         std::unique_ptr<vulkan::ProbeGI> probeGI_;

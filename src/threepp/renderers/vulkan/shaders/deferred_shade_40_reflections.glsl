@@ -617,70 +617,10 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
     // that's legitimate INDIRECT. Same principle as gSuppressReflEmitter for reflections.
     // Was `lit = hEmissive`, which over-brightened every emitter-lit surface (worst where
     // GI rays point at the emitter — e.g. a floor under it = the floor>wall over-count).
-    // Analytic direct at the GI hit. With MANY lights, sample ONE (×wL
-    // compensation, unbiased) — the GI channel is temporally accumulated +
-    // SVGF-denoised, which absorbs the selection noise, and this keeps lamp-
-    // heavy interiors cheap (1 shadow ray vs nLights). But for a SMALL light
-    // count that 1-of-N pick is pure variance the denoiser only SMEARS — worst
-    // for concentrated lights like SPOTLIGHTS, whose tight cone makes "is this
-    // bounce point in the cone?" a high-contrast coin-flip per gather ray. So
-    // for nLights<=8 loop them ALL (deterministic, ~nLights shadow rays/hit) —
-    // mirrors the cheapHit reflection path; the 1-pick stays only where looping
-    // all would be the real cost.
-    vec3 lit = vec3(0.0);
-    const uint nLights = lights.dirCount + lights.pointCount + lights.spotCount;
-    const bool pickOne = nLights > 8u;
-    float wL = 1.0;
-    const uint pick = pickOne ? pickAnalyticLight(hitP, seed, wL) : 0xFFFFFFFFu;
-
-    for (uint i = 0u; i < lights.dirCount; ++i) {
-        if (pickOne && i != pick) continue;
-        vec3        L   = normalize(lights.dirLights[i].direction);
-        const float leg = murkSunLeg(hitP, L);// submerged hit: refracted, attenuated
-        const float ndl = dot(hitN, L);
-        if (ndl <= 0.0) continue;
-        const float vis = doShadows ? shadowVis(shadowOrig, L, 1e30) : 1.0;
-        lit += diff * ndl * lights.dirLights[i].color * (vis * wL * leg);
-    }
-    for (uint i = 0u; i < lights.pointCount; ++i) {
-        if (pickOne && (lights.dirCount + i) != pick) continue;
-        vec3        toL  = lights.pointLights[i].position - hitP;
-        const float dist = length(toL);
-        if (dist < 1e-4) continue;
-        toL /= dist;
-        const float ndl = dot(hitN, toL);
-        if (ndl <= 0.0) continue;
-        float atten = 1.0 / max(distFalloff(dist, lights.pointLights[i].decay), 0.01);
-        const float range = lights.pointLights[i].range;
-        if (range > 0.0) { const float tt = dist / range; const float t4 = tt*tt*tt*tt; const float wnd = max(1.0 - t4, 0.0); atten *= wnd * wnd; }
-        if (atten <= 1e-6) continue;
-        const float vis = doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
-        lit += diff * ndl * lights.pointLights[i].color * (atten * vis * wL);
-    }
-    for (uint i = 0u; i < lights.spotCount; ++i) {
-        if (pickOne && (lights.dirCount + lights.pointCount + i) != pick) continue;
-        vec3        toL  = lights.spotLights[i].position - hitP;
-        const float dist = length(toL);
-        if (dist < 1e-4) continue;
-        toL /= dist;
-        const float ndl = dot(hitN, toL);
-        if (ndl <= 0.0) continue;
-        const float spotCos   = dot(-toL, lights.spotLights[i].direction);
-        const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter,
-                                           lights.spotLights[i].cosAngleInner, spotCos);
-        if (spotAtten <= 0.0) continue;
-        float atten = spotAtten / max(distFalloff(dist, lights.spotLights[i].decay), 0.01);
-        const float range = lights.spotLights[i].range;
-        if (range > 0.0) { const float tt = dist / range; const float t4 = tt*tt*tt*tt; const float wnd = max(1.0 - t4, 0.0); atten *= wnd * wnd; }
-        if (atten <= 1e-6) continue;
-        const float vis = doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
-        lit += diff * ndl * lights.spotLights[i].color * (atten * vis * wL);
-    }
-    // Emitter 1-bounce (e.g. enclosed scene lit only by an emissive sphere) —
-    // cheap small-sample diffuse NEE so the colour bleed survives the denoiser.
-    // 2 samples (was 4): rides the same accumulation as the rays above.
-    lit += diff * emissiveIrradiance(hitP, hitN, 2, doShadows);
-    // PROBE GRID (opt-in, multi-bounce): the hit's INDIRECT irradiance from
+    // Analytic lights + emitter NEE at the hit (gi_bounce.glsl, shared with
+    // the probe rays).
+    vec3 lit = giHitDirect(hitP, hitN, shadowOrig, diff, doShadows, seed);
+    // PROBE GRID (multi-bounce, on by default): the hit's INDIRECT irradiance from
     // the world-space SH-L1 cache — the bounce 2..∞ light plus the sky the
     // hit actually sees (probe rays that escape through real openings). The
     // direct terms above stay authoritative; the probe stores neither the
