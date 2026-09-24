@@ -57,8 +57,8 @@
 
 // Per-instance flag word — packed host-side (VulkanCoreIndirect.cpp) into
 // DrawInfo.flags, carried through gbuffer.vert into the gbuffer IDs
-// attachment's .z channel (rgba16ui — truncates to 16 bits, so flags live in
-// bits 0..7 and the semantic CLASS id in bits 8..15). THE canonical bit
+// attachment's .z channel (rgba32ui; flags live in bits 0..7 and the
+// semantic CLASS id in bits 8..15, bits 16..31 are zero). THE canonical bit
 // layout; shader consumers go through the instance_flags.glsl accessors
 // instead of raw masks. Bits 1..2 are reserved (documented for transmissive/
 // thin-walled in an earlier design, never packed — kept so re-introducing

@@ -70,7 +70,7 @@ layout(location = 0) out vec4 outNormal;
 // produce zero motion.
 layout(location = 1) out vec4 outMotion;
 
-// Attachment 2: per-pixel IDs + flags (rgba16ui).
+// Attachment 2: per-pixel IDs + flags (rgba32ui).
 //   .x = instanceCustomIndex + 1 (matches deferred_shade.comp's
 //        gbufIdsTex.x convention; 0 reserved for sky/miss because the render pass
 //        clears IDs to 0 before any draw). This is the PER-FRAME visible-set
@@ -814,9 +814,10 @@ void main() {
     // .x = per-frame visible index +1 (clear-to-0 = sky, matches
     // deferred_shade.comp's gbufIdsTex.x convention). .y = stable per-object id (host-assigned; 0 when
     // unassigned/sky). .z = flags | class byte (already packed into vFlags host-
-    // side, bits 8..15). Truncates to uint16 per channel — class fits in 8..15.
-    // .w = per-particle index within a ParticleField (0 for every ordinary
-    // mesh — see the vParticleId declaration).
+    // side, bits 8..15). .w = per-particle index within a ParticleField (0 for
+    // every ordinary mesh — see the vParticleId declaration). Every channel is
+    // 32 bits, so none of these wrap: the 16-bit channels this attachment had
+    // wrapped .x past 65,535 visible entries and read the wrong material.
     outIds = uvec4(vInstanceIdx + 1u, vStableId, vFlags, vParticleId);
 
     // log2 of the per-pixel UV-footprint diameter (texture-size-independent).

@@ -41,7 +41,7 @@ namespace threepp::vulkan::impl {
     struct RasterGbufImages {
         Image2D       normal;       // rgba16f — world-space normal in xyz, .w = linear roughness
         Image2D       motion;       // rgba16f — NDC delta in .rg, .ba reserved
-        Image2D       ids;          // rgba16ui — instanceCustomIndex/meshID/flags/reserved
+        Image2D       ids;          // rgba32ui — instanceCustomIndex/meshID/flags/reserved
         Image2D       uv;           // rgba16f — material UV in .rg
         Image2D       albedo;       // rgba8 unorm — linear base colour in .rgb, metalness in .a (raster-first deferred input)
         Image2D       indirect;     // rgba16f — demodulated diffuse-indirect irradiance (deferred denoiser scratch; STORAGE, not an attachment)

@@ -416,16 +416,16 @@ int main() {
         int aw = 0, ah = 0, abpp = 0;
         const bool gotIds = renderer.readGBufferAOV(VulkanRenderer::GBufferAOV::Ids,
                                                     ids, aw, ah, abpp);
-        check(gotIds && aw == kW && ah == kH && abpp == 8, "ids AOV readback at the render extent");
-        if (gotIds && nRgb > 0 && aw == kW && ah == kH && abpp == 8) {
-            // Ids layout: 4x uint16. .y is the STABLE per-object instance id —
+        check(gotIds && aw == kW && ah == kH && abpp == 16, "ids AOV readback at the render extent");
+        if (gotIds && nRgb > 0 && aw == kW && ah == kH && abpp == 16) {
+            // Ids layout: 4x uint32. .y is the STABLE per-object instance id —
             // what setObjectInstanceId overrides. (.x is the per-frame visible
             // index + 1, which is not what we asked for.)
-            const auto* px16 = reinterpret_cast<const uint16_t*>(ids.data());
+            const auto* px32 = reinterpret_cast<const uint32_t*>(ids.data());
             double sx = 0, sy = 0;
             int count = 0;
             for (int i = 0; i < kW * kH; ++i) {
-                if (px16[static_cast<size_t>(i) * 4 + 1] == 77u) {
+                if (px32[static_cast<size_t>(i) * 4 + 1] == 77u) {
                     sx += static_cast<double>(i % kW);
                     sy += static_cast<double>(i / kW);
                     ++count;

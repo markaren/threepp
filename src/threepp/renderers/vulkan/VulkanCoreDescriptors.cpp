@@ -497,7 +497,7 @@ void VulkanRenderer::Impl::ensureParticleFieldPass() {
 void VulkanRenderer::Impl::ensureGbufDummyMS() {
             if (gbufDummyMSCreated_) return;
             const VkFormat fmts[5] = {VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT,
-                                      VK_FORMAT_R16G16B16A16_UINT, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                      VK_FORMAT_R32G32B32A32_UINT, VK_FORMAT_R16G16B16A16_SFLOAT,
                                       VK_FORMAT_R8G8B8A8_UNORM};
             const VkImageAspectFlags aspects[5] = {VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_ASPECT_DEPTH_BIT,
                                                    VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_ASPECT_COLOR_BIT,

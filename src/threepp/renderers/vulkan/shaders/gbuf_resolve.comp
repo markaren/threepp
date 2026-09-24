@@ -51,7 +51,7 @@ layout(set = 0, binding = 5) uniform sampler2DMS  depthMS;
 
 layout(set = 0, binding = 6,  rgba16f) uniform writeonly image2D normalOut;
 layout(set = 0, binding = 7,  rgba16f) uniform writeonly image2D motionOut;
-layout(set = 0, binding = 8,  rgba16ui) uniform writeonly uimage2D idsOut;
+layout(set = 0, binding = 8,  rgba32ui) uniform writeonly uimage2D idsOut;
 layout(set = 0, binding = 9,  rgba16f) uniform writeonly image2D uvOut;
 layout(set = 0, binding = 10, rgba8) uniform writeonly image2D albedoOut;
 

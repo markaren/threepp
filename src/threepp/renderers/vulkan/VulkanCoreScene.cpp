@@ -2696,7 +2696,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // Same index space, same lifetime — see entryStableIds_. Filled in
             // the geomDescs loop below so a skipped/overlay entry keeps the 0
             // its dummy slot already means.
-            entryStableIds_.assign(entries.size(), uint16_t(0));
+            entryStableIds_.assign(entries.size(), 0u);
 
             // Material-asset dedup. Meshes sharing one Material C++ pointer
             // get the same matAssetIdx so the deferred shade's bilinear

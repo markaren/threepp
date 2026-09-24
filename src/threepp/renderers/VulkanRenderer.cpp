@@ -1209,16 +1209,18 @@ namespace threepp {
             if (!img || img->image == VK_NULL_HANDLE || img->width == 0 || img->height == 0) {
                 continue;// no frame rendered yet
             }
-            // Element size of the attachment format: RGBA16 (normal/motion/ids)
-            // = 8, D32_SFLOAT (depth) and RGBA8_UNORM (albedo) = 4.
+            // Element size of the attachment format: RGBA32UI (ids) = 16,
+            // RGBA16F (normal/motion) = 8, D32_SFLOAT (depth) and RGBA8_UNORM
+            // (albedo) = 4.
             uint32_t bpp = 4;
-            if (img->format == VK_FORMAT_R16G16B16A16_SFLOAT ||
-                img->format == VK_FORMAT_R16G16B16A16_UINT) {
+            if (img->format == VK_FORMAT_R32G32B32A32_UINT) {
+                bpp = 16;
+            } else if (img->format == VK_FORMAT_R16G16B16A16_SFLOAT) {
                 bpp = 8;
             }
-            // Regions pack back to back; offsets align to 8, a multiple of both
-            // texel sizes, which vkCmdCopyImageToBuffer's bufferOffset requires.
-            total = (total + 7) & ~VkDeviceSize(7);
+            // Regions pack back to back; offsets align to 16, a multiple of
+            // every texel size, which vkCmdCopyImageToBuffer's bufferOffset requires.
+            total = (total + 15) & ~VkDeviceSize(15);
             slots.push_back({aov, img, aspect, restLayout, bpp, total});
             total += VkDeviceSize(img->width) * img->height * bpp;
         }
@@ -1475,7 +1477,7 @@ namespace threepp {
     }
 
     void VulkanRenderer::setObjectInstanceId(const Object3D& obj, uint32_t instanceId) {
-        core()->instanceIdOverride_[obj.id] = static_cast<uint16_t>(instanceId & 0xFFFFu);
+        core()->instanceIdOverride_[obj.id] = std::min(instanceId, Impl::kMaxStableId);
         // stableId feeds DrawInfoGpu — invalidate the indirect-build skip
         // caches or an otherwise-static scene keeps serving the old id.
         ++core()->drawInputsVersion_;

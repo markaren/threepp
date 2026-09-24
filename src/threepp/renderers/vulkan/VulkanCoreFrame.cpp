@@ -2154,12 +2154,11 @@ bool VulkanRenderer::Impl::frameInteropSource(uint32_t viewHandle,
             out.image  = img->image;
             out.width  = img->width;
             out.height = img->height;
-            // RGBA16 (normal / motion / ids) is 8 bytes; D32_SFLOAT (depth,
-            // splat depth) and RGBA8_UNORM (albedo) are 4.
-            out.bpp = (img->format == VK_FORMAT_R16G16B16A16_SFLOAT ||
-                       img->format == VK_FORMAT_R16G16B16A16_UINT)
-                              ? 8u
-                              : 4u;
+            // RGBA32UI (ids) is 16 bytes; RGBA16F (normal / motion) is 8;
+            // D32_SFLOAT (depth, splat depth) and RGBA8_UNORM (albedo) are 4.
+            out.bpp = img->format == VK_FORMAT_R32G32B32A32_UINT    ? 16u
+                    : img->format == VK_FORMAT_R16G16B16A16_SFLOAT ? 8u
+                                                                   : 4u;
             return true;
         }
 

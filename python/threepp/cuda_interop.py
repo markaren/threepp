@@ -409,12 +409,13 @@ class VkInteropArray(VkInteropMemory):
 # attachment and the per-pixel component count. Straight from the layout table
 # on VulkanRenderer::enableFrameInterop, and the only place Python encodes it.
 #
-# `ids` is the one row with a caveat: the attachment is RGBA16_UINT and torch's
-# uint16 support is partial (2.5 has the dtype, few kernels), so it is exposed
-# as int16 with the same bits when torch refuses `<u2`. The values that matter
-# — instance ids and class ids — are all well under 32768, so the reinterpret
-# is invisible in practice; `.view(torch.uint16)` is a free fix-up where the
-# consumer needs the unsigned type.
+# `ids` is the one row with a caveat: the attachment is RGBA32_UINT and torch's
+# uint32 support is partial (the dtype exists, few kernels), so it is exposed
+# as int32 with the same bits when torch refuses `<u4`. Every channel stays
+# below 2^31 — stable ids are capped at 2^31-1, the visible index is bounded by
+# the 24-bit TLAS custom index, flags and class use 16 bits — so the
+# reinterpret never changes a value; `.view(torch.uint32)` is a free fix-up
+# where the consumer needs the unsigned type.
 FRAME_CHANNEL_DTYPES = {
     "color":       ("|u1", 4),
     "albedo":      ("|u1", 4),
@@ -422,7 +423,7 @@ FRAME_CHANNEL_DTYPES = {
     "splat_depth": ("<f4", 1),
     "normal":      ("<f2", 4),
     "motion":      ("<f2", 4),
-    "ids":         ("<u2", 4),
+    "ids":         ("<u4", 4),
 }
 
 
@@ -439,7 +440,7 @@ class VkInteropTensor(VkInteropMemory):
     shape : tuple
         The logical shape, e.g. (H, W, 4) for colour, (H, W) for depth.
     typestr : str
-        Numpy typestr of one component ('|u1', '<f4', '<f2', '<u2').
+        Numpy typestr of one component ('|u1', '<f4', '<f2', '<u4').
 
     Sync contract
     -------------
@@ -489,12 +490,12 @@ class VkInteropTensor(VkInteropMemory):
                 self._tensor = torch.as_tensor(self, device="cuda")
             except (TypeError, RuntimeError):
                 # torch's __cuda_array_interface__ importer rejects some
-                # typestrs depending on version — uint16 is the one that
+                # typestrs depending on version — uint32 is the one that
                 # matters. Re-expose the same bits as the signed type; see
                 # FRAME_CHANNEL_DTYPES for why that is safe here.
-                if self.typestr != "<u2":
+                if self.typestr != "<u4":
                     raise
-                signed = VkInteropTensorView(self, "<i2")
+                signed = VkInteropTensorView(self, "<i4")
                 self._tensor = torch.as_tensor(signed, device="cuda")
         return self._tensor
 
@@ -504,7 +505,7 @@ class VkInteropTensor(VkInteropMemory):
 
 
 class VkInteropTensorView:
-    """A re-typed view of a VkInteropTensor's memory, for the uint16 fallback.
+    """A re-typed view of a VkInteropTensor's memory, for the uint32 fallback.
 
     Owns nothing: it borrows the parent's pointer and dies with it.
     """

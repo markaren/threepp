@@ -165,7 +165,7 @@ namespace threepp {
         const BlasRecord* memoRec      = nullptr;
         bool              memoIdsValid = false;
         uint16_t          memoClassId  = 0;
-        uint16_t          memoStableId = 0;
+        uint32_t          memoStableId = 0;
         // Material-derived per-mesh memos (one virtual material() call +
         // flag/offset derivation per RUN of instances, not per instance).
         std::shared_ptr<Material> memoMatSp;
@@ -873,7 +873,7 @@ namespace threepp {
     // Replaces the old raw vkCmdBlitImage, which could only show the
     // world-normal attachment: a blit cannot bias the SIGNED motion vector
     // (it clamped to near-black) and is INVALID from the integer ids
-    // attachment (R16G16B16A16_UINT) into the UNORM swapchain (the Vulkan
+    // attachment (R32G32B32A32_UINT) into the UNORM swapchain (the Vulkan
     // spec forbids integer<->non-integer blits). The gbuf attachments are
     // in SHADER_READ_ONLY_OPTIMAL here (the gbuffer render pass declares a
     // COMPUTE consumer dependency, same as the deferred / event-shade

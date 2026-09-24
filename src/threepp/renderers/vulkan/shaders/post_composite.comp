@@ -225,7 +225,7 @@ void main() {
     // The id fetch sits INSIDE the bgIsSolidColor test: that flag is a push
     // constant, so the branch is dispatch-uniform (every invocation takes the
     // same side, no divergence to pay for) and on a sky/env-map frame the whole
-    // ids read — one distinct R16G16B16A16_UINT texel per pixel, so real DRAM
+    // ids read — one distinct R32G32B32A32_UINT texel per pixel, so real DRAM
     // traffic, not an L1 hit — disappears from the one pass that always runs.
     bool bypass = false;
     if (pc.bgIsSolidColor != 0u) {

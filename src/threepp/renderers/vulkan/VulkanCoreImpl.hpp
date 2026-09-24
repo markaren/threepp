@@ -919,7 +919,7 @@ namespace threepp {
         // valid for a frame, so is this; if entries were renumbered, both were
         // rebuilt together. Lets the lidar readback report the id the raster
         // Ids AOV reports rather than the raw TLAS instance index.
-        std::vector<uint16_t> entryStableIds_;
+        std::vector<uint32_t> entryStableIds_;
         // Manual threepp::LOD subtrees, rebuilt every FULL scene expansion
         // (cleared at the start of the traverseVisible walk). A mesh entry
         // under one of these is exempt from auto-LOD — its levels are
@@ -3507,18 +3507,21 @@ namespace threepp {
 
         // ── Stable / semantic object IDs for the segmentation AOVs ───────
         // outIds.x is the per-frame visible-set index; outIds.y must be STABLE
-        // across frames. We assign a dense 16-bit id per Object3D (keyed by the
+        // across frames. We assign a dense 31-bit id per Object3D (keyed by the
         // process-stable Object3D::id) the first time it is drawn, so the label
         // survives add/remove/hide/LOD. Callers may override the instance id and
         // set an 8-bit semantic class (folded into outIds.z bits 8..15 by
         // buildIndirectDrawData). Maps are keyed by Object3D::id (never a raw
         // pointer) so a deleted object leaves an inert entry, never a dangling read.
-        std::unordered_map<unsigned int, uint16_t> autoStableIds_;      // Object3D::id -> dense id
-        std::unordered_map<unsigned int, uint16_t> instanceIdOverride_; // user-set instance id
+        std::unordered_map<unsigned int, uint32_t> autoStableIds_;      // Object3D::id -> dense id
+        std::unordered_map<unsigned int, uint32_t> instanceIdOverride_; // user-set instance id
         std::unordered_map<unsigned int, uint16_t> classIds_;           // user-set semantic class
         uint32_t nextAutoStableId_ = 1;// 0 reserved for sky / unassigned
+        // Stable ids stop at INT32_MAX: LidarReturn::hitInstanceId reports the
+        // same id as int32 with negative sentinels (-1 miss, -2 volume).
+        static constexpr uint32_t kMaxStableId = 0x7FFFFFFFu;
 
-        uint16_t stableIdForObject(const Object3D& o) {
+        uint32_t stableIdForObject(const Object3D& o) {
             // Both id maps are empty unless the app opts in (setInstanceId /
             // setClassId), which is the common case — skip the probe entirely.
             if (!instanceIdOverride_.empty()) {
@@ -3526,10 +3529,10 @@ namespace threepp {
                     return it->second;
                 }
             }
-            const auto [it, inserted] = autoStableIds_.try_emplace(o.id, uint16_t(0));
+            const auto [it, inserted] = autoStableIds_.try_emplace(o.id, 0u);
             if (inserted) {
-                it->second = static_cast<uint16_t>(nextAutoStableId_);
-                if (nextAutoStableId_ < 0xFFFFu) ++nextAutoStableId_;// saturate at 65535
+                it->second = nextAutoStableId_;
+                if (nextAutoStableId_ < kMaxStableId) ++nextAutoStableId_;// saturate
             }
             return it->second;
         }
@@ -3545,14 +3548,14 @@ namespace threepp {
         // auto-numbered yet — which is the documented meaning of 0 (sky /
         // unassigned), not a new sentinel. It self-heals after one frame for
         // anything the draw builder visits.
-        [[nodiscard]] uint16_t stableIdIfAssigned(const Object3D& o) const {
+        [[nodiscard]] uint32_t stableIdIfAssigned(const Object3D& o) const {
             if (!instanceIdOverride_.empty()) {
                 if (const auto it = instanceIdOverride_.find(o.id); it != instanceIdOverride_.end()) {
                     return it->second;
                 }
             }
             const auto it = autoStableIds_.find(o.id);
-            return it == autoStableIds_.end() ? uint16_t(0) : it->second;
+            return it == autoStableIds_.end() ? 0u : it->second;
         }
         uint16_t classIdForObject(const Object3D& o) const {
             if (classIds_.empty()) return 0;
@@ -3676,7 +3679,7 @@ namespace threepp {
         // Replaces the old raw vkCmdBlitImage, which could only show the
         // world-normal attachment: a blit cannot bias the SIGNED motion vector
         // (it clamped to near-black) and is INVALID from the integer ids
-        // attachment (R16G16B16A16_UINT) into the UNORM swapchain (the Vulkan
+        // attachment (R32G32B32A32_UINT) into the UNORM swapchain (the Vulkan
         // spec forbids integer<->non-integer blits). The gbuf attachments are
         // in SHADER_READ_ONLY_OPTIMAL here (the gbuffer render pass declares a
         // COMPUTE consumer dependency, same as the deferred / event-shade
@@ -3860,7 +3863,7 @@ namespace threepp {
         // which time an edit can have renumbered the entry list; translating
         // against the live table would then relabel returns that were traced
         // against the older TLAS. The snapshot is a few KB at most.
-        std::array<std::vector<uint16_t>, vulkan::LidarScanner::kScanSlots> lidarStableIds_{};
+        std::array<std::vector<uint32_t>, vulkan::LidarScanner::kScanSlots> lidarStableIds_{};
 
         // ── Hybrid raster G-buffer prepass implementation ───────────────────
         // Lazy-initialized on first render().

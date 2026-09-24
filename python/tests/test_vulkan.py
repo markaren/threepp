@@ -848,7 +848,7 @@ def _host_aov(renderer, name, view):
     if name == "depth":
         return raw.view(np.float32).reshape(h, w)
     if name == "ids":
-        return raw.view(np.uint16).reshape(h, w, 4)
+        return raw.view(np.uint32).reshape(h, w, 4)
     return raw.reshape(h, w, 4)          # albedo: RGBA8, already bytes
 
 
@@ -884,7 +884,7 @@ def test_frame_interop_is_bit_exact_with_the_host_readback(vk_frames, secondary)
         got = {c: frames[c].clone().cpu().numpy() for c in channels}
         for c in channels:
             host = _host_aov(renderer, c, view)
-            mine = got[c].astype(np.uint16) if c == "ids" else got[c]
+            mine = got[c].astype(np.uint32) if c == "ids" else got[c]
             assert mine.shape == host.shape, c
             assert np.array_equal(mine, host), f"{c} differs from the host readback"
         # The frame really had content in it -- an all-zero comparison would
@@ -955,7 +955,7 @@ def test_frame_interop_tensors_are_live_and_untorn(vk_frames):
             frames.sync()
             # Untorn: this frame's tensor IS this frame's host readback.
             host = _host_aov(renderer, "ids", 0)
-            assert np.array_equal(frames.ids.clone().cpu().numpy().astype(np.uint16), host)
+            assert np.array_equal(frames.ids.clone().cpu().numpy().astype(np.uint32), host)
             static_max = max(static_max, changed_fraction(frames.ids, prev))
             prev = frames.ids.clone()
         assert static_max < 0.05, \

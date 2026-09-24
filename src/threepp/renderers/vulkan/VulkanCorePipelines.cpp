@@ -274,9 +274,9 @@ void VulkanRenderer::Impl::createRasterGbufRenderPass() {
             attachments[0].finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             // 1: motion vector (rgba16f, only rg used).
             attachments[1] = attachments[0];
-            // 2: per-pixel IDs + flags (rgba16ui).
+            // 2: per-pixel IDs + flags (rgba32ui).
             attachments[2] = attachments[0];
-            attachments[2].format = VK_FORMAT_R16G16B16A16_UINT;
+            attachments[2].format = VK_FORMAT_R32G32B32A32_UINT;
             // 3: material UV (rgba16f, only rg used).
             attachments[3] = attachments[0];
             // 4: albedo + metalness (rgba8 unorm) — raster-first deferred input.
@@ -357,7 +357,7 @@ void VulkanRenderer::Impl::createOcclRenderPasses(VkSampleCountFlagBits samples,
                                                        : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
                 attachments[1] = attachments[0];
                 attachments[2] = attachments[0];
-                attachments[2].format = VK_FORMAT_R16G16B16A16_UINT;
+                attachments[2].format = VK_FORMAT_R32G32B32A32_UINT;
                 attachments[3] = attachments[0];
                 attachments[4]        = attachments[0];
                 attachments[4].format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -440,7 +440,7 @@ void VulkanRenderer::Impl::createRasterGbufRenderPassMS(VkSampleCountFlagBits sa
             attachments[0].finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             attachments[1] = attachments[0];
             attachments[2] = attachments[0];
-            attachments[2].format = VK_FORMAT_R16G16B16A16_UINT;
+            attachments[2].format = VK_FORMAT_R32G32B32A32_UINT;
             attachments[3] = attachments[0];
             attachments[4]        = attachments[0];
             attachments[4].format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -542,7 +542,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                                                    colorUsage | VK_IMAGE_USAGE_STORAGE_BIT,
                                                    VK_IMAGE_ASPECT_COLOR_BIT,
                                                    N("motion"));
-                g.ids    = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_UINT,
+                g.ids    = createAttachmentImage2D(w, h, VK_FORMAT_R32G32B32A32_UINT,
                                                    colorUsage, VK_IMAGE_ASPECT_COLOR_BIT,
                                                    N("ids"));
                 g.uv     = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
@@ -754,7 +754,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                     g.motionMS = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                          colorUsageMS, VK_IMAGE_ASPECT_COLOR_BIT,
                                                          N("motionMS"), samples);
-                    g.idsMS    = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_UINT,
+                    g.idsMS    = createAttachmentImage2D(w, h, VK_FORMAT_R32G32B32A32_UINT,
                                                          colorUsageMS, VK_IMAGE_ASPECT_COLOR_BIT,
                                                          N("idsMS"), samples);
                     g.uvMS     = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,

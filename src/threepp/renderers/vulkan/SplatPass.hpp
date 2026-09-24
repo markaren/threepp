@@ -270,7 +270,7 @@ namespace threepp::vulkan {
             const VkImageView* depthPerFrame    = nullptr;// D32 reversed-Z, read-only layout
             const VkImageView* motionPerFrame   = nullptr;// rgba16f, STORAGE-capable
             const VkImage*     motionImages     = nullptr;// [framesInFlight], for the layout flip
-            const VkImageView* idsPerFrame      = nullptr;// rgba16ui, sampled read-only
+            const VkImageView* idsPerFrame      = nullptr;// rgba32ui, sampled read-only
             // Expected-depth AOV target, r32f in GENERAL. Full-res when the
             // AOV is enabled, 1x1 when it is not — the binding needs a real
             // image either way. Null leaves the pass unable to write its sets

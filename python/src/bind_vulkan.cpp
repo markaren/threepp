@@ -294,9 +294,9 @@ namespace {
             }
             py::array_t<uint32_t> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w)});
             auto* dst     = arr.mutable_data();
-            const auto* s = reinterpret_cast<const uint16_t*>(raw.data());// RGBA16_UINT, .y = stable id
+            const auto* s = reinterpret_cast<const uint32_t*>(raw.data());// RGBA32_UINT, .y = stable id
             const size_t px = static_cast<size_t>(w) * h;
-            for (size_t i = 0; i < px; ++i) dst[i] = static_cast<uint32_t>(s[i * 4 + 1]);
+            for (size_t i = 0; i < px; ++i) dst[i] = s[i * 4 + 1];
             return arr;
         }
 
@@ -316,9 +316,9 @@ namespace {
             }
             py::array_t<uint32_t> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w)});
             auto* dst     = arr.mutable_data();
-            const auto* s = reinterpret_cast<const uint16_t*>(raw.data());// RGBA16_UINT, .z = flags|class
+            const auto* s = reinterpret_cast<const uint32_t*>(raw.data());// RGBA32_UINT, .z = flags|class
             const size_t px = static_cast<size_t>(w) * h;
-            for (size_t i = 0; i < px; ++i) dst[i] = static_cast<uint32_t>((s[i * 4 + 2] >> 8) & 0xFFu);
+            for (size_t i = 0; i < px; ++i) dst[i] = (s[i * 4 + 2] >> 8) & 0xFFu;
             return arr;
         }
 

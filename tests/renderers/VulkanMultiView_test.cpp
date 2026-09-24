@@ -410,20 +410,20 @@ namespace {
 
         int wI = 0, hI = 0, bppI = 0;
         const bool okI = r.readViewGBufferAOV(hA, VulkanRenderer::GBufferAOV::Ids, idA, wI, hI, bppI);
-        // Ids is RGBA16UI: .x = instanceCustomIndex + 1, 0 = sky. An Ids
+        // Ids is RGBA32UI: .x = instanceCustomIndex + 1, 0 = sky. An Ids
         // attachment that was accidentally the primary's would still be
         // non-empty, so the dimension check is what separates them; this
         // confirms the attachment carries real labels rather than zeroes.
         long hits = 0;
         if (okI) {
-            const auto* px = reinterpret_cast<const uint16_t*>(idA.data());
+            const auto* px = reinterpret_cast<const uint32_t*>(idA.data());
             for (long i = 0; i < long(wI) * hI; ++i)
                 if (px[i * 4] != 0) ++hits;
         }
         std::printf("  view A ids: %dx%d bpp=%d, %ld/%d pixels carry an instance id\n",
                     wI, hI, bppI, hits, wI * hI);
-        check(okI && wI == 320 && hI == 200 && bppI == 8 && hits > 0,
-              "view A ids is 320x200 bpp=8 and carries real labels");
+        check(okI && wI == 320 && hI == 200 && bppI == 16 && hits > 0,
+              "view A ids is 320x200 bpp=16 and carries real labels");
 
         // Two cameras, same scene, different places: their depth must not agree.
         // Compared over the overlapping top-left region, since the views differ

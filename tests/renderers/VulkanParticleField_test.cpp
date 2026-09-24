@@ -70,6 +70,7 @@
 #include <memory>
 #include <random>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 using namespace threepp;
@@ -659,30 +660,30 @@ int main(int argc, char** argv) {
 
         // Per-particle identity out of the ids AOV: .x is the entry index + 1
         // (0 = sky), .w is the particle index.
-        const auto readIds = [&](std::vector<std::uint16_t>& px, int& w, int& h) {
+        const auto readIds = [&](std::vector<std::uint32_t>& px, int& w, int& h) {
             std::vector<std::uint8_t> raw;
             int bw = 0, bh = 0, bpp = 0;
             if (!renderer.readGBufferAOV(VulkanRenderer::GBufferAOV::Ids, raw, bw, bh, bpp))
                 return false;
             w = bw; h = bh;
             px.resize(std::size_t(bw) * std::size_t(bh) * 4u);
-            std::memcpy(px.data(), raw.data(), px.size() * sizeof(std::uint16_t));
+            std::memcpy(px.data(), raw.data(), px.size() * sizeof(std::uint32_t));
             return true;
         };
 
-        std::vector<std::uint16_t> ids;
+        std::vector<std::uint32_t> ids;
         int iw = 0, ih = 0;
         check(readIds(ids, iw, ih), "ids AOV readback succeeded");
 
         std::vector<int> perParticle(kN, 0);
         std::size_t covered = 0, foreign = 0;
-        std::uint16_t entryId = 0;
+        std::uint32_t entryId = 0;
         for (std::size_t p = 0; p * 4u + 3u < ids.size(); ++p) {
-            const std::uint16_t x = ids[p * 4u + 0u];
+            const std::uint32_t x = ids[p * 4u + 0u];
             if (x == 0) continue;// sky
             ++covered;
             if (entryId == 0) entryId = x;
-            const std::uint16_t pid = ids[p * 4u + 3u];
+            const std::uint32_t pid = ids[p * 4u + 3u];
             if (x != entryId || pid >= kN) ++foreign;
             else ++perParticle[pid];
         }
@@ -805,7 +806,7 @@ int main(int argc, char** argv) {
         std::vector<int>    cnt(kN, 0);
         for (std::size_t p = 0; p * 4u + 3u < ids.size(); ++p) {
             if (ids[p * 4u + 0u] == 0) continue;
-            const std::uint16_t pid = ids[p * 4u + 3u];
+            const std::uint32_t pid = ids[p * 4u + 3u];
             if (pid >= kN) continue;
             sx[pid] += double(mo[p * 4u + 0u]);
             sy[pid] += double(mo[p * 4u + 1u]);
@@ -945,29 +946,29 @@ int main(int argc, char** argv) {
         check(baseEntries == 0 || entryTotal(renderer) == entriesBeforeEmit + 1,
               "a Renderer-owned field is also EXACTLY ONE entry");
 
-        const auto readIds2 = [&](std::vector<std::uint16_t>& px, int& w, int& h) {
+        const auto readIds2 = [&](std::vector<std::uint32_t>& px, int& w, int& h) {
             std::vector<std::uint8_t> raw;
             int bw = 0, bh = 0, bpp = 0;
             if (!renderer.readGBufferAOV(VulkanRenderer::GBufferAOV::Ids, raw, bw, bh, bpp))
                 return false;
             w = bw; h = bh;
             px.resize(std::size_t(bw) * std::size_t(bh) * 4u);
-            std::memcpy(px.data(), raw.data(), px.size() * sizeof(std::uint16_t));
+            std::memcpy(px.data(), raw.data(), px.size() * sizeof(std::uint32_t));
             return true;
         };
-        std::vector<std::uint16_t> eids;
+        std::vector<std::uint32_t> eids;
         int ew = 0, eh = 0;
         check(readIds2(eids, ew, eh), "ids AOV readback succeeded (device emitter)");
         std::size_t emitPixels = 0, badId = 0;
-        std::uint16_t emitEntry = 0;
+        std::uint32_t emitEntry = 0;
         std::vector<std::uint8_t> seen(kEmit, 0);
         for (std::size_t p = 0; p * 4u + 3u < eids.size(); ++p) {
             if (eids[p * 4u + 0u] == 0) continue;
             ++emitPixels;
             if (emitEntry == 0) emitEntry = eids[p * 4u + 0u];
-            const std::uint16_t pid = eids[p * 4u + 3u];
-            // outIds.w is 16 bits, so a capacity above 65536 wraps by design —
-            // kEmit is below that, so an index out of range is a real fault.
+            const std::uint32_t pid = eids[p * 4u + 3u];
+            // An index out of range is a real fault: outIds.w carries the
+            // full 32-bit particle index.
             if (eids[p * 4u + 0u] != emitEntry || pid >= kEmit) ++badId;
             else seen[pid] = 1;
         }
@@ -1015,7 +1016,7 @@ int main(int argc, char** argv) {
                 frame();
             }
             std::vector<float> mo;
-            std::vector<std::uint16_t> id2;
+            std::vector<std::uint32_t> id2;
             int mw = 0, mh = 0, iw2 = 0, ih2 = 0;
             meanY = meanMag = 0.0;
             if (!readMotion2(mo, mw, mh) || !readIds2(id2, iw2, ih2)) return false;
@@ -1147,10 +1148,10 @@ int main(int argc, char** argv) {
         }
         check(readIds2(eids, ew, eh), "ids AOV readback succeeded (both modes in one scene)");
         std::size_t hostPixels = 0, devPixels = 0;
-        const std::uint16_t hostEntry = 0;
+        const std::uint32_t hostEntry = 0;
         (void) hostEntry;
         for (std::size_t p = 0; p * 4u + 3u < eids.size(); ++p) {
-            const std::uint16_t e = eids[p * 4u + 0u];
+            const std::uint32_t e = eids[p * 4u + 0u];
             if (e == 0) continue;
             if (e == emitEntry) ++devPixels;
             else ++hostPixels;
@@ -1347,14 +1348,14 @@ int main(int argc, char** argv) {
         // Mean luminance of each marker's own pixels, segmented by the class id
         // in the ids AOV (.z bits 8..15). Dust is not in the G-buffer, so the
         // mask is the same with and without it — one read is enough.
-        std::vector<std::uint16_t> idsPx;
+        std::vector<std::uint32_t> idsPx;
         const auto readIdsHere = [&] {
             std::vector<std::uint8_t> raw;
             int bw = 0, bh = 0, bpp = 0;
             if (!renderer.readGBufferAOV(VulkanRenderer::GBufferAOV::Ids, raw, bw, bh, bpp))
                 return false;
             idsPx.resize(std::size_t(bw) * std::size_t(bh) * 4u);
-            std::memcpy(idsPx.data(), raw.data(), idsPx.size() * sizeof(std::uint16_t));
+            std::memcpy(idsPx.data(), raw.data(), idsPx.size() * sizeof(std::uint32_t));
             return true;
         };
         // Index 0..kMarkers-1 = the pillars, index kMarkers = the backdrop.
@@ -3104,16 +3105,16 @@ int main(int argc, char** argv) {
             // half the frame as "resting" whatever the emitter did. Parking the
             // field leaves the entry LIST alone (parking is not a structural
             // change) and paints only the statics, which is the set to exclude.
-            std::vector<std::uint8_t> staticEntry(1u << 16, 0);
+            std::unordered_set<std::uint32_t> staticEntry;
             {
                 rested->setLiveCount(0);
                 for (int i = 0; i < 6; ++i) { rested->setEmitterTime(6.5f, 1.f / 60.f); frame(); }
                 std::vector<std::uint8_t> raw;
                 int w = 0, h = 0, bpp = 0;
                 if (renderer.readGBufferAOV(VulkanRenderer::GBufferAOV::Ids, raw, w, h, bpp)) {
-                    const auto* p16 = reinterpret_cast<const std::uint16_t*>(raw.data());
+                    const auto* p32 = reinterpret_cast<const std::uint32_t*>(raw.data());
                     const std::size_t n = std::size_t(w) * std::size_t(h);
-                    for (std::size_t p = 0; p < n; ++p) staticEntry[p16[p * 4u]] = 1;
+                    for (std::size_t p = 0; p < n; ++p) staticEntry.insert(p32[p * 4u]);
                 }
                 rested->setLiveCount(kRest);
             }
@@ -3149,12 +3150,12 @@ int main(int argc, char** argv) {
                                              iw, ih, ibpp) ||
                     iw != mw)
                     return false;
-                std::vector<std::uint16_t> ids(std::size_t(iw) * std::size_t(ih) * 4u);
-                std::memcpy(ids.data(), idRaw.data(), ids.size() * sizeof(std::uint16_t));
+                std::vector<std::uint32_t> ids(std::size_t(iw) * std::size_t(ih) * 4u);
+                std::memcpy(ids.data(), idRaw.data(), ids.size() * sizeof(std::uint32_t));
                 std::size_t fieldPx = 0, still = 0;
                 for (std::size_t p = 0; p * 4u + 3u < ids.size(); ++p) {
-                    const std::uint16_t en = ids[p * 4u + 0u];
-                    if (en == 0 || staticEntry[en]) continue;
+                    const std::uint32_t en = ids[p * 4u + 0u];
+                    if (en == 0 || staticEntry.count(en)) continue;
                     ++fieldPx;
                     const float mx = h2f(hf[p * 4 + 0]), my = h2f(hf[p * 4 + 1]);
                     if (std::sqrt(mx * mx + my * my) < 1e-5f) ++still;

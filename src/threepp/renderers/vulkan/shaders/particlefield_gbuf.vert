@@ -252,7 +252,7 @@ void main() {
     vInstanceIdx   = d.instanceCustomIndex;
     vFlags         = d.flags;
     vStableId      = d.stableId;
-    vParticleId    = pi & 0xFFFFu;// outIds is rgba16ui — 16 bits is the channel
+    vParticleId    = pi;
     vUv            = inUv;
     vWorldPos      = worldPos.xyz;
     vColor         = (d.colorAddr != 0ul) ? fetchColor(d.colorAddr, d.packedAttrs, vid) : vec3(1.0);

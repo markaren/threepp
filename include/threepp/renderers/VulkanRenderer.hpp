@@ -118,7 +118,7 @@ namespace threepp {
         //   Depth  (4)  1x float32 : reversed-Z NDC depth in [0,1] (1=near, 0=far)
         //   Normal (8)  4x float16 : world normal encoded n*0.5+0.5 in xyz, roughness in w
         //   Motion (8)  4x float16 : screen-space motion (prevNDC - currNDC) in xy, prevDepth in z
-        //   Ids    (8)  4x uint16  : x = instanceCustomIndex+1 (0 = sky/no-hit), y = meshId, z = flag bits
+        //   Ids    (16) 4x uint32  : x = instanceCustomIndex+1 (0 = sky/no-hit), y = meshId, z = flag bits
         //   Albedo (4)  4x unorm8  : linear base colour in rgb, metalness in a
         //   SplatDepth (4) 1x float32 : Gaussian-splat VIEW DISTANCE in world
         //                  units (positive, NOT reversed-Z NDC), 0 where no
@@ -305,8 +305,8 @@ namespace threepp {
         // a specific object; setObjectClassId tags an object with an 8-bit
         // semantic class written to .z bits 8..15 — so a single readback yields
         // both instance- and semantic-segmentation ground truth. Both take
-        // effect on the next render. instanceId is truncated to 16 bits, classId
-        // clamped to [0, 255]. Keyed by Object3D::id, so calling before the
+        // effect on the next render. instanceId is clamped to [0, 2^31-1] (the
+        // lidar reports the same id as int32), classId clamped to [0, 255]. Keyed by Object3D::id, so calling before the
         // object is added to the scene is fine.
         void setObjectInstanceId(const Object3D& obj, uint32_t instanceId);
         void setObjectClassId(const Object3D& obj, uint32_t classId);
@@ -1073,7 +1073,7 @@ namespace threepp {
         //   Depth      (4)  1x float32 : reversed-Z NDC depth (1=near, 0=far)
         //   Normal     (8)  4x float16 : n*0.5+0.5 in xyz, roughness in w
         //   Motion     (8)  4x float16 : NDC motion in xy, prevDepth in z
-        //   Ids        (8)  4x uint16  : visible index+1, meshId, flags|class
+        //   Ids        (16) 4x uint32  : visible index+1, meshId, flags|class
         //   Albedo     (4)  4x unorm8  : linear base colour in rgb, metal in a
         //   SplatDepth (4)  1x float32 : splat view distance; needs setSplatDepthAov
         // Rows are TIGHTLY PACKED (bufferRowLength 0), row-major, top-left

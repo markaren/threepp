@@ -192,6 +192,13 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanInstanceColor_test COMMAND VulkanInstanceColor_test)
     set_tests_properties(VulkanInstanceColor_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # More than 65,535 entries: the entry added last must still shade with its
+    # own material (the ids attachment's index channel wrapped at 16 bits).
+    add_executable(VulkanInstanceIdRange_test VulkanInstanceIdRange_test.cpp)
+    target_link_libraries(VulkanInstanceIdRange_test PRIVATE threepp)
+    add_test(NAME VulkanInstanceIdRange_test COMMAND VulkanInstanceIdRange_test)
+    set_tests_properties(VulkanInstanceIdRange_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # ParticleField phase 0: the entity must be ONE entry whatever its capacity.
     # Asserts the three O(entries) CPU phases stay flat from a 10k- to a
     # 300k-particle field (read straight out of the CPU phase profiler), that a

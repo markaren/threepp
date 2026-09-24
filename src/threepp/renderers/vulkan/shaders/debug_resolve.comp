@@ -8,7 +8,7 @@
 // world-normal attachment correctly:
 //   • the SIGNED motion-vector channel clamps to near-black under a blit
 //     (a blit can't bias 0 -> mid-grey), and
-//   • the integer ids attachment (R16G16B16A16_UINT) cannot be blitted into
+//   • the integer ids attachment (R32G32B32A32_UINT) cannot be blitted into
 //     the UNORM swapchain at all — the Vulkan spec forbids integer<->non-
 //     integer blits (VUID-vkCmdBlitImage-srcImage-00229/-00230).
 // A compute pass samples each attachment with the correct sampler type
