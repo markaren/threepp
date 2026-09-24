@@ -117,11 +117,17 @@ namespace threepp {
                 // The bracket covers the snapshot copy recordDispatch opens
                 // with as well as the probe rays themselves — they are one
                 // cost and the copy is the half that was easy to forget.
+                // A step in the lighting (a light switched, the emissive power
+                // jumped) runs the next kProbeFastBlendFrames updates at the
+                // fast blend; see probeLightingStepped.
+                if (probeLightingStepped()) probeFastBlendFrames_ = kProbeFastBlendFrames;
+                const bool fastBlend = probeFastBlendFrames_ > 0;
+                if (probeFastBlendFrames_ > 0) --probeFastBlendFrames_;
                 gpuTimings_->begin(cb, TP_ProbeGI, currentFrame);
                 probeGI_->recordDispatch(cb, currentFrame,
                                          emissiveTriCountThisFrame_,
                                          emissiveTotalPowerThisFrame_,
-                                         /*shadows=*/true, envImage.mipLevels);
+                                         /*shadows=*/true, envImage.mipLevels, fastBlend);
                 gpuTimings_->end(cb, TP_ProbeGI, currentFrame);
                 // Probe SH writes → deferred shade reads (compute→compute).
                 VkMemoryBarrier2 pbar{};
@@ -2235,6 +2241,11 @@ namespace threepp {
             v.haltonFrame_          = 0;
         });
         if (impl.probeGI_) impl.probeGI_->invalidateHistory();
+        // The lighting-step detector compares against the previous frame, and
+        // a boost left running would make the first updates after the reset
+        // depend on what preceded it.
+        impl.probeLightSigPrev_.valid = false;
+        impl.probeFastBlendFrames_    = 0;
         if (impl.occl_) impl.occl_->resetVisibility();
         // The sample index seeds every stochastic pass (ReSTIR, the gathers,
         // the soft sun, AO). A structural rebuild that cannot match entries by

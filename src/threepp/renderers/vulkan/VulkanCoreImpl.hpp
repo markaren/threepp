@@ -2058,6 +2058,25 @@ namespace threepp {
         std::unique_ptr<vulkan::ProbeGI> probeGI_;
         bool probeGIEnabled_  = true;
         bool probeGridDirty_  = true;
+        // Lighting-step detector for the probe update. The probes blend 1/32
+        // of each update, one update per probe every 8 frames, so a switched
+        // light lingered in the grid for thousands of frames; a step in any
+        // light's power (probeLightingStepped) runs the next
+        // kProbeFastBlendFrames of probe updates at the fast blend
+        // (probe_update.comp, push-constant flags bit 1). updateLightsUbo fills
+        // the current signature; the dispatch compares it with the last one.
+        struct ProbeLightSig {
+            std::array<uint32_t, 4> counts{};// dir, point, spot, rect
+            std::vector<float>      lum;     // ambient, then one entry per light
+            uint32_t                emissiveCount = 0;
+            float                   emissivePower = 0.f;
+            bool                    valid         = false;
+        };
+        ProbeLightSig probeLightSig_;
+        ProbeLightSig probeLightSigPrev_;
+        int           probeFastBlendFrames_ = 0;
+        static constexpr int kProbeFastBlendFrames = 32;// four full sweeps
+        bool probeLightingStepped();
         // ── Two-phase GPU occlusion culling (setOcclusionCulling) ───────────
         // Phase 1 draws last frame's visible set; a FARTHEST-depth pyramid
         // (occlHiz_, min-reduce) is

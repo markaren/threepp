@@ -21,7 +21,8 @@
 // (the sun arrives through the analytic dir-light loop instead), so enclosed
 // interiors only receive the sky their probes actually see through openings.
 // The result is reduced to SH-L1 irradiance and EMA-blended into the store
-// (α = 1/min(count+1, 32): fast bootstrap, stable 1/32 steady state). The
+// (α = 1/min(count+1, 32): fast bootstrap, stable 1/32 steady state; up to
+// 0.75 for the radiance on a statistically significant lighting change). The
 // ray-hit DISTANCES additionally feed the probe's 8×8 octahedral depth map
 // (mean/mean², same α) — the Chebyshev visibility test probeIrradiance runs
 // per tap to stop irradiance leaking through walls (see probe_common.glsl).
@@ -162,7 +163,7 @@ layout(push_constant) uniform Pc {
     uint  probeOffset;       // round-robin window start (probe index)
     uint  probeCount;        // probes this dispatch (== workgroup count)
     uint  frame;             // update counter — rotates the ray sphere
-    uint  flags;             // bit 0 = shadows
+    uint  flags;             // bit 0 = shadows, bit 1 = lighting stepped (fast blend)
     uint  emissiveCount;     // # emissive triangles (0 = none)
     float emissiveTotalPower;// power-CDF total (denominator)
     uint  envMipCount;       // PMREM mip levels (>=1)
@@ -597,8 +598,75 @@ void main() {
     const vec4 o1 = probeSh[pIdx * 4u + 1u];
     const vec4 o2 = probeSh[pIdx * 4u + 2u];
     const vec4 o3 = probeSh[pIdx * 4u + 3u];
-    probeShOut[pIdx * 4u + 0u] = vec4(mix(o0.rgb, c0, alpha), mix(o0.a, validity, alpha));
-    probeShOut[pIdx * 4u + 1u] = vec4(mix(o1.rgb, cx, alpha), min(hist + 1.0, 4096.0));
-    probeShOut[pIdx * 4u + 2u] = vec4(mix(o2.rgb, cy, alpha), 0.0);
-    probeShOut[pIdx * 4u + 3u] = vec4(mix(o3.rgb, cz, alpha), 0.0);
+
+    // LIGHTING CHANGE: the radiance coefficients take a faster blend when this
+    // update's mean ray luminance differs from the stored one by several
+    // standard errors, the RTXGI hysteresis cut with a noise model in place of
+    // a fixed threshold. At 1/32 per update, one update per probe every 8
+    // frames, and the multi-bounce feedback returning ~half of each update's
+    // light to the next, the vulkan_lights room kept a visible glow for ~4000
+    // frames after every light was switched off (time constant ~500 frames in
+    // linear radiance).
+    //
+    // The standard error is the LARGER of this update's (per-ray spread over
+    // the 64 rays) and the probe's running mean of it (slot 2 .a, blended at
+    // the same alpha as the radiance). This update's alone fails on a rare
+    // bright feature: a corridor probe that sees a sunlit patch with one ray in
+    // 64 measures a near-zero spread on every update that misses it, and in
+    // converged Sponza 16 % of probes scored above 2.5 and 9 % above 5 on
+    // noise alone. The running mean holds the spread of the updates that did
+    // hit it. Following the radiance's alpha lets it fall with the light after
+    // a switch-off, so the score stays high until the drop is done. With it,
+    // no converged probe scored above 1.68 (Sponza, vulkan_lights), which sets
+    // the ramp at 2.0 .. 3.5. The 2 % relative floor keeps a near-zero spread
+    // (uniform surroundings) from turning float noise into a trigger. Validity
+    // and the depth moments keep the base alpha: they track geometry, which a
+    // lighting change does not move.
+    //
+    // Measured on vulkan_lights (mean 8-bit luminance, probe-GI-off floor 16):
+    // 260 frames after the switch-off 28.6 against 87.6 at a fixed 1/32.
+    const vec3  LUM = vec3(0.2126, 0.7152, 0.0722);
+    float lSum = 0.0, lSq = 0.0;
+    for (uint i = 0u; i < kRays; ++i) {
+        const float l = dot(s00[i], LUM);
+        lSum += l;
+        lSq  += l * l;
+    }
+    const float mNew   = lSum / float(kRays);
+    const float varL   = max(lSq / float(kRays) - mNew * mNew, 0.0) * (float(kRays) / float(kRays - 1u));
+    const float semSq  = varL / float(kRays);
+    const float semSqOld = (hist > 0.0) ? o2.a : semSq;// fresh grid: no history yet
+    const float semEff = sqrt(max(semSq, semSqOld));
+    const float mOld   = dot(o0.rgb, LUM) / (4.0 * PI * 0.28209479);// L00 → mean radiance
+    const float semDen = max(semEff, 0.02 * max(mNew, mOld) + 1e-6);
+    // PERSISTENCE: a short running mean of the update means (slot 3 .a, alpha
+    // kAlphaRun) against the stored value, in units of that running mean's own
+    // noise (sqrt(a / (2 − a)) of one update's). One update cannot separate a
+    // drop from noise on a probe whose rays spread widely while lit: the
+    // spotlight section of vulkan_lights (a small bright pool on the floor) lost
+    // ~1.7 standard errors per update after the switch-off, under the single
+    // test's ramp, and kept a magenta glow long after the other sections were
+    // dark. Noise does not repeat in one direction; a switch-off does. Its ramp
+    // sits higher (4 .. 7) because a run of hits on a rare bright feature does
+    // move the running mean: converged Sponza reached 4.7 on a few probes, a
+    // switch-off in vulkan_lights put the median probe at 19 .. 55.
+    const float kAlphaRun = 0.3;
+    const float mRunOld = (hist > 0.0) ? o3.a : mNew;
+    const float mRun    = mix(mRunOld, mNew, kAlphaRun);
+    const float zSingle = abs(mNew - mOld) / semDen;
+    const float zRun    = abs(mRun - mOld) / (semDen * sqrt(kAlphaRun / (2.0 - kAlphaRun)));
+    const float kAlphaFast = 0.75;
+    // The renderer saw the lighting step (a light switched, see
+    // VulkanRenderer::Impl::probeLightingStepped): every probe takes the fast
+    // blend for a few sweeps, and the running spread follows it down, so the
+    // tests above work from the new level afterwards.
+    const float fastW   = ((pc.flags & 2u) != 0u)
+                              ? 1.0
+                              : max(smoothstep(2.0, 3.5, zSingle), smoothstep(4.0, 7.0, zRun));
+    const float alphaSh = max(alpha, mix(alpha, kAlphaFast, fastW));
+
+    probeShOut[pIdx * 4u + 0u] = vec4(mix(o0.rgb, c0, alphaSh), mix(o0.a, validity, alpha));
+    probeShOut[pIdx * 4u + 1u] = vec4(mix(o1.rgb, cx, alphaSh), min(hist + 1.0, 4096.0));
+    probeShOut[pIdx * 4u + 2u] = vec4(mix(o2.rgb, cy, alphaSh), mix(semSqOld, semSq, alphaSh));
+    probeShOut[pIdx * 4u + 3u] = vec4(mix(o3.rgb, cz, alphaSh), mRun);
 }

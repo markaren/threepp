@@ -1422,7 +1422,61 @@ namespace threepp {
             }
         }
 
+        // ── 4d: the probe update's lighting-step signature ──────────────────
+        // Per-light luminance of exactly what the probe rays shade with (this
+        // UBO), compared frame to frame by probeLightingStepped(). Rect lights
+        // are weighted by area, since their colour is radiance.
+        {
+            auto lum = [](const float* c) { return 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2]; };
+            auto& sig = probeLightSig_;
+            sig.counts = {ubo.dirCount, ubo.pointCount, ubo.spotCount, ubo.rectCount};
+            sig.lum.clear();
+            sig.lum.push_back(lum(ubo.ambient));
+            for (std::uint32_t i = 0; i < ubo.dirCount; ++i) sig.lum.push_back(lum(ubo.dirLights[i].color));
+            for (std::uint32_t i = 0; i < ubo.pointCount; ++i) sig.lum.push_back(lum(ubo.pointLights[i].color));
+            for (std::uint32_t i = 0; i < ubo.spotCount; ++i) sig.lum.push_back(lum(ubo.spotLights[i].color));
+            for (std::uint32_t i = 0; i < ubo.rectCount; ++i) {
+                const auto& r = ubo.rectLights[i];
+                const float u = std::sqrt(r.halfU[0] * r.halfU[0] + r.halfU[1] * r.halfU[1] + r.halfU[2] * r.halfU[2]);
+                const float v = std::sqrt(r.halfV[0] * r.halfV[0] + r.halfV[1] * r.halfV[1] + r.halfV[2] * r.halfV[2]);
+                sig.lum.push_back(lum(r.color) * 4.f * u * v);
+            }
+            sig.valid = true;
+        }
+
         uploadHostVisible(ctx->allocator(), lightsUbos[frame], &ubo, sizeof(ubo));
+    }
+
+    // A STEP in the scene's lighting since the previous probe update: a light
+    // added or removed, or any light's (or the ambient's, or the total
+    // emissive) power changed by more than 25 % in one frame. The probe
+    // update's own per-probe tests cannot see a drop quickly on probes whose
+    // rays spread widely while lit (a spotlight's pool on the floor): one
+    // update's drop sits inside the spread it remembers. The renderer knows
+    // the light changed, so it says so. Animated lights move by a few percent
+    // per frame (FireEffect's flicker peaks at ~5 % per 60 Hz frame) and stay
+    // under the threshold. Consumes the current signature: the next call
+    // compares against it.
+    bool VulkanRenderer::Impl::probeLightingStepped() {
+        auto& cur  = probeLightSig_;
+        auto& prev = probeLightSigPrev_;
+        cur.emissiveCount = emissiveTriCountThisFrame_;
+        cur.emissivePower = emissiveTotalPowerThisFrame_;
+        if (!cur.valid) return false;
+        auto stepped = [](float a, float b) {
+            const float m = std::max(a, b);
+            return m > 1e-6f && std::abs(a - b) > 0.25f * m;
+        };
+        bool step = false;
+        if (prev.valid) {
+            step = cur.counts != prev.counts || cur.lum.size() != prev.lum.size() ||
+                   (cur.emissiveCount == 0u) != (prev.emissiveCount == 0u) ||
+                   stepped(cur.emissivePower, prev.emissivePower);
+            for (size_t i = 0; !step && i < cur.lum.size(); ++i)
+                step = stepped(cur.lum[i], prev.lum[i]);
+        }
+        prev = cur;
+        return step;
     }
 
     void VulkanRenderer::Impl::createFogUbos() {

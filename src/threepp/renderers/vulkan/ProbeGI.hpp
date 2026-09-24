@@ -122,9 +122,11 @@ namespace threepp::vulkan {
         // Record the round-robin probe update (kProbesPerFrame workgroups ×
         // kRaysPerProbe rays). The caller provides the AS-build→compute
         // barrier before and the probe-write→shade-read barrier after.
+        // fastBlend: the scene's lighting just stepped (a light switched);
+        // this update's probes take the fast blend unconditionally.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame,
                             uint32_t emissiveCount, float emissiveTotalPower,
-                            bool shadows, uint32_t envMipCount);
+                            bool shadows, uint32_t envMipCount, bool fastBlend = false);
 
         // For DeferredShade's descriptor write (bindings 36/37/54).
         [[nodiscard]] VkBuffer shBuffer() const { return shBuf_.handle; }

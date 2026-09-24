@@ -7,8 +7,11 @@
 //   probeSh[]  — vec4[] storage buffer, 4 vec4 per probe (SH-L1 irradiance):
 //                  [0] = L00.rgb,  .a = validity (0 = probe inside geometry)
 //                  [1] = L1x.rgb,  .a = update count (EMA history length)
-//                  [2] = L1y.rgb
-//                  [3] = L1z.rgb
+//                  [2] = L1y.rgb,  .a = running squared standard error of the
+//                        update's mean ray luminance (probe_update's
+//                        lighting-change test; no consumer reads it)
+//                  [3] = L1z.rgb,  .a = short running mean of the update's
+//                        mean ray luminance (same test; no consumer reads it)
 //   probeDepth[] — uint[] storage buffer, kProbeDepthTexels per probe: an 8×8
 //                octahedral map of packHalf2x16(mean, mean²) ray-hit distance,
 //                NORMALIZED by probeMaxDist() (half-safe at any scene scale).
