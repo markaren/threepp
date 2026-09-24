@@ -1319,12 +1319,48 @@ void main() {
         // after the fork and is folded into the ambient term by BOTH the Phase A
         // branch and the AO-off branch below. It is included here too so Phase B
         // is not systematically darker than Phase A by that term.
+        //
+        // UNMEASURED SHARE (1 − conf), demod path. The env fill is sky only and
+        // carries no bounce; as the fill for this share it rendered a STARVED
+        // pixel (probes inside geometry or unable to see the point) in an
+        // enclosed room black. Case: vulkan_showcase, 0.55 m spheres on the
+        // floor of a 10 m room lit by a ceiling emitter, black background. The
+        // floor's lookup clamps to the lowest probe row (y = 0.31 m); the
+        // probes of that row under each sphere are inside it, and the floor
+        // footprint plus the sphere's underside rendered as hard black patches
+        // shaped by the probe cells.
+        //   conf ≥ 0.5: the valid probes' estimate stands for the whole
+        //     neighbourhood (DDGI weight renormalization over active probes).
+        //   conf < 0.5: this pixel's own stochastic gather (the Phase A
+        //     estimator, whose hits tap the probe grid where it is valid) takes
+        //     over, fully below 0.25.
+        // Neither leg passes through the env fill: a gather→env handoff left a
+        // thin dark seam along the probe-cell boundary on the clearcoat sphere,
+        // where half the pixel came from a black sky. The gather band is narrow
+        // because interior walls sit at conf ~0.9 (partially valid probes, e.g.
+        // the Sponza corridors); a 0.99 threshold ran the gather across all of
+        // them. The inline path (glass) keeps the env fill, since its gather is
+        // the deterministic sky-only variant.
         float conf;
         const vec3 probeE = probeIrradianceConf(worldPos + N * SHADOW_EPS, N, conf) * (1.0 / PI);
-        const vec3 envE   = sampleEnvLod(bentN, maxLod);
-        diffInd = mix(envE * gtaoMultiBounce(rtSkyVis, albedo),
-                      probeE * gtaoMultiBounce(rtAoNear, albedo), conf)
-                + (lights.ambient + hemiAmbient(N)) * rtSkyVis;
+        const vec3 probeT = probeE * gtaoMultiBounce(rtAoNear, albedo);
+        vec3 fillE;
+        if (demodIndirect) {
+            fillE = probeT;
+            const float gatherW = 1.0 - smoothstep(0.25, 0.5, conf);
+            if (gatherW > 0.0) {
+                float openness;
+                gGiMovFrac = 0.0;
+                const vec3 gatherE = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, true, giSpp,
+                                               pm.envMapIntensity, openness);
+                fillE = mix(fillE, gatherE, gatherW);
+                // The moving-hit dwell cut applies to the share the gather supplies.
+                gGiMovFrac *= (1.0 - conf) * gatherW;
+            }
+        } else {
+            fillE = sampleEnvLod(bentN, maxLod) * gtaoMultiBounce(rtSkyVis, albedo);
+        }
+        diffInd = mix(fillE, probeT, conf) + (lights.ambient + hemiAmbient(N)) * rtSkyVis;
     } else if (aoOn) {
         // ── Phase A: no probe field — keep the stochastic 1-bounce GI gather
         // for the sky/indirect term (nothing else supplies the near-field), but
@@ -1691,13 +1727,17 @@ void main() {
         // filter leaves env misses unblurred, so the single read stayed on
         // screen as grain. The ray itself still decides hit or escape.
         gTraceDeferMiss = roughness >= kReflStochastic;
+        // Traced fill for a starved probe neighbourhood at the first hit: full
+        // weight up to roughness 0.25, none from 0.35 (gReflStarvedFill).
+        gReflStarvedFill = 1.0 - smoothstep(0.25, 0.35, roughness);
         vec3 r = traceRadiance(shadowOrig, Rd, shadowsOn, maxLod, missLod, reflSeed,
                                /*cheapHits=*/true,// reflection channel: blur+temporal absorb
                                /*probeHitFill=*/true,
                                // THE reflection channel: this surface's own
                                // environment, so its envMapIntensity applies.
                                /*envInt=*/pm.envMapIntensity);
-        gTraceDeferMiss = false;
+        gTraceDeferMiss  = false;
+        gReflStarvedFill = 0.0;
         vec3 rEnv = vec3(0.0);// the escape's environment, kept apart for the moving clamp below
         if (any(greaterThan(gTraceMissTput, vec3(0.0)))) {
             // Blue noise across pixels, an R2 sequence through the frames: every

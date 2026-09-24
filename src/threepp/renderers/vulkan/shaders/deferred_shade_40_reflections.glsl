@@ -231,6 +231,16 @@ vec3 gTraceMissTput  = vec3(0.0);
 // every other caller (reflection traces read the probe fill and ignore this).
 float gEnvFillVis = 1.0;
 
+// Weight of the traced fill at a FIRST-bounce reflection hit whose probe
+// neighbourhood is starved (see the probeHitFill branch in traceRadiance).
+// Stamped by the opaque reflection caller from the reflecting surface's
+// roughness; 0 for every other caller. Rough lobes blur the reflected starved
+// region into the rest of the reflection. Ungated, the traced fill cost
+// +1.0 .. 1.5 ms of shade in Sponza (1600x900, RTX 4060 laptop), where stone
+// reflection rays land in contact corners across the whole frame; gated to
+// roughness < 0.35 it measured +0.18 .. 0.34 ms.
+float gReflStarvedFill = 0.0;
+
 // Measured probe/env irradiance ratio at P — the envSpecVis construction from
 // the opaque primary shade: 1 under open sky, → 0 deep inside an enclosure.
 // Conf-gated the same way: a starved probe neighbourhood (all 8 probes inside
@@ -421,7 +431,40 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                 // reasonably-measured neighbourhood (conf ≥ 0.25) is trusted
                 // outright; only a truly starved one (all 8 probes inside
                 // geometry) falls back to the env fill instead of black.
-                hitDiffInd = mix(hitDiffInd, probeFill, smoothstep(0.0, 0.25, probeConf));
+                const float probeTrust = smoothstep(0.0, 0.25, probeConf);
+                // The starved share is filled by two cosine-sampled giRadiance
+                // rays from the hit, the reflected counterpart of the primary
+                // Phase B gather fallback. The env fill is sky only; in an
+                // enclosed room with a black background it is black, and the
+                // floor under a sphere, mirrored in that sphere's lower half,
+                // showed the probe-cell-shaped starved region as a black patch
+                // (vulkan_showcase). Reflection hits are temporally accumulated
+                // like the emitter NEE they already sample stochastically.
+                // First bounce of a smooth reflector only (gReflStarvedFill).
+                const float starvedW = (b == 0) ? gReflStarvedFill : 0.0;
+                if (starvedW > 0.0 && probeTrust < 0.99) {
+                    const vec3 up   = abs(hitN.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+                    const vec3 fT   = normalize(cross(up, hitN));
+                    const vec3 fB   = cross(hitN, fT);
+                    const vec3 fOrg = hitP + hitN * SHADOW_EPS;
+                    vec3 gSum = vec3(0.0);
+                    const int kStarvedRays = 2;
+                    for (int s = 0; s < kStarvedRays; ++s) {
+                        const float u1  = rnd(seed);
+                        const float phi = TWO_PI * rnd(seed);
+                        const float r   = sqrt(u1);
+                        const vec3  fd  = normalize(fT * (r * cos(phi)) + fB * (r * sin(phi))
+                                                    + hitN * sqrt(max(0.0, 1.0 - u1)));
+                        bool fMissed;
+                        // envInt 1.0: the replaced env fill is unscaled as well.
+                        vec3 gi = giRadiance(fOrg, fd, doShadows, maxLod, seed, fMissed, 1.0);
+                        const float gl = max(max(gi.r, gi.g), gi.b);
+                        if (gl > 6.0) gi *= 6.0 / gl;// the gather's firefly cap
+                        gSum += gi;
+                    }
+                    hitDiffInd = mix(hitDiffInd, gSum * (1.0 / float(kStarvedRays)) + lights.ambient + hemiAmbient(hitN), starvedW);
+                }
+                hitDiffInd = mix(hitDiffInd, probeFill, probeTrust);
             } else {
                 // Transmission retrace: env-fill shape (probes cannot resolve
                 // the cavity) at the sky level that actually reaches the
