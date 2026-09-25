@@ -42,9 +42,19 @@ namespace threepp::vulkan {
 
     class VulkanContext;
 
+    class TransientPool;
+
     class SensorPass {
 
     public:
+        // Bind this pass's frame-local scratch into `pool` (TransientPool),
+        // as view `view`'s. Call before the images are created; null keeps
+        // dedicated allocations.
+        void setTransientPool(TransientPool* pool, uint32_t view) {
+            pool_     = pool;
+            poolView_ = view;
+        }
+
         SensorPass(VulkanContext& ctx, VkCommandPool cmdPool, uint32_t framesInFlight);
         ~SensorPass();
         SensorPass(const SensorPass&) = delete;
@@ -97,6 +107,8 @@ namespace threepp::vulkan {
                          const Params& p);
 
     private:
+        TransientPool* pool_     = nullptr;// frame-local scratch (setTransientPool)
+        uint32_t       poolView_ = 0;
         VulkanContext& ctx_;
         VkCommandPool  cmdPool_;
         uint32_t       framesInFlight_;

@@ -37,6 +37,18 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
                 size = WindowSize{static_cast<int>(ext.width), static_cast<int>(ext.height)};
             }
 
+            // THREEPP_VK_NO_ALIAS=1: every image gets its own allocation, as
+            // before the pools existed. For bisecting an aliasing suspect, and
+            // for the determinism-audit readbacks of scratch images
+            // (debugHashShadeImages' atrousA/B, readTaaDebugImages' input),
+            // which later passes overwrite when they share memory.
+            if (const char* e = std::getenv("THREEPP_VK_NO_ALIAS"); !(e && *e && *e != '0')) {
+                transientPool_ = std::make_unique<vulkan::TransientPool>(ctx->allocator(), ctx->device(),
+                                                                         "transient");
+                gbufMsPool_    = std::make_unique<vulkan::TransientPool>(ctx->allocator(), ctx->device(),
+                                                                         "gbufferMs");
+            }
+
             // The scene-dependent AS build runs lazily on the first render()
             // call. Everything below is scene-independent and safe at ctor time.
             createCommandResources();
@@ -67,6 +79,7 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
             imageCount_ = static_cast<uint32_t>(ctx->swapchainImages().size());
             view().taa_ = std::make_unique<vulkan::TaaResolve>(
                     *ctx, cmdPool, imageCount_, kFramesInFlight);
+            view().taa_->setTransientPool(transientPool_.get(), view().id);
             {
                 // TAA input is the deferred render extent; history +
                 // output are the swapchain extent. When they differ the
@@ -120,12 +133,14 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
             // extent (it is the shared set's binding 1 target); the bloom
             // pyramid levels are half that and below.
             view().bloom_ = std::make_unique<vulkan::BloomPass>(*ctx, cmdPool, kFramesInFlight);
+            view().bloom_->setTransientPool(transientPool_.get(), view().id);
             view().bloom_->createImages(renderExtent().width, renderExtent().height);
             onAfterBloomCreateImages();
             // Exposure/WB/tone-map/grade/sRGB composite → TAA input.
             view().post_ = std::make_unique<vulkan::PostComposite>(*ctx, cmdPool, kFramesInFlight);
             // Thin-lens DoF (images/descriptors fitted in rewriteBloomDescriptors).
             dof_ = std::make_unique<vulkan::DofPass>(*ctx, cmdPool, kFramesInFlight);
+            dof_->setTransientPool(transientPool_.get(), 0);
             // Gaussian splats (images/descriptors fitted in rewriteBloomDescriptors,
             // like DoF; buffers only appear once a scene actually has a cloud).
             splat_ = std::make_unique<vulkan::SplatPass>(*ctx, cmdPool, kFramesInFlight);
@@ -133,6 +148,7 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
             // the very end of recording (after the overlay pass — see
             // SensorPass.hpp). Allocates nothing until a lens or noise is set.
             sensorPass_ = std::make_unique<vulkan::SensorPass>(*ctx, cmdPool, kFramesInFlight);
+            sensorPass_->setTransientPool(transientPool_.get(), 0);
             // Raster-first deferred lighting pass. Writes bloom_->sceneHdr, so
             // it must exist after bloom_; its descriptors reference the camera /
             // lights UBOs, the env image, the raster gbuffer and sceneHdr — all

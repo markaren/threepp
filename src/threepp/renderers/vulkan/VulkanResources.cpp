@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
+#include "threepp/renderers/vulkan/TransientPool.hpp"
 #include "threepp/renderers/vulkan/DescriptorShadow.hpp"
 
 #include <stdexcept>
@@ -223,7 +224,9 @@ namespace threepp::vulkan {
             unregisterImageView(img.view);
             vkDestroyImageView(device, img.view, nullptr);
         }
-        if (img.image)   vmaDestroyImage(alloc, img.image, img.alloc);
+        // A TransientPool image shares its memory; the pool destroys it and
+        // releases its range. Anything else owns a VMA allocation.
+        if (img.image && !TransientPool::release(img.image)) vmaDestroyImage(alloc, img.image, img.alloc);
         img = {};
     }
 

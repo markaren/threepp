@@ -26,9 +26,19 @@ namespace threepp::vulkan {
 
     class VulkanContext;
 
+    class TransientPool;
+
     class TaaResolve {
 
     public:
+        // Bind this pass's frame-local scratch into `pool` (TransientPool),
+        // as view `view`'s. Call before the images are created; null keeps
+        // dedicated allocations.
+        void setTransientPool(TransientPool* pool, uint32_t view) {
+            pool_     = pool;
+            poolView_ = view;
+        }
+
         // `cmdPool` is used internally for one-shot image layout transitions
         // (UNDEFINED → GENERAL) at image creation time. Pipeline + layout +
         // sampler + descriptor pool + descriptor sets are allocated here;
@@ -204,6 +214,8 @@ namespace threepp::vulkan {
                                             const VkImage* swapchainImages);
 
     private:
+        TransientPool* pool_     = nullptr;// frame-local scratch (setTransientPool)
+        uint32_t       poolView_ = 0;
         VulkanContext& ctx_;
         VkCommandPool  cmdPool_;
         uint32_t       imageCount_;
@@ -266,8 +278,9 @@ namespace threepp::vulkan {
         uint32_t historyInvalidResolves_ = 2;// forced-alpha resolves still owed
 
         // Internal helpers.
+        // poolSlots != 0: in pool_ (TransientPhase::Post), for those slots.
         Image2D createStorageSampledImage(uint32_t w, uint32_t h, VkFormat format,
-                                          const char* label);
+                                          const char* label, uint32_t poolSlots = 0);
         void    transitionFreshImage(VkImage img);
         void    createPipeline();
         void    createDescriptorPool();

@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/SensorPass.hpp"
+#include "threepp/renderers/vulkan/TransientPool.hpp"
 
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 
@@ -164,7 +165,8 @@ namespace threepp::vulkan {
         height_ = height;
 
         VkDevice d = ctx_.device();
-        for (auto& img : snapshot_) {
+        for (uint32_t f = 0; f < snapshot_.size(); ++f) {
+            auto& img  = snapshot_[f];
             img.width  = width;
             img.height = height;
             img.format = VK_FORMAT_B8G8R8A8_UNORM;// matches the swapchain
@@ -181,9 +183,10 @@ namespace threepp::vulkan {
             ici.usage         = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
             ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
             ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            VmaAllocationCreateInfo aci{};
-            aci.usage = VMA_MEMORY_USAGE_AUTO;
-            check(vmaCreateImage(ctx_.allocator(), &ici, &aci, &img.image, &img.alloc, nullptr),
+            // Copied into and read back within the stage: transient scratch
+            // (the pool's Tail group).
+            check(createImageMaybePooled(ctx_.allocator(), pool_, transientGroup(TransientPhase::Tail, poolView_),
+                                         transientSlot(f), ici, &img.image, &img.alloc),
                   "vmaCreateImage(sensorPass.snapshot)");
 
             VkImageViewCreateInfo vci{};

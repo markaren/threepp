@@ -42,9 +42,19 @@ namespace threepp::vulkan {
 
     class VulkanContext;
 
+    class TransientPool;
+
     class DofPass {
 
     public:
+        // Bind this pass's frame-local scratch into `pool` (TransientPool),
+        // as view `view`'s. Call before the images are created; null keeps
+        // dedicated allocations.
+        void setTransientPool(TransientPool* pool, uint32_t view) {
+            pool_     = pool;
+            poolView_ = view;
+        }
+
         DofPass(VulkanContext& ctx, VkCommandPool cmdPool, uint32_t framesInFlight);
         ~DofPass();
         DofPass(const DofPass&) = delete;
@@ -77,6 +87,8 @@ namespace threepp::vulkan {
                      rg::ImageHandle depth, rg::ImageHandle sceneHdr) const;
 
     private:
+        TransientPool* pool_     = nullptr;// frame-local scratch (setTransientPool)
+        uint32_t       poolView_ = 0;
         VulkanContext& ctx_;
         VkCommandPool  cmdPool_;
         uint32_t       framesInFlight_;

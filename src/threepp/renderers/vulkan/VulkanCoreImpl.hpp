@@ -24,6 +24,7 @@
 #include "OverlayPass.hpp"
 #include "VulkanFrameTypes.hpp"
 #include "RenderGraph.hpp"
+#include "TransientPool.hpp"
 #include "TaaResolve.hpp"
 #if defined(THREEPP_WITH_FSR)
 #include "FsrUpscaler.hpp"
@@ -256,6 +257,15 @@ namespace threepp {
         double lastFrameTime_ = 0.0;
 
         std::unique_ptr<VulkanContext> ctx;
+        // Device memory shared by frame-local scratch images (TransientPool):
+        // declared right after ctx so it outlives every pass that binds images
+        // into it and dies before the allocator. transientPool_ holds the
+        // shade / post / tail scratch (TransientPhase groups alias each other,
+        // and so do frame-in-flight slots and views); gbufMsPool_ holds the
+        // multisampled G-buffer, whose only aliasing is across slots (it is in
+        // use from the G-buffer pass to the shade, alongside shade scratch).
+        std::unique_ptr<vulkan::TransientPool> transientPool_;
+        std::unique_ptr<vulkan::TransientPool> gbufMsPool_;
 
         // Per-mesh GPU state + the auto-LOD job types moved to
         // VulkanGeometryState.hpp (their doc comments travel with them).
@@ -3877,12 +3887,16 @@ namespace threepp {
                                         VkImageUsageFlags usage,
                                         VkImageAspectFlags aspect,
                                         const char* debugName = nullptr,
-                                        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
+                                        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT,
+                                        vulkan::TransientPool* pool = nullptr, uint32_t poolGroup = 0,
+                                        uint32_t poolSlots = vulkan::kTransientAllSlots);
 
         // 3D storage image (froxel volumetrics) — the volume sibling of
         // createAttachmentImage2D (OPTIMAL tiling, single mip, 3D view).
         Image2D createImage3D(uint32_t w, uint32_t h, uint32_t depth, VkFormat format,
-                              VkImageUsageFlags usage, const char* debugName = nullptr);
+                              VkImageUsageFlags usage, const char* debugName = nullptr,
+                              vulkan::TransientPool* pool = nullptr, uint32_t poolGroup = 0,
+                              uint32_t poolSlots = vulkan::kTransientAllSlots);
 
         void destroyRasterGbufImages();
 
@@ -4549,7 +4563,15 @@ namespace threepp {
         // barriers to stderr whenever they differ from what was last printed
         // under the same name (a pass appearing, a layout changing).
         void executeGraph(VkCommandBuffer cb, vulkan::rg::RenderGraph& graph, const char* name) {
+            // Which imported images share memory (TransientPool); the graph
+            // orders the hand-over between them and checks their lifetimes.
+            if (transientPool_) transientPool_->declare(graph);
+            if (gbufMsPool_) gbufMsPool_->declare(graph);
             graph.execute(cb);
+            for (const auto& e : graph.aliasErrors()) {
+                if (rgAliasErrorsReported_.insert(e).second)
+                    std::fprintf(stderr, "[RenderGraph] '%s': aliased %s\n", name, e.c_str());
+            }
             static const bool dump = [] {
                 const char* e = std::getenv("THREEPP_RG_DUMP");
                 return e && *e && *e != '0';
@@ -4563,6 +4585,7 @@ namespace threepp {
             last = std::move(text);
         }
         std::map<std::string, std::string> rgDumped_;
+        std::set<std::string> rgAliasErrorsReported_;
         // The primary's tail as graph passes: the field transmittance prepass,
         // the billboard glow, the hybrid overlay and the sensor image stage.
         void addTailPasses(vulkan::rg::RenderGraph& g, uint32_t imageIndex);

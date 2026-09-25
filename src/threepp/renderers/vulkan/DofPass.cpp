@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/DofPass.hpp"
+#include "threepp/renderers/vulkan/TransientPool.hpp"
 
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 
@@ -93,9 +94,11 @@ namespace threepp::vulkan {
         ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-        VmaAllocationCreateInfo aci{};
-        aci.usage = VMA_MEMORY_USAGE_AUTO;
-        check(vmaCreateImage(ctx_.allocator(), &ici, &aci, &out.image, &out.alloc, nullptr), label);
+        // One set for every slot, so every slot's frame uses it (the pool's
+        // Post group, beside the bloom pyramid and the TAA input).
+        check(createImageMaybePooled(ctx_.allocator(), pool_, transientGroup(TransientPhase::Post, poolView_),
+                                     kTransientAllSlots, ici, &out.image, &out.alloc),
+              label);
 
         VkImageViewCreateInfo vci{};
         vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -108,7 +111,9 @@ namespace threepp::vulkan {
         check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &out.view), label);
         ctx_.setObjectName(out.image, label);
 
-        // UNDEFINED → GENERAL once; the pass keeps everything in GENERAL.
+        // UNDEFINED → GENERAL once; the pass keeps everything in GENERAL. A
+        // pooled image is discarded at its first use in every frame instead.
+        if (out.alloc == VK_NULL_HANDLE) return out;
         VkCommandBufferAllocateInfo ai{};
         ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         ai.commandPool        = cmdPool_;

@@ -416,6 +416,9 @@ namespace threepp {
         // Splits "the shading diverged" from "the temporal resolve diverged"
         // in the determinism audit (examples/vulkan/vulkan_aov_audit.cpp).
         // Full device sync per call — an audit instrument, not a capture path.
+        // The TAA input is frame-local scratch whose memory later passes
+        // reuse, so by the time a frame completes it holds their data; run
+        // with THREEPP_VK_NO_ALIAS=1 to read the image itself.
         bool readTaaDebugImages(std::vector<uint8_t>& input, int& inW, int& inH,
                                 std::vector<uint8_t>& history, int& histW, int& histH);
 
@@ -434,6 +437,9 @@ namespace threepp {
         // directU is the control: analytic direct light, no rays, no history —
         // if IT diverges the shade dispatch itself is non-deterministic.
         // Empty result before the first frame. Full device sync per call.
+        // atrousA/B are frame-local scratch whose memory later passes reuse;
+        // their hashes describe those passes' data unless the renderer runs
+        // with THREEPP_VK_NO_ALIAS=1.
         std::vector<std::pair<std::string, uint64_t>> debugHashShadeImages();
 
         // Raw dump of the probe-GI SH-L1 store (kProbeCount × 4 × vec4) for
@@ -1649,6 +1655,16 @@ namespace threepp {
         [[nodiscard]] std::uint64_t splatVolumeBytes() const;
         [[nodiscard]] std::uint64_t splatVolumeGeneration() const;
         void splatVolumeHash(std::uint64_t out[3]) const;
+
+        // Device memory the renderer holds through its allocator, in bytes
+        // (every buffer, image and acceleration structure it created).
+        // transientImageBytes(): of that, the memory frame-local scratch
+        // images share (render targets that live within one part of the
+        // frame share memory with each other), and what the same images
+        // would take with an allocation each. Both 0 under
+        // THREEPP_VK_NO_ALIAS=1, which gives each its own allocation.
+        [[nodiscard]] std::uint64_t gpuAllocatedBytes() const;
+        void transientImageBytes(std::uint64_t& shared, std::uint64_t& unshared) const;
 
         // ── GPU per-instance world matrices ───────────────────────────────────
         // A compute pass (instance_expand.comp) that recomputes, per

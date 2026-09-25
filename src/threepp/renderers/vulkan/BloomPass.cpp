@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/BloomPass.hpp"
+#include "threepp/renderers/vulkan/TransientPool.hpp"
 
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 
@@ -36,7 +37,7 @@ namespace threepp::vulkan {
         for (auto& img : pyr_)      destroyImage2D(ctx_.allocator(), d, img);
     }
 
-    Image2D BloomPass::createStorageSampledImage(uint32_t w, uint32_t h, const char* label) {
+    Image2D BloomPass::createStorageSampledImage(uint32_t w, uint32_t h, const char* label, uint32_t poolSlots) {
         Image2D out{};
         out.width  = w;
         out.height = h;
@@ -58,12 +59,13 @@ namespace threepp::vulkan {
         ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-        VmaAllocationCreateInfo aci{};
-        aci.usage = VMA_MEMORY_USAGE_AUTO;
-        check(vmaCreateImage(ctx_.allocator(), &ici, &aci, &out.image, &out.alloc, nullptr),
+        TransientPool* pool = poolSlots ? pool_ : nullptr;
+        check(createImageMaybePooled(ctx_.allocator(), pool, transientGroup(TransientPhase::Post, poolView_),
+                                     poolSlots, ici, &out.image, &out.alloc),
               label);
 
-        transitionFreshImage(out.image);
+        // A pooled image is discarded at its first use in every frame.
+        if (out.alloc != VK_NULL_HANDLE) transitionFreshImage(out.image);
 
         VkImageViewCreateInfo vci{};
         vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -139,7 +141,7 @@ namespace threepp::vulkan {
             for (uint32_t l = 0; l < levels_; ++l)
                 pyr_[f * kMaxLevels + l] = createStorageSampledImage(
                         std::max(width_ >> (l + 1u), 1u), std::max(height_ >> (l + 1u), 1u),
-                        "vmaCreateImage(bloom.pyr)");
+                        "vmaCreateImage(bloom.pyr)", transientSlot(f));
     }
 
     static VkPipeline makeComputePipe(VkDevice d, VkPipelineCache cache, VkPipelineLayout layout,

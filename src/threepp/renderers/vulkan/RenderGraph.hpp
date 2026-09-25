@@ -25,6 +25,13 @@
 //     image where it expects it.
 // Within the graph every barrier is derived from the declarations.
 //
+// Aliasing. Images that share memory (bound to overlapping ranges of one
+// allocation) are declared with setMemoryRange. Their contents never survive
+// a frame: each is treated as imported in UNDEFINED. compile() checks that no
+// two of them are in use over overlapping pass ranges (aliasErrors()), and the
+// first use of one after another has been used discards its contents behind a
+// barrier that waits for the other's last use.
+//
 // Planning and recording are separate: compile() fills the barrier plan
 // without touching a command buffer (unit-testable, and what dump() prints),
 // execute() compiles if needed and records.
@@ -152,6 +159,12 @@ namespace threepp::vulkan::rg {
         // global memory barriers. The same name returns the same handle.
         BufferHandle importMemory(const char* name);
 
+        // The memory an imported image occupies: [offset, offset + size) of
+        // the allocation `heap` (any identity for it). Images whose ranges in
+        // one heap overlap alias each other (see the file comment). No-op for
+        // an image this graph has not imported.
+        void setMemoryRange(VkImage image, const void* heap, VkDeviceSize offset, VkDeviceSize size);
+
         // Passes run in the order they are added.
         PassBuilder addPass(const char* name, ExecuteFn execute);
 
@@ -170,6 +183,9 @@ namespace threepp::vulkan::rg {
         [[nodiscard]] const std::vector<PlannedBarrier>& exitBarriers() const { return exit_; }
         [[nodiscard]] bool hasEntryMemoryBarrier() const { return entryMemory_; }
         [[nodiscard]] bool hasExitMemoryBarrier() const { return exitMemory_; }
+        // Aliased images whose uses overlap in pass order — a bug in whatever
+        // assigned their memory. Empty when the plan is safe.
+        [[nodiscard]] const std::vector<std::string>& aliasErrors() const { return aliasErrors_; }
         [[nodiscard]] std::string dump() const;
 
     private:
@@ -206,6 +222,14 @@ namespace threepp::vulkan::rg {
             VkImageLayout      entryLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             VkImageLayout      exitLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             std::vector<State> mips;
+            // Aliasing (setMemoryRange). Planning state, rebuilt by compile().
+            const void*           heap = nullptr;
+            VkDeviceSize          memOffset = 0, memSize = 0;
+            uint32_t              firstPass = UINT32_MAX, lastPass = 0;
+            std::vector<uint32_t> aliases;
+            bool                  aliasPlanned = false;
+            VkPipelineStageFlags2 aliasSrcStages = 0;
+            VkAccessFlags2        aliasSrcAccess = 0;
         };
         // buffer == VK_NULL_HANDLE: a memory resource (importMemory).
         struct Buffer {
@@ -226,6 +250,7 @@ namespace threepp::vulkan::rg {
         mutable std::vector<VkBufferMemoryBarrier2> bufferScratch_;
         mutable std::vector<VkMemoryBarrier2>       memoryScratch_;
         std::vector<PlannedBarrier> entry_, exit_;
+        std::vector<std::string> aliasErrors_;
         bool entryMemory_ = false, exitMemory_ = false;
         bool compiled_ = false;
         VkPipelineStageFlags2 usedStages_ = 0;

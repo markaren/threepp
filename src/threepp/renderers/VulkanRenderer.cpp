@@ -2199,6 +2199,19 @@ namespace threepp {
         return core()->splat_ ? core()->splat_->volumeBytes() : 0;
     }
 
+    std::uint64_t VulkanRenderer::gpuAllocatedBytes() const {
+        return core()->ctx ? core()->vmaAllocatedBytes() : 0;
+    }
+
+    void VulkanRenderer::transientImageBytes(std::uint64_t& shared, std::uint64_t& unshared) const {
+        shared = unshared = 0;
+        for (const auto* pool : {core()->transientPool_.get(), core()->gbufMsPool_.get()}) {
+            if (!pool) continue;
+            shared += pool->reservedBytes();
+            unshared += pool->requestedBytes();
+        }
+    }
+
     std::uint64_t VulkanRenderer::splatVolumeGeneration() const {
         return core()->splat_ ? core()->splat_->volumeGeneration() : 0;
     }

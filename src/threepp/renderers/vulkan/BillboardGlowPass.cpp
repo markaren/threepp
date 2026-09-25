@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/BillboardGlowPass.hpp"
+#include "threepp/renderers/vulkan/TransientPool.hpp"
 
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 
@@ -60,7 +61,7 @@ namespace threepp::vulkan {
     }
 
     Image2D BillboardGlowPass::createImage(uint32_t w, uint32_t h,
-                                           VkImageUsageFlags usage, const char* label) {
+                                           VkImageUsageFlags usage, const char* label, uint32_t slot) {
         Image2D out{};
         out.width  = w;
         out.height = h;
@@ -79,11 +80,12 @@ namespace threepp::vulkan {
         ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-        VmaAllocationCreateInfo aci{};
-        aci.usage = VMA_MEMORY_USAGE_AUTO;
-        check(vmaCreateImage(ctx_.allocator(), &ici, &aci, &out.image, &out.alloc, nullptr), label);
+        check(createImageMaybePooled(ctx_.allocator(), pool_, transientGroup(TransientPhase::Tail, poolView_),
+                                     transientSlot(slot), ici, &out.image, &out.alloc),
+              label);
 
-        transitionFreshImage(out.image, VK_IMAGE_ASPECT_COLOR_BIT);
+        // A pooled image is discarded at its first use in every frame.
+        if (out.alloc != VK_NULL_HANDLE) transitionFreshImage(out.image, VK_IMAGE_ASPECT_COLOR_BIT);
 
         VkImageViewCreateInfo vci{};
         vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -104,7 +106,7 @@ namespace threepp::vulkan {
     // depth/stencil attachment is legal in GENERAL, and this one is written by
     // the reduce and read by the source pass in the same submit, so it never
     // needs a second layout.
-    Image2D BillboardGlowPass::createDepthImage(uint32_t w, uint32_t h, const char* label) {
+    Image2D BillboardGlowPass::createDepthImage(uint32_t w, uint32_t h, const char* label, uint32_t slot) {
         Image2D out{};
         out.width  = w;
         out.height = h;
@@ -123,11 +125,11 @@ namespace threepp::vulkan {
         ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-        VmaAllocationCreateInfo aci{};
-        aci.usage = VMA_MEMORY_USAGE_AUTO;
-        check(vmaCreateImage(ctx_.allocator(), &ici, &aci, &out.image, &out.alloc, nullptr), label);
+        check(createImageMaybePooled(ctx_.allocator(), pool_, transientGroup(TransientPhase::Tail, poolView_),
+                                     transientSlot(slot), ici, &out.image, &out.alloc),
+              label);
 
-        transitionFreshImage(out.image, VK_IMAGE_ASPECT_DEPTH_BIT);
+        if (out.alloc != VK_NULL_HANDLE) transitionFreshImage(out.image, VK_IMAGE_ASPECT_DEPTH_BIT);
 
         VkImageViewCreateInfo vci{};
         vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -212,19 +214,21 @@ namespace threepp::vulkan {
             ++levels_;
         if (levels_ == 0) levels_ = 1;
 
-        for (auto& img : src_)
-            img = createImage(srcW_, srcH_,
-                              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                                      VK_IMAGE_USAGE_STORAGE_BIT,
-                              "vmaCreateImage(bbglow.src)");
+        // All three are rewritten every frame (the reduce, a CLEAR, the
+        // pyramid) and dead after the overlay composite: transient scratch.
+        for (uint32_t f = 0; f < src_.size(); ++f)
+            src_[f] = createImage(srcW_, srcH_,
+                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                          VK_IMAGE_USAGE_STORAGE_BIT,
+                                  "vmaCreateImage(bbglow.src)", f);
         for (uint32_t f = 0; f < framesInFlight_; ++f)
             for (uint32_t l = 0; l < levels_; ++l)
                 pyr_[f * kMaxLevels + l] =
                         createImage(std::max(srcW_ >> (l + 1u), 1u), std::max(srcH_ >> (l + 1u), 1u),
                                     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                                    "vmaCreateImage(bbglow.pyr)");
-        for (auto& img : depth_)
-            img = createDepthImage(srcW_, srcH_, "vmaCreateImage(bbglow.depth)");
+                                    "vmaCreateImage(bbglow.pyr)", f);
+        for (uint32_t f = 0; f < depth_.size(); ++f)
+            depth_[f] = createDepthImage(srcW_, srcH_, "vmaCreateImage(bbglow.depth)", f);
         rewriteDescriptors();
         return true;
     }

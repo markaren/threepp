@@ -36,9 +36,19 @@ namespace threepp::vulkan {
 
     class VulkanContext;
 
+    class TransientPool;
+
     class BloomPass {
 
     public:
+        // Bind this pass's frame-local scratch into `pool` (TransientPool),
+        // as view `view`'s. Call before the images are created; null keeps
+        // dedicated allocations.
+        void setTransientPool(TransientPool* pool, uint32_t view) {
+            pool_     = pool;
+            poolView_ = view;
+        }
+
         BloomPass(VulkanContext& ctx, VkCommandPool cmdPool, uint32_t framesInFlight);
         ~BloomPass();
         BloomPass(const BloomPass&) = delete;
@@ -98,6 +108,8 @@ namespace threepp::vulkan {
         }
 
     private:
+        TransientPool* pool_     = nullptr;// frame-local scratch (setTransientPool)
+        uint32_t       poolView_ = 0;
         VulkanContext& ctx_;
         VkCommandPool  cmdPool_;
         uint32_t       framesInFlight_;
@@ -131,7 +143,8 @@ namespace threepp::vulkan {
         std::vector<VkDescriptorSet> downSets_;// [f×kMaxLevels]: (sceneHdr|pyr[l-1]) -> pyr[l]
         std::vector<VkDescriptorSet> upSets_;  // [f×kMaxLevels]: pyr[l+1] -> pyr[l] (accumulate)
 
-        Image2D createStorageSampledImage(uint32_t w, uint32_t h, const char* label);
+        // poolSlots != 0: in pool_ (TransientPhase::Post), for those slots.
+        Image2D createStorageSampledImage(uint32_t w, uint32_t h, const char* label, uint32_t poolSlots = 0);
         void    transitionFreshImage(VkImage img);
         void    createPipelines();
         void    createDescriptorPool();

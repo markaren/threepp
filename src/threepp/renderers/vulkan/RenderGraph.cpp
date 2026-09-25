@@ -208,6 +208,8 @@ namespace threepp::vulkan::rg {
         }
         img.name        = name ? name : "";
         img.image       = image;
+        img.heap        = nullptr;
+        img.memOffset   = img.memSize = 0;
         img.aspect      = aspect;
         img.mipLevels   = std::max(mipLevels, 1u);
         img.entryLayout = entryLayout;
@@ -235,6 +237,20 @@ namespace threepp::vulkan::rg {
         buffers_.push_back({name, VK_NULL_HANDLE, {}});
         compiled_ = false;
         return {static_cast<uint32_t>(buffers_.size() - 1)};
+    }
+
+    void RenderGraph::setMemoryRange(VkImage image, const void* heap, VkDeviceSize offset, VkDeviceSize size) {
+        const auto it = imageIndex_.find(image);
+        if (it == imageIndex_.end() || heap == nullptr) return;
+        auto& img       = images_[it->second];
+        img.heap        = heap;
+        img.memOffset   = offset;
+        img.memSize     = size;
+        // Another image may have written the memory since this one last held
+        // it: its contents are dead at the start of the graph and at the end.
+        img.entryLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        img.exitLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+        compiled_       = false;
     }
 
     PassBuilder RenderGraph::addPass(const char* name, ExecuteFn execute) {
@@ -333,8 +349,56 @@ namespace threepp::vulkan::rg {
         }
         for (auto& buf : buffers_) buf.state = State{};
 
+        // ── Aliasing: who shares memory with whom, and when each is live ────
+        aliasErrors_.clear();
+        bool anyAlias = false;
+        for (auto& img : images_) {
+            img.firstPass = UINT32_MAX;
+            img.lastPass  = 0;
+            img.aliases.clear();
+            img.aliasPlanned  = false;
+            img.aliasSrcStages = 0;
+            img.aliasSrcAccess = 0;
+            anyAlias = anyAlias || img.heap != nullptr;
+        }
+        uint32_t aliasMemory = UINT32_MAX;
+        if (anyAlias) {
+            for (uint32_t p = 0; p < passes_.size(); ++p) {
+                for (const auto& u : passes_[p].uses) {
+                    if (!u.isImage) continue;
+                    auto& img     = images_[u.resource];
+                    img.firstPass = std::min(img.firstPass, p);
+                    img.lastPass  = std::max(img.lastPass, p);
+                }
+            }
+            for (uint32_t i = 0; i < images_.size(); ++i) {
+                auto& a = images_[i];
+                if (!a.heap || a.firstPass == UINT32_MAX) continue;
+                for (uint32_t j = i + 1; j < images_.size(); ++j) {
+                    auto& b = images_[j];
+                    if (b.heap != a.heap || b.firstPass == UINT32_MAX) continue;
+                    if (a.memOffset >= b.memOffset + b.memSize || b.memOffset >= a.memOffset + a.memSize) continue;
+                    a.aliases.push_back(j);
+                    b.aliases.push_back(i);
+                    if (a.firstPass <= b.lastPass && b.firstPass <= a.lastPass) {
+                        char buf[256];
+                        std::snprintf(buf, sizeof(buf),
+                                      "images '%s' (passes %u..%u) and '%s' (passes %u..%u) share memory",
+                                      a.name, a.firstPass, a.lastPass, b.name, b.firstPass, b.lastPass);
+                        aliasErrors_.emplace_back(buf);
+                    }
+                }
+            }
+            // The barrier that hands memory from one image to the next is a
+            // global one: the writes it waits for were made to another image.
+            aliasMemory = importMemory("rg.aliasing").index;
+            buffers_[aliasMemory].state = State{};
+        }
+
         // First-use layouts go into the entry barrier: nothing in the graph has
-        // touched the image yet, so there is no in-graph source to wait for.
+        // touched the image yet, so there is no in-graph source to wait for —
+        // unless the image shares memory with one used earlier in the graph,
+        // in which case the first use waits for that one's last.
 
         // The boundary barriers are full on the OUTSIDE (what came before the
         // graph and what comes after are unknown to it) and exact on the
@@ -348,6 +412,28 @@ namespace threepp::vulkan::rg {
         for (auto& pass : passes_) {
             pass.barriers.clear();
             for (const auto& u : pass.uses) {
+                if (u.isImage && !images_[u.resource].aliases.empty() && !images_[u.resource].aliasPlanned) {
+                    auto& img        = images_[u.resource];
+                    img.aliasPlanned = true;
+                    for (const uint32_t o : img.aliases) {
+                        const auto& other = images_[o];
+                        if (other.firstPass >= img.firstPass) continue;// not used yet
+                        for (const auto& m : other.mips) {
+                            img.aliasSrcStages |= m.writeStages | m.readers;
+                            img.aliasSrcAccess |= m.writeAccess;
+                        }
+                    }
+                    if (img.aliasSrcStages != 0) {
+                        PlannedBarrier b;
+                        b.isImage   = false;
+                        b.resource  = aliasMemory;
+                        b.srcStages = img.aliasSrcStages;
+                        b.srcAccess = img.aliasSrcAccess;
+                        b.dstStages = u.access.stages;
+                        b.dstAccess = u.access.access;
+                        pass.barriers.push_back(b);
+                    }
+                }
                 if (!u.isImage) {
                     plan(buffers_[u.resource].state, u.access, false, u.resource, 0, pass.barriers);
                     continue;
@@ -358,7 +444,24 @@ namespace threepp::vulkan::rg {
                                                        : std::min(u.mipCount, img.mipLevels - first);
                 for (uint32_t m = first; m < first + count; ++m) {
                     State& s = img.mips[m];
-                    if (!s.touched) {
+                    if (!s.touched && img.aliasSrcStages != 0) {
+                        // Memory handed over from an alias: discard behind the
+                        // barrier above rather than in the entry barrier.
+                        s.touched = true;
+                        if (u.access.layout != VK_IMAGE_LAYOUT_UNDEFINED) {
+                            PlannedBarrier b;
+                            b.resource  = u.resource;
+                            b.baseMip   = m;
+                            b.srcStages = img.aliasSrcStages;
+                            b.srcAccess = 0;
+                            b.dstStages = u.access.stages;
+                            b.dstAccess = u.access.access;
+                            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                            b.newLayout = u.access.layout;
+                            pass.barriers.push_back(b);
+                            s.layout = u.access.layout;
+                        }
+                    } else if (!s.touched) {
                         s.touched = true;
                         if (u.access.layout != VK_IMAGE_LAYOUT_UNDEFINED && u.access.layout != s.layout) {
                             PlannedBarrier b;

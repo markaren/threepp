@@ -192,14 +192,16 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanInstanceColor_test COMMAND VulkanInstanceColor_test)
     set_tests_properties(VulkanInstanceColor_test PROPERTIES SKIP_RETURN_CODE 42)
 
-    # More than 65,535 entries: the entry added last must still shade with its
-    # own material (the ids attachment's index channel wrapped at 16 bits).
     # RenderGraph barrier planning; CPU only (no device needed).
     add_test_executable(RenderGraph_test)
+    # TransientPool placement (AliasPacker); CPU only.
+    add_test_executable(TransientPool_test)
     # SPIR-V binding reflection against the embedded shaders; CPU only.
     add_test_executable(SpirvReflect_test)
     target_include_directories(SpirvReflect_test PRIVATE "${CMAKE_BINARY_DIR}/generated")
 
+    # More than 65,535 entries: the entry added last must still shade with its
+    # own material (the ids attachment's index channel wrapped at 16 bits).
     add_executable(VulkanInstanceIdRange_test VulkanInstanceIdRange_test.cpp)
     target_link_libraries(VulkanInstanceIdRange_test PRIVATE threepp)
     add_test(NAME VulkanInstanceIdRange_test COMMAND VulkanInstanceIdRange_test)

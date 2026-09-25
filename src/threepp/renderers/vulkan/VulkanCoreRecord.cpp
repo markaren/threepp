@@ -1532,6 +1532,12 @@ void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t 
                         .use(bloom0, rg::sampled(kGeneral))
                         .use(ids, rg::sampled(kShaderRO))
                         .use(hdrOut, rg::storageWrite());
+                // The LDR output binding (the TAA input) is unwritten in HDR
+                // mode but part of the set the shader statically uses, so it
+                // must be in the layout its descriptor names — and it is
+                // pooled scratch, whose layout only the graph establishes.
+                post.use(g.importImage("taa.input", view().taa_->inputImage(f), kColor, 1, kGeneral),
+                         rg::storageWrite());
                 view().post_->declare(g, post);
 
                 const bool sharpen = sharpenStrength_ > 0.0f;
@@ -2229,6 +2235,7 @@ void VulkanRenderer::Impl::ensureFieldBillboardGlow() {
             if (!billboardGlow_) {
                 billboardGlow_ = std::make_unique<vulkan::BillboardGlowPass>(
                         *ctx, cmdPool, kFramesInFlight);
+                billboardGlow_->setTransientPool(transientPool_.get(), 0);
                 createFieldGlowCompositePipeline();
             }
             if (fieldGlowCompositePipeline_ == VK_NULL_HANDLE) return;
@@ -3870,10 +3877,15 @@ void VulkanRenderer::Impl::ensureOverlayMsaaImages(VkExtent2D ext) {
             if (overlayMsDepth_.image != VK_NULL_HANDLE) retire(std::move(overlayMsDepth_));
             if (overlayAaScratch_.image != VK_NULL_HANDLE) retire(std::move(overlayAaScratch_));
 
+            // The MS colour and the 1-sample scratch live only inside the
+            // overlay pass: transient scratch (the pool's Tail group). The MS
+            // depth does not: the prepass fills it right after the G-buffer
+            // and the overlay reads it at the end of the frame.
+            const uint32_t tailGroup = vulkan::transientGroup(vulkan::TransientPhase::Tail, 0);
             overlayMsColor_ = createAttachmentImage2D(
                     ext.width, ext.height, ctx->swapchainFormat(),
                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
-                    "overlayMsColor", overlaySampleBits_);
+                    "overlayMsColor", overlaySampleBits_, transientPool_.get(), tailGroup);
             // SAMPLED as well as attached: BillboardGlowPass reduces this
             // buffer to its own half extent so the billboard glow source can
             // depth-test (billboard_glow_depth.frag, sampler2DMS variant).
@@ -3902,9 +3914,8 @@ void VulkanRenderer::Impl::ensureOverlayMsaaImages(VkExtent2D ext) {
                 ici.usage         = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
                 ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
                 ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                VmaAllocationCreateInfo aci{};
-                aci.usage = VMA_MEMORY_USAGE_AUTO;
-                check(vmaCreateImage(ctx->allocator(), &ici, &aci, &out.image, &out.alloc, nullptr),
+                check(vulkan::createImageMaybePooled(ctx->allocator(), transientPool_.get(), tailGroup,
+                                                     vulkan::kTransientAllSlots, ici, &out.image, &out.alloc),
                       "vmaCreateImage(overlayAaScratch)");
                 VkImageViewCreateInfo vci{};
                 vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;

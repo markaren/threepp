@@ -600,14 +600,50 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 // are written and read within one frame and carry nothing into
                 // the next, and the frame's render graph orders frame N+1's
                 // first write after frame N's last read (its entry barrier's
-                // source scope is every earlier command on the queue).
+                // source scope is every earlier command on the queue). They
+                // also live in the transient pool, sharing memory with the
+                // post chain's and the tail's scratch (TransientPhase::Shade).
+                const uint32_t shadeGroup = vulkan::transientGroup(vulkan::TransientPhase::Shade, view().id);
+                // Blocks that hold the largest group whole — the shade scratch
+                // below, in creation order — so the post and tail groups fit
+                // inside them. Primary only: a secondary's images are smaller
+                // and fit the primary's blocks.
+                if (fi == 0 && !view().secondary && transientPool_) {
+                    auto info = [](VkImageType type, uint32_t iw, uint32_t ih, uint32_t id, VkFormat fmt,
+                                   VkImageUsageFlags usage) {
+                        VkImageCreateInfo ci{};
+                        ci.sType       = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+                        ci.imageType   = type;
+                        ci.format      = fmt;
+                        ci.extent      = {iw, ih, id};
+                        ci.mipLevels   = 1;
+                        ci.arrayLayers = 1;
+                        ci.samples     = VK_SAMPLE_COUNT_1_BIT;
+                        ci.tiling      = VK_IMAGE_TILING_OPTIMAL;
+                        ci.usage       = usage;
+                        return ci;
+                    };
+                    const auto k2D = VK_IMAGE_TYPE_2D;
+                    const auto kRgba16 = VK_FORMAT_R16G16B16A16_SFLOAT;
+                    transientPool_->setBlockSize(transientPool_->packedBytes({
+                            info(k2D, w, h, 1, kRgba16, VK_IMAGE_USAGE_STORAGE_BIT),// atrousA
+                            info(k2D, w, h, 1, kRgba16, VK_IMAGE_USAGE_STORAGE_BIT),// atrousB
+                            info(k2D, w, h, 1, kRgba16, VK_IMAGE_USAGE_STORAGE_BIT),// demodColor
+                            info(k2D, w, h, 1, VK_FORMAT_R16G16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT),
+                            info(k2D, w, h, 1, VK_FORMAT_R16G16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT),
+                            info(VK_IMAGE_TYPE_3D, 128, 72, 64, kRgba16,
+                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT),// froxelLut
+                    }));
+                }
                 if (fi == 0) {
                     g.atrousA = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                         VK_IMAGE_USAGE_STORAGE_BIT,
-                                                        VK_IMAGE_ASPECT_COLOR_BIT, N("atrousA"));
+                                                        VK_IMAGE_ASPECT_COLOR_BIT, N("atrousA"),
+                                                        VK_SAMPLE_COUNT_1_BIT, transientPool_.get(), shadeGroup);
                     g.atrousB = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                         VK_IMAGE_USAGE_STORAGE_BIT,
-                                                        VK_IMAGE_ASPECT_COLOR_BIT, N("atrousB"));
+                                                        VK_IMAGE_ASPECT_COLOR_BIT, N("atrousB"),
+                                                        VK_SAMPLE_COUNT_1_BIT, transientPool_.get(), shadeGroup);
                 }
                 // Sharp mirror-ray reflection radiance — written by the shade, then
                 // roughness-blurred + recombined by the reflection denoise pass.
@@ -639,13 +675,16 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 if (fi == 0) {// shared across slots, like atrousA/B
                     g.demodColor = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                            VK_IMAGE_USAGE_STORAGE_BIT,
-                                                           VK_IMAGE_ASPECT_COLOR_BIT, N("demodColor"));
+                                                           VK_IMAGE_ASPECT_COLOR_BIT, N("demodColor"),
+                                                           VK_SAMPLE_COUNT_1_BIT, transientPool_.get(), shadeGroup);
                     g.shadowAtrousA = createAttachmentImage2D(w, h, VK_FORMAT_R16G16_SFLOAT,
                                                               VK_IMAGE_USAGE_STORAGE_BIT,
-                                                              VK_IMAGE_ASPECT_COLOR_BIT, N("shadowAtrousA"));
+                                                              VK_IMAGE_ASPECT_COLOR_BIT, N("shadowAtrousA"),
+                                                              VK_SAMPLE_COUNT_1_BIT, transientPool_.get(), shadeGroup);
                     g.shadowAtrousB = createAttachmentImage2D(w, h, VK_FORMAT_R16G16_SFLOAT,
                                                               VK_IMAGE_USAGE_STORAGE_BIT,
-                                                              VK_IMAGE_ASPECT_COLOR_BIT, N("shadowAtrousB"));
+                                                              VK_IMAGE_ASPECT_COLOR_BIT, N("shadowAtrousB"),
+                                                              VK_SAMPLE_COUNT_1_BIT, transientPool_.get(), shadeGroup);
                 }
                 // Froxel volumetrics — FIXED-size 3D volumes (independent of
                 // the render extent; recreated here anyway on resize, which
@@ -659,7 +698,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 if (fi == 0) {
                     g.froxelLut = createImage3D(128, 72, 64, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                                                N("froxelLut"));
+                                                N("froxelLut"), transientPool_.get(), shadeGroup);
                 } else {
                     // The shared scratch of slot 0 (all created above by now).
                     const auto& g0 = view().rasterGbufs[0];
@@ -785,24 +824,29 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                     // NOT be reused for the MS images themselves.
                     const VkImageUsageFlags colorUsageMS =
                             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+                    // Written by the G-buffer pass and read up to the shade in
+                    // the same frame, nothing across frames: both slots' sets
+                    // share memory (gbufMsPool_, one slot each).
+                    vulkan::TransientPool* msPool = gbufMsPool_.get();
+                    const uint32_t msGroup = 0, msSlots = vulkan::transientSlot(static_cast<uint32_t>(fi));
                     g.normalMS = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                          colorUsageMS, VK_IMAGE_ASPECT_COLOR_BIT,
-                                                         N("normalMS"), samples);
+                                                         N("normalMS"), samples, msPool, msGroup, msSlots);
                     g.motionMS = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                          colorUsageMS, VK_IMAGE_ASPECT_COLOR_BIT,
-                                                         N("motionMS"), samples);
+                                                         N("motionMS"), samples, msPool, msGroup, msSlots);
                     g.idsMS    = createAttachmentImage2D(w, h, VK_FORMAT_R32G32B32A32_UINT,
                                                          colorUsageMS, VK_IMAGE_ASPECT_COLOR_BIT,
-                                                         N("idsMS"), samples);
+                                                         N("idsMS"), samples, msPool, msGroup, msSlots);
                     g.uvMS     = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                          colorUsageMS, VK_IMAGE_ASPECT_COLOR_BIT,
-                                                         N("uvMS"), samples);
+                                                         N("uvMS"), samples, msPool, msGroup, msSlots);
                     g.albedoMS = createAttachmentImage2D(w, h, VK_FORMAT_R8G8B8A8_UNORM,
                                                          colorUsageMS, VK_IMAGE_ASPECT_COLOR_BIT,
-                                                         N("albedoMS"), samples);
+                                                         N("albedoMS"), samples, msPool, msGroup, msSlots);
                     g.depthMS  = createAttachmentImage2D(w, h, VK_FORMAT_D32_SFLOAT,
                                                          depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,
-                                                         N("depthMS"), samples);
+                                                         N("depthMS"), samples, msPool, msGroup, msSlots);
 
                     VkImageView viewsMS[6] = {g.normalMS.view, g.motionMS.view, g.idsMS.view,
                                               g.uvMS.view, g.albedoMS.view, g.depthMS.view};
@@ -840,6 +884,9 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
             std::vector<VkImageMemoryBarrier> inits;
             inits.reserve(view().rasterGbufs.size() * (gbufMsaaSamples_ > 1 ? 18 : 12));
             auto pushInit = [&](VkImage image, VkImageAspectFlags aspect, VkImageLayout layout) {
+                // A pooled image shares memory with others and is discarded at
+                // its first use in every frame; nothing to initialise.
+                if (vulkan::TransientPool::pooled(image)) return;
                 // Once per image: the slots share their current-frame scratch.
                 for (const auto& e : inits) {
                     if (e.image == image) return;

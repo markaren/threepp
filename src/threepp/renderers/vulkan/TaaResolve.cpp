@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/TaaResolve.hpp"
+#include "threepp/renderers/vulkan/TransientPool.hpp"
 
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 
@@ -55,7 +56,7 @@ namespace threepp::vulkan {
 
     Image2D TaaResolve::createStorageSampledImage(uint32_t w, uint32_t h,
                                                   VkFormat format,
-                                                  const char* label) {
+                                                  const char* label, uint32_t poolSlots) {
         Image2D out{};
         out.width  = w;
         out.height = h;
@@ -85,12 +86,13 @@ namespace threepp::vulkan {
         ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-        VmaAllocationCreateInfo aci{};
-        aci.usage = VMA_MEMORY_USAGE_AUTO;
-        check(vmaCreateImage(ctx_.allocator(), &ici, &aci, &out.image, &out.alloc, nullptr),
+        TransientPool* pool = poolSlots ? pool_ : nullptr;
+        check(createImageMaybePooled(ctx_.allocator(), pool, transientGroup(TransientPhase::Post, poolView_),
+                                     poolSlots, ici, &out.image, &out.alloc),
               label);
 
-        transitionFreshImage(out.image);
+        // A pooled image is discarded at its first use in every frame.
+        if (out.alloc != VK_NULL_HANDLE) transitionFreshImage(out.image);
 
         VkImageViewCreateInfo vci{};
         vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -157,10 +159,12 @@ namespace threepp::vulkan {
         destroyImages();
         // Input: BGRA8_UNORM at the render extent — matches denoise.comp's
         // rgba8 output and the swapchain channel order.
-        for (auto& img : inputImagesPP_)
-            img = createStorageSampledImage(inWidth, inHeight,
-                                            VK_FORMAT_B8G8R8A8_UNORM,
-                                            "vmaCreateImage(taa.input)");
+        // Written by the post composite and read by the resolve in the same
+        // frame: transient scratch.
+        for (uint32_t f = 0; f < inputImagesPP_.size(); ++f)
+            inputImagesPP_[f] = createStorageSampledImage(inWidth, inHeight,
+                                                          VK_FORMAT_B8G8R8A8_UNORM,
+                                                          "vmaCreateImage(taa.input)", transientSlot(f));
         // History: RGBA16F at the output extent — the running mix() stays
         // sub-quantum precise and the reconstructed full-res image
         // accumulates here when the input is lower-resolution.
@@ -177,10 +181,10 @@ namespace threepp::vulkan {
             img = createStorageSampledImage(tilesX_, tilesY_,
                                             VK_FORMAT_R16G16_SFLOAT,
                                             "vmaCreateImage(taa.mblurTileMax)");
-        for (auto& img : mblurOut_)
-            img = createStorageSampledImage(outWidth, outHeight,
-                                            VK_FORMAT_B8G8R8A8_UNORM,
-                                            "vmaCreateImage(taa.mblurOut)");
+        for (uint32_t f = 0; f < mblurOut_.size(); ++f)
+            mblurOut_[f] = createStorageSampledImage(outWidth, outHeight,
+                                                     VK_FORMAT_B8G8R8A8_UNORM,
+                                                     "vmaCreateImage(taa.mblurOut)", transientSlot(f));
     }
 
     void TaaResolve::createPipeline() {

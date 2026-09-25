@@ -66,9 +66,19 @@ namespace threepp::vulkan {
 
     class VulkanContext;
 
+    class TransientPool;
+
     class BillboardGlowPass {
 
     public:
+        // Bind this pass's frame-local scratch into `pool` (TransientPool),
+        // as view `view`'s. Call before the images are created; null keeps
+        // dedicated allocations.
+        void setTransientPool(TransientPool* pool, uint32_t view) {
+            pool_     = pool;
+            poolView_ = view;
+        }
+
         BillboardGlowPass(VulkanContext& ctx, VkCommandPool cmdPool, uint32_t framesInFlight);
         ~BillboardGlowPass();
         BillboardGlowPass(const BillboardGlowPass&) = delete;
@@ -135,6 +145,8 @@ namespace threepp::vulkan {
         void declareComposite(rg::RenderGraph& g, rg::PassBuilder& pass, uint32_t frame) const;
 
     private:
+        TransientPool* pool_     = nullptr;// frame-local scratch (setTransientPool)
+        uint32_t       poolView_ = 0;
         VulkanContext& ctx_;
         VkCommandPool  cmdPool_;
         uint32_t       framesInFlight_;
@@ -185,8 +197,9 @@ namespace threepp::vulkan {
         // the VUID-03047 zone the class comment describes.
         std::vector<VkImageView> reduceSetViews_;
 
-        Image2D createImage(uint32_t w, uint32_t h, VkImageUsageFlags usage, const char* label);
-        Image2D createDepthImage(uint32_t w, uint32_t h, const char* label);
+        // In pool_ (TransientPhase::Tail) for `slot` when set.
+        Image2D createImage(uint32_t w, uint32_t h, VkImageUsageFlags usage, const char* label, uint32_t slot);
+        Image2D createDepthImage(uint32_t w, uint32_t h, const char* label, uint32_t slot);
         void    transitionFreshImage(VkImage img, VkImageAspectFlags aspect);
         void    createPipelines();
         void    createReducePipelines();

@@ -319,3 +319,53 @@ TEST_CASE("an image imported in UNDEFINED is discarded at first use and left whe
     CHECK(g.barriersBefore(1)[0].newLayout == RO);
     CHECK(g.exitBarriers().empty());
 }
+
+TEST_CASE("aliased images hand memory over behind a barrier") {
+    rg::RenderGraph g;
+    int heap = 0;
+    auto a = g.importImage("a", fakeImage(1), VK_IMAGE_ASPECT_COLOR_BIT, 1, GENERAL);
+    auto b = g.importImage("b", fakeImage(2), VK_IMAGE_ASPECT_COLOR_BIT, 1, GENERAL);
+    auto c = g.importImage("c", fakeImage(3), VK_IMAGE_ASPECT_COLOR_BIT, 1, GENERAL);
+    g.addPass("writeA", {}).use(a, rg::storageWrite());
+    g.addPass("readA", {}).use(a, rg::sampled(GENERAL, FS));
+    g.addPass("writeB", {}).use(b, rg::storageWrite());
+    g.addPass("writeC", {}).use(c, rg::storageWrite());
+    g.setMemoryRange(fakeImage(1), &heap, 0, 1024);
+    g.setMemoryRange(fakeImage(2), &heap, 512, 1024);// overlaps a
+    g.setMemoryRange(fakeImage(3), &heap, 4096, 256);// overlaps neither
+    g.compile();
+
+    CHECK(g.aliasErrors().empty());
+    // a and c are first in their memory: discarded in the entry barrier.
+    REQUIRE(g.entryBarriers().size() == 2);
+    CHECK(g.entryBarriers()[0].oldLayout == VK_IMAGE_LAYOUT_UNDEFINED);
+    CHECK(g.entryBarriers()[1].oldLayout == VK_IMAGE_LAYOUT_UNDEFINED);
+    // b waits for a's last use (the FS read after its CS write), then discards.
+    const auto& bb = g.barriersBefore(2);
+    REQUIRE(bb.size() == 2);
+    const auto& mem = bb[0].isImage ? bb[1] : bb[0];
+    const auto& img = bb[0].isImage ? bb[0] : bb[1];
+    CHECK(mem.srcStages == (CS | FS));
+    CHECK(mem.srcAccess == VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    CHECK(mem.dstStages == CS);
+    CHECK(img.oldLayout == VK_IMAGE_LAYOUT_UNDEFINED);
+    CHECK(img.newLayout == GENERAL);
+    CHECK(g.barriersBefore(3).empty());
+    CHECK(g.exitBarriers().empty());
+    CHECK(g.dump().find("rg.aliasing (memory)") != std::string::npos);
+}
+
+TEST_CASE("aliased images in use at the same time are reported") {
+    rg::RenderGraph g;
+    int heap = 0;
+    auto a = g.importImage("a", fakeImage(1), VK_IMAGE_ASPECT_COLOR_BIT, 1, GENERAL);
+    auto b = g.importImage("b", fakeImage(2), VK_IMAGE_ASPECT_COLOR_BIT, 1, GENERAL);
+    g.addPass("writeA", {}).use(a, rg::storageWrite());
+    g.addPass("writeB", {}).use(b, rg::storageWrite());
+    g.addPass("readA", {}).use(a, rg::sampled(GENERAL));
+    g.setMemoryRange(fakeImage(1), &heap, 0, 1024);
+    g.setMemoryRange(fakeImage(2), &heap, 0, 1024);
+    g.compile();
+    REQUIRE(g.aliasErrors().size() == 1);
+    CHECK(g.aliasErrors()[0].find("'a'") != std::string::npos);
+}

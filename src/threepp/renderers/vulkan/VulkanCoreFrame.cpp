@@ -1467,9 +1467,11 @@ void VulkanRenderer::Impl::createSecondaryViewResources(ViewContext& v) {
             // equal and the resolve is a plain 1:1 temporal filter — no
             // upsampling, and no FSR/DLSS (secondaries never take those paths).
             v.taa_ = std::make_unique<vulkan::TaaResolve>(*ctx, cmdPool, 1u, kFramesInFlight);
+            v.taa_->setTransientPool(transientPool_.get(), v.id);
             v.taa_->createImages(v.renderExt.width, v.renderExt.height,
                                  v.outExt.width, v.outExt.height);
             v.bloom_ = std::make_unique<vulkan::BloomPass>(*ctx, cmdPool, kFramesInFlight);
+            v.bloom_->setTransientPool(transientPool_.get(), v.id);
             v.bloom_->createImages(v.renderExt.width, v.renderExt.height);
             v.post_ = std::make_unique<vulkan::PostComposite>(*ctx, cmdPool, kFramesInFlight);
             if (ctx->rayQuerySupported()) {
