@@ -60,6 +60,7 @@
 #define THREEPP_VULKAN_PARTICLE_FIELD_PASS_HPP
 
 #include "VulkanImplCommon.hpp"
+#include "threepp/renderers/vulkan/RenderGraph.hpp"
 #include "VulkanResources.hpp"
 
 #include <vulkan/vulkan.h>
@@ -518,8 +519,8 @@ namespace threepp::vulkan {
         // baked footprint no longer matches what the emitter is about to ask
         // for. Recorded IMMEDIATELY BEFORE recordEmit — the map is the emitter's
         // input — and closed with a barrier in both directions: this pass's
-        // TLAS read must complete before recordDeformAndTlas's refit writes the
-        // acceleration structure later in the same command buffer, and its
+        // TLAS read must complete before the frame graph's TLAS refit writes
+        // the acceleration structure later in the same command buffer, and its
         // buffer write must complete before the emit dispatch reads it.
         //
         // No-op on the overwhelming majority of frames: a bake happens only when
@@ -558,11 +559,11 @@ namespace threepp::vulkan {
 
         // ── R8/R9: the per-view transmittance prepass ───────────────────────
         // One dispatch per marching field, writing (T_cam, T_sun) per SLOT into
-        // this frame's buffer, closed with a compute-write → vertex-read
-        // barrier. Recorded OUTSIDE any render-pass instance, immediately
-        // before the billboard draws of the view whose eye `camWorld` is —
-        // and re-recorded for the next view over the SAME buffer behind the
-        // next barrier (R9). T_sun is view-independent and is recomputed with
+        // this frame's buffer. Recorded OUTSIDE any render-pass instance, as
+        // a render-graph pass (declareTransmittance) ahead of the billboard
+        // draws of the view whose eye `camWorld` is — which the graph orders
+        // after it — and re-recorded for the next view over the SAME buffer
+        // in that view's graph (R9). T_sun is view-independent and is recomputed with
         // it; a second buffer to avoid that would cost more memory than the
         // eight taps it saves.
         //
@@ -580,6 +581,16 @@ namespace threepp::vulkan {
         // whole call (and its camera-inverse) on every scene that has no
         // volumetric field, which is nearly all of them.
         [[nodiscard]] bool transmittanceActive() const { return !transDispatch_.empty(); }
+
+        // recordTransmittance as a render-graph pass: its write of this frame's
+        // transmittance buffer, the density volumes its march samples and, when
+        // a field shadows the sun with geometry, the TLAS its ray queries read.
+        void declareTransmittance(rg::RenderGraph& g, rg::PassBuilder& pass, std::uint32_t frame) const;
+        // This frame's transmittance buffer, which the billboard vertex stage
+        // reads (VK_NULL_HANDLE until a field marches).
+        [[nodiscard]] VkBuffer transmittanceBuffer(std::uint32_t frame) const {
+            return transBufs_[frame].handle;
+        }
 
         // ── PHASE 2 ─────────────────────────────────────────────────────────
         // Zero the density volumes and splat this frame's live particles into

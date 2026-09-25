@@ -11,6 +11,9 @@
 #include "threepp/renderers/vulkan/shaders/particlefield_sun_occlude.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/particlefield_transmit.comp.spv.h"
 
+#include "threepp/renderers/vulkan/DescriptorShadow.hpp"
+#include "threepp/renderers/vulkan/SpirvReflect.hpp"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -1125,7 +1128,7 @@ void ParticleFieldPass::recordSurfaceBake(VkCommandBuffer cb) {
     //   WRITE -> READ: the map must be complete before particle_emit.comp,
     //     recorded immediately after this, dereferences it.
     //   READ -> WRITE: this pass TRACED the acceleration structure, and
-    //     recordDeformAndTlas's per-frame refit WRITES it later in this same
+    //     the frame graph's per-frame TLAS refit WRITES it later in this same
     //     command buffer. Without the read-before-write edge that is an
     //     unsynchronised hazard even though nothing here writes the AS.
     VkMemoryBarrier2 mb{};
@@ -2264,23 +2267,32 @@ void ParticleFieldPass::recordTransmittance(VkCommandBuffer cb, const float camW
         }
     }
 
-    // COMPUTE is on the destination list as well as VERTEX: the NEXT view's
-    // re-dispatch writes the same buffer this one just wrote, so without it the
-    // two dispatches are an unsynchronised write-after-write over the whole
-    // buffer. The vertex reads in between are what make that hazard real.
-    VkMemoryBarrier2 mb{};
-    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-    mb.dstStageMask  = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
-                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-    VkDependencyInfo dep{};
-    dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    dep.memoryBarrierCount = 1;
-    dep.pMemoryBarriers    = &mb;
-    vkCmdPipelineBarrier2(cb, &dep);
+    // The billboard vertex reads that follow, and the NEXT view's re-dispatch
+    // over the same buffer, are ordered by the render graph: the renderer
+    // declares this pass with declareTransmittance and the draws with a read
+    // of transmittanceBuffer().
+}
+
+void ParticleFieldPass::declareTransmittance(rg::RenderGraph& g, rg::PassBuilder& pass,
+                                             std::uint32_t frame) const {
+    if (transDispatch_.empty() || transPipe_ == VK_NULL_HANDLE) return;
+    constexpr VkPipelineStageFlags2 kCs = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    pass.use(g.importBuffer("particles.transmittance", transBufs_[frame].handle),
+             rg::Access{kCs, VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, true});
+    static const auto transRefl = reflectSpirvBindings(
+            kParticleFieldTransmitCompSpv, sizeof(kParticleFieldTransmitCompSpv) / sizeof(std::uint32_t));
+    for (const TransDispatch& td : transDispatch_) {
+        declareDescriptorSet(g, pass, td.set, 0, transRefl, kCs);
+    }
+    bool anyOcclude = false;
+    for (const TransDispatch& td : transDispatch_) anyOcclude |= td.occlude;
+    if (anyOcclude && occludePipe_ != VK_NULL_HANDLE) {
+        static const auto occludeRefl = reflectSpirvBindings(
+                kParticleFieldSunOccludeCompSpv,
+                sizeof(kParticleFieldSunOccludeCompSpv) / sizeof(std::uint32_t));
+        declareDescriptorSet(g, pass, tlasSet_, 0, occludeRefl, kCs);
+    }
 }
 
 void ParticleFieldPass::recordDensityScatter(VkCommandBuffer cb) {

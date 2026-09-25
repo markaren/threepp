@@ -54,6 +54,7 @@
 #ifndef THREEPP_VULKAN_BILLBOARD_GLOW_PASS_HPP
 #define THREEPP_VULKAN_BILLBOARD_GLOW_PASS_HPP
 
+#include "threepp/renderers/vulkan/RenderGraph.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
 #include <vulkan/vulkan.h>
@@ -120,10 +121,18 @@ namespace threepp::vulkan {
         [[nodiscard]] uint32_t levels() const { return levels_; }
 
         // Barrier the freshly-rendered `src` visible to compute, then run the
-        // progressive downsample + upsample walk-back. Leaves level 0 barriered
-        // for a FRAGMENT-stage sampled read (the composite draw), which is the
-        // one place this differs from BloomPass's compute-to-compute chain.
+        // progressive downsample + upsample walk-back. The composite draw's
+        // FRAGMENT-stage read of level 0 is ordered by the render graph.
         void recordPyramid(VkCommandBuffer cb, uint32_t frame, float threshold);
+
+        // Render-graph declarations. declare(): everything recordDepthReduce,
+        // the renderer's glow draw and recordPyramid touch — the source depth
+        // (`srcDepth`, sampled in the layout the overlay depth prepass leaves
+        // it; VK_NULL_HANDLE when there is none), this frame's half-extent
+        // depth and colour targets, and the pyramid. declareComposite(): the
+        // composite draw's read of level 0.
+        void declare(rg::RenderGraph& g, rg::PassBuilder& pass, uint32_t frame, VkImage srcDepth) const;
+        void declareComposite(rg::RenderGraph& g, rg::PassBuilder& pass, uint32_t frame) const;
 
     private:
         VulkanContext& ctx_;

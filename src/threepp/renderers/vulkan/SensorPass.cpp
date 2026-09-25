@@ -219,13 +219,12 @@ namespace threepp::vulkan {
         }
     }
 
-    void SensorPass::record(VkCommandBuffer cb, uint32_t frame,
-                            VkImage swapImage, VkImageView swapView,
-                            uint32_t width, uint32_t height, const Params& p) {
-        if (!p.active() || pipe_ == VK_NULL_HANDLE) return;
+    bool SensorPass::prepare(uint32_t frame, VkImageView swapView, uint32_t width, uint32_t height,
+                             const Params& p) {
+        if (!p.active() || pipe_ == VK_NULL_HANDLE) return false;
         resize(width, height);
-        if (snapshot_[frame].image == VK_NULL_HANDLE) return;
-        if (width != width_ || height != height_) return;
+        if (snapshot_[frame].image == VK_NULL_HANDLE) return false;
+        if (width != width_ || height != height_) return false;
 
         // The destination is the swapchain image for THIS frame's acquired
         // index, which rotates independently of the frame-in-flight slot, so
@@ -247,48 +246,14 @@ namespace threepp::vulkan {
             vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
             boundDst_[frame] = swapView;
         }
+        return true;
+    }
 
-        // ── Snapshot: swapchain → scratch ───────────────────────────────────
-        // The swapchain arrives in GENERAL, written by the overlay pass
-        // (colour attachment) and/or the resolve/RCAS (compute store).
-        {
-            VkImageMemoryBarrier2 bs[2]{};
-            bs[0].sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            bs[0].srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            bs[0].srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
-                                  VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            bs[0].dstStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            bs[0].dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-            bs[0].oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
-            bs[0].newLayout     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            bs[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            bs[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            bs[0].image = swapImage;
-            bs[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-            // The scratch is fully overwritten, so its previous contents are
-            // discardable — UNDEFINED avoids a needless read-back dependency.
-            bs[1].sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            bs[1].srcStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
-                                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            bs[1].srcAccessMask = 0;
-            bs[1].dstStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            bs[1].dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            bs[1].oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
-            bs[1].newLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            bs[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            bs[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            bs[1].image = snapshot_[frame].image;
-            bs[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-            VkDependencyInfo di{};
-            di.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            di.imageMemoryBarrierCount = 2;
-            di.pImageMemoryBarriers    = bs;
-            vkCmdPipelineBarrier2(cb, &di);
-        }
-
+    // The swapchain arrives written by the overlay pass (colour attachment)
+    // and/or the resolve/RCAS (compute store); the snapshot's previous contents
+    // are discarded.
+    void SensorPass::recordSnapshot(VkCommandBuffer cb, uint32_t frame, VkImage swapImage,
+                                    uint32_t width, uint32_t height) {
         VkImageCopy region{};
         region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -296,41 +261,10 @@ namespace threepp::vulkan {
         vkCmdCopyImage(cb, swapImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                        snapshot_[frame].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                        1, &region);
+    }
 
-        // ── Scratch → sampled, swapchain → GENERAL for the store ────────────
-        {
-            VkImageMemoryBarrier2 bs[2]{};
-            bs[0].sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            bs[0].srcStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            bs[0].srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            bs[0].dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            bs[0].dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-            bs[0].oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            bs[0].newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            bs[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            bs[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            bs[0].image = snapshot_[frame].image;
-            bs[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-            bs[1].sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            bs[1].srcStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            bs[1].srcAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-            bs[1].dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            bs[1].dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            bs[1].oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            bs[1].newLayout     = VK_IMAGE_LAYOUT_GENERAL;
-            bs[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            bs[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            bs[1].image = swapImage;
-            bs[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-            VkDependencyInfo di{};
-            di.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            di.imageMemoryBarrierCount = 2;
-            di.pImageMemoryBarriers    = bs;
-            vkCmdPipelineBarrier2(cb, &di);
-        }
-
+    void SensorPass::recordApply(VkCommandBuffer cb, uint32_t frame, uint32_t width, uint32_t height,
+                                 const Params& p) {
         SensorPush pc{};
         pc.width     = width;
         pc.height    = height;

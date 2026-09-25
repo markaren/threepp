@@ -733,10 +733,47 @@ namespace threepp::vulkan {
             computeBarrier();
         }
 
-        // Level 0 is next read by the composite draw's FRAGMENT stage, which the
-        // compute-to-compute barriers above do not cover.
-        barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        // Level 0 is next read by the composite draw's FRAGMENT stage; the
+        // render graph orders that read (declareComposite).
+    }
+
+    void BillboardGlowPass::declare(rg::RenderGraph& g, rg::PassBuilder& pass, uint32_t frame,
+                                    VkImage srcDepth) const {
+        if (levels_ == 0) return;
+        constexpr auto kGeneral = VK_IMAGE_LAYOUT_GENERAL;
+        constexpr auto kDsRo    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        constexpr auto kTests   = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        if (srcDepth != VK_NULL_HANDLE) {
+            pass.use(g.importImage("overlay.depth", srcDepth, VK_IMAGE_ASPECT_DEPTH_BIT, 1, kDsRo),
+                     rg::sampled(kDsRo, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT));
+        }
+        // The reduce writes the half-extent depth, the glow draw tests against it.
+        pass.use(g.importImage("glow.depth", depth_[frame].image, VK_IMAGE_ASPECT_DEPTH_BIT, 1, kGeneral),
+                 rg::Access{kTests,
+                            VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                            kGeneral, true});
+        // The glow draw renders the source, the first downsample samples it.
+        pass.use(g.importImage("glow.src", src_[frame].image, VK_IMAGE_ASPECT_COLOR_BIT, 1, kGeneral),
+                 rg::Access{VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                            kGeneral, true});
+        for (uint32_t l = 0; l < levels_; ++l) {
+            pass.use(g.importImage("glow.pyr", pyr_[frame * kMaxLevels + l].image, VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                                   kGeneral),
+                     rg::Access{VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                                kGeneral, true});
+        }
+    }
+
+    void BillboardGlowPass::declareComposite(rg::RenderGraph& g, rg::PassBuilder& pass, uint32_t frame) const {
+        if (levels_ == 0) return;
+        pass.use(g.importImage("glow.pyr", pyr_[frame * kMaxLevels].image, VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                               VK_IMAGE_LAYOUT_GENERAL),
+                 rg::sampled(VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT));
     }
 
 }// namespace threepp::vulkan

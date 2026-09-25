@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <sstream>
 
 namespace threepp::vulkan::rg {
@@ -56,6 +57,10 @@ namespace threepp::vulkan::rg {
                     {VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, "COLOR"},
                     {VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, "CS"},
                     {VK_PIPELINE_STAGE_2_TRANSFER_BIT, "XFER"},
+                    {VK_PIPELINE_STAGE_2_COPY_BIT, "COPY"},
+                    {VK_PIPELINE_STAGE_2_CLEAR_BIT, "CLEAR"},
+                    {VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT, "VTX_ATTR"},
+                    {VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT, "IDX_IN"},
                     {VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, "AS_BUILD"},
                     {VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, "RT"},
                     {VK_PIPELINE_STAGE_2_HOST_BIT, "HOST"},
@@ -183,6 +188,7 @@ namespace threepp::vulkan::rg {
         buffers_.clear();
         imageIndex_.clear();
         bufferIndex_.clear();
+        memoryIndex_.clear();
         entry_.clear();
         exit_.clear();
         entryMemory_ = exitMemory_ = false;
@@ -216,6 +222,17 @@ namespace threepp::vulkan::rg {
         const auto [it, inserted] = bufferIndex_.try_emplace(buffer, static_cast<uint32_t>(buffers_.size()));
         if (!inserted) return {it->second};
         buffers_.push_back({name ? name : "", buffer, {}});
+        compiled_ = false;
+        return {static_cast<uint32_t>(buffers_.size() - 1)};
+    }
+
+    BufferHandle RenderGraph::importMemory(const char* name) {
+        if (!name) name = "";
+        for (const uint32_t i : memoryIndex_) {
+            if (std::strcmp(buffers_[i].name, name) == 0) return {i};
+        }
+        memoryIndex_.push_back(static_cast<uint32_t>(buffers_.size()));
+        buffers_.push_back({name, VK_NULL_HANDLE, {}});
         compiled_ = false;
         return {static_cast<uint32_t>(buffers_.size() - 1)};
     }
@@ -382,7 +399,9 @@ namespace threepp::vulkan::rg {
         for (uint32_t i = 0; i < images_.size(); ++i) {
             const auto& img = images_[i];
             for (uint32_t m = 0; m < img.mipLevels; ++m) {
-                if (!img.mips[m].touched || img.mips[m].layout == img.exitLayout) continue;
+                if (!img.mips[m].touched || img.mips[m].layout == img.exitLayout ||
+                    img.exitLayout == VK_IMAGE_LAYOUT_UNDEFINED)
+                    continue;
                 PlannedBarrier b;
                 b.resource  = i;
                 b.baseMip   = m;
@@ -416,8 +435,19 @@ namespace threepp::vulkan::rg {
         if (barriers.empty() && !globalMemory) return;
         auto& ib = imageScratch_;
         auto& bb = bufferScratch_;
+        auto& mb = memoryScratch_;
         ib.clear();
         bb.clear();
+        mb.clear();
+        if (globalMemory) {
+            VkMemoryBarrier2 m{};
+            m.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            m.srcStageMask  = memSrc;
+            m.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+            m.dstStageMask  = memDst;
+            m.dstAccessMask = kAllAccess;
+            mb.push_back(m);
+        }
         for (const auto& p : barriers) {
             if (p.isImage) {
                 const auto& img = images_[p.resource];
@@ -438,6 +468,14 @@ namespace threepp::vulkan::rg {
                 b.subresourceRange.baseArrayLayer = 0;
                 b.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
                 ib.push_back(b);
+            } else if (buffers_[p.resource].buffer == VK_NULL_HANDLE) {
+                VkMemoryBarrier2 m{};
+                m.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                m.srcStageMask  = p.srcStages;
+                m.srcAccessMask = p.srcAccess;
+                m.dstStageMask  = p.dstStages;
+                m.dstAccessMask = p.dstAccess;
+                mb.push_back(m);
             } else {
                 VkBufferMemoryBarrier2 b{};
                 b.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
@@ -453,16 +491,10 @@ namespace threepp::vulkan::rg {
                 bb.push_back(b);
             }
         }
-        VkMemoryBarrier2 mb{};
-        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-        mb.srcStageMask  = memSrc;
-        mb.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
-        mb.dstStageMask  = memDst;
-        mb.dstAccessMask = kAllAccess;
         VkDependencyInfo di{};
         di.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        di.memoryBarrierCount       = globalMemory ? 1u : 0u;
-        di.pMemoryBarriers          = globalMemory ? &mb : nullptr;
+        di.memoryBarrierCount       = static_cast<uint32_t>(mb.size());
+        di.pMemoryBarriers          = mb.data();
         di.imageMemoryBarrierCount  = static_cast<uint32_t>(ib.size());
         di.pImageMemoryBarriers     = ib.data();
         di.bufferMemoryBarrierCount = static_cast<uint32_t>(bb.size());
@@ -485,6 +517,7 @@ namespace threepp::vulkan::rg {
         std::ostringstream os;
         auto line = [&](const PlannedBarrier& b) {
             os << "    " << (b.isImage ? images_[b.resource].name : buffers_[b.resource].name);
+            if (!b.isImage && buffers_[b.resource].buffer == VK_NULL_HANDLE) os << " (memory)";
             if (b.isImage && images_[b.resource].mipLevels > 1)
                 os << " mip " << b.baseMip << "+" << b.mipCount;
             os << ": " << stageNames(b.srcStages) << " -> " << stageNames(b.dstStages);

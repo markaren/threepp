@@ -79,12 +79,22 @@ namespace threepp::vulkan {
         // never pays the allocation.
         void resize(uint32_t width, uint32_t height);
 
-        // Snapshot `swapImage` into the scratch, then warp/noise it back into
-        // `swapView`. The swapchain image must be in GENERAL on entry and is
-        // left in GENERAL. No-op when `p.active()` is false.
-        void record(VkCommandBuffer cb, uint32_t frame,
-                    VkImage swapImage, VkImageView swapView,
-                    uint32_t width, uint32_t height, const Params& p);
+        // Before the frame graph is built: size the snapshot and point this
+        // slot's storage binding at `swapView`. False when there is nothing to
+        // record (no lens or noise, or no snapshot at this extent).
+        bool prepare(uint32_t frame, VkImageView swapView, uint32_t width, uint32_t height,
+                     const Params& p);
+        // This slot's snapshot scratch (valid once prepare returned true).
+        [[nodiscard]] VkImage snapshotImage(uint32_t frame) const { return snapshot_[frame].image; }
+
+        // The stage as two render-graph passes, which issues the transitions:
+        // copy the swapchain (TRANSFER_SRC_OPTIMAL) into the snapshot
+        // (TRANSFER_DST_OPTIMAL), then warp/noise the snapshot (SHADER_READ_
+        // ONLY_OPTIMAL) back into the swapchain (GENERAL, storage write).
+        void recordSnapshot(VkCommandBuffer cb, uint32_t frame, VkImage swapImage,
+                            uint32_t width, uint32_t height);
+        void recordApply(VkCommandBuffer cb, uint32_t frame, uint32_t width, uint32_t height,
+                         const Params& p);
 
     private:
         VulkanContext& ctx_;

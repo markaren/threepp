@@ -1742,19 +1742,10 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
             // to THREEPP_CPUPROF("frame.dynGeomRefit"), not to a GPU column.
             gpuTimings_->begin(cb, vulkan::TP_DynGeomRefit, currentFrame);
 
-            // NO cross-frame WAR fence here, on purpose — and it was not an
-            // oversight the first time either. The prior frame may still be
-            // reading vertex/normal/prevVertex when these copies execute; a
-            // barrier wide enough to cover every reader (deferred_shade's
-            // ray-query fetches are COMPUTE, so the mask would have to fence
-            // compute) also fences the previous frame's entire post chain —
-            // measured +6 ms/frame, handing back everything the drain removal
-            // bought. The skinned/tet/displaced/grass deformers have always
-            // rewritten their BLAS vertex buffers here under exactly this
-            // exposure: the frame model (present-block at frame end, deforms
-            // recorded first) keeps the window closed in practice, and this
-            // path deliberately matches their contract rather than inventing
-            // a stricter one.
+            // No cross-frame WAR fence here: the prior frame may still be
+            // reading vertex/normal/prevVertex when these copies would execute,
+            // and the frame graph's entry barrier, recorded ahead of this pass,
+            // is what orders them after it (for every deformer alike).
 
             // Live vertex rows under BufferGeometry::drawRange, consumed by the
             // interop sanitize/snapshot/copies below so a mostly-empty capacity
@@ -2068,23 +2059,8 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                     rangePtrs[kk] = &ranges[kk];
                 }
                 ctx->rt().cmdBuildAccelerationStructures(cb, N, blasBuilds.data(), rangePtrs.data());
-
-                // Phase 7 — AS write → AS read: the TLAS refit recorded later
-                // in recordDeformAndTlas consumes these BLASes this same frame.
-                {
-                    VkMemoryBarrier2 mb{};
-                    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                    mb.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-                    mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-                    mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-                    mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-                    VkDependencyInfo dep{};
-                    dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                    dep.memoryBarrierCount = 1;
-                    dep.pMemoryBarriers    = &mb;
-                    vkCmdPipelineBarrier2(cb, &dep);
-                }
+                // The TLAS refit consumes these BLASes this same frame; the
+                // frame graph orders it (both passes declare kSceneGeometry).
             }
 
             gpuTimings_->end(cb, vulkan::TP_DynGeomRefit, currentFrame);
@@ -2558,24 +2534,9 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
                 if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanFoam, currentFrame);
                 foamWorld_->recordDispatch(cb, st.foamWorldDS, fpc);
                 if (timed) gpuTimings_->end(cb, vulkan::TP_OceanFoam, currentFrame);
-
-                // Barrier: compute WRITE → ray-trace shader READ on the foam
-                // image. chit (binding 44) samples it via a combined image-
-                // sampler in the same frame.
-                VkImageMemoryBarrier fmb{};
-                fmb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                fmb.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                fmb.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                fmb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-                fmb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                fmb.image = st.foamImage.image;
-                fmb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                fmb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                fmb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                vkCmdPipelineBarrier(cb,
-                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                        VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-                        0, 0, nullptr, 0, nullptr, 1, &fmb);
+                // The deferred shade samples the foam image (binding 44) later
+                // this frame; the frame graph orders that read (the water pass
+                // declares the image).
             }
 
             // Buffer barrier: compute write → AS-build read on the vertex/normal buffers.
@@ -2890,7 +2851,7 @@ void VulkanRenderer::Impl::buildTlas(const std::vector<VkAccelerationStructureIn
             tlasCreate.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
             check(ctx->rt().createAccelerationStructure(ctx->device(), &tlasCreate, nullptr, &tlas),
                   "vkCreateAccelerationStructureKHR(TLAS)");
-            vulkan::registerAccelerationStructure(tlas, tlasCreate.buffer);
+            vulkan::registerAccelerationStructure(tlas, tlasCreate.buffer, kSceneGeometry);
 
             Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), tlasSizes.buildScratchSize);
 
@@ -2991,9 +2952,9 @@ void VulkanRenderer::Impl::recordTlasRefit(VkCommandBuffer cb,
                     &tlasBuild, &instanceCount, &sizes);
 
             // Persistent scratch (sized once; build ≥ update). REUSE is safe
-            // because recordDeformAndTlas opens with a barrier ordering this
-            // frame's AS builds after the previous frame's builds and ray
-            // queries — submission order alone would not. GROWTH is not: this runs mid-record, and the previous frame's
+            // because the frame graph's entry barrier orders this frame's AS
+            // builds after the previous frame's builds and ray queries —
+            // submission order alone would not. GROWTH is not: this runs mid-record, and the previous frame's
             // cmdBuildAccelerationStructures may still be in flight reading the
             // old buffer at the address it captured. Destroying it here is a
             // use-after-free (a device-lost / TDR class of multi-second hitch on

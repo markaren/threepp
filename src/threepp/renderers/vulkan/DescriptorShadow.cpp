@@ -37,8 +37,12 @@ namespace threepp::vulkan {
             static std::unordered_map<VkImageView, ViewInfo> v;
             return v;
         }
-        std::unordered_map<VkAccelerationStructureKHR, VkBuffer>& accels() {
-            static std::unordered_map<VkAccelerationStructureKHR, VkBuffer> a;
+        struct AccelInfo {
+            VkBuffer    storage = VK_NULL_HANDLE;
+            const char* contents = nullptr;
+        };
+        std::unordered_map<VkAccelerationStructureKHR, AccelInfo>& accels() {
+            static std::unordered_map<VkAccelerationStructureKHR, AccelInfo> a;
             return a;
         }
         std::unordered_map<VkDescriptorSet, SetShadow>& sets() {
@@ -95,16 +99,17 @@ namespace threepp::vulkan {
         return r;
     }
 
-    void registerAccelerationStructure(VkAccelerationStructureKHR as, VkBuffer storage) {
+    void registerAccelerationStructure(VkAccelerationStructureKHR as, VkBuffer storage,
+                                       const char* contents) {
         if (as == VK_NULL_HANDLE) return;
         std::lock_guard lock(mtx());
-        accels()[as] = storage;
+        accels()[as] = {storage, contents};
     }
 
     VkBuffer accelerationStructureBuffer(VkAccelerationStructureKHR as) {
         std::lock_guard lock(mtx());
         const auto it = accels().find(as);
-        return it == accels().end() ? VK_NULL_HANDLE : it->second;
+        return it == accels().end() ? VK_NULL_HANDLE : it->second.storage;
     }
 
     void unregisterImageView(VkImageView view) {
@@ -196,9 +201,18 @@ namespace threepp::vulkan {
                 for (const auto& el : bind.elements) {
                     const auto a = accels().find(el.as);
                     if (el.as == VK_NULL_HANDLE || a == accels().end()) continue;
-                    pass.use(graph.importBuffer(bindingName(setIndex, rb.binding), a->second),
+                    pass.use(graph.importBuffer(bindingName(setIndex, rb.binding), a->second.storage),
                              rg::Access{stages, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR,
                                         VK_IMAGE_LAYOUT_UNDEFINED, false});
+                    // Traversal reads the BLASes the instances reference, and
+                    // hit shading reads their vertex data by device address.
+                    if (a->second.contents) {
+                        pass.use(graph.importMemory(a->second.contents),
+                                 rg::Access{stages,
+                                            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                                    VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                                            VK_IMAGE_LAYOUT_UNDEFINED, false});
+                    }
                 }
                 continue;
             }

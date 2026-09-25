@@ -269,3 +269,53 @@ TEST_CASE("an empty graph records nothing") {
     CHECK_FALSE(g.hasEntryMemoryBarrier());
     CHECK_FALSE(g.hasExitMemoryBarrier());
 }
+
+TEST_CASE("a memory resource is ordered like a buffer and imported once per name") {
+    constexpr auto AS_BUILD = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+    constexpr auto VS       = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+    rg::RenderGraph g;
+    // The same name in different storage is the same resource.
+    char nameA[] = "scene.geometry";
+    char nameB[] = "scene.geometry";
+    const auto geom = g.importMemory(nameA);
+    CHECK(g.importMemory(nameB).index == geom.index);
+    CHECK(g.importMemory("other").index != geom.index);
+
+    const rg::Access deform{CS | AS_BUILD,
+                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                            VK_IMAGE_LAYOUT_UNDEFINED, true};
+    g.addPass("skin", {}).use(geom, deform);
+    g.addPass("grass", {}).use(geom, deform);
+    g.addPass("tlas", {}).use(geom, rg::accelRead(AS_BUILD));
+    g.addPass("gbuffer", {}).use(geom, rg::Access{VS, VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                                                  VK_IMAGE_LAYOUT_UNDEFINED, false});
+    g.addPass("shade", {}).use(geom, rg::accelRead(CS));
+    g.compile();
+
+    CHECK(g.barriersBefore(0).empty());
+    REQUIRE(g.barriersBefore(1).size() == 1);// write after write between deformers
+    CHECK(g.barriersBefore(1)[0].srcStages == (CS | AS_BUILD));
+    REQUIRE(g.barriersBefore(2).size() == 1);
+    CHECK(g.barriersBefore(2)[0].dstStages == AS_BUILD);
+    // Each reader waits on the last writer, not on the reads in between.
+    REQUIRE(g.barriersBefore(3).size() == 1);
+    CHECK(g.barriersBefore(3)[0].srcStages == (CS | AS_BUILD));
+    CHECK(g.barriersBefore(3)[0].dstStages == VS);
+    REQUIRE(g.barriersBefore(4).size() == 1);
+    CHECK(g.barriersBefore(4)[0].dstStages == CS);
+    CHECK(g.dump().find("scene.geometry (memory)") != std::string::npos);
+}
+
+TEST_CASE("an image imported in UNDEFINED is discarded at first use and left where it ends") {
+    rg::RenderGraph g;
+    auto scratch = g.importImage("scratch", fakeImage(1), VK_IMAGE_ASPECT_COLOR_BIT, 1, VK_IMAGE_LAYOUT_UNDEFINED);
+    g.addPass("copy", {}).use(scratch, rg::transferDst());
+    g.addPass("sample", {}).use(scratch, rg::sampled(RO));
+    g.compile();
+    REQUIRE(g.entryBarriers().size() == 1);
+    CHECK(g.entryBarriers()[0].oldLayout == VK_IMAGE_LAYOUT_UNDEFINED);
+    CHECK(g.entryBarriers()[0].newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    REQUIRE(g.barriersBefore(1).size() == 1);
+    CHECK(g.barriersBefore(1)[0].newLayout == RO);
+    CHECK(g.exitBarriers().empty());
+}

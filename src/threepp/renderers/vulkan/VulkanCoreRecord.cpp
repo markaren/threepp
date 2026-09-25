@@ -45,382 +45,337 @@ void VulkanRenderer::Impl::updatePaneRegion() {
             }
 }
 
-void VulkanRenderer::Impl::recordDeformAndTlas(VkCommandBuffer cb) {
-            // ── Cross-frame order for the in-place AS writes below ─────────
-            // The TLAS, its storage and its refit scratch, and every deformer's
-            // BLAS, are ONE object shared by both frames in flight, rebuilt IN
-            // PLACE. Submission order alone orders nothing: without a barrier
-            // this frame's build may overwrite them while the previous frame's
-            // ray queries (compute: shade, rtao, probes, froxels) or its lidar
-            // trace still traverse them (WAR), or while its own build is still
-            // writing them (WAW). The deformer branches' compute→AS barriers
-            // used to cover this by accident; a frame whose only change was
-            // rigid motion recorded none, and syncval reports both hazards on
-            // the TLAS buffer (VulkanValidation_test, steady state). Only on
-            // frames that build something — a bare barrier is not free.
-            if (pendingTlasRefit_ || !pendingDynamicGeomRefits_.empty() ||
-                !pendingSkinnedRebuilds_.empty() || !pendingTetRebuilds_.empty() ||
-                !pendingDisplacedDeforms_.empty() || !pendingGrassDeforms_.empty()) {
-                VkMemoryBarrier2 mb{};
-                mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
-                                   VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-                mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-                mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-                mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
-                                   VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-                VkDependencyInfo dep{};
-                dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                dep.memoryBarrierCount = 1;
-                dep.pMemoryBarriers    = &mb;
-                vkCmdPipelineBarrier2(cb, &dep);
-            }
+void VulkanRenderer::Impl::addDeformAndTlasPasses(rg::RenderGraph& g) {
+            // Cross-frame order for the in-place writes below is the graph's
+            // entry barrier: the TLAS, its storage and refit scratch, and every
+            // deformer's BLAS and vertex buffers are ONE object shared by both
+            // frames in flight, rebuilt in place, and the entry barrier orders
+            // this frame's first pass after everything the queue held (the
+            // previous frame's ray queries, lidar trace and builds included).
+            //
+            // Every deformer writes kSceneGeometry: vertex data by copy and by
+            // compute, then its BLAS by AS build, with its own barriers between
+            // those steps. The TLAS refit and the raster and ray-query passes
+            // after it read it.
+            const rg::BufferHandle geom = g.importMemory(kSceneGeometry);
+            const rg::Access deform{VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                    VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT |
+                                            VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                            VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                                    VK_IMAGE_LAYOUT_UNDEFINED, true};
 
             // ── Graduated per-frame dynamic plain meshes ───────────────────
             // CPU deformers that rebake their vertices every frame (Flock's
             // merged bird mesh) — staging upload + vertex/normal copies +
-            // batched BLAS refit, recorded like every other deformer here.
-            // The drain-based refreshGeomBlasBatch now only serves genuinely
-            // occasional edits. Internal barriers publish to the TLAS refit
-            // below and the raster/RT reads after it.
-            recordDynamicGeomRefits(cb);
-
-            // ── Skinned-mesh GPU pipeline ──────────────────────────────────
-            // ensureSceneBuilt populated pendingSkinnedRebuilds_ with the
-            // states whose bones changed this frame and uploaded the new
-            // bone matrices to each state's host-visible boneMatrices buffer.
-            // Now record: one skinning dispatch per state → barrier → one
-            // BLAS rebuild per state → barrier. The BLAS rebuild reads the
-            // deformed vertex/normal buffers the dispatch just wrote. The
-            // deferred shade / raster downstream reads the BLAS via TLAS.
-            if (!pendingSkinnedRebuilds_.empty() && skinning_) {
-                // ── Step 1: snapshot current vertex → prevVertex ──────────
-                // Before the skinning compute overwrites vertex with frame
-                // N's deformed positions, copy what's there (frame N-1's
-                // positions) into prevVertex. The chit's per-vertex motion-
-                // vector interpolation in step 1 reads prevVertex via
-                // gdesc.prevVertexAddress for the reprojection.
-                for (auto* st : pendingSkinnedRebuilds_) {
-                    if (st->blas->prevVertex.handle == VK_NULL_HANDLE) continue;
-                    VkBufferCopy region{};
-                    region.size = VkDeviceSize(st->vertexCount) * 3u * sizeof(float);
-                    vkCmdCopyBuffer(cb, st->blas->vertex.handle,
-                                    st->blas->prevVertex.handle, 1, &region);
-                }
-                // Transfer write → compute storage write (for vertex, which
-                // the skinning dispatch will now overwrite) and transfer
-                // write → ray-tracing shader read (for prevVertex, which
-                // chit reads via gdesc.prevVertexAddress later this frame).
-                {
-                    VkMemoryBarrier2 mb{};
-                    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
-                    mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                    mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-                    mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    VkDependencyInfo dep{};
-                    dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                    dep.memoryBarrierCount = 1;
-                    dep.pMemoryBarriers    = &mb;
-                    vkCmdPipelineBarrier2(cb, &dep);
-                }
-
-                skinning_->bindPipeline(cb);
-                for (auto* st : pendingSkinnedRebuilds_) {
-                    // The set for the slot refreshSkinnedBlas wrote this frame.
-                    skinning_->recordDispatch(cb, st->skinDescSet[st->boneSlot],
-                                              st->vertexCount);
-                }
-
-                // Compute write → AS build read + vertex attribute read +
-                // shader storage read. Single global memory barrier covers
-                // every pending mesh.
-                {
-                    VkMemoryBarrier2 mb{};
-                    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                                       VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
-                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-                    mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
-                                       VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
-                                       VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-                    VkDependencyInfo dep{};
-                    dep.sType               = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                    dep.memoryBarrierCount  = 1;
-                    dep.pMemoryBarriers     = &mb;
-                    vkCmdPipelineBarrier2(cb, &dep);
-                }
-
-                // BLAS rebuild per state — refit (MODE_UPDATE) by default,
-                // with periodic full rebuild every kBlasFullRebuildInterval
-                // frames to keep the BVH balanced under articulated motion.
-                // Persistent scratch is sized to buildScratchSize, which is
-                // always >= updateScratchSize, so the same buffer serves both.
-                for (auto* st : pendingSkinnedRebuilds_) {
-                    const bool fullRebuild = blasRebuildThisFrame_ ||
-                            st->blasRefitCounter >=
-                            SkinnedMeshState::kBlasFullRebuildInterval;
-                    st->blasRefitCounter = fullRebuild ? 0u
-                                                       : (st->blasRefitCounter + 1u);
-                    VkAccelerationStructureGeometryTrianglesDataKHR triData{};
-                    triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-                    triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-                    triData.vertexData.deviceAddress = st->blas->vertex.address;
-                    triData.vertexStride = 3 * sizeof(float);
-                    triData.maxVertex    = st->vertexCount - 1;
-                    if (st->indexed) {
-                        triData.indexType = VK_INDEX_TYPE_UINT32;
-                        triData.indexData.deviceAddress = st->blas->index.address;
-                    } else {
-                        triData.indexType = VK_INDEX_TYPE_NONE_KHR;
-                    }
-                    VkAccelerationStructureGeometryKHR blasGeom{};
-                    blasGeom.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-                    blasGeom.geometryType  = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-                    blasGeom.geometry.triangles = triData;
-                    blasGeom.flags         = 0;
-                    VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
-                    blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
-                    blasBuild.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-                    blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
-                                      VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
-                    blasBuild.mode  = fullRebuild
-                            ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
-                            : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
-                    blasBuild.geometryCount = 1;
-                    blasBuild.pGeometries   = &blasGeom;
-                    blasBuild.srcAccelerationStructure =
-                            fullRebuild ? VK_NULL_HANDLE : st->blas->as;
-                    blasBuild.dstAccelerationStructure = st->blas->as;
-                    blasBuild.scratchData.deviceAddress = st->blasScratch.address;
-                    VkAccelerationStructureBuildRangeInfoKHR range{};
-                    range.primitiveCount = st->primitiveCount;
-                    const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
-                    ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
-                }
-
-                // AS build write → TLAS / RT_SHADER read.
-                {
-                    VkMemoryBarrier2 mb{};
-                    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                    mb.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-                    mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-                    mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-                    mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-                    VkDependencyInfo dep{};
-                    dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                    dep.memoryBarrierCount = 1;
-                    dep.pMemoryBarriers    = &mb;
-                    vkCmdPipelineBarrier2(cb, &dep);
-                }
-
-                pendingSkinnedRebuilds_.clear();
+            // batched BLAS refit. The drain-based refreshGeomBlasBatch now only
+            // serves genuinely occasional edits.
+            if (!pendingDynamicGeomRefits_.empty() || !pendingDynamicPrevResyncs_.empty()) {
+                g.addPass("deform.dynGeom", [this](VkCommandBuffer c) { recordDynamicGeomRefits(c); })
+                        .use(geom, deform);
             }
 
-            // ── Tet-skinning (PhysX soft bodies) — same structure as the skinned
-            // block above: prevVertex snapshot → barrier → tet_skinning dispatch →
-            // barrier → BLAS refit → barrier. Separate pipeline + pending list.
+            // ── Skinned meshes / PhysX soft bodies (tet skinning) ──────────
+            if (!pendingSkinnedRebuilds_.empty() && skinning_) {
+                g.addPass("deform.skin", [this](VkCommandBuffer c) { recordSkinnedDeforms(c); })
+                        .use(geom, deform);
+            }
             if (!pendingTetRebuilds_.empty() && tetSkinning_) {
-                for (auto* st : pendingTetRebuilds_) {
-                    if (st->blas->prevVertex.handle == VK_NULL_HANDLE) continue;
-                    VkBufferCopy region{};
-                    region.size = VkDeviceSize(st->vertexCount) * 3u * sizeof(float);
-                    vkCmdCopyBuffer(cb, st->blas->vertex.handle,
-                                    st->blas->prevVertex.handle, 1, &region);
-                }
-                {
-                    VkMemoryBarrier2 mb{};
-                    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
-                    mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                    mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-                    mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    VkDependencyInfo dep{};
-                    dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                    dep.memoryBarrierCount = 1;
-                    dep.pMemoryBarriers    = &mb;
-                    vkCmdPipelineBarrier2(cb, &dep);
-                }
-
-                tetSkinning_->bindPipeline(cb);
-                for (auto* st : pendingTetRebuilds_) {
-                    tetSkinning_->recordDispatch(cb, st->tetDescSet[st->tetPosSlot], st->vertexCount);
-                }
-
-                {
-                    VkMemoryBarrier2 mb{};
-                    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                                       VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
-                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-                    mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
-                                       VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
-                                       VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-                    VkDependencyInfo dep{};
-                    dep.sType               = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                    dep.memoryBarrierCount  = 1;
-                    dep.pMemoryBarriers     = &mb;
-                    vkCmdPipelineBarrier2(cb, &dep);
-                }
-
-                for (auto* st : pendingTetRebuilds_) {
-                    const bool fullRebuild = blasRebuildThisFrame_ ||
-                            st->blasRefitCounter >= TetMeshState::kBlasFullRebuildInterval;
-                    st->blasRefitCounter = fullRebuild ? 0u : (st->blasRefitCounter + 1u);
-                    VkAccelerationStructureGeometryTrianglesDataKHR triData{};
-                    triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-                    triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-                    triData.vertexData.deviceAddress = st->blas->vertex.address;
-                    triData.vertexStride = 3 * sizeof(float);
-                    triData.maxVertex    = st->vertexCount - 1;
-                    if (st->indexed) {
-                        triData.indexType = VK_INDEX_TYPE_UINT32;
-                        triData.indexData.deviceAddress = st->blas->index.address;
-                    } else {
-                        triData.indexType = VK_INDEX_TYPE_NONE_KHR;
-                    }
-                    VkAccelerationStructureGeometryKHR blasGeom{};
-                    blasGeom.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-                    blasGeom.geometryType  = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-                    blasGeom.geometry.triangles = triData;
-                    blasGeom.flags         = 0;
-                    VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
-                    blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
-                    blasBuild.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-                    blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
-                                      VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
-                    blasBuild.mode  = fullRebuild
-                            ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
-                            : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
-                    blasBuild.geometryCount = 1;
-                    blasBuild.pGeometries   = &blasGeom;
-                    blasBuild.srcAccelerationStructure =
-                            fullRebuild ? VK_NULL_HANDLE : st->blas->as;
-                    blasBuild.dstAccelerationStructure = st->blas->as;
-                    blasBuild.scratchData.deviceAddress = st->blasScratch.address;
-                    VkAccelerationStructureBuildRangeInfoKHR range{};
-                    range.primitiveCount = st->primitiveCount;
-                    const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
-                    ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
-                }
-
-                {
-                    VkMemoryBarrier2 mb{};
-                    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                    mb.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-                    mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-                    mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-                    mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-                    VkDependencyInfo dep{};
-                    dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                    dep.memoryBarrierCount = 1;
-                    dep.pMemoryBarriers    = &mb;
-                    vkCmdPipelineBarrier2(cb, &dep);
-                }
-
-                pendingTetRebuilds_.clear();
+                g.addPass("deform.tet", [this](VkCommandBuffer c) { recordTetDeforms(c); })
+                        .use(geom, deform);
             }
 
             // ── DisplacedMesh (FFT water) update + BLAS rebuild ─────────────
-            // Recorded into the frame cb (no blocking submit), like the skinned
-            // and tet paths above. recordDisplacedDeform issues the cascade FFT
-            // chain, water_displace + world-foam dispatches, the height-field
-            // readback copies (mirrored to the CPU one frame later at stage
-            // time) and the in-place BLAS rebuild, with its internal barriers.
-            // The publish barrier below covers AS-build→TLAS/RT reads AND the
-            // displace-compute writes → raster G-buffer vertex-attribute reads
-            // (the one-shot's submit+wait used to serialize those implicitly).
+            // recordDisplacedDeform issues the cascade FFT chain, the
+            // water_displace + world-foam dispatches, the height-field readback
+            // copies (mirrored to the CPU one frame later at stage time) and the
+            // in-place BLAS rebuild, with its internal barriers. The deferred
+            // shade samples the fine cascade's height and the foam accumulator
+            // through its descriptors, so those are declared as images.
             if (!pendingDisplacedDeforms_.empty() && waterDisplace_) {
-                bool timed = true;// TP_Ocean* slots: first displaced mesh only
+                auto pass = g.addPass("deform.water", [this](VkCommandBuffer c) {
+                    bool timed = true;// TP_Ocean* slots: first displaced mesh only
+                    for (auto& [dmPtr, stPtr, tsec] : pendingDisplacedDeforms_) {
+                        recordDisplacedDeform(c, *dmPtr, *stPtr, tsec, timed);
+                        timed = false;
+                    }
+                    pendingDisplacedDeforms_.clear();
+                });
+                pass.use(geom, deform);
+                const rg::Access oceanOut{VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_COPY_BIT,
+                                          VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                                  VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                                  VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
+                                                  VK_ACCESS_2_TRANSFER_READ_BIT,
+                                          VK_IMAGE_LAYOUT_GENERAL, true};
                 for (auto& [dmPtr, stPtr, tsec] : pendingDisplacedDeforms_) {
-                    recordDisplacedDeform(cb, *dmPtr, *stPtr, tsec, timed);
-                    timed = false;
+                    const auto& st = *stPtr;
+                    for (uint32_t i = 0; i < 3; ++i) {
+                        if (!(st.cascadeMask & (1u << i)) || !st.cascades[i].dyn) continue;
+                        pass.use(g.importImage("ocean.ht", st.cascades[i].dyn->ht().image,
+                                               VK_IMAGE_ASPECT_COLOR_BIT, 1, VK_IMAGE_LAYOUT_GENERAL),
+                                 oceanOut);
+                        pass.use(g.importImage("ocean.displacement", st.cascades[i].dyn->displacement().image,
+                                               VK_IMAGE_ASPECT_COLOR_BIT, 1, VK_IMAGE_LAYOUT_GENERAL),
+                                 oceanOut);
+                    }
+                    pass.use(g.importImage("ocean.foam", st.foamImage.image, VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                                           VK_IMAGE_LAYOUT_GENERAL),
+                             oceanOut);
                 }
-                VkMemoryBarrier2 mb{};
-                mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                mb.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR |
-                                   VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
-                                   VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT;
-                mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
-                                   VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                   VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
-                VkDependencyInfo dep{};
-                dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                dep.memoryBarrierCount = 1;
-                dep.pMemoryBarriers    = &mb;
-                vkCmdPipelineBarrier2(cb, &dep);
-                pendingDisplacedDeforms_.clear();
             }
 
             // ── GrassMesh wind deform (GPU) + BLAS refit ────────────────────
-            // Recorded into the frame cb (no blocking submit), like the skinned
-            // and tet paths above. recordGrassDeform issues the grass_wind
-            // dispatch + a compute→AS barrier + the in-place BLAS refit per mesh;
-            // a final AS-write→RT-read barrier publishes the rebuilt geometry to
-            // the trace. (The TLAS sees last frame's bounds — fine for the small
-            // sway envelope, same 1-frame-late deal as skinned.)
+            // recordGrassDeform issues the grass_wind dispatch + a compute→AS
+            // barrier + the in-place BLAS refit per mesh. (The TLAS sees last
+            // frame's bounds — fine for the small sway envelope, same
+            // 1-frame-late deal as skinned.)
             if (!pendingGrassDeforms_.empty() && grassWind_) {
-                for (auto& [gm, st] : pendingGrassDeforms_) {
-                    recordGrassDeform(cb, *gm, *st);
-                }
-                VkMemoryBarrier2 mb{};
-                mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                mb.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-                mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-                mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-                mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-                VkDependencyInfo dep{};
-                dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                dep.memoryBarrierCount = 1;
-                dep.pMemoryBarriers    = &mb;
-                vkCmdPipelineBarrier2(cb, &dep);
-                pendingGrassDeforms_.clear();
+                g.addPass("deform.grass", [this](VkCommandBuffer c) {
+                     for (auto& [gm, st] : pendingGrassDeforms_) recordGrassDeform(c, *gm, *st);
+                     pendingGrassDeforms_.clear();
+                 }).use(geom, deform);
             }
 
             // ── Per-frame TLAS refit ────────────────────────────────────────
             // Recorded here (after every deformable BLAS rebuild above) instead
             // of a mid-frame one-shot drain in ensureSceneBuilt — this is what
             // removes the resolution-scaled stall (the old drain blocked on the
-            // previous frame's path trace). One submit per frame; CPU/GPU
-            // overlap restored.
+            // previous frame's path trace). Its readers — every ray query in a
+            // compute shader (shade, rtao, probes, froxels, particle lighting)
+            // — declare the TLAS through their descriptor sets.
             if (pendingTlasRefit_) {
-                gpuTimings_->begin(cb, vulkan::TP_TlasRefit, currentFrame);
-                recordTlasRefit(cb, pendingTlasInstances_, pendingTlasFullBuild_);
-                gpuTimings_->end(cb, vulkan::TP_TlasRefit, currentFrame);
-                // COMPUTE, not only RAY_TRACING_SHADER: every TLAS reader in the
-                // frame is a ray query in a compute shader (shade, rtao, probes,
-                // froxels, particle lighting). RAY_TRACING_SHADER alone ordered
-                // only the lidar pipeline, which barriers for itself anyway.
+                auto pass = g.addPass("tlas", [this](VkCommandBuffer c) {
+                    gpuTimings_->begin(c, vulkan::TP_TlasRefit, currentFrame);
+                    recordTlasRefit(c, pendingTlasInstances_, pendingTlasFullBuild_);
+                    gpuTimings_->end(c, vulkan::TP_TlasRefit, currentFrame);
+                    pendingTlasRefit_ = false;
+                });
+                pass.use(geom, rg::Access{VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                          VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR,
+                                          VK_IMAGE_LAYOUT_UNDEFINED, false});
+                pass.use(g.importBuffer("tlas", tlasBuffer.handle),
+                         rg::Access{VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                    VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                            VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                                    VK_IMAGE_LAYOUT_UNDEFINED, true});
+            }
+}
+
+// ── Skinned-mesh GPU pipeline ───────────────────────────────────────────────
+// ensureSceneBuilt populated pendingSkinnedRebuilds_ with the states whose
+// bones changed this frame and uploaded the new bone matrices to each state's
+// host-visible boneMatrices buffer. Recorded: prevVertex snapshot → barrier →
+// one skinning dispatch per state → barrier → one BLAS rebuild per state. The
+// BLAS rebuild reads the deformed vertex/normal buffers the dispatch just
+// wrote; the graph orders the TLAS refit and the frame's readers after it.
+void VulkanRenderer::Impl::recordSkinnedDeforms(VkCommandBuffer cb) {
+            // ── Step 1: snapshot current vertex → prevVertex ──────────
+            // Before the skinning compute overwrites vertex with frame
+            // N's deformed positions, copy what's there (frame N-1's
+            // positions) into prevVertex. The chit's per-vertex motion-
+            // vector interpolation in step 1 reads prevVertex via
+            // gdesc.prevVertexAddress for the reprojection.
+            for (auto* st : pendingSkinnedRebuilds_) {
+                if (st->blas->prevVertex.handle == VK_NULL_HANDLE) continue;
+                VkBufferCopy region{};
+                region.size = VkDeviceSize(st->vertexCount) * 3u * sizeof(float);
+                vkCmdCopyBuffer(cb, st->blas->vertex.handle,
+                                st->blas->prevVertex.handle, 1, &region);
+            }
+            // Transfer write → compute storage write (for vertex, which
+            // the skinning dispatch will now overwrite) and transfer
+            // write → ray-tracing shader read (for prevVertex, which
+            // chit reads via gdesc.prevVertexAddress later this frame).
+            {
                 VkMemoryBarrier2 mb{};
                 mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                mb.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-                mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+                mb.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
+                mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
                 mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
                                    VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-                mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+                mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                   VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
                 VkDependencyInfo dep{};
                 dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
                 dep.memoryBarrierCount = 1;
                 dep.pMemoryBarriers    = &mb;
                 vkCmdPipelineBarrier2(cb, &dep);
-                pendingTlasRefit_ = false;
             }
+
+            skinning_->bindPipeline(cb);
+            for (auto* st : pendingSkinnedRebuilds_) {
+                // The set for the slot refreshSkinnedBlas wrote this frame.
+                skinning_->recordDispatch(cb, st->skinDescSet[st->boneSlot],
+                                          st->vertexCount);
+            }
+
+            // Compute write → AS build read + vertex attribute read +
+            // shader storage read. Single global memory barrier covers
+            // every pending mesh.
+            {
+                VkMemoryBarrier2 mb{};
+                mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                   VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
+                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                   VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
+                                   VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+                VkDependencyInfo dep{};
+                dep.sType               = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.memoryBarrierCount  = 1;
+                dep.pMemoryBarriers     = &mb;
+                vkCmdPipelineBarrier2(cb, &dep);
+            }
+
+            // BLAS rebuild per state — refit (MODE_UPDATE) by default,
+            // with periodic full rebuild every kBlasFullRebuildInterval
+            // frames to keep the BVH balanced under articulated motion.
+            // Persistent scratch is sized to buildScratchSize, which is
+            // always >= updateScratchSize, so the same buffer serves both.
+            for (auto* st : pendingSkinnedRebuilds_) {
+                const bool fullRebuild = blasRebuildThisFrame_ ||
+                        st->blasRefitCounter >=
+                        SkinnedMeshState::kBlasFullRebuildInterval;
+                st->blasRefitCounter = fullRebuild ? 0u
+                                                   : (st->blasRefitCounter + 1u);
+                VkAccelerationStructureGeometryTrianglesDataKHR triData{};
+                triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+                triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+                triData.vertexData.deviceAddress = st->blas->vertex.address;
+                triData.vertexStride = 3 * sizeof(float);
+                triData.maxVertex    = st->vertexCount - 1;
+                if (st->indexed) {
+                    triData.indexType = VK_INDEX_TYPE_UINT32;
+                    triData.indexData.deviceAddress = st->blas->index.address;
+                } else {
+                    triData.indexType = VK_INDEX_TYPE_NONE_KHR;
+                }
+                VkAccelerationStructureGeometryKHR blasGeom{};
+                blasGeom.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+                blasGeom.geometryType  = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+                blasGeom.geometry.triangles = triData;
+                blasGeom.flags         = 0;
+                VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
+                blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+                blasBuild.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+                blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                                  VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+                blasBuild.mode  = fullRebuild
+                        ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
+                        : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+                blasBuild.geometryCount = 1;
+                blasBuild.pGeometries   = &blasGeom;
+                blasBuild.srcAccelerationStructure =
+                        fullRebuild ? VK_NULL_HANDLE : st->blas->as;
+                blasBuild.dstAccelerationStructure = st->blas->as;
+                blasBuild.scratchData.deviceAddress = st->blasScratch.address;
+                VkAccelerationStructureBuildRangeInfoKHR range{};
+                range.primitiveCount = st->primitiveCount;
+                const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
+                ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
+            }
+
+            pendingSkinnedRebuilds_.clear();
+}
+
+// ── Tet-skinning (PhysX soft bodies) — same structure as the skinned pass:
+// prevVertex snapshot → barrier → tet_skinning dispatch → barrier → BLAS refit.
+// Separate pipeline + pending list.
+void VulkanRenderer::Impl::recordTetDeforms(VkCommandBuffer cb) {
+            for (auto* st : pendingTetRebuilds_) {
+                if (st->blas->prevVertex.handle == VK_NULL_HANDLE) continue;
+                VkBufferCopy region{};
+                region.size = VkDeviceSize(st->vertexCount) * 3u * sizeof(float);
+                vkCmdCopyBuffer(cb, st->blas->vertex.handle,
+                                st->blas->prevVertex.handle, 1, &region);
+            }
+            {
+                VkMemoryBarrier2 mb{};
+                mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                mb.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
+                mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                   VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                VkDependencyInfo dep{};
+                dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.memoryBarrierCount = 1;
+                dep.pMemoryBarriers    = &mb;
+                vkCmdPipelineBarrier2(cb, &dep);
+            }
+
+            tetSkinning_->bindPipeline(cb);
+            for (auto* st : pendingTetRebuilds_) {
+                tetSkinning_->recordDispatch(cb, st->tetDescSet[st->tetPosSlot], st->vertexCount);
+            }
+
+            {
+                VkMemoryBarrier2 mb{};
+                mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                   VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
+                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                   VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
+                                   VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+                VkDependencyInfo dep{};
+                dep.sType               = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.memoryBarrierCount  = 1;
+                dep.pMemoryBarriers     = &mb;
+                vkCmdPipelineBarrier2(cb, &dep);
+            }
+
+            for (auto* st : pendingTetRebuilds_) {
+                const bool fullRebuild = blasRebuildThisFrame_ ||
+                        st->blasRefitCounter >= TetMeshState::kBlasFullRebuildInterval;
+                st->blasRefitCounter = fullRebuild ? 0u : (st->blasRefitCounter + 1u);
+                VkAccelerationStructureGeometryTrianglesDataKHR triData{};
+                triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+                triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+                triData.vertexData.deviceAddress = st->blas->vertex.address;
+                triData.vertexStride = 3 * sizeof(float);
+                triData.maxVertex    = st->vertexCount - 1;
+                if (st->indexed) {
+                    triData.indexType = VK_INDEX_TYPE_UINT32;
+                    triData.indexData.deviceAddress = st->blas->index.address;
+                } else {
+                    triData.indexType = VK_INDEX_TYPE_NONE_KHR;
+                }
+                VkAccelerationStructureGeometryKHR blasGeom{};
+                blasGeom.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+                blasGeom.geometryType  = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+                blasGeom.geometry.triangles = triData;
+                blasGeom.flags         = 0;
+                VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
+                blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+                blasBuild.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+                blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                                  VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+                blasBuild.mode  = fullRebuild
+                        ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
+                        : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+                blasBuild.geometryCount = 1;
+                blasBuild.pGeometries   = &blasGeom;
+                blasBuild.srcAccelerationStructure =
+                        fullRebuild ? VK_NULL_HANDLE : st->blas->as;
+                blasBuild.dstAccelerationStructure = st->blas->as;
+                blasBuild.scratchData.deviceAddress = st->blasScratch.address;
+                VkAccelerationStructureBuildRangeInfoKHR range{};
+                range.primitiveCount = st->primitiveCount;
+                const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
+                ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
+            }
+
+            pendingTetRebuilds_.clear();
 }
 
 // ── G-buffer stage, as render-graph passes ──────────────────────────────────
@@ -887,6 +842,11 @@ void VulkanRenderer::Impl::addGbufferPasses(rg::RenderGraph& g) {
                                       VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
                                               VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
                                       VK_IMAGE_LAYOUT_UNDEFINED, true, kDepthRO};
+            // Mesh vertex/index data, read by the vertex stage (kSceneGeometry).
+            const rg::Access kVertexRead{VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                                         VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT |
+                                                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                                         VK_IMAGE_LAYOUT_UNDEFINED, false};
             {
                 auto pass = g.addPass("gbuffer", [this](VkCommandBuffer c) { recordGbufferRaster(c); });
                 const Image2D* colors[5] = {msFb ? &gb.normalMS : &gb.normal, msFb ? &gb.motionMS : &gb.motion,
@@ -897,18 +857,16 @@ void VulkanRenderer::Impl::addGbufferPasses(rg::RenderGraph& g) {
                 }
                 const Image2D& depth = msFb ? gb.depthMS : gb.depth;
                 pass.use(g.importImage("gbuf.depth", depth.image, kDepth, 1, kDepthRO), depthOut);
-                // The draw records (host-written) and, through buffer device
-                // addresses the graph cannot see, every mesh's vertex/index data
-                // — the deformers' output among them — are read at the indirect,
-                // vertex-input and vertex-shader stages. Declaring the records
-                // puts those stages in the graph's entry barrier, which is what
-                // orders them after the deformers recorded ahead of the graph.
+                // The draw records (host-written), and every mesh's vertex/index
+                // data — the deformers' output among them — which the vertex
+                // stage reads through buffer device addresses.
                 pass.use(g.importBuffer("gbuf.drawRecords", view().indirectCmdBuffers[f].handle),
                          rg::Access{VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT |
                                             VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
                                     VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
                                             VK_ACCESS_2_INDEX_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
                                     VK_IMAGE_LAYOUT_UNDEFINED, false});
+                pass.use(g.importMemory(kSceneGeometry), kVertexRead);
             }
 
             // ── MSAA dominant-sample resolve (setGbufferMsaa 2|4) ──────────
@@ -943,9 +901,13 @@ void VulkanRenderer::Impl::addGbufferPasses(rg::RenderGraph& g) {
                 ensureOverlayMsaaImages(viewOutExtent());
                 const VkImage depthImg = overlaySamples() > 1 ? overlayMsDepth_.image : gb.unjitDepth.image;
                 auto pass = g.addPass("overlayDepth", [this](VkCommandBuffer c) { recordOverlayDepthPrepass(c); });
-                pass.use(g.importImage("overlay.depth", depthImg, kDepth, 1, kDepthRO),
+                // Imported in UNDEFINED: its contents are dead between frames
+                // (the prepass clears it), and the overlay pass leaves it
+                // writable when the splat stamp runs.
+                pass.use(g.importImage("overlay.depth", depthImg, kDepth, 1, VK_IMAGE_LAYOUT_UNDEFINED),
                          rg::Access{kTests, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                                     VK_IMAGE_LAYOUT_UNDEFINED, true, kDepthRO});
+                pass.use(g.importMemory(kSceneGeometry), kVertexRead);
             }
 }
 
@@ -1241,7 +1203,7 @@ void VulkanRenderer::Impl::addSplatPasses(rg::RenderGraph& g) {
 
 }
 
-bool VulkanRenderer::Impl::splatStampPrepare(VkCommandBuffer cb) {
+bool VulkanRenderer::Impl::splatStampPrepare() {
             // ── Splat depth -> the overlay's depth attachment ───────────────────
             // The one write that makes a cloud occlude the post-resolve overlay.
             // Everything the overlay pass draws — wireframe meshes, Lines,
@@ -1254,10 +1216,11 @@ bool VulkanRenderer::Impl::splatStampPrepare(VkCommandBuffer cb) {
             // LAST, in the transparent pass, over the lines. See
             // shaders/splat_overlay_depth.frag.
             //
-            // This half gates and issues the pre-pass barriers, called before
-            // the hybrid overlay pass begins; true means that pass must attach
-            // its depth WRITABLE and record recordSplatStampDraw at the
-            // exempt/occluded boundary of its draw order.
+            // This half gates and points the stamp's set at the AOV, called
+            // while the frame graph is built; true means the overlay pass must
+            // declare and attach its depth WRITABLE and record
+            // recordSplatStampDraw at the exempt/occluded boundary of its draw
+            // order.
             //
             // Gated exactly like the pass it feeds. The AOV gate is the one
             // that matters: without it the image is one texel, and
@@ -1303,48 +1266,11 @@ bool VulkanRenderer::Impl::splatStampPrepare(VkCommandBuffer cb) {
             // VUID-vkCmdWriteTimestamp2-None-03864 plus a meaningless number.
             // One fullscreen depth-only draw is not worth its own pass slot;
             // it lands inside TP_Frame like the rest of the unbracketed work.
-
-            // The AOV's stores (compute) -> the stamp's fragment reads. The
-            // image stays in GENERAL throughout the frame, so this is an
-            // execution + visibility barrier only, no transition.
-            VkMemoryBarrier2 aovVis{};
-            aovVis.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            aovVis.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            aovVis.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            aovVis.dstStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-            aovVis.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-
-            // ...and the depth attachment out of the read-only layout the
-            // prepass left it in: the overlay pass will attach it WRITABLE so
-            // the stamp draw inside it can write. Nothing reads it between the
-            // end of that pass and the next frame's prepass, and the prepass
-            // transitions from UNDEFINED (it clears), so the layout is not
-            // handed back.
-            VkImageMemoryBarrier2 toWrite{};
-            toWrite.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            toWrite.srcStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
-                                    VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-            toWrite.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-            toWrite.dstStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
-                                    VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-            toWrite.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
-                                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-            toWrite.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-            toWrite.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-            toWrite.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toWrite.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toWrite.image = depthImg;
-            toWrite.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-            toWrite.subresourceRange.levelCount = 1;
-            toWrite.subresourceRange.layerCount = 1;
-
-            VkDependencyInfo di{};
-            di.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            di.memoryBarrierCount       = 1;
-            di.pMemoryBarriers          = &aovVis;
-            di.imageMemoryBarrierCount  = 1;
-            di.pImageMemoryBarriers     = &toWrite;
-            vkCmdPipelineBarrier2(cb, &di);
+            //
+            // The overlay pass declares the AOV's fragment read and its depth
+            // attachment in DEPTH_ATTACHMENT_OPTIMAL (writable), so the graph
+            // orders the AOV's compute stores before the stamp and moves the
+            // depth out of the read-only layout the prepass left it in.
             return true;
 }
 
@@ -2006,6 +1932,89 @@ void VulkanRenderer::Impl::recordFieldBillboards(VkCommandBuffer cb, VkPipeline 
             }
         }
 
+// ── A secondary view's field billboards, as graph passes ────────────────────
+// Same shader, same pipeline layout, 1-sample variant, this view's own camera,
+// drawn onto the view's colour target after its temporal resolve. Depth comes
+// from this view's G-buffer, which the G-buffer pass left in DEPTH_STENCIL_
+// READ_ONLY — it is the JITTERED depth rather than the primary's unjittered
+// prepass, which is a sub-pixel disagreement on a soft sprite and not worth a
+// second full-screen depth pass per view.
+void VulkanRenderer::Impl::addSecondaryFieldBillboardPasses(rg::RenderGraph& g) {
+            if (fieldBillboardPipeline1x_ == VK_NULL_HANDLE || !sceneHasFieldBillboards()) return;
+            const uint32_t f = currentFrame;
+            ViewContext& v   = view();
+
+            // R8/R9: this view's own transmittance prepass, re-dispatched over
+            // the frame's one buffer. T_cam is a property of the EYE, so the
+            // primary's answers are wrong for a sensor looking from somewhere
+            // else — and the re-dispatch is what makes a shared buffer correct:
+            // each view's draws are ordered between its own dispatch and the
+            // next view's (the graph's entry barrier covers the one before).
+            if (particleFieldPass_ && particleFieldPass_->transmittanceActive()) {
+                auto pass = g.addPass("fieldTransmittance", [this](VkCommandBuffer c) { recordFieldTransmittance(c); });
+                particleFieldPass_->declareTransmittance(g, pass, f);
+            }
+
+            auto pass = g.addPass("fieldBillboards", [this](VkCommandBuffer c) {
+                const ViewContext& vc = view();
+                const VkExtent2D ext  = vc.outExt;
+                VkRenderingAttachmentInfo colorAtt{};
+                colorAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                colorAtt.imageView   = vc.colorTarget.view;
+                colorAtt.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                colorAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
+                colorAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+
+                VkRenderingAttachmentInfo depthAtt{};
+                depthAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                depthAtt.imageView   = vc.rasterGbufs[currentFrame].depth.view;
+                depthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                depthAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
+                depthAtt.storeOp     = VK_ATTACHMENT_STORE_OP_NONE;
+
+                VkRenderingInfo ri{};
+                ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                ri.renderArea.offset    = {0, 0};
+                ri.renderArea.extent    = ext;
+                ri.layerCount           = 1;
+                ri.colorAttachmentCount = 1;
+                ri.pColorAttachments    = &colorAtt;
+                ri.pDepthAttachment     = &depthAtt;
+                vkCmdBeginRendering(c, &ri);
+                VkViewport vp{0.f, 0.f, float(ext.width), float(ext.height), 0.f, 1.f};
+                vkCmdSetViewport(c, 0, 1, &vp);
+                VkRect2D sc{{0, 0}, ext};
+                vkCmdSetScissor(c, 0, 1, &sc);
+                // F4: the SHARP quads only — a secondary view gets no billboard
+                // GLOW, and that is a decision rather than an omission. The
+                // glow chain is one half-extent target plus one pyramid sized to
+                // the primary's display, and giving every view its own would be
+                // N targets and N pyramids per frame for a LENS artefact. A
+                // CameraSensor therefore measures the spark's own radiance
+                // (which is the physical quantity) and not the bloom the display
+                // adds around it. If sensor/display parity on the halo ever
+                // matters, the fix is a per-view BillboardGlowPass instance, not
+                // a change here.
+                recordFieldBillboards(c, fieldBillboardPipeline1x_, /*glowPass=*/false,
+                                      fieldBillboardAlphaPipeline1x_);
+                vkCmdEndRendering(c);
+            });
+            // The colour target stays in GENERAL, attached as it is; after the
+            // graph, recordViewComposite's copy and readViewRGBPixels' readback
+            // read it.
+            pass.use(g.importImage("view.color", v.colorTarget.image, VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                                   VK_IMAGE_LAYOUT_GENERAL),
+                     rg::colorAttachment(VK_IMAGE_LAYOUT_GENERAL));
+            pass.use(g.importImage("gbuf.depth", v.rasterGbufs[f].depth.image, VK_IMAGE_ASPECT_DEPTH_BIT, 1,
+                                   VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL),
+                     rg::depthAttachment(VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, false));
+            if (particleFieldPass_) {
+                pass.use(g.importBuffer("particles.transmittance", particleFieldPass_->transmittanceBuffer(f)),
+                         rg::Access{VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                                    VK_IMAGE_LAYOUT_UNDEFINED, false});
+            }
+}
+
 // ── R8/R9: the transmittance prepass, for the view about to draw ────────────
 // Called immediately before a view's billboard draws and OUTSIDE its render-
 // pass instance, because a compute dispatch cannot be recorded inside one. The
@@ -2162,30 +2171,10 @@ void VulkanRenderer::Impl::recordFieldBillboardGlow(VkCommandBuffer cb) {
                                            : view().rasterGbufs[currentFrame].unjitDepth.image;
                 srcDepthExt  = viewOutExtent();
             }
-            if (srcDepthView != VK_NULL_HANDLE) {
-                // The prepass left the image in DEPTH_STENCIL_READ_ONLY_OPTIMAL
-                // and made its writes visible to the depth TEST only. This is
-                // the same layout with a different access: a sampled read.
-                VkImageMemoryBarrier2 toSample{};
-                toSample.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                toSample.srcStageMask  = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-                toSample.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                toSample.dstStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-                toSample.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                toSample.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                toSample.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                toSample.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                toSample.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                toSample.image = srcDepthImg;
-                toSample.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-                toSample.subresourceRange.levelCount = 1;
-                toSample.subresourceRange.layerCount = 1;
-                VkDependencyInfo dep{};
-                dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                dep.imageMemoryBarrierCount = 1;
-                dep.pImageMemoryBarriers = &toSample;
-                vkCmdPipelineBarrier2(cb, &dep);
-            }
+            // The prepass left the image in DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            // the graph pass declares this sampled read of it
+            // (BillboardGlowPass::declare), which orders it after the prepass.
+            (void) srcDepthImg;
             billboardGlow_->recordDepthReduce(cb, currentFrame, srcDepthView, overlayMsaa,
                                               srcDepthExt);
 
@@ -2249,7 +2238,7 @@ void VulkanRenderer::Impl::ensureFieldBillboardGlow() {
                     billboardGlow_->ensureImages(ext.width, ext.height);
         }
 
-void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imageIndex) {
+void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imageIndex, bool stampActive) {
             const VkImage img    = ctx->swapchainImages()[imageIndex];
             const VkExtent2D ext = ctx->swapchainExtent();
 
@@ -2294,53 +2283,23 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                     // overlayMs* do not.
                     const bool overlayMsaa = overlaySamples() > 1;
 
-                    // Splat depth stamp: gates and pre-pass barriers now, the
-                    // draw itself inside the pass below, between the overlays
-                    // kSplatUnoccludedOverlayLayer exempts and everything
-                    // else. True also means the depth attachment must be
+                    // Splat depth stamp (stampActive, from splatStampPrepare
+                    // while the graph was built): the draw sits inside the pass
+                    // below, between the overlays kSplatUnoccludedOverlayLayer
+                    // exempts and everything else, and the depth attachment is
                     // WRITABLE — the stamp is the pass's one depth write.
-                    const bool stampActive = splatStampPrepare(cb);
-
+                    //
+                    // The graph pass (addTailPasses) arrives with the swapchain
+                    // in TRANSFER_SRC_OPTIMAL under MSAA (COLOR_ATTACHMENT_
+                    // OPTIMAL otherwise), the scratch in TRANSFER_DST_OPTIMAL,
+                    // the MS colour in COLOR_ATTACHMENT_OPTIMAL and the depth in
+                    // the layout the attachment below names.
                     if (overlayMsaa) {
                         // The swapchain holds the composited scene and becomes
                         // the RESOLVE TARGET, so it can neither be loaded into
                         // the MS target nor sampled by a draw inside the pass.
                         // Copy it to a 1-sample scratch first; the inject draw
                         // then seeds every sample from that.
-                        VkImageMemoryBarrier2 pre[2]{};
-                        // swapchain: post-TAA compute/transfer write → transfer read
-                        pre[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                        pre[0].srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                               VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-                        pre[0].srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
-                                               VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                        pre[0].dstStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-                        pre[0].dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-                        pre[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                        pre[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                        pre[0].image = img;
-                        // scratch: discard old contents → transfer dst (WAR vs
-                        // the PREVIOUS frame's inject sample)
-                        pre[1] = pre[0];
-                        pre[1].srcStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-                        pre[1].srcAccessMask = 0;
-                        pre[1].dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                        pre[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                        pre[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                        pre[1].image = overlayAaScratch_.image;
-                        for (auto& b : pre) {
-                            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                            b.subresourceRange.levelCount = 1;
-                            b.subresourceRange.layerCount = 1;
-                        }
-                        VkDependencyInfo dPre{};
-                        dPre.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                        dPre.imageMemoryBarrierCount = 2;
-                        dPre.pImageMemoryBarriers = pre;
-                        vkCmdPipelineBarrier2(cb, &dPre);
-
                         VkImageCopy region{};
                         region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                         region.srcSubresource.layerCount = 1;
@@ -2350,7 +2309,7 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                                        overlayAaScratch_.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                        1, &region);
 
-                        VkImageMemoryBarrier2 post[3]{};
+                        VkImageMemoryBarrier2 post[2]{};
                         // scratch: transfer write → inject's fragment sample
                         post[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
                         post[0].srcStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
@@ -2370,18 +2329,6 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                         post[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
                         post[1].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
                         post[1].image = img;
-                        // MS color: discard (loadOp DONT_CARE, the inject
-                        // covers every pixel) — WAR vs the previous frame's
-                        // resolve read, and WAW vs its attachment writes: the
-                        // pass draws into this image, so a discard transition
-                        // with no source access left those writes free to land
-                        // after it (syncval WAW vs vkCmdEndRendering).
-                        post[2] = post[1];
-                        post[2].srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                        post[2].srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                        post[2].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                        post[2].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                        post[2].image = overlayMsColor_.image;
                         for (auto& b : post) {
                             b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                             b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -2391,38 +2338,14 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                         }
                         VkDependencyInfo dPost{};
                         dPost.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                        dPost.imageMemoryBarrierCount = 3;
+                        dPost.imageMemoryBarrierCount = 2;
                         dPost.pImageMemoryBarriers = post;
                         vkCmdPipelineBarrier2(cb, &dPost);
-                    } else {
-                        // Swapchain GENERAL → COLOR_ATTACHMENT_OPTIMAL. The
-                        // overlay always composites onto the full-resolution
-                        // swapchain — TAA wrote it directly (upscaling there if
-                        // renderScale < 1), so there is no render-extent target
-                        // here even in scaled mode.
-                        VkImageMemoryBarrier2 toColor{};
-                        toColor.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                        toColor.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                                VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-                        toColor.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
-                                                VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                        toColor.dstStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                        toColor.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
-                                                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                        toColor.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                        toColor.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                        toColor.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                        toColor.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                        toColor.image = img;
-                        toColor.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                        toColor.subresourceRange.levelCount = 1;
-                        toColor.subresourceRange.layerCount = 1;
-                        VkDependencyInfo dOv{};
-                        dOv.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                        dOv.imageMemoryBarrierCount = 1;
-                        dOv.pImageMemoryBarriers = &toColor;
-                        vkCmdPipelineBarrier2(cb, &dOv);
                     }
+                    // (1 sample: the overlay composites straight onto the
+                    // full-resolution swapchain — TAA wrote it directly,
+                    // upscaling there if renderScale < 1, so there is no
+                    // render-extent target here even in scaled mode.)
 
                     VkRenderingAttachmentInfo colorAtt{};
                     colorAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -3204,50 +3127,173 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                     }
 
                     vkCmdEndRendering(cb);
-
-                    // Swapchain back to GENERAL so the downstream blocks
-                    // (ImGui overlay or the direct present-src transition)
-                    // see the layout they expect.
-                    VkImageMemoryBarrier2 toGeneral{};
-                    toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                    toGeneral.srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                    toGeneral.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                    toGeneral.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                              VK_PIPELINE_STAGE_2_TRANSFER_BIT |
-                                              VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                              VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
-                    toGeneral.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                              VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
-                                              VK_ACCESS_2_TRANSFER_READ_BIT |
-                                              VK_ACCESS_2_TRANSFER_WRITE_BIT |
-                                              VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
-                                              VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                    toGeneral.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                    toGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    toGeneral.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    toGeneral.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    toGeneral.image = img;
-                    toGeneral.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                    toGeneral.subresourceRange.levelCount = 1;
-                    toGeneral.subresourceRange.layerCount = 1;
-                    VkDependencyInfo dBack{};
-                    dBack.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                    dBack.imageMemoryBarrierCount = 1;
-                    dBack.pImageMemoryBarriers = &toGeneral;
-                    vkCmdPipelineBarrier2(cb, &dBack);
+                    // The swapchain is left in COLOR_ATTACHMENT_OPTIMAL; the
+                    // graph carries it to its next use (the sensor stage) or
+                    // back to GENERAL at the end of the graph.
                     gpuTimings_->end(cb, TP_OverlayDraw, currentFrame);
                 }
             }
             // ── End hybrid raster overlay pass ─────────────────────────────────
 }
 
+// ── The primary's tail, as graph passes ─────────────────────────────────────
+// After the post passes wrote the swapchain: the particle-field transmittance
+// prepass, the billboard glow, the hybrid overlay, and the lens/sensor stage.
+// Each recorder keeps the barriers between its own commands; the graph orders
+// the passes and carries the swapchain through its layouts.
+bool VulkanRenderer::Impl::fieldBillboardGlowActive() const {
+            if (!billboardGlowReadyThisFrame_ || !billboardGlow_) return false;
+            if (fieldBillboardGlowPipeline_ == VK_NULL_HANDLE) return false;
+            const VkExtent2D gext = billboardGlow_->srcExtent();
+            return gext.width != 0 && gext.height != 0;
+}
+
+const Image2D& VulkanRenderer::Impl::overlayDepthImage() {
+            return overlaySamples() > 1 ? overlayMsDepth_ : view().rasterGbufs[currentFrame].unjitDepth;
+}
+
+void VulkanRenderer::Impl::addTailPasses(rg::RenderGraph& g, uint32_t imageIndex) {
+            const uint32_t f = currentFrame;
+            constexpr auto kColor   = VK_IMAGE_ASPECT_COLOR_BIT;
+            constexpr auto kDepth   = VK_IMAGE_ASPECT_DEPTH_BIT;
+            constexpr auto kGeneral = VK_IMAGE_LAYOUT_GENERAL;
+            constexpr auto kColorAtt = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            const auto swap = g.importImage("swapchain", ctx->swapchainImages()[imageIndex], kColor, 1, kGeneral);
+            // The billboard vertex stage reads the transmittance prepass's output.
+            const rg::BufferHandle trans =
+                    particleFieldPass_ ? g.importBuffer("particles.transmittance",
+                                                        particleFieldPass_->transmittanceBuffer(f))
+                                       : rg::BufferHandle{};
+            const rg::Access vertexStorageRead{VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                                               VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                                               VK_IMAGE_LAYOUT_UNDEFINED, false};
+
+            // ── R8: the transmittance prepass ───────────────────────────────
+            // FIRST, and here rather than inside either billboard pass, because
+            // both of them draw the PRIMARY camera's quads — the glow leg is the
+            // display leg's content a second time — so one dispatch serves both.
+            if (particleFieldPass_ && particleFieldPass_->transmittanceActive()) {
+                auto pass = g.addPass("fieldTransmittance", [this](VkCommandBuffer c) { recordFieldTransmittance(c); });
+                particleFieldPass_->declareTransmittance(g, pass, f);
+            }
+
+            // ── F4: the billboard-only bloom pyramid ────────────────────────
+            // AFTER the upscaler (so the composite point that keeps field
+            // billboards clear of TAA/DLSS/FSR is untouched) and BEFORE the
+            // overlay pass (because the fullscreen draw that consumes the
+            // pyramid lives inside it, and a compute chain cannot be recorded
+            // inside a render-pass instance).
+            if (fieldBillboardGlowActive()) {
+                auto pass = g.addPass("fieldGlow", [this](VkCommandBuffer c) { recordFieldBillboardGlow(c); });
+                billboardGlow_->declare(g, pass, f,
+                                        overlayDepthPrepassActive() ? overlayDepthImage().image : VK_NULL_HANDLE);
+                pass.use(trans, vertexStorageRead);
+            }
+
+            // ── Post-TAA wireframe / line / particle / sprite overlays ──────
+            // The splat depth stamp records INSIDE this pass (recordSplatStampDraw),
+            // between the overlays kSplatUnoccludedOverlayLayer exempts and
+            // everything else.
+            if (hybridOverlayActive()) {
+                // Idempotent — the depth prepass already made these this frame;
+                // this only matters if the prepass pipeline is missing.
+                ensureOverlayMsaaImages(ctx->swapchainExtent());
+                const bool stamp = splatStampPrepare();
+                auto pass = g.addPass("overlay", [this, imageIndex, stamp](VkCommandBuffer c) {
+                    recordHybridOverlay(c, imageIndex, stamp);
+                });
+                if (overlaySamples() > 1) {
+                    // The swapchain is copied into the 1-sample scratch the inject
+                    // draw samples, then becomes the resolve target; the MS colour
+                    // is discarded (the inject covers every sample).
+                    pass.use(swap, rg::Access{VK_PIPELINE_STAGE_2_TRANSFER_BIT |
+                                                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                              VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, true, kColorAtt});
+                    pass.use(g.importImage("overlay.scratch", overlayAaScratch_.image, kColor, 1,
+                                           VK_IMAGE_LAYOUT_UNDEFINED),
+                             rg::Access{VK_PIPELINE_STAGE_2_TRANSFER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                        VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, true,
+                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+                    pass.use(g.importImage("overlay.msColor", overlayMsColor_.image, kColor, 1,
+                                           VK_IMAGE_LAYOUT_UNDEFINED),
+                             rg::colorAttachment(kColorAtt));
+                } else {
+                    pass.use(swap, rg::colorAttachment(kColorAtt));
+                }
+                // The prepass's occluders: read-only, or writable for the stamp.
+                pass.use(g.importImage("overlay.depth", overlayDepthImage().image, kDepth, 1,
+                                       VK_IMAGE_LAYOUT_UNDEFINED),
+                         stamp ? rg::depthAttachment(VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, true)
+                               : rg::depthAttachment(VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, false));
+                if (stamp) {
+                    pass.use(g.importImage("splat.depthAov", view().rasterGbufs[f].splatDepth.image, kColor, 1,
+                                           kGeneral),
+                             rg::storageRead(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT));
+                }
+                // Overlay-tagged and wireframe meshes (the deformers' output
+                // among them), the field billboards' transmittance, the legacy
+                // particles' lighting and the glow pyramid.
+                pass.use(g.importMemory(kSceneGeometry),
+                         rg::Access{VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                                    VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT |
+                                            VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                                    VK_IMAGE_LAYOUT_UNDEFINED, false});
+                pass.use(trans, vertexStorageRead);
+                pass.use(g.importBuffer("particle.light", particleLightBufs_[f].handle),
+                         rg::Access{VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                    VK_ACCESS_2_SHADER_STORAGE_READ_BIT, VK_IMAGE_LAYOUT_UNDEFINED, false});
+                if (billboardGlowReadyThisFrame_ && billboardGlow_ &&
+                    fieldGlowCompositePipeline_ != VK_NULL_HANDLE) {
+                    billboardGlow_->declareComposite(g, pass, f);
+                }
+            }
+
+            // ── Camera image formation: lens distortion + sensor noise ─────────
+            // Deliberately LAST. The overlay pass above composites particle
+            // billboards (chimney smoke and friends), lines and wireframe
+            // straight onto the swapchain, so a warp applied any earlier bent
+            // the scene but not them — overlays visibly slid off the geometry
+            // they belong to, worsening toward the frame edge. A real lens
+            // bends everything in front of it, and a real sensor noises
+            // everything the lens projects, so both belong here. Doing it here
+            // also leaves the overlay's depth test in the undistorted space its
+            // depth buffer is actually in. ImGui draws after (endFrame) and
+            // stays clean, which is right — a HUD is not in front of the lens.
+            //
+            // No-op (and no allocation) unless a lens or noise is configured.
+            if (sensorPass_ && sensorStageActive()) {
+                const VkExtent2D ext = viewOutExtent();
+                // Advances the noise frame counter: built once per frame, here.
+                const vulkan::SensorPass::Params params = buildSensorParams();
+                if (sensorPass_->prepare(f, ctx->swapchainImageViews()[imageIndex], ext.width, ext.height,
+                                         params)) {
+                    const VkImage swapImg = ctx->swapchainImages()[imageIndex];
+                    const auto snap = g.importImage("sensor.snapshot", sensorPass_->snapshotImage(f), kColor, 1,
+                                                    VK_IMAGE_LAYOUT_UNDEFINED);
+                    g.addPass("sensor.snapshot", [this, swapImg, ext](VkCommandBuffer c) {
+                         gpuTimings_->begin(c, TP_SensorImage, currentFrame);
+                         sensorPass_->recordSnapshot(c, currentFrame, swapImg, ext.width, ext.height);
+                     })
+                            .use(swap, rg::transferSrc())
+                            .use(snap, rg::transferDst());
+                    g.addPass("sensor", [this, ext, params](VkCommandBuffer c) {
+                         sensorPass_->recordApply(c, currentFrame, ext.width, ext.height, params);
+                         gpuTimings_->end(c, TP_SensorImage, currentFrame);
+                     })
+                            .use(snap, rg::sampled())
+                            .use(swap, rg::storageWrite());
+                }
+            }
+}
+
 void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
 
-            // The frame, stage by stage. ORDER IS THE CONTRACT — every
-            // cross-stage barrier lives inside the stage that needs it, so
-            // reordering these calls reorders the frame's synchronization.
-            // Each stage carries its own full commentary; this function is
-            // the table of contents.
+            // The frame, stage by stage: each stage adds its passes to the
+            // frame graph, which records the barriers between them from what
+            // each pass declares. Each stage carries its own full commentary;
+            // this function is the table of contents.
             updatePaneRegion();
 
             // ── The shared billboard texture pool, reset ONCE for the frame ──
@@ -3272,14 +3318,13 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
             if (particleDescPools_[currentFrame] != VK_NULL_HANDLE)
                 vkResetDescriptorPool(ctx->device(), particleDescPools_[currentFrame], 0);
 
-            // Deformers (skinned / tet / displaced / grass) + the per-frame
-            // TLAS refit, all recorded into the frame cb.
-            recordDeformAndTlas(cb);
-
-            // The frame's render graph starts with the raster G-buffer (+
-            // occlusion culling, MSAA resolve, overlay depth prepass).
+            // The frame's render graph: the deformers (dynamic meshes, skinned,
+            // tet, displaced water, grass) and the per-frame TLAS refit, then
+            // the raster G-buffer (+ occlusion culling, MSAA resolve, overlay
+            // depth prepass).
             auto& g = frameGraph_;
             g.reset();
+            addDeformAndTlasPasses(g);
             addGbufferPasses(g);
 
             // Hybrid debug view: the chosen G-buffer channel is blitted
@@ -3334,61 +3379,21 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
             // (lit billboards; the overlay loop below consumes the bases).
             prepareParticleLighting();
 
-            // ── Shade → splats → post: one render graph ─────────────────────
+            // ── Shade → splats → post → tail ────────────────────────────────
             // The deferred shade and its inputs (probes, clusters, clouds,
             // froxels, RTAO), the denoise, auto-exposure and particle light;
             // the Gaussian splats composited into sceneHdr while it is still
             // linear HDR, so everything after acts on them too; then DoF,
             // bloom, tonemap and the temporal resolve — exactly one of DLSS /
-            // FSR / built-in TAA runs (see addUpscaleAndPostPasses).
+            // FSR / built-in TAA runs (see addUpscaleAndPostPasses); then the
+            // field billboards' transmittance and glow, the hybrid overlay and
+            // the lens/sensor stage (addTailPasses).
             (void) setIdx;
             addSceneDispatchPasses(g);
             addSplatPasses(g);
             addUpscaleAndPostPasses(g, imageIndex, ext, ptExt, exposureBits, preExp);
+            addTailPasses(g, imageIndex);
             executeGraph(cb, g, "frame");
-
-            // F4: the billboard-only bloom pyramid. AFTER the upscaler (so the
-            // composite point that keeps field billboards clear of TAA/DLSS/FSR
-            // is untouched) and BEFORE the overlay pass (because the fullscreen
-            // draw that consumes the pyramid lives inside it, and a compute
-            // chain cannot be recorded inside a render-pass instance). No-op
-            // unless a visible field asked for a glow.
-            //
-            // R8: the transmittance prepass goes FIRST, and here rather than
-            // inside either billboard pass, because both of them draw the
-            // PRIMARY camera's quads — the glow leg is the display leg's
-            // content a second time — so one dispatch serves both. Outside any
-            // render-pass instance for the reason the glow chain is.
-            recordFieldTransmittance(cb);
-            recordFieldBillboardGlow(cb);
-
-            // Post-TAA wireframe / line / particle / sprite overlays. The
-            // splat depth stamp records INSIDE this pass now (splatStampPrepare
-            // / recordSplatStampDraw), between the overlays that
-            // kSplatUnoccludedOverlayLayer exempts and everything else.
-            recordHybridOverlay(cb, imageIndex);
-
-            // ── Camera image formation: lens distortion + sensor noise ─────────
-            // Deliberately LAST. The overlay pass above composites particle
-            // billboards (chimney smoke and friends), lines and wireframe
-            // straight onto the swapchain, so a warp applied any earlier bent
-            // the scene but not them — overlays visibly slid off the geometry
-            // they belong to, worsening toward the frame edge. A real lens
-            // bends everything in front of it, and a real sensor noises
-            // everything the lens projects, so both belong here. Doing it here
-            // also leaves the overlay's depth test in the undistorted space its
-            // depth buffer is actually in. ImGui draws after (endFrame) and
-            // stays clean, which is right — a HUD is not in front of the lens.
-            //
-            // No-op (and no allocation) unless a lens or noise is configured.
-            if (sensorPass_ && sensorStageActive()) {
-                gpuTimings_->begin(cb, TP_SensorImage, currentFrame);
-                sensorPass_->record(cb, currentFrame,
-                                    ctx->swapchainImages()[imageIndex],
-                                    ctx->swapchainImageViews()[imageIndex],
-                                    ext.width, ext.height, buildSensorParams());
-                gpuTimings_->end(cb, TP_SensorImage, currentFrame);
-            }
 
             // ── End of deferred-render recording. ──────────────────────────────
             // The swapchain image is left in VK_IMAGE_LAYOUT_GENERAL — endFrame

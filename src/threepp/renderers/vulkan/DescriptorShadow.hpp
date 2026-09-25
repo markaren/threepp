@@ -36,7 +36,12 @@ namespace threepp::vulkan {
     // The buffer an acceleration structure lives in. A shader's ray query
     // reads that buffer, so an AS binding is declared as an ACCELERATION_
     // STRUCTURE_READ of it — the same buffer an AS build declares its write on.
-    void registerAccelerationStructure(VkAccelerationStructureKHR as, VkBuffer storage);
+    // `contents` (a TLAS): the graph memory resource (RenderGraph::
+    // importMemory) holding what its instances reference — the BLASes and the
+    // vertex data hit shading reads by device address. A ray query through
+    // the AS is declared as a read of that too.
+    void registerAccelerationStructure(VkAccelerationStructureKHR as, VkBuffer storage,
+                                       const char* contents = nullptr);
     [[nodiscard]] VkBuffer accelerationStructureBuffer(VkAccelerationStructureKHR as);
 
     // updateDescriptorSets and createImageView (the recording wrappers) are

@@ -9,20 +9,21 @@
 //
 // Execution order is declaration order. The graph does not reorder or cull.
 //
-// Islands. A graph is built and executed per frame, and the frame is migrated
-// to it stage by stage, so a graph usually covers a SEGMENT of the frame with
-// hand-synchronised recording before and after it. Resource state at the
-// segment boundaries is therefore not known to the graph, and it assumes the
-// conservative answer:
+// Boundaries. A graph is built and executed per frame (per view: the renderer
+// builds one for the primary camera, from the deformers to the sensor stage,
+// and one for each secondary view), with hand-synchronised recording before
+// and after it (the frame's head, the post-view tail, the previous frame).
+// Resource state at the graph's boundaries is therefore not known to it, and
+// it assumes the conservative answer:
 //   * entry: one memory barrier (ALL_COMMANDS/MEMORY_WRITE -> the stages the
 //     graph's passes declared/MEMORY_READ|MEMORY_WRITE) before the first pass,
 //     which also carries each imported image from its declared entry layout
 //     to its first-use layout;
 //   * exit: the mirror image after the last pass (the declared stages ->
 //     ALL_COMMANDS), which carries each image to its declared exit layout
-//     (default: the entry layout), so the recording that follows finds what
-//     it found before the migration.
-// Within the segment every barrier is derived from the declarations.
+//     (default: the entry layout), so the recording that follows finds each
+//     image where it expects it.
+// Within the graph every barrier is derived from the declarations.
 //
 // Planning and recording are separate: compile() fills the barrier plan
 // without touching a command buffer (unit-testable, and what dump() prints),
@@ -134,13 +135,22 @@ namespace threepp::vulkan::rg {
 
         // An image owned elsewhere. entryLayout is its layout when the graph
         // starts; exitLayout its layout when the graph ends (UNDEFINED: the
-        // entry layout). An image imported twice returns the same handle.
+        // entry layout). An image whose contents are dead between frames is
+        // imported in UNDEFINED: its first use discards them and it is left
+        // in whatever layout its last use put it in. An image imported twice
+        // returns the same handle.
         // Names (here and in addPass) are kept by pointer, for dump(): pass
         // string literals or other storage that outlives the graph.
         ImageHandle importImage(const char* name, VkImage image, VkImageAspectFlags aspect,
                                 uint32_t mipLevels, VkImageLayout entryLayout,
                                 VkImageLayout exitLayout = VK_IMAGE_LAYOUT_UNDEFINED);
         BufferHandle importBuffer(const char* name, VkBuffer buffer);
+        // Memory the graph cannot name as one VkBuffer: a set of buffers and
+        // images a pass reaches through buffer device addresses or through
+        // acceleration-structure traversal (every deformer's vertex output, the
+        // BLASes a TLAS references). Declared like a buffer; its barriers are
+        // global memory barriers. The same name returns the same handle.
+        BufferHandle importMemory(const char* name);
 
         // Passes run in the order they are added.
         PassBuilder addPass(const char* name, ExecuteFn execute);
@@ -197,6 +207,7 @@ namespace threepp::vulkan::rg {
             VkImageLayout      exitLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             std::vector<State> mips;
         };
+        // buffer == VK_NULL_HANDLE: a memory resource (importMemory).
         struct Buffer {
             const char* name = "";
             VkBuffer    buffer = VK_NULL_HANDLE;
@@ -210,8 +221,10 @@ namespace threepp::vulkan::rg {
         std::vector<Image>  freeImages_;
         std::unordered_map<VkImage, uint32_t>  imageIndex_;
         std::unordered_map<VkBuffer, uint32_t> bufferIndex_;
+        std::vector<uint32_t> memoryIndex_;// buffers_ entries that are memory resources
         mutable std::vector<VkImageMemoryBarrier2>  imageScratch_;// record()
         mutable std::vector<VkBufferMemoryBarrier2> bufferScratch_;
+        mutable std::vector<VkMemoryBarrier2>       memoryScratch_;
         std::vector<PlannedBarrier> entry_, exit_;
         bool entryMemory_ = false, exitMemory_ = false;
         bool compiled_ = false;

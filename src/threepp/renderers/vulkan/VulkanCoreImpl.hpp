@@ -123,6 +123,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -383,8 +384,8 @@ namespace threepp {
         // currentFrame. The structural full build (buildTlas) writes all slots.
         Buffer tlasInstancesBuffers[kFramesInFlight];
         // Persistent scratch for the in-frame TLAS refit (sized once; reused —
-        // safe only because recordDeformAndTlas orders each frame's AS builds
-        // after the previous frame's with a barrier; submit order alone is not
+        // safe only because the frame graph's entry barrier orders each frame's
+        // AS builds after the previous frame's work; submit order alone is not
         // an execution dependency).
         Buffer tlasRefitScratch_{};
         VkDeviceSize tlasRefitScratchSize_ = 0;
@@ -3997,10 +3998,11 @@ namespace threepp {
                                                               bool linearOut);
 
         // F4: render the glow-enabled fields into BillboardGlowPass's offscreen
-        // target and run the pyramid over it. Recorded AFTER recordUpscaleAndPost
-        // and BEFORE recordHybridOverlay, because the composite draw that
+        // target and run the pyramid over it. Recorded AFTER the upscale/post
+        // passes and BEFORE recordHybridOverlay, because the composite draw that
         // consumes it lives inside that overlay pass and compute cannot run
-        // inside a render-pass instance. No-op when no field asked for a glow.
+        // inside a render-pass instance. Added to the graph only when
+        // fieldBillboardGlowActive().
         void recordFieldBillboardGlow(VkCommandBuffer cb);
         // R8/R9: (T_cam, T_sun) once per particle for the view whose draws come
         // next. Outside any render-pass instance; no-op when nothing marches.
@@ -4046,10 +4048,11 @@ namespace threepp {
         // ordered after the overlays kSplatUnoccludedOverlayLayer exempts.
         // splatStampPrepare gates (clouds AND overlay content this frame —
         // see splatOverlayDepth_ for the latch that turns the AOV on for it)
-        // and issues the pre-pass barriers; true obliges the overlay pass to
-        // attach depth WRITABLE and record recordSplatStampDraw at the
-        // exempt/occluded boundary.
-        bool splatStampPrepare(VkCommandBuffer cb);
+        // and points the stamp's set at this frame's AOV; true obliges the
+        // overlay pass to declare and attach its depth WRITABLE and record
+        // recordSplatStampDraw at the exempt/occluded boundary. Called while
+        // the frame graph is built.
+        bool splatStampPrepare();
         void recordSplatStampDraw(VkCommandBuffer cb);
 
         // Line geometry cache for the 3D hybrid overlay (recordCommandBuffer's
@@ -4504,13 +4507,23 @@ namespace threepp {
         }
 
         // Frame recording, split along the frame's own stage seams (bodies in
-        // VulkanCoreRecord.cpp). recordCommandBuffer is the narrative — it
-        // calls the stages in order; every cross-stage barrier lives INSIDE
-        // the stage that needs it, so the call order is the synchronization
-        // contract. The two bool stages return true when they FINISHED the
-        // frame (hybrid-debug blit / events-only mode) and recording stops.
+        // VulkanCoreRecord.cpp). recordCommandBuffer is the narrative: it adds
+        // each stage's passes to the frame graph in order, and the graph
+        // derives the barriers between them from what each pass declares.
         void updatePaneRegion();
-        void recordDeformAndTlas(VkCommandBuffer cb);
+        // The deformers (dynamic plain meshes, skinned, tet, displaced water,
+        // grass) and the per-frame TLAS refit, as graph passes. Each deformer
+        // pass keeps the barriers between its own copy / dispatch / BLAS build;
+        // all of them write kSceneGeometry.
+        void addDeformAndTlasPasses(vulkan::rg::RenderGraph& g);
+        void recordSkinnedDeforms(VkCommandBuffer cb);
+        void recordTetDeforms(VkCommandBuffer cb);
+        // Every deformable mesh's vertex / normal / prevVertex / index buffers,
+        // its BLAS, and the ocean's FFT outputs: the graph memory resource
+        // (RenderGraph::importMemory) the deformers write and the TLAS refit,
+        // the raster passes and every ray query read. Ray queries declare it
+        // through the TLAS's registration (registerAccelerationStructure).
+        static constexpr const char* kSceneGeometry = "scene.geometry";
         // The G-buffer stage as graph passes (VulkanCoreRecord.cpp).
         void addGbufferPasses(vulkan::rg::RenderGraph& g);
         void recordGbufferRaster(VkCommandBuffer cb);
@@ -4532,21 +4545,37 @@ namespace threepp {
         // The frame's render graph: shade → splats → post, per view (built,
         // executed, then reused for the next view).
         vulkan::rg::RenderGraph frameGraph_;
-        // Execute a segment; with THREEPP_RG_DUMP=1 also print each named
-        // segment's passes and barriers to stderr the first time it runs.
+        // Execute a graph; with THREEPP_RG_DUMP=1 also print its passes and
+        // barriers to stderr whenever they differ from what was last printed
+        // under the same name (a pass appearing, a layout changing).
         void executeGraph(VkCommandBuffer cb, vulkan::rg::RenderGraph& graph, const char* name) {
             graph.execute(cb);
             static const bool dump = [] {
                 const char* e = std::getenv("THREEPP_RG_DUMP");
                 return e && *e && *e != '0';
             }();
-            if (dump && rgDumped_.insert(name).second) {
-                std::fprintf(stderr, "[RenderGraph] segment '%s' (frame %u):\n%s", name, currentFrame,
-                             graph.dump().c_str());
-            }
+            if (!dump) return;
+            std::string text = graph.dump();
+            auto& last = rgDumped_[name];
+            if (text == last) return;
+            std::fprintf(stderr, "[RenderGraph] graph '%s' (frame serial %llu):\n%s", name,
+                         static_cast<unsigned long long>(frameSerial_), text.c_str());
+            last = std::move(text);
         }
-        std::set<std::string> rgDumped_;
-        void recordHybridOverlay(VkCommandBuffer cb, uint32_t imageIndex);
+        std::map<std::string, std::string> rgDumped_;
+        // The primary's tail as graph passes: the field transmittance prepass,
+        // the billboard glow, the hybrid overlay and the sensor image stage.
+        void addTailPasses(vulkan::rg::RenderGraph& g, uint32_t imageIndex);
+        // A secondary view's share of the tail: its field billboards (and their
+        // transmittance prepass, for its own eye) onto its colour target.
+        void addSecondaryFieldBillboardPasses(vulkan::rg::RenderGraph& g);
+        [[nodiscard]] bool hybridOverlayActive() const {
+            return overlayWireframePipeline != VK_NULL_HANDLE && sceneHasOverlayContent();
+        }
+        [[nodiscard]] bool fieldBillboardGlowActive() const;
+        // The overlay depth attachment: the MSAA overlay depth, or unjitDepth.
+        [[nodiscard]] const Image2D& overlayDepthImage();
+        void recordHybridOverlay(VkCommandBuffer cb, uint32_t imageIndex, bool stampActive);
         void recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex);
 
         // Records the ImGui (or any overlay) callback inside a dynamic render
