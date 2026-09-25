@@ -897,6 +897,18 @@ void VulkanRenderer::Impl::addGbufferPasses(rg::RenderGraph& g) {
                 }
                 const Image2D& depth = msFb ? gb.depthMS : gb.depth;
                 pass.use(g.importImage("gbuf.depth", depth.image, kDepth, 1, kDepthRO), depthOut);
+                // The draw records (host-written) and, through buffer device
+                // addresses the graph cannot see, every mesh's vertex/index data
+                // — the deformers' output among them — are read at the indirect,
+                // vertex-input and vertex-shader stages. Declaring the records
+                // puts those stages in the graph's entry barrier, which is what
+                // orders them after the deformers recorded ahead of the graph.
+                pass.use(g.importBuffer("gbuf.drawRecords", view().indirectCmdBuffers[f].handle),
+                         rg::Access{VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT |
+                                            VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                                    VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
+                                            VK_ACCESS_2_INDEX_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                                    VK_IMAGE_LAYOUT_UNDEFINED, false});
             }
 
             // ── MSAA dominant-sample resolve (setGbufferMsaa 2|4) ──────────
