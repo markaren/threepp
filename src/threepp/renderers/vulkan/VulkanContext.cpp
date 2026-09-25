@@ -1335,7 +1335,7 @@ namespace threepp::vulkan {
         ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                         VK_IMAGE_USAGE_STORAGE_BIT |
                         VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        // readRGBPixels()/recordSceneCapture() copy straight from the swapchain
+        // readRGBPixels()/addSceneCapturePass() copy straight from the swapchain
         // image, which is only legal when the image was created with
         // TRANSFER_SRC usage (VUID-vkCmdCopyImageToBuffer-srcImage-00186).
         // Every desktop WSI supports it in practice, but the spec only

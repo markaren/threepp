@@ -4,6 +4,8 @@
 
 namespace threepp {
 
+    namespace rg = vulkan::rg;
+
 void VulkanRenderer::Impl::createCommandResources() {
             VkCommandPoolCreateInfo pci{};
             pci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -950,51 +952,24 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 recordSecondaryViews(cmdBuffers[currentFrame]);
             }
 
-            // Scene-only swapchain capture. Runs BEFORE the sprite + ImGui
-            // overlays composite — sensor pipelines that consume the
-            // renderer's output need a clean image without their own
-            // visualisation drawn on top of it, otherwise they'd see
-            // their own readout as scene motion and feedback-loop.
-            // One key for the whole record tail (capture, event camera, view
-            // composite, screen-space sprite overlay): individually these are
-            // early-outs on a scene that uses none of them, and the point of the
-            // key is that the books close, not that each is attributable.
+            // The record tail after the views: scene capture, frame interop,
+            // the event camera and the view composite, as one graph (a frame
+            // that uses none of them adds no pass and records nothing).
+            // One key for the whole record tail (those and the screen-space
+            // sprite overlay): individually these are early-outs on a scene
+            // that uses none of them, and the point of the key is that the
+            // books close, not that each is attributable.
             THREEPP_CPUPROF("frame.4_recordTail");
-            if (sceneCaptureEnabled_) {
-                recordSceneCapture(cmdBuffers[currentFrame], imageIndex);
+            {
+                auto& g = frameGraph_;
+                g.reset();
+                addPostViewTailPasses(g, imageIndex);
+                if (g.passCount() > 0) executeGraph(cmdBuffers[currentFrame], g, "frame.tail");
             }
 
-            // Zero-copy frames out (enableFrameInterop). The SAME point in the
-            // frame as the scene capture, and for the same reason: the Color
-            // channel must be the clean post-TAA picture, without the sprite /
-            // ImGui overlays or a picture-in-picture view composite drawn into
-            // it. The G-buffer AOVs are equally final by here — every consumer
-            // of them (deferred shade, TAA, the secondary views) has already
-            // been recorded. Records nothing when no view is armed.
-            recordFrameInterop(cmdBuffers[currentFrame], imageIndex);
-
-            // GPU event camera detection. Run event_shade first to fill
-            // eventLumaBuf_ — with deterministic Lambert lighting from the
-            // gbuf (Shaded source: no stochastic shading noise as a source of
-            // false events) or with a box-average of the final frame now
-            // sitting in the swapchain (Final source: everything the picture
-            // shows fires) — then dispatch the detector against that buffer.
-            if (eventCamEnabled_ && eventCam_ &&
-                eventShadePipeline_ != VK_NULL_HANDLE) {
-                recordEventShade(cmdBuffers[currentFrame], currentFrame, imageIndex);
-                eventCam_->record(cmdBuffers[currentFrame],
-                                  eventLumaBuf_.handle,
-                                  eventCamParams_);
-            }
-
-            // Any secondary view the caller asked to see, copied into the
-            // frame at its rect. After the scene capture deliberately: a
-            // sensor consuming that capture wants the primary camera's image,
-            // not a picture-in-picture of some other camera. Before the
-            // overlay, so ImGui and screen-space sprites still draw over it.
-            recordViewComposite(cmdBuffers[currentFrame], imageIndex);
-
-            // Screen-space sprite auto-overlay. Walks the main scene for
+            // Screen-space sprite auto-overlay, after the graph: the same
+            // self-synchronising recorder as a HUD render() call, from GENERAL
+            // back to GENERAL. Walks the main scene for
             // Sprites with screenSpace=true and composites them through
             // an internal ortho camera derived from the swapchain extent —
             // no user code beyond setting the flag on the sprite.
@@ -1732,22 +1707,14 @@ bool VulkanRenderer::Impl::setViewDisplayRectImpl(uint32_t handle, int x, int y,
 // construction; the swapchain from the primary's composite until present), so
 // this needs no layout changes at all — only visibility barriers between the
 // compute stores that wrote them and the transfer that reads and writes them.
-void VulkanRenderer::Impl::recordViewComposite(VkCommandBuffer cb, uint32_t imageIndex) {
+void VulkanRenderer::Impl::addViewCompositePass(rg::RenderGraph& g, uint32_t imageIndex) {
             if (views_.size() < 2u) return;
 
             const VkExtent2D swap = ctx->swapchainExtent();
             if (swap.width == 0u || swap.height == 0u) return;
 
-            struct Job {
-                VkImage src;
-                VkOffset2D srcOff;
-                VkExtent2D srcExt;
-                VkOffset2D dstOff;
-                VkExtent2D dstExt;
-            };
-            std::vector<Job> jobs;
-            std::vector<VkImageMemoryBarrier2> pre;
-
+            auto& jobs = viewCompositeJobs_;
+            jobs.clear();
             for (size_t i = 1; i < views_.size(); ++i) {
                 ViewContext& v = *views_[i];
                 if (!v.displayed || v.pendingCreate || v.pendingDestroy) continue;
@@ -1779,89 +1746,76 @@ void VulkanRenderer::Impl::recordViewComposite(VkCommandBuffer cb, uint32_t imag
                 ch = std::min(ch, static_cast<int32_t>(swap.height) - dy);
                 if (cw <= 0 || ch <= 0) continue;
 
-                jobs.push_back(Job{v.colorTarget.image,
-                                   {sx, sy},
-                                   {static_cast<uint32_t>(cw), static_cast<uint32_t>(ch)},
-                                   {dx, dy},
-                                   {static_cast<uint32_t>(cw), static_cast<uint32_t>(ch)}});
-
-                VkImageMemoryBarrier2 b{};
-                b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                b.srcStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                b.srcAccessMask       = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                b.dstStageMask        = VK_PIPELINE_STAGE_2_COPY_BIT;
-                b.dstAccessMask       = VK_ACCESS_2_TRANSFER_READ_BIT;
-                b.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
-                b.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
-                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                b.image               = v.colorTarget.image;
-                b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                b.subresourceRange.levelCount = 1;
-                b.subresourceRange.layerCount = 1;
-                pre.push_back(b);
+                jobs.push_back(ViewCompositeJob{v.colorTarget.image,
+                                                {sx, sy},
+                                                {dx, dy},
+                                                {static_cast<uint32_t>(cw), static_cast<uint32_t>(ch)}});
             }
             if (jobs.empty()) return;
 
+            // The secondaries' colour targets live in GENERAL for good; the
+            // swapchain enters the tail graph in GENERAL. Both stay there: the
+            // graph orders the copies after the views' TAA stores and the
+            // scene capture, and the overlay after the graph finds GENERAL.
             const VkImage dst = ctx->swapchainImages()[imageIndex];
-
-            // The swapchain image was last written by the primary's composite
-            // (a compute store) or by the scene-capture copy just before this.
-            VkImageMemoryBarrier2 dstBarrier{};
-            dstBarrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            dstBarrier.srcStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                             VK_PIPELINE_STAGE_2_COPY_BIT;
-            dstBarrier.srcAccessMask       = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
-                                             VK_ACCESS_2_TRANSFER_READ_BIT;
-            dstBarrier.dstStageMask        = VK_PIPELINE_STAGE_2_COPY_BIT;
-            dstBarrier.dstAccessMask       = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            dstBarrier.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
-            dstBarrier.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
-            dstBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            dstBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            dstBarrier.image               = dst;
-            dstBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            dstBarrier.subresourceRange.levelCount = 1;
-            dstBarrier.subresourceRange.layerCount = 1;
-            pre.push_back(dstBarrier);
-
-            VkDependencyInfo dep{};
-            dep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            dep.imageMemoryBarrierCount = static_cast<uint32_t>(pre.size());
-            dep.pImageMemoryBarriers    = pre.data();
-            vkCmdPipelineBarrier2(cb, &dep);
-
+            auto pass = g.addPass("viewComposite", [this, dst](VkCommandBuffer c) {
+                for (const auto& j : viewCompositeJobs_) {
+                    VkImageCopy region{};
+                    region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    region.srcSubresource.layerCount = 1;
+                    region.srcOffset                 = {j.srcOff.x, j.srcOff.y, 0};
+                    region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    region.dstSubresource.layerCount = 1;
+                    region.dstOffset                 = {j.dstOff.x, j.dstOff.y, 0};
+                    region.extent                    = {j.ext.width, j.ext.height, 1};
+                    vkCmdCopyImage(c, j.src, VK_IMAGE_LAYOUT_GENERAL,
+                                   dst, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+                }
+            });
             for (const auto& j : jobs) {
-                VkImageCopy region{};
-                region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                region.srcSubresource.layerCount = 1;
-                region.srcOffset                 = {j.srcOff.x, j.srcOff.y, 0};
-                region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                region.dstSubresource.layerCount = 1;
-                region.dstOffset                 = {j.dstOff.x, j.dstOff.y, 0};
-                region.extent                    = {j.dstExt.width, j.dstExt.height, 1};
-                vkCmdCopyImage(cb, j.src, VK_IMAGE_LAYOUT_GENERAL,
-                               dst, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+                pass.use(g.importImage("view.color", j.src, VK_IMAGE_ASPECT_COLOR_BIT, 1, VK_IMAGE_LAYOUT_GENERAL),
+                         rg::transferSrc(VK_IMAGE_LAYOUT_GENERAL));
             }
+            pass.use(g.importImage("swapchain", dst, VK_IMAGE_ASPECT_COLOR_BIT, 1, VK_IMAGE_LAYOUT_GENERAL),
+                     rg::transferDst(VK_IMAGE_LAYOUT_GENERAL));
+        }
 
-            // Hand the swapchain image back to the overlay (a colour
-            // attachment) and to anything that samples or stores into it.
-            VkImageMemoryBarrier2 post = dstBarrier;
-            post.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
-            post.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            post.dstStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                 VK_PIPELINE_STAGE_2_COPY_BIT;
-            post.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
-                                 VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
-                                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
-                                 VK_ACCESS_2_TRANSFER_READ_BIT;
-            VkDependencyInfo depPost{};
-            depPost.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            depPost.imageMemoryBarrierCount = 1;
-            depPost.pImageMemoryBarriers    = &post;
-            vkCmdPipelineBarrier2(cb, &depPost);
+void VulkanRenderer::Impl::addPostViewTailPasses(rg::RenderGraph& g, uint32_t imageIndex) {
+            // Imported first, so its GENERAL entry (and exit) layout is the one
+            // the graph keeps whichever pass names it.
+            (void) g.importImage("swapchain", ctx->swapchainImages()[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                                 VK_IMAGE_LAYOUT_GENERAL);
+
+            // Scene-only swapchain capture. BEFORE the sprite + ImGui overlays
+            // composite — sensor pipelines that consume the renderer's output
+            // need a clean image without their own visualisation drawn on top
+            // of it, otherwise they'd see their own readout as scene motion and
+            // feedback-loop.
+            if (sceneCaptureEnabled_) addSceneCapturePass(g, imageIndex);
+
+            // Zero-copy frames out (enableFrameInterop). The SAME point in the
+            // frame as the scene capture, and for the same reason: the Color
+            // channel must be the clean post-TAA picture, without the sprite /
+            // ImGui overlays or a picture-in-picture view composite drawn into
+            // it. The G-buffer AOVs are equally final by here — every consumer
+            // of them (deferred shade, TAA, the secondary views) has already
+            // been recorded. Adds nothing when no view is armed.
+            addFrameInteropPass(g, imageIndex);
+
+            // GPU event camera detection. event_shade fills eventLumaBuf_ —
+            // with deterministic Lambert lighting from the gbuf (Shaded source:
+            // no stochastic shading noise as a source of false events) or with
+            // a box-average of the final frame now sitting in the swapchain
+            // (Final source: everything the picture shows fires) — then the
+            // detector dispatches against that buffer.
+            addEventCameraPasses(g, currentFrame, imageIndex);
+
+            // Any secondary view the caller asked to see, copied into the
+            // frame at its rect. After the scene capture deliberately: a
+            // sensor consuming that capture wants the primary camera's image,
+            // not a picture-in-picture of some other camera. Before the
+            // overlay, so ImGui and screen-space sprites still draw over it.
+            addViewCompositePass(g, imageIndex);
         }
 
 std::vector<unsigned char> VulkanRenderer::Impl::readViewPixelsImpl(uint32_t handle) {
@@ -1958,7 +1912,7 @@ bool VulkanRenderer::Impl::frameInteropSource(uint32_t viewHandle,
                 // The primary reads the swapchain image the frame is drawing
                 // into, at the scene-capture point: post-TAA, pre-overlay.
                 // Copying out of the swapchain needs TRANSFER_SRC usage, which
-                // the surface may not offer (the same gate recordSceneCapture
+                // the surface may not offer (the same gate addSceneCapturePass
                 // checks) — an unexportable channel is skipped, not fatal.
                 if (!ctx->swapchainSupportsTransferSrc()) return false;
                 if (imageIndex >= ctx->swapchainImages().size()) return false;
@@ -2161,19 +2115,13 @@ bool VulkanRenderer::Impl::syncFrameInterop() {
             return true;
         }
 
-void VulkanRenderer::Impl::recordFrameInterop(VkCommandBuffer cb, uint32_t imageIndex) {
-            // The cost gate: a frame with nothing armed records not one extra
-            // command, not even a barrier.
+void VulkanRenderer::Impl::addFrameInteropPass(rg::RenderGraph& g, uint32_t imageIndex) {
+            // The cost gate: a frame with nothing armed adds no pass, and so
+            // records not one extra command, not even a barrier.
             if (frameInterops_.empty()) return;
 
-            struct Copy {
-                VkImage image;
-                VkImageAspectFlags aspect;
-                VkImageLayout restLayout;
-                VkBuffer dst;
-                uint32_t width, height;
-            };
-            std::vector<Copy> copies;
+            auto& copies = frameInteropCopies_;
+            copies.clear();
             for (const auto& s : frameInterops_) {
                 for (const auto& c : s.channels) {
                     FrameInteropSource src{};
@@ -2189,75 +2137,32 @@ void VulkanRenderer::Impl::recordFrameInterop(VkCommandBuffer cb, uint32_t image
                     // cannot happen; skipping rather than trusting it is one
                     // comparison per channel per frame.
                     if (src.width != c.width || src.height != c.height || src.bpp != c.bpp) continue;
-                    copies.push_back({src.image, src.aspect, src.restLayout, c.buf.handle,
-                                      src.width, src.height});
+                    copies.push_back({src.image, src.aspect, src.restLayout, c.buf.handle, src.width, src.height});
                 }
             }
             if (copies.empty()) return;
 
-            // restLayout → TRANSFER_SRC for every source in ONE barrier batch,
-            // the copies, then one batch back — the recorded-per-frame form of
-            // readViewGBufferAOVs' pattern. ALL_COMMANDS on the source side
-            // because the batch mixes attachment writes (the G-buffer),
-            // compute stores (the swapchain after TAA/post) and transfer writes
-            // (a resolved image), and one conservative barrier at the frame's
-            // tail is cheaper to get right than four narrow ones.
-            std::vector<VkImageMemoryBarrier> toSrc(copies.size());
-            for (size_t i = 0; i < copies.size(); ++i) {
-                auto& b               = toSrc[i];
-                b                     = VkImageMemoryBarrier{};
-                b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                b.oldLayout           = copies[i].restLayout;
-                b.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                b.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT |
-                                        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
-                                        VK_ACCESS_TRANSFER_WRITE_BIT;
-                b.dstAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
-                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                b.image               = copies[i].image;
-                b.subresourceRange.aspectMask = copies[i].aspect;
-                b.subresourceRange.levelCount = 1;
-                b.subresourceRange.layerCount = 1;
+            auto pass = g.addPass("frameInterop", [this](VkCommandBuffer c) {
+                for (const auto& cp : frameInteropCopies_) {
+                    VkBufferImageCopy region{};
+                    region.bufferOffset                = 0;
+                    region.bufferRowLength             = 0;// tightly packed, like the readback
+                    region.bufferImageHeight           = 0;
+                    region.imageSubresource.aspectMask = cp.aspect;
+                    region.imageSubresource.layerCount = 1;
+                    region.imageExtent                 = {cp.width, cp.height, 1};
+                    vkCmdCopyImageToBuffer(c, cp.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, cp.dst, 1, &region);
+                }
+            });
+            // Each source is imported in its resting layout, the graph's entry
+            // and exit layout (the overlay tail and the next frame's consumers
+            // find it there), and is TRANSFER_SRC for the copy.
+            for (const auto& cp : copies) {
+                pass.use(g.importImage("interop.src", cp.image, cp.aspect, 1, cp.restLayout), rg::transferSrc());
+                pass.use(g.importBuffer("interop.dst", cp.dst),
+                         rg::Access{VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                    VK_IMAGE_LAYOUT_UNDEFINED, true});
             }
-            vkCmdPipelineBarrier(cb,
-                                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 0, 0, nullptr, 0, nullptr,
-                                 static_cast<uint32_t>(toSrc.size()), toSrc.data());
-
-            for (const auto& c : copies) {
-                VkBufferImageCopy region{};
-                region.bufferOffset                = 0;
-                region.bufferRowLength             = 0;// tightly packed, like the readback
-                region.bufferImageHeight           = 0;
-                region.imageSubresource.aspectMask = c.aspect;
-                region.imageSubresource.layerCount = 1;
-                region.imageExtent                 = {c.width, c.height, 1};
-                vkCmdCopyImageToBuffer(cb, c.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                       c.dst, 1, &region);
-            }
-
-            // Back to the resting layouts, so the overlay tail and the next
-            // frame's consumers find every image where they expect it.
-            std::vector<VkImageMemoryBarrier> toRest = toSrc;
-            for (size_t i = 0; i < toRest.size(); ++i) {
-                toRest[i].oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                toRest[i].newLayout     = copies[i].restLayout;
-                toRest[i].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-                toRest[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
-                                          VK_ACCESS_SHADER_WRITE_BIT |
-                                          VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-                                          VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                                          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                                          VK_ACCESS_TRANSFER_READ_BIT;
-            }
-            vkCmdPipelineBarrier(cb,
-                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                 0, 0, nullptr, 0, nullptr,
-                                 static_cast<uint32_t>(toRest.size()), toRest.data());
         }
 
 

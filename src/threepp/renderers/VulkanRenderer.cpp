@@ -804,9 +804,9 @@ namespace threepp {
 
     void VulkanRenderer::setSceneCaptureEnabled(bool enabled) {
         // Scene capture copies the mid-frame swapchain image into a staging
-        // buffer (recordSceneCapture) — same TRANSFER_SRC precondition as
+        // buffer (addSceneCapturePass) — same TRANSFER_SRC precondition as
         // readRGBPixels. ctx may not exist yet (pre-first-render enable);
-        // recordSceneCapture re-checks and skips with a warning in that case.
+        // addSceneCapturePass re-checks and skips with a warning in that case.
         if (enabled && core()->ctx && !core()->ctx->swapchainSupportsTransferSrc()) {
             throw std::runtime_error(
                     "VulkanRenderer::setSceneCaptureEnabled: the surface does not "

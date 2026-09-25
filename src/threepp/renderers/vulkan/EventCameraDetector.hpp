@@ -5,7 +5,7 @@
 // loop that capped the helper at ~30 FPS.
 //
 // Pipeline:
-//   1. Renderer's existing recordSceneCapture() copies the post-TAA
+//   1. Renderer's existing addSceneCapturePass() copies the post-TAA
 //      swapchain into sceneCaptureBuf_ (host-visible storage buffer).
 //   2. EventCameraDetector::record() dispatches event_detect.comp,
 //      which reads sceneCaptureBuf_, updates a persistent rg32f
@@ -111,11 +111,11 @@ namespace threepp::vulkan {
         // scene motion and must not read as a whole-frame burst.
         void resetReference() { firstFrame_ = true; }
 
-        // Record the compute dispatch (sceneCaptureBuf → logHistory +
-        // accumulator) plus the accumulator-to-ring copy. The caller is
-        // responsible for ensuring sceneCaptureBuf was populated earlier
-        // in the same command buffer (the renderer's scene-capture path
-        // handles that) and that the appropriate barriers are in place.
+        // Record the compute dispatch (sceneBuf → logHistory + accumulator)
+        // plus the accumulator-to-ring copy. The caller orders sceneBuf's
+        // write (the renderer's event_shade dispatch, earlier in the same
+        // command buffer) before this compute read — the renderer's frame
+        // graph does, from its declaration of the read.
         void record(VkCommandBuffer cb, VkBuffer sceneBuf, const Params& params);
 
         // Read the most recently completed visualisation. Returns RGBA8

@@ -2604,9 +2604,17 @@ namespace threepp {
         // torn down with a warning rather than left pointing at freed images.
         void invalidateFrameInterop(uint32_t viewHandle, const char* why);
         bool syncFrameInterop();
-        // Recorded at the frame's record tail, after the scene capture. Returns
-        // immediately when no view is armed.
-        void recordFrameInterop(VkCommandBuffer cb, uint32_t imageIndex);
+        // A pass of the post-view tail graph, after the scene capture: one copy
+        // per armed channel. Adds nothing when no view is armed.
+        void addFrameInteropPass(vulkan::rg::RenderGraph& g, uint32_t imageIndex);
+        struct FrameInteropCopy {
+            VkImage image;
+            VkImageAspectFlags aspect;
+            VkImageLayout restLayout;
+            VkBuffer dst;
+            uint32_t width, height;
+        };
+        std::vector<FrameInteropCopy> frameInteropCopies_;// this frame's, built by addFrameInteropPass
         void destroyFrameInterops();
 
         // Deferred-apply queue for setters that issue vkDeviceWaitIdle +
@@ -4625,13 +4633,17 @@ namespace threepp {
         // When no overlay callback is set, just emits the GENERAL → PRESENT_SRC
         // barrier directly. Called from endFrame() immediately before
         // vkEndCommandBuffer + submit.
+        // The frame's record tail after the secondary views, as one graph:
+        // scene capture, frame interop, the event camera, the view composite.
+        // The swapchain enters and leaves it in GENERAL, where the screen-space
+        // sprite overlay, HUD render() calls and endFrame's ImGui + present
+        // transition (all self-synchronising, outside any graph) expect it.
+        void addPostViewTailPasses(vulkan::rg::RenderGraph& g, uint32_t imageIndex);
         // Snapshot the post-TAA swapchain image into the host-visible
         // sceneCaptureBuf_ before any overlay (sprites, ImGui) composites.
         // Allocates / resizes the buffer lazily on first use or swapchain
-        // resize. Inserts GENERAL → TRANSFER_SRC → GENERAL barriers so the
-        // downstream overlay passes see the swapchain in the layout they
-        // expect.
-        void recordSceneCapture(VkCommandBuffer cb, uint32_t imageIndex);
+        // resize, at build time.
+        void addSceneCapturePass(vulkan::rg::RenderGraph& g, uint32_t imageIndex);
 
         // ── Event-camera shade compute ─────────────────────────────────
         // Creates the event_shade compute pipeline + descriptor set
@@ -4642,14 +4654,13 @@ namespace threepp {
         // Called from setEventCameraEnabled and on resize.
         void allocateEventLumaBuffer(uint32_t w, uint32_t h);
 
-        // Refresh descriptor set bindings + dispatch the event_shade
-        // compute. Called once per frame in the record tail (after the gbuf
-        // prepass AND after the swapchain holds the final frame), before the
-        // event_detect dispatch. Gbuf images are in SHADER_READ_ONLY_OPTIMAL
-        // at this point (same as for the main deferred shade's gbuf
-        // consumption); the acquired swapchain image (imageIndex) is in
-        // GENERAL and is bound as the Final source's storage image.
-        void recordEventShade(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex);
+        // The event_shade dispatch and the detector, as two passes of the
+        // post-view tail graph (after the gbuf prepass AND after the swapchain
+        // holds the final frame). The event_shade set is rewritten at build
+        // time, so its declaration (reflected) names this frame's gbuf images
+        // (SHADER_READ_ONLY_OPTIMAL) and the acquired swapchain image
+        // (GENERAL, the Final source's storage image).
+        void addEventCameraPasses(vulkan::rg::RenderGraph& g, uint32_t frame, uint32_t imageIndex);
 
         void recordOverlayAndPresentTransition(VkCommandBuffer cb, uint32_t imageIndex);
 
@@ -4728,11 +4739,18 @@ namespace threepp {
             curView_ = saved;
         }
         // Copy every DISPLAYED secondary view's colour target into the primary's
-        // swapchain image, at that view's rect. Recorded after the secondaries
+        // swapchain image, at that view's rect. A pass after the secondaries
         // have resolved and after the scene capture (which must stay a clean
         // picture of the primary alone), and before the overlay, so ImGui and
         // sprites still draw on top.
-        void recordViewComposite(VkCommandBuffer cb, uint32_t imageIndex);
+        void addViewCompositePass(vulkan::rg::RenderGraph& g, uint32_t imageIndex);
+        struct ViewCompositeJob {
+            VkImage    src;
+            VkOffset2D srcOff;
+            VkOffset2D dstOff;
+            VkExtent2D ext;
+        };
+        std::vector<ViewCompositeJob> viewCompositeJobs_;// this frame's, built by addViewCompositePass
         bool setViewDisplayRectImpl(uint32_t handle, int x, int y, int w, int h);
         // Per-view permission to rasterize sensor-only surfaces. Raster state
         // only — read while the draw list is built, so it takes effect on the

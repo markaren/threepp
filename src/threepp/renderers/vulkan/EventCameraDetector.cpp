@@ -415,30 +415,22 @@ namespace threepp::vulkan {
         vkCmdUpdateBuffer(cb, eventStreamRing_[writeSlot_].handle,
                           0, sizeof(hdr), &hdr);
 
-        // Make both buffer writes (sceneBuf transfer + stream header
-        // transfer) visible to the compute shader.
-        std::array<VkBufferMemoryBarrier, 2> preBarriers{};
-        preBarriers[0].sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        preBarriers[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        preBarriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        preBarriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        preBarriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        preBarriers[0].buffer = sceneBuf;
-        preBarriers[0].size   = VK_WHOLE_SIZE;
-        preBarriers[1].sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        preBarriers[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        preBarriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
-                                       VK_ACCESS_SHADER_WRITE_BIT;
-        preBarriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        preBarriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        preBarriers[1].buffer = eventStreamRing_[writeSlot_].handle;
-        preBarriers[1].size   = VK_WHOLE_SIZE;
+        // Make the stream header write visible to the compute shader. The
+        // write of sceneBuf (event_shade's dispatch) is ordered before this
+        // one by the caller's frame graph, which declares the read.
+        VkBufferMemoryBarrier headerBarrier{};
+        headerBarrier.sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        headerBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        headerBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                                      VK_ACCESS_SHADER_WRITE_BIT;
+        headerBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        headerBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        headerBarrier.buffer = eventStreamRing_[writeSlot_].handle;
+        headerBarrier.size   = VK_WHOLE_SIZE;
         vkCmdPipelineBarrier(cb,
                               VK_PIPELINE_STAGE_TRANSFER_BIT,
                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                              0, 0, nullptr,
-                              static_cast<uint32_t>(preBarriers.size()), preBarriers.data(),
-                              0, nullptr);
+                              0, 0, nullptr, 1, &headerBarrier, 0, nullptr);
 
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
