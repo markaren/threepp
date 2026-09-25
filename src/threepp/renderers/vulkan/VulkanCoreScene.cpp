@@ -3291,7 +3291,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // raster descriptor's binding 3 mirrors that same table, so
             // invalidate its per-slot cache — each frame slot then re-writes
             // binding 3 on its next uploadRasterCameraUbo. Per view: the flag
-            // guards per-view sets, and recordSecondaryViews calls
+            // guards per-view sets, and addSecondaryViewPasses calls
             // uploadRasterCameraUbo once per view per frame, so each view
             // heals its own slot.
             for (auto& v : views_) v->rasterMatTexValid_.fill(0);

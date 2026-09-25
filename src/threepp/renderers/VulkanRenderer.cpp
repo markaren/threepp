@@ -74,10 +74,10 @@ namespace threepp {
             // rays traverse it) and precede the primary's shade, and the
             // primary records first.
             //
-            // Safe against the early-outs: the debug-blit and events-only
-            // returns in VulkanCoreRecord abort the whole record, secondaries
-            // included, so there is no frame where a secondary would want a
-            // grid the primary never updated.
+            // The hybrid debug-view and events-only frames build no shade for
+            // the primary (addPrimaryViewPasses returns after the G-buffer), so
+            // on those frames the grid is not updated and a secondary view
+            // shades against the one the last full frame left.
             if (probeGIEnabled_ && !view().secondary) {
                 if (probeGridDirty_) {
                     fitProbeGridToScene();

@@ -971,111 +971,46 @@ void VulkanRenderer::Impl::addGbufferPasses(rg::RenderGraph& g) {
             }
 }
 
-bool VulkanRenderer::Impl::recordEventsOnlyFrame(VkCommandBuffer cb, uint32_t imageIndex) {
-            // ── Events-only render mode early-return ───────────────────────
+void VulkanRenderer::Impl::addEventsOnlyClearPass(rg::RenderGraph& g, uint32_t imageIndex) {
+            // ── Events-only render mode ─────────────────────────────────────
             // High-rate event-camera path (~500 Hz target): the gbuf prepass
-            // above wrote everything event_shade needs to produce a clean
-            // deterministic luma image. Skip deferred-shade/denoise/TAA/
-            // overlay/upscale entirely. The swapchain is cleared to black so
+            // wrote everything event_shade needs to produce a clean
+            // deterministic luma image. Deferred-shade/denoise/TAA/overlay/
+            // upscale are skipped entirely. The swapchain is cleared to black so
             // the sprite overlay (event accumulator) has a known starting
-            // canvas; event_shade + event_detect run after
-            // recordCommandBuffer exactly as in the normal render path.
-            //
-            // Requires the gbuf prepass to have actually run — gated above
-            // on rasterGbufPipeline. If it's missing the events-only flag is
-            // ignored and we fall through to the full deferred-shade path.
-            if (eventsOnlyMode_ && eventCamEnabled_ &&
-                rasterGbufPipeline != VK_NULL_HANDLE) {
-                const VkImage swap = ctx->swapchainImages()[imageIndex];
+            // canvas; event_shade + event_detect run in the record tail exactly
+            // as in the normal render path. The graph carries the swapchain
+            // from UNDEFINED (importSwapchain) to GENERAL for the clear and on
+            // to whatever the tail and the overlay after the graph need.
+            const VkImage swap = ctx->swapchainImages()[imageIndex];
+            g.addPass("eventsOnly.clear", [swap](VkCommandBuffer c) {
+                 VkClearColorValue cc{};
+                 cc.float32[3] = 1.f;
+                 VkImageSubresourceRange clrRange{};
+                 clrRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                 clrRange.levelCount = 1;
+                 clrRange.layerCount = 1;
+                 vkCmdClearColorImage(c, swap, VK_IMAGE_LAYOUT_GENERAL, &cc, 1, &clrRange);
+             }).use(importSwapchain(g, imageIndex), rg::transferDst(VK_IMAGE_LAYOUT_GENERAL));
+}
 
-                // UNDEFINED → GENERAL so vkCmdClearColorImage can write it,
-                // and so the downstream sprite overlay + ImGui pass see the
-                // layout they expect (matching the normal recordCommandBuffer
-                // tail comment at line 11892).
-                VkImageMemoryBarrier2 toGen{};
-                toGen.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                toGen.srcStageMask  = kAcquireWaitStages;// chain to the acquire wait
-                toGen.srcAccessMask = 0;
-                toGen.dstStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-                toGen.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                toGen.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                toGen.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                toGen.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                toGen.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                toGen.image = swap;
-                toGen.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                toGen.subresourceRange.levelCount = 1;
-                toGen.subresourceRange.layerCount = 1;
-                VkDependencyInfo dGen{};
-                dGen.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                dGen.imageMemoryBarrierCount = 1;
-                dGen.pImageMemoryBarriers = &toGen;
-                vkCmdPipelineBarrier2(cb, &dGen);
-
-                VkClearColorValue cc{};
-                cc.float32[0] = 0.f;
-                cc.float32[1] = 0.f;
-                cc.float32[2] = 0.f;
-                cc.float32[3] = 1.f;
-                VkImageSubresourceRange clrRange{};
-                clrRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                clrRange.levelCount = 1;
-                clrRange.layerCount = 1;
-                vkCmdClearColorImage(cb, swap, VK_IMAGE_LAYOUT_GENERAL,
-                                     &cc, 1, &clrRange);
-
-                // Transfer-write → downstream consumers (sprite overlay
-                // composites in COLOR_ATTACHMENT, ImGui in same, the
-                // potential scene-capture in TRANSFER_SRC). Layout stays
-                // GENERAL — caller pipelines transition out of GENERAL
-                // as needed (recordOverlayAndPresentTransition handles
-                // the GENERAL → PRESENT_SRC at the end).
-                VkImageMemoryBarrier2 visBar{};
-                visBar.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                visBar.srcStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-                visBar.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                visBar.dstStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                       VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
-                                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                       VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-                visBar.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
-                                       VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
-                                       VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
-                                       VK_ACCESS_2_TRANSFER_READ_BIT;
-                visBar.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                visBar.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                visBar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                visBar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                visBar.image = swap;
-                visBar.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                visBar.subresourceRange.levelCount = 1;
-                visBar.subresourceRange.layerCount = 1;
-                VkDependencyInfo dVis{};
-                dVis.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                dVis.imageMemoryBarrierCount = 1;
-                dVis.pImageMemoryBarriers = &visBar;
-                vkCmdPipelineBarrier2(cb, &dVis);
-
-                return true;
-            }
-            // ── End events-only render mode ─────────────────────────────────
-
-            return false;
+rg::ImageHandle VulkanRenderer::Impl::importSwapchain(rg::RenderGraph& g, uint32_t imageIndex) {
+            // Imported UNDEFINED: the acquired image's contents are dead, and the
+            // entry barrier, whose ALL_COMMANDS source chains to the acquire
+            // wait, carries it to its first use's layout. Imported ahead of
+            // every other pass that names it, so this import's layouts are the
+            // ones the graph keeps; the exit barrier leaves it in GENERAL, where
+            // the screen-space overlay and endFrame expect it. Its writers are
+            // the TAA / denoise compute store, the upscale blit, the overlay,
+            // the view composite — or, in the debug and events-only modes,
+            // their one pass.
+            return g.importImage("swapchain", ctx->swapchainImages()[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
 }
 
 void VulkanRenderer::Impl::addSwapchainPasses(rg::RenderGraph& g, uint32_t imageIndex) {
             const VkImage img = ctx->swapchainImages()[imageIndex];
-
-            // Imported UNDEFINED: the acquired image's contents are dead, and the
-            // entry barrier, whose ALL_COMMANDS source chains to the acquire
-            // wait, carries it to its first use's layout. Imported here, ahead
-            // of every other pass that names it, so this import's layouts are
-            // the ones the graph keeps; the exit barrier leaves it in GENERAL,
-            // where the post-view tail and endFrame expect it. Its writers are
-            // the TAA / denoise compute store, the upscale blit and the overlay.
-            const auto swap = g.importImage("swapchain", img, VK_IMAGE_ASPECT_COLOR_BIT, 1,
-                                            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+            const auto swap   = importSwapchain(g, imageIndex);
 
             // Split-screen: clear the whole frame to clearColor once so the
             // area outside the deferred-render pane's scissor shows the clear
@@ -1950,7 +1885,8 @@ void VulkanRenderer::Impl::addSecondaryFieldBillboardPasses(rg::RenderGraph& g) 
             // primary's answers are wrong for a sensor looking from somewhere
             // else — and the re-dispatch is what makes a shared buffer correct:
             // each view's draws are ordered between its own dispatch and the
-            // next view's (the graph's entry barrier covers the one before).
+            // next view's (the graph orders them: every one of them declares
+            // the buffer).
             if (particleFieldPass_ && particleFieldPass_->transmittanceActive()) {
                 auto pass = g.addPass("fieldTransmittance", [this](VkCommandBuffer c) { recordFieldTransmittance(c); });
                 particleFieldPass_->declareTransmittance(g, pass, f);
@@ -3295,12 +3231,13 @@ void VulkanRenderer::Impl::addTailPasses(rg::RenderGraph& g, uint32_t imageIndex
             }
 }
 
-void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
+void VulkanRenderer::Impl::addPrimaryViewPasses(rg::RenderGraph& g, uint32_t imageIndex) {
 
-            // The frame, stage by stage: each stage adds its passes to the
-            // frame graph, which records the barriers between them from what
-            // each pass declares. Each stage carries its own full commentary;
-            // this function is the table of contents.
+            // The primary view, stage by stage: each stage adds its passes to
+            // the frame graph, which records the barriers between them from
+            // what each pass declares (the secondary views and the record tail
+            // follow in the same graph, beginDeferredFrame). Each stage carries
+            // its own full commentary; this function is the table of contents.
             updatePaneRegion();
 
             // ── The shared billboard texture pool, reset ONCE for the frame ──
@@ -3331,24 +3268,22 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
             // water, grass) and the per-frame TLAS refit, then the raster
             // G-buffer (+ occlusion culling, MSAA resolve, overlay depth
             // prepass).
-            auto& g = frameGraph_;
-            g.reset();
             addHeadPasses(g);
             addDeformAndTlasPasses(g);
             addGbufferPasses(g);
 
-            // Hybrid debug view: the chosen G-buffer channel is blitted
-            // straight to the swapchain and the frame is finished.
+            // Hybrid debug view: the chosen G-buffer channel is resolved
+            // straight to the swapchain and the primary's frame is finished.
             if (rasterGbufPipeline != VK_NULL_HANDLE && hybridDebugView_ != HybridDebugView::Off) {
-                executeGraph(cb, g, "frame");
-                recordHybridDebugResolve(cb, imageIndex, currentFrame);
+                importSwapchain(g, imageIndex);
+                addHybridDebugResolvePass(g, imageIndex, currentFrame);
                 return;
             }
             // Events-only mode (~500 Hz event camera): clear the swapchain,
             // skip shade/post entirely.
             if (eventsOnlyMode_ && eventCamEnabled_ && rasterGbufPipeline != VK_NULL_HANDLE) {
-                executeGraph(cb, g, "frame");
-                (void) recordEventsOnlyFrame(cb, imageIndex);
+                importSwapchain(g, imageIndex);
+                addEventsOnlyClearPass(g, imageIndex);
                 return;
             }
 
@@ -3403,10 +3338,8 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
             addSplatPasses(g);
             addUpscaleAndPostPasses(g, imageIndex, ext, ptExt, exposureBits, preExp);
             addTailPasses(g, imageIndex);
-            executeGraph(cb, g, "frame");
 
-            // ── End of deferred-render recording. ──────────────────────────────
-            // The swapchain image is left in VK_IMAGE_LAYOUT_GENERAL — endFrame
+            // The graph leaves the swapchain image in GENERAL — endFrame
             // handles the ImGui overlay pass + GENERAL → PRESENT_SRC transition,
             // closes the command buffer, and submits.
         }

@@ -572,7 +572,7 @@ namespace threepp::vulkan {
         // a render-graph pass (declareTransmittance) ahead of the billboard
         // draws of the view whose eye `camWorld` is — which the graph orders
         // after it — and re-recorded for the next view over the SAME buffer
-        // in that view's graph (R9). T_sun is view-independent and is recomputed with
+        // in that view's passes (R9). T_sun is view-independent and is recomputed with
         // it; a second buffer to avoid that would cost more memory than the
         // eight taps it saves.
         //

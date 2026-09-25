@@ -2357,7 +2357,7 @@ void ParticleFieldPass::recordDensityScatter(VkCommandBuffer cb) {
     }
 
     // Both volumes' readers — the froxel passes' manual trilinear on the uint
-    // volume (every view, in its own graph), the shade's and the transmittance
+    // volume (every view, in its passes), the shade's and the transmittance
     // prepass's hardware trilinear on the r16f mirror — declare them through
     // their descriptor sets; the LIDAR's read of the majorants follows the
     // frame graph's exit barrier.

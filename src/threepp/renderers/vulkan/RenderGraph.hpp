@@ -9,10 +9,11 @@
 //
 // Execution order is declaration order. The graph does not reorder or cull.
 //
-// Boundaries. A graph is built and executed per frame (per view: the renderer
-// builds one for the primary camera, from the deformers to the sensor stage,
-// and one for each secondary view), with hand-synchronised recording before
-// and after it (the frame's head, the post-view tail, the previous frame).
+// Boundaries. A graph is built and executed per frame (the renderer builds one
+// for the whole frame: the primary camera from the frame head to the sensor
+// stage, every secondary view, then the record tail), with hand-synchronised
+// recording before and after it (the previous frame; the screen-space overlay,
+// ImGui and the present transition after it).
 // Resource state at the graph's boundaries is therefore not known to it, and
 // it assumes the conservative answer:
 //   * entry: one memory barrier (ALL_COMMANDS/MEMORY_WRITE -> the stages the

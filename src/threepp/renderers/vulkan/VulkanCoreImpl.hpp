@@ -3708,7 +3708,10 @@ namespace threepp {
         // freshly-acquired swapchain image to GENERAL for the storage write
         // and leave it there, the exact exit contract the full deferred path
         // uses so endFrame()'s shared overlay/present finalize is unchanged.
-        void recordHybridDebugResolve(VkCommandBuffer cb, uint32_t imageIndex, uint32_t frame);
+        // A frame-graph pass: the set is written at build time and declared
+        // from the reflected shader (the swapchain comes from
+        // importSwapchain).
+        void addHybridDebugResolvePass(vulkan::rg::RenderGraph& g, uint32_t imageIndex, uint32_t frame);
 
 
         void createLightsUbos();
@@ -4569,13 +4572,19 @@ namespace threepp {
         void recordOverlayDepthPrepass(VkCommandBuffer cb);
         [[nodiscard]] bool gbufferMsaaResolveActive();
         [[nodiscard]] bool overlayDepthPrepassActive();
-        [[nodiscard]] bool recordEventsOnlyFrame(VkCommandBuffer cb, uint32_t imageIndex);
-        // The swapchain image, imported UNDEFINED (the entry barrier's
-        // ALL_COMMANDS source chains to the acquire wait) and left in GENERAL
-        // for the post-view tail, plus the split-screen clear.
+        // Events-only mode: the swapchain cleared to black (the canvas the
+        // event accumulator's sprite overlay draws on), as a graph pass.
+        void addEventsOnlyClearPass(vulkan::rg::RenderGraph& g, uint32_t imageIndex);
+        // The acquired swapchain image, imported UNDEFINED (the entry
+        // barrier's ALL_COMMANDS source chains to the acquire wait) with exit
+        // layout GENERAL, where the post-graph overlay and endFrame expect it.
+        // Called before any pass names it, so these layouts are the ones the
+        // graph keeps.
+        vulkan::rg::ImageHandle importSwapchain(vulkan::rg::RenderGraph& g, uint32_t imageIndex);
+        // importSwapchain plus the split-screen clear.
         void addSwapchainPasses(vulkan::rg::RenderGraph& g, uint32_t imageIndex);
         // Depth of field, bloom, the temporal resolve / upscaler and the post
-        // composite, recorded as one render-graph segment (postGraph_).
+        // composite, as passes of the frame graph.
         // `secondary`: a secondary view's reduced chain — no DoF, no DLSS/FSR,
         // no sharpening or motion blur, the authored TAA alpha, and its own
         // colour target in place of the swapchain.
@@ -4583,9 +4592,47 @@ namespace threepp {
                                      VkExtent2D ext, VkExtent2D ptExt,
                                      uint32_t exposureBits, float preExp,
                                      bool secondary = false);
-        // The frame's render graph: shade → splats → post, per view (built,
-        // executed, then reused for the next view).
+        // The frame's render graph: every view's passes and the record tail,
+        // built in full and then executed once (beginDeferredFrame).
         vulkan::rg::RenderGraph frameGraph_;
+
+        // ── Several views, one graph ────────────────────────────────────────
+        // Every view's passes are BUILT before any is RECORDED, so the CPU
+        // state a view's pass callbacks read at record time — the current
+        // view, the pane region, the draw lists buildIndirectDrawData made for
+        // its camera, the camera-derived scalars updateCameraUbo and
+        // uploadRasterCameraUbo leave in Impl members — would otherwise be the
+        // LAST view's. Each view's passes therefore open with a "view" pass
+        // (no resource uses) that applies what that view's build left behind,
+        // saved into viewRecordStates_[its index in views_] once its passes
+        // are built. The record tail opens with the primary's again.
+        struct ViewRecordState {
+            ViewContext* view = nullptr;
+            VkExtent2D   regionRenderExt{}, regionSwapExt{};
+            int32_t      regionDstX = 0, regionDstY = 0;
+            std::array<DrawGroup, 4>      indirectGroups{};
+            uint32_t                      indirectTotalDraws = 0;
+            std::vector<ParticleDrawSlot> particleDrawSlots;
+            bool  occlActive  = false;
+            float tanHalfFovY = 0.f, filmHeightM = 0.f;
+            float projP0 = 0.f, projP5 = 0.f, projP8 = 0.f, projP9 = 0.f;
+#if defined(THREEPP_WITH_FSR)
+            float fsrJitterX = 0.f, fsrJitterY = 0.f;
+            float fsrCamNear = 0.f, fsrCamFar = 0.f, fsrCamFovY = 0.f;
+#endif
+#if defined(THREEPP_WITH_DLSS)
+            float dlssJitterX = 0.f, dlssJitterY = 0.f;
+#endif
+            float deferredCamRotAngle = 0.f;
+        };
+        std::vector<ViewRecordState> viewRecordStates_;
+        void saveViewRecordState(ViewRecordState& s);
+        // Also silences the GPU timestamps for a secondary view: one query
+        // pool per frame-in-flight, one slot pair per pass, and a secondary
+        // re-running those passes would overwrite the primary's.
+        void applyViewRecordState(const ViewRecordState& s);
+        // The "view" pass that applies viewRecordStates_[index] at record time.
+        void addViewEnterPass(vulkan::rg::RenderGraph& g, size_t index);
         // Execute a graph; with THREEPP_RG_DUMP=1 also print its passes and
         // barriers to stderr whenever they differ from what was last printed
         // under the same name (a pass appearing, a layout changing).
@@ -4626,7 +4673,10 @@ namespace threepp {
         // The overlay depth attachment: the MSAA overlay depth, or unjitDepth.
         [[nodiscard]] const Image2D& overlayDepthImage();
         void recordHybridOverlay(VkCommandBuffer cb, uint32_t imageIndex, bool stampActive);
-        void recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex);
+        // The primary view's passes, from the frame head to the sensor stage
+        // (or, in the hybrid debug view / events-only mode, the head, the
+        // G-buffer and that mode's swapchain pass).
+        void addPrimaryViewPasses(vulkan::rg::RenderGraph& g, uint32_t imageIndex);
 
         // Records the ImGui (or any overlay) callback inside a dynamic render
         // pass, then transitions the swapchain image GENERAL → PRESENT_SRC.
@@ -4710,11 +4760,11 @@ namespace threepp {
         // frame) until the shared render pass exists.
         void applyPendingViewChanges();
         bool pendingViewChanges_ = false;
-        // Record every secondary view's chain into the already-open frame
-        // command buffer, after the primary has been recorded. Shares the
-        // frame's TLAS/BLAS, lights, materials and textures; re-runs only what
-        // is genuinely per-camera.
-        void recordSecondaryViews(VkCommandBuffer cb);
+        // Every secondary view's chain, as passes after the primary's in the
+        // frame graph. Shares the frame's TLAS/BLAS, lights, materials and
+        // textures; re-runs only what is genuinely per-camera. Returns whether
+        // any view added passes (the tail then re-enters the primary).
+        bool addSecondaryViewPasses(vulkan::rg::RenderGraph& g);
         // Run `fn` once per LIVE view — the primary and every secondary that
         // already owns its resources — with curView_ pointed at it.
         //

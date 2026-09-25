@@ -835,7 +835,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             if (buildAndUploadEmissiveTris(currentFrame, lastVisibleEntries_)) {
                 // Keep the deferred pass's emissive binding fresh when the
                 // per-frame buffer grows. EVERY view: growth destroyed the old
-                // buffer outright, and recordSecondaryViews records against
+                // buffer outright, and the secondary views record against
                 // this same slot later this frame — a secondary's set left
                 // stale names freed memory (an intermittent device-lost once
                 // VMA recycles the block, not a visual glitch). Safe to
@@ -922,50 +922,71 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 // cells either way. The difference is not a cross-frame GPU
                 // hazard on this queue. Not kept; it would only cost overlap.)
             }
-            // Record the full deferred-render body into the now-open cmd
-            // buffer, from the frame graph's head passes (instance expansion,
-            // the ParticleField emitter, counts and density scatter) on.
-            // Leaves the swapchain image in GENERAL.
-            // INCLUSIVE of frame.M3_instExpandRec (the head passes' recording)
-            // and of frame.L_tlasRefitDispatch (and therefore of
+            // The whole frame is ONE render graph: the primary view (from the
+            // frame graph's head passes — instance expansion, the ParticleField
+            // emitter, counts and density scatter — on), every secondary view,
+            // then the record tail. It is built in full first and recorded
+            // once, so the barriers between views, and between the views and
+            // the tail, come from the passes' declarations like every other.
+            // Each view's passes open with a "view" pass that puts back the
+            // CPU state its build left (viewRecordStates_); the build of the
+            // next view has overwritten it by the time anything records.
+            auto& g = frameGraph_;
+            g.reset();
+            viewRecordStates_.resize(views_.size());
+            // frame.J_record: the primary's build here, plus the recording of
+            // every pass below (executeGraph). INCLUSIVE of
+            // frame.M3_instExpandRec (the head passes' recording) and of
+            // frame.L_tlasRefitDispatch (and therefore of
             // frame.H_uploadTlasInst inside it), which the frame graph's head
             // and tlas passes reach. Those are reported as detail rows; only ONE
             // of {frame.J_record} / {M3, L, H} belongs in a phase sum.
             {
                 THREEPP_CPUPROF("frame.J_record");
-                recordCommandBuffer(cmdBuffers[currentFrame], imageIndex);
+                addViewEnterPass(g, 0);
+                addPrimaryViewPasses(g, imageIndex);
+                saveViewRecordState(viewRecordStates_[0]);
             }
 
-            // Every secondary view, into the SAME command buffer and therefore
-            // the same submission. They share this frame's TLAS/BLAS, lights,
-            // materials and textures — only the genuinely per-camera work is
-            // repeated. Placed after the primary so the shared scene is fully
-            // built and its barriers are already in the stream, and before the
-            // capture / event-camera / overlay tail, all of which are the
-            // primary's alone.
+            // Every secondary view, into the same graph and therefore the same
+            // command buffer and submission. They share this frame's TLAS/BLAS,
+            // lights, materials and textures — only the genuinely per-camera
+            // work is repeated. After the primary so the shared scene is fully
+            // built by the passes before theirs, and before the capture /
+            // event-camera / composite tail, all of which are the primary's.
+            // frame.J9_secondaryViews is their per-camera CPU work and build;
+            // their recording is inside frame.J_record.
             // NOTE, for anyone reading frame.C_frustumCull / frame.D_buildIndirect
             // on a multi-view scene: this re-enters both, so those two keys ALREADY
             // sum primary + every secondary under one name. Single-view scenes
             // return immediately here and are unaffected.
+            bool anySecondary = false;
             {
                 THREEPP_CPUPROF("frame.J9_secondaryViews");
-                recordSecondaryViews(cmdBuffers[currentFrame]);
+                anySecondary = addSecondaryViewPasses(g);
             }
 
             // The record tail after the views: scene capture, frame interop,
-            // the event camera and the view composite, as one graph (a frame
-            // that uses none of them adds no pass and records nothing).
-            // One key for the whole record tail (those and the screen-space
-            // sprite overlay): individually these are early-outs on a scene
-            // that uses none of them, and the point of the key is that the
-            // books close, not that each is attributable.
-            THREEPP_CPUPROF("frame.4_recordTail");
+            // the event camera and the view composite (a frame that uses none
+            // of them adds no pass). It records as the primary.
+            // One key for the whole record tail's build (those and the
+            // screen-space sprite overlay): individually these are early-outs
+            // on a scene that uses none of them, and the point of the key is
+            // that the books close, not that each is attributable.
             {
-                auto& g = frameGraph_;
-                g.reset();
+                THREEPP_CPUPROF("frame.4_recordTail");
+                if (anySecondary) addViewEnterPass(g, 0);
                 addPostViewTailPasses(g, imageIndex);
-                if (g.passCount() > 0) executeGraph(cmdBuffers[currentFrame], g, "frame.tail");
             }
+            {
+                THREEPP_CPUPROF("frame.J_record");
+                executeGraph(cmdBuffers[currentFrame], g, "frame");
+            }
+            // Leave the primary's state standing for what follows the graph
+            // (the overlay below, HUD render() calls, readbacks).
+            applyViewRecordState(viewRecordStates_[0]);
+            // The same key again: the registry sums a name across call sites.
+            THREEPP_CPUPROF("frame.4_recordTail");
 
             // Screen-space sprite auto-overlay, after the graph: the same
             // self-synchronising recorder as a HUD render() call, from GENERAL
@@ -1566,22 +1587,90 @@ bool VulkanRenderer::Impl::setViewCameraImpl(uint32_t handle, Camera& camera) {
 
 // ── Multi-view: per-frame recording ─────────────────────────────────────────
 
-void VulkanRenderer::Impl::recordSecondaryViews(VkCommandBuffer cb) {
-            if (views_.size() < 2u) return;
+void VulkanRenderer::Impl::saveViewRecordState(ViewRecordState& s) {
+            s.view                = curView_;
+            s.regionRenderExt     = regionRenderExt_;
+            s.regionSwapExt       = regionSwapExt_;
+            s.regionDstX          = regionDstX_;
+            s.regionDstY          = regionDstY_;
+            s.indirectGroups      = indirectGroups_;
+            s.indirectTotalDraws  = indirectTotalDraws_;
+            s.particleDrawSlots   = particleDrawSlots_;// assign: keeps capacity
+            s.occlActive          = occlActiveThisFrame_;
+            s.tanHalfFovY         = tanHalfFovY_;
+            s.filmHeightM         = filmHeightM_;
+            s.projP0              = projP0_;
+            s.projP5              = projP5_;
+            s.projP8              = projP8_;
+            s.projP9              = projP9_;
+#if defined(THREEPP_WITH_FSR)
+            s.fsrJitterX          = fsrJitterX_;
+            s.fsrJitterY          = fsrJitterY_;
+            s.fsrCamNear          = fsrCamNear_;
+            s.fsrCamFar           = fsrCamFar_;
+            s.fsrCamFovY          = fsrCamFovY_;
+#endif
+#if defined(THREEPP_WITH_DLSS)
+            s.dlssJitterX         = dlssJitterX_;
+            s.dlssJitterY         = dlssJitterY_;
+#endif
+            s.deferredCamRotAngle = deferredCamRotAngle_;
+        }
 
-            // Saved so the frame ends exactly where the primary left it. The
-            // pane region is primary state (split-screen scissor); a secondary
-            // always renders full-frame into its own target.
-            const VkExtent2D savedRegionRender = regionRenderExt_;
-            const VkExtent2D savedRegionSwap   = regionSwapExt_;
-            const int32_t    savedDstX         = regionDstX_;
-            const int32_t    savedDstY         = regionDstY_;
-
+void VulkanRenderer::Impl::applyViewRecordState(const ViewRecordState& s) {
+            curView_              = s.view;
+            regionRenderExt_      = s.regionRenderExt;
+            regionSwapExt_        = s.regionSwapExt;
+            regionDstX_           = s.regionDstX;
+            regionDstY_           = s.regionDstY;
+            indirectGroups_       = s.indirectGroups;
+            indirectTotalDraws_   = s.indirectTotalDraws;
+            particleDrawSlots_    = s.particleDrawSlots;
+            occlActiveThisFrame_  = s.occlActive;
+            tanHalfFovY_          = s.tanHalfFovY;
+            filmHeightM_          = s.filmHeightM;
+            projP0_               = s.projP0;
+            projP5_               = s.projP5;
+            projP8_               = s.projP8;
+            projP9_               = s.projP9;
+#if defined(THREEPP_WITH_FSR)
+            fsrJitterX_           = s.fsrJitterX;
+            fsrJitterY_           = s.fsrJitterY;
+            fsrCamNear_           = s.fsrCamNear;
+            fsrCamFar_            = s.fsrCamFar;
+            fsrCamFovY_           = s.fsrCamFovY;
+#endif
+#if defined(THREEPP_WITH_DLSS)
+            dlssJitterX_          = s.dlssJitterX;
+            dlssJitterY_          = s.dlssJitterY;
+#endif
+            deferredCamRotAngle_  = s.deferredCamRotAngle;
             // One query pool per frame-in-flight, one slot pair per pass — a
             // secondary re-running those passes into the same command buffer
             // would overwrite timestamps the primary already wrote. Record
             // silently; lastFrameTimings() stays the primary's.
+            gpuTimings_->setSuppressed(s.view && s.view->secondary);
+        }
+
+void VulkanRenderer::Impl::addViewEnterPass(rg::RenderGraph& g, size_t index) {
+            // views_[0] is the primary; the state itself is saved after this
+            // view's passes are built, so it is read only when the pass runs.
+            g.addPass(index == 0 ? "view.primary" : "view.secondary",
+                      [this, index](VkCommandBuffer) { applyViewRecordState(viewRecordStates_[index]); });
+        }
+
+bool VulkanRenderer::Impl::addSecondaryViewPasses(rg::RenderGraph& g) {
+            if (views_.size() < 2u) return false;
+
+            // Saved so the build of the tail starts exactly where the primary
+            // left it. The pane region is primary state (split-screen scissor);
+            // a secondary always renders full-frame into its own target.
+            const ViewRecordState& primary = viewRecordStates_[0];
+
+            // Silenced for the builds too, as the recording is (see
+            // applyViewRecordState).
             gpuTimings_->setSuppressed(true);
+            bool any = false;
 
             for (size_t i = 1; i < views_.size(); ++i) {
                 ViewContext& v = *views_[i];
@@ -1613,10 +1702,14 @@ void VulkanRenderer::Impl::recordSecondaryViews(VkCommandBuffer cb) {
                 // a cheap no-op after (the extent never changes for a view).
                 ensureHybridResources();
 
-                // G-buffer passes, first in this view's frame graph. The
-                // hybrid debug-view blit is primary-only (recordCommandBuffer).
-                auto& g = frameGraph_;
-                g.reset();
+                // This view's passes open with the pass that restores what its
+                // build leaves behind (saved below, once they are all built).
+                addViewEnterPass(g, i);
+                any = true;
+
+                // G-buffer passes, first in this view's run of passes. The
+                // hybrid debug-view resolve is primary-only
+                // (addPrimaryViewPasses).
                 addGbufferPasses(g);
 
                 const VkExtent2D ext   = v.outExt;
@@ -1650,15 +1743,13 @@ void VulkanRenderer::Impl::recordSecondaryViews(VkCommandBuffer cb) {
                 // out — it is SHARED state and a secondary resizing it
                 // corrupts the open command buffer.
                 addSecondaryFieldBillboardPasses(g);
-                executeGraph(cb, g, "frame.secondary");
+                saveViewRecordState(viewRecordStates_[i]);
             }
 
-            gpuTimings_->setSuppressed(false);
-            regionRenderExt_ = savedRegionRender;
-            regionSwapExt_   = savedRegionSwap;
-            regionDstX_      = savedDstX;
-            regionDstY_      = savedDstY;
-            curView_         = views_[0].get();
+            // Back to the primary for the tail's build (its recording gets the
+            // same from the tail's own "view" pass).
+            applyViewRecordState(primary);
+            return any;
         }
 
 bool VulkanRenderer::Impl::setViewSensorSurfacesImpl(uint32_t handle, bool enabled) {

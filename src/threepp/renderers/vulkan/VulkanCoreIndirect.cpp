@@ -9,6 +9,9 @@
 // with the rest of this file's methods.
 #include "threepp/renderers/vulkan/shaders/debug_resolve.comp.spv.h"
 
+#include "threepp/renderers/vulkan/DescriptorShadow.hpp"
+#include "threepp/renderers/vulkan/SpirvReflect.hpp"
+
 namespace threepp {
 
     bool VulkanRenderer::Impl::ensureDrawInfoCapacity(uint32_t frame, VkDeviceSize neededBytes) {
@@ -881,7 +884,8 @@ namespace threepp {
     // freshly-acquired swapchain image to GENERAL for the storage write
     // and leave it there, the exact exit contract the full deferred path
     // uses so endFrame()'s shared overlay/present finalize is unchanged.
-    void VulkanRenderer::Impl::recordHybridDebugResolve(VkCommandBuffer cb, uint32_t imageIndex, uint32_t frame) {
+    void VulkanRenderer::Impl::addHybridDebugResolvePass(vulkan::rg::RenderGraph& graph, uint32_t imageIndex,
+                                                         uint32_t frame) {
         if (hybridDebugView_ == HybridDebugView::Off) return;
         createDebugResolvePipeline();
 
@@ -950,28 +954,11 @@ namespace threepp {
         w[5].pImageInfo      = &depthInfo;
         vulkan::updateDescriptorSets(ctx->device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
 
-        // Freshly-acquired swapchain image (contents undefined) → GENERAL
-        // for the compute storage write.
-        VkImageMemoryBarrier2 toGeneral{};
-        toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        toGeneral.srcStageMask  = kAcquireWaitStages;// chain to the acquire wait
-        toGeneral.srcAccessMask = 0;
-        toGeneral.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        toGeneral.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        toGeneral.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        toGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        toGeneral.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toGeneral.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toGeneral.image = ctx->swapchainImages()[imageIndex];
-        toGeneral.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        toGeneral.subresourceRange.levelCount = 1;
-        toGeneral.subresourceRange.layerCount = 1;
-        VkDependencyInfo dep{};
-        dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        dep.imageMemoryBarrierCount = 1;
-        dep.pImageMemoryBarriers = &toGeneral;
-        vkCmdPipelineBarrier2(cb, &dep);
-
+        // The freshly-acquired swapchain image (imported UNDEFINED by
+        // importSwapchain) is carried to GENERAL for the compute storage
+        // write, and the graph leaves it there — the shared overlay/present
+        // finalize expects exactly that. The set was written above, so its
+        // reflected declaration names this frame's gbuf images.
         const VkExtent2D ext = ctx->swapchainExtent();
         DebugResolvePC pc{};
         pc.view       = viewCode;
@@ -981,14 +968,17 @@ namespace threepp {
         pc.gbufHeight = g.height;
         pc.motionGain = 20.0f;// signed NDC delta is tiny; scale for visibility
 
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, debugResolvePipeline_);
-        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                debugResolvePipelineLayout_, 0, 1, &ds, 0, nullptr);
-        vkCmdPushConstants(cb, debugResolvePipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
-                           0, sizeof(pc), &pc);
-        vkCmdDispatch(cb, (ext.width + 7) / 8, (ext.height + 7) / 8, 1);
-        // Swapchain left in GENERAL — the shared overlay/present finalize
-        // expects exactly that.
+        auto pass = graph.addPass("debugResolve", [this, ds, pc, ext](VkCommandBuffer c) {
+            vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_COMPUTE, debugResolvePipeline_);
+            vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    debugResolvePipelineLayout_, 0, 1, &ds, 0, nullptr);
+            vkCmdPushConstants(c, debugResolvePipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, sizeof(pc), &pc);
+            vkCmdDispatch(c, (ext.width + 7) / 8, (ext.height + 7) / 8, 1);
+        });
+        static const auto refl = vulkan::reflectSpirvBindings(kDebugResolveCompSpv,
+                                                              sizeof(kDebugResolveCompSpv) / sizeof(uint32_t));
+        vulkan::declareDescriptorSet(graph, pass, ds, 0, refl, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
     }
 
 }// namespace threepp
