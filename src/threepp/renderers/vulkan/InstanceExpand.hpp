@@ -20,8 +20,8 @@
 //
 // Buffer ownership follows OcclusionCull exactly: the CPU-written inputs are
 // per-frame-in-flight host-mapped buffers, and the GPU-only output is SINGLE
-// (written and read inside one command buffer; the leading barrier's queue
-// scope orders cross-frame reuse). Growth never destroys in place — a grown-out
+// (written and read inside one command buffer; the frame graph's entry barrier
+// orders cross-frame reuse). Growth never destroys in place — a grown-out
 // shared buffer goes to the renderer's frame-serial retire queue, because
 // entry-list churn that frees a buffer a sibling frame still names is a device
 // drain at best and a device-lost at worst (invariant 5).
@@ -29,6 +29,7 @@
 #ifndef THREEPP_VULKAN_INSTANCE_EXPAND_HPP
 #define THREEPP_VULKAN_INSTANCE_EXPAND_HPP
 
+#include "threepp/renderers/vulkan/RenderGraph.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
 #include <vulkan/vulkan.h>
@@ -89,10 +90,15 @@ namespace threepp::vulkan {
         void flushSpans(uint32_t frame, uint32_t spanCount);
         void flushMatrices(uint32_t frame, uint32_t firstMatrix, uint32_t matrixCount);
 
-        // One dispatch over totalWork instances. Leading barrier: host writes
-        // + any prior frame's use of the shared output → compute.
+        // One dispatch over totalWork instances, as a frame-graph pass (see
+        // declare). No barriers of its own: host writes are visible to the
+        // submission, and the graph's entry barrier orders any prior frame's
+        // use of the shared output before this frame's write.
         void record(VkCommandBuffer cb, uint32_t frame,
                     uint32_t spanCount, uint32_t totalWork);
+        // record()'s accesses: this frame's set (the span and matrix pools and
+        // the shared output), from the reflected shader.
+        void declare(rg::RenderGraph& g, rg::PassBuilder& pass, uint32_t frame) const;
 
         [[nodiscard]] VkBuffer worldBuffer() const { return world_.handle; }
         // Matrices the shared output currently holds (>= the entryCount the

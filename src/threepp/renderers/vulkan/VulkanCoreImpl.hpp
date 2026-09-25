@@ -4525,6 +4525,22 @@ namespace threepp {
         // each stage's passes to the frame graph in order, and the graph
         // derives the barriers between them from what each pass declares.
         void updatePaneRegion();
+        // The frame's head, as graph passes ahead of the deformers: the GPU
+        // instance expansion, the ParticleField emitter (+ surface bake), the
+        // interop snapshot and indirect-count copies, and the density scatter.
+        // Once for all views; every view's G-buffer and billboard draws, the
+        // froxels and the shade read what they write.
+        void addHeadPasses(vulkan::rg::RenderGraph& g);
+        // Every ParticleField's position ring, prevPositions, counts block,
+        // surface-bake map and draw-indirect records: what the emitter, the
+        // interop snapshot and the counts copy write, and the density scatter,
+        // the G-buffer / billboard vertex stages and the transmittance prepass
+        // read through buffer device addresses and indirect draws.
+        static constexpr const char* kParticleFields = "particles.fields";
+        // A pass that reads kParticleFields: `draws` = the G-buffer and
+        // billboard draws (indirect records + vertex pulls), otherwise the
+        // transmittance prepass (compute). No-op without a ParticleField pass.
+        void useParticleFields(vulkan::rg::RenderGraph& g, vulkan::rg::PassBuilder& pass, bool draws);
         // The deformers (dynamic plain meshes, skinned, tet, displaced water,
         // grass) and the per-frame TLAS refit, as graph passes. Each deformer
         // pass keeps the barriers between its own copy / dispatch / BLAS build;
@@ -4546,7 +4562,10 @@ namespace threepp {
         [[nodiscard]] bool gbufferMsaaResolveActive();
         [[nodiscard]] bool overlayDepthPrepassActive();
         [[nodiscard]] bool recordEventsOnlyFrame(VkCommandBuffer cb, uint32_t imageIndex);
-        void recordSwapchainPrepare(VkCommandBuffer cb, uint32_t imageIndex);
+        // The swapchain image, imported UNDEFINED (the entry barrier's
+        // ALL_COMMANDS source chains to the acquire wait) and left in GENERAL
+        // for the post-view tail, plus the split-screen clear.
+        void addSwapchainPasses(vulkan::rg::RenderGraph& g, uint32_t imageIndex);
         // Depth of field, bloom, the temporal resolve / upscaler and the post
         // composite, recorded as one render-graph segment (postGraph_).
         // `secondary`: a secondary view's reduced chain — no DoF, no DLSS/FSR,

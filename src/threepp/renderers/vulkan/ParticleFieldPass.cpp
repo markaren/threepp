@@ -1122,24 +1122,17 @@ void ParticleFieldPass::recordSurfaceBake(VkCommandBuffer cb) {
         vkCmdDispatch(cb, bd.groups, bd.groups, 1);
     }
 
-    // Two dependencies in one barrier, and the second is the one that is easy
-    // to miss.
-    //
-    //   WRITE -> READ: the map must be complete before particle_emit.comp,
-    //     recorded immediately after this, dereferences it.
-    //   READ -> WRITE: this pass TRACED the acceleration structure, and
-    //     the frame graph's per-frame TLAS refit WRITES it later in this same
-    //     command buffer. Without the read-before-write edge that is an
-    //     unsynchronised hazard even though nothing here writes the AS.
+    // The map must be complete before particle_emit.comp, recorded
+    // immediately after this, dereferences it. The other edge this pass needs
+    // — its TLAS traversal before the frame graph's TLAS refit writes the
+    // structure later in this command buffer — is the graph's, from the bake
+    // set declared in declareEmit.
     VkMemoryBarrier2 mb{};
     mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
     mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
-                       VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-    mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                       VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-    mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                       VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+    mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
     VkDependencyInfo di{};
     di.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
     di.memoryBarrierCount = 1;
@@ -2152,34 +2145,23 @@ void ParticleFieldPass::recordEmit(VkCommandBuffer cb) {
                            0, static_cast<std::uint32_t>(sizeof(EmitPc)), ed.pc);
         vkCmdDispatch(cb, ed.groups, 1, 1);
     }
+    // No trailing barrier: the consumers (the density scatter, every view's
+    // G-buffer and billboard vertex pulls, the transmittance prepass) declare
+    // the renderer's fields memory resource, and the frame graph issues one
+    // barrier after all of the dispatches.
+}
 
-    // ONE barrier for every field, covering every consumer in this frame:
-    //   COMPUTE — the density scatter, recorded next;
-    //   VERTEX  — particlefield_gbuf.vert, which pulls positions AND
-    //             prevPositions through buffer_reference in every view's
-    //             G-buffer pass, all of which record later into this same
-    //             command buffer;
-    //   ACCELERATION_STRUCTURE_BUILD — nothing reads it yet (the procedural
-    //             AABB BLAS is parent phase 5, deferred), but a refit that
-    //             consumed these positions would sit in this same window, and
-    //             the stage is free to name now rather than a hazard to
-    //             rediscover later.
-    // Per-field barriers would serialise dispatches the scheduler is happy to
-    // overlap, and every consumer is downstream of ALL of them anyway.
-    VkMemoryBarrier2 mb{};
-    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-    mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                       VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
-                       VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-    mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                       VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-    VkDependencyInfo dep{};
-    dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    dep.memoryBarrierCount = 1;
-    dep.pMemoryBarriers    = &mb;
-    vkCmdPipelineBarrier2(cb, &dep);
+void ParticleFieldPass::declareEmit(rg::RenderGraph& g, rg::PassBuilder& pass,
+                                    rg::BufferHandle fields) const {
+    constexpr VkPipelineStageFlags2 kCs = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    // Positions, prevPositions, the counts block (atomics) and the bake map.
+    pass.use(fields, rg::Access{kCs, VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                                VK_IMAGE_LAYOUT_UNDEFINED, true});
+    if (!bakeDispatch_.empty() && bakePipe_ != VK_NULL_HANDLE) {
+        static const auto bakeRefl = reflectSpirvBindings(
+                kParticleHeightBakeCompSpv, sizeof(kParticleHeightBakeCompSpv) / sizeof(std::uint32_t));
+        declareDescriptorSet(g, pass, tlasSet_, 0, bakeRefl, kCs);
+    }
 }
 
 // ── R8/R9: (T_cam, T_sun) once per particle, once per view ──────────────────
@@ -2299,40 +2281,11 @@ void ParticleFieldPass::recordDensityScatter(VkCommandBuffer cb) {
 
     if (densityDispatch_.empty()) return;
 
-    // 1. Zero every volume. UNDEFINED → GENERAL because the previous contents
-    //    are about to be overwritten wholesale — this is a discard, which is
-    //    exactly what an undefined old layout means, and it also covers the
-    //    image's very first frame with no extra bookkeeping.
-    std::vector<VkImageMemoryBarrier2> pre;
-    pre.reserve(densityDispatch_.size() * 2u);
-    for (const DensityDispatch& dd : densityDispatch_) {
-        VkImageMemoryBarrier2 ib{};
-        ib.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        ib.srcStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        ib.srcAccessMask = 0;
-        ib.dstStageMask  = VK_PIPELINE_STAGE_2_CLEAR_BIT;
-        ib.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        ib.oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
-        ib.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
-        ib.image         = dd.image;
-        ib.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        ib.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        ib.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        pre.push_back(ib);
-        // The r16f mirror: same discard-to-GENERAL, but its writer is the
-        // convert dispatch, not the clear — every voxel is overwritten, so it
-        // needs no clear of its own.
-        ib.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        ib.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        ib.image         = dd.linImage;
-        pre.push_back(ib);
-    }
-    VkDependencyInfo preDep{};
-    preDep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    preDep.imageMemoryBarrierCount = static_cast<std::uint32_t>(pre.size());
-    preDep.pImageMemoryBarriers    = pre.data();
-    vkCmdPipelineBarrier2(cb, &preDep);
-
+    // 1. Zero every volume. The frame graph has carried both volumes from
+    //    UNDEFINED to GENERAL (declareDensityScatter imports them UNDEFINED):
+    //    the previous contents are about to be overwritten wholesale, and the
+    //    r16f mirror needs no clear of its own because the convert dispatch
+    //    overwrites every voxel.
     VkClearColorValue zero{};
     zero.uint32[0] = 0;
     VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
@@ -2403,33 +2356,51 @@ void ParticleFieldPass::recordDensityScatter(VkCommandBuffer cb) {
         vkCmdDispatch(cb, g, g, g);
     }
 
-    // 6. Both volumes → every read this frame: the froxel passes' manual
-    //    trilinear on the uint volume (all views — they ride this one write)
-    //    and the shade's hardware trilinear on the r16f mirror. The majorants
-    //    are read by the LIDAR pass, which is a SEPARATE submission and is
-    //    ordered by submission order, not by this barrier.
-    //
-    //    VERTEX is on the list because the billboard stage now marches the
-    //    r16f mirror for its transmittance terms (plans/particle-volumetric-
-    //    sprites R4), later in this same command buffer and in a graphics pass.
-    //    Without it that read is unsynchronised against the convert's writes.
-    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-    mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                       VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-    mb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-    vkCmdPipelineBarrier2(cb, &dep);
+    // Both volumes' readers — the froxel passes' manual trilinear on the uint
+    // volume (every view, in its own graph), the shade's and the transmittance
+    // prepass's hardware trilinear on the r16f mirror — declare them through
+    // their descriptor sets; the LIDAR's read of the majorants follows the
+    // frame graph's exit barrier.
+}
+
+void ParticleFieldPass::declareDensityScatter(rg::RenderGraph& g, rg::PassBuilder& pass,
+                                              rg::BufferHandle fields) const {
+    if (densityDispatch_.empty()) return;
+    constexpr VkPipelineStageFlags2 kCs = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    constexpr VkAccessFlags2 kRw = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    pass.use(fields, rg::Access{kCs, VK_ACCESS_2_SHADER_STORAGE_READ_BIT, VK_IMAGE_LAYOUT_UNDEFINED, false});
+    pass.use(g.importBuffer("particles.majorants", densityMajorants_.handle),
+             rg::Access{VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT | kCs, VK_ACCESS_2_TRANSFER_WRITE_BIT | kRw,
+                        VK_IMAGE_LAYOUT_UNDEFINED, true});
+    // Imported before the sets below (and before any other pass names them),
+    // so these UNDEFINED imports are the ones the graph keeps. Mip range 0/1,
+    // the range the descriptor shadow registers for their views, so the
+    // reflected uses below widen these rather than adding second ones.
+    for (const DensityDispatch& dd : densityDispatch_) {
+        pass.use(g.importImage("particles.density", dd.image, VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                               VK_IMAGE_LAYOUT_UNDEFINED),
+                 rg::Access{VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT | kCs, VK_ACCESS_2_TRANSFER_WRITE_BIT | kRw,
+                            VK_IMAGE_LAYOUT_GENERAL, true},
+                 0, 1);
+        pass.use(g.importImage("particles.densityLin", dd.linImage, VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                               VK_IMAGE_LAYOUT_UNDEFINED),
+                 rg::storageWrite(kCs), 0, 1);
+    }
+    static const auto scatterRefl = reflectSpirvBindings(
+            kParticleDensityScatterCompSpv, sizeof(kParticleDensityScatterCompSpv) / sizeof(std::uint32_t));
+    static const auto convertRefl = reflectSpirvBindings(
+            kParticleDensityConvertCompSpv, sizeof(kParticleDensityConvertCompSpv) / sizeof(std::uint32_t));
+    for (const DensityDispatch& dd : densityDispatch_) {
+        declareDescriptorSet(g, pass, dd.set, 0, scatterRefl, kCs);
+        declareDescriptorSet(g, pass, dd.convertSet, 0, convertRefl, kCs);
+    }
 }
 
 // ── F6: exported allocation → this frame's ring slot ────────────────────────
-// One copy per interop field, then one barrier for all of them — the copies
-// are independent and the copy engine can overlap them, same batching as
-// recordCounts.
-//
-// The destination stages are everything that can read a position this frame:
-// the vertex stage (the mesh proxy and the billboard quad both pull positions
-// by device address), compute (the density scatter), and transfer (nothing
-// today, but the AABB/BLAS phase's copy is on this list the day it lands).
+// One copy per interop field. The readers of a position this frame (the vertex
+// pulls of the mesh proxy and the billboard quad, the density scatter, the
+// transmittance prepass) declare the fields memory resource, so the frame
+// graph issues one barrier after all the copies (declareCounts).
 void ParticleFieldPass::recordInteropSnapshot(VkCommandBuffer cb) {
 
     if (interopCopies_.empty()) return;
@@ -2441,27 +2412,12 @@ void ParticleFieldPass::recordInteropSnapshot(VkCommandBuffer cb) {
         region.size      = c.bytes;
         vkCmdCopyBuffer(cb, c.src, c.dst, 1, &region);
     }
-
-    VkMemoryBarrier2 mb{};
-    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
-    mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-    mb.dstStageMask  = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
-                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                      VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
-    mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_TRANSFER_READ_BIT;
-    VkDependencyInfo dep{};
-    dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    dep.memoryBarrierCount = 1;
-    dep.pMemoryBarriers    = &mb;
-    vkCmdPipelineBarrier2(cb, &dep);
 }
 
 void ParticleFieldPass::recordCounts(VkCommandBuffer cb) {
 
     if (draws_.empty()) return;
 
-    bool any = false;
     VkBufferCopy region{};
     region.srcOffset = 0;// FieldCountsGpu::liveCount
     region.dstOffset = kInstanceCountOffset;
@@ -2469,30 +2425,22 @@ void ParticleFieldPass::recordCounts(VkCommandBuffer cb) {
     for (const DrawState& d : draws_) {
         if (d.vertexCount != 0u && d.indirect != VK_NULL_HANDLE) {
             vkCmdCopyBuffer(cb, d.counts, d.indirect, 1, &region);
-            any = true;
         }
         // The billboard record takes the SAME 4-byte device copy: the two
         // representations are independent draws of the same field, so each owns
         // a record and neither learns the count on the host.
         if (d.billboard && d.bbIndirect != VK_NULL_HANDLE) {
             vkCmdCopyBuffer(cb, d.counts, d.bbIndirect, 1, &region);
-            any = true;
         }
     }
-    if (!any) return;
+    // The draws that read the counts declare the fields memory resource at
+    // DRAW_INDIRECT, so the frame graph issues one barrier after all the
+    // copies, which the copy engine is free to overlap.
+}
 
-    // One barrier for every field: the copies are independent, the consumer is
-    // the same command-processor stage, and a per-field barrier would serialise
-    // what the copy engine is happy to overlap.
-    VkMemoryBarrier2 mb{};
-    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
-    mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-    mb.dstStageMask  = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
-    mb.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
-    VkDependencyInfo dep{};
-    dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    dep.memoryBarrierCount = 1;
-    dep.pMemoryBarriers    = &mb;
-    vkCmdPipelineBarrier2(cb, &dep);
+void ParticleFieldPass::declareCounts(rg::PassBuilder& pass, rg::BufferHandle fields) const {
+    if (interopCopies_.empty() && draws_.empty()) return;
+    pass.use(fields, rg::Access{VK_PIPELINE_STAGE_2_COPY_BIT,
+                                VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                VK_IMAGE_LAYOUT_UNDEFINED, true});
 }

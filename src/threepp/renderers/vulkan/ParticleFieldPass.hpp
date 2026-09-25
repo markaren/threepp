@@ -487,10 +487,10 @@ namespace threepp::vulkan {
 
         // ── F6: the head-of-frame device-to-device snapshot ─────────────────
         // One vkCmdCopyBuffer per Interop field, exported buffer → this frame's
-        // ring slot, closed with a barrier that covers every consumer (vertex
-        // pull, density scatter, transfer). MUST be recorded before all of
-        // them, and before recordCounts for tidiness rather than correctness.
-        // No-op — not one command — when no field is Interop-owned.
+        // ring slot. Recorded as a frame-graph pass at the head of the frame
+        // (declareCounts), before every consumer, and before recordCounts for
+        // tidiness rather than correctness. No-op — not one command — when no
+        // field is Interop-owned.
         void recordInteropSnapshot(VkCommandBuffer cb);
 
         // Publish liveCount into each field's VkDrawIndirectCommand, on the
@@ -502,14 +502,19 @@ namespace threepp::vulkan {
         // of the frame's command buffer, before any consumer.
         void recordCounts(VkCommandBuffer cb);
 
+        // recordInteropSnapshot + recordCounts as one render-graph pass: both
+        // copy within `fields` (the renderer's memory resource for every
+        // field's device-address data and draw records).
+        void declareCounts(rg::PassBuilder& pass, rg::BufferHandle fields) const;
+
         // ── F2: the device emitter (Ownership::Renderer) ────────────────────
         // ONE dispatch per Renderer field, for ALL views — the positions are
         // field-local and view-independent, the same world-anchored argument the
         // density scatter makes (plan R9). Recorded at the HEAD of the frame's
         // command buffer, before recordCounts / recordDensityScatter and before
-        // any view's raster pass, and closed with a barrier that covers every
-        // consumer: the density scatter (compute), the G-buffer draw (vertex)
-        // and, when a BLAS ever exists, the acceleration-structure build.
+        // any view's raster pass. Its consumers (the density scatter, every
+        // view's G-buffer and billboard draws, the transmittance prepass)
+        // declare `fields` and the frame graph orders them after it.
         //
         // No-op when no field is Renderer-owned — not one command is written.
         void recordEmit(VkCommandBuffer cb);
@@ -517,16 +522,20 @@ namespace threepp::vulkan {
         // ── F5: the surface height bake ─────────────────────────────────────
         // Re-bake, for any field whose EmitterParams::Surface is on and whose
         // baked footprint no longer matches what the emitter is about to ask
-        // for. Recorded IMMEDIATELY BEFORE recordEmit — the map is the emitter's
-        // input — and closed with a barrier in both directions: this pass's
-        // TLAS read must complete before the frame graph's TLAS refit writes
-        // the acceleration structure later in the same command buffer, and its
-        // buffer write must complete before the emit dispatch reads it.
+        // for. Recorded IMMEDIATELY BEFORE recordEmit, in the same graph pass —
+        // the map is the emitter's input — behind a barrier from its buffer
+        // write to the emit dispatch's read. Its TLAS read is declared through
+        // its descriptor set (declareEmit), which orders the frame graph's TLAS
+        // refit, later in the same command buffer, after it.
         //
         // No-op on the overwhelming majority of frames: a bake happens only when
         // the scene's structure changed, the follow centre snapped, the field
         // moved, or the footprint was reconfigured. Steady state records nothing.
         void recordSurfaceBake(VkCommandBuffer cb);
+
+        // recordSurfaceBake + recordEmit as one render-graph pass: the write of
+        // `fields` and, when a bake runs, the bake set's TLAS (reflected).
+        void declareEmit(rg::RenderGraph& g, rg::PassBuilder& pass, rg::BufferHandle fields) const;
 
         // A bake will be recorded this frame. Same purpose as emitActive(): let
         // the renderer skip the timestamp bracket on the frames that do nothing.
@@ -600,6 +609,13 @@ namespace threepp::vulkan {
         // recordCounts, and never inside a per-view block. No-op when no field
         // has a density representation — not one command is written.
         void recordDensityScatter(VkCommandBuffer cb);
+
+        // recordDensityScatter as a render-graph pass: both volumes of every
+        // scattered field, imported UNDEFINED (the clear discards them) and
+        // left in GENERAL for the froxels, the shade and the transmittance
+        // prepass; the majorant buffer; the positions it reads from `fields`;
+        // and the scatter / convert sets (reflected).
+        void declareDensityScatter(rg::RenderGraph& g, rg::PassBuilder& pass, rg::BufferHandle fields) const;
 
         // This frame's bound volumes, in descriptor-array order. Never longer
         // than kMaxDensityFields.

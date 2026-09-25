@@ -920,38 +920,15 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 // cells either way. The difference is not a cross-frame GPU
                 // hazard on this queue. Not kept; it would only cost overlap.)
             }
-            // First thing in the stream, and its own phase: one dispatch, no
-            // dependants. Deliberately NOT inside frame.J_record — a phase whose
-            // whole purpose is a cost measurement must not be summed into
-            // another one.
-            {
-                THREEPP_CPUPROF("frame.M3_instExpandRec");
-                recordInstanceExpansion(cmdBuffers[currentFrame], currentFrame);
-                // The ParticleField device emitter, FIRST of the field block:
-                // one dispatch per Ownership::Renderer field writes this
-                // frame's positions AND its prevPositions, and everything below
-                // — the density scatter here, every view's G-buffer draw later
-                // — reads them. Once for all views, same world-anchored
-                // argument as the scatter.
-                recordParticleFieldEmit(cmdBuffers[currentFrame], currentFrame);
-                // Same place, same shape: a handful of 4-byte copies that give
-                // each ParticleField's draw command its instanceCount without
-                // the count ever being a CPU-visible value.
-                recordParticleFieldCounts(cmdBuffers[currentFrame]);
-                // And the density representation's whole per-frame GPU cost:
-                // clear + splat each dust field into its world-anchored volume.
-                // HERE, not per view: the volume is world-anchored precisely so
-                // K cameras share ONE scatter (plan R9), and it must precede
-                // every view's froxel pass, all of which record later into this
-                // same command buffer.
-                recordParticleDensityScatter(cmdBuffers[currentFrame], currentFrame);
-            }
             // Record the full deferred-render body into the now-open cmd
-            // buffer. Leaves the swapchain image in GENERAL.
-            // INCLUSIVE of frame.L_tlasRefitDispatch (and therefore of
-            // frame.H_uploadTlasInst inside it), which the frame graph's tlas pass
-            // reaches. Those two are reported as detail rows; only ONE of
-            // {frame.J_record} / {L, H} belongs in a phase sum.
+            // buffer, from the frame graph's head passes (instance expansion,
+            // the ParticleField emitter, counts and density scatter) on.
+            // Leaves the swapchain image in GENERAL.
+            // INCLUSIVE of frame.M3_instExpandRec (the head passes' recording)
+            // and of frame.L_tlasRefitDispatch (and therefore of
+            // frame.H_uploadTlasInst inside it), which the frame graph's head
+            // and tlas passes reach. Those are reported as detail rows; only ONE
+            // of {frame.J_record} / {M3, L, H} belongs in a phase sum.
             {
                 THREEPP_CPUPROF("frame.J_record");
                 recordCommandBuffer(cmdBuffers[currentFrame], imageIndex);

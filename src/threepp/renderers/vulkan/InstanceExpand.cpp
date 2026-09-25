@@ -1,5 +1,7 @@
 #include "threepp/renderers/vulkan/InstanceExpand.hpp"
 
+#include "threepp/renderers/vulkan/DescriptorShadow.hpp"
+#include "threepp/renderers/vulkan/SpirvReflect.hpp"
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 
 #include "threepp/renderers/vulkan/shaders/instance_expand.comp.spv.h"
@@ -235,24 +237,6 @@ namespace threepp::vulkan {
                                 uint32_t spanCount, uint32_t totalWork) {
         if (spanCount == 0u || totalWork == 0u || pipe_ == VK_NULL_HANDLE) return;
 
-        // Host writes (spans + matrices) → compute reads, and the previous
-        // frame's compute writes into the SHARED output → this frame's writes
-        // (WAW on a single buffer). Nothing else reads the output yet, so this
-        // is the whole synchronization story for stage 1; the barrier the
-        // consumers will need arrives with them.
-        VkMemoryBarrier2 mb{};
-        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-        mb.srcStageMask  = VK_PIPELINE_STAGE_2_HOST_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        mb.srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                           VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        VkDependencyInfo dep{};
-        dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        dep.memoryBarrierCount = 1;
-        dep.pMemoryBarriers    = &mb;
-        vkCmdPipelineBarrier2(cb, &dep);
-
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_,
                                 0, 1, &sets_[frame], 0, nullptr);
@@ -261,7 +245,14 @@ namespace threepp::vulkan {
         vkCmdDispatch(cb, (totalWork + 63u) / 64u, 1, 1);
 
         // Trailing: the readback path is the only consumer, and it drains the
-        // device and issues its own barrier. A stage-2 consumer adds its own.
+        // device and issues its own barrier. A stage-2 consumer declares the
+        // output in its own graph pass.
+    }
+
+    void InstanceExpand::declare(rg::RenderGraph& g, rg::PassBuilder& pass, uint32_t frame) const {
+        static const auto refl = reflectSpirvBindings(kInstanceExpandCompSpv,
+                                                      sizeof(kInstanceExpandCompSpv) / sizeof(uint32_t));
+        declareDescriptorSet(g, pass, sets_[frame], 0, refl, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
     }
 
     bool InstanceExpand::readWorldMatrices(VkCommandPool cmdPool, VkQueue queue,

@@ -45,6 +45,61 @@ void VulkanRenderer::Impl::updatePaneRegion() {
             }
 }
 
+void VulkanRenderer::Impl::addHeadPasses(rg::RenderGraph& g) {
+            const uint32_t f = currentFrame;
+            // GPU per-instance world matrices (stage 1 of
+            // plans/gpu-driven-instances.md): one dispatch whose output only
+            // the instanceExpandCheck readback reads.
+            if (gpuInstanceExpand_ && instExpand_ && !instExpandSpans_.empty()) {
+                auto pass = g.addPass("instExpand", [this, f](VkCommandBuffer c) {
+                    THREEPP_CPUPROF("frame.M3_instExpandRec");
+                    recordInstanceExpansion(c, f);
+                });
+                instExpand_->declare(g, pass, f);
+            }
+            if (!particleFieldPass_) return;
+
+            // The ParticleField block, once for all views (the positions and
+            // the density volumes are world-anchored, plan R9). The emitter
+            // first: the counts copy, the density scatter and every view's
+            // draws read what it writes.
+            const rg::BufferHandle fields = g.importMemory(kParticleFields);
+            if (particleFieldPass_->emitActive()) {
+                auto pass = g.addPass("fields.emit", [this, f](VkCommandBuffer c) {
+                    THREEPP_CPUPROF("frame.M3_instExpandRec");
+                    recordParticleFieldEmit(c, f);
+                });
+                particleFieldPass_->declareEmit(g, pass, fields);
+            }
+            // The interop snapshot and the device-side instanceCount publish.
+            {
+                auto pass = g.addPass("fields.counts", [this](VkCommandBuffer c) {
+                    THREEPP_CPUPROF("frame.M3_instExpandRec");
+                    recordParticleFieldCounts(c);
+                });
+                particleFieldPass_->declareCounts(pass, fields);
+            }
+            // Clear + splat each dust field into its world-anchored volume,
+            // ahead of every view's froxel pass.
+            if (particleFieldPass_->densityActive()) {
+                auto pass = g.addPass("fields.density", [this, f](VkCommandBuffer c) {
+                    THREEPP_CPUPROF("frame.M3_instExpandRec");
+                    recordParticleDensityScatter(c, f);
+                });
+                particleFieldPass_->declareDensityScatter(g, pass, fields);
+            }
+}
+
+void VulkanRenderer::Impl::useParticleFields(rg::RenderGraph& g, rg::PassBuilder& pass, bool draws) {
+            if (!particleFieldPass_) return;
+            pass.use(g.importMemory(kParticleFields),
+                     draws ? rg::Access{VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                                        VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                                        VK_IMAGE_LAYOUT_UNDEFINED, false}
+                           : rg::Access{rg::kCompute, VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                                        VK_IMAGE_LAYOUT_UNDEFINED, false});
+}
+
 void VulkanRenderer::Impl::addDeformAndTlasPasses(rg::RenderGraph& g) {
             // Cross-frame order for the in-place writes below is the graph's
             // entry barrier: the TLAS, its storage and refit scratch, and every
@@ -867,6 +922,9 @@ void VulkanRenderer::Impl::addGbufferPasses(rg::RenderGraph& g) {
                                             VK_ACCESS_2_INDEX_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
                                     VK_IMAGE_LAYOUT_UNDEFINED, false});
                 pass.use(g.importMemory(kSceneGeometry), kVertexRead);
+                // The ParticleField draws: device-written instance counts and
+                // positions pulled by address (recordParticleFieldDraws).
+                useParticleFields(g, pass, true);
             }
 
             // ── MSAA dominant-sample resolve (setGbufferMsaa 2|4) ──────────
@@ -1004,64 +1062,18 @@ bool VulkanRenderer::Impl::recordEventsOnlyFrame(VkCommandBuffer cb, uint32_t im
             return false;
 }
 
-void VulkanRenderer::Impl::recordSwapchainPrepare(VkCommandBuffer cb, uint32_t imageIndex) {
+void VulkanRenderer::Impl::addSwapchainPasses(rg::RenderGraph& g, uint32_t imageIndex) {
             const VkImage img = ctx->swapchainImages()[imageIndex];
 
-            // UNDEFINED -> GENERAL. Swapchain is now written by either the
-            // TAA compute dispatch (post-denoise), the denoise compute pass
-            // directly (TAA off + unscaled), or the upscale blit (TAA off +
-            // scaled); raygen no longer writes the swapchain directly
-            // (binding 1 was redirected away from the swapchain view).
-            VkImageMemoryBarrier2 toGeneral{};
-            toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            toGeneral.srcStageMask = kAcquireWaitStages;// chain to the acquire wait
-            toGeneral.srcAccessMask = 0;
-            toGeneral.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                     VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            toGeneral.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
-                                      VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            toGeneral.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            toGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            toGeneral.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toGeneral.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toGeneral.image = img;
-            toGeneral.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            toGeneral.subresourceRange.levelCount = 1;
-            toGeneral.subresourceRange.layerCount = 1;
-
-            // Ensure prior frames' ReSTIR DI reservoir writes are visible to
-            // this frame's read-modify-write. We barrier both ping-pong slots
-            // since over consecutive frames the read-from / write-to roles
-            // alternate. Layout stays in GENERAL for both storage images.
-            VkImageMemoryBarrier2 accumGbufTemplate{};
-            accumGbufTemplate.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            accumGbufTemplate.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            accumGbufTemplate.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            accumGbufTemplate.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            accumGbufTemplate.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                              VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            accumGbufTemplate.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            accumGbufTemplate.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            accumGbufTemplate.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            accumGbufTemplate.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            accumGbufTemplate.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            accumGbufTemplate.subresourceRange.levelCount = 1;
-            accumGbufTemplate.subresourceRange.layerCount = 1;
-
-            std::array<VkImageMemoryBarrier2, 5> preBarriers{};
-            preBarriers[0] = toGeneral;
-            // ReSTIR DI reservoir ping-pong: frame N writes one slot, reads the
-            // other; the barrier ensures frame N-1's write is visible to frame
-            // N's read in the deferred shade's COMPUTE stage.
-            preBarriers[1] = accumGbufTemplate; preBarriers[1].image = view().reservoirPosImagesPP[0].image;
-            preBarriers[2] = accumGbufTemplate; preBarriers[2].image = view().reservoirPosImagesPP[1].image;
-            preBarriers[3] = accumGbufTemplate; preBarriers[3].image = view().reservoirWImagesPP[0].image;
-            preBarriers[4] = accumGbufTemplate; preBarriers[4].image = view().reservoirWImagesPP[1].image;
-            VkDependencyInfo dep{};
-            dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            dep.imageMemoryBarrierCount = static_cast<uint32_t>(preBarriers.size());
-            dep.pImageMemoryBarriers = preBarriers.data();
-            vkCmdPipelineBarrier2(cb, &dep);
+            // Imported UNDEFINED: the acquired image's contents are dead, and the
+            // entry barrier, whose ALL_COMMANDS source chains to the acquire
+            // wait, carries it to its first use's layout. Imported here, ahead
+            // of every other pass that names it, so this import's layouts are
+            // the ones the graph keeps; the exit barrier leaves it in GENERAL,
+            // where the post-view tail and endFrame expect it. Its writers are
+            // the TAA / denoise compute store, the upscale blit and the overlay.
+            const auto swap = g.importImage("swapchain", img, VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                                            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
 
             // Split-screen: clear the whole frame to clearColor once so the
             // area outside the deferred-render pane's scissor shows the clear
@@ -1077,32 +1089,13 @@ void VulkanRenderer::Impl::recordSwapchainPrepare(VkCommandBuffer cb, uint32_t i
                 cv.float32[1] = cc.g;
                 cv.float32[2] = cc.b;
                 cv.float32[3] = clearAlpha;
-                VkImageSubresourceRange clrRange{};
-                clrRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                clrRange.levelCount = 1;
-                clrRange.layerCount = 1;
-                vkCmdClearColorImage(cb, img, VK_IMAGE_LAYOUT_GENERAL, &cv, 1, &clrRange);
-                // Clear (transfer write) → the TAA swapchain store (compute write).
-                VkImageMemoryBarrier2 clrBar{};
-                clrBar.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                clrBar.srcStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-                clrBar.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                clrBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                clrBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
-                                       VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-                clrBar.oldLayout            = VK_IMAGE_LAYOUT_GENERAL;
-                clrBar.newLayout            = VK_IMAGE_LAYOUT_GENERAL;
-                clrBar.srcQueueFamilyIndex  = VK_QUEUE_FAMILY_IGNORED;
-                clrBar.dstQueueFamilyIndex  = VK_QUEUE_FAMILY_IGNORED;
-                clrBar.image                = img;
-                clrBar.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                clrBar.subresourceRange.levelCount = 1;
-                clrBar.subresourceRange.layerCount = 1;
-                VkDependencyInfo clrDep{};
-                clrDep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                clrDep.imageMemoryBarrierCount = 1;
-                clrDep.pImageMemoryBarriers    = &clrBar;
-                vkCmdPipelineBarrier2(cb, &clrDep);
+                g.addPass("swapchain.clear", [img, cv](VkCommandBuffer c) {
+                     VkImageSubresourceRange clrRange{};
+                     clrRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                     clrRange.levelCount = 1;
+                     clrRange.layerCount = 1;
+                     vkCmdClearColorImage(c, img, VK_IMAGE_LAYOUT_GENERAL, &cv, 1, &clrRange);
+                 }).use(swap, rg::transferDst(VK_IMAGE_LAYOUT_GENERAL));
             }
 }
 
@@ -1959,6 +1952,7 @@ void VulkanRenderer::Impl::addSecondaryFieldBillboardPasses(rg::RenderGraph& g) 
             if (particleFieldPass_ && particleFieldPass_->transmittanceActive()) {
                 auto pass = g.addPass("fieldTransmittance", [this](VkCommandBuffer c) { recordFieldTransmittance(c); });
                 particleFieldPass_->declareTransmittance(g, pass, f);
+                useParticleFields(g, pass, false);
             }
 
             auto pass = g.addPass("fieldBillboards", [this](VkCommandBuffer c) {
@@ -2019,6 +2013,7 @@ void VulkanRenderer::Impl::addSecondaryFieldBillboardPasses(rg::RenderGraph& g) 
                          rg::Access{VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
                                     VK_IMAGE_LAYOUT_UNDEFINED, false});
             }
+            useParticleFields(g, pass, true);
 }
 
 // ── R8/R9: the transmittance prepass, for the view about to draw ────────────
@@ -3182,6 +3177,7 @@ void VulkanRenderer::Impl::addTailPasses(rg::RenderGraph& g, uint32_t imageIndex
             if (particleFieldPass_ && particleFieldPass_->transmittanceActive()) {
                 auto pass = g.addPass("fieldTransmittance", [this](VkCommandBuffer c) { recordFieldTransmittance(c); });
                 particleFieldPass_->declareTransmittance(g, pass, f);
+                useParticleFields(g, pass, false);
             }
 
             // ── F4: the billboard-only bloom pyramid ────────────────────────
@@ -3195,6 +3191,7 @@ void VulkanRenderer::Impl::addTailPasses(rg::RenderGraph& g, uint32_t imageIndex
                 billboardGlow_->declare(g, pass, f,
                                         overlayDepthPrepassActive() ? overlayDepthImage().image : VK_NULL_HANDLE);
                 pass.use(trans, vertexStorageRead);
+                useParticleFields(g, pass, true);
             }
 
             // ── Post-TAA wireframe / line / particle / sprite overlays ──────
@@ -3248,6 +3245,7 @@ void VulkanRenderer::Impl::addTailPasses(rg::RenderGraph& g, uint32_t imageIndex
                                             VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
                                     VK_IMAGE_LAYOUT_UNDEFINED, false});
                 pass.use(trans, vertexStorageRead);
+                useParticleFields(g, pass, true);
                 pass.use(g.importBuffer("particle.light", particleLightBufs_[f].handle),
                          rg::Access{VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                                     VK_ACCESS_2_SHADER_STORAGE_READ_BIT, VK_IMAGE_LAYOUT_UNDEFINED, false});
@@ -3325,12 +3323,15 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
             if (particleDescPools_[currentFrame] != VK_NULL_HANDLE)
                 vkResetDescriptorPool(ctx->device(), particleDescPools_[currentFrame], 0);
 
-            // The frame's render graph: the deformers (dynamic meshes, skinned,
-            // tet, displaced water, grass) and the per-frame TLAS refit, then
-            // the raster G-buffer (+ occlusion culling, MSAA resolve, overlay
-            // depth prepass).
+            // The frame's render graph: the head (GPU instance expansion, the
+            // ParticleField emitter, counts and density scatter — once for all
+            // views), the deformers (dynamic meshes, skinned, tet, displaced
+            // water, grass) and the per-frame TLAS refit, then the raster
+            // G-buffer (+ occlusion culling, MSAA resolve, overlay depth
+            // prepass).
             auto& g = frameGraph_;
             g.reset();
+            addHeadPasses(g);
             addDeformAndTlasPasses(g);
             addGbufferPasses(g);
 
@@ -3349,10 +3350,10 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
                 return;
             }
 
-            // Swapchain → GENERAL, ReSTIR reservoir visibility, optional
-            // split-screen clear. Recorded ahead of the graph: it depends on
-            // nothing in the frame but the acquire.
-            recordSwapchainPrepare(cb, imageIndex);
+            // The acquired swapchain image (UNDEFINED in, GENERAL out) and the
+            // optional split-screen clear. The ReSTIR reservoirs' previous-frame
+            // writes are ordered by the entry barrier; the shade declares them.
+            addSwapchainPasses(g, imageIndex);
 
             // Per-frame set index. Was `currentFrame * imageCount_ + imageIndex`,
             // which read as live per-(frame, image) indexing but was neither: the
