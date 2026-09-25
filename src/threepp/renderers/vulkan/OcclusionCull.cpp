@@ -85,8 +85,8 @@ namespace threepp::vulkan {
         vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         vci.subresourceRange.levelCount = 1;
         vci.subresourceRange.layerCount = 1;
-        check(vkCreateImageView(ctx_.device(), &vci, nullptr, &dummyHiz_.view),
-              "vkCreateImageView(occl.dummyHiz)");
+        check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &dummyHiz_.view),
+              "vulkan::createImageView(occl.dummyHiz)");
 
         VkCommandBufferAllocateInfo ai{};
         ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -315,7 +315,7 @@ namespace threepp::vulkan {
             ww(3, 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, &bVis, nullptr);
             ww(4, 4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, nullptr, &iHiz);
             ww(5, 5, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &bCam, nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), 6, w, 0, nullptr);
+            vulkan::updateDescriptorSets(ctx_.device(), 6, w, 0, nullptr);
         };
         writeSet(filterSets_[frame], phase1_.handle, dummyHiz_.view, in.hizSampler,
                  VK_IMAGE_LAYOUT_GENERAL);

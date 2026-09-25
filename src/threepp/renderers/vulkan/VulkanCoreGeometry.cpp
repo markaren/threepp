@@ -909,7 +909,7 @@ void VulkanRenderer::Impl::rewriteTetPosBinding(TetMeshState& st, VkBuffer buf) 
                 wr.descriptorCount = 1;
                 wr.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                 wr.pBufferInfo     = &bi;
-                vkUpdateDescriptorSets(ctx->device(), 1, &wr, 0, nullptr);
+                vulkan::updateDescriptorSets(ctx->device(), 1, &wr, 0, nullptr);
             }
         }
 
@@ -940,7 +940,7 @@ void VulkanRenderer::Impl::disableSoftBodyInterop(const Mesh& mesh) {
                 wr.descriptorCount = 1;
                 wr.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                 wr.pBufferInfo     = &bi;
-                vkUpdateDescriptorSets(ctx->device(), 1, &wr, 0, nullptr);
+                vulkan::updateDescriptorSets(ctx->device(), 1, &wr, 0, nullptr);
             }
             vulkan::destroyExternalBuffer(ctx->device(), st.tetPosExt);
             st.tetPosExternalCopy = nullptr;
@@ -3233,7 +3233,7 @@ VulkanRenderer::Impl::SkinnedMeshState* VulkanRenderer::Impl::ensureSkinnedBlas(
                     wr[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                     wr[i].pBufferInfo     = &bi[i];
                 }
-                vkUpdateDescriptorSets(ctx->device(),
+                vulkan::updateDescriptorSets(ctx->device(),
                                        static_cast<uint32_t>(wr.size()),
                                        wr.data(), 0, nullptr);
             }
@@ -3375,7 +3375,7 @@ VulkanRenderer::Impl::TetMeshState* VulkanRenderer::Impl::ensureTetBlas(Mesh& m)
                     wr[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                     wr[i].pBufferInfo     = &bi[i];
                 }
-                vkUpdateDescriptorSets(ctx->device(),
+                vulkan::updateDescriptorSets(ctx->device(),
                                        static_cast<uint32_t>(wr.size()), wr.data(), 0, nullptr);
             }
 
@@ -3635,8 +3635,8 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
                 vci.format = VK_FORMAT_R32G32_SFLOAT;
                 vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                check(vkCreateImageView(ctx->device(), &vci, nullptr, &state->scratchA.view),
-                      "vkCreateImageView(displaceScratch)");
+                check(vulkan::createImageView(ctx->device(), &vci, nullptr, &state->scratchA.view),
+                      "vulkan::createImageView(displaceScratch)");
                 ctx->setObjectName(state->scratchA.image, "ocean.scratchA (IFFT ping-pong)");
                 ctx->setObjectName(state->scratchA.view,  "ocean.scratchA (IFFT ping-pong)");
             }
@@ -3722,8 +3722,8 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
                 vci.format = VK_FORMAT_R32_SFLOAT;
                 vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                check(vkCreateImageView(ctx->device(), &vci, nullptr, &state->foamImage.view),
-                      "vkCreateImageView(foamWorld)");
+                check(vulkan::createImageView(ctx->device(), &vci, nullptr, &state->foamImage.view),
+                      "vulkan::createImageView(foamWorld)");
                 ctx->setObjectName(state->foamImage.image, "ocean.foamWorld (R32F)");
                 ctx->setObjectName(state->foamImage.view,  "ocean.foamWorld (R32F)");
 
@@ -3801,7 +3801,7 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                 ws[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 ws[i].pImageInfo = &imageInfos[i];
             }
-            vkUpdateDescriptorSets(ctx->device(), uint32_t(ws.size()), ws.data(), 0, nullptr);
+            vulkan::updateDescriptorSets(ctx->device(), uint32_t(ws.size()), ws.data(), 0, nullptr);
 
             // Foam-world descriptor set — same cascade bindings 0..5 as the
             // displace set, plus binding 6 = the storage image foam target.
@@ -3836,7 +3836,7 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             fws[6].descriptorCount= 1;
             fws[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             fws[6].pImageInfo     = &foamStorageInfo;
-            vkUpdateDescriptorSets(ctx->device(), uint32_t(fws.size()), fws.data(), 0, nullptr);
+            vulkan::updateDescriptorSets(ctx->device(), uint32_t(fws.size()), fws.data(), 0, nullptr);
 
             // Hand the smallest enabled cascade's height image to closest_hit
             // (binding 32) for sub-mesh-resolution normal perturbation. Picks

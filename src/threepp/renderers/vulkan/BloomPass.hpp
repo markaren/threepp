@@ -24,6 +24,7 @@
 #ifndef THREEPP_VULKAN_BLOOM_PASS_HPP
 #define THREEPP_VULKAN_BLOOM_PASS_HPP
 
+#include "threepp/renderers/vulkan/RenderGraph.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
 #include <vulkan/vulkan.h>
@@ -80,12 +81,21 @@ namespace threepp::vulkan {
         // Records the bloom pyramid; no-op when bloomIntensity <= 0.
         // width/height = render extent. bloomClamp caps the per-tap HDR input
         // to the bright pass (<= 0 = off) so sub-pixel specular flicker can't
-        // pulse the halo radius. Ends with the pyramid writes barriered
-        // visible to the next compute consumer.
+        // pulse the halo radius. Records the barriers between its levels only:
+        // the ones against sceneHdr's producer and the pyramid's consumer are
+        // the render graph's, from declare().
         void recordPyramid(VkCommandBuffer cb, uint32_t frame,
                            uint32_t width, uint32_t height,
                            float bloomIntensity, float bloomThreshold,
                            float bloomClamp);
+
+        // Render-graph declaration of recordPyramid: sceneHdr sampled, every
+        // pyramid level read and written. The caller imports sceneHdr.
+        void declare(rg::RenderGraph& graph, rg::PassBuilder& pass, uint32_t frame,
+                     rg::ImageHandle sceneHdr) const;
+        [[nodiscard]] VkImage levelImage(uint32_t frame, uint32_t level) const {
+            return pyr_[frame * kMaxLevels + level].image;
+        }
 
     private:
         VulkanContext& ctx_;

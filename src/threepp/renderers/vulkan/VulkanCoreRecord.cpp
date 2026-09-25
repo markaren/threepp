@@ -4,6 +4,8 @@
 
 namespace threepp {
 
+    namespace rg = vulkan::rg;
+
 
 void VulkanRenderer::Impl::updatePaneRegion() {
             // ── Split-screen pane region ───────────────────────────────────
@@ -1057,7 +1059,7 @@ void VulkanRenderer::Impl::recordSwapchainPrepare(VkCommandBuffer cb, uint32_t i
             }
 }
 
-void VulkanRenderer::Impl::recordSplats(VkCommandBuffer cb) {
+void VulkanRenderer::Impl::addSplatPasses(rg::RenderGraph& g) {
             // ── Gaussian splats into the linear-HDR scene ──────────────────────
             // After the shade (so the G-buffer depth it tests against, and the
             // sceneHdr it composites over, are both final) and before the DoF
@@ -1070,7 +1072,7 @@ void VulkanRenderer::Impl::recordSplats(VkCommandBuffer cb) {
             // SplatPass::resize.
             if (!splat_) return;
             if (view().secondary) {
-                recordSecondaryViewSplats(cb);
+                addSecondaryViewSplatPasses(g);
                 return;
             }
 
@@ -1079,7 +1081,12 @@ void VulkanRenderer::Impl::recordSplats(VkCommandBuffer cb) {
             // leave an empty one rather than whatever the previous user of
             // this frame-in-flight slot wrote. Cheap when the AOV is off —
             // the image is one texel then.
-            if (splatDepthAovAllocated()) splat_->clearDepthAov(cb, currentFrame);
+            if (splatDepthAovAllocated()) {
+                auto clear = g.addPass("splatDepthClear", [this, f = currentFrame](VkCommandBuffer c) {
+                    splat_->clearDepthAov(c, f);
+                });
+                splat_->declareDepthAovClear(g, clear, currentFrame);
+            }
 
             if (!splat_->hasClouds()) return;
 
@@ -1138,9 +1145,14 @@ void VulkanRenderer::Impl::recordSplats(VkCommandBuffer cb) {
             p.checksum       = splatChecksum_;
 
             p.timings        = gpuTimings_.get();// per-stage split, from inside
-            gpuTimings_->begin(cb, TP_Splat, currentFrame);
-            splat_->record(cb, currentFrame, p);
-            gpuTimings_->end(cb, TP_Splat, currentFrame);
+            auto pass = g.addPass("splats", [this, p, f = currentFrame](VkCommandBuffer c) {
+                gpuTimings_->begin(c, TP_Splat, f);
+                splat_->record(c, f, p);
+                gpuTimings_->end(c, TP_Splat, f);
+            });
+            g.importImage("sceneHdr", view().bloom_->sceneHdrImage(currentFrame), VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                          VK_IMAGE_LAYOUT_GENERAL);
+            splat_->declare(g, pass, currentFrame, p);
 
 }
 
@@ -1197,7 +1209,7 @@ bool VulkanRenderer::Impl::splatStampPrepare(VkCommandBuffer cb) {
                 w.descriptorCount = 1;
                 w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 w.pImageInfo      = &ii;
-                vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
+                vulkan::updateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
                 splatStampSetViews_[currentFrame] = g.splatDepth.view;
             }
 
@@ -1291,7 +1303,7 @@ void VulkanRenderer::Impl::recordSplatStampDraw(VkCommandBuffer cb) {
             vkCmdDraw(cb, 3, 1, 0, 0);
 }
 
-void VulkanRenderer::Impl::recordSecondaryViewSplats(VkCommandBuffer cb) {
+void VulkanRenderer::Impl::addSecondaryViewSplatPasses(rg::RenderGraph& g) {
             // ── Splats into a secondary view's linear-HDR scene ─────────────────
             // Same slot in the frame as the primary's (after the shade, before
             // the bloom pyramid) and the same pipeline, on this view's own
@@ -1371,41 +1383,18 @@ void VulkanRenderer::Impl::recordSecondaryViewSplats(VkCommandBuffer cb) {
             p.preExposure    = preExposure();
             p.bgIsSolidColor = envIsBgColor;
 
-            splat_->record(cb, currentFrame, p);
+            auto pass = g.addPass("splats", [this, p, f = currentFrame](VkCommandBuffer c) {
+                splat_->record(c, f, p);
+            });
+            g.importImage("sceneHdr", v.bloom_->sceneHdrImage(currentFrame), VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                          VK_IMAGE_LAYOUT_GENERAL);
+            splat_->declare(g, pass, currentFrame, p);
 }
 
-void VulkanRenderer::Impl::recordDepthOfField(VkCommandBuffer cb) {
-            // ── Thin-lens depth of field (opt-in) ──────────────────────────────
-            // Defocus the linear-HDR scene BEFORE bloom/composite/TAA so
-            // bright bokeh still blooms and tone-maps as HDR. CoC from the
-            // camera: aperture = camAperture_ (setCameraExposure — exposure
-            // and DoF consume the triplet independently, so this works with
-            // physicalCamera off too), focal length from the camera's FOV on
-            // the camera's OWN sensor (filmHeightM_, from PerspectiveCamera's
-            // film gauge), focus plane at focusDistance_.
-            // Not under a parallel projection: an orthographic camera has no
-            // lens, so there is no aperture, no focal length and no circle of
-            // confusion — every point projects sharp by construction. The CoC
-            // derivation below would read a tan(fov/2) the projection never
-            // carried and defocus the frame by an arbitrary amount.
-            if (dofEnabled_ && !view().orthoFrame_ && dof_ && dof_->valid()) {
-                const float     kSensorH  = filmHeightM_;// sensor height (m)
-                constexpr float kMaxCocPx = 32.f;        // full-res radius clamp
-                const float f = (kSensorH * 0.5f) / std::max(tanHalfFovY_, 1e-3f);
-                const float S = std::max(focusDistance_, f * 2.f);
-                const float cocScale = f * f / (std::max(camAperture_, 0.1f) * (S - f)) *
-                                       (static_cast<float>(regionRenderExt_.height) / kSensorH) * 0.5f;
-                gpuTimings_->begin(cb, TP_Dof, currentFrame);
-                dof_->record(cb, currentFrame,
-                             regionRenderExt_.width, regionRenderExt_.height,
-                             cocScale, S, kMaxCocPx);
-                gpuTimings_->end(cb, TP_Dof, currentFrame);
-            }
-}
-
-void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t imageIndex,
-                                                VkExtent2D ext, VkExtent2D ptExt,
-                                                uint32_t exposureBits, float preExp) {
+void VulkanRenderer::Impl::addUpscaleAndPostPasses(rg::RenderGraph& g, uint32_t imageIndex,
+                                                   VkExtent2D ext, VkExtent2D ptExt,
+                                                   uint32_t exposureBits, float preExp,
+                                                   bool secondary) {
             // Frame-rate-aware history blend: keep the ghost-decay time constant in
             // wall-clock seconds, not frames (see taaPrevTimeSec_). taaBlendAlpha_ is
             // authored to look good at kTaaRefFps; at or above that rate this is a
@@ -1424,7 +1413,9 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                                      // ramp, soft-clip rate) by it — without that,
                                      // low fps leaves discrete stale edge bands
                                      // (one per ramp frame) behind moving objects.
-            {
+            // A secondary view blends at the authored alpha: the frame-rate
+            // clock below belongs to the primary (it keeps taaPrevTimeSec_).
+            if (!secondary) {
                 // frameNowSec, not glfwGetTime: this dt sets the history blend
                 // weight, so wall time here made the beauty frame irreproducible
                 // — every run blended with different alphas from the first
@@ -1442,14 +1433,129 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
 
             // Intensity normalized by the accumulated level count so the
             // summed pyramid lands at the same overall energy a single-level
-            // bloom put out for the same slider value. Computed unconditionally
-            // (both orders need it; HDR mode's bloom-add moves into TaaResolve).
+            // bloom put out for the same slider value.
             const float effBloomIntensity =
                     bloomIntensity_ / static_cast<float>(std::max(view().bloom_->levels(), 1u));
 
+            // ── The post segment as a render graph ───────────────────────────────
+            // DoF → bloom → (DLSS | FSR | built-in TAA) → post composite → finalize.
+            // Each pass declares what it reads and writes; the graph records the
+            // barriers between them (the passes record only their internal ones).
+            // Images are imported in the layouts they rest in between frame stages
+            // and are handed back in those layouts.
+            const uint32_t f  = currentFrame;
+            const uint32_t pf = (f + kFramesInFlight - 1u) % kFramesInFlight;
+            const auto& gb  = view().rasterGbufs;
+            const auto& gbPrev = gb[pf % gb.size()];
+            constexpr auto kColor = VK_IMAGE_ASPECT_COLOR_BIT;
+            constexpr auto kDepth = VK_IMAGE_ASPECT_DEPTH_BIT;
+            constexpr auto kGeneral = VK_IMAGE_LAYOUT_GENERAL;
+            constexpr auto kShaderRO = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            constexpr auto kDepthRO = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+            const auto sceneHdr  = g.importImage("sceneHdr", view().bloom_->sceneHdrImage(f), kColor, 1, kGeneral);
+            const auto depth     = g.importImage("gbuf.depth", gb[f].depth.image, kDepth, 1, kDepthRO);
+            const auto motion    = g.importImage("gbuf.motion", gb[f].motion.image, kColor, 1, kShaderRO);
+            const auto ids       = g.importImage("gbuf.ids", gb[f].ids.image, kColor, 1, kShaderRO);
+            const auto idsPrev   = g.importImage("gbuf.ids.prev", gbPrev.ids.image, kColor, 1, kShaderRO);
+            const auto depthPrev = g.importImage("gbuf.depth.prev", gbPrev.depth.image, kDepth, 1, kDepthRO);
+            // A secondary view's TaaResolve writes its own colour target (its
+            // one-image "swapchain"), which lives in GENERAL for good.
+            const VkImage outImage = secondary ? view().colorTarget.image : ctx->swapchainImages()[imageIndex];
+            const auto swap      = g.importImage("swapchain", outImage, kColor, 1, kGeneral);
+            const auto bloom0    = g.importImage("bloom.pyr", view().bloom_->levelImage(f, 0), kColor, 1, kGeneral);
+
+            // ── Thin-lens depth of field (opt-in) ──────────────────────────────
+            // Defocus the linear-HDR scene BEFORE bloom/composite/TAA so
+            // bright bokeh still blooms and tone-maps as HDR. CoC from the
+            // camera: aperture = camAperture_ (setCameraExposure — exposure
+            // and DoF consume the triplet independently, so this works with
+            // physicalCamera off too), focal length from the camera's FOV on
+            // the camera's OWN sensor (filmHeightM_, from PerspectiveCamera's
+            // film gauge), focus plane at focusDistance_.
+            // Not under a parallel projection: an orthographic camera has no
+            // lens, so there is no aperture, no focal length and no circle of
+            // confusion — every point projects sharp by construction. The CoC
+            // derivation below would read a tan(fov/2) the projection never
+            // carried and defocus the frame by an arbitrary amount.
+            if (!secondary && dofEnabled_ && !view().orthoFrame_ && dof_ && dof_->valid()) {
+                const float     kSensorH  = filmHeightM_;// sensor height (m)
+                constexpr float kMaxCocPx = 32.f;        // full-res radius clamp
+                const float fl = (kSensorH * 0.5f) / std::max(tanHalfFovY_, 1e-3f);
+                const float S  = std::max(focusDistance_, fl * 2.f);
+                const float cocScale = fl * fl / (std::max(camAperture_, 0.1f) * (S - fl)) *
+                                       (static_cast<float>(regionRenderExt_.height) / kSensorH) * 0.5f;
+                auto pass = g.addPass("dof", [this, f, cocScale, S, kMaxCocPx](VkCommandBuffer c) {
+                    gpuTimings_->begin(c, TP_Dof, f);
+                    dof_->record(c, f, regionRenderExt_.width, regionRenderExt_.height,
+                                 cocScale, S, kMaxCocPx);
+                    gpuTimings_->end(c, TP_Dof, f);
+                });
+                dof_->declare(g, pass, depth, sceneHdr);
+            }
+
+            const auto addBloom = [&] {
+                if (bloomIntensity_ <= 0.0f) return;
+                auto pass = g.addPass("bloom", [this, f](VkCommandBuffer c) {
+                    view().bloom_->recordPyramid(c, f, regionRenderExt_.width, regionRenderExt_.height,
+                                                 bloomIntensity_, bloomThreshold_, bloomClamp_);
+                });
+                view().bloom_->declare(g, pass, f, sceneHdr);
+            };
+
+            // Tonemap at DISPLAY res, reading the upscaler output (history slot
+            // via PostComposite's HDR-mode binding 6), ADDING bloom, into
+            // hdrOut_; then hdrOut_ → swapchain (display-referred RCAS or copy).
+            const auto addHdrPostAndFinalize = [&](rg::ImageHandle history) {
+                const auto hdrOut = g.importImage("post.hdrOut", view().post_->hdrOutImage(f), kColor, 1, kGeneral);
+                auto post = g.addPass("post", [this, f, exposureBits, effBloomIntensity](VkCommandBuffer c) {
+                    view().post_->recordDispatch(c, f, regionSwapExt_.width, regionSwapExt_.height,
+                                                 static_cast<uint32_t>(toneMapping_),
+                                                 exposureBits, preExpBits_, envIsBgColor,
+                                                 effBloomIntensity,
+                                                 regionRenderExt_.width, regionRenderExt_.height,
+                                                 /*hdrMode=*/true);
+                });
+                post.use(history, rg::sampled(kGeneral))
+                        .use(sceneHdr, rg::sampled(kGeneral))
+                        .use(bloom0, rg::sampled(kGeneral))
+                        .use(ids, rg::sampled(kShaderRO))
+                        .use(hdrOut, rg::storageWrite());
+                view().post_->declare(g, post);
+
+                const bool sharpen = sharpenStrength_ > 0.0f;
+                auto fin = g.addPass("finalize", [this, f, imageIndex, sharpen](VkCommandBuffer c) {
+                    view().taa_->recordPostFinalize(c, f, imageIndex,
+                                                    regionSwapExt_.width, regionSwapExt_.height,
+                                                    sharpen, sharpenStrength_);
+                });
+                if (sharpen) {
+                    fin.use(hdrOut, rg::sampled(kGeneral)).use(swap, rg::storageWrite());
+                } else {
+                    fin.use(hdrOut, rg::transferSrc(kGeneral)).use(swap, rg::transferDst(kGeneral));
+                }
+            };
+
+            // An external upscaler borrows its inputs into its own layouts and
+            // hands them back with UNDEFINED as the old layout (their contents
+            // are not needed afterwards), so to the graph it WRITES the colour
+            // and depth it reads. Its own barriers are full ALL_COMMANDS ones.
+            const auto declareUpscaler = [&](rg::PassBuilder& pass, rg::ImageHandle history) {
+                const rg::Access discard{VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, kGeneral, true};
+                const rg::Access depthDiscard{VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                              VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, kDepthRO, true};
+                pass.use(sceneHdr, discard)
+                        .use(depth, depthDiscard)
+                        .use(motion, rg::sampled(kShaderRO))
+                        .use(ids, rg::sampled(kShaderRO))
+                        .use(history, rg::storageWrite());
+            };
+
+            bool resolved = false;
 #if defined(THREEPP_WITH_DLSS) || defined(THREEPP_WITH_FSR)
             // External upscalers (DLSS/FSR) run full-frame only — split-screen
-            // falls through to the TAA path, like the HDR-input order.
+            // falls through to the TAA path.
             const bool upscalerFullFrame =
                     regionDstX_ == 0 && regionDstY_ == 0 &&
                     regionRenderExt_.width == ptExt.width &&
@@ -1464,12 +1570,14 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
             // motion → upscaled linear HDR into TaaResolve's history WRITE slot
             // (display extent) → PostComposite adds bloom + tonemaps at display
             // res → recordPostFinalize (RCAS) → swapchain. See DlssUpscaler.{hpp,cpp}.
-            if (useDlss() && dlss_ && dlss_->valid() && !dlss_->failing() && upscalerFullFrame) {
-                view().bloom_->recordPyramid(cb, currentFrame,
-                                      regionRenderExt_.width, regionRenderExt_.height,
-                                      bloomIntensity_, bloomThreshold_, bloomClamp_);
+            if (!secondary && !resolved && useDlss() && dlss_ && dlss_->valid() && !dlss_->failing() &&
+                upscalerFullFrame) {
+                resolved = true;
+                addBloom();
 
-                const uint32_t writeSlot = vulkan::TaaResolve::writeSlotFor(currentFrame);
+                const uint32_t writeSlot = vulkan::TaaResolve::writeSlotFor(f);
+                const auto history = g.importImage("taa.history", view().taa_->historyImage(writeSlot),
+                                                   kColor, 1, kGeneral);
 
                 // DLSS frameTimeDelta (ms) — own clock (the TAA dt isn't
                 // computed on this path).
@@ -1484,19 +1592,18 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                 }
 
                 vulkan::DlssUpscaler::DispatchInputs din{};
-                din.cmd          = cb;
-                din.colorImage   = view().bloom_->sceneHdrImage(currentFrame);
-                din.colorView    = view().bloom_->sceneHdrView(currentFrame);
+                din.colorImage   = view().bloom_->sceneHdrImage(f);
+                din.colorView    = view().bloom_->sceneHdrView(f);
                 din.colorFormat  = VK_FORMAT_R16G16B16A16_SFLOAT;
-                din.colorLayout  = VK_IMAGE_LAYOUT_GENERAL;
-                din.depthImage   = view().rasterGbufs[currentFrame].depth.image;
-                din.depthView    = view().rasterGbufs[currentFrame].depth.view;
+                din.colorLayout  = kGeneral;
+                din.depthImage   = gb[f].depth.image;
+                din.depthView    = gb[f].depth.view;
                 din.depthFormat  = VK_FORMAT_D32_SFLOAT;
-                din.depthLayout  = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                din.motionImage  = view().rasterGbufs[currentFrame].motion.image;
-                din.motionView   = view().rasterGbufs[currentFrame].motion.view;
+                din.depthLayout  = kDepthRO;
+                din.motionImage  = gb[f].motion.image;
+                din.motionView   = gb[f].motion.view;
                 din.motionFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-                din.motionLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                din.motionLayout = kShaderRO;
                 din.outputImage  = view().taa_->historyImage(writeSlot);
                 din.outputView   = view().taa_->historyView(writeSlot);
                 din.outputFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -1516,73 +1623,40 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                 // wind-animated surfaces — grass — favor the current frame; their
                 // shader displacement isn't in the motion vectors, so history
                 // ghosts at their edges without this). Mirrors the FSR reactive path.
-                din.frame         = currentFrame;
-                din.idsView       = view().rasterGbufs[currentFrame].ids.view;
+                din.frame         = f;
+                din.idsView       = gb[f].ids.view;
                 din.reactive      = true;
                 din.reactiveValue = 0.6f;
-
-                gpuTimings_->begin(cb, TP_TAA, currentFrame);
-                dlss_->recordDispatch(din);
-                gpuTimings_->end(cb, TP_TAA, currentFrame);
                 dlssResetNext_ = false;
 
-                // Make DLSS's UAV writes to the history slot visible to
-                // PostComposite's sampled read of the same slot (both compute).
-                {
-                    VkImageMemoryBarrier2 b{};
-                    b.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                    b.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    b.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                    b.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
-                    b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
-                    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    b.image         = view().taa_->historyImage(writeSlot);
-                    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                    b.subresourceRange.levelCount = 1;
-                    b.subresourceRange.layerCount = 1;
-                    VkDependencyInfo dep{};
-                    dep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                    dep.imageMemoryBarrierCount = 1;
-                    dep.pImageMemoryBarriers    = &b;
-                    vkCmdPipelineBarrier2(cb, &dep);
-                }
-
-                // Tonemap at DISPLAY res, reading the DLSS output (history slot
-                // via PostComposite's HDR-mode binding 6), ADDING bloom.
-                view().post_->recordDispatch(cb, currentFrame,
-                                      regionSwapExt_.width, regionSwapExt_.height,
-                                      static_cast<uint32_t>(toneMapping_),
-                                      exposureBits, preExpBits_, envIsBgColor,
-                                      effBloomIntensity,
-                                      regionRenderExt_.width, regionRenderExt_.height,
-                                      /*hdrMode=*/true);
-
-                // Finalize hdrOut_ → swapchain (display-referred RCAS or plain copy).
-                view().taa_->recordPostFinalize(cb, currentFrame, imageIndex,
-                                         regionSwapExt_.width, regionSwapExt_.height,
-                                         sharpenStrength_ > 0.0f, sharpenStrength_);
-            } else
+                auto pass = g.addPass("dlss", [this, din, f](VkCommandBuffer c) mutable {
+                    din.cmd = c;
+                    gpuTimings_->begin(c, TP_TAA, f);
+                    dlss_->recordDispatch(din);
+                    gpuTimings_->end(c, TP_TAA, f);
+                });
+                declareUpscaler(pass, history);
+                addHdrPostAndFinalize(history);
+            }
 #endif
 #if defined(THREEPP_WITH_FSR)
             // ── FSR 3.1 UPSCALER PATH ──────────────────────────────────────────
             // Replaces the TAA temporal resolve when FSR is active. Full-frame
-            // only (split-screen falls through to the TAA path, like the HDR-input
-            // order). FSR takes the linear-HDR sceneHdr (render extent) + reversed-Z
-            // depth + NDC-delta motion and writes the upscaled linear HDR into
-            // TaaResolve's history WRITE slot (display extent) — PostComposite's
-            // HDR-mode binding 6 already reads that slot. PostComposite then adds
-            // bloom + tonemaps at display res (FSR, unlike the TAA HDR path, does
-            // NOT fold bloom in), and recordPostFinalize sends hdrOut_ to the
-            // swapchain via RCAS/copy. See FsrUpscaler.{hpp,cpp}.
-            if (useFsr() && fsr_ && fsr_->valid() && upscalerFullFrame) {
-                view().bloom_->recordPyramid(cb, currentFrame,
-                                      regionRenderExt_.width, regionRenderExt_.height,
-                                      bloomIntensity_, bloomThreshold_, bloomClamp_);
+            // only (split-screen falls through to the TAA path). FSR takes the
+            // linear-HDR sceneHdr (render extent) + reversed-Z depth + NDC-delta
+            // motion and writes the upscaled linear HDR into TaaResolve's history
+            // WRITE slot (display extent) — PostComposite's HDR-mode binding 6
+            // already reads that slot. PostComposite then adds bloom + tonemaps
+            // at display res (FSR, unlike the TAA HDR path, does NOT fold bloom
+            // in), and recordPostFinalize sends hdrOut_ to the swapchain via
+            // RCAS/copy. See FsrUpscaler.{hpp,cpp}.
+            if (!secondary && !resolved && useFsr() && fsr_ && fsr_->valid() && upscalerFullFrame) {
+                resolved = true;
+                addBloom();
 
-                const uint32_t writeSlot = vulkan::TaaResolve::writeSlotFor(currentFrame);
+                const uint32_t writeSlot = vulkan::TaaResolve::writeSlotFor(f);
+                const auto history = g.importImage("taa.history", view().taa_->historyImage(writeSlot),
+                                                   kColor, 1, kGeneral);
 
                 // FSR frameTimeDelta (ms) — own clock (the TAA dt above isn't
                 // computed on this path).
@@ -1597,16 +1671,15 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                 }
 
                 vulkan::FsrUpscaler::DispatchInputs fin{};
-                fin.cmd          = cb;
-                fin.colorImage   = view().bloom_->sceneHdrImage(currentFrame);
+                fin.colorImage   = view().bloom_->sceneHdrImage(f);
                 fin.colorFormat  = VK_FORMAT_R16G16B16A16_SFLOAT;
-                fin.colorLayout  = VK_IMAGE_LAYOUT_GENERAL;
-                fin.depthImage   = view().rasterGbufs[currentFrame].depth.image;
+                fin.colorLayout  = kGeneral;
+                fin.depthImage   = gb[f].depth.image;
                 fin.depthFormat  = VK_FORMAT_D32_SFLOAT;
-                fin.depthLayout  = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                fin.motionImage  = view().rasterGbufs[currentFrame].motion.image;
+                fin.depthLayout  = kDepthRO;
+                fin.motionImage  = gb[f].motion.image;
                 fin.motionFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-                fin.motionLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                fin.motionLayout = kShaderRO;
                 fin.outputImage  = view().taa_->historyImage(writeSlot);
                 fin.outputFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
                 fin.renderWidth  = regionRenderExt_.width;
@@ -1629,58 +1702,23 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                 // Reactive mask: generated inside recordDispatch from the current
                 // frame's G-buffer IDs flags (deformer/animated surfaces → less
                 // ghosting). idsView is the same attachment PostComposite/TAA read.
-                fin.frame         = currentFrame;
-                fin.idsView       = view().rasterGbufs[currentFrame].ids.view;
+                fin.frame         = f;
+                fin.idsView       = gb[f].ids.view;
                 fin.reactive      = true;
                 fin.reactiveValue = 0.6f;
-
-                gpuTimings_->begin(cb, TP_TAA, currentFrame);
-                fsr_->recordDispatch(fin);
-                gpuTimings_->end(cb, TP_TAA, currentFrame);
                 fsrResetNext_ = false;
 
-                // Make FSR's UAV writes to the history slot visible to
-                // PostComposite's sampled read of the same slot (both compute).
-                {
-                    VkImageMemoryBarrier2 b{};
-                    b.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                    b.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    b.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                    b.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
-                    b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
-                    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    b.image         = view().taa_->historyImage(writeSlot);
-                    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                    b.subresourceRange.levelCount = 1;
-                    b.subresourceRange.layerCount = 1;
-                    VkDependencyInfo dep{};
-                    dep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                    dep.imageMemoryBarrierCount = 1;
-                    dep.pImageMemoryBarriers    = &b;
-                    vkCmdPipelineBarrier2(cb, &dep);
-                }
-
-                // Tonemap at DISPLAY res, reading the FSR output (history slot via
-                // PostComposite's HDR-mode binding 6), ADDING bloom (non-zero
-                // intensity — FSR didn't fold it in). Sky mask stays render-extent.
-                view().post_->recordDispatch(cb, currentFrame,
-                                      regionSwapExt_.width, regionSwapExt_.height,
-                                      static_cast<uint32_t>(toneMapping_),
-                                      exposureBits, preExpBits_, envIsBgColor,
-                                      effBloomIntensity,
-                                      regionRenderExt_.width, regionRenderExt_.height,
-                                      /*hdrMode=*/true);
-
-                // Finalize hdrOut_ → swapchain (display-referred RCAS or plain copy).
-                view().taa_->recordPostFinalize(cb, currentFrame, imageIndex,
-                                         regionSwapExt_.width, regionSwapExt_.height,
-                                         sharpenStrength_ > 0.0f, sharpenStrength_);
-            } else
+                auto pass = g.addPass("fsr", [this, fin, f](VkCommandBuffer c) mutable {
+                    fin.cmd = c;
+                    gpuTimings_->begin(c, TP_TAA, f);
+                    fsr_->recordDispatch(fin);
+                    gpuTimings_->end(c, TP_TAA, f);
+                });
+                declareUpscaler(pass, history);
+                addHdrPostAndFinalize(history);
+            }
 #endif
-            {
+            if (!resolved) {
                 // ── POST STACK / TAA ────────────────────────────────────────────
                 // Bloom pyramid + post composite (HDR post stack). The shade/
                 // resolve wrote linear HDR into bloom_->sceneHdr (the shared
@@ -1688,38 +1726,57 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                 // (skipped when bloomIntensity_ == 0); the post composite then
                 // closes the HDR path — exposure, white balance, tone map,
                 // grade LUT, sRGB — into the TAA input image (render extent).
-                view().bloom_->recordPyramid(cb, currentFrame,
-                                      regionRenderExt_.width, regionRenderExt_.height,
-                                      bloomIntensity_, bloomThreshold_, bloomClamp_);
-                view().post_->recordDispatch(cb, currentFrame,
-                                      regionRenderExt_.width, regionRenderExt_.height,
-                                      static_cast<uint32_t>(toneMapping_),
-                                      exposureBits, preExpBits_, envIsBgColor,
-                                      effBloomIntensity);
+                addBloom();
+                const auto taaInput = g.importImage("taa.input", view().taa_->inputImage(f), kColor, 1, kGeneral);
+                auto post = g.addPass("post", [this, f, exposureBits, effBloomIntensity](VkCommandBuffer c) {
+                    view().post_->recordDispatch(c, f, regionRenderExt_.width, regionRenderExt_.height,
+                                                 static_cast<uint32_t>(toneMapping_),
+                                                 exposureBits, preExpBits_, envIsBgColor,
+                                                 effBloomIntensity, 0, 0, /*hdrMode=*/false);
+                });
+                post.use(sceneHdr, rg::sampled(kGeneral))
+                        .use(bloom0, rg::sampled(kGeneral))
+                        .use(ids, rg::sampled(kShaderRO))
+                        .use(taaInput, rg::storageWrite());
+                view().post_->declare(g, post);
 
-                // Raster TAA / temporal upsampler. Reads denoise output from
-                // the TAA input image (render extent), blends with reprojected
-                // history (rgba16f, swapchain extent), writes the result
-                // straight to the swapchain. When renderScale < 1 the input is
-                // lower-res than the output, so this pass IS the upscaler —
-                // jittered low-res samples accumulate into the full-res
-                // history, reconstructing detail (no separate blit needed).
-                gpuTimings_->begin(cb, TP_TAA, currentFrame);
-                view().taa_->recordResolve(cb, currentFrame, imageIndex,
-                                    regionRenderExt_.width, regionRenderExt_.height,
-                                    regionSwapExt_.width, regionSwapExt_.height,
-                                    // setViewTaa(0, false), no upscaler: alpha 1 makes the
-                                    // resolve a copy of the current frame; the camera
-                                    // uploads already zeroed the jitter.
-                                    viewTaaOff() ? 1.0f : effAlpha, taaDtFrames,
-                                    sharpenStrength_ > 0.0f, sharpenStrength_,
-                                    view().taaSkyReproj_.data(),
-                                    static_cast<uint32_t>(regionDstX_), static_cast<uint32_t>(regionDstY_),
-                                    ptExt.width, ptExt.height, ext.width, ext.height,
-                                    view().taaDepthLin_.data(), motionBlurAmount_,
-                                    view().taaJitterTexels_[0], view().taaJitterTexels_[1]);
-                gpuTimings_->end(cb, TP_TAA, currentFrame);
+                // Raster TAA / temporal upsampler. Reads the post composite's
+                // output from the TAA input image (render extent), blends with
+                // reprojected history (rgba16f, swapchain extent), writes the
+                // result straight to the swapchain. When renderScale < 1 the
+                // input is lower-res than the output, so this pass IS the
+                // upscaler — jittered low-res samples accumulate into the
+                // full-res history, reconstructing detail (no separate blit).
+                const float alpha = viewTaaOff() ? 1.0f : effAlpha;
+                // Sharpening and motion blur are display-stage choices of the
+                // primary; a secondary view is a plain temporal resolve.
+                const bool  sharpen = !secondary && sharpenStrength_ > 0.0f;
+                const float mblur   = secondary ? 0.f : motionBlurAmount_;
+                auto taa = g.addPass("taa", [this, f, imageIndex, alpha, taaDtFrames, ext, ptExt, sharpen, mblur](VkCommandBuffer c) {
+                    gpuTimings_->begin(c, TP_TAA, f);
+                    view().taa_->recordResolve(c, f, imageIndex,
+                                               regionRenderExt_.width, regionRenderExt_.height,
+                                               regionSwapExt_.width, regionSwapExt_.height,
+                                               // setViewTaa(0, false), no upscaler: alpha 1 makes the
+                                               // resolve a copy of the current frame; the camera
+                                               // uploads already zeroed the jitter.
+                                               alpha, taaDtFrames,
+                                               sharpen, sharpen ? sharpenStrength_ : 0.f,
+                                               view().taaSkyReproj_.data(),
+                                               static_cast<uint32_t>(regionDstX_), static_cast<uint32_t>(regionDstY_),
+                                               ptExt.width, ptExt.height, ext.width, ext.height,
+                                               view().taaDepthLin_.data(), mblur,
+                                               view().taaJitterTexels_[0], view().taaJitterTexels_[1]);
+                    gpuTimings_->end(c, TP_TAA, f);
+                });
+                taa.use(motion, rg::sampled(kShaderRO))
+                        .use(ids, rg::sampled(kShaderRO))
+                        .use(idsPrev, rg::sampled(kShaderRO))
+                        .use(depthPrev, rg::sampled(kDepthRO))
+                        .use(swap, rg::storageWrite());
+                view().taa_->declareResolve(g, taa, f);
             }
+
             // ── End post stack / TAA ────────────────────────────────────────────
 }
 
@@ -1829,7 +1886,7 @@ void VulkanRenderer::Impl::recordFieldBillboards(VkCommandBuffer cb, VkPipeline 
                         w.descriptorCount = 1;
                         w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                         w.pImageInfo      = &dii;
-                        vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
+                        vulkan::updateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
                         setCache.emplace(tex, set);
                     }
                     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -2882,7 +2939,7 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                                 w.descriptorCount = 1;
                                 w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                                 w.pImageInfo      = &dii;
-                                vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
+                                vulkan::updateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
                                 vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                                         particlePipelineLayout_, 0, 1, &set, 0, nullptr);
 
@@ -2962,7 +3019,7 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                                             w.descriptorCount = 1;
                                             w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                                             w.pImageInfo      = &dii;
-                                            vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
+                                            vulkan::updateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
                                             setCache.emplace(sd.tex, set);
                                         }
                                         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -3179,21 +3236,20 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
             // (lit billboards; the overlay loop below consumes the bases).
             prepareParticleLighting();
 
-            // Dispatch the deferred shade compute (VulkanRenderer::Impl);
-            // bloom + TAA below are shared.
-            recordSceneDispatch(cb, setIdx, ext, ptExt, exposureBits);
-
-            // Gaussian splats: composite SplatClouds into sceneHdr while it
-            // is still linear HDR, so everything below acts on them too.
-            recordSplats(cb);
-
-            // Thin-lens depth of field (opt-in): defocus the linear-HDR
-            // scene before bloom/composite/TAA.
-            recordDepthOfField(cb);
-
-            // Bloom + tonemap + temporal resolve — exactly one of DLSS /
-            // FSR / built-in TAA runs (see recordUpscaleAndPost).
-            recordUpscaleAndPost(cb, imageIndex, ext, ptExt, exposureBits, preExp);
+            // ── Shade → splats → post: one render graph ─────────────────────
+            // The deferred shade and its inputs (probes, clusters, clouds,
+            // froxels, RTAO), the denoise, auto-exposure and particle light;
+            // the Gaussian splats composited into sceneHdr while it is still
+            // linear HDR, so everything after acts on them too; then DoF,
+            // bloom, tonemap and the temporal resolve — exactly one of DLSS /
+            // FSR / built-in TAA runs (see addUpscaleAndPostPasses).
+            (void) setIdx;
+            auto& g = frameGraph_;
+            g.reset();
+            addSceneDispatchPasses(g);
+            addSplatPasses(g);
+            addUpscaleAndPostPasses(g, imageIndex, ext, ptExt, exposureBits, preExp);
+            executeGraph(cb, g, "frame");
 
             // F4: the billboard-only bloom pyramid. AFTER the upscaler (so the
             // composite point that keeps field billboards clear of TAA/DLSS/FSR
@@ -3532,7 +3588,7 @@ void VulkanRenderer::Impl::recordEventShade(VkCommandBuffer cb, uint32_t frame, 
             w[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             w[5].pImageInfo = &finalInfo;
 
-            vkUpdateDescriptorSets(ctx->device(),
+            vulkan::updateDescriptorSets(ctx->device(),
                                     static_cast<uint32_t>(w.size()), w.data(),
                                     0, nullptr);
 
@@ -3757,8 +3813,8 @@ void VulkanRenderer::Impl::ensureOverlayMsaaImages(VkExtent2D ext) {
                 vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                 vci.subresourceRange.levelCount = 1;
                 vci.subresourceRange.layerCount = 1;
-                check(vkCreateImageView(ctx->device(), &vci, nullptr, &out.view),
-                      "vkCreateImageView(overlayAaScratch)");
+                check(vulkan::createImageView(ctx->device(), &vci, nullptr, &out.view),
+                      "vulkan::createImageView(overlayAaScratch)");
                 VkSamplerCreateInfo sci{};
                 sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
                 sci.magFilter    = VK_FILTER_NEAREST;// inject texelFetches 1:1
@@ -3782,7 +3838,7 @@ void VulkanRenderer::Impl::ensureOverlayMsaaImages(VkExtent2D ext) {
                 w.descriptorCount = 1;
                 w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w.pImageInfo      = &ii;
-                vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
+                vulkan::updateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
             }
         }
 

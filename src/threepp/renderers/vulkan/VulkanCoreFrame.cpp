@@ -1671,39 +1671,22 @@ void VulkanRenderer::Impl::recordSecondaryViews(VkCommandBuffer cb) {
                 std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
                 const float preExp = preExposure();
 
-                recordSceneDispatch(cb, currentFrame, ext, ptExt, exposureBits);
-
-                // Gaussian splats, if this view asked for them: the same place
-                // in the frame as the primary's (sceneHdr still linear HDR, the
-                // G-buffer depth it tests against final), on this view's own
-                // SplatPass target. No-op — not even a barrier — unless
-                // setViewSplats(handle, true) was called on this view.
-                recordSplats(cb);
-
-                // Built-in TAA tail only — no DLSS, no FSR, no DoF, no overlay,
-                // no lens/sensor stage. All of those are primary-only by scope,
-                // and recordUpscaleAndPost would branch into them, so the three
-                // passes a secondary does need are recorded directly.
-                const float effBloomIntensity =
-                        bloomIntensity_ / static_cast<float>(std::max(v.bloom_->levels(), 1u));
-                v.bloom_->recordPyramid(cb, currentFrame, ptExt.width, ptExt.height,
-                                        bloomIntensity_, bloomThreshold_, bloomClamp_);
-                v.post_->recordDispatch(cb, currentFrame, ptExt.width, ptExt.height,
-                                        static_cast<uint32_t>(toneMapping_),
-                                        exposureBits, preExpBits_, envIsBgColor,
-                                        effBloomIntensity);
-                // imageIndex 0: this view's TaaResolve was built against a
-                // one-image "swapchain" that is v.colorTarget.
-                v.taa_->recordResolve(cb, currentFrame, /*imageIndex=*/0u,
-                                      ptExt.width, ptExt.height,
-                                      ext.width, ext.height,
-                                      viewTaaOff() ? 1.0f : taaBlendAlpha_, 1.0f,// setViewTaa: alpha 1 = passthrough
-                                      /*sharpen=*/false, 0.f,
-                                      v.taaSkyReproj_.data(),
-                                      0u, 0u,
-                                      ptExt.width, ptExt.height, ext.width, ext.height,
-                                      v.taaDepthLin_.data(), /*mblurShutter=*/0.f,
-                                      v.taaJitterTexels_[0], v.taaJitterTexels_[1]);
+                // Shade → splats → post as one render graph, like the
+                // primary's. Splats only if this view asked for them
+                // (setViewSplats), on this view's own SplatPass target, at the
+                // same place in the frame (sceneHdr still linear HDR, the
+                // G-buffer depth it tests against final). Built-in TAA tail
+                // only — no DLSS, no FSR, no DoF, no overlay, no lens/sensor
+                // stage: all of those are primary-only by scope. imageIndex 0:
+                // this view's TaaResolve was built against a one-image
+                // "swapchain" that is v.colorTarget.
+                auto& g = frameGraph_;
+                g.reset();
+                addSceneDispatchPasses(g);
+                addSplatPasses(g);
+                addUpscaleAndPostPasses(g, /*imageIndex=*/0u, ext, ptExt, exposureBits, preExp,
+                                        /*secondary=*/true);
+                executeGraph(cb, g, "frame.secondary");
 
                 // ── ParticleField billboards, per view ─────────────────────
                 // The one piece of the primary's post-TAA overlay a secondary

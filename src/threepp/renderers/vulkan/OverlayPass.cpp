@@ -546,7 +546,7 @@ void OverlayPass::createLitMeshPipelines() {
             w.descriptorCount = 1;
             w.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             w.pBufferInfo     = &bi;
-            vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+            vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
         }
     }
 
@@ -936,8 +936,8 @@ void OverlayPass::ensurePaneDepth(VkCommandBuffer cb) {
     vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
     vci.subresourceRange.levelCount = 1;
     vci.subresourceRange.layerCount = 1;
-    check(vkCreateImageView(ctx_.device(), &vci, nullptr, &paneDepth_.view),
-          "vkCreateImageView(paneDepth)");
+    check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &paneDepth_.view),
+          "vulkan::createImageView(paneDepth)");
     ctx_.setObjectName(paneDepth_.image, "overlay pane depth");
 
     VkImageMemoryBarrier2 toDepth{};
@@ -1880,7 +1880,7 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
                 w.descriptorCount = 1;
                 w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w.pImageInfo      = &ii;
-                vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+                vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
                 paneSkyWrittenView_[frame] = paneEnvView_;
             }
 
@@ -2094,7 +2094,7 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
         w.descriptorCount = 1;
         w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w.pImageInfo      = &dii;
-        vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+        vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 spritePipelineLayout_, 0, 1, &set, 0, nullptr);
 

@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
+#include "threepp/renderers/vulkan/DescriptorShadow.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -218,7 +219,10 @@ namespace threepp::vulkan {
 
     void destroyImage2D(VmaAllocator alloc, VkDevice device, Image2D& img) {
         if (img.sampler) vkDestroySampler(device, img.sampler, nullptr);
-        if (img.view)    vkDestroyImageView(device, img.view, nullptr);
+        if (img.view) {
+            unregisterImageView(img.view);
+            vkDestroyImageView(device, img.view, nullptr);
+        }
         if (img.image)   vmaDestroyImage(alloc, img.image, img.alloc);
         img = {};
     }

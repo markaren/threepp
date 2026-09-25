@@ -1000,8 +1000,8 @@ Image2D VulkanRenderer::Impl::createSampledImageBC(uint32_t w, uint32_t h, VkFor
             vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             vci.subresourceRange.levelCount = mipLevels;
             vci.subresourceRange.layerCount = 1;
-            check(vkCreateImageView(ctx->device(), &vci, nullptr, &out.view),
-                  "vkCreateImageView(bc)");
+            check(vulkan::createImageView(ctx->device(), &vci, nullptr, &out.view),
+                  "vulkan::createImageView(bc)");
 
             VkPhysicalDeviceProperties props{};
             vkGetPhysicalDeviceProperties(ctx->physicalDevice(), &props);
@@ -1222,8 +1222,8 @@ Image2D VulkanRenderer::Impl::buildSampledImage2D(VkCommandBuffer cb,
             vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             vci.subresourceRange.levelCount = mipLevels;
             vci.subresourceRange.layerCount = 1;
-            check(vkCreateImageView(ctx->device(), &vci, nullptr, &out.view),
-                  "vkCreateImageView(env)");
+            check(vulkan::createImageView(ctx->device(), &vci, nullptr, &out.view),
+                  "vulkan::createImageView(env)");
 
             // Anisotropic filtering is paired with the mip chain — they only
             // help together. Aniso without mips snaps to mip 0 (no benefit at
@@ -1320,8 +1320,8 @@ Image2D VulkanRenderer::Impl::createStorageImage2D(uint32_t w, uint32_t h, VkFor
             vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             vci.subresourceRange.levelCount = 1;
             vci.subresourceRange.layerCount = 1;
-            check(vkCreateImageView(ctx->device(), &vci, nullptr, &out.view),
-                  "vkCreateImageView(accum)");
+            check(vulkan::createImageView(ctx->device(), &vci, nullptr, &out.view),
+                  "vulkan::createImageView(accum)");
 
             if (debugName) {
                 ctx->setObjectName(out.image, debugName);
@@ -1367,8 +1367,8 @@ Image2D VulkanRenderer::Impl::createAttachmentImage2D(uint32_t w, uint32_t h, Vk
             vci.subresourceRange.aspectMask = aspect;
             vci.subresourceRange.levelCount = 1;
             vci.subresourceRange.layerCount = 1;
-            check(vkCreateImageView(ctx->device(), &vci, nullptr, &out.view),
-                  "vkCreateImageView(rasterGbuf attachment)");
+            check(vulkan::createImageView(ctx->device(), &vci, nullptr, &out.view),
+                  "vulkan::createImageView(rasterGbuf attachment)");
             if (debugName) {
                 ctx->setObjectName(out.image, debugName);
                 ctx->setObjectName(out.view,  debugName);
@@ -1410,8 +1410,8 @@ Image2D VulkanRenderer::Impl::createImage3D(uint32_t w, uint32_t h, uint32_t dep
             vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             vci.subresourceRange.levelCount = 1;
             vci.subresourceRange.layerCount = 1;
-            check(vkCreateImageView(ctx->device(), &vci, nullptr, &out.view),
-                  "vkCreateImageView(3D)");
+            check(vulkan::createImageView(ctx->device(), &vci, nullptr, &out.view),
+                  "vulkan::createImageView(3D)");
             if (debugName) {
                 ctx->setObjectName(out.image, debugName);
                 ctx->setObjectName(out.view,  debugName);

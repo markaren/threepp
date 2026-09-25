@@ -793,7 +793,7 @@ void VulkanRenderer::Impl::ensureParticleIoSets() {
                 w[1].descriptorCount = 1;
                 w[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                 w[1].pBufferInfo     = &obi;
-                vkUpdateDescriptorSets(ctx->device(), 2, w, 0, nullptr);
+                vulkan::updateDescriptorSets(ctx->device(), 2, w, 0, nullptr);
             }
         }
 }// namespace threepp

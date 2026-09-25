@@ -174,6 +174,18 @@ namespace threepp::vulkan {
     // order and zeroes the struct.
     void destroyImage2D(VmaAllocator alloc, VkDevice device, Image2D& img);
 
+    // vkCreateImageView, registering the view's image and subresource range
+    // for the render graph's descriptor-derived declarations (see
+    // DescriptorShadow.hpp). Every view the backend creates goes through this.
+    VkResult createImageView(VkDevice device, const VkImageViewCreateInfo* info,
+                             const VkAllocationCallbacks* allocator, VkImageView* view);
+
+    // vkUpdateDescriptorSets, recording each write in the descriptor shadow
+    // (DescriptorShadow.hpp). Every descriptor update the backend makes goes
+    // through this.
+    void updateDescriptorSets(VkDevice device, uint32_t writeCount, const VkWriteDescriptorSet* writes,
+                              uint32_t copyCount, const VkCopyDescriptorSet* copies);
+
 }// namespace threepp::vulkan
 
 #endif//THREEPP_VULKAN_RESOURCES_HPP

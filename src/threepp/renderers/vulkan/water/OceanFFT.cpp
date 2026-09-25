@@ -100,7 +100,7 @@ namespace threepp::water {
             vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
             vci.format = fmt;
             vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            check(vkCreateImageView(ctx.device(), &vci, nullptr, &img.view),
+            check(vulkan::createImageView(ctx.device(), &vci, nullptr, &img.view),
                   "vkCreateImageView");
 
             if (debugName) {
@@ -410,7 +410,7 @@ namespace threepp::water {
         writes[1].descriptorCount = 1;
         writes[1].pImageInfo = &noiseInfo;
 
-        vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        vulkan::updateDescriptorSets(ctx_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
     void PhillipsSpectrum::recordCompute(VkCommandBuffer cb) {
@@ -551,7 +551,7 @@ namespace threepp::water {
         writes[0].dstBinding = 0; writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; writes[0].pImageInfo = &h0Info;
         writes[1].dstBinding = 1; writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          writes[1].pImageInfo = &htInfo;
         writes[2].dstBinding = 3; writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          writes[2].pImageInfo = &dispInfo;
-        vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        vulkan::updateDescriptorSets(ctx_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
     void DynamicSpectrum::recordCompute(VkCommandBuffer cb, float elapsedSeconds) {
@@ -728,7 +728,7 @@ namespace threepp::water {
         wT.descriptorCount = 1;
         wT.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         wT.pImageInfo = &tw;
-        vkUpdateDescriptorSets(ctx_.device(), 1, &wT, 0, nullptr);
+        vulkan::updateDescriptorSets(ctx_.device(), 1, &wT, 0, nullptr);
 
         // Butterfly/permute sets are allocated and wired per image pair in
         // groupFor — nothing more to allocate up front.
@@ -797,7 +797,7 @@ namespace threepp::water {
             w[0].dstBinding = 0; w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[0].pImageInfo = &twInfo;
             w[1].dstBinding = 1; w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[1].pImageInfo = &read;
             w[2].dstBinding = 2; w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          w[2].pImageInfo = &write;
-            vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
+            vulkan::updateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
         };
         writeButterfly(g.h[0], aSampled, bStorage);
         writeButterfly(g.h[1], bSampled, aStorage);
@@ -816,7 +816,7 @@ namespace threepp::water {
             w.dstBinding      = 0;
             w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             w.pImageInfo      = &inPlace;
-            vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+            vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
         };
         writePermute(g.p[0], aStorage);
         writePermute(g.p[1], bStorage);

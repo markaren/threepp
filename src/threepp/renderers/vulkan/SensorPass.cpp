@@ -194,8 +194,8 @@ namespace threepp::vulkan {
             vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             vci.subresourceRange.levelCount = 1;
             vci.subresourceRange.layerCount = 1;
-            check(vkCreateImageView(d, &vci, nullptr, &img.view),
-                  "vkCreateImageView(sensorPass.snapshot)");
+            check(vulkan::createImageView(d, &vci, nullptr, &img.view),
+                  "vulkan::createImageView(sensorPass.snapshot)");
             ctx_.setObjectName(img.image, "sensorPass.snapshot");
             ctx_.setObjectName(img.view, "sensorPass.snapshot");
         }
@@ -215,7 +215,7 @@ namespace threepp::vulkan {
             w.descriptorCount = 1;
             w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w.pImageInfo      = &srcI;
-            vkUpdateDescriptorSets(d, 1, &w, 0, nullptr);
+            vulkan::updateDescriptorSets(d, 1, &w, 0, nullptr);
         }
     }
 
@@ -244,7 +244,7 @@ namespace threepp::vulkan {
             w.descriptorCount = 1;
             w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             w.pImageInfo      = &dstI;
-            vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+            vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
             boundDst_[frame] = swapView;
         }
 

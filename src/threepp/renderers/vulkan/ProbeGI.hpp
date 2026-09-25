@@ -24,6 +24,8 @@
 #ifndef THREEPP_VULKAN_PROBE_GI_HPP
 #define THREEPP_VULKAN_PROBE_GI_HPP
 
+#include "threepp/renderers/vulkan/RenderGraph.hpp"
+#include "threepp/renderers/vulkan/SpirvReflect.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
 #include <vulkan/vulkan.h>
@@ -129,6 +131,12 @@ namespace threepp::vulkan {
                             bool shadows, uint32_t envMipCount, bool fastBlend = false);
 
         // For DeferredShade's descriptor write (bindings 36/37/54).
+        // Render-graph declaration of recordDispatch: its descriptor set as
+        // reflected from probe_update.comp, plus the SH and depth stores and
+        // their snapshots, which it also clears and copies (transfer). Its
+        // barriers between clear, snapshot and dispatch stay inside it.
+        void declare(rg::RenderGraph& graph, rg::PassBuilder& pass, uint32_t frame) const;
+
         [[nodiscard]] VkBuffer shBuffer() const { return shBuf_.handle; }
         [[nodiscard]] const VkBuffer* gridUbos() const { return gridUboHandles_.data(); }
         [[nodiscard]] VkBuffer depthBuffer() const { return depthBuf_.handle; }
@@ -146,6 +154,7 @@ namespace threepp::vulkan {
         // reading the canonical stores; no plumbing outside this class.
         Buffer                prevShBuf_{};
         Buffer                prevDepthBuf_{};
+        std::vector<SpirvBinding> refl_;// probe_update.comp's bindings
         std::vector<Buffer>   gridUbos_;        // [framesInFlight]
         std::vector<VkBuffer> gridUboHandles_;  // handles view for DeferredShade
 

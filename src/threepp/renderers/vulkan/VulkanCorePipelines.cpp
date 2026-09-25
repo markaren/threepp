@@ -2408,7 +2408,7 @@ void VulkanRenderer::Impl::createParticlePipeline() {
                     w[1].descriptorCount = 1;
                     w[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                     w[1].pBufferInfo     = &lbi;
-                    vkUpdateDescriptorSets(ctx->device(), 2, w, 0, nullptr);
+                    vulkan::updateDescriptorSets(ctx->device(), 2, w, 0, nullptr);
                 }
             }
             // (particle_light.comp's IO sets are created lazily by

@@ -757,7 +757,7 @@ bool ParticleFieldPass::ensureDensityVolume(State& st, const ParticleField& fiel
     w[3].dstBinding      = 2;
     w[3].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     w[3].pBufferInfo     = &mi;
-    vkUpdateDescriptorSets(ctx_.device(), 4, w, 0, nullptr);
+    vulkan::updateDescriptorSets(ctx_.device(), 4, w, 0, nullptr);
     return true;
 }
 
@@ -1036,7 +1036,7 @@ bool ParticleFieldPass::ensureTlasSet() {
         w.dstBinding      = 0;
         w.descriptorCount = 1;
         w.descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-        vkUpdateDescriptorSets(d, 1, &w, 0, nullptr);
+        vulkan::updateDescriptorSets(d, 1, &w, 0, nullptr);
         tlasBound_ = wantTlas_;
     }
     return true;
@@ -1854,7 +1854,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                             w.descriptorCount = 1;
                             w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                             w.pImageInfo      = &ii;
-                            vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+                            vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
                         } else {
                             st.marchSet = VK_NULL_HANDLE;
                         }

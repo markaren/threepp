@@ -564,7 +564,7 @@ namespace threepp {
             w.descriptorCount = 1;
             w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             w.pBufferInfo     = &dbInfo;
-            vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
+            vulkan::updateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
         }
 
         // Publish the skip cache for this view + FIF slot.
@@ -948,7 +948,7 @@ namespace threepp {
         w[5].descriptorCount = 1;
         w[5].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w[5].pImageInfo      = &depthInfo;
-        vkUpdateDescriptorSets(ctx->device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
+        vulkan::updateDescriptorSets(ctx->device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
 
         // Freshly-acquired swapchain image (contents undefined) → GENERAL
         // for the compute storage write.

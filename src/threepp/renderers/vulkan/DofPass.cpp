@@ -105,7 +105,7 @@ namespace threepp::vulkan {
         vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         vci.subresourceRange.levelCount = 1;
         vci.subresourceRange.layerCount = 1;
-        check(vkCreateImageView(ctx_.device(), &vci, nullptr, &out.view), label);
+        check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &out.view), label);
         ctx_.setObjectName(out.image, label);
 
         // UNDEFINED → GENERAL once; the pass keeps everything in GENERAL.
@@ -341,8 +341,21 @@ namespace threepp::vulkan {
         wImg(gatherSet_, 2, I, storage(far_.view));
         wImg(gatherSet_, 3, I, storage(near_.view));
 
-        vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(writes.size()),
+        vulkan::updateDescriptorSets(ctx_.device(), static_cast<uint32_t>(writes.size()),
                                writes.data(), 0, nullptr);
+    }
+
+    void DofPass::declare(rg::RenderGraph& graph, rg::PassBuilder& pass,
+                          rg::ImageHandle depth, rg::ImageHandle sceneHdr) const {
+        pass.use(depth, rg::sampled(VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL));
+        pass.use(sceneHdr, rg::sampled(VK_IMAGE_LAYOUT_GENERAL));
+        pass.use(sceneHdr, rg::storageReadWrite());
+        for (const Image2D* img : {&half_, &far_, &near_, &tileA_, &tileB_}) {
+            const auto h = graph.importImage("dof.scratch", img->image, VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                                             VK_IMAGE_LAYOUT_GENERAL);
+            pass.use(h, rg::sampled(VK_IMAGE_LAYOUT_GENERAL));
+            pass.use(h, rg::storageReadWrite());
+        }
     }
 
     void DofPass::record(VkCommandBuffer cb, uint32_t frame,
@@ -353,10 +366,9 @@ namespace threepp::vulkan {
         const uint32_t tw = (hw + 7u) / 8u;
         const uint32_t th = (hh + 7u) / 8u;
 
-        // Global compute→compute barrier. The first one ALSO orders this
-        // frame's scratch writes against the previous frame's reads (queue
-        // submission-order scope) — the scratch images are shared, not
-        // per-frame-in-flight.
+        // Global compute→compute barrier between the dispatches. The scratch
+        // images are shared, not per-frame-in-flight; the render graph orders
+        // this frame's first scratch write after the previous frame's reads.
         auto barrier = [&]() {
             VkMemoryBarrier2 mb{};
             mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
@@ -378,7 +390,6 @@ namespace threepp::vulkan {
         };
 
         // 1. CoC + prefilter → half.
-        barrier();
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, cocPipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, cocPipeLayout_,
                                 0, 1, &cocSets_[frame], 0, nullptr);

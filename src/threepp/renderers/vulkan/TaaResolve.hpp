@@ -13,6 +13,7 @@
 #ifndef THREEPP_VULKAN_TAA_RESOLVE_HPP
 #define THREEPP_VULKAN_TAA_RESOLVE_HPP
 
+#include "threepp/renderers/vulkan/RenderGraph.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
 #include <vulkan/vulkan.h>
@@ -124,6 +125,12 @@ namespace threepp::vulkan {
                            float mblurShutter = 0.f,
                            float jitterTexX = 0.f,
                            float jitterTexY = 0.f);
+
+        // Render-graph declaration of recordResolve for this frame. The caller
+        // imports and declares the G-buffer inputs (motion, current and
+        // previous ids, previous depth) and the output target; this declares
+        // the TAA input, both history slots and the motion-blur scratch.
+        void declareResolve(rg::RenderGraph& graph, rg::PassBuilder& pass, uint32_t frame) const;
 
         // Denoise writes its output here when TAA is active (replaces the
         // direct-to-swapchain write of non-TAA mode).

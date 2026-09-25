@@ -203,7 +203,7 @@ namespace threepp::vulkan {
             w[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             w[i].pBufferInfo     = &bi[i];
         }
-        vkUpdateDescriptorSets(ctx_.device(), 3, w, 0, nullptr);
+        vulkan::updateDescriptorSets(ctx_.device(), 3, w, 0, nullptr);
     }
 
     void InstanceExpand::prepareFrame(uint32_t frame, uint32_t spanCount,

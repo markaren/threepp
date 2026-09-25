@@ -29,68 +29,39 @@
 namespace threepp {
 
 
-    // Deferred scene dispatch. Called from recordCommandBuffer between the
-    // shared G-buffer/AS head and the shared bloom/TAA tail.
-    void VulkanRenderer::Impl::recordSceneDispatch(VkCommandBuffer cb, uint32_t setIdx,
-                                                   VkExtent2D ext, VkExtent2D ptExt,
-                                                   uint32_t exposureBits) {
-        // ── VulkanRenderer deferred dispatch ───────────────────────────
-        // Shade the raster material G-buffer (direct analytic lights +
-        // split-sum specular IBL + approximate diffuse IBL) straight
-        // into bloom_->sceneHdr. No path tracing, no denoise — the base
-        // is noise-free. The raster G-buffer pass already ran and its
-        // render-pass dependency makes it visible to COMPUTE; bloom's
-        // leading barrier makes this write visible to the composite.
-        // Per-frame BLAS refits (skinned / deformable meshes) are fenced
-        // only to the RT pipeline stage by the build barriers above. The
-        // deferred pass traverses the same acceleration structures via
-        // ray query from COMPUTE, so add an AS-build → compute fence here.
-        // No-op for static scenes (no pending AS write this frame).
-        // ALSO carries the GI-reproject cross-frame dependency: this
-        // frame's deferred shade SAMPLES the OTHER frame-in-flight's
-        // indirect image (last frame's accumulated GI history). Make the
-        // prev frame's COMPUTE write to it visible to this frame's COMPUTE
-        // read (the GPU executes frames sequentially per queue, so this is a
-        // cache-visibility barrier, not ordering).
-        {
-            VkMemoryBarrier2 asbar{};
-            asbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            asbar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            asbar.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-            asbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            asbar.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-            // The AS half of this fence exists FOR ray query, so it is also
-            // gated ON ray query: AS_READ paired with a COMPUTE stage is a
-            // validation error when the rayQuery feature is off
-            // (VUID-VkMemoryBarrier2-dstAccessMask-06256 — the validation gate
-            // found this the first time the no-ray-query fallback actually
-            // ran). Without ray query the deferred compute never touches an
-            // acceleration structure, and the RT-pipeline consumers are fenced
-            // by the AS_BUILD → RT_SHADER barriers at the build sites.
-            if (ctx->rayQuerySupported()) {
-                asbar.srcStageMask  |= VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-                asbar.srcAccessMask |= VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-                asbar.dstAccessMask |= VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-            }
-            VkDependencyInfo asdep{};
-            asdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            asdep.memoryBarrierCount = 1;
-            asdep.pMemoryBarriers = &asbar;
-            vkCmdPipelineBarrier2(cb, &asdep);
-        }
+    // Deferred scene dispatch: the passes between the G-buffer/AS head and
+    // the splats + post tail, for the current view. Every pass declares its
+    // resources (the DeferredShade stages from their shaders' reflected
+    // bindings) and the graph records the barriers between them.
+    //
+    // The graph's entry barrier also carries the two dependencies on work
+    // recorded before it: the per-frame BLAS/TLAS builds (the probe, RTAO and
+    // shade rays traverse them via ray query from COMPUTE) and the previous
+    // frame-in-flight's writes to the GI/shadow/reflection histories this
+    // frame reprojects from.
+    void VulkanRenderer::Impl::addSceneDispatchPasses(vulkan::rg::RenderGraph& g) {
+        namespace rg = vulkan::rg;
+        using Stage  = vulkan::DeferredShade::Stage;
+        const uint32_t f = currentFrame;
+        auto& shade = *view().deferredShade_;
+
+        // sceneHdr rests in GENERAL between stages; imported first so the
+        // descriptor-derived imports below don't pick its layout.
+        g.importImage("sceneHdr", view().bloom_->sceneHdrImage(f), VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                      VK_IMAGE_LAYOUT_GENERAL);
+
         // ── Probe-GI update (on by default, setProbeGI) ─────────────────
         // Refresh a round-robin window of world-space irradiance probes
-        // BEFORE the shade so this frame's gather taps a current grid.
-        // Runs after the AS barrier above (the probe rays traverse the
-        // same TLAS/BLAS). The grid UBO is re-uploaded every frame — its
-        // `enabled` flag is what the shader-side sampling gates on.
+        // BEFORE the shade so this frame's gather taps a current grid. The
+        // grid UBO is re-uploaded every frame — its `enabled` flag is what the
+        // shader-side sampling gates on.
         if (probeGI_) {
             // The UBO write is per view on purpose: it targets the
             // frame-in-flight slot every view of this frame shares, and the
             // content is identical, so it is idempotent — writing it once per
             // view costs a memcpy and keeps this independent of which view
             // records first.
-            probeGI_->updateGridUbo(currentFrame, probeGIEnabled_);
+            probeGI_->updateGridUbo(f, probeGIEnabled_);
             // The DISPATCH is once per FRAME, primary only. probe_update.comp
             // binds no camera anything: it is 2048 probes x 64 world-space ray
             // queries plus a snapshot copy, and running it again for a
@@ -98,10 +69,10 @@ namespace threepp {
             // round-robin cursor and the ray seed (the shader's `frame`) once
             // per view, which made the grid at frame N a function of how many
             // cameras were attached. The gate is VulkanMultiView_test's
-            // [probe] section. It stays HERE rather than moving to the frame
-            // head because it must sit after the AS barrier above (the probe
-            // rays traverse the TLAS the refit just built) and before the
-            // primary's shade, and the primary records first.
+            // [probe] section. It stays in this segment rather than moving to
+            // the frame head because it must follow the TLAS refit (the probe
+            // rays traverse it) and precede the primary's shade, and the
+            // primary records first.
             //
             // Safe against the early-outs: the debug-blit and events-only
             // returns in VulkanCoreRecord abort the whole record, secondaries
@@ -112,35 +83,25 @@ namespace threepp {
                     fitProbeGridToScene();
                     probeGridDirty_ = false;
                     // Grid moved → the UBO written above is stale; rewrite.
-                    probeGI_->updateGridUbo(currentFrame, true);
+                    probeGI_->updateGridUbo(f, true);
                 }
-                // The bracket covers the snapshot copy recordDispatch opens
-                // with as well as the probe rays themselves — they are one
-                // cost and the copy is the half that was easy to forget.
                 // A step in the lighting (a light switched, the emissive power
                 // jumped) runs the next kProbeFastBlendFrames updates at the
                 // fast blend; see probeLightingStepped.
                 if (probeLightingStepped()) probeFastBlendFrames_ = kProbeFastBlendFrames;
                 const bool fastBlend = probeFastBlendFrames_ > 0;
                 if (probeFastBlendFrames_ > 0) --probeFastBlendFrames_;
-                gpuTimings_->begin(cb, TP_ProbeGI, currentFrame);
-                probeGI_->recordDispatch(cb, currentFrame,
-                                         emissiveTriCountThisFrame_,
-                                         emissiveTotalPowerThisFrame_,
-                                         /*shadows=*/true, envImage.mipLevels, fastBlend);
-                gpuTimings_->end(cb, TP_ProbeGI, currentFrame);
-                // Probe SH writes → deferred shade reads (compute→compute).
-                VkMemoryBarrier2 pbar{};
-                pbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                pbar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                pbar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                pbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                pbar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-                VkDependencyInfo pdep{};
-                pdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                pdep.memoryBarrierCount = 1;
-                pdep.pMemoryBarriers = &pbar;
-                vkCmdPipelineBarrier2(cb, &pdep);
+                // The bracket covers the snapshot copy recordDispatch opens
+                // with as well as the probe rays themselves — they are one
+                // cost and the copy is the half that was easy to forget.
+                auto pass = g.addPass("probeGI", [this, f, fastBlend](VkCommandBuffer c) {
+                    gpuTimings_->begin(c, TP_ProbeGI, f);
+                    probeGI_->recordDispatch(c, f, emissiveTriCountThisFrame_,
+                                             emissiveTotalPowerThisFrame_,
+                                             /*shadows=*/true, envImage.mipLevels, fastBlend);
+                    gpuTimings_->end(c, TP_ProbeGI, f);
+                });
+                probeGI_->declare(g, pass, f);
             }
         }
         // The sample count THIS view's G-buffer was rastered at, not the
@@ -154,7 +115,7 @@ namespace threepp {
         // (VulkanMultiView_test's msaa gate, 10.8 dB against the primary),
         // and the filters read coverage bits the 1x pass never packs.
         const uint32_t viewMsaaSamples =
-                (view().rasterGbufs[currentFrame].framebufferMS != VK_NULL_HANDLE) ? gbufMsaaSamples_ : 1u;
+                (view().rasterGbufs[f].framebufferMS != VK_NULL_HANDLE) ? gbufMsaaSamples_ : 1u;
         // Dispatch A always sees the TRUE sample count: even with
         // dispatch B off it must blend SKY-minority coverage itself
         // (every geometry/sky silhouette — the most visible edges).
@@ -164,47 +125,27 @@ namespace threepp {
         const bool shadeBActive = viewMsaaSamples > 1 && gbufShadeBEnabled_;
         // Clustered light culling: per-cell light lists for the shade's
         // analytic split (all point/spot lights, no 8-per-type cap).
-        // Barrier: cull's grid writes → shade's reads (compute→compute).
         if (clusterLightCountThisFrame_ > 0) {
-            view().deferredShade_->recordClusterBuild(cb, currentFrame,
-                                               clusterLightCountThisFrame_,
-                                               regionRenderExt_.width, regionRenderExt_.height);
-            VkMemoryBarrier2 cbar{};
-            cbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            cbar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            cbar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            cbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            cbar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-            VkDependencyInfo cdep{};
-            cdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            cdep.memoryBarrierCount = 1;
-            cdep.pMemoryBarriers = &cbar;
-            vkCmdPipelineBarrier2(cb, &cdep);
+            auto pass = g.addPass("clusterBuild", [this, f](VkCommandBuffer c) {
+                view().deferredShade_->recordClusterBuild(c, f, clusterLightCountThisFrame_,
+                                                          regionRenderExt_.width, regionRenderExt_.height);
+            });
+            shade.declare(g, pass, Stage::ClusterBuild, f);
         }
         // Cloud shadow map: top-down cloud transmittance regenerated each
         // frame, sampled by the surface/froxel/water sun terms below (moving
-        // cloud shadows on the ground). Runs before the froxel + shade
-        // passes; the barrier makes its write visible to their sampled reads.
-        // Only when clouds are on (off = free / image-identical).
+        // cloud shadows on the ground). Only when clouds are on (off = free /
+        // image-identical).
         if (cloudsEnabled_) {
-            view().deferredShade_->recordCloudShadow(cb, currentFrame, sampleIndex);
-            VkMemoryBarrier2 csBar{};
-            csBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            csBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            csBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            csBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            csBar.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-            VkDependencyInfo csDep{};
-            csDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            csDep.memoryBarrierCount = 1;
-            csDep.pMemoryBarriers = &csBar;
-            vkCmdPipelineBarrier2(cb, &csDep);
+            auto pass = g.addPass("cloudShadow", [this, f](VkCommandBuffer c) {
+                view().deferredShade_->recordCloudShadow(c, f, sampleIndex);
+            });
+            shade.declare(g, pass, Stage::CloudShadow, f);
         }
         // Froxel volumetrics: inject (RT sun shafts + clustered-light
         // beams, temporal EMA) + integrate (front-to-back LUT), whenever
-        // a medium exists this frame. Runs AFTER the cluster barrier
-        // (inject reads the cluster grid); the barrier below makes the
-        // LUT visible to the shade's trilinear sample.
+        // a medium exists this frame. Inject reads the cluster grid; the
+        // shade samples the LUT.
         // Phase 2: the froxels run whenever the unified AIR medium exists
         // (scene.fog OR setHeightFog — resolved into mediumActiveThisFrame_ by
         // updateFogUbo) or the explicit clear-air beam density is set.
@@ -234,79 +175,44 @@ namespace threepp {
                                     clusterLightCountThisFrame_ > 0) ||
                                    densityActive;
         if (froxelsActive) {
-            gpuTimings_->begin(cb, TP_Froxel, currentFrame);
-            view().deferredShade_->recordFroxels(cb, currentFrame,
-                                          regionRenderExt_.width, regionRenderExt_.height,
-                                          deferredVolFog_, deferredVolDensity_, deferredVolAniso_,
-                                          sampleIndex,
-                                          view().deferredCamDeltaLen_, deferredCamRotAngle_,
-                                          clusterLightCountThisFrame_);
-            gpuTimings_->end(cb, TP_Froxel, currentFrame);
-            VkMemoryBarrier2 fbar{};
-            fbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            fbar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            fbar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            fbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            fbar.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
-                                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-            VkDependencyInfo fdep{};
-            fdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            fdep.memoryBarrierCount = 1;
-            fdep.pMemoryBarriers = &fbar;
-            vkCmdPipelineBarrier2(cb, &fdep);
+            auto pass = g.addPass("froxels", [this, f](VkCommandBuffer c) {
+                gpuTimings_->begin(c, TP_Froxel, f);
+                view().deferredShade_->recordFroxels(c, f, regionRenderExt_.width, regionRenderExt_.height,
+                                                     deferredVolFog_, deferredVolDensity_, deferredVolAniso_,
+                                                     sampleIndex,
+                                                     view().deferredCamDeltaLen_, deferredCamRotAngle_,
+                                                     clusterLightCountThisFrame_);
+                gpuTimings_->end(c, TP_Froxel, f);
+            });
+            shade.declare(g, pass, Stage::Froxels, f);
         }
         // Half-res volumetric cloud march (cloud_march.comp): raymarch the
         // cloud deck + temporally reproject at half res, off the per-pixel
         // shade critical path. Only when clouds are enabled (off = free /
-        // image-identical). Reads the resolved G-buffer depth/ids (already
-        // COMPUTE-visible via the raster pass dependency); the barrier below
-        // makes its cloudColor + cloudAux writes visible to the shade's
-        // depth-aware upsample.
+        // image-identical). The shade's depth-aware upsample reads its
+        // cloudColor + cloudAux writes.
         if (cloudsEnabled_) {
-            view().deferredShade_->recordCloudMarch(cb, currentFrame,
-                                             regionRenderExt_.width, regionRenderExt_.height,
-                                             envImage.mipLevels, sampleIndex,
-                                             view().deferredCamDeltaLen_, deferredCamRotAngle_);
-            VkMemoryBarrier2 cldBar{};
-            cldBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            cldBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            cldBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            cldBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            cldBar.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-            VkDependencyInfo cldDep{};
-            cldDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            cldDep.memoryBarrierCount = 1;
-            cldDep.pMemoryBarriers = &cldBar;
-            vkCmdPipelineBarrier2(cb, &cldDep);
+            auto pass = g.addPass("cloudMarch", [this, f](VkCommandBuffer c) {
+                view().deferredShade_->recordCloudMarch(c, f, regionRenderExt_.width, regionRenderExt_.height,
+                                                        envImage.mipLevels, sampleIndex,
+                                                        view().deferredCamDeltaLen_, deferredCamRotAngle_);
+            });
+            shade.declare(g, pass, Stage::CloudMarch, f);
         }
-        // Half-res RT ambient occlusion + bent normals. Recorded AFTER the
-        // probe-GI update (shares the TLAS) and BEFORE the shade, which
-        // bilaterally upsamples rtao for its ambient / specular-occlusion and
-        // (Phase B) its bent-normal probe+env diffuse indirect. The barrier
-        // makes the pass's storage writes visible to the shade's sampled read,
-        // same shape as the cloud barrier above.
+        // Half-res RT ambient occlusion + bent normals. After the probe-GI
+        // update (shares the TLAS) and before the shade, which bilaterally
+        // upsamples rtao for its ambient / specular-occlusion and (Phase B)
+        // its bent-normal probe+env diffuse indirect. The shade samples rtao
+        // (binding 74, sampler2D) and loads rtaoAux (binding 75, readonly
+        // image2D) — both come out of the reflected bindings.
         if (deferredAO_) {
-            gpuTimings_->begin(cb, TP_Rtao, currentFrame);
-            view().deferredShade_->recordRtao(cb, currentFrame,
-                                              regionRenderExt_.width, regionRenderExt_.height,
-                                              sampleIndex);
-            gpuTimings_->end(cb, TP_Rtao, currentFrame);
-            VkMemoryBarrier2 aoBar{};
-            aoBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            aoBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            aoBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            aoBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            // BOTH read bits: the shade samples rtao (binding 74, sampler2D)
-            // but reads rtaoAux (binding 75) via imageLoad on a readonly
-            // image2D — a STORAGE read. A SAMPLED_READ-only mask leaves the
-            // aux write unsynchronised against that load.
-            aoBar.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
-                                  VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-            VkDependencyInfo aoDep{};
-            aoDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            aoDep.memoryBarrierCount = 1;
-            aoDep.pMemoryBarriers = &aoBar;
-            vkCmdPipelineBarrier2(cb, &aoDep);
+            auto pass = g.addPass("rtao", [this, f](VkCommandBuffer c) {
+                gpuTimings_->begin(c, TP_Rtao, f);
+                view().deferredShade_->recordRtao(c, f, regionRenderExt_.width, regionRenderExt_.height,
+                                                  sampleIndex);
+                gpuTimings_->end(c, TP_Rtao, f);
+            });
+            shade.declare(g, pass, Stage::Rtao, f);
         }
         vulkan::DeferredShade::DispatchParams shadeParams{};
         shadeParams.width              = regionRenderExt_.width;
@@ -351,9 +257,14 @@ namespace threepp {
         shadeParams.preExpBits         = preExpBits_;
         shadeParams.bgIsSolidColor     = envIsBgColor;
 
-        gpuTimings_->begin(cb, TP_DeferredShade, currentFrame);
-        view().deferredShade_->recordDispatch(cb, currentFrame, shadeParams);
-        gpuTimings_->end(cb, TP_DeferredShade, currentFrame);// pathTraceMs = deferred SHADE only
+        {
+            auto pass = g.addPass("shade", [this, f, shadeParams](VkCommandBuffer c) {
+                gpuTimings_->begin(c, TP_DeferredShade, f);
+                view().deferredShade_->recordDispatch(c, f, shadeParams);
+                gpuTimings_->end(c, TP_DeferredShade, f);// pathTraceMs = deferred SHADE only
+            });
+            shade.declare(g, pass, Stage::Shade, f);
+        }
         // Consumed: this frame's shade started every temporal path fresh
         // (dispatch B below reuses shadeParams, flag included). From the next
         // frame on, the previous G-buffer slot is one the histories have seen.
@@ -361,134 +272,58 @@ namespace threepp {
 
         // ── MSAA dispatch B: per-sample shading at complex (edge) pixels ──
         // Opt-in (gbufShadeBEnabled_, default false) and only when
-        // setGbufferMsaa(2|4) is active. Reads dispatch A's outImage
-        // write (imageLoad accumulate) and the raw MS G-buffer; needs a
-        // compute->compute barrier on outImage between the two
-        // dispatches (RAW: B reads what A just wrote) plus visibility for
-        // the MS attachments (already satisfied — they've been
-        // SHADER_READ_ONLY since the MSAA render pass's own subpass
-        // dependency, unchanged since dispatch A started).
+        // setGbufferMsaa(2|4) is active. Reads dispatch A's outImage write
+        // (imageLoad accumulate) and the raw MS G-buffer.
         if (shadeBActive) {
-            VkMemoryBarrier2 shadeBar{};
-            shadeBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            shadeBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            shadeBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            shadeBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            shadeBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            VkDependencyInfo shadeDep{};
-            shadeDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            shadeDep.memoryBarrierCount = 1;
-            shadeDep.pMemoryBarriers    = &shadeBar;
-            vkCmdPipelineBarrier2(cb, &shadeDep);
-
             // Dispatch B reuses dispatch A's params verbatim — only the mode
             // differs (and shadeBActive is trivially true when B itself runs).
-            shadeParams.shadeMode    = 1u;
-            shadeParams.shadeBActive = true;
-            gpuTimings_->begin(cb, TP_ShadeB, currentFrame);
-            view().deferredShade_->recordDispatch(cb, currentFrame, shadeParams);
-            gpuTimings_->end(cb, TP_ShadeB, currentFrame);
-
-            // Dispatch B's outImage write -> bloom/composite's read.
-            VkMemoryBarrier2 postBar{};
-            postBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            postBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            postBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            postBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            postBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            VkDependencyInfo postDep{};
-            postDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            postDep.memoryBarrierCount = 1;
-            postDep.pMemoryBarriers    = &postBar;
-            vkCmdPipelineBarrier2(cb, &postDep);
+            auto paramsB = shadeParams;
+            paramsB.shadeMode    = 1u;
+            paramsB.shadeBActive = true;
+            auto pass = g.addPass("shadeB", [this, f, paramsB](VkCommandBuffer c) {
+                gpuTimings_->begin(c, TP_ShadeB, f);
+                view().deferredShade_->recordDispatch(c, f, paramsB);
+                gpuTimings_->end(c, TP_ShadeB, f);
+            });
+            shade.declare(g, pass, Stage::Shade, f);
         }
         // Filter the demodulated lighting channels (GI SVGF + shadow ratio,
-        // reflection gloss reconstruction) and composite them into sceneHdr.
-        // Barrier: the shade wrote sceneHdr + the indirect image (both
-        // GENERAL storage); the filter reads the indirect 5×5 neighbourhood
-        // and read-modify-writes sceneHdr — compute→compute RAW/WAR.
+        // reflection gloss reconstruction) and composite them into sceneHdr:
+        // the filter reads the indirect 5×5 neighbourhood and read-modify-
+        // writes sceneHdr.
         if (denoiseEnabled_) {
-            VkMemoryBarrier2 denoiseBar{};
-            denoiseBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            denoiseBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            denoiseBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            denoiseBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            denoiseBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            VkDependencyInfo denoiseDep{};
-            denoiseDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            denoiseDep.memoryBarrierCount = 1;
-            denoiseDep.pMemoryBarriers = &denoiseBar;
-            vkCmdPipelineBarrier2(cb, &denoiseDep);
-            gpuTimings_->begin(cb, TP_Denoise, currentFrame);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
-            view().deferredShade_->recordFilterAndComposite(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height,
-                                                     viewMsaaSamples, shadeBActive, preExpBits_);
-            gpuTimings_->end(cb, TP_Denoise, currentFrame);
+            auto pass = g.addPass("denoise", [this, f, viewMsaaSamples, shadeBActive](VkCommandBuffer c) {
+                gpuTimings_->begin(c, TP_Denoise, f);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
+                view().deferredShade_->recordFilterAndComposite(c, f, regionRenderExt_.width, regionRenderExt_.height,
+                                                                viewMsaaSamples, shadeBActive, preExpBits_);
+                gpuTimings_->end(c, TP_Denoise, f);
+            });
+            shade.declare(g, pass, Stage::FilterComposite, f);
         }
-        // Auto-exposure: histogram over the final sceneHdr. sceneHdr writes
-        // (deferred shade + optional denoise) are already visible via the
-        // barriers above; bloom's leading barrier will also make them visible,
-        // so this fits naturally in the gap. recordDispatch() inserts its own
-        // fill→compute barrier to zero the SSBO before sampling.
+        // Auto-exposure: histogram over the final sceneHdr. recordDispatch()
+        // clears the bins and orders that clear before its dispatch itself.
         if (autoExposureEnabled_ && autoExposure_) {
-            VkMemoryBarrier2 lumBar{};
-            lumBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            lumBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            lumBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            lumBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            lumBar.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-            VkDependencyInfo lumDep{};
-            lumDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            lumDep.memoryBarrierCount = 1;
-            lumDep.pMemoryBarriers    = &lumBar;
-            vkCmdPipelineBarrier2(cb, &lumDep);
-            autoExposure_->recordDispatch(cb, currentFrame,
-                                         regionRenderExt_.width, regionRenderExt_.height,
-                                         preExpHist_[currentFrame]);// meter un-bakes this
+            auto pass = g.addPass("autoExposure", [this, f](VkCommandBuffer c) {
+                autoExposure_->recordDispatch(c, f, regionRenderExt_.width, regionRenderExt_.height,
+                                              preExpHist_[f]);// meter un-bakes this
+            });
+            autoExposure_->declare(g, pass, f);
         }
         // ── Particle billboard lighting (particle_light.comp) ─────────
         // One thread per live overlay particle: the deferred light field
         // at the particle center + the camera→particle fog leg, written
-        // to the per-FIF results SSBO the billboard pass reads. Every
-        // input (TLAS, cluster grid, cloud shadow, froxel LUT, probe SH)
-        // is already compute-visible via the barriers above. The leading
-        // barrier orders this frame's write against the PREVIOUS frame's
-        // vertex-stage reads of the same FIF slot buffer (WAR — cache-
-        // visibility-free execution dependency would do, but keep the
-        // access masks explicit); the trailing one hands the results to
-        // the overlay pass's vertex fetches.
+        // to the per-FIF results SSBO the billboard pass reads. The graph's
+        // entry barrier orders this frame's write after the PREVIOUS frame's
+        // vertex-stage reads of the same slot buffer (WAR), and its exit
+        // barrier hands the results to the overlay pass's vertex fetches.
         if (particleLightCount_ > 0) {
-            VkMemoryBarrier2 preBar{};
-            preBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            preBar.srcStageMask  = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-            preBar.srcAccessMask = 0;// WAR: execution ordering suffices
-            preBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            preBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            VkDependencyInfo preDep{};
-            preDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            preDep.memoryBarrierCount = 1;
-            preDep.pMemoryBarriers    = &preBar;
-            vkCmdPipelineBarrier2(cb, &preDep);
-
-            view().deferredShade_->recordParticleLight(
-                    cb, currentFrame, particleIoDescSets_[currentFrame],
-                    particleLightCount_, /*centerBase=*/0u,
-                    clusterLightCountThisFrame_, froxelsActive,
-                    envImage.mipLevels);
-
-            VkMemoryBarrier2 postBar{};
-            postBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            postBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            postBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            postBar.dstStageMask  = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-            postBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-            VkDependencyInfo postDep{};
-            postDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            postDep.memoryBarrierCount = 1;
-            postDep.pMemoryBarriers    = &postBar;
-            vkCmdPipelineBarrier2(cb, &postDep);
+            auto pass = g.addPass("particleLight", [this, f, froxelsActive](VkCommandBuffer c) {
+                view().deferredShade_->recordParticleLight(c, f, particleIoDescSets_[f],
+                                                           particleLightCount_, /*centerBase=*/0u,
+                                                           clusterLightCountThisFrame_, froxelsActive,
+                                                           envImage.mipLevels);
+            });
+            shade.declare(g, pass, Stage::ParticleLight, f, particleIoDescSets_[f]);
         }
     }
 

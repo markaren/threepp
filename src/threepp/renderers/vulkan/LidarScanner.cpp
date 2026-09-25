@@ -396,7 +396,7 @@ namespace threepp::vulkan {
         w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         w[1].pBufferInfo = &resultInfo;
 
-        vkUpdateDescriptorSets(ctx_.device(),
+        vulkan::updateDescriptorSets(ctx_.device(),
                                static_cast<uint32_t>(w.size()), w.data(),
                                0, nullptr);
     }
@@ -502,7 +502,7 @@ namespace threepp::vulkan {
         w[6].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         w[6].pBufferInfo     = &pdUboInfo;
 
-        vkUpdateDescriptorSets(ctx_.device(),
+        vulkan::updateDescriptorSets(ctx_.device(),
                                static_cast<uint32_t>(w.size()), w.data(),
                                0, nullptr);
     }

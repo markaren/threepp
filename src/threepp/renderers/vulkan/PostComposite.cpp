@@ -164,8 +164,8 @@ namespace threepp::vulkan {
         vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         vci.subresourceRange.levelCount = 1;
         vci.subresourceRange.layerCount = 1;
-        check(vkCreateImageView(ctx_.device(), &vci, nullptr, &gradeLut_.view),
-              "vkCreateImageView(postComposite.gradeLut)");
+        check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &gradeLut_.view),
+              "vulkan::createImageView(postComposite.gradeLut)");
         ctx_.setObjectName(gradeLut_.image, "postComposite.gradeLut");
 
         // The LUT is always bound but only sampled when lutActive_ — still,
@@ -284,7 +284,7 @@ namespace threepp::vulkan {
             vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             vci.subresourceRange.levelCount = 1;
             vci.subresourceRange.layerCount = 1;
-            check(vkCreateImageView(d, &vci, nullptr, &img.view), "vkCreateImageView(postComposite.hdrOut)");
+            check(vulkan::createImageView(d, &vci, nullptr, &img.view), "vulkan::createImageView(postComposite.hdrOut)");
             ctx_.setObjectName(img.image, "vmaCreateImage(postComposite.hdrOut)");
             ctx_.setObjectName(img.view,  "vmaCreateImage(postComposite.hdrOut)");
         }
@@ -587,8 +587,15 @@ namespace threepp::vulkan {
             setw(4, 5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cIds);
             setw(5, 6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cHdrScene);
             setw(6, 7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cHdrOut);
-            vkUpdateDescriptorSets(ctx_.device(), 7, w, 0, nullptr);
+            vulkan::updateDescriptorSets(ctx_.device(), 7, w, 0, nullptr);
         }
+    }
+
+    void PostComposite::declare(rg::RenderGraph& graph, rg::PassBuilder& pass) const {
+        // 3D image, uploaded outside the frame; GENERAL at rest.
+        const auto lut = graph.importImage("post.gradeLut", gradeLut_.image, VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                                           VK_IMAGE_LAYOUT_GENERAL);
+        pass.use(lut, rg::sampled(VK_IMAGE_LAYOUT_GENERAL));
     }
 
     void PostComposite::recordDispatch(VkCommandBuffer cb, uint32_t frame,
@@ -600,22 +607,8 @@ namespace threepp::vulkan {
                                        bool hdrMode) {
         if (srcWidth == 0)  srcWidth  = width;
         if (srcHeight == 0) srcHeight = height;
-        // The shade/resolve (and, when active, the bloom pyramid / HDR-mode
-        // TAA resolve) wrote via compute; make those writes visible to this
-        // dispatch's reads.
-        VkMemoryBarrier2 mb{};
-        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-        mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                           VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        VkDependencyInfo di{};
-        di.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        di.memoryBarrierCount = 1;
-        di.pMemoryBarriers    = &mb;
-        vkCmdPipelineBarrier2(cb, &di);
-
+        // The render graph makes the inputs' writes visible (declared by the
+        // caller and declare()).
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);

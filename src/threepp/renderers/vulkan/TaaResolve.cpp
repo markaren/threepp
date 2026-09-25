@@ -100,8 +100,8 @@ namespace threepp::vulkan {
         vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         vci.subresourceRange.levelCount = 1;
         vci.subresourceRange.layerCount = 1;
-        check(vkCreateImageView(ctx_.device(), &vci, nullptr, &out.view),
-              "vkCreateImageView(taa)");
+        check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &out.view),
+              "vulkan::createImageView(taa)");
         ctx_.setObjectName(out.image, label);
         ctx_.setObjectName(out.view,  label);
         return out;
@@ -547,7 +547,7 @@ namespace threepp::vulkan {
                 w[6].pImageInfo = &idsPrevI;
                 w[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w[7].pImageInfo = &depthPrevI;
-                vkUpdateDescriptorSets(ctx_.device(), 8, w, 0, nullptr);
+                vulkan::updateDescriptorSets(ctx_.device(), 8, w, 0, nullptr);
 
                 // RCAS set: this frame's resolved output lives in the history
                 // WRITE slot (writeSlot) → sample it, sharpen, write swapchain.
@@ -571,7 +571,7 @@ namespace threepp::vulkan {
                 rw[1].descriptorCount = 1;
                 rw[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 rw[1].pImageInfo      = &rcasOut;
-                vkUpdateDescriptorSets(ctx_.device(), 2, rw, 0, nullptr);
+                vulkan::updateDescriptorSets(ctx_.device(), 2, rw, 0, nullptr);
 
                 // Motion-blur reconstruction → swapchain (the sharpen-off
                 // chain): resolved history + motion + tileMax in, swapchain
@@ -598,7 +598,7 @@ namespace threepp::vulkan {
                 mw[2].pImageInfo     = &mbTileI;
                 mw[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 mw[3].pImageInfo     = &swapI;
-                vkUpdateDescriptorSets(ctx_.device(), 4, mw, 0, nullptr);
+                vulkan::updateDescriptorSets(ctx_.device(), 4, mw, 0, nullptr);
 
                 VkDescriptorImageInfo mbOutReadI{};
                 mbOutReadI.sampler     = sampler_;
@@ -615,7 +615,7 @@ namespace threepp::vulkan {
                 rmw[0].pImageInfo     = &mbOutReadI;
                 rmw[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 rmw[1].pImageInfo     = &rcasOut;
-                vkUpdateDescriptorSets(ctx_.device(), 2, rmw, 0, nullptr);
+                vulkan::updateDescriptorSets(ctx_.device(), 2, rmw, 0, nullptr);
             }
 
             // Per-frame (swapchain-image-independent) motion-blur sets:
@@ -641,7 +641,7 @@ namespace threepp::vulkan {
                 tw[0].pImageInfo     = &motionI;
                 tw[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 tw[1].pImageInfo     = &tileWriteI;
-                vkUpdateDescriptorSets(ctx_.device(), 2, tw, 0, nullptr);
+                vulkan::updateDescriptorSets(ctx_.device(), 2, tw, 0, nullptr);
 
                 VkDescriptorImageInfo mbColorI{};
                 mbColorI.sampler     = sampler_;
@@ -667,7 +667,7 @@ namespace threepp::vulkan {
                 mw[2].pImageInfo     = &mbTileI;
                 mw[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 mw[3].pImageInfo     = &mbOutWriteI;
-                vkUpdateDescriptorSets(ctx_.device(), 4, mw, 0, nullptr);
+                vulkan::updateDescriptorSets(ctx_.device(), 4, mw, 0, nullptr);
             }
         }
     }
@@ -706,36 +706,9 @@ namespace threepp::vulkan {
                            dstX == 0 && dstY == 0 &&
                            physOutW == outWidth && physOutH == outHeight &&
                            tileMax_[frame].view != VK_NULL_HANDLE;
-        // Barrier: taaInput write → read; both history slots covered (RAW
-        // hazard on the read slot, WAW on the write slot we're about to
-        // overwrite this frame).
-        std::array<VkImageMemoryBarrier2, 3> pre{};
-        for (auto& b : pre) {
-            b.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            b.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            b.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                              VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                              VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
-                              VK_ACCESS_2_TRANSFER_READ_BIT;
-            b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            b.subresourceRange.levelCount = 1;
-            b.subresourceRange.layerCount = 1;
-        }
-        pre[0].image = inputImagesPP_[frame].image;
-        pre[1].image = historyImagesPP_[0].image;
-        pre[2].image = historyImagesPP_[1].image;
-        VkDependencyInfo dep{};
-        dep.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        dep.imageMemoryBarrierCount  = static_cast<uint32_t>(pre.size());
-        dep.pImageMemoryBarriers     = pre.data();
-        vkCmdPipelineBarrier2(cb, &dep);
-
+        // The TAA input, both history slots and the G-buffer inputs are made
+        // visible by the render graph (declareResolve + the caller's
+        // declarations); the barriers below order this pass's own dispatches.
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
         const uint32_t descIdx = frame * imageCount_ + imageIndex;
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -913,8 +886,30 @@ namespace threepp::vulkan {
                 w[1].descriptorCount = 1;
                 w[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 w[1].pImageInfo      = &dstI;
-                vkUpdateDescriptorSets(ctx_.device(), 2, w, 0, nullptr);
+                vulkan::updateDescriptorSets(ctx_.device(), 2, w, 0, nullptr);
             }
+        }
+    }
+
+    void TaaResolve::declareResolve(rg::RenderGraph& graph, rg::PassBuilder& pass, uint32_t frame) const {
+        const auto input = graph.importImage("taa.input", inputImagesPP_[frame].image,
+                                             VK_IMAGE_ASPECT_COLOR_BIT, 1, VK_IMAGE_LAYOUT_GENERAL);
+        pass.use(input, rg::sampled(VK_IMAGE_LAYOUT_GENERAL));
+        const auto hRead = graph.importImage("taa.history", historyImagesPP_[1u - writeSlotFor(frame)].image,
+                                             VK_IMAGE_ASPECT_COLOR_BIT, 1, VK_IMAGE_LAYOUT_GENERAL);
+        pass.use(hRead, rg::sampled(VK_IMAGE_LAYOUT_GENERAL));
+        // The write slot is written by the resolve and read back by the
+        // motion blur / RCAS dispatches of the same pass.
+        const auto hWrite = graph.importImage("taa.history", historyImagesPP_[writeSlotFor(frame)].image,
+                                              VK_IMAGE_ASPECT_COLOR_BIT, 1, VK_IMAGE_LAYOUT_GENERAL);
+        pass.use(hWrite, rg::storageReadWrite());
+        pass.use(hWrite, rg::sampled(VK_IMAGE_LAYOUT_GENERAL));
+        for (const auto* v : {&tileMax_, &mblurOut_}) {
+            if (frame >= v->size() || (*v)[frame].image == VK_NULL_HANDLE) continue;
+            const auto h = graph.importImage("taa.mblur", (*v)[frame].image, VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                                             VK_IMAGE_LAYOUT_GENERAL);
+            pass.use(h, rg::storageReadWrite());
+            pass.use(h, rg::sampled(VK_IMAGE_LAYOUT_GENERAL));
         }
     }
 
@@ -923,19 +918,6 @@ namespace threepp::vulkan {
                                         bool sharpen, float sharpenAmount) {
         const uint32_t descIdx = frame * imageCount_ + imageIndex;
         if (sharpen) {
-            // PostComposite's write (compute) → this RCAS read.
-            VkMemoryBarrier2 mb{};
-            mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-            VkDependencyInfo di{};
-            di.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            di.memoryBarrierCount = 1;
-            di.pMemoryBarriers    = &mb;
-            vkCmdPipelineBarrier2(cb, &di);
-
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, rcasPipe_);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                     rcasPipeLayout_, 0, 1,
@@ -950,26 +932,6 @@ namespace threepp::vulkan {
             // Plain copy — both images are BGRA8 at the same (display)
             // extent, so a direct vkCmdCopyImage is exact and cheap (no
             // compute dispatch, no sampling/filtering).
-            VkImageMemoryBarrier2 pre{};
-            pre.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            pre.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            pre.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            pre.dstStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            pre.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-            pre.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            pre.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            pre.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            pre.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            pre.image = postFinalizeSrcImage_[frame];
-            pre.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            pre.subresourceRange.levelCount = 1;
-            pre.subresourceRange.layerCount = 1;
-            VkDependencyInfo dep{};
-            dep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            dep.imageMemoryBarrierCount = 1;
-            dep.pImageMemoryBarriers    = &pre;
-            vkCmdPipelineBarrier2(cb, &dep);
-
             VkImageCopy region{};
             region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             region.srcSubresource.layerCount = 1;

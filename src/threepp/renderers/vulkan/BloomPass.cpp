@@ -73,8 +73,8 @@ namespace threepp::vulkan {
         vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         vci.subresourceRange.levelCount = 1;
         vci.subresourceRange.layerCount = 1;
-        check(vkCreateImageView(ctx_.device(), &vci, nullptr, &out.view),
-              "vkCreateImageView(bloom)");
+        check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &out.view),
+              "vulkan::createImageView(bloom)");
         ctx_.setObjectName(out.image, label);
         ctx_.setObjectName(out.view,  label);
         return out;
@@ -286,7 +286,7 @@ namespace threepp::vulkan {
                 w[0].pImageInfo     = src;
                 w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 w[1].pImageInfo     = dst;
-                vkUpdateDescriptorSets(ctx_.device(), 2, w, 0, nullptr);
+                vulkan::updateDescriptorSets(ctx_.device(), 2, w, 0, nullptr);
             };
 
             // Down chain: sceneHdr → pyr[0], then pyr[l-1] → pyr[l].
@@ -302,6 +302,17 @@ namespace threepp::vulkan {
                     writePair(upSets_[f * kMaxLevels + l], &uIn, &uOut);
                 }
             }
+        }
+    }
+
+    void BloomPass::declare(rg::RenderGraph& graph, rg::PassBuilder& pass, uint32_t frame,
+                            rg::ImageHandle sceneHdr) const {
+        pass.use(sceneHdr, rg::sampled(VK_IMAGE_LAYOUT_GENERAL));
+        for (uint32_t l = 0; l < levels_; ++l) {
+            const auto h = graph.importImage("bloom.pyr", pyr_[frame * kMaxLevels + l].image,
+                                             VK_IMAGE_ASPECT_COLOR_BIT, 1, VK_IMAGE_LAYOUT_GENERAL);
+            pass.use(h, rg::storageReadWrite());
+            pass.use(h, rg::sampled(VK_IMAGE_LAYOUT_GENERAL));
         }
     }
 
@@ -326,9 +337,6 @@ namespace threepp::vulkan {
             vkCmdPipelineBarrier2(cb, &di);
         };
 
-        // The shade/resolve wrote sceneHdr (compute); make it visible.
-        barrier();
-
         struct BloomPc { uint32_t srcW, srcH, dstW, dstH; float threshold, clampMax; uint32_t firstLevel; };
         auto levelW = [&](uint32_t l) { return std::max(width_  >> (l + 1u), 1u); };
         auto levelH = [&](uint32_t l) { return std::max(height_ >> (l + 1u), 1u); };
@@ -344,7 +352,9 @@ namespace threepp::vulkan {
                        bloomThreshold, l == 0 ? bloomClamp : 0.f, l == 0 ? 1u : 0u};
             vkCmdPushConstants(cb, bloomPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
             vkCmdDispatch(cb, (levelW(l) + 7u) / 8u, (levelH(l) + 7u) / 8u, 1);
-            barrier();
+            // Level l feeds level l+1; the last level feeds the upsample
+            // (when there is one).
+            if (levels_ > 1) barrier();
         }
 
         // Progressive upsample walk-back: tent-filter each coarser level
@@ -359,9 +369,10 @@ namespace threepp::vulkan {
             BloomPc pc{levelW(l), levelH(l), levelW(dst), levelH(dst), 0.f, 0.f, 0u};
             vkCmdPushConstants(cb, bloomPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
             vkCmdDispatch(cb, (levelW(dst) + 7u) / 8u, (levelH(dst) + 7u) / 8u, 1);
-            barrier();
+            // dst feeds the next upsample step (the last one feeds
+            // PostComposite, which the graph orders).
+            if (dst > 0) barrier();
         }
-        // Last barrier above already covers pyramid write → PostComposite read.
     }
 
 }// namespace threepp::vulkan

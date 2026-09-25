@@ -269,8 +269,8 @@ namespace threepp::vulkan {
             vci.subresourceRange.baseMipLevel = 0;
             vci.subresourceRange.levelCount = out.mipLevels;
             vci.subresourceRange.layerCount = 1;
-            check(vkCreateImageView(ctx_.device(), &vci, nullptr, &out.view),
-                  "vkCreateImageView(envPmrem)");
+            check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &out.view),
+                  "vulkan::createImageView(envPmrem)");
             ctx_.setObjectName(out.view, "envPmrem (HDR env prefilter)");
         }
 
@@ -309,8 +309,8 @@ namespace threepp::vulkan {
                 vci.subresourceRange.levelCount = 1;
                 vci.subresourceRange.layerCount = 1;
                 VkImageView mipView = VK_NULL_HANDLE;
-                check(vkCreateImageView(ctx_.device(), &vci, nullptr, &mipView),
-                      "vkCreateImageView(prefilter mip)");
+                check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &mipView),
+                      "vulkan::createImageView(prefilter mip)");
                 mipStorageViews.push_back(mipView);
 
                 VkDescriptorSetAllocateInfo ai{};
@@ -345,7 +345,7 @@ namespace threepp::vulkan {
                 ws[1].descriptorCount = 1;
                 ws[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 ws[1].pImageInfo      = &dstInfo;
-                vkUpdateDescriptorSets(ctx_.device(), 2, ws.data(), 0, nullptr);
+                vulkan::updateDescriptorSets(ctx_.device(), 2, ws.data(), 0, nullptr);
 
                 struct Pc {
                     float    alpha;

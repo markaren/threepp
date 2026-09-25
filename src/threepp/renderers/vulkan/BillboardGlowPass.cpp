@@ -93,8 +93,8 @@ namespace threepp::vulkan {
         vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         vci.subresourceRange.levelCount = 1;
         vci.subresourceRange.layerCount = 1;
-        check(vkCreateImageView(ctx_.device(), &vci, nullptr, &out.view),
-              "vkCreateImageView(bbglow)");
+        check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &out.view),
+              "vulkan::createImageView(bbglow)");
         ctx_.setObjectName(out.image, label);
         ctx_.setObjectName(out.view, label);
         return out;
@@ -137,8 +137,8 @@ namespace threepp::vulkan {
         vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
         vci.subresourceRange.levelCount = 1;
         vci.subresourceRange.layerCount = 1;
-        check(vkCreateImageView(ctx_.device(), &vci, nullptr, &out.view),
-              "vkCreateImageView(bbglow.depth)");
+        check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &out.view),
+              "vulkan::createImageView(bbglow.depth)");
         ctx_.setObjectName(out.image, label);
         ctx_.setObjectName(out.view, label);
         return out;
@@ -542,7 +542,7 @@ namespace threepp::vulkan {
                 w[0].pImageInfo     = s;
                 w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 w[1].pImageInfo     = d;
-                vkUpdateDescriptorSets(ctx_.device(), 2, w, 0, nullptr);
+                vulkan::updateDescriptorSets(ctx_.device(), 2, w, 0, nullptr);
             };
 
             for (uint32_t l = 0; l < levels_; ++l) {
@@ -565,7 +565,7 @@ namespace threepp::vulkan {
             w.descriptorCount = 1;
             w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w.pImageInfo      = &cIn;
-            vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+            vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
         }
     }
 
@@ -595,7 +595,7 @@ namespace threepp::vulkan {
             w.descriptorCount = 1;
             w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w.pImageInfo      = &ii;
-            vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+            vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
             reduceSetViews_[frame] = srcView;
         }
 

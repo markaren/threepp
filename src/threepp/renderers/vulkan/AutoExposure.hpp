@@ -10,6 +10,8 @@
 #ifndef THREEPP_VULKAN_AUTO_EXPOSURE_HPP
 #define THREEPP_VULKAN_AUTO_EXPOSURE_HPP
 
+#include "threepp/renderers/vulkan/RenderGraph.hpp"
+#include "threepp/renderers/vulkan/SpirvReflect.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
 #include <vulkan/vulkan.h>
@@ -42,6 +44,11 @@ namespace threepp::vulkan {
         void recordDispatch(VkCommandBuffer cb, uint32_t frame,
                             uint32_t width, uint32_t height,
                             float preExposure = 1.0f);
+
+        // Render-graph declaration of recordDispatch: its descriptor set as
+        // reflected from lum_histogram.comp (sceneHdr sampled, the bins), plus
+        // the bins' clear (transfer). The clear → dispatch barrier stays inside.
+        void declare(rg::RenderGraph& graph, rg::PassBuilder& pass, uint32_t frame) const;
 
         // Read the previous frame's histogram (currentFrame - 1, safe via fence
         // lag), compute weighted-percentile EV and advance the EMA.
@@ -87,6 +94,7 @@ namespace threepp::vulkan {
         VkPipeline            pipe_      = VK_NULL_HANDLE;
         VkDescriptorPool      descPool_  = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> descSets_;// [framesInFlight]
+        std::vector<SpirvBinding> refl_;// lum_histogram.comp's bindings
 
         void createPipeline();
     };

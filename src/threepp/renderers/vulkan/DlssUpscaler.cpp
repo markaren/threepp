@@ -331,7 +331,7 @@ namespace threepp::vulkan {
             w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[1].dstSet = reactiveSets_[in.frame]; w[1].dstBinding = 1; w[1].descriptorCount = 1;
             w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; w[1].pImageInfo = &reI;
-            vkUpdateDescriptorSets(ctx_.device(), 2, w, 0, nullptr);
+            vulkan::updateDescriptorSets(ctx_.device(), 2, w, 0, nullptr);
 
             // Regenerated in full every frame → UNDEFINED old layout (discard).
             transition(in.cmd, maskImg, VK_IMAGE_LAYOUT_UNDEFINED,
@@ -526,7 +526,7 @@ namespace threepp::vulkan {
             vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             vci.subresourceRange.levelCount = 1;
             vci.subresourceRange.layerCount = 1;
-            check(vkCreateImageView(d, &vci, nullptr, &img.view), "vkCreateImageView(dlss.mask)");
+            check(vulkan::createImageView(d, &vci, nullptr, &img.view), "vulkan::createImageView(dlss.mask)");
             ctx_.setObjectName(img.image, "dlss.reactiveMask");
             ctx_.setObjectName(img.view, "dlss.reactiveMask");
         }

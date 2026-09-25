@@ -230,8 +230,8 @@ namespace threepp::vulkan {
             vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             vci.subresourceRange.levelCount = 1;
             vci.subresourceRange.layerCount = 1;
-            check(vkCreateImageView(ctx_.device(), &vci, nullptr, &out.view),
-                  "vkCreateImageView(event_detect)");
+            check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &out.view),
+                  "vulkan::createImageView(event_detect)");
             return out;
         };
 
@@ -358,7 +358,7 @@ namespace threepp::vulkan {
             w[wi].pBufferInfo     = &streamInfos[s];
             ++wi;
         }
-        vkUpdateDescriptorSets(ctx_.device(), wi, w.data(), 0, nullptr);
+        vulkan::updateDescriptorSets(ctx_.device(), wi, w.data(), 0, nullptr);
 
         width_     = width;
         height_    = height;
@@ -386,7 +386,7 @@ namespace threepp::vulkan {
             w[s].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             w[s].pBufferInfo     = &info;
         }
-        vkUpdateDescriptorSets(ctx_.device(),
+        vulkan::updateDescriptorSets(ctx_.device(),
                                 static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
         currentSceneBuf_ = sceneBuf;
     }
@@ -588,7 +588,7 @@ namespace threepp::vulkan {
             w[s].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             w[s].pBufferInfo     = &infos[s];
         }
-        vkUpdateDescriptorSets(ctx_.device(), kRingSize, w.data(), 0, nullptr);
+        vulkan::updateDescriptorSets(ctx_.device(), kRingSize, w.data(), 0, nullptr);
     }
 
     bool EventCameraDetector::needsGrowthFor(uint32_t maxEventsPerPixel) const {

@@ -302,7 +302,7 @@ namespace threepp::vulkan {
                 w[6 + i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 w[6 + i].pImageInfo      = &storeInfo[i];
             }
-            vkUpdateDescriptorSets(d, 11, w, 0, nullptr);
+            vulkan::updateDescriptorSets(d, 11, w, 0, nullptr);
         }
 
         // ── Depth-resolve descriptor sets ───────────────────────────────
@@ -355,7 +355,7 @@ namespace threepp::vulkan {
             w[1].descriptorCount = 1;
             w[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w[1].pImageInfo      = &idsInfo;
-            vkUpdateDescriptorSets(d, 2, w, 0, nullptr);
+            vulkan::updateDescriptorSets(d, 2, w, 0, nullptr);
         }
     }
 

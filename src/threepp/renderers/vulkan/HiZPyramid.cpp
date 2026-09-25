@@ -171,12 +171,12 @@ namespace threepp::vulkan {
         vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         vci.subresourceRange.levelCount = mipCount_;
         vci.subresourceRange.layerCount = 1;
-        check(vkCreateImageView(d, &vci, nullptr, &fullView_), "vkCreateImageView(hiz full)");
+        check(vulkan::createImageView(d, &vci, nullptr, &fullView_), "vulkan::createImageView(hiz full)");
         mipViews_.resize(mipCount_);
         for (uint32_t m = 0; m < mipCount_; ++m) {
             vci.subresourceRange.baseMipLevel = m;
             vci.subresourceRange.levelCount   = 1;
-            check(vkCreateImageView(d, &vci, nullptr, &mipViews_[m]), "vkCreateImageView(hiz mip)");
+            check(vulkan::createImageView(d, &vci, nullptr, &mipViews_[m]), "vulkan::createImageView(hiz mip)");
         }
 
         // Descriptor sets: one per (frame, mip). Mip 0 samples the frame's
@@ -234,7 +234,7 @@ namespace threepp::vulkan {
                 setw(1, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &srcInfo);
                 setw(2, 2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &dstInfo);
                 setw(3, 3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &msInfo);
-                vkUpdateDescriptorSets(d, 4, w, 0, nullptr);
+                vulkan::updateDescriptorSets(d, 4, w, 0, nullptr);
             }
         }
     }

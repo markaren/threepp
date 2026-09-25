@@ -52,6 +52,7 @@
 #ifndef THREEPP_VULKAN_POST_COMPOSITE_HPP
 #define THREEPP_VULKAN_POST_COMPOSITE_HPP
 
+#include "threepp/renderers/vulkan/RenderGraph.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
 #include <vulkan/vulkan.h>
@@ -134,6 +135,11 @@ namespace threepp::vulkan {
                             bool bgIsSolidColor, float effBloomIntensity,
                             uint32_t srcWidth = 0, uint32_t srcHeight = 0,
                             bool hdrMode = false);
+
+        // Render-graph declaration of recordDispatch. The caller imports and
+        // declares the frame's inputs (sceneHdr, bloom level 0, ids, the
+        // HDR-mode scene) and its output; this adds the grade LUT.
+        void declare(rg::RenderGraph& graph, rg::PassBuilder& pass) const;
 
     private:
         VulkanContext& ctx_;

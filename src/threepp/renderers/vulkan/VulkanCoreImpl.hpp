@@ -23,6 +23,7 @@
 #include "GpuTimings.hpp"
 #include "OverlayPass.hpp"
 #include "VulkanFrameTypes.hpp"
+#include "RenderGraph.hpp"
 #include "TaaResolve.hpp"
 #if defined(THREEPP_WITH_FSR)
 #include "FsrUpscaler.hpp"
@@ -122,6 +123,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -4034,8 +4036,8 @@ namespace threepp {
         // collector filled while it still had the camera — everything except
         // the raster's sub-pixel jitter, which is only decided later (in
         // uploadRasterCameraUbo) and is folded in here.
-        void recordSplats(VkCommandBuffer cb);
-        void recordSecondaryViewSplats(VkCommandBuffer cb);
+        void addSplatPasses(vulkan::rg::RenderGraph& g);
+        void addSecondaryViewSplatPasses(vulkan::rg::RenderGraph& g);
 
         // Stamp the splat depth AOV into the overlay's depth attachment, so
         // the post-resolve overlay draw (wireframe, lines, world sprites,
@@ -4431,12 +4433,10 @@ namespace threepp {
 
         // Deferred scene dispatch: shades the raster material G-buffer into
         // bloom_->sceneHdr (direct analytic lights + split-sum specular IBL +
-        // approximate diffuse IBL + ray-query accents). Called from
-        // recordCommandBuffer between the shared G-buffer/AS head and the
-        // shared bloom/TAA tail; defined in VulkanRenderer.cpp.
-        void recordSceneDispatch(VkCommandBuffer cb, uint32_t setIdx,
-                                 VkExtent2D ext, VkExtent2D ptExt,
-                                 uint32_t exposureBits);
+        // approximate diffuse IBL + ray-query accents). Adds its passes to
+        // the frame graph between the G-buffer/AS head and the splats + post
+        // tail (recordCommandBuffer); defined in VulkanRenderer.cpp.
+        void addSceneDispatchPasses(vulkan::rg::RenderGraph& g);
 
         // Called once after bloom_->createImages(); wires sceneHdr views.
         void onAfterBloomCreateImages() {
@@ -4514,10 +4514,32 @@ namespace threepp {
         [[nodiscard]] bool recordGbufferStage(VkCommandBuffer cb, uint32_t imageIndex);
         [[nodiscard]] bool recordEventsOnlyFrame(VkCommandBuffer cb, uint32_t imageIndex);
         void recordSwapchainPrepare(VkCommandBuffer cb, uint32_t imageIndex);
-        void recordDepthOfField(VkCommandBuffer cb);
-        void recordUpscaleAndPost(VkCommandBuffer cb, uint32_t imageIndex,
-                                  VkExtent2D ext, VkExtent2D ptExt,
-                                  uint32_t exposureBits, float preExp);
+        // Depth of field, bloom, the temporal resolve / upscaler and the post
+        // composite, recorded as one render-graph segment (postGraph_).
+        // `secondary`: a secondary view's reduced chain — no DoF, no DLSS/FSR,
+        // no sharpening or motion blur, the authored TAA alpha, and its own
+        // colour target in place of the swapchain.
+        void addUpscaleAndPostPasses(vulkan::rg::RenderGraph& g, uint32_t imageIndex,
+                                     VkExtent2D ext, VkExtent2D ptExt,
+                                     uint32_t exposureBits, float preExp,
+                                     bool secondary = false);
+        // The frame's render graph: shade → splats → post, per view (built,
+        // executed, then reused for the next view).
+        vulkan::rg::RenderGraph frameGraph_;
+        // Execute a segment; with THREEPP_RG_DUMP=1 also print each named
+        // segment's passes and barriers to stderr the first time it runs.
+        void executeGraph(VkCommandBuffer cb, vulkan::rg::RenderGraph& graph, const char* name) {
+            graph.execute(cb);
+            static const bool dump = [] {
+                const char* e = std::getenv("THREEPP_RG_DUMP");
+                return e && *e && *e != '0';
+            }();
+            if (dump && rgDumped_.insert(name).second) {
+                std::fprintf(stderr, "[RenderGraph] segment '%s' (frame %u):\n%s", name, currentFrame,
+                             graph.dump().c_str());
+            }
+        }
+        std::set<std::string> rgDumped_;
         void recordHybridOverlay(VkCommandBuffer cb, uint32_t imageIndex);
         void recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex);
 

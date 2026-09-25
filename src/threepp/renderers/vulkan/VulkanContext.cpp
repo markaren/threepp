@@ -33,6 +33,11 @@
 
 namespace threepp::vulkan {
 
+    // VulkanResources.hpp (not included here: its check() collides with this
+    // file's own). Registers the view for the render graph's descriptor shadow.
+    VkResult createImageView(VkDevice device, const VkImageViewCreateInfo* info,
+                             const VkAllocationCallbacks* allocator, VkImageView* view);
+
 #if defined(THREEPP_WITH_DLSS)
     // Defined in DlssUpscaler.cpp (free function so this TU doesn't pull in
     // DlssUpscaler.hpp → VulkanResources.hpp, whose check() helper collides
@@ -1379,7 +1384,7 @@ namespace threepp::vulkan {
             ci.subresourceRange.levelCount = 1;
             ci.subresourceRange.baseArrayLayer = 0;
             ci.subresourceRange.layerCount = 1;
-            check(vkCreateImageView(device_, &ci, nullptr, &swapchainImageViews_[i]), "vkCreateImageView");
+            check(vulkan::createImageView(device_, &ci, nullptr, &swapchainImageViews_[i]), "vkCreateImageView");
         }
     }
 

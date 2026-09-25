@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/DeferredShade.hpp"
+#include "threepp/renderers/vulkan/DescriptorShadow.hpp"
 
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
@@ -277,6 +278,33 @@ namespace threepp::vulkan {
 
         VkShaderModuleCreateInfo smci{};
         smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        // Render-graph declarations (see declare): one reflection per Stage.
+        {
+            auto merge = [](std::vector<SpirvBinding> a, const std::vector<SpirvBinding>& b) {
+                for (const auto& x : b) {
+                    bool found = false;
+                    for (auto& y : a) {
+                        if (y.set == x.set && y.binding == x.binding) {
+                            y.read  = y.read || x.read;
+                            y.write = y.write || x.write;
+                            found   = true;
+                        }
+                    }
+                    if (!found) a.push_back(x);
+                }
+                return a;
+            };
+            refl_[static_cast<int>(Stage::Shade)]           = reflectSpirvBindings(kDeferredShadeCompSpv);
+            refl_[static_cast<int>(Stage::FilterComposite)] = merge(reflectSpirvBindings(kDeferredGiFilterCompSpv),
+                                                                    reflectSpirvBindings(kDeferredReflFilterCompSpv));
+            refl_[static_cast<int>(Stage::ClusterBuild)]    = reflectSpirvBindings(kClusterBuildCompSpv);
+            refl_[static_cast<int>(Stage::Froxels)]         = merge(reflectSpirvBindings(kFroxelInjectCompSpv),
+                                                                    reflectSpirvBindings(kFroxelIntegrateCompSpv));
+            refl_[static_cast<int>(Stage::CloudMarch)]      = reflectSpirvBindings(kCloudMarchCompSpv);
+            refl_[static_cast<int>(Stage::CloudShadow)]     = reflectSpirvBindings(kCloudShadowCompSpv);
+            refl_[static_cast<int>(Stage::Rtao)]            = reflectSpirvBindings(kRtaoCompSpv);
+            refl_[static_cast<int>(Stage::ParticleLight)]   = reflectSpirvBindings(kParticleLightCompSpv);
+        }
         smci.codeSize = sizeof(kDeferredShadeCompSpv);
         smci.pCode    = kDeferredShadeCompSpv;
         VkShaderModule mod = VK_NULL_HANDLE;
@@ -963,7 +991,7 @@ namespace threepp::vulkan {
             setw(74, 75, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &rtaoAuxCurInfo,     nullptr);
             setw(75, 76, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &rtaoAuxPrevInfo,    nullptr);
             setw(76, 77, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &demodColorInfo,     nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
+            vulkan::updateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
         }
     }
 
@@ -979,7 +1007,16 @@ namespace threepp::vulkan {
         w.descriptorCount = 1;
         w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         w.pBufferInfo = &info;
-        vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+        vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+    }
+
+    void DeferredShade::declare(rg::RenderGraph& graph, rg::PassBuilder& pass, Stage stage, uint32_t frame,
+                                VkDescriptorSet particleIoSet) const {
+        const auto& refl = refl_[static_cast<int>(stage)];
+        declareDescriptorSet(graph, pass, sets_[frame], 0, refl, rg::kCompute);
+        if (stage == Stage::ParticleLight && particleIoSet != VK_NULL_HANDLE) {
+            declareDescriptorSet(graph, pass, particleIoSet, 1, refl, rg::kCompute);
+        }
     }
 
     void DeferredShade::recordDispatch(VkCommandBuffer cb, uint32_t frame, const DispatchParams& p) {

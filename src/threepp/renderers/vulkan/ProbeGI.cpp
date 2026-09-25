@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/ProbeGI.hpp"
+#include "threepp/renderers/vulkan/DescriptorShadow.hpp"
 
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 #include "threepp/renderers/vulkan/shaders/vulkan_shared.h"// kMaxMaterialTextures
@@ -130,6 +131,7 @@ namespace threepp::vulkan {
 
         VkShaderModuleCreateInfo smci{};
         smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        refl_ = reflectSpirvBindings(kProbeUpdateCompSpv);
         smci.codeSize = sizeof(kProbeUpdateCompSpv);
         smci.pCode    = kProbeUpdateCompSpv;
         VkShaderModule mod = VK_NULL_HANDLE;
@@ -250,7 +252,7 @@ namespace threepp::vulkan {
             setw(9, 9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr,  &depthInfo);
             setw(10, 10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,       nullptr,  &shPrevInfo);
             setw(11, 11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,       nullptr,  &depthPrevInfo);
-            vkUpdateDescriptorSets(ctx_.device(), 12, w, 0, nullptr);
+            vulkan::updateDescriptorSets(ctx_.device(), 12, w, 0, nullptr);
         }
     }
 
@@ -265,7 +267,7 @@ namespace threepp::vulkan {
         w.descriptorCount = 1;
         w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         w.pBufferInfo = &info;
-        vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+        vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
     }
 
     void ProbeGI::setGridBounds(const float aabbMin[3], const float aabbMax[3]) {
@@ -327,6 +329,18 @@ namespace threepp::vulkan {
             flushHostWrites(ctx_.allocator(), gridUbos_[frame].alloc, 0, sizeof(d));
             vmaUnmapMemory(ctx_.allocator(), gridUbos_[frame].alloc);
         }
+    }
+
+    void ProbeGI::declare(rg::RenderGraph& graph, rg::PassBuilder& pass, uint32_t frame) const {
+        const rg::Access rw{rg::kCompute | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                            VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                    VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                            VK_IMAGE_LAYOUT_UNDEFINED, true};
+        pass.use(graph.importBuffer("probe.sh", shBuf_.handle), rw);
+        pass.use(graph.importBuffer("probe.depth", depthBuf_.handle), rw);
+        pass.use(graph.importBuffer("probe.sh.prev", prevShBuf_.handle), rw);
+        pass.use(graph.importBuffer("probe.depth.prev", prevDepthBuf_.handle), rw);
+        declareDescriptorSet(graph, pass, sets_[frame], 0, refl_, rg::kCompute);
     }
 
     void ProbeGI::recordDispatch(VkCommandBuffer cb, uint32_t frame,

@@ -30,6 +30,7 @@
 #ifndef THREEPP_VULKAN_DOF_PASS_HPP
 #define THREEPP_VULKAN_DOF_PASS_HPP
 
+#include "threepp/renderers/vulkan/RenderGraph.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
 #include <vulkan/vulkan.h>
@@ -61,13 +62,19 @@ namespace threepp::vulkan {
 
         [[nodiscard]] bool valid() const { return half_.image != VK_NULL_HANDLE; }
 
-        // Record the 5 dispatches (leading sceneHdr write→read barrier
-        // included; the trailing write is covered by the bloom/PostComposite
-        // leading barriers). width/height = the frame's region render
-        // extent; cocScale/focusDist/maxCocPx as documented above.
+        // Record the 5 dispatches and the barriers between them. width/height
+        // = the frame's region render extent; cocScale/focusDist/maxCocPx as
+        // documented above. The barriers against sceneHdr's producer and
+        // consumers are the render graph's, from declare().
         void record(VkCommandBuffer cb, uint32_t frame,
                     uint32_t width, uint32_t height,
                     float cocScale, float focusDist, float maxCocPx);
+
+        // Render-graph declaration of record: depth sampled, sceneHdr sampled
+        // and read-modify-written, the scratch images read and written. The
+        // caller imports depth and sceneHdr.
+        void declare(rg::RenderGraph& graph, rg::PassBuilder& pass,
+                     rg::ImageHandle depth, rg::ImageHandle sceneHdr) const;
 
     private:
         VulkanContext& ctx_;

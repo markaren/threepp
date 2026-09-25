@@ -143,6 +143,8 @@
 #ifndef THREEPP_VULKAN_SPLAT_PASS_HPP
 #define THREEPP_VULKAN_SPLAT_PASS_HPP
 
+#include "threepp/renderers/vulkan/RenderGraph.hpp"
+#include "threepp/renderers/vulkan/SpirvReflect.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
 #include <vulkan/vulkan.h>
@@ -365,11 +367,22 @@ namespace threepp::vulkan {
         };
         void record(VkCommandBuffer cb, uint32_t frame, const RecordParams& p);
 
+        // Render-graph declaration of record: every drawn cloud's descriptor
+        // set as reflected from the splat pipelines, the sort scratch it clears
+        // and copies (transfer) and dispatches from (indirect), and the motion
+        // attachment, which record() flips to GENERAL and back around its
+        // store and so is declared in its resting SHADER_READ_ONLY layout. The
+        // barriers between record()'s own dispatches stay inside it.
+        void declare(rg::RenderGraph& graph, rg::PassBuilder& pass, uint32_t frame,
+                     const RecordParams& p) const;
+
         // Zero the depth AOV for this frame slot. Separate from
         // record() and called BEFORE it, because record() is skipped outright
         // on a frame with no clouds and the AOV still has to describe THAT
-        // frame — an empty one. No-op when no AOV image was supplied.
+        // frame — an empty one. No-op when no AOV image was supplied. The
+        // clear → raster ordering is the render graph's (declareDepthAovClear).
         void clearDepthAov(VkCommandBuffer cb, uint32_t frame);
+        void declareDepthAovClear(rg::RenderGraph& graph, rg::PassBuilder& pass, uint32_t frame) const;
 
         // Debug/test surface. [0] sorted-key hash, [1] sorted-payload hash,
         // [2] composited-colour hash, [3] expanded entry count. Stalls the
@@ -603,6 +616,7 @@ namespace threepp::vulkan {
         Buffer   indirectBuf_{};
         std::vector<Buffer> uboBuf_;  // [framesInFlight], host-visible
         std::vector<Buffer> debugBuf_;// [framesInFlight], host-visible readback
+        std::vector<SpirvBinding> refl_;// union of the frame pipelines' bindings (declare)
 
         VkSampler             sampler_   = VK_NULL_HANDLE;
         VkDescriptorSetLayout dsLayout_  = VK_NULL_HANDLE;

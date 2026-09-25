@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/SplatPass.hpp"
+#include "threepp/renderers/vulkan/DescriptorShadow.hpp"
 
 #include "threepp/extras/DataUtils.hpp"
 #include "threepp/objects/SplatCloud.hpp"
@@ -139,8 +140,8 @@ namespace threepp::vulkan {
             vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             vci.subresourceRange.levelCount = 1;
             vci.subresourceRange.layerCount = 1;
-            check(vkCreateImageView(ctx.device(), &vci, nullptr, &out.view),
-                  "vkCreateImageView(splat volume)");
+            check(vulkan::createImageView(ctx.device(), &vci, nullptr, &out.view),
+                  "vulkan::createImageView(splat volume)");
             ctx.setObjectName(out.image, name);
             ctx.setObjectName(out.view, name);
             return out;
@@ -398,6 +399,26 @@ namespace threepp::vulkan {
               "vkCreatePipelineLayout(splat)");
 
         VkPipelineCache cache = ctx_.pipelineCache();
+        // Render-graph declaration (declare): what the frame pipelines use of
+        // their shared set, readonly/writeonly merged across them.
+        refl_.clear();
+        for (const auto& b : {reflectSpirvBindings(kSplatProjectCompSpv), reflectSpirvBindings(kSplatScanCompSpv),
+                              reflectSpirvBindings(kSplatScanAddCompSpv), reflectSpirvBindings(kSplatExpandCompSpv),
+                              reflectSpirvBindings(kSplatIndirectCompSpv), reflectSpirvBindings(kSplatRadixHistCompSpv),
+                              reflectSpirvBindings(kSplatRadixScatterCompSpv), reflectSpirvBindings(kSplatRangeCompSpv),
+                              reflectSpirvBindings(kSplatRasterCompSpv), reflectSpirvBindings(kSplatChecksumCompSpv)}) {
+            for (const auto& x : b) {
+                bool found = false;
+                for (auto& y : refl_) {
+                    if (y.set == x.set && y.binding == x.binding) {
+                        y.read  = y.read || x.read;
+                        y.write = y.write || x.write;
+                        found   = true;
+                    }
+                }
+                if (!found) refl_.push_back(x);
+            }
+        }
         projectPipe_  = makeComputePipe(d, cache, pipeLayout_, kSplatProjectCompSpv,
                                         sizeof(kSplatProjectCompSpv), "splat_project");
         scanPipe_     = makeComputePipe(d, cache, pipeLayout_, kSplatScanCompSpv,
@@ -734,7 +755,7 @@ namespace threepp::vulkan {
         w[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         w[3].pBufferInfo    = nullptr;
         w[3].pImageInfo     = &img;
-        vkUpdateDescriptorSets(ctx_.device(), kBakeBindings, w.data(), 0, nullptr);
+        vulkan::updateDescriptorSets(ctx_.device(), kBakeBindings, w.data(), 0, nullptr);
 
         // UNDEFINED -> GENERAL, and GENERAL for the rest of the image's life:
         // the consumer table binds live volumes and dummy slots through one
@@ -921,7 +942,7 @@ namespace threepp::vulkan {
             w[23].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             w[23].pImageInfo     = &sd;
 
-            vkUpdateDescriptorSets(ctx_.device(), kBindings, w.data(), 0, nullptr);
+            vulkan::updateDescriptorSets(ctx_.device(), kBindings, w.data(), 0, nullptr);
         }
     }
 
@@ -1345,9 +1366,12 @@ namespace threepp::vulkan {
         mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT;
         mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
         mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        // TRANSFER_WRITE too: the next radix pass's histogram fill (and the
+        // next cloud's scratch clears) write what this barrier's source wrote.
         mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
-                           VK_ACCESS_2_TRANSFER_READ_BIT;
+                           VK_ACCESS_2_TRANSFER_READ_BIT |
+                           VK_ACCESS_2_TRANSFER_WRITE_BIT;
         VkDependencyInfo di{};
         di.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
         di.memoryBarrierCount = 1;
@@ -1409,20 +1433,51 @@ namespace threepp::vulkan {
         full.levelCount = 1;
         full.layerCount = 1;
         vkCmdClearColorImage(cb, img, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &full);
+    }
 
-        // transfer write -> the raster's imageLoad/imageStore.
-        VkMemoryBarrier2 mb{};
-        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-        mb.srcStageMask  = VK_PIPELINE_STAGE_2_CLEAR_BIT;
-        mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                           VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        VkDependencyInfo di{};
-        di.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        di.memoryBarrierCount = 1;
-        di.pMemoryBarriers    = &mb;
-        vkCmdPipelineBarrier2(cb, &di);
+    void SplatPass::declareDepthAovClear(rg::RenderGraph& graph, rg::PassBuilder& pass, uint32_t frame) const {
+        if (frame >= targets_[0].splatDepthImages.size()) return;
+        pass.use(graph.importImage("splat.depthAov", targets_[0].splatDepthImages[frame], VK_IMAGE_ASPECT_COLOR_BIT,
+                                   1, VK_IMAGE_LAYOUT_GENERAL),
+                 rg::transferDst(VK_IMAGE_LAYOUT_GENERAL));
+    }
+
+    void SplatPass::declare(rg::RenderGraph& graph, rg::PassBuilder& pass, uint32_t frame,
+                            const RecordParams& p) const {
+        if (frameClouds_.empty() || !valid() || !targetValid(p.target)) return;
+        const Target& tg = targets_[p.target];
+        const VkImage motion = (p.motionVectors && frame < tg.motionImages.size()) ? tg.motionImages[frame]
+                                                                                    : VK_NULL_HANDLE;
+        if (motion != VK_NULL_HANDLE) {
+            pass.use(graph.importImage("gbuf.motion", motion, VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+                     rg::Access{rg::kCompute,
+                                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, true});
+        }
+        const rg::Access scratch{rg::kCompute | VK_PIPELINE_STAGE_2_TRANSFER_BIT |
+                                         VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                         VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT |
+                                         VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
+                                 VK_IMAGE_LAYOUT_UNDEFINED, true};
+        for (const Buffer* b : {&projBuf_, &countBuf_, &offsetBuf_, &keyA_, &valA_, &keyB_, &valB_,
+                                &rangeBuf_, &globalBuf_, &histBuf_, &scanBuf_, &indirectBuf_}) {
+            pass.use(graph.importBuffer("splat.scratch", b->handle), scratch);
+        }
+        if (p.target == 0 && frame < debugBuf_.size()) {
+            pass.use(graph.importBuffer("splat.debug", debugBuf_[frame].handle),
+                     rg::Access{VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                VK_IMAGE_LAYOUT_UNDEFINED, true});
+        }
+        for (const auto& fc : frameClouds_) {
+            const Cloud& c = *fc.cloud;
+            if (c.count == 0 || fc.submitCount == 0) continue;
+            const size_t idx = static_cast<size_t>(p.target) * framesInFlight_ + frame;
+            if (idx >= c.sets.size()) continue;
+            declareDescriptorSet(graph, pass, c.sets[idx], 0, refl_, rg::kCompute, 16, {motion});
+        }
     }
 
     void SplatPass::record(VkCommandBuffer cb, uint32_t frame, const RecordParams& p) {

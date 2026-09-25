@@ -1,4 +1,5 @@
 #include "threepp/renderers/vulkan/AutoExposure.hpp"
+#include "threepp/renderers/vulkan/DescriptorShadow.hpp"
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 #include "threepp/renderers/vulkan/shaders/lum_histogram.comp.spv.h"
 
@@ -95,6 +96,7 @@ namespace threepp::vulkan {
 
         VkShaderModuleCreateInfo smci{};
         smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        refl_ = reflectSpirvBindings(kLumHistogramCompSpv);
         smci.codeSize = sizeof(kLumHistogramCompSpv);
         smci.pCode    = kLumHistogramCompSpv;
         VkShaderModule sm = VK_NULL_HANDLE;
@@ -169,8 +171,17 @@ namespace threepp::vulkan {
             w[1].descriptorCount = 1;
             w[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             w[1].pBufferInfo     = &bufInfo;
-            vkUpdateDescriptorSets(d, 2, w, 0, nullptr);
+            vulkan::updateDescriptorSets(d, 2, w, 0, nullptr);
         }
+    }
+
+    void AutoExposure::declare(rg::RenderGraph& graph, rg::PassBuilder& pass, uint32_t frame) const {
+        pass.use(graph.importBuffer("autoExposure.bins", histBufs_[frame].buf.handle),
+                 rg::Access{rg::kCompute | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                            VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                    VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                            VK_IMAGE_LAYOUT_UNDEFINED, true});
+        declareDescriptorSet(graph, pass, descSets_[frame], 0, refl_, rg::kCompute);
     }
 
     void AutoExposure::recordDispatch(VkCommandBuffer cb, uint32_t frame,

@@ -1,0 +1,496 @@
+#include "threepp/renderers/vulkan/RenderGraph.hpp"
+
+#include <algorithm>
+#include <cstdio>
+#include <sstream>
+
+namespace threepp::vulkan::rg {
+
+    namespace {
+
+        constexpr VkAccessFlags2 kWriteBits =
+                VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_HOST_WRITE_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT |
+                VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+
+        constexpr VkPipelineStageFlags2 kAll = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        constexpr VkAccessFlags2 kAllAccess = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+
+        bool covers(const std::vector<std::pair<VkPipelineStageFlags2, VkAccessFlags2>>& visible,
+                    VkPipelineStageFlags2 stages, VkAccessFlags2 access) {
+            for (const auto& [s, a] : visible) {
+                if ((s & stages) == stages && (a & access) == access) return true;
+            }
+            return false;
+        }
+
+        const char* layoutName(VkImageLayout l) {
+            switch (l) {
+                case VK_IMAGE_LAYOUT_UNDEFINED: return "UNDEFINED";
+                case VK_IMAGE_LAYOUT_GENERAL: return "GENERAL";
+                case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: return "COLOR_ATT";
+                case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL: return "DS_ATT";
+                case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL: return "DS_RO";
+                case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL: return "DEPTH_ATT";
+                case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL: return "DEPTH_RO";
+                case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: return "SHADER_RO";
+                case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: return "XFER_SRC";
+                case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: return "XFER_DST";
+                case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR: return "PRESENT";
+                default: return "?";
+            }
+        }
+
+        std::string stageNames(VkPipelineStageFlags2 s) {
+            if (s == 0) return "NONE";
+            if (s == kAll) return "ALL";
+            struct N { VkPipelineStageFlags2 bit; const char* name; };
+            static const N names[] = {
+                    {VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT, "INDIRECT"},
+                    {VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT, "VTX_IN"},
+                    {VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT, "VS"},
+                    {VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, "FS"},
+                    {VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT, "EFT"},
+                    {VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, "LFT"},
+                    {VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, "COLOR"},
+                    {VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, "CS"},
+                    {VK_PIPELINE_STAGE_2_TRANSFER_BIT, "XFER"},
+                    {VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, "AS_BUILD"},
+                    {VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, "RT"},
+                    {VK_PIPELINE_STAGE_2_HOST_BIT, "HOST"},
+            };
+            std::string out;
+            for (const auto& n : names) {
+                if (s & n.bit) {
+                    if (!out.empty()) out += '|';
+                    out += n.name;
+                    s &= ~n.bit;
+                }
+            }
+            if (s) {
+                char buf[32];
+                std::snprintf(buf, sizeof(buf), "%s0x%llx", out.empty() ? "" : "|",
+                              static_cast<unsigned long long>(s));
+                out += buf;
+            }
+            return out;
+        }
+
+    }// namespace
+
+    // ── Access helpers ───────────────────────────────────────────────────────
+
+    Access sampled(VkImageLayout layout, VkPipelineStageFlags2 stages) {
+        return {stages, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, layout, false};
+    }
+    Access storageRead(VkPipelineStageFlags2 stages, VkImageLayout layout) {
+        return {stages, VK_ACCESS_2_SHADER_STORAGE_READ_BIT, layout, false};
+    }
+    Access storageWrite(VkPipelineStageFlags2 stages, VkImageLayout layout) {
+        return {stages, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, layout, true};
+    }
+    Access storageReadWrite(VkPipelineStageFlags2 stages, VkImageLayout layout) {
+        return {stages, VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, layout, true};
+    }
+    Access generalRead(VkPipelineStageFlags2 stages) {
+        return {stages, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                VK_IMAGE_LAYOUT_GENERAL, false};
+    }
+    Access uniformRead(VkPipelineStageFlags2 stages) {
+        return {stages, VK_ACCESS_2_UNIFORM_READ_BIT, VK_IMAGE_LAYOUT_UNDEFINED, false};
+    }
+    Access indirectRead() {
+        return {VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, false};
+    }
+    Access transferSrc(VkImageLayout layout) {
+        return {VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, layout, false};
+    }
+    Access transferDst(VkImageLayout layout) {
+        return {VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, layout, true};
+    }
+    Access colorAttachment(VkImageLayout layout, bool loadOrBlend) {
+        VkAccessFlags2 a = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        if (loadOrBlend) a |= VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
+        return {VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, a, layout, true};
+    }
+    Access depthAttachment(VkImageLayout layout, bool write) {
+        VkAccessFlags2 a = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+        if (write) a |= VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        return {VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                a, layout, write};
+    }
+    Access accelRead(VkPipelineStageFlags2 stages) {
+        return {stages, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR, VK_IMAGE_LAYOUT_UNDEFINED, false};
+    }
+
+    // ── Builder ──────────────────────────────────────────────────────────────
+
+    PassBuilder& PassBuilder::use(ImageHandle image, const Access& access, uint32_t baseMip,
+                                  uint32_t mipCount) {
+        if (!image.valid()) return *this;
+        graph_.compiled_ = false;
+        // One access per subresource per pass: a pass's uses run concurrently,
+        // so a second declaration of the same range widens the first.
+        for (auto& u : graph_.passes_[pass_].uses) {
+            if (u.isImage && u.resource == image.index && u.baseMip == baseMip && u.mipCount == mipCount) {
+                if (u.access.layout != access.layout) {
+                    std::fprintf(stderr, "[RenderGraph] pass '%s' uses image '%s' in two layouts\n",
+                                 graph_.passes_[pass_].name, graph_.images_[image.index].name);
+                }
+                u.access.stages |= access.stages;
+                u.access.access |= access.access;
+                u.access.write = u.access.write || access.write;
+                return *this;
+            }
+        }
+        graph_.passes_[pass_].uses.push_back({true, image.index, baseMip, mipCount, access});
+        return *this;
+    }
+
+    PassBuilder& PassBuilder::use(BufferHandle buffer, const Access& access) {
+        if (!buffer.valid()) return *this;
+        graph_.compiled_ = false;
+        for (auto& u : graph_.passes_[pass_].uses) {
+            if (!u.isImage && u.resource == buffer.index) {
+                u.access.stages |= access.stages;
+                u.access.access |= access.access;
+                u.access.write = u.access.write || access.write;
+                return *this;
+            }
+        }
+        graph_.passes_[pass_].uses.push_back({false, buffer.index, 0, 1, access});
+        return *this;
+    }
+
+    // ── Graph ────────────────────────────────────────────────────────────────
+
+    void RenderGraph::reset() {
+        for (auto& p : passes_) {
+            p.uses.clear();
+            p.barriers.clear();
+            p.execute = nullptr;
+            freePasses_.push_back(std::move(p));
+        }
+        passes_.clear();
+        for (auto& img : images_) {
+            img.mips.clear();
+            freeImages_.push_back(std::move(img));
+        }
+        images_.clear();
+        buffers_.clear();
+        imageIndex_.clear();
+        bufferIndex_.clear();
+        entry_.clear();
+        exit_.clear();
+        entryMemory_ = exitMemory_ = false;
+        compiled_ = false;
+    }
+
+    ImageHandle RenderGraph::importImage(const char* name, VkImage image, VkImageAspectFlags aspect,
+                                         uint32_t mipLevels, VkImageLayout entryLayout,
+                                         VkImageLayout exitLayout) {
+        if (image == VK_NULL_HANDLE) return {};
+        const auto [it, inserted] = imageIndex_.try_emplace(image, static_cast<uint32_t>(images_.size()));
+        if (!inserted) return {it->second};
+        Image img;
+        if (!freeImages_.empty()) {
+            img = std::move(freeImages_.back());
+            freeImages_.pop_back();
+        }
+        img.name        = name ? name : "";
+        img.image       = image;
+        img.aspect      = aspect;
+        img.mipLevels   = std::max(mipLevels, 1u);
+        img.entryLayout = entryLayout;
+        img.exitLayout  = exitLayout == VK_IMAGE_LAYOUT_UNDEFINED ? entryLayout : exitLayout;
+        images_.push_back(std::move(img));
+        compiled_ = false;
+        return {static_cast<uint32_t>(images_.size() - 1)};
+    }
+
+    BufferHandle RenderGraph::importBuffer(const char* name, VkBuffer buffer) {
+        if (buffer == VK_NULL_HANDLE) return {};
+        const auto [it, inserted] = bufferIndex_.try_emplace(buffer, static_cast<uint32_t>(buffers_.size()));
+        if (!inserted) return {it->second};
+        buffers_.push_back({name ? name : "", buffer, {}});
+        compiled_ = false;
+        return {static_cast<uint32_t>(buffers_.size() - 1)};
+    }
+
+    PassBuilder RenderGraph::addPass(const char* name, ExecuteFn execute) {
+        if (!freePasses_.empty()) {
+            passes_.push_back(std::move(freePasses_.back()));
+            freePasses_.pop_back();
+        } else {
+            passes_.emplace_back();
+        }
+        passes_.back().name    = name ? name : "";
+        passes_.back().execute = std::move(execute);
+        compiled_ = false;
+        return {*this, static_cast<uint32_t>(passes_.size() - 1)};
+    }
+
+    // One access against one resource state. Appends at most one barrier.
+    void RenderGraph::plan(State& s, const Access& a, bool isImage, uint32_t resource, uint32_t mip,
+                           std::vector<PlannedBarrier>& out) {
+        const bool layoutChange = isImage && a.layout != s.layout;
+        if (a.write || layoutChange) {
+            const VkPipelineStageFlags2 src = s.writeStages | s.readers;
+            if (src != 0 || layoutChange) {
+                PlannedBarrier b;
+                b.isImage   = isImage;
+                b.resource  = resource;
+                b.baseMip   = mip;
+                b.mipCount  = 1;
+                b.srcStages = src != 0 ? src : VK_PIPELINE_STAGE_2_NONE;
+                b.srcAccess = s.writeAccess;
+                b.dstStages = a.stages;
+                b.dstAccess = a.access;
+                b.oldLayout = isImage ? s.layout : VK_IMAGE_LAYOUT_UNDEFINED;
+                b.newLayout = isImage ? a.layout : VK_IMAGE_LAYOUT_UNDEFINED;
+                out.push_back(b);
+            }
+            if (isImage) s.layout = a.layout;
+            s.visible.clear();
+            if (a.write) {
+                s.writeStages = a.stages;
+                s.writeAccess = a.access & kWriteBits;
+                s.readers     = 0;
+                // A read-write pass reads its own writes through its own
+                // internal barriers; the graph only tracks the pass boundary.
+            } else {
+                // A layout transition is a write the barrier performs. It is
+                // visible to this access; later accesses chain on its stages.
+                s.writeStages = a.stages;
+                s.writeAccess = 0;
+                s.readers     = a.stages;
+                s.visible.emplace_back(a.stages, a.access);
+            }
+            return;
+        }
+
+        // A read in the current layout.
+        s.readers |= a.stages;
+        if (s.writeStages == 0) return;// nothing written since the last full sync
+        if (covers(s.visible, a.stages, a.access)) return;
+        PlannedBarrier b;
+        b.isImage   = isImage;
+        b.resource  = resource;
+        b.baseMip   = mip;
+        b.mipCount  = 1;
+        b.srcStages = s.writeStages;
+        b.srcAccess = s.writeAccess;
+        b.dstStages = a.stages;
+        b.dstAccess = a.access;
+        b.oldLayout = b.newLayout = isImage ? s.layout : VK_IMAGE_LAYOUT_UNDEFINED;
+        out.push_back(b);
+        s.visible.emplace_back(a.stages, a.access);
+    }
+
+    void RenderGraph::compile() {
+        if (compiled_) return;
+        entry_.clear();
+        exit_.clear();
+        for (auto& img : images_) {
+            img.mips.resize(img.mipLevels);
+            for (auto& m : img.mips) {
+                m.touched     = false;
+                m.layout      = img.entryLayout;
+                m.writeStages = 0;
+                m.writeAccess = 0;
+                m.readers     = 0;
+                m.visible.clear();
+            }
+        }
+        for (auto& buf : buffers_) buf.state = State{};
+
+        // First-use layouts go into the entry barrier: nothing in the graph has
+        // touched the image yet, so there is no in-graph source to wait for.
+
+        // The boundary barriers are full on the OUTSIDE (what came before the
+        // graph and what comes after are unknown to it) and exact on the
+        // inside: the stages the graph's own passes declared.
+        usedStages_ = 0;
+        for (const auto& pass : passes_) {
+            for (const auto& u : pass.uses) usedStages_ |= u.access.stages;
+        }
+        if (usedStages_ == 0) usedStages_ = kAll;
+
+        for (auto& pass : passes_) {
+            pass.barriers.clear();
+            for (const auto& u : pass.uses) {
+                if (!u.isImage) {
+                    plan(buffers_[u.resource].state, u.access, false, u.resource, 0, pass.barriers);
+                    continue;
+                }
+                auto& img = images_[u.resource];
+                const uint32_t first = std::min(u.baseMip, img.mipLevels - 1);
+                const uint32_t count = u.mipCount == 0 ? img.mipLevels - first
+                                                       : std::min(u.mipCount, img.mipLevels - first);
+                for (uint32_t m = first; m < first + count; ++m) {
+                    State& s = img.mips[m];
+                    if (!s.touched) {
+                        s.touched = true;
+                        if (u.access.layout != s.layout) {
+                            PlannedBarrier b;
+                            b.resource  = u.resource;
+                            b.baseMip   = m;
+                            b.srcStages = kAll;
+                            b.srcAccess = VK_ACCESS_2_MEMORY_WRITE_BIT;
+                            b.dstStages = usedStages_;
+                            b.dstAccess = kAllAccess;
+                            b.oldLayout = s.layout;
+                            b.newLayout = u.access.layout;
+                            entry_.push_back(b);
+                            s.layout = u.access.layout;
+                        }
+                    }
+                    plan(s, u.access, true, u.resource, m, pass.barriers);
+                }
+            }
+            // Merge consecutive mips of one image with identical parameters.
+            std::vector<PlannedBarrier> merged;
+            for (const auto& b : pass.barriers) {
+                if (!merged.empty()) {
+                    auto& m = merged.back();
+                    if (m.isImage && b.isImage && m.resource == b.resource &&
+                        m.baseMip + m.mipCount == b.baseMip && m.srcStages == b.srcStages &&
+                        m.dstStages == b.dstStages && m.srcAccess == b.srcAccess &&
+                        m.dstAccess == b.dstAccess && m.oldLayout == b.oldLayout &&
+                        m.newLayout == b.newLayout) {
+                        ++m.mipCount;
+                        continue;
+                    }
+                }
+                merged.push_back(b);
+            }
+            pass.barriers = std::move(merged);
+        }
+
+        for (uint32_t i = 0; i < images_.size(); ++i) {
+            const auto& img = images_[i];
+            for (uint32_t m = 0; m < img.mipLevels; ++m) {
+                if (!img.mips[m].touched || img.mips[m].layout == img.exitLayout) continue;
+                PlannedBarrier b;
+                b.resource  = i;
+                b.baseMip   = m;
+                b.srcStages = usedStages_;
+                b.srcAccess = VK_ACCESS_2_MEMORY_WRITE_BIT;
+                b.dstStages = kAll;
+                b.dstAccess = kAllAccess;
+                b.oldLayout = img.mips[m].layout;
+                b.newLayout = img.exitLayout;
+                if (!exit_.empty() && exit_.back().resource == i &&
+                    exit_.back().baseMip + exit_.back().mipCount == m &&
+                    exit_.back().oldLayout == b.oldLayout) {
+                    ++exit_.back().mipCount;
+                } else {
+                    exit_.push_back(b);
+                }
+            }
+        }
+        // Recording after the graph was written against the old per-stage
+        // barriers, which may include one this graph no longer issues (a write
+        // outside the graph after a read inside it), so the exit is a full
+        // barrier whenever the graph recorded anything.
+        entryMemory_ = !passes_.empty();
+        exitMemory_  = !passes_.empty();
+        compiled_    = true;
+    }
+
+    void RenderGraph::record(VkCommandBuffer cb, const std::vector<PlannedBarrier>& barriers,
+                             bool globalMemory, VkPipelineStageFlags2 memSrc,
+                             VkPipelineStageFlags2 memDst) const {
+        if (barriers.empty() && !globalMemory) return;
+        auto& ib = imageScratch_;
+        auto& bb = bufferScratch_;
+        ib.clear();
+        bb.clear();
+        for (const auto& p : barriers) {
+            if (p.isImage) {
+                const auto& img = images_[p.resource];
+                VkImageMemoryBarrier2 b{};
+                b.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                b.srcStageMask                    = p.srcStages;
+                b.srcAccessMask                   = p.srcAccess;
+                b.dstStageMask                    = p.dstStages;
+                b.dstAccessMask                   = p.dstAccess;
+                b.oldLayout                       = p.oldLayout;
+                b.newLayout                       = p.newLayout;
+                b.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+                b.image                           = img.image;
+                b.subresourceRange.aspectMask     = img.aspect;
+                b.subresourceRange.baseMipLevel   = p.baseMip;
+                b.subresourceRange.levelCount     = p.mipCount;
+                b.subresourceRange.baseArrayLayer = 0;
+                b.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
+                ib.push_back(b);
+            } else {
+                VkBufferMemoryBarrier2 b{};
+                b.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+                b.srcStageMask        = p.srcStages;
+                b.srcAccessMask       = p.srcAccess;
+                b.dstStageMask        = p.dstStages;
+                b.dstAccessMask       = p.dstAccess;
+                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.buffer              = buffers_[p.resource].buffer;
+                b.offset              = 0;
+                b.size                = VK_WHOLE_SIZE;
+                bb.push_back(b);
+            }
+        }
+        VkMemoryBarrier2 mb{};
+        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+        mb.srcStageMask  = memSrc;
+        mb.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+        mb.dstStageMask  = memDst;
+        mb.dstAccessMask = kAllAccess;
+        VkDependencyInfo di{};
+        di.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        di.memoryBarrierCount       = globalMemory ? 1u : 0u;
+        di.pMemoryBarriers          = globalMemory ? &mb : nullptr;
+        di.imageMemoryBarrierCount  = static_cast<uint32_t>(ib.size());
+        di.pImageMemoryBarriers     = ib.data();
+        di.bufferMemoryBarrierCount = static_cast<uint32_t>(bb.size());
+        di.pBufferMemoryBarriers    = bb.data();
+        vkCmdPipelineBarrier2(cb, &di);
+    }
+
+    void RenderGraph::execute(VkCommandBuffer cb) {
+        compile();
+        if (passes_.empty()) return;
+        record(cb, entry_, entryMemory_, kAll, usedStages_);
+        for (const auto& pass : passes_) {
+            record(cb, pass.barriers, false, 0, 0);
+            if (pass.execute) pass.execute(cb);
+        }
+        record(cb, exit_, exitMemory_, usedStages_, kAll);
+    }
+
+    std::string RenderGraph::dump() const {
+        std::ostringstream os;
+        auto line = [&](const PlannedBarrier& b) {
+            os << "    " << (b.isImage ? images_[b.resource].name : buffers_[b.resource].name);
+            if (b.isImage && images_[b.resource].mipLevels > 1)
+                os << " mip " << b.baseMip << "+" << b.mipCount;
+            os << ": " << stageNames(b.srcStages) << " -> " << stageNames(b.dstStages);
+            if (b.isImage && b.oldLayout != b.newLayout)
+                os << "  " << layoutName(b.oldLayout) << " -> " << layoutName(b.newLayout);
+            os << "\n";
+        };
+        os << "entry" << (entryMemory_ ? " (+global)" : "") << "\n";
+        for (const auto& b : entry_) line(b);
+        for (const auto& p : passes_) {
+            os << "pass " << p.name << "\n";
+            for (const auto& b : p.barriers) line(b);
+        }
+        os << "exit" << (exitMemory_ ? " (+global)" : "") << "\n";
+        for (const auto& b : exit_) line(b);
+        return os.str();
+    }
+
+}// namespace threepp::vulkan::rg

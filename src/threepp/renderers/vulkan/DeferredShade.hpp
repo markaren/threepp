@@ -16,6 +16,9 @@
 #ifndef THREEPP_VULKAN_DEFERRED_SHADE_HPP
 #define THREEPP_VULKAN_DEFERRED_SHADE_HPP
 
+#include "threepp/renderers/vulkan/RenderGraph.hpp"
+#include "threepp/renderers/vulkan/SpirvReflect.hpp"
+
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
@@ -372,6 +375,17 @@ namespace threepp::vulkan {
                                       bool shadeBActive = false,
                                       uint32_t preExpBits = 0x3F800000u);
 
+        // ── Render-graph declarations ────────────────────────────────────────
+        // Every record* above binds this frame's shared descriptor set (the
+        // particle light also its IO set as set 1). What a stage can touch is
+        // what its pipeline's shaders use of that set, reflected from their
+        // SPIR-V, so each stage declares exactly that — no hand-written list.
+        // The barriers BETWEEN a stage's own dispatches (froxel inject →
+        // integrate, the à-trous chain) stay inside the record* functions.
+        enum class Stage { Shade, FilterComposite, ClusterBuild, Froxels, CloudMarch, CloudShadow, Rtao, ParticleLight };
+        void declare(rg::RenderGraph& graph, rg::PassBuilder& pass, Stage stage, uint32_t frame,
+                     VkDescriptorSet particleIoSet = VK_NULL_HANDLE) const;
+
     private:
         VulkanContext& ctx_;
         uint32_t       framesInFlight_;
@@ -402,6 +416,10 @@ namespace threepp::vulkan {
         // createDescriptorPool. Deriving them from the single binding table
         // means they can't desync from it — replaces the old hand-summed counts.
         std::vector<VkDescriptorPoolSize> poolSizes_;
+
+        // Reflected bindings per Stage (see declare), from the same SPIR-V the
+        // pipelines are built from.
+        std::vector<SpirvBinding> refl_[8];
 
         void createPipeline();
         void createDescriptorPool();

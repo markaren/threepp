@@ -1135,7 +1135,7 @@ namespace threepp {
             writeCount = 4;
             view().rasterMatTexValid_[frame] = 1;
         }
-        vkUpdateDescriptorSets(ctx->device(), writeCount, writes, 0, nullptr);
+        vulkan::updateDescriptorSets(ctx->device(), writeCount, writes, 0, nullptr);
     }
 
     void VulkanRenderer::Impl::createLightsUbos() {
