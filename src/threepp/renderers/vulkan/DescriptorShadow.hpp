@@ -33,6 +33,12 @@ namespace threepp::vulkan {
                            uint32_t baseMip, uint32_t mipCount, uint32_t imageMipLevels);
     void unregisterImageView(VkImageView view);
 
+    // The buffer an acceleration structure lives in. A shader's ray query
+    // reads that buffer, so an AS binding is declared as an ACCELERATION_
+    // STRUCTURE_READ of it — the same buffer an AS build declares its write on.
+    void registerAccelerationStructure(VkAccelerationStructureKHR as, VkBuffer storage);
+    [[nodiscard]] VkBuffer accelerationStructureBuffer(VkAccelerationStructureKHR as);
+
     // updateDescriptorSets and createImageView (the recording wrappers) are
     // declared in VulkanResources.hpp, next to the other resource helpers.
 

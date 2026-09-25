@@ -4511,7 +4511,13 @@ namespace threepp {
         // frame (hybrid-debug blit / events-only mode) and recording stops.
         void updatePaneRegion();
         void recordDeformAndTlas(VkCommandBuffer cb);
-        [[nodiscard]] bool recordGbufferStage(VkCommandBuffer cb, uint32_t imageIndex);
+        // The G-buffer stage as graph passes (VulkanCoreRecord.cpp).
+        void addGbufferPasses(vulkan::rg::RenderGraph& g);
+        void recordGbufferRaster(VkCommandBuffer cb);
+        void recordGbufferMsaaResolve(VkCommandBuffer cb);
+        void recordOverlayDepthPrepass(VkCommandBuffer cb);
+        [[nodiscard]] bool gbufferMsaaResolveActive();
+        [[nodiscard]] bool overlayDepthPrepassActive();
         [[nodiscard]] bool recordEventsOnlyFrame(VkCommandBuffer cb, uint32_t imageIndex);
         void recordSwapchainPrepare(VkCommandBuffer cb, uint32_t imageIndex);
         // Depth of field, bloom, the temporal resolve / upscaler and the post

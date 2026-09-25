@@ -142,6 +142,7 @@ namespace threepp::vulkan::rg {
                 u.access.stages |= access.stages;
                 u.access.access |= access.access;
                 u.access.write = u.access.write || access.write;
+                if (access.finalLayout != VK_IMAGE_LAYOUT_UNDEFINED) u.access.finalLayout = access.finalLayout;
                 return *this;
             }
         }
@@ -235,8 +236,16 @@ namespace threepp::vulkan::rg {
     // One access against one resource state. Appends at most one barrier.
     void RenderGraph::plan(State& s, const Access& a, bool isImage, uint32_t resource, uint32_t mip,
                            std::vector<PlannedBarrier>& out) {
-        const bool layoutChange = isImage && a.layout != s.layout;
-        if (a.write || layoutChange) {
+        // UNDEFINED on an image: the pass transitions it itself (see Access).
+        const bool anyLayout    = isImage && a.layout == VK_IMAGE_LAYOUT_UNDEFINED;
+        const bool layoutChange = isImage && !anyLayout && a.layout != s.layout;
+        const VkImageLayout inLayout = anyLayout ? s.layout : a.layout;
+        // A layout change the pass makes itself is a write for ordering.
+        const bool passTransitions = isImage && a.finalLayout != VK_IMAGE_LAYOUT_UNDEFINED &&
+                                     (anyLayout || a.finalLayout != inLayout);
+        const bool write = a.write || passTransitions;
+
+        if (write || layoutChange) {
             const VkPipelineStageFlags2 src = s.writeStages | s.readers;
             if (src != 0 || layoutChange) {
                 PlannedBarrier b;
@@ -249,12 +258,12 @@ namespace threepp::vulkan::rg {
                 b.dstStages = a.stages;
                 b.dstAccess = a.access;
                 b.oldLayout = isImage ? s.layout : VK_IMAGE_LAYOUT_UNDEFINED;
-                b.newLayout = isImage ? a.layout : VK_IMAGE_LAYOUT_UNDEFINED;
+                b.newLayout = isImage ? inLayout : VK_IMAGE_LAYOUT_UNDEFINED;
                 out.push_back(b);
             }
-            if (isImage) s.layout = a.layout;
+            if (isImage) s.layout = inLayout;
             s.visible.clear();
-            if (a.write) {
+            if (write) {
                 s.writeStages = a.stages;
                 s.writeAccess = a.access & kWriteBits;
                 s.readers     = 0;
@@ -268,6 +277,7 @@ namespace threepp::vulkan::rg {
                 s.readers     = a.stages;
                 s.visible.emplace_back(a.stages, a.access);
             }
+            if (passTransitions) s.layout = a.finalLayout;
             return;
         }
 
@@ -333,7 +343,7 @@ namespace threepp::vulkan::rg {
                     State& s = img.mips[m];
                     if (!s.touched) {
                         s.touched = true;
-                        if (u.access.layout != s.layout) {
+                        if (u.access.layout != VK_IMAGE_LAYOUT_UNDEFINED && u.access.layout != s.layout) {
                             PlannedBarrier b;
                             b.resource  = u.resource;
                             b.baseMip   = m;

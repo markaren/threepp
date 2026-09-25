@@ -84,7 +84,7 @@ namespace threepp {
         for (auto& v : cmds) v.clear();
         // Occlusion-cull metadata rides the same bucketing so its final
         // concatenated order matches the command records 1:1.
-        // PRIMARY ONLY, like the two-phase record itself (recordGbufferStage
+        // PRIMARY ONLY, like the two-phase record itself (recordGbufferRaster
         // gates the passes, but the hazard is here): occl_'s per-FIF
         // descriptor set and meta buffer are single shared instances, and a
         // secondary's build runs AFTER the primary's dispatches were recorded

@@ -1,4 +1,5 @@
 #include "VulkanCoreImpl.hpp"
+#include "DescriptorShadow.hpp"
 #include "VulkanCpuPhaseProf.hpp"
 
 #include "threepp/core/AttributeView.hpp"
@@ -425,6 +426,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             blasCreate.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
             check(ctx->rt().createAccelerationStructure(ctx->device(), &blasCreate, nullptr, &rec->as),
                   "vkCreateAccelerationStructureKHR(BLAS)");
+            vulkan::registerAccelerationStructure(rec->as, blasCreate.buffer);
 
             Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
 
@@ -606,6 +608,7 @@ bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
             blasCreate.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
             check(ctx->rt().createAccelerationStructure(ctx->device(), &blasCreate, nullptr, &out.as),
                   "vkCreateAccelerationStructureKHR(LOD level BLAS)");
+            vulkan::registerAccelerationStructure(out.as, blasCreate.buffer);
 
             // The AS device address is a property of the storage binding —
             // valid immediately at creation, before the build executes.
@@ -2887,6 +2890,7 @@ void VulkanRenderer::Impl::buildTlas(const std::vector<VkAccelerationStructureIn
             tlasCreate.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
             check(ctx->rt().createAccelerationStructure(ctx->device(), &tlasCreate, nullptr, &tlas),
                   "vkCreateAccelerationStructureKHR(TLAS)");
+            vulkan::registerAccelerationStructure(tlas, tlasCreate.buffer);
 
             Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), tlasSizes.buildScratchSize);
 

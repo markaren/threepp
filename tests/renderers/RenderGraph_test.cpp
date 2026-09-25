@@ -186,6 +186,48 @@ TEST_CASE("re-importing an image returns the same handle") {
     CHECK_FALSE(g.importImage("null", VK_NULL_HANDLE, VK_IMAGE_ASPECT_COLOR_BIT, 1, GENERAL).valid());
 }
 
+TEST_CASE("a render pass that transitions its attachment itself") {
+    // initialLayout UNDEFINED, finalLayout SHADER_RO: the graph orders the
+    // pass against earlier readers but records no transition of its own, and
+    // the image is in SHADER_RO afterwards.
+    rg::RenderGraph g;
+    auto img = g.importImage("gbuf", fakeImage(1), VK_IMAGE_ASPECT_COLOR_BIT, 1, RO);
+    g.addPass("read", {}).use(img, rg::sampled(RO));
+    rg::Access att = rg::colorAttachment(VK_IMAGE_LAYOUT_UNDEFINED, false);
+    att.finalLayout = RO;
+    g.addPass("raster", {}).use(img, att);
+    g.addPass("shade", {}).use(img, rg::sampled(RO));
+    g.compile();
+
+    CHECK(g.entryBarriers().empty());
+    REQUIRE(g.barriersBefore(1).size() == 1);// WAR against the read
+    const auto& b = g.barriersBefore(1)[0];
+    CHECK(b.srcStages == CS);
+    CHECK(b.oldLayout == RO);
+    CHECK(b.newLayout == RO);
+    REQUIRE(g.barriersBefore(2).size() == 1);// attachment write -> sampled read, no transition
+    CHECK(g.barriersBefore(2)[0].srcStages == VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
+    CHECK(g.barriersBefore(2)[0].oldLayout == RO);
+    CHECK(g.barriersBefore(2)[0].newLayout == RO);
+    CHECK(g.exitBarriers().empty());// already back in its resting layout
+}
+
+TEST_CASE("a pass that flips an image and leaves it flipped") {
+    rg::RenderGraph g;
+    auto img = g.importImage("img", fakeImage(1), VK_IMAGE_ASPECT_COLOR_BIT, 1, RO);
+    rg::Access flip = rg::sampled(RO);
+    flip.finalLayout = GENERAL;// e.g. the pass's own barrier at its end
+    g.addPass("flip", {}).use(img, flip);
+    g.addPass("store", {}).use(img, rg::storageWrite());
+    g.compile();
+    REQUIRE(g.barriersBefore(1).size() == 1);
+    CHECK(g.barriersBefore(1)[0].oldLayout == GENERAL);// no second transition
+    CHECK(g.barriersBefore(1)[0].newLayout == GENERAL);
+    REQUIRE(g.exitBarriers().size() == 1);
+    CHECK(g.exitBarriers()[0].oldLayout == GENERAL);
+    CHECK(g.exitBarriers()[0].newLayout == RO);
+}
+
 TEST_CASE("a reset graph plans like a fresh one") {
     const auto build = [](rg::RenderGraph& g) {
         auto a = g.importImage("a", fakeImage(1), VK_IMAGE_ASPECT_COLOR_BIT, 3, RO);

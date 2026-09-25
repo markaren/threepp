@@ -215,6 +215,19 @@ void VulkanRenderer::Impl::destroyRasterGbufMsObjects() {
 void VulkanRenderer::Impl::destroyRasterGbufImages() {
             if (!ctx) return;
             VkDevice d = ctx->device();
+            // Slots > 0 alias slot 0's current-frame scratch (see
+            // createRasterGbufImages): forget those handles, slot 0 frees them.
+            for (size_t fi = 1; fi < view().rasterGbufs.size(); ++fi) {
+                auto& g        = view().rasterGbufs[fi];
+                const auto& g0 = view().rasterGbufs[0];
+                for (auto [img, img0] : {std::pair{&g.atrousA, &g0.atrousA}, std::pair{&g.atrousB, &g0.atrousB},
+                                         std::pair{&g.demodColor, &g0.demodColor},
+                                         std::pair{&g.shadowAtrousA, &g0.shadowAtrousA},
+                                         std::pair{&g.shadowAtrousB, &g0.shadowAtrousB},
+                                         std::pair{&g.froxelLut, &g0.froxelLut}}) {
+                    if (img->image == img0->image) *img = {};
+                }
+            }
             for (auto& g : view().rasterGbufs) {
                 if (g.framebuffer) {
                     vkDestroyFramebuffer(d, g.framebuffer, nullptr);
@@ -581,12 +594,21 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 // SVGF multi-pass à-trous ping-pong scratch (rgb=GI, a=variance).
                 // STORAGE only (compute imageLoad/Store, no sampling). The denoise
                 // bounces the GI between these at widening step sizes.
-                g.atrousA = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                    VK_IMAGE_USAGE_STORAGE_BIT,
-                                                    VK_IMAGE_ASPECT_COLOR_BIT, N("atrousA"));
-                g.atrousB = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                    VK_IMAGE_USAGE_STORAGE_BIT,
-                                                    VK_IMAGE_ASPECT_COLOR_BIT, N("atrousB"));
+                //
+                // ONE copy for every frame-in-flight slot (see sharedScratch
+                // below): this and the other images marked "current frame only"
+                // are written and read within one frame and carry nothing into
+                // the next, and the frame's render graph orders frame N+1's
+                // first write after frame N's last read (its entry barrier's
+                // source scope is every earlier command on the queue).
+                if (fi == 0) {
+                    g.atrousA = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                        VK_IMAGE_USAGE_STORAGE_BIT,
+                                                        VK_IMAGE_ASPECT_COLOR_BIT, N("atrousA"));
+                    g.atrousB = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                        VK_IMAGE_USAGE_STORAGE_BIT,
+                                                        VK_IMAGE_ASPECT_COLOR_BIT, N("atrousB"));
+                }
                 // Sharp mirror-ray reflection radiance — written by the shade, then
                 // roughness-blurred + recombined by the reflection denoise pass.
                 // SAMPLED too: the shade temporally accumulates it (samples the OTHER
@@ -614,15 +636,17 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 // The GI recombine's per-pixel demodulation colour (what the
                 // filtered diffuse irradiance is multiplied by). Written by the
                 // shade, read by deferred_gi_filter in the same frame.
-                g.demodColor = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                       VK_IMAGE_USAGE_STORAGE_BIT,
-                                                       VK_IMAGE_ASPECT_COLOR_BIT, N("demodColor"));
-                g.shadowAtrousA = createAttachmentImage2D(w, h, VK_FORMAT_R16G16_SFLOAT,
-                                                          VK_IMAGE_USAGE_STORAGE_BIT,
-                                                          VK_IMAGE_ASPECT_COLOR_BIT, N("shadowAtrousA"));
-                g.shadowAtrousB = createAttachmentImage2D(w, h, VK_FORMAT_R16G16_SFLOAT,
-                                                          VK_IMAGE_USAGE_STORAGE_BIT,
-                                                          VK_IMAGE_ASPECT_COLOR_BIT, N("shadowAtrousB"));
+                if (fi == 0) {// shared across slots, like atrousA/B
+                    g.demodColor = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                           VK_IMAGE_USAGE_STORAGE_BIT,
+                                                           VK_IMAGE_ASPECT_COLOR_BIT, N("demodColor"));
+                    g.shadowAtrousA = createAttachmentImage2D(w, h, VK_FORMAT_R16G16_SFLOAT,
+                                                              VK_IMAGE_USAGE_STORAGE_BIT,
+                                                              VK_IMAGE_ASPECT_COLOR_BIT, N("shadowAtrousA"));
+                    g.shadowAtrousB = createAttachmentImage2D(w, h, VK_FORMAT_R16G16_SFLOAT,
+                                                              VK_IMAGE_USAGE_STORAGE_BIT,
+                                                              VK_IMAGE_ASPECT_COLOR_BIT, N("shadowAtrousB"));
+                }
                 // Froxel volumetrics — FIXED-size 3D volumes (independent of
                 // the render extent; recreated here anyway on resize, which
                 // also correctly resets the temporal history). KEEP the dims
@@ -630,9 +654,22 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 g.froxelScatter = createImage3D(128, 72, 64, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                                                 N("froxelScatter"));
-                g.froxelLut = createImage3D(128, 72, 64, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                                            N("froxelLut"));
+                // Rebuilt from froxelScatter every frame (the EMA history lives
+                // there), so one LUT serves every slot, like atrousA/B.
+                if (fi == 0) {
+                    g.froxelLut = createImage3D(128, 72, 64, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                N("froxelLut"));
+                } else {
+                    // The shared scratch of slot 0 (all created above by now).
+                    const auto& g0 = view().rasterGbufs[0];
+                    g.atrousA       = g0.atrousA;
+                    g.atrousB       = g0.atrousB;
+                    g.demodColor    = g0.demodColor;
+                    g.shadowAtrousA = g0.shadowAtrousA;
+                    g.shadowAtrousB = g0.shadowAtrousB;
+                    g.froxelLut     = g0.froxelLut;
+                }
                 // Half-res volumetric cloud march targets (cloud_march.comp).
                 // Sized to HALF the render extent — the ~4× perf win — and
                 // recreated here on resize (which also resets the temporal
@@ -803,6 +840,10 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
             std::vector<VkImageMemoryBarrier> inits;
             inits.reserve(view().rasterGbufs.size() * (gbufMsaaSamples_ > 1 ? 18 : 12));
             auto pushInit = [&](VkImage image, VkImageAspectFlags aspect, VkImageLayout layout) {
+                // Once per image: the slots share their current-frame scratch.
+                for (const auto& e : inits) {
+                    if (e.image == image) return;
+                }
                 VkImageMemoryBarrier b{};
                 b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
                 b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;

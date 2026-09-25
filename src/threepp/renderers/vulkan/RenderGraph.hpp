@@ -42,11 +42,21 @@
 namespace threepp::vulkan::rg {
 
     // One use of a resource by a pass.
+    //
+    // Images: `layout` is the layout the pass needs the image in when it
+    // starts; the graph transitions to it. UNDEFINED means the pass takes the
+    // image in whatever layout it is in and transitions it itself, discarding
+    // its contents (a render pass attachment with initialLayout UNDEFINED); the
+    // graph then only orders it. `finalLayout` is the layout the pass leaves
+    // the image in when it transitions it itself (a render pass finalLayout, or
+    // a pass that flips an image and does not flip it back); UNDEFINED means
+    // the pass leaves the layout alone.
     struct Access {
         VkPipelineStageFlags2 stages = 0;
         VkAccessFlags2        access = 0;
         VkImageLayout         layout = VK_IMAGE_LAYOUT_UNDEFINED;// images only
         bool                  write  = false;
+        VkImageLayout         finalLayout = VK_IMAGE_LAYOUT_UNDEFINED;// images only
     };
 
     // ── Common accesses ─────────────────────────────────────────────────────

@@ -21,6 +21,7 @@ namespace threepp::vulkan {
             VkImageView   view = VK_NULL_HANDLE;
             VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
             VkBuffer      buffer = VK_NULL_HANDLE;
+            VkAccelerationStructureKHR as = VK_NULL_HANDLE;
         };
         struct Binding {
             VkDescriptorType     type = VK_DESCRIPTOR_TYPE_MAX_ENUM;
@@ -35,6 +36,10 @@ namespace threepp::vulkan {
         std::unordered_map<VkImageView, ViewInfo>& views() {
             static std::unordered_map<VkImageView, ViewInfo> v;
             return v;
+        }
+        std::unordered_map<VkAccelerationStructureKHR, VkBuffer>& accels() {
+            static std::unordered_map<VkAccelerationStructureKHR, VkBuffer> a;
+            return a;
         }
         std::unordered_map<VkDescriptorSet, SetShadow>& sets() {
             static std::unordered_map<VkDescriptorSet, SetShadow> s;
@@ -90,6 +95,18 @@ namespace threepp::vulkan {
         return r;
     }
 
+    void registerAccelerationStructure(VkAccelerationStructureKHR as, VkBuffer storage) {
+        if (as == VK_NULL_HANDLE) return;
+        std::lock_guard lock(mtx());
+        accels()[as] = storage;
+    }
+
+    VkBuffer accelerationStructureBuffer(VkAccelerationStructureKHR as) {
+        std::lock_guard lock(mtx());
+        const auto it = accels().find(as);
+        return it == accels().end() ? VK_NULL_HANDLE : it->second;
+    }
+
     void unregisterImageView(VkImageView view) {
         if (view == VK_NULL_HANDLE) return;
         std::lock_guard lock(mtx());
@@ -115,6 +132,13 @@ namespace threepp::vulkan {
                         el.layout = w.pImageInfo[e].imageLayout;
                     } else if (isBufferType(w.descriptorType) && w.pBufferInfo) {
                         el.buffer = w.pBufferInfo[e].buffer;
+                    } else if (w.descriptorType == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR) {
+                        for (auto* n = static_cast<const VkBaseInStructure*>(w.pNext); n; n = n->pNext) {
+                            if (n->sType == VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR) {
+                                const auto* a = reinterpret_cast<const VkWriteDescriptorSetAccelerationStructureKHR*>(n);
+                                if (e < a->accelerationStructureCount) el.as = a->pAccelerationStructures[e];
+                            }
+                        }
                     }
                 }
             }
@@ -165,6 +189,16 @@ namespace threepp::vulkan {
                 for (const auto& el : bind.elements) {
                     if (el.buffer == VK_NULL_HANDLE) continue;
                     pass.use(graph.importBuffer(bindingName(setIndex, rb.binding), el.buffer), a);
+                }
+                continue;
+            }
+            if (bind.type == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR) {
+                for (const auto& el : bind.elements) {
+                    const auto a = accels().find(el.as);
+                    if (el.as == VK_NULL_HANDLE || a == accels().end()) continue;
+                    pass.use(graph.importBuffer(bindingName(setIndex, rb.binding), a->second),
+                             rg::Access{stages, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR,
+                                        VK_IMAGE_LAYOUT_UNDEFINED, false});
                 }
                 continue;
             }

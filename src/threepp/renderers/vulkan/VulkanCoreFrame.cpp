@@ -1659,10 +1659,11 @@ void VulkanRenderer::Impl::recordSecondaryViews(VkCommandBuffer cb) {
                 // a cheap no-op after (the extent never changes for a view).
                 ensureHybridResources();
 
-                // G-buffer. imageIndex is meaningless here — a secondary never
-                // touches the swapchain — and the debug-blit early-out it feeds
-                // is a primary-only path, gated below.
-                recordGbufferStage(cb, 0u);
+                // G-buffer passes, first in this view's frame graph. The
+                // hybrid debug-view blit is primary-only (recordCommandBuffer).
+                auto& g = frameGraph_;
+                g.reset();
+                addGbufferPasses(g);
 
                 const VkExtent2D ext   = v.outExt;
                 const VkExtent2D ptExt = v.renderExt;
@@ -1680,8 +1681,6 @@ void VulkanRenderer::Impl::recordSecondaryViews(VkCommandBuffer cb) {
                 // stage: all of those are primary-only by scope. imageIndex 0:
                 // this view's TaaResolve was built against a one-image
                 // "swapchain" that is v.colorTarget.
-                auto& g = frameGraph_;
-                g.reset();
                 addSceneDispatchPasses(g);
                 addSplatPasses(g);
                 addUpscaleAndPostPasses(g, /*imageIndex=*/0u, ext, ptExt, exposureBits, preExp,
@@ -1695,13 +1694,13 @@ void VulkanRenderer::Impl::recordSecondaryViews(VkCommandBuffer cb) {
                 // them, whereas a wireframe gizmo or a HUD sprite genuinely is
                 // a primary-view garnish. The rest of that pass (MSAA inject,
                 // resolve, the shared overlayMs* images, overlayInjectSet_)
-                // stays primary-only for the reason recordGbufferStage spells
+                // stays primary-only for the reason recordOverlayDepthPrepass spells
                 // out — it is SHARED state and a secondary resizing it
                 // corrupts the open command buffer.
                 //
                 // Same shader, same pipeline layout, 1-sample variant, this
                 // view's own camera. Depth comes from this view's G-buffer,
-                // which recordGbufferStage left in DEPTH_STENCIL_READ_ONLY —
+                // which the G-buffer pass left in DEPTH_STENCIL_READ_ONLY —
                 // it is the JITTERED depth rather than the primary's unjittered
                 // prepass, which is a sub-pixel disagreement on a soft sprite
                 // and not worth a second full-screen depth pass per view.

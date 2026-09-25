@@ -423,445 +423,518 @@ void VulkanRenderer::Impl::recordDeformAndTlas(VkCommandBuffer cb) {
             }
 }
 
-bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t imageIndex) {
-            // ── Hybrid raster G-buffer pass ─────────────────────────────────
-            // Runs ahead of any ray-query work so the gbuffer is ready when
-            // the deferred shade wants to read primary visibility. In
-            // G-buffer debug mode we blit a chosen channel directly to the
-            // swapchain, draw the ImGui overlay on top (mirrors the normal
-            // overlay flow), then present — bypassing the shade dispatch
-            // entirely.
-            if (rasterGbufPipeline != VK_NULL_HANDLE) {
-                gpuTimings_->begin(cb, TP_RasterGbuf, currentFrame);
-                const bool occlMsaa = gbufMsaaSamples_ > 1 &&
-                                      view().rasterGbufs[currentFrame].framebufferMS != VK_NULL_HANDLE;
-                const VkRenderPass  occlA  = occlMsaa ? occlRenderPassAMS_ : occlRenderPassA_;
-                const VkRenderPass  occlB  = occlMsaa ? occlRenderPassBMS_ : occlRenderPassB_;
-                const VkFramebuffer occlFb = occlMsaa ? view().rasterGbufs[currentFrame].framebufferMS
-                                                      : view().rasterGbufs[currentFrame].framebuffer;
-                // Secondaries always take the plain pass: occlusion culling is
-                // primary-only by scope, and occl_/occlHiz_ are single shared
-                // instances — a secondary recording them would clobber the
-                // primary's phase buffers and HiZ pyramid.
-                if (!view().secondary && occlActiveThisFrame_ && occlA != VK_NULL_HANDLE &&
-                    occlFb != VK_NULL_HANDLE) {
-                    // ── Two-phase occlusion culling ────────────────────────
-                    // Filter to last frame's visible set → pass A → farthest
-                    // HiZ from its depth (the raw MS attachment under MSAA —
-                    // its samples reduce at mip 0) → AABB test → pass B draws
-                    // only the newly visible. rasterGbufMs (this timing
-                    // scope) covers the whole sequence, so the on/off
-                    // comparison measures like for like.
-                    occl_->recordFilter(cb, currentFrame, indirectTotalDraws_);
-                    recordRasterGbufPassInternal(cb, currentFrame, occlA, occlFb,
-                                                 occlMsaa,
-                                                 occl_->phase1Buffer(), /*clear=*/true);
-                    occlHiz_->record(cb, currentFrame);
-                    occl_->recordCullTest(cb, currentFrame, indirectTotalDraws_,
-                                          occlHiz_->mips(), renderExtent());
-                    recordRasterGbufPassInternal(cb, currentFrame, occlB, occlFb,
-                                                 occlMsaa,
-                                                 occl_->phase2Buffer(), /*clear=*/false,
-                                                 /*particles=*/false);
-                } else {
-                    recordRasterGbufPass(cb, currentFrame);
+// ── G-buffer stage, as render-graph passes ──────────────────────────────────
+// Runs ahead of any ray-query work so the G-buffer is ready when the deferred
+// shade reads primary visibility. Three recorders, each keeping the barriers
+// between its own commands; addGbufferPasses declares what each one leaves
+// behind so the graph orders them against the rest of the frame. The render
+// passes (and the MSAA depth resolve / overlay prepass) transition their
+// attachments themselves, so those are declared with layout UNDEFINED and the
+// finalLayout they leave the image in.
+
+void VulkanRenderer::Impl::recordGbufferRaster(VkCommandBuffer cb) {
+            gpuTimings_->begin(cb, TP_RasterGbuf, currentFrame);
+            const bool occlMsaa = gbufMsaaSamples_ > 1 &&
+                                  view().rasterGbufs[currentFrame].framebufferMS != VK_NULL_HANDLE;
+            const VkRenderPass  occlA  = occlMsaa ? occlRenderPassAMS_ : occlRenderPassA_;
+            const VkRenderPass  occlB  = occlMsaa ? occlRenderPassBMS_ : occlRenderPassB_;
+            const VkFramebuffer occlFb = occlMsaa ? view().rasterGbufs[currentFrame].framebufferMS
+                                                  : view().rasterGbufs[currentFrame].framebuffer;
+            // Secondaries always take the plain pass: occlusion culling is
+            // primary-only by scope, and occl_/occlHiz_ are single shared
+            // instances — a secondary recording them would clobber the
+            // primary's phase buffers and HiZ pyramid.
+            if (!view().secondary && occlActiveThisFrame_ && occlA != VK_NULL_HANDLE &&
+                occlFb != VK_NULL_HANDLE) {
+                // ── Two-phase occlusion culling ────────────────────────
+                // Filter to last frame's visible set → pass A → farthest
+                // HiZ from its depth (the raw MS attachment under MSAA —
+                // its samples reduce at mip 0) → AABB test → pass B draws
+                // only the newly visible. rasterGbufMs (this timing
+                // scope) covers the whole sequence, so the on/off
+                // comparison measures like for like.
+                occl_->recordFilter(cb, currentFrame, indirectTotalDraws_);
+                recordRasterGbufPassInternal(cb, currentFrame, occlA, occlFb,
+                                             occlMsaa,
+                                             occl_->phase1Buffer(), /*clear=*/true);
+                occlHiz_->record(cb, currentFrame);
+                occl_->recordCullTest(cb, currentFrame, indirectTotalDraws_,
+                                      occlHiz_->mips(), renderExtent());
+                recordRasterGbufPassInternal(cb, currentFrame, occlB, occlFb,
+                                             occlMsaa,
+                                             occl_->phase2Buffer(), /*clear=*/false,
+                                             /*particles=*/false);
+            } else {
+                recordRasterGbufPass(cb, currentFrame);
+            }
+            gpuTimings_->end(cb, TP_RasterGbuf, currentFrame);
+}
+
+void VulkanRenderer::Impl::recordGbufferMsaaResolve(VkCommandBuffer cb) {
+            // ── MSAA dominant-sample resolve ────────────────────────────
+            // Only when setGbufferMsaa(2|4) is active. The MSAA render
+            // pass's own subpass dependency (createRasterGbufRenderPassMS
+            // deps[1]) already makes the MS attachments visible to
+            // COMPUTE, so gbuf_resolve.comp can read them with no extra
+            // barrier. Its writes then need: compute->compute (the
+            // depth-resolve fragment shader reads idsResolved) and
+            // compute->{fragment,everyone-else} (the resolved colour
+            // images + resolved depth feed every existing G-buffer
+            // consumer downstream).
+            // !secondary: defense in depth — a secondary never gets a
+            // framebufferMS (createRasterGbufImages gates it), and the
+            // shared gbufResolve_ sets name the PRIMARY's images, so
+            // resolving here for a secondary would read the wrong view.
+            if (!view().secondary && gbufMsaaSamples_ > 1 && gbufResolve_ &&
+                view().rasterGbufs[currentFrame].framebufferMS != VK_NULL_HANDLE) {
+                const VkExtent2D resExt = {view().rasterGbufs[currentFrame].width, view().rasterGbufs[currentFrame].height};
+                gpuTimings_->begin(cb, TP_GbufResolve, currentFrame);
+
+                // The 5 resolved colour images rest at SHADER_READ_ONLY_
+                // OPTIMAL (every existing consumer's expected layout,
+                // same as the msaa=1 render pass's own finalLayout) —
+                // gbuf_resolve.comp's imageStore needs GENERAL. Flip to
+                // GENERAL for the duration of the compute write, then
+                // back below.
+                {
+                    VkImage resolveImgs[5] = {
+                            view().rasterGbufs[currentFrame].normal.image, view().rasterGbufs[currentFrame].motion.image,
+                            view().rasterGbufs[currentFrame].ids.image, view().rasterGbufs[currentFrame].uv.image,
+                            view().rasterGbufs[currentFrame].albedo.image};
+                    VkImageMemoryBarrier2 toGeneral[5]{};
+                    for (int i = 0; i < 5; ++i) {
+                        toGeneral[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                        toGeneral[i].srcStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                                     VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                        toGeneral[i].srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                        toGeneral[i].dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                        toGeneral[i].dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                        toGeneral[i].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                        toGeneral[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                        toGeneral[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                        toGeneral[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                        toGeneral[i].image = resolveImgs[i];
+                        toGeneral[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                        toGeneral[i].subresourceRange.levelCount = 1;
+                        toGeneral[i].subresourceRange.layerCount = 1;
+                    }
+                    VkDependencyInfo genDep{};
+                    genDep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    genDep.imageMemoryBarrierCount = 5;
+                    genDep.pImageMemoryBarriers    = toGeneral;
+                    vkCmdPipelineBarrier2(cb, &genDep);
                 }
-                gpuTimings_->end(cb, TP_RasterGbuf, currentFrame);
 
-                // ── MSAA dominant-sample resolve ────────────────────────────
-                // Only when setGbufferMsaa(2|4) is active. The MSAA render
-                // pass's own subpass dependency (createRasterGbufRenderPassMS
-                // deps[1]) already makes the MS attachments visible to
-                // COMPUTE, so gbuf_resolve.comp can read them with no extra
-                // barrier. Its writes then need: compute->compute (the
-                // depth-resolve fragment shader reads idsResolved) and
-                // compute->{fragment,everyone-else} (the resolved colour
-                // images + resolved depth feed every existing G-buffer
-                // consumer downstream).
-                // !secondary: defense in depth — a secondary never gets a
-                // framebufferMS (createRasterGbufImages gates it), and the
-                // shared gbufResolve_ sets name the PRIMARY's images, so
-                // resolving here for a secondary would read the wrong view.
-                if (!view().secondary && gbufMsaaSamples_ > 1 && gbufResolve_ &&
-                    view().rasterGbufs[currentFrame].framebufferMS != VK_NULL_HANDLE) {
-                    const VkExtent2D resExt = {view().rasterGbufs[currentFrame].width, view().rasterGbufs[currentFrame].height};
-                    gpuTimings_->begin(cb, TP_GbufResolve, currentFrame);
+                gbufResolve_->recordComputeResolve(cb, currentFrame, resExt.width, resExt.height, gbufMsaaSamples_);
 
-                    // The 5 resolved colour images rest at SHADER_READ_ONLY_
-                    // OPTIMAL (every existing consumer's expected layout,
-                    // same as the msaa=1 render pass's own finalLayout) —
-                    // gbuf_resolve.comp's imageStore needs GENERAL. Flip to
-                    // GENERAL for the duration of the compute write, then
-                    // back below.
-                    {
-                        VkImage resolveImgs[5] = {
-                                view().rasterGbufs[currentFrame].normal.image, view().rasterGbufs[currentFrame].motion.image,
-                                view().rasterGbufs[currentFrame].ids.image, view().rasterGbufs[currentFrame].uv.image,
-                                view().rasterGbufs[currentFrame].albedo.image};
-                        VkImageMemoryBarrier2 toGeneral[5]{};
-                        for (int i = 0; i < 5; ++i) {
-                            toGeneral[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                            toGeneral[i].srcStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
-                                                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                                         VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-                            toGeneral[i].srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-                            toGeneral[i].dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                            toGeneral[i].dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                            toGeneral[i].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                            toGeneral[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                            toGeneral[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                            toGeneral[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                            toGeneral[i].image = resolveImgs[i];
-                            toGeneral[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                            toGeneral[i].subresourceRange.levelCount = 1;
-                            toGeneral[i].subresourceRange.layerCount = 1;
-                        }
-                        VkDependencyInfo genDep{};
-                        genDep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                        genDep.imageMemoryBarrierCount = 5;
-                        genDep.pImageMemoryBarriers    = toGeneral;
-                        vkCmdPipelineBarrier2(cb, &genDep);
+                // Compute write (resolved normal/motion/ids/uv/albedo) ->
+                // fragment read (depth-resolve pass reads idsResolved for
+                // the dominant index) + compute/fragment read (every
+                // other consumer). Also flips the layout back to
+                // SHADER_READ_ONLY_OPTIMAL — every consumer (DeferredShade,
+                // TaaResolve, the shade's hybrid set, debug blit) binds these
+                // as COMBINED_IMAGE_SAMPLER at that layout, same contract
+                // as the msaa=1 render pass's own finalLayout.
+                {
+                    VkImage resolveImgs[5] = {
+                            view().rasterGbufs[currentFrame].normal.image, view().rasterGbufs[currentFrame].motion.image,
+                            view().rasterGbufs[currentFrame].ids.image, view().rasterGbufs[currentFrame].uv.image,
+                            view().rasterGbufs[currentFrame].albedo.image};
+                    VkImageMemoryBarrier2 toRead[5]{};
+                    for (int i = 0; i < 5; ++i) {
+                        toRead[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                        toRead[i].srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                        toRead[i].srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                        toRead[i].dstStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                                  VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                        toRead[i].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                        toRead[i].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                        toRead[i].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                        toRead[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                        toRead[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                        toRead[i].image = resolveImgs[i];
+                        toRead[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                        toRead[i].subresourceRange.levelCount = 1;
+                        toRead[i].subresourceRange.layerCount = 1;
                     }
+                    VkDependencyInfo resDep{};
+                    resDep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    resDep.imageMemoryBarrierCount = 5;
+                    resDep.pImageMemoryBarriers    = toRead;
+                    vkCmdPipelineBarrier2(cb, &resDep);
+                }
 
-                    gbufResolve_->recordComputeResolve(cb, currentFrame, resExt.width, resExt.height, gbufMsaaSamples_);
-
-                    // Compute write (resolved normal/motion/ids/uv/albedo) ->
-                    // fragment read (depth-resolve pass reads idsResolved for
-                    // the dominant index) + compute/fragment read (every
-                    // other consumer). Also flips the layout back to
-                    // SHADER_READ_ONLY_OPTIMAL — every consumer (DeferredShade,
-                    // TaaResolve, the shade's hybrid set, debug blit) binds these
-                    // as COMBINED_IMAGE_SAMPLER at that layout, same contract
-                    // as the msaa=1 render pass's own finalLayout.
-                    {
-                        VkImage resolveImgs[5] = {
-                                view().rasterGbufs[currentFrame].normal.image, view().rasterGbufs[currentFrame].motion.image,
-                                view().rasterGbufs[currentFrame].ids.image, view().rasterGbufs[currentFrame].uv.image,
-                                view().rasterGbufs[currentFrame].albedo.image};
-                        VkImageMemoryBarrier2 toRead[5]{};
-                        for (int i = 0; i < 5; ++i) {
-                            toRead[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                            toRead[i].srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                            toRead[i].srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                            toRead[i].dstStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
-                                                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                                      VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-                            toRead[i].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-                            toRead[i].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                            toRead[i].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                            toRead[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                            toRead[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                            toRead[i].image = resolveImgs[i];
-                            toRead[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                            toRead[i].subresourceRange.levelCount = 1;
-                            toRead[i].subresourceRange.layerCount = 1;
-                        }
-                        VkDependencyInfo resDep{};
-                        resDep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                        resDep.imageMemoryBarrierCount = 5;
-                        resDep.pImageMemoryBarriers    = toRead;
-                        vkCmdPipelineBarrier2(cb, &resDep);
-                    }
-
-                    // Resolved depth image: UNDEFINED/SHADER_READ_ONLY (from
-                    // last frame) -> DEPTH_ATTACHMENT_OPTIMAL for the
-                    // fullscreen depth-resolve write.
-                    VkImageMemoryBarrier2 toDepthAtt{};
-                    toDepthAtt.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                    toDepthAtt.srcStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
-                                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                               VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-                    toDepthAtt.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-                    toDepthAtt.dstStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
-                                               VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-                    toDepthAtt.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                    toDepthAtt.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                    toDepthAtt.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-                    toDepthAtt.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    toDepthAtt.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    toDepthAtt.image = view().rasterGbufs[currentFrame].depth.image;
-                    toDepthAtt.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-                    toDepthAtt.subresourceRange.levelCount = 1;
-                    toDepthAtt.subresourceRange.layerCount = 1;
-                    VkDependencyInfo depDep{};
-                    depDep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                    depDep.imageMemoryBarrierCount = 1;
-                    depDep.pImageMemoryBarriers    = &toDepthAtt;
-                    vkCmdPipelineBarrier2(cb, &depDep);
-
-                    gbufResolve_->recordDepthResolve(cb, currentFrame, resExt.width, resExt.height,
-                                                     view().rasterGbufs[currentFrame].depthMS.view,
-                                                     view().rasterGbufs[currentFrame].ids.view,
-                                                     view().rasterGbufs[currentFrame].depth.view);
-
-                    // DEPTH_ATTACHMENT_OPTIMAL -> DEPTH_STENCIL_READ_ONLY
-                    // (the layout every existing consumer — DeferredShade,
-                    // TaaResolve, the shade's hybrid set — expects, matching
-                    // the 1x render pass's own depth finalLayout).
-                    VkImageMemoryBarrier2 toRead{};
-                    toRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                    toRead.srcStageMask  = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-                    toRead.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                    toRead.dstStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                // Resolved depth image: UNDEFINED/SHADER_READ_ONLY (from
+                // last frame) -> DEPTH_ATTACHMENT_OPTIMAL for the
+                // fullscreen depth-resolve write.
+                VkImageMemoryBarrier2 toDepthAtt{};
+                toDepthAtt.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                toDepthAtt.srcStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
                                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                           VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
-                                           VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
-                    toRead.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT |
-                                           VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-                    toRead.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-                    toRead.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                    toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    toRead.image = view().rasterGbufs[currentFrame].depth.image;
-                    toRead.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-                    toRead.subresourceRange.levelCount = 1;
-                    toRead.subresourceRange.layerCount = 1;
-                    VkDependencyInfo readDep{};
-                    readDep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                    readDep.imageMemoryBarrierCount = 1;
-                    readDep.pImageMemoryBarriers    = &toRead;
-                    vkCmdPipelineBarrier2(cb, &readDep);
+                                           VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                toDepthAtt.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                toDepthAtt.dstStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                           VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                toDepthAtt.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                toDepthAtt.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                toDepthAtt.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                toDepthAtt.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toDepthAtt.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toDepthAtt.image = view().rasterGbufs[currentFrame].depth.image;
+                toDepthAtt.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                toDepthAtt.subresourceRange.levelCount = 1;
+                toDepthAtt.subresourceRange.layerCount = 1;
+                VkDependencyInfo depDep{};
+                depDep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                depDep.imageMemoryBarrierCount = 1;
+                depDep.pImageMemoryBarriers    = &toDepthAtt;
+                vkCmdPipelineBarrier2(cb, &depDep);
 
-                    gpuTimings_->end(cb, TP_GbufResolve, currentFrame);
-                }
-                // ── Overlay depth prepass ──────────────────────────────────
-                // Fills the overlay pass's depth attachment with the
-                // unjittered VP. Consumed by the post-TAA wireframe overlay
-                // pass for occlusion testing. Only runs when an overlay
-                // pipeline exists AND the scene actually has overlay
-                // candidates this frame (else the prepass is wasted work).
-                //
-                // PRIMARY ONLY. The overlay itself is primary-only by scope,
-                // and the prepass touches SHARED state: ensureOverlayMsaaImages
-                // below sizes overlayMsColor_/overlayMsDepth_/overlayAaScratch_
-                // to THIS view's extent and rewrites overlayInjectSet_ — a
-                // single persistent set. A secondary running this re-sized
-                // those to its own (smaller) extent and updated a set already
-                // bound in the open command buffer, which invalidates the
-                // ENTIRE buffer: every later draw silently becomes garbage
-                // (corrupted gizmo/overlay, missing markers) and the submit is
-                // free to end in VK_ERROR_DEVICE_LOST.
-                if (!view().secondary &&
-                    overlayDepthPrepassPipeline != VK_NULL_HANDLE && sceneHasOverlayContent()) {
-                    gpuTimings_->begin(cb, TP_OverlayDepth, currentFrame);
-                    // Swapchain extent — the depth target is full-res so the
-                    // post-TAA overlay can depth-test the upscaled image.
-                    const VkExtent2D dext = viewOutExtent();
-                    // Hardware-MSAA overlay: rasterize the occluders into the
-                    // multisampled overlayMsDepth_ so the overlay's depth test
-                    // is correct PER SAMPLE (a 1-sample depth buffer would
-                    // quantise every overlay edge back to whole pixels and
-                    // throw the MSAA away). Allocated here because the prepass
-                    // is the first consumer in the frame; idempotent.
-                    ensureOverlayMsaaImages(dext);
-                    const bool   overlayMsaa = overlaySamples() > 1;
-                    VkImage      depthImg  = overlayMsaa ? overlayMsDepth_.image
-                                                         : view().rasterGbufs[currentFrame].unjitDepth.image;
-                    VkImageView  depthView = overlayMsaa ? overlayMsDepth_.view
-                                                         : view().rasterGbufs[currentFrame].unjitDepth.view;
+                gbufResolve_->recordDepthResolve(cb, currentFrame, resExt.width, resExt.height,
+                                                 view().rasterGbufs[currentFrame].depthMS.view,
+                                                 view().rasterGbufs[currentFrame].ids.view,
+                                                 view().rasterGbufs[currentFrame].depth.view);
 
-                    // UNDEFINED → DEPTH_ATTACHMENT (write). We always clear
-                    // each frame so the prior contents are irrelevant; the
-                    // initial layout is ignored under DONT_CARE-style clear.
-                    VkImageMemoryBarrier2 toDepth{};
-                    toDepth.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                    toDepth.srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                             VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
-                                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-                    toDepth.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
-                                             VK_ACCESS_2_SHADER_READ_BIT;
-                    toDepth.dstStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
-                                             VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-                    toDepth.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
-                                             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-                    toDepth.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                    toDepth.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-                    toDepth.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    toDepth.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    toDepth.image = depthImg;
-                    toDepth.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-                    toDepth.subresourceRange.levelCount = 1;
-                    toDepth.subresourceRange.layerCount = 1;
-                    VkDependencyInfo depToDepth{};
-                    depToDepth.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                    depToDepth.imageMemoryBarrierCount = 1;
-                    depToDepth.pImageMemoryBarriers = &toDepth;
-                    vkCmdPipelineBarrier2(cb, &depToDepth);
+                // DEPTH_ATTACHMENT_OPTIMAL -> DEPTH_STENCIL_READ_ONLY
+                // (the layout every existing consumer — DeferredShade,
+                // TaaResolve, the shade's hybrid set — expects, matching
+                // the 1x render pass's own depth finalLayout).
+                VkImageMemoryBarrier2 toRead{};
+                toRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                toRead.srcStageMask  = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                toRead.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                toRead.dstStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                                       VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
+                toRead.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT |
+                                       VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+                toRead.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                toRead.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toRead.image = view().rasterGbufs[currentFrame].depth.image;
+                toRead.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                toRead.subresourceRange.levelCount = 1;
+                toRead.subresourceRange.layerCount = 1;
+                VkDependencyInfo readDep{};
+                readDep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                readDep.imageMemoryBarrierCount = 1;
+                readDep.pImageMemoryBarriers    = &toRead;
+                vkCmdPipelineBarrier2(cb, &readDep);
 
-                    VkRenderingAttachmentInfo dDepthAtt{};
-                    dDepthAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-                    dDepthAtt.imageView   = depthView;
-                    dDepthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-                    dDepthAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
-                    dDepthAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
-                    dDepthAtt.clearValue.depthStencil = {0.0f, 0u};// reverse-Z: clear to 0 (far)
+                gpuTimings_->end(cb, TP_GbufResolve, currentFrame);
+            }
+}
 
-                    VkRenderingInfo dRi{};
-                    dRi.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-                    dRi.renderArea.offset = {0, 0};
-                    dRi.renderArea.extent = dext;
-                    dRi.layerCount = 1;
-                    dRi.colorAttachmentCount = 0;
-                    dRi.pDepthAttachment = &dDepthAtt;
-                    vkCmdBeginRendering(cb, &dRi);
+void VulkanRenderer::Impl::recordOverlayDepthPrepass(VkCommandBuffer cb) {
+            // ── Overlay depth prepass ──────────────────────────────────
+            // Fills the overlay pass's depth attachment with the
+            // unjittered VP. Consumed by the post-TAA wireframe overlay
+            // pass for occlusion testing. Only runs when an overlay
+            // pipeline exists AND the scene actually has overlay
+            // candidates this frame (else the prepass is wasted work).
+            //
+            // PRIMARY ONLY. The overlay itself is primary-only by scope,
+            // and the prepass touches SHARED state: ensureOverlayMsaaImages
+            // below sizes overlayMsColor_/overlayMsDepth_/overlayAaScratch_
+            // to THIS view's extent and rewrites overlayInjectSet_ — a
+            // single persistent set. A secondary running this re-sized
+            // those to its own (smaller) extent and updated a set already
+            // bound in the open command buffer, which invalidates the
+            // ENTIRE buffer: every later draw silently becomes garbage
+            // (corrupted gizmo/overlay, missing markers) and the submit is
+            // free to end in VK_ERROR_DEVICE_LOST.
+            if (!view().secondary &&
+                overlayDepthPrepassPipeline != VK_NULL_HANDLE && sceneHasOverlayContent()) {
+                gpuTimings_->begin(cb, TP_OverlayDepth, currentFrame);
+                // Swapchain extent — the depth target is full-res so the
+                // post-TAA overlay can depth-test the upscaled image.
+                const VkExtent2D dext = viewOutExtent();
+                // Hardware-MSAA overlay: rasterize the occluders into the
+                // multisampled overlayMsDepth_ so the overlay's depth test
+                // is correct PER SAMPLE (a 1-sample depth buffer would
+                // quantise every overlay edge back to whole pixels and
+                // throw the MSAA away). Allocated here because the prepass
+                // is the first consumer in the frame; idempotent.
+                ensureOverlayMsaaImages(dext);
+                const bool   overlayMsaa = overlaySamples() > 1;
+                VkImage      depthImg  = overlayMsaa ? overlayMsDepth_.image
+                                                     : view().rasterGbufs[currentFrame].unjitDepth.image;
+                VkImageView  depthView = overlayMsaa ? overlayMsDepth_.view
+                                                     : view().rasterGbufs[currentFrame].unjitDepth.view;
 
-                    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayDepthPrepassPipeline);
-                    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                            rasterPipelineLayout, 0, 1,
-                                            &view().rasterDescSets[currentFrame], 0, nullptr);
-                    // Split-screen: clip the overlay depth prepass to the pane
-                    // region. unjitDepth is full-res but the deferred-render
-                    // pane lands at regionDst (size regionSwapExt) after the
-                    // TAA write, so the overlay's occluder depth must be laid
-                    // down at the same place the color pass reads it. Both
-                    // default to the full frame when scissorTest is off
-                    // (byte-identical single-scene).
-                    VkViewport dvp{float(regionDstX_), float(regionDstY_),
-                                   float(regionSwapExt_.width), float(regionSwapExt_.height), 0.f, 1.f};
-                    vkCmdSetViewport(cb, 0, 1, &dvp);
-                    VkRect2D dsc{{regionDstX_, regionDstY_}, regionSwapExt_};
-                    vkCmdSetScissor(cb, 0, 1, &dsc);
+                // UNDEFINED → DEPTH_ATTACHMENT (write). We always clear
+                // each frame so the prior contents are irrelevant; the
+                // initial layout is ignored under DONT_CARE-style clear.
+                VkImageMemoryBarrier2 toDepth{};
+                toDepth.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                toDepth.srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                         VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
+                                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                toDepth.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                         VK_ACCESS_2_SHADER_READ_BIT;
+                toDepth.dstStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                         VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                toDepth.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                         VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+                toDepth.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                toDepth.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                toDepth.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toDepth.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toDepth.image = depthImg;
+                toDepth.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                toDepth.subresourceRange.levelCount = 1;
+                toDepth.subresourceRange.layerCount = 1;
+                VkDependencyInfo depToDepth{};
+                depToDepth.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                depToDepth.imageMemoryBarrierCount = 1;
+                depToDepth.pImageMemoryBarriers = &toDepth;
+                vkCmdPipelineBarrier2(cb, &depToDepth);
 
-                    // Last-entry memos, the same shape (and for the same
-                    // reason) as the ones the indirect draw builder keeps: an
-                    // InstancedMesh expands to one entry per instance, all
-                    // sharing a single en.mesh, so a whole instanced run
-                    // collapses to one BLAS resolve and one pair of buffer
-                    // binds; a scene of distinct meshes simply always misses
-                    // and pays a pointer compare. Keying on en.mesh is exact —
-                    // resolveBlasForEntry dispatches on en.mesh's cached type
-                    // flags and looks up by en.mesh (or by its geometry), and
-                    // none of the caches it reads are mutated inside this loop.
-                    // The bind cache is a SEPARATE key because blasCache is
-                    // keyed by geometry: two distinct meshes sharing one
-                    // BufferGeometry resolve to the same record and so to the
-                    // same handles. Both live HERE, inside the render-pass
-                    // instance, so no bind state is ever assumed to survive
-                    // into the next frame's command buffer — this loop is the
-                    // only thing that binds vertex/index buffers in the pass.
-                    const Mesh*       memoMesh = nullptr;
-                    const BlasRecord* memoRec  = nullptr;
-                    VkBuffer          boundVtx = VK_NULL_HANDLE;
-                    VkBuffer          boundIdx = VK_NULL_HANDLE;
-                    VkIndexType       boundIdxType = VK_INDEX_TYPE_UINT32;
-                    THREEPP_CPUPROF("frame.N_overlayDepthRec");
-                    for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
-                        const auto& en = lastVisibleEntries_[i];
-                        if (en.isOverlay) continue;// overlay meshes drawn by overlay pass instead
-                        if (en.sensorOnly) continue;// primary-only pass, and the primary never sees them
-                        // Frustum cull, same lever as the gbuf prepass — read
-                        // from THIS view's results. The overlay only ever runs
-                        // for the primary, and this is the reader that a shared
-                        // cull bit would have fed the last secondary's answer.
-                        if (!viewCulled(i)) continue;
-                        // ParticleField: its BlasRecord is the MeshRepr PROXY,
-                        // and this fixed-function pass has no per-particle
-                        // vertex stage — drawing it here would put ONE proxy at
-                        // the field origin into the overlay depth buffer. Phase
-                        // 1's answer is that particles do not occlude overlay
-                        // meshes; the alternative is a second particle pipeline
-                        // for a depth-only pass, which no consumer has asked for.
-                        if (en.isParticleField) continue;
-                        // Below the skips: the resolve is a pure lookup, so a
-                        // culled entry has no reason to pay for it. It cannot
-                        // stale the memo either — the answer depends only on
-                        // en.mesh, never on which entries came before.
-                        if (en.mesh != memoMesh) {
-                            memoMesh = en.mesh;
-                            memoRec  = resolveBlasForEntry(en);
-                        }
-                        const BlasRecord* rec = memoRec;
-                        if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
+                VkRenderingAttachmentInfo dDepthAtt{};
+                dDepthAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                dDepthAtt.imageView   = depthView;
+                dDepthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                dDepthAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                dDepthAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+                dDepthAtt.clearValue.depthStencil = {0.0f, 0u};// reverse-Z: clear to 0 (far)
 
-                        struct PC {
-                            float    model[16];
-                            uint32_t instanceCustomIndex;
-                            uint32_t flags;
-                            uint32_t _pad0;
-                            uint32_t _pad1;
-                        } pcDepth{};
-                        std::memcpy(pcDepth.model, en.worldMatrix.data(), 64);
-                        pcDepth.instanceCustomIndex = static_cast<uint32_t>(i);
-                        pcDepth.flags = 0u;
-                        vkCmdPushConstants(cb, rasterPipelineLayout,
-                                           VK_SHADER_STAGE_VERTEX_BIT,
-                                           0, sizeof(pcDepth), &pcDepth);
+                VkRenderingInfo dRi{};
+                dRi.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                dRi.renderArea.offset = {0, 0};
+                dRi.renderArea.extent = dext;
+                dRi.layerCount = 1;
+                dRi.colorAttachmentCount = 0;
+                dRi.pDepthAttachment = &dDepthAtt;
+                vkCmdBeginRendering(cb, &dRi);
 
-                        if (rec->vertex.handle != boundVtx) {
-                            VkBuffer     vbufs[1] = {rec->vertex.handle};
-                            VkDeviceSize voffs[1] = {0};
-                            vkCmdBindVertexBuffers(cb, 0, 1, vbufs, voffs);
-                            boundVtx = rec->vertex.handle;
-                        }
-                        // Element counts come off the record, not off the CPU
-                        // attribute: the snapshot was taken by buildBlasFor
-                        // against the very buffers bound above (every state
-                        // that owns a BlasRecord — skinned, tet, displaced,
-                        // grass, morphed — gets it from that one funnel), so
-                        // the count can never describe more elements than the
-                        // buffer holds. idxAttr->count() can, on a frame where
-                        // the app grew the array and the BLAS refresh has not
-                        // run yet. It also drops two by-value shared_ptr
-                        // returns and a string-keyed attribute lookup per
-                        // entry, which is the whole point at instance counts.
-                        if (rec->index.handle != VK_NULL_HANDLE) {
-                            // Packed static records store uint16 indices (bit 3).
-                            const VkIndexType itype = (rec->packedMask & 8u) ? VK_INDEX_TYPE_UINT16
-                                                                             : VK_INDEX_TYPE_UINT32;
-                            if (rec->index.handle != boundIdx || itype != boundIdxType) {
-                                vkCmdBindIndexBuffer(cb, rec->index.handle, 0, itype);
-                                boundIdx     = rec->index.handle;
-                                boundIdxType = itype;
-                            }
-                            if (rec->indexCount > 0u) {
-                                vkCmdDrawIndexed(cb, rec->indexCount, 1, 0, 0, 0);
-                            }
-                        } else if (rec->vertexCount > 0u) {
-                            vkCmdDraw(cb, rec->vertexCount, 1, 0, 0);
-                        }
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayDepthPrepassPipeline);
+                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        rasterPipelineLayout, 0, 1,
+                                        &view().rasterDescSets[currentFrame], 0, nullptr);
+                // Split-screen: clip the overlay depth prepass to the pane
+                // region. unjitDepth is full-res but the deferred-render
+                // pane lands at regionDst (size regionSwapExt) after the
+                // TAA write, so the overlay's occluder depth must be laid
+                // down at the same place the color pass reads it. Both
+                // default to the full frame when scissorTest is off
+                // (byte-identical single-scene).
+                VkViewport dvp{float(regionDstX_), float(regionDstY_),
+                               float(regionSwapExt_.width), float(regionSwapExt_.height), 0.f, 1.f};
+                vkCmdSetViewport(cb, 0, 1, &dvp);
+                VkRect2D dsc{{regionDstX_, regionDstY_}, regionSwapExt_};
+                vkCmdSetScissor(cb, 0, 1, &dsc);
+
+                // Last-entry memos, the same shape (and for the same
+                // reason) as the ones the indirect draw builder keeps: an
+                // InstancedMesh expands to one entry per instance, all
+                // sharing a single en.mesh, so a whole instanced run
+                // collapses to one BLAS resolve and one pair of buffer
+                // binds; a scene of distinct meshes simply always misses
+                // and pays a pointer compare. Keying on en.mesh is exact —
+                // resolveBlasForEntry dispatches on en.mesh's cached type
+                // flags and looks up by en.mesh (or by its geometry), and
+                // none of the caches it reads are mutated inside this loop.
+                // The bind cache is a SEPARATE key because blasCache is
+                // keyed by geometry: two distinct meshes sharing one
+                // BufferGeometry resolve to the same record and so to the
+                // same handles. Both live HERE, inside the render-pass
+                // instance, so no bind state is ever assumed to survive
+                // into the next frame's command buffer — this loop is the
+                // only thing that binds vertex/index buffers in the pass.
+                const Mesh*       memoMesh = nullptr;
+                const BlasRecord* memoRec  = nullptr;
+                VkBuffer          boundVtx = VK_NULL_HANDLE;
+                VkBuffer          boundIdx = VK_NULL_HANDLE;
+                VkIndexType       boundIdxType = VK_INDEX_TYPE_UINT32;
+                THREEPP_CPUPROF("frame.N_overlayDepthRec");
+                for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
+                    const auto& en = lastVisibleEntries_[i];
+                    if (en.isOverlay) continue;// overlay meshes drawn by overlay pass instead
+                    if (en.sensorOnly) continue;// primary-only pass, and the primary never sees them
+                    // Frustum cull, same lever as the gbuf prepass — read
+                    // from THIS view's results. The overlay only ever runs
+                    // for the primary, and this is the reader that a shared
+                    // cull bit would have fed the last secondary's answer.
+                    if (!viewCulled(i)) continue;
+                    // ParticleField: its BlasRecord is the MeshRepr PROXY,
+                    // and this fixed-function pass has no per-particle
+                    // vertex stage — drawing it here would put ONE proxy at
+                    // the field origin into the overlay depth buffer. Phase
+                    // 1's answer is that particles do not occlude overlay
+                    // meshes; the alternative is a second particle pipeline
+                    // for a depth-only pass, which no consumer has asked for.
+                    if (en.isParticleField) continue;
+                    // Below the skips: the resolve is a pure lookup, so a
+                    // culled entry has no reason to pay for it. It cannot
+                    // stale the memo either — the answer depends only on
+                    // en.mesh, never on which entries came before.
+                    if (en.mesh != memoMesh) {
+                        memoMesh = en.mesh;
+                        memoRec  = resolveBlasForEntry(en);
                     }
-                    vkCmdEndRendering(cb);
+                    const BlasRecord* rec = memoRec;
+                    if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
 
-                    // Transition to DEPTH_STENCIL_READ_ONLY_OPTIMAL for the
-                    // overlay pass's read-only depth attachment.
-                    VkImageMemoryBarrier2 toRead{};
-                    toRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                    toRead.srcStageMask  = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-                    toRead.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                    toRead.dstStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
-                                            VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-                    toRead.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-                    toRead.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-                    toRead.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                    toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    toRead.image = depthImg;
-                    toRead.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-                    toRead.subresourceRange.levelCount = 1;
-                    toRead.subresourceRange.layerCount = 1;
-                    VkDependencyInfo depToRead{};
-                    depToRead.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                    depToRead.imageMemoryBarrierCount = 1;
-                    depToRead.pImageMemoryBarriers = &toRead;
-                    vkCmdPipelineBarrier2(cb, &depToRead);
-                    gpuTimings_->end(cb, TP_OverlayDepth, currentFrame);
+                    struct PC {
+                        float    model[16];
+                        uint32_t instanceCustomIndex;
+                        uint32_t flags;
+                        uint32_t _pad0;
+                        uint32_t _pad1;
+                    } pcDepth{};
+                    std::memcpy(pcDepth.model, en.worldMatrix.data(), 64);
+                    pcDepth.instanceCustomIndex = static_cast<uint32_t>(i);
+                    pcDepth.flags = 0u;
+                    vkCmdPushConstants(cb, rasterPipelineLayout,
+                                       VK_SHADER_STAGE_VERTEX_BIT,
+                                       0, sizeof(pcDepth), &pcDepth);
+
+                    if (rec->vertex.handle != boundVtx) {
+                        VkBuffer     vbufs[1] = {rec->vertex.handle};
+                        VkDeviceSize voffs[1] = {0};
+                        vkCmdBindVertexBuffers(cb, 0, 1, vbufs, voffs);
+                        boundVtx = rec->vertex.handle;
+                    }
+                    // Element counts come off the record, not off the CPU
+                    // attribute: the snapshot was taken by buildBlasFor
+                    // against the very buffers bound above (every state
+                    // that owns a BlasRecord — skinned, tet, displaced,
+                    // grass, morphed — gets it from that one funnel), so
+                    // the count can never describe more elements than the
+                    // buffer holds. idxAttr->count() can, on a frame where
+                    // the app grew the array and the BLAS refresh has not
+                    // run yet. It also drops two by-value shared_ptr
+                    // returns and a string-keyed attribute lookup per
+                    // entry, which is the whole point at instance counts.
+                    if (rec->index.handle != VK_NULL_HANDLE) {
+                        // Packed static records store uint16 indices (bit 3).
+                        const VkIndexType itype = (rec->packedMask & 8u) ? VK_INDEX_TYPE_UINT16
+                                                                         : VK_INDEX_TYPE_UINT32;
+                        if (rec->index.handle != boundIdx || itype != boundIdxType) {
+                            vkCmdBindIndexBuffer(cb, rec->index.handle, 0, itype);
+                            boundIdx     = rec->index.handle;
+                            boundIdxType = itype;
+                        }
+                        if (rec->indexCount > 0u) {
+                            vkCmdDrawIndexed(cb, rec->indexCount, 1, 0, 0, 0);
+                        }
+                    } else if (rec->vertexCount > 0u) {
+                        vkCmdDraw(cb, rec->vertexCount, 1, 0, 0);
+                    }
                 }
-                if (hybridDebugView_ != HybridDebugView::Off) {
-                    // Blit the chosen G-buffer channel to the swapchain and
-                    // leave it in GENERAL with the cmd buffer still open — the
-                    // exact exit contract of the full deferred path. The shared
-                    // tail (overlayPass_ screen-space sprites in beginDeferredFrame,
-                    // then endFrame()'s overlay composite + single PRESENT_SRC
-                    // transition + submit/present) finalizes the frame
-                    // uniformly. This keeps the --shot writeFramebuffer readback
-                    // (which expects PRESENT_SRC) consistent and avoids the
-                    // double vkEndCommandBuffer the bespoke finalize used to do.
-                    recordHybridDebugResolve(cb, imageIndex, currentFrame);
-                    return true;
+                vkCmdEndRendering(cb);
+
+                // Transition to DEPTH_STENCIL_READ_ONLY_OPTIMAL for the
+                // overlay pass's read-only depth attachment.
+                VkImageMemoryBarrier2 toRead{};
+                toRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                toRead.srcStageMask  = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                toRead.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                toRead.dstStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                        VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                toRead.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+                toRead.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                toRead.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toRead.image = depthImg;
+                toRead.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                toRead.subresourceRange.levelCount = 1;
+                toRead.subresourceRange.layerCount = 1;
+                VkDependencyInfo depToRead{};
+                depToRead.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                depToRead.imageMemoryBarrierCount = 1;
+                depToRead.pImageMemoryBarriers = &toRead;
+                vkCmdPipelineBarrier2(cb, &depToRead);
+                gpuTimings_->end(cb, TP_OverlayDepth, currentFrame);
+            }
+}
+
+bool VulkanRenderer::Impl::gbufferMsaaResolveActive() {
+            return !view().secondary && gbufMsaaSamples_ > 1 && gbufResolve_ &&
+                   view().rasterGbufs[currentFrame].framebufferMS != VK_NULL_HANDLE;
+}
+
+bool VulkanRenderer::Impl::overlayDepthPrepassActive() {
+            return !view().secondary && overlayDepthPrepassPipeline != VK_NULL_HANDLE &&
+                   sceneHasOverlayContent();
+}
+
+void VulkanRenderer::Impl::addGbufferPasses(rg::RenderGraph& g) {
+            if (rasterGbufPipeline == VK_NULL_HANDLE) return;
+            const uint32_t f = currentFrame;
+            auto& gb = view().rasterGbufs[f];
+            constexpr auto kColor   = VK_IMAGE_ASPECT_COLOR_BIT;
+            constexpr auto kDepth   = VK_IMAGE_ASPECT_DEPTH_BIT;
+            constexpr auto kRO      = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            constexpr auto kDepthRO = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            constexpr auto kAtt     = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            constexpr auto kTests   = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                      VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+
+            // The raster pass clears every attachment (initialLayout
+            // UNDEFINED) and leaves colour in SHADER_READ_ONLY, depth in
+            // DEPTH_STENCIL_READ_ONLY — also the two-phase occlusion sequence,
+            // whose HiZ build and cull test read the depth in between (COMPUTE).
+            const bool msFb = gbufMsaaSamples_ > 1 && gb.framebufferMS != VK_NULL_HANDLE;
+            const rg::Access colorOut{kAtt | rg::kCompute, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                      VK_IMAGE_LAYOUT_UNDEFINED, true, kRO};
+            const rg::Access depthOut{kTests | rg::kCompute,
+                                      VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                              VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                                      VK_IMAGE_LAYOUT_UNDEFINED, true, kDepthRO};
+            {
+                auto pass = g.addPass("gbuffer", [this](VkCommandBuffer c) { recordGbufferRaster(c); });
+                const Image2D* colors[5] = {msFb ? &gb.normalMS : &gb.normal, msFb ? &gb.motionMS : &gb.motion,
+                                            msFb ? &gb.idsMS : &gb.ids, msFb ? &gb.uvMS : &gb.uv,
+                                            msFb ? &gb.albedoMS : &gb.albedo};
+                for (const Image2D* img : colors) {
+                    pass.use(g.importImage("gbuf", img->image, kColor, 1, kRO), colorOut);
                 }
+                const Image2D& depth = msFb ? gb.depthMS : gb.depth;
+                pass.use(g.importImage("gbuf.depth", depth.image, kDepth, 1, kDepthRO), depthOut);
             }
 
-            return false;
+            // ── MSAA dominant-sample resolve (setGbufferMsaa 2|4) ──────────
+            // Reads the MS attachments; rewrites the five single-sample colour
+            // images (flipped to GENERAL and back inside) and the depth (a
+            // fullscreen depth-resolve pass that starts from UNDEFINED).
+            if (gbufferMsaaResolveActive()) {
+                auto pass = g.addPass("gbufResolve", [this](VkCommandBuffer c) { recordGbufferMsaaResolve(c); });
+                for (const Image2D* img : {&gb.normalMS, &gb.motionMS, &gb.idsMS, &gb.uvMS, &gb.albedoMS}) {
+                    pass.use(g.importImage("gbuf.ms", img->image, kColor, 1, kRO),
+                             rg::sampled(kRO, rg::kCompute | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT));
+                }
+                pass.use(g.importImage("gbuf.depth.ms", gb.depthMS.image, kDepth, 1, kDepthRO),
+                         rg::sampled(kDepthRO, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT));
+                const rg::Access resolved{rg::kCompute | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                          VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                                          kRO, true, kRO};
+                for (const Image2D* img : {&gb.normal, &gb.motion, &gb.ids, &gb.uv, &gb.albedo}) {
+                    pass.use(g.importImage("gbuf", img->image, kColor, 1, kRO), resolved);
+                }
+                pass.use(g.importImage("gbuf.depth", gb.depth.image, kDepth, 1, kDepthRO),
+                         rg::Access{kTests, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                                    VK_IMAGE_LAYOUT_UNDEFINED, true, kDepthRO});
+            }
+
+            // ── Overlay depth prepass ──────────────────────────────────────
+            // The overlay pass's occluder depth (unjittered VP), cleared from
+            // UNDEFINED and left in DEPTH_STENCIL_READ_ONLY by the recorder.
+            // The MSAA overlay images are allocated here, before the graph
+            // imports them (idempotent; the recorder calls it again).
+            if (overlayDepthPrepassActive()) {
+                ensureOverlayMsaaImages(viewOutExtent());
+                const VkImage depthImg = overlaySamples() > 1 ? overlayMsDepth_.image : gb.unjitDepth.image;
+                auto pass = g.addPass("overlayDepth", [this](VkCommandBuffer c) { recordOverlayDepthPrepass(c); });
+                pass.use(g.importImage("overlay.depth", depthImg, kDepth, 1, kDepthRO),
+                         rg::Access{kTests, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                                    VK_IMAGE_LAYOUT_UNDEFINED, true, kDepthRO});
+            }
 }
 
 bool VulkanRenderer::Impl::recordEventsOnlyFrame(VkCommandBuffer cb, uint32_t imageIndex) {
@@ -3191,17 +3264,30 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
             // TLAS refit, all recorded into the frame cb.
             recordDeformAndTlas(cb);
 
-            // Raster G-buffer prepass (+ occlusion culling, MSAA resolve,
-            // overlay depth prepass). True → the hybrid debug view blitted
-            // straight to the swapchain and the frame is finished.
-            if (recordGbufferStage(cb, imageIndex)) return;
+            // The frame's render graph starts with the raster G-buffer (+
+            // occlusion culling, MSAA resolve, overlay depth prepass).
+            auto& g = frameGraph_;
+            g.reset();
+            addGbufferPasses(g);
 
+            // Hybrid debug view: the chosen G-buffer channel is blitted
+            // straight to the swapchain and the frame is finished.
+            if (rasterGbufPipeline != VK_NULL_HANDLE && hybridDebugView_ != HybridDebugView::Off) {
+                executeGraph(cb, g, "frame");
+                recordHybridDebugResolve(cb, imageIndex, currentFrame);
+                return;
+            }
             // Events-only mode (~500 Hz event camera): clear the swapchain,
-            // skip shade/post entirely. True → the frame is finished.
-            if (recordEventsOnlyFrame(cb, imageIndex)) return;
+            // skip shade/post entirely.
+            if (eventsOnlyMode_ && eventCamEnabled_ && rasterGbufPipeline != VK_NULL_HANDLE) {
+                executeGraph(cb, g, "frame");
+                (void) recordEventsOnlyFrame(cb, imageIndex);
+                return;
+            }
 
             // Swapchain → GENERAL, ReSTIR reservoir visibility, optional
-            // split-screen clear.
+            // split-screen clear. Recorded ahead of the graph: it depends on
+            // nothing in the frame but the acquire.
             recordSwapchainPrepare(cb, imageIndex);
 
             // Per-frame set index. Was `currentFrame * imageCount_ + imageIndex`,
@@ -3244,8 +3330,6 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
             // bloom, tonemap and the temporal resolve — exactly one of DLSS /
             // FSR / built-in TAA runs (see addUpscaleAndPostPasses).
             (void) setIdx;
-            auto& g = frameGraph_;
-            g.reset();
             addSceneDispatchPasses(g);
             addSplatPasses(g);
             addUpscaleAndPostPasses(g, imageIndex, ext, ptExt, exposureBits, preExp);
