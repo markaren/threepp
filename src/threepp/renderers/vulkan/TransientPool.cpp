@@ -28,19 +28,17 @@ namespace threepp::vulkan {
 
     // ── AliasPacker ──────────────────────────────────────────────────────────
 
-    AliasPacker::Placement AliasPacker::place(uint32_t group, uint32_t slots, VkDeviceSize size,
+    AliasPacker::Placement AliasPacker::place(Span span, uint32_t slots, VkDeviceSize size,
                                               VkDeviceSize alignment, uint32_t memoryTypeBits) const {
         for (uint32_t b = 0; b < blocks_.size(); ++b) {
             const Block& blk = blocks_[b];
             if (!blk.alive || !blk.open || !(memoryTypeBits & (1u << blk.memoryType)) || size > blk.size) continue;
             VkDeviceSize at = 0;
-            const auto it = blk.used.find(group);
-            if (it != blk.used.end()) {
-                for (const Range& r : it->second) {
-                    if (!(r.slots & slots)) continue;// never in the same frame
-                    if (alignUp(at, alignment) + size <= r.offset) break;
-                    at = std::max(at, r.offset + r.size);
-                }
+            for (const Range& r : blk.used) {
+                // Live at other times, or never in the same frame.
+                if (!(r.span & span) || !(r.slots & slots)) continue;
+                if (alignUp(at, alignment) + size <= r.offset) break;
+                at = std::max(at, r.offset + r.size);
             }
             at = alignUp(at, alignment);
             if (at + size <= blk.size) return {b, at};
@@ -56,25 +54,22 @@ namespace threepp::vulkan {
         return static_cast<uint32_t>(blocks_.size() - 1);
     }
 
-    void AliasPacker::occupy(uint32_t block, uint32_t group, uint32_t slots, VkDeviceSize offset,
+    void AliasPacker::occupy(uint32_t block, Span span, uint32_t slots, VkDeviceSize offset,
                              VkDeviceSize size) {
-        auto& v = blocks_[block].used[group];
+        auto& v = blocks_[block].used;
         const auto at = std::lower_bound(v.begin(), v.end(), offset,
                                          [](const Range& r, VkDeviceSize o) { return r.offset < o; });
-        v.insert(at, {offset, size, slots});
+        v.insert(at, {offset, size, span, slots});
     }
 
-    void AliasPacker::release(uint32_t block, uint32_t group, uint32_t slots, VkDeviceSize offset) {
-        auto& used = blocks_[block].used;
-        const auto g = used.find(group);
-        if (g == used.end()) return;
-        auto& v = g->second;
-        // (offset, slots) is unique in a group: two images at one offset have
-        // disjoint slot masks.
-        const auto r = std::find_if(v.begin(), v.end(),
-                                    [&](const Range& x) { return x.offset == offset && x.slots == slots; });
+    void AliasPacker::release(uint32_t block, Span span, uint32_t slots, VkDeviceSize offset) {
+        auto& v = blocks_[block].used;
+        // (offset, span, slots) is unique in a block: two images at one offset
+        // have disjoint spans or disjoint slot masks, and either differs.
+        const auto r = std::find_if(v.begin(), v.end(), [&](const Range& x) {
+            return x.offset == offset && x.span == span && x.slots == slots;
+        });
         if (r != v.end()) v.erase(r);
-        if (v.empty()) used.erase(g);
     }
 
     bool AliasPacker::blockEmpty(uint32_t block) const {
@@ -121,14 +116,14 @@ namespace threepp::vulkan {
             if (a) vmaFreeMemory(allocator_, a);
     }
 
-    VkImage TransientPool::createImage(const VkImageCreateInfo& info, uint32_t group, uint32_t slots) {
+    VkImage TransientPool::createImage(const VkImageCreateInfo& info, TransientSpan span, uint32_t slots) {
         VkImage image = VK_NULL_HANDLE;
         if (vkCreateImage(device_, &info, nullptr, &image) != VK_SUCCESS) return VK_NULL_HANDLE;
         VkMemoryRequirements req{};
         vkGetImageMemoryRequirements(device_, image, &req);
 
         std::lock_guard lock(mtx_);
-        auto at = packer_.place(group, slots, req.size, req.alignment, req.memoryTypeBits);
+        auto at = packer_.place(span, slots, req.size, req.alignment, req.memoryTypeBits);
         if (at.block == AliasPacker::kNone) {
             VkMemoryRequirements blockReq = req;
             blockReq.size = std::max(req.size, blockSize_);
@@ -154,8 +149,8 @@ namespace threepp::vulkan {
             }
             return VK_NULL_HANDLE;
         }
-        packer_.occupy(at.block, group, slots, at.offset, req.size);
-        images_[image] = {at.block, group, slots, at.offset, req.size};
+        packer_.occupy(at.block, span, slots, at.offset, req.size);
+        images_[image] = {at.block, span, slots, at.offset, req.size};
         return image;
     }
 
@@ -166,18 +161,33 @@ namespace threepp::vulkan {
         packer_.closeAll();
     }
 
-    VkDeviceSize TransientPool::packedBytes(const std::vector<VkImageCreateInfo>& infos) const {
-        VkDeviceSize at = 0;
-        for (const auto& info : infos) {
+    VkDeviceSize TransientPool::packedBytes(const std::vector<Request>& requests) const {
+        struct Req {
+            VkDeviceSize size, alignment;
+        };
+        std::vector<Req> reqs;
+        VkDeviceSize     total = 0;
+        for (const auto& rq : requests) {
             VkDeviceImageMemoryRequirements q{};
             q.sType       = VK_STRUCTURE_TYPE_DEVICE_IMAGE_MEMORY_REQUIREMENTS;
-            q.pCreateInfo = &info;
+            q.pCreateInfo = &rq.info;
             VkMemoryRequirements2 r{};
             r.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
             vkGetDeviceImageMemoryRequirements(device_, &q, &r);
-            at = alignUp(at, r.memoryRequirements.alignment) + r.memoryRequirements.size;
+            reqs.push_back({r.memoryRequirements.size, r.memoryRequirements.alignment});
+            total = alignUp(total, r.memoryRequirements.alignment) + r.memoryRequirements.size;
         }
-        return at;
+        // The same first fit createImage uses, into one block that holds them
+        // all even unshared; the highest end is the block they need.
+        AliasPacker    dry;
+        const uint32_t b   = dry.addBlock(total, 0);
+        VkDeviceSize   top = 0;
+        for (size_t i = 0; i < requests.size(); ++i) {
+            const auto at = dry.place(requests[i].span, requests[i].slots, reqs[i].size, reqs[i].alignment, 1u);
+            dry.occupy(b, requests[i].span, requests[i].slots, at.offset, reqs[i].size);
+            top = std::max(top, at.offset + reqs[i].size);
+        }
+        return top;
     }
 
     bool TransientPool::releaseImpl(VkImage image) {
@@ -187,7 +197,7 @@ namespace threepp::vulkan {
         const Entry e = it->second;
         images_.erase(it);
         vkDestroyImage(device_, image, nullptr);
-        packer_.release(e.block, e.group, e.slots, e.offset);
+        packer_.release(e.block, e.span, e.slots, e.offset);
         if (packer_.blockEmpty(e.block)) {
             vmaFreeMemory(allocator_, blocks_[e.block]);
             blocks_[e.block] = VK_NULL_HANDLE;
@@ -233,11 +243,11 @@ namespace threepp::vulkan {
         return n;
     }
 
-    VkResult createImageMaybePooled(VmaAllocator allocator, TransientPool* pool, uint32_t group, uint32_t slots,
+    VkResult createImageMaybePooled(VmaAllocator allocator, TransientPool* pool, TransientSpan span, uint32_t slots,
                                     const VkImageCreateInfo& info, VkImage* image, VmaAllocation* alloc) {
         *alloc = VK_NULL_HANDLE;
         if (pool) {
-            *image = pool->createImage(info, group, slots);
+            *image = pool->createImage(info, span, slots);
             if (*image != VK_NULL_HANDLE) return VK_SUCCESS;
         }
         VmaAllocationCreateInfo aci{};

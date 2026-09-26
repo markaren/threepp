@@ -1715,6 +1715,11 @@ namespace threepp {
         const uint32_t slot = (impl.currentFrame + kFramesInFlight - 1u) % kFramesInFlight;
         const auto& img = bloom->sceneHdrImage2D(slot);
         if (img.image == VK_NULL_HANDLE || img.width == 0) return false;
+        // A pooled sceneHdr shares memory with images live outside the shade →
+        // post stretch and is dead after the frame's graph (it may never have
+        // been written at all, e.g. in the hybrid debug view): there is nothing
+        // to read. THREEPP_VK_NO_ALIAS=1 gives it its own allocation.
+        if (vulkan::TransientPool::pooled(img.image)) return false;
 
         vkDeviceWaitIdle(ctx->device());
 

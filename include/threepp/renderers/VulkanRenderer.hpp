@@ -428,6 +428,10 @@ namespace threepp {
         // taa.input diverging while sceneHdr is exact indicts bloom/post;
         // sceneHdr diverging under --no-denoise indicts the shade dispatch
         // itself. Full device sync per call — audit instrument, not capture.
+        // sceneHdr shares its memory with images live outside the shade → post
+        // stretch of the frame (the tail's scratch, the other frame-in-flight
+        // slot's sceneHdr) and holds nothing after a frame: this returns false
+        // unless THREEPP_VK_NO_ALIAS=1 gives it an allocation of its own.
         bool readSceneHdrDebug(std::vector<uint8_t>& hdr, int& w, int& h);
 
         // The finest split: FNV-1a hash of each deferred-shade temporal image

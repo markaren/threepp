@@ -260,8 +260,10 @@ namespace threepp {
         // Device memory shared by frame-local scratch images (TransientPool):
         // declared right after ctx so it outlives every pass that binds images
         // into it and dies before the allocator. transientPool_ holds the
-        // shade / post / tail scratch (TransientPhase groups alias each other,
-        // and so do frame-in-flight slots and views); gbufMsPool_ holds the
+        // frame-local images — uv, sceneHdr, the filter / post / tail scratch —
+        // each with the span of TransientPhases it is live in (images whose
+        // spans do not meet alias each other, and so do frame-in-flight slots
+        // and views); gbufMsPool_ holds the
         // multisampled G-buffer, whose only aliasing is across slots (it is in
         // use from the G-buffer pass to the shade, alongside shade scratch).
         std::unique_ptr<vulkan::TransientPool> transientPool_;
@@ -3899,14 +3901,14 @@ namespace threepp {
                                         VkImageAspectFlags aspect,
                                         const char* debugName = nullptr,
                                         VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT,
-                                        vulkan::TransientPool* pool = nullptr, uint32_t poolGroup = 0,
+                                        vulkan::TransientPool* pool = nullptr, vulkan::TransientSpan poolSpan = 0,
                                         uint32_t poolSlots = vulkan::kTransientAllSlots);
 
         // 3D storage image (froxel volumetrics) — the volume sibling of
         // createAttachmentImage2D (OPTIMAL tiling, single mip, 3D view).
         Image2D createImage3D(uint32_t w, uint32_t h, uint32_t depth, VkFormat format,
                               VkImageUsageFlags usage, const char* debugName = nullptr,
-                              vulkan::TransientPool* pool = nullptr, uint32_t poolGroup = 0,
+                              vulkan::TransientPool* pool = nullptr, vulkan::TransientSpan poolSpan = 0,
                               uint32_t poolSlots = vulkan::kTransientAllSlots);
 
         void destroyRasterGbufImages();

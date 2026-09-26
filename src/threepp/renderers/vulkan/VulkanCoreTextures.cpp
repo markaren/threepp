@@ -1335,7 +1335,7 @@ Image2D VulkanRenderer::Impl::createAttachmentImage2D(uint32_t w, uint32_t h, Vk
                                         VkImageAspectFlags aspect,
                                         const char* debugName,
                                         VkSampleCountFlagBits samples,
-                                        vulkan::TransientPool* pool, uint32_t poolGroup, uint32_t poolSlots) {
+                                        vulkan::TransientPool* pool, vulkan::TransientSpan poolSpan, uint32_t poolSlots) {
             Image2D out{};
             out.width  = w;
             out.height = h;
@@ -1354,7 +1354,7 @@ Image2D VulkanRenderer::Impl::createAttachmentImage2D(uint32_t w, uint32_t h, Vk
             ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
             ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-            check(vulkan::createImageMaybePooled(ctx->allocator(), pool, poolGroup, poolSlots, ici, &out.image,
+            check(vulkan::createImageMaybePooled(ctx->allocator(), pool, poolSpan, poolSlots, ici, &out.image,
                                                  &out.alloc),
                   "vmaCreateImage(rasterGbuf attachment)");
 
@@ -1377,7 +1377,7 @@ Image2D VulkanRenderer::Impl::createAttachmentImage2D(uint32_t w, uint32_t h, Vk
 
 Image2D VulkanRenderer::Impl::createImage3D(uint32_t w, uint32_t h, uint32_t depth, VkFormat format,
                               VkImageUsageFlags usage, const char* debugName,
-                              vulkan::TransientPool* pool, uint32_t poolGroup, uint32_t poolSlots) {
+                              vulkan::TransientPool* pool, vulkan::TransientSpan poolSpan, uint32_t poolSlots) {
             Image2D out{};
             out.width  = w;
             out.height = h;
@@ -1396,7 +1396,7 @@ Image2D VulkanRenderer::Impl::createImage3D(uint32_t w, uint32_t h, uint32_t dep
             ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
             ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-            check(vulkan::createImageMaybePooled(ctx->allocator(), pool, poolGroup, poolSlots, ici, &out.image,
+            check(vulkan::createImageMaybePooled(ctx->allocator(), pool, poolSpan, poolSlots, ici, &out.image,
                                                  &out.alloc),
                   "vmaCreateImage(3D)");
 

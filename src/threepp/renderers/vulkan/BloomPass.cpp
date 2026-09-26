@@ -37,7 +37,8 @@ namespace threepp::vulkan {
         for (auto& img : pyr_)      destroyImage2D(ctx_.allocator(), d, img);
     }
 
-    Image2D BloomPass::createStorageSampledImage(uint32_t w, uint32_t h, const char* label, uint32_t poolSlots) {
+    Image2D BloomPass::createStorageSampledImage(uint32_t w, uint32_t h, const char* label, uint32_t poolSlots,
+                                                 TransientSpan span) {
         Image2D out{};
         out.width  = w;
         out.height = h;
@@ -60,7 +61,8 @@ namespace threepp::vulkan {
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         TransientPool* pool = poolSlots ? pool_ : nullptr;
-        check(createImageMaybePooled(ctx_.allocator(), pool, transientGroup(TransientPhase::Post, poolView_),
+        check(createImageMaybePooled(ctx_.allocator(), pool,
+                                     span ? span : transientGroup(TransientPhase::Post, poolView_),
                                      poolSlots, ici, &out.image, &out.alloc),
               label);
 
@@ -135,8 +137,16 @@ namespace threepp::vulkan {
                std::min(width >> (levels_ + 1u), height >> (levels_ + 1u)) >= 8u)
             ++levels_;
         if (levels_ == 0) levels_ = 1;// degenerate tiny extent: keep the half-res level
-        for (auto& img : sceneHdr_)
-            img = createStorageSampledImage(width_, height_, "vmaCreateImage(bloom.sceneHdr)");
+        // sceneHdr is live from the shade (its first write) through the post
+        // composite — no later frame reads it — so it shares memory with
+        // images live before the shade (uv) and after the post chain (the
+        // tail's). Pooled, it holds nothing after the frame's graph:
+        // readSceneHdrDebug reads it back whole only under THREEPP_VK_NO_ALIAS.
+        for (uint32_t f = 0; f < framesInFlight_; ++f)
+            sceneHdr_[f] = createStorageSampledImage(width_, height_, "vmaCreateImage(bloom.sceneHdr)",
+                                                     transientSlot(f),
+                                                     transientSpan(TransientPhase::Light, TransientPhase::Post,
+                                                                   poolView_));
         for (uint32_t f = 0; f < framesInFlight_; ++f)
             for (uint32_t l = 0; l < levels_; ++l)
                 pyr_[f * kMaxLevels + l] = createStorageSampledImage(

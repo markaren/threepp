@@ -24,6 +24,7 @@
 #ifndef THREEPP_VULKAN_BLOOM_PASS_HPP
 #define THREEPP_VULKAN_BLOOM_PASS_HPP
 
+#include "threepp/renderers/vulkan/AliasPacker.hpp"
 #include "threepp/renderers/vulkan/RenderGraph.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
@@ -143,8 +144,10 @@ namespace threepp::vulkan {
         std::vector<VkDescriptorSet> downSets_;// [f×kMaxLevels]: (sceneHdr|pyr[l-1]) -> pyr[l]
         std::vector<VkDescriptorSet> upSets_;  // [f×kMaxLevels]: pyr[l+1] -> pyr[l] (accumulate)
 
-        // poolSlots != 0: in pool_ (TransientPhase::Post), for those slots.
-        Image2D createStorageSampledImage(uint32_t w, uint32_t h, const char* label, uint32_t poolSlots = 0);
+        // poolSlots != 0: in pool_, for those slots, live in `span` (0: the
+        // post chain, TransientPhase::Post).
+        Image2D createStorageSampledImage(uint32_t w, uint32_t h, const char* label, uint32_t poolSlots = 0,
+                                          TransientSpan span = 0);
         void    transitionFreshImage(VkImage img);
         void    createPipelines();
         void    createDescriptorPool();

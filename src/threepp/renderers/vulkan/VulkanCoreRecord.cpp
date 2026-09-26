@@ -3765,7 +3765,7 @@ void VulkanRenderer::Impl::ensureOverlayMsaaImages(VkExtent2D ext) {
             // overlay pass: transient scratch (the pool's Tail group). The MS
             // depth does not: the prepass fills it right after the G-buffer
             // and the overlay reads it at the end of the frame.
-            const uint32_t tailGroup = vulkan::transientGroup(vulkan::TransientPhase::Tail, 0);
+            const auto tailGroup = vulkan::transientGroup(vulkan::TransientPhase::Tail, 0);
             overlayMsColor_ = createAttachmentImage2D(
                     ext.width, ext.height, ctx->swapchainFormat(),
                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
