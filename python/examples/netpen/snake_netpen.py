@@ -1,10 +1,11 @@
 """An eel-like snake robot (NTNU Mamba style) patrols the net pen of warp_netpen.py.
 
 The BlueROV2 is retired; a 9-link yellow snake lives in a cradle hung from the inner collar,
-undocks, follows the net wall at ~1.5 m, passes the tear slowly at ~1 m, U-turns, passes it
-again, swims back and docks. This file is the SCENE: the snake visual, the dock, the hooks into
-warp_netpen (head camera, head sonar, fish avoidance) and a kinematic placeholder for the motion.
-The swimming physics (snake_model.py) plugs in through the same pose-provider interface.
+undocks, follows the net wall at ~1.5 m, passes the tear slowly at ~1.25 m, U-turns, passes it
+again, swims back and docks into the current through a funnel (snake_mission.py). This file is the
+SCENE: the snake visual, the dock, the hooks into warp_netpen (head camera, head sonar, fish
+avoidance) and a kinematic placeholder for the motion. The swimming physics (snake_model.py)
+plugs in through the same pose-provider interface.
 
     python snake_netpen.py                                   # window; drag to orbit, Esc quits
     python snake_netpen.py --snake-shot snake_hud --out x.png --seconds 8 --size 1600x900
@@ -19,6 +20,10 @@ Flag contract
     --seed N            current heading jitter: N = 0 is the scene's own current, N > 0 rotates
                         warp_netpen.current_at by a seeded N(0, 0.15) rad
     --snake-film PATH   reserved for the film phase (P4); exits with a message today
+    --mission           headless closed-loop mission (PhysX snake + snake_mission), telemetry, summary
+    --mission-shots     ... plus a still a moment after each phase change
+    --dump-sonar        with --mission: save up to 600 sonar images near the wall (seedN_sonar_dump.npz)
+    --t-cap S  --render-every N   mission time cap; main-view render cadence
   Passed through to warp_netpen (read by it at import):
     --size WxH  --seconds S (scene warm-up before a still)  --fish N  --terrain [dir]
     --no-interop  --no-ocean
@@ -50,6 +55,7 @@ for _p in (_HERE, _EX, _PY):
 import numpy as np
 
 from demo_common import cli_arg
+import snake_mission as MS                                # pure: the mission, the cradle geometry
 
 # ---- flags: ours first, then the argv warp_netpen will see at import --------------------------
 SNAKE_SHOT = cli_arg("--snake-shot", "", str)
@@ -59,6 +65,7 @@ KINEMATIC = "--kinematic" in sys.argv                     # the window runs the 
 T_CAP = cli_arg("--t-cap", 300.0, float)
 RENDER_EVERY = cli_arg("--render-every", 3, int)
 SNAKE_FILM = "--snake-film" in sys.argv
+DUMP_SONAR = "--dump-sonar" in sys.argv                   # --mission: save the sonar images near the wall (npz)
 SEED = cli_arg("--seed", 0, int)
 TAG = cli_arg("--tag", "", str)
 SIZE = cli_arg("--size", "1600x900", str)
@@ -120,8 +127,8 @@ def e_r(th):
     return np.array([math.cos(th), 0.0, math.sin(th)])
 
 
-DOCK_C = polar(DOCK_BEARING, R_PATROL)
-DOCK_U = np.array([math.sin(DOCK_BEARING), 0.0, -math.cos(DOCK_BEARING)])   # dock axis, pointing toward the tear
+DOCK_C = MS.DOCK_C.copy()                                 # r 4.7, the axis yawed 18 deg (snake_mission.py says why)
+DOCK_U = MS.DOCK_U.copy()                                 # dock axis, pointing toward the tear
 D2R = math.radians
 
 
@@ -439,13 +446,13 @@ class PhysicsSnake:
         n = int(round((t - self.t_last) * 240.0))
         if n > 0:
             h = n / 240.0
-            st = self.ad.state(self.t_last)
+            st = self.ad.state(self.t_last, W.current_at(W.world_t))   # cur: the station's current meter
             for img, o, yaw in SONAR_IN:                  # the last image(s), with the pose they were fired from
                 self.mission.on_sonar(img, o, yaw, st, W.SON_EVERY / 60.0)
                 self.images += 1
             SONAR_IN.clear()
-            gait, phi0, latch = self.mission.step(st, h)
-            self.ad.apply(gait, phi0, latch, st, h)
+            gait, phi0, hold = self.mission.step(st, h)
+            self.ad.apply(gait, phi0, hold, st, h)
             self.snake.set_current(W.current_at(W.world_t))
             self.world.step(h)
             self.t_last += h
@@ -646,7 +653,7 @@ def _dock_add(m):
     return m
 
 
-HOOP_R, RAIL_S, RAIL_H = 0.19, 0.085, -0.072
+HOOP_R, RAIL_S, RAIL_H = MS.MOUTH_R, 0.085, -0.072          # funnel mouth 0.35 m: the gait's swept width
 for sgn in (-1.0, 1.0):                                    # the two rails the body rests on
     _dock_add(W.tube(dpt(-0.5 * DOCK_LEN, sgn * RAIL_S, RAIL_H), dpt(0.5 * DOCK_LEN, sgn * RAIL_S, RAIL_H), 0.014, dock_grey, 12))
 for a in (-0.55, 0.0, 0.55):                               # U-ties under the body
@@ -661,12 +668,12 @@ for a in (-0.5 * DOCK_LEN, 0.5 * DOCK_LEN):                # funnel hoops, both 
     zaxis = np.array([0.0, 0.0, 1.0])
     ax = np.cross(zaxis, DOCK_U)
     hoop.quaternion.set_from_axis_angle(tp.Vector3(*(ax / np.linalg.norm(ax))), math.acos(float(zaxis @ DOCK_U)))
-    fun = tp.Mesh(tp.CylinderGeometry(HOOP_R, 0.115, 0.16, 32, 1, True), standard_material(0xc9cdd0, roughness=0.6, side=tp.Side.Double))
-    fun.position.set(*dpt(a - sgn * 0.08, 0.0, 0.0))
+    fun = tp.Mesh(tp.CylinderGeometry(HOOP_R, MS.BORE_R, 0.25, 32, 1, True), standard_material(0xc9cdd0, roughness=0.6, side=tp.Side.Double))
+    fun.position.set(*dpt(a - sgn * 0.125, 0.0, 0.0))
     W.align_y(fun, sgn * DOCK_U)                           # wide end outward
     _dock_add(fun)
     for s in (-1.0, 1.0):                                  # hoop to rail struts
-        _dock_add(W.tube(dpt(a, s * RAIL_S, RAIL_H), dpt(a, s * 0.13, -0.13), 0.010, dock_grey, 8))
+        _dock_add(W.tube(dpt(a, s * RAIL_S, RAIL_H), dpt(a, s * 0.707 * HOOP_R, -0.707 * HOOP_R), 0.010, dock_grey, 8))
 # latch post with its LED, mid-cradle on the starboard side
 _dock_add(W.tube(dpt(0.0, RAIL_S + 0.03, RAIL_H), dpt(0.0, RAIL_S + 0.03, 0.10), 0.013, dock_grey, 10))
 latch = _dock_add(tp.Mesh(tp.BoxGeometry(0.05, 0.03, 0.05), dock_white))
@@ -832,11 +839,19 @@ def snake_fish_step(t, dt):
 _sonar_draw0 = W.sonar_draw
 
 
+SONAR_DUMP = []                                           # (t, phase, image f16, sonar pos, sonar yaw)
+DUMP_PHASES = ("ACQUIRE", "FOLLOW_WALL", "TEAR", "INSPECT", "UTURN", "INSPECT_2")
+
+
 def snake_sonar_draw(frame_i):
     """The sonar's image as it lands (the same one the inset draws), with the pose it was fired from."""
     if SON_POSE[0] is not None:
-        SONAR_IN.append((W.son_hist[(frame_i // W.SON_EVERY) % 3].copy(), *SON_POSE[0]))
+        img = W.son_hist[(frame_i // W.SON_EVERY) % 3].copy()
+        SONAR_IN.append((img, *SON_POSE[0]))
         del SONAR_IN[:-2]
+        ph = getattr(SNAKE[0], "phase", "")
+        if DUMP_SONAR and ph in DUMP_PHASES and len(SONAR_DUMP) < 600:
+            SONAR_DUMP.append((mission_t(), ph, img.astype(np.float16), SON_POSE[0][0], SON_POSE[0][1]))
     _sonar_draw0(frame_i)
 
 
@@ -981,8 +996,9 @@ def run_shots(names, out_for):
 
 
 MISSION_SHOT_PHASES = {"UNDOCK": ("undock", 3.0), "FOLLOW_WALL": ("follow_wall", 4.0), "TEAR": ("tear_detected", 0.5),
-                       "INSPECT": ("inspect", 4.0), "UTURN": ("uturn", 3.0), "RETURN": ("return", 4.0),
-                       "APPROACH": ("approach", 3.0), "DOCKED": ("docked", 3.0)}
+                       "INSPECT": ("inspect", 4.0), "UTURN": ("uturn", 3.0), "INSPECT_2": ("inspect_2", 3.0),
+                       "APPROACH": ("approach", 3.0), "TURN_IN": ("turn_in", 2.0), "FINAL": ("final", 4.0),
+                       "CAPTURE": ("capture", 2.0), "DOCKED": ("docked", 3.0)}
 
 
 def place_mission_shot(name):
@@ -990,7 +1006,7 @@ def place_mission_shot(name):
     mid = sn.mid_point()
     fwd = mean_fwd(sn)
     inb = -np.array([mid[0], 0.0, mid[2]]) / math.hypot(mid[0], mid[2])
-    if name in ("undock", "approach", "docked"):
+    if name in ("undock", "approach", "turn_in", "final", "capture", "docked"):
         aim(mid - 1.2 * fwd + 2.0 * inb + [0, 0.9, 0], mid + 0.2 * fwd + [0, -0.1, 0], 58.0)
     elif name in ("tear_detected", "inspect"):
         tc = W.tear_now()
@@ -1030,7 +1046,7 @@ def run_mission(shots=False):
     cols = ["t", "phase", "gait", "phi0", "psi_mean", "psi_head", "dpsi_head", "speed", "p_abs", "p_net", "e_abs",
             "e_net", "meas", "d_head_true", "d_min_links", "tangent", "psi_wall", "wall_seen", "tear_fired",
             "tear_bearing", "cand_bearing", "cur_x", "cur_z", "com_x", "com_y", "com_z", "head_x", "head_y", "head_z",
-            "los_s", "los_e", "latch_f", "images", "peak_torque"]
+            "los_s", "los_e", "latch_f", "images", "peak_torque", "guide_f", "tear_x", "tear_z", "d_head_tear"]
     rows, links, quats = [], [], []
     shots_todo, shot_paths, shot_names = [], [], set()
     wall0 = time.perf_counter()
@@ -1062,6 +1078,7 @@ def run_mission(shots=False):
             shots_todo.remove(s)
             print(f"  still {p}  (t {t:.1f} s, {ms.phase})", flush=True)
         hp = prov.pos[0]
+        tc = W.tear_now()
         qn = net_positions()
         d_head = float(np.sqrt(((qn - hp) ** 2).sum(1).min()))
         sn = prov.snake
@@ -1074,7 +1091,8 @@ def run_mission(shots=False):
                      d_head, W.ROV_STATS.get("d", float("nan")), est.tangent, ms.follow.psi_wall, float(est.seen),
                      float(ms.det.fired), ms.det.bearing, cand, float(cur[0]), float(cur[2]), *st.com, *hp,
                      ms.los.get("s", float("nan")), ms.los.get("e", float("nan")),
-                     float(np.linalg.norm(prov.ad.latch_force)), prov.images, sn.peak_torque])
+                     float(np.linalg.norm(prov.ad.latch_force)), prov.images, sn.peak_torque, prov.ad.guide_force,
+                     float(tc[0]), float(tc[2]), float(np.linalg.norm(prov.nose() - tc))])
         links.append(prov.pos.astype(np.float32))
         quats.append(prov.quat.astype(np.float32))
         f += 1
@@ -1091,6 +1109,12 @@ def run_mission(shots=False):
                tear_true=np.float64(TEAR_BEARING), dock_c=MS.DOCK_C, dock_u=MS.DOCK_U, latch_p=MS.LATCH_P,
                gaits=np.array(list(MS.GAITS)), phases=np.array(MS.PHASES), net_y3=_net_ring(), seed=np.int64(SEED))
     np.savez_compressed(stem + "_telemetry.npz", **tel)
+    if DUMP_SONAR and SONAR_DUMP:
+        np.savez_compressed(stem + "_sonar_dump.npz", t=np.array([d[0] for d in SONAR_DUMP]),
+                            phase=np.array([d[1] for d in SONAR_DUMP]), img=np.stack([d[2] for d in SONAR_DUMP]),
+                            pos=np.stack([d[3] for d in SONAR_DUMP]), yaw=np.array([d[4] for d in SONAR_DUMP]),
+                            net_y3=_net_ring())
+        print(f"mission: {len(SONAR_DUMP)} sonar images -> {stem}_sonar_dump.npz")
     summ = MS.summarize(tel, prov.mission, prov.ad, mass=float(prov.snake.mass.sum()))
     summ.update(seed=SEED, frames=f, wall_s=round(wall, 1), ms_per_frame=round(wall / max(f, 1) * 1e3, 1),
                 render_every=RENDER_EVERY, size=SIZE, max_vertical_drift_m=round(prov.max_dy, 4),
