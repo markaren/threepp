@@ -2252,8 +2252,9 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
                         for (uint32_t c = 0; c < 3; ++c) {
                             const uint32_t dim = st.heightReadbackDim[c];
                             if (dim == 0) continue;
+                            // Height image, then the displacement image.
                             const VkDeviceSize bytes =
-                                    VkDeviceSize(dim) * VkDeviceSize(dim) * 8u;
+                                    VkDeviceSize(dim) * VkDeviceSize(dim) * 16u;
                             for (uint32_t s = 0; s < kFramesInFlight; ++s) {
                                 auto& b = st.heightReadback[c][s];
                                 b = createBuffer(
@@ -2272,30 +2273,40 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
                 }
                 if (rb && rb->handle != VK_NULL_HANDLE) {
                     st.heightReadbackWritten[currentFrame] = true;
-                    VkImageMemoryBarrier imb{};
-                    imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                    imb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-                    imb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-                    imb.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    imb.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    imb.image = c.dyn->ht().image;
-                    imb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    imb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    imb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    // Height image at offset 0, horizontal displacement
+                    // after it: sampleHeight() inverts x = q + D(q) to find
+                    // the rest point whose displaced image lies over the query.
+                    const VkImage srcImages[2] = {c.dyn->ht().image,
+                                                  c.dyn->displacement().image};
+                    VkImageMemoryBarrier imb[2]{};
+                    for (int k = 0; k < 2; ++k) {
+                        imb[k].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                        imb[k].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                        imb[k].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                        imb[k].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                        imb[k].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                        imb[k].image = srcImages[k];
+                        imb[k].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                        imb[k].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                        imb[k].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    }
                     vkCmdPipelineBarrier(cb,
                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                             VK_PIPELINE_STAGE_TRANSFER_BIT,
-                            0, 0, nullptr, 0, nullptr, 1, &imb);
+                            0, 0, nullptr, 0, nullptr, 2, imb);
 
-                    VkBufferImageCopy bic{};
-                    bic.bufferOffset = 0;
-                    bic.bufferRowLength = 0;
-                    bic.bufferImageHeight = 0;
-                    bic.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                    bic.imageOffset = {0, 0, 0};
-                    bic.imageExtent = {st.heightReadbackDim[i], st.heightReadbackDim[i], 1};
-                    vkCmdCopyImageToBuffer(cb, c.dyn->ht().image, VK_IMAGE_LAYOUT_GENERAL,
-                                           rb->handle, 1, &bic);
+                    const uint32_t dim = st.heightReadbackDim[i];
+                    for (int k = 0; k < 2; ++k) {
+                        VkBufferImageCopy bic{};
+                        bic.bufferOffset = VkDeviceSize(k) * VkDeviceSize(dim) * VkDeviceSize(dim) * 8u;
+                        bic.bufferRowLength = 0;
+                        bic.bufferImageHeight = 0;
+                        bic.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                        bic.imageOffset = {0, 0, 0};
+                        bic.imageExtent = {dim, dim, 1};
+                        vkCmdCopyImageToBuffer(cb, srcImages[k], VK_IMAGE_LAYOUT_GENERAL,
+                                               rb->handle, 1, &bic);
+                    }
 
                     VkBufferMemoryBarrier bmb{};
                     bmb.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
@@ -2661,13 +2672,16 @@ void VulkanRenderer::Impl::mirrorDisplacedHeightfields(DisplacedMesh& dm, Displa
                 const uint32_t dim = st.heightReadbackDim[ci];
                 if (buf.handle != VK_NULL_HANDLE && dim > 0) {
                     const size_t cells = size_t(dim) * size_t(dim);
-                    const size_t bytes = cells * 2 * sizeof(float);
+                    const size_t fieldBytes = cells * 2 * sizeof(float);
                     if (cf.data.size() != cells * 2)
                         cf.data.assign(cells * 2, 0.f);
+                    if (cf.disp.size() != cells * 2)
+                        cf.disp.assign(cells * 2, 0.f);
                     void* mapped = nullptr;
                     vmaMapMemory(ctx->allocator(), buf.alloc, &mapped);
-                    invalidateHostReads(ctx->allocator(), buf.alloc, 0, bytes);
-                    std::memcpy(cf.data.data(), mapped, bytes);
+                    invalidateHostReads(ctx->allocator(), buf.alloc, 0, 2 * fieldBytes);
+                    std::memcpy(cf.data.data(), mapped, fieldBytes);
+                    std::memcpy(cf.disp.data(), static_cast<const char*>(mapped) + fieldBytes, fieldBytes);
                     vmaUnmapMemory(ctx->allocator(), buf.alloc);
                     cf.dim      = dim;
                     cf.tileSize = tileSizes[ci];
@@ -3552,7 +3566,8 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
 
             // Per-cascade height readback DIMENSIONS. Each cascade can run at
             // a different FFT resolution, so each readback buffer is sized to
-            // its own dim²·8 bytes (RG32F). The buffers themselves — a ring of
+            // its own dim²·16 bytes (height + displacement, both RG32F). The
+            // buffers themselves — a ring of
             // kFramesInFlight per cascade, see DisplacedMeshState — are
             // allocated by recordDisplacedDeform on the first frame that
             // records the copies (sampleHeight()'s sticky opt-in); a scene

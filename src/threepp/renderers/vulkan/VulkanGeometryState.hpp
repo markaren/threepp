@@ -474,7 +474,9 @@ namespace threepp::vulkan::impl {
         Buffer    heightReadback[3][kFramesInFlight] = {};
         // Per-cascade readback texture dimension. Cascades can run at
         // different FFT resolutions — each cascade's readback buffer is
-        // sized to its own dim²·8 bytes (RG32F).
+        // sized to its own dim²·16 bytes: the height image (RG32F) at
+        // offset 0, then the horizontal-displacement image (RG32F) at
+        // dim²·8. sampleHeight() needs both to invert x = q + D(q).
         uint32_t  heightReadbackDim[3] = {0, 0, 0};
         // Per-slot: true once a command buffer that copies into slot s has
         // been recorded (a frame cb, or the synchronous first-build

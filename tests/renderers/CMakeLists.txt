@@ -193,6 +193,11 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     set_tests_properties(VulkanInstanceColor_test PROPERTIES SKIP_RETURN_CODE 42)
 
     # RenderGraph barrier planning; CPU only (no device needed).
+    # CPU wave-height query of the FFT ocean against an analytic Gerstner
+    # wave: the choppy-displacement inversion and the cascade-1 rotation.
+    # No device needed; DisplacedMesh is only built with Vulkan.
+    add_test_executable(DisplacedMeshSampleHeight_test)
+
     add_test_executable(RenderGraph_test)
     # TransientPool placement (AliasPacker); CPU only.
     add_test_executable(TransientPool_test)

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace threepp {
 
@@ -21,50 +22,97 @@ namespace threepp {
 
     namespace {
 
-        float sampleCascade(const DisplacedMesh::CascadeField& cf,
-                            float worldX, float worldZ) {
-            if (cf.data.empty() || cf.dim == 0 || cf.tileSize <= 0.f)
-                return 0.f;
+        struct Vec2f {
+            float x = 0.f;
+            float y = 0.f;
+        };
 
-            const uint32_t dim = cf.dim;
-            const float invTile = 1.f / cf.tileSize;
-            // Same mapping as the GPU samplers: texture v = +worldZ / tile
-            // (an earlier version negated z here, which silently sampled the
-            // z-MIRRORED field — statistically identical, so floaters bobbed
-            // plausibly without actually riding the rendered crests).
-            const float u = worldX * invTile;
-            const float v = worldZ * invTile;
-
-            auto wrap = [dim](float x) {
-                const float fdim = float(dim);
+        // Filtered, repeat-wrapped sample of an RG32F cascade field at tile
+        // coordinates (u, v) = sample-domain XZ / tileSize. Texel i's value
+        // sits at (i+0.5)/dim, as with GPU texture(). `bicubic` selects the
+        // uniform cubic B-spline over the 4x4 neighbourhood, which is what
+        // sampleBicubicR/RG in water_displace.comp evaluate with four bilinear
+        // taps; otherwise bilinear. Returns the raw (unnormalized) R and G.
+        Vec2f sampleField(const std::vector<float>& field, uint32_t dim,
+                          float u, float v, bool bicubic) {
+            const float fdim = float(dim);
+            auto wrap = [fdim](float x) {
                 float w = std::fmod(x, fdim);
                 if (w < 0.f) w += fdim;
                 return w;
             };
-            // −0.5: GPU texture() bilinear places texel i's value at
-            // (i+0.5)/dim — emulate that so the field isn't shifted by half a
-            // texel (which at coarse cascade resolutions is metres of world).
-            const float fx = wrap(u * float(dim) - 0.5f);
-            const float fz = wrap(v * float(dim) - 0.5f);
+            const float fx = wrap(u * fdim - 0.5f);
+            const float fz = wrap(v * fdim - 0.5f);
+            const int ix = int(std::floor(fx));
+            const int iz = int(std::floor(fz));
+            const float tx = fx - float(ix);
+            const float tz = fz - float(iz);
 
-            const uint32_t x0 = uint32_t(std::floor(fx)) % dim;
-            const uint32_t z0 = uint32_t(std::floor(fz)) % dim;
-            const uint32_t x1 = (x0 + 1) % dim;
-            const uint32_t z1 = (z0 + 1) % dim;
-            const float tx = fx - std::floor(fx);
-            const float tz = fz - std::floor(fz);
-
-            auto h = [&](uint32_t x, uint32_t z) {
-                return cf.data[(z * dim + x) * 2u + 0u];
+            auto texel = [&](int x, int z) {
+                const int d = int(dim);
+                x %= d;
+                if (x < 0) x += d;
+                z %= d;
+                if (z < 0) z += d;
+                const size_t idx = (size_t(z) * dim + size_t(x)) * 2u;
+                return Vec2f{field[idx], field[idx + 1]};
             };
-            const float h00 = h(x0, z0);
-            const float h10 = h(x1, z0);
-            const float h01 = h(x0, z1);
-            const float h11 = h(x1, z1);
-            const float a = h00 * (1.f - tx) + h10 * tx;
-            const float b = h01 * (1.f - tx) + h11 * tx;
 
-            return (a * (1.f - tz) + b * tz) * invTile;
+            float wx[4], wz[4];
+            int first;
+            int taps;
+            if (bicubic) {
+                auto bspline = [](float t, float w[4]) {
+                    const float t2 = t * t;
+                    const float t3 = t2 * t;
+                    w[0] = (-t3 + 3.f * t2 - 3.f * t + 1.f) / 6.f;
+                    w[1] = (3.f * t3 - 6.f * t2 + 4.f) / 6.f;
+                    w[2] = (-3.f * t3 + 3.f * t2 + 3.f * t + 1.f) / 6.f;
+                    w[3] = t3 / 6.f;
+                };
+                bspline(tx, wx);
+                bspline(tz, wz);
+                first = -1;
+                taps = 4;
+            } else {
+                wx[0] = 1.f - tx;
+                wx[1] = tx;
+                wz[0] = 1.f - tz;
+                wz[1] = tz;
+                first = 0;
+                taps = 2;
+            }
+
+            Vec2f r;
+            for (int j = 0; j < taps; ++j) {
+                for (int i = 0; i < taps; ++i) {
+                    const Vec2f t = texel(ix + first + i, iz + first + j);
+                    const float w = wx[i] * wz[j];
+                    r.x += w * t.x;
+                    r.y += w * t.y;
+                }
+            }
+            return r;
+        }
+
+        bool hasField(const DisplacedMesh::CascadeField& cf, const std::vector<float>& field) {
+            return cf.dim > 0 && cf.tileSize > 0.f &&
+                   field.size() >= size_t(cf.dim) * cf.dim * 2u;
+        }
+
+        // Cascade i's sample-domain position for a world XZ. Cascade 1 is
+        // sampled in a rotated domain (repeat-lattice break, see
+        // vulkan_shared.h); mirror of oceanC1Domain().
+        Vec2f cascadeDomain(uint32_t i, float worldX, float worldZ) {
+            if (i != 1) return {worldX, worldZ};
+            return {kOceanCascade1RotCos * worldX - kOceanCascade1RotSin * worldZ,
+                    kOceanCascade1RotSin * worldX + kOceanCascade1RotCos * worldZ};
+        }
+
+        // Cascades 0 and 1 are B-spline reconstructed on the GPU, cascade 2
+        // bilinear (see sampleDisplacement in water_displace.comp).
+        bool cascadeBicubic(uint32_t i) {
+            return i < 2;
         }
 
     }// namespace
@@ -78,18 +126,71 @@ namespace threepp {
         // mirror's fixed kFramesInFlight-frame latency (see the header).
         wantsHeightReadback = true;
 
+        // World-space horizontal displacement D(q) of the selected cascades at
+        // rest position q, choppiness applied.
+        auto displacement = [&](float qx, float qz) {
+            Vec2f d;
+            for (uint32_t i = 0; i < 3; ++i) {
+                if ((cascadeMask & (1u << i)) == 0u) continue;
+                const CascadeField& cf = heightFields[i];
+                if (!hasField(cf, cf.disp)) continue;
+                const float invTile = 1.f / cf.tileSize;
+                const Vec2f p = cascadeDomain(i, qx, qz);
+                Vec2f v = sampleField(cf.disp, cf.dim, p.x * invTile, p.y * invTile,
+                                      cascadeBicubic(i));
+                if (i == 1) {
+                    // Domain vector back to world; mirror of oceanC1World().
+                    v = {kOceanCascade1RotCos * v.x + kOceanCascade1RotSin * v.y,
+                         -kOceanCascade1RotSin * v.x + kOceanCascade1RotCos * v.y};
+                }
+                d.x += v.x * invTile;
+                d.y += v.y * invTile;
+            }
+            d.x *= params.choppiness;
+            d.y *= params.choppiness;
+            return d;
+        };
+
+        // Solve x = q + D(q) for the rest position q. The map q -> x - D(q)
+        // contracts wherever the surface does not fold (Jacobian > 0), so
+        // fixed-point iteration converges; near a fold it can oscillate, so
+        // keep the iterate with the smallest residual |q + D(q) - x|, which
+        // is the length of the step it produces. The error shrinks by the
+        // displacement slope choppiness*a*k per step: a few steps at the
+        // default choppiness, 14 at choppiness 1 on a steep (ak = 0.59) wave.
+        float bestX = worldX;
+        float bestZ = worldZ;
+        if (params.choppiness != 0.f) {
+            constexpr int kMaxIterations = 16;
+            constexpr float kTolerance = 1e-3f;// metres
+            float qx = worldX;
+            float qz = worldZ;
+            float bestResidual = std::numeric_limits<float>::max();
+            for (int it = 0; it < kMaxIterations; ++it) {
+                const Vec2f d = displacement(qx, qz);
+                const float nx = worldX - d.x;
+                const float nz = worldZ - d.y;
+                const float residual = std::hypot(nx - qx, nz - qz);
+                if (residual < bestResidual) {
+                    bestResidual = residual;
+                    bestX = qx;
+                    bestZ = qz;
+                }
+                if (residual < kTolerance) break;
+                qx = nx;
+                qz = nz;
+            }
+        }
+
         float total = 0.f;
         for (uint32_t i = 0; i < 3; ++i) {
             if ((cascadeMask & (1u << i)) == 0u) continue;
-            if (i == 1) {
-                // Cascade 1 is sampled in a ROTATED domain (repeat-lattice
-                // break — see vulkan_shared.h). Mirror of oceanC1Domain().
-                const float qx = kOceanCascade1RotCos * worldX - kOceanCascade1RotSin * worldZ;
-                const float qz = kOceanCascade1RotSin * worldX + kOceanCascade1RotCos * worldZ;
-                total += sampleCascade(heightFields[i], qx, qz);
-            } else {
-                total += sampleCascade(heightFields[i], worldX, worldZ);
-            }
+            const CascadeField& cf = heightFields[i];
+            if (!hasField(cf, cf.data)) continue;
+            const float invTile = 1.f / cf.tileSize;
+            const Vec2f p = cascadeDomain(i, bestX, bestZ);
+            total += sampleField(cf.data, cf.dim, p.x * invTile, p.y * invTile,
+                                 cascadeBicubic(i)).x * invTile;
         }
         return total * params.waveScale;
     }

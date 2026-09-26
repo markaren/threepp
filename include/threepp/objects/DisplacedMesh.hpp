@@ -237,23 +237,38 @@ namespace threepp {
         // from user code.
         mutable bool wantsHeightReadback = false;
 
-        // Renderer-filled spatial-domain height fields, one per cascade,
+        // Renderer-filled spatial-domain wave fields, one per cascade,
         // copied back from GPU each frame after the IFFT pass (only while
-        // wantsHeightReadback is set). Layout:
-        // row-major RG32F (R = vertical displacement, G = unused).
-        // Cell (ix, iz) lives at index `(iz*dim + ix)*2`.
+        // wantsHeightReadback is set). Both are row-major RG32F with cell
+        // (ix, iz) at index `(iz*dim + ix)*2`:
+        //   data — R = vertical displacement, G = unused
+        //   disp — R = horizontal displacement x, G = horizontal displacement z
+        //          (in the cascade's sample domain; cascade 1 is rotated)
+        // Values are unnormalized IFFT output: scale by 1/tileSize.
         // mutable so const-method `sampleHeight` can be called on a const
         // DisplacedMesh while the renderer keeps the data fresh.
         struct CascadeField {
             std::vector<float> data;
+            std::vector<float> disp;
             uint32_t dim      = 0;
             float    tileSize = 0.f;
         };
         mutable CascadeField heightFields[3];
 
-        // Bilinear-sample the combined wave height at (worldX, worldZ).
-        // Matches the GPU's sampleDisplacement().y exactly: each enabled
-        // cascade contributes height * (1/tileSize) * waveScale.
+        // Combined wave height of the rendered surface over (worldX, worldZ).
+        // Mirrors water_displace.comp's sampleDisplacement(): cascades 0 and 1
+        // are B-spline filtered, cascade 2 bilinear, and each contributes
+        // height * (1/tileSize) * waveScale.
+        //
+        // The wave field is defined over rest (undisplaced) positions: a
+        // surface point with rest position q is drawn at q + D(q), where D is
+        // the horizontal displacement scaled by `choppiness`. The height over
+        // a world XZ is therefore H(q) for the q whose displaced image is that
+        // XZ, not H(worldXZ). sampleHeight solves x = q + D(q) by fixed-point
+        // iteration (the same inversion foam_world.comp does). Without it the
+        // result is off by the local chop displacement, up to metres in a
+        // steep sea. `cascadeMask` applies to both D and H, so a masked query
+        // returns the height of the surface built from those cascades alone.
         //
         // `cascadeMask` is a bitmask (bit i selects cascade i); the default
         // 0b111 sums all three. Use a narrower mask for hull-scale buoyancy
