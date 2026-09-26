@@ -59,13 +59,14 @@ class Encoder:
 
     The keyword flags exist because the films disagree about them and their
     output must not change: `preset`, `faststart`, `an`, `hide_banner`,
-    `loglevel`, `vf` (a filter, e.g. the odd-size fixup) and `log` (a path this
-    class opens and closes, or an already-open handle it only writes to).
+    `loglevel`, `vf` (a filter, e.g. the odd-size fixup), `log` (a path this
+    class opens and closes, or an already-open handle it only writes to),
+    `pix_fmt` and `extra` (further output arguments, appended as given).
     """
 
     def __init__(self, path, w, h, fps, crf=18, preset=None, faststart=False,
                  an=True, hide_banner=True, loglevel="warning", vf=None,
-                 log=None, ffmpeg=None):
+                 log=None, ffmpeg=None, pix_fmt="yuv420p", extra=None):
         exe = ffmpeg or find_ffmpeg()
         if exe is None:
             raise RuntimeError("no ffmpeg on PATH and no imageio-ffmpeg")
@@ -76,13 +77,15 @@ class Encoder:
                 "-s", f"{w}x{h}", "-r", str(fps), "-i", "-"]
         if an:
             cmd += ["-an"]
-        cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", str(crf)]
+        cmd += ["-c:v", "libx264", "-pix_fmt", pix_fmt, "-crf", str(crf)]
         if preset:
             cmd += ["-preset", preset]
         if faststart:
             cmd += ["-movflags", "+faststart"]
         if vf:
             cmd += ["-vf", vf]
+        if extra:
+            cmd += list(extra)
         self.cmd = cmd + [path]
         self._own_log = isinstance(log, str)
         self.log = open(log, "w") if self._own_log else log
@@ -166,6 +169,55 @@ def write_radiance_hdr(path, rgb):
         f.write(b"-Y %d +X %d\n" % (h, w))
         f.write(rgbe.tobytes())
     return path
+
+
+def read_radiance_hdr(path):
+    """Read a Radiance .hdr (flat or new-style RLE) as an (H, W, 3) float32 array.
+
+    Row 0 is the top of the file, which for an equirect is the zenith. For
+    editing a downloaded HDRI in numpy before it becomes a float_texture;
+    RGBELoader alone is enough when the pixels go straight to the renderer."""
+    with open(path, "rb") as f:
+        data = f.read()
+    pos = 0
+    while True:                                   # header lines, blank line ends them
+        end = data.index(b"\n", pos)
+        line = data[pos:end]
+        pos = end + 1
+        if not line.strip():
+            break
+    end = data.index(b"\n", pos)
+    parts = data[pos:end].split()
+    pos = end + 1
+    if parts[0] != b"-Y" or parts[2] != b"+X":
+        raise ValueError(f"{path}: unsupported orientation {data[pos:end]!r}")
+    h, w = int(parts[1]), int(parts[3])
+    buf = np.frombuffer(data, np.uint8, offset=pos)
+    rgbe = np.empty((h, w, 4), np.uint8)
+    rle = 8 <= w < 32768 and buf[0] == 2 and buf[1] == 2 and buf[2] < 128
+    if not rle:
+        rgbe[:] = buf[:h * w * 4].reshape(h, w, 4)
+    else:
+        p = 0
+        for y in range(h):
+            p += 4                                # (2, 2, w_hi, w_lo)
+            for c in range(4):
+                row = rgbe[y, :, c]
+                x = 0
+                while x < w:
+                    n = int(buf[p])
+                    p += 1
+                    if n > 128:                   # a run of one byte
+                        n -= 128
+                        row[x:x + n] = buf[p]
+                        p += 1
+                    else:                         # n literal bytes
+                        row[x:x + n] = buf[p:p + n]
+                        p += n
+                    x += n
+    e = rgbe[..., 3:4].astype(np.int32)
+    scale = np.where(e > 0, np.ldexp(1.0, e - 136), 0.0).astype(np.float32)
+    return rgbe[..., :3].astype(np.float32) * scale
 
 
 # --- scene plumbing ------------------------------------------------------------
