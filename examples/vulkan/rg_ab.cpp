@@ -55,7 +55,14 @@
 //                    the probe ray hit distances, differs run to run; it
 //                    persists with full barriers and an idle device every
 //                    frame; root cause open). The room_dlss and room/overlays
-//                    modes below were bisected to it.
+//                    modes below were bisected to it. Measured 2026-09-26 on
+//                    room: 1 run in 119 on an RTX 4070 (driver 595.97), about
+//                    1 in 2 on an RTX 4060 laptop; the divergent run's
+//                    final.rgb and AOVs were byte-identical, only the
+//                    RG_AUDIT_END probeSh/probeDepth hashes differed, so
+//                    --compare cannot see it. To catch one: RG_AUDIT_END +
+//                    RG_PROBE_DUMP per run where it is frequent, then diff two
+//                    dumps' stores probe by probe.
 //   --occl 1         occlusion culling          --msaa N   G-buffer MSAA
 //   --aa N           overlay pass sample count (the Canvas antialiasing; default 4)
 //   --noviews 1      skip addView (the primary alone)
@@ -69,6 +76,8 @@
 //                    and exits with the render-graph verdict
 // Environment
 //   RG_AUDIT_END=<file>    the shade-image hashes after the last frame
+//   RG_PROBE_DUMP=<dir>    probe_sh.bin and probe_depth.bin (the probe GI
+//                          stores) after the last frame
 //   RG_SERIALIZE=1         idle the device after every frame (a readback)
 //   THREEPP_RG_DUMP=1      print the frame graph (passes, barriers) to stderr
 //                          whenever its shape changes
@@ -659,6 +668,15 @@ int main(int argc, char** argv) {
         std::ofstream audit(e);
         for (const auto& [name, h] : renderer.debugHashShadeImages())
             audit << name << ' ' << std::hex << h << std::dec << '\n';
+    }
+    if (const char* e = std::getenv("RG_PROBE_DUMP")) {
+        std::vector<uint8_t> sh, depth;
+        if (renderer.readProbeShDebug(sh, &depth)) {
+            const fs::path d(e);
+            fs::create_directories(d);
+            writeFile(d / "probe_sh.bin", sh.data(), sh.size());
+            writeFile(d / "probe_depth.bin", depth.data(), depth.size());
+        }
     }
 
     if (timeFrames > 0) {

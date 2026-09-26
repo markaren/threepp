@@ -449,8 +449,10 @@ namespace threepp {
 
         // Raw dump of the probe-GI SH-L1 store (kProbeCount × 4 × vec4) for
         // byte-level divergence forensics: which probe, which SH band, how
-        // large. Audit instrument; full device sync per call.
-        bool readProbeShDebug(std::vector<uint8_t>& sh);
+        // large. With `depth`, the Chebyshev depth store too (kProbeCount ×
+        // kDepthTexels × packHalf2x16(mean, mean²)). Audit instrument; full
+        // device sync per call.
+        bool readProbeShDebug(std::vector<uint8_t>& sh, std::vector<uint8_t>* depth = nullptr);
 
         // ImGui integration handles (Vulkan types erased to void* / uint32_t).
         [[nodiscard]] void* nativeInstance() const;

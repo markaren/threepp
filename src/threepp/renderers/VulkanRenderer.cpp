@@ -1989,14 +1989,19 @@ namespace threepp {
         return out;
     }
 
-    bool VulkanRenderer::readProbeShDebug(std::vector<uint8_t>& sh) {
+    bool VulkanRenderer::readProbeShDebug(std::vector<uint8_t>& sh, std::vector<uint8_t>* depth) {
         auto& impl = *core();
         auto* ctx  = impl.ctx.get();
         if (!ctx || !impl.probeGI_) return false;
         if (impl.frameSerial_ == 0) return false;
 
-        const VkDeviceSize bytes =
+        const VkDeviceSize shBytes =
                 static_cast<VkDeviceSize>(vulkan::ProbeGI::kProbeCount) * 4 * 16;
+        const VkDeviceSize depthBytes =
+                depth ? static_cast<VkDeviceSize>(vulkan::ProbeGI::kProbeCount) *
+                                vulkan::ProbeGI::kDepthTexels * 4
+                      : 0;
+        const VkDeviceSize bytes = shBytes + depthBytes;
         vkDeviceWaitIdle(ctx->device());
 
         vulkan::Buffer staging = vulkan::createBuffer(
@@ -2033,8 +2038,14 @@ namespace threepp {
         vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
         VkBufferCopy bc{};
-        bc.size = bytes;
+        bc.size = shBytes;
         vkCmdCopyBuffer(cb, impl.probeGI_->shBuffer(), staging.handle, 1, &bc);
+        if (depth) {
+            VkBufferCopy dc{};
+            dc.dstOffset = shBytes;
+            dc.size      = depthBytes;
+            vkCmdCopyBuffer(cb, impl.probeGI_->depthBuffer(), staging.handle, 1, &dc);
+        }
 
         vulkan::check(vkEndCommandBuffer(cb), "vkEndCommandBuffer(readProbeShDebug)");
         VkFenceCreateInfo fci{};
@@ -2051,12 +2062,17 @@ namespace threepp {
         vulkan::check(vkWaitForFences(ctx->device(), 1, &fence, VK_TRUE, UINT64_MAX),
                       "vkWaitForFences(readProbeShDebug)");
 
-        sh.resize(static_cast<size_t>(bytes));
+        sh.resize(static_cast<size_t>(shBytes));
         void* mapped = nullptr;
         vulkan::check(vmaMapMemory(ctx->allocator(), staging.alloc, &mapped),
                       "vmaMapMemory(readProbeShDebug)");
         vulkan::invalidateHostReads(ctx->allocator(), staging.alloc, 0, bytes);
-        std::memcpy(sh.data(), mapped, static_cast<size_t>(bytes));
+        std::memcpy(sh.data(), mapped, static_cast<size_t>(shBytes));
+        if (depth) {
+            depth->resize(static_cast<size_t>(depthBytes));
+            std::memcpy(depth->data(), static_cast<const uint8_t*>(mapped) + shBytes,
+                        static_cast<size_t>(depthBytes));
+        }
         vmaUnmapMemory(ctx->allocator(), staging.alloc);
 
         vkDestroyFence(ctx->device(), fence, nullptr);

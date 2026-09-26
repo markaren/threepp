@@ -1,3 +1,5 @@
+#include <cstdio>
+#include <cstdlib>
 #include "threepp/renderers/vulkan/ProbeGI.hpp"
 #include "threepp/renderers/vulkan/DescriptorShadow.hpp"
 
@@ -305,6 +307,11 @@ namespace threepp::vulkan {
                 }
             }
             if (keep) return;
+        }
+        if (const char* e = std::getenv("THREEPP_PROBE_LOG"); e && *e && *e != '0') {
+            std::fprintf(stderr, "[probe] grid %s origin=(%.6f %.6f %.6f) spacing=(%.6f %.6f %.6f)\n",
+                         gridFitted_ ? "REFIT" : "fit", newOrigin[0], newOrigin[1], newOrigin[2],
+                         newSpacing[0], newSpacing[1], newSpacing[2]);
         }
         std::memcpy(gridSpacing_, newSpacing, sizeof(newSpacing));
         std::memcpy(gridOrigin_,  newOrigin,  sizeof(newOrigin));
