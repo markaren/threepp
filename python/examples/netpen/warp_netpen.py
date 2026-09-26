@@ -5,7 +5,7 @@ camera + sonar insets, and a Warp school of procedural salmon.
     python warp_netpen.py --shot p3_hud --out x.png --seconds 8 --size 1600x900
     python warp_netpen.py --film [out.mp4]         # 82 s film + contact sheet + poster (--film-test: stills per cut)
     python warp_netpen.py --e3 60 --e3-seed 0 --e3-out e3_s0.json   # the closed sonar inspection loop (E3)
-Cameras: p1_net_wide p1_collar_below p1_rov_hero p1_tear p2_school p2_fish_close p2_leak p3_hud p3_sonar_tear
+Cameras: p1_net_wide p1_collar_below p1_rov_hero p1_tear p2_school p2_fish_close p2_fish_head p2_fish_side p2_leak p3_hud p3_sonar_tear
          barge barge_stern.
 `--fish N` (400); `--profile` prints per-stage ms over 300 live frames and exits; `--no-interop` uploads the school
 through the host. Vulkan only; Warp on CUDA if present.
@@ -1862,32 +1862,127 @@ def bubbles_step(dt):
 
 # ---- fish: procedural salmon v2 ---------------------------------------------
 FISH_N = max(cli_arg("--fish", 400, int), 2)
-F_RINGS, F_SIDES = 24, 24
 F_K = 5.6
 FISH_SPEED_MIN, FISH_SPEED_MAX = 0.25, 1.6
 MILL_SPEED = 0.75
 LEAK_FRAC = 0.05
 LEAK_T0 = [0.0]                                       # world time the leak schedule starts (the film sets it)
-EYE_U, EYE_TH = 0.085, 0.25
-TEX_W, TEX_H, BODY_ROWS = 1024, 512, 392
+EYE_U, EYE_TH = 0.072, 0.25
+EYE_R, EYE_H = 0.0125, 0.0050                         # eyeball radius and how far its cornea stands proud, body lengths
+TEX_W, TEX_H, BODY_ROWS = 1024, 576, 392
 BODY_V = BODY_ROWS / TEX_H
 FIN_BANDS = {k: ((402 + 36 * k) / TEX_H, (434 + 36 * k) / TEX_H) for k in range(3)}   # dark fins / pectoral / pelvic+anal
+EYE_PATCH = (36.0, 544.0, 28.0)                       # eyeball texture: centre column, centre row, radius (texels)
+MOUTH_U = 0.100                                       # the mouth corner: rear end of the maxilla, just behind the eye
+NOSE_U = 0.032                                        # snout rounding length: short, so the snout ends blunt
+MOUTH_DTH = 0.06                                      # ring-angle half width of the lip / gape / lower-jaw columns
+OP_U = 0.18                                           # mid gill-cover edge, and the two rings bracketing it
+OP_RINGS = (OP_U - 0.004, OP_U + 0.004)
+# Ring stations: dense on the head (snout dome, mouth, eye, gill cover), then the body.
+F_U = np.concatenate([[0.002, 0.008, 0.018, 0.031, 0.046, 0.062, 0.078, 0.094, 0.110, 0.127, 0.145, 0.162],
+                      OP_RINGS, 0.21 + 0.79 * np.linspace(0.0, 1.0, 17) ** 0.9])
+F_RINGS, F_SIDES = len(F_U), 24
 
 
-HALF_H = np.float32([0.024, 0.060, 0.082, 0.096, 0.106, 0.106, 0.099, 0.086, 0.069, 0.049, 0.030, 0.014])
-HALF_W = np.float32([0.016, 0.040, 0.051, 0.059, 0.063, 0.061, 0.056, 0.048, 0.038, 0.027, 0.016, 0.006])
-KEEL = np.float32([1.0, 1.05, 1.15, 1.22, 1.25, 1.24, 1.20, 1.14, 1.08, 1.02, 1.0, 1.0])
+HALF_H = np.float32([0.030, 0.058, 0.085, 0.103, 0.110, 0.109, 0.103, 0.092, 0.078, 0.064, 0.050, 0.0425])
+HALF_W = np.float32([0.018, 0.037, 0.049, 0.058, 0.063, 0.062, 0.058, 0.051, 0.042, 0.032, 0.023, 0.016])
+KEEL = np.float32([1.0, 1.03, 1.06, 1.08, 1.09, 1.09, 1.08, 1.06, 1.04, 1.02, 1.0, 1.0])
+
+
+def sstep(x, a, b):
+    t = np.clip((x - a) / (b - a), 0, 1)
+    return t * t * (3 - 2 * t)
+
+
+def mouth_th(u):
+    """Folded ring angle of the gape: level at the snout tip, sloping down back to below the eye."""
+    return -0.10 - 0.28 * np.clip(u / MOUTH_U, 0, 1) ** 1.3
+
+
+def op_edge(d):
+    """Body fraction of the gill cover's rear edge at d (0 back, 1 belly): an arc from above the eye, back
+    across the cheek and forward again to the throat."""
+    return 0.148 + 0.047 * np.sin(np.pi * np.clip((d - 0.12) / 0.83, 0, 1)) ** 0.8
 
 
 def skin_fn(u, th):
     """The skin at body fraction u (0 nose, 1 tail root) and ring angle th; +Z is the nose."""
     h, w, kb = catmull(HALF_H, u), catmull(HALF_W, u), catmull(KEEL, u)
     s, c = np.sin(th), np.cos(th)
-    eye = 1.0 + 0.10 * np.exp(-((u - EYE_U) / 0.035) ** 2) * (np.exp(-(1 - np.cos(th - EYE_TH)) / 0.05)
-                                                              + np.exp(-(1 - np.cos(th + EYE_TH - np.pi)) / 0.05))
-    jaw = 1.0 + 0.30 * np.exp(-((u - 0.05) / 0.035) ** 2) * np.clip(-s, 0, 1) ** 2     # lower jaw lobe
-    y = h * s * np.where(s < 0, kb * (1.0 - 0.18 * c * c) * jaw, 1.0) * eye - 0.15 * h
-    return np.stack([w * c * eye, y, 0.5 - u], -1)
+    ts = np.arcsin(np.clip(s, -1, 1))                 # folded onto one side: -pi/2 belly .. pi/2 back
+    d = 0.5 - ts / np.pi                              # 0 back .. 1 belly, the texture's d
+    nose = np.sqrt(np.clip(1 - (1 - np.clip(u / NOSE_U, 0, 1)) ** 2, 0, 1))      # a rounded, blunt snout
+    eye = 1.0 + 0.035 * np.exp(-((u - EYE_U) / 0.03) ** 2) * np.exp(-(1 - np.cos(ts - EYE_TH)) / 0.04)   # orbit rim
+    jaw = 1.0 + 0.20 * np.exp(-((u - 0.045) / 0.03) ** 2) * np.clip(-s, 0, 1) ** 2     # lower jaw lobe
+    # The gape: a V groove on the mouth line, and the lower jaw tucked in under the upper lip.
+    mw = 1 - sstep(u, MOUTH_U - 0.012, MOUTH_U + 0.01)
+    x = ts - mouth_th(u)
+    groove = (0.14 - 0.05 * np.clip(u / MOUTH_U, 0, 1)) * np.clip(1 - np.abs(x) / MOUTH_DTH, 0, 1) * mw
+    tuck = 0.05 * sstep(-x, 0.0, MOUTH_DTH) * (1 - sstep(-x, 0.45, 0.9)) * mw
+    # The gill cover: a plate that thickens toward its rear edge and drops off it.
+    ue = op_edge(d)
+    op = 0.045 * np.clip((u - ue + 0.06) / 0.056, 0, 1) ** 1.5 * np.clip((ue + 0.004 - u) / 0.008, 0, 1) * sstep(d, 0.08, 0.22)
+    r = nose * (1.0 - groove - tuck + op) * eye
+    y = h * s * np.where(s < 0, kb * (1.0 - 0.18 * c * c) * jaw, 1.0) * r - 0.15 * h
+    return np.stack([w * c * r, y, 0.5 - u], -1)
+
+
+def body_grid():
+    """(U, TH) of the body tube: a column pair brackets the gape and a ring pair the gill-cover edge."""
+    S1 = F_SIDES + 1                                  # ring closes on a duplicated belly vertex (uv seam)
+    t = -np.pi / 2 + 2.0 * np.pi * np.arange(S1) / F_SIDES
+    ts = np.arcsin(np.clip(np.sin(t), -1, 1))
+    TH = np.empty((F_RINGS, S1))
+    dj = 2.0 * np.pi / F_SIDES
+    kt = np.array([-np.pi / 2, -np.pi / 4, -2 * dj, -dj, 0.0, dj, np.pi / 2])   # columns 3..7 around the gape
+    for i, u in enumerate(F_U):
+        tm = mouth_th(u)
+        kth = np.array([-np.pi / 2, -np.pi / 4, tm - MOUTH_DTH, tm, tm + MOUTH_DTH, dj, np.pi / 2])
+        cw = 1 - sstep(u, MOUTH_U, MOUTH_U + 0.04)
+        tw = ts + cw * (np.interp(ts, kt, kth) - ts)
+        TH[i] = np.where(np.cos(t) >= -1e-9, tw, np.pi - tw)
+    d = 0.5 - np.arcsin(np.clip(np.sin(TH), -1, 1)) / np.pi
+    ow = np.clip(1 - (np.abs(F_U - 0.172) - 0.022) / 0.045, 0, 1)[:, None]  # rings near the edge follow its arc
+    U = F_U[:, None] + ow * (op_edge(d) - OP_U)
+    return U, TH
+
+
+def eyeball(sgn):
+    """A domed eye on the skin at (EYE_U, EYE_TH), mirrored for sgn < 0: positions, tris, normals, uv."""
+    e = 1e-4
+    th0 = EYE_TH
+    du = (skin_fn(EYE_U + e, th0) - skin_fn(EYE_U - e, th0)) / (2 * e)
+    dt = (skin_fn(EYE_U, th0 + e) - skin_fn(EYE_U, th0 - e)) / (2 * e)
+    n = np.cross(du, dt)
+    n /= np.linalg.norm(n)
+    a = -du / np.linalg.norm(du)                      # toward the nose
+    b = np.cross(n, a)
+    b /= np.linalg.norm(b)
+    ring = 10
+    rho = [0.0] + [0.6] * ring + [1.0] * ring
+    phi = [0.0] + list(2 * np.pi * np.arange(ring) / ring) * 2
+    P, N, UV = [], [], []
+    for r, f in zip(rho, phi):
+        off = r * EYE_R * (np.cos(f) * a + np.sin(f) * b)
+        uo, to = np.linalg.lstsq(np.stack([du, dt], 1), off, rcond=None)[0]
+        base = skin_fn(EYE_U + uo, th0 + to)
+        hgt = EYE_H * (1 - r * r) - 0.0012
+        P.append(base + hgt * n)
+        k = 2 * EYE_H / EYE_R * r                     # cap slope at this radius
+        g = n + k * (np.cos(f) * a + np.sin(f) * b)
+        N.append(g / np.linalg.norm(g))
+        UV.append([(EYE_PATCH[0] + EYE_PATCH[2] * r * np.cos(f)) / TEX_W,
+                   (EYE_PATCH[1] + EYE_PATCH[2] * r * np.sin(f)) / TEX_H])
+    tris = [[0, 1 + j, 1 + (j + 1) % ring] for j in range(ring)]
+    for j in range(ring):
+        a0, a1, b0, b1 = 1 + j, 1 + (j + 1) % ring, 1 + ring + j, 1 + ring + (j + 1) % ring
+        tris += [[a0, b0, b1], [a0, b1, a1]]
+    P, N, tris = np.asarray(P), np.asarray(N), np.asarray(tris)
+    if np.dot(np.cross(P[tris[0][1]] - P[0], P[tris[0][2]] - P[0]), n) < 0:
+        tris = tris[:, ::-1]
+    if sgn < 0:
+        P, N, tris = P * [-1, 1, 1], N * [-1, 1, 1], tris[:, ::-1]
+    return P, tris, N, np.asarray(UV)
 
 
 def fan(outline, nrm, ray, camber, shift=(0.0, 0.0, 0.0), band=0, flip=False):
@@ -1911,17 +2006,15 @@ def fan(outline, nrm, ray, camber, shift=(0.0, 0.0, 0.0), band=0, flip=False):
 
 def salmon():
     """Canonical unit-length salmon: folded/flared positions and normals, uv, body fraction u, kind, index."""
-    S1 = F_SIDES + 1                                # ring closes on a duplicated belly vertex (uv seam)
-    u = np.linspace(0.0, 1.0, F_RINGS) ** 0.85
-    th = -np.pi / 2 + 2.0 * np.pi * np.arange(S1) / F_SIDES
-    U, TH = np.meshgrid(u, th, indexing="ij")
+    S1 = F_SIDES + 1
+    U, TH = body_grid()
     P = skin_fn(U, TH)
     e = 1e-3
     du = skin_fn(np.clip(U + e, 0, 1), TH) - skin_fn(np.clip(U - e, 0, 1), TH)
     dt = skin_fn(U, TH + e) - skin_fn(U, TH - e)
     N = np.cross(du, dt)
     N /= np.maximum(np.linalg.norm(N, axis=-1, keepdims=True), 1e-9)
-    V = np.broadcast_to((np.arange(S1) / F_SIDES * BODY_V)[None, :], U.shape)
+    V = (TH + np.pi / 2) / (2 * np.pi) * BODY_V        # uv follows the warped columns, so paint lands on the geometry
     pos, nrm, uu, kind = [P.reshape(-1, 3)], [N.reshape(-1, 3)], [U.reshape(-1)], [np.zeros(U.size)]
     uv = [np.stack([U, V], -1).reshape(-1, 2)]
     tris = []
@@ -1930,14 +2023,15 @@ def salmon():
             a = i * S1 + j
             tris += [[a, a + S1, a + 1], [a + 1, a + S1, a + S1 + 1]]
     nv = F_RINGS * S1
-    pos.append([[0.0, -0.15 * HALF_H[0], 0.505], [0.0, -0.15 * HALF_H[-1], -0.5]])
+    h0 = catmull(HALF_H, 0.0)
+    pos.append([[0.0, -0.15 * h0, 0.5], [0.0, -0.15 * HALF_H[-1], -0.525]])
     nrm.append([[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]])
-    uu.append([0.0, 1.0])
+    uu.append([0.0, 1.025])
     kind.append([0, 0])
     uv.append([[0.0, 0.5 * BODY_V], [1.0, 0.5 * BODY_V]])
-    for j in range(F_SIDES):
-        tris.append([nv, j + 1, j])
-        tris.append([nv + 1, nv - S1 + j, nv - S1 + j + 1])
+    for j in range(F_SIDES):                          # caps wound like the tube, so Side.Double never flips them
+        tris.append([nv, j, j + 1])
+        tris.append([nv + 1, nv - S1 + j + 1, nv - S1 + j])
     nv += 2
 
     def add(f, k):
@@ -1954,13 +2048,14 @@ def salmon():
     top = lambda x: float(skin_fn(x, np.pi / 2)[1])
     bot = lambda x: float(skin_fn(x, -np.pi / 2)[1])
     z = lambda x: 0.5 - x
-    add(fan([[0, 0.012, -0.46], [0, 0.06, -0.55], [0, 0.115, -0.65], [0, 0.13, -0.70], [0, 0.07, -0.675],
-             [0, 0.02, -0.66], [0, -0.02, -0.66], [0, -0.07, -0.675], [0, -0.125, -0.70], [0, -0.11, -0.65],
-             [0, -0.055, -0.55], [0, -0.016, -0.46]], [1, 0, 0], [0, 0, -1], 0.006), 1)
-    add(fan([[0, top(x) + h, z(x)] for x, h in ((0.45, 0), (0.455, 0.009), (0.468, 0.015), (0.49, 0.017), (0.52, 0.013),
-                                                (0.55, 0.006), (0.565, 0), (0.51, 0))], [1, 0, 0], [0, 1, -0.5], 0.004), 1)
-    add(fan([[0, top(x) + h, z(x)] for x, h in ((0.80, 0), (0.81, 0.006), (0.825, 0.008), (0.84, 0.003), (0.845, 0))],
-            [1, 0, 0], [0, 1, -0.3], 0.001), 1)
+    add(fan([[0, 0.034, -0.47], [0, 0.064, -0.53], [0, 0.100, -0.60], [0, 0.114, -0.638], [0, 0.103, -0.652],
+             [0, 0.05, -0.626], [0, 0.0, -0.614], [0, -0.05, -0.626], [0, -0.105, -0.652], [0, -0.116, -0.638],
+             [0, -0.102, -0.60], [0, -0.072, -0.53], [0, -0.046, -0.47]], [1, 0, 0], [0, 0, -1], 0.005), 1)
+    add(fan([[0, top(x) + h, z(x)] for x, h in ((0.44, 0), (0.455, 0.030), (0.47, 0.048), (0.483, 0.054), (0.497, 0.046),
+                                                (0.525, 0.028), (0.555, 0.013), (0.572, 0.007), (0.562, 0), (0.505, 0))],
+            [1, 0, 0], [0, 1, -0.35], 0.004), 1)
+    add(fan([[0, top(x) + h, z(x)] for x, h in ((0.79, 0), (0.80, 0.008), (0.818, 0.012), (0.838, 0.006), (0.845, 0))],
+            [1, 0, 0], [0, 1, -0.4], 0.001), 1)
     add(fan([[0, bot(x) + h, z(x)] for x, h in ((0.75, 0), (0.76, -0.016), (0.78, -0.024), (0.81, -0.012),
                                                 (0.825, -0.002), (0.79, 0))], [1, 0, 0], [0, -1, -0.5], 0.003, band=2), 1)
     for sgn in (1.0, -1.0):
@@ -1968,9 +2063,18 @@ def salmon():
         add(fan([[0, 0, 0], [sgn * 0.012, -0.012, -0.024], [sgn * 0.024, -0.024, -0.05], [sgn * 0.009, -0.021, -0.046],
                  [0, -0.005, -0.015]], [0.3 * sgn, -1, 0], [sgn * 0.4, -0.45, -1], 0.003, r, band=2, flip=sgn > 0), 1)
     for sgn in (1.0, -1.0):
-        r = skin_fn(0.235, -0.3 * np.pi if sgn > 0 else 1.3 * np.pi) + [sgn * 0.003, 0, 0]
+        r = skin_fn(0.215, -0.3 * np.pi if sgn > 0 else 1.3 * np.pi) + [sgn * 0.003, 0, 0]
         add(fan([[0, 0, 0], [sgn * 0.006, -0.006, -0.03], [sgn * 0.012, -0.012, -0.078], [sgn * 0.010, -0.028, -0.064],
                  [sgn * 0.004, -0.022, -0.018]], [sgn * 0.8, -0.6, 0], [sgn * 0.1, -0.2, -1], -0.003, r, band=1), 2 if sgn > 0 else 3)
+    for sgn in (1.0, -1.0):
+        v, t, n, tuv = eyeball(sgn)
+        pos.append(v)
+        nrm.append(n)
+        uv.append(tuv)
+        tris.extend((t + nv).tolist())
+        uu.append(0.5 - v[:, 2])
+        kind.append(np.zeros(len(v)))
+        nv += len(v)
     pos, nrm, uv = np.concatenate(pos), np.concatenate(nrm), np.concatenate(uv)
     uu, kind = np.concatenate(uu), np.concatenate(kind).astype(np.int32)
     pos1, nrm1 = pos.copy(), nrm.copy()
@@ -1998,7 +2102,8 @@ def srgb8(lin):
 
 
 def fish_albedo():
-    """(TEX_H, TEX_W, 3) linear RGB + (TEX_H, TEX_W, 4) normal map: body band (u nose->tail, v belly->back->belly), fin bands."""
+    """Linear RGB albedo, normal map and ORM (G roughness, B metalness) for the body band (u nose->tail,
+    v belly->back->belly), the fin bands and the eyeball patch."""
     rng = np.random.default_rng(7)
     U, V = np.meshgrid((np.arange(TEX_W) + 0.5) / TEX_W, (np.arange(BODY_ROWS) + 0.5) / BODY_ROWS)
     px, py = U * TEX_W, V * BODY_ROWS
@@ -2006,51 +2111,84 @@ def fish_albedo():
     rows = BODY_ROWS / 2                               # rows per unit d
     ysc = 0.55 * TEX_W / BODY_ROWS                     # rows -> x-texel units, so shapes are round on the fish
     n = fbm(*grid(BODY_ROWS, TEX_W, 4, 12), 4, 12, rng, 4) - 0.5
-    de = d + 0.04 * n - 0.06 * (1 - np.clip((U - 0.12) / 0.10, 0, 1))          # dark top reaches lower on the head
-    sm = lambda x, a, b: np.clip((x - a) / (b - a), 0, 1) ** 2 * (3 - 2 * np.clip((x - a) / (b - a), 0, 1))
-    back, flank, belly = np.float32([0.03, 0.05, 0.06]), np.float32([0.33, 0.37, 0.39]), np.float32([0.64, 0.66, 0.64])
-    t1, t2 = sm(de, 0.30, 0.40)[..., None], sm(de, 0.62, 0.88)[..., None]
+    de = d + 0.04 * n - 0.09 * (1 - np.clip((U - 0.14) / 0.08, 0, 1))          # the dark top reaches lower on the head
+    sm = sstep
+    # Guanine mirror: a dark matte back, SILVER flanks (metallic, fairly smooth: they flash as the fish turns),
+    # a white belly. The flank albedo is mostly the mirror's F0.
+    back, flank, belly = np.float32([0.030, 0.038, 0.050]), np.float32([0.72, 0.75, 0.77]), np.float32([0.80, 0.80, 0.78])
+    t1, t2 = sm(de, 0.28, 0.40)[..., None], sm(de, 0.66, 0.90)[..., None]
     col = (back * (1 - t1) + flank * t1) * (1 - t2) + belly * t2
-    g = np.clip((de - 0.35) / 0.4, 0, 1)[..., None]    # blue -> purple -> copper sheen down the flank
-    sheen = (1 - g) ** 2 * np.float32([0.94, 0.97, 1.06]) + 2 * g * (1 - g) * np.float32([1.02, 0.95, 1.04]) + g ** 2 * np.float32([1.06, 0.98, 0.93])
-    col = col * (1 + 0.5 * (sheen - 1) * t1 * (1 - t2)) * (1 + 0.08 * n[..., None] * np.float32([1.0, 1.1, 0.8]))
-    col *= 1 - 0.12 * np.exp(-((d - 0.46) * rows / 1.6) ** 2)[..., None] * (U > 0.21)[..., None]      # lateral line
-    ue = 0.19 + 0.03 * np.sin(np.pi * np.clip((d - 0.05) / 0.9, 0, 1))                                 # gill cover rear edge
+    g = np.clip((de - 0.30) / 0.3, 0, 1)[..., None]    # blue-green -> violet -> clean silver just under the back
+    sheen = (1 - g) ** 2 * np.float32([0.85, 0.93, 1.05]) + 2 * g * (1 - g) * np.float32([0.98, 0.95, 1.03]) + g ** 2
+    col = col * (1 + (sheen - 1) * t1 * (1 - t2)) * (1 + 0.06 * n[..., None] * np.float32([1.0, 1.1, 0.8]))
+    # Mostly mirror: a flank shows the water it faces, and flashes when it tilts toward the light; the
+    # diffuse remainder keeps it reading as silver in the murk.
+    metal = 0.72 * t1[..., 0] * (1 - t2[..., 0]) + 0.32 * t2[..., 0]
+    rough = 0.55 * (1 - t1[..., 0]) + 0.28 * t1[..., 0] * (1 - t2[..., 0]) + 0.40 * t2[..., 0]
+    ll = np.exp(-((d - 0.46) * rows / 1.6) ** 2) * (U > 0.21)                  # lateral line
+    col *= (1 - 0.10 * ll)[..., None]
+    ue = op_edge(d)                                    # gill cover rear edge (the geometry drops off here too)
     ge = (U - ue) * TEX_W
     scl = np.clip((U - ue) / 0.03, 0, 1)                # scales start behind the gill cover
     a1, a2 = px / 11.4 + py * ysc / 11.4, px / 11.4 - py * ysc / 11.4
     ta, tb = np.abs(a1 % 1 - 0.5), np.abs(a2 % 1 - 0.5)
     edge = np.exp(-(np.minimum(ta, tb) / 0.09) ** 2)
-    col *= (1 - 0.16 * edge * scl)[..., None]                                                          # ~90 diamond scales
-    hd = (1 - sm(U, ue - 0.02, ue + 0.02))[..., None]                                                 # head weight
-    col = col * (1 - hd) + col * np.float32([0.84, 0.88, 0.87]) * hd
-    op = sm(U, 0.10, 0.15) * (1 - sm(U, ue - 0.015, ue + 0.01)) * (d > 0.12)                          # operculum plate
-    col *= (1 + 0.16 * op * (0.6 + 0.4 * sm(d, 0.15, 0.5)))[..., None]
-    col *= (1 - 0.14 * np.exp(-((ge - 5.0) / 7.0) ** 2) * (ge > -2) * (d > 0.12))[..., None]           # soft shade behind it
+    col *= (1 - 0.06 * edge * scl)[..., None]                                                          # ~90 diamond scales
+    band = sm(de, 0.24, 0.32) * (1 - sm(de, 0.40, 0.56)) * scl
+    col *= (1 - 0.55 * np.clip(edge * 1.6, 0, 1) * band)[..., None]                                    # reticulated upper flank
+    metal *= 1 - 0.12 * edge * scl
+    rough += 0.05 * edge * scl
+    hd = 1 - sm(U, ue - 0.02, ue + 0.02)                                                              # head weight
+    col *= (1 - 0.22 * np.exp(-((ge - 1.2) / 1.6) ** 2) * sm(d, 0.10, 0.2))[..., None]              # the gill-cover crease
+    col *= (1 - 0.06 * np.exp(-((ge - 5.0) / 5.0) ** 2) * (ge > 0) * sm(d, 0.10, 0.2))[..., None]
+    pre = np.exp(-((U - (ue - 0.035)) * TEX_W / 2.0) ** 2) * sm(d, 0.40, 0.5) * (1 - sm(d, 0.85, 0.95))   # preopercle
+    col *= (1 - 0.10 * pre)[..., None]
+    col = col * (1 - 0.15 * hd[..., None]) + col * np.float32([0.80, 0.86, 0.86]) * 0.15 * hd[..., None]
+    col *= (1 - 0.45 * hd * (1 - sm(de, 0.16, 0.30)))[..., None]                                   # near-black crown
+    dm = 0.5 - mouth_th(U) / np.pi                     # the gape, exactly where the geometry's groove is
+    mw = 1 - sm(U, MOUTH_U - 0.004, MOUTH_U + 0.006)
+    gap = np.exp(-((d - dm) * rows / np.where(d > dm, 3.5, 2.2)) ** 2) * mw        # the lower jaw's top edge sits in shadow
+    col = col * (1 - 0.92 * gap[..., None]) + np.float32([0.010, 0.008, 0.008]) * 0.92 * gap[..., None]
+    metal *= 1 - gap
+    rough = rough * (1 - gap) + 0.6 * gap
+    mx = sm(dm - d, 0.0, 0.012) * (1 - sm(dm - d, 0.05, 0.075)) * (1 - sm(U, MOUTH_U - 0.02, MOUTH_U + 0.004))
+    col *= (1 - 0.45 * mx)[..., None]                                                                  # maxilla: a darker bony lip
+    metal *= 1 - 0.6 * mx
+    lip = np.exp(-((d - dm - 0.02) * rows / 4.0) ** 2) * (0.5 + 0.5 * sm(U, MOUTH_U - 0.05, MOUTH_U)) \
+        * (1 - sm(U, MOUTH_U, MOUTH_U + 0.012))
+    col = col * (1 - 0.45 * lip[..., None]) + np.float32([0.55, 0.25, 0.26]) * 0.45 * lip[..., None]     # pink lip
+    metal *= 1 - 0.7 * lip
+    jl = np.exp(-((d - (dm + 0.10 + 0.25 * np.clip(U / 0.16, 0, 1))) * rows / 2.0) ** 2) * sm(U, 0.02, 0.05) * (1 - sm(U, 0.14, 0.17))
+    col *= (1 - 0.22 * jl)[..., None]                                                                  # lower jaw bone edge
     for sg in (1, -1):
-        vm = 0.5 + sg * (0.30 + 0.06 * U / 0.125)
-        m = np.exp(-((V - vm) * BODY_ROWS / 3.2) ** 2) * sm(U, 0.015, 0.07) * (1 - sm(U, 0.10, 0.13))
-        col *= (1 - 0.40 * m)[..., None]                                                               # mouth seam
-        jw = sm(sg * (V - 0.5), 0.27 + 0.06 * U / 0.125, 0.35 + 0.06 * U / 0.125) * (1 - sm(U, 0.09, 0.13))
-        col = col * (1 - 0.35 * jw)[..., None] + np.float32([0.58, 0.47, 0.45]) * (0.35 * jw)[..., None]   # lower jaw
-        r = np.hypot(px - 0.055 * TEX_W, (py - (0.5 - sg * 0.20) * BODY_ROWS) * ysc)
-        col *= (1 - 0.6 * np.clip((2.2 - r) * 0.8, 0, 1))[..., None]                                   # nostril
+        r = np.hypot(px - 0.052 * TEX_W, (py - (0.5 - sg * 0.19) * BODY_ROWS) * ysc)
+        col *= (1 - 0.7 * np.clip((2.4 - r) * 0.8, 0, 1))[..., None]                                   # nostril
+        r = np.hypot(px - 0.064 * TEX_W, (py - (0.5 - sg * 0.185) * BODY_ROWS) * ysc)
+        col *= (1 - 0.5 * np.clip((1.8 - r) * 0.8, 0, 1))[..., None]
     X, Y = px, py * ysc
     cov = np.zeros_like(U)
     rim = fbm(*grid(BODY_ROWS, TEX_W, 32, 128), 32, 128, rng, 3) - 0.5
-    for dx in (-1, 0, 1):                              # sparse irregular black dots, back and upper flank
-        for dy in (-1, 0, 1):
-            cx, cy = 48, 24
+    for dx in (-1, 0, 1):                              # many small irregular black dots and short blotches, dense on the
+        for dy in (-1, 0, 1):                          # back and upper flank, thinning to the lateral line, ~none below
+            cx, cy = 15, 9
             jx, jy = (px // cx).astype(int) + dx + 8, (py // cy).astype(int) + dy + 8
-            sx = (jx - 8 + 0.15 + 0.7 * hash01(jx, jy, 1)) * cx
-            sy = (jy - 8 + 0.15 + 0.7 * hash01(jx, jy, 2)) * cy
+            sx = (jx - 8 + 0.5 + 0.9 * (hash01(jx, jy, 1) - 0.5)) * cx
+            sy = (jy - 8 + 0.5 + 0.9 * (hash01(jx, jy, 2) - 0.5)) * cy
             su, sd = sx / TEX_W, np.abs(sy / BODY_ROWS - 0.5) / 0.5
-            p = 0.30 * (1 - sm(sd, 0.34, 0.46)) * (su > ue.mean())
+            p = (0.50 * (1 - sm(sd, 0.34, 0.52)) + 0.012) * sm(su, ue.mean() + 0.005, ue.mean() + 0.04) * (1 - 0.6 * sm(su, 0.82, 0.97))
+            p *= 0.55 + 0.9 * np.clip(n[np.clip(sy.astype(int), 0, BODY_ROWS - 1), np.clip(sx.astype(int), 0, TEX_W - 1)] + 0.5, 0, 1)   # clustered
             on = hash01(jx, jy, 3) < p
-            r0 = 4.0 + 5.0 * hash01(jx, jy, 5)                # <= ~2 scales across
-            ex = 0.8 + 0.4 * hash01(jx, jy, 8)
-            r = np.hypot((X - sx) * ex, (Y - sy * ysc) / ex) * (1 + 0.5 * rim)
-            cov = np.maximum(cov, np.clip((r0 - r) * 0.7 + 0.5, 0, 1) * on)
+            r0 = (1.3 + 2.4 * hash01(jx, jy, 5) ** 1.6) * (1.25 - 0.5 * sm(sd, 0.2, 0.45))
+            lx, ly = X - sx, Y - sy * ysc
+            a0 = np.pi * hash01(jx, jy, 6)
+            el = 1.0 + 0.9 * hash01(jx, jy, 7) ** 2                        # some elongated into short blotches
+            ca, sa = np.cos(a0), np.sin(a0)
+            qa, qb = lx * ca + ly * sa, -lx * sa + ly * ca
+            r = np.hypot(qa / el, qb) * (1 + 0.45 * rim)
+            tail = np.hypot((qa - 0.9 * r0 * el) / 0.7, qb - 0.5 * r0) * (1 + 0.45 * rim)     # comma tails on a few
+            ct = hash01(jx, jy, 8) < 0.3
+            blob = np.maximum(np.clip((r0 - r) * 0.9 + 0.5, 0, 1), np.clip((0.55 * r0 - tail) * 0.9 + 0.5, 0, 1) * ct)
+            cov = np.maximum(cov, blob * on)
     for dx in (-1, 0, 1):                              # round dots on the gill cover / head; speckles on top
         for dy in (-1, 0, 1):
             cx, cy = 22, 14
@@ -2059,30 +2197,34 @@ def fish_albedo():
             sy = (jy - 8 + 0.2 + 0.6 * hash01(jx, jy, 12)) * cy
             su, sd = sx / TEX_W, np.abs(sy / BODY_ROWS - 0.5) / 0.5
             eye_far = np.hypot((su - EYE_U) * TEX_W / 16.4, (sd - 0.42) * rows / 11.4) > 2.0
-            dot = (hash01(jx, jy, 13) < 0.22) & (su > 0.11) & (su < ue.mean()) & (sd > 0.2) & (sd < 0.62) & eye_far
+            dot = (hash01(jx, jy, 13) < 0.16) & (su > 0.12) & (su < ue.mean() - 0.01) & (sd > 0.2) & (sd < 0.5) & eye_far
             spk = (hash01(jx, jy, 14) < 0.5) & (su > 0.03) & (su < ue.mean() + 0.02) & (sd < 0.22)
             r = np.hypot(X - sx, Y - sy * ysc)
-            cov = np.maximum(cov, np.clip((3.2 - r) * 1.2 + 0.5, 0, 1) * dot)
+            cov = np.maximum(cov, np.clip((2.2 - r * (1 + 0.4 * rim)) * 1.2 + 0.5, 0, 1) * dot)
             cov = np.maximum(cov, np.clip((1.3 - r) * 1.5 + 0.5, 0, 1) * spk)
     col = col * (1 - 0.95 * cov[..., None]) + np.float32([0.012, 0.015, 0.018]) * (0.95 * cov)[..., None]
-    for sg in (1, -1):
+    metal *= 1 - cov
+    rough = rough * (1 - cov) + 0.5 * cov
+    for sg in (1, -1):                                 # the orbit under the eyeball dome: a dark socket ring
         r = np.hypot((px - EYE_U * TEX_W) / 16.4, (py - (0.5 - sg * 0.21) * BODY_ROWS) / 11.4)
-        disc = lambda r0: np.clip((r0 - r) * 3.5, 0, 1)[..., None]
-        col *= 1 - 0.22 * (disc(1.55) - disc(1.05))
-        col = col * (1 - disc(1.12)) + np.float32([0.03, 0.035, 0.04]) * disc(1.12)
-        col = col * (1 - disc(0.95)) + (np.float32([0.40, 0.29, 0.09]) * (0.55 + 0.6 * r)[..., None]) * disc(0.95)
-        col = col * (1 - disc(0.52)) + np.float32([0.008, 0.008, 0.01]) * disc(0.52)
+        disc = lambda r0: np.clip((r0 - r) * 3.5, 0, 1)
+        col = col * (1 - 0.7 * disc(1.2))[..., None] + np.float32([0.07, 0.075, 0.08]) * (0.7 * disc(1.2))[..., None]
+        col *= (1 - 0.2 * (disc(1.6) - disc(1.2)))[..., None]
+        metal *= 1 - 0.5 * disc(1.2)
     tex = np.tile(np.float32([0.05, 0.06, 0.065]), (TEX_H, TEX_W, 1))
     tex[:BODY_ROWS] = col
+    orm = np.zeros((TEX_H, TEX_W, 3), np.float32)
+    orm[..., 0] = 1.0
+    orm[..., 1] = 0.5
+    orm[:BODY_ROWS, :, 1] = np.clip(rough, 0.05, 1)
+    orm[:BODY_ROWS, :, 2] = np.clip(metal, 0, 1)
     fa, fb = a1 % 1 - 0.5, a2 % 1 - 0.5                    # in-scale coords; +fa+fb points to the tail
     ca, cb = np.floor(a1).astype(int) + 64, np.floor(a2).astype(int) + 64
     cup = -1.3 * np.clip(1 - (fa * fa + fb * fb) / 0.25, 0, 1)
     ridge = 0.9 * np.clip((fa + fb - 0.22) / 0.2, 0, 1) * np.clip((0.5 - np.maximum(np.abs(fa), np.abs(fb))) / 0.1, 0, 1)
     tilt = 11.4 * 0.052 * (fa * (hash01(ca, cb, 21) - 0.5) + fb * (hash01(ca, cb, 22) - 0.5)) * 2.0     # 2-4 deg per scale
     hgt = np.zeros((TEX_H, TEX_W), np.float32)
-    hgt[:BODY_ROWS] = (cup + ridge + tilt) * scl
-    rough = np.full((TEX_H, TEX_W), 0.5, np.float32)
-    rough[:BODY_ROWS] = 0.42 * (1 - scl) + (0.30 + 0.25 * edge) * scl
+    hgt[:BODY_ROWS] = (cup + ridge + tilt) * scl - 2.0 * gap - 1.2 * np.exp(-((ge - 1.0) / 2.0) ** 2) * sm(d, 0.10, 0.2) * (ge > -1)
     ac = (np.arange(TEX_W) + 0.5) / TEX_W
     ray = np.exp(-(((ac * 11) % 1 - 0.5) * TEX_W / 11 / 3.5) ** 2)[None, :]
     for k, (v0, v1) in FIN_BANDS.items():
@@ -2093,22 +2235,38 @@ def fish_albedo():
         fin *= (1 - 0.4 * sm(al, 0.8, 1.0))[..., None]
         if k == 1:                                     # pectoral: pink base
             w = (1 - np.clip(al / 0.35, 0, 1)) * np.ones_like(ray)
-            fin = np.float32([0.45, 0.22, 0.22]) * w[..., None] + fin * (1 - w)[..., None]
-        if k == 2:                                     # pelvic / anal: whitish leading tip
-            w = np.clip((0.16 - ac) / 0.10, 0, 1)[None, :] * np.clip((al - 0.3) / 0.4, 0, 1)
-            fin = np.float32([0.60, 0.60, 0.58]) * w[..., None] + fin * (1 - w)[..., None]
+            fin = np.float32([0.50, 0.26, 0.26]) * w[..., None] + fin * (1 - w)[..., None]
+        if k == 2:                                     # pelvic / anal: pale pink, a greyer tip
+            pk = np.float32([0.62, 0.42, 0.42]) * (1 - 0.12 * ray * np.clip(al * 4, 0, 1) + 0.1 * n2)[..., None]
+            fin = pk * (1 - 0.35 * sm(al, 0.6, 1.0))[..., None] + np.float32([0.25, 0.22, 0.23]) * 0.35 * sm(al, 0.6, 1.0)[..., None]
         tex[r0:r1] = fin
+    # The eyeball: black pupil, a silver-bronze iris (a guanine mirror too), a dark rim; wet cornea on top.
+    er0, er1 = 512, TEX_H
+    ey, ex = np.mgrid[er0:er1, 0:TEX_W] + 0.5
+    rr = np.hypot(ex - EYE_PATCH[0], ey - EYE_PATCH[1]) / EYE_PATCH[2]
+    ang = np.arctan2(ey - EYE_PATCH[1], ex - EYE_PATCH[0])
+    streak = 0.5 + 0.5 * np.sin(ang * 23 + 3 * np.sin(ang * 5)) * np.clip((rr - 0.5) / 0.3, 0, 1)
+    up = np.clip(-(ey - EYE_PATCH[1]) / EYE_PATCH[2], 0, 1)[..., None]
+    iris = (np.float32([0.30, 0.29, 0.26]) * (1 - up) + np.float32([0.36, 0.27, 0.13]) * up) * (0.75 + 0.35 * streak)[..., None]
+    pup = np.clip((0.62 - rr) * 25, 0, 1)[..., None]                          # a big pupil: no white sclera on a fish
+    ring = np.clip((rr - 0.84) * 10, 0, 1)[..., None]
+    ecol = iris * (1 - pup) + np.float32([0.004, 0.004, 0.005]) * pup
+    ecol = ecol * (1 - 0.35 * np.clip((0.66 - rr) * 8, 0, 1)[..., None] * (1 - pup))      # darker collarette
+    ecol = ecol * (1 - ring) + np.float32([0.05, 0.055, 0.06]) * ring
+    tex[er0:er1] = ecol
+    orm[er0:er1, :, 1] = 0.10
+    orm[er0:er1, :, 2] = 0.5 * (1 - pup[..., 0]) * (1 - ring[..., 0])
     gy, gx = np.gradient(hgt)
     nrm = np.stack([-gx, gy, np.ones_like(gx)], -1)
     nrm /= np.linalg.norm(nrm, axis=-1, keepdims=True)
     nmap = np.full((TEX_H, TEX_W, 4), 255, np.uint8)
     nmap[..., :3] = np.clip((nrm * 0.5 + 0.5) * 255, 0, 255)
-    return tex, nmap, np.repeat((rough * 255).astype(np.uint8)[..., None], 3, -1)
+    return tex, nmap, (np.clip(orm, 0, 1) * 255 + 0.5).astype(np.uint8)
 
 
 def fish_texture():
-    tex, nmap, rough = fish_albedo()
-    return tp.data_texture(srgb8(tex), srgb=True), tp.data_texture(nmap, srgb=False), tp.data_texture(rough, srgb=False)
+    tex, nmap, orm = fish_albedo()
+    return tp.data_texture(srgb8(tex), srgb=True), tp.data_texture(nmap, srgb=False), tp.data_texture(orm, srgb=False)
 
 
 def fish_tint(rng):
@@ -2325,12 +2483,13 @@ school.skin()
 _fp0, _fn0 = school.out_p.numpy(), school.out_n.numpy()
 fish_mat = tp.MeshPhysicalMaterial()
 fish_mat.color = 0xffffff
-fish_mat.roughness, fish_mat.metalness = 1.0, 0.15    # roughness lives in the map
-fish_mat.specular_intensity = 0.2      # skin/water IOR contrast is small: F0 ~0.008, else the sky env chromes the back
+fish_mat.roughness, fish_mat.metalness = 1.0, 1.0     # both live in the ORM map (G roughness, B metalness)
+fish_mat.specular_intensity = 0.2      # skin/water IOR contrast is small: F0 ~0.008 where it is NOT metal, else the sky env chromes the back
 fish_mat.iridescence, fish_mat.iridescence_ior, fish_mat.iridescence_thickness_nm = 0.5, 1.3, 350.0
 fish_mat.side = tp.Side.Double
 fish_mat.vertex_colors = True
 fish_mat.map, fish_mat.normal_map, fish_mat.roughness_map = fish_texture()
+fish_mat.metalness_map = fish_mat.roughness_map        # one packed texture: the Vulkan G-buffer takes it in a single tap
 fish_mat.normal_scale = tp.Vector2(0.7, 0.7)
 fish_geo = tp.BufferGeometry()
 fish_geo.set_attribute("position", _fp0)
@@ -2786,6 +2945,8 @@ SHOTS = {
     "p1_tear": (TEAR_C - 2.0 * e_r + [0, 0.15, 0], TEAR_C, 55.0),
     "p2_school": (-1.2 * sun_h3 + [0, -6.2, 0], 4.5 * sun_h3 + [0, -0.6, 0], 72.0),
     "p2_fish_close": None,
+    "p2_fish_head": None,
+    "p2_fish_side": None,
     "p2_leak": (TEAR_C + 2.6 * e_r - 1.4 * e_t + [0, 0.35, 0], TEAR_C + 0.6 * e_r, 52.0),
     "p3_hud": None,
     "p3_sonar_tear": None,
@@ -2803,6 +2964,32 @@ def place(cam, key):
         cam.update_projection_matrix()
         cam.position.set(*(hp + 0.78 * side + 0.32 * hf + [0, 0.22, 0]))
         cam.look_at(*(hp + 0.05 * hf))
+        return
+    if key == "p2_fish_side":                    # square-on to the hero's sunward flank, like a reference photo
+        hp = school.pos.numpy()[0]
+        y, pt = float(school.yaw.numpy()[0]), float(school.pitch.numpy()[0])
+        hf = np.array([math.sin(y) * math.cos(pt), -math.sin(pt), math.cos(y) * math.cos(pt)])
+        side = np.cross([0.0, 1.0, 0.0], hf)
+        side /= np.linalg.norm(side)
+        side *= 1.0 if np.dot(side, sun_h3) > 0 else -1.0
+        mid = hp - 0.07 * float(school.len.numpy()[0]) * hf
+        cam.fov = 30.0
+        cam.update_projection_matrix()
+        cam.position.set(*(mid + 1.6 * float(school.len.numpy()[0]) * side))
+        cam.look_at(*mid)
+        return
+    if key == "p2_fish_head":                    # the hero's head from its sunward side, a little ahead and above
+        hp = school.pos.numpy()[0]
+        y, pt = float(school.yaw.numpy()[0]), float(school.pitch.numpy()[0])
+        hf = np.array([math.sin(y) * math.cos(pt), -math.sin(pt), math.cos(y) * math.cos(pt)])   # the nose, pitch included
+        side = np.cross([0.0, 1.0, 0.0], hf)
+        side /= np.linalg.norm(side)
+        side *= 1.0 if np.dot(side, sun_h3) > 0 else -1.0
+        head = hp + 0.38 * float(school.len.numpy()[0]) * hf
+        cam.fov = 30.0
+        cam.update_projection_matrix()
+        cam.position.set(*(head + 0.30 * side + 0.13 * hf + [0, 0.06, 0]))
+        cam.look_at(*(head - 0.015 * hf))
         return
     if SHOTS[key] is None:
         fwd = rov_R @ [1.0, 0.0, 0.0]
