@@ -1872,6 +1872,8 @@ EYE_R, EYE_H = 0.0125, 0.0050                         # eyeball radius and how f
 TEX_W, TEX_H, BODY_ROWS = 1024, 576, 392
 BODY_V = BODY_ROWS / TEX_H
 FIN_BANDS = {k: ((402 + 36 * k) / TEX_H, (434 + 36 * k) / TEX_H) for k in range(3)}   # dark fins / pectoral / pelvic+anal
+FIN_BANDS[3] = (514 / TEX_H, 546 / TEX_H)             # the tail, beside the eyeball patch
+TAIL_C0 = 128                                         # ... in columns TAIL_C0.. (the eye patch keeps the left ones)
 EYE_PATCH = (36.0, 544.0, 28.0)                       # eyeball texture: centre column, centre row, radius (texels)
 MOUTH_U = 0.100                                       # the mouth corner: rear end of the maxilla, just behind the eye
 NOSE_U = 0.032                                        # snout rounding length: short, so the snout ends blunt
@@ -1884,8 +1886,8 @@ F_U = np.concatenate([[0.002, 0.008, 0.018, 0.031, 0.046, 0.062, 0.078, 0.094, 0
 F_RINGS, F_SIDES = len(F_U), 24
 
 
-HALF_H = np.float32([0.030, 0.058, 0.085, 0.103, 0.110, 0.109, 0.103, 0.092, 0.078, 0.064, 0.050, 0.0425])
-HALF_W = np.float32([0.018, 0.037, 0.049, 0.058, 0.063, 0.062, 0.058, 0.051, 0.042, 0.032, 0.023, 0.016])
+HALF_H = np.float32([0.030, 0.058, 0.085, 0.103, 0.110, 0.109, 0.103, 0.092, 0.076, 0.058, 0.043, 0.038])
+HALF_W = np.float32([0.018, 0.037, 0.049, 0.058, 0.063, 0.062, 0.058, 0.051, 0.041, 0.030, 0.020, 0.014])
 KEEL = np.float32([1.0, 1.03, 1.06, 1.08, 1.09, 1.09, 1.08, 1.06, 1.04, 1.02, 1.0, 1.0])
 
 
@@ -1908,6 +1910,7 @@ def op_edge(d):
 def skin_fn(u, th):
     """The skin at body fraction u (0 nose, 1 tail root) and ring angle th; +Z is the nose."""
     h, w, kb = catmull(HALF_H, u), catmull(HALF_W, u), catmull(KEEL, u)
+    w = w * (1.0 - 0.78 * sstep(u, 0.84, 1.0))       # the peduncle flattens into a blade as deep as the fin root
     s, c = np.sin(th), np.cos(th)
     ts = np.arcsin(np.clip(s, -1, 1))                 # folded onto one side: -pi/2 belly .. pi/2 back
     d = 0.5 - ts / np.pi                              # 0 back .. 1 belly, the texture's d
@@ -2001,7 +2004,8 @@ def fan(outline, nrm, ray, camber, shift=(0.0, 0.0, 0.0), band=0, flip=False):
     n = nrm - np.outer(camber * 4 * (1 - 2 * ac) * al / lc, perp) - np.outer(camber * 4 * ac * (1 - ac) / la, ray)
     n /= np.linalg.norm(n, axis=1, keepdims=True)
     v0, v1 = FIN_BANDS[band]
-    return v, np.asarray(tris), n, np.stack([1 - ac if flip else ac, v0 + (v1 - v0) * al], 1)
+    c0 = TAIL_C0 / TEX_W if band == 3 else 0.0
+    return v, np.asarray(tris), n, np.stack([c0 + (1 - c0) * (1 - ac if flip else ac), v0 + (v1 - v0) * al], 1)
 
 
 def salmon():
@@ -2024,9 +2028,9 @@ def salmon():
             tris += [[a, a + S1, a + 1], [a + 1, a + S1, a + S1 + 1]]
     nv = F_RINGS * S1
     h0 = catmull(HALF_H, 0.0)
-    pos.append([[0.0, -0.15 * h0, 0.5], [0.0, -0.15 * HALF_H[-1], -0.525]])
+    pos.append([[0.0, -0.15 * h0, 0.5], [0.0, -0.15 * HALF_H[-1], -0.505]])
     nrm.append([[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]])
-    uu.append([0.0, 1.025])
+    uu.append([0.0, 1.005])
     kind.append([0, 0])
     uv.append([[0.0, 0.5 * BODY_V], [1.0, 0.5 * BODY_V]])
     for j in range(F_SIDES):                          # caps wound like the tube, so Side.Double never flips them
@@ -2048,11 +2052,19 @@ def salmon():
     top = lambda x: float(skin_fn(x, np.pi / 2)[1])
     bot = lambda x: float(skin_fn(x, -np.pi / 2)[1])
     z = lambda x: 0.5 - x
-    add(fan([[0, 0.034, -0.47], [0, 0.064, -0.53], [0, 0.100, -0.60], [0, 0.114, -0.638], [0, 0.103, -0.652],
-             [0, 0.05, -0.626], [0, 0.0, -0.614], [0, -0.05, -0.626], [0, -0.105, -0.652], [0, -0.116, -0.638],
-             [0, -0.102, -0.60], [0, -0.072, -0.53], [0, -0.046, -0.47]], [1, 0, 0], [0, 0, -1], 0.005), 1)
-    add(fan([[0, top(x) + h, z(x)] for x, h in ((0.44, 0), (0.455, 0.030), (0.47, 0.048), (0.483, 0.054), (0.497, 0.046),
-                                                (0.525, 0.028), (0.555, 0.013), (0.572, 0.007), (0.562, 0), (0.505, 0))],
+    # The tail: rooted inside the flattened peduncle, leaving it exactly on its outline and flaring out from
+    # there (no step), a forked trailing edge with a few split rays.
+    sf = np.linspace(0.0, 1.0, 6)[1:]
+    tip_t, tip_b = (0.112, -0.640), (-0.114, -0.640)
+    up = [[0, top(1.0) + (tip_t[0] - top(1.0)) * f ** 1.7, -0.5 + (tip_t[1] + 0.5) * f] for f in sf]
+    lo = [[0, bot(1.0) + (tip_b[0] - bot(1.0)) * f ** 1.7, -0.5 + (tip_b[1] + 0.5) * f] for f in sf]
+    te = [[0.101, -0.655], [0.083, -0.641], [0.066, -0.643], [0.047, -0.629], [0.030, -0.628], [0.012, -0.614]]
+    edge = [[0, y, zz] for y, zz in te] + [[0, 0.0, -0.612]] + [[0, -y - 0.002, zz] for y, zz in te[::-1]]
+    add(fan([[0, top(0.95) - 0.003, z(0.95)], [0, top(1.0), -0.5]] + up + edge + lo[::-1]
+            + [[0, bot(1.0), -0.5], [0, bot(0.95) + 0.003, z(0.95)]], [1, 0, 0], [0, 0, -1], 0.005, band=3), 1)
+    add(fan([[0, top(x) + h, z(x)] for x, h in ((0.44, 0), (0.455, 0.030), (0.47, 0.048), (0.483, 0.054), (0.495, 0.047),
+                                                (0.503, 0.041), (0.513, 0.037), (0.525, 0.029), (0.538, 0.019),
+                                                (0.555, 0.013), (0.572, 0.007), (0.562, 0), (0.505, 0))],
             [1, 0, 0], [0, 1, -0.35], 0.004), 1)
     add(fan([[0, top(x) + h, z(x)] for x, h in ((0.79, 0), (0.80, 0.008), (0.818, 0.012), (0.838, 0.006), (0.845, 0))],
             [1, 0, 0], [0, 1, -0.4], 0.001), 1)
@@ -2063,9 +2075,10 @@ def salmon():
         add(fan([[0, 0, 0], [sgn * 0.012, -0.012, -0.024], [sgn * 0.024, -0.024, -0.05], [sgn * 0.009, -0.021, -0.046],
                  [0, -0.005, -0.015]], [0.3 * sgn, -1, 0], [sgn * 0.4, -0.45, -1], 0.003, r, band=2, flip=sgn > 0), 1)
     for sgn in (1.0, -1.0):
-        r = skin_fn(0.215, -0.3 * np.pi if sgn > 0 else 1.3 * np.pi) + [sgn * 0.003, 0, 0]
-        add(fan([[0, 0, 0], [sgn * 0.006, -0.006, -0.03], [sgn * 0.012, -0.012, -0.078], [sgn * 0.010, -0.028, -0.064],
-                 [sgn * 0.004, -0.022, -0.018]], [sgn * 0.8, -0.6, 0], [sgn * 0.1, -0.2, -1], -0.003, r, band=1), 2 if sgn > 0 else 3)
+        r = skin_fn(0.19, -0.30 * np.pi if sgn > 0 else 1.30 * np.pi) + [sgn * 0.004, 0, 0]   # low, behind the gill cover
+        add(fan([[0, 0, 0], [sgn * 0.004, -0.003, -0.036], [sgn * 0.008, -0.012, -0.094], [sgn * 0.008, -0.022, -0.102],
+                 [sgn * 0.007, -0.033, -0.080], [sgn * 0.003, -0.027, -0.022]], [sgn * 0.95, -0.3, 0], [sgn * 0.06, -0.25, -1],
+                -0.003, r, band=1), 2 if sgn > 0 else 3)
     for sgn in (1.0, -1.0):
         v, t, n, tuv = eyeball(sgn)
         pos.append(v)
@@ -2077,6 +2090,10 @@ def salmon():
         nv += len(v)
     pos, nrm, uv = np.concatenate(pos), np.concatenate(nrm), np.concatenate(uv)
     uu, kind = np.concatenate(uu), np.concatenate(kind).astype(np.int32)
+    tris = np.asarray(tris)
+    fnm = np.cross(pos[tris[:, 1]] - pos[tris[:, 0]], pos[tris[:, 2]] - pos[tris[:, 0]])
+    flip = (fnm * nrm[tris].sum(1)).sum(1) < 0      # wind every fin triangle like its normals
+    tris[flip] = tris[flip][:, ::-1]
     pos1, nrm1 = pos.copy(), nrm.copy()
     for sgn, k in ((1.0, 2), (-1.0, 3)):           # flared pectorals: swept out and laid flat
         sel = kind == k
@@ -2116,7 +2133,7 @@ def fish_albedo():
     # Guanine mirror: a dark matte back, SILVER flanks (metallic, fairly smooth: they flash as the fish turns),
     # a white belly. The flank albedo is mostly the mirror's F0.
     back, flank, belly = np.float32([0.030, 0.038, 0.050]), np.float32([0.72, 0.75, 0.77]), np.float32([0.80, 0.80, 0.78])
-    t1, t2 = sm(de, 0.28, 0.40)[..., None], sm(de, 0.66, 0.90)[..., None]
+    t1, t2 = sm(de, 0.25, 0.37)[..., None], sm(de, 0.66, 0.90)[..., None]
     col = (back * (1 - t1) + flank * t1) * (1 - t2) + belly * t2
     g = np.clip((de - 0.30) / 0.3, 0, 1)[..., None]    # blue-green -> violet -> clean silver just under the back
     sheen = (1 - g) ** 2 * np.float32([0.85, 0.93, 1.05]) + 2 * g * (1 - g) * np.float32([0.98, 0.95, 1.03]) + g ** 2
@@ -2168,27 +2185,31 @@ def fish_albedo():
     X, Y = px, py * ysc
     cov = np.zeros_like(U)
     rim = fbm(*grid(BODY_ROWS, TEX_W, 32, 128), 32, 128, rng, 3) - 0.5
-    for dx in (-1, 0, 1):                              # many small irregular black dots and short blotches, dense on the
-        for dy in (-1, 0, 1):                          # back and upper flank, thinning to the lateral line, ~none below
-            cx, cy = 15, 9
-            jx, jy = (px // cx).astype(int) + dx + 8, (py // cy).astype(int) + dy + 8
-            sx = (jx - 8 + 0.5 + 0.9 * (hash01(jx, jy, 1) - 0.5)) * cx
-            sy = (jy - 8 + 0.5 + 0.9 * (hash01(jx, jy, 2) - 0.5)) * cy
-            su, sd = sx / TEX_W, np.abs(sy / BODY_ROWS - 0.5) / 0.5
-            p = (0.50 * (1 - sm(sd, 0.34, 0.52)) + 0.012) * sm(su, ue.mean() + 0.005, ue.mean() + 0.04) * (1 - 0.6 * sm(su, 0.82, 0.97))
-            p *= 0.55 + 0.9 * np.clip(n[np.clip(sy.astype(int), 0, BODY_ROWS - 1), np.clip(sx.astype(int), 0, TEX_W - 1)] + 0.5, 0, 1)   # clustered
-            on = hash01(jx, jy, 3) < p
-            r0 = (1.3 + 2.4 * hash01(jx, jy, 5) ** 1.6) * (1.25 - 0.5 * sm(sd, 0.2, 0.45))
-            lx, ly = X - sx, Y - sy * ysc
-            a0 = np.pi * hash01(jx, jy, 6)
-            el = 1.0 + 0.9 * hash01(jx, jy, 7) ** 2                        # some elongated into short blotches
-            ca, sa = np.cos(a0), np.sin(a0)
-            qa, qb = lx * ca + ly * sa, -lx * sa + ly * ca
-            r = np.hypot(qa / el, qb) * (1 + 0.45 * rim)
-            tail = np.hypot((qa - 0.9 * r0 * el) / 0.7, qb - 0.5 * r0) * (1 + 0.45 * rim)     # comma tails on a few
-            ct = hash01(jx, jy, 8) < 0.3
-            blob = np.maximum(np.clip((r0 - r) * 0.9 + 0.5, 0, 1), np.clip((0.55 * r0 - tail) * 0.9 + 0.5, 0, 1) * ct)
-            cov = np.maximum(cov, blob * on)
+    # Dense fine black dots (a scale or two across) over the back and upper flank, thinning to the lateral line,
+    # ~none below; then a sparser layer of larger irregular blotches, a few with a comma tail, higher up.
+    for (cx, cy, pk, fl, r_lo, r_hi, sd0, sd1, blotch) in ((10, 7, 0.62, 0.01, 1.0, 1.4, 0.40, 0.52, False),
+                                                           (30, 17, 0.45, 0.0, 1.9, 1.6, 0.26, 0.40, True)):
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                jx, jy = (px // cx).astype(int) + dx + 8, (py // cy).astype(int) + dy + 8
+                sx = (jx - 8 + 0.5 + 0.9 * (hash01(jx, jy, 1 + 30 * blotch) - 0.5)) * cx
+                sy = (jy - 8 + 0.5 + 0.9 * (hash01(jx, jy, 2 + 30 * blotch) - 0.5)) * cy
+                su, sd = sx / TEX_W, np.abs(sy / BODY_ROWS - 0.5) / 0.5
+                p = (pk * (1 - sm(sd, sd0, sd1)) + fl) * sm(su, ue.mean() + 0.005, ue.mean() + 0.04) * (1 - 0.55 * sm(su, 0.84, 0.98))
+                p *= 0.55 + 0.9 * np.clip(n[np.clip(sy.astype(int), 0, BODY_ROWS - 1), np.clip(sx.astype(int), 0, TEX_W - 1)] + 0.5, 0, 1)   # clustered
+                on = hash01(jx, jy, 3 + 30 * blotch) < p
+                r0 = (r_lo + r_hi * hash01(jx, jy, 5 + 30 * blotch) ** 2) * (1.15 - 0.3 * sm(sd, 0.2, 0.45))
+                lx, ly = X - sx, Y - sy * ysc
+                a0 = np.pi * hash01(jx, jy, 6 + 30 * blotch)
+                el = 1.0 + (0.8 if blotch else 0.5) * hash01(jx, jy, 7 + 30 * blotch) ** 2      # some drawn out a little
+                ca, sa = np.cos(a0), np.sin(a0)
+                qa, qb = lx * ca + ly * sa, -lx * sa + ly * ca
+                r = np.hypot(qa / el, qb) * (1 + 0.45 * rim)
+                blob = np.clip((r0 - r) * 0.9 + 0.5, 0, 1)
+                if blotch:                                 # a comma tail on a third of the big ones
+                    tl = np.hypot((qa - 0.9 * r0 * el) / 0.7, qb - 0.5 * r0) * (1 + 0.45 * rim)
+                    blob = np.maximum(blob, np.clip((0.55 * r0 - tl) * 0.9 + 0.5, 0, 1) * (hash01(jx, jy, 38) < 0.35))
+                cov = np.maximum(cov, blob * on)
     for dx in (-1, 0, 1):                              # round dots on the gill cover / head; speckles on top
         for dy in (-1, 0, 1):
             cx, cy = 22, 14
@@ -2197,14 +2218,18 @@ def fish_albedo():
             sy = (jy - 8 + 0.2 + 0.6 * hash01(jx, jy, 12)) * cy
             su, sd = sx / TEX_W, np.abs(sy / BODY_ROWS - 0.5) / 0.5
             eye_far = np.hypot((su - EYE_U) * TEX_W / 16.4, (sd - 0.42) * rows / 11.4) > 2.0
-            dot = (hash01(jx, jy, 13) < 0.16) & (su > 0.12) & (su < ue.mean() - 0.01) & (sd > 0.2) & (sd < 0.5) & eye_far
+            dot = (hash01(jx, jy, 13) < 0.36) & (su > 0.12) & (su < ue.mean() - 0.01) & (sd > 0.2) & (sd < 0.5) & eye_far
             spk = (hash01(jx, jy, 14) < 0.5) & (su > 0.03) & (su < ue.mean() + 0.02) & (sd < 0.22)
             r = np.hypot(X - sx, Y - sy * ysc)
-            cov = np.maximum(cov, np.clip((2.2 - r * (1 + 0.4 * rim)) * 1.2 + 0.5, 0, 1) * dot)
+            cov = np.maximum(cov, np.clip((2.4 + 0.8 * hash01(jx, jy, 15) - r * (1 + 0.4 * rim)) * 1.2 + 0.5, 0, 1) * dot)
             cov = np.maximum(cov, np.clip((1.3 - r) * 1.5 + 0.5, 0, 1) * spk)
     col = col * (1 - 0.95 * cov[..., None]) + np.float32([0.012, 0.015, 0.018]) * (0.95 * cov)[..., None]
     metal *= 1 - cov
     rough = rough * (1 - cov) + 0.5 * cov
+    tb = sm(U, 0.90, 1.0)[..., None]                   # the silver flank greys into the tail's root (the dark back stays)
+    col = col * (1 - 0.75 * tb) + np.minimum(col, np.float32([0.24, 0.255, 0.265])) * 0.75 * tb
+    metal *= 1 - 0.35 * tb[..., 0]
+    rough = rough * (1 - tb[..., 0]) + 0.48 * tb[..., 0]
     for sg in (1, -1):                                 # the orbit under the eyeball dome: a dark socket ring
         r = np.hypot((px - EYE_U * TEX_W) / 16.4, (py - (0.5 - sg * 0.21) * BODY_ROWS) / 11.4)
         disc = lambda r0: np.clip((r0 - r) * 3.5, 0, 1)
@@ -2232,12 +2257,22 @@ def fish_albedo():
         al = np.clip((np.arange(r1 - r0) + 0.5 - 2) / (r1 - r0 - 4), 0, 1)[:, None]
         n2 = fbm(*grid(r1 - r0, TEX_W, 1, 16), 1, 16, rng, 3) - 0.5
         fin = np.float32([0.05, 0.06, 0.065]) * (1 - 0.3 * ray * np.clip(al * 4, 0, 1) + 0.15 * n2)[..., None]
-        fin *= (1 - 0.4 * sm(al, 0.8, 1.0))[..., None]
-        if k == 1:                                     # pectoral: pink base
-            w = (1 - np.clip(al / 0.35, 0, 1)) * np.ones_like(ray)
-            fin = np.float32([0.50, 0.26, 0.26]) * w[..., None] + fin * (1 - w)[..., None]
+        rag = fbm(*grid(r1 - r0, TEX_W, 1, 64), 1, 64, rng, 2)                 # a ragged, darker trailing edge
+        fin *= (1 - 0.55 * sm(al, 0.72 + 0.14 * rag, 0.97))[..., None]
+        if k == 3:                                     # tail: scaled grey skin runs onto the root in a rounded tongue
+            ag = np.clip((ac - TAIL_C0 / TEX_W) / (1 - TAIL_C0 / TEX_W), 0, 1)[None, :]
+            fin = fin * (1 + 0.8 * (1 - sm(al, 0.2, 0.6)))[..., None]
+            a0 = 0.20 + 0.26 * (1 - np.abs(2 * ag - 1)) ** 3
+            wt = 1 - sm(al, a0, a0 + 0.16)
+            fin = fin * (1 - wt[..., None]) + np.float32([0.24, 0.255, 0.265]) * (1 + 0.15 * n2)[..., None] * wt[..., None]
+            tail_band = (r0, r1, fin, wt)
+            continue
+        if k == 1:                                     # pectoral: near-black, a pink base
+            fin = fin * 0.6
+            w = (1 - sm(al, 0.18, 0.40)) * np.ones_like(ray)
+            fin = np.float32([0.52, 0.20, 0.22]) * (1 - 0.1 * ray)[..., None] * w[..., None] + fin * (1 - w)[..., None]
         if k == 2:                                     # pelvic / anal: pale pink, a greyer tip
-            pk = np.float32([0.62, 0.42, 0.42]) * (1 - 0.12 * ray * np.clip(al * 4, 0, 1) + 0.1 * n2)[..., None]
+            pk = np.float32([0.62, 0.36, 0.37]) * (1 - 0.12 * ray * np.clip(al * 4, 0, 1) + 0.1 * n2)[..., None]
             fin = pk * (1 - 0.35 * sm(al, 0.6, 1.0))[..., None] + np.float32([0.25, 0.22, 0.23]) * 0.35 * sm(al, 0.6, 1.0)[..., None]
         tex[r0:r1] = fin
     # The eyeball: black pupil, a silver-bronze iris (a guanine mirror too), a dark rim; wet cornea on top.
@@ -2256,6 +2291,10 @@ def fish_albedo():
     tex[er0:er1] = ecol
     orm[er0:er1, :, 1] = 0.10
     orm[er0:er1, :, 2] = 0.5 * (1 - pup[..., 0]) * (1 - ring[..., 0])
+    r0, r1, fin, wt = tail_band
+    tex[r0:r1, TAIL_C0:] = fin[:, TAIL_C0:]
+    orm[r0:r1, TAIL_C0:, 1] = 0.5 - 0.18 * wt[:, TAIL_C0:]
+    orm[r0:r1, TAIL_C0:, 2] = 0.6 * wt[:, TAIL_C0:]
     gy, gx = np.gradient(hgt)
     nrm = np.stack([-gx, gy, np.ones_like(gx)], -1)
     nrm /= np.linalg.norm(nrm, axis=-1, keepdims=True)
