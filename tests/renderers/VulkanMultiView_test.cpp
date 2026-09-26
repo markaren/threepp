@@ -779,6 +779,50 @@ namespace {
         runFrames(canvas, r, scene, primaryCam, 3);
     }
 
+    // The auto-exposure meter reads the PRIMARY's frame and drives the
+    // display's exposure. Run for a secondary view too, it cleared the
+    // primary's histogram and re-metered the primary's image over the
+    // secondary's extent — a top-left crop, here the dark background — so an
+    // attached view changed the primary's exposure. Compared on the converged
+    // mean luminance: the exposure is an EMA, so runs are not bit-comparable,
+    // and the crop moved the mean by ~18 of 255 (0.3 with the meter primary-only).
+    void gateAutoExposure(Canvas& canvas, VulkanRenderer& r, Scene& scene, Camera& primaryCam) {
+        std::printf("\n[exposure] the auto-exposure meter reads the primary's frame alone\n");
+        const bool  savedAe    = r.autoExposure();
+        const float savedSpeed = r.autoExposureSpeed();
+        r.setAutoExposure(true);
+        r.setAutoExposureSpeed(20.f);// converges within the frames below
+
+        auto secCam = makeCam(Vector3(4.2f, 2.6f, 4.6f), Vector3(0.f, 1.5f, 0.f));
+        // The meter's dt is the sim-time step: pinned to 1/60 s per frame so
+        // the EMA moves the same amount per frame however fast frames render.
+        double t = 0.0;
+        const auto meanLuma = [&](bool withView) {
+            const uint32_t vh = withView ? r.addView(*secCam, 320, 200) : 0u;
+            for (int i = 0; i < 60; ++i) {
+                r.setSimTime(t);
+                t += 1.0 / 60.0;
+                canvas.animateOnce([&] { r.render(scene, primaryCam); });
+            }
+            const auto rgb = r.readRGBPixels();
+            if (vh) (void) r.removeView(vh);
+            double sum = 0.0;
+            for (size_t i = 0; i + 2 < rgb.size(); i += 3)
+                sum += 0.2126 * rgb[i] + 0.7152 * rgb[i + 1] + 0.0722 * rgb[i + 2];
+            return rgb.empty() ? -1.0 : sum / static_cast<double>(rgb.size() / 3);
+        };
+        const double alone = meanLuma(false);
+        const double with  = meanLuma(true);
+        const double again = meanLuma(false);
+        std::printf("  mean luma: primary alone %.2f, with a view %.2f, alone again %.2f\n", alone, with, again);
+        check(alone > 0.0 && std::abs(alone - again) < 2.0, "exposure: the meter converges (control)");
+        check(alone > 0.0 && std::abs(alone - with) < 2.0, "exposure: an attached view leaves the primary's exposure");
+
+        r.setAutoExposure(savedAe);
+        r.setAutoExposureSpeed(savedSpeed);
+        runFrames(canvas, r, scene, primaryCam, 3);
+    }
+
     // ── Opt-in measurement: 0 vs 3 secondary views, interleaved ─────────────
     // Interleaved within ONE run, alternating in blocks, because per-session
     // clock/thermal drift makes two separate runs untrustworthy. Not a gate —
@@ -927,6 +971,7 @@ int main(int argc, char** argv) {
     gateMsaa(canvas, renderer, scene, *primaryCam);
     gateSplats(canvas, renderer, scene, *primaryCam);
     gateProbeDeterminism(canvas, renderer, scene, *primaryCam);
+    gateAutoExposure(canvas, renderer, scene, *primaryCam);
 
     std::printf("\nmulti-view: %d failed\n", failures);
     return failures == 0 ? 0 : 1;

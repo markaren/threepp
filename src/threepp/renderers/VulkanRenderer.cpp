@@ -302,7 +302,12 @@ namespace threepp {
         }
         // Auto-exposure: histogram over the final sceneHdr. recordDispatch()
         // clears the bins and orders that clear before its dispatch itself.
-        if (autoExposureEnabled_ && autoExposure_) {
+        // PRIMARY ONLY: the meter's descriptors name the primary's sceneHdr
+        // (onAfterBloomCreateImages) and its histogram drives the display's
+        // exposure. Run for a secondary view it cleared the primary's bins and
+        // re-metered the primary's image over the secondary's extent, so with
+        // a view attached the exposure came from a top-left crop of the frame.
+        if (autoExposureEnabled_ && autoExposure_ && !view().secondary) {
             auto pass = g.addPass("autoExposure", [this, f](VkCommandBuffer c) {
                 autoExposure_->recordDispatch(c, f, regionRenderExt_.width, regionRenderExt_.height,
                                               preExpHist_[f]);// meter un-bakes this
