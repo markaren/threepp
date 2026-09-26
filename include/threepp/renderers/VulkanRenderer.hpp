@@ -29,6 +29,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -1669,6 +1670,19 @@ namespace threepp {
         // THREEPP_VK_NO_ALIAS=1, which gives each its own allocation.
         [[nodiscard]] std::uint64_t gpuAllocatedBytes() const;
         void transientImageBytes(std::uint64_t& shared, std::uint64_t& unshared) const;
+
+        // Render-graph diagnostics counted since this renderer was created, in
+        // the manner of vulkan::validationErrorCount(): a pass that declared one
+        // image in two layouts, and aliased frame-local images whose uses
+        // overlap (memory assigned to both while both are live). Each is a bug
+        // in the renderer's own pass declarations or span assignment, not in
+        // the scene, so the expected value is 0 and tests assert it.
+        // Counted per occurrence (a defect present every frame adds one per
+        // frame); each distinct message is also printed to stderr once.
+        // No reset: a caller wanting a per-phase figure subtracts two readings.
+        [[nodiscard]] std::uint32_t renderGraphDiagnosticCount() const;
+        // The distinct messages behind that count, in the order first seen.
+        [[nodiscard]] std::vector<std::string> renderGraphDiagnostics() const;
 
         // ── GPU per-instance world matrices ───────────────────────────────────
         // A compute pass (instance_expand.comp) that recomputes, per

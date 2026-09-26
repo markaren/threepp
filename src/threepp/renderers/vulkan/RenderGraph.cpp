@@ -141,8 +141,11 @@ namespace threepp::vulkan::rg {
         for (auto& u : graph_.passes_[pass_].uses) {
             if (u.isImage && u.resource == image.index && u.baseMip == baseMip && u.mipCount == mipCount) {
                 if (u.access.layout != access.layout) {
-                    std::fprintf(stderr, "[RenderGraph] pass '%s' uses image '%s' in two layouts\n",
-                                 graph_.passes_[pass_].name, graph_.images_[image.index].name);
+                    char buf[256];
+                    std::snprintf(buf, sizeof(buf), "pass '%s' uses image '%s' in two layouts (%s, %s)",
+                                  graph_.passes_[pass_].name, graph_.images_[image.index].name,
+                                  layoutName(u.access.layout), layoutName(access.layout));
+                    graph_.layoutErrors_.emplace_back(buf);
                 }
                 u.access.stages |= access.stages;
                 u.access.access |= access.access;
@@ -191,8 +194,18 @@ namespace threepp::vulkan::rg {
         memoryIndex_.clear();
         entry_.clear();
         exit_.clear();
+        aliasErrors_.clear();
+        layoutErrors_.clear();
         entryMemory_ = exitMemory_ = false;
         compiled_ = false;
+    }
+
+    std::vector<std::string> RenderGraph::diagnostics() const {
+        std::vector<std::string> out;
+        out.reserve(layoutErrors_.size() + aliasErrors_.size());
+        out.insert(out.end(), layoutErrors_.begin(), layoutErrors_.end());
+        for (const auto& e : aliasErrors_) out.push_back("aliased " + e);
+        return out;
     }
 
     ImageHandle RenderGraph::importImage(const char* name, VkImage image, VkImageAspectFlags aspect,

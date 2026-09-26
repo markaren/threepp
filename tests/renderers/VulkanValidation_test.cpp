@@ -20,9 +20,16 @@
 // rewrite descriptors, i.e. where that defect class lives. A phase that renders
 // happily and reports one error has done its job.
 //
+// The same phases also count render-graph diagnostics
+// (VulkanRenderer::renderGraphDiagnosticCount(): a pass declaring one image in
+// two layouts, aliased frame-local images in use at the same time). Those are
+// computed on the CPU from the renderer's own declarations, so they are equally
+// hardware-independent, and each one fails the test.
+//
 // Plain exit-code program (not Catch2), matching the other tests here:
 //   0   clean
-//   1   validation errors were reported (they are printed above the summary)
+//   1   validation errors or render-graph diagnostics were reported (printed
+//       above the summary)
 //   42  CTest "Skipped" — no Vulkan/RT device, or no validation layer, which
 //       would make every assertion below vacuously true
 //
@@ -88,19 +95,23 @@ namespace {
         std::string name;
         std::uint32_t errors;
         std::uint32_t warnings;
+        std::uint32_t graphDiagnostics;
     };
 
     std::vector<PhaseTally> tallies;
-    std::uint32_t seenErrors = 0, seenWarnings = 0;
+    std::uint32_t seenErrors = 0, seenWarnings = 0, seenGraph = 0;
+    const VulkanRenderer* gateRenderer = nullptr;// set once constructed
 
     void endPhase(const char* name) {
         const auto e = vulkan::validationErrorCount();
         const auto w = vulkan::validationWarningCount();
-        tallies.push_back({name, e - seenErrors, w - seenWarnings});
-        std::printf("[phase] %-28s errors +%u  warnings +%u\n",
-                    name, e - seenErrors, w - seenWarnings);
+        const auto g = gateRenderer ? gateRenderer->renderGraphDiagnosticCount() : 0u;
+        tallies.push_back({name, e - seenErrors, w - seenWarnings, g - seenGraph});
+        std::printf("[phase] %-28s errors +%u  warnings +%u  graph diagnostics +%u\n",
+                    name, e - seenErrors, w - seenWarnings, g - seenGraph);
         seenErrors = e;
         seenWarnings = w;
+        seenGraph = g;
     }
 
     // A scene wide enough to put several pipelines in the frame — opaque
@@ -216,6 +227,7 @@ int main() {
     }
     Canvas& canvas = *canvasPtr;
     VulkanRenderer& renderer = *rendererPtr;
+    gateRenderer = &renderer;
 
     // Without the layer every assertion below is vacuously true, so this is a
     // skip, not a pass. A green run of this test must MEAN something.
@@ -479,20 +491,30 @@ int main() {
     // ── Verdict ─────────────────────────────────────────────────────────────
     const auto errors   = vulkan::validationErrorCount();
     const auto warnings = vulkan::validationWarningCount();
+    const auto graph    = renderer.renderGraphDiagnosticCount();
 
     std::printf("\n=== summary ===\n");
     for (const auto& t : tallies) {
-        std::printf("  %-28s errors %u  warnings %u\n", t.name.c_str(), t.errors, t.warnings);
+        std::printf("  %-28s errors %u  warnings %u  graph diagnostics %u\n", t.name.c_str(), t.errors,
+                    t.warnings, t.graphDiagnostics);
     }
-    std::printf("  %-28s errors %u  warnings %u\n", "TOTAL", errors, warnings);
+    std::printf("  %-28s errors %u  warnings %u  graph diagnostics %u\n", "TOTAL", errors, warnings, graph);
 
+    bool failed = false;
     if (errors != 0) {
         std::printf("\nFAILED: the validation layer reported %u error(s). The messages are above,\n"
                     "        each prefixed \"[Vulkan] ERROR:\"; the phase table names which\n"
                     "        reconfiguration provoked them.\n",
                     errors);
-        return 1;
+        failed = true;
     }
-    std::printf("\nPASSED: no validation errors across %zu phases.\n", tallies.size());
+    if (graph != 0) {
+        std::printf("\nFAILED: the render graph reported %u diagnostic(s):\n", graph);
+        for (const auto& m : renderer.renderGraphDiagnostics()) std::printf("        %s\n", m.c_str());
+        failed = true;
+    }
+    if (failed) return 1;
+    std::printf("\nPASSED: no validation errors or render-graph diagnostics across %zu phases.\n",
+                tallies.size());
     return 0;
 }

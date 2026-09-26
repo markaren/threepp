@@ -368,4 +368,30 @@ TEST_CASE("aliased images in use at the same time are reported") {
     g.compile();
     REQUIRE(g.aliasErrors().size() == 1);
     CHECK(g.aliasErrors()[0].find("'a'") != std::string::npos);
+    REQUIRE(g.diagnostics().size() == 1);
+    CHECK(g.diagnostics()[0] == "aliased " + g.aliasErrors()[0]);
+}
+
+TEST_CASE("one image declared in two layouts by one pass is a diagnostic") {
+    rg::RenderGraph g;
+    auto img = g.importImage("img", fakeImage(1), VK_IMAGE_ASPECT_COLOR_BIT, 1, GENERAL);
+    auto other = g.importImage("other", fakeImage(2), VK_IMAGE_ASPECT_COLOR_BIT, 2, GENERAL);
+    g.addPass("w", {}).use(img, rg::storageWrite());
+    // Same layout twice, and two layouts on different mip ranges: consistent.
+    g.addPass("rw", {}).use(img, rg::sampled(GENERAL)).use(img, rg::storageWrite());
+    g.addPass("mips", {}).use(other, rg::sampled(RO), 0, 1).use(other, rg::storageWrite(), 1, 1);
+    g.compile();
+    CHECK(g.diagnostics().empty());
+
+    g.addPass("bad", {}).use(img, rg::sampled(RO)).use(img, rg::storageWrite());
+    g.compile();
+    REQUIRE(g.diagnostics().size() == 1);
+    CHECK(g.diagnostics()[0] == "pass 'bad' uses image 'img' in two layouts (SHADER_RO, GENERAL)");
+    CHECK(g.aliasErrors().empty());
+    // The first declaration's layout is the one planned.
+    REQUIRE(g.barriersBefore(3).size() == 1);
+    CHECK(g.barriersBefore(3)[0].newLayout == RO);
+
+    g.reset();
+    CHECK(g.diagnostics().empty());
 }

@@ -4644,9 +4644,14 @@ namespace threepp {
             if (transientPool_) transientPool_->declare(graph);
             if (gbufMsPool_) gbufMsPool_->declare(graph);
             graph.execute(cb);
-            for (const auto& e : graph.aliasErrors()) {
-                if (rgAliasErrorsReported_.insert(e).second)
-                    std::fprintf(stderr, "[RenderGraph] '%s': aliased %s\n", name, e.c_str());
+            // Diagnostics (two-layout declarations, overlapping aliases): every
+            // occurrence is counted, each distinct message printed and kept once.
+            for (auto& e : graph.diagnostics()) {
+                ++rgDiagnosticCount_;
+                if (rgDiagnosticsReported_.insert(e).second) {
+                    std::fprintf(stderr, "[RenderGraph] '%s': %s\n", name, e.c_str());
+                    rgDiagnostics_.push_back(std::move(e));
+                }
             }
             static const bool dump = [] {
                 const char* e = std::getenv("THREEPP_RG_DUMP");
@@ -4661,7 +4666,9 @@ namespace threepp {
             last = std::move(text);
         }
         std::map<std::string, std::string> rgDumped_;
-        std::set<std::string> rgAliasErrorsReported_;
+        std::set<std::string> rgDiagnosticsReported_;
+        std::vector<std::string> rgDiagnostics_;// distinct, in the order first seen
+        std::uint32_t rgDiagnosticCount_ = 0;   // VulkanRenderer::renderGraphDiagnosticCount()
         // The primary's tail as graph passes: the field transmittance prepass,
         // the billboard glow, the hybrid overlay and the sensor image stage.
         void addTailPasses(vulkan::rg::RenderGraph& g, uint32_t imageIndex);

@@ -3809,6 +3809,10 @@ int main(int argc, char** argv) {
         std::printf("\n[info] validation errors provoked by the ParticleField phases: %u\n", errs);
         check(errs == 0, "ParticleField frames provoke no validation errors");
     }
+    // Field billboards, glow, the transmittance prepass and secondary views all
+    // declare their passes to the frame graph; none may produce a diagnostic.
+    for (const auto& m : renderer.renderGraphDiagnostics()) std::printf("  [graph] %s\n", m.c_str());
+    check(renderer.renderGraphDiagnosticCount() == 0, "ParticleField frames produce no render-graph diagnostics");
 
     std::printf("%s (%d failure%s)\n", failures == 0 ? "PASS" : "FAIL", failures,
                 failures == 1 ? "" : "s");

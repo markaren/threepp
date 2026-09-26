@@ -6,6 +6,9 @@ becomes its own example target automatically — the parent `CMakeLists.txt` glo
 The target name is the file stem (e.g. `scratch/vulkan_aaa_capture.cpp` →
 `cmake --build <dir> --target vulkan_aaa_capture`).
 
+The render-graph A/B harness `rg_ab` started here and is now committed as
+`examples/vulkan/rg_ab.cpp`.
+
 Everything in this directory is gitignored **except this README**, so scratch
 harnesses, their configs, and local build scripts stay out of the project's
 history. Render outputs go to `<project>/aaa_caps/` (also gitignored).

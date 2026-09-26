@@ -196,6 +196,17 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test_executable(RenderGraph_test)
     # TransientPool placement (AliasPacker); CPU only.
     add_test_executable(TransientPool_test)
+    # The render-graph A/B harness (examples/vulkan/rg_ab.cpp) in --selfcheck
+    # mode, one test per scene: renders the scene and fails (exit 3) on any
+    # render-graph diagnostic. Four scenes, about 20 s each, cover the MSAA
+    # G-buffer pool, secondary views, splats and fields; the harness's other
+    # scenes are run by hand. Exists only when the examples are built.
+    if (TARGET rg_ab)
+        foreach (_rg_scene room room_fx outdoor fields_views)
+            add_test(NAME rg_ab_${_rg_scene} COMMAND rg_ab --selfcheck --scene ${_rg_scene})
+            set_tests_properties(rg_ab_${_rg_scene} PROPERTIES SKIP_RETURN_CODE 42)
+        endforeach ()
+    endif ()
     # SPIR-V binding reflection against the embedded shaders; CPU only.
     add_test_executable(SpirvReflect_test)
     target_include_directories(SpirvReflect_test PRIVATE "${CMAKE_BINARY_DIR}/generated")

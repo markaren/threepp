@@ -2222,6 +2222,14 @@ namespace threepp {
         }
     }
 
+    std::uint32_t VulkanRenderer::renderGraphDiagnosticCount() const {
+        return core()->rgDiagnosticCount_;
+    }
+
+    std::vector<std::string> VulkanRenderer::renderGraphDiagnostics() const {
+        return core()->rgDiagnostics_;
+    }
+
     std::uint64_t VulkanRenderer::splatVolumeGeneration() const {
         return core()->splat_ ? core()->splat_->volumeGeneration() : 0;
     }

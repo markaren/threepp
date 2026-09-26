@@ -33,6 +33,12 @@
 // first use of one after another has been used discards its contents behind a
 // barrier that waits for the other's last use.
 //
+// Diagnostics. Declarations the graph cannot plan exactly are collected in
+// diagnostics() rather than failing: an overlapping alias (above), and one pass
+// declaring the same image range in two different layouts (the graph keeps the
+// first layout and widens the access). Either is a bug in the declaring code.
+// The renderer counts them (VulkanRenderer::renderGraphDiagnosticCount()).
+//
 // Planning and recording are separate: compile() fills the barrier plan
 // without touching a command buffer (unit-testable, and what dump() prints),
 // execute() compiles if needed and records.
@@ -187,6 +193,11 @@ namespace threepp::vulkan::rg {
         // Aliased images whose uses overlap in pass order — a bug in whatever
         // assigned their memory. Empty when the plan is safe.
         [[nodiscard]] const std::vector<std::string>& aliasErrors() const { return aliasErrors_; }
+        // Every diagnostic of the current graph: a pass that declared one image
+        // range in two layouts (collected as passes are declared), then the
+        // alias errors (prefixed "aliased "; valid after compile()). Cleared by
+        // reset(). Empty when the declarations are consistent.
+        [[nodiscard]] std::vector<std::string> diagnostics() const;
         [[nodiscard]] std::string dump() const;
 
     private:
@@ -252,6 +263,7 @@ namespace threepp::vulkan::rg {
         mutable std::vector<VkMemoryBarrier2>       memoryScratch_;
         std::vector<PlannedBarrier> entry_, exit_;
         std::vector<std::string> aliasErrors_;
+        std::vector<std::string> layoutErrors_;// PassBuilder::use, two layouts
         bool entryMemory_ = false, exitMemory_ = false;
         bool compiled_ = false;
         VkPipelineStageFlags2 usedStages_ = 0;

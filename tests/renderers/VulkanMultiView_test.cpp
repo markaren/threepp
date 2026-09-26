@@ -973,6 +973,13 @@ int main(int argc, char** argv) {
     gateProbeDeterminism(canvas, renderer, scene, *primaryCam);
     gateAutoExposure(canvas, renderer, scene, *primaryCam);
 
+    // Every gate above renders through one frame graph (secondary views, the
+    // MSAA G-buffer pool, per-view splat sorts); none may produce a
+    // render-graph diagnostic (two-layout declaration, overlapping alias).
+    std::printf("\n[graph] render-graph diagnostics across every gate\n");
+    for (const auto& m : renderer.renderGraphDiagnostics()) std::printf("  %s\n", m.c_str());
+    check(renderer.renderGraphDiagnosticCount() == 0, "no render-graph diagnostics");
+
     std::printf("\nmulti-view: %d failed\n", failures);
     return failures == 0 ? 0 : 1;
 }
