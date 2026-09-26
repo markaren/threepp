@@ -2857,6 +2857,15 @@ sim_t = 0.0                                           # render clock: ocean, par
 frame_i = 0
 
 
+def current_at(t):
+    """The fjord current at world time t (m/s, world frame): 0.10-0.20 m/s, heading
+    0.35 +- 0.25 rad from +x toward +z. Only the net feels it here; a module function
+    so a sibling scene (snake_netpen.py) reads the same water the cloth does."""
+    sp = 0.15 * (1.0 + 0.35 * math.sin(0.21 * t))
+    ang = 0.35 + 0.25 * math.sin(0.09 * t)
+    return np.array([sp * math.cos(ang), 0.0, sp * math.sin(ang)], np.float32)
+
+
 def step(dt=1.0 / 60.0):
     global world_t, sim_t, frame_i
     world_t += dt
@@ -2868,9 +2877,7 @@ def step(dt=1.0 / 60.0):
     pins = tether_pins(dt)
     rope.pins.assign(np.asarray(pins, np.float32))
     rope.pay_out(float(np.linalg.norm(pins[1] - pins[0])))
-    sp = 0.15 * (1.0 + 0.35 * math.sin(0.21 * world_t))
-    ang = 0.35 + 0.25 * math.sin(0.09 * world_t)
-    net_step(np.array([sp * math.cos(ang), 0.0, sp * math.sin(ang)], np.float32), world_t)
+    net_step(current_at(world_t), world_t)
     mark("net+tether solve", gpu=True)
     net_upload()
     mark("net upload")
@@ -3507,65 +3514,66 @@ print(f"fish: {'interop' if fish_vk else 'host upload'}; net: {'interop' if net_
 
 terrain_scan()
 
-if FILM_BENCH:
-    film_bench()
-elif FILM:
-    run_film()
-elif AUDIT:
-    run_audit(AUDIT)
-elif E3:
-    run_e3(E3)
-elif HEADLESS:
-    os.makedirs(os.path.dirname(OUT) or ".", exist_ok=True)
-    place(camera, SHOT)
-    frames = int(SECONDS * 60)
-    WARM_B, t_bench = min(60, frames // 2), 0.0     # skip pipeline warm-up + the first tile bakes
-    for i in range(frames):
-        if i == WARM_B:
-            t_bench = time.perf_counter()
-        step()
-        if SHOTS[SHOT] is None:
-            place(camera, SHOT)
-        renderer.render(scene, camera)
-    t_bench, n_bench = time.perf_counter() - t_bench, frames - WARM_B
-    renderer.save_frame(scene, camera, OUT)
-    print(f"simulated {SECONDS:.1f} s ({frames} frames), wrote {OUT}")
-    print(f"frame path: {1e3 * t_bench / n_bench:.1f} ms/f = {n_bench / t_bench:.1f} fps at {W}x{H}"
-          f" over {n_bench} frames ({'terrain ON' if GEO is not None else 'terrain off'})")
-    rov_report()
-    if SHOT == "p1_tear":
-        for _ in range(30):
+if __name__ == "__main__":                     # the run modes; an import stops after the setup above
+    if FILM_BENCH:
+        film_bench()
+    elif FILM:
+        run_film()
+    elif AUDIT:
+        run_audit(AUDIT)
+    elif E3:
+        run_e3(E3)
+    elif HEADLESS:
+        os.makedirs(os.path.dirname(OUT) or ".", exist_ok=True)
+        place(camera, SHOT)
+        frames = int(SECONDS * 60)
+        WARM_B, t_bench = min(60, frames // 2), 0.0     # skip pipeline warm-up + the first tile bakes
+        for i in range(frames):
+            if i == WARM_B:
+                t_bench = time.perf_counter()
             step()
+            if SHOTS[SHOT] is None:
+                place(camera, SHOT)
             renderer.render(scene, camera)
-        out_b = OUT[:-4] + "_b.png"
-        renderer.save_frame(scene, camera, out_b)
-        print(f"wrote {out_b} (+0.5 s)")
-elif PROFILE:
-    WARM, TIMED = 60, 300
-    engine, n = {}, [0]
+        t_bench, n_bench = time.perf_counter() - t_bench, frames - WARM_B
+        renderer.save_frame(scene, camera, OUT)
+        print(f"simulated {SECONDS:.1f} s ({frames} frames), wrote {OUT}")
+        print(f"frame path: {1e3 * t_bench / n_bench:.1f} ms/f = {n_bench / t_bench:.1f} fps at {W}x{H}"
+              f" over {n_bench} frames ({'terrain ON' if GEO is not None else 'terrain off'})")
+        rov_report()
+        if SHOT == "p1_tear":
+            for _ in range(30):
+                step()
+                renderer.render(scene, camera)
+            out_b = OUT[:-4] + "_b.png"
+            renderer.save_frame(scene, camera, out_b)
+            print(f"wrote {out_b} (+0.5 s)")
+    elif PROFILE:
+        WARM, TIMED = 60, 300
+        engine, n = {}, [0]
 
-    def profile_frame():
-        step()
-        place(camera, "p3_hud")
-        mark("other")
-        renderer.render(scene, camera)
-        mark("render")
-        n[0] += 1
-        if n[0] == WARM:
-            prof.acc.clear()
-        elif n[0] > WARM and prof.on:
-            for k, v in renderer.frame_timings.items():
-                engine[k] = engine.get(k, 0.0) + v
+        def profile_frame():
+            step()
+            place(camera, "p3_hud")
+            mark("other")
+            renderer.render(scene, camera)
+            mark("render")
+            n[0] += 1
+            if n[0] == WARM:
+                prof.acc.clear()
+            elif n[0] > WARM and prof.on:
+                for k, v in renderer.frame_timings.items():
+                    engine[k] = engine.get(k, 0.0) + v
 
-    while n[0] < WARM + TIMED and canvas.animate_once(profile_frame):
-        pass
-    prof.report(TIMED, engine)
-    prof.on, n[0] = False, 0
-    t0 = time.perf_counter()
-    while n[0] < TIMED and canvas.animate_once(profile_frame):
-        pass
-    print(f"live, no syncs: {TIMED / (time.perf_counter() - t0):.1f} fps over {TIMED} frames")
-else:
-    place(camera, "p1_tear")
-    camera.position.set(*(TEAR_C - 4.0 * e_r + 1.5 * e_t + [0, 0.6, 0]))
-    orbit_loop(canvas, renderer, scene, camera, step, target=tuple(TEAR_C))
+        while n[0] < WARM + TIMED and canvas.animate_once(profile_frame):
+            pass
+        prof.report(TIMED, engine)
+        prof.on, n[0] = False, 0
+        t0 = time.perf_counter()
+        while n[0] < TIMED and canvas.animate_once(profile_frame):
+            pass
+        print(f"live, no syncs: {TIMED / (time.perf_counter() - t0):.1f} fps over {TIMED} frames")
+    else:
+        place(camera, "p1_tear")
+        camera.position.set(*(TEAR_C - 4.0 * e_r + 1.5 * e_t + [0, 0.6, 0]))
+        orbit_loop(canvas, renderer, scene, camera, step, target=tuple(TEAR_C))
