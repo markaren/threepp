@@ -337,6 +337,7 @@ set(privateHeaders
         "threepp/loaders/HdrTexture.hpp"
         "threepp/loaders/ObjectJsonConstants.hpp"
         "threepp/loaders/ObjectJsonParse.hpp"
+        "threepp/loaders/gltf/GLTFParser.hpp"
 
         "threepp/loaders/exr/PizDecode.hpp"
 
@@ -552,6 +553,8 @@ set(sources
         "threepp/loaders/exr/PizDecode.cpp"
         "threepp/loaders/FontLoader.cpp"
         "threepp/loaders/GLTFLoader.cpp"
+        "threepp/loaders/gltf/GLTFMaterials.cpp"
+        "threepp/loaders/gltf/GLTFMeshes.cpp"
         "threepp/loaders/MaterialVariants.cpp"
         "threepp/loaders/ImageLoader.cpp"
         "threepp/loaders/RGBELoader.cpp"
