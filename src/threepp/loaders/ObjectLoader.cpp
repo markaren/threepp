@@ -1286,6 +1286,24 @@ namespace {
                 if (it != ctx.textures.end()) scene->environment = it->second;
             }
 
+            scene->backgroundBlurriness = value(j, "backgroundBlurriness", 0.f);
+            scene->backgroundIntensity = value(j, "backgroundIntensity", 1.f);
+            scene->environmentIntensity = value(j, "environmentIntensity", 1.f);
+            const auto readEuler = [&](const char* key, Euler& e) {
+                if (!j.contains(key) || !j[key].is_array() || j[key].size() < 3) return;
+                const auto& a = j[key];
+                static const char* orderNames[] = {"XYZ", "YZX", "ZXY", "XZY", "YXZ", "ZYX"};
+                auto order = Euler::default_order;
+                if (a.size() > 3 && a[3].is_string()) {
+                    for (int i = 0; i < 6; ++i) {
+                        if (a[3].get<std::string>() == orderNames[i]) order = static_cast<Euler::RotationOrders>(i);
+                    }
+                }
+                e.set(a[0].get<float>(), a[1].get<float>(), a[2].get<float>(), order);
+            };
+            readEuler("backgroundRotation", scene->backgroundRotation);
+            readEuler("environmentRotation", scene->environmentRotation);
+
             if (j.contains("fog") && j["fog"].is_object()) {
                 const auto& fog = j["fog"];
                 const auto fogType = value<std::string>(fog, "type", "Fog");

@@ -33,6 +33,10 @@ namespace threepp::shaders {
                 // flag: the shader does vec3( flipEnvMap * reflectVec.x, ... ).
                 // The two legal values are -1 and +1.
                 {"flipEnvMap", Uniform(1.f)},
+                // three.js r162: world direction -> environment direction,
+                // i.e. transpose(makeRotationFromEuler(rotation)). Applied
+                // BEFORE the flipEnvMap x-mirror, as r162 folds it in.
+                {"envMapRotation", Uniform(Matrix3())},
                 {"reflectivity", Uniform(1.f)},
                 {"refractionRatio", Uniform(0.98f)},
                 {"maxMipLevel", Uniform(0)}};

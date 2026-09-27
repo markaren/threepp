@@ -52,7 +52,8 @@ ShaderLib::ShaderLib()
                                       UniformMap{
                                             {"emissive", Uniform(Color(0x000000))},
                                             {"specular", Uniform(Color(0x111111))},
-                                            {"shininess", Uniform(30.f)}
+                                            {"shininess", Uniform(30.f)},
+                                            {"envMapIntensity", Uniform(1.f)}
                                       }
                               }),// clang-format on
 
@@ -171,7 +172,8 @@ ShaderLib::ShaderLib()
               mergeUniforms({// clang-format off
                                       UniformMap{
                                               {"uvTransform", Uniform(Matrix3())},
-                                              {"t2D", Uniform()}
+                                              {"t2D", Uniform()},
+                                              {"backgroundIntensity", Uniform(1.f)}
                                       }
                               }),// clang-format on
 
@@ -182,6 +184,8 @@ ShaderLib::ShaderLib()
                                       UniformsLib::instance().envmap,
                                       UniformMap{
                                               {"opacity", Uniform(1.f)},
+                                              {"backgroundBlurriness", Uniform(0.f)},
+                                              {"backgroundIntensity", Uniform(1.f)},
                                               // xyz = the camera's world forward, w = 1 under an
                                               // orthographic camera. The w=0 default leaves the
                                               // perspective path exactly as it was.

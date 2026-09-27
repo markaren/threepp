@@ -193,6 +193,11 @@ struct GLMaterials::Impl {
 
         uniforms.at("specular").value<Color>().copy(material->specular);
         uniforms.at("shininess").value<float>() = std::max(material->shininess, static_cast<float>(1E-4));// to prevent pow( 0.0, 0.0 )
+        // Diffuse IBL for Phong is a scene.environment feature (r184 #32795):
+        // with its own envMap, r186 does not PMREM it and so adds no IBL. Here
+        // an equirect envMap is PMREM'd for every material, so zeroing the
+        // scale is what keeps such a Phong exactly as it rendered before.
+        uniforms.at("envMapIntensity").value<float>() = material->envMap ? 0.f : material->envMapIntensity;
 
         if (material->emissiveMap) {
 

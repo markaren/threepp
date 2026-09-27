@@ -4,6 +4,7 @@
 #define THREEPP_SCENE_HPP
 
 #include "threepp/core/Object3D.hpp"
+#include "threepp/math/Euler.hpp"
 
 #include "threepp/scenes/Fog.hpp"
 #include "threepp/scenes/FogExp2.hpp"
@@ -48,6 +49,26 @@ namespace threepp {
         Background background;
         std::shared_ptr<Texture> environment;
         std::optional<FogVariant> fog;
+
+        // three.js r146-r163 background/environment controls (same names, same
+        // defaults; the defaults reproduce the renderer's output from before
+        // they existed). Honoured by GLRenderer only for now: the Vulkan
+        // renderer ignores all five.
+        //
+        // Blur of a texture background, 0 (sharp) .. 1 (fully diffuse). Blurred
+        // backgrounds are read from the environment's prefiltered PMREM, so they
+        // need an equirectangular or cube texture background.
+        float backgroundBlurriness = 0;
+        // Linear multiplier on a texture background (not on a Color background).
+        float backgroundIntensity = 1;
+        // Rotation of a texture background (cube / equirect).
+        Euler backgroundRotation;
+        // Multiplier on the IBL of every material lit by `environment` (one that
+        // has no envMap of its own). threepp multiplies it with the material's
+        // envMapIntensity; see GLRenderer.
+        float environmentIntensity = 1;
+        // Rotation of `environment`, for every material lit by it.
+        Euler environmentRotation;
 
         std::shared_ptr<Material> overrideMaterial;
 

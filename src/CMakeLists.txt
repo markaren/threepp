@@ -47,6 +47,7 @@ set(publicHeaders
         "threepp/cameras/OrthographicCamera.hpp"
 
         "threepp/extras/ShapeUtils.hpp"
+        "threepp/extras/environments/RoomEnvironment.hpp"
         "threepp/extras/core/Curve.hpp"
         "threepp/extras/core/CurvePath.hpp"
         "threepp/extras/core/Font.hpp"
@@ -255,6 +256,7 @@ set(publicHeaders
         "threepp/renderers/gl/GLInfo.hpp"
         "threepp/renderers/gl/GLShadowMap.hpp"
         "threepp/renderers/gl/GLState.hpp"
+        "threepp/renderers/gl/PMREMGenerator.hpp"
 
         "threepp/renderers/shaders/ShaderChunk.hpp"
         "threepp/renderers/shaders/ShaderLib.hpp"
@@ -622,6 +624,7 @@ set(sources
         "threepp/lights/SpotLightShadow.cpp"
 
         "threepp/scenes/Scene.cpp"
+        "threepp/extras/environments/RoomEnvironment.cpp"
         "threepp/scenes/Fog.cpp"
         "threepp/scenes/FogExp2.cpp"
 
@@ -715,6 +718,7 @@ set(sources
         "threepp/renderers/gl/GLTextures.cpp"
         "threepp/renderers/gl/GLUniforms.cpp"
         "threepp/renderers/gl/ProgramParameters.cpp"
+        "threepp/renderers/gl/PMREMGenerator.cpp"
 
         "threepp/renderers/shaders/ShaderLib.cpp"
 

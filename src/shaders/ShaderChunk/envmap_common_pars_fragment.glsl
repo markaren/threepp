@@ -3,6 +3,7 @@
 
 	uniform float envMapIntensity;
 	uniform float flipEnvMap;
+	uniform mat3 envMapRotation;
 	uniform int maxMipLevel;
 
 	#ifdef ENVMAP_TYPE_CUBE

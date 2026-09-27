@@ -42,6 +42,7 @@ void GLCubeMaps::forget(Texture* texture) {
 
     cubemaps.erase(texture);
     pmrems.erase(texture);
+    cubePmrems.erase(texture);
     watched_.erase(texture);
 }
 
@@ -145,7 +146,13 @@ Texture* GLCubeMaps::getPMREM(Texture* texture) {
     // and the only layout the detector reads (and all Vulkan accepts too).
     EnvSunExtract sun;
     std::shared_ptr<Texture> sunClamped;
-    if (envSunExtraction && image.isFloat() && image.channels() == 4) {
+    // A GPU-rendered source (PMREMGenerator::fromScene, any render target) has
+    // no CPU pixels to scan: its Image is an empty byte vector, so it is not
+    // float and the detector never runs. The size check keeps a float Image
+    // that only carries dimensions from reaching it either.
+    const bool hasCpuPixels = image.isFloat() && image.channels() == 4 &&
+                              image.data<float>().size() >= static_cast<size_t>(image.width()) * image.height() * 4;
+    if (envSunExtraction && hasCpuPixels) {
         std::vector<float> clamped;
         if (extractEnvSun(image.width(), image.height(),
                           image.data<float>().data(), clamped, sun)) {
@@ -182,6 +189,33 @@ Texture* GLCubeMaps::getPMREM(Texture* texture) {
     return result;
 }
 
+Texture* GLCubeMaps::getBackgroundPMREM(Texture* texture) {
+
+    auto* cube = dynamic_cast<CubeTexture*>(texture);
+    if (!cube) return getPMREM(texture);
+
+    if (const auto it = cubePmrems.find(texture); it != cubePmrems.end()) {
+        return it->second->texture.get();
+    }
+
+    if (!pmremGenerator) {
+        pmremGenerator = std::make_unique<GLPMREM>(renderer);
+    }
+
+    // 256 per face -> a 1024x512 equirect, the size fromEquirectangular's
+    // prefilter is tuned for. The loaded-cube mirror is undone here, so the
+    // atlas is in the same world frame as every other PMREM.
+    auto* currentRenderTarget = renderer.getRenderTarget();
+    auto equirect = pmremGenerator->cubeToEquirect(*cube, 256, 0.f, cube->_needsFlipEnvMap);
+    auto pmrem = pmremGenerator->fromEquirectangular(*equirect->texture);
+    renderer.setRenderTarget(currentRenderTarget);
+
+    auto* result = pmrem->texture.get();
+    cubePmrems[texture] = std::move(pmrem);
+    watch(texture);
+    return result;
+}
+
 const EnvSunExtract* GLCubeMaps::envSun(Texture* texture) const {
 
     if (!texture) return nullptr;
@@ -193,6 +227,7 @@ const EnvSunExtract* GLCubeMaps::envSun(Texture* texture) const {
 void GLCubeMaps::disposePMREMs() {
 
     pmrems.clear();
+    cubePmrems.clear();
 }
 
 void GLCubeMaps::dispose() {
@@ -200,5 +235,6 @@ void GLCubeMaps::dispose() {
     unwatchAll();
     cubemaps.clear();
     pmrems.clear();
+    cubePmrems.clear();
     pmremGenerator.reset();
 }

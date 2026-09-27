@@ -9,6 +9,9 @@
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 
 #include "threepp/cameras/OrthographicCamera.hpp"
+#include "threepp/geometries/PlaneGeometry.hpp"
+#include "threepp/math/Matrix3.hpp"
+#include "threepp/math/Matrix4.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -22,18 +25,31 @@ GLBackground::GLBackground(GLRenderer& renderer, GLCubeMaps& cubemaps, GLState& 
 void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
 
     bool forceClear = false;
-    const bool isScene = scene->is<Scene>();
+    auto* asScene = scene->as<Scene>();
 
     std::optional<Background> background;
 
-    if (isScene) {
-        background = scene->as<Scene>()->background;
+    if (asScene) {
+        background = asScene->background;
     }
 
+    // three.js r146/r147/r162 background knobs. The defaults leave every path
+    // below exactly as it was.
+    const float blurriness = asScene ? std::clamp(asScene->backgroundBlurriness, 0.f, 1.f) : 0.f;
+    const float intensity = asScene ? asScene->backgroundIntensity : 1.f;
+
     // Resolve equirectangular textures to cubemaps up front (mirrors three.js WebGLBackground).
+    // A blurred background resolves to the PMREM instead (r146: usePMREM =
+    // backgroundBlurriness > 0) and is read at roughness = blurriness; that
+    // holds for equirect and cube textures, not for a plain 2D one.
     Texture* resolvedBackground = nullptr;
     if (background && background->isTexture()) {
-        resolvedBackground = cubemaps.get(background->texture().get());
+        auto* source = background->texture().get();
+        const bool hasPMREM = source->mapping == Mapping::EquirectangularReflection ||
+                              source->mapping == Mapping::EquirectangularRefraction ||
+                              dynamic_cast<CubeTexture*>(source) != nullptr;
+        resolvedBackground = (blurriness > 0.f && hasPMREM) ? cubemaps.getBackgroundPMREM(source)
+                                                            : cubemaps.get(source);
     }
 
     if (!background || (background && background->empty())) {
@@ -51,9 +67,13 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
         renderer.clear(renderer.autoClearColor, renderer.autoClearDepth, renderer.autoClearStencil);
     }
 
-    // resolvedBackground is either the original texture or the converted CubeTexture.
-    // Only render the skybox if it resolves to a CubeTexture.
-    if (auto* cubeBackground = dynamic_cast<CubeTexture*>(resolvedBackground)) {
+    // resolvedBackground is the original texture, the converted CubeTexture, or
+    // (blurred) the PMREM atlas. Cube and atlas go on the skybox; any other
+    // texture is a plain 2D background drawn full-screen.
+    auto* cubeBackground = dynamic_cast<CubeTexture*>(resolvedBackground);
+    const bool isCubeUV = resolvedBackground && resolvedBackground->mapping == Mapping::CubeUVReflection;
+
+    if (cubeBackground || isCubeUV) {
 
         auto tex = background->texture();
         // Wrap the resolved cube texture in a non-owning shared_ptr so we can assign it to
@@ -61,7 +81,7 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
         // envMap points at the *resolved* cube texture, so WebGLPrograms/GLRenderer reads
         // CubeReflection mapping and compiles ENVMAP_TYPE_CUBE (samplerCube), which matches
         // the uniform bound below. Storage still lives in GLCubeMaps.
-        auto resolvedShared = std::shared_ptr<Texture>(cubeBackground, [](Texture*) {});
+        auto resolvedShared = std::shared_ptr<Texture>(resolvedBackground, [](Texture*) {});
 
         if (!boxMesh) {
             auto shaderMaterial = ShaderMaterial::create();
@@ -125,19 +145,95 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
         // Point envMap at the *resolved* cube texture so ProgramParameters reads
         // CubeReflection mapping (samplerCube path). The uniform carries the same ptr.
         shaderMaterial->envMap = resolvedShared;
-        shaderMaterial->uniforms.at("envMap").setValue(cubeBackground);
-        shaderMaterial->uniforms.at("flipEnvMap").setValue(cubeBackground->_needsFlipEnvMap ? -1.f : 1.f);
+        shaderMaterial->uniforms.at("envMap").setValue(resolvedBackground);
+        shaderMaterial->uniforms.at("flipEnvMap").setValue((cubeBackground && cubeBackground->_needsFlipEnvMap) ? -1.f : 1.f);
+        shaderMaterial->uniforms.at("backgroundBlurriness").setValue(blurriness);
+        shaderMaterial->uniforms.at("backgroundIntensity").setValue(intensity);
 
-        if (currentBackground != &background.value() || currentBackgroundVersion != tex->version() || currentTonemapping != renderer.toneMapping) {
+        // scene.backgroundRotation, applied exactly as scene.environmentRotation
+        // is on materials (world -> env = transpose of the rotation, then the
+        // flipEnvMap mirror), so a background and the reflections of the same
+        // texture under the same rotation always agree. r186's WebGLBackground
+        // builds this from the NEGATED Euler angles instead, which equals the
+        // transpose for a rotation about one axis but not for a compound one.
+        Matrix3 rotation;
+        if (asScene) {
+            const auto& r = asScene->backgroundRotation;
+            if (static_cast<float>(r.x) != 0 || static_cast<float>(r.y) != 0 || static_cast<float>(r.z) != 0) {
+                Matrix4 m;
+                m.makeRotationFromEuler(r);
+                rotation.setFromMatrix4(m).transpose();
+            }
+        }
+        shaderMaterial->uniforms.at("envMapRotation").setValue(rotation);
+
+        if (currentBackground != &background.value() || currentBackgroundVersion != tex->version() ||
+            currentTonemapping != renderer.toneMapping || currentResolved != resolvedBackground) {
 
             shaderMaterial->needsUpdate();
 
             currentBackground = &background.value();
             currentBackgroundVersion = tex->version();
             currentTonemapping = renderer.toneMapping;
+            currentResolved = resolvedBackground;
         }
 
         renderList.unshift(boxMesh.get(), boxMesh->geometry().get(), boxMesh->material().get(), 0, 0, std::nullopt);
+
+    } else if (resolvedBackground) {
+
+        // A plain 2D texture: r129/r186 WebGLBackground's planeMesh, a
+        // full-screen quad the background vertex shader pins to the far plane.
+        auto* tex = resolvedBackground;
+
+        if (!planeMesh) {
+            auto shaderMaterial = ShaderMaterial::create();
+            shaderMaterial->name = "BackgroundMaterial";
+            shaderMaterial->uniforms = shaders::ShaderLib::instance().background.uniforms;
+            shaderMaterial->vertexShader = shaders::ShaderLib::instance().background.vertexShader;
+            shaderMaterial->fragmentShader = shaders::ShaderLib::instance().background.fragmentShader;
+            shaderMaterial->side = Side::Front;
+            shaderMaterial->depthTest = false;
+            shaderMaterial->depthWrite = false;
+            shaderMaterial->fog = false;
+
+            auto geometry = PlaneGeometry::create(2, 2);
+            geometry->deleteAttribute("normal");
+
+            planeMesh = std::make_unique<Mesh>(geometry, shaderMaterial);
+            planeMesh->frustumCulled = false;
+
+            objects.update(planeMesh.get());
+        }
+
+        auto shaderMaterial = planeMesh->materialAs<ShaderMaterial>();
+        shaderMaterial->uniforms.at("t2D").setValue(tex);
+        shaderMaterial->uniforms.at("backgroundIntensity").setValue(intensity);
+
+        // ShaderMaterial carries no `map`, so the program cannot pick up the
+        // texture's encoding the way a material's mapTexelToLinear does; the
+        // shader decodes sRGB itself. r186 also leaves an sRGB (display-ready)
+        // background out of tone mapping.
+        const bool srgb = tex->colorSpace == ColorSpace::sRGB;
+        shaderMaterial->toneMapped = !srgb;
+        if (srgb) shaderMaterial->defines["BACKGROUND_SRGB"] = "";
+        else shaderMaterial->defines.erase("BACKGROUND_SRGB");
+
+        if (tex->matrixAutoUpdate) tex->updateMatrix();
+        shaderMaterial->uniforms.at("uvTransform").value<Matrix3>().copy(tex->matrix);
+
+        if (currentResolved != tex || currentBackgroundVersion != tex->version() ||
+            currentTonemapping != renderer.toneMapping || currentSrgb != srgb) {
+
+            shaderMaterial->needsUpdate();
+
+            currentResolved = tex;
+            currentBackgroundVersion = tex->version();
+            currentTonemapping = renderer.toneMapping;
+            currentSrgb = srgb;
+        }
+
+        renderList.unshift(planeMesh.get(), planeMesh->geometry().get(), planeMesh->material().get(), 0, 0, std::nullopt);
     }
 }
 

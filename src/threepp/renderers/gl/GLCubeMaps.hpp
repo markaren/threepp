@@ -33,6 +33,12 @@ namespace threepp {
             // for non-equirect inputs (pre-baked cube PMREMs etc.).
             Texture* getPMREM(Texture* texture);
 
+            // The PMREM a BLURRED background reads (scene.backgroundBlurriness
+            // > 0): getPMREM for an equirect, and for a cube texture a PMREM
+            // built from it via an equirect resample. Materials keep reading a
+            // cube envMap directly, so cubes only get one here.
+            Texture* getBackgroundPMREM(Texture* texture);
+
             // The sun measured out of `texture` when its PMREM was built, or
             // nullptr when the PMREM is not built yet, extraction was off, or no
             // disc was found. GLRenderer re-injects it as an analytic light.
@@ -83,6 +89,7 @@ namespace threepp {
             GLRenderer& renderer;
             std::unordered_map<Texture*, std::unique_ptr<GLCubeRenderTarget>> cubemaps;
             std::unordered_map<Texture*, PmremEntry> pmrems;
+            std::unordered_map<Texture*, std::unique_ptr<RenderTarget>> cubePmrems;
             std::unordered_set<Texture*> watched_;
             SourceTextureEventListener onSourceDispose_;
             std::unique_ptr<GLPMREM> pmremGenerator;

@@ -266,6 +266,23 @@ struct GLRenderer::Impl {
         cubemaps.getPMREM(asScene->environment.get());
         if (const auto* sun = cubemaps.envSun(asScene->environment.get())) {
             envSun_ = *sun;
+            // The sun is part of scene.environment, so it follows the same two
+            // knobs the IBL does: environmentIntensity scales its irradiance and
+            // environmentRotation turns it (env -> world is the rotation itself;
+            // the shaders use its transpose for world -> env). Kept in world
+            // space here, so envSunDirection()/envSunColor() report what is lit.
+            const float k = asScene->environmentIntensity;
+            for (float& c : envSun_.colorE) c *= k;
+            const auto& r = asScene->environmentRotation;
+            if (static_cast<float>(r.x) != 0 || static_cast<float>(r.y) != 0 || static_cast<float>(r.z) != 0) {
+                Matrix4 m;
+                m.makeRotationFromEuler(r);
+                Vector3 d(envSun_.dir[0], envSun_.dir[1], envSun_.dir[2]);
+                d.applyMatrix4(m);
+                envSun_.dir[0] = d.x;
+                envSun_.dir[1] = d.y;
+                envSun_.dir[2] = d.z;
+            }
         }
     }
 
@@ -869,7 +886,10 @@ struct GLRenderer::Impl {
         // Mirrors three.js WebGLPrograms, which calls cubeuvmaps.get() inline when reading
         // material.envMap — so parameters.envMapMode reflects the *resolved* mapping
         // (e.g. CubeUVReflection for equirect sources), not the source equirect mapping.
-        materialProperties->environment = material->is<MeshStandardMaterial>() ? scene->environment.get() : nullptr;
+        // three.js r184 (#32795): Phong reads scene.environment too.
+        materialProperties->environment = (material->is<MeshStandardMaterial>() || material->is<MeshPhongMaterial>())
+                                                  ? scene->environment.get()
+                                                  : nullptr;
         materialProperties->fog = scene->fog;
         auto materialWithEnvMap = material->as<MaterialWithEnvMap>();
         if (materialWithEnvMap && materialWithEnvMap->envMap) {
@@ -1003,7 +1023,7 @@ struct GLRenderer::Impl {
         textures.resetTextureUnits();
 
         auto& fog = scene->fog;
-        auto environment = isMeshStandardMaterial ? scene->environment : nullptr;
+        auto environment = (isMeshStandardMaterial || isMeshPhongMaterial) ? scene->environment : nullptr;
         ColorSpace encoding = currentOutputColorSpace();
 
         Texture* envMap;
@@ -1299,6 +1319,40 @@ struct GLRenderer::Impl {
             }
 
             materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _size.height(), _transmissionRenderTarget.get());
+
+            // three.js r162 envMapRotation / r163 environmentIntensity. When the
+            // env comes from scene.environment (the material has no envMap of its
+            // own) its lookups turn with scene.environmentRotation and its IBL is
+            // scaled by scene.environmentIntensity. r186 REPLACES
+            // envMapIntensity with environmentIntensity there; threepp MULTIPLIES
+            // them, so a scene that already tuned material.envMapIntensity under
+            // scene.environment keeps its look (identical at the defaults).
+            // ShaderMaterials (the background box) own their uniforms.
+            if (envMap && !isShaderMaterial && m_uniforms.contains("envMapRotation")) {
+                const bool fromEnvironment = environment && !isEnvMap;
+                Matrix3 rotation;
+                if (fromEnvironment) {
+                    Matrix4 m;
+                    m.makeRotationFromEuler(scene->environmentRotation);
+                    // Orthonormal, so the transpose is the inverse: world -> env.
+                    rotation.setFromMatrix4(m).transpose();
+                    if (materialWithEnvMap && m_uniforms.contains("envMapIntensity")) {
+                        m_uniforms.at("envMapIntensity").value<float>() =
+                                materialWithEnvMap->envMapIntensity * scene->environmentIntensity;
+                    }
+                    // r186 blends the mirror env into Phong (material.combine)
+                    // only for a cube envMap, never for a PMREM, so
+                    // scene.environment gives Phong diffuse IBL and no
+                    // multiply-blended reflection. Here every env is a PMREM
+                    // (the blend has to keep working for a material's own
+                    // equirect envMap), so the blend is switched off through
+                    // its weight instead.
+                    if (isMeshPhongMaterial && m_uniforms.contains("reflectivity")) {
+                        m_uniforms.at("reflectivity").value<float>() = 0.f;
+                    }
+                }
+                m_uniforms.at("envMapRotation").value<Matrix3>().copy(rotation);
+            }
 
             gl::GLUniforms::upload(materialProperties->uniformsList, m_uniforms, &textures);
         }

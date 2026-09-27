@@ -1655,6 +1655,19 @@ namespace {
             if (scene->environment) {
                 data["environment"] = writeTexture(*scene->environment, meta);
             }
+            // three.js r186 Scene.toJSON names. Rotations are written only when
+            // set, so a document without them stays byte-identical (three.js
+            // writes them unconditionally).
+            static const char* orderNames[] = {"XYZ", "YZX", "ZXY", "XZY", "YXZ", "ZYX"};
+            const auto eulerArray = [&](const Euler& e) {
+                return json::array({static_cast<float>(e.x), static_cast<float>(e.y), static_cast<float>(e.z), orderNames[static_cast<int>(e.getOrder())]});
+            };
+            const auto isZero = [](const Euler& e) { return static_cast<float>(e.x) == 0 && static_cast<float>(e.y) == 0 && static_cast<float>(e.z) == 0; };
+            if (scene->backgroundBlurriness > 0) data["backgroundBlurriness"] = scene->backgroundBlurriness;
+            if (scene->backgroundIntensity != 1) data["backgroundIntensity"] = scene->backgroundIntensity;
+            if (!isZero(scene->backgroundRotation)) data["backgroundRotation"] = eulerArray(scene->backgroundRotation);
+            if (scene->environmentIntensity != 1) data["environmentIntensity"] = scene->environmentIntensity;
+            if (!isZero(scene->environmentRotation)) data["environmentRotation"] = eulerArray(scene->environmentRotation);
             if (scene->fog) {
                 if (std::holds_alternative<Fog>(*scene->fog)) {
                     const auto& fog = std::get<Fog>(*scene->fog);

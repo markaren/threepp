@@ -34,6 +34,8 @@
 
 	#endif
 
+	reflectVec = envMapRotation * reflectVec;
+
 	#ifdef ENVMAP_TYPE_CUBE
 
 		vec4 envColor = textureCube( envMap, vec3( flipEnvMap * reflectVec.x, reflectVec.yz ) );

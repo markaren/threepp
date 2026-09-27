@@ -42,6 +42,17 @@ namespace threepp {
             std::unique_ptr<RenderTarget> fromEquirectangular(Texture& equirect,
                                                               Texture* roughSource = nullptr);
 
+            // Resample a cube texture (loaded or rendered) into an
+            // equirectangular HalfFloat target of 4*faceSize x 2*faceSize, in
+            // this atlas's equirect convention, with a full mip chain so it can
+            // feed fromEquirectangular. `flipX` is the loaded-cube-map mirror
+            // (CubeTexture::_needsFlipEnvMap); an sRGB cube is decoded to
+            // linear. sigma > 0 blurs with a Gaussian of that many radians
+            // (three.js PMREMGenerator.fromScene's sigma). The mapping is
+            // EquirectangularReflection.
+            std::unique_ptr<RenderTarget> cubeToEquirect(Texture& cube, int faceSize, float sigma = 0,
+                                                         bool flipX = false);
+
         private:
             GLRenderer& renderer;
 

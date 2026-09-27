@@ -52,6 +52,14 @@ namespace threepp {
             float clearAlpha = 0;
 
             std::unique_ptr<Mesh> boxMesh = nullptr;
+            // Full-screen quad for a plain 2D texture background (three.js
+            // WebGLBackground planeMesh).
+            std::unique_ptr<Mesh> planeMesh = nullptr;
+            // The texture the box/plane program was last built for: switching
+            // between a cube and the PMREM atlas (a blurred background) changes
+            // the program, so it must invalidate the material.
+            Texture* currentResolved = nullptr;
+            bool currentSrgb = false;
 
             Background* currentBackground = nullptr;
             unsigned int currentBackgroundVersion = 0;

@@ -20,6 +20,11 @@ void Scene::copy(const Object3D& source, bool recursive) {
         background = s->background;
         environment = s->environment;
         fog = s->fog;
+        backgroundBlurriness = s->backgroundBlurriness;
+        backgroundIntensity = s->backgroundIntensity;
+        backgroundRotation.copy(s->backgroundRotation);
+        environmentIntensity = s->environmentIntensity;
+        environmentRotation.copy(s->environmentRotation);
         overrideMaterial = s->overrideMaterial;
         autoUpdate = s->autoUpdate;
     }

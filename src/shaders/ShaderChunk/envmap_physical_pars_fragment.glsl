@@ -7,7 +7,7 @@
 
 	vec3 getLightProbeIndirectIrradiance( /*const in SpecularLightProbe specularLightProbe,*/ const in GeometricContext geometry, const in int maxMIPLevel ) {
 
-		vec3 worldNormal = inverseTransformDirection( geometry.normal, viewMatrix );
+		vec3 worldNormal = envMapRotation * inverseTransformDirection( geometry.normal, viewMatrix );
 
 		#ifdef ENVMAP_TYPE_CUBE
 
@@ -75,7 +75,7 @@
 
 		#endif
 
-		reflectVec = inverseTransformDirection( reflectVec, viewMatrix );
+		reflectVec = envMapRotation * inverseTransformDirection( reflectVec, viewMatrix );
 
 		float specularMIPLevel = getSpecularMIPLevel( roughness, maxMIPLevel );
 

@@ -195,6 +195,70 @@ void main() {
 }
 )";
 
+    // Cube -> equirect, in this atlas's equirect convention (dirFromUv as
+    // above), so the result feeds fromEquirectangular and GLCubeRenderTarget
+    // unchanged.
+    //
+    // sigma > 0 blurs with a Gaussian of that standard deviation (radians) on
+    // the sphere, as three.js's fromScene does before building its PMREM: a
+    // deterministic golden-angle spiral whose radii follow the Rayleigh
+    // distribution, i.e. equal-weight importance samples of a 2D Gaussian in
+    // the tangent plane.
+    const char* const CUBE_TO_EQUIRECT_SRC = R"(#version 330 core
+precision highp float;
+
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform samplerCube cubeMap;
+uniform float sigma;
+uniform int blurSamples;
+uniform float flipX;
+uniform int decodeSRGB;
+
+#define PI  3.14159265359
+#define PI2 6.28318530718
+#define GOLDEN_ANGLE 2.39996322973
+
+vec3 dirFromUv(vec2 uv) {
+    float phi   = (uv.x - 0.5) * PI2;
+    float theta = (uv.y - 0.5) * PI;
+    float cosT = cos(theta);
+    return vec3(cosT * cos(phi), sin(theta), cosT * sin(phi));
+}
+
+vec3 fetch(vec3 dir) {
+    vec3 c = texture(cubeMap, vec3(flipX * dir.x, dir.yz)).rgb;
+    if (decodeSRGB == 1) {
+        c = mix(pow(c * 0.9478672986 + vec3(0.0521327014), vec3(2.4)), c * 0.0773993808, vec3(lessThanEqual(c, vec3(0.04045))));
+    }
+    return c;
+}
+
+void main() {
+    vec3 N = normalize(dirFromUv(vUv));
+
+    if (sigma <= 0.0) {
+        fragColor = vec4(fetch(N), 1.0);
+        return;
+    }
+
+    vec3 upN = abs(N.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 T = normalize(cross(upN, N));
+    vec3 B = cross(N, T);
+
+    vec3 acc = vec3(0.0);
+    for (int i = 0; i < blurSamples; ++i) {
+        float u = (float(i) + 0.5) / float(blurSamples);
+        float theta = sigma * sqrt(-2.0 * log(1.0 - u));
+        float phi = float(i) * GOLDEN_ANGLE;
+        vec3 dir = cos(theta) * N + sin(theta) * (cos(phi) * T + sin(phi) * B);
+        acc += fetch(dir);
+    }
+    fragColor = vec4(acc / float(blurSamples), 1.0);
+}
+)";
+
     // One fullscreen quad ([-1,1]^2, uv [0,1]^2). The viewport restricts it to
     // the active strip, so the same geometry is reused for every LOD.
     std::shared_ptr<BufferGeometry> createFullscreenQuad() {
@@ -215,6 +279,7 @@ void main() {
 
 struct GLPMREM::Impl {
     std::shared_ptr<RawShaderMaterial> material;
+    std::shared_ptr<RawShaderMaterial> cubeMaterial;
     std::shared_ptr<OrthographicCamera> camera;
 };
 
@@ -235,7 +300,64 @@ GLPMREM::GLPMREM(GLRenderer& r)
     impl->material->blending = Blending::None;
     impl->material->side = Side::Double;
 
+    impl->cubeMaterial = RawShaderMaterial::create();
+    impl->cubeMaterial->name = "PMREM.cubeToEquirect";
+    impl->cubeMaterial->vertexShader = VERTEX_SRC;
+    impl->cubeMaterial->fragmentShader = CUBE_TO_EQUIRECT_SRC;
+    impl->cubeMaterial->uniforms["cubeMap"] = Uniform();
+    impl->cubeMaterial->uniforms["sigma"] = Uniform(0.f);
+    impl->cubeMaterial->uniforms["blurSamples"] = Uniform(96);
+    impl->cubeMaterial->uniforms["flipX"] = Uniform(1.f);
+    impl->cubeMaterial->uniforms["decodeSRGB"] = Uniform(0);
+    impl->cubeMaterial->depthTest = false;
+    impl->cubeMaterial->depthWrite = false;
+    impl->cubeMaterial->blending = Blending::None;
+    impl->cubeMaterial->side = Side::Double;
+
     impl->camera = OrthographicCamera::create();
+}
+
+std::unique_ptr<RenderTarget> GLPMREM::cubeToEquirect(Texture& cube, int faceSize, float sigma, bool flipX) {
+
+    faceSize = std::max(faceSize, 16);
+
+    RenderTarget::Options options;
+    options.type = Type::HalfFloat;
+    options.format = Format::RGBA;
+    options.encoding = ColorSpace::Linear;
+    options.magFilter = Filter::Linear;
+    // fromEquirectangular reads its source through textureLod, so the mip
+    // chain has to exist (the renderer regenerates it after the draw).
+    options.minFilter = Filter::LinearMipmapLinear;
+    options.wrapS = TextureWrapping::Repeat;
+    options.wrapT = TextureWrapping::ClampToEdge;
+    options.generateMipmaps = true;
+    options.depthBuffer = false;
+
+    auto target = RenderTarget::create(4 * faceSize, 2 * faceSize, options);
+    target->texture->mapping = Mapping::EquirectangularReflection;
+
+    auto& uniforms = impl->cubeMaterial->uniforms;
+    uniforms["cubeMap"].setValue(&cube);
+    uniforms["sigma"].setValue(std::max(sigma, 0.f));
+    uniforms["flipX"].setValue(flipX ? -1.f : 1.f);
+    uniforms["decodeSRGB"].setValue(cube.colorSpace == ColorSpace::sRGB ? 1 : 0);
+
+    auto* oldTarget = renderer.getRenderTarget();
+
+    auto geometry = createFullscreenQuad();
+    Mesh mesh(geometry, impl->cubeMaterial);
+    mesh.frustumCulled = false;
+
+    renderer.setRenderTarget(target.get());
+    renderer.render(mesh, *impl->camera);
+    renderer.setRenderTarget(oldTarget);
+
+    geometry->dispose();
+    // The cube may die before this generator: do not keep pointing at it.
+    uniforms["cubeMap"] = Uniform();
+
+    return target;
 }
 
 GLPMREM::~GLPMREM() = default;
