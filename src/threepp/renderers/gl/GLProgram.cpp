@@ -443,6 +443,7 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
                     parameters->roughnessMap ? "#define USE_ROUGHNESSMAP" : "",
                     parameters->metalnessMap ? "#define USE_METALNESSMAP" : "",
                     parameters->alphaMap ? "#define USE_ALPHAMAP" : "",
+                    parameters->alphaHash ? "#define USE_ALPHAHASH" : "",
                     parameters->transmission ? "#define USE_TRANSMISSION" : "",
                     parameters->transmissionMap ? "#define USE_TRANSMISSIONMAP" : "",
                     parameters->thicknessMap ? "#define USE_THICKNESSMAP" : "",
@@ -615,6 +616,9 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
                     parameters->roughnessMap ? "#define USE_ROUGHNESSMAP" : "",
                     parameters->metalnessMap ? "#define USE_METALNESSMAP" : "",
                     parameters->alphaMap ? "#define USE_ALPHAMAP" : "",
+                    parameters->alphaHash ? "#define USE_ALPHAHASH" : "",
+                    parameters->alphaToCoverage ? "#define ALPHA_TO_COVERAGE" : "",
+                    parameters->opaque ? "#define OPAQUE" : "",
 
                     parameters->sheen ? "#define USE_SHEEN" : "",
                     parameters->pbrSpecular ? "#define USE_SPECULAR" : "",

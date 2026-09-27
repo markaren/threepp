@@ -130,3 +130,8 @@ vec2 equirectUv( in vec3 dir ) {
 
 }
 
+#ifdef USE_ALPHAHASH
+
+	varying vec3 vPosition;
+
+#endif

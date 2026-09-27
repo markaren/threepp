@@ -69,6 +69,10 @@ namespace threepp {
             // map in use, naming the attribute each map samples.
             std::string uvDefines;
 
+            bool opaque{};         // r186: !transparent && Normal blending && !alphaToCoverage
+            bool alphaHash{};      // r154 #24271
+            bool alphaToCoverage{};// r161 #22172
+
             bool gradientMap{};
 
             bool sheen{};

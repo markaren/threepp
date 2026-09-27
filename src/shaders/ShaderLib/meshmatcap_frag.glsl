@@ -19,6 +19,7 @@ varying vec3 vViewPosition;
 #include <uv_pars_fragment>
 #include <map_pars_fragment>
 #include <alphamap_pars_fragment>
+#include <alphahash_pars_fragment>
 
 #include <fog_pars_fragment>
 #include <bumpmap_pars_fragment>
@@ -28,15 +29,16 @@ varying vec3 vViewPosition;
 
 void main() {
 
-	#include <clipping_planes_fragment>
 
 	vec4 diffuseColor = vec4( diffuse, opacity );
+	#include <clipping_planes_fragment>
 
 	#include <logdepthbuf_fragment>
 	#include <map_fragment>
 	#include <color_fragment>
 	#include <alphamap_fragment>
 	#include <alphatest_fragment>
+	#include <alphahash_fragment>
 	#include <normal_fragment_begin>
 	#include <normal_fragment_maps>
 
@@ -58,7 +60,7 @@ void main() {
 
 	vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;
 
-	gl_FragColor = vec4( outgoingLight, diffuseColor.a );
+	#include <opaque_fragment>
 
 	#include <tonemapping_fragment>
 	#include <encodings_fragment>

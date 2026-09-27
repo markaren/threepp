@@ -222,6 +222,20 @@ ProgramParameters::ProgramParameters(
     if (flatshadeMaterial) {
         flatShading = flatshadeMaterial->flatShading;
     }
+    {
+        // three.js r184 (#32831): a lit mesh whose geometry has no normals
+        // (and no normal map to replace them) is shaded flat from screen-space
+        // derivatives instead of reading an unbound normal attribute (black).
+        const auto wireMaterial = dynamic_cast<MaterialWithWireframe*>(material);
+        const bool wireframe = wireMaterial && wireMaterial->wireframe;
+        const auto type = material->type();
+        const bool litMesh = type == "MeshLambertMaterial" || type == "MeshPhongMaterial" ||
+                             type == "MeshStandardMaterial" || type == "MeshPhysicalMaterial";
+        if (litMesh && !wireframe && !normalMap && object->geometry() &&
+            !object->geometry()->hasAttribute("normal")) {
+            flatShading = true;
+        }
+    }
 
     auto sizeMaterial = material->as<MaterialWithSize>();
     sizeAttenuation = sizeMaterial ? sizeMaterial->sizeAttenuation : false;
@@ -261,6 +275,9 @@ ProgramParameters::ProgramParameters(
     premultipliedAlpha = material->premultipliedAlpha;
 
     alphaTest = material->alphaTest;
+    alphaHash = material->alphaHash;
+    alphaToCoverage = material->alphaToCoverage;
+    opaque = !material->transparent && material->blending == Blending::Normal && !material->alphaToCoverage;
     doubleSided = material->side == Side::Double;
     flipSided = material->side == Side::Back;
 
@@ -367,6 +384,7 @@ std::string ProgramParameters::hash() const {
     s << std::to_string(premultipliedAlpha) << '\n';
 
     s << std::to_string(alphaTest) << '\n';
+    s << std::to_string(alphaHash) << std::to_string(alphaToCoverage) << std::to_string(opaque) << '\n';
     s << std::to_string(doubleSided) << '\n';
     s << std::to_string(flipSided) << '\n';
 
