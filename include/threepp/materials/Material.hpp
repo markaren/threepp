@@ -96,6 +96,15 @@ namespace threepp {
 
         float alphaTest = 0;
         bool alphaToCoverage = false;
+        // three.js r154 (#24271): stochastic, sort-free transparency. The
+        // fragment is kept when its alpha beats a stable 3D hash, so opacity
+        // becomes coverage. Needs no sorting and writes depth; pair it with
+        // MSAA or TAA to smooth the dither.
+        bool alphaHash = false;
+        // three.js r149 (#25239): a transparent, double-sided material is
+        // drawn in two passes, back faces then front faces (r130 #21967), so
+        // its own back faces show through. true restores the single pass.
+        bool forceSinglePass = false;
         bool premultipliedAlpha = false;
 
         bool visible = true;

@@ -684,13 +684,31 @@ struct GLRenderer::Impl {
 
                 if (!object->frustumCulled || _frustum.intersectsObject(*object)) {
 
+                    const auto geometry = objects.update(object);
+
                     if (sortObjects) {
 
-                        _vector3.setFromMatrixPosition(*object->matrixWorld)
+                        // three.js r152 (#25913, #25974, #28571): sort on the
+                        // bounding-sphere centre in clip space, not on the
+                        // object origin, so geometry built far from its origin
+                        // still sorts where it is drawn. An InstancedMesh uses
+                        // the sphere around all its instances (#28125).
+                        std::optional<Sphere>* sphere = nullptr;
+                        if (auto instanced = object->as<InstancedMesh>()) {
+                            if (!instanced->boundingSphere) instanced->computeBoundingSphere();
+                            sphere = &instanced->boundingSphere;
+                        } else if (geometry) {
+                            if (!geometry->boundingSphere) geometry->computeBoundingSphere();
+                            sphere = &geometry->boundingSphere;
+                        }
+                        if (sphere && *sphere) {
+                            _vector3.copy((*sphere)->center);
+                        } else {
+                            _vector3.set(0, 0, 0);
+                        }
+                        _vector3.applyMatrix4(*object->matrixWorld)
                                 .applyMatrix4(_projScreenMatrix);
                     }
-
-                    const auto geometry = objects.update(object);
                     const auto& materials = object->as<ObjectWithMaterials>()->materials();
 
                     if (materials.size() > 1) {
@@ -844,7 +862,25 @@ struct GLRenderer::Impl {
         object->modelViewMatrix.multiplyMatrices(camera->matrixWorldInverse, *object->matrixWorld);
         object->normalMatrix.getNormalMatrix(object->modelViewMatrix);
 
-        renderBufferDirect(camera, scene, geometry, material, object, group);
+        // three.js r130 (#21967) / r149 (#25239): a transparent double-sided
+        // material draws its back faces first, then its front faces, so the
+        // far side of a glass shell shows through the near side.
+        if (material->transparent && material->side == Side::Double && !material->forceSinglePass) {
+
+            material->side = Side::Back;
+            material->needsUpdate();
+            renderBufferDirect(camera, scene, geometry, material, object, group);
+
+            material->side = Side::Front;
+            material->needsUpdate();
+            renderBufferDirect(camera, scene, geometry, material, object, group);
+
+            material->side = Side::Double;
+
+        } else {
+
+            renderBufferDirect(camera, scene, geometry, material, object, group);
+        }
 
         if (object->onAfterRender) {
 

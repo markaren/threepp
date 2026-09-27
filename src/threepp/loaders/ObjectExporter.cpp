@@ -907,6 +907,8 @@ namespace {
         data["dithering"] = material.dithering;
         data["alphaTest"] = material.alphaTest;
         data["alphaToCoverage"] = material.alphaToCoverage;
+        data["alphaHash"] = material.alphaHash;
+        data["forceSinglePass"] = material.forceSinglePass;
         data["premultipliedAlpha"] = material.premultipliedAlpha;
 
         data["visible"] = material.visible;

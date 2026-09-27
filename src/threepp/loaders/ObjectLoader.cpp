@@ -635,6 +635,8 @@ namespace {
         setBool("dithering");
         setFloat("alphaTest");
         setBool("alphaToCoverage");
+        setBool("alphaHash");
+        setBool("forceSinglePass");
         setBool("premultipliedAlpha");
         setBool("visible");
         setBool("toneMapped");

@@ -115,6 +115,8 @@ void Material::copyInto(Material& m) const {
 
     m.alphaTest = alphaTest;
     m.alphaToCoverage = alphaToCoverage;
+    m.alphaHash = alphaHash;
+    m.forceSinglePass = forceSinglePass;
     m.premultipliedAlpha = premultipliedAlpha;
 
     m.visible = visible;
@@ -412,6 +414,16 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
         } else if (key == "alphaToCoverage") {
 
             alphaToCoverage = std::get<bool>(value);
+            used = true;
+
+        } else if (key == "alphaHash") {
+
+            alphaHash = std::get<bool>(value);
+            used = true;
+
+        } else if (key == "forceSinglePass") {
+
+            forceSinglePass = std::get<bool>(value);
             used = true;
 
         } else if (key == "premultipliedAlpha") {
