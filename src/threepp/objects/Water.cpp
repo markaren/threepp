@@ -155,7 +155,11 @@ struct Water::Impl {
         RenderTarget::Options parameters;
         parameters.minFilter = Filter::Linear;
         parameters.magFilter = Filter::Linear;
-        parameters.format = Format::RGB;
+        // The mirror holds scene-linear HDR, un-tone-mapped (three.js r154+):
+        // half float, as three.js r186, so a bright sky or sun glint survives
+        // into the reflection and is tone-mapped once, by the water shader.
+        parameters.format = Format::RGBA;
+        parameters.type = Type::HalfFloat;
 
         renderTarget = RenderTarget::create(textureWidth, textureHeight, parameters);
 

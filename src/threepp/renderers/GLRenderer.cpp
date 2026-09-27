@@ -763,6 +763,10 @@ struct GLRenderer::Impl {
             options.magFilter = Filter::Nearest;
             options.wrapS = TextureWrapping::ClampToEdge;
             options.wrapT = TextureWrapping::ClampToEdge;
+            // What refracts through glass is scene-linear HDR now that targets
+            // are not tone-mapped (three.js r154+); half float, as three.js
+            // r186, so it is neither clipped at 1 nor banded in the darks.
+            options.type = Type::HalfFloat;
 
             _transmissionRenderTarget = RenderTarget::create(1024*2, 1024*2, options);
         }
@@ -898,6 +902,21 @@ struct GLRenderer::Impl {
         return _currentRenderTarget ? _currentRenderTarget->texture->colorSpace : scope.outputColorSpace;
     }
 
+    // Tone mapping a material applies inline right now. As three.js r154+
+    // (#26371): only when drawing to the screen. A render target holds
+    // scene-linear HDR, so what reads it (post-processing, reflections,
+    // environment captures, transmission) works on the light the scene
+    // actually has, and whatever finally shows it (OutputPass, the Reflector
+    // and Water shaders) tone-maps once. A target flagged displayTarget is the
+    // exception, the counterpart of three.js's XR render target: it IS the
+    // picture, so it is tone-mapped like the screen.
+    [[nodiscard]] ToneMapping currentToneMapping(const Material* material) const {
+
+        if (!material->toneMapped) return ToneMapping::None;
+        if (_currentRenderTarget && !_currentRenderTarget->displayTarget) return ToneMapping::None;
+        return scope.toneMapping;
+    }
+
     gl::GLProgram* getProgram(Material* material, Object3D* _scene, Object3D* object) {
 
         auto* scene = _scene->as<Scene>();
@@ -934,7 +953,7 @@ struct GLRenderer::Impl {
             materialProperties->envMap = cubemaps.getPMREM(materialProperties->environment);
         }
 
-        auto parameters = gl::GLPrograms::getParameters(scope, shadowCfg, caps, clipping, material, lights.state, shadowsArray.size(), scene, object, materialProperties->envMap, currentOutputColorSpace());
+        auto parameters = gl::GLPrograms::getParameters(scope, shadowCfg, caps, clipping, material, lights.state, shadowsArray.size(), scene, object, materialProperties->envMap, currentOutputColorSpace(), currentToneMapping(material));
         auto programCacheKey = gl::GLPrograms::getProgramCacheKey(scope, parameters);
 
         auto& programs = materialProperties->programs;
@@ -1170,11 +1189,12 @@ struct GLRenderer::Impl {
                 // changes the sampling code, not a uniform.
                 needsProgramChange = true;
 
-            } else if (materialProperties->toneMapping !=
-                       (material->toneMapped ? scope.toneMapping : ToneMapping::None)) {
+            } else if (materialProperties->toneMapping != currentToneMapping(material)) {
 
-                // TONE_MAPPING and the operator are compiled into the program;
-                // same expression as ProgramParameters.
+                // TONE_MAPPING and the operator are compiled into the program,
+                // and they depend on what is bound (see currentToneMapping): a
+                // material drawn into a target and then to the screen in one
+                // frame switches between two cached programs here.
                 needsProgramChange = true;
 
             } else if (materialProperties->useLegacyLights != scope.useLegacyLights) {

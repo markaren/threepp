@@ -2,6 +2,7 @@
 #include "threepp/postprocessing/EffectComposer.hpp"
 
 #include "threepp/postprocessing/MaskPass.hpp"
+#include "threepp/postprocessing/OutputPass.hpp"
 #include "threepp/postprocessing/Pass.hpp"
 #include "threepp/postprocessing/ShaderPass.hpp"
 #include "threepp/postprocessing/shaders/CopyShader.hpp"
@@ -13,6 +14,26 @@
 #include <utility>
 
 using namespace threepp;
+
+namespace {
+
+    // A copy that neither tone-maps nor encodes, for an image that has already
+    // been through an OutputPass.
+    Shader rawCopyShader() {
+
+        auto shader = shaders::copyShader();
+        shader.fragmentShader = R"(
+                uniform float opacity;
+                uniform sampler2D tDiffuse;
+                varying vec2 vUv;
+
+                void main() {
+                    gl_FragColor = opacity * texture2D( tDiffuse, vUv );
+                })";
+        return shader;
+    }
+
+}// namespace
 
 
 struct EffectComposer::Impl {
@@ -36,8 +57,14 @@ struct EffectComposer::Impl {
     // Used mid-chain to carry a masked region across a buffer swap.
     std::shared_ptr<ShaderPass> copyPass;
 
-    // Owns the draw to the screen, and with it the output colour transform.
-    std::shared_ptr<ShaderPass> outputPass;
+    // Owns the draw to the screen, and with it tone mapping and the output
+    // colour transform: the passes before it work on scene-linear HDR, as the
+    // renderer only tone-maps what it draws to the screen (three.js r154+).
+    std::shared_ptr<OutputPass> outputPass;
+
+    // The draw to the screen when the chain already has an OutputPass that is
+    // not its last pass: the image is display-ready, so it is copied as is.
+    std::shared_ptr<ShaderPass> blitPass;
 
     Impl(GLRenderer& renderer, const Options& options)
         : renderer(renderer),
@@ -46,7 +73,8 @@ struct EffectComposer::Impl {
           height(static_cast<unsigned int>(renderer.size().height())),
           pixelRatio(renderer.getTargetPixelRatio()),
           copyPass(std::make_shared<ShaderPass>(shaders::copyShader())),
-          outputPass(std::make_shared<ShaderPass>(shaders::copyShader())) {
+          outputPass(std::make_shared<OutputPass>()),
+          blitPass(std::make_shared<ShaderPass>(rawCopyShader())) {
 
         allocateTargets();
     }
@@ -124,6 +152,19 @@ struct EffectComposer::Impl {
         // chain; whatever the caller had bound is put back at the end.
         auto* currentRenderTarget = renderer.getRenderTarget();
 
+        // A chain that carries its own OutputPass gets no second one. When it
+        // is the last enabled pass it draws to the screen itself; otherwise
+        // the passes after it expect display-ready input, and the final draw
+        // is a plain copy.
+        OutputPass* explicitOutput = nullptr;
+        size_t lastEnabled = passes.size();
+        for (size_t i = 0; i < passes.size(); i++) {
+            if (!passes[i]->enabled) continue;
+            lastEnabled = i;
+            if (auto* output = dynamic_cast<OutputPass*>(passes[i].get())) explicitOutput = output;
+        }
+        const bool outputIsLast = explicitOutput && lastEnabled < passes.size() && passes[lastEnabled].get() == explicitOutput;
+
         bool maskActive = false;
 
         for (size_t i = 0; i < passes.size(); i++) {
@@ -132,7 +173,16 @@ struct EffectComposer::Impl {
 
             if (!pass->enabled) continue;
 
+            const bool presents = renderToScreen && outputIsLast && i == lastEnabled;
+            const bool oldRenderToScreen = pass->renderToScreen;
+            if (presents) pass->renderToScreen = true;
+
             pass->render(renderer, writeBuffer, readBuffer, deltaTime, maskActive);
+
+            if (presents) {
+                pass->renderToScreen = oldRenderToScreen;
+                continue;
+            }
 
             if (pass->needsSwap) {
 
@@ -156,10 +206,11 @@ struct EffectComposer::Impl {
             }
         }
 
-        if (renderToScreen) {
+        if (renderToScreen && !outputIsLast) {
 
-            outputPass->renderToScreen = true;
-            outputPass->render(renderer, nullptr, readBuffer, deltaTime, maskActive);
+            auto& finalPass = explicitOutput ? static_cast<Pass&>(*blitPass) : static_cast<Pass&>(*outputPass);
+            finalPass.renderToScreen = true;
+            finalPass.render(renderer, nullptr, readBuffer, deltaTime, maskActive);
         }
 
         renderer.setRenderTarget(currentRenderTarget);

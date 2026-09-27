@@ -13,6 +13,7 @@
 #include "threepp/postprocessing/GTAOPass.hpp"
 #include "threepp/postprocessing/MaskPass.hpp"
 #include "threepp/postprocessing/OutlinePass.hpp"
+#include "threepp/postprocessing/OutputPass.hpp"
 #include "threepp/postprocessing/Pass.hpp"
 #include "threepp/postprocessing/RenderPass.hpp"
 #include "threepp/postprocessing/SavePass.hpp"

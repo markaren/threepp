@@ -158,7 +158,12 @@ namespace threepp {
                     // bound render target's, or the renderer's when drawing to
                     // the screen. Resolved by the caller, which is the only
                     // side that knows what is currently bound.
-                    ColorSpace outputColorSpace);
+                    ColorSpace outputColorSpace,
+                    // Tone mapping compiled into the program, resolved by the
+                    // caller for the same reason: the renderer's operator when
+                    // drawing to the screen (or a display target), None into
+                    // an ordinary render target. See GLRenderer.
+                    ToneMapping toneMapping);
 
             [[nodiscard]] std::string hash() const;
         };

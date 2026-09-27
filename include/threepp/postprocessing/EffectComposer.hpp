@@ -23,13 +23,16 @@ namespace threepp {
     // Two things differ from three.js on purpose:
     //
     //  * The composer always finishes by drawing its result to the screen
-    //    itself, rather than handing the screen to whichever pass happens to be
-    //    last. Intermediate targets are linear, and threepp compiles the output
-    //    transform per bound target, so a pass shader written for an offscreen
-    //    target would silently skip the sRGB encode if it drew to the screen —
-    //    the classic washed-out composer image. Owning the final draw puts the
-    //    encode in exactly one place. Set `renderToScreen` false to keep the
-    //    result offscreen and read it from readBuffer() instead.
+    //    itself, through an implicit OutputPass, rather than handing the screen
+    //    to whichever pass happens to be last. Every pass works on scene-linear
+    //    HDR (the renderer only tone-maps what it draws to the screen, as three.js
+    //    r154+), and the OutputPass applies the renderer's tone mapping and
+    //    output colour space once, at the end. A chain that adds its own
+    //    OutputPass gets no second one: if it is the last enabled pass it draws
+    //    to the screen, otherwise the final draw is a plain copy. Set
+    //    `renderToScreen` false to keep the result offscreen and read it from
+    //    readBuffer() instead; that result is linear HDR unless the chain ends
+    //    in an OutputPass.
     //
     //  * MSAA is a composer option (`Options::samples`) rather than something
     //    you lose by adding a composer at all: the internal targets can be

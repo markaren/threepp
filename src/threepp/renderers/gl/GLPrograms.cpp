@@ -55,9 +55,10 @@ ProgramParameters GLPrograms::getParameters(
         Scene* scene,
         Object3D* object,
         Texture* resolvedEnvMap,
-        ColorSpace outputColorSpace) {
+        ColorSpace outputColorSpace,
+        ToneMapping toneMapping) {
 
-    return {renderer, shadowConfig, capabilities, clipping, lights, numShadows, object, scene, material, resolvedEnvMap, shaderIDs, outputColorSpace};
+    return {renderer, shadowConfig, capabilities, clipping, lights, numShadows, object, scene, material, resolvedEnvMap, shaderIDs, outputColorSpace, toneMapping};
 }
 
 std::string GLPrograms::getProgramCacheKey(const GLRenderer& renderer, const ProgramParameters& parameters) {

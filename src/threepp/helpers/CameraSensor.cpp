@@ -49,6 +49,11 @@ CameraSensor::CameraSensor(float fovY, unsigned int width, unsigned int height,
     // memory and nothing in correctness.
     options.samples = 4;
     target_ = RenderTarget::create(width_, height_, options);
+    // The frame is the PICTURE, not an intermediate: tone-mapped inline like
+    // the screen, so a GL capture matches the viewport beside it. Every other
+    // render target receives un-tone-mapped HDR (three.js r154+); without this
+    // a capture would come back with the scene's raw light clipped at 1.
+    target_->displayTarget = true;
 
     addRef(camera_);
 }

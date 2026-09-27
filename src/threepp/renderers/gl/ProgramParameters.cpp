@@ -37,7 +37,8 @@ ProgramParameters::ProgramParameters(
         Material* material,
         Texture* resolvedEnvMap,
         const std::unordered_map<std::string, std::string>& shaderIDs,
-        ColorSpace outputColorSpace) {
+        ColorSpace outputColorSpace,
+        ToneMapping toneMapping) {
 
     auto mapMaterial = dynamic_cast<MaterialWithMap*>(material);
     auto alphaMaterial = dynamic_cast<MaterialWithAlphaMap*>(material);
@@ -269,7 +270,7 @@ ProgramParameters::ProgramParameters(
     shadowMapEnabled = shadowConfig.enabled && numShadows > 0;
     shadowMapType = shadowConfig.type;
 
-    toneMapping = material->toneMapped ? renderer.toneMapping : ToneMapping::None;
+    this->toneMapping = toneMapping;
     useLegacyLights = renderer.useLegacyLights;
 
     premultipliedAlpha = material->premultipliedAlpha;

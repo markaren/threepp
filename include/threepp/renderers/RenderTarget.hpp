@@ -68,6 +68,17 @@ namespace threepp {
 
         std::shared_ptr<DepthTexture> depthTexture;
 
+        // A target that IS the final picture rather than an intermediate: the
+        // GL renderer tone-maps into it inline, exactly as it does when drawing
+        // to the screen (three.js does the same for its XR render targets).
+        // Every other target receives scene-linear, un-tone-mapped HDR since
+        // three.js r154; tone mapping is then applied by whatever displays it
+        // (OutputPass at the end of an EffectComposer chain, the Reflector and
+        // Water shaders). CameraSensor sets this so a capture matches the
+        // on-screen image. Pair it with an sRGB `encoding` for a display-ready
+        // 8-bit image.
+        bool displayTarget = false;
+
         RenderTarget(unsigned int width, unsigned int height, const Options& options);
 
         RenderTarget(RenderTarget&&) = delete;

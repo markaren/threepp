@@ -48,12 +48,13 @@ namespace {
                 void main() {
                     vec4 base = texture2DProj( tDiffuse, vUv );
                     gl_FragColor = vec4( blendOverlay( base.rgb, color ), 1.0 );
-                    // Apply the output color-space transform every threepp material does.
-                    // GL encodes sRGB in-shader (its framebuffer is not sRGB); on a backend
-                    // with an sRGB swapchain the macro is a no-op because the hardware
-                    // encodes. Without it the reflection is never encoded on GL and renders
-                    // too dark.
-                    gl_FragColor = linearToOutputTexel( gl_FragColor );
+                    // The mirror texture is scene-linear HDR (the renderer never
+                    // tone-maps into a target), so the reflection is tone-mapped
+                    // and encoded here, once, like every other surface on screen
+                    // (three.js r186 Reflector). On a backend with an sRGB
+                    // swapchain the encode is a no-op because the hardware does it.
+                    #include <tonemapping_fragment>
+                    #include <encodings_fragment>
                 })"
 
         };
@@ -77,6 +78,9 @@ struct Reflector::Impl {
         parameters.minFilter = Filter::Linear;
         parameters.magFilter = Filter::Linear;
         parameters.format = Format::RGBA;
+        // Scene-linear HDR, as three.js r186: a highlight brighter than 1 must
+        // reach the Reflector shader's tone mapping intact.
+        parameters.type = Type::HalfFloat;
 
         renderTarget = std::make_unique<RenderTarget>(textureWidth, textureHeight, parameters);
 
@@ -161,7 +165,6 @@ struct Reflector::Impl {
                 e[13] = e[15] - e[13];
             }
 
-            renderTarget->texture->colorSpace = _renderer->outputColorSpace;
             reflector_.visible = false;
             const auto currentRenderTarget = _renderer->getRenderTarget();
             const auto currentShadowAutoUpdate = _renderer->shadowMapAutoUpdate;

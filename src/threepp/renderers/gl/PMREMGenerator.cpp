@@ -45,17 +45,15 @@ std::shared_ptr<Texture> PMREMGenerator::fromScene(Scene& scene, float sigma, fl
     cubeCamera.updateMatrixWorld();
 
     auto* oldTarget = renderer_.getRenderTarget();
-    const auto oldToneMapping = renderer_.toneMapping;
     const bool oldAutoClear = renderer_.autoClear;
 
-    // As three.js _sceneToCubeUV: no tone mapping, and every face cleared (to
-    // the renderer's clear colour when the scene has no background).
-    renderer_.toneMapping = ToneMapping::None;
+    // As three.js _sceneToCubeUV: every face cleared (to the renderer's clear
+    // colour when the scene has no background). No tone mapping to switch off:
+    // the renderer never tone-maps into a render target (three.js r154+).
     renderer_.autoClear = true;
 
     cubeCamera.update(renderer_, scene);
 
-    renderer_.toneMapping = oldToneMapping;
     renderer_.autoClear = oldAutoClear;
     renderer_.setRenderTarget(oldTarget);
 

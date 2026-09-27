@@ -48,7 +48,8 @@ namespace threepp {
                     Scene* scene,
                     Object3D* object,
                     Texture* resolvedEnvMap,
-                    ColorSpace outputColorSpace);
+                    ColorSpace outputColorSpace,
+                    ToneMapping toneMapping);
 
             static std::string getProgramCacheKey(const GLRenderer& renderer, const ProgramParameters& parameters);
 
