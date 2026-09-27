@@ -23,6 +23,10 @@ namespace threepp {
         float normalBias = 0;
         float radius = 1;
 
+        // How much of the light a fully shadowed receiver loses: 1 is a hard
+        // shadow, 0 no shadow at all. As three.js r186's LightShadow.intensity.
+        float intensity = 1;
+
         // Default shadow-map resolution. Bumped from the old three.js r129
         // default (512) — modern desktop GPUs comfortably afford 2048².
         Vector2 mapSize{2048, 2048};

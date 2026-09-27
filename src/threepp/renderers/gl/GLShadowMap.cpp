@@ -8,12 +8,12 @@
 #include "threepp/objects/Points.hpp"
 
 #include "threepp/materials/MeshDepthMaterial.hpp"
-#include "threepp/materials/MeshDistanceMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/lights/PointLightShadow.hpp"
 
+#include "threepp/renderers/GLCubeRenderTarget.hpp"
 #include "threepp/renderers/GLRenderTarget.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/renderers/shaders/ShaderChunk.hpp"
@@ -22,6 +22,8 @@
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLObjects.hpp"
 #include "threepp/renderers/gl/GLTextures.hpp"
+
+#include "threepp/textures/CubeDepthTexture.hpp"
 
 
 #include <cmath>
@@ -47,6 +49,10 @@ namespace {
     // renderer's clear colour instead, and alpha carries almost all of
     // unpackRGBAToDepth - so the default alpha of 0 meant depth 0, the near
     // plane, and every receiver the light covered came back fully shadowed.
+    //
+    // Since the r186 port only VSM still reads the packed colour (its caster
+    // pass writes depth as RGBA for the blur); PCF and Basic read the depth
+    // attachment, which clear() resets to 1 alongside.
     void bindAndClearShadowTarget(GLRenderer& renderer, RenderTarget* target) {
 
         renderer.setRenderTarget(target);
@@ -70,7 +76,6 @@ struct GLShadowMap::Impl {
     Vector4 _viewport;
 
     std::vector<std::shared_ptr<MeshDepthMaterial>> _depthMaterials;
-    std::vector<std::shared_ptr<MeshDistanceMaterial>> _distanceMaterials;
 
     std::unordered_map<std::string, std::unordered_map<std::string, std::shared_ptr<Material>>> _materialCache;
 
@@ -80,6 +85,15 @@ struct GLShadowMap::Impl {
     int _maxTextureSize;
 
     std::shared_ptr<Mesh> fullScreenMesh;
+
+    // Per-face frustum for point lights, which render into a cube target here
+    // rather than through PointLightShadow's atlas viewports.
+    Frustum _pointFrustum;
+
+    // What a shadow's targets were built for. The receiver's sampler type
+    // follows it: VSM samples moments from a colour target, Compare a depth
+    // texture through a shadow sampler (hardware PCF), Plain raw depth.
+    enum class MapKind { VSM, Compare, Plain };
 
     Impl(GLShadowMap* scope, GLObjects& objects, GLTextures& textures)
         : scope(scope),
@@ -181,32 +195,17 @@ struct GLShadowMap::Impl {
         return cached.get();
     }
 
-    MeshDistanceMaterial* getDistanceMaterialVariant(bool useMorphing) {
-        unsigned index = useMorphing << 0;
-
-        if (index >= _distanceMaterials.size()) {
-
-            auto material = MeshDistanceMaterial::create();
-
-            _distanceMaterials.emplace_back(material);
-
-            return material.get();
-        }
-
-        return _distanceMaterials[index].get();
-    }
-
-    Material* getDepthMaterial(GLRenderer& _renderer, Object3D* /*object*/, BufferGeometry* /*geometry*/, Material* material, Light* light, float shadowCameraNear, float shadowCameraFar) {
+    // Every light, point lights included, renders with the depth material: the
+    // shadow is the hardware depth written into the target's depth texture
+    // (native cube depth for point lights, as three.js r186), so the colour a
+    // caster writes only matters for VSM, and point lights never use VSM here.
+    // That also gives point-light shadows the alpha-cutout path, which the old
+    // distance material never had.
+    Material* getDepthMaterial(GLRenderer& _renderer, Material* material, bool vsmCaster) {
 
         Material* result;
 
-        if (light->type() == "PointLight") {
-
-            // MeshDistanceMaterial has no cutout path here — point-light shadows
-            // from alpha-tested casters still write the full quad.
-            result = getDistanceMaterialVariant(false);
-
-        } else if (auto* cutout = getCutoutDepthMaterial(material)) {
+        if (auto* cutout = getCutoutDepthMaterial(material)) {
 
             result = cutout;
 
@@ -244,7 +243,7 @@ struct GLShadowMap::Impl {
         }
 
 
-        if (scope->type == ShadowMap::VSM) {
+        if (vsmCaster) {
 
             result->side = (material->shadowSide) ? *material->shadowSide : material->side;
 
@@ -263,25 +262,10 @@ struct GLShadowMap::Impl {
             resultWithLineWidth->linewidth = materialWithLineWidth->linewidth;
         }
 
-        // `result`, not `material`: these three belong to the distance variant we
-        // are about to render the shadow map with, not to the object's own
-        // material. Casting the source material to MeshDistanceMaterial always
-        // failed in any ordinary scene, so nothing was set at all and
-        // referencePosition stayed at the world ORIGIN with the default near/far
-        // — a point light's shadow then encoded distance from the origin rather
-        // than from the light. r129 tests result.isMeshDistanceMaterial.
-        if (light->type() == "PointLight") {
-            if (auto distanceMaterial = result->as<MeshDistanceMaterial>()) {
-                distanceMaterial->referencePosition.setFromMatrixPosition(*light->matrixWorld);
-                distanceMaterial->nearDistance = shadowCameraNear;
-                distanceMaterial->farDistance = shadowCameraFar;
-            }
-        }
-
         return result;
     }
 
-    void renderObject(GLRenderer& _renderer, Object3D* object, Camera* camera, Camera* shadowCamera, Light* light) {
+    void renderObject(GLRenderer& _renderer, Object3D* object, Camera* camera, Camera* shadowCamera, bool vsmCaster) {
 
         if (!object->visible) return;
 
@@ -289,7 +273,7 @@ struct GLShadowMap::Impl {
 
         if (visible && (object->is<Mesh>() || object->is<Line>() || object->is<Points>())) {
 
-            if ((object->castShadow || (object->receiveShadow && scope->type == ShadowMap::VSM)) && (!object->frustumCulled || _frustum->intersectsObject(*object))) {
+            if ((object->castShadow || (object->receiveShadow && vsmCaster)) && (!object->frustumCulled || _frustum->intersectsObject(*object))) {
 
                 object->modelViewMatrix.multiplyMatrices(shadowCamera->matrixWorldInverse, *object->matrixWorld);
 
@@ -307,7 +291,7 @@ struct GLShadowMap::Impl {
 
                             if (groupMaterial && groupMaterial->visible) {
 
-                                const auto depthMaterial = getDepthMaterial(_renderer, object, geometry, groupMaterial, light, shadowCamera->nearPlane, shadowCamera->farPlane);
+                                const auto depthMaterial = getDepthMaterial(_renderer, groupMaterial, vsmCaster);
 
                                 _renderer.renderBufferDirect(shadowCamera, nullptr, geometry, depthMaterial, object, group);
                             }
@@ -316,7 +300,7 @@ struct GLShadowMap::Impl {
 
                 } else if (material.front()->visible) {
 
-                    const auto depthMaterial = getDepthMaterial(_renderer, object, geometry, material.front().get(), light, shadowCamera->nearPlane, shadowCamera->farPlane);
+                    const auto depthMaterial = getDepthMaterial(_renderer, material.front().get(), vsmCaster);
 
                     _renderer.renderBufferDirect(shadowCamera, nullptr, geometry, depthMaterial, object, std::nullopt);
                 }
@@ -325,7 +309,55 @@ struct GLShadowMap::Impl {
 
         for (auto& child : object->children) {
 
-            renderObject(_renderer, child, camera, shadowCamera, light);
+            renderObject(_renderer, child, camera, shadowCamera, vsmCaster);
+        }
+    }
+
+    // A point light's six faces, each rendered into its own face of the cube
+    // target's native depth cube map. Face directions and ups are three.js
+    // r186's (WebGLShadowMap _cubeDirections/_cubeUps), which lay the faces out
+    // the way GL cube-map sampling expects, so the receiver can look the
+    // shadow up with the raw light-to-fragment vector.
+    void renderPointShadow(GLRenderer& _renderer, LightShadow& shadow, Light& light, Object3D* scene, Camera* camera) {
+
+        static const Vector3 cubeDirections[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+        static const Vector3 cubeUps[6] = {{0, -1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}, {0, -1, 0}, {0, -1, 0}};
+
+        auto& shadowCamera = *shadow.camera;
+
+        const auto* pointLight = light.as<PointLight>();
+        const float far = (pointLight && pointLight->distance > 0) ? pointLight->distance : shadowCamera.farPlane;
+        if (far != shadowCamera.farPlane) {
+            shadowCamera.farPlane = far;
+            shadowCamera.updateProjectionMatrix();
+        }
+
+        Vector3 lightPositionWorld;
+        lightPositionWorld.setFromMatrixPosition(*light.matrixWorld);
+
+        // The receiver's coordinate is the light-to-fragment vector.
+        shadow.matrix.makeTranslation(-lightPositionWorld.x, -lightPositionWorld.y, -lightPositionWorld.z);
+
+        Matrix4 projScreenMatrix;
+        Vector3 lookTarget;
+
+        for (int face = 0; face < 6; face++) {
+
+            shadowCamera.position.copy(lightPositionWorld);
+            lookTarget.copy(lightPositionWorld).add(cubeDirections[face]);
+            shadowCamera.up.copy(cubeUps[face]);
+            shadowCamera.lookAt(lookTarget);
+            shadowCamera.updateMatrixWorld();
+
+            projScreenMatrix.multiplyMatrices(shadowCamera.projectionMatrix, shadowCamera.matrixWorldInverse);
+            _pointFrustum.setFromProjectionMatrix(projScreenMatrix);
+            _frustum = &_pointFrustum;
+
+            _renderer.setRenderTarget(shadow.map.get(), face);
+            _renderer.state().colorBuffer.setClear(1, 1, 1, 1);
+            _renderer.clear();
+
+            renderObject(_renderer, scene, camera, &shadowCamera, false);
         }
     }
 
@@ -335,6 +367,18 @@ struct GLShadowMap::Impl {
         if (!scope->autoUpdate && !scope->needsUpdate) return;
 
         if (lights.empty()) return;
+
+        if (scope->type == ShadowMap::PFCSoft) {
+
+            // Removed in three.js r183; r186 warns and uses PCF, whose rotated
+            // Vogel disk is softer than PCFSoft's bilinear 3x3 was anyway.
+            static bool warned = false;
+            if (!warned) {
+                std::cerr << "THREE.GLShadowMap: PCFSoftShadowMap has been removed. Using PCFShadowMap instead." << std::endl;
+                warned = true;
+            }
+            scope->type = ShadowMap::PFC;
+        }
 
         auto currentRenderTarget = _renderer.getRenderTarget();
         auto activeCubeFace = _renderer.getActiveCubeFace();
@@ -364,151 +408,215 @@ struct GLShadowMap::Impl {
 
             if (!shadow->autoUpdate && !shadow->needsUpdate) continue;
 
-            _shadowMapSize.copy(shadow->mapSize);
+            const bool isPoint = std::dynamic_pointer_cast<PointLightShadow>(shadow) != nullptr;
 
-            auto shadowFrameExtents = shadow->getFrameExtents();
+            // Point lights have no VSM path (three.js r186 drops their shadow
+            // under VSM with a warning); here they keep the PCF cube instead,
+            // so switching a scene to VSM does not silently lose them.
+            const MapKind wantKind = (scope->type == ShadowMap::VSM && !isPoint) ? MapKind::VSM
+                                     : (scope->type == ShadowMap::Basic)        ? MapKind::Plain
+                                                                                : MapKind::Compare;
 
-            _shadowMapSize.multiply(shadowFrameExtents);
+            if (isPoint) {
 
-            _viewportSize.copy(shadow->mapSize);
+                // One square cube face per side, rather than PointLightShadow's
+                // 4x2 atlas of viewports.
+                const float size = std::min(shadow->mapSize.x, static_cast<float>(_maxTextureSize));
+                _shadowMapSize.set(size, size);
+                _viewportSize.set(size, size);
 
-            if (_shadowMapSize.x > _maxTextureSize || _shadowMapSize.y > _maxTextureSize) {
+            } else {
 
-                if (_shadowMapSize.x > _maxTextureSize) {
+                _shadowMapSize.copy(shadow->mapSize);
 
-                    _viewportSize.x = std::floor(static_cast<float>(_maxTextureSize) / shadowFrameExtents.x);
-                    _shadowMapSize.x = _viewportSize.x * shadowFrameExtents.x;
-                    shadow->mapSize.x = _viewportSize.x;
-                }
+                auto shadowFrameExtents = shadow->getFrameExtents();
 
-                if (_shadowMapSize.y > _maxTextureSize) {
+                _shadowMapSize.multiply(shadowFrameExtents);
 
-                    _viewportSize.y = std::floor(static_cast<float>(_maxTextureSize) / shadowFrameExtents.y);
-                    _shadowMapSize.y = _viewportSize.y * shadowFrameExtents.y;
-                    shadow->mapSize.y = _viewportSize.y;
+                _viewportSize.copy(shadow->mapSize);
+
+                if (_shadowMapSize.x > _maxTextureSize || _shadowMapSize.y > _maxTextureSize) {
+
+                    if (_shadowMapSize.x > _maxTextureSize) {
+
+                        _viewportSize.x = std::floor(static_cast<float>(_maxTextureSize) / shadowFrameExtents.x);
+                        _shadowMapSize.x = _viewportSize.x * shadowFrameExtents.x;
+                        shadow->mapSize.x = _viewportSize.x;
+                    }
+
+                    if (_shadowMapSize.y > _maxTextureSize) {
+
+                        _viewportSize.y = std::floor(static_cast<float>(_maxTextureSize) / shadowFrameExtents.y);
+                        _shadowMapSize.y = _viewportSize.y * shadowFrameExtents.y;
+                        shadow->mapSize.y = _viewportSize.y;
+                    }
                 }
             }
 
-            // VSM blurs the depth map through a second target, so it needs
-            // `mapPass` and must sample with Linear; every other type compares
-            // depth directly and must NOT filter across texels. `mapPass` is
-            // therefore also the marker for "these targets were built for VSM".
-            const bool wantVsm = scope->type == ShadowMap::VSM && !std::dynamic_pointer_cast<PointLightShadow>(shadow);
-            const bool haveVsm = shadow->mapPass != nullptr;
+            if (shadow->map) {
 
-            if (shadow->map && wantVsm != haveVsm) {
+                // The shadow type (or the map size) changed after the targets
+                // were allocated: drop them and rebuild for the current state.
+                // The receiver's sampler type follows the kind, so a map built
+                // for another kind cannot be reused, only replaced. (Switching
+                // TO VSM once left mapPass null and crashed the blur; switching
+                // away kept VSM's Linear moments.)
+                MapKind haveKind = MapKind::Plain;
+                if (shadow->mapPass) haveKind = MapKind::VSM;
+                else if (shadow->map->depthTexture && shadow->map->depthTexture->compareFunction) haveKind = MapKind::Compare;
 
-                // The shadow type changed after the targets were allocated.
-                // Previously the allocation was guarded on `!shadow->map` alone,
-                // so switching TO VSM at runtime left mapPass null and VSMPass()
-                // dereferenced it — an outright crash. Switching AWAY from VSM
-                // silently kept the Linear filtering, softening every other type.
-                // Drop both and rebuild for the current type.
-                shadow->dispose();
-                shadow->map.reset();
-                shadow->mapPass.reset();
+                const bool resized = shadow->map->width != static_cast<unsigned>(_shadowMapSize.x) ||
+                                     shadow->map->height != static_cast<unsigned>(_shadowMapSize.y);
+
+                if (haveKind != wantKind || resized) {
+                    shadow->dispose();
+                    shadow->map.reset();
+                    shadow->mapPass.reset();
+                }
             }
 
-            if (!shadow->map) {
+            if (!shadow->map && wantKind == MapKind::VSM) {
 
-                GLRenderTarget::Options pars{};
-                // Mipmapped moments for VSM. This is the one thing VSM can do
-                // that no depth-comparison filter can: a mean and a variance
-                // average correctly, so a mip level *is* the right answer for a
-                // pixel covering many texels, where an averaged depth would be
-                // meaningless. Without it the moments are point-sampled and, on
-                // a receiver at an angle to the light, neighbouring pixels land
-                // on texels whose means straddle the surface — a stipple across
-                // the whole frustum that looks like noise and is really
-                // undersampling. The editor's default scene hits it: a 2048 map
-                // over the 10-unit shadow camera against a ~640px view is 4:1.
-                pars.minFilter = wantVsm ? Filter::LinearMipmapLinear : Filter::Nearest;
-                pars.magFilter = wantVsm ? Filter::Linear : Filter::Nearest;
-                pars.format = Format::RGBA;
+                    GLRenderTarget::Options pars{};
+                    // Mipmapped moments for VSM. This is the one thing VSM can do
+                    // that no depth-comparison filter can: a mean and a variance
+                    // average correctly, so a mip level *is* the right answer for a
+                    // pixel covering many texels, where an averaged depth would be
+                    // meaningless. Without it the moments are point-sampled and, on
+                    // a receiver at an angle to the light, neighbouring pixels land
+                    // on texels whose means straddle the surface — a stipple across
+                    // the whole frustum that looks like noise and is really
+                    // undersampling. The editor's default scene hits it: a 2048 map
+                    // over the 10-unit shadow camera against a ~640px view is 4:1.
+                    pars.minFilter = Filter::LinearMipmapLinear;
+                    pars.magFilter = Filter::Linear;
+                    pars.format = Format::RGBA;
 
-                // VSM stores moments — a mean depth and a standard deviation —
-                // and then asks for the variance, a difference of two nearly
-                // equal numbers. Eight-bit channels cannot carry that: the
-                // default shadow camera spans 0.5..500, so a scene a few units
-                // from the light sits at a depth near 0.01 and uses a hundredth
-                // of the range. The variance underflows to zero, Chebyshev's
-                // inequality degenerates, and neighbouring texels disagree at
-                // random — a moiré of fringes across every receiver.
-                //
-                // Float moments fix it at the source: precision no longer
-                // bounds how finely two nearby depths can be told apart, at any
-                // range the camera happens to have. Deliberately unlike
-                // three.js, which packs the moments into RGBA8 and so works
-                // only where the shadow camera was fitted to the scene by hand.
-                // Nothing in the public API moves — the same ShadowMap::VSM
-                // with the same LightShadow knobs.
-                //
-                // Full float, not half: at a depth of 0.01 a half's ulp is
-                // ~8e-6 against the packed format's 1.5e-5, which measurably
-                // does NOT clear the fringes. Costs 4x a packed map on both
-                // targets, so VSM is the one type that pays for its map — fair,
-                // since it is the one type that cannot work without it. The
-                // caster pass still writes 24-bit packed depth exactly as
-                // before; a float target stores that losslessly.
-                //
-                // Desktop GL 3.3 has RGBA32F both colour-renderable and
-                // linearly filterable in core. WebGL2 needs EXT_color_buffer_float
-                // to render to it and OES_texture_float_linear to filter it.
-                if (wantVsm) pars.type = Type::Float;
+                    // VSM stores moments — a mean depth and a standard deviation —
+                    // and then asks for the variance, a difference of two nearly
+                    // equal numbers. Eight-bit channels cannot carry that: the
+                    // default shadow camera spans 0.5..500, so a scene a few units
+                    // from the light sits at a depth near 0.01 and uses a hundredth
+                    // of the range. The variance underflows to zero, Chebyshev's
+                    // inequality degenerates, and neighbouring texels disagree at
+                    // random — a moiré of fringes across every receiver.
+                    //
+                    // Float moments fix it at the source: precision no longer
+                    // bounds how finely two nearby depths can be told apart, at any
+                    // range the camera happens to have. Deliberately unlike
+                    // three.js, which packs the moments into RGBA8 and so works
+                    // only where the shadow camera was fitted to the scene by hand.
+                    // Nothing in the public API moves — the same ShadowMap::VSM
+                    // with the same LightShadow knobs.
+                    //
+                    // Full float, not half: at a depth of 0.01 a half's ulp is
+                    // ~8e-6 against the packed format's 1.5e-5, which measurably
+                    // does NOT clear the fringes. Costs 4x a packed map on both
+                    // targets, so VSM is the one type that pays for its map — fair,
+                    // since it is the one type that cannot work without it. The
+                    // caster pass still writes 24-bit packed depth exactly as
+                    // before; a float target stores that losslessly.
+                    //
+                    // Desktop GL 3.3 has RGBA32F both colour-renderable and
+                    // linearly filterable in core. WebGL2 needs EXT_color_buffer_float
+                    // to render to it and OES_texture_float_linear to filter it.
+                    pars.type = Type::Float;
 
-                shadow->map = GLRenderTarget::create(static_cast<int>(_shadowMapSize.x), static_cast<int>(_shadowMapSize.y), pars);
-                shadow->map->texture->name = light->name + ".shadowMap";
-                // Set on the texture rather than through Options, whose
-                // generateMipmaps field the RenderTarget constructor never
-                // reads. Only the map is mipmapped: mapPass is scratch that
-                // only the horizontal blur samples, at level 0.
-                shadow->map->texture->generateMipmaps = wantVsm;
-
-                if (wantVsm) {
+                    shadow->map = GLRenderTarget::create(static_cast<int>(_shadowMapSize.x), static_cast<int>(_shadowMapSize.y), pars);
+                    shadow->map->texture->name = light->name + ".shadowMap";
+                    // Set on the texture rather than through Options, whose
+                    // generateMipmaps field the RenderTarget constructor never
+                    // reads. Only the map is mipmapped: mapPass is scratch that
+                    // only the horizontal blur samples, at level 0.
+                    shadow->map->texture->generateMipmaps = true;
 
                     auto passPars = pars;
                     passPars.minFilter = Filter::Linear;
                     shadow->mapPass = GLRenderTarget::create(static_cast<int>(_shadowMapSize.x), static_cast<int>(_shadowMapSize.y), passPars);
                     shadow->mapPass->texture->generateMipmaps = false;
+
+                    shadow->camera->updateProjectionMatrix();
+
+            } else if (!shadow->map) {
+
+                // PCF and Basic: the shadow is the native depth buffer, kept as
+                // a 24-bit DepthTexture (three.js r186: UnsignedIntType). PCF
+                // sets a LessEqual compare and Linear filtering so each tap of
+                // the receiver's sampler2DShadow is a hardware 2x2 PCF; Basic
+                // reads raw depth, Nearest. The colour attachment is written by
+                // the depth material but never sampled.
+                GLRenderTarget::Options pars{};
+                pars.minFilter = Filter::Nearest;
+                pars.magFilter = Filter::Nearest;
+                pars.format = Format::RGBA;
+
+                const auto w = static_cast<int>(_shadowMapSize.x);
+                const auto h = static_cast<int>(_shadowMapSize.y);
+
+                std::shared_ptr<DepthTexture> depth;
+                if (isPoint) {
+                    shadow->map = std::make_unique<GLCubeRenderTarget>(w, pars);
+                    depth = CubeDepthTexture::create(static_cast<unsigned>(w), Type::UnsignedInt);
+                } else {
+                    shadow->map = GLRenderTarget::create(w, h, pars);
+                    depth = DepthTexture::create(Type::UnsignedInt);
                 }
+                shadow->map->texture->generateMipmaps = false;
+                shadow->map->texture->name = light->name + ".shadowMap";
+
+                depth->name = light->name + ".shadowMap";
+                if (wantKind == MapKind::Compare) {
+                    depth->compareFunction = DepthFunc::LessEqual;
+                    depth->minFilter = Filter::Linear;
+                    depth->magFilter = Filter::Linear;
+                } else {
+                    depth->compareFunction.reset();
+                    depth->minFilter = Filter::Nearest;
+                    depth->magFilter = Filter::Nearest;
+                }
+                shadow->map->depthTexture = depth;
 
                 shadow->camera->updateProjectionMatrix();
             }
 
-            bindAndClearShadowTarget(_renderer, shadow->map.get());
+            const bool vsmCaster = wantKind == MapKind::VSM;
 
-            const auto viewportCount = shadow->getViewportCount();
+            if (isPoint) {
 
-            for (unsigned vp = 0; vp < viewportCount; vp++) {
+                renderPointShadow(_renderer, *shadow, *light, scene, camera);
 
-                const auto& viewport = shadow->getViewport(vp);
+            } else {
 
-                _viewport.set(
-                        _viewportSize.x * viewport.x,
-                        _viewportSize.y * viewport.y,
-                        _viewportSize.x * viewport.z,
-                        _viewportSize.y * viewport.w);
+                bindAndClearShadowTarget(_renderer, shadow->map.get());
 
-                _state.viewport(_viewport);
+                const auto viewportCount = shadow->getViewportCount();
 
-                if (auto pointLightShadow = std::dynamic_pointer_cast<PointLightShadow>(shadow)) {
-                    pointLightShadow->updateMatrices(*light->as<PointLight>(), vp);
-                } else {
+                for (unsigned vp = 0; vp < viewportCount; vp++) {
+
+                    const auto& viewport = shadow->getViewport(vp);
+
+                    _viewport.set(
+                            _viewportSize.x * viewport.x,
+                            _viewportSize.y * viewport.y,
+                            _viewportSize.x * viewport.z,
+                            _viewportSize.y * viewport.w);
+
+                    _state.viewport(_viewport);
+
                     shadow->updateMatrices(*light);
+
+                    _frustum = &shadow->getFrustum();
+
+                    renderObject(_renderer, scene, camera, shadow->camera.get(), vsmCaster);
                 }
 
-                _frustum = &shadow->getFrustum();
+                // do blur pass for VSM
 
-                renderObject(_renderer, scene, camera, shadow->camera.get(), light);
+                if (vsmCaster) {
+
+                    VSMPass(_renderer, shadow.get(), camera);
+                }
             }
-
-            // do blur pass for VSM
-
-            if (!std::dynamic_pointer_cast<PointLightShadow>(shadow) && scope->type == ShadowMap::VSM) {
-
-                VSMPass(_renderer, shadow.get(), camera);
-            }
-
             shadow->needsUpdate = false;
         }
 

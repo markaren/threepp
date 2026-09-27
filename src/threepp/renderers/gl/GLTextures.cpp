@@ -4,6 +4,7 @@
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLUtils.hpp"
 
+#include "threepp/textures/CubeDepthTexture.hpp"
 #include "threepp/textures/CubeTexture.hpp"
 #include "threepp/textures/DataTexture3D.hpp"
 
@@ -20,6 +21,20 @@
 using namespace threepp;
 
 namespace {
+
+    GLint compareFunctionToGL(DepthFunc func) {
+        switch (func) {
+            case DepthFunc::Never: return GL_NEVER;
+            case DepthFunc::Always: return GL_ALWAYS;
+            case DepthFunc::Less: return GL_LESS;
+            case DepthFunc::LessEqual: return GL_LEQUAL;
+            case DepthFunc::Equal: return GL_EQUAL;
+            case DepthFunc::GreaterEqual: return GL_GEQUAL;
+            case DepthFunc::Greater: return GL_GREATER;
+            case DepthFunc::NotEqual: return GL_NOTEQUAL;
+        }
+        return GL_LEQUAL;
+    }
 
     std::unordered_map<TextureWrapping, int> wrappingToGL{
             {TextureWrapping::Repeat, GL_REPEAT},
@@ -158,6 +173,19 @@ void gl::GLTextures::setTextureParameters(GLuint textureType, Texture& texture) 
                             : Filter::Linear;
     }
     glTexParameteri(textureType, GL_TEXTURE_MIN_FILTER, filterToGL[minFilter]);
+
+    // Depth textures sampled through a shadow sampler compare in hardware; a
+    // Linear filter then returns the 2x2 PCF of the comparison. Written for
+    // every depth texture so one that drops its compare function reverts to
+    // raw depth. As three.js r186 WebGLTextures.setTextureParameters.
+    if (auto* depthTexture = dynamic_cast<DepthTexture*>(&texture)) {
+        if (depthTexture->compareFunction) {
+            glTexParameteri(textureType, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+            glTexParameteri(textureType, GL_TEXTURE_COMPARE_FUNC, compareFunctionToGL(*depthTexture->compareFunction));
+        } else {
+            glTexParameteri(textureType, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+        }
+    }
 
     if (texture.anisotropy > 1 || properties->textureProperties.get(&texture)->currentAnisotropy) {
 
@@ -674,8 +702,41 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
                                    GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, glTexture, 0);
         }
 
-        // Shared depth renderbuffer across all faces.
-        if (renderTarget->depthBuffer) {
+        if (auto* cubeDepth = dynamic_cast<CubeDepthTexture*>(renderTarget->depthTexture.get())) {
+
+            // A native depth cube map as the depth attachment, one face per FBO:
+            // what point-light shadows render into and sample as a
+            // samplerCubeShadow. Allocated here in full, so the texture is
+            // already current when a sampler binds it (setTextureCube uploads
+            // nothing for it).
+            auto depthProperties = properties->textureProperties.get(cubeDepth);
+            initTexture(depthProperties, *cubeDepth);
+            depthProperties->version = cubeDepth->version();
+            cubeDepth->image() = Image(std::vector<unsigned char>{}, renderTarget->width, renderTarget->height);
+
+            const GLint depthInternalFormat = cubeDepth->type == Type::Float ? GL_DEPTH_COMPONENT32F : GL_DEPTH_COMPONENT24;
+            const GLenum depthType = cubeDepth->type == Type::Float ? GL_FLOAT : GL_UNSIGNED_INT;
+
+            state->bindTexture(GL_TEXTURE_CUBE_MAP, *depthProperties->glTexture);
+            setTextureParameters(GL_TEXTURE_CUBE_MAP, *cubeDepth);
+            for (int i = 0; i < 6; i++) {
+                state->texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, depthInternalFormat,
+                                  renderTarget->width, renderTarget->height, GL_DEPTH_COMPONENT, depthType, nullptr);
+            }
+
+            for (int i = 0; i < 6; i++) {
+                state->bindFramebuffer(GL_FRAMEBUFFER, fbos[i]);
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                       GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, *depthProperties->glTexture, 0);
+                const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+                if (status != GL_FRAMEBUFFER_COMPLETE) {
+                    std::cerr << "GLTextures: cube depth framebuffer incomplete: 0x" << std::hex << status << std::dec << std::endl;
+                }
+            }
+
+        } else if (renderTarget->depthBuffer) {
+
+            // Shared depth renderbuffer across all faces.
             GLuint glDepthbuffer;
             glGenRenderbuffers(1, &glDepthbuffer);
             renderTargetProperties->glDepthbuffer = glDepthbuffer;

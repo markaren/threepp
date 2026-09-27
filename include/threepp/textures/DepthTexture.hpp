@@ -10,9 +10,17 @@ namespace threepp {
     class DepthTexture: public Texture {
 
     public:
+        // Depth comparison for sampling through a shadow sampler
+        // (sampler2DShadow / samplerCubeShadow). When set, the texture is
+        // uploaded with GL_TEXTURE_COMPARE_MODE = COMPARE_REF_TO_TEXTURE and this
+        // function, so a Linear-filtered lookup returns hardware 2x2 PCF. Unset
+        // (the default) samples the raw depth, as a plain sampler2D needs.
+        // As three.js r186's DepthTexture.compareFunction.
+        std::optional<DepthFunc> compareFunction;
+
         static std::shared_ptr<DepthTexture> create(std::optional<Type> type = std::nullopt, Format format = Format::Depth);
 
-    private:
+    protected:
         DepthTexture(std::optional<Type> type, Format format);
     };
 

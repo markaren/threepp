@@ -76,6 +76,7 @@ void LightShadow::copy(const LightShadow& source) {
     camera->updateProjectionMatrix();
 
     bias = source.bias;
+    intensity = source.intensity;
     normalBias = source.normalBias;
     radius = source.radius;
     mapSize.copy(source.mapSize);

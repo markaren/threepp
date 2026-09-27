@@ -15,6 +15,7 @@
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/lights/PointLight.hpp"
+#include "threepp/lights/SpotLight.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 
 namespace {
@@ -385,4 +386,223 @@ TEST_CASE("VSM survives a shadow map much larger than the view") {
     CHECK(dark < total / 3);
 
     renderer.dispose();
+}
+
+// The r186 filter: a straight shadow edge seen from straight above.
+//
+// A half-plane caster over a white floor, a directional light almost overhead
+// and no ambient, so a lit floor pixel and a shadowed one are the only two
+// values the frame can hold unless the filter draws a penumbra between them.
+// Output is left linear, so a pixel value is proportional to the light that
+// reached it.
+namespace {
+
+    struct EdgeRig {
+        std::shared_ptr<Scene> scene;
+        std::shared_ptr<PerspectiveCamera> camera;
+        std::shared_ptr<DirectionalLight> light;
+    };
+
+    EdgeRig makeEdgeRig() {
+        auto scene = Scene::create();
+        scene->background = Color(0, 0, 0);
+
+        auto light = DirectionalLight::create(0xffffff, 2.f);
+        light->position.set(0.3f, 10, 0.2f);
+        light->castShadow = true;
+        light->shadow->mapSize.set(256, 256);
+        scene->add(light);
+
+        auto floorMat = MeshStandardMaterial::create();
+        floorMat->color = Color(1, 1, 1);
+        floorMat->roughness = 1.f;
+        floorMat->metalness = 0.f;
+        auto floor = Mesh::create(PlaneGeometry::create(20, 20), floorMat);
+        floor->rotation.x = -math::PI / 2.f;
+        floor->receiveShadow = true;
+        scene->add(floor);
+
+        // Covers x < 0, above the camera: the shadow edge runs down the
+        // middle of the view.
+        auto casterMat = MeshStandardMaterial::create();
+        auto caster = Mesh::create(BoxGeometry::create(10, 0.2f, 20), casterMat);
+        caster->position.set(-5, 3, 0);
+        caster->castShadow = true;
+        scene->add(caster);
+
+        auto camera = PerspectiveCamera::create(50, 1.f, 0.1f, 100.f);
+        camera->position.set(0, 1.5f, 0.001f);
+        camera->lookAt(Vector3{0, 0, 0});
+
+        return {scene, camera, light};
+    }
+
+    constexpr int edgeSize = 128;
+
+    std::vector<unsigned char> renderEdge(EdgeRig& rig, ShadowMap type) {
+        Canvas canvas(Canvas::Parameters().size(edgeSize, edgeSize).headless(true));
+        GLRenderer renderer(canvas);
+        renderer.outputColorSpace = ColorSpace::Linear;
+        renderer.setClearColor(Color(0, 0, 0));
+        renderer.shadowMap().enabled = true;
+        renderer.shadowMap().type = type;
+        renderer.render(*rig.scene, *rig.camera);
+        auto px = renderer.readRGBPixels();
+        renderer.dispose();
+        return px;
+    }
+
+    int redAt(const std::vector<unsigned char>& px, int x, int y) {
+        return px[(static_cast<size_t>(y) * edgeSize + x) * 3];
+    }
+
+}// namespace
+
+TEST_CASE("PCF draws a graded penumbra across a hard edge") {
+
+    auto rig = makeEdgeRig();
+    rig.light->shadow->radius = 4;
+
+    const auto px = renderEdge(rig, ShadowMap::PFC);
+    REQUIRE(px.size() == static_cast<size_t>(edgeSize * edgeSize * 3));
+
+    // Lit and shadowed reference values, far either side of the edge.
+    const int y = edgeSize / 2;
+    const int shadowed = redAt(px, 8, y);
+    const int lit = redAt(px, edgeSize - 8, y);
+    INFO("shadowed " << shadowed << ", lit " << lit);
+    REQUIRE(lit > shadowed + 60);
+
+    // Distinct values strictly between the two, anywhere on the middle rows:
+    // a hard (or merely 2x2-bilinear) edge has at most one or two.
+    std::vector<bool> seen(256, false);
+    int levels = 0;
+    for (int row = y - 4; row <= y + 4; ++row) {
+        for (int x = 0; x < edgeSize; ++x) {
+            const int v = redAt(px, x, row);
+            if (v > shadowed + 8 && v < lit - 8 && !seen[v]) {
+                seen[v] = true;
+                ++levels;
+            }
+        }
+    }
+    INFO("intermediate levels across the edge: " << levels);
+    CHECK(levels > 2);
+}
+
+TEST_CASE("shadow.intensity = 0.5 halves the darkening of a fully shadowed pixel") {
+
+    const auto darkening = [](float intensity) {
+        auto rig = makeEdgeRig();
+        rig.light->shadow->intensity = intensity;
+        const auto px = renderEdge(rig, ShadowMap::PFC);
+        const int y = edgeSize / 2;
+        const double shadowed = redAt(px, 8, y);
+        const double lit = redAt(px, edgeSize - 8, y);
+        return std::pair{1.0 - shadowed / lit, lit};
+    };
+
+    const auto [full, litFull] = darkening(1.f);
+    const auto [half, litHalf] = darkening(0.5f);
+
+    INFO("darkening at intensity 1: " << full << ", at 0.5: " << half << " (lit " << litFull << ")");
+    REQUIRE(litFull > 60);
+    REQUIRE(full > 0.9);
+    CHECK(std::abs(half - 0.5 * full) < 0.05);
+}
+
+// Point lights render into a native depth cube map. Looking out from the light
+// along each axis, the caster on that axis must shadow the middle of the view,
+// and everywhere else - out past the 45-degree lines where one cube face hands
+// over to the next - must match the same frame rendered with shadows off. A
+// wrongly oriented face moves or loses its shadow; a seam, acne or a bad
+// face-to-face depth conversion shows up as a difference outside the shadow.
+//
+// The casters are invisible to the camera (no colour, no depth) but still
+// cast: the shadow pass renders them with its own depth material.
+TEST_CASE("point shadows land on all six cube faces with no seam between them") {
+
+    constexpr int size = 64;
+    Canvas canvas(Canvas::Parameters().size(size, size).headless(true));
+
+    auto scene = Scene::create();
+    scene->background = Color(0, 0, 0);
+
+    auto roomMat = MeshStandardMaterial::create();
+    roomMat->color = Color(1, 1, 1);
+    roomMat->roughness = 1.f;
+    roomMat->metalness = 0.f;
+    roomMat->side = Side::Back;
+    auto room = Mesh::create(BoxGeometry::create(8, 8, 8), roomMat);
+    room->receiveShadow = true;
+    scene->add(room);
+
+    auto light = PointLight::create(0xffffff, 6.f, 0, 2);
+    light->castShadow = true;
+    light->shadow->mapSize.set(256, 256);
+    scene->add(light);
+
+    const Vector3 axes[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+
+    auto casterMat = MeshStandardMaterial::create();
+    casterMat->colorWrite = false;
+    casterMat->depthWrite = false;
+    for (const auto& axis : axes) {
+        auto caster = Mesh::create(SphereGeometry::create(0.4f, 24, 16), casterMat);
+        caster->position.copy(axis).multiplyScalar(1.5f);
+        caster->castShadow = true;
+        scene->add(caster);
+    }
+
+    // Wide enough to see across the face boundaries at 45 degrees.
+    constexpr float fov = 100;
+    const float tanHalf = std::tan(math::degToRad(fov / 2));
+
+    for (int f = 0; f < 6; ++f) {
+
+        auto camera = PerspectiveCamera::create(fov, 1.f, 0.1f, 100.f);
+        const Vector3& axis = axes[f];
+        camera->up.set(std::abs(axis.y) > 0.5f ? 0.f : 1.f, 0.f, std::abs(axis.y) > 0.5f ? 1.f : 0.f);
+        camera->lookAt(axis);
+
+        const auto render = [&](bool shadows) {
+            GLRenderer renderer(canvas);
+            renderer.setClearColor(Color(0, 0, 0));
+            renderer.shadowMap().enabled = shadows;
+            renderer.shadowMap().type = ShadowMap::PFC;
+            renderer.render(*scene, *camera);
+            auto px = renderer.readRGBPixels();
+            renderer.dispose();
+            return px;
+        };
+
+        const auto on = render(true);
+        const auto off = render(false);
+        REQUIRE(on.size() == static_cast<size_t>(size * size * 3));
+
+        const auto at = [&](const std::vector<unsigned char>& px, int x, int y) {
+            const size_t i = (static_cast<size_t>(y) * size + x) * 3;
+            return px[i] + px[i + 1] + px[i + 2];
+        };
+
+        // The caster on this axis shadows the middle of the view.
+        const int centreOn = at(on, size / 2, size / 2);
+        const int centreOff = at(off, size / 2, size / 2);
+
+        // Outside a cone around the middle, shadows on and off agree.
+        int worst = 0;
+        for (int y = 0; y < size; ++y) {
+            for (int x = 0; x < size; ++x) {
+                const float u = (2.f * (static_cast<float>(x) + 0.5f) / size - 1.f) * tanHalf;
+                const float v = (2.f * (static_cast<float>(y) + 0.5f) / size - 1.f) * tanHalf;
+                const float angle = std::atan(std::sqrt(u * u + v * v));
+                if (angle < math::degToRad(28)) continue;
+                worst = std::max(worst, std::abs(at(on, x, y) - at(off, x, y)));
+            }
+        }
+
+        INFO("face " << f << ": centre " << centreOn << " shadowed vs " << centreOff << " unshadowed, worst difference outside the shadow " << worst);
+        CHECK(centreOn < centreOff / 4);
+        CHECK(worst <= 6);
+    }
 }

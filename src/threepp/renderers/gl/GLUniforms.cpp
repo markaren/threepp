@@ -361,6 +361,21 @@ namespace {
                             textures->setTexture2D(*data[i], units[i]);
                         }
                     };
+                case 0x8b60:// SAMPLER_CUBE
+                case 0x8dc5:// SAMPLER_CUBE_SHADOW
+                    // Point-light shadow maps: an array of cube depth textures.
+                    return [&](const UniformValue& value, GLTextures* textures) {
+                        auto& data = std::get<std::vector<Texture*>>(value);
+                        const auto n = data.size();
+                        auto units = allocTexUnits(*textures, n);
+
+                        glUniform1iv(addr, static_cast<int>(n), units.data());
+
+                        for (unsigned i = 0; i != n; ++i) {
+                            if (!data[i]) continue;
+                            textures->setTextureCube(*data[i], units[i]);
+                        }
+                    };
                 default:
                     return [&](const UniformValue&, GLTextures*) {
                         std::cout << "PureArrayUniform TODO: "

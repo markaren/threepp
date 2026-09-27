@@ -245,20 +245,25 @@ namespace {
 
     inline std::string generatePrecision() {
 
+#ifdef __EMSCRIPTEN__
+        // GLSL ES 3.00 gives shadow samplers no default precision, and the
+        // shadow chunks declare sampler2DShadow / samplerCubeShadow (three.js
+        // r186 WebGLProgram declares the same).
+        return "precision highp float;\nprecision highp int;\nprecision highp sampler2DShadow;\nprecision highp samplerCubeShadow;\n#define HIGH_PRECISION";
+#else
         return "precision highp float;\nprecision highp int;\n#define HIGH_PRECISION";
+#endif
     }
 
     std::string generateShadowMapTypeDefine(const ProgramParameters* parameters) {
 
         std::string shadowMapTypeDefine = "SHADOWMAP_TYPE_BASIC";
 
-        if (parameters->shadowMapType == ShadowMap::PFC) {
+        // PCFSoft was removed in three.js r183: it compiles as PCF, whose
+        // Vogel-disk filter is the softer of the two anyway.
+        if (parameters->shadowMapType == ShadowMap::PFC || parameters->shadowMapType == ShadowMap::PFCSoft) {
 
             shadowMapTypeDefine = "SHADOWMAP_TYPE_PCF";
-
-        } else if (parameters->shadowMapType == ShadowMap::PFCSoft) {
-
-            shadowMapTypeDefine = "SHADOWMAP_TYPE_PCF_SOFT";
 
         } else if (parameters->shadowMapType == ShadowMap::VSM) {
 

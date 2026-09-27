@@ -14,6 +14,15 @@ using namespace threepp;
 
 namespace {
 
+    // What a receiver samples: the native depth texture the shadow pass wrote
+    // (PCF and Basic, as three.js r186), or the colour target holding the
+    // blurred moments (VSM, which has no depth texture attached).
+    Texture* shadowMapTexture(const LightShadow& shadow) {
+        if (!shadow.map) return nullptr;
+        if (shadow.map->depthTexture) return shadow.map->depthTexture.get();
+        return shadow.map->texture.get();
+    }
+
     bool shadowCastingLightsFirst(const Light* lightA, const Light* lightB) {
 
         return (lightB->castShadow ? 1 : 0) < (lightA->castShadow ? 1 : 0);
@@ -80,6 +89,7 @@ void Lights::setup(std::vector<Light*>& lights) {
 
                 auto shadowUniforms = shadowCache_.get(*light);
 
+                shadowUniforms->at("shadowIntensity") = shadow->intensity;
                 shadowUniforms->at("shadowBias") = shadow->bias;
                 shadowUniforms->at("shadowNormalBias") = shadow->normalBias;
                 shadowUniforms->at("shadowRadius") = shadow->radius;
@@ -89,7 +99,7 @@ void Lights::setup(std::vector<Light*>& lights) {
                 ensureCapacity(state.directionalShadowMap, directionalLength + 1);
                 ensureCapacity(state.directionalShadowMatrix, directionalLength + 1);
                 state.directionalShadow[directionalLength] = shadowUniforms;
-                state.directionalShadowMap[directionalLength] = shadow->map ? shadow->map->texture.get() : nullptr;
+                state.directionalShadowMap[directionalLength] = shadowMapTexture(*shadow);
                 state.directionalShadowMatrix[directionalLength] = &shadow->matrix;
 
                 ++numDirectionalShadows;
@@ -118,6 +128,7 @@ void Lights::setup(std::vector<Light*>& lights) {
                 const auto& shadow = spotLight->shadow;
                 const auto shadowUniforms = shadowCache_.get(*light);
 
+                shadowUniforms->at("shadowIntensity") = shadow->intensity;
                 shadowUniforms->at("shadowBias") = shadow->bias;
                 shadowUniforms->at("shadowNormalBias") = shadow->normalBias;
                 shadowUniforms->at("shadowRadius") = shadow->radius;
@@ -127,7 +138,7 @@ void Lights::setup(std::vector<Light*>& lights) {
                 ensureCapacity(state.spotShadowMap, spotLength + 1);
                 ensureCapacity(state.spotShadowMatrix, spotLength + 1);
                 state.spotShadow[spotLength] = shadowUniforms;
-                state.spotShadowMap[spotLength] = shadow->map ? shadow->map->texture.get() : nullptr;
+                state.spotShadowMap[spotLength] = shadowMapTexture(*shadow);
                 state.spotShadowMatrix[spotLength] = &shadow->matrix;
 
                 ++numSpotShadows;
@@ -151,6 +162,7 @@ void Lights::setup(std::vector<Light*>& lights) {
                 const auto& shadow = pointLight->shadow;
                 LightUniforms* shadowUniforms = shadowCache_.get(*light);
 
+                shadowUniforms->at("shadowIntensity") = shadow->intensity;
                 shadowUniforms->at("shadowBias") = shadow->bias;
                 shadowUniforms->at("shadowNormalBias") = shadow->normalBias;
                 shadowUniforms->at("shadowRadius") = shadow->radius;
@@ -162,7 +174,7 @@ void Lights::setup(std::vector<Light*>& lights) {
                 ensureCapacity(state.pointShadowMap, pointLength + 1);
                 ensureCapacity(state.pointShadowMatrix, pointLength + 1);
                 state.pointShadow[pointLength] = shadowUniforms;
-                state.pointShadowMap[pointLength] = shadow->map ? shadow->map->texture.get() : nullptr;
+                state.pointShadowMap[pointLength] = shadowMapTexture(*shadow);
                 state.pointShadowMatrix[pointLength] = &shadow->matrix;
 
                 ++numPointShadows;
