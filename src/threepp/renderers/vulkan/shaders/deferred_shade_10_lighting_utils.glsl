@@ -346,9 +346,24 @@ vec3 envSpecularWeight(vec3 F0, vec2 ab) {
     return FssEss + Fms * Ems;
 }
 vec3 sampleEnvLod(vec3 dir, float lod) {
+    // scene.environmentRotation (world -> env) and environmentIntensity.
+    if ((lights.envKnobFlags & 1u) != 0u) dir = mat3(lights.envRotC0, lights.envRotC1, lights.envRotC2) * dir;
     const float u = 0.5 + atan(dir.z, dir.x) / TWO_PI;
     const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
-    return textureLod(envTex, vec2(u, v), lod).rgb;
+    return textureLod(envTex, vec2(u, v), lod).rgb * lights.envIntensity;
+}
+
+// The visible background along a view ray: scene.backgroundRotation and
+// backgroundIntensity, and backgroundBlurriness read from the prefiltered
+// chain at roughness = blurriness (the LOD the specular IBL uses for that
+// roughness). GLRenderer's cube_frag does the same. Not scaled by
+// environmentIntensity, which is a lighting knob. Defaults: LOD 0, x1.
+vec3 sampleBackground(vec3 dir) {
+    if ((lights.envKnobFlags & 2u) != 0u) dir = mat3(lights.bgRotC0, lights.bgRotC1, lights.bgRotC2) * dir;
+    const float u   = 0.5 + atan(dir.z, dir.x) / TWO_PI;
+    const float v   = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
+    const float lod = lights.bgBlurriness * float(max(pc.envMipCount, 1u) - 1u);
+    return textureLod(envTex, vec2(u, v), lod).rgb * lights.bgIntensity;
 }
 
 // HemisphereLight surface term — the zero-mean directional remainder of

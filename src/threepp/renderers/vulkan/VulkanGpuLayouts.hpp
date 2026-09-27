@@ -63,12 +63,29 @@ namespace threepp::vulkan::impl {
         float hemiDeltaR[3];
         float hemiDeltaG[3];
         float hemiDeltaB[3];
+        // three.js scene.environmentRotation / environmentIntensity and
+        // scene.backgroundRotation / backgroundIntensity / backgroundBlurriness,
+        // with GLRenderer's conventions (9804c236). Appended LAST, like the hemi
+        // rows. The rotations are WORLD -> ENV (the transpose of the Euler's
+        // rotation), stored as three GLSL mat3 columns. sampleEnvLod applies
+        // envRot + envIntensity to every environment read; the visible sky
+        // applies bgRot + bgIntensity and reads the PMREM at LOD
+        // bgBlurriness * (mips - 1). envKnobFlags bit 0 = envRot is not the
+        // identity, bit 1 = bgRot is not the identity: the shaders skip the
+        // multiply otherwise, so a default scene samples exactly as before.
+        float    envRot[9];
+        float    envIntensity;
+        float    bgRot[9];
+        float    bgIntensity;
+        float    bgBlurriness;
+        uint32_t envKnobFlags;
+        float    envKnobPad[2];
     };
     static_assert(sizeof(GpuDirLight)   == 24);
     static_assert(sizeof(GpuPointLight) == 36);
     static_assert(sizeof(GpuSpotLight)  == 56);
     static_assert(sizeof(GpuRectLight)  == 60);
-    static_assert(sizeof(GpuLightsUbo)  == 1232);
+    static_assert(sizeof(GpuLightsUbo)  == 1328);
 
     struct GpuClusterLight {
         float position[3];   float range;         // range 0 = infinite (three.js)

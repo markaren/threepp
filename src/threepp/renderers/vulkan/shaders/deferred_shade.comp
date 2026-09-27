@@ -119,6 +119,20 @@ layout(set = 0, binding = 1, scalar) uniform LightsUbo {
     vec3       hemiDeltaR;
     vec3       hemiDeltaG;
     vec3       hemiDeltaB;
+    // scene.environmentRotation / environmentIntensity and the background
+    // knobs (GpuLightsUbo tail, VulkanGpuLayouts.hpp; SceneEnvKnobs.hpp).
+    // Rotations are world -> env mat3 columns; envKnobFlags bit 0 / bit 1 =
+    // env / background rotation active (identity skipped: defaults exact).
+    vec3       envRotC0;
+    vec3       envRotC1;
+    vec3       envRotC2;
+    float      envIntensity;
+    vec3       bgRotC0;
+    vec3       bgRotC1;
+    vec3       bgRotC2;
+    float      bgIntensity;
+    float      bgBlurriness;
+    uint       envKnobFlags;
 } lights;
 
 layout(set = 0, binding = 2) uniform sampler2D  envTex;        // prefiltered PMREM mip chain
@@ -494,6 +508,7 @@ vec4 cloudGather(ivec2 px, float sceneDist, out float meanDist) {
 // unit. cam/clouds/fog/lights UBOs are already declared above.
 float heightFogOpticalDepth(vec3 a, vec3 b);// deferred_shade_60_fog_volumetrics.glsl
 vec3  sampleEnvLod(vec3 dir, float lod);    // deferred_shade_10_lighting_utils.glsl
+vec3  sampleBackground(vec3 dir);           // deferred_shade_10_lighting_utils.glsl
 // Composite the upsampled half-res cloud layer (binding 61) over `col` at this
 // pixel. sceneDist = this pixel's own camera→surface distance (1e30 for sky).
 // A no-op when clouds are off, so the whole system is free/image-identical
@@ -845,7 +860,7 @@ void main() {
         // no murk medium bound.
         vec3 skyRad = camUnderwater()
                     ? applyMurkSky(dirWS)
-                    : applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS);
+                    : applySkyFog(sampleBackground(dirWS) + proceduralStars(dirWS), dirWS);
         skyRad = compositeClouds(skyRad, px, 1e30);// upsampled half-res cloud layer over the sky
         // Dust in front of the sky. Without this the cloud is invisible against
         // the background and only reads where it covers geometry — the whole

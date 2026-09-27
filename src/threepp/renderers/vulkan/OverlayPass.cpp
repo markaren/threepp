@@ -1,6 +1,7 @@
 #include "threepp/renderers/vulkan/OverlayPass.hpp"
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
+#include "threepp/renderers/vulkan/SceneEnvKnobs.hpp"
 
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/core/AttributeView.hpp"
@@ -1894,6 +1895,19 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
             vpM.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
             Matrix4 invVP;
             invVP.copy(vpM).invert();
+            // scene.backgroundRotation / Intensity / Blurriness, as the deferred
+            // sky applies them (sampleBackground). The rotation is linear in
+            // the unprojected points, so world -> env folds into invVP.
+            const auto knobs = SceneEnvKnobs::fromScene(scene);
+            if (knobs.bgRotActive) {
+                const float* r = knobs.bgToWorld;// column-major env -> world
+                Matrix4 worldToEnv;
+                worldToEnv.set(r[0], r[1], r[2], 0,
+                               r[3], r[4], r[5], 0,
+                               r[6], r[7], r[8], 0,
+                               0, 0, 0, 1);// set() is row-major: rows of R^T = columns of R
+                invVP.premultiply(worldToEnv);
+            }
             SkyPC spc{};
             std::memcpy(spc.invVP, invVP.elements.data(), 64);
             spc.rect[0]   = static_cast<float>(regionX);
@@ -1901,6 +1915,8 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
             spc.rect[2]   = static_cast<float>(regionW);
             spc.rect[3]   = static_cast<float>(regionH);
             spc.params[0] = paneEnvExposure_;
+            spc.params[1] = knobs.bgIntensity;
+            spc.params[2] = knobs.bgBlurriness;
 
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, paneSkyPipeline_);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, paneSkyPipelineLayout_,

@@ -17,7 +17,8 @@
 layout(push_constant) uniform Pc {
     mat4 invVP; // inverse(proj · view), GL clip conventions
     vec4 rect;  // pane rect in framebuffer pixels: x, y, w, h (top-left origin)
-    vec4 params;// .x = exposure (toneMappingExposure), .yzw unused
+    vec4 params;// .x = exposure (toneMappingExposure), .y = scene.backgroundIntensity,
+                // .z = scene.backgroundBlurriness (invVP carries backgroundRotation), .w unused
 } pc;
 
 layout(set = 0, binding = 0) uniform sampler2D envTex;
@@ -57,7 +58,8 @@ void main() {
     const float u = 0.5 + atan(dir.z, dir.x) / TWO_PI;
     const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
 
-    vec3 c = textureLod(envTex, vec2(u, v), 0.0).rgb * pc.params.x;
+    const float lod = pc.params.z * float(max(textureQueryLevels(envTex), 1) - 1);
+    vec3 c = textureLod(envTex, vec2(u, v), lod).rgb * pc.params.y * pc.params.x;
     c = acesFilm(c);
     outColor = vec4(linearToSRGB(c), 1.0);
 }

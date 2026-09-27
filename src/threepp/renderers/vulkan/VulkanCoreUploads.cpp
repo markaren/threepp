@@ -1382,6 +1382,11 @@ namespace threepp {
         // directional shadow report). Auto defers; Always still injects.
         // Hiding/showing a scene sun re-evaluates here every frame, and
         // the UBO hash below resets accumulation on the change.
+        //
+        // The sun is part of the environment, so it follows the same two
+        // knobs every env lookup does (GLRenderer, 9804c236): the rotation
+        // turns it into world space, environmentIntensity scales it.
+        envKnobs_ = vulkan::SceneEnvKnobs::fromScene(scene);
         const bool sceneHasSun = ubo.dirCount > 0;
         if (envSunExtractionWanted() && envSun_.found && ubo.dirCount < kMaxDirLights &&
             !(envSunDefersToSceneSun() && sceneHasSun)) {
@@ -1389,10 +1394,20 @@ namespace threepp {
             g.direction[0] = envSun_.dir[0];
             g.direction[1] = envSun_.dir[1];
             g.direction[2] = envSun_.dir[2];
-            g.color[0] = envSun_.colorE[0];
-            g.color[1] = envSun_.colorE[1];
-            g.color[2] = envSun_.colorE[2];
+            if (envKnobs_.envRotActive) envKnobs_.envDirToWorld(envSun_.dir, g.direction);
+            const float k = envKnobs_.envIntensity;
+            g.color[0] = envSun_.colorE[0] * k;
+            g.color[1] = envSun_.colorE[1] * k;
+            g.color[2] = envSun_.colorE[2] * k;
         }
+
+        // The knobs themselves, for sampleEnvLod and the sky (the UBO's tail).
+        vulkan::SceneEnvKnobs::worldToEnvColumns(envKnobs_.envToWorld, ubo.envRot);
+        vulkan::SceneEnvKnobs::worldToEnvColumns(envKnobs_.bgToWorld, ubo.bgRot);
+        ubo.envIntensity = envKnobs_.envIntensity;
+        ubo.bgIntensity  = envKnobs_.bgIntensity;
+        ubo.bgBlurriness = envKnobs_.bgBlurriness;
+        ubo.envKnobFlags = (envKnobs_.envRotActive ? 1u : 0u) | (envKnobs_.bgRotActive ? 2u : 0u);
 
         // ── 4c: the billboard slice's copy of the sun ───────────────────────
         // ParticleFieldPass has no descriptor set by design, so a `lit`
@@ -1432,6 +1447,7 @@ namespace threepp {
             sig.counts = {ubo.dirCount, ubo.pointCount, ubo.spotCount, ubo.rectCount};
             sig.lum.clear();
             sig.lum.push_back(lum(ubo.ambient));
+            sig.lum.push_back(ubo.envIntensity);// scene.environmentIntensity scales every probe ray's env miss
             for (std::uint32_t i = 0; i < ubo.dirCount; ++i) sig.lum.push_back(lum(ubo.dirLights[i].color));
             for (std::uint32_t i = 0; i < ubo.pointCount; ++i) sig.lum.push_back(lum(ubo.pointLights[i].color));
             for (std::uint32_t i = 0; i < ubo.spotCount; ++i) sig.lum.push_back(lum(ubo.spotLights[i].color));

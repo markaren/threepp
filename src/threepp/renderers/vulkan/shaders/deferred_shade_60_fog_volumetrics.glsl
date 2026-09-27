@@ -1123,7 +1123,7 @@ vec3 skyBackground(vec2 ndc, vec3 ro) {
     // bright sky-coloured rim along every submerged silhouette.
     const vec3 bg = camUnderwater()
                   ? applyMurkSky(dirWS)
-                  : applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS);
+                  : applySkyFog(sampleBackground(dirWS) + proceduralStars(dirWS), dirWS);
     // Same dust term the full sky path applies (deferred_shade.comp's skyRad):
     // this is the MSAA sky-minority blend, and a minority that skipped the dust
     // would put an undusted rim along every silhouette inside the cloud.

@@ -292,6 +292,19 @@ layout(set = 0, binding = 20, scalar) uniform LightsUbo {
     vec3     ambient;
     uint     dirCount;
     DirLight dirLights[8];
+    // Skips the point/spot/rect lists and the hemi rows (bytes 208..1232 of
+    // GpuLightsUbo) to reach the environment knobs at the tail.
+    float    lightsSkipToEnvKnobs[256];
+    vec3     envRotC0;// scene.environmentRotation, world -> env
+    vec3     envRotC1;
+    vec3     envRotC2;
+    float    envIntensity;// scene.environmentIntensity
+    vec3     bgRotC0;
+    vec3     bgRotC1;
+    vec3     bgRotC2;
+    float    bgIntensity;
+    float    bgBlurriness;
+    uint     envKnobFlags;
 } lights;
 
 layout(set = 0, binding = 21) uniform sampler2D envTex;// prefiltered PMREM chain
@@ -499,7 +512,14 @@ float splatMurkPathLength(vec3 a, vec3 b) {
 
 vec3 splatEnvTop() {
     const float lod = float(max(ubo.envMipCount, 1u) - 1u);
-    return textureLod(envTex, vec2(0.5, 1.0), lod).rgb;
+    // World up, turned into the env by scene.environmentRotation (the default
+    // reads the top row exactly as before), scaled by environmentIntensity.
+    vec2 uv = vec2(0.5, 1.0);
+    if ((lights.envKnobFlags & 1u) != 0u) {
+        const vec3 d = mat3(lights.envRotC0, lights.envRotC1, lights.envRotC2) * vec3(0.0, 1.0, 0.0);
+        uv = vec2(0.5 + atan(d.z, d.x) / 6.28318530717959, 0.5 + asin(clamp(d.y, -1.0, 1.0)) / 3.14159265358979);
+    }
+    return textureLod(envTex, uv, lod).rgb * lights.envIntensity;
 }
 
 // Henyey-Greenstein phase — the same expression as hgPhase in

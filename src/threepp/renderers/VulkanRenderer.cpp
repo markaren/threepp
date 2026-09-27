@@ -2643,14 +2643,20 @@ namespace threepp {
         return pimpl_->envSun_.found;
     }
 
+    // World space, as lit: turned by scene.environmentRotation and scaled by
+    // scene.environmentIntensity (as of the last frame), like GLRenderer's.
     Vector3 VulkanRenderer::envSunDirection() const {
         const auto& s = pimpl_->envSun_;
-        return {s.dir[0], s.dir[1], s.dir[2]};
+        const auto& k = pimpl_->envKnobs_;
+        float d[3] = {s.dir[0], s.dir[1], s.dir[2]};
+        if (k.envRotActive) k.envDirToWorld(s.dir, d);
+        return {d[0], d[1], d[2]};
     }
 
     Vector3 VulkanRenderer::envSunColor() const {
         const auto& s = pimpl_->envSun_;
-        return {s.colorE[0], s.colorE[1], s.colorE[2]};
+        const float k = pimpl_->envKnobs_.envIntensity;
+        return {s.colorE[0] * k, s.colorE[1] * k, s.colorE[2] * k};
     }
 
     void VulkanRenderer::setAutoExposure(bool enabled) {

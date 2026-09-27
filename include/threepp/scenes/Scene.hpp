@@ -52,8 +52,13 @@ namespace threepp {
 
         // three.js r146-r163 background/environment controls (same names, same
         // defaults; the defaults reproduce the renderer's output from before
-        // they existed). Honoured by GLRenderer only for now: the Vulkan
-        // renderer ignores all five.
+        // they existed). Honoured by GLRenderer and VulkanRenderer with the same
+        // conventions. Vulkan keeps one environment image (`environment`, or a
+        // texture `background` when there is none) and draws that image as a
+        // texture background; when the background texture stands in for the
+        // environment, its lookups turn with backgroundRotation so reflections
+        // match the sky. (PMREMGenerator::fromScene / RoomEnvironment remain
+        // GL-only.)
         //
         // Blur of a texture background, 0 (sharp) .. 1 (fully diffuse). Blurred
         // backgrounds are read from the environment's prefiltered PMREM, so they
@@ -65,7 +70,8 @@ namespace threepp {
         Euler backgroundRotation;
         // Multiplier on the IBL of every material lit by `environment` (one that
         // has no envMap of its own). threepp multiplies it with the material's
-        // envMapIntensity; see GLRenderer.
+        // envMapIntensity; see GLRenderer. The environment's extracted sun
+        // follows this and environmentRotation on both renderers.
         float environmentIntensity = 1;
         // Rotation of `environment`, for every material lit by it.
         Euler environmentRotation;

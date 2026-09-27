@@ -885,7 +885,21 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 if (splat_)
                     splat_->rewriteEnvironment(envImage.view, envImage.sampler,
                                                envImage.mipLevels);
+            } else if (envKnobsSeenValid_ && vulkan::SceneEnvKnobs::fromScene(scene) != envKnobsSeen_) {
+                // scene.environmentRotation / environmentIntensity / the
+                // background knobs changed: to every temporal accumulator that
+                // is the same event as a new environment (a primary radiance
+                // source moved), so it gets the same drain + history wipe on
+                // every view, and the probe grid takes the fast blend a light
+                // step gets. (updateLightsUbo has already packed the new values
+                // this frame, which is why this compares against its own copy.)
+                THREEPP_CPUPROF("frame.2c_descRefresh");
+                vkDeviceWaitIdle(ctx->device());
+                forEachLiveView([&] { clearGbufImages(); });
+                probeFastBlendFrames_ = kProbeFastBlendFrames;
             }
+            envKnobsSeen_      = vulkan::SceneEnvKnobs::fromScene(scene);
+            envKnobsSeenValid_ = true;
 
             // Per-FIF deferred-descriptor refresh: a material texture swapped in
             // place (refreshDirtyMaterialTextures) marked all FIF sets dirty.

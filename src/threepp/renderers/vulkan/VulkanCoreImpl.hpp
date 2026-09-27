@@ -16,6 +16,7 @@
 #include "VulkanSceneTypes.hpp"
 #include "VulkanViewContext.hpp"
 #include "EnvPrefilter.hpp"
+#include "SceneEnvKnobs.hpp"
 #include "EventCameraDetector.hpp"
 #include "LidarScanner.hpp"
 #include "SkinningPipeline.hpp"
@@ -661,6 +662,15 @@ namespace threepp {
         // envSunExtractionWanted). found=false when no sun / extraction off.
         // updateLightsUbo re-injects it as an analytic directional light.
         vulkan::EnvPrefilter::SunExtract envSun_{};
+        // The scene's environment/background knobs (SceneEnvKnobs.hpp), as
+        // updateLightsUbo last packed them. envSun_ above stays in ENV space;
+        // the lights UBO and envSunDirection()/envSunColor() turn and scale it
+        // by these. envKnobsSeen_ is the frame loop's own copy for change
+        // detection (a change wipes temporal history like a new env does);
+        // invalid until the first frame, so the first read is not a change.
+        vulkan::SceneEnvKnobs envKnobs_{};
+        vulkan::SceneEnvKnobs envKnobsSeen_{};
+        bool envKnobsSeenValid_ = false;
 
         // Ocean fine-cascade normal-map source (deferred shade ocean binding).
         // Default 1×1 dummy R32F, replaced with the active DisplacedMesh's

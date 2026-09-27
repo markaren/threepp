@@ -49,6 +49,25 @@ layout(set = 0, binding = 1, scalar) uniform LightsUbo {
     PointLight pointLights[8];
     SpotLight  spotLights[8];
     RectLight  rectLights[4];
+    // HemisphereLight zero-mean rows (unused here; declared so the env-knob
+    // tail below lands at its offset).
+    vec3       hemiDeltaR;
+    vec3       hemiDeltaG;
+    vec3       hemiDeltaB;
+    // scene.environmentRotation / environmentIntensity and the background
+    // knobs (GpuLightsUbo tail, VulkanGpuLayouts.hpp; SceneEnvKnobs.hpp).
+    // Rotations are world -> env mat3 columns; envKnobFlags bit 0 / bit 1 =
+    // env / background rotation active (identity skipped: defaults exact).
+    vec3       envRotC0;
+    vec3       envRotC1;
+    vec3       envRotC2;
+    float      envIntensity;
+    vec3       bgRotC0;
+    vec3       bgRotC1;
+    vec3       bgRotC2;
+    float      bgIntensity;
+    float      bgBlurriness;
+    uint       envKnobFlags;
 } lights;
 
 layout(set = 0, binding = 2) uniform sampler2D  envTex;      // prefiltered PMREM
@@ -97,9 +116,11 @@ const float PI = 3.14159265358979;
 #include "cloud_density.glsl"
 
 vec3 sampleEnvLod(vec3 dir, float lod) {
+    // scene.environmentRotation (world -> env) and environmentIntensity.
+    if ((lights.envKnobFlags & 1u) != 0u) dir = mat3(lights.envRotC0, lights.envRotC1, lights.envRotC2) * dir;
     const float u = 0.5 + atan(dir.z, dir.x) / (2.0 * PI);
     const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
-    return textureLod(envTex, vec2(u, v), lod).rgb;
+    return textureLod(envTex, vec2(u, v), lod).rgb * lights.envIntensity;
 }
 float hgPhase(float mu, float g) {
     const float g2 = g * g;

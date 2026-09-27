@@ -48,6 +48,14 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanGolden_test COMMAND VulkanGolden_test)
     set_tests_properties(VulkanGolden_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # scene.environmentIntensity / backgroundIntensity / environmentRotation on
+    # the Vulkan path (GLEnvironmentKnobs_test is the GL twin). Same plain
+    # exit-code shape and skip code as the golden test.
+    add_executable(VulkanEnvKnobs_test VulkanEnvKnobs_test.cpp)
+    target_link_libraries(VulkanEnvKnobs_test PRIVATE threepp)
+    add_test(NAME VulkanEnvKnobs_test COMMAND VulkanEnvKnobs_test)
+    set_tests_properties(VulkanEnvKnobs_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # A/B probe for the analyticDirectSplit light pick. NOT a ctest: it needs
     # two builds (old shader / new shader) to say anything, and it exists
     # because the golden scenes above have zero analytic lights and so never
