@@ -1,0 +1,1163 @@
+"""lesson: a small toolkit for making explainer videos with threepp.
+
+A lesson is rendered in two passes:
+
+1. **Choreography.** Everything stateful (an IK solve, a simulation, a trail)
+   runs once, front to back, and records per-frame state. No rendering.
+2. **Frames.** `render(t)` is a pure function of the recorded state and the
+   clock, so any frame can be rendered on its own: a still, a contact sheet,
+   a low-res preview of one beat, or the final film.
+
+The pieces, from bottom to top:
+
+`Timeline`
+    Named beats with start/end times. `tl.p("fk", t)` is the eased 0..1
+    progress through a beat, `tl.fade("fk", t)` a fade-in/hold/fade-out
+    envelope for things that belong to it.
+
+`Stage`
+    Canvas + renderer + a dark studio set (key/rim light, soft IBL, a floor that
+    dissolves into the background). GL by default so a lesson runs on any
+    laptop; `renderer="vulkan"` for the ray-traced look. `frame()` returns the
+    picture as an (H, W, 3) uint8 array and `project()` maps a world point to
+    pixels so 2D callouts can point at 3D things.
+
+`Arrow3D`, `Ring3D`, `Marker3D`, `Tube3D`
+    The 3D annotation kit: thick arrows (shaft + cone), glowing rings around a
+    joint axis, a target marker, and a tube trail that is rebuilt from points.
+    All fade with `.opacity` and live wherever they are parented, so an arrow
+    can ride on a robot link.
+
+`Hud`
+    The 2D layer, also drawn by threepp: an orthographic scene rendered over
+    the 3D one. Panels, text (Text2D from the system TTF), LaTeX-style maths
+    (matplotlib's mathtext outlines loaded through SVGLoader, no TeX install
+    needed, and cached to JSON so a finished lesson needs no matplotlib), lines,
+    arrows, bars, a log plot, and callouts.
+
+`Film`
+    Pipes frames into ffmpeg (imageio_ffmpeg's binary) as H.264, writing to a
+    temporary name and renaming on success so a half-written mp4 never sits at
+    the final path.
+"""
+from __future__ import annotations
+
+import math
+import os
+import shutil
+import subprocess
+import sys
+
+import numpy as np
+import struct
+import zlib
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_PY = os.path.dirname(os.path.dirname(_HERE))
+if _PY not in sys.path:
+    sys.path.insert(0, _PY)
+import threepp as tp  # noqa: E402
+
+
+# ── colour ────────────────────────────────────────────────────────────────────
+def hex_rgb(h):
+    """0xRRGGBB or '#rrggbb' -> (r, g, b) ints."""
+    if isinstance(h, str):
+        h = int(h.lstrip("#"), 16)
+    return (h >> 16) & 255, (h >> 8) & 255, h & 255
+
+
+def to_hex(h):
+    if isinstance(h, str):
+        return int(h.lstrip("#"), 16)
+    return int(h)
+
+
+# ── easing & time ─────────────────────────────────────────────────────────────
+def clamp01(x):
+    return 0.0 if x < 0.0 else 1.0 if x > 1.0 else float(x)
+
+
+def smooth(x):
+    """Smoothstep: zero velocity at both ends."""
+    x = clamp01(x)
+    return x * x * (3.0 - 2.0 * x)
+
+
+def smoother(x):
+    """Smootherstep: zero velocity AND acceleration at both ends."""
+    x = clamp01(x)
+    return x * x * x * (x * (6.0 * x - 15.0) + 10.0)
+
+
+def ease_out(x):
+    x = clamp01(x)
+    return 1.0 - (1.0 - x) ** 3
+
+
+def ease_out_back(x, s=1.4):
+    x = clamp01(x) - 1.0
+    return 1.0 + x * x * ((s + 1.0) * x + s)
+
+
+def lerp(a, b, t):
+    return a + (b - a) * t
+
+
+def remap(t, a, b):
+    """Linear 0..1 progress of t through [a, b], clamped."""
+    return clamp01((t - a) / max(b - a, 1e-9))
+
+
+class Timeline:
+    """Named beats. Times are seconds from the start of the film."""
+
+    def __init__(self):
+        self.beats = {}
+        self.order = []
+
+    def add(self, name, start, end):
+        self.beats[name] = (float(start), float(end))
+        self.order.append(name)
+        return self
+
+    def then(self, name, duration, gap=0.0):
+        """Append a beat right after the previous one."""
+        start = self.beats[self.order[-1]][1] + gap if self.order else 0.0
+        return self.add(name, start, start + duration)
+
+    @property
+    def duration(self):
+        return max(e for _, e in self.beats.values()) if self.beats else 0.0
+
+    def span(self, name):
+        return self.beats[name]
+
+    def start(self, name):
+        return self.beats[name][0]
+
+    def end(self, name):
+        return self.beats[name][1]
+
+    def local(self, name, t):
+        """Seconds since the beat started (negative before it)."""
+        return t - self.beats[name][0]
+
+    def active(self, name, t, pad=0.0):
+        s, e = self.beats[name]
+        return s - pad <= t <= e + pad
+
+    def p(self, name, t, ease=smoother):
+        """Eased 0..1 progress through the beat."""
+        s, e = self.beats[name]
+        return ease(remap(t, s, e))
+
+    def fade(self, name, t, fade_in=0.5, fade_out=0.5, delay=0.0, early_out=0.0):
+        """0 -> 1 -> 0 envelope over the beat (smoothstepped edges)."""
+        s, e = self.beats[name]
+        s += delay
+        e -= early_out
+        if t < s or t > e:
+            return 0.0
+        a = smooth((t - s) / fade_in) if fade_in > 0 else 1.0
+        b = smooth((e - t) / fade_out) if fade_out > 0 else 1.0
+        return min(a, b)
+
+    def which(self, t):
+        for n in self.order:
+            s, e = self.beats[n]
+            if s <= t < e:
+                return n
+        return self.order[-1] if self.order else None
+
+
+def envelope(t, t_in, t_out, fade_in=0.5, fade_out=0.5):
+    """Standalone fade envelope: rises at t_in, falls to 0 at t_out."""
+    if t < t_in or t > t_out:
+        return 0.0
+    a = smooth((t - t_in) / fade_in) if fade_in > 0 else 1.0
+    b = smooth((t_out - t) / fade_out) if fade_out > 0 else 1.0
+    return min(a, b)
+
+
+class Keys:
+    """Keyframed vector value with smoother-step interpolation between keys.
+
+    keys = [(time, value), ...]. Values are anything numpy can add.
+    """
+
+    def __init__(self, keys, ease=smoother):
+        self.keys = sorted(((float(t), np.asarray(v, np.float64)) for t, v in keys), key=lambda k: k[0])
+        self.ease = ease
+
+    def __call__(self, t):
+        ks = self.keys
+        if t <= ks[0][0]:
+            return ks[0][1].copy()
+        for (t0, v0), (t1, v1) in zip(ks, ks[1:]):
+            if t <= t1:
+                u = self.ease((t - t0) / max(t1 - t0, 1e-9))
+                return v0 * (1 - u) + v1 * u
+        return ks[-1][1].copy()
+
+
+# ── the stage ─────────────────────────────────────────────────────────────────
+def data_dir():
+    env = os.environ.get("THREEPP_DATA_DIR")
+    if env and os.path.isdir(env):
+        return env
+    repo = os.path.dirname(_PY)
+    for name in ("threepp-data", "threepp_data"):
+        cand = os.path.join(os.path.dirname(repo), name)
+        if os.path.isdir(cand):
+            return cand
+    return ""
+
+
+def standard(color, roughness=0.5, metalness=0.0, emissive=None, emissive_intensity=1.0):
+    m = tp.MeshStandardMaterial()
+    m.color = to_hex(color)
+    m.roughness = roughness
+    m.metalness = metalness
+    if emissive is not None:
+        m.emissive = to_hex(emissive)
+        m.emissive_intensity = emissive_intensity
+    return m
+
+
+class Stage:
+    """A headless canvas, a renderer, and a dark studio set.
+
+    World is Y-up (three.js convention). Robots from URDF are Z-up; parent them
+    under `stage.zup`, a group that turns Z-up into Y-up, and annotate in the
+    robot's own frame.
+    """
+
+    BG = 0x0b0f17
+
+    def __init__(self, width=1920, height=1080, renderer="gl", headless=True, msaa=8,
+                 floor=True, env="empty_warehouse_01_2k.hdr", env_intensity=0.35, design=(1920, 1080)):
+        self.W, self.H = int(width), int(height)
+        self.design = design     # project() answers in these units, the Hud's
+        self.kind = renderer
+        if renderer == "vulkan":
+            self.canvas = tp.Canvas("lesson", width=self.W, height=self.H, vsync=False, headless=headless)
+            self.r = tp.VulkanRenderer(self.canvas)
+            self.r.sun_angular_radius = 2.0
+            self.r.gbuffer_msaa = 2
+        else:
+            self.canvas = tp.Canvas("lesson", width=self.W, height=self.H, antialiasing=msaa, headless=headless)
+            self.r = tp.GLRenderer(self.canvas)
+            self.r.shadow_map_enabled = True
+        self.r.tone_mapping = tp.ToneMapping.ACESFilmic
+        self.r.tone_mapping_exposure = 0.95
+        self.frame_index = 0
+
+        self.scene = tp.Scene()
+        self.scene.background = tp.Background(self.BG)
+        dd = data_dir()
+        if renderer != "vulkan" and env and dd:
+            path = os.path.join(dd, "textures", "env", env)
+            if os.path.isfile(path):
+                self.scene.environment = tp.RGBELoader().load(path)
+                self.scene.environment_intensity = env_intensity
+
+        self.hemi = tp.HemisphereLight(0x9fb6d8, 0x0c0e12, 0.35)
+        self.scene.add(self.hemi)
+        self.key = tp.DirectionalLight(0xfff1e0, 2.7)
+        self.key.position.set(2.6, 6.0, 3.6)
+        self.key.cast_shadow = True
+        self.key.shadow.map_size = tp.Vector2(4096, 4096)
+        self.key.shadow.radius = 5
+        self.key.shadow.bias = -0.0003
+        self.key.set_shadow_frustum(-1.6, 1.6, 1.6, -1.6)
+        self.scene.add(self.key)
+        self.rim = tp.DirectionalLight(0x86a8ff, 1.4)
+        self.rim.position.set(-4.0, 3.0, -3.5)
+        self.scene.add(self.rim)
+
+        if floor:
+            self.floor_mat = standard(0x0f1319, roughness=0.7)
+            self.floor_mat.env_map_intensity = 0.06
+            self.floor = tp.Mesh(tp.CircleGeometry(12.0, 128), self.floor_mat)
+            self.floor.rotate_x(-math.pi / 2)
+            self.floor.receive_shadow = True
+            self.scene.add(self.floor)
+            # The floor dissolves into the backdrop instead of ending at a rim.
+            self.scene.set_fog(tp.Color(self.BG), 3.5, 9.0)
+
+        self.zup = tp.Group()
+        self.zup.rotate_x(-math.pi / 2)
+        self.scene.add(self.zup)
+
+        self.camera = tp.PerspectiveCamera(32, self.W / self.H, 0.03, 60)
+        self._look = np.zeros(3)
+
+    # camera ----------------------------------------------------------------
+    def look(self, eye, target, fov=None, roll=0.0):
+        eye = np.asarray(eye, float)
+        target = np.asarray(target, float)
+        if fov is not None:
+            self.camera.fov = float(fov)
+            self.camera.update_projection_matrix()
+        self.camera.position.set(*eye)
+        if roll:
+            fwd = target - eye
+            fwd /= np.linalg.norm(fwd)
+            right = np.cross(fwd, [0, 1, 0])
+            right /= np.linalg.norm(right) + 1e-12
+            up = np.cross(right, fwd)
+            u = math.cos(roll) * up + math.sin(roll) * right
+            self.camera.up.set(*u)
+        else:
+            self.camera.up.set(0, 1, 0)
+        self.camera.look_at(*target)
+        self._look = target
+        self.camera.update_matrix_world()
+
+    # frame -----------------------------------------------------------------
+    def frame(self, t=None, hud=None):
+        """Render the scene (and the Hud over it) and return (H, W, 3) uint8."""
+        if self.kind == "vulkan" and t is not None:
+            self.r.sim_time = float(t)
+        self.r.render(self.scene, self.camera)
+        if hud is not None:
+            self.r.auto_clear = False
+            self.r.render(hud.scene, hud.camera)
+            self.r.auto_clear = True
+        self.frame_index += 1
+        return self.r.read_pixels()
+
+    # projection --------------------------------------------------------------
+    def _vp(self):
+        self.camera.update_matrix_world()
+        view = np.linalg.inv(self.camera.matrix_world.to_numpy())
+        f = math.radians(self.camera.fov)
+        a = self.W / self.H
+        n, fa = self.camera.near, self.camera.far
+        P = np.zeros((4, 4))
+        P[0, 0] = 1.0 / (a * math.tan(f / 2))
+        P[1, 1] = 1.0 / math.tan(f / 2)
+        P[2, 2] = -(fa + n) / (fa - n)
+        P[2, 3] = -2 * fa * n / (fa - n)
+        P[3, 2] = -1.0
+        return P @ view
+
+    def project(self, p_world):
+        """World point(s) -> pixel (x, y) and view depth. Accepts (3,) or (N, 3)."""
+        p = np.atleast_2d(np.asarray(p_world, float))
+        h = np.c_[p, np.ones(len(p))] @ self._vp().T
+        w = h[:, 3:4]
+        ndc = h[:, :3] / w
+        dw, dh = self.design
+        xy = np.c_[(ndc[:, 0] * 0.5 + 0.5) * dw, (0.5 - ndc[:, 1] * 0.5) * dh]
+        out = np.c_[xy, w[:, 0]]
+        return out[0] if np.asarray(p_world).ndim == 1 else out
+
+    def zup_to_world(self, p):
+        """Robot (Z-up) coordinates -> world (Y-up): (x, y, z) -> (x, z, -y)."""
+        p = np.asarray(p, float)
+        return np.stack([p[..., 0], p[..., 2], -p[..., 1]], axis=-1)
+
+    def project_zup(self, p):
+        return self.project(self.zup_to_world(p))
+
+
+# ── 3D annotation kit ─────────────────────────────────────────────────────────
+def _quat_y_to(d):
+    """Quaternion (x, y, z, w) rotating +Y onto unit vector d."""
+    y = np.array([0.0, 1.0, 0.0])
+    d = np.asarray(d, float)
+    c = float(np.dot(y, d))
+    if c < -0.999999:
+        return (1.0, 0.0, 0.0, 0.0)
+    axis = np.cross(y, d)
+    s = math.sqrt((1.0 + c) * 2.0)
+    return (axis[0] / s, axis[1] / s, axis[2] / s, s / 2.0)
+
+
+def _fade_material(m, opacity, xray=False):
+    opacity = clamp01(opacity)
+    m.transparent = opacity < 0.999 or xray
+    m.opacity = opacity
+    m.depth_write = opacity >= 0.999 and not xray
+
+
+def xray(obj, order=10):
+    """Draw `obj` (and children) on top of everything: no depth test, late render order."""
+    def f(o):
+        o.render_order = order
+        mat = getattr(o, "material", None)
+        if mat is not None:
+            mat.depth_test = False
+            mat.depth_write = False
+            mat.transparent = True
+    obj.traverse(f)
+
+
+class Arrow3D:
+    """A thick arrow from `a` to `b` (in its parent's frame)."""
+
+    def __init__(self, color, radius=0.008, head_radius=None, head_length=None, emissive=0.55,
+                 parent=None):
+        self.radius = radius
+        self.head_r = head_radius or radius * 2.6
+        self.head_l = head_length or radius * 6.5
+        self.mat = standard(color, roughness=0.35, emissive=color, emissive_intensity=emissive)
+        self.group = tp.Group()
+        self.shaft = tp.Mesh(tp.CylinderGeometry(radius, radius, 1.0, 20), self.mat)
+        self.head = tp.Mesh(tp.ConeGeometry(self.head_r, self.head_l, 28), self.mat)
+        self.shaft.cast_shadow = True
+        self.head.cast_shadow = True
+        self.group.add(self.shaft)
+        self.group.add(self.head)
+        if parent is not None:
+            parent.add(self.group)
+        self.opacity = 1.0
+
+    def set(self, a, b, opacity=None, scale=1.0):
+        a = np.asarray(a, float)
+        b = np.asarray(b, float)
+        d = b - a
+        L = float(np.linalg.norm(d))
+        if opacity is not None:
+            self.set_opacity(opacity)
+        if L < 1e-6 or scale <= 1e-4:
+            self.group.visible = False
+            return
+        self.group.visible = self.opacity > 0.003
+        u = d / L
+        hl = min(self.head_l * scale, 0.45 * L) if L < 2.2 * self.head_l * scale else self.head_l * scale
+        sl = max(L - hl, 1e-4)
+        self.group.position.set(*a)
+        self.group.quaternion.set(*_quat_y_to(u))
+        self.shaft.scale.set(scale, sl, scale)
+        self.shaft.position.set(0, sl / 2, 0)
+        self.head.scale.set(scale, hl / self.head_l if self.head_l > 0 else 1.0, scale)
+        self.head.position.set(0, sl + hl / 2, 0)
+
+    def set_opacity(self, o):
+        self.opacity = clamp01(o)
+        _fade_material(self.mat, self.opacity)
+        self.group.visible = self.opacity > 0.003
+
+    def set_color(self, color, emissive=None):
+        self.mat.color = to_hex(color)
+        self.mat.emissive = to_hex(color)
+        if emissive is not None:
+            self.mat.emissive_intensity = emissive
+
+
+class Ring3D:
+    """A glowing torus in its parent's XY plane (i.e. around the local Z axis)."""
+
+    def __init__(self, color, radius=0.08, tube=0.006, parent=None, emissive=0.9, arc=2 * math.pi):
+        self.mat = standard(color, roughness=0.3, emissive=color, emissive_intensity=emissive)
+        self.mesh = tp.Mesh(tp.TorusGeometry(radius, tube, 16, 96, arc), self.mat)
+        if parent is not None:
+            parent.add(self.mesh)
+        self.set_opacity(0.0)
+
+    def set_opacity(self, o):
+        _fade_material(self.mat, o)
+        self.mesh.visible = o > 0.003
+
+
+class Marker3D:
+    """The target: a glowing core, a translucent shell, and an optional axis triad."""
+
+    def __init__(self, color, radius=0.022, parent=None, triad=True, triad_len=0.09):
+        self.group = tp.Group()
+        self.core_mat = standard(color, roughness=0.2, emissive=color, emissive_intensity=2.2)
+        self.core = tp.Mesh(tp.SphereGeometry(radius, 40, 24), self.core_mat)
+        self.shell_mat = tp.MeshBasicMaterial()
+        self.shell_mat.color = to_hex(color)
+        self.shell_mat.blending = tp.Blending.Additive
+        self.shell_mat.transparent = True
+        self.shell_mat.depth_write = False
+        self.shell = tp.Mesh(tp.SphereGeometry(radius * 1.9, 40, 24), self.shell_mat)
+        self.group.add(self.core)
+        self.group.add(self.shell)
+        self.triad = []
+        if triad:
+            for c, d in ((0xff5a5f, (1, 0, 0)), (0x5ee27a, (0, 1, 0)), (0x4f8dff, (0, 0, 1))):
+                a = Arrow3D(c, radius=0.0045, parent=self.group, emissive=0.8)
+                a.set((0, 0, 0), np.array(d, float) * triad_len)
+                self.triad.append(a)
+        if parent is not None:
+            parent.add(self.group)
+        self.set_opacity(0.0)
+
+    def place(self, M):
+        """Pose from a 4x4 numpy matrix (parent frame)."""
+        M = np.asarray(M, float)
+        self.group.position.set(*M[:3, 3])
+        R = M[:3, :3]
+        w = math.sqrt(max(0.0, 1.0 + R[0, 0] + R[1, 1] + R[2, 2])) / 2.0
+        if w > 1e-4:
+            x = (R[2, 1] - R[1, 2]) / (4 * w)
+            y = (R[0, 2] - R[2, 0]) / (4 * w)
+            z = (R[1, 0] - R[0, 1]) / (4 * w)
+        else:  # 180 degree turn: pick the largest diagonal
+            i = int(np.argmax(np.diag(R)))
+            if i == 0:
+                x = math.sqrt(max(0.0, 1 + R[0, 0] - R[1, 1] - R[2, 2])) / 2
+                y, z, w = (R[0, 1] + R[1, 0]) / (4 * x), (R[0, 2] + R[2, 0]) / (4 * x), (R[2, 1] - R[1, 2]) / (4 * x)
+            elif i == 1:
+                y = math.sqrt(max(0.0, 1 + R[1, 1] - R[0, 0] - R[2, 2])) / 2
+                x, z, w = (R[0, 1] + R[1, 0]) / (4 * y), (R[1, 2] + R[2, 1]) / (4 * y), (R[0, 2] - R[2, 0]) / (4 * y)
+            else:
+                z = math.sqrt(max(0.0, 1 + R[2, 2] - R[0, 0] - R[1, 1])) / 2
+                x, y, w = (R[0, 2] + R[2, 0]) / (4 * z), (R[1, 2] + R[2, 1]) / (4 * z), (R[1, 0] - R[0, 1]) / (4 * z)
+        self.group.quaternion.set(x, y, z, w)
+
+    def set_opacity(self, o, pulse=0.0):
+        o = clamp01(o)
+        _fade_material(self.core_mat, o)
+        self.shell_mat.opacity = 0.16 * o * (1.0 + 0.5 * pulse)
+        self.shell.visible = o > 0.003
+        for a in self.triad:
+            a.set_opacity(o)
+        self.group.visible = o > 0.003
+
+
+def tube_arrays(points, radius, sides=12):
+    """Positions, normals and indices for a tube through `points` (N, 3)."""
+    P = np.asarray(points, np.float64)
+    if len(P) >= 2:   # drop repeated points: they have no tangent
+        keep = np.r_[True, np.linalg.norm(np.diff(P, axis=0), axis=1) > 1e-6]
+        P = P[keep]
+    n = len(P)
+    if n < 2:
+        return None
+    T = np.gradient(P, axis=0)
+    T /= np.linalg.norm(T, axis=1, keepdims=True) + 1e-12
+    # parallel-transport frames: no twisting
+    ref = np.array([0.0, 0.0, 1.0]) if abs(T[0, 2]) < 0.9 else np.array([1.0, 0.0, 0.0])
+    N = np.zeros_like(P)
+    N[0] = np.cross(T[0], ref)
+    N[0] /= np.linalg.norm(N[0])
+    for i in range(1, n):
+        v = N[i - 1] - np.dot(N[i - 1], T[i]) * T[i]
+        L = np.linalg.norm(v)
+        N[i] = v / L if L > 1e-9 else N[i - 1]
+    B = np.cross(T, N)
+    ang = np.linspace(0, 2 * np.pi, sides, endpoint=False)
+    ca, sa = np.cos(ang), np.sin(ang)
+    r = np.broadcast_to(np.asarray(radius, float), (n,))[:, None, None]
+    nrm = ca[None, :, None] * N[:, None, :] + sa[None, :, None] * B[:, None, :]
+    pos = P[:, None, :] + r * nrm
+    i = np.arange(n - 1)[:, None]
+    j = np.arange(sides)[None, :]
+    a = i * sides + j
+    b = i * sides + (j + 1) % sides
+    c = (i + 1) * sides + j
+    d = (i + 1) * sides + (j + 1) % sides
+    idx = np.stack([a, c, b, b, c, d], axis=-1).reshape(-1)
+    return (pos.reshape(-1, 3).astype(np.float32), nrm.reshape(-1, 3).astype(np.float32),
+            idx.astype(np.uint32))
+
+
+class Tube3D:
+    """A tube through a list of points, rebuilt whenever `set_points` is called."""
+
+    def __init__(self, color, radius=0.004, sides=12, parent=None, emissive=0.9, xray=False):
+        self.xray = xray
+        self.radius = radius
+        self.sides = sides
+        self.mat = standard(color, roughness=0.35, emissive=color, emissive_intensity=emissive)
+        self.geom = tp.BufferGeometry()
+        self.mesh = tp.Mesh(self.geom, self.mat)
+        self.mesh.frustum_culled = False
+        if parent is not None:
+            parent.add(self.mesh)
+        self._n = 0
+        self.mesh.visible = False
+
+    def set_points(self, pts, radius=None, opacity=1.0):
+        pts = np.asarray(pts, float)
+        if len(pts) < 2 or opacity <= 0.003:
+            self.mesh.visible = False
+            return
+        arr = tube_arrays(pts, self.radius if radius is None else radius, self.sides)
+        if arr is None:
+            self.mesh.visible = False
+            return
+        pos, nrm, idx = arr
+        # A fresh geometry per change: attribute sizes vary with the point count.
+        g = tp.BufferGeometry()
+        g.set_attribute("position", pos)
+        g.set_attribute("normal", nrm)
+        g.set_index(idx)
+        self.mesh.set_geometry(g)
+        self.geom = g
+        _fade_material(self.mat, opacity, self.xray)
+        if self.xray:
+            self.mat.depth_test = False
+            self.mesh.render_order = 10
+        self.mesh.visible = True
+
+
+# ── 2D overlay ────────────────────────────────────────────────────────────────
+FONT_DIRS = [os.path.join(os.environ.get("WINDIR", "C:/Windows"), "Fonts"),
+             "/usr/share/fonts/truetype/dejavu", "/usr/share/fonts"]
+FONT_FILES = {
+    "regular": ["segoeui.ttf", "DejaVuSans.ttf"],
+    "light": ["segoeuil.ttf", "segoeuisl.ttf", "DejaVuSans.ttf"],
+    "semibold": ["seguisb.ttf", "segoeuib.ttf", "DejaVuSans-Bold.ttf"],
+    "bold": ["segoeuib.ttf", "DejaVuSans-Bold.ttf"],
+    "italic": ["segoeuii.ttf", "DejaVuSans-Oblique.ttf"],
+    "numeric": ["bahnschrift.ttf", "DejaVuSansMono.ttf"],
+    "mono": ["consola.ttf", "DejaVuSansMono.ttf"],
+}
+
+
+def _find_font(kind):
+    for name in FONT_FILES[kind]:
+        for d in FONT_DIRS:
+            p = os.path.join(d, name)
+            if os.path.isfile(p):
+                return p
+    return None
+
+
+class Hud:
+    """The 2D layer, drawn by threepp: an orthographic scene rendered over the 3D one.
+
+    Immediate-mode API: call `begin()`, then draw calls (`panel`, `text`, `math`,
+    `line`, ...), then `end()`. Behind it every call reuses a pooled threepp mesh:
+    glyphs are `Text2D` meshes built from the TTF, panels are `ShapeGeometry`
+    rounded rectangles, lines are triangle strips, and equations are matplotlib's
+    glyph outlines turned into an SVG path and loaded with `SVGLoader`, so they are
+    real geometry too. Objects a frame does not touch are hidden, and each call is
+    drawn on top of the previous one (render order = call order, no depth test).
+
+    Coordinates are pixels in a fixed 1920x1080 design space, origin top-left,
+    whatever the actual render size. Text is measured with the same threepp Font
+    that draws it (`Font.advance`, `ascender`, `descender`), so layout and glyphs agree.
+    """
+
+    def __init__(self, width=1920, height=1080, math_cache=None):
+        """`math_cache`: a JSON file of typeset equations. With it, a lesson whose
+        equations are all cached renders without matplotlib; a new or edited
+        equation is typeset once and appended."""
+        self.W, self.H = int(width), int(height)
+        self._math_file = math_cache
+        self._math_disk = {}
+        if math_cache and os.path.isfile(math_cache):
+            import json
+            with open(math_cache, encoding="utf-8") as f:
+                self._math_disk = json.load(f)
+        self.scene = tp.Scene()
+        self.camera = tp.OrthographicCamera(0, self.W, self.H, 0, -10, 10)
+        self._fonts_tp = {}
+        self._pool = {}
+        self._used = {}
+        self._order = 0
+        self._math_cache = {}
+
+    # fonts -----------------------------------------------------------------
+    def _tp_font(self, kind):
+        f = self._fonts_tp.get(kind)
+        if f is None:
+            path = _find_font(kind)
+            f = tp.FontLoader().load(path) if path else None
+            if f is None:
+                f = tp.FontLoader().default_font()
+            self._fonts_tp[kind] = f
+        return f
+
+    def text_width(self, s, size=28, kind="regular"):
+        return self._tp_font(kind).advance(s, size)
+
+    # pooling ---------------------------------------------------------------
+    def begin(self):
+        self._used = {k: 0 for k in self._pool}
+        self._order = 0
+        return self
+
+    def end(self):
+        for k, objs in self._pool.items():
+            n = self._used.get(k, 0)
+            for o in objs[n:]:
+                o.visible = False
+
+    def _acquire(self, key, factory):
+        objs = self._pool.setdefault(key, [])
+        n = self._used.get(key, 0)
+        if n < len(objs):
+            o = objs[n]
+        else:
+            o = factory()
+            self.scene.add(o)
+            objs.append(o)
+        self._used[key] = n + 1
+        o.visible = True
+        self._order += 1
+        o.render_order = self._order
+        return o
+
+    @staticmethod
+    def _material(color=0xffffff):
+        m = tp.MeshBasicMaterial()
+        m.color = to_hex(color)
+        m.transparent = True
+        m.depth_test = False
+        m.depth_write = False
+        m.tone_mapped = False
+        m.side = tp.Side.Double
+        return m
+
+    def _paint(self, mesh, color, alpha):
+        m = mesh.material
+        m.color = to_hex(color)
+        m.opacity = clamp01(alpha)
+
+    def _Y(self, y):
+        return self.H - y
+
+    # primitives --------------------------------------------------------------
+    @staticmethod
+    def _rounded_shape(x, y, w, h, r):
+        """Rounded rectangle, lower-left (x, y), y up."""
+        r = max(0.0, min(r, w / 2, h / 2))
+        s = tp.Shape()
+        s.move_to(x + r, y)
+        s.line_to(x + w - r, y)
+        s.absarc(x + w - r, y + r, r, -math.pi / 2, 0, False)
+        s.line_to(x + w, y + h - r)
+        s.absarc(x + w - r, y + h - r, r, 0, math.pi / 2, False)
+        s.line_to(x + r, y + h)
+        s.absarc(x + r, y + h - r, r, math.pi / 2, math.pi, False)
+        s.line_to(x, y + r)
+        s.absarc(x + r, y + r, r, math.pi, 1.5 * math.pi, False)
+        return s
+
+    def _rrect(self, x, y, w, h, radius, color, alpha, outline_w=0.0):
+        """A filled rounded rect (or just its outline ring) in design pixels."""
+        key = ("rrect", round(w, 1), round(h, 1), round(radius, 1), round(outline_w, 2))
+
+        def make():
+            if outline_w > 0:
+                outer = self._rounded_shape(0, 0, w, h, radius)
+                inner = self._rounded_shape(outline_w, outline_w, w - 2 * outline_w, h - 2 * outline_w,
+                                            max(radius - outline_w, 0.0))
+                hole = tp.Path()
+                pts = inner.get_points(12)
+                hole.set_from_points(list(reversed(pts)))
+                outer.holes = list(outer.holes) + [hole]
+                geom = tp.ShapeGeometry([outer], 12)
+            else:
+                geom = tp.ShapeGeometry([self._rounded_shape(0, 0, w, h, radius)], 12)
+            return tp.Mesh(geom, self._material())
+        m = self._acquire(key, make)
+        m.position.set(x, self._Y(y + h), 0)
+        self._paint(m, color, alpha)
+        return m
+
+    def panel(self, x, y, w, h, radius=14, fill=0x0d131e, alpha=0.72, outline=None, outline_alpha=0.25,
+              width=1.5):
+        if alpha <= 0.003:
+            return
+        self._rrect(x, y, w, h, radius, fill, alpha)
+        if outline is not None:
+            self._rrect(x, y, w, h, radius, outline, outline_alpha * alpha / 0.72, outline_w=width)
+
+    def _glyphs(self, s, size, kind):
+        key = ("text", s, round(size, 1), kind)
+
+        # tessellate by size: a 16 px label needs few segments per curve, a 96 px title many
+        segs = int(min(32, max(8, size / 3)))
+
+        def make():
+            return tp.Text2D(self._tp_font(kind), s, size=size, curve_segments=segs, material=self._material())
+        return self._acquire(key, make)
+
+    def text(self, x, y, s, size=28, color=0xffffff, alpha=1.0, kind="regular", anchor="la", tracking=0.0):
+        """anchor = horizontal (l/m/r) + vertical (a ascender, m middle, s baseline, d descender)."""
+        if alpha <= 0.003 or not s:
+            return
+        f = self._tp_font(kind)
+        asc, desc = f.ascender(size), -f.descender(size)
+        v = anchor[1]
+        base = y + (asc if v == "a" else (asc - desc) / 2 if v == "m" else -desc if v == "d" else 0.0)
+        if tracking:
+            widths = [f.advance(ch, size) for ch in s]
+            total = sum(widths) + tracking * (len(s) - 1)
+        else:
+            total = f.advance(s, size)
+        h = anchor[0]
+        x0 = x - (total if h == "r" else total / 2 if h == "m" else 0.0)
+        if tracking:
+            cx = x0
+            for ch, w in zip(s, widths):
+                if ch != " ":
+                    g = self._glyphs(ch, size, kind)
+                    g.position.set(cx, self._Y(base), 0)
+                    self._paint(g, color, alpha)
+                cx += w + tracking
+            return
+        g = self._glyphs(s, size, kind)
+        g.position.set(x0, self._Y(base), 0)
+        self._paint(g, color, alpha)
+
+    def rich(self, x, y, parts, size=28, alpha=1.0, anchor="ls"):
+        widths = [self.text_width(t, size, k) for t, _, k in parts]
+        total = sum(widths)
+        cx = x - (total if anchor[0] == "r" else total / 2 if anchor[0] == "m" else 0)
+        for (t, c, k), w in zip(parts, widths):
+            self.text(cx, y, t, size=size, color=c, alpha=alpha, kind=k, anchor="l" + anchor[1])
+            cx += w
+        return total
+
+    def _strip(self, pts, width, round_ends=True):
+        """Triangles for a thick polyline (design pixels, y already flipped)."""
+        P = np.asarray(pts, np.float64)
+        keep = np.r_[True, np.linalg.norm(np.diff(P, axis=0), axis=1) > 1e-6]
+        P = P[keep]
+        if len(P) < 2:
+            return None, None
+        hw = width / 2.0
+        pos, idx = [], []
+        for a, b in zip(P[:-1], P[1:]):
+            d = b - a
+            n = np.array([-d[1], d[0]]) / np.linalg.norm(d) * hw
+            k = len(pos)
+            pos += [a + n, a - n, b + n, b - n]
+            idx += [k, k + 1, k + 2, k + 1, k + 3, k + 2]
+        # round joins and caps: small fans
+        joins = P if round_ends else P[1:-1]
+        seg = 10
+        for c in joins:
+            k = len(pos)
+            pos.append(c)
+            for s_ in range(seg + 1):
+                ang = 2 * math.pi * s_ / seg
+                pos.append(c + hw * np.array([math.cos(ang), math.sin(ang)]))
+            for s_ in range(seg):
+                idx += [k, k + 1 + s_, k + 2 + s_]
+        pos = np.c_[np.asarray(pos), np.zeros(len(pos))].astype(np.float32)
+        return pos, np.asarray(idx, np.uint32)
+
+    def _dyn_mesh(self, pos, idx, color, alpha):
+        m = self._acquire(("dyn",), lambda: tp.Mesh(tp.BufferGeometry(), self._material()))
+        g = tp.BufferGeometry()
+        g.set_attribute("position", pos)
+        g.set_index(idx)
+        m.set_geometry(g)
+        m.frustum_culled = False
+        m.position.set(0, 0, 0)
+        self._paint(m, color, alpha)
+        return m
+
+    def line(self, pts, color=0xffffff, width=2.0, alpha=1.0):
+        if alpha <= 0.003:
+            return
+        P = [(float(px), self._Y(float(py))) for px, py in pts]
+        pos, idx = self._strip(P, width)
+        if pos is not None:
+            self._dyn_mesh(pos, idx, color, alpha)
+
+    def dashed(self, p0, p1, color=0xffffff, width=2.0, alpha=1.0, dash=10, gap=7, phase=0.0):
+        if alpha <= 0.003:
+            return
+        p0, p1 = np.asarray(p0, float), np.asarray(p1, float)
+        L = float(np.linalg.norm(p1 - p0))
+        if L < 1e-3:
+            return
+        u = (p1 - p0) / L
+        s = -phase % (dash + gap) - (dash + gap)
+        allpos, allidx = [], []
+        while s < L:
+            a, b = max(s, 0.0), min(s + dash, L)
+            if b > a:
+                A, B = p0 + u * a, p0 + u * b
+                pos, idx = self._strip([(A[0], self._Y(A[1])), (B[0], self._Y(B[1]))], width, round_ends=False)
+                if pos is not None:
+                    allidx.append(idx + sum(len(q) for q in allpos))
+                    allpos.append(pos)
+            s += dash + gap
+        if allpos:
+            self._dyn_mesh(np.concatenate(allpos), np.concatenate(allidx), color, alpha)
+
+    def circle(self, x, y, r, fill=None, outline=None, width=2.0, alpha=1.0):
+        if alpha <= 0.003:
+            return
+        if fill is not None:
+            m = self._acquire(("disc",), lambda: tp.Mesh(tp.CircleGeometry(1.0, 48), self._material()))
+            m.position.set(x, self._Y(y), 0)
+            m.scale.set(r, r, 1)
+            self._paint(m, fill, alpha)
+        if outline is not None:
+            pts = [(x + r * math.cos(a), y + r * math.sin(a)) for a in np.linspace(0, 2 * math.pi, 64)]
+            self.line(pts, outline, width, alpha)
+
+    def arrow2d(self, p0, p1, color=0xffffff, width=2.5, head=12, alpha=1.0):
+        p0, p1 = np.asarray(p0, float), np.asarray(p1, float)
+        d = p1 - p0
+        L = np.linalg.norm(d)
+        if L < 1e-3 or alpha <= 0.003:
+            return
+        u = d / L
+        n = np.array([-u[1], u[0]])
+        base = p1 - u * head
+        self.line([p0, base + u * 1.0], color, width, alpha)
+        tri = np.array([p1, base + n * head * 0.5, base - n * head * 0.5])
+        pos = np.c_[tri[:, 0], self.H - tri[:, 1], np.zeros(3)].astype(np.float32)
+        self._dyn_mesh(pos, np.array([0, 1, 2], np.uint32), color, alpha)
+
+    def bar(self, x, y, w, h, frac, color, alpha=1.0, track=0x2a3342, radius=None):
+        radius = h / 2 if radius is None else radius
+        self._rrect(x, y, w, h, radius, track, alpha)
+        fw = max(h, w * clamp01(frac))
+        self._rrect(x, y, fw, h, radius, color, alpha)
+
+    # maths ---------------------------------------------------------------------
+    def _math_group(self, tex, size):
+        """matplotlib mathtext -> glyph outlines -> one SVG path -> threepp meshes (cached per size)."""
+        key = (tex, round(size, 1))
+        hit = self._math_cache.get(key)
+        if hit is not None:
+            return hit
+        dkey = f"{round(size, 1)}|{tex}"
+        disk = self._math_disk.get(dkey)
+        if disk is not None:
+            info = (disk["svg"], disk["x0"], disk["y0"], disk["w"], disk["h"])
+            self._math_cache[key] = info
+            return info
+        import matplotlib
+        from matplotlib.font_manager import FontProperties
+        from matplotlib.path import Path as MPath
+        from matplotlib.textpath import TextPath
+        with matplotlib.rc_context({"mathtext.fontset": "cm"}):
+            tpath = TextPath((0, 0), tex, size=size, prop=FontProperties(size=size))
+        V, C = tpath.vertices, tpath.codes
+        d = []
+        i = 0
+        while i < len(V):
+            c = C[i]
+            x, y = V[i]
+            if c == MPath.MOVETO:
+                d.append(f"M{x:.3f},{-y:.3f}")
+                i += 1
+            elif c == MPath.LINETO:
+                d.append(f"L{x:.3f},{-y:.3f}")
+                i += 1
+            elif c == MPath.CURVE3:
+                (x1, y1), (x2, y2) = V[i], V[i + 1]
+                d.append(f"Q{x1:.3f},{-y1:.3f} {x2:.3f},{-y2:.3f}")
+                i += 2
+            elif c == MPath.CURVE4:
+                (x1, y1), (x2, y2), (x3, y3) = V[i], V[i + 1], V[i + 2]
+                d.append(f"C{x1:.3f},{-y1:.3f} {x2:.3f},{-y2:.3f} {x3:.3f},{-y3:.3f}")
+                i += 3
+            elif c == MPath.CLOSEPOLY:
+                d.append("Z")
+                i += 1
+            else:
+                i += 1
+        svg = (f'<svg xmlns="http://www.w3.org/2000/svg"><path fill="#ffffff" fill-rule="nonzero" '
+               f'd="{" ".join(d)}"/></svg>')
+        ext = tpath.get_extents()
+        info = (svg, float(ext.x0), float(ext.y0), float(ext.width), float(ext.height))
+        self._math_cache[key] = info
+        if self._math_file:
+            import json
+            self._math_disk[dkey] = dict(zip(("svg", "x0", "y0", "w", "h"), info))
+            with open(self._math_file, "w", encoding="utf-8") as f:
+                json.dump(self._math_disk, f, indent=0, sort_keys=True)
+        return info
+
+    def math_size(self, tex, size=34):
+        _, _, _, w, h = self._math_group(tex, size)
+        return w, h
+
+    def math(self, x, y, tex, size=34, color=0xffffff, alpha=1.0, anchor="lm"):
+        """Place maths; (x, y) is the anchor point ('l'/'m'/'r' + 't'/'m'/'b') of its ink box."""
+        if alpha <= 0.003:
+            return (0, 0)
+        svg, x0, y0, w, h = self._math_group(tex, size)
+
+        def make():
+            g = tp.SVGLoader().parse(svg)          # y-flipped by the loader: back to y-up
+            mat = self._material()
+            for ch in g.children:
+                ch.set_material(mat)
+            return g
+        g = self._acquire(("math", tex, round(size, 1)), make)
+        for ch in g.children:
+            ch.render_order = g.render_order
+            self._paint(ch, color, alpha)
+        left = x - (w if anchor[0] == "r" else w / 2 if anchor[0] == "m" else 0)
+        top = y - (h if anchor[1] == "b" else h / 2 if anchor[1] == "m" else 0)
+        # ink box: x0..x0+w, y0..y0+h in y-up TextPath units
+        g.position.set(left - x0, self._Y(top) - (y0 + h), 0)
+        return (w, h)
+
+    # compound widgets ----------------------------------------------------------
+    def caption(self, text, alpha, y=None, size=34, sub=None, width=1640, color=0xf2f5fa):
+        """Lower-third caption: one or two balanced lines, centred, on a soft panel."""
+        if alpha <= 0.003:
+            return
+        y = self.H - 118 if y is None else y
+        lines = self.wrap_balanced(text, size, width)
+        lh = size * 1.28
+        widths = [self.text_width(l, size) for l in lines]
+        w = max(widths) + 64
+        h = lh * len(lines) + 34
+        x = (self.W - w) / 2
+        top = y - h / 2
+        self.panel(x, top, w, h, radius=18, alpha=0.62 * alpha)
+        for i, l in enumerate(lines):
+            self.text(self.W / 2, top + 17 + i * lh + size * 0.02, l, size=size, color=color, alpha=alpha,
+                      anchor="ma")
+
+    def wrap_balanced(self, text, size, width, kind="regular"):
+        """Wrap into the fewest lines, then even out their lengths (no orphans)."""
+        n = len(self.wrap(text, size, width, kind))
+        if n <= 1:
+            return [text]
+        lo, hi = 200.0, float(width)
+        best = self.wrap(text, size, width, kind)
+        for _ in range(18):
+            mid = (lo + hi) / 2
+            w = self.wrap(text, size, mid, kind)
+            if len(w) <= n and all(self.text_width(l, size, kind) <= mid + 1 for l in w):
+                best, hi = w, mid
+            else:
+                lo = mid
+        return best
+
+    def wrap(self, text, size, width, kind="regular"):
+        words = text.split()
+        lines, cur = [], ""
+        for w in words:
+            cand = (cur + " " + w).strip()
+            if self.text_width(cand, size, kind) <= width or not cur:
+                cur = cand
+            else:
+                lines.append(cur)
+                cur = w
+        if cur:
+            lines.append(cur)
+        return lines
+
+    def callout(self, anchor, label_xy, text, color=0xffffff, alpha=1.0, size=24, kind="semibold",
+                dot=5, grow=1.0):
+        """Leader line from a projected 3D point to a label."""
+        if alpha <= 0.003:
+            return
+        ax, ay = anchor
+        lx, ly = label_xy
+        ex = ax + (lx - ax) * grow
+        ey = ay + (ly - ay) * grow
+        self.circle(ax, ay, dot, fill=color, alpha=alpha)
+        self.line([(ax, ay), (ex, ey)], color, 1.6, alpha * 0.9)
+        if grow > 0.98:
+            left = lx < ax
+            self.text(lx + (-10 if left else 10), ly, text, size=size, color=color, alpha=alpha, kind=kind,
+                      anchor="rm" if left else "lm")
+
+    def logplot(self, x, y, w, h, values, alpha=1.0, color=0xffb347, ymin=1e-4, ymax=1.0, xmax=None,
+                title=None, threshold=None, unit_fmt=None, marker_last=True):
+        """Small log-scale plot of a positive series (error vs iteration)."""
+        if alpha <= 0.003:
+            return
+        self.panel(x, y, w, h, alpha=0.70 * alpha, outline=0x8aa0c0, outline_alpha=0.18)
+        px, py, pw, ph = x + 70, y + 50, w - 92, h - 80
+        if title:
+            self.text(x + 22, y + 16, title, size=17, color=0x9fb2cc, alpha=alpha, kind="semibold", tracking=2.0)
+        lo, hi = math.log10(ymin), math.log10(ymax)
+
+        def Y(v):
+            v = max(float(v), ymin)
+            return py + ph * (1 - (math.log10(v) - lo) / (hi - lo))
+
+        for dec in range(int(math.floor(lo)), int(math.ceil(hi)) + 1):
+            yy = Y(10.0 ** dec)
+            if py - 1 <= yy <= py + ph + 1:
+                self.line([(px, yy), (px + pw, yy)], 0x3a4558, 1.0, alpha * 0.8)
+                lab = unit_fmt(10.0 ** dec) if unit_fmt else f"1e{dec}"
+                self.text(px - 10, yy, lab, size=15, color=0x7f8ea6, alpha=alpha, kind="numeric", anchor="rm")
+        if threshold is not None:
+            yy = Y(threshold)
+            self.dashed((px, yy), (px + pw, yy), 0x5ee27a, 1.4, alpha * 0.85, dash=6, gap=5)
+        n = len(values)
+        xm = max(xmax or n, 2)
+
+        def X(i):
+            return px + pw * i / (xm - 1)
+
+        if n >= 2:
+            self.line([(X(i), Y(v)) for i, v in enumerate(values)], color, 2.6, alpha)
+        for i, v in enumerate(values):
+            self.circle(X(i), Y(v), 4.2 if (i == n - 1 and marker_last) else 3.0, fill=color, alpha=alpha)
+
+    def fade(self, amount, color=0x000000):
+        """Full-frame veil, drawn last: 1 = solid colour."""
+        if amount <= 0.003:
+            return
+        self._rrect(-4, -4, self.W + 8, self.H + 8, 0, color, amount)
+
+
+# ── images without an imaging library ──────────────────────────────────────────
+def write_png(path, rgb):
+    """Write an (H, W, 3) uint8 array as a PNG with only the standard library."""
+    rgb = np.ascontiguousarray(rgb, np.uint8)
+    h, w = rgb.shape[:2]
+    raw = b"".join(b"\x00" + rgb[y].tobytes() for y in range(h))   # filter type 0 per row
+
+    def chunk(tag, data):
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n")
+        f.write(chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)))
+        f.write(chunk(b"IDAT", zlib.compress(raw, 6)))
+        f.write(chunk(b"IEND", b""))
+
+
+def shrink(rgb, factor):
+    """Box-filter downsample by an integer factor."""
+    h, w = rgb.shape[0] // factor * factor, rgb.shape[1] // factor * factor
+    a = rgb[:h, :w].astype(np.float32).reshape(h // factor, factor, w // factor, factor, -1)
+    return a.mean(axis=(1, 3)).round().astype(np.uint8)
+
+
+# ── film writer ───────────────────────────────────────────────────────────────
+def ffmpeg_exe():
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return shutil.which("ffmpeg")
+
+
+class Film:
+    """Frames -> H.264 mp4 through an ffmpeg pipe. Written to <path>.part, renamed on close."""
+
+    def __init__(self, path, width, height, fps=60, crf=16, preset="slow", threads=0):
+        self.path = path
+        self.tmp = path + ".part.mp4"
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        cmd = [ffmpeg_exe(), "-y", "-loglevel", "error",
+               "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", str(fps), "-i", "-",
+               "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p",
+               "-profile:v", "high", "-movflags", "+faststart", "-color_primaries", "bt709",
+               "-color_trc", "bt709", "-colorspace", "bt709"]
+        if threads:
+            cmd += ["-threads", str(threads)]
+        cmd += [self.tmp]
+        self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+        self.n = 0
+
+    def write(self, frame):
+        self.p.stdin.write(np.ascontiguousarray(frame, np.uint8).tobytes())
+        self.n += 1
+
+    def close(self):
+        self.p.stdin.close()
+        rc = self.p.wait()
+        if rc != 0:
+            raise RuntimeError(f"ffmpeg exited {rc}")
+        os.replace(self.tmp, self.path)
+        return self.path
