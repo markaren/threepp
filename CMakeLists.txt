@@ -136,7 +136,12 @@ add_subdirectory(src)
 # per-consumer macros the installed library cannot own (see the file's header
 # comment). Before the editor gate on purpose: the Python bindings and the
 # tests consume it whether or not the apps are built.
-add_subdirectory(editor-core)
+#
+# EXCLUDE_FROM_ALL so it is built only when something links it — the editor,
+# the player, the tests or the Python bindings. A project that pulls threepp in
+# with FetchContent or add_subdirectory otherwise compiles its 37 sources for
+# nothing. It is never installed, so nothing is lost.
+add_subdirectory(editor-core EXCLUDE_FROM_ALL)
 
 # V-HACD convex decomposition, a small static library the editor and the PhysX
 # tests share. Self-gates on the PhysX SDK being present, so a build without
