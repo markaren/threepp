@@ -887,7 +887,7 @@ struct GLRenderer::Impl {
         // material.envMap — so parameters.envMapMode reflects the *resolved* mapping
         // (e.g. CubeUVReflection for equirect sources), not the source equirect mapping.
         // three.js r184 (#32795): Phong reads scene.environment too.
-        materialProperties->environment = (material->is<MeshStandardMaterial>() || material->is<MeshPhongMaterial>())
+        materialProperties->environment = (material->is<MeshStandardMaterial>() || material->is<MeshPhongMaterial>() || material->is<MeshLambertMaterial>())
                                                   ? scene->environment.get()
                                                   : nullptr;
         materialProperties->fog = scene->fog;
@@ -1023,7 +1023,8 @@ struct GLRenderer::Impl {
         textures.resetTextureUnits();
 
         auto& fog = scene->fog;
-        auto environment = (isMeshStandardMaterial || isMeshPhongMaterial) ? scene->environment : nullptr;
+        // three.js r184 (#32791, #32795): Lambert and Phong read scene.environment too.
+        auto environment = (isMeshStandardMaterial || isMeshPhongMaterial || isMeshLambertMaterial) ? scene->environment : nullptr;
         ColorSpace encoding = currentOutputColorSpace();
 
         Texture* envMap;
@@ -1347,7 +1348,7 @@ struct GLRenderer::Impl {
                     // (the blend has to keep working for a material's own
                     // equirect envMap), so the blend is switched off through
                     // its weight instead.
-                    if (isMeshPhongMaterial && m_uniforms.contains("reflectivity")) {
+                    if ((isMeshPhongMaterial || isMeshLambertMaterial) && m_uniforms.contains("reflectivity")) {
                         m_uniforms.at("reflectivity").value<float>() = 0.f;
                     }
                 }

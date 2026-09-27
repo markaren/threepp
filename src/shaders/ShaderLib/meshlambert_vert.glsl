@@ -1,20 +1,17 @@
-
 #define LAMBERT
 
-varying vec3 vLightFront;
-varying vec3 vIndirectFront;
+varying vec3 vViewPosition;
 
-#ifdef DOUBLE_SIDED
-	varying vec3 vLightBack;
-	varying vec3 vIndirectBack;
+#ifndef FLAT_SHADED
+
+	varying vec3 vNormal;
+
 #endif
 
 #include <common>
 #include <uv_pars_vertex>
 #include <uv2_pars_vertex>
 #include <envmap_pars_vertex>
-#include <bsdfs>
-#include <lights_pars_begin>
 #include <color_pars_vertex>
 #include <fog_pars_vertex>
 #include <morphtarget_pars_vertex>
@@ -35,6 +32,12 @@ void main() {
 	#include <skinnormal_vertex>
 	#include <defaultnormal_vertex>
 
+#ifndef FLAT_SHADED // Normal computed with derivatives when FLAT_SHADED
+
+	vNormal = normalize( transformedNormal );
+
+#endif
+
 	#include <begin_vertex>
 	#include <morphtarget_vertex>
 	#include <skinning_vertex>
@@ -42,10 +45,11 @@ void main() {
 	#include <logdepthbuf_vertex>
 	#include <clipping_planes_vertex>
 
+	vViewPosition = - mvPosition.xyz;
+
 	#include <worldpos_vertex>
 	#include <envmap_vertex>
-	#include <lights_lambert_vertex>
 	#include <shadowmap_vertex>
 	#include <fog_vertex>
-}
 
+}

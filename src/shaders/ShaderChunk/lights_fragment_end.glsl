@@ -1,9 +1,9 @@
 
 #if defined( RE_IndirectDiffuse )
 
-	#if defined( PHONG )
+	#if defined( LAMBERT ) || defined( PHONG )
 
-		// r184: Phong has no RE_IndirectSpecular to fold the IBL in, so the
+		// r184: Lambert and Phong have no RE_IndirectSpecular to fold the IBL in, so the
 		// environment's irradiance joins the ambient one.
 		irradiance += iblIrradiance;
 

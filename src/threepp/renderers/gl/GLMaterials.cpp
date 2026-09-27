@@ -183,6 +183,10 @@ struct GLMaterials::Impl {
 
     void refreshUniformsLambert(UniformMap& uniforms, MeshLambertMaterial* material) {
 
+        // As for Phong: diffuse IBL comes from scene.environment only (r184
+        // #32791). A Lambert with its own envMap keeps its pre-r184 look.
+        uniforms.at("envMapIntensity").value<float>() = material->envMap ? 0.f : material->envMapIntensity;
+
         auto& emissiveMap = material->emissiveMap;
         if (emissiveMap) {
             uniforms.at("emissiveMap").setValue(emissiveMap.get());

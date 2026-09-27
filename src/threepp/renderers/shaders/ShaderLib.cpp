@@ -30,7 +30,8 @@ ShaderLib::ShaderLib()
                                       UniformsLib::instance().fog,
                                       UniformsLib::instance().lights,
                                       UniformMap{
-                                              {"emissive", Uniform(Color(0x000000))}
+                                              {"emissive", Uniform(Color(0x000000))},
+                                              {"envMapIntensity", Uniform(1.f)}
                                       }
                               }),// clang-format on
 

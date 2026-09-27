@@ -180,8 +180,12 @@ namespace threepp::shaders {
             return get("lightmap_pars_fragment");
         }
 
-        const std::string& lights_lambert_vertex() {
-            return get("lights_lambert_vertex");
+        const std::string& lights_lambert_fragment() {
+            return get("lights_lambert_fragment");
+        }
+
+        const std::string& lights_lambert_pars_fragment() {
+            return get("lights_lambert_pars_fragment");
         }
 
         const std::string& lights_pars_begin() {

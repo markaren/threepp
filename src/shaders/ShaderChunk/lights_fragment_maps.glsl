@@ -6,7 +6,9 @@
 		vec4 lightMapTexel= texture2D( lightMap, vUv2 );
 		vec3 lightMapIrradiance = lightMapTexelToLinear( lightMapTexel ).rgb * lightMapIntensity;
 
-		#ifdef USE_LEGACY_LIGHTS
+		// threepp keeps the PI for Lambert: its (pre-r144) Gouraud path always
+		// added PI * lightMap, so a Lambert light-mapped scene renders as before.
+		#if defined( USE_LEGACY_LIGHTS ) || defined( LAMBERT )
 
 			lightMapIrradiance *= PI; // factor of PI should not be present; included here to prevent breakage
 
@@ -16,7 +18,7 @@
 
 	#endif
 
-	#if defined( USE_ENVMAP ) && ( defined( STANDARD ) || defined( PHONG ) ) && defined( ENVMAP_TYPE_CUBE_UV )
+	#if defined( USE_ENVMAP ) && ( defined( STANDARD ) || defined( LAMBERT ) || defined( PHONG ) ) && defined( ENVMAP_TYPE_CUBE_UV )
 
 		iblIrradiance += getLightProbeIndirectIrradiance( /*lightProbe,*/ geometry, maxMipLevel );
 
