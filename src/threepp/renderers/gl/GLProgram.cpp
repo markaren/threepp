@@ -452,6 +452,7 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
                     parameters->vertexAlphas ? "#define USE_COLOR_ALPHA" : "",
                     parameters->vertexUvs ? "#define USE_UV" : "",
                     parameters->uvsVertexOnly ? "#define UVS_VERTEX_ONLY" : "",
+                    parameters->uvDefines,
 
                     parameters->flatShading ? "#define FLAT_SHADED" : "",
 
@@ -495,6 +496,18 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
                     "attribute vec3 position;",
                     "attribute vec3 normal;",
                     "attribute vec2 uv;",
+
+                    "#if defined( USE_LIGHTMAP ) || defined( USE_AOMAP ) || defined( USE_UV2_ATTRIBUTE )",
+
+                    "	attribute vec2 uv2;",
+
+                    "#endif",
+
+                    "#ifdef USE_UV3_ATTRIBUTE",
+
+                    "	attribute vec2 uv3;",
+
+                    "#endif",
 
                     "#ifdef USE_TANGENT",
 

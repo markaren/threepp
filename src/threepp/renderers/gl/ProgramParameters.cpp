@@ -10,6 +10,7 @@
 #include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/scenes/Scene.hpp"
 
+#include <algorithm>
 #include <sstream>
 
 using namespace threepp;
@@ -161,6 +162,44 @@ ProgramParameters::ProgramParameters(
     transmissionCoverage = transmission && material->transparent;
     thicknessMap = thicknessMaterial && thicknessMaterial->thicknessMap;
 
+    {
+        // Per-map UV set (three.js r152 #25721, #25788). Texture::channel 0/1/2
+        // selects the "uv"/"uv2"/"uv3" attribute; threepp keeps "uv2" as the
+        // name of the second set (r152 renamed it uv1). An aoMap or lightMap
+        // left at channel 0 on a geometry that has "uv2" samples uv2, as it
+        // always did here, so existing light-mapped scenes are unchanged.
+        const bool hasUv2 = object->geometry() && object->geometry()->hasAttribute("uv2");
+        bool useUv2 = false, useUv3 = false;
+        std::ostringstream ss;
+        auto add = [&](const char* define, const Texture* tex, bool legacySecondSet) {
+            if (!tex) return;
+            int ch = std::clamp(tex->channel, 0, 2);
+            if (ch == 0 && legacySecondSet && hasUv2) ch = 1;
+            useUv2 = useUv2 || ch == 1;
+            useUv3 = useUv3 || ch == 2;
+            ss << "#define " << define << (ch == 0 ? " uv" : ch == 1 ? " uv2" : " uv3") << '\n';
+        };
+        if (map) add("MAP_UV", mapMaterial->map.get(), false);
+        if (alphaMap) add("ALPHAMAP_UV", alphaMaterial->alphaMap.get(), false);
+        if (lightMap) add("LIGHTMAP_UV", lightmapMaterial->lightMap.get(), true);
+        if (aoMap) add("AOMAP_UV", aomapMaterial->aoMap.get(), true);
+        if (bumpMap) add("BUMPMAP_UV", bumpmapMaterial->bumpMap.get(), false);
+        if (normalMap) add("NORMALMAP_UV", normalMaterial->normalMap.get(), false);
+        if (displacementMap) add("DISPLACEMENTMAP_UV", displacementMapMaterial->displacementMap.get(), false);
+        if (emissiveMap) add("EMISSIVEMAP_UV", emissiveMaterial->emissiveMap.get(), false);
+        if (metalnessMap) add("METALNESSMAP_UV", metallnessMaterial->metalnessMap.get(), false);
+        if (roughnessMap) add("ROUGHNESSMAP_UV", roughnessMaterial->roughnessMap.get(), false);
+        if (specularMap) add("SPECULARMAP_UV", specularMapMaterial->specularMap.get(), false);
+        if (clearcoatMap) add("CLEARCOATMAP_UV", clearcoatMaterial->clearcoatMap.get(), false);
+        if (clearcoatNormalMap) add("CLEARCOAT_NORMALMAP_UV", clearcoatMaterial->clearcoatNormalMap.get(), false);
+        if (clearcoatRoughnessMap) add("CLEARCOAT_ROUGHNESSMAP_UV", clearcoatMaterial->clearcoatRoughnessMap.get(), false);
+        if (transmissionMap) add("TRANSMISSIONMAP_UV", transmissionMaterial->transmissionMap.get(), false);
+        if (thicknessMap) add("THICKNESSMAP_UV", thicknessMaterial->thicknessMap.get(), false);
+        if (useUv2) ss << "#define USE_UV2_ATTRIBUTE\n";
+        if (useUv3) ss << "#define USE_UV3_ATTRIBUTE\n";
+        uvDefines = ss.str();
+    }
+
     if (combineMaterial) {
         combine = combineMaterial->combine;
     }
@@ -278,6 +317,7 @@ std::string ProgramParameters::hash() const {
     s << std::to_string(transmissionMap) << '\n';
     s << std::to_string(transmissionCoverage) << '\n';
     s << std::to_string(thicknessMap) << '\n';
+    s << uvDefines << '\n';
 
     s << (combine.has_value() ? std::to_string(as_integer(*combine)) : std::string("undefined")) << '\n';
 

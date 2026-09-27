@@ -3,13 +3,13 @@
 
 	#ifdef USE_TRANSMISSIONMAP
 
-		totalTransmission *= texture2D( transmissionMap, vUv ).r;
+		totalTransmission *= texture2D( transmissionMap, vTransmissionMapUv ).r;
 
 	#endif
 
 	#ifdef USE_THICKNESSMAP
 
-		thicknessFactor *= texture2D( thicknessMap, vUv ).g;
+		thicknessFactor *= texture2D( thicknessMap, vThicknessMapUv ).g;
 
 	#endif
 

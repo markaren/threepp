@@ -93,7 +93,7 @@ namespace {
            << " off=" << f4(t->offset.x) << "," << f4(t->offset.y)
            << " rep=" << f4(t->repeat.x) << "," << f4(t->repeat.y)
            << " rot=" << f4(t->rotation)
-           << " uv=" << t->texCoord
+           << " uv=" << t->channel
            << "\n";
     }
 

@@ -96,7 +96,12 @@ namespace threepp {
         Vector2 center{0, 0};
         float rotation = 0;
 
-        int texCoord = 0;  // UV set index (0 = TEXCOORD_0, 1 = TEXCOORD_1)
+        // Which UV set the texture samples (three.js r152 Texture.channel):
+        // 0 = the "uv" attribute, 1 = "uv2" (threepp's name for the second
+        // set; glTF TEXCOORD_1), 2 = "uv3". An aoMap or lightMap at channel 0
+        // on a geometry that carries "uv2" keeps threepp's pre-r152 rule and
+        // samples uv2.
+        int channel = 0;
 
         bool matrixAutoUpdate = true;
         Matrix3 matrix{};

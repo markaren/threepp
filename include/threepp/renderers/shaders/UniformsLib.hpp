@@ -22,10 +22,14 @@ namespace threepp::shaders {
                 {"map", Uniform()},
                 {"uvTransform", Uniform(Matrix3())},
                 {"uv2Transform", Uniform(Matrix3())},
-                {"alphaMap", Uniform()}};
+                {"alphaMap", Uniform()},
+                // three.js r152 per-map transforms (#25721)
+                {"mapTransform", Uniform(Matrix3())},
+                {"alphaMapTransform", Uniform(Matrix3())}};
 
         UniformMap specularmap{
-                {"specularMap", Uniform()}};
+                {"specularMap", Uniform()},
+                {"specularMapTransform", Uniform(Matrix3())}};
 
         UniformMap envmap{
                 {"envMap", Uniform()},
@@ -43,33 +47,41 @@ namespace threepp::shaders {
 
         UniformMap aomap{
                 {"aoMap", Uniform()},
-                {"aoMapIntensity", Uniform(1.f)}};
+                {"aoMapIntensity", Uniform(1.f)},
+                {"aoMapTransform", Uniform(Matrix3())}};
 
         UniformMap lightmap{
                 {"lightMap", Uniform()},
-                {"lightMapIntensity", Uniform(1.f)}};
+                {"lightMapIntensity", Uniform(1.f)},
+                {"lightMapTransform", Uniform(Matrix3())}};
 
         UniformMap emissivemap{
-                {"emissiveMap", Uniform()}};
+                {"emissiveMap", Uniform()},
+                {"emissiveMapTransform", Uniform(Matrix3())}};
 
         UniformMap bumpmap{
                 {"bumpMap", Uniform()},
-                {"bumpScale", Uniform(1.f)}};
+                {"bumpScale", Uniform(1.f)},
+                {"bumpMapTransform", Uniform(Matrix3())}};
 
         UniformMap normalmap{
                 {"normalMap", Uniform()},
-                {"normalScale", Uniform(Vector2(1, 1))}};
+                {"normalScale", Uniform(Vector2(1, 1))},
+                {"normalMapTransform", Uniform(Matrix3())}};
 
         UniformMap displacementmap{
                 {"displacementMap", Uniform()},
                 {"displacementScale", Uniform(1.f)},
-                {"displacementBias", Uniform(0.f)}};
+                {"displacementBias", Uniform(0.f)},
+                {"displacementMapTransform", Uniform(Matrix3())}};
 
         UniformMap roughnessmap{
-                {"roughnessMap", Uniform()}};
+                {"roughnessMap", Uniform()},
+                {"roughnessMapTransform", Uniform(Matrix3())}};
 
         UniformMap metalnessmap{
-                {"metalnessMap", Uniform()}};
+                {"metalnessMap", Uniform()},
+                {"metalnessMapTransform", Uniform(Matrix3())}};
 
         UniformMap gradientmap{
                 {"gradientMap", Uniform()}};
@@ -117,7 +129,9 @@ namespace threepp::shaders {
                 {"rotation", Uniform(0.f)},
                 {"map", Uniform()},
                 {"alphaMap", Uniform()},
-                {"uvTransform", Uniform(Matrix3())}};
+                {"uvTransform", Uniform(Matrix3())},
+                {"mapTransform", Uniform(Matrix3())},
+                {"alphaMapTransform", Uniform(Matrix3())}};
 
         UniformsLib(const UniformsLib&) = delete;
         void operator=(const UniformsLib&) = delete;

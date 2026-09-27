@@ -54,13 +54,13 @@ material.specularRoughness = min( material.specularRoughness, 1.0 );
 
 	#ifdef USE_CLEARCOATMAP
 
-		material.clearcoat *= texture2D( clearcoatMap, vUv ).x;
+		material.clearcoat *= texture2D( clearcoatMap, vClearcoatMapUv ).x;
 
 	#endif
 
 	#ifdef USE_CLEARCOAT_ROUGHNESSMAP
 
-		material.clearcoatRoughness *= texture2D( clearcoatRoughnessMap, vUv ).y;
+		material.clearcoatRoughness *= texture2D( clearcoatRoughnessMap, vClearcoatRoughnessMapUv ).y;
 
 	#endif
 

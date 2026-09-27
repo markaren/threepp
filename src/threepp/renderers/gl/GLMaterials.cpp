@@ -18,6 +18,19 @@
 using namespace threepp;
 using namespace threepp::gl;
 
+namespace {
+
+    // three.js r152 refreshTransformUniform: each map carries its own
+    // offset/repeat/rotation into "<name>Transform".
+    void refreshTransformUniform(UniformMap& uniforms, const char* name, Texture* map) {
+        if (!map) return;
+        if (map->matrixAutoUpdate) map->updateMatrix();
+        auto it = uniforms.find(name);
+        if (it != uniforms.end()) it->second.value<Matrix3>().copy(map->matrix);
+    }
+
+}// namespace
+
 struct GLMaterials::Impl {
 
     GLProperties& properties;
@@ -106,6 +119,20 @@ struct GLMaterials::Impl {
             uniforms.at("aoMap").setValue(aoMaterial->aoMap.get());
             uniforms.at("aoMapIntensity").setValue(aoMaterial->aoMapIntensity);
         }
+
+        // Per-map transforms (three.js r152 #25721). The legacy uvTransform /
+        // uv2Transform below still feed vUv / vUv2 for custom shaders.
+        if (mapMaterial) refreshTransformUniform(uniforms, "mapTransform", mapMaterial->map.get());
+        if (alphaMaterial) refreshTransformUniform(uniforms, "alphaMapTransform", alphaMaterial->alphaMap.get());
+        if (specularMaterial) refreshTransformUniform(uniforms, "specularMapTransform", specularMaterial->specularMap.get());
+        if (displacementMaterial) refreshTransformUniform(uniforms, "displacementMapTransform", displacementMaterial->displacementMap.get());
+        if (normalMaterial) refreshTransformUniform(uniforms, "normalMapTransform", normalMaterial->normalMap.get());
+        if (bumpMaterial) refreshTransformUniform(uniforms, "bumpMapTransform", bumpMaterial->bumpMap.get());
+        if (roughnessMaterial) refreshTransformUniform(uniforms, "roughnessMapTransform", roughnessMaterial->roughnessMap.get());
+        if (metalnessMaterial) refreshTransformUniform(uniforms, "metalnessMapTransform", metalnessMaterial->metalnessMap.get());
+        if (emissiveMaterial) refreshTransformUniform(uniforms, "emissiveMapTransform", emissiveMaterial->emissiveMap.get());
+        if (aoMaterial) refreshTransformUniform(uniforms, "aoMapTransform", aoMaterial->aoMap.get());
+        if (lightMaterial) refreshTransformUniform(uniforms, "lightMapTransform", lightMaterial->lightMap.get());
 
         // uv repeat and offset setting priorities
         // 1. color map
@@ -314,6 +341,11 @@ struct GLMaterials::Impl {
         if (material->clearcoatMap) {
             uniforms.at("clearcoatMap").setValue(material->clearcoatMap.get());
         }
+        refreshTransformUniform(uniforms, "clearcoatMapTransform", material->clearcoatMap.get());
+        refreshTransformUniform(uniforms, "clearcoatRoughnessMapTransform", material->clearcoatRoughnessMap.get());
+        refreshTransformUniform(uniforms, "clearcoatNormalMapTransform", material->clearcoatNormalMap.get());
+        refreshTransformUniform(uniforms, "transmissionMapTransform", material->transmissionMap.get());
+        refreshTransformUniform(uniforms, "thicknessMapTransform", material->thicknessMap.get());
 
         if (material->clearcoatRoughnessMap) {
             uniforms.at("clearcoatRoughnessMap").setValue(material->clearcoatRoughnessMap.get());
@@ -555,6 +587,9 @@ struct GLMaterials::Impl {
 
             uniforms.at("alphaMap").setValue(material->alphaMap.get());
         }
+
+        refreshTransformUniform(uniforms, "mapTransform", material->map.get());
+        refreshTransformUniform(uniforms, "alphaMapTransform", material->alphaMap.get());
 
         // uv repeat and offset setting priorities
         // 1. color map

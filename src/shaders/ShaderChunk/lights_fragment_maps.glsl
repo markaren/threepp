@@ -3,7 +3,7 @@
 
 	#ifdef USE_LIGHTMAP
 
-		vec4 lightMapTexel= texture2D( lightMap, vUv2 );
+		vec4 lightMapTexel= texture2D( lightMap, vLightMapUv );
 		vec3 lightMapIrradiance = lightMapTexelToLinear( lightMapTexel ).rgb * lightMapIntensity;
 
 		// threepp keeps the PI for Lambert: its (pre-r144) Gouraud path always

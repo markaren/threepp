@@ -1,7 +1,7 @@
 
 #ifdef USE_CLEARCOAT_NORMALMAP
 
-	vec3 clearcoatMapN = texture2D( clearcoatNormalMap, vUv ).xyz * 2.0 - 1.0;
+	vec3 clearcoatMapN = texture2D( clearcoatNormalMap, vClearcoatNormalMapUv ).xyz * 2.0 - 1.0;
 	clearcoatMapN.xy *= clearcoatNormalScale;
 
 	#ifdef USE_TANGENT
@@ -10,7 +10,7 @@
 
 	#else
 
-		clearcoatNormal = perturbNormal2Arb( - vViewPosition, clearcoatNormal, clearcoatMapN, faceDirection );
+		clearcoatNormal = perturbNormal2Arb( - vViewPosition, clearcoatNormal, clearcoatMapN, faceDirection, vClearcoatNormalMapUv );
 
 	#endif
 

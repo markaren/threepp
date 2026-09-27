@@ -65,6 +65,10 @@ namespace threepp {
             bool specularMap{};
             bool alphaMap{};
 
+            // three.js r152 (#25721): "#define MAP_UV uv" etc., one line per
+            // map in use, naming the attribute each map samples.
+            std::string uvDefines;
+
             bool gradientMap{};
 
             bool sheen{};

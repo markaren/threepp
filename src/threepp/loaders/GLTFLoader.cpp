@@ -957,7 +957,7 @@ namespace threepp {
                 clone->repeat = {scX, scY};
                 clone->rotation = rot;
                 clone->center = {0, 0};
-                clone->texCoord = texCoordVal;
+                clone->channel = texCoordVal;
                 clone->updateMatrix();
                 textureTransformCache[key] = clone;
                 return clone;

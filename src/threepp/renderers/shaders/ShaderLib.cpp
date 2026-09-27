@@ -235,11 +235,11 @@ ShaderLib::ShaderLib()
                                       standard.uniforms,
                                       UniformMap{
                                               {"clearcoat", Uniform(0.f)},
-                                              {"clearcoatMap", Uniform()},
+                                              {"clearcoatMap", Uniform()}, {"clearcoatMapTransform", Uniform(Matrix3())},
                                               {"clearcoatRoughness", Uniform(0.f)},
-                                              {"clearcoatRoughnessMap", Uniform()},
+                                              {"clearcoatRoughnessMap", Uniform()}, {"clearcoatRoughnessMapTransform", Uniform(Matrix3())},
                                               {"clearcoatNormalScale", Uniform(Vector2(1,1))},
-                                              {"clearcoatNormalMap", Uniform()},
+                                              {"clearcoatNormalMap", Uniform()}, {"clearcoatNormalMapTransform", Uniform(Matrix3())},
                                               {"sheenColor", Uniform(Color(0x000000))},
                                               {"sheenRoughness", Uniform(0.f)},
                                               {"specularIntensity", Uniform(1.f)},
@@ -248,11 +248,11 @@ ShaderLib::ShaderLib()
                                               {"iridescenceIOR", Uniform(1.3f)},
                                               {"iridescenceThicknessNm", Uniform(400.f)},
                                               {"transmission", Uniform(0.f)},
-                                              {"transmissionMap", Uniform()},
+                                              {"transmissionMap", Uniform()}, {"transmissionMapTransform", Uniform(Matrix3())},
                                               {"transmissionSamplerSize", Uniform(Vector2(0,0))},
                                               {"transmissionSamplerMap", Uniform()},
                                               {"thickness", Uniform(0.f)},
-                                              {"thicknessMap", Uniform()},
+                                              {"thicknessMap", Uniform()}, {"thicknessMapTransform", Uniform(Matrix3())},
                                               {"attenuationDistance", Uniform(0.f)},
                                               {"attenuationColor", Uniform(Color(0x000000))}
                                       }
