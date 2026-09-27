@@ -794,3 +794,116 @@ TEST_CASE("OutlinePass: an empty selection leaves the image untouched", "[postpr
     CHECK(maxDiff <= 1);
     CHECK(maxDiffAfter <= 1);
 }
+
+
+namespace {
+
+    // An unlit white floor meeting an unlit white wall: without AO the frame
+    // is flat white, so anything the pass does is readable directly.
+    struct CornerScene {
+        std::shared_ptr<Scene> scene;
+        std::shared_ptr<PerspectiveCamera> camera;
+    };
+
+    CornerScene cornerScene() {
+
+        auto scene = Scene::create();
+        scene->background = Color(0, 0, 0);
+
+        auto mat = MeshBasicMaterial::create();
+        mat->color = Color(0.8f, 0.8f, 0.8f);
+
+        auto floor = Mesh::create(PlaneGeometry::create(10, 10), mat);
+        floor->rotation.x = -math::PI / 2;
+        scene->add(floor);
+
+        auto wall = Mesh::create(PlaneGeometry::create(10, 4), mat);
+        wall->position.set(0, 2, -1);
+        scene->add(wall);
+
+        auto camera = PerspectiveCamera::create(60, 1.f, 0.1f, 20.f);
+        camera->position.set(0, 1.2f, 1.8f);
+        camera->lookAt(Vector3{0, 0, -0.6f});
+        camera->updateMatrixWorld();
+
+        return {scene, camera};
+    }
+
+    // Mean brightness of the 3x3 block around where `world` lands on screen.
+    double brightnessAt(const std::vector<unsigned char>& px, const Camera& camera, Vector3 world) {
+
+        world.project(camera);
+        const int cx = static_cast<int>((world.x * 0.5f + 0.5f) * RT_WIDTH);
+        const int cy = static_cast<int>((world.y * 0.5f + 0.5f) * RT_HEIGHT);
+
+        double sum = 0;
+        int n = 0;
+        for (int y = cy - 1; y <= cy + 1; y++) {
+            for (int x = cx - 1; x <= cx + 1; x++) {
+                const size_t i = (static_cast<size_t>(y) * RT_WIDTH + x) * 3;
+                sum += (px[i] + px[i + 1] + px[i + 2]) / 3.0;
+                n++;
+            }
+        }
+        return sum / n;
+    }
+
+    std::vector<unsigned char> renderCorner(const CornerScene& s, std::optional<float> blendIntensity) {
+
+        GLRenderer renderer(glCanvas());
+        renderer.outputColorSpace = ColorSpace::NoColorSpace;
+        renderer.setClearColor(Color(0, 0, 0));
+
+        EffectComposer composer(renderer);
+        composer.addPass(std::make_shared<RenderPass>(*s.scene, *s.camera));
+        if (blendIntensity) {
+            auto gtao = std::make_shared<GTAOPass>(*s.scene, *s.camera, RT_WIDTH, RT_HEIGHT);
+            gtao->blendIntensity = *blendIntensity;
+            composer.addPass(gtao);
+        }
+        composer.render();
+
+        return renderer.readRGBPixels();
+    }
+
+}// namespace
+
+// AO has to darken where two surfaces meet, and only there: the crease of the
+// corner loses light, the open floor two units from any wall keeps all of it.
+TEST_CASE("GTAOPass: a concave corner darkens, an open floor does not", "[postprocessing]") {
+
+    const auto s = cornerScene();
+
+    const auto plain = renderCorner(s, std::nullopt);
+    const auto withAo = renderCorner(s, 1.f);
+
+    const Vector3 crease{0, 0.03f, -0.97f};
+    const Vector3 openFloor{0, 0, 0.9f};
+
+    const double creasePlain = brightnessAt(plain, *s.camera, crease);
+    const double creaseAo = brightnessAt(withAo, *s.camera, crease);
+    const double floorPlain = brightnessAt(plain, *s.camera, openFloor);
+    const double floorAo = brightnessAt(withAo, *s.camera, openFloor);
+
+    INFO("crease " << creasePlain << " -> " << creaseAo << ", open floor " << floorPlain << " -> " << floorAo);
+    CHECK(creaseAo < creasePlain - 15.0);
+    CHECK(std::abs(floorAo - floorPlain) < 3.0);
+}
+
+// blendIntensity 0 is "no AO", and has to be exactly that - not a copy that
+// shifts the image a little on the way through.
+TEST_CASE("GTAOPass: blendIntensity 0 leaves the image untouched", "[postprocessing]") {
+
+    const auto s = cornerScene();
+
+    const auto plain = renderCorner(s, std::nullopt);
+    const auto zero = renderCorner(s, 0.f);
+
+    int maxDiff = 0;
+    for (size_t i = 0; i < plain.size(); i++) {
+        maxDiff = std::max(maxDiff, std::abs(static_cast<int>(plain[i]) - static_cast<int>(zero[i])));
+    }
+
+    INFO("max channel difference " << maxDiff);
+    CHECK(maxDiff <= 1);
+}

@@ -266,6 +266,7 @@ set(publicHeaders
         "threepp/postprocessing/BokehPass.hpp"
         "threepp/postprocessing/ClearPass.hpp"
         "threepp/postprocessing/EffectComposer.hpp"
+        "threepp/postprocessing/GTAOPass.hpp"
         "threepp/postprocessing/MaskPass.hpp"
         "threepp/postprocessing/OutlinePass.hpp"
         "threepp/postprocessing/Pass.hpp"
@@ -276,7 +277,9 @@ set(publicHeaders
         "threepp/postprocessing/UnrealBloomPass.hpp"
         "threepp/postprocessing/shaders/BokehShader.hpp"
         "threepp/postprocessing/shaders/CopyShader.hpp"
+        "threepp/postprocessing/shaders/GTAOShader.hpp"
         "threepp/postprocessing/shaders/LuminosityHighPassShader.hpp"
+        "threepp/postprocessing/shaders/PoissonDenoiseShader.hpp"
 
 )
 
@@ -676,6 +679,7 @@ set(sources
         "threepp/postprocessing/BokehPass.cpp"
         "threepp/postprocessing/ClearPass.cpp"
         "threepp/postprocessing/EffectComposer.cpp"
+        "threepp/postprocessing/GTAOPass.cpp"
         "threepp/postprocessing/MaskPass.cpp"
         "threepp/postprocessing/OutlinePass.cpp"
         "threepp/postprocessing/Pass.cpp"
