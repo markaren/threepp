@@ -2646,37 +2646,52 @@ scene.add(motes)
 # ---- sonar: tp.SonarSensor through the renderer's own acceleration structure ------------------
 # The imaging sonar is a threepp sensor now: a 130 x 28 deg fan of 256 x 16 rays traced as one
 # dispatch through the TLAS the picture is drawn from, folded into an echogram (strongest echo
-# per range bin). The collar, the fish and the barge are in that TLAS already. The net is not,
-# acoustically: its render meshes are alpha-cut twine the rays would mostly pass through, so a
-# solid membrane (the periodic grid minus the hole, the same triangles the old Warp kernel
-# traced) rides the sensor-only layer: every camera skips it, every sensor ray hits it.
+# per range bin). The collar, the fish and the barge are in that TLAS already. So is the net,
+# and wrongly: the sensor trace is forced opaque (no alpha test), so the three render meshes
+# are solid sheets to it, hole cells included -- the tear's hole is only alpha. The acoustic
+# net is a solid membrane (the periodic grid minus the hole, the same triangles the old Warp
+# kernel traced) on the sensor-only layer: every camera skips it, every sensor ray hits it.
+# It needs a normal attribute or the renderer drops it from the scene (it did: the sonar only
+# ever saw the render meshes, and the tear never showed). The hole's own triangles ride the
+# same layer as a silent plug (reflectivity 0), and both ride SON_NUDGE toward the transducer
+# so they always answer before the render meshes: the wall echoes, the hole does not.
 SON_BEAMS, SON_VS, SON_BINS, SON_RANGE, SON_FOV, SON_EL = 256, 16, 512, 20.0, 130.0, 14.0
 SON_W, SON_H, SON_VIEW = 512, 384, 10.0                 # 20 m of bins, 10 m shown: the wall arc AND the milling band inboard
 SON_ID_FISH, SON_ID_NET = 7, 8                          # stable instance ids: the sonar's reflectivity is keyed on them
+SON_ID_HOLE = 60000                                     # the silent plug (the returns keep 16 bits of an id)
+SON_NUDGE = 0.005                                       # m: past the fouling layer's 0.5 mm lift to ~84 deg incidence, far under a 39 mm bin
 
 
 def net_solid_tris():
-    """Periodic-grid triangles minus the invisible hole membrane, so the tear is a gap to the sonar."""
+    """Periodic-grid triangles: (the membrane, the hole's invisible cells), so the tear is a gap to the sonar."""
     iv, iu = np.meshgrid(np.arange(NVT - 1), np.arange(NU), indexing="ij")
     a, b = iv * NU + iu, iv * NU + (iu + 1) % NU
     tri = np.concatenate([np.stack([a, b, b + NU], -1), np.stack([a, b + NU, a + NU], -1)]).reshape(-1, 3)
-    return tri[(net.cls[tri] != -2).all(1)]
+    solid = (net.cls[tri] != -2).all(1)
+    return tri[solid], tri[~solid]
+
+
+def sensor_mesh(tri, sid):
+    g = tp.BufferGeometry()
+    g.set_attribute("position", net.pos.numpy())
+    g.set_attribute("normal", np.tile(np.float32([0.0, 0.0, 1.0]), (net.n, 1)))   # presence only: the trace takes the triangle's
+    g.set_index(np.ascontiguousarray(tri.reshape(-1).astype(np.uint32)))
+    mat = tp.MeshStandardMaterial()
+    mat.side = tp.Side.Double
+    m = tp.Mesh(g, mat)
+    m.frustum_culled = False
+    m.cast_shadow = False
+    m.receive_shadow = False
+    m.layers.set(tp.SENSOR_ONLY_LAYER)
+    scene.add(m)
+    renderer.set_instance_id(m, sid)
+    return g
 
 
 SON_EVERY = 3
-_net_tri = net_solid_tris()
-son_proxy_geo = tp.BufferGeometry()
-son_proxy_geo.set_attribute("position", net.pos.numpy())
-son_proxy_geo.set_index(np.ascontiguousarray(_net_tri.reshape(-1).astype(np.uint32)))
-_son_proxy_mat = tp.MeshStandardMaterial()
-_son_proxy_mat.side = tp.Side.Double
-son_proxy = tp.Mesh(son_proxy_geo, _son_proxy_mat)
-son_proxy.frustum_culled = False
-son_proxy.cast_shadow = False
-son_proxy.receive_shadow = False
-son_proxy.layers.set(tp.SENSOR_ONLY_LAYER)
-scene.add(son_proxy)
-renderer.set_instance_id(son_proxy, SON_ID_NET)
+_net_tri, _hole_tri = net_solid_tris()
+son_proxy_geo = sensor_mesh(_net_tri, SON_ID_NET)
+son_hole_geo = sensor_mesh(_hole_tri, SON_ID_HOLE)
 renderer.set_instance_id(fish, SON_ID_FISH)
 renderer.set_sensor_only_surfaces(True)
 
@@ -2687,6 +2702,7 @@ sonar = tp.SonarSensor(_son_model)
 sonar.params.min_range = 0.35                          # the ROV's own hull sits right behind the transducer
 sonar.reflectivity.set(SON_ID_NET, 1.0)
 sonar.reflectivity.set(SON_ID_FISH, 0.35)
+sonar.reflectivity.set(SON_ID_HOLE, 0.0)
 _yy, _xx = np.mgrid[0:SON_H, 0:SON_W]
 _dx, _dy = _xx - SON_W / 2, (SON_H - 12) - _yy
 _r_m = np.hypot(_dx, _dy) / (SON_H - 24) * SON_VIEW
@@ -2746,8 +2762,12 @@ def sonar_step(frame_i):
     if frame_i % SON_EVERY:
         return
     # The membrane follows the cloth; the fish and collar are already live in the TLAS.
-    son_proxy_geo.update_attribute("position", net.pos.numpy())
     sonar_aim()
+    p = net.pos.numpy()
+    v = np.float32([sonar.position.x, sonar.position.y, sonar.position.z]) - p
+    p = p + v * (SON_NUDGE / np.maximum(np.linalg.norm(v, axis=1, keepdims=True), 1e-6))
+    son_proxy_geo.update_attribute("position", p)
+    son_hole_geo.update_attribute("position", p)
     sonar.scan_begin(renderer)                          # False before the first render: retried next scan frame
     mark("sonar fire")
 
