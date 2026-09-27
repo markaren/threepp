@@ -1,5 +1,11 @@
 """The GL studio kit: shadow/scene/texture/material knobs, RoomEnvironment +
-PMREMGenerator, and the EffectComposer passes (GTAOPass, OutlinePass)."""
+PMREMGenerator, and the EffectComposer passes (GTAOPass, OutlinePass).
+
+Named to sort AFTER test_imgui.py: that module makes a second headless GL
+context current and nothing makes the session `renderer` fixture's context
+current again, so a session renderer first created before it (as a file
+named test_gl_*.py would) renders nothing in every later test.
+"""
 import numpy as np
 
 import threepp as tp
