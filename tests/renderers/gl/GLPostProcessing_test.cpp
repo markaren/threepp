@@ -693,3 +693,104 @@ TEST_CASE("BokehPass: aperture 0 leaves the image untouched", "[postprocessing]"
     INFO("plain " << plain << ", aperture-0 bokeh " << pinhole);
     CHECK(std::abs(pinhole - plain) < plain * 0.02);
 }
+
+
+namespace {
+
+    // A unit plate of a dim unlit colour in the middle of a black frame, seen
+    // head on: the silhouette is a square from pixel 16 to 48.
+    std::shared_ptr<Mesh> outlinePlate(Scene& scene) {
+
+        auto mat = MeshBasicMaterial::create();
+        mat->color = Color(0.2f, 0.2f, 0.2f);
+        auto plate = Mesh::create(PlaneGeometry::create(1, 1), mat);
+        scene.add(plate);
+
+        return plate;
+    }
+
+}// namespace
+
+// The outline has to land on the silhouette, in the visible colour when
+// nothing covers the selection: a pixel just outside the plate's edge turns
+// the edge colour, and the far corner of the frame stays black.
+TEST_CASE("OutlinePass: the selection's silhouette takes the visible edge colour", "[postprocessing]") {
+
+    auto scene = Scene::create();
+    scene->background = Color(0, 0, 0);
+    auto plate = outlinePlate(*scene);
+    auto camera = plateCamera();
+
+    GLRenderer renderer(glCanvas());
+    renderer.outputColorSpace = ColorSpace::NoColorSpace;
+    renderer.setClearColor(Color(0, 0, 0));
+
+    EffectComposer composer(renderer);
+    composer.addPass(std::make_shared<RenderPass>(*scene, *camera));
+    auto outline = std::make_shared<OutlinePass>(Vector2(RT_WIDTH, RT_HEIGHT), *scene, *camera,
+                                                 std::vector<Object3D*>{plate.get()});
+    outline->visibleEdgeColor = Color(0, 1, 0);
+    outline->hiddenEdgeColor = Color(1, 0, 0);
+    composer.addPass(outline);
+    composer.render();
+
+    const auto px = renderer.readRGBPixels();
+    const auto at = [&](int x, int y) {
+        const size_t i = (static_cast<size_t>(y) * RT_WIDTH + x) * 3;
+        return AvgColor{static_cast<double>(px[i]), static_cast<double>(px[i + 1]), static_cast<double>(px[i + 2])};
+    };
+
+    const auto outside = at(15, RT_HEIGHT / 2);// one pixel left of the plate
+    const auto corner = at(2, 2);
+
+    INFO("just outside " << outside.r << "," << outside.g << "," << outside.b
+                         << "  corner " << corner.r << "," << corner.g << "," << corner.b);
+    CHECK(outside.g > 40.0);
+    CHECK(outside.r < 5.0);
+    CHECK(corner.g < 2.0);
+}
+
+// With nothing selected the pass must be the identity - and must put back the
+// visibility, background and override material it borrows, or the next frame
+// differs from the first.
+TEST_CASE("OutlinePass: an empty selection leaves the image untouched", "[postprocessing]") {
+
+    auto scene = Scene::create();
+    scene->background = Color(0.1f, 0.2f, 0.3f);
+    outlinePlate(*scene);
+    auto camera = plateCamera();
+
+    GLRenderer renderer(glCanvas());
+    renderer.outputColorSpace = ColorSpace::NoColorSpace;
+    renderer.setClearColor(Color(0, 0, 0));
+
+    EffectComposer plainComposer(renderer);
+    plainComposer.addPass(std::make_shared<RenderPass>(*scene, *camera));
+    plainComposer.render();
+    const auto plain = renderer.readRGBPixels();
+
+    EffectComposer outlineComposer(renderer);
+    outlineComposer.addPass(std::make_shared<RenderPass>(*scene, *camera));
+    auto outline = std::make_shared<OutlinePass>(Vector2(RT_WIDTH, RT_HEIGHT), *scene, *camera);
+    outlineComposer.addPass(outline);
+    outlineComposer.render();
+    const auto empty = renderer.readRGBPixels();
+
+    // One frame with a selection, then clear it: the scene must come back
+    // exactly as it was.
+    outline->selectedObjects = {scene->children.front()};
+    outlineComposer.render();
+    outline->selectedObjects.clear();
+    outlineComposer.render();
+    const auto after = renderer.readRGBPixels();
+
+    int maxDiff = 0, maxDiffAfter = 0;
+    for (size_t i = 0; i < plain.size(); i++) {
+        maxDiff = std::max(maxDiff, std::abs(static_cast<int>(plain[i]) - static_cast<int>(empty[i])));
+        maxDiffAfter = std::max(maxDiffAfter, std::abs(static_cast<int>(plain[i]) - static_cast<int>(after[i])));
+    }
+
+    INFO("max channel difference: empty " << maxDiff << ", after a selected frame " << maxDiffAfter);
+    CHECK(maxDiff <= 1);
+    CHECK(maxDiffAfter <= 1);
+}
