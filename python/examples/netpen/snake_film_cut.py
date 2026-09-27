@@ -95,10 +95,13 @@ def events_of(tel_npz):
 
 # ---- the schedule ----------------------------------------------------------------------------------
 def plan_segments(tel, ev):
-    """[(t0, t1, speed)] over mission time, from the run's own events and closest approaches."""
+    """[(t0, t1, 1)] mission-time windows played in real time, cut hard from one to the next (a jump
+    in the clock, never a fast-forward: a sped-up swimmer reads as a wiggle), from the run's own
+    events and closest approaches. Windows closer than a second merge."""
     t = tel.t
     first = lambda k, dflt=None: ev[k][0] if k in ev and ev[k] else dflt   # noqa: E731
-    t_und, t_tear = first("UNDOCK"), first("TEAR", first("INSPECT"))
+    t_und, t_piv, t_dep = first("UNDOCK"), first("PIVOT"), first("DEPART")
+    t_tear = first("TEAR", first("INSPECT"))
     t_insp, t_ut, t_i2 = first("INSPECT"), first("UTURN"), first("INSPECT_2")
     t_ret = first("RETURN", first("APPROACH"))
     t_fin, t_cap = first("FINAL"), first("CAPTURE")
@@ -116,68 +119,47 @@ def plan_segments(tel, ev):
         return float(t[k[np.argmin(dt_[k])]])
     c1 = closest("INSPECT", t_insp, t_ut)
     c2 = closest("INSPECT_2", t_i2, t_ret)
-    keys = [
-        (max(t_und - 2.6, 0.3), 1.0),        # the cradle, lamps off; they come on at the undock
-        (t_und + 5.0, 3.0),                  # the transit to the wall
-        (t_tear - 2.5, 1.0),                 # the tear fires, the first pass
-        (c1 + 4.0, 2.0),
-        (t_ut - 0.3, 1.0),                   # the U-turn
-        (t_i2 + 0.8, 2.0),                   # the second pass
-        (c2 + 2.0, 3.0),                     # the return, the approach, the turn in
-        (t_fin + 3.0, 4.0 if t_cap - t_fin > 18.0 else 3.0),   # a long line-up in front of the funnel
-        (t_cap - 1.5, 1.0),                  # the funnel capture
-        (t_cap + 5.0, 2.0),
-        (t_dock - 2.5, 1.0),                 # the latch and the hold
-        (min(t_dock + 2.8, float(t[-1])), None),
+    wins = [
+        (max(t_und - 2.5, 0.3), t_und + 5.0),            # latched, the lamps come on, it starts backing out
+        # one stretch, no jump: the tail clears the funnel, the pivot, away under the sun, along the net,
+        # the tear fires, the first pass with the neck on the hole
+        (t_piv - 2.5, c1 + 3.0),
+        (t_ut + 1.0, t_ut + 8.0),                        # the U-turn
+        (c2 - 3.0, c2 + 3.0),                            # the second pass
+        (t_cap - 6.0, t_cap + 4.0),                      # into the funnel, the capture
+        (t_dock - 2.5, min(t_dock + 2.8, float(t[-1]))),  # latched
     ]
-    segs = [(a, keys[i + 1][0], s) for i, (a, s) in enumerate(keys[:-1]) if keys[i + 1][0] > a]
-    info = dict(undock=t_und, tear=t_tear, closest1=c1, uturn=t_ut, inspect2=t_i2, closest2=c2, ret=t_ret,
-                final=t_fin, capture=t_cap, docked=t_dock)
+    wins = sorted((a, b) for a, b in wins if b > a)
+    out = [list(wins[0])]
+    for a, b in wins[1:]:
+        if a <= out[-1][1] + 1.0:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    segs = [(a, b, 1.0) for a, b in out]
+    info = dict(undock=t_und, pivot=t_piv, depart=t_dep, tear=t_tear, closest1=c1, uturn=t_ut, inspect2=t_i2,
+                closest2=c2, ret=t_ret, final=t_fin, capture=t_cap, docked=t_dock)
     return segs, info
 
 
-def speed_at(segs, x, ramp=0.9):
-    """Speed at mission time x: the segment's, eased linearly over `ramp` s of film into the next."""
-    for i, (a, b, s) in enumerate(segs):
-        if a <= x < b:
-            if i + 1 < len(segs):
-                s2 = segs[i + 1][2]
-                w = (x - (b - ramp * max(s, s2) * 0.5)) / (ramp * max(s, s2) * 0.5)
-                if w > 0:
-                    return s + (s2 - s) * min(w, 1.0) * 0.5
-            if i > 0:
-                s0 = segs[i - 1][2]
-                w = 1.0 - (x - a) / (ramp * max(s, s0) * 0.5)
-                if w > 0:
-                    return s + (s0 - s) * min(w, 1.0) * 0.5
-            return s
-    return 1.0
-
-
 def build_schedule(tel, flog, segs, info):
-    """Per output frame of the mission section: source index, mission time, badge speed, dissolve
-    source + weight, head-camera and sonar emphasis (eased, so every worker sees the same values)."""
+    """Per output frame of the mission section: source index, mission time, the jump badge (seconds
+    skipped at the last jump, for 1.6 s after it), dissolve source + weight (none: DISSOLVE is 0),
+    head-camera and sonar emphasis (eased, so every worker sees the same values)."""
     ft = flog[:, 0]
-    cut_src = set(np.nonzero(flog[:, 2] > 0.5)[0].tolist())
-    x, x_end = segs[0][0], segs[-1][1]
     rows = []
-    while x < x_end:
-        src = int(np.clip(np.searchsorted(ft, x - 0.5 / FPS), 0, len(ft) - 1))
-        sp = speed_at(segs, x)
-        badge = next((s for a, b, s in segs if a <= x < b), 1.0)
-        rows.append([src, float(ft[src]), sp, badge])
-        x += sp / FPS
+    jump, t_jump = 0.0, -1e9
+    for w, (a, b, _) in enumerate(segs):
+        if w > 0:
+            jump, t_jump = a - segs[w - 1][1], a
+        x = a
+        while x < b:
+            src = int(np.clip(np.searchsorted(ft, x - 0.5 / FPS), 0, len(ft) - 1))
+            rows.append([src, float(ft[src]), 1.0, jump if x - t_jump < 1.6 else 0.0])
+            x += 1.0 / FPS
     n = len(rows)
     src = np.array([r[0] for r in rows])
     diss_src, diss_w = np.full(n, -1), np.zeros(n)
-    nd = int(DISSOLVE * FPS)
-    for k in range(1, n):
-        crossed = [c for c in cut_src if src[k - 1] < c <= src[k]]
-        if crossed:
-            held = src[k - 1]
-            for j in range(nd):
-                if k + j < n:
-                    diss_src[k + j], diss_w[k + j] = held, 1.0 - (j + 1) / (nd + 1)
     # emphasis: the head camera while the head passes the tear; the sonar when the tear fires
     tt = tel.t
     dht = tel.col("d_head_tear")
@@ -187,6 +169,8 @@ def build_schedule(tel, flog, segs, info):
     a, b = 0.0, 0.0
     for k in range(n):
         tm = rows[k][1]
+        if k and tm - rows[k - 1][1] > 0.5:               # a jump: the emphasis restarts from rest
+            a = b = 0.0
         i = int(np.clip(np.searchsorted(tt, tm), 0, len(tt) - 1))
         after = t_fire is None or tm - t_fire > SON_EMPH_S + 0.4          # one inset grows at a time
         want_i = 1.0 if (ph_names[i] in ("TEAR", "INSPECT", "INSPECT_2") and dht[i] < 2.3 and after) else 0.0
@@ -198,7 +182,6 @@ def build_schedule(tel, flog, segs, info):
                 badge=np.array([r[3] for r in rows]), diss_src=diss_src, diss_w=diss_w, e_ins=e_ins, e_son=e_son)
 
 
-# ---- compositing -------------------------------------------------------------------------------------
 def ease(x):
     x = min(max(x, 0.0), 1.0)
     return x * x * (3.0 - 2.0 * x)
@@ -289,15 +272,16 @@ def title_card():
     L.rect(x, 380, x + 6, 470, fill=SP._rgba(SP.ACCENT))
     L.text(x + 30, 372, "A snake robot that lives in a fish farm", 58, "sb", SP.WHITE)
     L.text(x + 30, 446, "Resident net-pen inspection, simulated", 26, "r", SP.ACCENT)
-    body = ("An eel-like underwater snake robot (Mamba-style: 9 links, 1.62 m) lives in a dock inside a salmon "
-            "net pen. It undocks, follows the net on its own sonar, inspects a tear, and swims home into the "
-            "current to dock. One closed-loop run of the swimming physics; the camera follows what it does.")
+    body = ("An underwater snake robot (9 modules, 1.62 m, side and tunnel thrusters like NTNU's Eelume) lives in "
+            "a dock inside a salmon net pen. It backs out, follows the net on its own sonar, finds a tear and turns "
+            "its head to look into it, then docks into the current. One closed-loop run of the physics; the camera "
+            "follows what it does.")
     y = 540
     for ln in SP.Panels._lines(body, 24, "r", 1500):
         L.text(x + 30, y, ln, 24, "r", SP.GREY)
         y += 36
-    L.text(x + 30, y + 30, "threepp: PhysX at 240 Hz with the Kelasidi et al. (2015) fluid model, Warp net and salmon, "
-                           "Vulkan renderer", 18, "r", SP.DIM)
+    L.text(x + 30, y + 30, "threepp: PhysX at 240 Hz with the Kelasidi et al. (2015) fluid model and thrusters, Warp net "
+                           "and salmon, Vulkan renderer", 18, "r", SP.DIM)
     img.alpha_composite(L.done())
     return np.asarray(img.convert("RGB"))
 
@@ -339,8 +323,7 @@ def work(args):
             w = float(S["diss_w"][j])
             img = Image.fromarray(blend(np.asarray(img), np.asarray(held[ds]), w), "RGBA")
         base = np.asarray(img.convert("RGB"))
-        badge = float(S["badge"][j])
-        out = P.compose(base, tm, speedup=badge if badge > 1.01 else 1.0, sonar_rect=srect,
+        out = P.compose(base, tm, jump=float(S["badge"][j]), sonar_rect=srect,
                         sonar_gap_xy=gap_xy(tel, i, srect, sw, sh))
         enc.send(out)
         if j in picks:
@@ -384,9 +367,9 @@ def main():
         n = min(n, int(a.limit * FPS))
         S = {k: v[:n] for k, v in S.items()}
     total = TITLE_S + n / FPS + END_S
-    print("segments (mission t0 -> t1, speed, film s):")
+    print("windows (mission t0 -> t1, real time, cut hard between):")
     for s0, s1, sp in segs:
-        print(f"  {s0:6.1f} -> {s1:6.1f}  x{sp:.0f}  {(s1 - s0) / sp:5.1f} s")
+        print(f"  {s0:6.1f} -> {s1:6.1f}  {(s1 - s0) / sp:5.1f} s")
     print(f"events used: " + ", ".join(f"{k} {v:.1f}" for k, v in info.items() if v is not None))
     print(f"mission section {n / FPS:.1f} s, film {total:.1f} s at {FPS} fps; cuts dissolved: "
           f"{int((S['diss_w'] > 0).sum() // max(int(DISSOLVE * FPS), 1))}")

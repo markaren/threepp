@@ -1,8 +1,9 @@
 """The snake robot's inspection mission: sonar wall-following, a tear detector, the state machine.
 
 Pure code, like netpen_e3.py: no scene import, no GPU. The scene (snake_netpen.py --mission) feeds
-it the head sonar's images and the robot's own state; this module answers with a gait and a
-steering offset phi0 for snake_model.Snake. On its own:
+it the head sonar's images and the robot's own state; this module answers with a mode (GAITS) and a
+steering command phi0, and SnakeAdapter turns them into thrust and joint targets for
+snake_model.Snake. On its own:
 
     python snake_mission.py --selftest            # CPU: detector + a unicycle stand-in, 3 seeds
     python snake_mission.py --selftest --physx    # + the real PhysX snake on the synthetic sonar
@@ -35,7 +36,19 @@ lateral wave) and phi0 is rate limited to 40 deg/s (a step reaches the joints as
 spike through the paper's feed-forward (23): 50 N m peaks without it, <= 10 N m with it).
 NAVIGATION: a USBL fix of the head at 1 Hz (seeded 5 cm noise), DVL dead reckoning in between (the
 error is the fix's noise, held for the second); the body centre adds the chain shape from the
-joint encoders.
+joint encoders. (The guidance above was written for the undulating robot; on thrusters the body is
+straight and the head yaw small, and the same equations hold.)
+
+PROPULSION. The robot swims on snake_model.thruster_layout(), NTNU's swimming-manipulator
+arrangement: two side thrusters push, two tunnel thrusters turn. SnakeAdapter.thrust_cmd holds the
+mode's speed over ground (the tangential drag at the through-water speed that makes it, from the
+current meter, + a DVL speed loop) and a yaw rate K_TURN x phi0 (the rotational drag at that rate
++ a gyro loop, on the tunnel pair). The speed drops in a hard turn (TURN_SLOW), the joints bend the
+body into the turn's arc (L / radius each), and it is straight in and near the cradle. At the tear
+the front two joints turn the head toward it (the neck, <= 30 deg), where the head camera finishes
+the aim. Undulation (the paper's gaits) is not flown: at the tear the 0.15 m/s current pushes
+inboard and the only steady-headed stroke, eel-like at 0.185 m/s, drifted 2 m off the net there
+on the CPU harness; lateral undulation swings the head (camera, sonar) 30+ deg.
 
 TEAR DETECTOR. Per image, across the whole fan (the gait swings the head so far, +-40-65 deg,
 that the wall and the hole sweep through the port half too): the wall's expected range per beam
@@ -58,32 +71,35 @@ gave 7: the hole sat in the port half or straddled the mask's edge (no wall besi
 wider than the window left the median NaN in its middle, splitting the run.
 
 STATE MACHINE. DOCKED (latched: the latch line holds the head at the latch point, spring 40 N/m,
-damper 20 N s/m, cap 10 N; the cradle bore holds the links inside it, see CRADLE) -> UNDOCK (the
-latch releases; lateral at 20 deg, into the current, on the cradle axis until the nose clears the
-outer hoop, then on an exit line turned 38 deg inboard of the axis, 20 deg inboard of the pen
-tangent, so the body stays off the bowed net) -> ACQUIRE (turn toward the wall until it is seen)
--> FOLLOW_WALL (lateral, 1.5 m) -> TEAR (the detector fired) -> INSPECT (1.25 m, until 1.5 m past
-the tear: eel-like on station, lateral at 20 deg when off it) -> UTURN (inboard, until heading back
-along the pen) -> INSPECT_2 (the same, back past the tear, on the pen-centred circle at the wall
-radius the first pass measured minus 1.25 m: USBL fix + circle ILOS) -> RETURN -> APPROACH.
+damper 20 N s/m, cap 10 N) -> UNDOCK (the latch releases; reverse thrust, body straight, out of the
+downstream funnel until the nose is 0.35 m past its mouth: the robot rests nose into the current,
+and forward out of the upstream end would carry the nose to the net, that end of the axis points
+18 deg outboard) -> PIVOT (on the spot, the tunnel pair, 45 deg inboard) -> DEPART (the inboard
+pass line, 1.2 m off the axis, until past the cradle) -> ACQUIRE (turn toward the wall until it
+is seen) -> FOLLOW_WALL (1.5 m) -> TEAR (the detector fired) -> INSPECT (0.2 m/s on the
+pen-centred circle 1.25 m inside the wall radius the detector measured at the hole: the neck turns
+the head, and the sonar, into the hole, where there is no wall to follow; until 1.5 m past the
+tear) -> UTURN (inboard, until heading back along the pen) -> INSPECT_2 (the same circle, back
+past the tear) -> RETURN -> APPROACH.
 
 DOCKING, the way a real dock is flown. The cradle is open at both ends; the robot enters at the
 DOWNSTREAM end so the final approach heads INTO the current (the station's current meter picks the
 end): the headway keeps the steering authority and a miss drifts back out of the funnel instead of
 through it. APPROACH: an ILOS pass line 1.2 m inboard of the axis, with the current, until the
-body centre is 3.0 m beyond the cradle centre -> TURN_IN (turn outboard, 25 deg phi0, onto the
-axis) -> FINAL (ILOS on the axis from the USBL fix and the joint encoders, lateral cruise, lateral at
-20 deg for the last metre so the body fits the funnel) -> at the mouth plane the FUNNEL decides:
-nose within 0.30 m of the axis (the 0.35 m mouth hoop less the body radius) and mean heading
-within 25 deg = CAPTURE (the funnel cone narrows to the 0.13 m bore), else RETREAT (gait off, the current carries it back
-1.4 m) and retry, up to 3 attempts, else ABORT. CAPTURE: the gait fades out and the latch line hauls
-the nose along the axis to the latch point at 0.15 m/s (target moving along the axis, the same
-capped spring) -> DOCKED (latched) and the mission ends 5 s later.
+body centre is 3.0 m beyond the cradle centre -> TURN_IN (turn outboard at 0.2 m/s onto the axis)
+-> FINAL (ILOS on the axis from the USBL fix and the joint encoders, 0.18 m/s for the last metre)
+-> at the mouth plane the FUNNEL decides: nose within 0.30 m of the axis (the 0.35 m mouth hoop
+less the body radius) and mean heading within 25 deg = CAPTURE (the funnel cone narrows to the
+0.16 m bore), else RETREAT (thrust off, the current carries it back 1.4 m) and retry, up to 3
+attempts, else ABORT. CAPTURE: thrust off and the latch line hauls the nose along the axis to the
+latch point at 0.15 m/s (target moving along the axis, the same capped spring) -> DOCKED (latched)
+and the mission ends 5 s later.
 
-CRADLE. While DOCKED and in CAPTURE the bore's contact acts on every link inside the cradle: a
-one-sided lateral spring-damper beyond 0.04 m of free play (150 N/m, 10 N s/m, cap 6 N per link),
-the rails and hoops pushing back. It is off while swimming out (lateral undulation needs the lateral
-motion). These are the only non-paper forces: no thrusters, the latch line, the bore contact.
+CRADLE. A tube of bars (bore 0.16 m) between two funnels. Its walls are contact in every phase
+(SnakeAdapter._contact, every substep): a one-sided spring-damper (1500 N/m, 15 N s/m per point)
+on points along each link, the side thrusters' ducts, the lamp pods and the tail cap, starting
+2 cm inside the bars (rubber sleeves), so the rendered body never enters a bar, ring or funnel
+(snake_dock_clearance.py on the telemetry). The non-paper forces: the thrusters, the latch line, the walls.
 
 Conventions (the scene's): forward +x at yaw 0, starboard +z, y up; yaw = atan2(-z, x); pen
 bearing = atan2(z, x); sonar bearings positive to starboard (netpen_e3).
@@ -118,9 +134,10 @@ DOCK_BEARING = D2R(-95.0)
 # its axis is >= 0.8 m off it.
 R_DOCK = 4.7
 DOCK_LEN = 2.0
-# The funnel mouth takes the gait's swept width: at lateral 20 deg the head swings ~+-0.15 m about
-# the body's line (0.105 m body), so the mouth is 0.70 m across and narrows to the 0.26 m bore.
-MOUTH_R, BORE_R = 0.35, 0.13                              # funnel mouth hoop radius, bore radius (m)
+# The cradle is a tube of bars (bore 0.16 m: the body's 0.0525 m and the side thrusters' ducts out to
+# 0.109 m, with room) with a funnel at each end, flaring over FUN_L to the 0.35 m mouth hoop. Its
+# walls are contact (cradle_contact, always on): the robot passes through straight, on its thrusters.
+MOUTH_R, BORE_R, FUN_L = 0.35, 0.16, 0.25                 # funnel mouth hoop radius, bore radius, funnel length (m)
 LINK_N, LINK_L, LINK_R = 9, 0.18, 0.0525
 SON_TILT, SON_EL = -6.0, 14.0
 STANDOFF_FOLLOW, STANDOFF_INSPECT = 1.5, 1.25
@@ -166,36 +183,64 @@ def latch_point(a_in):
 
 LATCH_P = latch_point(DOCK_U)                             # the start pose's nose (the current sets the end's)
 HEADING_OUT = yaw_of(DOCK_U)
-EXIT_BEND = D2R(38.0)                                     # the exit line past the outer hoop, turned inboard (20 deg off the tangent)
-EXIT_U = math.cos(EXIT_BEND) * DOCK_U + math.sin(EXIT_BEND) * DOCK_IN
+# Leaving: the robot rests nose into the current (it docked that way), so it backs out of the
+# downstream funnel on reverse thrust, body straight, pivots inboard on its tunnel thrusters and passes
+# the cradle on the inboard pass line. (Forward out of the upstream end would put the nose 0.5 m past
+# the squashed net: that end of the axis points 18 deg outboard.)
+DEPART_U = math.cos(D2R(45.0)) * DOCK_U + math.sin(D2R(45.0)) * DOCK_N       # the pivot's heading
+BACK_CLEAR = 0.35                                         # backed out until the nose is this far past the mouth
 EXIT_O = DOCK_C + 0.5 * DOCK_LEN * DOCK_U
 # docking: pass inboard of the cradle, turn outboard onto its axis downstream, swim in against the current
 PASS_E = 1.2                                              # pass line: this far inboard of the axis
 S_TURN = -3.0                                             # turn when the COM is this far along the entry axis
 CAPTURE_E, CAPTURE_PSI = MOUTH_R - LINK_R, D2R(25.0)       # funnel capture window at the mouth plane (0.30 m)
+A_THROAT = 0.5 * DOCK_LEN - FUN_L                         # 0.75 m: the funnels' throats, the tube between
+
 V_HAUL = 0.15                                             # m/s: the latch line hauls the nose to the latch
 LATCH_K, LATCH_C, LATCH_CAP = 40.0, 20.0, 10.0            # head latch spring N/m, damper N s/m, cap N
-GUIDE_FREE, GUIDE_K, GUIDE_C, GUIDE_CAP = 0.04, 150.0, 10.0, 6.0   # cradle bore contact per link
+WALL_K, WALL_C = 1500.0, 15.0                            # the cradle's wall contact: N/m, N s/m per point
+WALL_SKIN = 0.02                                          # contact starts this far inside the bars (rubber sleeves)
+BEND_MAX = D2R(10.0)                                      # thrust modes: the body's bend into a turn, per joint
+TURN_SLOW = 2.5                                           # thrust modes: speed x (1 - TURN_SLOW |phi0|), >= 0.35
+CONE_K = 1.0 / math.cos(math.atan((MOUTH_R - BORE_R) / FUN_L))   # a point's radius measured across the cone
+SIDE_THRUSTER_LINK = 6                                    # snake_model.SIDE_THRUSTER_LINK (tail = 0)
 MAX_ATTEMPTS = 3
 PHI0_RATE = D2R(40.0)                                     # rad/s: the steering offset's rate limit
 
-# ---- gaits: measured on snake_model (complex coefficients, 20-30 s runs, still water) -------------
-#   name        pattern    alpha  omega  delta   speed    head-yaw RMS   yaw rate per deg phi0
+# ---- gaits -------------------------------------------------------------------------------------------
+# Every mode swims on the thrusters (pattern 'thrust', v = over-ground speed m/s): the side pair
+# pushes, the tunnel pair yaws at K_TURN x phi0 (phi0 = the guidance's steering command), and the
+# joints shape the body: into the arc of a turn, straight in the cradle, and at the tear the front two
+# bend like a neck to hold the head on the hole. Undulation (the paper's gaits, still in GAITS for the
+# sweep's record) is not used: at the tear the 0.15 m/s current pushes inboard, and the best eel-like
+# stroke (0.185 m/s, the only one with a steady head) drifted 2 m off the net there (gait_probe).
+#   name        pattern    v / alpha  omega  delta
 GAITS = {
-    "cruise":  ("lateral", 30.0, 150.0, 30.0),       # 0.35 m/s   31 deg        ~2.2 /s
-    "inspect": ("eel",     40.0, 150.0, 30.0),       # 0.22 m/s   13 deg        ~1.4 /s
-    "creep":   ("lateral", 20.0, 150.0, 30.0),       # 0.26 m/s   20 deg        inspection off station
-    "dock":    ("lateral", 20.0, 150.0, 30.0),       # 0.26 m/s   20 deg        the last metre into the funnel
-    "undock":  ("lateral", 20.0, 150.0, 30.0),       # 0.26 m/s   20 deg        (the cradle: headway into the current)
-    "stop":    ("eel",      0.0,   0.0, 30.0),
+    "cruise":  ("thrust",   0.45,   0.0,  0.0),      # transit
+    "inspect": ("thrust",   0.20,   0.0,  0.0),      # past the tear
+    "slow":    ("thrust",   0.18,   0.0,  0.0),      # into the cradle
+    "turn":    ("thrust",   0.20,   0.0,  0.0),      # the U-turn past the tear, the turn onto the dock axis
+    "back":    ("thrust",  -0.20,   0.0,  0.0),      # reversing out of the cradle
+    "hover":   ("thrust",   0.00,   0.0,  0.0),      # the pivot on the spot
+    "eel":     ("eel",     40.0, 150.0, 45.0),       # measured 0.185 m/s, head yaw 4.4 deg RMS (unused)
+    "stop":    ("eel",      0.0,   0.0, 45.0),
 }
-GAIT_SPEED = {"cruise": 0.35, "inspect": 0.22, "creep": 0.26, "dock": 0.26, "undock": 0.26, "stop": 0.0}
-GAIT_TURN = {"cruise": 2.2, "inspect": 1.4, "creep": 1.5, "dock": 1.5, "undock": 1.5, "stop": 0.0}
-GAIT_HEADYAW = {"cruise": D2R(31.0), "inspect": D2R(13.0), "creep": D2R(20.0), "dock": D2R(20.0),
-                "undock": D2R(20.0), "stop": 0.0}
-GAIT_OMEGA = {k: D2R(v[2]) for k, v in GAITS.items()}
+NECK_MAX = D2R(30.0)                                      # the head's bend toward the tear (joints 6 + 7)
+K_TURN = 0.6                                              # thrust modes: yaw rate (rad/s) per rad of phi0
+GAIT_SPEED = {k: (v[1] if v[0] == "thrust" else 0.185) for k, v in GAITS.items()}
+GAIT_SPEED["stop"] = 0.0
+GAIT_TURN = {k: (K_TURN if v[0] == "thrust" else 1.03) for k, v in GAITS.items()}
+GAIT_TURN["stop"] = 0.0
+GAIT_HEADYAW = {k: 0.0 for k in GAITS}
+GAIT_HEADYAW["eel"] = D2R(4.4)
+GAIT_OMEGA = {k: (D2R(v[2]) if v[0] != "thrust" else 0.0) for k, v in GAITS.items()}
+THRUST_KV, THRUST_KM = 6.0, 4.0                           # speed loop N per m/s, yaw-rate loop N m per rad/s
 
-PHASES = ("DOCKED", "UNDOCK", "ACQUIRE", "FOLLOW_WALL", "TEAR", "INSPECT", "UTURN", "INSPECT_2",
+
+def is_thrust(gait):
+    return GAITS[gait][0] == "thrust"
+
+PHASES = ("DOCKED", "UNDOCK", "PIVOT", "DEPART", "ACQUIRE", "FOLLOW_WALL", "TEAR", "INSPECT", "UTURN", "INSPECT_2",
           "RETURN", "APPROACH", "TURN_IN", "FINAL", "CAPTURE", "RETREAT", "ABORT")
 
 
@@ -268,10 +313,12 @@ class TearDetector:
         self.hist = []                                    # per image: candidate pen bearing or None
         self.all_cands = []                               # (t, bearing, width, range) for the log
         self.fired, self.bearing, self.mode, self.t_fire = False, float("nan"), "", float("nan")
+        self.r_wall = float("nan")                        # the hole's centre: pen radius of the wall there
         self.last = None
 
     def candidates(self, intensity, r, b, side, pos, yaw):
-        """Candidate gaps in one image: list of (pen bearing, chord width m, expected range m)."""
+        """Candidate gaps in one image: list of (pen bearing, chord width m, expected range m, pen
+        radius of the chord's centre m)."""
         if side not in (-1, 1):
             return []
         a = np.asarray(intensity, np.float32)
@@ -316,7 +363,7 @@ class TearDetector:
             if not (self.min_w <= w <= self.max_w):
                 continue
             pc = 0.5 * (p_lo + p_hi)                      # its centre on the wall, not the mid beam
-            out.append((bearing_of(pc), w, rc))
+            out.append((bearing_of(pc), w, rc, float(math.hypot(pc[0], pc[2]))))
         return out
 
     def update(self, t, intensity, r, b, side, pos, yaw):
@@ -324,15 +371,16 @@ class TearDetector:
         best = min(c, key=lambda q: q[2]) if c else None  # the nearest: the one the fan sees whole
         for q in c:
             self.all_cands.append((t, *q))
-        self.hist.append(None if best is None else best[0])
+        self.hist.append(None if best is None else (best[0], best[3]))
         self.hist = self.hist[-self.window:]
         self.last = best
         if self.fired or best is None:
             return False
-        near = [h for h in self.hist if h is not None and abs(wrap(h - best[0])) < self.agree]
+        near = [h for h in self.hist if h is not None and abs(wrap(h[0] - best[0])) < self.agree]
         if len(near) >= self.persist:
             self.fired, self.mode, self.t_fire = True, "sonar", t
-            self.bearing = float(np.median(near))
+            self.bearing = float(np.median([h[0] for h in near]))
+            self.r_wall = float(np.median([h[1] for h in near]))
             return True
         return False
 
@@ -342,14 +390,16 @@ class TearDetector:
         for q in self.candidates(intensity, r, b, side, pos, yaw):
             self.all_cands.append((t, *q))
         if self.mode == "sector":
-            inside = [q[1] for q in self.all_cands if abs(wrap(q[1] - reported)) < sector]
+            inside = [q for q in self.all_cands if abs(wrap(q[1] - reported)) < sector]
             if len(inside) >= 3:
-                self.bearing, self.mode = float(np.median(inside)), "sector+sonar"
+                self.bearing, self.mode = float(np.median([q[1] for q in inside])), "sector+sonar"
+                self.r_wall = float(np.median([q[4] for q in inside]))
 
     def fire_sector(self, t, reported, sector=D2R(20.0)):
-        inside = [q[1] for q in self.all_cands if abs(wrap(q[1] - reported)) < sector]
+        inside = [q for q in self.all_cands if abs(wrap(q[1] - reported)) < sector]
         if inside:
-            self.bearing, self.mode = float(np.median(inside)), "sector+sonar"
+            self.bearing, self.mode = float(np.median([q[1] for q in inside])), "sector+sonar"
+            self.r_wall = float(np.median([q[4] for q in inside]))
         else:
             self.bearing, self.mode = reported, "sector"
         self.fired, self.t_fire = True, t
@@ -450,6 +500,7 @@ class Mission:
         self.r_wall = 5.7
         self.psi_f = None
         self.phi0_prev = 0.0
+        self.neck, self.aim = 0.0, None                   # the head's bend toward the tear (rad), its target point
 
     # -- helpers
     def goto(self, phase, t):
@@ -486,14 +537,16 @@ class Mission:
         return float(np.clip(0.7 * wrap(psi_ref - yaw_mean), -cap, cap))
 
     def circle_phi0(self, p, yaw_mean, r_ref, dt, delta=1.0, ki=0.1, z_max=0.5, cap=D2R(20.0), cur=None, v=0.0,
-                    e_min=-np.inf):
-        """ILOS on the pen-centred circle r_ref, travelling toward increasing bearing; e_min (the sonar's
-        'too close' error, + = inboard wanted) overrides the circle where the wall bows in."""
+                    e_min=-np.inf, sgn=1.0):
+        """ILOS on the pen-centred circle r_ref, travelling toward increasing bearing (sgn -1: decreasing);
+        e_min (the sonar's 'too close' error, + = inboard wanted) overrides the circle where the wall
+        bows in."""
         th = bearing_of(p)
         out = np.array([math.cos(th), 0.0, math.sin(th)])
-        tan = np.array([-math.sin(th), 0.0, math.cos(th)])
+        tan = sgn * np.array([-math.sin(th), 0.0, math.cos(th)])
         e = max(math.hypot(p[0], p[2]) - r_ref, e_min)
-        z = float(np.clip(self.zi.get("circle", 0.0) + ki * e * dt, -z_max, z_max))
+        zi = self.zi.get("circle", 0.0)
+        z = float(np.clip(zi + ki * e * dt, -z_max, z_max)) if abs(e) < 0.4 else zi   # anti-windup
         self.zi["circle"] = z
         psi_ref = crab_heading(delta * tan - float(np.clip(e + z, -delta, delta)) * out, cur, v)
         return float(np.clip(0.7 * wrap(psi_ref - yaw_mean), -cap, cap)), e
@@ -528,7 +581,7 @@ class Mission:
             self.station = False
         elif abs(e) < 0.20:
             self.station = True
-        return "inspect" if self.station else "creep"
+        return "inspect"
 
     def choose_entry(self, st):
         """Dock INTO the current: enter the open-ended cradle at its downstream end."""
@@ -557,16 +610,25 @@ class Mission:
                 self.goto("UNDOCK", t)
             elif self.returned and tp_ >= 5.0:
                 self.done = True
-        elif ph == "UNDOCK":
-            self.gait = "undock"
+        elif ph == "UNDOCK":                              # back out of the downstream funnel, straight
+            self.gait = "back"
+            self.phi0_cmd = float(np.clip(0.7 * wrap(yaw_of(DOCK_U) - yaw_g), -D2R(15.0), D2R(15.0)))
             s_nose, _ = self.axis_coords(st.nose, DOCK_U)
-            p = self.com_fix(st)                          # the body's line, not the swinging head
-            if s_nose < 0.5 * DOCK_LEN + 0.15:            # through the cradle on its axis
-                self.phi0_cmd = self.line_phi0(p, yaw_g, DOCK_C, DOCK_U, 1.0, dt, "undock", cap=D2R(15.0))
-            else:                                         # past the outer hoop: the exit line, bent inboard
-                self.phi0_cmd = self.line_phi0(p, yaw_g, EXIT_O, EXIT_U, 1.0, dt, "exit", cap=D2R(15.0))
-            tail_s, _ = self.axis_coords(st.links[0], DOCK_U)
-            if tail_s > 0.5 * DOCK_LEN + 0.2:                  # the tail is clear of the outer hoop
+            if s_nose < -0.5 * DOCK_LEN - BACK_CLEAR:
+                self.goto("PIVOT", t)
+        elif ph == "PIVOT":                               # on the spot, inboard, onto the departure heading
+            self.gait = "hover"
+            err = wrap(yaw_of(DEPART_U) - yaw_g)
+            self.phi0_cmd = float(np.clip(0.7 * err, -D2R(25.0), D2R(25.0)))
+            if abs(err) < D2R(8.0) or tp_ > 20.0:
+                self.zi.pop("depart", None)
+                self.goto("DEPART", t)
+        elif ph == "DEPART":                              # past the cradle on the inboard pass line
+            self.gait = "cruise"
+            o = DOCK_C + PASS_E * DOCK_N
+            self.phi0_cmd = self.line_phi0(self.com_fix(st), yaw_g, o, DOCK_U, 1.0, dt, "depart")
+            s_c, _ = self.axis_coords(self.com_fix(st), DOCK_U)
+            if s_c > 0.5 * DOCK_LEN:                      # past the cradle: the line points 18 deg at the net
                 self.goto("ACQUIRE", t)
         elif ph == "ACQUIRE":
             self.gait = "cruise"
@@ -582,27 +644,31 @@ class Mission:
             if not self.det.fired and wrap(b_head - self.tear_reported) < D2R(8.0):
                 self.det.fire_sector(t, self.tear_reported)
                 self.goto("TEAR", t)
-        elif ph == "TEAR":
-            self.gait = "creep"
-            self.follow.standoff = STANDOFF_INSPECT
-            self.phi0_cmd = self.follow.phi0(yaw_g, self.nav_fix(st), st.cur, GAIT_SPEED.get(self.gait, 0.2))
-            if tp_ >= 1.0:
+        elif ph in ("TEAR", "INSPECT"):
+            # the pass: the pen-centred circle 1.25 m inside the wall radius the sonar measured when the
+            # tear fired, on the USBL fix (the neck turns the head, and the sonar, into the hole, where
+            # there is no wall to follow); the sonar's 'too close' still overrides where the wall bows in
+            self.gait = "inspect"
+            p = self.nav_fix(st)
+            if ph == "TEAR" and tp_ < dt * 1.5:
+                # the wall radius at the hole, from the detector's own chord; else the follower's
+                rw = self.det.r_wall
+                if not np.isfinite(rw):
+                    rw = math.hypot(p[0], p[2]) + (self.follow.meas if np.isfinite(self.follow.meas) else STANDOFF_FOLLOW)
+                self.r_wall = float(np.clip(rw, 5.0, 7.2))
+                self.zi.pop("circle", None)
+            fm = self.follow.meas
+            e_son = (STANDOFF_INSPECT - fm) if (np.isfinite(fm) and self.follow.misses <= 30) else -np.inf
+            self.phi0_cmd, _ = self.circle_phi0(p, yaw_g, self.r_wall - STANDOFF_INSPECT, dt, cur=st.cur,
+                                                v=GAIT_SPEED[self.gait], e_min=e_son, sgn=-1.0)
+            if ph == "TEAR" and tp_ >= 1.0:
                 self.goto("INSPECT", t)
-        elif ph == "INSPECT":
-            self.gait = self.station_gait()
-            self.follow.standoff = STANDOFF_INSPECT
-            self.phi0_cmd = self.follow.phi0(yaw_g, self.nav_fix(st), st.cur, GAIT_SPEED.get(self.gait, 0.2))
-            if wrap(bearing_of(self.nav_fix(st)) - self.det.bearing) < -1.5 / 5.0:   # 1.5 m past the tear
-                # turn until heading back along the wall (the sonar's wall yaw reversed), not 180 deg
-                # off the crabbed heading: the current pushes inboard here, so the robot crabs 25-40 deg
-                p = self.nav_fix(st)
+            elif ph == "INSPECT" and wrap(bearing_of(p) - self.det.bearing) < -1.5 / 5.0:   # 1.5 m past the tear
                 th = bearing_of(p)
-                meas = self.follow.meas if np.isfinite(self.follow.meas) else STANDOFF_INSPECT
-                self.r_wall = float(np.clip(math.hypot(p[0], p[2]) + meas, 5.0, 7.2))   # the wall here, from the pass
                 self.uturn_yaw0 = yaw_of(np.array([-math.sin(th), 0.0, math.cos(th)]))  # back along the pen (+bearing)
                 self.goto("UTURN", t)
         elif ph == "UTURN":
-            self.gait = "cruise"
+            self.gait = "turn"
             self.phi0_cmd = self.follow.side * D2R(20.0)   # inboard: away from the wall
             if abs(wrap(st.yaw_mean - self.uturn_yaw0)) < D2R(25.0) or tp_ > 40.0:
                 self.follow = WallFollower(STANDOFF_INSPECT, side=-1)
@@ -621,7 +687,7 @@ class Mission:
                 self.station = False
             elif abs(e) < 0.20:
                 self.station = True
-            self.gait = "inspect" if self.station else "creep"
+            self.gait = "inspect"
             self.on_wall |= abs(e) < 0.5
             if (self.on_wall or tp_ > 20.0) and wrap(bearing_of(p) - self.det.bearing) > 1.5 / 5.0:
                 self.follow.standoff = STANDOFF_FOLLOW
@@ -646,7 +712,7 @@ class Mission:
             if s_c < S_TURN:
                 self.goto("TURN_IN", t)
         elif ph == "TURN_IN":                             # outboard, onto the axis, heading into the current
-            self.gait = "cruise"
+            self.gait = "turn"
             self.phi0_cmd = self.turn_sign * D2R(25.0)
             if abs(wrap(st.yaw_mean - yaw_of(self.a_in))) < D2R(40.0) or tp_ > 25.0:
                 self.zi.pop("final", None)
@@ -654,7 +720,7 @@ class Mission:
                 self.goto("FINAL", t)
         elif ph == "FINAL":
             s_nose, e_nose = self.axis_coords(st.nose, self.a_in)
-            self.gait = "cruise" if s_nose < -0.5 * DOCK_LEN - 1.0 else "dock"
+            self.gait = "cruise" if s_nose < -0.5 * DOCK_LEN - 1.0 else "slow"
             # track the point halfway from the body centre to the head: the body's line and the nose both
             p_tr = 0.5 * (self.com_fix(st) + self.nav_fix(st))
             self.phi0_cmd = self.line_phi0(p_tr, yaw_g, DOCK_C, self.a_in, 0.8, dt, "final")
@@ -698,6 +764,22 @@ class Mission:
             self.gait, self.phi0_cmd = "stop", 0.0
             if tp_ > 5.0:
                 self.done = True
+        # the neck: within 3 m of the detected tear the front two joints turn the head toward it
+        # (the estimate: the detector's bearing on the wall the sonar measures), rate-limited
+        want, self.aim = 0.0, None
+        if ph in ("TEAR", "INSPECT", "INSPECT_2") and self.det.fired and hold is None:
+            p = self.nav_fix(st)
+            meas = self.follow.meas if np.isfinite(self.follow.meas) else STANDOFF_INSPECT
+            tear = polar(self.det.bearing, math.hypot(p[0], p[2]) + meas)
+            d = tear - p
+            a = wrap(yaw_of(d) - st.yaw_mean)
+            if float(np.linalg.norm(d[[0, 2]])) < 3.0 and abs(a) < D2R(120.0):
+                want, self.aim = float(np.clip(a, -NECK_MAX, NECK_MAX)), tear
+        self.neck += float(np.clip(want - self.neck, -D2R(20.0) * dt, D2R(20.0) * dt))
+        if hold is None and abs(self.neck) > 1e-4:
+            shape = np.zeros(LINK_N - 1)
+            shape[-2:] = 0.5 * self.neck
+            hold = dict(shape=shape)
         # rate limit on the steering offset: a step in phi0 (a guidance line switch, the U-turn
         # entry) otherwise reaches the joints as a phi_ddot* spike through the paper's feed-forward
         # (23): 50 N m peaks at the undock's line switch, against 10 N m for the PD part
@@ -709,8 +791,17 @@ class Mission:
 
 
 # ---- the robot side: snake_model.Snake <-> the mission ------------------------------------------------
+def near_cradle(links, margin=0.4):
+    """Any link within `margin` of the cradle's tube or funnels (the body must stay straight there)."""
+    d = np.asarray(links, float) - DOCK_C
+    a = d @ DOCK_U
+    lat = np.linalg.norm(d - a[:, None] * DOCK_U, axis=1)
+    return bool(np.any((np.abs(a) < 0.5 * DOCK_LEN + margin) & (lat < MOUTH_R + margin)))
+
+
 class SnakeAdapter:
-    """Applies the mission's commands to a snake_model.Snake and reads its state (tail-first order)."""
+    """Applies the mission's commands to a snake_model.Snake and reads its state (tail-first order).
+    Owns the cradle's wall contact (every substep, whatever the phase) and the thrust controller."""
 
     def __init__(self, snake, latch_k=LATCH_K, latch_c=LATCH_C, latch_cap=LATCH_CAP):
         self.s = snake
@@ -719,6 +810,50 @@ class SnakeAdapter:
         self.latch_impulse, self.latch_pull0, self.latch_force = 0.0, None, np.zeros(3)
         self.guide_force, self.guide_max, self.latch_max = 0.0, 0.0, 0.0
         self.phi0 = 0.0
+        # contact points per link: (link, along, lateral, radius) -- the body, the tail cap past the
+        # capsule, the side thrusters' ducts, the head's lamp pods (snake_netpen's visual extents)
+        pts = [(k, a, 0.0, LINK_R) for k in range(snake.n) for a in (-0.09, 0.0, 0.09)]
+        pts.append((0, -0.15, 0.0, 0.03))
+        for side in (-1.0, 1.0):
+            if snake.thrusters:
+                pts += [(SIDE_THRUSTER_LINK, a, side * 0.079, 0.03) for a in (-0.035, 0.035)]
+            pts.append((snake.n - 1, 0.0, side * 0.0625, 0.011))
+        P = np.array(pts)
+        self.c_link = P[:, 0].astype(int)
+        self.c_off = P[:, 1:2] * snake.t_loc[None] + P[:, 2:3] * snake.lat_loc[None]
+        self.c_rad = P[:, 3]
+        self._cmax = 0.0
+        snake.contact = self._contact
+
+    def _contact(self, pos, R, v, w):
+        """The cradle's walls: a one-sided spring-damper on every contact point that overlaps the tube
+        (bore BORE_R) or a funnel (radius growing to MOUTH_R); force at the point, so it also turns
+        the link. Only near the wall (inside it by more than 3 cm = outside the cradle: no contact)."""
+        n = len(pos)
+        F, T = np.zeros((n, 3)), np.zeros((n, 3))
+        k = self.c_link
+        r = np.einsum("pij,pj->pi", R[k], self.c_off)
+        p = pos[k] + r
+        d = p - DOCK_C
+        ax = d @ DOCK_U
+        aa = np.abs(ax)
+        rv = d - ax[:, None] * DOCK_U
+        rho = np.linalg.norm(rv, axis=1)
+        cone = aa > A_THROAT
+        r_in = np.where(cone, BORE_R + (aa - A_THROAT) / FUN_L * (MOUTH_R - BORE_R), BORE_R)
+        pen = rho + self.c_rad * np.where(cone, CONE_K, 1.0) - (r_in - WALL_SKIN)
+        act = (aa <= 0.5 * DOCK_LEN) & (pen > 0.0) & (rho < r_in + 0.03) & (rho > 1e-6)
+        self._cmax = 0.0
+        if act.any():
+            j = np.nonzero(act)[0]
+            nr = rv[j] / rho[j, None]
+            vp = v[k[j]] + np.cross(w[k[j]], r[j])
+            fm = np.maximum(WALL_K * pen[j] + WALL_C * np.einsum("ij,ij->i", vp, nr), 0.0)
+            f = -fm[:, None] * nr
+            np.add.at(F, k[j], f)
+            np.add.at(T, k[j], np.cross(r[j], f))
+            self._cmax = float(np.linalg.norm(F, axis=1).max())
+        return F, T
 
     def state(self, t, cur=None):
         s = self.s
@@ -732,64 +867,74 @@ class SnakeAdapter:
                           com=(m[:, None] * pos).sum(0) / m.sum(),
                           speed=float(np.linalg.norm(((m[:, None] * v).sum(0) / m.sum())[[0, 2]])), cur=cur)
 
+    def thrust_cmd(self, v_cmd, phi0, r_ff, st):
+        """Surge: the tangential drag at the through-water speed that makes v_cmd over ground (the
+        current meter) + a speed loop on the DVL; yaw: the rotational drag at the commanded rate +
+        a rate loop on the gyro, both on the tunnel pair (thrust_alloc)."""
+        s = self.s
+        v, w = s.velocities()
+        vc = (s.mass[:, None] * v).sum(0) / s.mass.sum()
+        d = yaw_dir(st.yaw_mean)
+        cur = np.zeros(3) if st.cur is None else np.asarray(st.cur, float)
+        vw = v_cmd - float(cur @ d)
+        surge = s.n * s.c_t * (vw + abs(vw) * vw) + THRUST_KV * (v_cmd - float(vc @ d))
+        r_cmd = K_TURN * phi0 + r_ff
+        xk = (np.arange(s.n) - (s.n - 1) / 2.0) * LINK_L
+        M = s.c_n * float(np.sum(xk ** 2 * r_cmd + np.abs(xk) ** 3 * r_cmd * abs(r_cmd))) + s.n * s.lam2 * r_cmd
+        M += THRUST_KM * (r_cmd - float(np.mean(w[:, 1])))
+        return s.thrust_alloc(surge, M, 0.0)
+
     def apply(self, gait, phi0, latch, st, dt):
         s = self.s
+        pat = GAITS[gait][0]
         if gait != self.gait:
-            pat, a, w, d = GAITS[gait]
             if gait == "stop" and self.gait is None:
                 pass                                      # never started: the drives hold zero
+            elif pat == "thrust":
+                s.set_gait("eel", 0.0, 0.0, D2R(45.0), phi0=0.0)   # the joints ease straight
             else:
-                s.set_gait(pat, D2R(a), D2R(w), D2R(d), phi0=phi0)
+                _, a, w_, d_ = GAITS[gait]
+                s.set_gait(pat, D2R(a), D2R(w_), D2R(d_), phi0=phi0)
             self.gait = gait
-        elif self.gait != "stop":
+        elif pat != "thrust" and gait != "stop":
             s.set_phi0(phi0)
         self.phi0 = phi0
-        s.extra_force, self.latch_force, self.guide_force = None, np.zeros(3), 0.0
-        if latch is None:
+        extra = latch or {}
+        shape = extra.get("shape")
+        if shape is not None or self.gait is not None:
+            s.set_shape(np.zeros(s.n - 1) if shape is None else shape)
+        if s.thrusters:
+            if pat == "thrust":
+                v_cmd, r_ff = GAITS[gait][1], extra.get("r_ff", 0.0)
+                if v_cmd > 0.0:                           # slow into a hard turn: 0.75 m radius at full lock
+                    v_cmd *= float(np.clip(1.0 - TURN_SLOW * abs(phi0), 0.35, 1.0))
+                s.set_thrust(self.thrust_cmd(v_cmd, phi0, r_ff, st))
+                # the body bends into its turn (each joint L / turn radius, the shape of the path it
+                # swims), straight at the hover and anywhere near the cradle
+                if shape is None and abs(v_cmd) > 0.05 and not near_cradle(st.links):
+                    k = LINK_L * (K_TURN * phi0 + r_ff) / (math.copysign(max(abs(v_cmd), 0.15), v_cmd))
+                    s.set_shape(np.full(s.n - 1, float(np.clip(k, -BEND_MAX, BEND_MAX))))
+            else:
+                s.set_thrust(np.zeros(len(s.thrusters)))
+        self.guide_force = self._cmax
+        self.guide_max = max(self.guide_max, self._cmax)
+        s.extra_force, self.latch_force = None, np.zeros(3)
+        tgt = extra.get("target")
+        if tgt is None:
             return
         F = np.zeros((s.n, 3))
         v = s.velocities()[0]
-        tgt = latch.get("target")
-        if tgt is not None:                               # the latch line on the head module
-            f = self.latch_k * (np.asarray(tgt) - st.nose) - self.latch_c * v[-1]
-            f[1] = 0.0
-            n = float(np.linalg.norm(f))
-            cap = float(latch.get("cap", self.latch_cap))
-            if n > cap:
-                f *= cap / n
-            F[-1] += f
-            self.latch_force = f
-            self.latch_impulse += float(np.linalg.norm(f)) * dt
-            self.latch_max = max(self.latch_max, float(np.linalg.norm(f)))
-        if latch.get("guide"):
-            G = cradle_guide(st.links, v)
-            F += G
-            self.guide_force = float(np.linalg.norm(G, axis=1).max())
-            self.guide_max = max(self.guide_max, self.guide_force)
-        s.extra_force = F
-
-
-def cradle_guide(links, v):
-    """The cradle bore's contact on the links inside it (one-sided lateral spring-damper beyond a
-    free play, capped per link): the rails and funnel hoops, not a propulsor. links/v (n, 3)."""
-    F = np.zeros((len(links), 3))
-    for k, (p, vk) in enumerate(zip(links, v)):
-        d = np.asarray(p, float) - DOCK_C
-        s = float(d @ DOCK_U)
-        if abs(s) > 0.5 * DOCK_LEN:
-            continue
-        lat = d - s * DOCK_U
-        lat[1] = 0.0
-        rho = float(np.linalg.norm(lat))
-        if rho <= GUIDE_FREE or rho > 0.5:
-            continue
-        nrm = lat / rho
-        f = -GUIDE_K * (rho - GUIDE_FREE) * nrm - GUIDE_C * float(vk @ nrm) * nrm
+        f = self.latch_k * (np.asarray(tgt) - st.nose) - self.latch_c * v[-1]   # the latch line on the head
+        f[1] = 0.0
         n = float(np.linalg.norm(f))
-        if n > GUIDE_CAP:
-            f *= GUIDE_CAP / n
-        F[k] = f
-    return F
+        cap = float(extra.get("cap", self.latch_cap))
+        if n > cap:
+            f *= cap / n
+        F[-1] += f
+        self.latch_force = f
+        self.latch_impulse += float(np.linalg.norm(f)) * dt
+        self.latch_max = max(self.latch_max, float(np.linalg.norm(f)))
+        s.extra_force = F
 
 
 # ---- the synthetic world for the CPU harness -------------------------------------------------------------
@@ -914,10 +1059,12 @@ class Unicycle:
         self.gait = gait
         self.phi0 += (phi0 - self.phi0) * (1.0 - math.exp(-dt / 0.5))
         v0 = GAIT_SPEED[gait]
-        self.v += (v0 * (1.0 - 0.35 * (self.phi0 / D2R(20.0)) ** 2) - self.v) * (1.0 - math.exp(-dt / 2.0))
+        slow = float(np.clip(1.0 - TURN_SLOW * abs(self.phi0), 0.35, 1.0)) if is_thrust(gait) and v0 > 0 else             1.0 - 0.35 * (self.phi0 / D2R(20.0)) ** 2
+        self.v += (v0 * slow - self.v) * (1.0 - math.exp(-dt / 2.0))
         self.amp += (GAIT_HEADYAW[gait] - self.amp) * (1.0 - math.exp(-dt / 2.0))
         self.phase_g += GAIT_OMEGA[gait] * dt
-        self.yaw += GAIT_TURN[gait] * self.phi0 * (self.v / max(v0, 1e-6) if v0 > 0 else 0.0) * dt
+        scale = 1.0 if is_thrust(gait) else (self.v / max(v0, 1e-6) if v0 > 0 else 0.0)
+        self.yaw += GAIT_TURN[gait] * self.phi0 * scale * dt
         cur = current_at(st.t, self.seed)
         if hold is not None and hold.get("target") is not None:
             f = np.asarray(hold["target"]) - st.nose
@@ -930,7 +1077,10 @@ class Unicycle:
             a = np.asarray(hold["axis"], float)
             self.com = self.com + float((self.v * yaw_dir(self.yaw) + cur) @ a) * a * dt
             return
-        self.com = self.com + (self.v * yaw_dir(self.yaw) + cur) * dt
+        f = yaw_dir(self.yaw)
+        if is_thrust(gait):                               # the thrust loop holds the speed over ground along f
+            cur = cur - float(cur @ f) * f
+        self.com = self.com + (self.v * f + cur) * dt
 
 
 class PhysxRobot:
@@ -941,7 +1091,8 @@ class PhysxRobot:
         self.sm = sm
         self.seed = seed
         self.world = sm.make_world()
-        self.snake = sm.Snake(self.world, sm.SnakeParams(), origin=tuple(DOCK_C), heading=HEADING_OUT)
+        self.snake = sm.Snake(self.world, sm.SnakeParams(thrusters=sm.thruster_layout()), origin=tuple(DOCK_C),
+                              heading=HEADING_OUT)
         self.ad = SnakeAdapter(self.snake)
 
     def state(self, t, cur=None):
@@ -1024,7 +1175,7 @@ def run_synthetic(robot, seed=0, t_cap=300.0, dt=1.0 / 60.0, every=3, hole=True,
     return res, L
 
 
-PHASE_COLORS = {"DOCKED": "#555555", "UNDOCK": "#8c564b", "ACQUIRE": "#bcbd22", "FOLLOW_WALL": "#1f77b4",
+PHASE_COLORS = {"DOCKED": "#555555", "UNDOCK": "#8c564b", "PIVOT": "#c49c94", "DEPART": "#7f7f7f", "ACQUIRE": "#bcbd22", "FOLLOW_WALL": "#1f77b4",
                 "TEAR": "#d62728", "INSPECT": "#ff7f0e", "UTURN": "#9467bd", "INSPECT_2": "#e377c2",
                 "RETURN": "#17becf", "APPROACH": "#2ca02c", "TURN_IN": "#98df8a", "FINAL": "#006400",
                 "CAPTURE": "#000000", "RETREAT": "#ff9896", "ABORT": "#ff0000"}
@@ -1046,14 +1197,14 @@ def summarize(tel, mission, adapter, mass):
                path_length_m=round(float(seg[moving].sum()), 2),
                events=[[round(a, 2), b] for a, b in mission.events])
     per = {}
-    for g in ("cruise", "inspect", "creep", "dock", "undock"):
-        k = gaits.index(g)
+    p_all = L[:, c["p_abs"]] + (L[:, c["p_thr"]] if "p_thr" in c else 0.0)     # joints + thrusters
+    for k, g in enumerate(gaits):
         m = gait[1:] == k
-        if m.sum() < 60:
+        if m.sum() < 60 or g == "stop":
             continue
         dt_ = np.diff(t)[m]
         dist = float(seg[m].sum())
-        e = float(np.sum(L[1:, c["p_abs"]][m] * dt_))
+        e = float(np.sum(p_all[1:][m] * dt_))
         hy = L[1:, c["dpsi_head"]][m]
         per[g] = dict(time_s=round(float(dt_.sum()), 1), dist_m=round(dist, 2),
                       mean_speed_ms=round(dist / max(float(dt_.sum()), 1e-9), 3),
@@ -1099,9 +1250,12 @@ def summarize(tel, mission, adapter, mass):
     lf = L[:, c["latch_f"]]
     out["latch"] = dict(max_N=round(float(np.nanmax(lf)), 2), max_N_after_undock=round(float(np.nanmax(np.where(t > mission.t_docked + 0.1, lf, 0.0))), 2),
                         impulse_Ns=round(adapter.latch_impulse, 3), cap_N=adapter.latch_cap,
-                        guide_max_N_per_link=round(adapter.guide_max, 2), guide_cap_N=GUIDE_CAP)
+                        wall_max_N_per_link=round(adapter.guide_max, 2), wall_k_N_per_m=WALL_K)
     out["peak_joint_torque_Nm"] = round(float(L[-1, c["peak_torque"]]), 2)
-    out["energy_abs_J"] = round(float(L[-1, c["e_abs"]]), 1)
+    out["energy_abs_J"] = round(float(L[-1, c["e_abs"]]), 1)          # the joints
+    if "e_thr" in c:
+        out["energy_thrusters_J"] = round(float(L[-1, c["e_thr"]]), 1)
+        out["mean_power_W"] = round((float(L[-1, c["e_abs"]]) + float(L[-1, c["e_thr"]])) / max(float(t[-1]), 1e-9), 2)
     out["sonar_images"] = int(L[-1, c["images"]])
     sc = mission.side_check
     out["wall_side_agreement"] = round(float(np.mean([a == b for a, b in sc if b != 0])), 3) if sc else None

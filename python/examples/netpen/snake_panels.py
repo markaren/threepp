@@ -46,14 +46,22 @@ PLATE_EDGE = (255, 255, 255, 30)
 PEN_R = 7.0
 N_LINKS = 9
 
-# gait name (telemetry 'gaits' table) -> swimming pattern; keep in step with snake_mission.GAITS
-GAIT_PATTERN = {"cruise": "lateral", "creep": "lateral", "dock": "lateral", "undock": "lateral",
-                "inspect": "eel", "stop": None}
-PATTERN_LABEL = {"lateral": "lateral undulation", "eel": "eel-like", None: "joints straight"}
-PATTERN_COLOR = {"lateral": ACCENT, "eel": EEL_C, None: DIM}
+# gait name (telemetry 'gaits' table) -> propulsion pattern; keep in step with snake_mission.GAITS
+# (the undulation names stay so the overnight telemetry still loads)
+GAIT_PATTERN = {"cruise": "thrust", "inspect": "thrust", "slow": "thrust", "turn": "thrust", "back": "thrust",
+                "hover": "thrust", "eel": "eel", "stop": None, "creep": "lateral", "dock": "lateral",
+                "undock": "lateral"}
+PATTERN_LABEL = {"thrust": "thrusters", "lateral": "lateral undulation", "eel": "eel-like", None: "latched"}
+PATTERN_COLOR = {"thrust": ACCENT, "lateral": ACCENT, "eel": EEL_C, None: DIM}
+MODE_LABEL = {"cruise": "transit", "inspect": "slow pass", "slow": "docking", "turn": "turning",
+              "back": "reversing", "hover": "pivot", "stop": "latched", "eel": "eel-like",
+              "creep": "lateral", "dock": "lateral", "undock": "lateral"}
+THRUSTERS = (("side, port", "thr_port", 4.0), ("side, stbd", "thr_stbd", 4.0),
+             ("tunnel, bow", "thr_bow", 2.5), ("tunnel, stern", "thr_stern", 2.5))
 
 PHASE_LABEL = {
-    "DOCKED": "DOCKED", "UNDOCK": "UNDOCKING", "ACQUIRE": "LOOKING FOR THE NET ON SONAR",
+    "DOCKED": "DOCKED", "UNDOCK": "BACKING OUT OF THE CRADLE", "PIVOT": "TURNING ON THE SPOT",
+    "DEPART": "LEAVING THE DOCK", "ACQUIRE": "LOOKING FOR THE NET ON SONAR",
     "FOLLOW_WALL": "FOLLOWING THE NET ON SONAR", "TEAR": "TEAR DETECTED",
     "INSPECT": "INSPECTING THE TEAR, PASS 1", "UTURN": "U-TURN", "INSPECT_2": "INSPECTING THE TEAR, PASS 2",
     "RETURN": "RETURNING TO THE DOCK", "APPROACH": "APPROACHING THE DOCK", "TURN_IN": "TURNING IN TO THE DOCK",
@@ -79,7 +87,8 @@ CITATION = ("E. Kelasidi, P. Liljeback, K. Y. Pettersen, J. T. Gravdahl (2015). 
             "patterns. Robotics and Biomimetics 2:8.")
 HONESTY = ("Trend-level check: the paper tabulates no absolute speeds. Coefficients are the ones the paper prints "
            "(from its generic simulation study, not identified on Mamba). The speed drop past ~30 deg amplitude "
-           "is reproduced only for lateral undulation with the paper's full coefficients.")
+           "is reproduced only for lateral undulation with the paper's full coefficients. The thruster ratings "
+           "(4 N side, 2.5 N tunnel) and their 50 % efficiency are assumptions, not Eelume data.")
 CREDITS = "threepp (PhysX, Warp, Vulkan) - simulated, not filmed"
 
 
@@ -201,6 +210,7 @@ class Telemetry:
         self.net = np.asarray(d["net_y3"], np.float64) if "net_y3" in d.files else None
         self.seed = int(d["seed"]) if "seed" in d.files else None
         self.has_current = "cur_x" in self.c and "cur_z" in self.c
+        self.has_thrust = all(k in self.c for _, k, _ in THRUSTERS) and "p_thr" in self.c
         # link yaw from the quaternion's forward axis; joint i = yaw(link i) - yaw(link i+1), head first
         q = self.quats
         qx, qy, qz, qw = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
@@ -213,6 +223,10 @@ class Telemetry:
 
     def col(self, name):
         return self.L[:, self.c[name]]
+
+    def gait_name(self, i):
+        k = int(self.gait_i[i])
+        return self.gaits[k] if 0 <= k < len(self.gaits) else "stop"
 
     def idx(self, t):
         return int(np.clip(np.searchsorted(self.t, t, side="right") - 1, 0, len(self.t) - 1))
@@ -274,7 +288,7 @@ class Panels:
         self.tel = Telemetry(telemetry_npz)
         self.summ = load_summary(summary_json)
         self.sweep = load_sweep(sweep_dir)
-        self.lay = dict(title_xy=(24, 24), gait_w=470, map_size=300, map_xy=(-24, 24), margin=14)
+        self.lay = dict(title_xy=(24, 24), gait_w=520, map_size=300, map_xy=(-24, 24), margin=14)
         self.lay.update(layout or {})
         ref = self.sweep["complex"]["reference_gait"]
         self.ref_yaw = (ref["lateral"]["head_yaw_rms_deg"], ref["eel"]["head_yaw_rms_deg"])
@@ -297,7 +311,7 @@ class Panels:
         self.tear_xz = np.array([r * math.cos(tb), r * math.sin(tb)])
 
     # -- per frame
-    def compose(self, frame_rgb, t_mission, speedup=1.0, sonar_rect=None, sonar_gap_xy=None):
+    def compose(self, frame_rgb, t_mission, speedup=1.0, sonar_rect=None, sonar_gap_xy=None, jump=0.0):
         """frame_rgb (H, W, 3) uint8 -> uint8 with the HUD. speedup > 1 shows a TIME-LAPSE badge;
         sonar_rect (x, y, w, h) in frame pixels = the sonar panel, annotated for 6 s after the tear fires;
         sonar_gap_xy optionally points the annotation's arrow at the gap."""
@@ -316,7 +330,10 @@ class Panels:
         if speedup and speedup > 1.01:
             badge = self._badge(speedup, s)
             img.alpha_composite(badge, (int(x0 + title.width + m), int(y0)))
-        gait = self._gait(i, s)
+        elif jump and jump > 0.5:                          # a jump cut: the time it skipped
+            badge = self._badge(0.0, s, left="SKIPPED", right=f"+{jump:.0f} s")
+            img.alpha_composite(badge, (int(x0 + title.width + m), int(y0)))
+        gait = self._thrust(i, s) if self.tel.has_thrust else self._gait(i, s)
         img.alpha_composite(gait, (int(x0), int(y0 + title.height + m)))
         mp = self._minimap(i, t_mission, s)
         mx, my = self.lay["map_xy"]
@@ -346,13 +363,14 @@ class Panels:
         fields = [("", clock), ("speed", f"{spd:.2f} m/s"), ("to net", f"{d_true:.2f} m"),
                   ("sonar", f"{meas:.2f} m" if meas is not None else "no wall")]
         pat = tel.pattern[i]
-        fields.append(("gait", PATTERN_LABEL[pat]))
+        fields.append(("mode", MODE_LABEL.get(tel.gait_name(i), PATTERN_LABEL[pat])))
         T1, T2, T3, T4 = 25, 14.5, 23, 16.5
         head = "Underwater snake robot on net-pen patrol"
-        sub = "Mamba-style, 9 links, 1.62 m.  Kelasidi et al. (2015) fluid model in PhysX"
+        sub = ("9 modules, 1.62 m, 2 side + 2 tunnel thrusters.  Kelasidi et al. (2015) fluid model in PhysX"
+               if tel.has_thrust else "Mamba-style, 9 links, 1.62 m.  Kelasidi et al. (2015) fluid model in PhysX")
         gap = 16
         # fixed slots (widest value each field can take), so the plate and the columns never jitter
-        tmpl = [["T+ 00:00.0"], ["0.00 m/s"], ["00.00 m"], ["00.00 m", "no wall"], list(PATTERN_LABEL.values())]
+        tmpl = [["T+ 00:00.0"], ["0.00 m/s"], ["00.00 m"], ["00.00 m", "no wall"], list(MODE_LABEL.values())]
         slots = [(text_width(lb + "  ", T4 - 2) if lb else 0.0) + max(text_width(v, T4, "sb") for v in tv)
                  for (lb, _), tv in zip(fields, tmpl)]
         labels = [PHASE_LABEL.get(p, p.replace("_", " ")) for p in tel.phases]
@@ -373,17 +391,17 @@ class Panels:
             if lb:
                 L.text(x1, y + 1.5 * s, lb, (T4 - 2) * s, "r", GREY)
                 x1 += L.tw(lb + "  ", (T4 - 2) * s)
-            col = PATTERN_COLOR[pat] if lb == "gait" else WHITE
+            col = PATTERN_COLOR[pat] if lb == "mode" else WHITE
             L.text(x1, y, v, T4 * s, "sb", col)
             x += (sw + gap) * s
         return L.done()
 
-    def _badge(self, speedup, s):
-        txt = f"x{speedup:.0f}" if abs(speedup - round(speedup)) < 0.05 else f"x{speedup:.1f}"
-        w = (text_width("TIME-LAPSE", 15, "sb") + text_width(txt, 26, "b") + 44) * s
+    def _badge(self, speedup, s, left="TIME-LAPSE", right=None):
+        txt = right or (f"x{speedup:.0f}" if abs(speedup - round(speedup)) < 0.05 else f"x{speedup:.1f}")
+        w = (text_width(left, 15, "sb") + text_width(txt, 26, "b") + 44) * s
         L = Layer(w, 50 * s)
         L.plate(8 * s, edge=_rgba(ACCENT, 200))
-        L.text(16 * s, 25 * s, "TIME-LAPSE", 15 * s, "sb", GREY, anchor="lm")
+        L.text(16 * s, 25 * s, left, 15 * s, "sb", GREY, anchor="lm")
         L.text(w - 16 * s, 25 * s, txt, 26 * s, "b", ACCENT, anchor="rm")
         return L.done()
 
@@ -436,6 +454,51 @@ class Panels:
         L.line([(18 * s, 150 * s), ((W_ - 18) * s, 150 * s)], _rgba(WHITE, 30), 1 * s)
         L.text(18 * s, 155 * s, f"Sweep, the paper's reference gait: head yaw RMS {self.ref_yaw[0]:.0f} deg lateral, "
                                 f"{self.ref_yaw[1]:.0f} deg eel-like", 12.5 * s, "r", GREY)
+        return L.done()
+
+    def _thrust(self, i, s):
+        """The thrusters now (signed bars, each to its rating), the body's shape (the joints), power."""
+        tel = self.tel
+        W_, H_ = self.lay["gait_w"], 176
+        L = Layer(W_ * s, H_ * s)
+        L.plate(8 * s)
+        x = 18 * s
+        g = tel.gait_name(i)
+        L.text(x, 12 * s, "THRUSTERS", 14 * s, "sb", GREY)
+        L.text(x + 96 * s, 9 * s, MODE_LABEL.get(g, g), 19 * s, "sb", ACCENT if g != "stop" else DIM)
+        a, b = tel.window(i, 1.0)
+        pw = float(np.nanmean(tel.col("p_thr")[a:b] + tel.col("p_abs")[a:b]))
+        L.text((W_ - 18) * s, 13 * s, f"power {pw:4.1f} W", 13.5 * s, "r", GREY, anchor="ra")
+        bx0, bx1, y = 118, 250, 46
+        cx = (bx0 + bx1) / 2
+        for lab, key, rating in THRUSTERS:
+            v = float(tel.col(key)[i])
+            L.text(18 * s, (y - 1) * s, lab, 12.5 * s, "r", GREY)
+            L.rect(bx0 * s, (y + 1) * s, bx1 * s, (y + 13) * s, fill=_rgba(WHITE, 16), r=2 * s)
+            L.line([(cx * s, (y - 1) * s), (cx * s, (y + 15) * s)], _rgba(WHITE, 70), 1 * s)
+            f = float(np.clip(v / rating, -1.0, 1.0)) * (bx1 - bx0) / 2
+            if abs(f) > 0.3:
+                L.rect(min(cx, cx + f) * s, (y + 2) * s, max(cx, cx + f) * s, (y + 12) * s, fill=_rgba(ACCENT, 230), r=2 * s)
+            L.text((bx1 + 6) * s, (y - 1) * s, f"{v:+.1f} N", 12.5 * s, "sb", WHITE)
+            y += 22
+        # the joints now, head to tail: the body's shape
+        px0, px1 = 345, W_ - 18
+        py0, py1 = 44, 128
+        ymid = (py0 + py1) / 2
+        jk = (py1 - py0) / 2 / math.radians(40)
+        bw = (px1 - px0) / 8.0
+        L.line([(px0 * s, ymid * s), (px1 * s, ymid * s)], _rgba(WHITE, 55), 1 * s)
+        for j, ph in enumerate(tel.joints[i]):
+            c_ = px0 + (j + 0.5) * bw
+            hh = float(np.clip(ph, -0.7, 0.7)) * jk
+            col = EEL_C if (j < 2 and "neck" in tel.c and abs(tel.col("neck")[i]) > math.radians(2)) else ACCENT
+            L.rect((c_ - bw * 0.3) * s, ymid * s, (c_ + bw * 0.3) * s, (ymid - hh) * s, fill=_rgba(col, 225))
+        L.text(px0 * s, (py1 + 5) * s, "joints, head to tail", 12 * s, "r", DIM)
+        L.line([(18 * s, 150 * s), ((W_ - 18) * s, 150 * s)], _rgba(WHITE, 30), 1 * s)
+        neck = math.degrees(float(tel.col("neck")[i])) if "neck" in tel.c else 0.0
+        note = (f"the neck turns the head {abs(neck):.0f} deg toward the tear" if abs(neck) > 2.0 else
+                "side pair pushes, tunnel pair turns, the joints shape the body")
+        L.text(18 * s, 155 * s, note, 12.5 * s, "r", EEL_C if abs(neck) > 2.0 else GREY)
         return L.done()
 
     def _map_view(self):
@@ -525,7 +588,7 @@ class Panels:
         # footer: legend, current, scale bar
         fy = (head_h + M + 16) * s
         x = 14 * s
-        for pat in ("lateral", "eel"):
+        for pat in [q for q in ("thrust", "lateral", "eel") if q in set(self.tel.pattern)]:
             L.line([(x, fy), (x + 18 * s, fy)], _rgba(PATTERN_COLOR[pat]), 2.4 * s)
             L.text(x + 24 * s, fy, PATTERN_LABEL[pat], 12 * s, "r", GREY, anchor="lm")
             x += (24 + text_width(PATTERN_LABEL[pat], 12) + 16) * s
@@ -593,37 +656,60 @@ class Panels:
         img.alpha_composite(fig, (int(40 * s), int(120 * s)))
         L = Layer(W, H)
         x0 = 56 * s
-        L.text(x0, 40 * s, "The swimming, checked against the paper", 32 * s, "sb", WHITE)
-        L.text(x0, 84 * s, "Kelasidi et al. (2015) fluid model in PhysX at 240 Hz, 9 links x 0.18 m. "
-                           "Speed and joint power, mean over 10-30 s of 30 s runs.", 16 * s, "r", GREY)
+        L.text(x0, 40 * s, "The fluid model, checked against the paper", 32 * s, "sb", WHITE)
+        L.text(x0, 84 * s, "Kelasidi et al. (2015) fluid model in PhysX at 240 Hz, 9 links x 0.18 m, on the paper's "
+                           "undulation trends: the same drag the thrusters push against.", 16 * s, "r", GREY)
         rx = 1150 * s
         rw = W - rx - 56 * s
         y = 40 * s
         L.text(rx, y, "The numbers", 32 * s, "sb", WHITE)
         y = 100 * s
-        L.text(rx, y, "At the paper's reference gait", 19 * s, "sb", ACCENT)
-        L.text(rx, y + 27 * s, "alpha 30 deg, omega 120 deg/s, delta 30 deg, full coefficients", 14 * s, "r", GREY)
         ref = self.sweep["complex"]["reference_gait"]
-        c1, c2 = rx + 300 * s, rx + 470 * s
-        y += 60 * s
-        L.text(c1, y, "lateral", 14.5 * s, "sb", ACCENT)
-        L.text(c2, y, "eel-like", 14.5 * s, "sb", EEL_C)
-        rows = [("speed", f"{ref['lateral']['speed']:.2f} m/s", f"{ref['eel']['speed']:.2f} m/s"),
-                ("head yaw RMS", f"{ref['lateral']['head_yaw_rms_deg']:.0f} deg", f"{ref['eel']['head_yaw_rms_deg']:.0f} deg"),
-                ("mean |joint power|", f"{ref['lateral']['power_abs']:.2f} W", f"{ref['eel']['power_abs']:.2f} W")]
-        y += 26 * s
-        for lb, a, b in rows:
-            L.text(rx, y, lb, 17 * s, "r", GREY)
-            L.text(c1, y, a, 19 * s, "sb", WHITE)
-            L.text(c2, y, b, 19 * s, "sb", WHITE)
-            y += 32 * s
-        ig = self.inspect_gait()
-        if ig and GAIT_PATTERN[ig] == "eel":
-            why = "Eel-like is the inspection gait: slower, but the head (camera, sonar) is steadier."
+        pg = self.summ.get("per_gait", {})
+        if self.tel.has_thrust:
+            L.text(rx, y, "Why thrusters", 19 * s, "sb", ACCENT)
+            y += 36 * s
+            lat, eel = ref["lateral"], ref["eel"]
+            rows = [("undulation, the paper's gait", f"lateral {lat['speed']:.2f} m/s, head yaw {lat['head_yaw_rms_deg']:.0f} deg; "
+                                                    f"eel-like {eel['speed']:.2f} m/s, {eel['head_yaw_rms_deg']:.0f} deg")]
+            tv = []
+            if "cruise" in pg:
+                tv.append(f"transit {pg['cruise']['mean_speed_ms']:.2f} m/s")
+            if "inspect" in pg:
+                tv.append(f"tear pass {pg['inspect']['mean_speed_ms']:.2f} m/s, head yaw "
+                          f"{pg['inspect']['head_yaw_rms_deg']:.0f} deg (the neck aims it)")
+            rows.append(("this robot, on thrusters", ", ".join(tv) or "n/a"))
+            for lb, v in rows:
+                L.text(rx, y, lb, 16 * s, "r", GREY)
+                self._wrap_text(L, rx + 250 * s, y, v, 17 * s, "sb", WHITE, rw - 250 * s, 23 * s)
+                y += max(1, self._n_lines(v, 17 * s, "sb", rw - 250 * s)) * 23 * s + 8 * s
+            why = ("The current at the tear runs 0.15 m/s: the steady-headed eel-like stroke cannot hold the wall "
+                   "against it, and lateral undulation swings the head (camera, sonar) 30+ deg. NTNU's later robot, "
+                   "Eelume, swims on thrusters for the same reasons.")
+            y = self._wrap_text(L, rx, y + 2 * s, why, 14 * s, "r", GREY, rw, 20 * s) - 30 * s
         else:
-            why = ("Eel-like holds the head (camera, sonar) steadier; this run inspected with "
-                   f"{PATTERN_LABEL[GAIT_PATTERN[ig]] if ig else 'no inspection pass'}" + (f" ({ig})." if ig else "."))
-        L.text(rx, y + 2 * s, why, 14 * s, "r", GREY)
+            L.text(rx, y, "At the paper's reference gait", 19 * s, "sb", ACCENT)
+            L.text(rx, y + 27 * s, "alpha 30 deg, omega 120 deg/s, delta 30 deg, full coefficients", 14 * s, "r", GREY)
+            c1, c2 = rx + 300 * s, rx + 470 * s
+            y += 60 * s
+            L.text(c1, y, "lateral", 14.5 * s, "sb", ACCENT)
+            L.text(c2, y, "eel-like", 14.5 * s, "sb", EEL_C)
+            rows = [("speed", f"{ref['lateral']['speed']:.2f} m/s", f"{ref['eel']['speed']:.2f} m/s"),
+                    ("head yaw RMS", f"{ref['lateral']['head_yaw_rms_deg']:.0f} deg", f"{ref['eel']['head_yaw_rms_deg']:.0f} deg"),
+                    ("mean |joint power|", f"{ref['lateral']['power_abs']:.2f} W", f"{ref['eel']['power_abs']:.2f} W")]
+            y += 26 * s
+            for lb, a, b in rows:
+                L.text(rx, y, lb, 17 * s, "r", GREY)
+                L.text(c1, y, a, 19 * s, "sb", WHITE)
+                L.text(c2, y, b, 19 * s, "sb", WHITE)
+                y += 32 * s
+            ig = self.inspect_gait()
+            if ig and GAIT_PATTERN[ig] == "eel":
+                why = "Eel-like is the inspection gait: slower, but the head (camera, sonar) is steadier."
+            else:
+                why = ("Eel-like holds the head (camera, sonar) steadier; this run inspected with "
+                       f"{PATTERN_LABEL[GAIT_PATTERN[ig]] if ig else 'no inspection pass'}" + (f" ({ig})." if ig else "."))
+            L.text(rx, y + 2 * s, why, 14 * s, "r", GREY)
         y += 50 * s
         L.line([(rx, y), (rx + rw, y)], _rgba(WHITE, 40), 1 * s)
         y += 18 * s
@@ -722,7 +808,12 @@ class Panels:
                     + (f"; bearing error {rng(err, '{:.1f}', ' deg')}" if err else "")))
         out.append(("closest pass, nose to tear", "pass 1 " + rng([s.get("inspect_closest_head_to_tear_m") for s in summs], "{:.2f}", " m")
                     + ", pass 2 " + rng([s.get("inspect_2_closest_head_to_tear_m") for s in summs], "{:.2f}", " m")))
-        out.append(("energy (joint work)", rng([s["energy_abs_J"] for s in summs], "{:.0f}", " J")))
+        if all("energy_thrusters_J" in s for s in summs):
+            out.append(("energy", "joints " + rng([s["energy_abs_J"] for s in summs], "{:.0f}", " J") + ", thrusters "
+                        + rng([s["energy_thrusters_J"] for s in summs], "{:.0f}", " J") + "; mean "
+                        + rng([s.get("mean_power_W") for s in summs], "{:.1f}", " W")))
+        else:
+            out.append(("energy (joint work)", rng([s["energy_abs_J"] for s in summs], "{:.0f}", " J")))
         de = [s["dock_error"] for s in summs if s.get("dock_error")]
         out.append(("latched at", "nose " + rng([d["nose_m"] for d in de], "{:.2f}", " m") + ", heading "
                     + rng([d["heading_deg"] for d in de], "{:.1f}", " deg")))

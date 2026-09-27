@@ -419,8 +419,8 @@ class PhysicsSnake:
         import snake_mission as MS
         self.MS = MS
         self.world = SM.make_world(1.0 / 240.0)
-        self.snake = SM.Snake(self.world, SM.SnakeParams(), origin=tuple(float(v) for v in MS.DOCK_C),
-                              heading=MS.HEADING_OUT)
+        self.snake = SM.Snake(self.world, SM.SnakeParams(thrusters=SM.thruster_layout()),
+                              origin=tuple(float(v) for v in MS.DOCK_C), heading=MS.HEADING_OUT)
         self.ad = MS.SnakeAdapter(self.snake)
         self.mission = MS.Mission(seed=seed, tear_reported=TEAR_BEARING)
         s = self.snake
@@ -535,6 +535,11 @@ def _along_x(mesh):
 # ridged boot at each joint end; the two halves ride their own links, so a bent joint opens the boot
 # on the outside of the bend (a dark core fills it) and closes it on the inside. Merged per material.
 MOD_R = 0.049                                             # module shell radius (the head keeps LINK_R)
+# Thrusters (snake_model.thruster_layout; scene link index = 8 - model index): two ducted side
+# thrusters on the second module behind the head, a tunnel thruster port behind the head and one
+# ahead of the tail, like NTNU's swimming manipulator (Eelume).
+SCENE_SIDE_THRUSTERS, SCENE_TUNNEL_BOW, SCENE_TUNNEL_STERN = 2, 1, 7
+SIDE_Y, DUCT_R, DUCT_L = 0.079, 0.030, 0.070
 MOD_HALF = 0.056                                          # shell half length
 RING_R, RING_W = 0.0515, 0.006                            # raised end rings
 CHAMF_W, BOOT_R = 0.009, 0.036                            # chamfer to the boot, boot core radius
@@ -578,6 +583,23 @@ def module_parts(i):
             R.append((tp.TorusGeometry(BOOT_R + 0.001, 0.0052, 8, 32), (sg * xr, 0.0, 0.0), ROT_TORUS_X))
     if i < LINK_N - 1:
         R.append((tp.SphereGeometry(BOOT_R + 0.0005, 24, 12), (-0.5 * LINK_L, 0.0, 0.0), None))   # boot core
+    if i in (SCENE_TUNNEL_BOW, SCENE_TUNNEL_STERN):       # tunnel thruster: a port through the module, both flanks
+        for sd in (-1.0, 1.0):
+            R.append((tp.CircleGeometry(0.021, 24), (0.0, 0.0, sd * (MOD_R + 0.0008)), (0.0, 0.0 if sd > 0 else math.pi, 0.0)))
+            M.append((tp.TorusGeometry(0.0215, 0.0026, 8, 32), (0.0, 0.0, sd * (MOD_R + 0.0004)), None))
+            for a in (0.0, math.pi / 2):                  # the guard grille
+                M.append((tp.BoxGeometry(0.040, 0.0028, 0.0025), (0.0, 0.0, sd * (MOD_R + 0.0012)), (0.0, 0.0, a)))
+    if i == SCENE_SIDE_THRUSTERS:                         # the two side thrusters: ducts on pylons
+        for sd in (-1.0, 1.0):
+            zc = sd * SIDE_Y
+            D.append(cyl_x(DUCT_R, DUCT_R, -DUCT_L / 2, DUCT_L / 2, seg=32, open_=True))
+            D[-1] = (D[-1][0], (0.0, 0.0, zc), D[-1][2])
+            Y.append((tp.TorusGeometry(DUCT_R - 0.0005, 0.0042, 10, 36), (DUCT_L / 2, 0.0, zc), ROT_TORUS_X))   # the yellow intake lip
+            R.append((tp.TorusGeometry(DUCT_R - 0.001, 0.0022, 8, 36), (-DUCT_L / 2, 0.0, zc), ROT_TORUS_X))
+            R.append((tp.BoxGeometry(0.048, 0.010, 0.012), (0.0, 0.0, sd * (MOD_R + 0.002)), None))            # pylon
+            M.append((tp.CylinderGeometry(0.0075, 0.0075, 0.030, 16, 1), (-0.004, 0.0, zc), ROT_X))            # motor pod
+            M.append((tp.ConeGeometry(0.0075, 0.012, 16, 1), (-0.025, 0.0, zc), ROT_MX))                       # tail cone
+            M.append((tp.BoxGeometry(0.004, 2 * DUCT_R - 0.004, 0.003), (-0.016, 0.0, zc), None))              # stator
     if i == 6:                                            # sensor pod on the crown (altimeter / DVL stand-in)
         R.append((tp.BoxGeometry(0.056, 0.020, 0.034), (0.0, MOD_R + 0.007, 0.0), None))
         M.append((tp.CylinderGeometry(0.009, 0.009, 0.004, 16, 1), (0.029, MOD_R + 0.007, 0.0), ROT_X))
@@ -634,6 +656,33 @@ for i in range(LINK_N):
     W.scene.add(g)
     snake_links.append(g)
 HEAD_LAMPS = lamps
+prop_mat = standard_material(0x1c1f22, roughness=0.45, metalness=0.4)
+PROPS = []                                                # (group, side): spun per frame from the thrust
+for sd in (-1.0, 1.0):
+    pg = tp.Group()
+    pg.position.set(0.012, 0.0, sd * SIDE_Y)
+    for k in range(3):                                    # three blades, pitched
+        b = tp.Mesh(tp.BoxGeometry(0.0025, 0.021, 0.011), prop_mat)
+        a = 2.0 * math.pi * k / 3.0
+        holder = tp.Group()
+        holder.rotation.x = a
+        b.position.y = 0.0135
+        b.rotation.y = math.radians(35.0)
+        holder.add(b)
+        pg.add(holder)
+        snake_meshes.append(b)
+    snake_links[SCENE_SIDE_THRUSTERS].add(pg)
+    PROPS.append([pg, sd, 0.0])
+PROP_RPS = 2.6                                            # visual rev/s per sqrt(N): below the 3-blade 60 fps alias (10 rev/s)
+
+
+def props_update(dt):
+    sn = SNAKE[0]
+    thr = getattr(getattr(sn, "snake", None), "thr", None)
+    for pr in PROPS:
+        T = 0.0 if thr is None else float(thr[0 if pr[1] < 0 else 1])
+        pr[2] += math.copysign(PROP_RPS * math.sqrt(abs(T)), T) * 2.0 * math.pi * dt
+        pr[0].rotation.x = pr[2]
 for _m in snake_meshes:
     W.renderer.set_instance_id(_m, SON_ID_SNAKE)
 W.sonar.reflectivity.set(SON_ID_SNAKE, 0.0)               # the snake's own body never echoes in its sonar
@@ -666,33 +715,50 @@ def _dock_add(m):
     return m
 
 
-HOOP_R, RAIL_S, RAIL_H = MS.MOUTH_R, 0.085, -0.072          # funnel mouth 0.35 m: the gait's swept width
-for sgn in (-1.0, 1.0):                                    # the two rails the body rests on
-    _dock_add(W.tube(dpt(-0.5 * DOCK_LEN, sgn * RAIL_S, RAIL_H), dpt(0.5 * DOCK_LEN, sgn * RAIL_S, RAIL_H), 0.014, dock_grey, 12))
-for a in (-0.55, 0.0, 0.55):                               # U-ties under the body
-    pts = [dpt(a, s, h) for s, h in ((-RAIL_S, RAIL_H), (-0.07, -0.12), (0.07, -0.12), (RAIL_S, RAIL_H))]
-    for p, q in zip(pts[:-1], pts[1:]):
-        _dock_add(W.tube(p, q, 0.011, dock_grey, 8))
-for a in (-0.5 * DOCK_LEN, 0.5 * DOCK_LEN):                # funnel hoops, both ends open
-    sgn = 1.0 if a > 0 else -1.0
-    hoop = _dock_add(tp.Mesh(tp.TorusGeometry(HOOP_R, 0.017, 12, 48), dock_orange))
-    hoop.position.set(*dpt(a, 0.0, 0.0))
-    # torus lies in XY with its axis on +Z: turn +Z onto the dock axis
+# A tube of six bars and four frame rings (bore MS.BORE_R: the body and the side thrusters' ducts,
+# with room), a funnel at each end flaring to the orange mouth hoop, and the inductive charging pad
+# under the middle with its LED. The mission's wall contact (snake_mission.SnakeAdapter._contact) is this
+# geometry, 2 cm inside the bars; snake_dock_clearance.py checks the rendered body never enters a part.
+HOOP_R = MS.MOUTH_R
+BAR_R = MS.BORE_R + 0.012
+dock_rubber = standard_material(0x1a1c1e, roughness=0.85)
+
+
+def _axis_mesh(m, a, s_, h_):
+    """A +Z-axis primitive (torus) turned onto the dock axis at dock-local (a, s, h)."""
+    m.position.set(*dpt(a, s_, h_))
     zaxis = np.array([0.0, 0.0, 1.0])
     ax = np.cross(zaxis, DOCK_U)
-    hoop.quaternion.set_from_axis_angle(tp.Vector3(*(ax / np.linalg.norm(ax))), math.acos(float(zaxis @ DOCK_U)))
-    fun = tp.Mesh(tp.CylinderGeometry(HOOP_R, MS.BORE_R, 0.25, 32, 1, True), standard_material(0xc9cdd0, roughness=0.6, side=tp.Side.Double))
-    fun.position.set(*dpt(a - sgn * 0.125, 0.0, 0.0))
+    m.quaternion.set_from_axis_angle(tp.Vector3(*(ax / np.linalg.norm(ax))), math.acos(float(zaxis @ DOCK_U)))
+    return m
+
+
+for k in range(6):                                         # the tube's bars, rubber-sleeved
+    th = math.radians(30.0 + 60.0 * k)
+    sb, hb = BAR_R * math.cos(th), BAR_R * math.sin(th)
+    _dock_add(W.tube(dpt(-MS.A_THROAT, sb, hb), dpt(MS.A_THROAT, sb, hb), 0.010, dock_rubber, 10))
+for a in (-0.75, -0.25, 0.25, 0.75):                       # frame rings
+    _dock_add(_axis_mesh(tp.Mesh(tp.TorusGeometry(BAR_R, 0.012, 10, 48), dock_grey), a, 0.0, 0.0))
+for a in (-0.5 * DOCK_LEN, 0.5 * DOCK_LEN):                # funnels and mouth hoops, both ends open
+    sgn = 1.0 if a > 0 else -1.0
+    _dock_add(_axis_mesh(tp.Mesh(tp.TorusGeometry(HOOP_R, 0.017, 12, 48), dock_orange), a, 0.0, 0.0))
+    fun = tp.Mesh(tp.CylinderGeometry(HOOP_R, MS.BORE_R + 0.005, MS.FUN_L, 40, 1, True),
+                  standard_material(0xc9cdd0, roughness=0.6, side=tp.Side.Double))
+    fun.position.set(*dpt(a - sgn * 0.5 * MS.FUN_L, 0.0, 0.0))
     W.align_y(fun, sgn * DOCK_U)                           # wide end outward
     _dock_add(fun)
-    for s in (-1.0, 1.0):                                  # hoop to rail struts
-        _dock_add(W.tube(dpt(a, s * RAIL_S, RAIL_H), dpt(a, s * 0.707 * HOOP_R, -0.707 * HOOP_R), 0.010, dock_grey, 8))
-# latch post with its LED, mid-cradle on the starboard side
-_dock_add(W.tube(dpt(0.0, RAIL_S + 0.03, RAIL_H), dpt(0.0, RAIL_S + 0.03, 0.10), 0.013, dock_grey, 10))
-latch = _dock_add(tp.Mesh(tp.BoxGeometry(0.05, 0.03, 0.05), dock_white))
-latch.position.set(*dpt(0.0, RAIL_S + 0.03, 0.10))
+# the charging pad under the middle: a housing on two stand-offs from the bottom bar, the coil face up
+PAD_H = -(BAR_R + 0.035)
+pad = _dock_add(tp.Mesh(tp.BoxGeometry(0.24, 0.04, 0.12), dock_white))
+pad.position.set(*dpt(0.0, 0.0, PAD_H))
+pad.rotation.y = MS.yaw_of(DOCK_U)
+coil = _dock_add(tp.Mesh(tp.CircleGeometry(0.045, 32), dock_rubber))
+coil.position.set(*dpt(0.0, 0.0, PAD_H + 0.0205))
+coil.rotation.x = -math.pi / 2
+for a in (-0.08, 0.08):
+    _dock_add(W.tube(dpt(a, 0.0, PAD_H + 0.02), dpt(a, 0.0, -BAR_R), 0.008, dock_grey, 8))
 led = tp.Mesh(tp.SphereGeometry(0.011, 12, 8), led_mat)
-led.position.set(*dpt(0.0, RAIL_S + 0.03, 0.125))
+led.position.set(*dpt(0.10, 0.061, PAD_H + 0.005))
 dock.add(led)
 # spreader bar over the cradle and the two ropes up to the inner collar
 _dock_add(W.tube(dpt(-0.5 * DOCK_LEN, 0.0, HOOP_R + 0.02), dpt(0.5 * DOCK_LEN, 0.0, HOOP_R + 0.02), 0.012, dock_grey, 8))
@@ -702,6 +768,8 @@ for a in (-0.5 * DOCK_LEN, 0.5 * DOCK_LEN):
     anchor = np.array([(W.PEN_R - 0.05) * math.cos(th), W.WATER_Y - 0.12, (W.PEN_R - 0.05) * math.sin(th)])
     _dock_add(W.tube(top, anchor, 0.009, W.rope_mat, 6))
     _dock_add(W.tube(dpt(a, 0.0, 0.0) + HOOP_R * _UP, top, 0.010, dock_grey, 8))
+for a in (-0.25, 0.25):                                    # hangers: the tube's top ring to the spreader
+    _dock_add(W.tube(dpt(a, 0.0, BAR_R + 0.012), dpt(a, 0.0, HOOP_R + 0.02), 0.008, dock_grey, 8))
 W.scene.add(dock)
 
 
@@ -799,6 +867,7 @@ def snake_rov_pose(t, dt=1.0 / 60.0):
     sn = SNAKE[0]
     pos, quat = sn.poses(mission_t())
     pose_links(pos, quat)
+    props_update(dt)
     p, R = sn.head_pose()
     W.rov_pos, W.rov_R, W.rov_thrust = p, R, np.zeros(3)
     q = net_positions()
@@ -828,14 +897,21 @@ def lamp_update(phase, p, R, dt):
     off in the cradle before the undock, full while swimming, dimmed on the funnel and docked."""
     h = HEAD_LOOK
     a_want = math.radians(45.0) if phase in WALL_PHASES else 0.0
+    aim_pt = getattr(getattr(SNAKE[0], "mission", None), "aim", None)
+    if aim_pt is not None:                                # the neck turns the head at the tear; the camera finishes
+        d = np.asarray(aim_pt, float) - p
+        side = wall_side(p, R[:, 0])
+        a_want = float(np.clip(math.atan2(float(d @ side), float(d @ R[:, 0])), -math.radians(60.0), math.radians(80.0)))
     h["a"] += (a_want - h["a"]) * (1.0 - math.exp(-dt / 1.0))
     if phase != "DOCKED":
         h["undocked"] = True
     lv = 1.0
     if phase == "DOCKED":
         lv = 0.12 if h["undocked"] else 0.0
-    elif phase in ("CAPTURE", "LATCHED"):
-        lv = 0.45
+    elif phase in ("UNDOCK", "PIVOT"):                    # backing out: the white funnel burns the head camera out
+        lv = 0.0
+    elif phase in ("CAPTURE", "LATCHED"):                 # in the tube: the rings would burn out
+        lv = 0.15
     step_ = dt / 1.2
     h["level"] += min(max(lv - h["level"], -step_), step_)
     look = R.T @ head_look_dir(p, R)
@@ -1167,7 +1243,8 @@ def run_mission(shots=False):
 TEL_COLS = ["t", "phase", "gait", "phi0", "psi_mean", "psi_head", "dpsi_head", "speed", "p_abs", "p_net", "e_abs",
             "e_net", "meas", "d_head_true", "d_min_links", "tangent", "psi_wall", "wall_seen", "tear_fired",
             "tear_bearing", "cand_bearing", "cur_x", "cur_z", "com_x", "com_y", "com_z", "head_x", "head_y", "head_z",
-            "los_s", "los_e", "latch_f", "images", "peak_torque", "guide_f", "tear_x", "tear_z", "d_head_tear"]
+            "los_s", "los_e", "latch_f", "images", "peak_torque", "guide_f", "tear_x", "tear_z", "d_head_tear",
+            "thr_port", "thr_stbd", "thr_bow", "thr_stern", "p_thr", "e_thr", "neck"]
 
 
 def mission_row(prov, t, gait_ids):
@@ -1189,7 +1266,8 @@ def mission_row(prov, t, gait_ids):
             float(ms.det.fired), ms.det.bearing, cand, float(cur[0]), float(cur[2]), *st.com, *hp,
             ms.los.get("s", float("nan")), ms.los.get("e", float("nan")),
             float(np.linalg.norm(prov.ad.latch_force)), prov.images, sn.peak_torque, prov.ad.guide_force,
-            float(tc[0]), float(tc[2]), float(np.linalg.norm(prov.nose() - tc))]
+            float(tc[0]), float(tc[2]), float(np.linalg.norm(prov.nose() - tc)),
+            *[float(x) for x in sn.thr], sn.power_thr, sn.energy_thr, ms.neck]
 
 
 def save_mission(prov, rows, links, quats, stem, frames, wall, **extra):
@@ -1221,16 +1299,25 @@ def save_mission(prov, rows, links, quats, stem, frames, wall, **extra):
 # on the lens. The edit (snake_film_cut.py) dissolves at the logged cuts.
 FILM_VIEW_W, FILM_VIEW_H = 960, 540                       # head-camera view: the edit scales it (bigger at the tear)
 CUT_LEAD = 1.0
-SHOT_IDS = ("cradle", "chase", "tear", "top", "high", "dock")
+SHOT_IDS = ("cradle", "chase", "tear", "top", "high", "dock", "sun", "track")
+SUN_FOLLOW = 0.7                                          # the sun shot's eye travels with the body at this fraction
+# The refracted sun under water: Snell at the flat surface (n 1.333), toward the sun.
+_SIN_AIR = math.sqrt(max(1.0 - float(W.SUN_DIR[1]) ** 2, 0.0))
+_SIN_W = _SIN_AIR / 1.333
+SUN_UW = np.array([_SIN_W * W.SUN_H[0], math.sqrt(1.0 - _SIN_W ** 2), _SIN_W * W.SUN_H[1]])
 UNDOCK_CRADLE_S = 7.0                                     # the cradle shot holds this long into the undock
 
 
 def shot_for(phase, t_in, undocked):
     if phase == "DOCKED":
         return "dock" if undocked else "cradle"
-    if phase == "UNDOCK":
-        return "cradle" if t_in < UNDOCK_CRADLE_S else "chase"
-    if phase in ("ACQUIRE", "FOLLOW_WALL", "RETURN", "APPROACH"):
+    if phase in ("UNDOCK", "PIVOT"):
+        return "cradle"
+    if phase == "DEPART":
+        return "sun"
+    if phase in ("ACQUIRE", "FOLLOW_WALL"):
+        return "track"
+    if phase in ("RETURN", "APPROACH"):
         return "chase"
     if phase in ("TEAR", "INSPECT"):
         return "tear"
@@ -1270,11 +1357,25 @@ class Director:
         up = _UP
         u = DOCK_U
         od = np.array([DOCK_C[0], 0.0, DOCK_C[2]]) / math.hypot(DOCK_C[0], DOCK_C[2])
-        if shot == "cradle":                              # outboard of the cradle's exit end, looking back in
-            eye = DOCK_C + 0.35 * u + 1.85 * od + 0.80 * up
-            rest = DOCK_C + 0.15 * u - 0.05 * up
-            w = smoothstep((t_in - 1.0) / 4.0) if self.phase == "UNDOCK" else 0.0
-            return eye, rest + w * (0.55 * head + 0.45 * mid - rest), 52.0
+        if shot == "cradle":                              # inboard of the downstream end: the tube, the back-out, the pivot
+            n_in = MS.DOCK_N
+            eye = DOCK_C - 1.35 * u + 1.75 * n_in + 0.55 * up
+            rest = DOCK_C - 0.35 * u - 0.03 * up
+            # the aim leaves the cradle for the body once it moves, and stays on it (through the cut lead
+            # into the next phase: snapping back to the empty cradle read as a pan away)
+            w = 0.0 if self.phase == "DOCKED" else (smoothstep((t_in - 0.5) / 5.0) if self.phase == "UNDOCK" else 1.0)
+            return eye, rest + w * (0.5 * mid + 0.5 * (DOCK_C - 1.3 * u) - rest), 55.0
+        if shot == "sun":                                 # below, looking up the refracted sun, travelling with the body
+            if "sun" not in self.anchor:                  # (at SUN_FOLLOW, so it drifts across the sun as it goes)
+                self.anchor["sun"] = (mid + 1.8 * fwd, mid.copy(), fwd.copy())
+            c0, m0, f0 = self.anchor["sun"]
+            c = c0 + SUN_FOLLOW * (mid - m0)
+            eye = c - 2.7 * SUN_UW - 0.4 * f0
+            return eye, 0.75 * (c + 0.8 * SUN_UW) + 0.25 * mid, 70.0
+        if shot == "track":                               # alongside, inboard, looking past the body at the net streaming by
+            side = np.cross(fwd, up)
+            inb = side if float(side @ out) < 0 else -side
+            return mid + 1.9 * inb - 0.5 * fwd + 0.25 * up, mid + 0.4 * fwd - 0.4 * inb, 50.0
         if shot == "chase":                               # behind, above and a little outboard: along the wall
             return mid - 2.0 * fwd + 0.35 * out + 1.05 * up, mid + 0.7 * fwd - 0.15 * up, 50.0
         if shot == "tear":                                # inboard of the hole, the snake crossing in front of it
@@ -1327,7 +1428,7 @@ class Director:
         if want != self.shot:
             if want != self.want:
                 self.want, self.want_t = want, t
-                self.anchor.pop("tear_sgn" if want == "tear" else "dock_e" if want == "dock" else "", None)
+                self.anchor.pop({"tear": "tear_sgn", "dock": "dock_e", "sun": "sun"}.get(want, ""), None)
             if t - self.want_t >= CUT_LEAD:
                 self.shot, self.cut, self.want = want, True, None
                 self.shot_t = t
@@ -1366,9 +1467,10 @@ def composite_preview(frame, inset, sonar):
     return im
 
 
-FILM_TEST_AT = {"DOCKED": (2.0,), "UNDOCK": (3.0, 7.5, 14.0), "FOLLOW_WALL": (3.0,), "TEAR": (0.5,),
-                "INSPECT": (2.5, 8.0), "UTURN": (2.5,), "INSPECT_2": (6.0, 17.0), "APPROACH": (7.0,),
-                "TURN_IN": (2.0,), "FINAL": (10.0,), "CAPTURE": (4.0, 10.0)}
+FILM_TEST_AT = {"DOCKED": (2.0,), "UNDOCK": (2.0, 6.0, 10.5), "PIVOT": (2.0,), "DEPART": (3.0, 9.0),
+                "FOLLOW_WALL": (1.0,), "TEAR": (0.5,), "INSPECT": (3.0, 7.0, 11.0), "UTURN": (3.0,),
+                "INSPECT_2": (6.0, 12.0), "APPROACH": (7.0,), "TURN_IN": (3.0,), "FINAL": (6.0,),
+                "CAPTURE": (4.0, 10.0)}
 
 
 def run_film():

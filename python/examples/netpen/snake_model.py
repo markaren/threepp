@@ -91,6 +91,18 @@ Conventions and choices, each with its reason:
     so each substep adds +0.05 m v and +0.05 I omega back (selftest: coast-down keeps >= 99 %).
   * Buoyancy: gravity 0 (neutral) + a righting couple per link from buoyancy m g acting 5 mm above
     the centre of mass, so the chain stays upright.
+
+THRUSTERS (optional; params.thrusters, empty by default so the validation sweep is the paper's pure
+undulation). NTNU's later design, the underwater swimming manipulator behind Eelume, carries
+"side mounted thrusters that provide longitudinal thrust" and tunnel thruster modules
+(Sverdrup-Thygeson, Kelasidi, Pettersen, Gravdahl 2016, IFAC-PapersOnLine 49-23). thruster_layout()
+is that arrangement on this 9-link body: a pair of side-mounted ducted thrusters on the second module
+behind the head (longitudinal), a tunnel thruster behind the head and one ahead of the tail (lateral).
+Each is a force along its axis at its mounting point (so a lateral one also yaws the body), spun up
+with a first-order lag; electrical power from actuator-disc momentum theory, P = T (V + v_i) / eta,
+v_i = -V/2 + sqrt(V^2/4 + T / (2 rho A)), V the inflow along the axis. The thrust ratings and eta are
+assumptions of this model (stated in thruster_layout), not Eelume data. The fluid model does not see
+the thrusters' wash.
 """
 import argparse
 import math
@@ -140,10 +152,40 @@ class SnakeParams:
     g: float = 9.81
     ramp_time: float = 2.0               # alpha / omega / delta / pattern changes settle to 99 % in this
     phi0_tau: float = 0.5                # phi0 (steering) first-order-like settling (s)
+    thrusters: list = field(default_factory=list)   # [Thruster]; thruster_layout() for the USM set
+    rho: float = 1025.0                  # sea water (kg/m^3), thruster power only
+    thrust_eta: float = 0.5              # propeller x motor efficiency (assumed)
     extra: dict = field(default_factory=dict)
 
     def coef(self):
         return COEFFS[self.coeffs]
+
+
+@dataclass
+class Thruster:
+    """One thruster: on link `link` (0 = tail), at `pos` and thrusting along `axis`, both in the link's
+    (along toward the head, lateral to starboard, up) axes. Thrust in [t_min, t_max] N."""
+    name: str
+    link: int
+    pos: tuple
+    axis: tuple
+    t_max: float
+    t_min: float
+    duct_d: float                        # m, the disc area for the momentum-theory power
+    tau: float = 0.15                    # s, spin-up
+
+
+SIDE_THRUSTER_LINK, BOW_TUNNEL_LINK, STERN_TUNNEL_LINK = 6, 7, 1
+SIDE_THRUSTER_Y = 0.079                  # duct axis off the body axis: the 0.049 shell + a 0.03 duct
+
+
+def thruster_layout():
+    """The swimming-manipulator arrangement on the Mamba body (ratings assumed: small 4 N ducted
+    thrusters on the flanks, 2.5 N tunnel thrusters; a 0.5 m/s cruise needs ~1.8 N in total)."""
+    return [Thruster("side_port", SIDE_THRUSTER_LINK, (0.0, -SIDE_THRUSTER_Y, 0.0), (1.0, 0.0, 0.0), 4.0, -2.5, 0.05),
+            Thruster("side_stbd", SIDE_THRUSTER_LINK, (0.0, SIDE_THRUSTER_Y, 0.0), (1.0, 0.0, 0.0), 4.0, -2.5, 0.05),
+            Thruster("tunnel_bow", BOW_TUNNEL_LINK, (0.0, 0.0, 0.0), (0.0, 1.0, 0.0), 2.5, -2.5, 0.045),
+            Thruster("tunnel_stern", STERN_TUNNEL_LINK, (0.0, 0.0, 0.0), (0.0, 1.0, 0.0), 2.5, -2.5, 0.045)]
 
 
 def quat_to_R(q):
@@ -254,6 +296,7 @@ class Snake:
         self._omega = _Smooth([0.0], p.ramp_time)
         self._delta = _Smooth([0.0], p.ramp_time)
         self._phi0 = _Smooth([0.0], p.phi0_tau * 6.64 / 4.74)   # ~95 % in ~phi0_tau*... (smooth steering)
+        self._shape = _Smooth(np.zeros(nj), 0.4)                   # per-joint bend (follow-the-leader)
         self._psi = 0.0
         self.gait_on = False
         self.phi_ref = np.zeros(nj); self.phid_ref = np.zeros(nj); self.phidd_ref = np.zeros(nj)
@@ -266,6 +309,17 @@ class Snake:
         self.peak_torque = 0.0
         self.u = np.zeros(nj)
         self.extra_force = None                   # optional (n,3) world forces (tests / disturbances)
+        self.extra_torque = None                  # optional (n,3) world torques (contact at a point)
+        self.contact = None                       # optional f(pos, R, v, w) -> (F, T) (n,3) each, every substep
+        # Thrusters: link-local mounting point and axis in the body basis.
+        th = list(p.thrusters)
+        self.thrusters = th
+        B = np.stack([self.t_loc, self.lat_loc, self.up_loc], 1)   # (along, lateral, up) -> link-local
+        self.thr_link = np.array([t.link for t in th], dtype=int)
+        self.thr_pos = np.array([B @ np.asarray(t.pos, float) for t in th]).reshape(-1, 3)
+        self.thr_axis = np.array([B @ np.asarray(t.axis, float) for t in th]).reshape(-1, 3)
+        self.thr_cmd = np.zeros(len(th)); self.thr = np.zeros(len(th))
+        self.power_thr = 0.0; self.energy_thr = 0.0
         self._v_prev = None
         self._thd_prev = None
         self.last_v = np.zeros((n, 3)); self.last_w = np.zeros((n, 3))
@@ -360,15 +414,38 @@ class Snake:
         self._phi0.target = np.array([float(phi0)])
         self.gait_on = True
 
+    def set_shape(self, phi):
+        """Per-joint bend targets (rad, joint k = 0 at the tail), added to the gait; settles in 0.4 s."""
+        self._shape.target = np.asarray(phi, float).copy()
+        self.gait_on = True
+
     def set_current(self, v):
         self.current = np.array(v, dtype=float)
+
+    def set_thrust(self, cmd):
+        """Thrust commands (N), one per params.thrusters entry, clipped to each rating."""
+        th = self.thrusters
+        self.thr_cmd = np.clip(np.asarray(cmd, float), [t.t_min for t in th], [t.t_max for t in th])
+
+    def thrust_alloc(self, surge, yaw_moment, sway=0.0):
+        """thruster_layout() commands for a surge force (N, headward), a yaw moment (N m about +Y,
+        + turns toward +heading) and a sway force (N, to starboard), with the body straight. The two
+        tunnel thrusters sit 6 links apart about the chain's middle: a lateral force F at x ahead of
+        the middle yaws by -x F (+Y up, starboard lateral)."""
+        L = self.p.link_length
+        mid = (self.n - 1) / 2.0
+        xb, xs = (BOW_TUNNEL_LINK - mid) * L, (STERN_TUNNEL_LINK - mid) * L
+        # sway = Fb + Fs, yaw = -(xb Fb + xs Fs)
+        A = np.array([[1.0, 1.0], [-xb, -xs]])
+        fb, fs = np.linalg.solve(A, [sway, yaw_moment])
+        return np.array([0.5 * surge, 0.5 * surge, fb, fs])
 
     def gait_state(self):
         return dict(pattern=self._pattern, amp=self._amp.x.copy(), omega=float(self._omega.x[0]),
                     delta=float(self._delta.x[0]), phi0=float(self._phi0.x[0]))
 
     def _gait_step(self, dt):
-        for s in (self._amp, self._omega, self._delta, self._phi0):
+        for s in (self._amp, self._omega, self._delta, self._phi0, self._shape):
             s.step(dt)
         self._psi += float(self._omega.x[0]) * dt
         k = np.arange(self.n - 1)
@@ -380,9 +457,10 @@ class Snake:
         argd = om + k * ded
         argdd = omd + k * dedd
         lim = 0.98 * self.p.joint_limit
-        self.phi_ref = np.clip(A * s + self._phi0.x[0], -lim, lim)
-        self.phid_ref = Ad * s + A * c * argd + self._phi0.xd[0]
-        self.phidd_ref = Add * s + 2.0 * Ad * c * argd - A * s * argd ** 2 + A * c * argdd + self._phi0.xdd[0]
+        sh = self._shape
+        self.phi_ref = np.clip(A * s + self._phi0.x[0] + sh.x, -lim, lim)
+        self.phid_ref = Ad * s + A * c * argd + self._phi0.xd[0] + sh.xd
+        self.phidd_ref = Add * s + 2.0 * Ad * c * argd - A * s * argd ** 2 + A * c * argdd + self._phi0.xdd[0] + sh.xdd
 
     # ------------------------------------------------------------------ the substep hook
     def _substep(self, dt):
@@ -429,6 +507,13 @@ class Snake:
             T += np.cross(arm, B[:, None] * np.array([0.0, 1.0, 0.0]))
         if self.extra_force is not None:
             F += self.extra_force
+        if self.extra_torque is not None:
+            T += self.extra_torque
+        if self.contact is not None:
+            cF, cT = self.contact(pos, R, v, w)
+            F += cF; T += cT
+        if len(self.thrusters):
+            self._thrust_step(dt, R, v, w, F, T)
         # Gait: drive targets + the paper's feedforward.
         nj = self.n - 1
         if self.gait_on:
@@ -454,6 +539,30 @@ class Snake:
             lk.add_force(_v3(F[k])); lk.add_torque(_v3(T[k]))
         self.last_v, self.last_w = v, w
         self.time += dt
+
+    def _thrust_step(self, dt, R, v, w, F, T):
+        """Spin-up lag, the force at each mounting point (force + moment on its link), and the
+        momentum-theory power."""
+        p = self.p
+        tau = np.array([t.tau for t in self.thrusters])
+        self.thr += (self.thr_cmd - self.thr) * (1.0 - np.exp(-dt / tau))
+        P = 0.0
+        for j, t in enumerate(self.thrusters):
+            k = self.thr_link[j]
+            r = R[k] @ self.thr_pos[j]
+            a = R[k] @ self.thr_axis[j]
+            f = self.thr[j] * a
+            F[k] += f
+            T[k] += np.cross(r, f)
+            Tm = abs(self.thr[j])
+            if Tm > 1e-9:
+                vin = float((v[k] + np.cross(w[k], r) - self.current) @ a) * math.copysign(1.0, self.thr[j])
+                V = max(vin, 0.0)
+                A = math.pi * 0.25 * t.duct_d ** 2
+                vi = -0.5 * V + math.sqrt(0.25 * V * V + Tm / (2.0 * p.rho * A))
+                P += Tm * (V + vi) / p.thrust_eta
+        self.power_thr = P
+        self.energy_thr += P * dt
 
     def remove(self):
         self.world.remove_substep_callback(self._handle)
@@ -500,6 +609,13 @@ def selftest():
             lk.add_impulse(_v3(S.mass[k] * v0 * _yaw_dir(0.0)))
     Fpush = 0.5
     E.extra_force = np.tile([0.0, 0.0, Fpush], (E.n, 1))    # lateral (+Z), every link
+    # F: the side thrusters, 1 N each, body straight. G: the tunnel couple, 0.8 N m, no surge.
+    Fs = Snake(world, SnakeParams(thrusters=thruster_layout()), origin=(2 * D, 0, D), heading=0.0)
+    Gs = Snake(world, SnakeParams(thrusters=thruster_layout()), origin=(0, 0, 2 * D), heading=0.0)
+    Fs.set_thrust([1.0, 1.0, 0.0, 0.0])
+    M_G = 0.8
+    Gs.set_thrust(Gs.thrust_alloc(0.0, M_G, 0.0))
+    yawG = []
     com0 = A.com(); y0 = com0[1]
     fd_err = []; fk_err = []; step_err = []; root_err = []; vmax_y = 0.0; tilt_max = 0.0
     speeds_B = {}; speeds_C = {}
@@ -553,6 +669,10 @@ def selftest():
             comA20 = A.com(); headA = A.head_pose()[0]
         if t_now <= 3.0 and (s + 1) % 4 == 0:
             E_rec.append((t_now, E.velocities()[0].mean(0)[2]))
+        if abs(t_now - 20.0) < 0.5 * dt:
+            vF = Fs.velocities()[0].mean(0)
+        if 15.0 <= t_now <= 20.0 and (s + 1) % 24 == 0:
+            yawG.append((t_now, Gs.mean_heading()))
     # (a)
     report("a chain-velocity", len(fd_err) > 0 and max(fd_err) < 1e-3 and max(fk_err) < 1e-4,
            f"max rel err {max(fd_err):.2e} vs central FD of the link kinematics ({len(fd_err)} samples, links > 2 cm/s); "
@@ -587,9 +707,26 @@ def selftest():
     report("e added mass", abs(slope / pred - 1) < 0.01 and resid < 1e-4,
            f"lateral accel {slope:.5f} m/s^2 vs F/(m+mu_n) {pred:.5f} ({(slope / pred - 1) * 100:+.3f} %), residual {resid:.1e} m/s; "
            f"root bound |z| <= mu_n/m = {E.mu_n / E.p.mass:.3f}")
-    for S in (A, B, C, Dn, E):
+    # (f) thrust: straight body, terminal speed where 2 N = the tangential drag sum n c_t (v + v^2)
+    n_, ct = Fs.n, Fs.c_t
+    v_pred = (-1.0 + math.sqrt(1.0 + 4.0 * 2.0 / (n_ * ct))) / 2.0
+    vfwd = float(vF @ _yaw_dir(0.0))
+    report("f thrust", abs(vfwd / v_pred - 1) < 0.02 and abs(vF[2]) < 0.01,
+           f"2 x 1 N side thrust: {vfwd:.4f} m/s vs drag balance {v_pred:.4f} ({(vfwd / v_pred - 1) * 100:+.2f} %), "
+           f"sideways {vF[2]:+.4f} m/s; thruster power {Fs.power_thr:.2f} W")
+    # (g) the tunnel couple: steady yaw rate where M = sum c_n (x^2 r + |x|^3 r|r|) + n lam2 r
+    tg = np.array([r[0] for r in yawG]); yg = np.array([r[1] for r in yawG])
+    r_meas = float(np.polyfit(tg, yg, 1)[0])
+    xk = (np.arange(Gs.n) - (Gs.n - 1) / 2.0) * Gs.p.link_length
+    a2, a1 = Gs.c_n * np.sum(np.abs(xk) ** 3), Gs.c_n * np.sum(xk ** 2) + Gs.n * Gs.lam2
+    r_pred = (-a1 + math.sqrt(a1 * a1 + 4.0 * a2 * M_G)) / (2.0 * a2)
+    drift = float(np.linalg.norm(Gs.com() - np.array([0.0, 0.0, 2 * D])))
+    report("g tunnel couple", abs(r_meas / r_pred - 1) < 0.03 and drift < 0.05,
+           f"{M_G} N m: yaw rate {math.degrees(r_meas):+.3f} deg/s vs rotational drag {math.degrees(r_pred):+.3f} "
+           f"({(r_meas / r_pred - 1) * 100:+.2f} %, + = toward +heading), centre drift {drift * 100:.2f} cm")
+    for S in (A, B, C, Dn, E, Fs, Gs):
         S.remove()
-    del A, B, C, Dn, E, world
+    del A, B, C, Dn, E, Fs, Gs, world
     gc.collect()
     print("SELFTEST", "PASS" if ok else "FAIL")
     return ok
