@@ -28,12 +28,19 @@ Two things the demo's material law does not have, both optional:
 
   * a compaction cap (Material(cap_p0=..., cap_lambda=...)): elastic volumetric
     strain beyond what the pre-consolidation pressure p_c allows becomes plastic
-    compaction, hardening p_c = p0 exp(-e_vp / lambda). Without it the DP cone
+    compaction, hardening p_c = p0 exp(-e_vp / lambda), optionally bounded
+    (cap_pmax: p_c <= p_max, then it compacts at constant p_c). Without it the DP cone
     can only flow, never compact, and a loaded wheel's sinkage is mostly
     ELASTIC (measured: 59-64 % rebound at E = 3-10 MPa). Loose soil needs it.
   * the bin floor and walls accumulate the momentum THEY remove too
     (take_wall_force), the far end of the load path: with a body carrying W,
     floor reaction - soil weight = W is the independent closure check.
+
+A grousered wheel on a grid too coarse for its lugs is the classic
+EFFECTIVE-RADIUS model: a CYLINDER at r + h_g with the soil's own friction
+mu = tan(phi). jh_k > 0 (GranularMPM and GranularPatches) makes that friction
+build with the local slip ratio (wheel_mu, Janosi-Hanamoto) instead of jumping
+to the Coulomb ceiling: examples/warp_rover_slope.py.
 
 Stress units: E and cohesion in Pa, rho in kg/m^3, lengths in m. y is up.
 
@@ -47,6 +54,28 @@ KINEMATIC = 0
 FREE_Y = 1
 CYLINDER = 0
 BOX = 1
+# A rover wheel with grousers (GranularMPM only). size = (rim radius r, half-width,
+# grouser height h_g); lug = (lug thickness, lug count, -). The lugs are straight
+# transverse bars, rotated with the wheel's spin angle. A lug thinner than a cell
+# falls between the grid nodes, so the caller inflates it (see
+# examples/warp_rover_slope.py for the rule); the rim itself is Coulomb (mu).
+LUGGED = 2
+# The same wheel as its grouser ENVELOPE: a cylinder of radius r + h_g whose
+# nodes move with the rim tangentially (no-slip) and may only leave it normally:
+# the soil trapped between the lugs is carried, as if the lugs were infinitely
+# many. size and lug as LUGGED (lug is ignored).
+ENVELOPE = 3
+# Particle-level rim contact (on top of the node BC, which is the only force
+# channel in every mode). The default is NONE, on evidence (MGRU3 wheel, h = 16.7
+# mm, s = 0.3, D:/dev/rover_p1): on the grouser envelope, v1 and the velocity-only
+# contact both made the soil's force 4.5x noisier (DP std 0.036 -> 0.16 N) and
+# leaked ~5 % of the load past the bin-floor closure, to cut a penetration that
+# was only 0.06 h without them; on the lugged wheel the rim never touches the
+# soil, so they do nothing. The car-wheel v1 A/B found the same trade (7x
+# noise, +11 % rut density for 0.23 h -> 0).
+PC_NONE = 0          # node BC only: grains may creep ~0.5 h into the rim
+PC_PROJECT = 1       # fix v1: snap positions out of the skin (moves x, not F)
+PC_VELOCITY = 2      # strip the inward relative normal velocity in the skin; no teleport
 
 _K = None
 
@@ -74,7 +103,7 @@ def _compile():
         coh: float         # cohesion, as a log-strain offset of the cone
         tr_apex: float     # tr(eps) at the cone apex (0 without cohesion)
         apic: float
-        grav: float
+        grav: wp.vec3      # gravity, m/s^2 (a vec3 so a tilt bed is just a rotated g)
         vmax: float
         lo: wp.vec3        # bin interior: floor at lo.y, walls at lo/hi x and z
         hi: wp.vec3
@@ -84,6 +113,174 @@ def _compile():
         bulk: float        # la + 2 mu / 3
         cap_p0: float      # compaction cap: initial pre-consolidation pressure, Pa
         cap_lam: float     # plastic volumetric strain per e-fold of cap pressure (0 = off)
+        cap_pmax: float    # upper bound on the cap pressure, Pa (0 = unbounded)
+        prad: float        # half a particle spacing: a grain's reach past its centre
+        pcontact: int      # PC_NONE / PC_PROJECT / PC_VELOCITY
+        jh_k: float        # slip-mobilised wheel friction (see wheel_mu); 0 = plain Coulomb
+
+    @wp.func
+    def lug_hit(d: wp.vec3, ax: wp.vec3, sz: wp.vec3, lug: wp.vec3, ang: float, shape: int,
+                skin: float, side: float):
+        """Is the point d (relative to the hub) in a LUGGED/ENVELOPE wheel, grown
+        by `skin` on its outer surfaces and `side` past its side faces?
+        Returns (hit, outward normal, lever): the lever is the point on the body
+        whose velocity v_b + omega x lever the contact enforces.
+
+        LUGGED: the rim (radius r, Coulomb) or the nearest lug, a box r..r+h_g
+        radially and lug[0] thick, with the nearest face's normal (its top or
+        one of its two driving faces). ENVELOPE: a cylinder r + h_g."""
+        a = wp.dot(d, ax)
+        rad = d - ax * a
+        rl = wp.length(rad)
+        nr = rad * (1.0 / wp.max(rl, 1.0e-9))
+        hit = int(0)
+        n = nr
+        lever = rad
+        if wp.abs(a) <= sz[1] + side:
+            if shape == 3:
+                re = sz[0] + sz[2]
+                if rl < re + skin:
+                    hit = 1
+                    lever = nr * re
+            else:
+                if rl < sz[0] + skin:
+                    hit = 1
+                    lever = nr * sz[0]
+                elif rl < sz[0] + sz[2] + skin and lug[1] > 0.5:
+                    # The wheel's in-plane frame (e1, e2 = ax x e1); lug k points
+                    # along angle ang + k * pitch, a right-handed spin about ax.
+                    ref = wp.vec3(0.0, 1.0, 0.0)
+                    if wp.abs(ax[1]) > 0.9:
+                        ref = wp.vec3(1.0, 0.0, 0.0)
+                    e1 = wp.normalize(ref - ax * wp.dot(ax, ref))
+                    e2 = wp.cross(ax, e1)
+                    pitch = 6.283185307 / lug[1]
+                    phi = wp.atan2(wp.dot(rad, e2), wp.dot(rad, e1)) - ang
+                    kq = wp.round(phi / pitch)
+                    dl = phi - kq * pitch
+                    tau = rl * wp.sin(dl)          # offset from the lug's mid-plane
+                    rho = rl * wp.cos(dl)          # distance along the lug
+                    ht = 0.5 * lug[0]
+                    if wp.abs(tau) < ht + skin and rho < sz[0] + sz[2] + skin:
+                        hit = 1
+                        th = ang + kq * pitch
+                        ul = e1 * wp.cos(th) + e2 * wp.sin(th)
+                        if sz[0] + sz[2] - rho < ht - wp.abs(tau):
+                            n = ul
+                        else:
+                            n = wp.cross(ax, ul) * wp.sign(tau)
+        return hit, n, lever
+
+    @wp.func
+    def vel_contact(xq: wp.vec3, vq: wp.vec3, c: wp.vec3, vb: wp.vec3, om: wp.vec3,
+                    ax: wp.vec3, shape: int, sz: wp.vec3, eps: float, prad: float) -> wp.vec3:
+        """Velocity-only particle contact (PC_VELOCITY): a grain whose centre would
+        end the substep within the body's skin (eps + half a spacing, as
+        project_out) loses its inward normal velocity RELATIVE to the body. No
+        position change, so F and the particle's volume stay consistent (the v1
+        snap moved x without F and densified the rut ~11 %).
+
+        Only CYLINDER/BOX geometry: g2p passes a lugged wheel's RIM (or its
+        envelope). On the lugs themselves it was measured to be a hidden force
+        channel: the momentum it strips is not booked, and with 24 lugs pushing
+        grains the bin floor took 1.46 N instead of N."""
+        d = xq - c
+        hit = int(0)
+        n = wp.vec3(0.0, 1.0, 0.0)
+        lever = d
+        if shape == 0:
+            a = wp.dot(d, ax)
+            rad = d - ax * a
+            rl = wp.length(rad)
+            rs = sz[0] + eps + prad
+            hw = sz[1] + prad
+            if wp.abs(a) < hw and rl < rs:
+                hit = 1
+                if hw - wp.abs(a) < rs - rl:
+                    n = ax * wp.sign(a)
+                else:
+                    n = rad * (1.0 / wp.max(rl, 1.0e-9))
+        elif shape == 1:
+            sk = eps + prad
+            qx = wp.abs(d[0]) - sz[0]
+            qy = wp.abs(d[1]) - sz[1]
+            qz = wp.abs(d[2]) - sz[2]
+            if wp.max(qx, wp.max(qy, qz)) < sk:
+                hit = 1
+                if qy >= qx and qy >= qz:
+                    n = wp.vec3(0.0, wp.sign(d[1]), 0.0)
+                elif qx >= qz:
+                    n = wp.vec3(wp.sign(d[0]), 0.0, 0.0)
+                else:
+                    n = wp.vec3(0.0, 0.0, wp.sign(d[2]))
+        vo = vq
+        if hit == 1:
+            rel = vq - (vb + wp.cross(om, lever))
+            vn = wp.dot(rel, n)
+            if vn < 0.0:
+                vo = vq - n * vn
+        return vo
+
+    @wp.func
+    def project_out(xq: wp.vec3, vq: wp.vec3, c: wp.vec3, vb: wp.vec3, om: wp.vec3,
+                    ax: wp.vec3, shape: int, sz: wp.vec3, eps: float, prad: float):
+        """A particle that advected into a collider -> back onto its surface.
+
+        The grid BC constrains NODES inside the body (r + eps); nothing stops a
+        particle's position from following the interpolated velocity across the
+        skin, and under a loaded rim the grains came to rest ~0.55 h inside it
+        (an A/B against Newton's MPM, which projects). The skin here is
+        eps + half a particle spacing on the rim (and half a spacing past the
+        side faces, which the grid BC does not inflate): a grain's centre stays
+        half a spacing outside the grid BC's surface, so the grain surface
+        (centre + half a spacing, the testbed's definition) TOUCHES the rim
+        bottom (r + eps) -- grains on the rim, no gap, no overlap.
+        The velocity keeps its tangential part relative to the body; only an
+        inward normal component is removed (no friction: that is the grid's)."""
+        d = xq - c
+        hit = int(0)
+        n = wp.vec3(0.0, 1.0, 0.0)
+        xo = xq
+        if shape == 0:
+            a = wp.dot(d, ax)
+            rad = d - ax * a
+            rl = wp.length(rad)
+            rs = sz[0] + eps + prad
+            hw = sz[1] + prad
+            if wp.abs(a) < hw and rl < rs:
+                hit = 1
+                if hw - wp.abs(a) < rs - rl:
+                    # In through a side face (a rut wall): out sideways, the
+                    # short way, not a jump across the wheel to the rim.
+                    n = ax * wp.sign(a)
+                    xo = xq + n * (hw - wp.abs(a))
+                else:
+                    n = rad * (1.0 / wp.max(rl, 1.0e-9))
+                    xo = c + ax * a + n * rs
+        else:
+            sk = eps + prad
+            qx = wp.abs(d[0]) - sz[0]
+            qy = wp.abs(d[1]) - sz[1]
+            qz = wp.abs(d[2]) - sz[2]
+            if wp.max(qx, wp.max(qy, qz)) < sk:
+                hit = 1
+                # The nearest face (the grid kernel's normal choice).
+                if qy >= qx and qy >= qz:
+                    n = wp.vec3(0.0, wp.sign(d[1]), 0.0)
+                    xo = wp.vec3(xq[0], c[1] + n[1] * (sz[1] + sk), xq[2])
+                elif qx >= qz:
+                    n = wp.vec3(wp.sign(d[0]), 0.0, 0.0)
+                    xo = wp.vec3(c[0] + n[0] * (sz[0] + sk), xq[1], xq[2])
+                else:
+                    n = wp.vec3(0.0, 0.0, wp.sign(d[2]))
+                    xo = wp.vec3(xq[0], xq[1], c[2] + n[2] * (sz[2] + sk))
+        vo = vq
+        if hit == 1:
+            rel = vq - (vb + wp.cross(om, xo - c))
+            vn = wp.dot(rel, n)
+            if vn < 0.0:
+                vo = vq - n * vn
+        return xo, vo
 
     @wp.func
     def collide(v: wp.vec3, n: wp.vec3, vc: wp.vec3, mu: float) -> wp.vec3:
@@ -99,6 +296,24 @@ def _compile():
         else:
             vt = wp.vec3(0.0, 0.0, 0.0)
         return vc + vt
+
+    @wp.func
+    def wheel_mu(v: wp.vec3, n: wp.vec3, vc: wp.vec3, vb: wp.vec3, tip: float, mu: float,
+                 k: float) -> float:
+        """Slip-mobilised wheel-soil friction (k > 0): the Janosi-Hanamoto law
+        tau = tau_max (1 - exp(-j / K)) with the shear displacement j read off
+        the LOCAL slip ratio, mu_eff = mu (1 - exp(-k |v_t,rel| / max(omega r, |v|))).
+        For soil at rest under the wheel |v_t,rel| / (omega r) is the slip s, so
+        k ~ l / (2 K) (contact length over twice the shear-deformation modulus,
+        ~3 for sand): the traction builds with slip instead of jumping to the
+        Coulomb ceiling at the first sliding node. Rate-independent (a velocity
+        RATIO). k = 0: plain Coulomb."""
+        if k <= 0.0:
+            return mu
+        rel = v - vc
+        vt = rel - n * wp.dot(rel, n)
+        ref = wp.max(wp.max(tip, wp.length(vb)), 0.02)
+        return mu * (1.0 - wp.exp(-k * wp.length(vt) / ref))
 
     @wp.func
     def bspline(f: float) -> wp.vec3:
@@ -157,8 +372,13 @@ def _compile():
              bshape: wp.array(dtype=int), bsize: wp.array(dtype=wp.vec3),
              bmu: wp.array(dtype=float),
              react: wp.array(dtype=wp.vec3), rtorque: wp.array(dtype=wp.vec3),
-             wreact: wp.array(dtype=wp.vec3), dt: float):
+             wreact: wp.array(dtype=wp.vec3), dt: float,
+             blug: wp.array(dtype=wp.vec3), bangle: wp.array(dtype=float),
+             grav: wp.array(dtype=wp.vec3)):
         """Momentum -> velocity, gravity, the bodies (with reaction), the bin.
+
+        Gravity is `grav[0]`, a device array (not P.grav, which a captured graph
+        would freeze by value), so set_gravity() moves it between frames.
 
         `wreact` collects the impulse the bin floor and walls take out of the
         grid: the independent end of the load path (W + soil weight)."""
@@ -167,7 +387,7 @@ def _compile():
         if m <= 1.0e-12:
             gv[i, j, k] = wp.vec3(0.0, 0.0, 0.0)
             return
-        v = gv[i, j, k] * (1.0 / m) + wp.vec3(0.0, P.grav * dt, 0.0)
+        v = gv[i, j, k] * (1.0 / m) + grav[0] * dt
         p = wp.vec3(P.origin[0] + float(i) * P.h, P.origin[1] + float(j) * P.h,
                     P.origin[2] + float(k) * P.h)
         for q in range(nb):
@@ -186,6 +406,8 @@ def _compile():
                     hit = 1
                     n = rad * (1.0 / wp.max(rl, 1.0e-9))
                     lever = n * sz[0]
+            elif bshape[q] >= 2:
+                hit, n, lever = lug_hit(d, baxis[q], sz, blug[q], bangle[q], bshape[q], P.eps, 0.0)
             else:
                 qx = wp.abs(d[0]) - sz[0]
                 qy = wp.abs(d[1]) - sz[1]
@@ -201,7 +423,19 @@ def _compile():
                         n = wp.vec3(0.0, 0.0, wp.sign(d[2]))
             if hit == 1:
                 before = v
-                v = collide(v, n, bvel[q] + wp.cross(bomega[q], lever), bmu[q])
+                vc = bvel[q] + wp.cross(bomega[q], lever)
+                if bshape[q] == 3:
+                    # Grouser envelope: no-slip. The node moves with the rim
+                    # tangentially whether it approaches or leaves; only an
+                    # outward normal velocity survives.
+                    vn = wp.dot(v - vc, n)
+                    v = vc + n * wp.max(vn, 0.0)
+                else:
+                    muq = bmu[q]
+                    if bshape[q] == 0:
+                        muq = wheel_mu(v, n, vc, bvel[q], wp.abs(wp.dot(bomega[q], baxis[q])) * sz[0],
+                                       muq, P.jh_k)
+                    v = collide(v, n, vc, muq)
                 dp = (before - v) * m        # impulse the soil put INTO the body
                 wp.atomic_add(react, q, dp)
                 wp.atomic_add(rtorque, q, wp.cross(lever, dp))
@@ -229,7 +463,11 @@ def _compile():
     def g2p(x: wp.array(dtype=wp.vec3), v: wp.array(dtype=wp.vec3),
             C: wp.array(dtype=wp.mat33), F: wp.array(dtype=wp.mat33),
             evp: wp.array(dtype=float),
-            gv: wp.array3d(dtype=wp.vec3), P: Params, dt: float):
+            gv: wp.array3d(dtype=wp.vec3), P: Params, dt: float,
+            nb: int, bpos: wp.array(dtype=wp.vec3), bvel: wp.array(dtype=wp.vec3),
+            bomega: wp.array(dtype=wp.vec3), baxis: wp.array(dtype=wp.vec3),
+            bshape: wp.array(dtype=int), bsize: wp.array(dtype=wp.vec3),
+            blug: wp.array(dtype=wp.vec3), bangle: wp.array(dtype=float)):
         p = wp.tid()
         xp = x[p]
         gx = (xp[0] - P.origin[0]) * P.inv_h
@@ -276,6 +514,10 @@ def _compile():
             # excess becomes plastic compaction, which hardens the cap along a
             # normal-compression line  p_c = p0 exp(-evp / lam).
             pc = P.cap_p0 * wp.exp(-evp[p] / P.cap_lam)
+            if P.cap_pmax > 0.0:
+                # Bounded cap: past p_max the soil compacts at constant p_c
+                # instead of hardening without limit.
+                pc = wp.min(pc, P.cap_pmax)
             trc = -pc / P.bulk
             if tr < trc:
                 dv = tr - trc
@@ -305,8 +547,40 @@ def _compile():
                 s2 = wp.exp(e2 - h2 * sc)
         F[p] = U * wp.diag(wp.vec3(s0, s1, s2)) * wp.transpose(V)
         C[p] = nc
-        v[p] = nv
         q = xp + nv * dt
+        # Keep the advected particle out of every collider (see project_out).
+        # body_step already ran: bpos is the pose at the END of this substep,
+        # the same instant as q. This is a KINEMATIC correction and is NOT
+        # booked as force: the grid BC impulse (react) stays the only channel
+        # between soil and body, so Fy/W and the bin-floor reaction still close.
+        if P.pcontact == 1:
+            for ib in range(nb):
+                # A lugged wheel projects against its rim (LUGGED) or its
+                # envelope (ENVELOPE), as a cylinder.
+                shp = bshape[ib]
+                szb = bsize[ib]
+                if shp == 3:
+                    szb = wp.vec3(szb[0] + szb[2], szb[1], 0.0)
+                if shp >= 2:
+                    shp = 0
+                q, nv = project_out(q, nv, bpos[ib], bvel[ib], bomega[ib], baxis[ib], shp,
+                                    szb, P.eps, P.prad)
+        elif P.pcontact == 2:
+            # Velocity-only: judged at the advected position against the body at
+            # the end of the substep (body_step already ran), then re-advected.
+            # Like v1 this is NOT booked as force: the grid BC impulse stays the
+            # only channel between soil and body. The rim only (see vel_contact).
+            for ib in range(nb):
+                shp = bshape[ib]
+                szb = bsize[ib]
+                if shp == 3:
+                    szb = wp.vec3(szb[0] + szb[2], szb[1], 0.0)
+                if shp >= 2:
+                    shp = 0
+                nv = vel_contact(q, nv, bpos[ib], bvel[ib], bomega[ib], baxis[ib], shp,
+                                 szb, P.eps, P.prad)
+            q = xp + nv * dt
+        v[p] = nv
         pad = 0.05 * P.h
         x[p] = wp.vec3(wp.min(wp.max(q[0], P.lo[0] + pad), P.hi[0] - pad),
                        wp.min(wp.max(q[1], P.lo[1] + pad),
@@ -319,9 +593,13 @@ def _compile():
                   mass: wp.array(dtype=float), damp: wp.array(dtype=float),
                   react: wp.array(dtype=wp.vec3), rtorque: wp.array(dtype=wp.vec3),
                   fsum: wp.array(dtype=wp.vec3), tsum: wp.array(dtype=wp.vec3),
-                  nsum: wp.array(dtype=float), dt: float):
+                  nsum: wp.array(dtype=float), dt: float,
+                  bomega: wp.array(dtype=wp.vec3), baxis: wp.array(dtype=wp.vec3),
+                  bangle: wp.array(dtype=float)):
         """One thread per body: the soil's force this substep, then y'' = (F_y - W)/m."""
         q = wp.tid()
+        # The spin angle about the axis: only a LUGGED wheel's grousers read it.
+        bangle[q] = bangle[q] + wp.dot(bomega[q], baxis[q]) * dt
         f = react[q] * (1.0 / dt)
         t = rtorque[q] * (1.0 / dt)
         vel = bvel[q]
@@ -344,9 +622,10 @@ class Material:
     """Soil constants in SI. cohesion in Pa, phi in degrees."""
 
     def __init__(self, E=3.0e6, nu=0.3, rho=1700.0, phi_deg=36.0, cohesion=0.0, apic=0.94,
-                 cap_p0=0.0, cap_lambda=0.0):
+                 cap_p0=0.0, cap_lambda=0.0, cap_pmax=0.0):
         self.E, self.nu, self.rho = float(E), float(nu), float(rho)
         self.cap_p0, self.cap_lambda = float(cap_p0), float(cap_lambda)
+        self.cap_pmax = float(cap_pmax)     # bound on the cap pressure, Pa (0 = unbounded)
         self.phi_deg, self.cohesion, self.apic = float(phi_deg), float(cohesion), float(apic)
 
     @property
@@ -376,7 +655,8 @@ class GranularMPM:
 
     def __init__(self, material, h, lo, hi, fill_height, dt, device="cuda:0",
                  ppc_spacing=0.5, headroom=0.3, max_bodies=4, mu_floor=0.6,
-                 mu_wall=0.3, eps_cells=0.25, vmax=8.0, seed=3):
+                 mu_wall=0.3, eps_cells=0.25, vmax=8.0, seed=3, gravity=(0.0, -9.81, 0.0),
+                 particle_contact=PC_NONE, jh_k=0.0):
         K = _compile()
         wp = K["wp"]
         self.wp, self.K = wp, K
@@ -427,7 +707,8 @@ class GranularMPM:
         P.coh = math.sqrt(2.0) * B / (2.0 * m.mu)
         P.tr_apex = P.coh / P.dp_k if P.dp_k > 0 else 0.0
         P.apic = m.apic
-        P.grav = -9.81
+        self.gravity = np.asarray(gravity, np.float64)
+        P.grav = wp.vec3(*self.gravity)
         P.vmax = vmax
         P.lo = wp.vec3(*self.lo)
         P.hi = wp.vec3(*self.hi)
@@ -437,6 +718,10 @@ class GranularMPM:
         P.bulk = m.la + 2.0 * m.mu / 3.0
         P.cap_p0 = m.cap_p0
         P.cap_lam = m.cap_lambda
+        P.cap_pmax = m.cap_pmax
+        P.prad = 0.5 * pd
+        P.pcontact = int(particle_contact)
+        P.jh_k = float(jh_k)     # slip-mobilised wheel friction (wheel_mu); 0 = Coulomb
         self.P = P
         self.eps = P.eps
 
@@ -448,6 +733,9 @@ class GranularMPM:
         self.evp = wp.zeros(self.n, dtype=float, device=device)
         self.gm = wp.zeros(dims, dtype=float, device=device)
         self.gv = wp.zeros(dims, dtype=wp.vec3, device=device)
+        # gravity lives on the device: the grid kernel reads it, so a new vector
+        # (set_gravity) reaches an already captured graph
+        self.grav_d = wp.array(np.asarray([self.gravity], np.float32), dtype=wp.vec3, device=device)
 
         nb = max_bodies
         self.nb = 0
@@ -462,6 +750,8 @@ class GranularMPM:
         self.bload = wp.zeros(nb, dtype=float, device=device)
         self.bmass = wp.ones(nb, dtype=float, device=device)
         self.bdamp = wp.zeros(nb, dtype=float, device=device)
+        self.blug = z3()
+        self.bangle = wp.zeros(nb, dtype=float, device=device)
         self.react, self.rtorque = z3(), z3()
         self.fsum, self.tsum = z3(), z3()
         self.nsum = wp.zeros(nb, dtype=float, device=device)
@@ -478,8 +768,10 @@ class GranularMPM:
         arr.assign(a)
 
     def add_body(self, shape, size, pos, vel=(0, 0, 0), omega=(0, 0, 0), axis=(0, 0, 1),
-                 mu=0.6, mode=KINEMATIC, load=0.0, mass=1.0, damp=0.0):
-        """size: CYLINDER (radius, half-width, -); BOX (half extents)."""
+                 mu=0.6, mode=KINEMATIC, load=0.0, mass=1.0, damp=0.0, lug=(0.0, 0.0, 0.0)):
+        """size: CYLINDER (radius, half-width, -); BOX (half extents);
+        LUGGED / ENVELOPE (rim radius, half-width, grouser height) with
+        lug = (lug thickness, lug count, -)."""
         i = self.nb
         assert i < self.max_bodies
         self.nb += 1
@@ -494,6 +786,8 @@ class GranularMPM:
         self._set(self.bload, i, load)
         self._set(self.bmass, i, mass)
         self._set(self.bdamp, i, damp)
+        self._set(self.blug, i, lug)
+        self._set(self.bangle, i, 0.0)
         self._graph = None
         return i
 
@@ -507,6 +801,13 @@ class GranularMPM:
 
     def body_state(self, i):
         return self.bpos.numpy()[i].astype(np.float64), self.bvel.numpy()[i].astype(np.float64)
+
+    def set_gravity(self, g):
+        """New gravity vector (m/s^2) from the next substep on; a captured graph
+        stays valid (the grid kernel reads a device array)."""
+        self.gravity = np.asarray(g, np.float64)
+        self.P.grav = self.wp.vec3(*self.gravity)
+        self.grav_d.assign(np.asarray([self.gravity], np.float32))
 
     def take_mean_force(self):
         """Mean soil force and torque on each body since the last call (N, N m)."""
@@ -529,14 +830,17 @@ class GranularMPM:
         wp.launch(K["grid"], dim=self.dims, device=dev,
                   inputs=[self.gm, self.gv, self.P, self.nb, self.bpos, self.bvel,
                           self.bomega, self.baxis, self.bshape, self.bsize, self.bmu,
-                          self.react, self.rtorque, self.wreact, self.dt])
+                          self.react, self.rtorque, self.wreact, self.dt, self.blug, self.bangle,
+                          self.grav_d])
         if self.nb:
             wp.launch(K["body_step"], dim=self.nb, device=dev,
                       inputs=[self.bpos, self.bvel, self.bmode, self.bload, self.bmass,
                               self.bdamp, self.react, self.rtorque, self.fsum, self.tsum,
-                              self.nsum, self.dt])
+                              self.nsum, self.dt, self.bomega, self.baxis, self.bangle])
         wp.launch(K["g2p"], dim=self.n, device=dev,
-                  inputs=[self.x, self.v, self.C, self.F, self.evp, self.gv, self.P, self.dt])
+                  inputs=[self.x, self.v, self.C, self.F, self.evp, self.gv, self.P, self.dt,
+                          self.nb, self.bpos, self.bvel, self.bomega, self.baxis, self.bshape,
+                          self.bsize, self.blug, self.bangle])
 
     def take_wall_force(self):
         """Mean force the soil put on the bin floor + walls since the last call, N."""
@@ -547,7 +851,9 @@ class GranularMPM:
 
     @property
     def soil_weight(self):
-        return self.n * self.P.pmass * 9.81
+        # The load the floor carries: the soil's weight along -y (the bed frame's
+        # normal). A tilted g puts the rest on the walls.
+        return self.n * self.P.pmass * -float(self.gravity[1])
 
     def step(self, nsub, graph=True):
         """Advance `nsub` substeps; the first call per nsub captures a CUDA graph."""
@@ -629,7 +935,7 @@ def _compile_patched():
         coh: float
         tr_apex: float
         apic: float
-        grav: float
+        grav: wp.vec3      # gravity, m/s^2 (see Params.grav)
         vmax: float
         mu_floor: float
         mu_wall: float
@@ -637,6 +943,9 @@ def _compile_patched():
         bulk: float
         cap_p0: float
         cap_lam: float
+        cap_pmax: float    # see Params.cap_pmax
+        pcontact: int      # PC_NONE or PC_PROJECT (v1 snap-out; see GranularMPM)
+        jh_k: float        # see Params.jh_k
         pd: float
         hf_ox: float
         hf_oz: float
@@ -666,6 +975,88 @@ def _compile_patched():
         else:
             vt = wp.vec3(0.0, 0.0, 0.0)
         return vc + vt
+
+    @wp.func
+    def pproject(xq: wp.vec3, vq: wp.vec3, c: wp.vec3, vb: wp.vec3, om: wp.vec3,
+                 ax: wp.vec3, sz: wp.vec3, eps: float, prad: float):
+        """GranularMPM's project_out for this set's one shape, the wheel: a
+        particle that advected inside r + eps + half a spacing goes back onto that
+        surface (a side face: out sideways), and loses only its inward velocity
+        relative to the rim. Grain surface = centre + half a spacing = the rim
+        bottom (r + eps), so the grains touch the rim instead of sitting ~0.5 h
+        inside it."""
+        d = xq - c
+        a = wp.dot(d, ax)
+        rad = d - ax * a
+        rl = wp.length(rad)
+        rs = sz[0] + eps + prad
+        hw = sz[1] + prad
+        xo = xq
+        vo = vq
+        if wp.abs(a) < hw and rl < rs:
+            n = rad * (1.0 / wp.max(rl, 1.0e-9))
+            if hw - wp.abs(a) < rs - rl:
+                n = ax * wp.sign(a)
+                xo = xq + n * (hw - wp.abs(a))
+            else:
+                xo = c + ax * a + n * rs
+            rel = vq - (vb + wp.cross(om, xo - c))
+            vn = wp.dot(rel, n)
+            if vn < 0.0:
+                vo = vq - n * vn
+        return xo, vo
+
+    @wp.func
+    def pwheel_mu(v: wp.vec3, n: wp.vec3, vc: wp.vec3, vb: wp.vec3, tip: float, mu: float,
+                  k: float) -> float:
+        """GranularMPM's wheel_mu (slip-mobilised friction; k = 0: Coulomb)."""
+        if k <= 0.0:
+            return mu
+        rel = v - vc
+        vt = rel - n * wp.dot(rel, n)
+        ref = wp.max(wp.max(tip, wp.length(vb)), 0.02)
+        return mu * (1.0 - wp.exp(-k * wp.length(vt) / ref))
+
+    @wp.func
+    def plug_hit(d: wp.vec3, ax: wp.vec3, r: float, hw: float, lug: wp.vec3, ang: float,
+                 skin: float):
+        """GranularMPM's lug_hit for a LUGGED wheel (set_lugs): the rim (radius r)
+        or the nearest grouser, a box r..r+h_g radially and lug[0] thick, with
+        lug = (thickness, count, h_g). Returns (hit, outward normal, lever), the
+        lever being the point on the wheel whose velocity the contact enforces."""
+        a = wp.dot(d, ax)
+        rad = d - ax * a
+        rl = wp.length(rad)
+        nr = rad * (1.0 / wp.max(rl, 1.0e-9))
+        hit = int(0)
+        n = nr
+        lever = rad
+        if wp.abs(a) <= hw:
+            if rl < r + skin:
+                hit = 1
+                lever = nr * r
+            elif rl < r + lug[2] + skin:
+                ref = wp.vec3(0.0, 1.0, 0.0)
+                if wp.abs(ax[1]) > 0.9:
+                    ref = wp.vec3(1.0, 0.0, 0.0)
+                e1 = wp.normalize(ref - ax * wp.dot(ax, ref))
+                e2 = wp.cross(ax, e1)
+                pitch = 6.283185307 / lug[1]
+                phi = wp.atan2(wp.dot(rad, e2), wp.dot(rad, e1)) - ang
+                kq = wp.round(phi / pitch)
+                dl = phi - kq * pitch
+                tau = rl * wp.sin(dl)          # offset from the lug's mid-plane
+                rho = rl * wp.cos(dl)          # distance along the lug
+                ht = 0.5 * lug[0]
+                if wp.abs(tau) < ht + skin and rho < r + lug[2] + skin:
+                    hit = 1
+                    th = ang + kq * pitch
+                    ul = e1 * wp.cos(th) + e2 * wp.sin(th)
+                    if r + lug[2] - rho < ht - wp.abs(tau):
+                        n = ul
+                    else:
+                        n = wp.cross(ax, ul) * wp.sign(tau)
+        return hit, n, lever
 
     @wp.func
     def pspline(f: float) -> wp.vec3:
@@ -1165,33 +1556,59 @@ def _compile_patched():
              bpos: wp.array(dtype=wp.vec3), bvel: wp.array(dtype=wp.vec3),
              bomega: wp.array(dtype=wp.vec3), baxis: wp.array(dtype=wp.vec3),
              bsize: wp.array(dtype=wp.vec3), bmu: wp.array(dtype=float),
-             react: wp.array(dtype=wp.vec3), rtorque: wp.array(dtype=wp.vec3), dt: float):
+             react: wp.array(dtype=wp.vec3), rtorque: wp.array(dtype=wp.vec3), dt: float,
+             bsnap: wp.array2d(dtype=wp.vec3), grav: wp.array(dtype=wp.vec3),
+             blug: wp.array(dtype=wp.vec3), bangle: wp.array(dtype=float)):
+        # gravity: grav[0], a device array (see GranularMPM's grid)
         i, j, kk = wp.tid()
         q = i // P.nx
         li = i - q * P.nx
         zero = wp.vec3(0.0, 0.0, 0.0)
+        if li == 0 and j == 0 and kk == 0:
+            # The wheel pose g2p projects particles against: the hub at the END
+            # of this substep, predicted with this substep's velocity. g2p's
+            # threads 0..K-1 rewrite bpos/bvel while the particle threads run,
+            # so the particles must not read those (a race); the prediction
+            # misses the vertical DOF's update by dt^2 a, far below a micron.
+            bsnap[q, 0] = bpos[q] + bvel[q] * dt
+            bsnap[q, 1] = bvel[q]
         gv_next[i, j, kk] = zero
         m = gm[i, j, kk]
         gm[i, j, kk] = 0.0
         if m <= 1.0e-12:
             gv[i, j, kk] = zero
             return
-        v = gv[i, j, kk] * (1.0 / m) + wp.vec3(0.0, P.grav * dt, 0.0)
+        v = gv[i, j, kk] * (1.0 / m) + grav[0] * dt
         ox = float(pc[q, 0]) * P.h
         oz = float(pc[q, 1]) * P.h
         p = wp.vec3(ox + float(li) * P.h, P.oy + float(j) * P.h, oz + float(kk) * P.h)
-        # This block's own wheel (a cylinder of radius sz[0], half-width sz[1]).
+        # This block's own wheel: a cylinder of radius sz[0], half-width sz[1], or
+        # with grousers (blug count > 0, set_lugs) the rim plus its lugs at the
+        # wheel's spin angle, as GranularMPM's LUGGED wheel (plain Coulomb faces).
         d = p - bpos[q]
         sz = bsize[q]
         ax = baxis[q]
-        aa = wp.dot(d, ax)
-        rad = d - ax * aa
-        rl = wp.length(rad)
-        if wp.abs(aa) <= sz[1] and rl < sz[0] + P.eps:
-            n = rad * (1.0 / wp.max(rl, 1.0e-9))
-            lever = n * sz[0]
+        lg = blug[q]
+        hit = int(0)
+        n = wp.vec3(0.0, 1.0, 0.0)
+        lever = d
+        if lg[1] > 0.5:
+            hit, n, lever = plug_hit(d, ax, sz[0], sz[1], lg, bangle[q], P.eps)
+        else:
+            aa = wp.dot(d, ax)
+            rad = d - ax * aa
+            rl = wp.length(rad)
+            if wp.abs(aa) <= sz[1] and rl < sz[0] + P.eps:
+                hit = 1
+                n = rad * (1.0 / wp.max(rl, 1.0e-9))
+                lever = n * sz[0]
+        if hit == 1:
             before = v
-            v = pcollide(v, n, bvel[q] + wp.cross(bomega[q], lever), bmu[q])
+            vcq = bvel[q] + wp.cross(bomega[q], lever)
+            muq = bmu[q]
+            if lg[1] <= 0.5:
+                muq = pwheel_mu(v, n, vcq, bvel[q], wp.abs(wp.dot(bomega[q], ax)) * sz[0], muq, P.jh_k)
+            v = pcollide(v, n, vcq, muq)
             dp = (before - v) * m
             wp.atomic_add(react, q, dp)
             wp.atomic_add(rtorque, q, wp.cross(lever, dp))
@@ -1225,9 +1642,14 @@ def _compile_patched():
             mass: wp.array(dtype=float), damp: wp.array(dtype=float),
             react: wp.array(dtype=wp.vec3), rtorque: wp.array(dtype=wp.vec3),
             fsum: wp.array(dtype=wp.vec3), tsum: wp.array(dtype=wp.vec3),
-            nsum: wp.array(dtype=float)):
+            nsum: wp.array(dtype=float), bsnap: wp.array2d(dtype=wp.vec3),
+            bomega: wp.array(dtype=wp.vec3), baxis: wp.array(dtype=wp.vec3),
+            bsize: wp.array(dtype=wp.vec3), bangle: wp.array(dtype=float)):
         p = wp.tid()
         if p < P.nb:
+            # The spin angle the grid's grousers read next substep (no particle
+            # thread reads it: pproject treats a lugged wheel as its rim).
+            bangle[p] = bangle[p] + wp.dot(bomega[p], baxis[p]) * dt
             # The wheel's vertical DOF (the grid kernel's reaction is complete).
             f = react[p] * (1.0 / dt)
             t = rtorque[p] * (1.0 / dt)
@@ -1284,6 +1706,8 @@ def _compile_patched():
         tr = e0 + e1 + e2
         if P.cap_lam > 0.0:
             pcap = P.cap_p0 * wp.exp(-evp[p] / P.cap_lam)
+            if P.cap_pmax > 0.0:
+                pcap = wp.min(pcap, P.cap_pmax)
             trc = -pcap / P.bulk
             if tr < trc:
                 dv = tr - trc
@@ -1314,8 +1738,14 @@ def _compile_patched():
                                      2.0 * P.mu * e1 + P.la * trn,
                                      2.0 * P.mu * e2 + P.la * trn)) * wp.transpose(U)
         C[p] = nc
-        v[p] = nv
         q = xp + nv * dt
+        # Keep the advected particle out of its patch's wheel (pproject). A
+        # KINEMATIC correction, NOT booked as force: the grid BC impulse (react)
+        # stays the only channel between soil and wheel, so the load closes.
+        if P.pcontact == 1:
+            q, nv = pproject(q, nv, bsnap[k, 0], bsnap[k, 1], bomega[k], baxis[k], bsize[k],
+                             P.eps, 0.5 * P.pd)
+        v[p] = nv
         pad = 0.05 * P.h
         lox = ox + float(P.marg) * P.h
         loz = oz + float(P.marg) * P.h
@@ -1432,6 +1862,10 @@ class GranularPatches:
     undamped): set_wheels(..., mass=45.0, damp=5000.0) -- the unsprung mass and
     a near-critical damper; at 8 m/s it cuts the frame-to-frame Fy/W spread
     from 0.33 to 0.01 (std).
+
+    A rover wheel (examples/warp_rover_slope.py --mode rt): radius = the grouser
+    tips r + h_g, mu = tan(phi), jh_k ~ 2.5-3 (slip-mobilised friction, see
+    wheel_mu); jh_k = 0 (the default) is the car's plain Coulomb rim.
     """
 
     def __init__(self, material, h, n_patches, patch_size=(0.8, 0.44), depth=0.3,
@@ -1439,7 +1873,8 @@ class GranularPatches:
                  ppc_spacing=0.63, headroom=0.2, mu_floor=0.6, mu_wall=0.3, eps_cells=0.25,
                  vmax=40.0, cap_factor=1.35, lead=1.0 / 120.0, shift_thr=1.0, seed=3,
                  device="cuda:0", hf_init=None, sort_every=1, splat_r_pd=1.0, fill_dips=True,
-                 dip_thr=0.006, cfl=0.5, tiled_p2g=True):
+                 dip_thr=0.006, cfl=0.5, tiled_p2g=True, gravity=(0.0, -9.81, 0.0),
+                 particle_contact=PC_NONE, jh_k=0.0):
         K = _compile_patched()
         wp = K["wp"]
         self.wp, self.K, self.dev = wp, K, device
@@ -1479,11 +1914,14 @@ class GranularPatches:
         B = 6.0 * m.cohesion * math.cos(math.radians(m.phi_deg)) / (math.sqrt(3.0) * (3.0 - sphi))
         P.coh = math.sqrt(2.0) * B / (2.0 * m.mu)
         P.tr_apex = P.coh / P.dp_k if P.dp_k > 0 else 0.0
-        P.apic, P.grav, P.vmax = m.apic, -9.81, vmax
+        self.gravity = np.asarray(gravity, np.float64)
+        P.apic, P.grav, P.vmax = m.apic, wp.vec3(*self.gravity), vmax
         P.mu_floor, P.mu_wall = mu_floor, mu_wall
         P.eps = eps_cells * self.h
         P.bulk = m.la + 2.0 * m.mu / 3.0
-        P.cap_p0, P.cap_lam = m.cap_p0, m.cap_lambda
+        P.cap_p0, P.cap_lam, P.cap_pmax = m.cap_p0, m.cap_lambda, m.cap_pmax
+        P.pcontact = int(particle_contact)
+        P.jh_k = float(jh_k)     # slip-mobilised wheel friction (wheel_mu); 0 = Coulomb
         P.pd = self.pd
         P.hf_ox, P.hf_oz, P.hf_dx = self.hf_origin[0], self.hf_origin[1], self.hf_dx
         P.hf_nx, P.hf_nz = hnx, hnz
@@ -1516,6 +1954,7 @@ class GranularPatches:
         self.ovf = wp.zeros(1, dtype=int, device=dev)
         gd = (self.nb * nx, ny, nz)
         self.gm = wp.zeros(gd, dtype=float, device=dev)
+        self.grav_d = wp.array(np.asarray([self.gravity], np.float32), dtype=wp.vec3, device=dev)
         self.gv = [wp.zeros(gd, dtype=wp.vec3, device=dev), wp.zeros(gd, dtype=wp.vec3, device=dev)]
         hf0 = np.full((hnx, hnz), self.floor_y + depth, np.float32) if hf_init is None \
             else np.ascontiguousarray(hf_init, np.float32)
@@ -1536,6 +1975,11 @@ class GranularPatches:
         self.bmode = wp.zeros(K3, dtype=int, device=dev)
         self.react, self.rtorque, self.fsum, self.tsum = z3(), z3(), z3(), z3()
         self.nsum = wp.zeros(K3, dtype=float, device=dev)
+        self.bsnap = wp.zeros((K3, 2), dtype=wp.vec3, device=dev)   # end-of-substep hub pos, vel
+        # Grousers per wheel (set_lugs): (thickness, count, height); count 0 = the
+        # plain cylinder. bangle = the spin angle they are laid out from.
+        self.blug = z3()
+        self.bangle = wp.zeros(K3, dtype=float, device=dev)
         pinned = str(dev).startswith("cuda")
         self.cmd_h = wp.zeros((K3, NCMD), dtype=float, device="cpu", pinned=pinned)
         self.cmd_d = wp.zeros((K3, NCMD), dtype=float, device=dev)
@@ -1585,6 +2029,27 @@ class GranularPatches:
         c[:, 17] = mu
         c[:, 18] = 1.0 if free_y else 0.0
         c[:, 19] = 1.0 if set_y else 0.0
+
+    def set_gravity(self, g):
+        """New gravity vector (m/s^2), e.g. a tilt bed's rotated g, from the next
+        frame on. The grid kernel reads it from a device array, so the captured
+        frame graphs stay valid: call it every frame if the tilt is moving."""
+        self.gravity = np.asarray(g, np.float64)
+        self.P.grav = self.wp.vec3(*self.gravity)
+        self.grav_d.assign(np.asarray([self.gravity], np.float32))
+
+    def set_lugs(self, count, height, thickness):
+        """Grousers on every wheel (scalars) or per wheel ((K,) arrays): `count`
+        straight transverse lugs, `height` radially past the rim (set_wheels'
+        radius), `thickness` along the tread. count 0 = the plain cylinder (the
+        default). A lug thinner than a cell falls between the grid nodes: pass it
+        at least h thick, and conserve the total lug volume with fewer lugs
+        (examples/warp_rover_demo.py). Device arrays: captured graphs stay valid."""
+        lug = np.zeros((self.nb, 3), np.float32)
+        lug[:, 0] = np.broadcast_to(np.asarray(thickness, np.float32), (self.nb,))
+        lug[:, 1] = np.broadcast_to(np.asarray(count, np.float32), (self.nb,))
+        lug[:, 2] = np.broadcast_to(np.asarray(height, np.float32), (self.nb,))
+        self.blug.assign(lug)
 
     def nsub_for(self, speed, cfl=None, even=True):
         """Substeps per 1/60 s frame for a max body/grain speed (the CFL counts it).
@@ -1653,11 +2118,13 @@ class GranularPatches:
                           inputs=[self.x, self.v, self.C, self.tau, self.alive, self.pc, self.gm, ga, P, dt])
             wp.launch(K["grid"], dim=(self.nb * self.dims[0], self.dims[1], self.dims[2]), device=dev,
                       inputs=[self.gm, ga, gb, self.pc, P, self.bpos, self.bvel, self.bomega,
-                              self.baxis, self.bsize, self.bmu, self.react, self.rtorque, dt])
+                              self.baxis, self.bsize, self.bmu, self.react, self.rtorque, dt,
+                              self.bsnap, self.grav_d, self.blug, self.bangle])
             wp.launch(K["g2p"], dim=self.n_slots, device=dev,
                       inputs=[self.x, self.v, self.C, self.F, self.tau, self.evp, self.alive, self.pc,
                               ga, P, dt, self.bpos, self.bvel, self.bmode, self.bload, self.bmass,
-                              self.bdamp, self.react, self.rtorque, self.fsum, self.tsum, self.nsum])
+                              self.bdamp, self.react, self.rtorque, self.fsum, self.tsum, self.nsum,
+                              self.bsnap, self.bomega, self.baxis, self.bsize, self.bangle])
 
     def _post(self):
         wp, K, dev = self.wp, self.K, self.dev
