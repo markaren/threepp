@@ -19,7 +19,14 @@ Flag contract
     --tag SUFFIX        appended to each still's name (e.g. _v1)
     --seed N            current heading jitter: N = 0 is the scene's own current, N > 0 rotates
                         warp_netpen.current_at by a seeded N(0, 0.15) rad
-    --snake-film PATH   reserved for the film phase (P4); exits with a message today
+    --snake-film        pass 1 of the film: the mission (as --mission) rendered EVERY frame with the
+                        film camera (a phase-driven shot director); writes to --out (default
+                        D:/dev/snake_out/film) raw_seedN.mp4 (the 3D frame, crf 12), raw_seedN_aux.mp4
+                        (head-camera view + sonar image, composited offline), the run's telemetry npz /
+                        json and raw_seedN_film_log.npz (per frame: mission t, shot, cut, camera).
+                        Pass 2 (the edit, panels, title and end card): snake_film_cut.py
+    --film-test         with --snake-film: no mp4s; renders every 3rd frame and saves composited stills
+                        at phase-relative mission times (test_<shot>_t<t>.png)
     --mission           headless closed-loop mission (PhysX snake + snake_mission), telemetry, summary
     --mission-shots     ... plus a still a moment after each phase change
     --dump-sonar        with --mission: save up to 600 sonar images near the wall (seedN_sonar_dump.npz)
@@ -64,21 +71,20 @@ MISSION_SHOTS = "--mission-shots" in sys.argv             # ... plus a still at 
 KINEMATIC = "--kinematic" in sys.argv                     # the window runs the kinematic placeholder
 T_CAP = cli_arg("--t-cap", 300.0, float)
 RENDER_EVERY = cli_arg("--render-every", 3, int)
-SNAKE_FILM = "--snake-film" in sys.argv
+SNAKE_FILM = "--snake-film" in sys.argv                   # pass 1 of the film (run_film)
+FILM_TEST = "--film-test" in sys.argv
 DUMP_SONAR = "--dump-sonar" in sys.argv                   # --mission: save the sonar images near the wall (npz)
 SEED = cli_arg("--seed", 0, int)
 TAG = cli_arg("--tag", "", str)
-SIZE = cli_arg("--size", "1600x900", str)
+SIZE = cli_arg("--size", "1920x1080" if SNAKE_FILM else "1600x900", str)
 SECONDS = cli_arg("--seconds", 8.0, float)
 SHOT_NAMES = ("snake_dock", "snake_school", "snake_tear", "snake_hud", "snake_top")
 OUT_DIR_DEFAULT = "D:/dev/snake_out/shots"
 OUT = cli_arg("--out", "", str)
-if SNAKE_FILM:
-    sys.exit("--snake-film is the film phase's (P4); not implemented in the scene phase")
 SHOT_LIST = SHOT_NAMES if SNAKE_SHOT == "all" else tuple(n for n in SNAKE_SHOT.split(",") if n)
 if any(n not in SHOT_NAMES for n in SHOT_LIST):
     sys.exit(f"unknown --snake-shot {SNAKE_SHOT!r}; one or a comma list of {', '.join(SHOT_NAMES)}, or all")
-HEADLESS = bool(SNAKE_SHOT) or MISSION or MISSION_SHOTS
+HEADLESS = bool(SNAKE_SHOT) or MISSION or MISSION_SHOTS or SNAKE_FILM
 
 _w_argv = [os.path.join(_HERE, "warp_netpen.py"), "--size", SIZE, "--seconds", str(SECONDS)]
 if HEADLESS:
@@ -503,7 +509,10 @@ smoked.clearcoat = 1.0
 smoked.clearcoat_roughness = 0.05
 lens_mat = standard_material(0x05070c, roughness=0.12)
 ring_mat = standard_material(0x9aa0a6, roughness=0.35, metalness=0.9)
-LAMP_I = 550.0                                            # 800 put a backscatter disc over the head-cam inset
+LAMP_I = 60.0                                             # full level; 550 on the camera axis put a backscatter disc over the
+                                                          # inset, 220 still burnt the silver salmon flanks white at < 0.5 m
+LAMP_SPLAY = math.radians(20.0)                           # each beam turned outward off the camera axis
+LAMP_DISC_E = 90.0                                        # the lamp face's emissive at full level
 lamp_disc_mat = standard_material(0xfff2dc, roughness=0.3, emissive=0xffe6c0, emissive_intensity=90.0)
 
 snake_links, snake_meshes = [], []
@@ -593,21 +602,25 @@ for i in range(LINK_N):
         son = _add(g, tp.Mesh(tp.BoxGeometry(0.05, 0.018, 0.04), rubber))   # sonar head on the crown
         son.position.set(-0.01, LINK_R + 0.004, 0.0)
         lamps = []
-        for z in (-0.045, 0.045):                         # two side lamps just behind the dome
-            hous = _add(g, _along_x(tp.Mesh(tp.CylinderGeometry(0.014, 0.014, 0.03, 16, 1), rubber)))
-            hous.position.set(x_dome - 0.012, -0.012, z)
-            disc = tp.Mesh(tp.CircleGeometry(0.011, 20), lamp_disc_mat)
+        # Two lamp pods on the head's flanks, 3 cm behind the lens, each beam turned LAMP_SPLAY
+        # outward off the camera axis (how subsea vehicles keep the lit near field, the
+        # backscatter, out of the picture); aimed per frame with the head camera (lamp_update).
+        for side in (-1.0, 1.0):                          # local +z = starboard
+            zc = side * (LINK_R + 0.010)
+            hous = _add(g, _along_x(tp.Mesh(tp.CylinderGeometry(0.011, 0.011, 0.034, 16, 1), rubber)))
+            hous.position.set(x_dome - 0.03, -0.004, zc)
+            disc = tp.Mesh(tp.CircleGeometry(0.0085, 20), lamp_disc_mat)
             disc.rotation.y = math.pi / 2
-            disc.position.set(x_dome + 0.0035, -0.012, z)
+            disc.position.set(x_dome - 0.03 + 0.0175, -0.004, zc)
             _add(g, disc, shadow=False)
-            spot = tp.SpotLight(tp.Color(1.0, 0.90, 0.74), LAMP_I, 3.5, math.radians(24.0), 0.6, 3.0)
-            spot.position.set(x_dome + 0.006, -0.012, z)
+            spot = tp.SpotLight(tp.Color(1.0, 0.90, 0.74), LAMP_I, 3.5, math.radians(20.0), 0.6, 3.0)
+            spot.position.set(x_dome - 0.03 + 0.02, -0.004, zc)
             tgt = tp.Group()
-            tgt.position.set(3.0, -0.2, z)
+            tgt.position.set(3.0, 0.0, zc)
             g.add(tgt)
             spot.set_target(tgt)
             g.add(spot)
-            lamps.append((spot, tgt))
+            lamps.append((spot, tgt, side, np.array([x_dome - 0.01, -0.004, zc])))
     Y, M, R, D = module_parts(i)
     for items, mat in ((Y, yellow), (M, metal), (R, rubber), (D, duct_mat)):
         if items:
@@ -794,11 +807,45 @@ def snake_rov_pose(t, dt=1.0 / 60.0):
     W.ROV_STATS["d"] = d
     STATS["min_d"] = min(STATS["min_d"], d)
     W.ROV_STATS["min_d"] = STATS["min_d"]
-    # lamps: aim with the head camera, forward and 45 deg to the wall side, in the head frame
-    look = R.T @ (math.cos(math.radians(45.0)) * R[:, 0] + math.sin(math.radians(45.0)) * wall_side(p, R[:, 0]))
-    for k, (spot, tgt) in enumerate(HEAD_LAMPS):
-        tgt.position.set(*(0.055 * np.array([1.0, 0.0, 0.0]) + 3.0 * look + [0.0, -0.15, (k - 0.5) * 0.3]))
+    lamp_update(sn.phase, p, R, dt)
     led_update(sn.phase)
+
+
+# The head camera pans: straight ahead in and near the dock (a docking camera), 45 deg to the
+# wall side while it works the net. The lamps ride the same pan. Visual only: the mission
+# steers on the sonar, never on this camera.
+WALL_PHASES = ("ACQUIRE", "FOLLOW_WALL", "TEAR", "INSPECT", "UTURN", "INSPECT_2", "RETURN", "APPROACH")
+HEAD_LOOK = {"a": 0.0, "look": None, "level": 0.0, "undocked": False}
+
+
+def head_look_dir(p, R):
+    a = HEAD_LOOK["a"]
+    return math.cos(a) * R[:, 0] + math.sin(a) * wall_side(p, R[:, 0])
+
+
+def lamp_update(phase, p, R, dt):
+    """Pan the head camera + lamps toward the phase's look angle; the lamps' level by phase:
+    off in the cradle before the undock, full while swimming, dimmed on the funnel and docked."""
+    h = HEAD_LOOK
+    a_want = math.radians(45.0) if phase in WALL_PHASES else 0.0
+    h["a"] += (a_want - h["a"]) * (1.0 - math.exp(-dt / 1.0))
+    if phase != "DOCKED":
+        h["undocked"] = True
+    lv = 1.0
+    if phase == "DOCKED":
+        lv = 0.12 if h["undocked"] else 0.0
+    elif phase in ("CAPTURE", "LATCHED"):
+        lv = 0.45
+    step_ = dt / 1.2
+    h["level"] += min(max(lv - h["level"], -step_), step_)
+    look = R.T @ head_look_dir(p, R)
+    for spot, tgt, side, pod in HEAD_LAMPS:
+        a = -side * LAMP_SPLAY                            # rotate about the head's up, outward
+        ca, sa = math.cos(a), math.sin(a)
+        d = np.array([look[0] * ca + look[2] * sa, look[1], -look[0] * sa + look[2] * ca])
+        tgt.position.set(*(pod + 3.0 * d))
+        spot.intensity = LAMP_I * h["level"]
+    lamp_disc_mat.emissive_intensity = LAMP_DISC_E * max(h["level"], 0.02)
 
 
 SONAR_IN = []                                             # (intensity, sonar pos, sonar yaw) for the mission
@@ -821,14 +868,36 @@ def snake_cam_place():
     sn = SNAKE[0]
     p, R = sn.head_pose()
     o = sn.nose() + 0.02 * R[:, 0]
-    look = math.cos(math.radians(45.0)) * R[:, 0] + math.sin(math.radians(45.0)) * wall_side(p, R[:, 0])
+    look = head_look_dir(p, R)
     W.rov_cam.position.set(*o)
     W.rov_cam.look_at(*(o + look))
 
 
+FISH_CAM = [None]                                         # the film pre-rolls the NEXT shot's eye here before a cut
+# The boids avoid ONE snake point (2 m falloff). Along the net and at the tear the head camera is
+# the payload: the point moves (eased) to 0.35 m ahead of the lens so the school keeps out of its
+# view; in open water and at the dock it sits on the mid link, keeping the whole body clear.
+HEAD_AVOID_PHASES = ("FOLLOW_WALL", "TEAR", "INSPECT", "UTURN", "INSPECT_2")
+FISH_AVOID = {"w": 0.0}
+
+
+def fish_avoid_point(dt):
+    sn = SNAKE[0]
+    want = 1.0 if sn.phase in HEAD_AVOID_PHASES else 0.0
+    FISH_AVOID["w"] += min(max(want - FISH_AVOID["w"], -dt), dt)
+    w = FISH_AVOID["w"]
+    mid = sn.mid_point()
+    if w <= 0.0:
+        return mid
+    p, R = sn.head_pose()
+    ahead = sn.nose() + 0.35 * head_look_dir(p, R)
+    return mid + w * (ahead - mid)
+
+
 def snake_fish_step(t, dt):
     cp = W.camera.position
-    W.school.step(t, dt, SNAKE[0].mid_point(), np.array([cp.x, cp.y, cp.z]))   # one point, 2 m falloff: the body
+    cam = FISH_CAM[0] if FISH_CAM[0] is not None else np.array([cp.x, cp.y, cp.z])
+    W.school.step(t, dt, fish_avoid_point(dt), cam)     # the snake point (2 m falloff) and the film camera (2.6 m)
     if W.fish_vk is not None:
         return
     W.school.skin()
@@ -1043,10 +1112,6 @@ def run_mission(shots=False):
         if i % RENDER_EVERY == 0:
             W.renderer.render(W.scene, W.camera)
     print(f"mission: warm-up {warm} frames in {time.perf_counter() - t0:.1f} s", flush=True)
-    cols = ["t", "phase", "gait", "phi0", "psi_mean", "psi_head", "dpsi_head", "speed", "p_abs", "p_net", "e_abs",
-            "e_net", "meas", "d_head_true", "d_min_links", "tangent", "psi_wall", "wall_seen", "tear_fired",
-            "tear_bearing", "cand_bearing", "cur_x", "cur_z", "com_x", "com_y", "com_z", "head_x", "head_y", "head_z",
-            "los_s", "los_e", "latch_f", "images", "peak_torque", "guide_f", "tear_x", "tear_z", "d_head_tear"]
     rows, links, quats = [], [], []
     shots_todo, shot_paths, shot_names = [], [], set()
     wall0 = time.perf_counter()
@@ -1077,22 +1142,8 @@ def run_mission(shots=False):
             shot_paths.append(p)
             shots_todo.remove(s)
             print(f"  still {p}  (t {t:.1f} s, {ms.phase})", flush=True)
-        hp = prov.pos[0]
-        tc = W.tear_now()
-        qn = net_positions()
-        d_head = float(np.sqrt(((qn - hp) ** 2).sum(1).min()))
-        sn = prov.snake
-        cur = W.current_at(W.world_t)
-        est = ms.est
-        cand = ms.det.last[0] if ms.det.last is not None else float("nan")
-        st = prov.st
-        rows.append([t, MS.PHASES.index(ms.phase), gait_ids.get(ms.gait, -1), ms.phi0_cmd, st.yaw_mean, st.head_yaw,
-                     st.dpsi_head, st.speed, sn.power_abs, sn.power_net, sn.energy_abs, sn.energy_net, ms.follow.meas,
-                     d_head, W.ROV_STATS.get("d", float("nan")), est.tangent, ms.follow.psi_wall, float(est.seen),
-                     float(ms.det.fired), ms.det.bearing, cand, float(cur[0]), float(cur[2]), *st.com, *hp,
-                     ms.los.get("s", float("nan")), ms.los.get("e", float("nan")),
-                     float(np.linalg.norm(prov.ad.latch_force)), prov.images, sn.peak_torque, prov.ad.guide_force,
-                     float(tc[0]), float(tc[2]), float(np.linalg.norm(prov.nose() - tc))])
+        row = mission_row(prov, t, gait_ids)
+        rows.append(row)
         links.append(prov.pos.astype(np.float32))
         quats.append(prov.quat.astype(np.float32))
         f += 1
@@ -1100,30 +1151,334 @@ def run_mission(shots=False):
             break
         if f % 600 == 0:
             print(f"  t {t:6.1f} s  {ms.phase:11s} {(time.perf_counter() - wall0) / f * 1e3:.1f} ms/f  "
-                  f"images {prov.images}  meas {ms.follow.meas:.2f}  head-net {d_head:.2f}", flush=True)
+                  f"images {prov.images}  meas {ms.follow.meas:.2f}  head-net {row[13]:.2f}", flush=True)
     wall = time.perf_counter() - wall0
-    L = np.asarray(rows, np.float64)
     stem = os.path.join(out_dir, f"seed{SEED}{TAG}")
-    tel = dict(cols=np.array(cols), log=L, links=np.asarray(links), quats=np.asarray(quats),
-               events=np.array([f"{a:.2f} {b}" for a, b in prov.mission.events]),
-               tear_true=np.float64(TEAR_BEARING), dock_c=MS.DOCK_C, dock_u=MS.DOCK_U, latch_p=MS.LATCH_P,
-               gaits=np.array(list(MS.GAITS)), phases=np.array(MS.PHASES), net_y3=_net_ring(), seed=np.int64(SEED))
-    np.savez_compressed(stem + "_telemetry.npz", **tel)
+    tel = save_mission(prov, rows, links, quats, stem, f, wall, stills=shot_paths)
     if DUMP_SONAR and SONAR_DUMP:
         np.savez_compressed(stem + "_sonar_dump.npz", t=np.array([d[0] for d in SONAR_DUMP]),
                             phase=np.array([d[1] for d in SONAR_DUMP]), img=np.stack([d[2] for d in SONAR_DUMP]),
                             pos=np.stack([d[3] for d in SONAR_DUMP]), yaw=np.array([d[4] for d in SONAR_DUMP]),
                             net_y3=_net_ring())
         print(f"mission: {len(SONAR_DUMP)} sonar images -> {stem}_sonar_dump.npz")
+    MS.plot_top(tel, stem + "_top.png")
+
+
+TEL_COLS = ["t", "phase", "gait", "phi0", "psi_mean", "psi_head", "dpsi_head", "speed", "p_abs", "p_net", "e_abs",
+            "e_net", "meas", "d_head_true", "d_min_links", "tangent", "psi_wall", "wall_seen", "tear_fired",
+            "tear_bearing", "cand_bearing", "cur_x", "cur_z", "com_x", "com_y", "com_z", "head_x", "head_y", "head_z",
+            "los_s", "los_e", "latch_f", "images", "peak_torque", "guide_f", "tear_x", "tear_z", "d_head_tear"]
+
+
+def mission_row(prov, t, gait_ids):
+    """One telemetry row (TEL_COLS) of the physics snake's mission at mission time t."""
+    import snake_mission as MS
+    ms = prov.mission
+    hp = prov.pos[0]
+    tc = W.tear_now()
+    qn = net_positions()
+    d_head = float(np.sqrt(((qn - hp) ** 2).sum(1).min()))
+    sn = prov.snake
+    cur = W.current_at(W.world_t)
+    est = ms.est
+    cand = ms.det.last[0] if ms.det.last is not None else float("nan")
+    st = prov.st
+    return [t, MS.PHASES.index(ms.phase), gait_ids.get(ms.gait, -1), ms.phi0_cmd, st.yaw_mean, st.head_yaw,
+            st.dpsi_head, st.speed, sn.power_abs, sn.power_net, sn.energy_abs, sn.energy_net, ms.follow.meas,
+            d_head, W.ROV_STATS.get("d", float("nan")), est.tangent, ms.follow.psi_wall, float(est.seen),
+            float(ms.det.fired), ms.det.bearing, cand, float(cur[0]), float(cur[2]), *st.com, *hp,
+            ms.los.get("s", float("nan")), ms.los.get("e", float("nan")),
+            float(np.linalg.norm(prov.ad.latch_force)), prov.images, sn.peak_torque, prov.ad.guide_force,
+            float(tc[0]), float(tc[2]), float(np.linalg.norm(prov.nose() - tc))]
+
+
+def save_mission(prov, rows, links, quats, stem, frames, wall, **extra):
+    """The telemetry npz and the summary json of a finished run; returns the telemetry dict."""
+    import json
+    import snake_mission as MS
+    tel = dict(cols=np.array(TEL_COLS), log=np.asarray(rows, np.float64), links=np.asarray(links),
+               quats=np.asarray(quats), events=np.array([f"{a:.2f} {b}" for a, b in prov.mission.events]),
+               tear_true=np.float64(TEAR_BEARING), dock_c=MS.DOCK_C, dock_u=MS.DOCK_U, latch_p=MS.LATCH_P,
+               gaits=np.array(list(MS.GAITS)), phases=np.array(MS.PHASES), net_y3=_net_ring(), seed=np.int64(SEED))
+    np.savez_compressed(stem + "_telemetry.npz", **tel)
     summ = MS.summarize(tel, prov.mission, prov.ad, mass=float(prov.snake.mass.sum()))
-    summ.update(seed=SEED, frames=f, wall_s=round(wall, 1), ms_per_frame=round(wall / max(f, 1) * 1e3, 1),
+    summ.update(seed=SEED, frames=frames, wall_s=round(wall, 1), ms_per_frame=round(wall / max(frames, 1) * 1e3, 1),
                 render_every=RENDER_EVERY, size=SIZE, max_vertical_drift_m=round(prov.max_dy, 4),
-                current_heading_jitter_rad=CUR_DH, stills=shot_paths)
+                current_heading_jitter_rad=CUR_DH, **extra)
     with open(stem + ".json", "w") as fh:
         json.dump(summ, fh, indent=1)
-    MS.plot_top(tel, stem + "_top.png")
     print(json.dumps(summ, indent=1))
-    print(f"mission: {f} frames in {wall:.0f} s ({wall / max(f, 1) * 1e3:.1f} ms/f) -> {stem}_telemetry.npz, .json, _top.png")
+    print(f"mission: {frames} frames in {wall:.0f} s ({wall / max(frames, 1) * 1e3:.1f} ms/f) -> {stem}_telemetry.npz, .json")
+    return tel
+
+
+# ---- the film (pass 1): a shot director driven by the live mission ------------------------------
+# Every shot is a function of the live state (the snake's pose, the phase, the tear on the bowed
+# wall, the dock), never of a clock: a re-run that shifts by seconds keeps its framing. Within a
+# shot the eye and the target ease toward the shot's pose (no whip pans); a change of shot is a
+# cut, taken CUT_LEAD seconds after the phase asks for it, and during that lead the school already
+# steers round the NEXT eye (the boids avoid one camera point), so a cut never opens on a fish
+# on the lens. The edit (snake_film_cut.py) dissolves at the logged cuts.
+FILM_VIEW_W, FILM_VIEW_H = 960, 540                       # head-camera view: the edit scales it (bigger at the tear)
+CUT_LEAD = 1.0
+SHOT_IDS = ("cradle", "chase", "tear", "top", "high", "dock")
+UNDOCK_CRADLE_S = 7.0                                     # the cradle shot holds this long into the undock
+
+
+def shot_for(phase, t_in, undocked):
+    if phase == "DOCKED":
+        return "dock" if undocked else "cradle"
+    if phase == "UNDOCK":
+        return "cradle" if t_in < UNDOCK_CRADLE_S else "chase"
+    if phase in ("ACQUIRE", "FOLLOW_WALL", "RETURN", "APPROACH"):
+        return "chase"
+    if phase in ("TEAR", "INSPECT"):
+        return "tear"
+    if phase == "UTURN":
+        return "top"
+    if phase == "INSPECT_2":
+        return "high"
+    if phase in ("TURN_IN", "FINAL"):                     # the chase, the funnel ahead; the dock shot once near
+        sn = SNAKE[0]
+        head = sn.head_pose()[0]
+        e = 1.0 if float((head - DOCK_C) @ DOCK_U) > 0 else -1.0
+        return "dock" if np.linalg.norm(head - (DOCK_C + e * 1.0 * DOCK_U)) < 1.6 else "chase"
+    return "dock"                                         # CAPTURE, LATCHED, RETREAT, ABORT
+
+
+class Director:
+    def __init__(self):
+        self.shot, self.want, self.want_t = None, None, 0.0
+        self.eye = self.tgt = None
+        self.fov = 55.0
+        self.anchor = {}
+        self.phase, self.t_phase, self.undocked = None, 0.0, False
+        self.cut = False
+
+    def frame(self):
+        """(mid, head, fwd, out) of the snake now: centre link, head link, mean forward, outboard."""
+        sn = SNAKE[0]
+        mid, head = sn.mid_point(), sn.head_pose()[0]
+        fwd = mean_fwd(sn)
+        out = np.array([mid[0], 0.0, mid[2]])
+        out /= max(np.linalg.norm(out), 1e-9)
+        return mid, head, fwd, out
+
+    def pose(self, shot, t_in, t_shot=0.0):
+        """The shot's (eye, target, fov) now; t_in = seconds into the phase, t_shot = into the shot."""
+        mid, head, fwd, out = self.frame()
+        up = _UP
+        u = DOCK_U
+        od = np.array([DOCK_C[0], 0.0, DOCK_C[2]]) / math.hypot(DOCK_C[0], DOCK_C[2])
+        if shot == "cradle":                              # outboard of the cradle's exit end, looking back in
+            eye = DOCK_C + 0.35 * u + 1.85 * od + 0.80 * up
+            rest = DOCK_C + 0.15 * u - 0.05 * up
+            w = smoothstep((t_in - 1.0) / 4.0) if self.phase == "UNDOCK" else 0.0
+            return eye, rest + w * (0.55 * head + 0.45 * mid - rest), 52.0
+        if shot == "chase":                               # behind, above and a little outboard: along the wall
+            return mid - 2.0 * fwd + 0.35 * out + 1.05 * up, mid + 0.7 * fwd - 0.15 * up, 50.0
+        if shot == "tear":                                # inboard of the hole, the snake crossing in front of it
+            tc, tn = W.tear_now(), W.tear_normal()
+            tt = np.cross(up, tn)
+            tt /= max(np.linalg.norm(tt), 1e-9)
+            if "tear_sgn" not in self.anchor:
+                self.anchor["tear_sgn"] = 1.0 if float((mid - tc) @ tt) > 0 else -1.0
+            s = self.anchor["tear_sgn"]
+            k = smoothstep(t_shot / 14.0)                 # a slow push in over the first pass
+            eye = tc - (3.3 - 0.5 * k) * tn + 1.1 * s * tt + 0.55 * up
+            tgt = 0.55 * (tc - 1.0 * tn) + 0.45 * head + [0.0, -0.05, 0.0]
+            return eye, tgt, 50.0
+        if shot == "top":                                 # over the U-turn, a little outboard: the S reads
+            return mid + 0.75 * out - 0.25 * fwd + 2.3 * up, mid + 0.1 * out, 55.0
+        if shot == "high":                                # high chase for the second pass
+            return mid - 1.6 * fwd + 0.55 * out + 1.7 * up, mid + 0.8 * fwd, 52.0
+        # dock: outboard of the cradle beside the entry mouth, the funnel and the approach in frame
+        if "dock_e" not in self.anchor:
+            self.anchor["dock_e"] = 1.0 if float((head - DOCK_C) @ u) > 0 else -1.0
+        e = self.anchor["dock_e"]
+        eye = DOCK_C + e * 1.05 * u + 1.95 * od + 0.80 * up
+        mouth = DOCK_C + e * 1.0 * u
+        if self.phase in ("CAPTURE", "LATCHED", "DOCKED"):
+            tgt = DOCK_C + e * 0.40 * u - 0.05 * up
+        else:
+            tgt = 0.5 * mouth + 0.5 * (0.6 * head + 0.4 * mid)
+        return eye, tgt, 55.0
+
+    @staticmethod
+    def clear(eye):
+        eye = W.net_clear(np.asarray(eye, np.float64), 0.75)
+        eye[1] = min(eye[1], W.WATER_Y - 0.55)            # always under the surface
+        return eye
+
+    def update(self, t, dt):
+        sn = SNAKE[0]
+        ph = sn.phase
+        if ph != self.phase:
+            self.phase, self.t_phase = ph, t
+        if ph != "DOCKED":
+            self.undocked = True
+        t_in = t - self.t_phase
+        want = shot_for(ph, t_in, self.undocked)
+        if self.shot == "dock" and ph in ("TURN_IN", "FINAL"):
+            want = "dock"                                 # hysteresis: a station-keeping snake never cuts back
+        self.cut = False
+        if self.shot is None:
+            self.shot, self.shot_t = want, t
+        if want != self.shot:
+            if want != self.want:
+                self.want, self.want_t = want, t
+                self.anchor.pop("tear_sgn" if want == "tear" else "dock_e" if want == "dock" else "", None)
+            if t - self.want_t >= CUT_LEAD:
+                self.shot, self.cut, self.want = want, True, None
+                self.shot_t = t
+        else:
+            self.want = None
+        if self.want is not None:                         # pre-roll: the school clears the next eye
+            e, _, _ = self.pose(self.want, t_in)
+            FISH_CAM[0] = self.clear(e)
+        else:
+            FISH_CAM[0] = None
+        eye, tgt, fov = self.pose(self.shot, t_in, t - self.shot_t)
+        eye = self.clear(eye)
+        if self.eye is None or self.cut:
+            self.eye, self.tgt, self.fov = eye, np.asarray(tgt, np.float64), fov
+        else:
+            ke, kt = 1.0 - math.exp(-dt / 0.8), 1.0 - math.exp(-dt / 0.5)
+            self.eye = self.clear(self.eye + (eye - self.eye) * ke)
+            self.tgt = self.tgt + (np.asarray(tgt) - self.tgt) * kt
+            self.fov += (fov - self.fov) * (1.0 - math.exp(-dt / 1.0))
+        cam = W.camera
+        cam.fov = self.fov
+        cam.update_projection_matrix()
+        cam.position.set(*self.eye)
+        cam.look_at(*self.tgt)
+
+
+def composite_preview(frame, inset, sonar):
+    """Test stills: the frame with the head camera (bottom left) and the sonar (bottom right) pasted 1:1-ish."""
+    from PIL import Image
+    im = Image.fromarray(frame)
+    H = frame.shape[0]
+    ins = Image.fromarray(inset).resize((576, 324), Image.LANCZOS)
+    im.paste(ins, (20, H - 20 - 324))
+    son = Image.fromarray(sonar)
+    im.paste(son, (frame.shape[1] - 20 - son.width, H - 20 - son.height))
+    return im
+
+
+FILM_TEST_AT = {"DOCKED": (2.0,), "UNDOCK": (3.0, 7.5, 14.0), "FOLLOW_WALL": (3.0,), "TEAR": (0.5,),
+                "INSPECT": (2.5, 8.0), "UTURN": (2.5,), "INSPECT_2": (6.0, 17.0), "APPROACH": (7.0,),
+                "TURN_IN": (2.0,), "FINAL": (10.0,), "CAPTURE": (4.0, 10.0)}
+
+
+def run_film():
+    """Pass 1: the mission rendered every frame with the director's camera; mp4 intermediates +
+    telemetry + a per-frame film log. --film-test: stills at phase-relative times instead."""
+    from PIL import Image
+    from demo_common import Encoder
+    import snake_mission as MS
+    out_dir = OUT or "D:/dev/snake_out/film"
+    os.makedirs(out_dir, exist_ok=True)
+    stem = os.path.join(out_dir, f"raw_seed{SEED}{TAG}")
+    R = W.renderer
+    R.set_flush_frames(1)
+    W.hud_park(True)                                      # the sonar only runs while the HUD is live ...
+    for o in W._hud_b + W._hud_a:                         # ... but every W sprite and label stays off screen:
+        o.position.x = -9000.0                            # the edit composites the view + sonar + panels itself
+    phase_lab.position.x = -9000.0
+    R.remove_view(W.ROV_VIEW)                             # a bigger head-camera view, never displayed by W
+    W.rov_cam.fov = 62.0
+    W.rov_cam.update_projection_matrix()
+    view = R.add_view(W.rov_cam, FILM_VIEW_W, FILM_VIEW_H)
+    R.set_view_display_rect(view, -9000, 0, FILM_VIEW_W, FILM_VIEW_H)
+    W.ROV_VIEW = view
+
+    def _hud_quiet():
+        return None
+    W.hud_update = _hud_quiet
+    prov = PhysicsSnake(SEED)
+    SNAKE[0] = prov
+    warm = int(SECONDS * 60)
+    MISSION_T0[0] = -(W.world_t + warm / 60.0)
+    W.LEAK_T0[0] = W.world_t + warm / 60.0 + 16.0         # the last leakers go through as the first pass arrives
+    d = Director()
+    dt = 1.0 / 60.0
+    t0 = time.perf_counter()
+    for i in range(warm):
+        W.step()
+        d.update(mission_t(), dt)
+        if i % 3 == 0 or i >= warm - 30:
+            R.render(W.scene, W.camera)
+    print(f"film: warm-up {warm} frames in {time.perf_counter() - t0:.1f} s", flush=True)
+    SW, SH = W.SON_W, W.SON_H
+    aux_w, aux_h = FILM_VIEW_W + SW, max(FILM_VIEW_H, SH)
+    enc = aux = None
+    if not FILM_TEST:
+        enc = Encoder(stem + ".mp4", W.W, W.H, 60, crf=12, preset="veryfast")
+        aux = Encoder(stem + "_aux.mp4", aux_w, aux_h, 60, crf=12, preset="veryfast")
+    gait_ids = {g: k for k, g in enumerate(MS.GAITS)}
+    rows, links, quats, flog = [], [], [], []
+    todo, stills, last_phase = [], [], "DOCKED"
+    for off in (FILM_TEST_AT.get("DOCKED", ()) if FILM_TEST else ()):
+        todo.append((int(off * 60), "DOCKED", off))
+    f, wall0, t_rd = 0, time.perf_counter(), 0.0
+    t_done = None
+    while True:
+        W.step()
+        t = mission_t()
+        ms = prov.mission
+        if ms.phase != last_phase:
+            print(f"  t {t:6.1f} s  {last_phase} -> {ms.phase}  shot {d.shot}", flush=True)
+            if FILM_TEST:
+                for off in FILM_TEST_AT.get(ms.phase, ()):
+                    todo.append((f + int(off * 60), ms.phase, off))
+            last_phase = ms.phase
+        d.update(t, dt)
+        pend = [s for s in todo if s[0] - 30 <= f]
+        if not FILM_TEST or pend or f % 3 == 0:
+            R.render(W.scene, W.camera)
+        if not FILM_TEST or any(s[0] <= f for s in todo):
+            tr = time.perf_counter()
+            px = R.read_pixels()
+            ins = R.read_view_rgb_pixels(view)
+            son = np.ascontiguousarray(W.son_img[::-1, :, :3])
+            t_rd += time.perf_counter() - tr
+            if enc is not None:
+                enc.send(px)
+                a = np.zeros((aux_h, aux_w, 3), np.uint8)
+                a[:FILM_VIEW_H, :FILM_VIEW_W] = ins
+                a[:SH, FILM_VIEW_W:] = son
+                aux.send(a)
+            for s in [s for s in todo if s[0] <= f]:
+                p = os.path.join(out_dir, f"test{TAG}_{s[1].lower()}_{s[2]:04.1f}_{d.shot}_t{t:05.1f}.png")
+                composite_preview(px, ins, son).save(p)
+                stills.append(p)
+                todo.remove(s)
+                print(f"  still {p}", flush=True)
+        rows.append(mission_row(prov, t, gait_ids))
+        links.append(prov.pos.astype(np.float32))
+        quats.append(prov.quat.astype(np.float32))
+        e, g = d.eye, d.tgt
+        flog.append([t, SHOT_IDS.index(d.shot), float(d.cut), *e, *g, d.fov, HEAD_LOOK["level"]])
+        f += 1
+        if ms.done and t_done is None:
+            t_done = t
+        if (t_done is not None and t >= t_done + 1.0 and not todo) or t >= T_CAP:
+            break
+        if f % 600 == 0:
+            print(f"  t {t:6.1f} s  {ms.phase:11s} shot {d.shot:6s} {(time.perf_counter() - wall0) / f * 1e3:.1f} ms/f "
+                  f"(readback {t_rd / f * 1e3:.1f})  images {prov.images}", flush=True)
+    wall = time.perf_counter() - wall0
+    if enc is not None:
+        enc.close()
+        aux.close()
+    save_mission(prov, rows, links, quats, stem, f, wall, film_stills=stills)
+    np.savez_compressed(stem + "_film_log.npz", log=np.asarray(flog, np.float64), shots=np.array(SHOT_IDS),
+                        cols=np.array(["t", "shot", "cut", "eye_x", "eye_y", "eye_z", "tgt_x", "tgt_y", "tgt_z", "fov",
+                                       "lamp"]), view_wh=np.array([FILM_VIEW_W, FILM_VIEW_H]),
+                        sonar_wh=np.array([SW, SH]), size=np.array([W.W, W.H]))
+    print(f"film: {f} frames in {wall / 60:.1f} min ({wall / max(f, 1) * 1e3:.1f} ms/f) -> {stem}.mp4, _aux.mp4, "
+          f"_film_log.npz; {len(stills)} test stills")
 
 
 def main():
@@ -1131,6 +1486,9 @@ def main():
           f"tear bearing {math.degrees(TEAR_BEARING):.1f} deg ({math.degrees(DOCK_BEARING - TEAR_BEARING):.1f} deg of arc), "
           f"seed {SEED} (current heading {CUR_DH:+.3f} rad)")
     print("snake: waypoints " + ", ".join(f"{k} s={v:.2f} t={mission_time_of(k):.1f}" for k, v in PATH_KEYS.items()))
+    if SNAKE_FILM:
+        run_film()
+        return
     if MISSION or MISSION_SHOTS:
         run_mission(shots=MISSION_SHOTS)
         return

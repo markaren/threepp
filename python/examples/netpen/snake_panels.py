@@ -65,6 +65,7 @@ TEAR_NOTE = {                               # summary tear.mode -> the sonar ann
     "sonar": "gap in the wall return = the tear",
     "sector+sonar": "reported tear sector, gap confirmed on sonar",
     "sector": "reported tear sector (no sonar gap fire)",
+    "sector (sonar did not confirm)": "reported tear sector (sonar did not confirm the gap)",
 }
 
 REQ_ARRAYS = ("cols", "log", "links", "quats", "phases", "gaits", "dock_c", "dock_u", "tear_true")
@@ -577,7 +578,10 @@ class Panels:
         img.alpha_composite(L.done())
 
     # -- the end card
-    def end_card(self, size=(1920, 1080)):
+    def end_card(self, size=(1920, 1080), seeds=None, seeds_note=""):
+        """The closing card. seeds: optional list of summary dicts (one per seed); the mission block
+        then shows the result across them (n/n docked, ranges) instead of this run's alone;
+        seeds_note replaces the block header's parenthesis (e.g. which tree the seeds ran on)."""
         W, H = size
         s = H / 1080.0
         bg = (9, 22, 26)
@@ -625,9 +629,15 @@ class Panels:
         y += 18 * s
         sm = self.summ
         seed = self.seed
-        L.text(rx, y, f"The mission{'' if seed is None else f', seed {seed}'}", 19 * s, "sb", ACCENT)
+        if seeds:
+            L.text(rx, y, f"The mission, {len(seeds)} seeds ({seeds_note or 'current direction jitter'})", 19 * s,
+                   "sb", ACCENT)
+            rows = self._mission_rows_multi(seeds)
+        else:
+            L.text(rx, y, f"The mission{'' if seed is None else f', seed {seed}'}", 19 * s, "sb", ACCENT)
+            rows = self._mission_rows(sm)
         y += 36 * s
-        for lb, v in self._mission_rows(sm):
+        for lb, v in rows:
             L.text(rx, y, lb, 16 * s, "r", GREY)
             self._wrap_text(L, rx + 250 * s, y, v, 17 * s, "sb", WHITE, rw - 250 * s, 23 * s)
             y += max(1, self._n_lines(v, 17 * s, "sb", rw - 250 * s)) * 23 * s + 8 * s
@@ -680,6 +690,47 @@ class Panels:
             out.append(("head yaw RMS, mission", ", ".join(hy) + "; steering included"))
         de = sm["dock_error"]
         out.append(("docking error", "n/a" if not de else f"nose {de['nose_m']:.2f} m, heading {de['heading_deg']:.1f} deg"))
+        return out
+
+    def _mission_rows_multi(self, summs):
+        """The mission block over several seeds: n/n docked, then min-max ranges; the last row is this
+        film's own run (its telemetry/summary), which is a re-run and not bit-identical to its seed."""
+        def rng(vals, fmt, unit=""):
+            v = [x for x in vals if x is not None]
+            if not v:
+                return "n/a"
+            a, b = fmt.format(min(v)), fmt.format(max(v))
+            return (a if a == b else f"{a}-{b}") + unit
+        how_of = {"sonar": "sonar gap detector", "sector+sonar": "reported sector +-20 deg, confirmed on sonar",
+                  "sector": "reported sector +-20 deg, no sonar fire"}
+
+        def how(mode):
+            return how_of.get(mode, mode.replace("sector (", "reported sector +-20 deg (") if mode else "?")
+        n = len(summs)
+        nd = sum(bool(s["completed"]) for s in summs)
+        att = [s.get("dock_attempts") for s in summs]
+        out = [("outcome", f"{nd}/{n} docked" + (", each on the first attempt" if all(a == 1 for a in att) else ""))]
+        out.append(("time, path", rng([s["mission_time_s"] for s in summs], "{:.0f}", " s") + ", "
+                    + rng([s["path_length_m"] for s in summs], "{:.1f}", " m")))
+        out.append(("following the net", "true distance mean " + rng([s.get("follow_true_mean_m") for s in summs], "{:.2f}", " m")
+                    + "; sonar vs truth RMS " + rng([s["follow_standoff_err_rms_m"] for s in summs], "{:.2f}", " m")))
+        out.append(("closest link to the net", rng([s["min_link_to_net_m"] for s in summs], "{:.2f}", " m")))
+        modes = [s["tear"]["mode"] for s in summs if s["tear"]["detected"]]
+        cnt = ", ".join(f"{how(m)} {modes.count(m)}/{n}" for m in sorted(set(modes), key=lambda m: -modes.count(m)))
+        err = [abs(s["tear"]["bearing_err_deg"]) for s in summs if s["tear"].get("bearing_err_deg") is not None]
+        out.append(("tear found", f"t {rng([s['tear']['t_s'] for s in summs], '{:.1f}', ' s')}: {cnt}"
+                    + (f"; bearing error {rng(err, '{:.1f}', ' deg')}" if err else "")))
+        out.append(("closest pass, nose to tear", "pass 1 " + rng([s.get("inspect_closest_head_to_tear_m") for s in summs], "{:.2f}", " m")
+                    + ", pass 2 " + rng([s.get("inspect_2_closest_head_to_tear_m") for s in summs], "{:.2f}", " m")))
+        out.append(("energy (joint work)", rng([s["energy_abs_J"] for s in summs], "{:.0f}", " J")))
+        de = [s["dock_error"] for s in summs if s.get("dock_error")]
+        out.append(("latched at", "nose " + rng([d["nose_m"] for d in de], "{:.2f}", " m") + ", heading "
+                    + rng([d["heading_deg"] for d in de], "{:.1f}", " deg")))
+        sm = self.summ
+        tr = sm["tear"]
+        film = (("docked" if sm["completed"] else "not docked") + f", {sm['mission_time_s']:.0f} s; tear: "
+                + (how(tr["mode"]) if tr["detected"] else "not detected"))
+        out.append((f"this film (seed {self.seed}, re-run)", film))
         return out
 
     @staticmethod
