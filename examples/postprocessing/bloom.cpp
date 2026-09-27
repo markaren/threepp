@@ -1,12 +1,27 @@
 // UnrealBloomPass: threshold the image, blur what survives across five
 // progressively halved mips, add it back weighted.
 //
-// The threshold is applied to the scene's linear HDR light: the renderer only
-// tone-maps what it draws to the screen (three.js r154+), so the RenderPass
-// fills the composer's half-float targets with un-tone-mapped values, and the
-// composer's implicit OutputPass applies the renderer's tone mapping once, after
-// the bloom. A threshold of 1 blooms only what is brighter than white; below 1,
-// as here, the brighter parts of ordinary surfaces start to glow too.
+// The bloom works on the scene's linear HDR light: the renderer only tone-maps
+// what it draws to the screen (three.js r154+), so the RenderPass fills the
+// composer's half-float targets with un-tone-mapped values, and the composer's
+// implicit OutputPass applies the renderer's tone mapping once, after the bloom.
+// Two consequences for tuning:
+//
+// - The threshold is a luminance in scene light, not a fraction of white. At
+//   0.5 the emitters (luminance 0.7 to 2.9 at intensity 4) bloom and the lit
+//   slab (about 0.2) does not; above 1 it can still be raised to keep only the
+//   hottest pixels.
+// - Glow scales with how bright the emitter really is. An emitter at 4 feeds
+//   four times the light of one at 1 into the blur, and the widest mips carry
+//   it across the whole frame, so the strength stays low (0.2, the pass adds
+//   3 x strength of the blurred light) and the radius at 0, which weights the
+//   sharp mips over the wide ones. ACES turns the cores white; the halos keep
+//   the emitters' colour and fade within about a sphere's width.
+//
+// three.js's webgl_postprocessing_unreal_bloom uses threshold 0, strength 1,
+// radius 0.5 on a model whose only bright parts are its emissive strips; here
+// the emitters are several times brighter than white, so the same settings
+// would wash the frame in coloured light.
 //
 //   1 / 2   strength down / up
 //   3 / 4   threshold down / up
@@ -48,7 +63,7 @@ int main(int argc, char** argv) {
     // Headless capture (dev): bloom --shot <name.png> [--frames N] [--strength X]
     std::string shotPath;
     int shotFrames = 30, shotFrame = 0;
-    float strength = 0.9f;
+    float strength = 0.2f;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
@@ -76,9 +91,12 @@ int main(int argc, char** argv) {
     scene->add(keyLight);
 
     auto emitters = Group::create();
-    emitters->add(glowingSphere({-2.4f, 0, 0}, Color(0xff3311), 3.f));// luma weights differ per channel,
-    emitters->add(glowingSphere({0, 0, 0}, Color(0x33ff66), 2.2f));// so equal intensities would not
-    emitters->add(glowingSphere({2.4f, 0, 0}, Color(0x3366ff), 3.5f));// bloom equally - green needs least
+    // Equal radiant intensity; green still has the most luminance, so it
+    // crosses the threshold by the widest margin and glows the most, as a
+    // green lamp of the same power would look brightest.
+    emitters->add(glowingSphere({-2.4f, 0, 0}, Color(0xff3311), 4.f));
+    emitters->add(glowingSphere({0, 0, 0}, Color(0x33ff66), 4.f));
+    emitters->add(glowingSphere({2.4f, 0, 0}, Color(0x3366ff), 4.f));
     scene->add(emitters);
 
     // Something dull, so the bloom has a surface to bleed over and it is
@@ -98,15 +116,15 @@ int main(int argc, char** argv) {
 
     auto bloom = std::make_shared<UnrealBloomPass>(
             Vector2(static_cast<float>(canvas.size().width()), static_cast<float>(canvas.size().height())),
-            strength, 0.4f, 0.35f);
+            strength, 0.f, 0.5f);
     composer.addPass(bloom);
 
     canvas.onKeyPressed([&](KeyEvent evt) {
         switch (evt.key) {
-            case Key::NUM_1: bloom->strength = std::max(0.f, bloom->strength - 0.2f); break;
-            case Key::NUM_2: bloom->strength += 0.2f; break;
-            case Key::NUM_3: bloom->threshold = std::max(0.f, bloom->threshold - 0.05f); break;
-            case Key::NUM_4: bloom->threshold = std::min(1.f, bloom->threshold + 0.05f); break;
+            case Key::NUM_1: bloom->strength = std::max(0.f, bloom->strength - 0.05f); break;
+            case Key::NUM_2: bloom->strength += 0.05f; break;
+            case Key::NUM_3: bloom->threshold = std::max(0.f, bloom->threshold - 0.1f); break;
+            case Key::NUM_4: bloom->threshold += 0.1f; break;// HDR: above 1 is meaningful
             case Key::NUM_5: bloom->radius = std::max(0.f, bloom->radius - 0.1f); break;
             case Key::NUM_6: bloom->radius = std::min(1.f, bloom->radius + 0.1f); break;
             case Key::B: bloom->enabled = !bloom->enabled; break;
