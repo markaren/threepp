@@ -482,6 +482,61 @@ jobs:
         run: ctest --preset ci-windows
 
 
+  # threepp as a DLL built by MinGW-w64 GCC, in Debug: what a CLion or MSYS2
+  # user gets when they fetch it with BUILD_SHARED_LIBS=ON. No other job builds
+  # with GCC on Windows, or builds the shared library at all, and that is how a
+  # broken link shipped unnoticed: in Debug, GCC gives every inline function four
+  # COFF sections, and ObjectLoader.cpp went past the 32,767 a regular object can
+  # hold ("relocation truncated to fit: IMAGE_REL_AMD64_SECREL").
+  #
+  # The tests link against the DLL, so this also checks that programs using it
+  # build and run. Examples and the editor are off, to keep a Debug build of the
+  # library and every test within reason.
+  #
+  # From MSYS2 rather than the runner's preinstalled MinGW, so the toolchain is
+  # declared here and not whatever the image happens to ship. git comes from
+  # MSYS2 too: the MSYS2 shell does not inherit the Windows PATH, and
+  # FetchContent needs it for Catch2 and the test data.
+  windows-mingw:
+
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+
+      - name: Configure and build
+        run: |
+          gcc --version | head -n1
+          ld --version | head -n1
+          cmake --preset ci-mingw
+          cmake --build --preset ci-mingw
+
+      # -Wa,-mbig-obj (src/CMakeLists.txt) lifts the limit, so this job stays
+      # green when an object grows past it again. Report the largest objects, so
+      # that growth is still visible in the log.
+      - name: Report the largest objects by COFF section count
+        run: |
+          find build/ci-mingw/src -name '*.obj' | while read -r f; do
+            echo "$(objdump -h "$f" | grep -c '^ *[0-9]') ${f#build/ci-mingw/src/CMakeFiles/threepp.dir/}"
+          done | sort -rn | head -n 8
+
+      - name: Test
+        run: ctest --preset ci-mingw
+
+
   darwin:
 
     runs-on: ${{ matrix.os }}

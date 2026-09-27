@@ -170,6 +170,21 @@
       }
     },
     {
+      "name": "ci-mingw",
+      "inherits": [
+        "gl",
+        "ci-base"
+      ],
+      "displayName": "CI: Windows, MinGW-w64 GCC, shared library, Debug",
+      "description": "threepp as a DLL built by GCC, the way a CLion or MSYS2 user who fetches it gets it. Debug on purpose: GCC gives every inline function its own .debug_frame section there, which is what pushed single objects past the 32,767-section COFF limit and broke the link. The tests link against the DLL, so they also check that programs using it build and run. Run from a MinGW shell with gcc, cmake and ninja on PATH.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_SHARED_LIBS": "ON",
+        "THREEPP_BUILD_EXAMPLES": "OFF",
+        "THREEPP_BUILD_EDITOR": "OFF"
+      }
+    },
+    {
       "name": "ci-macos",
       "inherits": "ci-base",
       "displayName": "CI: macOS, library compile check",
@@ -278,6 +293,11 @@
       "configuration": "Release"
     },
     {
+      "name": "ci-mingw",
+      "configurePreset": "ci-mingw",
+      "configuration": "Debug"
+    },
+    {
       "name": "ci-macos",
       "configurePreset": "ci-macos",
       "configuration": "Release"
@@ -361,6 +381,12 @@
       "inherits": "base",
       "configurePreset": "ci-windows",
       "configuration": "Release"
+    },
+    {
+      "name": "ci-mingw",
+      "inherits": "base",
+      "configurePreset": "ci-mingw",
+      "configuration": "Debug"
     }
   ]
 }
