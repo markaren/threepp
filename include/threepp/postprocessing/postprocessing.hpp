@@ -10,6 +10,7 @@
 #include "threepp/postprocessing/BokehPass.hpp"
 #include "threepp/postprocessing/ClearPass.hpp"
 #include "threepp/postprocessing/EffectComposer.hpp"
+#include "threepp/postprocessing/FXAAPass.hpp"
 #include "threepp/postprocessing/GTAOPass.hpp"
 #include "threepp/postprocessing/MaskPass.hpp"
 #include "threepp/postprocessing/OutlinePass.hpp"
@@ -23,6 +24,7 @@
 
 #include "threepp/postprocessing/shaders/BokehShader.hpp"
 #include "threepp/postprocessing/shaders/CopyShader.hpp"
+#include "threepp/postprocessing/shaders/FXAAShader.hpp"
 #include "threepp/postprocessing/shaders/GTAOShader.hpp"
 #include "threepp/postprocessing/shaders/LuminosityHighPassShader.hpp"
 #include "threepp/postprocessing/shaders/PoissonDenoiseShader.hpp"
