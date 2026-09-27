@@ -15,8 +15,9 @@ snake_film_contact.png (16 frames) and snake_film_poster.png.
 
 The edit: a title card; the mission with speed-ramped time-lapse on the long transits (labelled by
 the panels' TIME-LAPSE badge; real time for the undock, the tear, the first pass, the U-turn and
-the funnel capture and latch); a 0.35 s dissolve at every camera cut logged by pass 1 (the outgoing
-frame is held under the dissolve, so story time never repeats); the head-camera view and the sonar
+the funnel capture and latch); a hard cut at every camera cut logged by pass 1 (DISSOLVE > 0 holds
+the outgoing frame under a dissolve instead, so story time never repeats); dissolves only from the
+title and into the end card; the head-camera view and the sonar
 composited here (the head camera grows while the head passes the tear, the sonar grows when the
 tear fires); snake_panels' HUD on top; the end card with the three-seed mission numbers.
 """
@@ -44,7 +45,8 @@ import snake_panels as SP
 
 FPS = 60
 OUT_W, OUT_H = 1920, 1080
-DISSOLVE = 0.35                                            # s, at every logged cut
+DISSOLVE = 0.0                                             # s at a logged cut: 0 = a hard cut (a dissolve between two
+                                                           # angles on the same moving snake reads as a double exposure)
 TITLE_S, END_S = 3.4, 9.0
 MARGIN = 24
 INS_SMALL, INS_BIG = (544, 306), (736, 414)                # head camera: normal, passing the tear
@@ -257,6 +259,25 @@ def frame3d(raw, aux, t, e_i, e_s, vw, vh, sw, sh, d_tear, phase):
     return img, (sx, sy, sw2, sh2)
 
 
+def gap_xy(tel, i, rect, sw, sh, view_m=10.0):
+    """Frame pixel of the tear in the sonar panel at log row i (the true tear, seen from the head's
+    logged pose: bearing positive to starboard = right in the fan), or None outside the fan."""
+    c = tel.c
+    if not all(k in c for k in ("head_x", "head_z", "psi_head", "tear_x", "tear_z")):
+        return None
+    L = tel.L[i]
+    psi = L[c["psi_head"]]
+    d = np.array([L[c["tear_x"]] - L[c["head_x"]], L[c["tear_z"]] - L[c["head_z"]]])
+    b = math.atan2(d @ [math.sin(psi), math.cos(psi)], d @ [math.cos(psi), -math.sin(psi)])
+    r = float(np.hypot(*d))
+    if abs(b) > math.radians(62.0) or r > 0.95 * view_m:
+        return None
+    rpx = r / view_m * (sh - 24)
+    x, y, w, h = rect
+    k = w / sw
+    return x + (0.5 * sw + rpx * math.sin(b)) * k, y + ((sh - 12) - rpx * math.cos(b)) * k
+
+
 # ---- title and end card ---------------------------------------------------------------------------
 def title_card():
     bg = np.array((9, 22, 26), float)
@@ -319,7 +340,8 @@ def work(args):
             img = Image.fromarray(blend(np.asarray(img), np.asarray(held[ds]), w), "RGBA")
         base = np.asarray(img.convert("RGB"))
         badge = float(S["badge"][j])
-        out = P.compose(base, tm, speedup=badge if badge > 1.01 else 1.0, sonar_rect=srect)
+        out = P.compose(base, tm, speedup=badge if badge > 1.01 else 1.0, sonar_rect=srect,
+                        sonar_gap_xy=gap_xy(tel, i, srect, sw, sh))
         enc.send(out)
         if j in picks:
             shots[j] = out

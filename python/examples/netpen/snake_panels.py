@@ -63,7 +63,7 @@ PHASE_LABEL = {
 
 TEAR_NOTE = {                               # summary tear.mode -> the sonar annotation
     "sonar": "gap in the wall return = the tear",
-    "sector+sonar": "reported tear sector, gap confirmed on sonar",
+    "sector+sonar": "gap in the wall return, inside the reported tear sector",
     "sector": "reported tear sector (no sonar gap fire)",
     "sector (sonar did not confirm)": "reported tear sector (sonar did not confirm the gap)",
 }
