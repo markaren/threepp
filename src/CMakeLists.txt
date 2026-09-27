@@ -336,6 +336,7 @@ set(privateHeaders
 
         "threepp/loaders/HdrTexture.hpp"
         "threepp/loaders/ObjectJsonConstants.hpp"
+        "threepp/loaders/ObjectJsonParse.hpp"
 
         "threepp/loaders/exr/PizDecode.hpp"
 
@@ -558,6 +559,7 @@ set(sources
         "threepp/loaders/ModelLoader.cpp"
         "threepp/loaders/ObjectExporter.cpp"
         "threepp/loaders/ObjectLoader.cpp"
+        "threepp/loaders/ObjectLoaderResources.cpp"
         "threepp/loaders/OBJLoader.cpp"
         "threepp/loaders/STLLoader.cpp"
         "threepp/loaders/SogLoader.cpp"
