@@ -51,6 +51,18 @@ namespace threepp_py {
         // ---- Font / FontLoader ----------------------------------------------
         py::class_<Font>(m, "Font")
                 .def_readonly("family_name", &Font::familyName)
+                // Metrics, scaled to a text size (the `size` Text2D/Text3D take), so
+                // text can be aligned before it is built: right-aligned x is
+                // x - advance(text, size); the baseline sits ascender(size) below
+                // the top of the line box.
+                .def("advance", &Font::advance, py::arg("text"), py::arg("size") = 1.f,
+                     "Width of `text` at `size`, exactly as Text2D lays it out (widest line).")
+                .def("ascender", [](const Font& f, float size) {
+                    return f.resolution > 0 ? static_cast<float>(f.ascender) * size / static_cast<float>(f.resolution) : 0.f;
+                }, py::arg("size") = 1.f, "Height above the baseline at `size` (positive).")
+                .def("descender", [](const Font& f, float size) {
+                    return f.resolution > 0 ? static_cast<float>(f.descender) * size / static_cast<float>(f.resolution) : 0.f;
+                }, py::arg("size") = 1.f, "Depth below the baseline at `size` (negative).")
                 .def("__repr__", [](const Font& f) { return "<threepp.Font '" + f.familyName + "'>"; });
 
         py::class_<FontLoader>(m, "FontLoader")

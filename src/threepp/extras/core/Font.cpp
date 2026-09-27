@@ -104,6 +104,25 @@ namespace {
 
 }// namespace
 
+float Font::advance(const std::string& text, float size) const {
+
+    if (resolution <= 0) return 0.f;
+    const auto scale = size / static_cast<float>(resolution);
+
+    float widest = 0.f, line = 0.f;
+    for (const auto c : utils::decodeUtf8(text)) {
+        if (c == U'\n') {
+            widest = std::max(widest, line);
+            line = 0.f;
+            continue;
+        }
+        auto it = glyphs.find(c);
+        if (it == glyphs.end()) it = glyphs.find(U'?');
+        if (it != glyphs.end()) line += static_cast<float>(it->second.ha) * scale;
+    }
+    return std::max(widest, line);
+}
+
 std::vector<Shape> Font::generateShapes(const std::string& text, float size) const {
 
     std::vector<Shape> shapes;

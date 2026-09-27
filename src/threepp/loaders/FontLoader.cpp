@@ -23,6 +23,8 @@ namespace {
         data.familyName = json["familyName"];
         data.resolution = json["resolution"];
         data.lineHeight = json["lineHeight"];
+        data.ascender = json.value("ascender", 0);
+        data.descender = json.value("descender", 0);
         data.boundingBox = Font::BoundingBox{
                 json["boundingBox"]["xMin"].get<float>(),
                 json["boundingBox"]["xMax"].get<float>(),
@@ -73,6 +75,7 @@ namespace {
         font.familyName = ttfFile.stem().string();
         font.resolution = ttUSHORT(info.data + info.head + 18);
         stbtt_GetFontVMetrics(&info, &font.lineHeight, nullptr, nullptr);
+        stbtt_GetFontVMetrics(&info, &font.ascender, &font.descender, nullptr);
 
         int width, height, xOffset, yOffset;
         float scale = stbtt_ScaleForPixelHeight(&info, 16);

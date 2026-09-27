@@ -2710,6 +2710,18 @@ class FogExp2:
 class Font:
     def __repr__(self) -> str:
         ...
+    def advance(self, text: str, size: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> float:
+        """
+        Width of `text` at `size`, exactly as Text2D lays it out (widest line).
+        """
+    def ascender(self, size: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> float:
+        """
+        Height above the baseline at `size` (positive).
+        """
+    def descender(self, size: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> float:
+        """
+        Depth below the baseline at `size` (negative).
+        """
     @property
     def family_name(self) -> str:
         ...

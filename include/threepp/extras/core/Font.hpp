@@ -36,12 +36,19 @@ namespace threepp {
         int resolution{};
         int lineHeight{};
         int underlineThickness{};
+        int ascender{};  // font units above the baseline (positive)
+        int descender{}; // font units below the baseline (negative)
 
         // Keyed by Unicode code point. A character with no glyph falls back to '?'.
         std::unordered_map<char32_t, Glyph> glyphs;
 
         // `text` is UTF-8.
         [[nodiscard]] std::vector<Shape> generateShapes(const std::string& text, float size = 100) const;
+
+        // Width of `text` (UTF-8) at `size`, measured exactly as generateShapes
+        // lays it out: the sum of glyph advances, widest line if multi-line.
+        // For aligning text: this is where the next character would start.
+        [[nodiscard]] float advance(const std::string& text, float size = 100) const;
 
         // Rasterize text into an RGBA image of the given pixel height.
         // supersampling (1, 2, 4, 8) renders at N× resolution and box-filters down,

@@ -110,3 +110,27 @@ TEST_CASE("Typeface JSON keys are decoded as UTF-8") {
     CHECK(font->glyphs.contains(char32_t{0x03BB}));// lambda
     CHECK(font->glyphs.contains(char32_t{0x00E9}));// e-acute
 }
+
+TEST_CASE("Font metrics for laying text out") {
+
+    FontLoader loader;
+    auto json = loader.load(std::string(DATA_FOLDER) + "/fonts/typeface/optimer_regular.typeface.json");
+    REQUIRE(json);
+    CHECK(json->ascender == 1267);
+    CHECK(json->descender == -374);
+
+    auto ttf = roboto();
+    REQUIRE(ttf);
+    CHECK(ttf->ascender > 0);
+    CHECK(ttf->descender < 0);
+
+    for (const auto* font : {&*json, &*ttf}) {
+        const float scale = 50.f / static_cast<float>(font->resolution);
+        const float ab = static_cast<float>(font->glyphs.at('a').ha + font->glyphs.at('b').ha) * scale;
+        CHECK_THAT(font->advance("ab", 50), Catch::Matchers::WithinRel(ab, 1e-5f));
+        // the widest line, and a multi-byte character counts once
+        CHECK_THAT(font->advance("ab\na", 50), Catch::Matchers::WithinRel(ab, 1e-5f));
+        CHECK(font->advance("", 50) == 0.f);
+    }
+    CHECK(ttf->advance("\xC2\xB5", 50) < ttf->advance("??", 50));
+}
