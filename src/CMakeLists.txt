@@ -1780,6 +1780,20 @@ if (MSVC)
     endif ()
 endif ()
 
+# A regular COFF object holds at most 32,767 sections, and MinGW GCC gives every
+# inline function and template instantiation its own .text$, .xdata$, .pdata$ and,
+# in Debug, .debug_frame$ section. Past the limit, linking the shared library
+# fails with "relocation truncated to fit: IMAGE_REL_AMD64_SECREL". ObjectLoader
+# crossed it as one file (~34k) and GLTFLoader was next (~25k); both are now split
+# so that no part is past ~20k. Splitting fixes the files that were measured; this
+# keeps the next one that grows from breaking the build, so it is set for the
+# whole target. GLRenderer.cpp (~21k) is the largest left. It is the GNU assembler's
+# equivalent of MSVC's /bigobj. GCC only: Clang's integrated assembler switches
+# to big-obj by itself.
+if (MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(threepp PRIVATE -Wa,-mbig-obj)
+endif ()
+
 if (THREEPP_TREAT_WARNINGS_AS_ERRORS)
     # Treat warnings as errors,
     if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
