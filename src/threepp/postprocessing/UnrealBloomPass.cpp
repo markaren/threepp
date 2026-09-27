@@ -148,11 +148,15 @@ namespace {
                 }
 
                 void main() {
-                    gl_FragColor = bloomStrength * ( lerpBloomFactor(bloomFactors[0]) * vec4(bloomTintColors[0], 1.0) * texture2D(blurTexture1, vUv) +
-                        lerpBloomFactor(bloomFactors[1]) * vec4(bloomTintColors[1], 1.0) * texture2D(blurTexture2, vUv) +
-                        lerpBloomFactor(bloomFactors[2]) * vec4(bloomTintColors[2], 1.0) * texture2D(blurTexture3, vUv) +
-                        lerpBloomFactor(bloomFactors[3]) * vec4(bloomTintColors[3], 1.0) * texture2D(blurTexture4, vUv) +
-                        lerpBloomFactor(bloomFactors[4]) * vec4(bloomTintColors[4], 1.0) * texture2D(blurTexture5, vUv) );
+                    // 3.0 keeps strength 1 where it was when the weight rode in
+                    // alpha (three.js r186); the sum of the mip factors is 3.
+                    vec3 bloom = 3.0 * bloomStrength * ( lerpBloomFactor(bloomFactors[0]) * bloomTintColors[0] * texture2D(blurTexture1, vUv).rgb +
+                        lerpBloomFactor(bloomFactors[1]) * bloomTintColors[1] * texture2D(blurTexture2, vUv).rgb +
+                        lerpBloomFactor(bloomFactors[2]) * bloomTintColors[2] * texture2D(blurTexture3, vUv).rgb +
+                        lerpBloomFactor(bloomFactors[3]) * bloomTintColors[3] * texture2D(blurTexture4, vUv).rgb +
+                        lerpBloomFactor(bloomFactors[4]) * bloomTintColors[4] * texture2D(blurTexture5, vUv).rgb );
+                    float bloomAlpha = max(bloom.r, max(bloom.g, bloom.b));
+                    gl_FragColor = vec4(bloom, bloomAlpha);
                 })";
 
         material->depthTest = false;
@@ -203,13 +207,18 @@ UnrealBloomPass::UnrealBloomPass(const Vector2& resolution, float strength, floa
     compositeMaterial_ = compositeMaterial();
 
     // The bloom is added to the image, not blended with it: light is additive,
-    // and the pass has no opinion about what was already there.
+    // and the pass has no opinion about what was already there. Premultiplied
+    // (ONE, ONE), so the added light is linear in strength. Straight additive
+    // blending (SRC_ALPHA, ONE) with the weight also in alpha added
+    // 3 * strength^2 of the glow into a half-float target, where nothing clamps
+    // alpha to 1 (three.js #32517 / #32521).
     const auto copy = shaders::copyShader();
     blendMaterial_ = ShaderMaterial::create();
     blendMaterial_->uniforms = copy.uniforms;
     blendMaterial_->vertexShader = copy.vertexShader;
     blendMaterial_->fragmentShader = copy.fragmentShader;
     blendMaterial_->blending = Blending::Additive;
+    blendMaterial_->premultipliedAlpha = true;
     blendMaterial_->transparent = true;
     blendMaterial_->depthTest = false;
     blendMaterial_->depthWrite = false;
