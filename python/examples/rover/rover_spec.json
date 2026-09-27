@@ -1,0 +1,770 @@
+{
+  "schema": "threepp.rover_spec/1",
+  "name": "TP-1",
+  "stage": "detailed (step 2)",
+  "description": "Original VIPER-class lunar rover for the tilt-bed film. Four rigid grousered wheels, each on an independent fore-aft swing-arm leg with a linear actuator. One file drives the Blender generator (build_rover_blender.py -> rover.glb) and the physics.",
+  "units": "SI: metres, kilograms. Keys ending in _deg are degrees.",
+  "frame": {
+    "handedness": "right",
+    "forward": "+X",
+    "up": "+Y",
+    "right": "+Z",
+    "left": "-Z",
+    "origin": "Chassis frame origin = centroid of the four wheel hub centres at nominal leg extension (all hubs at y = 0), on the rover centreline.",
+    "ground_at_nominal_y": -0.275,
+    "ground_note": "Flat hard ground touches the grouser tips at y = -(rim_radius + grouser.height) = -0.275 when a grouser points straight down. On sand the wheel sinks; the physics owns that.",
+    "wheel_names": "FL = front-left, FR = front-right, RL = rear-left, RR = rear-right, in the rover's own frame (front = +X, left = -Z).",
+    "gltf": "rover.glb is Y-up, same axes and metres as this frame. Node 'chassis' is the root and sits at identity (glTF scene origin = chassis frame origin)."
+  },
+  "wheel": {
+    "rim_radius": 0.25,
+    "width": 0.2,
+    "grouser": {
+      "count": 24,
+      "height": 0.025,
+      "thickness": 0.01,
+      "length": 0.2,
+      "profile": "straight, transverse (parallel to the spin axis), full width, evenly spaced",
+      "phase_deg": 0.0,
+      "phase_note": "Grouser k is centred at angle k*15 deg about local +Z, measured from local +X toward local +Y. k = 18 points straight down (-Y) at spin 0."
+    },
+    "grouser_tip_radius": 0.275,
+    "rim_inner_radius": 0.235,
+    "hub_radius": 0.07,
+    "hub_length": 0.24,
+    "rigid": true,
+    "spin_axis_local": "+Z",
+    "forward_roll_sign": -1,
+    "forward_roll_note": "Rolling toward +X is a NEGATIVE rotation about the wheel node's local +Z (v = omega x r with the contact point at -Y).",
+    "node_origin": "hub centre",
+    "spokes": 8
+  },
+  "hubs": {
+    "FL": [
+      0.6418,
+      0.0,
+      -0.6098
+    ],
+    "FR": [
+      0.6418,
+      0.0,
+      0.6098
+    ],
+    "RL": [
+      -0.6418,
+      0.0,
+      -0.6098
+    ],
+    "RR": [
+      -0.6418,
+      0.0,
+      0.6098
+    ]
+  },
+  "wheelbase": 1.2836,
+  "track": 1.2196,
+  "hub_source": {
+    "file": "src/chrono_models/robot/viper/Viper.cpp",
+    "repo": "github.com/projectchrono/chrono (BSD-3-Clause)",
+    "commit": "af55b29380cb3e617b831cf950103f2a756ed9fe (main, fetched 2026-09-27)",
+    "lines": "388-398: wx = 0.5618 + 0.08 = 0.6418, wy = 0.2067 + 0.32 + 0.0831 = 0.6098, wz = 0.0; wheels at (+-wx, +-wy, wz)",
+    "mapping": "Chrono is X-forward, Y-left, Z-up. Here: x = chrono_x, y = chrono_z, z = -chrono_y.",
+    "use": "MGRU3 proxy for track and wheelbase"
+  },
+  "legs": {
+    "type": "fore-aft swing arm, one rotational DOF, driven by a linear actuator (slider-crank)",
+    "node_origin": "leg pivot on the chassis side bracket",
+    "pivot_axis_local": "+Z (parallel to the wheel spin axis, so the wheel stays upright at every leg angle)",
+    "frame_at_zero": "At leg angle 0 the leg node axes are parallel to the chassis axes; angle 0 = nominal extension.",
+    "pivots": {
+      "FL": [
+        0.14,
+        0.2,
+        -0.47
+      ],
+      "FR": [
+        0.14,
+        0.2,
+        0.47
+      ],
+      "RL": [
+        -0.14,
+        0.2,
+        -0.47
+      ],
+      "RR": [
+        -0.14,
+        0.2,
+        0.47
+      ]
+    },
+    "arm_length": 0.540188,
+    "arm_section": [
+      0.05,
+      0.04
+    ],
+    "nominal_extension": 0.2,
+    "nominal_extension_note": "Vertical drop from leg pivot to hub centre at leg angle 0.",
+    "stroke": 0.36,
+    "extension_range": [
+      0.02,
+      0.38
+    ],
+    "extension_note": "0.02 = fully compressed (chassis lowered 0.18 m), 0.38 = fully extended (chassis raised 0.18 m). Nominal sits mid-stroke.",
+    "hub_up_sign": {
+      "FL": 1,
+      "FR": 1,
+      "RL": -1,
+      "RR": -1
+    },
+    "hub_up_note": "A positive rotation about local +Z raises the hub (compresses) on the front legs and lowers it (extends) on the rear legs.",
+    "angle_limits_deg": {
+      "FL": [
+        -22.975,
+        19.609
+      ],
+      "FR": [
+        -22.975,
+        19.609
+      ],
+      "RL": [
+        -19.609,
+        22.975
+      ],
+      "RR": [
+        -19.609,
+        22.975
+      ]
+    },
+    "wheel_parenting": "wheel_XX is a child of leg_XX; its local translation is the hub in the leg frame (pivot -> hub). Leg rotation adds to the wheel's world spin angle; spin is still about local +Z."
+  },
+  "actuators": {
+    "note": "Two nodes per leg that telescope. actuator_XX_barrel (cylinder) is a child of 'chassis' anchored at chassis_mount; actuator_XX_rod is a child of leg_XX anchored at arm_mount_leg_frame. Both extend along their local +Y.",
+    "reaim_recipe": "Each frame: A = chassis_mount (chassis frame); B = leg_XX.matrix @ arm_mount_leg_frame (chassis frame). barrel.quaternion = rotation taking +Y onto (B - A). rod.quaternion = rotation taking +Y onto leg_XX.matrix^-1 applied to the direction (A - B) (leg frame). Positions stay at the anchors. Barrel + rod overlap at every leg angle inside angle_limits_deg.",
+    "chassis_mount": {
+      "FL": [
+        0.4,
+        0.5,
+        -0.47
+      ],
+      "FR": [
+        0.4,
+        0.5,
+        0.47
+      ],
+      "RL": [
+        -0.4,
+        0.5,
+        -0.47
+      ],
+      "RR": [
+        -0.4,
+        0.5,
+        0.47
+      ]
+    },
+    "arm_mount_distance": 0.18,
+    "arm_mount_leg_frame": {
+      "FL": [
+        0.167213,
+        -0.066643,
+        0.0
+      ],
+      "FR": [
+        0.167213,
+        -0.066643,
+        0.0
+      ],
+      "RL": [
+        -0.167213,
+        -0.066643,
+        0.0
+      ],
+      "RR": [
+        -0.167213,
+        -0.066643,
+        0.0
+      ]
+    },
+    "barrel_length": 0.26,
+    "barrel_radius": 0.028,
+    "rod_length": 0.26,
+    "rod_radius": 0.016
+  },
+  "chassis": {
+    "note": "Two tiers. A keel box between the legs carries the leg pivots and the battery; a wide upper body spans the footprint with the wheels tucked under its edges.",
+    "keel": {
+      "size": [
+        1.1,
+        0.48,
+        0.86
+      ],
+      "center": [
+        0.0,
+        0.26,
+        0.0
+      ]
+    },
+    "upper_body": {
+      "size": [
+        1.52,
+        0.38,
+        1.38
+      ],
+      "center": [
+        0.0,
+        0.69,
+        0.0
+      ],
+      "corner_chamfer": 0.16
+    },
+    "deck_y": 0.88,
+    "belly_y": 0.02,
+    "ground_clearance_nominal": 0.295,
+    "wheel_clearance_note": "Upper-body underside y = 0.50; wheel top at full compression = 0.18 + 0.275 = 0.455, so 45 mm clearance over the whole stroke (checked by the generator).",
+    "keel_radiator": {
+      "x_range": [
+        -0.46,
+        0.46
+      ],
+      "y_range": [
+        0.26,
+        0.47
+      ],
+      "thickness": 0.01
+    },
+    "deck_radiators": [
+      {
+        "x_range": [
+          -0.7,
+          0.3
+        ],
+        "z_range": [
+          -0.6,
+          -0.06
+        ]
+      },
+      {
+        "x_range": [
+          -0.7,
+          0.3
+        ],
+        "z_range": [
+          0.06,
+          0.6
+        ]
+      }
+    ],
+    "pivot_bracket_size": [
+      0.08,
+      0.1,
+      0.04
+    ],
+    "mli_tile": 0.6,
+    "designation_plate": {
+      "text": "TP-1",
+      "x_range": [
+        0.36,
+        0.56
+      ],
+      "y_range": [
+        0.62,
+        0.72
+      ],
+      "text_height": 0.058,
+      "sides": [
+        "left",
+        "right"
+      ]
+    }
+  },
+  "mast": {
+    "base": [
+      0.58,
+      0.88,
+      0.0
+    ],
+    "base_flange_radius": 0.11,
+    "tube_radius": 0.055,
+    "tube_top_y": 1.5,
+    "braces": {
+      "deck": [
+        [
+          0.34,
+          0.88,
+          -0.13
+        ],
+        [
+          0.34,
+          0.88,
+          0.13
+        ]
+      ],
+      "mast_y": 1.24,
+      "radius": 0.016
+    },
+    "pan": {
+      "node": "mast_pan",
+      "origin": [
+        0.58,
+        1.5,
+        0.0
+      ],
+      "axis_local": "+Y",
+      "drive_radius": 0.08,
+      "drive_height": 0.08
+    },
+    "tilt": {
+      "node": "mast_tilt",
+      "origin_in_pan": [
+        0.0,
+        0.22,
+        0.0
+      ],
+      "axis_local": "+Z",
+      "rest_deg": -15.0,
+      "note": "mast_tilt rotates about its local +Z; rest pose pitches the head 15 deg down; positive = pitch up."
+    },
+    "head_size": [
+      0.15,
+      0.13,
+      0.5
+    ],
+    "head_offset": [
+      0.02,
+      0.0,
+      0.0
+    ],
+    "top_y_target": 1.825,
+    "height_above_ground_target": 2.1
+  },
+  "sensors": {
+    "convention": "Empties look down local -Z with local +Y up and +X right (threepp/glTF camera convention). Head sensors are children of mast_tilt and move with pan and tilt; local_* is in the mast_tilt frame. nominal_position / nominal_pitch_down_deg are the resulting chassis-frame pose at pan 0, tilt rest.",
+    "stereo_baseline": 0.24,
+    "navcam_L": {
+      "parent": "mast_tilt",
+      "local_position": [
+        0.13,
+        0.0,
+        -0.12
+      ],
+      "local_pitch_down_deg": 0.0,
+      "nominal_position": [
+        0.70557,
+        1.68635,
+        -0.12
+      ],
+      "nominal_pitch_down_deg": 15.0,
+      "hfov_deg": 60.0,
+      "resolution": [
+        1280,
+        1024
+      ]
+    },
+    "navcam_R": {
+      "parent": "mast_tilt",
+      "local_position": [
+        0.13,
+        0.0,
+        0.12
+      ],
+      "local_pitch_down_deg": 0.0,
+      "nominal_position": [
+        0.70557,
+        1.68635,
+        0.12
+      ],
+      "nominal_pitch_down_deg": 15.0,
+      "hfov_deg": 60.0,
+      "resolution": [
+        1280,
+        1024
+      ]
+    },
+    "headlight_L": {
+      "parent": "mast_tilt",
+      "local_position": [
+        0.12,
+        -0.045,
+        -0.205
+      ],
+      "local_pitch_down_deg": 5.0,
+      "nominal_position": [
+        0.68426,
+        1.64548,
+        -0.205
+      ],
+      "nominal_pitch_down_deg": 20.0,
+      "cone_deg": 50.0
+    },
+    "headlight_R": {
+      "parent": "mast_tilt",
+      "local_position": [
+        0.12,
+        -0.045,
+        0.205
+      ],
+      "local_pitch_down_deg": 5.0,
+      "nominal_position": [
+        0.68426,
+        1.64548,
+        0.205
+      ],
+      "nominal_pitch_down_deg": 20.0,
+      "cone_deg": 50.0
+    },
+    "hazcam_front": {
+      "parent": "chassis",
+      "local_position": [
+        0.785,
+        0.6,
+        0.0
+      ],
+      "local_pitch_down_deg": 35.0,
+      "nominal_position": [
+        0.785,
+        0.6,
+        0.0
+      ],
+      "nominal_pitch_down_deg": 35.0,
+      "hfov_deg": 110.0,
+      "resolution": [
+        1024,
+        1024
+      ]
+    }
+  },
+  "mass": {
+    "total": 88.0,
+    "per_wheel": 3.5,
+    "per_leg_with_actuator": 2.5,
+    "com": [
+      0.005,
+      0.313,
+      -0.0025
+    ],
+    "com_height_above_ground_nominal": 0.588,
+    "com_method": "Component budget: masses are engineering estimates that sum to the 88 kg test mass; each centroid is the centroid of that component's geometry in rover.glb (box/prism centres, mast by segment). CoM = mass-weighted mean; the generator recomputes it and asserts it matches within 5 mm.",
+    "com_note": "Chassis frame at nominal leg extension. The wide upper body, vertical arrays and mast raise it from the step-1 0.164; the battery rides low in the keel to hold it down.",
+    "budget": [
+      {
+        "item": "wheels (4 x 3.5)",
+        "mass": 14.0,
+        "centroid": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "item": "legs + actuators (4 x 2.5)",
+        "mass": 10.0,
+        "centroid": [
+          0.0,
+          0.16,
+          0.0
+        ]
+      },
+      {
+        "item": "keel structure, MLI, keel radiators",
+        "mass": 10.0,
+        "centroid": [
+          0.0,
+          0.26,
+          0.0
+        ]
+      },
+      {
+        "item": "upper body structure, MLI, deck radiators, hazcam",
+        "mass": 14.0,
+        "centroid": [
+          0.0,
+          0.69,
+          0.0
+        ]
+      },
+      {
+        "item": "battery + avionics, keel floor",
+        "mass": 30.0,
+        "centroid": [
+          -0.015,
+          0.08,
+          0.0
+        ]
+      },
+      {
+        "item": "vertical solar arrays (2 side + rear)",
+        "mass": 5.0,
+        "centroid": [
+          -0.38,
+          0.81,
+          0.0
+        ]
+      },
+      {
+        "item": "mast, braces, pan-tilt head, cameras, headlights",
+        "mass": 4.5,
+        "centroid": [
+          0.57,
+          1.5,
+          0.0
+        ]
+      },
+      {
+        "item": "patch antenna",
+        "mass": 0.5,
+        "centroid": [
+          0.46,
+          0.92,
+          -0.44
+        ]
+      }
+    ]
+  },
+  "materials": {
+    "note": "Step-1 flat colours (linear RGB). Step 2 swaps these by NAME for crinkled foil, anodise and so on.",
+    "mli_gold_foil": {
+      "color": [
+        0.8,
+        0.53,
+        0.17
+      ],
+      "metallic": 0.85,
+      "roughness": 0.34,
+      "normal_map": "mli_crinkle_normal",
+      "normal_scale": 0.9
+    },
+    "mli_silver_foil": {
+      "color": [
+        0.8,
+        0.8,
+        0.82
+      ],
+      "metallic": 0.85,
+      "roughness": 0.28,
+      "normal_map": "mli_crinkle_normal",
+      "normal_scale": 0.7
+    },
+    "radiator_white": {
+      "color": [
+        0.82,
+        0.82,
+        0.8
+      ],
+      "metallic": 0.0,
+      "roughness": 0.55
+    },
+    "wheel_black_anodised": {
+      "color": [
+        0.018,
+        0.018,
+        0.02
+      ],
+      "metallic": 0.3,
+      "roughness": 0.45
+    },
+    "hub_titanium": {
+      "color": [
+        0.42,
+        0.41,
+        0.39
+      ],
+      "metallic": 1.0,
+      "roughness": 0.4
+    },
+    "leg_aluminium": {
+      "color": [
+        0.6,
+        0.61,
+        0.63
+      ],
+      "metallic": 0.8,
+      "roughness": 0.45
+    },
+    "actuator_steel": {
+      "color": [
+        0.22,
+        0.23,
+        0.25
+      ],
+      "metallic": 0.9,
+      "roughness": 0.4
+    },
+    "actuator_rod_chrome": {
+      "color": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "metallic": 1.0,
+      "roughness": 0.18
+    },
+    "mast_white": {
+      "color": [
+        0.78,
+        0.78,
+        0.76
+      ],
+      "metallic": 0.0,
+      "roughness": 0.5
+    },
+    "camera_body_black": {
+      "color": [
+        0.03,
+        0.03,
+        0.03
+      ],
+      "metallic": 0.0,
+      "roughness": 0.5
+    },
+    "lens_glass": {
+      "color": [
+        0.01,
+        0.014,
+        0.02
+      ],
+      "metallic": 0.0,
+      "roughness": 0.05
+    },
+    "headlight_emitter": {
+      "color": [
+        0.9,
+        0.9,
+        0.85
+      ],
+      "metallic": 0.0,
+      "roughness": 0.3,
+      "emissive": [
+        1.0,
+        0.94,
+        0.82
+      ],
+      "emissive_strength": 4.0
+    },
+    "plate_grey": {
+      "color": [
+        0.52,
+        0.53,
+        0.55
+      ],
+      "metallic": 0.3,
+      "roughness": 0.5
+    },
+    "plate_text_black": {
+      "color": [
+        0.02,
+        0.02,
+        0.02
+      ],
+      "metallic": 0.0,
+      "roughness": 0.6
+    },
+    "solar_cell": {
+      "color": [
+        0.02,
+        0.035,
+        0.09
+      ],
+      "metallic": 0.2,
+      "roughness": 0.12
+    },
+    "solar_frame": {
+      "color": [
+        0.6,
+        0.61,
+        0.63
+      ],
+      "metallic": 0.9,
+      "roughness": 0.35
+    },
+    "solar_back": {
+      "color": [
+        0.1,
+        0.1,
+        0.11
+      ],
+      "metallic": 0.0,
+      "roughness": 0.5
+    },
+    "antenna_patch": {
+      "color": [
+        0.85,
+        0.85,
+        0.83
+      ],
+      "metallic": 0.0,
+      "roughness": 0.45
+    },
+    "normal_maps": {
+      "mli_crinkle_normal": {
+        "size": 1024,
+        "seed": 7,
+        "octaves": [
+          [
+            14,
+            0.3
+          ],
+          [
+            34,
+            0.22
+          ],
+          [
+            80,
+            0.1
+          ]
+        ],
+        "note": "Procedural faceted crinkle (jittered-grid Voronoi, random tilt per facet), tangent-space, OpenGL +Y. Generated in the build, packed into rover.glb."
+      }
+    }
+  },
+  "solar_panels": {
+    "note": "Vertical arrays: at the lunar south pole the sun sits on the horizon. Panel-local frame: u along the panel, v up, w = outward normal.",
+    "y_range": [
+      0.56,
+      1.06
+    ],
+    "thickness": 0.02,
+    "standoff": 0.015,
+    "cell_grid": [
+      10,
+      5
+    ],
+    "panels": [
+      {
+        "name": "solar_R",
+        "center_u": -0.15,
+        "width": 0.9,
+        "face": "+Z",
+        "plane": 0.705
+      },
+      {
+        "name": "solar_L",
+        "center_u": -0.15,
+        "width": 0.9,
+        "face": "-Z",
+        "plane": -0.705
+      },
+      {
+        "name": "solar_rear",
+        "center_u": 0.0,
+        "width": 1.0,
+        "face": "-X",
+        "plane": -0.775
+      }
+    ]
+  },
+  "antenna": {
+    "type": "low-profile flat patch on a short plinth",
+    "center": [
+      0.46,
+      0.88,
+      -0.44
+    ],
+    "size": [
+      0.24,
+      0.025,
+      0.24
+    ],
+    "plinth_height": 0.05
+  }
+}
