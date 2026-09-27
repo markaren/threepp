@@ -249,6 +249,41 @@ namespace threepp {
             return roadOverrides_[static_cast<std::size_t>(wheel)].active;
         }
 
+        // -- External wheel torque (an external contact model drives the spin) --
+        //
+        // With a road override at mu = 0 the PhysX tire develops no force and no
+        // torque, so a caller that owns the whole contact (a granular soil, say)
+        // can apply the soil's horizontal force to the chassis itself and hand the
+        // soil's moment about the axle to the wheel's spin here. `torque` (N m) is
+        // added to the tire's wheelTorque every substep, in the wheel-spin sign
+        // convention of wheelAngularSpeed(): a torque resisting a forward-spinning
+        // wheel is negative. The soil answers once per frame, so the torque can be
+        // linearised around the spin it was measured at:
+        //     wheelTorque += torque + dTorqueDOmega * (omega - omegaRef)
+        // with dTorqueDOmega <= 0 the soil's (negative) slope; it keeps the
+        // frame-lagged coupling from ringing against a 1000+ N m drive.
+        // While active the wheel's sticky-tire states are held off: sticky tires
+        // pin a slow wheel with a constraint the external model knows nothing of.
+        // CAVEAT (probe-verified, PhysX 5.x direct drive): a wheel with neither
+        // drive nor brake applied is FREE-ROLLING -- the drivetrain sets its spin
+        // from the ground speed and integrates no torque, so the external torque
+        // only acts while throttle or brake is on. Coasting wheels then roll
+        // without slip; the soil's horizontal force (applied by the caller) still
+        // slows the car.
+        void setWheelExternalTorque(int wheel, float torque, float dTorqueDOmega = 0.f, float omegaRef = 0.f) {
+            checkWheelIndex(wheel);
+            auto& e = wheelTorques_[static_cast<std::size_t>(wheel)];
+            e.active = true;
+            e.torque = torque;
+            e.slope = dTorqueDOmega;
+            e.omegaRef = omegaRef;
+        }
+
+        void clearWheelExternalTorque(int wheel) {
+            checkWheelIndex(wheel);
+            wheelTorques_[static_cast<std::size_t>(wheel)].active = false;
+        }
+
         // -- Readouts --
 
         ::physx::PxRigidDynamic* chassisActor() const { return chassisActor_; }
@@ -656,6 +691,12 @@ namespace threepp {
                     static_cast<::physx::PxU8>(std::max(1u, settings_.subStepCountLowSpeed)));
             componentSequence_.add(static_cast<PxVehicleSuspensionComponent*>(this));
             componentSequence_.add(static_cast<PxVehicleTireComponent*>(this));
+            // External wheel torques (setWheelExternalTorque) go onto the tire's
+            // wheelTorque after the tire component wrote it and before the
+            // drivetrain integrates the spin. Same one-line-component pattern as
+            // the road override; inert while no wheel has one.
+            wheelTorqueComponent_.owner = this;
+            componentSequence_.add(&wheelTorqueComponent_);
             addDrivetrainComponents();
             componentSequence_.add(static_cast<PxVehicleWheelComponent*>(this));
             componentSequence_.add(static_cast<PxVehicleRigidBodyComponent*>(this));
@@ -878,6 +919,23 @@ namespace threepp {
             }
         }
 
+        // Add the external wheel torques. Runs every substep, between the tire
+        // component and the drivetrain -- see buildComponentSequence().
+        void applyWheelExternalTorques() {
+            using namespace ::physx::vehicle2;
+            for (std::size_t i = 0; i < 4; ++i) {
+                const auto& e = wheelTorques_[i];
+                if (!e.active) continue;
+                const float omega = wheelRigidBody1dStates_[i].rotationSpeed;
+                tireForces_[i].wheelTorque += e.torque + e.slope * (omega - e.omegaRef);
+                auto& st = tireStickyStates_[i];
+                st.activeStatus[PxVehicleTireDirectionModes::eLONGITUDINAL] = false;
+                st.activeStatus[PxVehicleTireDirectionModes::eLATERAL] = false;
+                st.lowSpeedTime[PxVehicleTireDirectionModes::eLONGITUDINAL] = 0.f;
+                st.lowSpeedTime[PxVehicleTireDirectionModes::eLATERAL] = 0.f;
+            }
+        }
+
         // ---- Internal types ----
 
         struct RoadOverride {
@@ -894,6 +952,24 @@ namespace threepp {
             bool update(const ::physx::PxReal,
                         const ::physx::vehicle2::PxVehicleSimulationContext&) override {
                 owner->applyRoadOverrides();
+                return true;
+            }
+        };
+
+        struct WheelTorque {
+            bool active = false;
+            float torque = 0.f;  // N m, in the wheelAngularSpeed() sign convention
+            float slope = 0.f;   // dTorque/dOmega, N m s (<= 0 for a resisting soil)
+            float omegaRef = 0.f;// the spin the torque was measured at, rad/s
+        };
+
+        // Sequence element that does nothing but call applyWheelExternalTorques().
+        struct WheelTorqueComponent : public ::physx::vehicle2::PxVehicleComponent {
+            PhysxVehicleBase* owner = nullptr;
+
+            bool update(const ::physx::PxReal,
+                        const ::physx::vehicle2::PxVehicleSimulationContext&) override {
+                owner->applyWheelExternalTorques();
                 return true;
             }
         };
@@ -979,6 +1055,8 @@ namespace threepp {
         std::array<::physx::vehicle2::PxVehicleRoadGeometryState, 4> roadGeometryStates_{};
         std::array<RoadOverride, 4> roadOverrides_{};
         RoadOverrideComponent roadOverrideComponent_{};
+        std::array<WheelTorque, 4> wheelTorques_{};
+        WheelTorqueComponent wheelTorqueComponent_{};
 
         ChassisQueryFilter queryFilter_{};
 

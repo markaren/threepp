@@ -1441,7 +1441,26 @@ namespace threepp_py {
                      py::arg("wheel"), "Give this wheel back to the scene query (the rigid fallback).")
                 .def("road_override_active",
                      [](const PhysxVehicle& v, int i) { return v.roadOverrideActive(wheelIndex(i)); },
-                     py::arg("wheel"));
+                     py::arg("wheel"))
+                // -- External wheel torque --
+                .def("set_wheel_external_torque",
+                     [](PhysxVehicle& v, int i, float torque, float slope, float omegaRef) {
+                         v.setWheelExternalTorque(wheelIndex(i), torque, slope, omegaRef);
+                     },
+                     py::arg("wheel"), py::arg("torque"), py::arg("dtorque_domega") = 0.f,
+                     py::arg("omega_ref") = 0.f,
+                     "Add an external torque (N m) to this wheel's spin, every substep, in the "
+                     "wheel_angular_speed() sign convention (resisting a forward-spinning wheel = "
+                     "negative): torque + dtorque_domega * (omega - omega_ref), the soil's answer "
+                     "linearised around the spin it was measured at (dtorque_domega <= 0). With "
+                     "set_road_override(..., mu=0) the tire itself develops nothing, so a ground "
+                     "model that owns the whole contact applies its horizontal force with "
+                     "add_force_at_pos and its moment about the axle here. Sticky-tire states are "
+                     "held off while it is set. CAVEAT: with neither throttle nor brake on, PhysX "
+                     "free-rolls the wheel (spin from ground speed) and ignores the torque.")
+                .def("clear_wheel_external_torque",
+                     [](PhysxVehicle& v, int i) { v.clearWheelExternalTorque(wheelIndex(i)); },
+                     py::arg("wheel"), "Stop adding an external torque to this wheel's spin.");
 
         m.attr("HAS_PHYSX") = true;
     }
