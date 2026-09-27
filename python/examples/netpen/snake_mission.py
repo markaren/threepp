@@ -37,21 +37,25 @@ NAVIGATION: a USBL fix of the head at 1 Hz (seeded 5 cm noise), DVL dead reckoni
 error is the fix's noise, held for the second); the body centre adds the chain shape from the
 joint encoders.
 
-TEAR DETECTOR. Per image, on the wall side: the wall's expected range per beam is a wide
-nan-median of the first echoes (the gap's neighbours carry it across the gap); a beam is a gap
-beam where the first echo is missing or > expected + 1.0 m, or where the wall echo is < 25 % of
-the local wall level (the 28 deg vertical fan straddles a 1.3 m hole except near abeam, so a
-partly covered beam still echoes, only weaker). A contiguous run of gap beams with the wall on
-both sides, at an expected range < 3 m, whose chord on the wall is 0.4-1.8 m, is a candidate;
-its centre goes to the world with the head's pose at the image. It fires when >= 3 of the last
-5 images hold a candidate within 6 deg of pen bearing of each other. If the head passes the
-reported sector (+-20 deg around the reported tear bearing) without a fire, it fires in 'sector'
-mode on the best sonar candidate inside the sector ('sector+sonar') or on the reported bearing;
-the close passes keep collecting candidates and upgrade a bare 'sector' fire to 'sector+sonar'
-once >= 3 agree. On the scene's rendered sonar (seed 0, 133 images with the hole in the fan at
-1.3-2.6 m) the wall echo runs on across the hole: the last-echo range on the hole's beam equals its
-+-20 beam neighbours' within 0.02 m and the echo level is unchanged, so no candidate forms and the
-scene's summary says 'sector (sonar did not confirm)' with no bearing error for that mode.
+TEAR DETECTOR. Per image, across the whole fan (the gait swings the head so far, +-40-65 deg,
+that the wall and the hole sweep through the port half too): the wall's expected range per beam
+is a 41-beam nan-median of the last echoes, carried linearly across a longer no-echo run from the
+wall on its two sides; a beam is a gap beam where the echo is missing or > expected + 1.0 m, or
+where the wall echo is < 25 % of the local wall level (the vertical fan straddles a 1.3 m hole
+except near abeam, so a partly covered beam still echoes, only weaker). A contiguous run of gap
+beams with the wall on both sides, at an expected range < 3 m, whose chord on the wall (its two
+edges, each at its own expected range: the wall is oblique to the fan) is 0.4-1.8 m, is a
+candidate; the chord's midpoint goes to the world with the head's pose at the image. It fires
+when >= 3 of the last 5 images hold a candidate within 6 deg of pen bearing of each other. If the
+head passes the reported sector (+-20 deg around the reported tear bearing) without a fire, it
+fires in 'sector' mode on the best sonar candidate inside the sector ('sector+sonar') or on the
+reported bearing; the close passes keep collecting candidates and upgrade a bare 'sector' fire to
+'sector+sonar' once >= 3 agree. On the scene's rendered sonar (seed 0, 600 images ACQUIRE ..
+INSPECT_2) the hole is a no-echo run of 8-30 beams at 1.8-2.1 m, 30-48 at 1.3-1.7 m, none beyond
+~2.2 m: 111 candidates, all 0.6-1.3 deg from the true tear bearing, none elsewhere (wall, fish,
+cradle), a 'sonar' fire at 30.1 s (-1.1 deg). A starboard-only mask (b > 12 deg) and the bare 41-beam median
+gave 7: the hole sat in the port half or straddled the mask's edge (no wall beside it), and a hole
+wider than the window left the median NaN in its middle, splitting the run.
 
 STATE MACHINE. DOCKED (latched: the latch line holds the head at the latch point, spring 40 N/m,
 damper 20 N s/m, cap 10 N; the cradle bore holds the links inside it, see CRADLE) -> UNDOCK (the
@@ -222,6 +226,18 @@ def _nanmed_window(r, k):
         return np.nanmedian(win, axis=1)
 
 
+def _fill_across(v, mask):
+    """v with its NaN runs inside mask that have finite values on both sides filled linearly."""
+    k = np.arange(len(v))
+    idx = np.flatnonzero(mask & np.isfinite(v))
+    if len(idx) < 2:
+        return v
+    inner = mask & ~np.isfinite(v) & (k > idx[0]) & (k < idx[-1])
+    out = v.copy()
+    out[inner] = np.interp(k[inner], idx, v[idx])
+    return out
+
+
 def wall_ranges(intensity, rel=0.06, abs_floor=0.01, max_r=10.0, smooth=3):
     """Per-beam range of the LAST echo above threshold inside max_r (NaN where none). Inside the pen
     everything else (fish, the collar's shadow) is nearer than the net, so the last echo is the wall
@@ -245,7 +261,7 @@ class TearDetector:
     """Gap in the net wall from the head sonar; see the module docstring."""
 
     def __init__(self, jump=1.0, weak=0.25, max_ref=3.0, min_w=0.4, max_w=1.8, win=41,
-                 persist=3, window=5, agree=D2R(6.0), min_side=D2R(12.0)):
+                 persist=3, window=5, agree=D2R(6.0), min_side=None):
         self.jump, self.weak, self.max_ref = jump, weak, max_ref
         self.min_w, self.max_w, self.win = min_w, max_w, win
         self.persist, self.window, self.agree, self.min_side = persist, window, agree, min_side
@@ -261,14 +277,17 @@ class TearDetector:
         a = np.asarray(intensity, np.float32)
         bins = a.shape[1]
         bin_m = e3.SON_RANGE / bins
-        wall_side = side * b > self.min_side
+        # the whole fan by default: the gait swings the head so far that the wall and the hole sweep
+        # through the port half too (min_side = a starboard-only mask, radians)
+        wall_side = np.ones(len(b), bool) if self.min_side is None else side * b > self.min_side
         rr = np.where(wall_side, r, np.nan)
-        ref = _nanmed_window(rr, self.win)
+        # carried across a no-echo run wider than the window from the wall on both sides
+        ref = _fill_across(_nanmed_window(rr, self.win), wall_side)
         # the wall echo level per beam, around the expected range
         rb = np.clip(np.nan_to_num(ref / bin_m, nan=0).astype(int), 0, bins - 1)
         idx = np.clip(rb[:, None] + np.arange(-4, 5)[None, :], 0, bins - 1)
         level = a[np.arange(len(r))[:, None], idx].max(1)
-        lref = _nanmed_window(np.where(wall_side & np.isfinite(r), level, np.nan), self.win)
+        lref = _fill_across(_nanmed_window(np.where(wall_side & np.isfinite(r), level, np.nan), self.win), wall_side)
         ok = wall_side & np.isfinite(ref) & (ref < self.max_ref)
         gap = ok & (~np.isfinite(r) | (r > ref + self.jump) | (level < self.weak * np.nan_to_num(lref, nan=0.0)))
         out = []
@@ -289,12 +308,14 @@ class TearDetector:
             if len(left) < 3 or len(right) < 3:
                 continue
             rc = float(np.nanmedian(ref[lo:hi + 1]))
-            p_lo = pos + rc * yaw_dir(yaw - (b[lo] - 0.5 * abs(b[1] - b[0])))
-            p_hi = pos + rc * yaw_dir(yaw - (b[hi] + 0.5 * abs(b[1] - b[0])))
+            # the chord on the wall between the run's edges, each at its own expected range (the
+            # wall is oblique to the fan: one expected range for both undercounts it)
+            p_lo = pos + ref[lo] * yaw_dir(yaw - (b[lo] - 0.5 * abs(b[1] - b[0])))
+            p_hi = pos + ref[hi] * yaw_dir(yaw - (b[hi] + 0.5 * abs(b[1] - b[0])))
             w = float(np.linalg.norm((p_hi - p_lo)[[0, 2]]))
             if not (self.min_w <= w <= self.max_w):
                 continue
-            pc = pos + rc * yaw_dir(yaw - 0.5 * (b[lo] + b[hi]))
+            pc = 0.5 * (p_lo + p_hi)                      # its centre on the wall, not the mid beam
             out.append((bearing_of(pc), w, rc))
         return out
 
