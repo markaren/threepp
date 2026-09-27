@@ -21,7 +21,8 @@
 # zipped against PyPI's 100 MiB/file cap). It is dlopen'd, never linked — drop
 # PhysXGpu_64.dll + PhysXDevice64.dll next to the installed module and
 # PhysxWorld(gpu_dynamics=True) / direct-GPU RL work (verified); soft bodies
-# additionally need a binding surface the wheel does not have yet.
+# (add_soft_body, bound since 2026.9.6) run only on the GPU solver, so they
+# need the same pair.
 [build-system]
 requires = ["scikit-build-core>=0.10"]
 build-backend = "scikit_build_core.build"
@@ -74,10 +75,43 @@ build.targets = ["threepp_py"]
 install.components = ["python_module"]
 wheel.packages = []
 cmake.version = ">=3.21"
+# The sdist carries only what the python_module build reads. By default
+# scikit-build-core packs every git-tracked file, which had grown the 2026.9.6
+# sdist to 42 MB — 29 MB of it README screenshots, the rest C++ examples,
+# tests, apps and Python examples that a `pip install` from source never
+# touches. ImGui is the one thing needed from examples/ (python/CMakeLists.txt
+# compiles it into the module), so it is re-included; include wins over
+# exclude. If the module build grows a new out-of-tree dependency, add it to
+# sdist.include or the sdist stops compiling.
+sdist.exclude = [
+    "/doc/",
+    "/apps/",
+    "/tests/",
+    "/scripts/",
+    "/examples/",
+    "/editor-wheel/",
+    "/geodata/",
+    "/.github/",
+    "/python/examples/",
+    "/python/tests/",
+    # Local-only trees (a CI checkout has none of these), so an sdist built
+    # from a working copy matches the one CI uploads.
+    "/cmake-build-*/",
+    "/build*/",
+    "/dist/",
+    "/.claude/",
+    "/plans/",
+    "/aaa_caps/",
+    "__pycache__/",
+]
+sdist.include = ["/examples/external/imgui/"]
 cmake.args = [
     "-DTHREEPP_WITH_PYTHON=ON",
     "-DTHREEPP_BUILD_EXAMPLES=OFF",
     "-DTHREEPP_BUILD_TESTS=OFF",
+    # Defaults ON for a top-level build; the module does not link it, and apps/
+    # is not in the sdist (see sdist.exclude above).
+    "-DTHREEPP_BUILD_EDITOR=OFF",
     "-DTHREEPP_WITH_AUDIO=OFF",
     "-DPYBIND11_FINDPYTHON=ON",
 ]

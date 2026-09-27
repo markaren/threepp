@@ -88,7 +88,7 @@ lights, the frame loop, loaders and the two backends.
 * **Python bindings, on PyPI** — `pip install threepp`: the scene graph, headless
   render-to-NumPy, PhysX, and `threepp.rl` (a GPU-vectorized RL stack). The editor
   is `pip install threepp-editor`.
-* Built-in loaders — models [STL (binary & ASCII), OBJ/MTL, glTF/GLB incl. meshopt compression,
+* Built-in loaders — models [STL (binary & ASCII), OBJ/MTL, glTF/GLB incl. meshopt compression and loading from memory,
   COLLADA, SVG, URDF/xacro], images [PNG/JPEG, DDS, WebP, Radiance HDR, OpenEXR] and
   Gaussian-splat scans. `USDLoader` and `FBXLoader` are opt-in.
 * **Native xacro support** — URDF loading takes `.urdf.xacro` directly (macros, properties,
@@ -107,7 +107,8 @@ There are two layers here, and they move at very different speeds.
 
 **The three.js port is mature and stable.** The high-level API is mostly in line with three.js
 [r129](https://github.com/mrdoob/three.js/tree/r129) with changes from newer revisions in some
-areas, and the OpenGL backend is a mechanical port of the WebGL renderer. It barely moves between
+areas (shadow filtering, the environment and background knobs and the newer post-processing
+passes follow r186), and the OpenGL backend is a mechanical port of the WebGL renderer. It barely moves between
 releases, and it is what most users touch.
 
 **The simulation layer on top of it is where the project is going** — the deferred Vulkan renderer,
@@ -147,12 +148,17 @@ A few limits worth knowing before you start:
 * Lights [Ambient, Directional, Point, Spot, Hemi, RectArea]
 * Raycasting [Mesh, Line, Points]
 * 2D/3D Textures, 2D/3D text, Sprites, RenderTarget, CubeMaps
-* Transparency, Transmission, Shadows
+* Transparency, Transmission, alpha hash and alpha-to-coverage cutouts
+* Shadows, filtered as in three.js r186: Vogel-disk PCF penumbrae, cube-mapped point-light
+  shadows and `shadow.intensity`
 * Post-processing on the OpenGL path: `EffectComposer` with render/shader/mask/
-  clear/texture/save passes plus `UnrealBloomPass` and `BokehPass` (depth of
-  field), MSAA-capable internal targets, and three.js addon shaders that port
+  clear/texture/save passes plus `UnrealBloomPass`, `BokehPass` (depth of
+  field), `GTAOPass` (ground-truth ambient occlusion) and `OutlinePass` (selection
+  outlines, in a second colour where hidden), MSAA-capable internal targets, and three.js addon shaders that port
   over as-is ([examples/postprocessing](examples/postprocessing))
-* Environment maps, including PMREM
+* Environment maps, including PMREM, and `RoomEnvironment` for image-based lighting with no
+  HDR file. The scene's environment and background intensity, rotation and blurriness work on
+  both backends
 * Animation, morph targets, Bones
 * Controls [Orbit, Trackball, Fly, Drag, Transform]
 * Water and Sky shaders
@@ -175,8 +181,11 @@ A few limits worth knowing before you start:
   joint encoder, contact, force/torque
 * PhysX physics — rigid bodies, reduced-coordinate articulations, joints, tendons and
   routed pull-only cables, soft bodies, PBD particles (GPU-solved granular piles and
-  fluids), character controllers, vehicles, heightfield colliders, and V-HACD convex
-  decomposition
+  fluids), character controllers, vehicles (whose wheels can hand the whole contact to a
+  ground model of your own), heightfield colliders, and V-HACD convex decomposition
+* Soft and granular ground, from Python on NVIDIA Warp: Bekker-Wong mud and snow that keep
+  their ruts (`threepp.terrain_deform`), and MLS-MPM grains that carry a wheel, a rover or a
+  whole car (`threepp.granular_mpm`), checked against single-wheel terramechanics data
 * Automatic mesh LOD (Vulkan, on by default), GPU occlusion culling, and NVIDIA
   DLSS / AMD FSR 3.1 temporal upscaling
 * Procedural content, all asset-free and first-party — quadtree-LOD terrain, trees,

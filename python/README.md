@@ -71,8 +71,8 @@ Physics in the wheel is **CPU-only** — the GPU runtime (`PhysXGpu_64.dll`) is
 paths need the two GPU DLLs (`PhysXGpu_64.dll` + `PhysXDevice64.dll`) dropped
 next to the installed module (they are loaded lazily by name, never linked):
 that alone enables `PhysxWorld(gpu_dynamics=True)` and the direct-GPU RL batch
-(verified). Soft bodies additionally need a Python API the wheel does not bind
-yet — today they are an editor capability.
+(verified). Soft bodies (`PhysxWorld.add_soft_body`) run only on the GPU solver,
+so they need the same two DLLs.
 
 ## Build
 
@@ -101,21 +101,21 @@ display is only required for the on-screen examples.
 
 | Script | What it shows |
 | --- | --- |
-| [`examples/hello_cube.py`](examples/hello_cube.py) | On-screen window: spinning, lit cubes you can orbit (`OrbitControls` + animation loop). Needs a display. |
-| [`examples/pbr_showcase.py`](examples/pbr_showcase.py) | **Photoreal PBR playground** — metals + glowing gems under a *procedurally generated* HDR sky (no assets), ACES tone mapping, live ImGui controls. `--shot out.png` renders headless. |
-| [`examples/text_overlay.py`](examples/text_overlay.py) | **Text & SVG overlay** — billboard `TextSprite` labels on 3D objects + a 2D HUD (`Text2D` + `SVGLoader` badge) via an `OrthographicCamera` overlay pass. |
-| [`examples/headless_render.py`](examples/headless_render.py) | Off-screen render straight into a `(H, W, 3)` uint8 numpy array; saves a PNG. No window. |
-| [`examples/textured_box.py`](examples/textured_box.py) | Load an image with `TextureLoader` and map it onto a mesh (headless). |
-| [`examples/load_model.py`](examples/load_model.py) | `python load_model.py model.glb` — load a model with `ModelLoader`, auto-frame and render it. |
-| [`examples/vulkan_aovs.py`](examples/vulkan_aovs.py) | Vulkan deferred render → G-buffer AOVs (normals / segmentation / albedo / depth) as numpy. Needs a Vulkan build. |
-| [`examples/vulkan_ocean.py`](examples/vulkan_ocean.py) | The FFT-displaced **`Ocean`** — fancy water (waves, foam, transmission) in one line; orbit around it live. Needs a Vulkan build + display. |
-| [`examples/ui_demo.py`](examples/ui_demo.py) | In-window Dear ImGui control panel (sliders/buttons) driving the scene live (GL). Needs a display. |
-| [`examples/vulkan_ui.py`](examples/vulkan_ui.py) | The same ImGui control panel, over the **Vulkan** deferred renderer. Needs a Vulkan build + display. |
-| [`examples/physics_demo.py`](examples/physics_demo.py) | A pile of boxes tumbling onto the floor — `PhysxWorld` rigid bodies driving the scene graph. Needs a PhysX build + display. |
-| [`examples/imu_demo.py`](examples/imu_demo.py) | **Headless IMU** — a box dropped onto the floor with an `Imu` mounted off-CoM; prints the physics-truth table (free fall ~0, at rest ~+9.81). Needs a PhysX build; no display. |
-| [`examples/cartpole/train_cartpole.py`](examples/cartpole/train_cartpole.py) / [`play_cartpole.py`](examples/cartpole/play_cartpole.py) | **GPU-vectorized RL end to end** — a `VecTask` cartpole swing-up trained with the owned `threepp.rl` PPO (committed checkpoint included; `play` renders the result). Needs a PhysX GPU build + torch. |
-| [`examples/spot/`](examples/spot) | **Quadruped RL family** — Spot locomotion policies (steps, stairs, heightfield), sim-to-sim deploy into the editor, depth scanning; see its [README](examples/spot/README.md). |
-| [`examples/probes/smoke_test.py`](examples/probes/smoke_test.py) | Assertion-based regression test of the whole surface; prints `ALL OK`. |
+| [`examples/hello_cube.py`](https://github.com/markaren/threepp/blob/master/python/examples/hello_cube.py) | On-screen window: spinning, lit cubes you can orbit (`OrbitControls` + animation loop). Needs a display. |
+| [`examples/pbr_showcase.py`](https://github.com/markaren/threepp/blob/master/python/examples/pbr_showcase.py) | **Photoreal PBR playground** — metals + glowing gems under a *procedurally generated* HDR sky (no assets), ACES tone mapping, live ImGui controls. `--shot out.png` renders headless. |
+| [`examples/text_overlay.py`](https://github.com/markaren/threepp/blob/master/python/examples/text_overlay.py) | **Text & SVG overlay** — billboard `TextSprite` labels on 3D objects + a 2D HUD (`Text2D` + `SVGLoader` badge) via an `OrthographicCamera` overlay pass. |
+| [`examples/headless_render.py`](https://github.com/markaren/threepp/blob/master/python/examples/headless_render.py) | Off-screen render straight into a `(H, W, 3)` uint8 numpy array; saves a PNG. No window. |
+| [`examples/textured_box.py`](https://github.com/markaren/threepp/blob/master/python/examples/textured_box.py) | Load an image with `TextureLoader` and map it onto a mesh (headless). |
+| [`examples/load_model.py`](https://github.com/markaren/threepp/blob/master/python/examples/load_model.py) | `python load_model.py model.glb` — load a model with `ModelLoader`, auto-frame and render it. |
+| [`examples/vulkan_aovs.py`](https://github.com/markaren/threepp/blob/master/python/examples/vulkan_aovs.py) | Vulkan deferred render → G-buffer AOVs (normals / segmentation / albedo / depth) as numpy. Needs a Vulkan build. |
+| [`examples/vulkan_ocean.py`](https://github.com/markaren/threepp/blob/master/python/examples/vulkan_ocean.py) | The FFT-displaced **`Ocean`** — fancy water (waves, foam, transmission) in one line; orbit around it live. Needs a Vulkan build + display. |
+| [`examples/ui_demo.py`](https://github.com/markaren/threepp/blob/master/python/examples/ui_demo.py) | In-window Dear ImGui control panel (sliders/buttons) driving the scene live (GL). Needs a display. |
+| [`examples/vulkan_ui.py`](https://github.com/markaren/threepp/blob/master/python/examples/vulkan_ui.py) | The same ImGui control panel, over the **Vulkan** deferred renderer. Needs a Vulkan build + display. |
+| [`examples/physics_demo.py`](https://github.com/markaren/threepp/blob/master/python/examples/physics_demo.py) | A pile of boxes tumbling onto the floor — `PhysxWorld` rigid bodies driving the scene graph. Needs a PhysX build + display. |
+| [`examples/imu_demo.py`](https://github.com/markaren/threepp/blob/master/python/examples/imu_demo.py) | **Headless IMU** — a box dropped onto the floor with an `Imu` mounted off-CoM; prints the physics-truth table (free fall ~0, at rest ~+9.81). Needs a PhysX build; no display. |
+| [`examples/cartpole/train_cartpole.py`](https://github.com/markaren/threepp/blob/master/python/examples/cartpole/train_cartpole.py) / [`play_cartpole.py`](https://github.com/markaren/threepp/blob/master/python/examples/cartpole/play_cartpole.py) | **GPU-vectorized RL end to end** — a `VecTask` cartpole swing-up trained with the owned `threepp.rl` PPO (committed checkpoint included; `play` renders the result). Needs a PhysX GPU build + torch. |
+| [`examples/spot/`](https://github.com/markaren/threepp/blob/master/python/examples/spot) | **Quadruped RL family** — Spot locomotion policies (steps, stairs, heightfield), sim-to-sim deploy into the editor, depth scanning; see its [README](https://github.com/markaren/threepp/blob/master/python/examples/spot/README.md). |
+| [`examples/probes/smoke_test.py`](https://github.com/markaren/threepp/blob/master/python/examples/probes/smoke_test.py) | Assertion-based regression test of the whole surface; prints `ALL OK`. |
 
 ```sh
 cd python
@@ -129,73 +129,84 @@ module docstring.
 
 | Script | What it shows |
 | --- | --- |
-| [`examples/animation.py`](examples/animation.py) | Keyframe animation driven by an `AnimationMixer`. |
-| [`examples/transform_controls.py`](examples/transform_controls.py) | `TransformControls` — grab the gizmo to translate, rotate or scale a mesh. |
-| [`examples/terrain_demo.py`](examples/terrain_demo.py) | The procedural terrain generator, with its parameters on sliders. |
-| [`examples/tree_demo.py`](examples/tree_demo.py) | The procedural tree generator, likewise. |
+| [`examples/animation.py`](https://github.com/markaren/threepp/blob/master/python/examples/animation.py) | Keyframe animation driven by an `AnimationMixer`. |
+| [`examples/transform_controls.py`](https://github.com/markaren/threepp/blob/master/python/examples/transform_controls.py) | `TransformControls` — grab the gizmo to translate, rotate or scale a mesh. |
+| [`examples/terrain_demo.py`](https://github.com/markaren/threepp/blob/master/python/examples/terrain_demo.py) | The procedural terrain generator, with its parameters on sliders. |
+| [`examples/tree_demo.py`](https://github.com/markaren/threepp/blob/master/python/examples/tree_demo.py) | The procedural tree generator, likewise. |
 
 **Sensors**
 
 | Script | What it shows |
 | --- | --- |
-| [`examples/depth_sensor.py`](examples/depth_sensor.py) | `DepthSensor` showcase: live coloured point cloud, incremental `VoxelGrid` map, marching-cubes surface. |
-| [`examples/torch_frames.py`](examples/torch_frames.py) | Zero-copy frames out — the Vulkan renderer's images as live torch tensors. |
+| [`examples/depth_sensor.py`](https://github.com/markaren/threepp/blob/master/python/examples/depth_sensor.py) | `DepthSensor` showcase: live coloured point cloud, incremental `VoxelGrid` map, marching-cubes surface. |
+| [`examples/torch_frames.py`](https://github.com/markaren/threepp/blob/master/python/examples/torch_frames.py) | Zero-copy frames out — the Vulkan renderer's images as live torch tensors. |
 
 **Physics and robots**
 
 | Script | What it shows |
 | --- | --- |
-| [`examples/urdf_arm.py`](examples/urdf_arm.py) | Import any URDF as a PhysX articulation and wave its joints. |
-| [`examples/stewart_balancer.py`](examples/stewart_balancer.py) | A 6-leg Stewart platform balancing a ball along a rose curve: LQR + IK + stepper dynamics. |
-| [`examples/tendon_hand/`](examples/tendon_hand) | A tendon-driven anthropomorphic hand, built so the mechanics are right, and a GPU-trained policy that holds on with it through a roll-over; see its [README](examples/tendon_hand/README.md). |
+| [`examples/urdf_arm.py`](https://github.com/markaren/threepp/blob/master/python/examples/urdf_arm.py) | Import any URDF as a PhysX articulation and wave its joints. |
+| [`examples/stewart_balancer.py`](https://github.com/markaren/threepp/blob/master/python/examples/stewart_balancer.py) | A 6-leg Stewart platform balancing a ball along a rose curve: LQR + IK + stepper dynamics. |
+| [`examples/tendon_hand/`](https://github.com/markaren/threepp/blob/master/python/examples/tendon_hand) | A tendon-driven anthropomorphic hand, built so the mechanics are right, and a GPU-trained policy that holds on with it through a roll-over; see its [README](https://github.com/markaren/threepp/blob/master/python/examples/tendon_hand/README.md). |
 
 **Warp films** — NVIDIA Warp simulation rendered live by threepp. Each is
-self-contained; what they share lives in [`examples/warp_common.py`](examples/warp_common.py).
+self-contained; what they share lives in [`examples/warp_common.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_common.py).
 
 | Script | What it shows |
 | --- | --- |
-| [`examples/warp_cloth.py`](examples/warp_cloth.py) | GPU cloth, the smallest complete Warp + threepp loop. |
-| [`examples/warp_cloth_toss.py`](examples/warp_cloth_toss.py) | Can a cloth throw a ball? The spike behind the toss demo. |
-| [`examples/warp_cloth_catch.py`](examples/warp_cloth_catch.py) | Four arms catch a cannonball in a cloth, throw it up, and four drones net it. |
-| [`examples/warp_squishy_ball.py`](examples/warp_squishy_ball.py) | A pressurised shell: Verlet predict, volume constraint, normals. |
-| [`examples/warp_fluid.py`](examples/warp_fluid.py) | A PBF liquid surfaced by marching cubes. |
-| [`examples/warp_water_balloon.py`](examples/warp_water_balloon.py) | A water balloon and a needle — the shell tears and the water leaves. |
-| [`examples/warp_hydraulic_press.py`](examples/warp_hydraulic_press.py) | A chrome sphere crushed by a hydraulic press in a Cornell box. |
-| [`examples/warp_explosion.py`](examples/warp_explosion.py) | Blast Yard: a brick test range demolished by a charge (PhysX + Warp + Vulkan). |
-| [`examples/warp_nebula.py`](examples/warp_nebula.py) | A particle nebula (GL). |
-| [`examples/warp_nebula_vk.py`](examples/warp_nebula_vk.py) | The same nebula as a VOLUME, through the Vulkan particle sprites. |
-| [`examples/warp_prop_vortex.py`](examples/warp_prop_vortex.py) | A twin-screw stern cavitating underwater. |
-| [`examples/warp_sailboat.py`](examples/warp_sailboat.py) | A sailboat whose sails are Warp cloth, sailing the FFT ocean in the mist. |
-| [`examples/netpen/`](examples/netpen) | Net-pen inspection ROV: a torn Warp-cloth net, tether, sonar and camera insets, a school of salmon, and the closed sonar loop (E3) built on it; see its [README](examples/netpen/README.md). |
-| [`examples/warp_mudsnow.py`](examples/warp_mudsnow.py) | Deformable ground: the same boots and rolling ball, in mud and in snow. |
-| [`examples/warp_mudsnow_mpm.py`](examples/warp_mudsnow_mpm.py) | The same ground as MLS-MPM granular material. |
-| [`examples/warp_mudsnow_drive.py`](examples/warp_mudsnow_drive.py) | A Range Rover driven over Bekker-Wong ground: mud, snow, packed clay. |
+| [`examples/warp_cloth.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_cloth.py) | GPU cloth, the smallest complete Warp + threepp loop. |
+| [`examples/warp_cloth_toss.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_cloth_toss.py) | Can a cloth throw a ball? The spike behind the toss demo. |
+| [`examples/warp_cloth_catch.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_cloth_catch.py) | Four arms catch a cannonball in a cloth, throw it up, and four drones net it. |
+| [`examples/warp_squishy_ball.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_squishy_ball.py) | A pressurised shell: Verlet predict, volume constraint, normals. |
+| [`examples/warp_fluid.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_fluid.py) | A PBF liquid surfaced by marching cubes. |
+| [`examples/warp_water_balloon.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_water_balloon.py) | A water balloon and a needle — the shell tears and the water leaves. |
+| [`examples/warp_hydraulic_press.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_hydraulic_press.py) | A chrome sphere crushed by a hydraulic press in a Cornell box. |
+| [`examples/warp_explosion.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_explosion.py) | Blast Yard: a brick test range demolished by a charge (PhysX + Warp + Vulkan). |
+| [`examples/warp_gummy_rain.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_gummy_rain.py) | Hundreds of soft jelly candies pour into a glass bowl, each one its own XPBD lattice. |
+| [`examples/warp_jelly_wreck.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_jelly_wreck.py) | A wall of jelly blocks smashed by a chrome wrecking ball, with an event-camera and lidar mosaic ([`sensor_panels.py`](https://github.com/markaren/threepp/blob/master/python/examples/sensor_panels.py)). |
+| [`examples/warp_nebula.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_nebula.py) | A particle nebula (GL). |
+| [`examples/warp_nebula_vk.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_nebula_vk.py) | The same nebula as a VOLUME, through the Vulkan particle sprites. |
+| [`examples/warp_prop_vortex.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_prop_vortex.py) | A twin-screw stern cavitating underwater. |
+| [`examples/warp_sailboat.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_sailboat.py) | A sailboat whose sails are Warp cloth, sailing the FFT ocean in the mist. |
+| [`examples/netpen/`](https://github.com/markaren/threepp/blob/master/python/examples/netpen) | Net-pen inspection ROV: a torn Warp-cloth net, tether, sonar and camera insets, a school of salmon, and the closed sonar loop (E3) built on it; see its [README](https://github.com/markaren/threepp/blob/master/python/examples/netpen/README.md). |
+| [`examples/warp_mudsnow.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_mudsnow.py) | Deformable ground: the same boots and rolling ball, in mud and in snow. |
+| [`examples/warp_mudsnow_mpm.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_mudsnow_mpm.py) | The same ground as MLS-MPM granular material. |
+| [`examples/warp_mudsnow_drive.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_mudsnow_drive.py) | A Range Rover driven over Bekker-Wong ground (mud, snow, packed clay), plus `--gravel` and `--sand` lanes where MLS-MPM grains carry the car, and a dune it can get stuck on. |
+
+**Granular soil and rovers**: wheels carried by MLS-MPM grains
+(`threepp.granular_mpm`), checked against single-wheel terramechanics data.
+
+| Script | What it shows |
+| --- | --- |
+| [`examples/warp_wheel_testbed.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_wheel_testbed.py) | One rigid wheel in a bin of grains, its height and drawbar pull set by the soil, not prescribed. |
+| [`examples/warp_rover_slope.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_rover_slope.py) | A VIPER-class rover wheel's slip sweep against NASA's single-wheel data, and the four-wheel cost. |
+| [`examples/warp_rover_demo.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_rover_demo.py) | TP-1, a four-wheeled lunar-rover-class vehicle, climbs a tilting sand bed until the grains stop it. Build the model once with [`rover/build_rover_blender.py`](https://github.com/markaren/threepp/blob/master/python/examples/rover/build_rover_blender.py). |
 
 **Film kits** — reusable pieces a film imports. Renderer-only (no Warp); each
 runs standalone too.
 
 | Script | What it shows |
 | --- | --- |
-| [`examples/fireworks.py`](examples/fireworks.py) | `FireworkShow`: a staggered firework display as one `ParticleField` plus a `PointLight` per shell, closed-form in the scene clock so any frame can be seeked. Run it for the show over water, replaying; orbit it live. Needs a Vulkan build + display. |
-| [`examples/drone_rig.py`](examples/drone_rig.py) | `Drone` (attitude derived from the path), `Route` (authored legs, smoothed as a signal and held above terrain and canopy) and `FollowCamera` (precomputed and filtered the same way). Renderer-free smoke test. |
+| [`examples/fireworks.py`](https://github.com/markaren/threepp/blob/master/python/examples/fireworks.py) | `FireworkShow`: a staggered firework display as one `ParticleField` plus a `PointLight` per shell, closed-form in the scene clock so any frame can be seeked. Run it for the show over water, replaying; orbit it live. Needs a Vulkan build + display. |
+| [`examples/drone_rig.py`](https://github.com/markaren/threepp/blob/master/python/examples/drone_rig.py) | `Drone` (attitude derived from the path), `Route` (authored legs, smoothed as a signal and held above terrain and canopy) and `FollowCamera` (precomputed and filtered the same way). Renderer-free smoke test. |
 
 **Inverse design** — an optimiser, not an animator, decides the shape.
 
 | Script | What it shows |
 | --- | --- |
-| [`examples/warp_hull_sculpt.py`](examples/warp_hull_sculpt.py) | Differentiable hull sculpting: gradient descent designs a hull, live in the water. |
-| [`examples/lidar_sculpt.py`](examples/lidar_sculpt.py) | Sculpting against a sensor: a body reshaped to hide from, or shout at, the engine's own LIDAR. |
+| [`examples/warp_hull_sculpt.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_hull_sculpt.py) | Differentiable hull sculpting: gradient descent designs a hull, live in the water. |
+| [`examples/lidar_sculpt.py`](https://github.com/markaren/threepp/blob/master/python/examples/lidar_sculpt.py) | Sculpting against a sensor: a body reshaped to hide from, or shout at, the engine's own LIDAR. |
 
 **Probes** — instruments, not demos: each answers one question and prints (or
-writes) the answer. They live in [`examples/probes/`](examples/probes) with
-`smoke_test.py` above; see its [README](examples/probes/README.md).
+writes) the answer. They live in [`examples/probes/`](https://github.com/markaren/threepp/blob/master/python/examples/probes) with
+`smoke_test.py` above; see its [README](https://github.com/markaren/threepp/blob/master/python/examples/probes/README.md).
 
 | Script | What it measures |
 | --- | --- |
-| [`examples/probes/sensor_audit.py`](examples/probes/sensor_audit.py) | Sensor replay audit for any machine that can `pip install threepp`: does every sensor stream replay bit for bit across fresh processes and GPUs. |
-| [`examples/probes/multiview_bench.py`](examples/probes/multiview_bench.py) | E2: same-instant multi-view — the temporal-coherence triptych and the frame-time curve for 1 to 8 views. |
-| [`examples/probes/tendon_probe.py`](examples/probes/tendon_probe.py) | Measures what PhysX articulation tendons actually do, before building a hand on them. |
-| [`examples/probes/idun_egl_smoke.py`](examples/probes/idun_egl_smoke.py) | Hardware OpenGL on a display-less GPU node through EGL, and a check that the GPU drew it. |
+| [`examples/probes/sensor_audit.py`](https://github.com/markaren/threepp/blob/master/python/examples/probes/sensor_audit.py) | Sensor replay audit for any machine that can `pip install threepp`: does every sensor stream replay bit for bit across fresh processes and GPUs. |
+| [`examples/probes/multiview_bench.py`](https://github.com/markaren/threepp/blob/master/python/examples/probes/multiview_bench.py) | E2: same-instant multi-view — the temporal-coherence triptych and the frame-time curve for 1 to 8 views. |
+| [`examples/probes/tendon_probe.py`](https://github.com/markaren/threepp/blob/master/python/examples/probes/tendon_probe.py) | Measures what PhysX articulation tendons actually do, before building a hand on them. |
+| [`examples/probes/idun_egl_smoke.py`](https://github.com/markaren/threepp/blob/master/python/examples/probes/idun_egl_smoke.py) | Hardware OpenGL on a display-less GPU node through EGL, and a check that the GPU drew it. |
 
 ## What's exposed
 
@@ -219,8 +230,8 @@ writes) the answer. They live in [`examples/probes/`](examples/probes) with
   an `(N, 3)` / `(N, 2)` float array, and `get_points_at(u)`,
   `get_tangents_at(u)`, `get_points_array(n)`, `get_spaced_points_array(n)`
   return `(N, D)` float32 arrays.
-- **Materials**: `MeshStandard`, `MeshPhong`, `MeshLambert`, `MeshBasic`,
-  `MeshNormal`, `Points`, `LineBasic`, `Sprite`, `Shadow` — concrete fields, the
+- **Materials**: `MeshStandard`, `MeshPhysical`, `MeshPhong`, `MeshLambert`,
+  `MeshBasic`, `MeshNormal`, `MeshDepth`, `Points`, `LineBasic`, `Sprite`, `Shadow` — concrete fields, the
   shared base fields (`opacity`, `transparent`, `side`, …), and texture-map slots
   (`map`, `normal_map`, `roughness_map`, `metalness_map`, `emissive_map`,
   `ao_map`, `alpha_map`, …).
@@ -251,7 +262,8 @@ writes) the answer. They live in [`examples/probes/`](examples/probes) with
 - **Rendering**: `Canvas` (window / headless), `GLRenderer`
   (`render`, `set_clear_color`, `read_pixels` → numpy, `save_frame`, shadows,
   `tone_mapping` / `tone_mapping_exposure`), `OrbitControls`, `Clock`.
-- **HDR image-based lighting**: `RGBELoader().load("env.hdr")` → an equirect
+- **HDR image-based lighting**: `RGBELoader().load("env.hdr")` (or
+  `EXRLoader` for `.exr`) → an equirect
   `Texture`; assign it to `scene.environment` (IBL on standard/physical
   materials) or `scene.background`. `ToneMapping.ACESFilmic` (etc.) keeps HDR
   highlights from clipping.
@@ -270,8 +282,9 @@ writes) the answer. They live in [`examples/probes/`](examples/probes) with
   immediate-mode widgets (window/text/button/slider/checkbox/color/combo/…) for
   control panels. Works on **both** the GL and Vulkan renderers (`tp.HAS_IMGUI`).
 - **3D Gaussian Splatting**: `SplatLoader.load_ply()` reads the `.ply` files
-  3DGS optimisers emit (any SH degree, header-driven) and `SplatCloud` puts the
-  result in the scene graph like any mesh — rendered by **both** the GL and
+  3DGS optimisers emit (any SH degree, header-driven), `SogLoader` reads
+  PlayCanvas SOG scans, and `SplatCloud` puts the result in the scene graph like
+  any mesh — rendered by **both** the GL and
   Vulkan backends. `is_splat_ply()` discriminates splat files from mesh PLYs;
   `submit_ranges` exposes the chunk-LOD/culling mechanism (Vulkan).
 - **Mesh collision queries**: `BVH` — `BVH.intersects(a, b)` (exact
@@ -296,7 +309,7 @@ writes) the answer. They live in [`examples/probes/`](examples/probes) with
   `RigidBody` — add `Mesh`es as dynamic/static bodies (box/sphere/capsule, convex
   hull, or triangle mesh), `step(dt)`, and the bound meshes follow the simulation
   (`tp.HAS_PHYSX`). Reduced-coordinate `Articulation`s (URDF robots with joints,
-  limits and drives) are bound too.
+  limits and drives), `PhysxVehicle` and GPU `SoftBody`s are bound too.
 - **Proprioceptive sensors** (PhysX builds): `Imu` (gyroscope + accelerometer),
   `JointEncoder`, `ContactSensor` and `ForceTorqueSensor` — attached to scene
   nodes, driven from the physics step loop, with configurable seeded
@@ -318,14 +331,23 @@ writes) the answer. They live in [`examples/probes/`](examples/probes) with
   mirror and may return 0 — values are live from the next rendered frame).
   The low-level `tp.DisplacedMesh` (own geometry + material)
   is exposed too. Not tied to any "hero" object — see
-  [`examples/vulkan_ocean.py`](examples/vulkan_ocean.py).
+  [`examples/vulkan_ocean.py`](https://github.com/markaren/threepp/blob/master/python/examples/vulkan_ocean.py).
+- **Pure-Python helpers** that ship in the package beside the native module:
+  `threepp.cuda_interop` (a mesh's vertex buffers as CUDA arrays an external
+  producer writes in place) and `threepp.torch_frames` (the Vulkan renderer's
+  images as live torch tensors), both NVIDIA-only; `threepp.terrain_deform`
+  (Sumner/O'Brien/Hodgins deformable ground with a Bekker-Wong bearing, batched
+  in Warp) and `threepp.granular_mpm` (MLS-MPM granular soil with two-way rigid
+  wheel and plate colliders, in Warp); `threepp.urdf` (a URDF straight into a
+  PhysX articulation) and `threepp.rl`. The Warp modules import Warp only on
+  first use, so `import threepp` never needs it.
 
 Naming follows Python conventions (`snake_case` methods/properties), e.g.
 `camera.update_projection_matrix()`, `renderer.set_clear_color(...)`.
 
 ## Tests
 
-A pytest suite under [`tests/`](tests/) covers the whole surface — math,
+A pytest suite under [`tests/`](https://github.com/markaren/threepp/blob/master/python/tests/) covers the whole surface — math,
 scene graph, geometries, materials, cameras, lights, textures, loaders and
 headless rendering — including regression tests that pin the pybind11
 virtual-base workaround (they crash the interpreter if it ever regresses).
@@ -336,7 +358,7 @@ cd python
 pytest
 ```
 
-[`examples/probes/smoke_test.py`](examples/probes/smoke_test.py) is a dependency-light
+[`examples/probes/smoke_test.py`](https://github.com/markaren/threepp/blob/master/python/examples/probes/smoke_test.py) is a dependency-light
 standalone alternative that prints `ALL OK`.
 
 ### Type stubs (IDE autocomplete)
@@ -371,12 +393,12 @@ python python/scripts/gen_stubs.py
 ```
 
 `pybind11-stubgen` is **pinned** in
-[`requirements-stubs.txt`](requirements-stubs.txt) because its output layout and
+[`requirements-stubs.txt`](https://github.com/markaren/threepp/blob/master/python/requirements-stubs.txt) because its output layout and
 formatting change between releases — an unpinned upgrade is what silently
 reshaped the stubs from a flat file into this package. Bump the pin
 deliberately, regenerate, and review the diff.
 
-[`scripts/gen_stubs.py`](scripts/gen_stubs.py) wraps the generator so the result
+[`scripts/gen_stubs.py`](https://github.com/markaren/threepp/blob/master/python/scripts/gen_stubs.py) wraps the generator so the result
 is reproducible: it fixes the flags, repairs any keyword-named binding (see
 below), **fails if the emitted stub does not parse**, and **fails if
 regeneration dropped symbols the committed stubs declare**. The bare
@@ -405,7 +427,7 @@ Every other stub here is generated; `editor.pyi` is written by hand, and
 
 `threepp.editor` is served by two modules built from the same binding sources:
 this wheel, and the editor app's embedded interpreter. Only the editor compiles
-[`src/bind_editor_physics.cpp`](src/bind_editor_physics.cpp) — `RigidBody`,
+[`src/bind_editor_physics.cpp`](https://github.com/markaren/threepp/blob/master/python/src/bind_editor_physics.cpp) — `RigidBody`,
 `SoftBody`, `Articulation` and the three `*_from_object` lookups are handles onto
 a live `PhysicsPlaySession`, which nothing outside a running editor has, so the
 wheel does not bind them. The stub has to describe the **union** for a script
@@ -421,7 +443,7 @@ The union stays in the source tree for the editor's Pylance integration, but it
 does **not** ship in the wheel: the wheel carries `py.typed`, so an installed
 stub is *certified* to a type checker, and certifying 40-odd names that raise
 `AttributeError` on a pip install would be lying. The wheel instead installs
-[`wheel-stubs/editor.pyi`](wheel-stubs/editor.pyi) — just `SplinePath` and
+[`wheel-stubs/editor.pyi`](https://github.com/markaren/threepp/blob/master/python/wheel-stubs/editor.pyi) — just `SplinePath` and
 `spline_from_object`, the two names `bind_editor.cpp` actually provides there.
 A name added to `bind_editor.cpp` belongs in **both** stubs; a name added to
 the editor-only TUs belongs only in the union.
@@ -539,7 +561,7 @@ It works on **both** renderers — pass the renderer so the backend matches:
 `ImguiContext(canvas, gl_renderer)` (or `ImguiContext(canvas)`) for GL, and
 `ImguiContext(canvas, vulkan_renderer)` for the Vulkan overlay (recorded into the
 deferred frame after the scene). Create the `ImguiContext` after the renderer. See
-[examples/vulkan_ui.py](examples/vulkan_ui.py) for the Vulkan version.
+[examples/vulkan_ui.py](https://github.com/markaren/threepp/blob/master/python/examples/vulkan_ui.py) for the Vulkan version.
 
 One caveat: only **one** `ImguiContext` should be alive at a time (Dear ImGui has a
 single global context) — don't keep a GL and a Vulkan one simultaneously.
@@ -592,8 +614,9 @@ cmake --build build --target threepp_py
 the build then stages the PhysX runtime DLLs next to the module.) `tp.HAS_PHYSX`
 reports whether it was compiled in. Reduced-coordinate **articulations** (robots)
 are bound too — `Articulation` / `ArticulationLink`, built from a URDF in one
-call. Soft bodies and vehicles (which need the CUDA/GPU path) are not exposed
-yet.
+call. So are `PhysxVehicle`, a drivable four-wheel PxVehicle2 whose road can be
+replaced per wheel by your own ground model, and `SoftBody` (`add_soft_body`,
+which needs `gpu_dynamics=True` and so a CUDA GPU).
 
 Combined with the Vulkan AOVs, this is the **dynamic** half of the synthetic-data
 story: physics gives you moving scenes, the G-buffer gives you per-frame
@@ -665,7 +688,7 @@ continuous-time densities — `white_noise_density` [X/√Hz], `random_walk`
 every field to zero for a perfect sensor. Change the noise, then call
 `imu.reset()` (which also re-arms the finite-difference after an episode reset).
 
-See [`examples/imu_demo.py`](examples/imu_demo.py) for the full headless demo.
+See [`examples/imu_demo.py`](https://github.com/markaren/threepp/blob/master/python/examples/imu_demo.py) for the full headless demo.
 
 ## Notes for maintainers
 
