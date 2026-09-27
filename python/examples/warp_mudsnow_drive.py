@@ -21,6 +21,9 @@ ground.
     python warp_mudsnow_drive.py --gravel                # the fourth lane: two-way grains
     python warp_mudsnow_drive.py --gravel --frames 600   # honest windowed fps, then exit
     python warp_mudsnow_drive.py --gravel --shot --script gravel_take   # launch mp4 + stills
+    python warp_mudsnow_drive.py --sand                  # that lane as deep dune sand + a dune
+    python warp_mudsnow_drive.py --sand --shot --script sand_dune_stop --out-dir D:/x
+                                                         # CSV + stills (--clip PATH: an mp4)
     python warp_mudsnow_drive.py --film --interop        # the film (see below)
     python warp_mudsnow_drive.py --film --gravel --interop   # + the spread's take
     python warp_mudsnow_drive.py --film --dry            # its route, no renderer
@@ -230,6 +233,13 @@ LANE_COLOR = "--no-lane-color" not in sys.argv   # static colour under interop
 # The fourth lane. Opt-in: its four MPM patches are a whole second solver in a
 # frame that already spends ~25 ms elsewhere. See "the gravel lane" below.
 GRAVEL = "--gravel" in sys.argv
+# --sand: the SAME lane slot, patches, coupling and look pipeline as --gravel,
+# with deep dry dune sand and lugged tyres instead (see "the sand lane" below).
+# It implies GRAVEL: every "gravel" name in the code is the lane SLOT.
+SAND = "--sand" in sys.argv
+GRAVEL = GRAVEL or SAND
+# --sand carries a DUNE across its lane (see dune() below); --no-dune keeps it flat.
+DUNE = SAND and "--no-dune" not in sys.argv
 # Honest windowed timing: `--frames N` runs the INTERACTIVE loop (the real
 # frame(), wall-clock sim accumulator, UI, vsync off unless --vsync) for N frames
 # on an autopilot (--auto-throttle as a speed hold at --auto-kmh; the keyboard
@@ -373,6 +383,50 @@ BUMP_LAM = 8.0                    # ...at 8 m and 4 m. NOT shorter: the lanes ar
                                   # suspension cannot tell from a step.
 FADE_R = (APRON_R - 12.0, APRON_R)  # profile -> 0 before the hills take over
 
+# The dune (--sand, unless --no-dune). A windward face across the sand lane:
+# 22 m of approach from the spawn, a 1 m toe, a 21-degree face (well under the
+# sand's 32-degree repose: the far field is a heightfield and does not
+# avalanche), a 1.2 m rounded crest, 1 m of top, and an 11-degree lee side back
+# down to the road. Rise 4.1 x tan(21) = 1.57 m; the face is 5.2 m toe to crest
+# (x 2.0 -> 7.2). Across the lane it is full height over z 12.9-17.6 (both
+# wheel tracks and their patches), falling to the road by z 10.1 on the mud
+# lane's side and z 22.6 outside. The patches are in the road's sheared frame
+# (local y = world y - base + depth), so their soil lies ON the face by
+# construction; GranularLane.step tilts their gravity by the face's slope.
+DUNE_X0 = 2.0                     # the toe, world x
+SAND_COLLIDER_DROP = 0.65         # --sand: the rigid collider under the sand lane sits
+                                  # this far under the road (past the patch floor)
+DUNE_FACE_DEG, DUNE_BACK_DEG = 21.0, 11.0
+if DUNE:
+    _dune_dx = 0.02
+    _dune_x = np.arange(-30.0, 30.0 + _dune_dx, _dune_dx)
+
+    def _dune_ramp(a, b):
+        t = np.clip((_dune_x - a) / (b - a), 0.0, 1.0)
+        return 0.5 - 0.5 * np.cos(math.pi * t)
+
+    _sf = math.tan(math.radians(DUNE_FACE_DEG))
+    _sb = math.tan(math.radians(DUNE_BACK_DEG))
+    DUNE_RISE = _sf * (0.5 * 1.0 + 3.0 + 0.5 * 1.2)
+    _lb = DUNE_RISE / _sb - 1.0                      # the lee's straight run
+    _x = DUNE_X0
+    _slope = (_sf * (_dune_ramp(_x, _x + 1.0) - _dune_ramp(_x + 4.0, _x + 5.2))
+              - _sb * (_dune_ramp(_x + 6.2, _x + 7.2) - _dune_ramp(_x + 7.2 + _lb, _x + 8.2 + _lb)))
+    _DUNE_PROF = np.maximum(np.concatenate([[0.0], np.cumsum(0.5 * (_slope[1:] + _slope[:-1]) * _dune_dx)]), 0.0)
+    DUNE_CREST_X = _x + 5.2
+    print(f"  dune: toe x {_x:.1f}, face {DUNE_FACE_DEG:.0f} deg to the crest at x {DUNE_CREST_X:.1f}, "
+          f"rise {DUNE_RISE:.2f} m, lee {DUNE_BACK_DEG:.0f} deg back to the road by x {_x + 8.2 + _lb:.1f}")
+
+
+def dune(x, z):
+    """The dune's height over the road at world (x, z) (0 without --sand)."""
+    if not DUNE:
+        return 0.0
+    x = np.asarray(x, dtype=np.float64)
+    z = np.asarray(z, dtype=np.float64)
+    return (np.interp(x, _dune_x, _DUNE_PROF)
+            * smoothstep(10.1, 12.9, z) * (1.0 - smoothstep(17.6, 22.6, z)))
+
 
 def base(x, z):
     """The road surface, metres above the yard datum, at world (x, z).
@@ -397,6 +451,7 @@ def base(x, z):
     rough = ((0.30 + 0.70 * smoothstep(2.5, 13.0, np.abs(z)))
              * (1.0 - smoothstep(26.0, 46.0, np.hypot(x, z))))
     h = h + BUMP_AMP * rough * (2.0 * fbm(x, z, 1.0 / BUMP_LAM, 4441, 2) - 1.0)
+    h = h + dune(x, z)
     # And flat again before the perimeter, so the surround hills join the yard
     # at exactly the datum they joined it at when the yard was a plane.
     return h * (1.0 - smoothstep(FADE_R[0], FADE_R[1], np.hypot(x, z)))
@@ -726,12 +781,18 @@ clay_mat = standard_material(0x5a5142, 0.96)
 # stone the wheels have not reached, and the ruts they left); the soup over a
 # live patch shares its albedo and its detail-layer stones, further down.
 gravel_mat = standard_material(0x4c4740, 0.95)
+# --sand: dry dune sand, a light warm beige (sRGB; linear ~0.46/0.34/0.20).
+SAND_SRGB = (0.706, 0.620, 0.486)
+if SAND:
+    gravel_mat.color = 0xb49e7c
 LANE_MAT = {"mud": mud_mat, "snow": snow_mat, "clay": clay_mat,
             "gravel": gravel_mat}
 # --lane-color: the same trick as the yard, on the LANES -- white materials and
 # a static per-vertex albedo. Off by default; see the note in Strip.__init__.
 LANE_ALBEDO = {"mud": (0.251, 0.161, 0.102), "snow": (0.867, 0.898, 0.941),
                "clay": (0.353, 0.318, 0.259), "gravel": (0.286, 0.267, 0.235)}
+if SAND:
+    LANE_ALBEDO["gravel"] = SAND_SRGB
 if LANE_COLOR:
     for _m in LANE_MAT.values():
         _m.color = 0xffffff
@@ -1134,7 +1195,20 @@ def build_surround():
     snowline = LANE_Z["snow"][0] - 1.6 - 7.0 * fbm(cx, cz, 0.035, 89, 3)
     snow_ground = yard & (cz < snowline)
 
-    def mesh_of(mask, material):
+    # --sand: the COLLIDER (never drawn) drops SAND_COLLIDER_DROP under the
+    # sand lane. It is the packed ground 3 cm under every other lane; under the
+    # sand it followed the dune, and the chassis box rode up the face on it
+    # (measured: the four wheels carried 5.5 of the car's 14.7 kN there, the
+    # rigid dune the rest). Now only the grains and the belly hold the car.
+    pos_col = pos
+    if SAND:
+        in_sand = ((X >= X0 - 0.5) & (X <= X1 + 0.5)
+                   & (Z >= GRAVEL_Z[0] - 0.3) & (Z <= GRAVEL_Z[1] + 0.3)).reshape(-1)
+        pos_col = pos.copy()
+        pos_col[in_sand, 1] -= (np.broadcast_to(np.asarray(dune(X, Z), np.float64), X.shape).reshape(-1)[in_sand]
+                                + SAND_COLLIDER_DROP)
+
+    def mesh_of(mask, material, pos=pos):
         idx = quads[mask]
         g = tp.BufferGeometry()
         g.set_attribute("position", pos)
@@ -1158,7 +1232,7 @@ def build_surround():
     return (mesh_of(yard & ~snow_ground, apron_mat),
             mesh_of(snow_ground, field_snow_mat),
             mesh_of(~yard, hill_mat),
-            mesh_of(np.ones(len(quads), bool), apron_mat))
+            mesh_of(np.ones(len(quads), bool), apron_mat, pos_col))
 
 
 # The yard floor is churned wet dirt: darker than the clay strip so the lanes
@@ -1620,7 +1694,7 @@ def _spray_field(mesh_material=None, hot=(0.20, 0.14, 0.10), cool=(0.09, 0.07, 0
 clod_mat = standard_material(0x2a1e14, 0.62)
 # Gravel throws STONES: drier, lighter, less drag than a wet clod and a shorter
 # life, because a 2 cm chip leaves the tread and is down again in half a second.
-grit_mat = standard_material(0x585044, 0.78)
+grit_mat = standard_material(0xa89274 if SAND else 0x585044, 0.78)
 sprays = {"mud": Spray("mud", 0.30, (0.70, 1.20), 0.030, 5150),
           "snow": Spray("snow", 1.60, (0.55, 1.00), 0.036, 5151)}
 if GRAVEL:
@@ -1633,8 +1707,10 @@ if not GL:
                                         (0.44, 0.47, 0.54), 1.0, 0.036,
                                         stretch=0.05, opacity=0.55)
     if GRAVEL:
-        sprays["gravel"].field = _spray_field(grit_mat, (0.178, 0.161, 0.132),
-                                              (0.088, 0.080, 0.068), 1.0, 0.022,
+        sprays["gravel"].field = _spray_field(grit_mat, *(((0.46, 0.36, 0.23), (0.30, 0.23, 0.15))
+                                                          if SAND else
+                                                          ((0.178, 0.161, 0.132), (0.088, 0.080, 0.068))),
+                                              1.0, 0.022,
                                               stretch=0.015, opacity=0.90)
 
 
@@ -1772,11 +1848,100 @@ GR_SEAM, GR_SEAM_RAMP = 0.025, 0.04   # strip sunk under a live patch, ramp from
 GR_LIFT = 0.25                  # an off-lane wheel hovers this far over its patch, m
 GR_VTOP = 2.0                   # m/s: faster grains are airborne, not ground
 GR_MAX_TRIS = 24_000            # per patch soup
+GR_RIM = R_WHEEL                # the MPM wheel's rim radius (lug tips = R_WHEEL)
+GR_WHEEL_MU = 0.6               # set_wheels' rim friction (its default)
+
+# --- the sand lane (--sand): the gravel slot with deep, loose, dry dune sand ----
+# Calibrated with ONE car wheel (r 0.40 = R_WHEEL, 240 mm tread, W 4.5 kN, h 40
+# mm, 0.5 m deep; D:/dev/sand_lane/probe_car_wheel.py, config "R"; plausible, NOT
+# validated): Drucker-Prager 32 deg (loose dune sand), rho 1650, E 1 MPa, cap
+# p0 20 kPa / lambda 0.015 / bound 150 kPa; lugs 12 x 15 mm x 40 mm, mu 0.45.
+#   static sinkage 112 mm (elastic share 7 %: E = 1 MPa is as soft as that allows)
+#   rolling 2.5 m/s at slip 0.1/0.2/0.3/0.5: DP/W .02/.09/.11/.11 (levels off),
+#     gross thrust T/(rW) .30/.37/.41/.43, sinkage 73/78/82/88 mm
+#   stalled spin, rim 12 m/s: 235/310/396 mm at 0.5/1/2 s, T/(rW) .73, DP/W +.30
+#   the same wheel under a 20-degree tilted g, uphill: DP/W .09/.07 at s .3/.5
+# The static sinkage is SHEAR flow, not compaction (cap p0 5 -> 30 kPa barely
+# moves it): Bekker's dry-sand constants give ~94 mm for this RIGID wheel. The
+# 30-60 mm of a real car needs tyre deflection, which is not modelled -- airing
+# down does nothing here. The cap is sized for car pressures (p0 20 kPa,
+# hardening to a 150 kPa bound), so a car compacts ~5 % and not to the floor.
+# Lugs: one cell thick, 15 mm tall: ~3x an AT tyre's groove volume, the least
+# the 40 mm grid resolves. They are what DIG when a wheel spins (a smooth rim
+# digs ~1/3 as fast). phi 35 / lug mu 0.55 ("N") gave DP/W .22 at 30 % slip and
+# +.68 at a stalled spin; "R" has the lowest stall DP of the six treads tried.
+#
+# FINDING (flat lane, --no-dune): AWD on flat dune sand, floored, does NOT bog.
+# The grains give net DP > 0 at every slip (single wheel and car; so do Bekker-
+# Janosi and the rigid-wheel sand data): floored with TC off from 10 km/h the
+# Evoque digs to ~100 mm and accelerates away to 45 km/h; from a standstill it
+# sinks 133 mm in 0.5 s and still leaves. A car gets stuck in sand on a SLOPE or
+# HIGH-CENTRED, which is what the dune and the belly are for:
+# With ROUTE_B (the grains own the contact, below), the rigid collider dropped
+# under the sand lane and the slope force on the chassis' real support:
+#   sand_gentle: 0.26 throttle (390 N m a wheel) cannot roll the car out of its
+#     own ~100 mm sinkage (~600 N m needed): it creeps 3 m and digs in; 0.35
+#     crosses at 22 km/h.
+#   sand_floor (TC off from 10 km/h): DP/W 0.2-0.5 while spinning, away at 37.
+#   sand_dune_momentum: 21 km/h at the toe, 12.6 km/h near the top, over.
+#   sand_dune_slow (9.7 km/h at the toe, 0.45): BOGS 4.05 m up the 5.2 m face.
+#   sand_dune_stop: stopped 2.6 m up the face, floored with TC off: all four
+#     wheels dig 125 -> 215 mm in 1.2 s and on to ~390 mm, it creeps 0.3 m and
+#     sits on its belly (up to 13-16 kN) -- high-centred, and stays released.
+#   sand_rock: high-centred the same way; five forward/reverse cycles move it
+#     +-0.1 m and it stays (belly 7-9 kN).
+# On the face the car's per-wheel DP/W matches ONE probe wheel at the same
+# tilt, speed, slip and load: fronts 0.24 +-0.08 (s 0.69, 1.8 kN) vs 0.18
+# +-0.10; rears 0.16 +-0.07 (s 0.26, 2.1 kN) vs 0.13 +-0.03. The S1 "4x"
+# mismatch was the rigid collider carrying the chassis up the face.
+if SAND:
+    SAND_LUGS = (12, 0.015, 0.040)          # count, height past the rim, thickness
+    GR_WHEEL_MU = 0.45                      # rim + lug-face Coulomb friction
+    GR_RIM = R_WHEEL - SAND_LUGS[1]
+    GR_DEPTH = 0.50                         # a wheel can dig ~0.3 m before the floor
+    # The gross-thrust ceiling (T/r)/W reaches 0.73-0.95 while a lugged wheel
+    # spins (0.41-0.43 at 30-50 % slip rolling): the gravel lane's 0.70 top
+    # would clip the grains' own number, so the sand lane lets it to 0.85.
+    GR_MU_RANGE = (0.30, 0.85)
+    GR_MU0 = 0.47                           # before the first saturated sample (the EMA
+                                            # takes over within ~0.1 s of slip)
+    SAND_OMEGA_MAX = 90.0                   # rad/s (130 km/h of rim): past it, a blow-up
+    # PhysxVehicle is a torque source with no engine: floored with TC off, a
+    # wheel on a 0.5 ceiling spins to 90 rad/s in 0.3 s. The real car cannot --
+    # redline in first (~15:1 overall) is ~45 rad/s -- so --sand cuts the
+    # throttle over the last 5 rad/s below SAND_REV: a rev limiter, not a TC.
+    SAND_REV = 42.0                         # rad/s (60 km/h of rim)
+# ROUTE B (--sand; --sand-route-a restores Route A for an A/B): the grains own
+# the whole contact. Per sand wheel per step:
+#   road override = the rim bottom the grains hold up (as Route A), mu = 0, so
+#     PhysX's tyre develops NOTHING -- no slip curve, no ceiling;
+#   the grains' HORIZONTAL force on the wheel (OUT_F x, z: drawbar pull,
+#     resistance and the lateral force in one) -> add_force_at_pos at the
+#     contact point; the vertical stays with the suspension via the road height;
+#   the grains' axle moment -> set_wheel_external_torque(i, -T_AXLE, -k,
+#     omega_measured): OUT_T_AXLE is + when it resists forward rolling, PhysX
+#     spins forward positive, so the resisting torque is -T_AXLE; -k (N m s)
+#     linearises it about the omega it was measured at, which is what keeps the
+#     frame-lagged spin loop from ringing. PhysX free-rolls a wheel with
+#     throttle AND brake both 0 and ignores the torque then (coasting rolls;
+#     the grains' horizontal force still acts).
+ROUTE_B = SAND and "--sand-route-a" not in sys.argv
+SAND_SPIN_K = cli_arg("--spin-k", 300.0, float)   # 80 chattered +-2.7 rad/s at a stall; 300: +-0.5
+# Belly contact (--sand): the Evoque's floorpan and sills against the sand top.
+BELLY_CLEAR = 0.20                  # ground clearance at rest on a hard road, m
+BELLY_K = 2.0e4                     # per sample point, N/m (15 points: 3e5 N/m)
+BELLY_C = 2.0e3                     # per point, N s/m (~0.7 critical for the car)
+BELLY_MU = 0.9                      # horizontal drag / support: sliding + ploughing
+BELLY_FMAX = 6.0e3                  # per point cap, N
 
 
 def gravel_material():
     """warp_wheel_testbed.py's material() at E = 3 MPa: the phase-1 loose soil
-    (Drucker-Prager 36 deg + a compaction cap) the phase-2 gate measured."""
+    (Drucker-Prager 36 deg + a compaction cap) the phase-2 gate measured.
+    With --sand: the dune sand calibrated above."""
+    if SAND:
+        return gm.Material(E=1.0e6, nu=0.3, rho=1650.0, phi_deg=32.0, cohesion=0.0,
+                           cap_p0=20.0e3, cap_lambda=0.015, cap_pmax=150.0e3)
     return gm.Material(E=3.0e6, nu=0.3, rho=1700.0, phi_deg=36.0, cohesion=0.0,
                        cap_p0=2.0e3, cap_lambda=0.025)
 
@@ -1892,7 +2057,7 @@ class GranularLane:
         c = 1.15 * sim.pd
         self.mc_cell = c
         self.mc_dims = (int(GR_PATCH[0] / c) + 1,
-                        int((GR_DEPTH + 0.2 + 0.12) / c) + 3,
+                        int((GR_DEPTH + 0.2 + 0.12 + (0.40 if DUNE else 0.0)) / c) + 3,
                         int(GR_PATCH[1] / c) + 1)
         self.surfs = [DensitySurface((0.0, 0.0, 0.0), c, self.mc_dims, self.dev)
                       for _ in range(4)]
@@ -1908,7 +2073,7 @@ class GranularLane:
         # number LANE_ALBEDO carries for the strip), so the soup and the strip
         # it lies on are one surface; the stones are the detail layer's.
         m = tp.MeshPhysicalMaterial()
-        m.color = 0x49443c
+        m.color = 0xb49e7c if SAND else 0x49443c
         m.roughness = 0.94
         m.specular_intensity = 0.18
         m.side = tp.Side.Double
@@ -1924,10 +2089,19 @@ class GranularLane:
         self.R = np.zeros(4)
         self.fy = np.zeros(4)
         self.thrust = np.zeros(4)
+        self.slip = np.zeros(4)
+        self.fh = [(0.0, 0.0)] * 4           # Route B: the grains' horizontal force per wheel, N
+        self.tspin = np.zeros(4)             # ...their axle moment in PhysX's spin sign, N m
+        self.dpw = np.zeros(4)               # DP/W along each wheel's travel
+        self.wload = np.zeros(4)             # the W handed to the patches, N
+        self.ext_on = np.zeros(4, bool)      # set_wheel_external_torque active
         self.out = np.zeros((4, 16), np.float32)
         self.nsub = 0
         self.ms = 0.0
         self.pub_ms = 0.0                    # soup rebuild + host copy, ms (EMA)
+        self.blown = None                    # --sand's numerical guard: why it tripped
+        self.outside = np.zeros(4, int)      # frames a hub has been outside its patch
+        self.theta = 0.0                     # the grains' gravity tilt (the dune face), rad
         print(f"  gravel lane: 4 MLS-MPM patches, {sim.n_slots:,} particle slots, "
               f"h = {GR_H * 1000:.0f} mm, {GR_PATCH[0]:.2f} x {GR_PATCH[1]:.2f} x "
               f"{GR_DEPTH:.2f} m each; heightfield {sim.hf.shape[0]}x{sim.hf.shape[1]} "
@@ -1938,6 +2112,8 @@ class GranularLane:
             gravel_material(), GR_H, 4, patch_size=GR_PATCH, depth=GR_DEPTH,
             hf_origin=(X0 - 1.0, GRAVEL_Z[0] - 1.0), hf_size=(LANE_LEN + 2.0, GRAVEL_W + 2.0),
             floor_y=0.0, device=self.dev)
+        if SAND:
+            self.sim.set_lugs(*SAND_LUGS)
         # Pre-capture every substep count the lane can ask for, with the wheels
         # hovering over the spawn end: a first-use capture mid-drive is a hitch.
         zg = 0.5 * (GRAVEL_Z[0] + GRAVEL_Z[1])
@@ -1947,7 +2123,7 @@ class GranularLane:
         axis = np.tile([0.0, 0.0, 1.0], (4, 1))
         for n in sorted({self.nsub_q(s) for s in (0.0, 10.0, 20.0, 30.0, 40.0)}):
             pos[:, 1] = GR_DEPTH + R_WHEEL + GR_LIFT
-            self.sim.set_wheels(pos, zero, zero, axis, 0.0, R_WHEEL, GR_HALF_W,
+            self.sim.set_wheels(pos, zero, zero, axis, 0.0, GR_RIM, GR_HALF_W, mu=GR_WHEEL_MU,
                                 mass=GR_MASS, damp=GR_DAMP, free_y=False, set_y=True)
             self.sim.step_frame(n)
             self.sim.step_frame(n)
@@ -1964,6 +2140,8 @@ class GranularLane:
         self.dirty = False
         self.mu[:] = GR_MU0
         self.R[:] = 0.0
+        self.blown = None
+        self.theta = 0.0
 
     def step(self, hub, vel, omega, axis, load, on):
         """One frame of the four patches. Returns the (4, 16) readback, or None
@@ -1974,7 +2152,7 @@ class GranularLane:
             return None
         t0 = time.perf_counter()
         sim = self.sim
-        sim.set_wheels(hub, vel, omega, axis, load, R_WHEEL, GR_HALF_W,
+        sim.set_wheels(hub, vel, omega, axis, load, GR_RIM, GR_HALF_W, mu=GR_WHEEL_MU,
                        mass=GR_MASS, damp=GR_DAMP)
         c = sim.cmd
         for k in range(4):
@@ -1992,6 +2170,17 @@ class GranularLane:
                 c[k, 1] = GR_DEPTH + R_WHEEL + sim.eps + 0.002
                 c[k, 4] = 0.0
                 c[k, 19] = 1.0
+        if DUNE:
+            # The face's slope under the wheels on the lane (their mean: one
+            # gravity for all four patches, so while the car straddles the toe
+            # both axles feel half of it). The sheared frame is taken as the
+            # slope's frame: g rotated by theta, downhill along -x.
+            sl = [(float(base(hub[k][0] + 0.05, hub[k][2])) - float(base(hub[k][0] - 0.05, hub[k][2]))) / 0.1
+                  for k in range(4) if on[k]]
+            th = math.atan(float(np.mean(sl)))
+            if abs(th - self.theta) > 1e-4:
+                sim.set_gravity((-9.81 * math.sin(th), -9.81 * math.cos(th), 0.0))
+                self.theta = th
         speed = 0.0
         for k in range(4):
             if on[k]:
@@ -1999,6 +2188,27 @@ class GranularLane:
                             float(np.linalg.norm(omega[k])) * R_WHEEL)
         self.nsub = self.nsub_q(speed)
         self.out = sim.step_frame(self.nsub)
+        if SAND and self.blown is None:
+            # The numerical guard: a hub that left its own patch (the window
+            # could not follow it), or a non-finite readback.
+            o = self.out
+            lo = (o[:, gm.OUT_BLOCK] + sim.marg) * sim.h
+            for k in range(4):
+                if not on[k]:
+                    continue
+                hx, hz = float(o[k, 8]), float(o[k, 10])
+                if not np.all(np.isfinite(o[k])):
+                    self.blown = f"wheel {k}: non-finite readback"
+                elif not (lo[k, 0] <= hx <= lo[k, 0] + sim.ix * sim.h
+                          and lo[k, 1] <= hz <= lo[k, 1] + sim.iz * sim.h):
+                    # three frames running: a respawn's one-frame velocity
+                    # spike throws the window's lead, and that is not a blow-up
+                    self.outside[k] += 1
+                    if self.outside[k] >= 3:
+                        self.blown = (f"wheel {k}: hub ({hx:.2f}, {hz:.2f}) left its patch "
+                                      f"[{lo[k, 0]:.2f}, {lo[k, 1]:.2f}] +{sim.ix * sim.h:.2f} x {sim.iz * sim.h:.2f}")
+                else:
+                    self.outside[k] = 0
         self.on = np.array(on, bool)
         self.was_on = self.on.copy()
         self.ms = (time.perf_counter() - t0) * 1000.0
@@ -2068,8 +2278,10 @@ if gravel is not None:
         _grain = tp.data_texture(grain_detail_texture(256, 144), srgb=False)
         for _m in (gravel.material, gravel_mat):
             _m.detail_normal_map = _grain
-            _m.detail_repeat = 3.0
-            _m.detail_normal_scale = 1.0
+            # Sand: the same layer, 3x finer and faint (a 9 mm stipple, not
+            # stones; S2 owns the sand's own look).
+            _m.detail_repeat = 9.0 if SAND else 3.0
+            _m.detail_normal_scale = 0.35 if SAND else 1.0
 
 
 def gravel_couple(hub, lane_of, grade, w_load, q):
@@ -2101,6 +2313,10 @@ def gravel_couple(hub, lane_of, grade, w_load, q):
         if prev_hub is not None:
             vel[i] = (hub[i] - prev_hub[i]) / DT
             vel[i, 1] = 0.0
+            if DUNE:
+                # the patches' x runs ALONG the face: the hub's speed along it
+                _g = (float(base(hub[i, 0] + 0.05, hub[i, 2])) - float(base(hub[i, 0] - 0.05, hub[i, 2]))) / 0.1
+                vel[i, 0] *= math.sqrt(1.0 + _g * _g)
     W = np.maximum(w_load, 0.0) + M_UNSPRUNG * 9.81
     out = gravel.step(hub, vel, om, axis, W, on)
     if out is None:
@@ -2120,14 +2336,157 @@ def gravel_couple(hub, lane_of, grade, w_load, q):
         mu_raw = abs(t_ax) / R_WHEEL / W[i]
         rim = float(vehicle.wheel_angular_speed(i)) * R_WHEEL
         slip = (rim - v_roll) / max(abs(rim), abs(v_roll), 0.5)
+        gravel.slip[i] = slip
+        if SAND and gravel.blown is None and abs(rim / R_WHEEL) > SAND_OMEGA_MAX:
+            gravel.blown = f"wheel {i}: omega {rim / R_WHEEL:.0f} rad/s"
         if abs(slip) > GR_SLIP_SAT and abs(rim - v_roll) > GR_SCRUB_SAT:
             gravel.mu[i] += (float(np.clip(mu_raw, *GR_MU_RANGE)) - gravel.mu[i]) * k_ema
         gravel.R[i] += (max(thrust - dp, 0.0) - gravel.R[i]) * k_ema
         gravel.fy[i] = float(f[1]) / W[i]
         gravel.thrust[i] = mu_raw
-        road = float(out[i, gm.OUT_Y_BOTTOM]) - GR_DEPTH + grade[i]
-        res[i] = (road, gravel.mu[i], gravel.R[i])
+        gravel.fh[i] = (float(f[0]), float(f[2]))      # Route B: the grains' horizontal force
+        gravel.tspin[i] = -t_ax                        # ...and axle moment, PhysX's spin sign
+        gravel.dpw[i] = dp / W[i]                      # DP/W along the wheel's travel
+        gravel.wload[i] = W[i]
+        # OUT_Y_BOTTOM is the RIM's bottom; PhysX's wheel is the lug tips (R_WHEEL).
+        road = float(out[i, gm.OUT_Y_BOTTOM]) - (R_WHEEL - GR_RIM) - GR_DEPTH + grade[i]
+        if SAND and gravel.blown is None and grade[i] - road > GR_DEPTH - 0.08:
+            # the model's limit, not the sand's: the lugs are 80 mm off the
+            # patch's rigid floor, and past it a digging wheel grinds on it
+            gravel.blown = f"wheel {i}: dug {1000 * (grade[i] - road):.0f} mm, 80 mm off the patch floor"
+        # Route B: mu 0 (the tyre develops nothing) and no R channel.
+        res[i] = (road, 0.0, 0.0) if ROUTE_B else (road, gravel.mu[i], gravel.R[i])
     return res
+
+
+@wp.kernel
+def gr_hf_points(H: wp.array2d(dtype=float), hox: float, hoz: float, hdx: float,
+                 pts: wp.array(dtype=wp.vec3), out: wp.array(dtype=float)):
+    """The patches' far-field heightfield (local y) at a few world (x, z)."""
+    p = wp.tid()
+    x = pts[p][0]
+    z = pts[p][2]
+    u = (x - hox) / hdx - 0.5
+    w = (z - hoz) / hdx - 0.5
+    i0 = int(wp.floor(u))
+    j0 = int(wp.floor(w))
+    fu = u - float(i0)
+    fw = w - float(j0)
+    i0c = wp.clamp(i0, 0, H.shape[0] - 1)
+    i1c = wp.clamp(i0 + 1, 0, H.shape[0] - 1)
+    j0c = wp.clamp(j0, 0, H.shape[1] - 1)
+    j1c = wp.clamp(j0 + 1, 0, H.shape[1] - 1)
+    out[p] = ((H[i0c, j0c] * (1.0 - fu) + H[i1c, j0c] * fu) * (1.0 - fw)
+              + (H[i0c, j1c] * (1.0 - fu) + H[i1c, j1c] * fu) * fw)
+
+
+# The belly (--sand). The Evoque's floorpan and sills as 15 points on a plane
+# BELLY_CLEAR over the tyres' contact at the rest pose, in the chassis frame
+# (x right, z forward): 5 across (the sills at +-0.85, over the ruts) x 3 along,
+# all between the axles and clear of the four patches, so the sand they meet is
+# the far field the patches wrote back (the ruts' berms and the crown between
+# them). Where a point is under the sand top it gets support
+# K pen - C vy (>= 0, capped) and a horizontal drag BELLY_MU x that support
+# against its own travel, through add_force_at_pos: a car dug in to its sills is
+# high-centred -- its weight leaves the tyres, and with it the ceiling mu W.
+# The sand under the belly does not move (S2: let it plough the crown).
+BELLY_PTS = np.array([[x, 0.0, z] for z in (-0.80, 0.0, 0.80)
+                      for x in (-0.85, -0.42, 0.0, 0.42, 0.85)])
+belly = dict(y=None, n=0, prev=None, fy=0.0, fx=0.0, pen=0.0, pts=None, out=None, slope_fx=0.0)
+
+
+def base_grad(x, z, d=0.05):
+    """(d base/dx, d base/dz) at world (x, z), vectorised."""
+    x = np.asarray(x, dtype=np.float64)
+    z = np.asarray(z, dtype=np.float64)
+    return ((base(x + d, z) - base(x - d, z)) / (2.0 * d),
+            (base(x, z + d) - base(x, z - d)) / (2.0 * d))
+
+
+def slope_normal_forces(hub, lane_of):
+    """--sand's dune: the road override is a HORIZONTAL plane per wheel, so its
+    normal is vertical and a car on the face feels none of the slope: it is
+    lifted up the dune for free (measured: 0.45 throttle ACCELERATED from 10
+    to 13 km/h up the 21-degree face). A true slope's normal leans back
+    downhill; its horizontal part, -N grad(base), is added here at each sand
+    wheel's contact. On the 5 % swells this is 0.05 N; on the face, 0.38 N.
+
+    N's TOTAL is not the reported suspension forces': climbing the face they
+    summed to 1-12 kN while the chassis rose at a near-steady 0.5-1 m/s, so
+    the support it actually got was ~its weight and part of it reaches the
+    chassis without showing up in suspension_force. N_total is therefore the
+    vertical support from the chassis' own momentum, m (g + a_y), minus what
+    the belly carried, split between the sand wheels in the proportions of
+    their reported forces (the front/rear weight transfer). Energy check on
+    the climb (dKE = W_grains + W_slope + losses; the support's lift and
+    gravity cancel): -0.3 and -0.8 kJ of losses over two 1.5 m stretches of
+    the face, the same order as on the flat approach."""
+    y = float(vehicle.position.y)
+    if belly.get("sy") is None:
+        belly.update(sy=y, svy=0.0, say=0.0)
+    vy = (y - belly["sy"]) / DT
+    ay = (vy - belly["svy"]) / DT
+    belly["say"] += (ay - belly["say"]) * (DT / (0.08 + DT))
+    belly["sy"], belly["svy"] = y, vy
+    n_tot = max(CHASSIS_MASS * (9.81 + belly["say"]) - belly["fy"], 0.0)
+    on = [i for i in range(4) if lane_of[i] == "gravel"]
+    share = np.array([max(float(vehicle.suspension_force(i)), 0.0) for i in range(4)])
+    if share.sum() < 1.0:
+        share[:] = 1.0
+    belly["slope_fx"] = 0.0
+    for i in on:
+        gx, gz = base_grad(hub[i, 0], hub[i, 2])
+        n = n_tot * share[i] / share.sum()
+        belly["slope_fx"] += float(-n * gx)
+        vehicle.add_force_at_pos(tp.Vector3(float(-n * gx), 0.0, float(-n * gz)),
+                                 tp.Vector3(float(hub[i, 0]), float(hub[i, 1] - R_WHEEL), float(hub[i, 2])))
+
+
+def belly_contact(q, origin):
+    """Support + drag on the chassis underside where it is under the sand top."""
+    if gravel is None or not SAND:
+        return
+    belly["n"] += 1
+    if belly["y"] is None:
+        if belly["n"] < 45:
+            return
+        # The rest pose: the wheels' mean local height once the car has
+        # settled (the suspension carries the static load on any ground).
+        ys = [vehicle.wheel_local_pose(i)[0].y for i in range(4)]
+        belly["y"] = float(np.mean(ys)) - R_WHEEL + BELLY_CLEAR
+        print(f"  belly: floorpan at chassis y {belly['y']:+.3f} (clearance {BELLY_CLEAR} m)", flush=True)
+    loc = BELLY_PTS.copy()
+    loc[:, 1] = belly["y"]
+    wpts = np.array([origin + qrot(q, loc[k]) for k in range(len(loc))])
+    if belly["pts"] is None:
+        belly["pts"] = wp.zeros(len(loc), dtype=wp.vec3, device=gravel.dev)
+        belly["out"] = wp.zeros(len(loc), dtype=float, device=gravel.dev)
+    belly["pts"].assign(wpts.astype(np.float32))
+    sim = gravel.sim
+    wp.launch(gr_hf_points, dim=len(loc), device=gravel.dev,
+              inputs=[sim.hf, sim.hf_origin[0], sim.hf_origin[1], sim.hf_dx, belly["pts"], belly["out"]])
+    top = belly["out"].numpy().astype(np.float64) - GR_DEPTH + _base_host(wpts[:, 0], wpts[:, 2])
+    inlane = (wpts[:, 2] > GRAVEL_Z[0]) & (wpts[:, 2] < GRAVEL_Z[1]) & (wpts[:, 0] > X0) & (wpts[:, 0] < X1)
+    vel = np.zeros_like(wpts) if belly["prev"] is None else (wpts - belly["prev"]) / DT
+    bgx, bgz = base_grad(wpts[:, 0], wpts[:, 2]) if DUNE else (np.zeros(len(loc)), np.zeros(len(loc)))
+    belly["prev"] = wpts
+    fy_t, fh_t, pen_max = 0.0, 0.0, 0.0
+    for k in range(len(loc)):
+        pen = float(top[k] - wpts[k, 1])
+        if not inlane[k] or pen <= 0.0:
+            continue
+        pen_max = max(pen_max, pen)
+        fy = float(np.clip(BELLY_K * pen - BELLY_C * vel[k, 1], 0.0, BELLY_FMAX))
+        vh = np.array([vel[k, 0], 0.0, vel[k, 2]])
+        sp = float(np.linalg.norm(vh))
+        fh = BELLY_MU * fy * min(sp / 0.3, 1.0)
+        f = np.array([-fy * float(bgx[k]), fy, -fy * float(bgz[k])])   # the support leans with the slope
+        if sp > 1e-3:
+            f -= vh / sp * fh
+        vehicle.add_force_at_pos(tp.Vector3(*[float(c) for c in f]), tp.Vector3(*[float(c) for c in wpts[k]]))
+        fy_t += fy
+        fh_t += fh
+    belly["fy"], belly["fx"], belly["pen"] = fy_t, fh_t, pen_max
 
 
 # --- the rover -----------------------------------------------------------------
@@ -2480,6 +2839,31 @@ def coupled_step(throttle, steer, brake, relax_iters=2):
                                  tp.Vector3(*hub[i]))
     prev_hub = hub.copy()
 
+    # 7b. --sand: the chassis underside against the sand top (see belly_contact).
+    #     The slope normal force stays under Route B: it is not a traction term
+    #     but the missing tilt of the road override's (horizontal) plane -- the
+    #     grains carry W along THEIR normal and give only the along-slope force,
+    #     so without it the car's weight has no downhill component at all.
+    if SAND and any(n == "gravel" for n in lane_of):
+        belly_contact(q, origin)
+        if DUNE:
+            slope_normal_forces(hub, lane_of)
+    # 7c. Route B (see ROUTE_B): the grains' horizontal force at the contact
+    #     and their axle moment on the wheel's spin; cleared off the lane.
+    if ROUTE_B:
+        for i in range(4):
+            if i in gr:
+                fx, fz = gravel.fh[i]
+                vehicle.add_force_at_pos(tp.Vector3(fx, 0.0, fz),
+                                         tp.Vector3(float(hub[i, 0]), float(hub[i, 1] - R_WHEEL),
+                                                    float(hub[i, 2])))
+                vehicle.set_wheel_external_torque(i, float(gravel.tspin[i]), -SAND_SPIN_K,
+                                                  float(vehicle.wheel_angular_speed(i)))
+                gravel.ext_on[i] = True
+            elif gravel.ext_on[i]:
+                vehicle.clear_wheel_external_torque(i)
+                gravel.ext_on[i] = False
+
     # 8. and PhysX runs the car -- through the traction control, which is the
     #    difference between "drivable at any throttle" and "any throttle spins".
     if tc_on:
@@ -2491,6 +2875,9 @@ def coupled_step(throttle, steer, brake, relax_iters=2):
         throttle = throttle * tc_cut
     else:
         tc_cut = 1.0
+    if SAND:
+        w_max = max(abs(float(vehicle.wheel_angular_speed(i))) for i in range(4))
+        throttle = throttle * float(np.clip((SAND_REV - w_max) / 5.0, 0.0, 1.0))
     vehicle.set_throttle(throttle)
     vehicle.set_steer(steer)
     vehicle.set_brake(brake)
@@ -3228,6 +3615,298 @@ elif SHOT:
             save_shot(out(name))
         print(f"  gravel take: stopped at x {vehicle.position.x:.2f}, sink "
               f"{np.round(hud['z'] * 1000, 1)} mm, Fy/W {np.round(gravel.fy, 3)}")
+    if which in ("sand_gentle", "sand_floor", "sand_rock",
+                 "sand_dune_momentum", "sand_dune_slow", "sand_dune_stop"):
+        # The sand lane's three acceptance drives (--sand), each logged per
+        # frame to <out-dir>/<script>.csv, then a chase still and a low still of
+        # the rear-right wheel. --clip PATH also films the drive (every other
+        # sim frame at 30 fps, chase camera) to PATH, written as *.partial.mp4
+        # and renamed when done; an existing PATH is never overwritten.
+        #   sand_gentle: TC on, a steady light 0.26 throttle (--gentle-thr) down the lane.
+        #   sand_floor:  up to ~10 km/h on 0.5, then TC OFF and floored for 7 s.
+        #   sand_rock:   floored (TC off) until it stalls (< 1 km/h), then
+        #                forward/reverse rocking at 0.6 (TC on), five cycles; on
+        #                the dune it first does sand_dune_stop's approach + stop.
+        # The dune (--sand without --no-dune; the three above were tuned flat):
+        #   sand_dune_momentum: TC on, up to ~33 km/h on the approach, then
+        #                floored into the face.
+        #   sand_dune_slow: TC on, a 9 km/h hold to the toe, then a modest 0.45.
+        #   sand_dune_stop: 10 km/h hold until the front axle is half-way up the
+        #                face, a 1.5 s stop on the brake, then TC OFF and floored
+        #                for 6 s, then everything released for 3 s.
+        # A dune drive is BOGGED when it sits under 0.5 km/h for 1.5 s with the
+        # front axle on the face (it then runs 2.5 s more), and OVER when the
+        # car's centre is 4 m past the crest.
+        # Every drive ends at the lane's far end (X1 - 4 m).
+        # The numerical guard (gravel.blown: a runaway omega, a hub outside its
+        # patch) ends the drive; nothing after it is filmed.
+        if not SAND:
+            print("  --script sand_* needs --sand")
+            raise SystemExit(0)
+        if which.startswith("sand_dune") and not DUNE:
+            print("  --script sand_dune_* needs the dune (drop --no-dune)")
+            raise SystemExit(0)
+        import csv
+        z_g = 0.5 * (GRAVEL_Z[0] + GRAVEL_Z[1])
+        clip = cli_arg("--clip", "", str)
+        clip_from = cli_arg("--clip-from", 0.0, float)      # s: film from here on
+        fdir = None
+        if clip:
+            import imageio_ffmpeg
+            fdir = os.path.join(OUT_DIR, f"frames_{which}")
+            os.makedirs(fdir, exist_ok=True)
+            for _f in os.listdir(fdir):
+                if _f.endswith(".png"):
+                    os.remove(os.path.join(fdir, _f))
+        vehicle.respawn(tp.Vector3(SPAWN_X, ride_y(SPAWN_X, z_g), z_g), SPAWN_ROT)
+        vehicle.gear = tp.PhysxVehicle.Gear.FORWARD
+        w_ema[:] = REST_LOAD
+        tc_on = True
+        prev_hub = None                 # no respawn jump in the first frame's hub velocity
+        for _ in range(60):
+            coupled_step(0.0, 0.0, 0.0)
+        if gravel.blown:
+            print(f"  guard during the settle: {gravel.blown}", flush=True)
+
+        def chase_eye():
+            p, q = vehicle.position, vehicle.quaternion
+            c = np.array([p.x, p.y, p.z])
+            return c + qrot(q, np.array([-2.4, 1.7, -6.8])), c + qrot(q, np.array([0.0, -0.3, 1.0]))
+
+        cam_pos[:], cam_tgt[:] = chase_eye()
+        camera.position.set(*cam_pos)
+        camera.look_at(tp.Vector3(*cam_tgt))
+        if fdir:
+            for _ in range(0 if GL else 30):
+                renderer.render(scene, camera)
+        rows = []
+        floor_kmh = cli_arg("--floor-kmh", 10.0, float)     # sand_floor: floored from this speed
+        GENTLE_THR = cli_arg("--gentle-thr", 0.26, float)    # sand_gentle: the steady throttle
+        n_max = int(round({"sand_gentle": 24.0, "sand_floor": 12.0, "sand_rock": 30.0,
+                           "sand_dune_momentum": 16.0, "sand_dune_slow": 24.0,
+                           "sand_dune_stop": 24.0}[which] * 60))
+        bogged_at = None          # (t, face x) when a dune drive stalls on the face
+        over_at = None
+        slow_t = 0.0
+        n_saved = 0
+        phase = "go"
+        t_phase = 0.0
+        stalled_at = None
+        rock_k = 0
+        t_start = time.perf_counter()
+        for k in range(n_max):
+            t = k / 60.0
+            v_kmh = vehicle.forward_speed * 3.6
+            br = 0.0
+            x_face = vehicle.position.x + 1.33 - DUNE_X0 if DUNE else -99.0   # front axle past the toe
+            if which == "sand_gentle":
+                thr = GENTLE_THR
+            elif which == "sand_dune_momentum":
+                thr = 1.0 if (x_face > -1.0 or v_kmh < 33.0) else 0.4
+            elif which == "sand_dune_slow":
+                thr = 0.45 if (x_face > -0.3 or v_kmh < 9.0) else 0.2
+            elif which == "sand_dune_stop":
+                if phase == "go":
+                    thr = 0.45 if v_kmh < 10.0 else 0.2
+                    if x_face >= 2.6:
+                        phase, t_phase = "stop", t
+                        print(f"    braking at t {t:.2f} s, face x {x_face:.2f} m, {v_kmh:.1f} km/h", flush=True)
+                if phase == "stop":
+                    thr, br = 0.0, 1.0
+                    if t - t_phase > 1.5:
+                        phase, t_phase, tc_on = "floor", t, False
+                        stalled_at = (t, vehicle.position.x)
+                        print(f"    floored (TC off) at t {t:.2f} s, face x {x_face:.2f} m, "
+                              f"{v_kmh:.1f} km/h", flush=True)
+                if phase == "floor":
+                    thr = 1.0
+                    if t - t_phase > 6.0:
+                        phase, t_phase = "free", t
+                        print(f"    released at t {t:.2f} s, face x {x_face:.2f} m, {v_kmh:.1f} km/h", flush=True)
+                if phase == "free":
+                    thr = 0.0
+            elif which == "sand_floor":
+                if phase == "go":
+                    thr = 0.5
+                    if v_kmh >= floor_kmh or t > 5.0:
+                        phase, t_phase, tc_on = "floor", t, False
+                        print(f"    floored at t {t:.2f} s, {v_kmh:.1f} km/h, TC off", flush=True)
+                thr = 1.0 if phase == "floor" else thr
+            else:
+                if phase == "go" and DUNE:
+                    # On the dune: sand_dune_stop's approach and stop, then
+                    # floored until it stalls, then the rocking.
+                    thr = 0.45 if v_kmh < 10.0 else 0.2
+                    if x_face >= 2.6:
+                        phase, t_phase = "stop", t
+                        print(f"    braking at t {t:.2f} s, face x {x_face:.2f} m", flush=True)
+                elif phase == "go":
+                    thr = 0.5
+                    if v_kmh >= 10.0 or t > 5.0:
+                        phase, t_phase, tc_on = "floor", t, False
+                        print(f"    floored at t {t:.2f} s, {v_kmh:.1f} km/h, TC off", flush=True)
+                if phase == "stop":
+                    thr, br = 0.0, 1.0
+                    if t - t_phase > 1.5:
+                        phase, t_phase, tc_on = "floor", t, False
+                        print(f"    floored at t {t:.2f} s, face x {x_face:.2f} m, TC off", flush=True)
+                if phase == "floor":
+                    thr = 1.0
+                    if t - t_phase > 1.5 and abs(v_kmh) < 1.0:
+                        phase, t_phase, tc_on = "rock", t, True
+                        stalled_at = (t, vehicle.position.x)
+                        print(f"    rocking from t {t:.2f} s at x {vehicle.position.x:.2f} "
+                              f"({v_kmh:.1f} km/h)", flush=True)
+                if phase == "rock":
+                    # 1.3 s each way, a beat of brake between (the gear change)
+                    c_t = (t - t_phase) % 2.8
+                    rock_k = int((t - t_phase) // 2.8)
+                    fwd_half = c_t < 1.4
+                    want = tp.PhysxVehicle.Gear.FORWARD if fwd_half else tp.PhysxVehicle.Gear.REVERSE
+                    if vehicle.gear != want:
+                        vehicle.gear = want
+                    thr = 0.6 if (c_t % 1.4) < 1.15 else 0.0
+                    if rock_k >= 5:
+                        thr, br = 0.0, 1.0
+            _tw = time.perf_counter()
+            hub = coupled_step(thr, 0.0, br)
+            step_ms = (time.perf_counter() - _tw) * 1000.0
+            mark_dirty(hub)
+            spray_step(DT, hub)
+            om = [float(vehicle.wheel_angular_speed(i)) for i in range(4)]
+            rows.append([round(t, 4), phase, vehicle.position.x, v_kmh, thr, int(tc_on), round(x_face, 3),
+                         round(math.degrees(gravel.theta), 2)]
+                        + om + list(gravel.slip) + list(1000.0 * hud["z"]) + list(hud["mu"])
+                        + list(gravel.fy) + list(hud["drag"]) + list(gravel.thrust)
+                        + list(gravel.dpw) + list(gravel.tspin) + list(gravel.wload)
+                        + [vehicle.position.y, belly["slope_fx"], sum(gravel.fh[i][0] for i in range(4))]
+                        + [float(vehicle.suspension_jounce(i)) for i in range(4)]
+                        + [float(vehicle.suspension_force(i)) for i in range(4)]
+                        + [belly["fy"], belly["fx"], 1000.0 * belly["pen"],
+                                             gravel.ms, gravel.nsub, step_ms])
+            if gravel.blown:
+                print(f"  GUARD at t {t:.2f} s: {gravel.blown} -- ending the drive (not filmed)", flush=True)
+                break
+            if k % 30 == 0:
+                print(f"    t{t:5.2f} {phase:5s} x{vehicle.position.x:7.2f} face{x_face:6.2f} "
+                      f"th{math.degrees(gravel.theta):5.1f} v{v_kmh:6.1f} km/h  "
+                      f"w {np.round(om, 1)}  slip {np.round(gravel.slip, 2)}  sink {np.round(hud['z'] * 1000, 0)} mm  "
+                      f"mu {np.round(hud['mu'], 2)}  H/W {np.round(gravel.thrust, 2)}  DP/W {np.round(gravel.dpw, 2)}  "
+                      f"T {np.round(gravel.tspin, 0)}  drag {hud['drag'].sum():.0f} N  belly {belly['fy'] / 1000:.1f} kN pen {belly['pen'] * 1000:.0f} mm  "
+                      f"MPM {gravel.ms:.1f} ms/{gravel.nsub}", flush=True)
+            if which.startswith("sand_dune"):
+                if over_at is None and vehicle.position.x > DUNE_CREST_X + 4.0:
+                    over_at = t
+                    print(f"    OVER the crest at t {t:.2f} s, {v_kmh:.1f} km/h", flush=True)
+                if over_at is not None and t - over_at > 1.0:
+                    break
+                if which != "sand_dune_stop" and x_face > 0.0 and abs(v_kmh) < 0.5:
+                    slow_t += DT
+                else:
+                    slow_t = 0.0
+                if bogged_at is None and slow_t > 1.5:
+                    bogged_at = (t, x_face)
+                    print(f"    BOGGED at t {t:.2f} s, front axle {x_face:.2f} m up the face", flush=True)
+                if bogged_at is not None and t - bogged_at[0] > 2.5:
+                    break
+                if which == "sand_dune_stop" and phase == "free" and t - t_phase > 3.0:
+                    break
+            if vehicle.position.x > X1 - 4.0:
+                print(f"    through: the lane's end at t {t:.2f} s, {v_kmh:.1f} km/h"
+                      + ("" if which != "sand_rock" or stalled_at else " (never stalled: nothing to rock)"),
+                      flush=True)
+                break
+            if fdir:
+                pose_visuals()
+                e, tg = chase_eye()
+                kk = 1.0 - math.exp(-6.0 * DT)
+                cam_pos += (e - cam_pos) * kk
+                cam_tgt += (tg - cam_tgt) * kk
+                camera.position.set(*cam_pos)
+                camera.look_at(tp.Vector3(*cam_tgt))
+                weather(DT, cam_pos)
+                gravel.publish()
+                for s_ in strips:
+                    s_.publish()
+                if k % 2 == 0 and t >= clip_from:
+                    renderer.save_frame(scene, camera, os.path.join(fdir, f"f{n_saved:05d}.png"))
+                    n_saved += 1
+            else:
+                weather(DT, (0.0, 2.0, 0.0))
+        wall = time.perf_counter() - t_start
+        hdr = (["t", "phase", "x", "v_kmh", "throttle", "tc", "face_x", "theta_deg"] + [f"omega{i}" for i in range(4)]
+               + [f"slip{i}" for i in range(4)] + [f"sink_mm{i}" for i in range(4)]
+               + [f"mu{i}" for i in range(4)] + [f"FyW{i}" for i in range(4)]
+               + [f"drag_N{i}" for i in range(4)] + [f"HW{i}" for i in range(4)]
+               + [f"DPW{i}" for i in range(4)] + [f"Tspin{i}" for i in range(4)] + [f"W{i}" for i in range(4)]
+               + ["car_y", "slope_fx", "grains_fx"] + [f"jounce{i}" for i in range(4)]
+               + [f"susp{i}" for i in range(4)]
+               + ["belly_fy", "belly_fh", "belly_pen_mm", "mpm_ms", "nsub", "step_ms"])
+        os.makedirs(OUT_DIR, exist_ok=True)
+        csv_path = os.path.join(OUT_DIR, f"{which}.csv")
+        with open(csv_path, "w", newline="") as fh:
+            wcsv = csv.writer(fh)
+            wcsv.writerow(hdr)
+            wcsv.writerows(rows)
+        a = np.array([r[8:] for r in rows], np.float64)
+        print(f"  {which}: {len(rows)} frames in {wall:.1f} s; x {rows[0][2]:.2f} -> {rows[-1][2]:.2f}, "
+              f"v end {rows[-1][3]:.1f} km/h; max sink {a[:, 8:12].max(0).round(0)} mm; "
+              f"MPM {np.median(a[:, -3]):.2f} ms median at {np.median(a[:, -2]):.0f} substeps, "
+              f"coupled step {np.median(a[:, -1]):.2f} ms; belly max {a[:, hdr.index('belly_fy') - 8].max() / 1000:.1f} kN; "
+              f"drag mean {a[:, 20:24].sum(1).mean():.0f} N; "
+              f"guard {gravel.blown}; wrote {csv_path}", flush=True)
+        if stalled_at:
+            print(f"  {which}: {'floored' if which == 'sand_dune_stop' else 'stalled'} at t {stalled_at[0]:.2f} s "
+                  f"x {stalled_at[1]:.2f}; ended at x {vehicle.position.x:.2f} "
+                  f"({vehicle.position.x - stalled_at[1]:+.2f} m)", flush=True)
+        if which.startswith("sand_dune"):
+            print(f"  {which}: {'OVER at t %.2f s' % over_at if over_at is not None else 'not over'}; "
+                  f"{'BOGGED at t %.2f s, %.2f m up the face' % bogged_at if bogged_at else 'never bogged' if which != 'sand_dune_stop' else 'stopped on purpose'}; "
+                  f"max face x {max(r[6] for r in rows):.2f} m, end face x {rows[-1][6]:.2f} m", flush=True)
+        if fdir and os.listdir(fdir):
+            final = clip
+            base_, ext = os.path.splitext(clip)
+            v_ = 2
+            while os.path.exists(final):
+                final = f"{base_}_v{v_}{ext}"
+                v_ += 1
+            part = final[:-4] + ".partial.mp4"
+            encode_png_sequence(os.path.join(fdir, "f%05d.png"), part, 30, crf=19,
+                                ffmpeg=imageio_ffmpeg.get_ffmpeg_exe())
+            os.replace(part, final)
+            print(f"  wrote {final}", flush=True)
+        # Stills: settle, then chase + the low rear-right wheel.
+        for _ in range(30):
+            hub = coupled_step(0.0, 0.0, 1.0)
+            mark_dirty(hub)
+        pose_visuals()
+        gravel.publish()
+        for s_ in strips:
+            s_.dirty = True
+            s_.publish()
+        p, q = vehicle.position, vehicle.quaternion
+        c = np.array([p.x, p.y, p.z])
+        lp, _ = vehicle.wheel_local_pose(2)          # rear right
+        hub_rr = c + qrot(q, np.array([lp.x, lp.y, lp.z]))
+        right = qrot(q, np.array([1.0, 0.0, 0.0]))
+        fwd = qrot(q, np.array([0.0, 0.0, 1.0]))
+        g0 = float(base(hub_rr[0], hub_rr[2]))
+        e_ch, t_ch = chase_eye()
+        # The low camera stands on ITS OWN ground (on the dune the hub's ground
+        # is not the camera's), a little higher, looking down into the rut.
+        e_lo = hub_rr + right * 1.55 - fwd * 0.75
+        e_lo[1] = float(base(e_lo[0], e_lo[2])) + 0.30
+        shots = [(f"{which}_chase", e_ch, t_ch),
+                 (f"{which}_wheel_low", e_lo,
+                  hub_rr + np.array([0.0, g0 - 0.10 - hub_rr[1], 0.0]))]
+        for name, e, lk in shots:
+            weather(0.0, e)
+            camera.position.set(*e)
+            camera.look_at(tp.Vector3(*lk))
+            for _ in range(0 if GL else WARM):
+                renderer.render(scene, camera)
+            save_shot(out(name))
+            print(f"  wrote {out(name)}", flush=True)
     if which == "crest":
         # The road's own frame: the car ON the rise out of the spawn dip, shot
         # from the clay strip across the lanes so the chassis PITCH is a
