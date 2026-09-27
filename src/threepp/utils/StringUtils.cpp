@@ -132,3 +132,41 @@ float utils::parseFloat(const std::string& str) {
 
     return value;
 }
+
+std::u32string utils::decodeUtf8(const std::string& s) {
+    constexpr char32_t kReplacement = 0xFFFD;
+    std::u32string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size();) {
+        const auto lead = static_cast<unsigned char>(s[i]);
+        int n;
+        char32_t cp;
+        if (lead < 0x80) {
+            n = 1, cp = lead;
+        } else if ((lead >> 5) == 0x6) {
+            n = 2, cp = lead & 0x1F;
+        } else if ((lead >> 4) == 0xE) {
+            n = 3, cp = lead & 0x0F;
+        } else if ((lead >> 3) == 0x1E) {
+            n = 4, cp = lead & 0x07;
+        } else {
+            out.push_back(kReplacement);
+            ++i;
+            continue;
+        }
+        bool ok = i + n <= s.size();
+        for (int k = 1; ok && k < n; ++k) {
+            const auto cont = static_cast<unsigned char>(s[i + k]);
+            ok = (cont >> 6) == 0x2;
+            cp = (cp << 6) | (cont & 0x3F);
+        }
+        if (!ok) {
+            out.push_back(kReplacement);
+            ++i;
+            continue;
+        }
+        out.push_back(cp);
+        i += n;
+    }
+    return out;
+}

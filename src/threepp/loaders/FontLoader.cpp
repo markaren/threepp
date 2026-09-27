@@ -8,7 +8,9 @@
 #include "stb_truetype.h"
 
 #include <fstream>
+#include <initializer_list>
 #include <iostream>
+#include <utility>
 
 
 using namespace threepp;
@@ -30,7 +32,9 @@ namespace {
 
         auto& glyphs = data.glyphs;
         for (auto& [str_key, value] : json["glyphs"].items()) {
-            char key = str_key[0];
+            const auto codepoints = utils::decodeUtf8(str_key);
+            if (codepoints.empty()) continue;
+            const char32_t key = codepoints[0];
             glyphs[key] = Font::Glyph{
                     .x_min = value["x_min"].get<float>(),
                     .x_max = value["x_max"].get<float>(),
@@ -73,45 +77,49 @@ namespace {
         int width, height, xOffset, yOffset;
         float scale = stbtt_ScaleForPixelHeight(&info, 16);
 
-        stbtt_vertex* vertices;
-        for (int ch = 32; ch < 128; ++ch) {
-            Font::Glyph glyph;
+        // Printable ASCII, Latin-1 + Latin Extended-A (accents, ø, µ, °, ×),
+        // Greek (λ, θ, ω for maths and physics labels), and the common
+        // typographic and mathematical symbols.
+        static constexpr std::pair<char32_t, char32_t> ranges[] = {
+                {0x0020, 0x007E}, {0x00A0, 0x017F}, {0x0370, 0x03FF}, {0x2010, 0x2027},
+                {0x2030, 0x203A}, {0x20AC, 0x20AC}, {0x2190, 0x21FF}, {0x2200, 0x22FF}};
 
-            int glyphIndex = stbtt_FindGlyphIndex(&info, ch);
-            if (glyphIndex == 0) continue;
+        // The outline format is three.js's typeface one, which lists the END
+        // point of a curve before its control point(s):
+        //   q x y cpx cpy          b x y cp1x cp1y cp2x cp2y
+        const auto put = [](Font::Glyph& g, const char* op, std::initializer_list<int> values) {
+            g.o.emplace_back(op);
+            for (const int v : values) g.o.emplace_back(std::to_string(v));
+        };
 
-            stbtt_GetGlyphHMetrics(&info, glyphIndex, &glyph.ha, nullptr);
-            stbtt_GetGlyphBitmapBox(&info, glyphIndex, scale, scale, &xOffset, &yOffset, &width, &height);
-            glyph.x_min = static_cast<float>(xOffset);
-            glyph.x_max = static_cast<float>(xOffset + width);
+        for (const auto& [first, last] : ranges) {
+            for (char32_t ch = first; ch <= last; ++ch) {
+                const int glyphIndex = stbtt_FindGlyphIndex(&info, static_cast<int>(ch));
+                if (glyphIndex == 0) continue;
 
-            int numVertices = stbtt_GetGlyphShape(&info, glyphIndex, &vertices);
+                Font::Glyph glyph;
+                stbtt_GetGlyphHMetrics(&info, glyphIndex, &glyph.ha, nullptr);
+                stbtt_GetGlyphBitmapBox(&info, glyphIndex, scale, scale, &xOffset, &yOffset, &width, &height);
+                glyph.x_min = static_cast<float>(xOffset);
+                glyph.x_max = static_cast<float>(xOffset + width);
 
-            for (int j = 0; j < numVertices; ++j) {
-                const auto type = vertices[j].type;
-                if (type == STBTT_vcurve) {
-                    glyph.o.emplace_back("q");
-                    glyph.o.emplace_back(std::to_string(vertices[j].cx));
-                    glyph.o.emplace_back(std::to_string(vertices[j].cy));
-                    glyph.o.emplace_back(std::to_string(vertices[j - 1].x));
-                    glyph.o.emplace_back(std::to_string(vertices[j - 1].y));
-
-                } else if (type == STBTT_vline) {
-                    glyph.o.emplace_back("l");
-                    glyph.o.emplace_back(std::to_string(vertices[j].x));
-                    glyph.o.emplace_back(std::to_string(vertices[j].y));
-
-                } else if (type == STBTT_vmove) {
-                    glyph.o.emplace_back("m");
-                    glyph.o.emplace_back(std::to_string(vertices[j].x));
-                    glyph.o.emplace_back(std::to_string(vertices[j].y));
+                stbtt_vertex* vertices = nullptr;
+                const int numVertices = stbtt_GetGlyphShape(&info, glyphIndex, &vertices);
+                for (int j = 0; j < numVertices; ++j) {
+                    const auto& v = vertices[j];
+                    switch (v.type) {
+                        case STBTT_vmove: put(glyph, "m", {v.x, v.y}); break;
+                        case STBTT_vline: put(glyph, "l", {v.x, v.y}); break;
+                        case STBTT_vcurve: put(glyph, "q", {v.x, v.y, v.cx, v.cy}); break;
+                        case STBTT_vcubic: put(glyph, "b", {v.x, v.y, v.cx, v.cy, v.cx1, v.cy1}); break;
+                        default: break;
+                    }
                 }
+                STBTT_free(vertices, info.userdata);
+
+                font.glyphs[ch] = std::move(glyph);
             }
-
-            font.glyphs[static_cast<char>(ch)] = glyph;
         }
-
-        STBTT_free(vertices, info);
 
         return font;
     }

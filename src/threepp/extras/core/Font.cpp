@@ -18,9 +18,12 @@ namespace {
         ShapePath path;
     };
 
-    FontPath createPath(char c, float scale, float offsetX, float offsetY, const Font& data) {
+    FontPath createPath(char32_t c, float scale, float offsetX, float offsetY, const Font& data) {
 
-        const auto glyph = data.glyphs.contains(c) ? data.glyphs.at(c) : data.glyphs.at('?');
+        auto it = data.glyphs.find(c);
+        if (it == data.glyphs.end()) it = data.glyphs.find(U'?');
+        if (it == data.glyphs.end()) return {};
+        const auto& glyph = it->second;
 
         ShapePath path;
 
@@ -81,9 +84,9 @@ namespace {
 
         float offsetX = 0, offsetY = 0;
 
-        for (auto c : text) {
+        for (const auto c : utils::decodeUtf8(text)) {
 
-            if (c == '\n') {
+            if (c == U'\n') {
 
                 offsetX = 0;
                 offsetY -= line_height;

@@ -51,6 +51,11 @@ namespace threepp::utils {
 
     float parseFloat(const std::string& str);
 
+    // UTF-8 bytes -> Unicode code points. A malformed or truncated sequence
+    // becomes U+FFFD (one per bad lead byte), so the output never loses track
+    // of where the next character starts.
+    std::u32string decodeUtf8(const std::string& s);
+
 }// namespace threepp::utils
 
 #endif//THREEPP_STRINGUTILS_HPP

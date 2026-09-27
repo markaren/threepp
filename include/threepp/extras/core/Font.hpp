@@ -37,8 +37,10 @@ namespace threepp {
         int lineHeight{};
         int underlineThickness{};
 
-        std::unordered_map<char, Glyph> glyphs;
+        // Keyed by Unicode code point. A character with no glyph falls back to '?'.
+        std::unordered_map<char32_t, Glyph> glyphs;
 
+        // `text` is UTF-8.
         [[nodiscard]] std::vector<Shape> generateShapes(const std::string& text, float size = 100) const;
 
         // Rasterize text into an RGBA image of the given pixel height.
