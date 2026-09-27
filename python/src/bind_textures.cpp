@@ -58,6 +58,9 @@ namespace threepp_py {
                 .def_readwrite("mapping", &Texture::mapping)
                 .def_readwrite("generate_mipmaps", &Texture::generateMipmaps)
                 .def_readwrite("color_space", &Texture::colorSpace)
+                // Which UV set the texture samples: 0 = "uv", 1 = "uv2", 2 = "uv3"
+                // (three.js Texture.channel).
+                .def_readwrite("channel", &Texture::channel)
                 // In-place re-bake of a float_texture's pixels: same allocation,
                 // same Texture object, new radiance. The point is the ping-pong
                 // a moving sun needs — write the BACK texture, then swap

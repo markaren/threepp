@@ -8,7 +8,7 @@ import numpy.typing
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'FBXLoader', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_EGL', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'ParticleField', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'Ray', 'RayHit', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'SkeletonHelper', 'SoftBody', 'SogLoader', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
+__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'FBXLoader', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_EGL', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'Ray', 'RayHit', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'SkeletonHelper', 'SoftBody', 'SogLoader', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
 class AmbientLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
@@ -714,6 +714,42 @@ class Blending:
         ...
     @property
     def value(self) -> int:
+        ...
+class BokehPass(Pass):
+    """
+    Depth of field.
+    """
+    def __init__(self, scene: Scene, camera: Camera, focus: typing.SupportsFloat | typing.SupportsIndex = 1.0, aperture: typing.SupportsFloat | typing.SupportsIndex = 0.02500000037252903, maxblur: typing.SupportsFloat | typing.SupportsIndex = 0.009999999776482582) -> None:
+        ...
+    @property
+    def aperture(self) -> float:
+        """
+        Larger is shallower (less in focus).
+        """
+    @aperture.setter
+    def aperture(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def aspect(self) -> float:
+        ...
+    @aspect.setter
+    def aspect(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def focus(self) -> float:
+        """
+        Distance to the focus plane along the view axis.
+        """
+    @focus.setter
+    def focus(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def maxblur(self) -> float:
+        """
+        Ceiling on the blur radius, in UV units.
+        """
+    @maxblur.setter
+    def maxblur(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
 class Box3:
     @typing.overload
@@ -1584,6 +1620,11 @@ class DirectionalLight(Light):
         """
     def set_target(self, target: Object3D) -> None:
         ...
+    @property
+    def shadow(self) -> LightShadow:
+        """
+        The light's LightShadow (bias, radius, intensity, map_size).
+        """
 class DirectionalLightHelper(Object3D):
     def __init__(self, light: DirectionalLight, size: typing.SupportsFloat | typing.SupportsIndex = 1.0, color: Color | None = None) -> None:
         ...
@@ -1905,6 +1946,47 @@ class EXRLoader:
         """
         Load an OpenEXR .exr equirectangular environment as a float Texture.
         """
+class EffectComposer:
+    """
+    A chain of full-screen passes (GLRenderer only). Every pass works on linear HDR; the composer tone-maps once at the end through an implicit OutputPass.
+    """
+    def __init__(self, renderer: GLRenderer, samples: typing.SupportsInt | typing.SupportsIndex = 0, type: str | None = None, depth_buffer: bool = True, stencil_buffer: bool = True) -> None:
+        """
+        samples: MSAA samples for the internal targets (0 = off). type: 'HalfFloat' (default), 'Float' or 'UnsignedByte' (cheaper, but bands in dark gradients).
+        """
+    def add_pass(self, pass_: Pass) -> None:
+        ...
+    def get_pixel_ratio(self) -> float:
+        ...
+    def insert_pass(self, pass_: Pass, index: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def read_pixels(self, renderer: GLRenderer, flip: bool = True) -> numpy.typing.NDArray[numpy.uint8]:
+        """
+        The chain's finished image as an (H, W, 3) uint8 array (use with render_to_screen=False; linear HDR clamped unless the chain ends in an OutputPass).
+        """
+    def remove_pass(self, pass_: Pass) -> None:
+        ...
+    def render(self, delta_time: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
+        ...
+    def set_pixel_ratio(self, pixel_ratio: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def set_size(self, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Resize the internal targets (framebuffer pixels; the pixel ratio is applied here).
+        """
+    @property
+    def passes(self) -> list[Pass]:
+        """
+        A fresh list of the passes (editing it does not change the chain).
+        """
+    @property
+    def render_to_screen(self) -> bool:
+        """
+        False keeps the result offscreen (read it with read_pixels()).
+        """
+    @render_to_screen.setter
+    def render_to_screen(self, arg0: bool) -> None:
+        ...
 class EglContext:
     @staticmethod
     def available() -> bool:
@@ -2842,6 +2924,92 @@ class GLTFResult:
         """
         All scenes in the file.
         """
+class GTAOPass(Pass):
+    """
+    Ground-truth ambient occlusion: darkens creases, corners and contact points. Renders the scene once more per frame for normals + depth, then denoises and multiplies the AO in.
+    """
+    class Output:
+        """
+        Members:
+        
+          Off
+        
+          Default
+        
+          Diffuse
+        
+          Depth
+        
+          Normal
+        
+          AO
+        
+          Denoise
+        """
+        AO: typing.ClassVar[GTAOPass.Output]  # value = <Output.AO: 4>
+        Default: typing.ClassVar[GTAOPass.Output]  # value = <Output.Default: 0>
+        Denoise: typing.ClassVar[GTAOPass.Output]  # value = <Output.Denoise: 5>
+        Depth: typing.ClassVar[GTAOPass.Output]  # value = <Output.Depth: 2>
+        Diffuse: typing.ClassVar[GTAOPass.Output]  # value = <Output.Diffuse: 1>
+        Normal: typing.ClassVar[GTAOPass.Output]  # value = <Output.Normal: 3>
+        Off: typing.ClassVar[GTAOPass.Output]  # value = <Output.Off: -1>
+        __members__: typing.ClassVar[dict[str, GTAOPass.Output]]  # value = {'Off': <Output.Off: -1>, 'Default': <Output.Default: 0>, 'Diffuse': <Output.Diffuse: 1>, 'Depth': <Output.Depth: 2>, 'Normal': <Output.Normal: 3>, 'AO': <Output.AO: 4>, 'Denoise': <Output.Denoise: 5>}
+        def __eq__(self, other: typing.Any) -> bool:
+            ...
+        def __getstate__(self) -> int:
+            ...
+        def __hash__(self) -> int:
+            ...
+        def __index__(self) -> int:
+            ...
+        def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        def __int__(self) -> int:
+            ...
+        def __ne__(self, other: typing.Any) -> bool:
+            ...
+        def __repr__(self) -> str:
+            ...
+        def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        def __str__(self) -> str:
+            ...
+        @property
+        def name(self) -> str:
+            ...
+        @property
+        def value(self) -> int:
+            ...
+    def __init__(self, scene: Scene, camera: Camera, width: typing.SupportsInt | typing.SupportsIndex = 512, height: typing.SupportsInt | typing.SupportsIndex = 512) -> None:
+        ...
+    def set_scene_clip_box(self, box: Box3 | None) -> None:
+        """
+        Fade AO out beyond `box` (a Box3), so a small scene does not shade a distant backdrop. None removes it.
+        """
+    def update_gtao_material(self, *, radius: typing.SupportsFloat | typing.SupportsIndex | None = None, distance_exponent: typing.SupportsFloat | typing.SupportsIndex | None = None, thickness: typing.SupportsFloat | typing.SupportsIndex | None = None, distance_fall_off: typing.SupportsFloat | typing.SupportsIndex | None = None, scale: typing.SupportsFloat | typing.SupportsIndex | None = None, samples: typing.SupportsInt | typing.SupportsIndex | None = None, screen_space_radius: bool | None = None) -> None:
+        """
+        Change the AO estimate; only the keywords given are touched. radius is the world-space reach (0.25), thickness the depth gap beyond which a sample stops occluding (1), scale an exponent on the AO (1), samples the depth taps per pixel (16).
+        """
+    def update_pd_material(self, *, luma_phi: typing.SupportsFloat | typing.SupportsIndex | None = None, depth_phi: typing.SupportsFloat | typing.SupportsIndex | None = None, normal_phi: typing.SupportsFloat | typing.SupportsIndex | None = None, radius: typing.SupportsFloat | typing.SupportsIndex | None = None, radius_exponent: typing.SupportsFloat | typing.SupportsIndex | None = None, rings: typing.SupportsFloat | typing.SupportsIndex | None = None, samples: typing.SupportsInt | typing.SupportsIndex | None = None) -> None:
+        """
+        Change the Poisson denoise that follows the AO; only the keywords given are touched.
+        """
+    @property
+    def blend_intensity(self) -> float:
+        """
+        0 = no AO, 1 = full AO.
+        """
+    @blend_intensity.setter
+    def blend_intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def output(self) -> GTAOPass.Output:
+        """
+        What reaches the next pass: the lit image with AO, or a buffer.
+        """
+    @output.setter
+    def output(self, arg0: GTAOPass.Output) -> None:
+        ...
 class Gait:
     """
     Members:
@@ -4118,6 +4286,45 @@ class Light(Object3D):
     @intensity.setter
     def intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
+class LightShadow:
+    auto_update: bool
+    needs_update: bool
+    @property
+    def bias(self) -> float:
+        ...
+    @bias.setter
+    def bias(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def intensity(self) -> float:
+        """
+        How much light a fully shadowed receiver loses: 1 a hard shadow, 0 none.
+        """
+    @intensity.setter
+    def intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def map_size(self) -> Vector2:
+        """
+        Shadow-map resolution in texels (Vector2, default 2048 x 2048). Set before the first render.
+        """
+    @map_size.setter
+    def map_size(self, arg0: Vector2) -> None:
+        ...
+    @property
+    def normal_bias(self) -> float:
+        ...
+    @normal_bias.setter
+    def normal_bias(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def radius(self) -> float:
+        """
+        Penumbra width in shadow-map texels (PCF: a soft Vogel-disk filter; VSM: the blur).
+        """
+    @radius.setter
+    def radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
 class Line(Object3D):
     cast_shadow: bool
     frustum_culled: bool
@@ -4217,11 +4424,13 @@ class Line(Object3D):
     def uuid(self) -> str:
         ...
 class LineBasicMaterial(Material):
+    alpha_hash: bool
     blending: Blending
     color: Color
     depth_test: bool
     depth_write: bool
     fog: bool
+    force_single_pass: bool
     name: str
     premultiplied_alpha: bool
     side: Side
@@ -4361,10 +4570,12 @@ class Mapping:
     def value(self) -> int:
         ...
 class Material:
+    alpha_hash: bool
     blending: Blending
     depth_test: bool
     depth_write: bool
     fog: bool
+    force_single_pass: bool
     name: str
     premultiplied_alpha: bool
     side: Side
@@ -4543,6 +4754,7 @@ class Mesh(Object3D):
     def uuid(self) -> str:
         ...
 class MeshBasicMaterial(Material):
+    alpha_hash: bool
     alpha_map: Texture
     ao_map: Texture
     blending: Blending
@@ -4552,6 +4764,7 @@ class MeshBasicMaterial(Material):
     depth_write: bool
     env_map: Texture
     fog: bool
+    force_single_pass: bool
     map: Texture
     name: str
     premultiplied_alpha: bool
@@ -4601,6 +4814,7 @@ class MeshBasicMaterial(Material):
     def wireframe_linewidth(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
 class MeshDepthMaterial(Material):
+    alpha_hash: bool
     alpha_map: Texture
     blending: Blending
     depth_packing: DepthPacking
@@ -4608,6 +4822,7 @@ class MeshDepthMaterial(Material):
     depth_write: bool
     displacement_map: Texture
     fog: bool
+    force_single_pass: bool
     map: Texture
     name: str
     premultiplied_alpha: bool
@@ -4656,6 +4871,7 @@ class MeshDepthMaterial(Material):
     def wireframe_linewidth(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
 class MeshLambertMaterial(Material):
+    alpha_hash: bool
     alpha_map: Texture
     ao_map: Texture
     blending: Blending
@@ -4666,6 +4882,7 @@ class MeshLambertMaterial(Material):
     emissive_map: Texture
     env_map: Texture
     fog: bool
+    force_single_pass: bool
     map: Texture
     name: str
     premultiplied_alpha: bool
@@ -4708,6 +4925,7 @@ class MeshLambertMaterial(Material):
     def reflectivity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
 class MeshNormalMaterial(Material):
+    alpha_hash: bool
     blending: Blending
     bump_map: Texture
     depth_test: bool
@@ -4715,6 +4933,7 @@ class MeshNormalMaterial(Material):
     displacement_map: Texture
     flat_shading: bool
     fog: bool
+    force_single_pass: bool
     name: str
     normal_map: Texture
     normal_scale: Vector2
@@ -4746,6 +4965,7 @@ class MeshNormalMaterial(Material):
     def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
 class MeshPhongMaterial(Material):
+    alpha_hash: bool
     alpha_map: Texture
     ao_map: Texture
     blending: Blending
@@ -4759,6 +4979,7 @@ class MeshPhongMaterial(Material):
     env_map: Texture
     flat_shading: bool
     fog: bool
+    force_single_pass: bool
     map: Texture
     name: str
     normal_map: Texture
@@ -4927,6 +5148,7 @@ class MeshPhysicalMaterial(MeshStandardMaterial):
     def transmission(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
 class MeshStandardMaterial(Material):
+    alpha_hash: bool
     alpha_map: Texture
     ao_map: Texture
     blending: Blending
@@ -4934,18 +5156,13 @@ class MeshStandardMaterial(Material):
     color: Color
     depth_test: bool
     depth_write: bool
-    detail_map: Texture | None
-    detail_normal_map: Texture | None
-    detail_normal_scale: float
-    detail_repeat: float
-    detail_rough_strength: float
-    detail_strength: float
     displacement_map: Texture
     emissive: Color
     emissive_map: Texture
     env_map: Texture
     flat_shading: bool
     fog: bool
+    force_single_pass: bool
     map: Texture
     metalness_map: Texture
     name: str
@@ -4973,6 +5190,54 @@ class MeshStandardMaterial(Material):
         ...
     @alpha_test.setter
     def alpha_test(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def detail_map(self) -> Texture:
+        """
+        LINEAR albedo modulation texture, 0.5 = neutral.
+        """
+    @detail_map.setter
+    def detail_map(self, arg0: Texture) -> None:
+        ...
+    @property
+    def detail_normal_map(self) -> Texture:
+        """
+        LINEAR RGBA: RGB tangent-space normal (0.5 = flat), A = roughness modulation (0.5 = neutral). Inert when None.
+        """
+    @detail_normal_map.setter
+    def detail_normal_map(self, arg0: Texture) -> None:
+        ...
+    @property
+    def detail_normal_scale(self) -> float:
+        """
+        Tangent-space xy perturbation scale of the detail normal.
+        """
+    @detail_normal_scale.setter
+    def detail_normal_scale(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def detail_repeat(self) -> float:
+        """
+        Detail repeats per world metre (albedo AND normal layers).
+        """
+    @detail_repeat.setter
+    def detail_repeat(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def detail_rough_strength(self) -> float:
+        """
+        0..1 strength of the detail roughness modulation.
+        """
+    @detail_rough_strength.setter
+    def detail_rough_strength(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def detail_strength(self) -> float:
+        """
+        0..1 strength of the detail albedo modulation.
+        """
+    @detail_strength.setter
+    def detail_strength(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def emissive_intensity(self) -> float:
@@ -5281,6 +5546,81 @@ class OrthographicCamera(Camera):
     @top.setter
     def top(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
+class OutlinePass(Pass):
+    """
+    A glowing outline around the selected objects (visible_edge_color where in view, hidden_edge_color where something hides them). Only meshes and sprites take part.
+    """
+    hidden_edge_color: Color
+    pattern_texture: Texture
+    resolution: Vector2
+    use_pattern_texture: bool
+    visible_edge_color: Color
+    def __init__(self, resolution: Vector2, scene: Scene, camera: Camera, selected_objects: typing.Any = None) -> None:
+        ...
+    @property
+    def down_sample_ratio(self) -> float:
+        """
+        Takes effect on the next set_size.
+        """
+    @down_sample_ratio.setter
+    def down_sample_ratio(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def edge_glow(self) -> float:
+        """
+        A wider, softer copy of the edge; 0 is a crisp line.
+        """
+    @edge_glow.setter
+    def edge_glow(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def edge_strength(self) -> float:
+        """
+        Multiplies the edge (linear light) before it is added.
+        """
+    @edge_strength.setter
+    def edge_strength(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def edge_thickness(self) -> float:
+        """
+        Edge blur width in downsampled pixels, up to 4.
+        """
+    @edge_thickness.setter
+    def edge_thickness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def pulse_period(self) -> float:
+        """
+        Seconds-ish period of a brightness pulse; 0 = off.
+        """
+    @pulse_period.setter
+    def pulse_period(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def selected_objects(self) -> list:
+        """
+        The objects to outline (a Group outlines every mesh under it). The getter returns a FRESH list: `p.selected_objects.append(m)` changes nothing. Assign a whole list instead: `p.selected_objects = [m]`. The pass keeps the objects alive.
+        """
+    @selected_objects.setter
+    def selected_objects(self, arg1: collections.abc.Iterable) -> None:
+        ...
+class OutputPass(Pass):
+    """
+    Tone mapping + output colour space. The composer appends one implicitly; add it explicitly only when a later pass needs display-ready input.
+    """
+    def __init__(self) -> None:
+        ...
+class PMREMGenerator:
+    """
+    Turns a Scene into an environment map (GLRenderer only). Keeps the renderer alive.
+    """
+    def __init__(self, renderer: GLRenderer) -> None:
+        ...
+    def from_scene(self, scene: Scene, sigma: typing.SupportsFloat | typing.SupportsIndex = 0.0, near: typing.SupportsFloat | typing.SupportsIndex = 0.10000000149011612, far: typing.SupportsFloat | typing.SupportsIndex = 100.0, size: typing.SupportsInt | typing.SupportsIndex = 256, position: Vector3 | None = None) -> Texture:
+        """
+        Render `scene` into a cube from `position` and return it as an equirectangular HalfFloat environment Texture, for scene.environment (or scene.background). `sigma` is a Gaussian blur in radians (0.04 suits RoomEnvironment); `size` is the cube face edge. The texture lives on the GPU of the renderer that made it and stays valid while referenced, independent of this generator.
+        """
 class ParticleField(Mesh):
     class BillboardRepr:
         enabled: bool
@@ -6073,6 +6413,44 @@ class ParticleField(Mesh):
     @property
     def mesh_repr(self) -> ParticleField.MeshRepr:
         ...
+class Pass:
+    """
+    One step of an EffectComposer chain.
+    """
+    def set_size(self, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def clear(self) -> bool:
+        """
+        Whether the pass clears its target before drawing.
+        """
+    @clear.setter
+    def clear(self, arg0: bool) -> None:
+        ...
+    @property
+    def enabled(self) -> bool:
+        """
+        A disabled pass is skipped, including its buffer swap.
+        """
+    @enabled.setter
+    def enabled(self, arg0: bool) -> None:
+        ...
+    @property
+    def need_swap(self) -> bool:
+        """
+        Whether the composer swaps read/write buffers after this pass.
+        """
+    @need_swap.setter
+    def need_swap(self, arg0: bool) -> None:
+        ...
+    @property
+    def render_to_screen(self) -> bool:
+        """
+        Set by the composer; the composer always ends its chain with its own output pass.
+        """
+    @render_to_screen.setter
+    def render_to_screen(self, arg0: bool) -> None:
+        ...
 class Path(Curve2):
     auto_close: bool
     current_point: Vector2
@@ -6400,6 +6778,10 @@ class PhysxVehicle:
         """
         Give this wheel back to the scene query (the rigid fallback).
         """
+    def clear_wheel_external_torque(self, wheel: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Stop adding an external torque to this wheel's spin.
+        """
     def respawn(self, position: Vector3, rotation: Quaternion = ...) -> None:
         """
         Teleport the chassis and kill its velocities (the wheels keep spinning down on their own). The suspension re-settles over the next few steps.
@@ -6421,6 +6803,10 @@ class PhysxVehicle:
     def set_throttle(self, value: typing.SupportsFloat | typing.SupportsIndex) -> None:
         """
         Throttle, 0..1. Direct drive: torque straight to the driven wheels.
+        """
+    def set_wheel_external_torque(self, wheel: typing.SupportsInt | typing.SupportsIndex, torque: typing.SupportsFloat | typing.SupportsIndex, dtorque_domega: typing.SupportsFloat | typing.SupportsIndex = 0.0, omega_ref: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
+        """
+        Add an external torque (N m) to this wheel's spin, every substep, in the wheel_angular_speed() sign convention (resisting a forward-spinning wheel = negative): torque + dtorque_domega * (omega - omega_ref), the soil's answer linearised around the spin it was measured at (dtorque_domega <= 0). With set_road_override(..., mu=0) the tire itself develops nothing, so a ground model that owns the whole contact applies its horizontal force with add_force_at_pos and its moment about the axle here. Sticky-tire states are held off while it is set. CAVEAT: with neither throttle nor brake on, PhysX free-rolls the wheel (spin from ground speed) and ignores the torque.
         """
     def suspension_force(self, wheel: typing.SupportsInt | typing.SupportsIndex) -> float:
         """
@@ -6610,6 +6996,11 @@ class PointLight(Light):
     @distance.setter
     def distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
+    @property
+    def shadow(self) -> LightShadow:
+        """
+        The light's LightShadow (bias, radius, intensity, map_size).
+        """
 class PointLightHelper(Mesh):
     def __init__(self, light: PointLight, sphere_size: typing.SupportsFloat | typing.SupportsIndex = 1.0, color: Color | None = None) -> None:
         ...
@@ -6712,12 +7103,14 @@ class Points(Object3D):
     def uuid(self) -> str:
         ...
 class PointsMaterial(Material):
+    alpha_hash: bool
     alpha_map: Texture
     blending: Blending
     color: Color
     depth_test: bool
     depth_write: bool
     fog: bool
+    force_single_pass: bool
     map: Texture
     name: str
     premultiplied_alpha: bool
@@ -6920,6 +7313,28 @@ class RectAreaLight(Light):
     @property
     def width(self) -> float:
         ...
+class RenderPass(Pass):
+    """
+    Draws the scene: the head of nearly every chain.
+    """
+    clear_depth: bool
+    override_material: typing.Any
+    def __init__(self, scene: typing.Any, camera: Camera) -> None:
+        ...
+    @property
+    def clear_alpha(self) -> float:
+        ...
+    @clear_alpha.setter
+    def clear_alpha(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def clear_color(self) -> Color | None:
+        """
+        Color to clear to instead of the renderer's, or None.
+        """
+    @clear_color.setter
+    def clear_color(self, arg0: Color | None) -> None:
+        ...
 class RigidBody:
     """
     Handle to a PhysX actor created via PhysxWorld. Valid only while its world is alive. Velocity/force/kinematic operations require a dynamic body.
@@ -7007,6 +7422,19 @@ class Robot(Object3D):
     @property
     def num_dof(self) -> int:
         ...
+class RoomEnvironment(Scene):
+    """
+    A neutral studio (a white room with a few boxes and six light panels) that is not looked at but turned into an environment map, for image-based light without an HDR file:
+    
+        pmrem = tp.PMREMGenerator(renderer)
+        scene.environment = pmrem.from_scene(tp.RoomEnvironment(), 0.04)
+    """
+    def __init__(self) -> None:
+        ...
+    def dispose(self) -> None:
+        """
+        Free the geometry and materials the room owns.
+        """
 class RotationOrder:
     """
     Members:
@@ -7101,7 +7529,9 @@ class ScalarField:
         ...
 class Scene(Object3D):
     auto_update: bool
+    background_rotation: Euler
     environment: Texture
+    environment_rotation: Euler
     override_material: Material
     def __init__(self) -> None:
         ...
@@ -7118,6 +7548,30 @@ class Scene(Object3D):
         ...
     @background.setter
     def background(self, arg1: typing.Any) -> None:
+        ...
+    @property
+    def background_blurriness(self) -> float:
+        """
+        Blur of a texture background, 0 (sharp) .. 1 (fully diffuse).
+        """
+    @background_blurriness.setter
+    def background_blurriness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def background_intensity(self) -> float:
+        """
+        Linear multiplier on a texture background (not a Color one).
+        """
+    @background_intensity.setter
+    def background_intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def environment_intensity(self) -> float:
+        """
+        Multiplier on the image-based light of every material lit by `environment`.
+        """
+    @environment_intensity.setter
+    def environment_intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
 class Sensor:
     """
@@ -7144,11 +7598,13 @@ class Sensor:
     def sim_time(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
 class ShadowMaterial(Material):
+    alpha_hash: bool
     blending: Blending
     color: Color
     depth_test: bool
     depth_write: bool
     fog: bool
+    force_single_pass: bool
     name: str
     premultiplied_alpha: bool
     side: Side
@@ -7820,6 +8276,11 @@ class SpotLight(Light):
     @penumbra.setter
     def penumbra(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
+    @property
+    def shadow(self) -> LightShadow:
+        """
+        The light's LightShadow (bias, radius, intensity, map_size).
+        """
 class SpotLightHelper(Object3D):
     def __init__(self, light: SpotLight, color: Color | None = None) -> None:
         ...
@@ -7835,12 +8296,14 @@ class Sprite(Object3D):
     def material(self) -> Material | None:
         ...
 class SpriteMaterial(Material):
+    alpha_hash: bool
     alpha_map: Texture
     blending: Blending
     color: Color
     depth_test: bool
     depth_write: bool
     fog: bool
+    force_single_pass: bool
     map: Texture
     name: str
     premultiplied_alpha: bool
@@ -8393,6 +8856,12 @@ class Texture:
     def anisotropy(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
     @property
+    def channel(self) -> int:
+        ...
+    @channel.setter
+    def channel(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
     def rotation(self) -> float:
         ...
     @rotation.setter
@@ -8885,6 +9354,31 @@ class URDFLoader:
         
         The raise already carries this. It is here for the caller that wants to report rather than propagate - a ROS node logging a bad /robot_description and carrying on, say.
         """
+class UnrealBloomPass(Pass):
+    def __init__(self, resolution: Vector2 = ..., strength: typing.SupportsFloat | typing.SupportsIndex = 1.0, radius: typing.SupportsFloat | typing.SupportsIndex = 0.0, threshold: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
+        ...
+    @property
+    def radius(self) -> float:
+        """
+        0..1; higher spreads the glow further.
+        """
+    @radius.setter
+    def radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def strength(self) -> float:
+        ...
+    @strength.setter
+    def strength(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def threshold(self) -> float:
+        """
+        Luminance a pixel must exceed to bloom.
+        """
+    @threshold.setter
+    def threshold(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
 class Vector2:
     __hash__: typing.ClassVar[None] = None
     def __add__(self, arg0: Vector2) -> Vector2:
@@ -9149,10 +9643,6 @@ class VulkanRenderer:
         """
         Release the exports and return the mesh to the CPU attribute path. STOP the foreign writes first — nothing here can wait on a CUDA stream. Close the importing VkInteropArrays before calling this.
         """
-    def set_stable_correspondence(self, mesh: Mesh, stable: bool) -> None:
-        """
-        enable_vertex_interop's stable_correspondence switch for the HOST attribute path (update_attribute). stable=False for a mesh re-uploaded every frame as a re-triangulated soup (marching cubes): its vertex slots are not the same surface points frame to frame, so per-vertex motion vectors are noise and the temporal passes boil wherever the soup changed. The mesh then reprojects as world-static. Remembered per geometry; may be called before the first render.
-        """
     def enable_frame_interop(self, view: typing.SupportsInt | typing.SupportsIndex = 0, channels: collections.abc.Iterable = ('color', 'depth')) -> list:
         """
         Export this view's per-frame images as CUDA-importable buffers and arm the device-to-device copies that fill them.
@@ -9402,6 +9892,10 @@ class VulkanRenderer:
         """
         Ask for the Gaussian-splat depth AOV: 'off', 'expected' (the transmittance-weighted mean view distance) or 'median' (the front of the cloud — what an occlusion test wants). A SETUP knob: turning it on or off reallocates the render targets, so call it once before the loop, not per frame. Changing only the statistic reallocates nothing. Primary view only.
         """
+    def set_stable_correspondence(self, mesh: Mesh, stable: bool) -> None:
+        """
+        enable_vertex_interop's stable_correspondence switch for the HOST attribute path (update_attribute). stable=False for a mesh re-uploaded every frame as a re-triangulated soup (marching cubes): its vertex slots are not the same surface points frame to frame, so per-vertex motion vectors are noise and the temporal passes boil wherever the soup changed. The mesh then reprojects as world-static. Remembered per geometry; may be called before the first render.
+        """
     def set_underwater_murk(self, density: typing.SupportsFloat | typing.SupportsIndex, color: Color = ...) -> None:
         """
         Enable underwater murk (below fog_water_surface_y). density = sigma_t (1/m; 0 disables); color = inscatter tint.
@@ -9419,6 +9913,10 @@ class VulkanRenderer:
     def set_view_sensor_surfaces(self, handle: typing.SupportsInt | typing.SupportsIndex, enabled: bool) -> bool:
         """
         Let ONE secondary view rasterize sensor-only surfaces. OFF by default for every view, because 'secondary' does not mean 'sensor': an RGB camera preview showing an untextured bake shell in front of the splats it approximates is a defect. A DEPTH consumer is the caller that turns it on. Takes effect only if set_sensor_only_surfaces(True) as well. False for an unknown handle, and for handle 0 — the primary never draws them.
+        """
+    def set_view_taa(self, handle: typing.SupportsInt | typing.SupportsIndex, enabled: bool) -> bool:
+        """
+        Temporal anti-aliasing on ONE view (0 = the primary). On by default. Off, the view rasterizes unjittered and its resolve passes the current frame through (blend alpha 1): no history, no sub-pixel lag, and no anti-aliasing. For sensor views scored against sub-pixel ground truth. The primary honours it only while DLSS and FSR are off. False for an unknown handle.
         """
     def set_viewport(self, x: typing.SupportsInt | typing.SupportsIndex, y: typing.SupportsInt | typing.SupportsIndex, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
@@ -9439,6 +9937,10 @@ class VulkanRenderer:
     def view_size(self, handle: typing.SupportsInt | typing.SupportsIndex) -> typing.Any:
         """
         Pixel size of a view's output as (width, height), or None if the handle is unknown.
+        """
+    def view_taa(self, handle: typing.SupportsInt | typing.SupportsIndex) -> bool:
+        """
+        Whether temporal anti-aliasing is on for this view.
         """
     @property
     def auto_exposure(self) -> bool:

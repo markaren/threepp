@@ -259,6 +259,17 @@ namespace threepp_py {
                 .def_readwrite("environment", &Scene::environment)
                 .def_readwrite("override_material", &Scene::overrideMaterial)
                 .def_readwrite("auto_update", &Scene::autoUpdate)
+                // three.js background/environment knobs (GL only; Vulkan ignores
+                // them). The rotations are Euler values mutable in place, like
+                // Object3D.rotation: scene.environment_rotation.y = 0.5 works.
+                .def_readwrite("background_blurriness", &Scene::backgroundBlurriness,
+                               "Blur of a texture background, 0 (sharp) .. 1 (fully diffuse).")
+                .def_readwrite("background_intensity", &Scene::backgroundIntensity,
+                               "Linear multiplier on a texture background (not a Color one).")
+                .def_readwrite("background_rotation", &Scene::backgroundRotation)
+                .def_readwrite("environment_intensity", &Scene::environmentIntensity,
+                               "Multiplier on the image-based light of every material lit by `environment`.")
+                .def_readwrite("environment_rotation", &Scene::environmentRotation)
                 // Convenience: linear distance fog. (scene.fog is a std::variant
                 // under the hood; this avoids exposing the variant to Python.)
                 .def("set_fog", [](Scene& s, const Color& c, float near, float far) { s.fog = Fog(c, near, far); },

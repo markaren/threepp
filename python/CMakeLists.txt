@@ -44,6 +44,7 @@ pybind11_add_module(threepp_py
         src/bind_vulkan.cpp
         src/bind_imgui.cpp
         src/bind_physx.cpp
+        src/bind_postprocessing.cpp
         src/bind_sensors.cpp)
 
 # threepp_editor_core: bind_editor.cpp binds the document model (SceneDocument,

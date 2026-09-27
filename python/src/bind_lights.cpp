@@ -5,6 +5,7 @@
 
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/lights/light_interfaces.hpp"
+#include "threepp/lights/LightShadow.hpp"
 #include "threepp/lights/lights.hpp"
 #include "threepp/math/MathUtils.hpp"
 
@@ -19,6 +20,22 @@ namespace threepp_py {
                 .def_readwrite("color", &Light::color)
                 .def_readwrite("intensity", &Light::intensity);
 
+        // ---- LightShadow -----------------------------------------------------
+        // The shadow of a Directional/Point/SpotLight, reached as `light.shadow`
+        // (owned by the light; no constructor). Only drawn when the renderer's
+        // shadow_map_enabled is on and the light's cast_shadow is set.
+        py::class_<LightShadow, std::shared_ptr<LightShadow>>(m, "LightShadow")
+                .def_readwrite("bias", &LightShadow::bias)
+                .def_readwrite("normal_bias", &LightShadow::normalBias)
+                .def_readwrite("radius", &LightShadow::radius,
+                               "Penumbra width in shadow-map texels (PCF: a soft Vogel-disk filter; VSM: the blur).")
+                .def_readwrite("intensity", &LightShadow::intensity,
+                               "How much light a fully shadowed receiver loses: 1 a hard shadow, 0 none.")
+                .def_readwrite("map_size", &LightShadow::mapSize,
+                               "Shadow-map resolution in texels (Vector2, default 2048 x 2048). Set before the first render.")
+                .def_readwrite("auto_update", &LightShadow::autoUpdate)
+                .def_readwrite("needs_update", &LightShadow::needsUpdate);
+
         // ---- AmbientLight ----------------------------------------------------
         py::class_<AmbientLight, Light, std::shared_ptr<AmbientLight>>(m, "AmbientLight")
                 .def(py::init([](const Color& color, float intensity) {
@@ -28,6 +45,8 @@ namespace threepp_py {
 
         // ---- DirectionalLight ------------------------------------------------
         py::class_<DirectionalLight, Light, std::shared_ptr<DirectionalLight>>(m, "DirectionalLight")
+                .def_property_readonly("shadow", [](DirectionalLight& l) { return l.shadow; },
+                                       "The light's LightShadow (bias, radius, intensity, map_size).")
                 .def(py::init([](const Color& color, float intensity) {
                     return DirectionalLight::create(color, intensity);
                 }),
@@ -60,6 +79,8 @@ namespace threepp_py {
 
         // ---- PointLight ------------------------------------------------------
         py::class_<PointLight, Light, std::shared_ptr<PointLight>>(m, "PointLight")
+                .def_property_readonly("shadow", [](PointLight& l) { return l.shadow; },
+                                       "The light's LightShadow (bias, radius, intensity, map_size).")
                 .def(py::init([](const Color& color, float intensity, float distance, float decay) {
                     return PointLight::create(color, intensity, distance, decay);
                 }),
@@ -72,6 +93,8 @@ namespace threepp_py {
 
         // ---- SpotLight -------------------------------------------------------
         py::class_<SpotLight, Light, std::shared_ptr<SpotLight>>(m, "SpotLight")
+                .def_property_readonly("shadow", [](SpotLight& l) { return l.shadow; },
+                                       "The light's LightShadow (bias, radius, intensity, map_size).")
                 .def(py::init([](const Color& color, float intensity, float distance, float angle, float penumbra, float decay) {
                     return SpotLight::create(color, intensity, distance, angle, penumbra, decay);
                 }),

@@ -121,6 +121,9 @@ namespace threepp_py {
     void init_text(py::module_& m);  // fonts, Text2D/Text3D, TextSprite, SVGLoader
     void init_vulkan(py::module_& m);// no-op unless built with the Vulkan backend
     void init_imgui(py::module_& m); // no-op unless built with imgui
+    // RoomEnvironment, PMREMGenerator and the EffectComposer passes (GL only);
+    // after init_render (GLRenderer) and init_math (Box3).
+    void init_postprocessing(py::module_& m);
     void init_physx(py::module_& m); // no-op unless built with the omniverse-physx-sdk
     void init_sensor_base(py::module_& m);// Sensor + NoiseModel + RangeNoiseModel; always available
     void init_sensors(py::module_& m);// proprioceptive sensors (Imu); no-op without PhysX

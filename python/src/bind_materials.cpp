@@ -74,6 +74,12 @@ namespace threepp_py {
                 .def_readwrite("alpha_test", &T::alphaTest)
                 .def_readwrite("tone_mapped", &T::toneMapped)
                 .def_readwrite("premultiplied_alpha", &T::premultipliedAlpha)
+                // Sort-free stochastic transparency (three.js alphaHash): opacity
+                // becomes coverage against a stable hash. Pair with MSAA/TAA.
+                .def_readwrite("alpha_hash", &T::alphaHash)
+                // A transparent double-sided material draws back faces, then front
+                // faces; True restores the single pass (three.js forceSinglePass).
+                .def_readwrite("force_single_pass", &T::forceSinglePass)
                 // Bump the material version so backends that cache derived
                 // per-material GPU state (Vulkan MaterialDesc SSBO) re-upload
                 // after a runtime property edit. No-op visual cost on GL.
@@ -145,6 +151,8 @@ namespace threepp_py {
         THREEPP_MAT_FIELD("alpha_test", alphaTest);
         THREEPP_MAT_FIELD("tone_mapped", toneMapped);
         THREEPP_MAT_FIELD("premultiplied_alpha", premultipliedAlpha);
+        THREEPP_MAT_FIELD("alpha_hash", alphaHash);
+        THREEPP_MAT_FIELD("force_single_pass", forceSinglePass);
 #undef THREEPP_MAT_FIELD
         material.def("needs_update", [](const py::object& self) { as_material(self)->needsUpdate(); })
                 .def("dispose", [](const py::object& self) { as_material(self)->dispose(); })
