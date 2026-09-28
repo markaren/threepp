@@ -1371,6 +1371,12 @@ namespace threepp_py {
                      "Apply a continuous force (N) to the chassis at a world-space point — the way to "
                      "add something PhysX's vehicle knows nothing about, e.g. the bulldozing drag of a "
                      "wheel ploughing through soil. Consumed by the next step().")
+                .def("associate",
+                     [](PhysxVehicle& v, const py::handle& node) { v.associate(*as_object3d(node)); },
+                     py::arg("node"), py::keep_alive<1, 2>(),
+                     "Let sensors attached at or under `node` (e.g. an Imu on the car's visual group) "
+                     "resolve to the chassis body, so world.register_sensor accepts them. The node is "
+                     "not moved by the simulation; keep copying position/quaternion onto it.")
                 // -- Chassis readouts --
                 .def_property_readonly("position",
                                        [](const PhysxVehicle& v) { return fromPxVec3(v.chassisPose().p); },

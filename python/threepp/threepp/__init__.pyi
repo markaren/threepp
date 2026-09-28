@@ -6786,6 +6786,10 @@ class PhysxVehicle:
         """
         Apply a continuous force (N) to the chassis at a world-space point — the way to add something PhysX's vehicle knows nothing about, e.g. the bulldozing drag of a wheel ploughing through soil. Consumed by the next step().
         """
+    def associate(self, node: typing.Any) -> None:
+        """
+        Let sensors attached at or under `node` (e.g. an Imu on the car's visual group) resolve to the chassis body, so world.register_sensor accepts them. The node is not moved by the simulation; keep copying position/quaternion onto it.
+        """
     def clear_road_override(self, wheel: typing.SupportsInt | typing.SupportsIndex) -> None:
         """
         Give this wheel back to the scene query (the rigid fallback).

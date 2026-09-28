@@ -289,6 +289,11 @@ namespace threepp {
         ::physx::PxRigidDynamic* chassisActor() const { return chassisActor_; }
         ::physx::PxTransform chassisPose() const { return rigidBodyState_.pose; }
 
+        // Make sensors attached at or under `obj` (an Imu on the car's visual)
+        // resolve to the chassis actor. The node is not moved by the simulation:
+        // keep copying chassis pose onto it as before.
+        void associate(Object3D& obj) { world_->associate(obj, *chassisActor_); }
+
         ::physx::PxTransform wheelLocalPose(int i) const {
             return wheelLocalPoses_[i].localPose;
         }
