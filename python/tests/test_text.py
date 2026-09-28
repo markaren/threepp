@@ -48,3 +48,20 @@ def test_svg_parse_to_group():
     meshes = [0]
     group.traverse(lambda o: meshes.__setitem__(0, meshes[0] + (1 if isinstance(o, tp.Mesh) else 0)))
     assert meshes[0] >= 1                    # at least one filled shape became a mesh
+
+
+def test_font_metrics_for_layout():
+    font = tp.FontLoader().default_font()
+    a, b = font.advance("a", 20), font.advance("b", 20)
+    assert a > 0 and b > 0
+    assert abs(font.advance("ab", 20) - (a + b)) < 1e-4     # advances add up, no kerning
+    assert abs(font.advance("ab", 40) - 2 * (a + b)) < 1e-3  # and scale with size
+    assert font.advance("ab" + chr(10) + "a", 20) == font.advance("ab", 20)  # widest line
+    assert font.ascender(20) > 0 > font.descender(20)
+
+
+def test_text_is_utf8():
+    font = tp.FontLoader().default_font()
+    micro = chr(0xB5) + "m"      # two characters, three UTF-8 bytes
+    # it used to be measured (and drawn) as three '?' glyphs
+    assert font.advance(micro, 20) != font.advance("??m", 20)

@@ -7521,6 +7521,11 @@ class ScalarField:
         """
         Return field data as (nz, ny, nx) float32 numpy array.
         """
+    @staticmethod
+    def from_numpy(data: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], origin: Vector3, cell_size: typing.SupportsFloat | typing.SupportsIndex) -> ScalarField:
+        """
+        Field from a (nz, ny, nx) float32 array (the layout data_numpy returns); node (x, y, z) sits at origin + cell_size * (x, y, z).
+        """
     @property
     def cell_size(self) -> float:
         ...

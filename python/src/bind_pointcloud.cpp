@@ -151,7 +151,24 @@ namespace threepp_py {
                          py::array_t<float> arr({f.nz, f.ny, f.nx});
                          std::memcpy(arr.mutable_data(), f.data.data(), f.data.size() * sizeof(float));
                          return arr;
-                     }, "Return field data as (nz, ny, nx) float32 numpy array.");
+                     }, "Return field data as (nz, ny, nx) float32 numpy array.")
+                // The inverse of data_numpy: any field computed in numpy (a TSDF fused
+                // from depth images, an SDF, a density) can go through marching_cubes.
+                .def_static("from_numpy", [](const py::array_t<float, py::array::c_style | py::array::forcecast>& data,
+                                             const Vector3& origin, float cell_size) {
+                         if (data.ndim() != 3) throw std::runtime_error("ScalarField.from_numpy: expected a (nz, ny, nx) array");
+                         if (cell_size <= 0.f) throw std::runtime_error("ScalarField.from_numpy: cell_size must be > 0");
+                         ScalarField f;
+                         f.nz = static_cast<int>(data.shape(0));
+                         f.ny = static_cast<int>(data.shape(1));
+                         f.nx = static_cast<int>(data.shape(2));
+                         f.data.assign(data.data(), data.data() + data.size());
+                         f.origin = origin;
+                         f.cellSize = cell_size;
+                         return f;
+                     }, py::arg("data"), py::arg("origin"), py::arg("cell_size"),
+                     "Field from a (nz, ny, nx) float32 array (the layout data_numpy returns); node "
+                     "(x, y, z) sits at origin + cell_size * (x, y, z).");
 
         // ---- IsoMesh --------------------------------------------------------
         py::class_<IsoMesh>(m, "IsoMesh")
