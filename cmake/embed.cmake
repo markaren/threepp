@@ -111,11 +111,16 @@ std::vector<unsigned char> faviconSource() {\n\
 
 }\n")
 
-file(WRITE "${favicon_out}"
+# file(CONFIGURE) rather than file(WRITE): it leaves the file alone when the
+# content is unchanged. A file(WRITE) here gave favicon.hpp a fresh mtime on
+# every CMake regeneration, which recompiled Canvas.cpp (its only includer)
+# although not a byte was different.
+string(CONCAT favicon_content
         "#ifndef THREEPP_FAVICON_HPP\n"
-        "#define THREEPP_FAVICON_HPP\n\n")
-file(APPEND "${favicon_out}" "${header_content}")
-file(APPEND "${favicon_out}" "\n\n#endif\n")
+        "#define THREEPP_FAVICON_HPP\n\n"
+        "${header_content}"
+        "\n\n#endif\n")
+file(CONFIGURE OUTPUT "${favicon_out}" CONTENT "${favicon_content}" @ONLY)
 
 
 ############################################
@@ -130,7 +135,9 @@ file(READ ${fontFile} FILE_CONTENTS HEX)
 string(REGEX REPLACE "(..)" "0x\\0," FILE_CONTENTS "${FILE_CONTENTS}")
 get_filename_component(fontName ${fontFile} NAME)
 
-file(WRITE ${embeddedFonts_out}
+# file(CONFIGURE) for the same reason as favicon.hpp above: EmbeddedFonts.cpp is
+# a build source, and a rewrite with identical bytes still recompiles it.
+string(CONCAT embeddedFonts_content
         "#include \"threepp/loaders/FontLoader.hpp\"\n\n"
 
         "#include <vector>\n\n"
@@ -144,3 +151,4 @@ file(WRITE ${embeddedFonts_out}
         "\treturn *load(data);\n"
         "}\n"
 )
+file(CONFIGURE OUTPUT ${embeddedFonts_out} CONTENT "${embeddedFonts_content}" @ONLY)
