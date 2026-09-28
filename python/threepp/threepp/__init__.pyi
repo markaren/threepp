@@ -7361,9 +7361,17 @@ class RigidBody:
         """
         Apply a continuous force (N), consumed by the next step().
         """
+    def add_force_at_pos(self, force: Vector3, world_pos: Vector3) -> None:
+        """
+        Apply a continuous force (N) at a world-space point: the force plus the torque it makes about the centre of mass, consumed by the next step().
+        """
     def add_impulse(self, impulse: Vector3) -> None:
         """
         Apply an instantaneous impulse (kg·m/s).
+        """
+    def add_torque(self, torque: Vector3) -> None:
+        """
+        Apply a continuous torque (N·m, world frame), consumed by the next step().
         """
     def set_angular_damping(self, d: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...

@@ -116,6 +116,10 @@ inline ::physx::PxCombineMode::Enum combineModeFromString(const std::string& s) 
         Vector3 angularVelocity() const { return fromPxVec3(dyn()->getAngularVelocity()); }
         void addForce(const Vector3& v) { dyn()->addForce(toPxVec3(v), ::physx::PxForceMode::eFORCE); }
         void addImpulse(const Vector3& v) { dyn()->addForce(toPxVec3(v), ::physx::PxForceMode::eIMPULSE); }
+        void addTorque(const Vector3& v) { dyn()->addTorque(toPxVec3(v), ::physx::PxForceMode::eFORCE); }
+        void addForceAtPos(const Vector3& f, const Vector3& worldPos) {
+            ::physx::PxRigidBodyExt::addForceAtPos(*dyn(), toPxVec3(f), toPxVec3(worldPos), ::physx::PxForceMode::eFORCE);
+        }
         void setLinearDamping(float d) { dyn()->setLinearDamping(d); }
         void setAngularDamping(float d) { dyn()->setAngularDamping(d); }
         float mass() const { return dyn()->getMass(); }
@@ -268,6 +272,11 @@ namespace threepp_py {
                      "Apply a continuous force (N), consumed by the next step().")
                 .def("add_impulse", &RigidBody::addImpulse, py::arg("impulse"),
                      "Apply an instantaneous impulse (kg·m/s).")
+                .def("add_torque", &RigidBody::addTorque, py::arg("torque"),
+                     "Apply a continuous torque (N·m, world frame), consumed by the next step().")
+                .def("add_force_at_pos", &RigidBody::addForceAtPos, py::arg("force"), py::arg("world_pos"),
+                     "Apply a continuous force (N) at a world-space point: the force plus the torque it "
+                     "makes about the centre of mass, consumed by the next step().")
                 .def("set_linear_damping", &RigidBody::setLinearDamping, py::arg("d"))
                 .def("set_angular_damping", &RigidBody::setAngularDamping, py::arg("d"))
                 .def_property_readonly("mass", &RigidBody::mass)
