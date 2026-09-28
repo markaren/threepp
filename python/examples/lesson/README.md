@@ -8,7 +8,7 @@ made with it so far:
 | `threepp_intro.py` | Part 0, *What is threepp?* An introduction for new users, with the code in C++ (217 s) |
 | `ik_fr3.py` | Part 1, *What does inverse kinematics actually solve?* (108 s, Franka FR3) |
 | `depth_map.py` | Part 2, *How a robot sees in 3D: from depth pixels to a map* (103 s) |
-| `imu_tilt.py` | Part 3, *Which way is up? How a robot measures its own tilt* (108 s, Range Rover on a PhysX track) |
+| `imu_tilt.py` | Part 3, *Which way is up? How a robot measures its own tilt* (136 s, Range Rover on a PhysX track) |
 
 Everything in the picture is drawn by threepp. The robot, lights, shadows and 3D
 annotations are one scene. Captions, equations, panels and plots are a second,
@@ -48,9 +48,11 @@ holds the picture until it has been said (`lesson.TimeMap`); the captions, the `
 `--stills` / `--from` times all follow the film's clock. The clips are placed on one track and
 muxed into the mp4 as AAC. `--no-voice` renders without Kokoro.
 Kokoro's own reading of a word can be wrong; `lesson.SPOKEN_WORDS` respells those, and a
-`[word](/phonemes/)` entry sets the phonemes outright (PhysX is `/fˈɪzˌɛks/`). Part 0 goes
-further and lays its whole timeline out from the measured length of each spoken line, so its
-film never holds.
+`[word](/phonemes/)` entry sets the phonemes outright (PhysX is `/fˈɪzˌɛks/`). Parts 0 and 3
+go further and time their scripts from the measured length of each spoken line, so their films
+never hold for the voice: Part 0 lays its whole timeline out from them, and Part 3 gives its
+drive more time wherever a line would overrun its caption (`imu_tilt.SPEECH`, `at()`), so the
+car keeps driving while the line is said.
 
 Each threepp_data file is looked up in `THREEPP_DATA_DIR`, then a `threepp_data`
 (or `threepp-data`) checkout next to the repo, then the copies CMake fetches into
@@ -104,8 +106,8 @@ car's own acceleration (dv/dt forward plus w x v):
 ```
 [parked] |f| 9.810 m/s^2, gyro [0.5 -0.4 0.45] deg/s (bias set [0.5 -0.4 0.45])
 [accel] parked 0.08 deg; braking up to 28.7, cornering up to 15.7 deg
-[comp]  best blend tau 20.83 s: 4.46 deg rms
-[kalman] rms 0.41 deg, max 0.71; bias [0.57 -0.47 0.37] deg/s vs set [0.5 -0.4 0.45]
+[comp]  best blend tau 8.33 s: 4.48 deg rms
+[kalman] rms 0.42 deg, max 0.75; bias [0.58 -0.41 0.36] deg/s vs set [0.5 -0.4 0.45]
 ```
 
 The heightfield collider is Z-up while the vehicle is Y-up, so the track is a

@@ -25,6 +25,7 @@ import numpy as np
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
+import lesson  # noqa: E402
 from lesson import (DIM, TEXT, Arrow3D, Hud, OrbitCamera, Ring3D, Stage, Timeline, clamp01,  # noqa: E402
                     data_file, ease_out, envelope, fade_in_out, ghost, remap, run, smooth, standard, tp, xray)
 
@@ -34,7 +35,6 @@ SUB = 4                      # substeps per film frame
 BLOCK = 6                    # frames per point in the tilt-error plot (0.1 s means)
 BIAS_DPS = np.array([0.50, -0.40, 0.45])    # gyro turn-on bias (sensor x right, y up, z forward), deg/s
 R_WHEEL = 0.4
-T_GO = 20.0                  # the car pulls away
 V_STRAIGHT, V_TURN = 13.0, 6.0
 THROTTLE_MAX = 0.45           # keeps acceleration out of the turns SUV-like
 MAX_STEER = 0.6               # PhysxVehicle default, rad at full lock
@@ -51,26 +51,13 @@ C_OWN = 0xff7a90                 # the car's own acceleration
 AXIS_C = (0xff5a5f, 0x5ee27a, 0x4f8dff)      # x right, y up, z forward
 
 # ── the script ────────────────────────────────────────────────────────────────
-TL = Timeline()
-TL.add("open", 0.0, 7.0)
-TL.add("sense", 7.0, 24.0)
-TL.add("gyro", 24.0, 42.0)
-TL.add("accel", 42.0, 58.0)
-TL.add("fuse", 58.0, 76.0)
-TL.add("kalman", 76.0, 94.0)
-TL.add("heading", 94.0, 100.0)
-TL.add("outro", 100.0, 108.0)
-T_GYRO0 = 24.8               # the gyro-only estimate starts from the true tilt here
-
-# Each ghost is introduced on its own: the film holds (the drive stands still), the car
-# is hidden, the ghost blinks with a label, and the drive goes on. Everything in this file
-# runs on the drive's clock; lesson.run maps it to the film's.
-INTRO = {"gyro": T_GYRO0, "acc": 42.6, "comp": 58.6, "kf": 83.0}
-PAUSE = 2.0
-INTRO_LABEL = {"gyro": "the gyroscope's estimate", "acc": "the accelerometer's estimate",
-               "comp": "the complementary filter", "kf": "the Kalman filter"}
-
-CAPTIONS = [
+# Written on a 108 s clock (the times below). The narration then sets the pace: where a
+# spoken line (Kokoro, af_heart, measured in SPEECH) runs past its caption, the script gets
+# that much more time just before the caption ends, so the car drives on while the line is
+# said instead of the film standing still. `at` maps a written time onto that clock. A line
+# whose text changes should be re-measured (lesson.Narration(...).clip(text)); until then
+# `run` holds the picture for any overrun.
+_CAPTIONS = [
     (7.4, 13.4, "Phones, drones, cars and robots carry an IMU: a gyroscope and an accelerometer on one chip."),
     (13.8, 19.2, None),      # parked accelerometer reading
     (19.6, 23.6, "So it knows which way is up. The gyroscope reports how fast the car turns, axis by axis."),
@@ -84,8 +71,48 @@ CAPTIONS = [
     (83.4, 93.6, None),      # Kalman
     (94.4, 99.6, "None of this finds north: gravity says nothing about heading. That takes a compass, GNSS or a camera."),
 ]
+SPEECH = [7.17, 9.88, 6.4, 5.55, 10.85, 4.65, 9.95, 5.88, 11.72, 6.65, 10.12, 7.33]    # seconds, af_heart
+MARGIN = 0.3                 # a stretched caption outlasts its speech by this much
 
-EQUATIONS = [   # (t_in, t_out, tex, note)
+# Each ghost is introduced on its own: the film holds (the drive stands still), the car
+# is hidden, the ghost blinks with a label, and the drive goes on. Everything in this file
+# runs on the drive's clock; lesson.run maps it to the film's.
+_INTRO = {"gyro": 24.8, "acc": 42.6, "comp": 58.6, "kf": 83.0}
+PAUSE = 2.0
+INTRO_LABEL = {"gyro": "the gyroscope's estimate", "acc": "the accelerometer's estimate",
+               "comp": "the complementary filter", "kf": "the Kalman filter"}
+
+
+def _stretch():
+    """(written time, seconds added there) for every caption whose line would overrun it.
+    Like lesson.run, an introduction's pause inside a caption counts as time to speak."""
+    out = []
+    for (a, b, _), need in zip(_CAPTIONS, SPEECH):
+        p = b - lesson.VOICE_TAIL
+        have = p - (a + lesson.VOICE_LEAD) + PAUSE * sum(a + lesson.VOICE_LEAD <= s < p for s in _INTRO.values())
+        if need + MARGIN > have:
+            out.append((p, need + MARGIN - have))
+    return out
+
+
+STRETCH = _stretch()
+
+
+def at(t):
+    """A written script time on the drive's clock."""
+    return t + sum(d for p, d in STRETCH if p < t)
+
+
+TL = Timeline()
+for _name, _a, _b in (("open", 0.0, 7.0), ("sense", 7.0, 24.0), ("gyro", 24.0, 42.0), ("accel", 42.0, 58.0),
+                      ("fuse", 58.0, 76.0), ("kalman", 76.0, 94.0), ("heading", 94.0, 100.0), ("outro", 100.0, 108.0)):
+    TL.add(_name, at(_a), at(_b))
+T_GO = at(20.0)              # the car pulls away
+INTRO = {key: at(s) for key, s in _INTRO.items()}
+T_GYRO0 = INTRO["gyro"]      # the gyro-only estimate starts from the true tilt here
+CAPTIONS = [(at(a), at(b), txt) for a, b, txt in _CAPTIONS]
+
+EQUATIONS = [(at(a), at(b), tex, note) for a, b, tex, note in [   # (t_in, t_out, tex, note)
     (14.2, 23.8, r"$\mathbf{f} = \mathbf{a} - \mathbf{g}$", "what the accelerometer measures"),
     (24.0, 41.8, r"$\mathbf{u} \leftarrow \mathbf{u} - (\boldsymbol{\omega}\,\Delta t) \times \mathbf{u}$",
      "integrate the gyroscope"),
@@ -95,7 +122,7 @@ EQUATIONS = [   # (t_in, t_out, tex, note)
     (76.6, 93.8, r"$\mathbf{f} - (\dot{v}\,\hat{\mathbf{e}}_{\mathrm{fwd}} + \boldsymbol{\omega} \times \mathbf{v})$",
      "remove the car's own acceleration"),
     (83.6, 93.8, r"$\boldsymbol{\omega}_{\mathrm{true}} = \boldsymbol{\omega} - \mathbf{b}$", "Kalman filter: learn the bias"),
-]
+]]
 
 SUMMARY = [   # (tex, sentence)
     (r"$\int \boldsymbol{\omega}\,dt$", "The gyroscope is smooth, but every small offset adds up."),
@@ -672,16 +699,16 @@ class Painter:
 
         # chip, force arrow and rings in the sense beat
         sense = envelope(t, TL.start("sense") + 0.6, TL.end("sense") - 0.2, 0.6, 0.6)
-        f3.chip.visible = sense > 0.003 or envelope(t, 76.0, 84.0, 0.5, 0.5) > 0.003
-        f3.chip.material.opacity = max(sense, envelope(t, 76.0, 84.0, 0.5, 0.5))
-        fa = envelope(t, 13.6, TL.end("sense") - 0.2, 0.5, 0.6)
+        f3.chip.visible = sense > 0.003 or envelope(t, at(76.0), at(84.0), 0.5, 0.5) > 0.003
+        f3.chip.material.opacity = max(sense, envelope(t, at(76.0), at(84.0), 0.5, 0.5))
+        fa = envelope(t, at(13.6), TL.end("sense") - 0.2, 0.5, 0.6)
         if fa > 0.003:
             f = rec.F[max(k - 12, 0):k + 1].mean(0)          # 50 ms of samples: the arrow reads, not buzzes
             base = np.array(IMU_MOUNT)
             f3.f_arrow.set(base, base + f * 0.16, opacity=fa)
         else:
             f3.f_arrow.set_opacity(0.0)
-        rv = envelope(t, 19.4, TL.end("sense") + 0.4, 0.6, 0.6)
+        rv = envelope(t, at(19.4), TL.end("sense") + 0.4, 0.6, 0.6)
         w = np.abs(rec.W[max(k - 12, 0):k + 1].mean(0))
         for j, ring in enumerate(f3.rings):
             glow = clamp01(w[j] / 0.35)
@@ -763,7 +790,7 @@ class Painter:
         ov.equation_card(t, EQUATIONS)
 
         # the IMU readout and its callout
-        a = envelope(t, 8.2, TL.end("sense") - 0.2, 0.6, 0.6)
+        a = envelope(t, at(8.2), TL.end("sense") - 0.2, 0.6, 0.6)
         if a > 0:
             w = np.degrees(rec.W[k])
             f = rec.F[k]
@@ -771,9 +798,9 @@ class Painter:
             rows += [(f"accel {n}", f"{v:+6.2f} m/s²", AXIS_C[j]) for j, (n, v) in enumerate(zip("xyz", f))]
             ov.readout(1488, 64, 368, "IMU  ·  ICM-42688-P", rows, alpha=a)
             chip = st.project(np.asarray(rec.pos[i]) + q2R(rec.quat[i]) @ np.array(IMU_MOUNT))
-            c1 = envelope(t, 8.6, 13.4, 0.5, 0.4)
+            c1 = envelope(t, at(8.6), at(13.4), 0.5, 0.4)
             if c1 > 0:
-                ov.callout(chip[:2], (chip[0] + 170, chip[1] - 150), "IMU", C_IMU, c1, grow=ease_out(remap(t, 8.6, 9.3)))
+                ov.callout(chip[:2], (chip[0] + 170, chip[1] - 150), "IMU", C_IMU, c1, grow=ease_out(remap(t, at(8.6), at(9.3))))
 
         # tilt error, scrolling
         pe = envelope(t, T_GYRO0 + 0.4, TL.end("kalman") - 0.2, 0.6, 0.6)
@@ -795,11 +822,11 @@ class Painter:
                     xfmt=lambda v: f"{v:.0f} s", yfmt=lambda v: f"{v:.0f}°")
 
         # the blend sweep
-        sw = envelope(t, 65.0, TL.end("fuse") - 0.2, 0.6, 0.6)
+        sw = envelope(t, at(65.0), TL.end("fuse") - 0.2, 0.6, 0.6)
         if sw > 0:
             taus = [r[0] for r in rec.sweep]
             rmss = [r[1] for r in rec.sweep]
-            grow = smooth(remap(t, 65.0, 68.0))
+            grow = smooth(remap(t, at(65.0), at(68.0)))
             nshow = max(2, int(round(grow * len(taus))))
             ov.plot(1380, 420, 476, 300, [(taus[:nshow], rmss[:nshow], C_FUSE, None)], (0.3, 100.0), (0.0, 16.0),
                     alpha=sw, title="BLEND  vs  AVERAGE ERROR", xlog=True, xticks=(1, 10, 100), yticks=(0, 5, 10, 15),
@@ -810,7 +837,7 @@ class Painter:
                         alpha=sw, anchor="ms")
 
         # the bias the Kalman filter learns
-        bv = envelope(t, 84.0, TL.end("kalman") + 0.4, 0.6, 0.6)
+        bv = envelope(t, at(84.0), TL.end("kalman") + 0.4, 0.6, 0.6)
         if bv > 0:
             xs = np.arange(0, self.frameidx(t) + 1, 15) / FPS
             idx = (xs / DT).astype(int)
@@ -818,7 +845,8 @@ class Painter:
             series += [((0.0, t), (BIAS_DPS[j], BIAS_DPS[j]), AXIS_C[j], None) for j in range(3)]
             ov.plot(1380, 420, 476, 300, series, (0.0, max(t, 30.0)), (-1.0, 1.0), alpha=bv,
                     title="GYRO BIAS: LEARNED vs SET  (deg/s)", yticks=(-1, -0.5, 0, 0.5, 1),
-                    xticks=(0, 25, 50, 75), xfmt=lambda v: f"{v:.0f} s", yfmt=lambda v: f"{v:+.1f}", width=2.0)
+                    xticks=tuple(range(0, int(max(t, 30.0)) + 1, 25)), xfmt=lambda v: f"{v:.0f} s",
+                    yfmt=lambda v: f"{v:+.1f}", width=2.0)
 
         # heading
         hv = envelope(t, TL.start("heading") + 0.4, TL.end("heading") + 0.4, 0.5, 0.6)
@@ -869,21 +897,21 @@ class Painter:
 
 # camera: (time, azimuth deg relative to the car's heading, elevation deg, distance m, look offset, fov)
 CAM = [
-    (0.0, 125, 26, 24.0, (6.0, 0.0, 3.0), 32),
-    (5.8, 115, 18, 14.0, (1.0, 0.4, 0.0), 32),
-    (8.2, 105, 12, 8.5, (0.0, 0.7, 0.0), 30),
-    (13.5, 110, 12, 8.0, (0.0, 0.7, 0.0), 30),
-    (19.0, 135, 16, 10.5, (0.0, 0.6, 0.0), 30),
-    (24.5, 150, 16, 12.5, (0.0, 0.6, 0.0), 30),
-    (41.5, 150, 15, 12.5, (0.0, 0.6, 0.0), 30),
-    (44.0, 100, 10, 12.0, (0.0, 0.6, 0.0), 30),
-    (57.5, 100, 10, 12.0, (0.0, 0.6, 0.0), 30),
-    (60.0, 135, 18, 13.0, (0.0, 0.6, 0.0), 30),
-    (75.5, 140, 18, 13.0, (0.0, 0.6, 0.0), 30),
-    (78.0, 160, 20, 12.5, (0.0, 0.6, 0.0), 30),
-    (93.5, 165, 20, 13.0, (0.0, 0.6, 0.0), 30),
-    (96.5, 180, 52, 20.0, (0.0, 0.0, 0.0), 32),
-    (108.0, 200, 36, 32.0, (0.0, 0.0, 0.0), 32),
+    (at(0.0), 125, 26, 24.0, (6.0, 0.0, 3.0), 32),
+    (at(5.8), 115, 18, 14.0, (1.0, 0.4, 0.0), 32),
+    (at(8.2), 105, 12, 8.5, (0.0, 0.7, 0.0), 30),
+    (at(13.5), 110, 12, 8.0, (0.0, 0.7, 0.0), 30),
+    (at(19.0), 135, 16, 10.5, (0.0, 0.6, 0.0), 30),
+    (at(24.5), 150, 16, 12.5, (0.0, 0.6, 0.0), 30),
+    (at(41.5), 150, 15, 12.5, (0.0, 0.6, 0.0), 30),
+    (at(44.0), 100, 10, 12.0, (0.0, 0.6, 0.0), 30),
+    (at(57.5), 100, 10, 12.0, (0.0, 0.6, 0.0), 30),
+    (at(60.0), 135, 18, 13.0, (0.0, 0.6, 0.0), 30),
+    (at(75.5), 140, 18, 13.0, (0.0, 0.6, 0.0), 30),
+    (at(78.0), 160, 20, 12.5, (0.0, 0.6, 0.0), 30),
+    (at(93.5), 165, 20, 13.0, (0.0, 0.6, 0.0), 30),
+    (at(96.5), 180, 52, 20.0, (0.0, 0.0, 0.0), 32),
+    (at(108.0), 200, 36, 32.0, (0.0, 0.0, 0.0), 32),
 ]
 
 
