@@ -1607,8 +1607,10 @@ class TimeMap:
 
 
 # ── narration ─────────────────────────────────────────────────────────────────
+# Kokoro's G2P reads "PhysX" as "fize-ex" and runs "three.js" together; a [word](/phonemes/)
+# link fixes the pronunciation outright.
 SPOKEN_WORDS = {"IMU": "I M U", "GNSS": "G N S S", "fps": "frames per second", "threepp": "three p p",
-                "FR3": "F R 3"}
+                "FR3": "F R 3", "PhysX": "[PhysX](/fˈɪzˌɛks/)", "three.js": "three J S"}
 _UNITS = [("m/s²", "metres per second squared"), ("°/s", "degrees per second"),
           ("ms", "milliseconds"), ("mm", "millimetres"), ("cm", "centimetres"), ("s", "seconds"),
           ("m", "metres"), ("%", "percent"), ("°", "degrees")]

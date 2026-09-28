@@ -1,10 +1,11 @@
 # lesson: explainer videos made with threepp
 
-`lesson.py` is a small toolkit for YouTube-style teaching clips. Three lessons are
+`lesson.py` is a small toolkit for YouTube-style teaching clips. Four lessons are
 made with it so far:
 
 | | |
 |---|---|
+| `threepp_intro.py` | Part 0, *What is threepp?* An introduction for new users, with the code in C++ (217 s) |
 | `ik_fr3.py` | Part 1, *What does inverse kinematics actually solve?* (108 s, Franka FR3) |
 | `depth_map.py` | Part 2, *How a robot sees in 3D: from depth pixels to a map* (103 s) |
 | `imu_tilt.py` | Part 3, *Which way is up? How a robot measures its own tilt* (108 s, Range Rover on a PhysX track) |
@@ -25,7 +26,7 @@ python ik_fr3.py --voice am_michael                          # another narrator 
 python ik_fr3.py --no-voice                                  # a silent film
 ```
 
-`depth_map.py` and `imu_tilt.py` take the same flags. Output goes to `lesson_out/` in the current
+`threepp_intro.py`, `depth_map.py` and `imu_tilt.py` take the same flags. Output goes to `lesson_out/` in the current
 directory unless `--out` / `--outdir` say otherwise.
 
 Needs threepp (GL renderer only, no Vulkan), numpy, threepp_data (for the FR3
@@ -35,6 +36,7 @@ standard library. The equations are typeset by matplotlib once and cached in
 `<lesson>.math.json`, so matplotlib is only needed when you add or edit one.
 Part 3 also needs the PhysX backend (`tp.HAS_PHYSX`) and the Evoque glTF from
 threepp_data, and a threepp module built after `PhysxVehicle.associate` was added.
+Part 0 needs the PhysX backend too, and the screenshots in `doc/screenshots`.
 
 **Narration.** The captions are read aloud by [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M),
 an offline neural TTS model (82M parameters, Apache-2.0): `pip install kokoro soundfile`,
@@ -45,6 +47,10 @@ the lines whose measured numbers changed. Where a line is longer than its captio
 holds the picture until it has been said (`lesson.TimeMap`); the captions, the `.srt` and
 `--stills` / `--from` times all follow the film's clock. The clips are placed on one track and
 muxed into the mp4 as AAC. `--no-voice` renders without Kokoro.
+Kokoro's own reading of a word can be wrong; `lesson.SPOKEN_WORDS` respells those, and a
+`[word](/phonemes/)` entry sets the phonemes outright (PhysX is `/fˈɪzˌɛks/`). Part 0 goes
+further and lays its whole timeline out from the measured length of each spoken line, so its
+film never holds.
 
 Each threepp_data file is looked up in `THREEPP_DATA_DIR`, then a `threepp_data`
 (or `threepp-data`) checkout next to the repo, then the copies CMake fetches into
@@ -104,6 +110,33 @@ car's own acceleration (dv/dt forward plus w x v):
 
 The heightfield collider is Z-up while the vehicle is Y-up, so the track is a
 `add_static_trimesh` of the same terrain the film draws.
+
+**Part 0.** The code on screen is C++, for readers who will use the library from C++;
+the film itself is made from Python like the others. `hello.cpp` is assembled step by
+step (canvas and renderer, scene, camera, mesh as geometry plus material, light, render
+loop), followed by its Python twin, shared ownership, the scene graph, materials and
+lights, an FR3 from URDF driven by `IkSolver`, PhysX boxes, a `DepthSensor`, and a
+`CMakeLists.txt` that fetches threepp. The Vulkan renderer appears only as screenshots
+from `doc/screenshots`, labelled as such. What is on screen was checked:
+
+* every C++ snippet compiles against the headers; the ownership beat's `use_count()`
+  values (9 and 9 after the loop, 1 and 1 after `row->clear()`, 0 after
+  `material.reset()`) are what that code prints when linked and run;
+* the window after the render-loop step is the program's own output, not the film's
+  studio: `HELLO_PY` runs in a separate process (headless, turned a fixed step per
+  frame instead of by the clock). A capture build of `hello.cpp` made the same frames
+  (3 of 44 million pixels differed by more than one level), so the window is
+  labelled as what `hello.cpp` shows;
+* the printed values under the IK, PhysX and depth-camera cards and the numbers in
+  the captions come from the choreography pass. Wall-clock timings (solve, step and
+  scan times) are left out on purpose: they describe the machine, not the library.
+
+```
+[ik] 4138 solves, worst position error 0.10 mm
+[physx] 40 boxes, resting height 0.17 m
+[urdf] fr3: 191 objects, 54 meshes
+[depth] 156 scans of 160 x 120, median 17142 points
+```
 
 ## How a lesson is built
 
