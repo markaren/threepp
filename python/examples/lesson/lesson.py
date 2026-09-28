@@ -42,6 +42,7 @@ The pieces, from bottom to top:
 """
 from __future__ import annotations
 
+import glob
 import math
 import os
 import shutil
@@ -207,16 +208,27 @@ class Keys:
 
 
 # ── the stage ─────────────────────────────────────────────────────────────────
-def data_dir():
-    env = os.environ.get("THREEPP_DATA_DIR")
-    if env and os.path.isdir(env):
-        return env
+def data_roots():
+    """Where threepp_data may be, in search order: THREEPP_DATA_DIR, a checkout next
+    to the repo, then the copies CMake fetches into the build directories."""
     repo = os.path.dirname(_PY)
-    for name in ("threepp-data", "threepp_data"):
-        cand = os.path.join(os.path.dirname(repo), name)
-        if os.path.isdir(cand):
-            return cand
-    return ""
+    roots = [os.environ.get("THREEPP_DATA_DIR", "")]
+    roots += [os.path.join(os.path.dirname(repo), n) for n in ("threepp-data", "threepp_data")]
+    roots += sorted(glob.glob(os.path.join(repo, "cmake-build-*", "_deps", "threepp_data-src")))
+    return [r for r in roots if r and os.path.isdir(r)]
+
+
+def data_file(*parts):
+    """Path of a threepp_data file in the first root that has it. Roots are checked
+    per file, so an older checkout that lacks it does not hide a newer copy."""
+    rel = os.path.join(*parts)
+    roots = data_roots()
+    for r in roots:
+        p = os.path.join(r, rel)
+        if os.path.isfile(p):
+            return p
+    raise FileNotFoundError(f"threepp_data file '{rel}' not found in {roots or 'any data directory'}; "
+                            f"set THREEPP_DATA_DIR to a threepp_data checkout that has it")
 
 
 def standard(color, roughness=0.5, metalness=0.0, emissive=None, emissive_intensity=1.0):
@@ -260,10 +272,12 @@ class Stage:
 
         self.scene = tp.Scene()
         self.scene.background = tp.Background(self.BG)
-        dd = data_dir()
-        if renderer != "vulkan" and env and dd:
-            path = os.path.join(dd, "textures", "env", env)
-            if os.path.isfile(path):
+        if renderer != "vulkan" and env:
+            try:
+                path = data_file("textures", "env", env)
+            except FileNotFoundError as e:
+                print(f"[stage] rendering without image-based lighting: {e}", file=sys.stderr)
+            else:
                 self.scene.environment = tp.RGBELoader().load(path)
                 self.scene.environment_intensity = env_intensity
 
@@ -874,7 +888,13 @@ class Hud:
             return
         self._rrect(x, y, w, h, radius, fill, alpha)
         if outline is not None:
-            self._rrect(x, y, w, h, radius, outline, outline_alpha * alpha / 0.72, outline_w=width)
+            self.outline(x, y, w, h, outline, outline_alpha * alpha / 0.72, width=width, radius=radius)
+
+    def outline(self, x, y, w, h, color=0xffffff, alpha=1.0, width=1.5, radius=0):
+        """A rounded-rectangle outline with no fill."""
+        if alpha <= 0.003:
+            return
+        self._rrect(x, y, w, h, radius, color, alpha, outline_w=width)
 
     def _glyphs(self, s, size, kind):
         key = ("text", s, round(size, 1), kind)
@@ -1186,12 +1206,12 @@ class Hud:
             v = max(float(v), ymin)
             return py + ph * (1 - (math.log10(v) - lo) / (hi - lo))
 
-        for dec in range(int(math.floor(lo)), int(math.ceil(hi)) + 1):
+        # only decades inside [ymin, ymax]: Y() clamps, so one below ymin would sit at ymin's height
+        for dec in range(math.ceil(lo - 1e-9), math.floor(hi + 1e-9) + 1):
             yy = Y(10.0 ** dec)
-            if py - 1 <= yy <= py + ph + 1:
-                self.line([(px, yy), (px + pw, yy)], 0x3a4558, 1.0, alpha * 0.8)
-                lab = unit_fmt(10.0 ** dec) if unit_fmt else f"1e{dec}"
-                self.text(px - 10, yy, lab, size=15, color=0x7f8ea6, alpha=alpha, kind="numeric", anchor="rm")
+            self.line([(px, yy), (px + pw, yy)], 0x3a4558, 1.0, alpha * 0.8)
+            lab = unit_fmt(10.0 ** dec) if unit_fmt else f"1e{dec}"
+            self.text(px - 10, yy, lab, size=15, color=0x7f8ea6, alpha=alpha, kind="numeric", anchor="rm")
         if threshold is not None:
             yy = Y(threshold)
             self.dashed((px, yy), (px + pw, yy), 0x5ee27a, 1.4, alpha * 0.85, dash=6, gap=5)

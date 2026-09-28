@@ -1,9 +1,9 @@
 """What does inverse kinematics actually solve?  A ~105 s explainer on a Franka FR3.
 
-    python ik_fr3.py --out D:/dev/lesson_out/ik_fr3.mp4          # the film (1080p60)
-    python ik_fr3.py --stills 5,15,40 --outdir D:/dev/lesson_out  # individual frames
-    python ik_fr3.py --sheet --outdir D:/dev/lesson_out           # contact sheet, one frame per 3 s
-    python ik_fr3.py --preview --out preview.mp4                  # 960x540 @ 30 fps
+    python ik_fr3.py                               # the film (1080p60), lesson_out/ik_fr3.mp4
+    python ik_fr3.py --stills 5,15,40              # individual frames, into lesson_out/
+    python ik_fr3.py --sheet                       # contact sheet, one frame per 3 s
+    python ik_fr3.py --preview --out preview.mp4   # 960x540 @ 30 fps
 
 Everything the robot does is computed by threepp's own IK solver
 (`tp.IkSolver`, damped least squares), and the equation shown on screen is the
@@ -26,7 +26,7 @@ import numpy as np
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 from lesson import (Arrow3D, Film, Hud, Keys, Marker3D, Ring3D, shrink, write_png, Stage, Timeline, Tube3D, clamp01,  # noqa: E402
-                    data_dir, ease_out, ease_out_back, envelope, remap, smooth, smoother, standard, tp, xray)
+                    data_file, ease_out, ease_out_back, envelope, remap, smooth, smoother, standard, tp, xray)
 
 FPS = 60
 DOF = 7
@@ -469,7 +469,7 @@ class Film3D:
 
 def make_ghost(st, color):
     """A second FR3 with one translucent material: a pose remembered on screen."""
-    g = tp.URDFLoader().load(os.path.join(data_dir(), "urdf", "franka", "fr3.urdf"))
+    g = tp.URDFLoader().load(data_file("urdf", "franka", "fr3.urdf"))
     g.show_colliders(False)
     mat = standard(color, roughness=0.4, emissive=color, emissive_intensity=0.35)
     mat.transparent = True
@@ -905,7 +905,7 @@ def fade_amount(t):
 # ── main ──────────────────────────────────────────────────────────────────────
 def build(width, height):
     st = Stage(width, height, renderer="gl")
-    robot = tp.URDFLoader().load(os.path.join(data_dir(), "urdf", "franka", "fr3.urdf"))
+    robot = tp.URDFLoader().load(data_file("urdf", "franka", "fr3.urdf"))
     robot.show_colliders(False)
     robot.traverse(lambda o: setattr(o, "cast_shadow", True))
     st.zup.add(robot)
@@ -915,8 +915,8 @@ def build(width, height):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="D:/dev/lesson_out/ik_fr3.mp4")
-    ap.add_argument("--outdir", default="D:/dev/lesson_out")
+    ap.add_argument("--out", default=None, help="the film (default: <outdir>/ik_fr3.mp4)")
+    ap.add_argument("--outdir", default="lesson_out", help="stills, sheets and the default film")
     ap.add_argument("--stills", default=None, help="comma-separated times (s)")
     ap.add_argument("--sheet", action="store_true", help="contact sheet, one frame every --every seconds")
     ap.add_argument("--every", type=float, default=3.0)
@@ -970,7 +970,8 @@ def main():
         return
 
     t_to = args.t_to if args.t_to is not None else TL.duration
-    film = Film(args.out, W, H, fps=fps, crf=16 if not args.preview else 22,
+    out = args.out or os.path.join(args.outdir, "ik_fr3.mp4")
+    film = Film(out, W, H, fps=fps, crf=16 if not args.preview else 22,
                 preset="slow" if not args.preview else "veryfast")
     nfr = int(round((t_to - args.t_from) * fps))
     t_start = time.time()

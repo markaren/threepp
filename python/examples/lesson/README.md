@@ -14,20 +14,27 @@ orthographic scene rendered on top. Python only choreographs and pipes finished
 frames to ffmpeg.
 
 ```
-python ik_fr3.py --out D:/dev/lesson_out/ik_fr3.mp4          # 1920x1080, 60 fps, about 5 min
+python ik_fr3.py                                             # lesson_out/ik_fr3.mp4: 1920x1080, 60 fps, about 5 min
 python ik_fr3.py --preview --out preview.mp4                 # 960x540, 30 fps
 python ik_fr3.py --stills 10.5,50,72 --outdir shots          # single frames
 python ik_fr3.py --sheet --outdir shots                      # contact sheet, one frame per 3 s
 python ik_fr3.py --from 48 --to 64 --out iter.mp4            # one beat
 ```
 
-`depth_map.py` takes the same flags.
+`depth_map.py` takes the same flags. Output goes to `lesson_out/` in the current
+directory unless `--out` / `--outdir` say otherwise.
 
-Needs threepp (GL renderer only, no Vulkan), numpy, threepp-data (for the FR3
+Needs threepp (GL renderer only, no Vulkan), numpy, threepp_data (for the FR3
 URDF and the studio HDR), and `imageio_ffmpeg` or an `ffmpeg` on PATH. That is
 all: text is measured and drawn by threepp, and PNGs are written with the
 standard library. The equations are typeset by matplotlib once and cached in
 `<lesson>.math.json`, so matplotlib is only needed when you add or edit one.
+
+Each threepp_data file is looked up in `THREEPP_DATA_DIR`, then a `threepp_data`
+(or `threepp-data`) checkout next to the repo, then the copies CMake fetches into
+`cmake-build-*/_deps/threepp_data-src`, and the first place that has that file wins.
+A missing studio HDR is reported and the lesson renders without its
+image-based lighting.
 
 ## Honest numbers
 

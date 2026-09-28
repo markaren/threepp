@@ -1,9 +1,9 @@
 """How does a robot see in 3D? From depth pixels to a map.  Part 2 of the threepp lessons.
 
-    python depth_map.py --out D:/dev/lesson_out/depth_map.mp4       # the film (1080p60)
-    python depth_map.py --stills 10,25,60 --outdir D:/dev/lesson_out  # individual frames
-    python depth_map.py --sheet --outdir D:/dev/lesson_out            # contact sheet
-    python depth_map.py --preview --out preview.mp4                   # 960x540 @ 30 fps
+    python depth_map.py                               # the film (1080p60), lesson_out/depth_map.mp4
+    python depth_map.py --stills 10,25,60             # individual frames, into lesson_out/
+    python depth_map.py --sheet                       # contact sheet
+    python depth_map.py --preview --out preview.mp4   # 960x540 @ 30 fps
 
 A depth camera on the FR3's hand scans five objects on a tray. Everything shown is
 computed by threepp while the film is made: the depth images come from
@@ -26,7 +26,7 @@ import numpy as np
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 from lesson import (Cloud, Film, Hud, Keys, Segments, Stage, Timeline, Tube3D,  # noqa: E402
-                    data_dir, ease_out, ease_out_back, envelope, remap, shrink, smooth, smoother, standard, tp,
+                    data_file, ease_out, ease_out_back, envelope, remap, shrink, smooth, smoother, standard, tp,
                     turbo, turbo_hex, write_png)
 
 FPS = 60
@@ -207,7 +207,7 @@ def tsdf_fuse(scans):
 # ── build ─────────────────────────────────────────────────────────────────────
 def build(width, height):
     st = Stage(width, height, renderer="gl")
-    robot = tp.URDFLoader().load(os.path.join(data_dir(), "urdf", "franka", "fr3.urdf"))
+    robot = tp.URDFLoader().load(data_file("urdf", "franka", "fr3.urdf"))
     robot.show_colliders(False)
     robot.traverse(lambda o: setattr(o, "cast_shadow", True))
     st.zup.add(robot)
@@ -849,8 +849,8 @@ class Painter:
                 px = ix + (s0.ui[h] + 0.5) / SW * iw
                 py = iy + (s0.vi[h] + 0.5) / SH * ih
                 cell = iw / SW
-                ov.panel(px - cell * 1.6, py - cell * 1.6, cell * 3.2, cell * 3.2, radius=2, fill=0xffffff,
-                         alpha=0.0, outline=0xffffff, outline_alpha=hv * 0.72 / 0.72, width=2.0)
+                ov.outline(px - cell * 1.6, py - cell * 1.6, cell * 3.2, cell * 3.2, 0xffffff, hv, width=2.0,
+                           radius=2)
                 ov.text(px, py - 22, f"(u, v) = ({s0.ui[h]}, {s0.vi[h]})", size=18, color=C_TEXT, alpha=hv,
                         kind="numeric", anchor="ms")
                 g = ease_out(remap(t, 21.6, 22.8))
@@ -963,8 +963,8 @@ def fade_amount(t):
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="D:/dev/lesson_out/depth_map.mp4")
-    ap.add_argument("--outdir", default="D:/dev/lesson_out")
+    ap.add_argument("--out", default=None, help="the film (default: <outdir>/depth_map.mp4)")
+    ap.add_argument("--outdir", default="lesson_out", help="stills, sheets and the default film")
     ap.add_argument("--stills", default=None, help="comma-separated times (s)")
     ap.add_argument("--sheet", action="store_true")
     ap.add_argument("--every", type=float, default=3.0)
@@ -1017,7 +1017,8 @@ def main():
         return
 
     t_to = args.t_to if args.t_to is not None else TL.duration
-    film = Film(args.out, W, H, fps=fps, crf=16 if not args.preview else 22,
+    out = args.out or os.path.join(args.outdir, "depth_map.mp4")
+    film = Film(out, W, H, fps=fps, crf=16 if not args.preview else 22,
                 preset="slow" if not args.preview else "veryfast")
     nfr = int(round((t_to - args.t_from) * fps))
     t_start = time.time()
