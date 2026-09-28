@@ -1,6 +1,6 @@
 # lesson: explainer videos made with threepp
 
-`lesson.py` is a small toolkit for YouTube-style teaching clips. Four lessons are
+`lesson.py` is a small toolkit for YouTube-style teaching clips. Five lessons are
 made with it so far:
 
 | | |
@@ -9,6 +9,7 @@ made with it so far:
 | `ik_fr3.py` | Part 1, *What does inverse kinematics actually solve?* (108 s, Franka FR3) |
 | `depth_map.py` | Part 2, *How a robot sees in 3D: from depth pixels to a map* (103 s) |
 | `imu_tilt.py` | Part 3, *Which way is up? How a robot measures its own tilt* (136 s, Range Rover on a PhysX track) |
+| `rocket_pid.py` | Part 4, *Hold still: PID control, flown on a rocket* (150 s, a hopper in PhysX, exhaust in Warp) |
 
 Everything in the picture is drawn by threepp. The robot, lights, shadows and 3D
 annotations are one scene. Captions, equations, panels and plots are a second,
@@ -26,7 +27,7 @@ python ik_fr3.py --voice am_michael                          # another narrator 
 python ik_fr3.py --no-voice                                  # a silent film
 ```
 
-`threepp_intro.py`, `depth_map.py` and `imu_tilt.py` take the same flags. Output goes to `lesson_out/` in the current
+`threepp_intro.py`, `depth_map.py`, `imu_tilt.py` and `rocket_pid.py` take the same flags. Output goes to `lesson_out/` in the current
 directory unless `--out` / `--outdir` say otherwise.
 
 Needs threepp (GL renderer only, no Vulkan), numpy, threepp_data (for the FR3
@@ -37,6 +38,8 @@ standard library. The equations are typeset by matplotlib once and cached in
 Part 3 also needs the PhysX backend (`tp.HAS_PHYSX`) and the Evoque glTF from
 threepp_data, and a threepp module built after `PhysxVehicle.associate` was added.
 Part 0 needs the PhysX backend too, and the screenshots in `doc/screenshots`.
+Part 4 needs the PhysX backend, a threepp module with `RigidBody.add_force_at_pos`, and
+NVIDIA Warp on a CUDA GPU for the exhaust, smoke and dust.
 
 **Narration.** The captions are read aloud by [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M),
 an offline neural TTS model (82M parameters, Apache-2.0): `pip install kokoro soundfile`,
@@ -46,7 +49,9 @@ clip is cached in `<outdir>/voice_cache` by voice and text, so a re-render only 
 the lines whose measured numbers changed. Where a line is longer than its caption, the film
 holds the picture until it has been said (`lesson.TimeMap`); the captions, the `.srt` and
 `--stills` / `--from` times all follow the film's clock. The clips are placed on one track and
-muxed into the mp4 as AAC. `--no-voice` renders without Kokoro.
+muxed into the mp4 as AAC. `--no-voice` renders without Kokoro. A caption given as
+`(start, end, text, False)` is spoken (and written to the `.srt`) but not drawn: Part 4 uses one to
+narrate its title card, so the film has sound from the first second.
 Kokoro's own reading of a word can be wrong; `lesson.SPOKEN_WORDS` respells those, and a
 `[word](/phonemes/)` entry sets the phonemes outright (PhysX is `/fˈɪzˌɛks/`). Parts 0 and 3
 go further and time their scripts from the measured length of each spoken line, so their films
@@ -139,6 +144,31 @@ from `doc/screenshots`, labelled as such. What is on screen was checked:
 [urdf] fr3: 191 objects, 54 meshes
 [depth] 156 scans of 160 x 120, median 17142 points
 ```
+
+**Part 4.** A 6 t, 12 m hopper is a PhysX convex body. Its engine pushes along the body
+(`RigidBody.add_force_at_pos` at the nozzle) with up to 1.5 times its weight, no lower than
+35 % once lit, and answers the controller a fifth of a second late (a first-order lag). The
+altitude controller runs at 240 Hz in throttle units, u = Kp e + Ki ∫e dt - Kd v with Kp 0.10 /m,
+Ki 0.03 /(m s) and Kd 0.15 s/m, built up on screen one term at a time; a gimbal PD keeps it upright
+and leans it back over the pad. The film says what each term does, not these numbers. Five
+flights are flown before the film is laid out: P alone, PD with I switched on part-way, PID with
+and without anti-windup, and the anti-windup flight carrying on through a gust and a landing:
+
+```
+[P]  swings grow; hits the pad 10.7 s after ignition at 9.5 m/s
+[PD] settles at 13.33 m: 6.67 m low (hover / Kp = 6.67 m)
+[PID] holds 20 m within 4.2 mm
+[windup] naive peak 26.72 m; with anti-windup 1.03 m over
+[gust] 0.12 x weight for 1.5 s: tilt 5.8 deg, drift 2.57 m
+[land] touchdown at 0.19 m/s
+```
+
+The PD sag is the textbook one to the centimetre: hovering takes 1/1.5 = 66.7 % throttle, and P
+gives that only at an error of 0.667 / Kp. The exhaust, the ground cloud and the dust are
+particles stepped by Warp kernels from the recorded engine state (a plume that turns along the
+pad where it hits, dust kicked up while the engine is low) and drawn by threepp as soft points
+in age bands. They are the only part of the picture that is not the simulation's state; they
+are checkpointed so any frame can be rendered on its own.
 
 ## How a lesson is built
 
