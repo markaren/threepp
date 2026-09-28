@@ -32,9 +32,6 @@ vcpkg_installed/
 
 imgui.ini
 
-# wgpu-native is fetched at configure time via cmake/FetchWgpuNative.cmake
-src/external/wgpu-native/
-
 temp/
 
 .claude

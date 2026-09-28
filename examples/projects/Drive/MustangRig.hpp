@@ -3,12 +3,11 @@
 #define THREEPP_DRIVE_MUSTANGRIG_HPP
 
 // A car rig built around an imported glTF/GLB model (a 1967 Ford Mustang Shelby
-// GT500) instead of hand-rolled primitives. It mirrors CarRig's public surface
-// — root(), setHeadlights()/headlightsOn(), update(vehicle, dt, brake, signal) —
-// so the Drive demo can swap one for the other.
+// GT500) instead of hand-rolled primitives. Its public surface is root(),
+// setHeadlights()/headlightsOn() and update(vehicle, dt, brake, signal).
 //
-// The wrinkle vs. CarRig is that nothing about the model's dimensions is known
-// ahead of time, and the PhysX vehicle needs those numbers (track, wheelbase,
+// The wrinkle vs. a primitive-built car is that nothing about the model's
+// dimensions is known ahead of time, and the PhysX vehicle needs those numbers (track, wheelbase,
 // wheel radius, chassis extents) to build its collider and suspension. So the
 // flow is two-phase:
 //
@@ -223,8 +222,8 @@ namespace drive {
             return headlights_;
         }
 
-        // Update visuals from the vehicle. turnSignal is accepted for API parity
-        // with CarRig; this model has no dedicated indicator geometry.
+        // Update visuals from the vehicle. turnSignal is accepted but unused;
+        // this model has no dedicated indicator geometry.
         void update(const PhysxVehicleEngineDrive& v, float /*dt*/,
                     float brakeCmd, int /*turnSignal*/) {
             for (int i = 0; i < 4; ++i) {
