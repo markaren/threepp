@@ -10,6 +10,8 @@ using namespace threepp;
 
 namespace {
 
+    // three.js r186's painterSortStable minus its materialVariant tie-break.
+    // r186 has no program term here, so neither does this.
     struct {
 
         bool operator()(const RenderItem* a, const RenderItem* b) const {
@@ -17,8 +19,6 @@ namespace {
                 return a->groupOrder < b->groupOrder;
             } else if (a->renderOrder != b->renderOrder) {
                 return a->renderOrder < b->renderOrder;
-            } else if (a->programId != b->programId) {
-                return a->programId < b->programId;
             } else if (a->material->id != b->material->id) {
                 return a->material->id < b->material->id;
             } else if (a->z != b->z) {
@@ -46,8 +46,6 @@ namespace {
 
 }// namespace
 
-RenderList::RenderList(ProgramIdResolver resolver): resolver_(std::move(resolver)) {}
-
 void RenderList::init() {
 
     renderItemsIndex = 0;
@@ -63,8 +61,6 @@ RenderItem* RenderList::getNextRenderItem(
         Material* material,
         int groupOrder, float z, std::optional<GeometryGroup> group) {
 
-    uint64_t progId = resolver_ ? resolver_(material) : 0;
-
     RenderItem* renderItem = nullptr;
 
     if (renderItemsIndex >= renderItems.size()) {
@@ -72,7 +68,6 @@ RenderItem* RenderList::getNextRenderItem(
                                                          object,
                                                          geometry,
                                                          material,
-                                                         progId,
                                                          groupOrder,
                                                          object->renderOrder,
                                                          z,
@@ -88,7 +83,6 @@ RenderItem* RenderList::getNextRenderItem(
         renderItem->object = object;
         renderItem->geometry = geometry;
         renderItem->material = material;
-        renderItem->programId = progId;
         renderItem->groupOrder = groupOrder;
         renderItem->renderOrder = object->renderOrder;
         renderItem->z = z;
@@ -162,18 +156,15 @@ void RenderList::finish() {
         renderItem->object = nullptr;
         renderItem->geometry = nullptr;
         renderItem->material = nullptr;
-        renderItem->programId = 0;
         renderItem->group = std::nullopt;
     }
 }
-
-RenderLists::RenderLists(ProgramIdResolver resolver): resolver_(std::move(resolver)) {}
 
 RenderList* RenderLists::get(Object3D* scene, size_t renderCallDepth) {
 
     if (!lists.contains(scene->uuid)) {
 
-        auto& l = lists[scene->uuid].emplace_back(std::make_unique<RenderList>(resolver_));
+        auto& l = lists[scene->uuid].emplace_back(std::make_unique<RenderList>());
         return l.get();
 
     } else {
@@ -181,7 +172,7 @@ RenderList* RenderLists::get(Object3D* scene, size_t renderCallDepth) {
         auto& l = lists.at(scene->uuid);
         if (renderCallDepth >= l.size()) {
 
-            l.emplace_back(std::make_unique<RenderList>(resolver_));
+            l.emplace_back(std::make_unique<RenderList>());
             return l.back().get();
 
         } else {

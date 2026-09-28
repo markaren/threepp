@@ -187,7 +187,6 @@ struct GLRenderer::Impl {
           clipping(properties),
           textures(state, properties, _info),
           materials(properties),
-          renderLists(properties),
           objects(geometries, attributes, _info),
           programCache(bindingStates, clipping),
           cubemaps(scope),

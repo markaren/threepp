@@ -46,7 +46,6 @@ namespace threepp::gl {
 
     struct MaterialProperties {
 
-        GLProgram* program = nullptr;
         GLProgram* currentProgram = nullptr;
         std::unordered_map<std::string, GLProgram*> programs{};
 
