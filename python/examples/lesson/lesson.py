@@ -35,8 +35,11 @@ The pieces, from bottom to top:
     the 3D one. Panels, text (Text2D from the system TTF), LaTeX-style maths
     (matplotlib's mathtext outlines loaded through SVGLoader, no TeX install
     needed, and cached to JSON so a finished lesson needs no matplotlib), lines,
-    arrows, bars, a log plot, and callouts. The cards every lesson has are
-    widgets: `captions`, `title_card`, `equation_card` and `summary`.
+    arrows, bars, a log plot, line plots (`plot`), a panel of live values
+    (`readout`), and callouts. The cards every lesson has are widgets:
+    `captions`, `title_card`, `equation_card` and `summary`. `ghost()` makes a
+    translucent copy of any object, and `Stage.follow()` keeps the key light's
+    shadow area on a moving subject.
 
 `Film`
     Pipes frames into ffmpeg (imageio_ffmpeg's binary) as H.264, writing to a
@@ -223,27 +226,41 @@ def fade_in_out(t, duration, fade_in=0.8, fade_out=0.9):
 
 
 class OrbitCamera:
-    """A keyframed orbit around a look point given in a Z-up (robot) frame.
+    """A keyframed orbit around a look point.
 
     keys = [(time, azimuth deg, elevation deg, distance m, look point, fov deg), ...].
-    Azimuth is measured in the XY plane from +x. `drift` is ((amplitude deg, rad/s) for
-    azimuth, (amplitude deg, rad/s) for elevation): slow sinusoids so held shots never
-    freeze. Called with t, returns (eye, look, fov) in the stage's Y-up world, ready for
-    `Stage.look`.
+    By default the look points are in a Z-up (robot) frame and azimuth is measured in
+    its XY plane from +x. With `frame="yup"` they are in the stage's Y-up world and
+    azimuth is measured in the XZ plane from +x towards -z (the same direction once
+    Z-up is turned into Y-up). `follow(t)`, if given, returns a point (same frame) that
+    the keyed look point is added to, and `heading(t)` an angle (rad) added to the
+    azimuth: together a chase camera. `drift` is ((amplitude deg, rad/s) for azimuth,
+    (amplitude deg, rad/s) for elevation): slow sinusoids so held shots never freeze.
+    Called with t, returns (eye, look, fov) in the Y-up world, ready for `Stage.look`.
     """
 
-    def __init__(self, keys, drift=((1.2, 0.21), (0.6, 0.17))):
+    def __init__(self, keys, drift=((1.2, 0.21), (0.6, 0.17)), frame="zup", follow=None, heading=None):
         self.orbit = Keys([(k[0], [k[1], k[2], k[3], k[5]]) for k in keys])
         self.target = Keys([(k[0], k[4]) for k in keys])
         self.drift = drift
+        self.frame = frame
+        self.follow = follow
+        self.heading = heading
 
     def __call__(self, t):
         az, el, dist, fov = (float(v) for v in self.orbit(t))
         look = self.target(t)
+        if self.follow is not None:
+            look = look + np.asarray(self.follow(t), float)
         (az_amp, az_rate), (el_amp, el_rate) = self.drift
         az += az_amp * math.sin(az_rate * t)
         el += el_amp * math.sin(el_rate * t + 1.0)
         a, e = math.radians(az), math.radians(el)
+        if self.heading is not None:
+            a += float(self.heading(t))
+        if self.frame == "yup":
+            eye = look + dist * np.array([math.cos(e) * math.cos(a), math.sin(e), -math.cos(e) * math.sin(a)])
+            return eye, look, fov
         eye = look + dist * np.array([math.cos(e) * math.cos(a), math.cos(e) * math.sin(a), math.sin(e)])
         zw = lambda p: np.array([p[0], p[2], -p[1]])  # noqa: E731  Z-up -> Y-up
         return zw(eye), zw(look), fov
@@ -295,7 +312,11 @@ class Stage:
     BG = 0x0b0f17
 
     def __init__(self, width=1920, height=1080, renderer="gl", headless=True, msaa=8,
-                 floor=True, env="empty_warehouse_01_2k.hdr", env_intensity=0.35, design=(1920, 1080)):
+                 floor=True, env="empty_warehouse_01_2k.hdr", env_intensity=0.35, design=(1920, 1080),
+                 fog=None, shadow_extent=1.6, far=60.0):
+        """`fog` = (near, far) in metres (default 3.5..9 with the studio floor, none without).
+        `shadow_extent` is the half-size of the key light's shadow area around its target;
+        `follow()` moves that area with a subject. `far` is the camera's far plane."""
         self.W, self.H = int(width), int(height)
         self.design = design     # project() answers in these units, the Hud's
         self.kind = renderer
@@ -331,8 +352,11 @@ class Stage:
         self.key.shadow.map_size = tp.Vector2(4096, 4096)
         self.key.shadow.radius = 5
         self.key.shadow.bias = -0.0003
-        self.key.set_shadow_frustum(-1.6, 1.6, 1.6, -1.6)
+        e = shadow_extent
+        self.key.set_shadow_frustum(-e, e, e, -e)
         self.scene.add(self.key)
+        self._key_offset = np.array([2.6, 6.0, 3.6])
+        self._key_target = None
         self.rim = tp.DirectionalLight(0x86a8ff, 1.4)
         self.rim.position.set(-4.0, 3.0, -3.5)
         self.scene.add(self.rim)
@@ -344,15 +368,29 @@ class Stage:
             self.floor.rotate_x(-math.pi / 2)
             self.floor.receive_shadow = True
             self.scene.add(self.floor)
-            # The floor dissolves into the backdrop instead of ending at a rim.
-            self.scene.set_fog(tp.Color(self.BG), 3.5, 9.0)
+            if fog is None:
+                fog = (3.5, 9.0)     # the floor dissolves into the backdrop instead of ending at a rim
+        if fog is not None:
+            self.scene.set_fog(tp.Color(self.BG), float(fog[0]), float(fog[1]))
 
         self.zup = tp.Group()
         self.zup.rotate_x(-math.pi / 2)
         self.scene.add(self.zup)
 
-        self.camera = tp.PerspectiveCamera(32, self.W / self.H, 0.03, 60)
+        self.camera = tp.PerspectiveCamera(32, self.W / self.H, 0.03, far)
         self._look = np.zeros(3)
+
+    def follow(self, p, height=None):
+        """Centre the key light and its shadow area on world point p (Y-up). The light
+        keeps its direction; `height` scales its offset (the shadow camera's depth)."""
+        p = np.asarray(p, float)
+        if self._key_target is None:
+            self._key_target = tp.Object3D()
+            self.scene.add(self._key_target)
+            self.key.set_target(self._key_target)
+        off = self._key_offset if height is None else self._key_offset * (height / self._key_offset[1])
+        self._key_target.position.set(*p)
+        self.key.position.set(*(p + off))
 
     # camera ----------------------------------------------------------------
     def look(self, eye, target, fov=None, roll=0.0):
@@ -485,6 +523,24 @@ def xray(obj, order=10):
             mat.depth_write = False
             mat.transparent = True
     obj.traverse(f)
+
+
+def ghost(obj, color, opacity=0.3, emissive=0.35):
+    """A translucent copy of `obj` (recursive clone, every mesh on one shared material):
+    a second pose of the same thing on screen. Returns (copy, material); fade it with
+    `material.opacity` and hide it with `copy.visible`."""
+    g = obj.clone(True)
+    mat = standard(color, roughness=0.4, emissive=color, emissive_intensity=emissive)
+    mat.transparent = True
+    mat.depth_write = False
+    mat.opacity = opacity
+
+    def f(o):
+        if type(o).__name__ == "Mesh":
+            o.set_material(mat)
+            o.cast_shadow = False
+    g.traverse(f)
+    return g, mat
 
 
 class Arrow3D:
@@ -1277,7 +1333,7 @@ class Hud:
         return best
 
     def wrap(self, text, size, width, kind="regular"):
-        words = text.split()
+        words = [w for w in text.split(" ") if w]     # a no-break space (U+00A0) keeps its words together
         lines, cur = [], ""
         for w in words:
             cand = (cur + " " + w).strip()
@@ -1340,6 +1396,61 @@ class Hud:
             self.line([(X(i), Y(v)) for i, v in enumerate(values)], color, 2.6, alpha)
         for i, v in enumerate(values):
             self.circle(X(i), Y(v), 4.2 if (i == n - 1 and marker_last) else 3.0, fill=color, alpha=alpha)
+
+    def plot(self, x, y, w, h, series, xlim, ylim, alpha=1.0, title=None, xlog=False, ylog=False,
+             xticks=(), yticks=(), xfmt=str, yfmt=str, legend=True, markers=(), width=2.4):
+        """Line plot on linear or log axes. series: [(xs, ys, colour, label or None)];
+        points outside xlim/ylim are clamped to the frame. xticks/yticks: values that get a
+        label (xfmt/yfmt) and, for y, a grid line. markers: [(x, y, colour)] dots."""
+        if alpha <= 0.003:
+            return
+        self.panel(x, y, w, h, alpha=0.70 * alpha, outline=0x8aa0c0, outline_alpha=0.18)
+        top = 52 if title else 24
+        px, py, pw, ph = x + 70, y + top, w - 94, h - top - 46
+        if title:
+            self.text(x + 22, y + 16, title, size=17, color=DIM, alpha=alpha, kind="semibold", tracking=2.0)
+        fx = math.log10 if xlog else float
+        fy = math.log10 if ylog else float
+        x0, x1 = fx(xlim[0]), fx(xlim[1])
+        y0, y1 = fy(ylim[0]), fy(ylim[1])
+
+        def X(v):
+            return px + pw * clamp01((fx(max(v, xlim[0]) if xlog else v) - x0) / (x1 - x0))
+
+        def Y(v):
+            return py + ph * (1 - clamp01((fy(max(v, ylim[0]) if ylog else v) - y0) / (y1 - y0)))
+
+        for v in yticks:
+            yy = Y(v)
+            self.line([(px, yy), (px + pw, yy)], 0x3a4558, 1.0, alpha * 0.8)
+            self.text(px - 10, yy, yfmt(v), size=15, color=0x7f8ea6, alpha=alpha, kind="numeric", anchor="rm")
+        for v in xticks:
+            self.text(X(v), py + ph + 12, xfmt(v), size=15, color=0x7f8ea6, alpha=alpha, kind="numeric", anchor="ma")
+        for xs, ys, color, _ in series:
+            if len(xs) >= 2:
+                self.line([(X(a), Y(b)) for a, b in zip(xs, ys)], color, width, alpha)
+        for mx, my, color in markers:
+            self.circle(X(mx), Y(my), 5.0, fill=color, alpha=alpha)
+        if legend:
+            ly = py + 4
+            for _, _, color, label in series:
+                if label:
+                    self.line([(px + pw - 150, ly + 9), (px + pw - 126, ly + 9)], color, 3.0, alpha)
+                    self.text(px + pw - 118, ly + 9, label, size=15, color=TEXT, alpha=alpha, anchor="lm")
+                    ly += 22
+
+    def readout(self, x, y, w, title, rows, alpha=1.0, row_h=40, value_size=26):
+        """A panel of live values: rows [(label, value text, value colour or None)]."""
+        if alpha <= 0.003:
+            return
+        self.panel(x, y, w, 58 + row_h * len(rows), radius=16, alpha=0.66 * alpha, outline=0x8aa0c0,
+                   outline_alpha=0.16)
+        self.text(x + 24, y + 22, title, size=16, color=DIM, alpha=alpha, kind="semibold", tracking=2.2)
+        for j, (label, value, color) in enumerate(rows):
+            yy = y + 58 + j * row_h + row_h / 2
+            self.text(x + 24, yy, label, size=19, color=DIM, alpha=alpha, anchor="lm")
+            self.text(x + w - 24, yy, value, size=value_size, color=TEXT if color is None else color, alpha=alpha,
+                      kind="numeric", anchor="rm")
 
     def fade(self, amount, color=0x000000):
         """Full-frame veil, drawn last: 1 = solid colour."""

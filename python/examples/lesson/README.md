@@ -1,12 +1,13 @@
 # lesson: explainer videos made with threepp
 
-`lesson.py` is a small toolkit for YouTube-style teaching clips. Two lessons are
+`lesson.py` is a small toolkit for YouTube-style teaching clips. Three lessons are
 made with it so far:
 
 | | |
 |---|---|
 | `ik_fr3.py` | Part 1, *What does inverse kinematics actually solve?* (108 s, Franka FR3) |
 | `depth_map.py` | Part 2, *How a robot sees in 3D: from depth pixels to a map* (103 s) |
+| `imu_tilt.py` | Part 3, *Which way is up? How a robot measures its own tilt* (108 s, Range Rover on a PhysX track) |
 
 Everything in the picture is drawn by threepp. The robot, lights, shadows and 3D
 annotations are one scene. Captions, equations, panels and plots are a second,
@@ -22,7 +23,7 @@ python ik_fr3.py --from 48 --to 64 --out iter.mp4            # one beat
 python ik_fr3.py --srt                                       # captions as lesson_out/ik_fr3.srt, for YouTube
 ```
 
-`depth_map.py` takes the same flags. Output goes to `lesson_out/` in the current
+`depth_map.py` and `imu_tilt.py` take the same flags. Output goes to `lesson_out/` in the current
 directory unless `--out` / `--outdir` say otherwise.
 
 Needs threepp (GL renderer only, no Vulkan), numpy, threepp_data (for the FR3
@@ -30,6 +31,8 @@ URDF and the studio HDR), and `imageio_ffmpeg` or an `ffmpeg` on PATH. That is
 all: text is measured and drawn by threepp, and PNGs are written with the
 standard library. The equations are typeset by matplotlib once and cached in
 `<lesson>.math.json`, so matplotlib is only needed when you add or edit one.
+Part 3 also needs the PhysX backend (`tp.HAS_PHYSX`) and the Evoque glTF from
+threepp_data, and a threepp module built after `PhysxVehicle.associate` was added.
 
 Each threepp_data file is looked up in `THREEPP_DATA_DIR`, then a `threepp_data`
 (or `threepp-data`) checkout next to the repo, then the copies CMake fetches into
@@ -71,6 +74,25 @@ Two modelling choices matter for that number: space no view saw inside the tray'
 footprint is treated as solid (it is what lies behind the surfaces), and the fused
 field gets a light [1 2 1] blur before meshing.
 
+**Part 3.** A `tp.PhysxVehicle` (the Evoque tuning) drives a stadium track with
+hills and a side slope, steered by pure pursuit. A `tp.Imu` rides the chassis
+(`PhysxVehicle.associate`): ICM-42688-P white noise, plus a gyro turn-on bias of
+(0.50, -0.40, 0.45) deg/s set in its noise model. The true tilt is the chassis pose.
+Four estimates run on the recorded samples: the gyro integrated alone, the
+accelerometer alone, a complementary filter (its blend swept, best one kept), and a
+Kalman filter over up and gyro bias that also uses the wheel speeds to remove the
+car's own acceleration (dv/dt forward plus w x v):
+
+```
+[parked] |f| 9.810 m/s^2, gyro [0.5 -0.4 0.45] deg/s (bias set [0.5 -0.4 0.45])
+[accel] parked 0.08 deg; braking up to 28.7, cornering up to 15.7 deg
+[comp]  best blend tau 20.83 s: 4.46 deg rms
+[kalman] rms 0.41 deg, max 0.71; bias [0.57 -0.47 0.37] deg/s vs set [0.5 -0.4 0.45]
+```
+
+The heightfield collider is Z-up while the vehicle is Y-up, so the track is a
+`add_static_trimesh` of the same terrain the film draws.
+
 ## How a lesson is built
 
 1. **Choreography pass.** Everything stateful (IK solves, scans, maps, trails,
@@ -88,11 +110,12 @@ Pieces in `lesson.py`:
 |---|---|
 | `run` | the shared command line: film, preview, one stretch, stills, contact sheet, `.srt` captions |
 | `Timeline` | named beats; `p()` eased progress, `fade()` in/hold/out envelopes |
-| `Keys`, `OrbitCamera` | keyframed vectors with smootherstep between keys; a camera keyframed as azimuth, elevation, distance, look point and fov, with a slow drift |
-| `Stage` | headless canvas + GL (or Vulkan) renderer + dark studio set; `project()` maps 3D to HUD pixels |
-| `Arrow3D`, `Ring3D`, `Marker3D`, `Tube3D`, `xray()`, `set_pose()` | 3D annotations that fade and can ride on robot links; placing an object at a 4x4 pose |
+| `Keys`, `OrbitCamera` | keyframed vectors with smootherstep between keys; a camera keyframed as azimuth, elevation, distance, look point and fov, with a slow drift, in a Z-up or Y-up frame, optionally following a moving target and its heading |
+| `Stage` | headless canvas + GL (or Vulkan) renderer + dark studio set; `project()` maps 3D to HUD pixels; `follow()` moves the key light's shadow area with a moving subject |
+| `Arrow3D`, `Ring3D`, `Marker3D`, `Tube3D`, `xray()`, `set_pose()`, `ghost()` | 3D annotations that fade and can ride on robot links; placing an object at a 4x4 pose; a translucent copy of any object |
 | `Cloud`, `Segments` | point clouds (round sprites) and line fans, updated in place |
 | `Hud` | immediate-mode 2D layer drawn by threepp: `Text2D` from the system TTF, `ShapeGeometry` panels, triangle-strip lines, images, colour bars, maths as matplotlib glyph outlines loaded through `SVGLoader` |
+| `Hud.plot`, `readout` | line plots with several series and a legend on linear or log axes; a panel of live values |
 | `Hud.title_card`, `captions`, `equation_card`, `summary` | the opening title, the lower-third captions, the top-left card of equations, and the closing "IN SHORT" card |
 | `turbo`, `write_png`, `write_srt`, `Film` | colour map, stdlib PNG writer, SubRip subtitles, and frames to H.264 via an ffmpeg pipe (written to a temp name and renamed on success) |
 
