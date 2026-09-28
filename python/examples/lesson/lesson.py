@@ -78,25 +78,30 @@ def clamp01(x):
     return 0.0 if x < 0.0 else 1.0 if x > 1.0 else float(x)
 
 
+# The easings take a scalar or a numpy array (per-point staggers).
+def _c01(x):
+    return clamp01(x) if np.isscalar(x) else np.clip(x, 0.0, 1.0)
+
+
 def smooth(x):
     """Smoothstep: zero velocity at both ends."""
-    x = clamp01(x)
+    x = _c01(x)
     return x * x * (3.0 - 2.0 * x)
 
 
 def smoother(x):
     """Smootherstep: zero velocity AND acceleration at both ends."""
-    x = clamp01(x)
+    x = _c01(x)
     return x * x * x * (x * (6.0 * x - 15.0) + 10.0)
 
 
 def ease_out(x):
-    x = clamp01(x)
+    x = _c01(x)
     return 1.0 - (1.0 - x) ** 3
 
 
 def ease_out_back(x, s=1.4):
-    x = clamp01(x) - 1.0
+    x = _c01(x) - 1.0
     return 1.0 + x * x * ((s + 1.0) * x + s)
 
 
@@ -596,6 +601,114 @@ class Tube3D:
             self.mat.depth_test = False
             self.mesh.render_order = 10
         self.mesh.visible = True
+
+
+def turbo(t):
+    """Google's Turbo colormap (polynomial fit): t in [0, 1] -> (N, 3) float RGB in [0, 1]."""
+    t = np.clip(np.asarray(t, np.float64), 0.0, 1.0)
+    r = np.array([0.13572138, 4.61539260, -42.66032258, 132.13108234, -152.94239396, 59.28637943])
+    g = np.array([0.09140261, 2.19418839, 4.84296658, -14.18503333, 4.27729857, 2.82956604])
+    b = np.array([0.10667330, 12.64194608, -60.58204836, 110.36276771, -89.90310912, 27.34824973])
+    P = np.stack([t ** k for k in range(6)], axis=-1)
+    return np.clip(np.stack([P @ r, P @ g, P @ b], axis=-1), 0.0, 1.0)
+
+
+def turbo_hex(t):
+    r, g, b = (turbo(np.array([t]))[0] * 255).round().astype(int)
+    return (int(r) << 16) | (int(g) << 8) | int(b)
+
+
+def disc_texture(size=64, soft=0.18):
+    """A round sprite (white disc, soft edge) for Points."""
+    y, x = np.mgrid[0:size, 0:size]
+    r = np.hypot(x - (size - 1) / 2, y - (size - 1) / 2) / (size / 2)
+    a = np.clip((1.0 - r) / soft, 0.0, 1.0)
+    img = np.zeros((size, size, 4), np.uint8)
+    img[..., :3] = 255
+    img[..., 3] = (a * 255).astype(np.uint8)
+    tex = tp.data_texture(img, True)
+    return tex
+
+
+class Cloud:
+    """A point cloud with a fixed capacity, updated in place (positions, colours, count)."""
+
+    _sprite = None
+
+    def __init__(self, capacity, size=0.004, parent=None, sprite=True):
+        self.capacity = int(capacity)
+        self.geom = tp.BufferGeometry()
+        self.geom.set_attribute("position", np.zeros((self.capacity, 3), np.float32))
+        self.geom.set_attribute("color", np.zeros((self.capacity, 3), np.float32))
+        self.geom.set_draw_range(0, 0)
+        self.mat = tp.PointsMaterial()
+        self.mat.size = size
+        self.mat.size_attenuation = True
+        self.mat.vertex_colors = True
+        if sprite:
+            if Cloud._sprite is None:
+                Cloud._sprite = disc_texture()
+            self.mat.map = Cloud._sprite
+            self.mat.alpha_test = 0.5
+        self.points = tp.Points(self.geom, self.mat)
+        self.points.frustum_culled = False
+        if parent is not None:
+            parent.add(self.points)
+        self._pos = np.zeros((self.capacity, 3), np.float32)
+        self._col = np.zeros((self.capacity, 3), np.float32)
+
+    def set(self, pos, col, opacity=1.0):
+        n = min(len(pos), self.capacity)
+        if n == 0 or opacity <= 0.003:
+            self.geom.set_draw_range(0, 0)
+            self.points.visible = False
+            return
+        self._pos[:n] = pos[:n]
+        self._col[:n] = col[:n]
+        self.geom.update_attribute("position", self._pos)
+        self.geom.update_attribute("color", self._col)
+        self.geom.set_draw_range(0, n)
+        self.mat.transparent = opacity < 0.999
+        self.mat.opacity = opacity
+        self.points.visible = True
+
+
+class Segments:
+    """Many line segments (1 px), updated in place; additive by default so dense fans glow."""
+
+    def __init__(self, capacity, parent=None, additive=True):
+        self.capacity = int(capacity)
+        self.geom = tp.BufferGeometry()
+        self.geom.set_attribute("position", np.zeros((2 * self.capacity, 3), np.float32))
+        self.geom.set_attribute("color", np.zeros((2 * self.capacity, 3), np.float32))
+        self.geom.set_draw_range(0, 0)
+        self.mat = tp.LineBasicMaterial()
+        self.mat.vertex_colors = True
+        self.mat.transparent = True
+        self.mat.depth_write = False
+        if additive:
+            self.mat.blending = tp.Blending.Additive
+        self.lines = tp.LineSegments(self.geom, self.mat)
+        self.lines.frustum_culled = False
+        if parent is not None:
+            parent.add(self.lines)
+        self._pos = np.zeros((2 * self.capacity, 3), np.float32)
+        self._col = np.zeros((2 * self.capacity, 3), np.float32)
+
+    def set(self, a, b, col_a, col_b=None, opacity=1.0):
+        n = min(len(a), self.capacity)
+        if n == 0 or opacity <= 0.003:
+            self.lines.visible = False
+            return
+        self._pos[0:2 * n:2] = a[:n]
+        self._pos[1:2 * n:2] = b[:n]
+        self._col[0:2 * n:2] = col_a[:n]
+        self._col[1:2 * n:2] = (col_a if col_b is None else col_b)[:n]
+        self.geom.update_attribute("position", self._pos)
+        self.geom.update_attribute("color", self._col)
+        self.geom.set_draw_range(0, 2 * n)
+        self.mat.opacity = opacity
+        self.lines.visible = True
 
 
 # ── 2D overlay ────────────────────────────────────────────────────────────────
@@ -1098,6 +1211,28 @@ class Hud:
         if amount <= 0.003:
             return
         self._rrect(-4, -4, self.W + 8, self.H + 8, 0, color, amount)
+
+    def image(self, x, y, w, h, texture, alpha=1.0):
+        """A texture as a w x h rectangle, top-left at (x, y)."""
+        if alpha <= 0.003:
+            return
+
+        def make():
+            mat = self._material()
+            mat.map = texture
+            return tp.Mesh(tp.PlaneGeometry(1, 1), mat)
+        m = self._acquire(("image", id(texture)), make)
+        m.position.set(x + w / 2, self._Y(y + h / 2), 0)
+        m.scale.set(w, h, 1)
+        m.material.opacity = clamp01(alpha)
+
+    def colorbar(self, x, y, w, h, cmap, alpha=1.0, steps=48):
+        """Horizontal gradient bar: cmap(t) -> 0xRRGGBB for t in [0, 1]."""
+        if alpha <= 0.003:
+            return
+        sw = w / steps
+        for k in range(steps):
+            self._rrect(x + k * sw, y, sw + 0.6, h, 0, cmap((k + 0.5) / steps), alpha)
 
 
 # ── images without an imaging library ──────────────────────────────────────────
