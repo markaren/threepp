@@ -4,6 +4,7 @@
     python depth_map.py --stills 10,25,60             # individual frames, into lesson_out/
     python depth_map.py --sheet                       # contact sheet
     python depth_map.py --preview --out preview.mp4   # 960x540 @ 30 fps
+    python depth_map.py --srt                         # the captions as lesson_out/depth_map.srt
 
 A depth camera on the FR3's hand scans five objects on a tray. Everything shown is
 computed by threepp while the film is made: the depth images come from
@@ -15,7 +16,6 @@ measure the reconstruction error against the true shapes instead of guessing it.
 """
 from __future__ import annotations
 
-import argparse
 import math
 import os
 import sys
@@ -25,9 +25,9 @@ import numpy as np
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
-from lesson import (Cloud, Film, Hud, Keys, Segments, Stage, Timeline, Tube3D,  # noqa: E402
-                    data_file, ease_out, ease_out_back, envelope, remap, shrink, smooth, smoother, standard, tp,
-                    turbo, turbo_hex, write_png)
+from lesson import (Cloud, Hud, OrbitCamera, Segments, Stage, Timeline, Tube3D, data_file,  # noqa: E402
+                    ease_out, ease_out_back, envelope, fade_in_out, mat4, remap, run, set_pose, smooth, smoother,
+                    standard, tp, turbo, turbo_hex)
 
 FPS = 60
 DOF = 7
@@ -98,12 +98,6 @@ T_HEAT = (86.2, 89.4)
 # ── kinematics ────────────────────────────────────────────────────────────────
 def full(q7):
     return list(map(float, q7[:DOF])) + [FINGERS, FINGERS]
-
-
-def mat4(M):
-    m = tp.Matrix4()
-    m.set(*[float(v) for v in np.asarray(M, float).reshape(-1)])
-    return m
 
 
 def view_point(az, rho, h):
@@ -509,15 +503,7 @@ class Film3D:
                 tb.set_points([a, b], opacity=1.0)
                 tb.mat.transparent = True
                 tb.mesh.visible = False
-            g.matrix_auto_update = False
-            m = tp.Matrix4()
-            m.set(*s.pose.reshape(-1))
-            g.position.set(*s.pose[:3, 3])
-            R = s.pose[:3, :3]
-            w = math.sqrt(max(0.0, 1.0 + np.trace(R))) / 2
-            g.matrix_auto_update = True
-            g.quaternion.set((R[2, 1] - R[1, 2]) / (4 * w), (R[0, 2] - R[2, 0]) / (4 * w),
-                             (R[1, 0] - R[0, 1]) / (4 * w), w)
+            set_pose(g, s.pose)
             root.add(g)
             self.ghosts.append((g, tubes))
 
@@ -568,7 +554,7 @@ class Film3D:
 
 
 # camera: (time, azimuth deg, elevation deg, distance m, look point in the ROBOT frame, fov)
-CAM = [
+CAMERA = OrbitCamera([
     (0.0, -70, 18, 2.45, (-0.34, -0.22, 0.26), 30),
     (5.6, -62, 20, 2.30, (-0.26, -0.18, 0.24), 30),
     (8.5, -58, 20, 1.30, (0.42, -0.10, 0.22), 30),
@@ -583,18 +569,22 @@ CAM = [
     (80.0, -114, 55, 1.00, (0.56, 0.0, -0.01), 30),
     (94.5, -100, 55, 0.98, (0.56, 0.0, -0.01), 30),
     (103.0, -96, 50, 1.25, (0.56, 0.0, 0.05), 30),
+], drift=((0.8, 0.23), (0.4, 0.17)))
+
+EQUATIONS = [   # (t_in, t_out, tex, note)
+    (20.8, 33.8, r"$\mathbf{p} = z\,K^{-1}\,(u,\ v,\ 1)^{T}$", "back-projection"),
+    (22.6, 33.8, r"$x = \frac{(u - c_x)\,z}{f_x},\quad y = \frac{(v - c_y)\,z}{f_y}$", None),
+    (52.6, 67.4, r"$\mathbf{p}_{\mathrm{world}} = T_{\mathrm{camera}}(\mathbf{q})\ \mathbf{p}$",
+     "every scan in one frame"),
+    (68.8, 79.8, r"$\mathbf{i} = \lfloor\,\mathbf{p}\,/\,s\,\rfloor$", "voxel index"),
+    (80.8, 94.6, r"$F \leftarrow \frac{W\,F + f}{W + 1}$", "signed-distance fusion"),
 ]
 
-
-def camera_at(t):
-    az, el, dist, fov = (float(v) for v in Keys([(k[0], [k[1], k[2], k[3], k[5]]) for k in CAM])(t))
-    look = Keys([(k[0], k[4]) for k in CAM])(t)
-    az += 0.8 * math.sin(0.23 * t)
-    el += 0.4 * math.sin(0.17 * t + 1.0)
-    a, e = math.radians(az), math.radians(el)
-    eye = look + dist * np.array([math.cos(e) * math.cos(a), math.cos(e) * math.sin(a), math.sin(e)])
-    zw = lambda p: np.array([p[0], p[2], -p[1]])  # noqa: E731
-    return zw(eye), zw(look), fov
+SUMMARY = [   # (tex, sentence)
+    (r"$(u,\,v,\,z)\ \rightarrow\ \mathbf{p}$", "A depth pixel is a 3D point."),
+    (r"$T(\mathbf{q})$", "Knowing the camera pose puts every scan in one map."),
+    (r"$\lfloor\mathbf{p}/s\rfloor$", "Voxels compress it, and a surface makes it usable."),
+]
 
 
 CAPTIONS = [
@@ -639,8 +629,7 @@ class Painter:
     def set3d(self, t, i):
         rec, f3 = self.rec, self.f3
         f3.pose(rec.q[i])
-        eye, look, fov = camera_at(t)
-        self.st.look(eye, look, fov)
+        self.st.look(*CAMERA(t))
         s0 = rec.scans[0]
         stimes = rec.meta["scan_times"]
 
@@ -810,21 +799,10 @@ class Painter:
         m = rec.meta
         s0 = rec.scans[0]
 
-        a = envelope(t, 0.9, 6.4, 0.9, 0.8)
-        if a > 0:
-            y = 360 + 14 * (1 - ease_out(remap(t, 0.9, 2.2)))
-            ov.text(128, y - 58, "A THREEPP LESSON  \u00b7  PART 2", size=22, color=C_ACC, alpha=a, kind="semibold",
-                    tracking=4)
-            ov.text(122, y, "How a Robot Sees in 3D", size=88, color=C_TEXT, alpha=a, kind="semibold")
-            ov.text(128, y + 112, "From depth pixels to a map", size=38, color=C_DIM,
-                    alpha=a * smooth(remap(t, 1.6, 2.6)), kind="light")
-
-        for (a0, b0, txt) in self.captions:
-            al = envelope(t, a0, b0, 0.45, 0.4)
-            if al > 0:
-                ov.caption(txt, al)
-
-        self.equations(t)
+        ov.title_card(t, "A THREEPP LESSON  \u00b7  PART 2", "How a Robot Sees in 3D", "From depth pixels to a map",
+                      C_ACC, size=88, sub_dy=112)
+        ov.captions(t, self.captions)
+        ov.equation_card(t, EQUATIONS, gap=16)
 
         # the depth image panel
         dp = envelope(t, 10.6, T_FLY + FLY_STAGGER + FLY_DUR, 0.6, 0.6)
@@ -862,35 +840,8 @@ class Painter:
 
         self.stats(t)
         self.error_bar(t)
-        self.outro(t)
-
-    def equations(self, t):
-        ov = self.ov
-        x, y = 70, 64
-        eqs = [
-            (20.8, 33.8, r"$\mathbf{p} = z\,K^{-1}\,(u,\ v,\ 1)^{T}$", "back-projection"),
-            (22.6, 33.8, r"$x = \frac{(u - c_x)\,z}{f_x},\quad y = \frac{(v - c_y)\,z}{f_y}$", None),
-            (52.6, 67.4, r"$\mathbf{p}_{\mathrm{world}} = T_{\mathrm{camera}}(\mathbf{q})\ \mathbf{p}$",
-             "every scan in one frame"),
-            (68.8, 79.8, r"$\mathbf{i} = \lfloor\,\mathbf{p}\,/\,s\,\rfloor$", "voxel index"),
-            (80.8, 94.6, r"$F \leftarrow \frac{W\,F + f}{W + 1}$", "signed-distance fusion"),
-        ]
-        rows = [e for e in eqs if e[0] - 0.1 <= t <= e[1] + 0.6]
-        if not rows:
-            return
-        sizes = [ov.math_size(tex, 40) for _, _, tex, _ in rows]
-        w = max(max(s[0] for s in sizes) + 60, 470)
-        h = sum(s[1] + (30 if note else 12) for s, (_, _, _, note) in zip(sizes, rows)) + 40
-        pa = max(envelope(t, a, b, 0.6, 0.6) for a, b, _, _ in rows)
-        ov.panel(x, y, w, h, radius=16, alpha=0.66 * pa, outline=0x8aa0c0, outline_alpha=0.16)
-        yy = y + 22
-        for (a, b, tex, note), (sw, sh) in zip(rows, sizes):
-            al = envelope(t, a, b, 0.6, 0.6)
-            if note:
-                ov.text(x + 30, yy, note.upper(), size=16, color=C_DIM, alpha=al, kind="semibold", tracking=2.2)
-                yy += 24
-            ov.math(x + 30, yy + sh / 2, tex, size=40, color=C_TEXT, alpha=al, anchor="lm")
-            yy += sh + 16
+        ov.summary(t, TL.start("outro"), TL.end("outro"), SUMMARY, "Scanned, mapped and rendered with threepp",
+                   C_ACC, C_CAM, text_dx=340)
 
     def stats(self, t):
         ov, rec = self.ov, self.rec
@@ -932,51 +883,10 @@ class Painter:
                 anchor="ls")
         ov.text(x + w - 24, y + 164, "mean", size=18, color=C_DIM, alpha=a, anchor="rs")
 
-    def outro(self, t):
-        ov = self.ov
-        a = envelope(t, TL.start("outro") + 0.2, TL.end("outro") + 1, 0.8, 0.1)
-        if a <= 0:
-            return
-        W, H = ov.W, ov.H
-        ov.panel(-20, -20, W + 40, H + 40, radius=0, fill=0x070a10, alpha=0.8 * a)
-        x = 250
-        ov.text(x, 250, "IN SHORT", size=22, color=C_ACC, alpha=a, kind="semibold", tracking=4)
-        rows = [
-            (r"$(u,\,v,\,z)\ \rightarrow\ \mathbf{p}$", "A depth pixel is a 3D point."),
-            (r"$T(\mathbf{q})$", "Knowing the camera pose puts every scan in one map."),
-            (r"$\lfloor\mathbf{p}/s\rfloor$", "Voxels compress it, and a surface makes it usable."),
-        ]
-        for k, (tex, txt) in enumerate(rows):
-            al = a * smooth(remap(t, TL.start("outro") + 0.6 + 0.5 * k, TL.start("outro") + 1.3 + 0.5 * k))
-            yy = 350 + k * 110
-            ov.math(x, yy, tex, size=46, color=C_TEXT, alpha=al, anchor="lm")
-            ov.text(x + 340, yy, txt, size=38, color=C_TEXT, alpha=al, anchor="lm")
-        al = a * smooth(remap(t, TL.start("outro") + 2.4, TL.start("outro") + 3.2))
-        ov.text(x, 780, "Scanned, mapped and rendered with threepp", size=28, color=C_DIM, alpha=al, kind="semibold")
-        ov.text(x, 824, "github.com/markaren/threepp", size=26, color=C_CAM, alpha=al)
-
-
-def fade_amount(t):
-    return 1.0 - min(smooth(remap(t, 0.0, 0.8)), 1.0 - smooth(remap(t, TL.duration - 0.9, TL.duration)))
-
 
 # ── main ──────────────────────────────────────────────────────────────────────
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=None, help="the film (default: <outdir>/depth_map.mp4)")
-    ap.add_argument("--outdir", default="lesson_out", help="stills, sheets and the default film")
-    ap.add_argument("--stills", default=None, help="comma-separated times (s)")
-    ap.add_argument("--sheet", action="store_true")
-    ap.add_argument("--every", type=float, default=3.0)
-    ap.add_argument("--preview", action="store_true", help="960x540 @ 30 fps")
-    ap.add_argument("--from", dest="t_from", type=float, default=0.0)
-    ap.add_argument("--to", dest="t_to", type=float, default=None)
-    ap.add_argument("--fps", type=int, default=None)
-    args = ap.parse_args()
-
-    W, H = (960, 540) if args.preview else (1920, 1080)
-    fps = args.fps or (30 if args.preview else FPS)
-    st, robot, objs, meshes, sensor = build(W, H)
+def setup(width, height):
+    st, robot, objs, meshes, sensor = build(width, height)
     t0 = time.time()
     rec = choreograph(st, robot, sensor)
     print(f"[choreo] {rec.n} frames in {time.time() - t0:.1f}s")
@@ -989,48 +899,11 @@ def main():
         painter.set3d(t, i)
         ov.begin()
         painter.draw2d(t, i)
-        ov.fade(fade_amount(t))
+        ov.fade(fade_in_out(t, TL.duration))
         ov.end()
         return st.frame(t, hud=ov)
-
-    os.makedirs(args.outdir, exist_ok=True)
-    if args.stills:
-        for tok in args.stills.split(","):
-            t = float(tok)
-            p = os.path.join(args.outdir, f"depth_still_{t:06.2f}.png")
-            write_png(p, render(t))
-            print("saved", p)
-        return
-    if args.sheet:
-        f = max(1, W // 480)
-        thumbs = [shrink(render(float(t)), f) for t in np.arange(0.5, TL.duration, args.every)]
-        cols = 6
-        th, tw = thumbs[0].shape[:2]
-        rows = (len(thumbs) + cols - 1) // cols
-        sheet = np.zeros((rows * th, cols * tw, 3), np.uint8)
-        for k, im in enumerate(thumbs):
-            y, x = (k // cols) * th, (k % cols) * tw
-            sheet[y:y + th, x:x + tw] = im
-        p = os.path.join(args.outdir, "depth_sheet.png")
-        write_png(p, sheet)
-        print("saved", p, f"({len(thumbs)} frames, every {args.every} s from 0.5 s, row-major)")
-        return
-
-    t_to = args.t_to if args.t_to is not None else TL.duration
-    out = args.out or os.path.join(args.outdir, "depth_map.mp4")
-    film = Film(out, W, H, fps=fps, crf=16 if not args.preview else 22,
-                preset="slow" if not args.preview else "veryfast")
-    nfr = int(round((t_to - args.t_from) * fps))
-    t_start = time.time()
-    for f in range(nfr):
-        t = args.t_from + f / fps
-        film.write(render(t))
-        if f % (fps * 5) == 0:
-            el = time.time() - t_start
-            print(f"[film] {t:6.1f}s  frame {f}/{nfr}  {el / max(f, 1) * 1000:.0f} ms/frame", flush=True)
-    path = film.close()
-    print(f"[film] wrote {path} ({nfr} frames, {time.time() - t_start:.0f}s)")
+    return render, painter.captions
 
 
 if __name__ == "__main__":
-    main()
+    run("depth_map", TL.duration, setup, fps=FPS)

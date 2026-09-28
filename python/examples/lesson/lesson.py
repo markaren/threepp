@@ -10,10 +10,12 @@ A lesson is rendered in two passes:
 
 The pieces, from bottom to top:
 
-`Timeline`
+`Timeline`, `Keys`, `OrbitCamera`
     Named beats with start/end times. `tl.p("fk", t)` is the eased 0..1
     progress through a beat, `tl.fade("fk", t)` a fade-in/hold/fade-out
-    envelope for things that belong to it.
+    envelope for things that belong to it. `Keys` interpolates keyframed
+    vectors; `OrbitCamera` keyframes the camera as azimuth, elevation,
+    distance, look point and fov, with a slow drift.
 
 `Stage`
     Canvas + renderer + a dark studio set (key/rim light, soft IBL, a floor that
@@ -26,28 +28,36 @@ The pieces, from bottom to top:
     The 3D annotation kit: thick arrows (shaft + cone), glowing rings around a
     joint axis, a target marker, and a tube trail that is rebuilt from points.
     All fade with `.opacity` and live wherever they are parented, so an arrow
-    can ride on a robot link.
+    can ride on a robot link. `set_pose` places any object at a 4x4 numpy pose.
 
 `Hud`
     The 2D layer, also drawn by threepp: an orthographic scene rendered over
     the 3D one. Panels, text (Text2D from the system TTF), LaTeX-style maths
     (matplotlib's mathtext outlines loaded through SVGLoader, no TeX install
     needed, and cached to JSON so a finished lesson needs no matplotlib), lines,
-    arrows, bars, a log plot, and callouts.
+    arrows, bars, a log plot, and callouts. The cards every lesson has are
+    widgets: `captions`, `title_card`, `equation_card` and `summary`.
 
 `Film`
     Pipes frames into ffmpeg (imageio_ffmpeg's binary) as H.264, writing to a
     temporary name and renaming on success so a half-written mp4 never sits at
     the final path.
+
+`run`
+    The command line every lesson shares: the film, a preview, one stretch,
+    stills, a contact sheet, or the captions as an .srt. A lesson provides
+    `setup(width, height) -> (render, captions)`.
 """
 from __future__ import annotations
 
+import argparse
 import glob
 import math
 import os
 import shutil
 import subprocess
 import sys
+import time
 
 import numpy as np
 import struct
@@ -205,6 +215,38 @@ class Keys:
                 u = self.ease((t - t0) / max(t1 - t0, 1e-9))
                 return v0 * (1 - u) + v1 * u
         return ks[-1][1].copy()
+
+
+def fade_in_out(t, duration, fade_in=0.8, fade_out=0.9):
+    """Veil for a film that rises from black and returns to it (1 = black), for Hud.fade."""
+    return 1.0 - min(smooth(remap(t, 0.0, fade_in)), 1.0 - smooth(remap(t, duration - fade_out, duration)))
+
+
+class OrbitCamera:
+    """A keyframed orbit around a look point given in a Z-up (robot) frame.
+
+    keys = [(time, azimuth deg, elevation deg, distance m, look point, fov deg), ...].
+    Azimuth is measured in the XY plane from +x. `drift` is ((amplitude deg, rad/s) for
+    azimuth, (amplitude deg, rad/s) for elevation): slow sinusoids so held shots never
+    freeze. Called with t, returns (eye, look, fov) in the stage's Y-up world, ready for
+    `Stage.look`.
+    """
+
+    def __init__(self, keys, drift=((1.2, 0.21), (0.6, 0.17))):
+        self.orbit = Keys([(k[0], [k[1], k[2], k[3], k[5]]) for k in keys])
+        self.target = Keys([(k[0], k[4]) for k in keys])
+        self.drift = drift
+
+    def __call__(self, t):
+        az, el, dist, fov = (float(v) for v in self.orbit(t))
+        look = self.target(t)
+        (az_amp, az_rate), (el_amp, el_rate) = self.drift
+        az += az_amp * math.sin(az_rate * t)
+        el += el_amp * math.sin(el_rate * t + 1.0)
+        a, e = math.radians(az), math.radians(el)
+        eye = look + dist * np.array([math.cos(e) * math.cos(a), math.cos(e) * math.sin(a), math.sin(e)])
+        zw = lambda p: np.array([p[0], p[2], -p[1]])  # noqa: E731  Z-up -> Y-up
+        return zw(eye), zw(look), fov
 
 
 # ── the stage ─────────────────────────────────────────────────────────────────
@@ -383,6 +425,37 @@ class Stage:
 
 
 # ── 3D annotation kit ─────────────────────────────────────────────────────────
+def mat4(M):
+    """A 4x4 numpy matrix as a tp.Matrix4."""
+    m = tp.Matrix4()
+    m.set(*[float(v) for v in np.asarray(M, float).reshape(-1)])
+    return m
+
+
+def set_pose(obj, M):
+    """Place `obj` at a 4x4 numpy pose in its parent's frame (position and rotation)."""
+    M = np.asarray(M, float)
+    obj.position.set(*M[:3, 3])
+    R = M[:3, :3]
+    w = math.sqrt(max(0.0, 1.0 + R[0, 0] + R[1, 1] + R[2, 2])) / 2.0
+    if w > 1e-4:
+        x = (R[2, 1] - R[1, 2]) / (4 * w)
+        y = (R[0, 2] - R[2, 0]) / (4 * w)
+        z = (R[1, 0] - R[0, 1]) / (4 * w)
+    else:  # 180 degree turn: pick the largest diagonal
+        i = int(np.argmax(np.diag(R)))
+        if i == 0:
+            x = math.sqrt(max(0.0, 1 + R[0, 0] - R[1, 1] - R[2, 2])) / 2
+            y, z, w = (R[0, 1] + R[1, 0]) / (4 * x), (R[0, 2] + R[2, 0]) / (4 * x), (R[2, 1] - R[1, 2]) / (4 * x)
+        elif i == 1:
+            y = math.sqrt(max(0.0, 1 + R[1, 1] - R[0, 0] - R[2, 2])) / 2
+            x, z, w = (R[0, 1] + R[1, 0]) / (4 * y), (R[1, 2] + R[2, 1]) / (4 * y), (R[0, 2] - R[2, 0]) / (4 * y)
+        else:
+            z = math.sqrt(max(0.0, 1 + R[2, 2] - R[0, 0] - R[1, 1])) / 2
+            x, y, w = (R[0, 2] + R[2, 0]) / (4 * z), (R[1, 2] + R[2, 1]) / (4 * z), (R[1, 0] - R[0, 1]) / (4 * z)
+    obj.quaternion.set(x, y, z, w)
+
+
 def _quat_y_to(d):
     """Quaternion (x, y, z, w) rotating +Y onto unit vector d."""
     y = np.array([0.0, 1.0, 0.0])
@@ -509,26 +582,7 @@ class Marker3D:
 
     def place(self, M):
         """Pose from a 4x4 numpy matrix (parent frame)."""
-        M = np.asarray(M, float)
-        self.group.position.set(*M[:3, 3])
-        R = M[:3, :3]
-        w = math.sqrt(max(0.0, 1.0 + R[0, 0] + R[1, 1] + R[2, 2])) / 2.0
-        if w > 1e-4:
-            x = (R[2, 1] - R[1, 2]) / (4 * w)
-            y = (R[0, 2] - R[2, 0]) / (4 * w)
-            z = (R[1, 0] - R[0, 1]) / (4 * w)
-        else:  # 180 degree turn: pick the largest diagonal
-            i = int(np.argmax(np.diag(R)))
-            if i == 0:
-                x = math.sqrt(max(0.0, 1 + R[0, 0] - R[1, 1] - R[2, 2])) / 2
-                y, z, w = (R[0, 1] + R[1, 0]) / (4 * x), (R[0, 2] + R[2, 0]) / (4 * x), (R[2, 1] - R[1, 2]) / (4 * x)
-            elif i == 1:
-                y = math.sqrt(max(0.0, 1 + R[1, 1] - R[0, 0] - R[2, 2])) / 2
-                x, z, w = (R[0, 1] + R[1, 0]) / (4 * y), (R[1, 2] + R[2, 1]) / (4 * y), (R[0, 2] - R[2, 0]) / (4 * y)
-            else:
-                z = math.sqrt(max(0.0, 1 + R[2, 2] - R[0, 0] - R[1, 1])) / 2
-                x, y, w = (R[0, 2] + R[2, 0]) / (4 * z), (R[1, 2] + R[2, 1]) / (4 * z), (R[1, 0] - R[0, 1]) / (4 * z)
-        self.group.quaternion.set(x, y, z, w)
+        set_pose(self.group, M)
 
     def set_opacity(self, o, pulse=0.0):
         o = clamp01(o)
@@ -726,6 +780,9 @@ class Segments:
 
 
 # ── 2D overlay ────────────────────────────────────────────────────────────────
+TEXT = 0xf2f5fa     # body text and maths
+DIM = 0x9fb2cc      # labels, notes, secondary text
+
 FONT_DIRS = [os.path.join(os.environ.get("WINDIR", "C:/Windows"), "Fonts"),
              "/usr/share/fonts/truetype/dejavu", "/usr/share/fonts"]
 FONT_FILES = {
@@ -1145,6 +1202,64 @@ class Hud:
             self.text(self.W / 2, top + 17 + i * lh + size * 0.02, l, size=size, color=color, alpha=alpha,
                       anchor="ma")
 
+    def captions(self, t, captions):
+        """All captions of a film, [(start, end, text)]: each fades in and out over its span."""
+        for a0, b0, txt in captions:
+            al = envelope(t, a0, b0, 0.45, 0.4)
+            if al > 0:
+                self.caption(txt, al)
+
+    def title_card(self, t, kicker, title, subtitle, accent, t_in=0.9, t_out=6.4, size=96, sub_dy=118):
+        """Opening title, left-aligned: a small tracked kicker, the title rising into place,
+        and a subtitle `sub_dy` below it that fades in after it."""
+        a = envelope(t, t_in, t_out, 0.9, 0.8)
+        if a <= 0:
+            return
+        y = 360 + 14 * (1 - ease_out(remap(t, t_in, t_in + 1.3)))
+        self.text(128, y - 58, kicker, size=22, color=accent, alpha=a, kind="semibold", tracking=4)
+        self.text(122, y, title, size=size, color=TEXT, alpha=a, kind="semibold")
+        sub = a * smooth(remap(t, t_in + 0.7, t_in + 1.7))
+        self.text(128, y + sub_dy, subtitle, size=38, color=DIM, alpha=sub, kind="light")
+
+    def equation_card(self, t, rows, x=70, y=64, size=40, gap=12, min_width=470):
+        """A card of equations, rows [(t_in, t_out, tex, note or None)]. Each row fades in and
+        out over its span, with its note above it in small capitals, and the card is sized
+        to the rows showing at t."""
+        rows = [e for e in rows if e[0] - 0.1 <= t <= e[1] + 0.6]
+        if not rows:
+            return
+        sizes = [self.math_size(tex, size) for _, _, tex, _ in rows]
+        w = max(max(s[0] for s in sizes) + 60, min_width)
+        h = sum(s[1] + (30 if note else gap - 4) for s, (_, _, _, note) in zip(sizes, rows)) + 40
+        pa = max(envelope(t, a, b, 0.6, 0.6) for a, b, _, _ in rows)
+        self.panel(x, y, w, h, radius=16, alpha=0.66 * pa, outline=0x8aa0c0, outline_alpha=0.16)
+        yy = y + 22
+        for (a, b, tex, note), (sw, sh) in zip(rows, sizes):
+            al = envelope(t, a, b, 0.6, 0.6)
+            if note:
+                self.text(x + 30, yy, note.upper(), size=16, color=DIM, alpha=al, kind="semibold", tracking=2.2)
+                yy += 24
+            self.math(x + 30, yy + sh / 2, tex, size=size, color=TEXT, alpha=al, anchor="lm")
+            yy += sh + gap
+
+    def summary(self, t, t0, t1, rows, footer, accent, link_color, text_dx=260, link="github.com/markaren/threepp"):
+        """Closing card over the darkened frame, from t0 to past t1: "IN SHORT", rows of
+        (tex, sentence) that appear one after another, then a footer and a link."""
+        a = envelope(t, t0 + 0.2, t1 + 1, 0.8, 0.1)
+        if a <= 0:
+            return
+        self.panel(-20, -20, self.W + 40, self.H + 40, radius=0, fill=0x070a10, alpha=0.8 * a)
+        x = 250
+        self.text(x, 250, "IN SHORT", size=22, color=accent, alpha=a, kind="semibold", tracking=4)
+        for k, (tex, txt) in enumerate(rows):
+            al = a * smooth(remap(t, t0 + 0.6 + 0.5 * k, t0 + 1.3 + 0.5 * k))
+            yy = 350 + k * 110
+            self.math(x, yy, tex, size=46, color=TEXT, alpha=al, anchor="lm")
+            self.text(x + text_dx, yy, txt, size=38, color=TEXT, alpha=al, anchor="lm")
+        al = a * smooth(remap(t, t0 + 2.4, t0 + 3.2))
+        self.text(x, 780, footer, size=28, color=DIM, alpha=al, kind="semibold")
+        self.text(x, 824, link, size=26, color=link_color, alpha=al)
+
     def wrap_balanced(self, text, size, width, kind="regular"):
         """Wrap into the fewest lines, then even out their lengths (no orphans)."""
         n = len(self.wrap(text, size, width, kind))
@@ -1316,3 +1431,89 @@ class Film:
             raise RuntimeError(f"ffmpeg exited {rc}")
         os.replace(self.tmp, self.path)
         return self.path
+
+
+def write_srt(path, captions):
+    """Captions [(start s, end s, text)] as a SubRip (.srt) subtitle file."""
+    def stamp(s):
+        ms = int(round(s * 1000))
+        return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
+    with open(path, "w", encoding="utf-8") as f:
+        for k, (a, b, txt) in enumerate(captions, 1):
+            f.write(f"{k}\n{stamp(a)} --> {stamp(b)}\n{txt}\n\n")
+
+
+# ── the command line ──────────────────────────────────────────────────────────
+def run(name, duration, setup, fps=60):
+    """The command line every lesson shares.
+
+    `setup(width, height)` builds the lesson at that render size and returns
+    `(render, captions)`: `render(t)` gives the (H, W, 3) frame at t seconds, and
+    `captions` is the [(start, end, text)] list the film shows.
+
+        (no flags)            the film, 1920x1080 at `fps`, to <outdir>/<name>.mp4
+        --preview             960x540 at 30 fps
+        --from S --to S       one stretch of the film
+        --stills 5,15,40      single frames, <outdir>/<name>_still_<t>.png
+        --sheet [--every S]   contact sheet, one frame every S seconds from 0.5 s
+        --srt                 the captions as <outdir>/<name>.srt
+    """
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default=None, help=f"the film (default: <outdir>/{name}.mp4)")
+    ap.add_argument("--outdir", default="lesson_out", help="stills, sheets, subtitles and the default film")
+    ap.add_argument("--stills", default=None, help="comma-separated times (s)")
+    ap.add_argument("--sheet", action="store_true", help="contact sheet, one frame every --every seconds")
+    ap.add_argument("--every", type=float, default=3.0)
+    ap.add_argument("--srt", action="store_true", help=f"write the captions to <outdir>/{name}.srt")
+    ap.add_argument("--preview", action="store_true", help="960x540 @ 30 fps")
+    ap.add_argument("--from", dest="t_from", type=float, default=0.0)
+    ap.add_argument("--to", dest="t_to", type=float, default=None)
+    ap.add_argument("--fps", type=int, default=None)
+    args = ap.parse_args()
+
+    W, H = (960, 540) if args.preview else (1920, 1080)
+    fps = args.fps or (30 if args.preview else fps)
+    render, captions = setup(W, H)
+
+    os.makedirs(args.outdir, exist_ok=True)
+    if args.srt:
+        p = os.path.join(args.outdir, f"{name}.srt")
+        write_srt(p, captions)
+        print("saved", p, f"({len(captions)} captions)")
+        return
+    if args.stills:
+        for tok in args.stills.split(","):
+            t = float(tok)
+            p = os.path.join(args.outdir, f"{name}_still_{t:06.2f}.png")
+            write_png(p, render(t))
+            print("saved", p)
+        return
+    if args.sheet:
+        f = max(1, W // 480)
+        thumbs = [shrink(render(float(t)), f) for t in np.arange(0.5, duration, args.every)]
+        cols = 6
+        th, tw = thumbs[0].shape[:2]
+        rows = (len(thumbs) + cols - 1) // cols
+        sheet = np.zeros((rows * th, cols * tw, 3), np.uint8)
+        for k, im in enumerate(thumbs):
+            y, x = (k // cols) * th, (k % cols) * tw
+            sheet[y:y + th, x:x + tw] = im
+        p = os.path.join(args.outdir, f"{name}_sheet.png")
+        write_png(p, sheet)
+        print("saved", p, f"({len(thumbs)} frames, every {args.every} s from 0.5 s, row-major)")
+        return
+
+    t_to = args.t_to if args.t_to is not None else duration
+    out = args.out or os.path.join(args.outdir, f"{name}.mp4")
+    film = Film(out, W, H, fps=fps, crf=16 if not args.preview else 22,
+                preset="slow" if not args.preview else "veryfast")
+    nfr = int(round((t_to - args.t_from) * fps))
+    t_start = time.time()
+    for f in range(nfr):
+        t = args.t_from + f / fps
+        film.write(render(t))
+        if f % (fps * 5) == 0:
+            el = time.time() - t_start
+            print(f"[film] {t:6.1f}s  frame {f}/{nfr}  {el / max(f, 1) * 1000:.0f} ms/frame", flush=True)
+    path = film.close()
+    print(f"[film] wrote {path} ({nfr} frames, {time.time() - t_start:.0f}s)")

@@ -4,6 +4,7 @@
     python ik_fr3.py --stills 5,15,40              # individual frames, into lesson_out/
     python ik_fr3.py --sheet                       # contact sheet, one frame per 3 s
     python ik_fr3.py --preview --out preview.mp4   # 960x540 @ 30 fps
+    python ik_fr3.py --srt                         # the captions as lesson_out/ik_fr3.srt
 
 Everything the robot does is computed by threepp's own IK solver
 (`tp.IkSolver`, damped least squares), and the equation shown on screen is the
@@ -15,7 +16,6 @@ records every frame's joint vector; pass 2 renders any frame from that record.
 """
 from __future__ import annotations
 
-import argparse
 import math
 import os
 import sys
@@ -25,8 +25,9 @@ import numpy as np
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
-from lesson import (Arrow3D, Film, Hud, Keys, Marker3D, Ring3D, shrink, write_png, Stage, Timeline, Tube3D, clamp01,  # noqa: E402
-                    data_file, ease_out, ease_out_back, envelope, remap, smooth, smoother, standard, tp, xray)
+from lesson import (Arrow3D, Hud, Keys, Marker3D, OrbitCamera, Ring3D, Stage, Timeline, Tube3D, clamp01,  # noqa: E402
+                    data_file, ease_out, ease_out_back, envelope, fade_in_out, mat4, remap, run, smooth, smoother,
+                    standard, tp, xray)
 
 FPS = 60
 DOF = 7
@@ -90,12 +91,6 @@ def tool_down(p, yaw=0.0):
     M[:3, :3] = rot_z(yaw) @ np.diag([1.0, -1.0, -1.0])
     M[:3, 3] = p
     return M
-
-
-def mat4(M):
-    m = tp.Matrix4()
-    m.set(*[float(v) for v in np.asarray(M, float).reshape(-1)])
-    return m
 
 
 def rotvec(R):
@@ -500,9 +495,9 @@ def link_positions_all(robot, st, rec, which):
 
 
 # camera: (time, azimuth deg, elevation deg, distance m, look point in the ROBOT frame, fov)
-# azimuth is measured in the robot's XY plane from +x; at -90 the camera sits on -y and
-# the robot's reach (+x) runs left to right across the picture.
-CAM = [
+# at azimuth -90 the camera sits on -y and the robot's reach (+x) runs left to right
+# across the picture.
+CAMERA = OrbitCamera([
     (0.0, -28, 13, 3.05, (-0.34, 0.05, 0.40), 30),
     (6.2, -46, 15, 2.85, (-0.26, 0.02, 0.42), 30),
     (8.0, -58, 16, 2.60, (0.16, 0.0, 0.42), 30),
@@ -518,18 +513,23 @@ CAM = [
     (93.5, -80, 12, 2.95, (0.52, -0.06, 0.38), 30),
     (99.5, -84, 12, 3.00, (0.52, -0.06, 0.38), 30),
     (108.0, -60, 16, 3.30, (0.30, 0.0, 0.40), 30),
+], drift=((1.2, 0.21), (0.6, 0.17)))
+
+EQUATIONS = [   # (t_in, t_out, tex, note)
+    (8.6, 22.8, r"$\mathbf{x} = f(\mathbf{q})$", "forward kinematics"),
+    (14.2, 22.8, r"$T_{\mathrm{hand}} = T_1(q_1)\,T_2(q_2)\,\cdots\,T_7(q_7)$", None),
+    (24.2, 32.9, r"$\mathbf{q} = f^{-1}(\mathbf{x})\ \ ?$", "inverse kinematics"),
+    (41.0, 64.0, r"$\dot{\mathbf{x}} = J(\mathbf{q})\,\dot{\mathbf{q}}$", "the Jacobian"),
+    (49.0, 64.0, r"$\Delta\mathbf{q} = J^{T}\left(JJ^{T} + \lambda^{2} I\right)^{-1}\mathbf{e}$",
+     "damped least squares"),
+    (65.4, 76.8, r"$\dot{\mathbf{q}} = \left(I - J^{+}J\right)\mathbf{z}$", "motion in the null space"),
 ]
 
-
-def camera_at(t):
-    az, el, dist, fov = (float(v) for v in Keys([(k[0], [k[1], k[2], k[3], k[5]]) for k in CAM])(t))
-    look = Keys([(k[0], k[4]) for k in CAM])(t)
-    az += 1.2 * math.sin(0.21 * t)          # slow breathing drift: held shots never freeze
-    el += 0.6 * math.sin(0.17 * t + 1.0)
-    a, e = math.radians(az), math.radians(el)
-    eye_r = look + dist * np.array([math.cos(e) * math.cos(a), math.cos(e) * math.sin(a), math.sin(e)])
-    zw = lambda p: np.array([p[0], p[2], -p[1]])  # noqa: E731  robot Z-up -> world Y-up
-    return zw(eye_r), zw(look), fov
+SUMMARY = [   # (tex, sentence)
+    (r"$\mathbf{q}\ \rightarrow\ \mathbf{x}$", "Forward kinematics: one set of angles, one pose."),
+    (r"$\mathbf{x}\ \rightarrow\ \mathbf{q}$", "Inverse kinematics: search for the angles, step by step with J."),
+    (r"$7 - 6 = 1$", "A seven-joint arm has one spare motion to spend."),
+]
 
 
 class Painter:
@@ -553,8 +553,7 @@ class Painter:
     def set3d(self, t, i):
         rec, f3 = self.rec, self.f3
         f3.pose(rec.q[i])
-        eye, look, fov = camera_at(t)
-        self.st.look(eye, look, fov)
+        self.st.look(*CAMERA(t))
 
         # rings + joint axes: appear one by one in fk, then pulse on wiggle / Jacobian build
         fk_in = [envelope(t, 8.0 + 0.32 * j, TL.end("fk") - 0.3, 0.5, 0.6) for j in range(DOF)]
@@ -696,23 +695,10 @@ class Painter:
     def draw2d(self, t, i, tool, tgt):
         ov, st, rec = self.ov, self.st, self.rec
 
-        # title
-        a = envelope(t, 0.9, 6.4, 0.9, 0.8)
-        if a > 0:
-            y = 360 + 14 * (1 - ease_out(remap(t, 0.9, 2.2)))
-            ov.text(128, y - 58, "A THREEPP LESSON", size=22, color=C_TARGET, alpha=a, kind="semibold", tracking=4)
-            ov.text(122, y, "Inverse Kinematics", size=96, color=C_TEXT, alpha=a, kind="semibold")
-            ov.text(128, y + 118, "How a robot arm finds its joint angles", size=38, color=C_DIM,
-                    alpha=a * smooth(remap(t, 1.6, 2.6)), kind="light")
-
-        # captions
-        for (a0, b0, txt) in self.captions:
-            al = envelope(t, a0, b0, 0.45, 0.4)
-            if al > 0:
-                ov.caption(txt, al)
-
-        # equation card (top left)
-        self.equations(t)
+        ov.title_card(t, "A THREEPP LESSON", "Inverse Kinematics", "How a robot arm finds its joint angles",
+                      C_TARGET)
+        ov.captions(t, self.captions)
+        ov.equation_card(t, EQUATIONS)
         # joint panel (right)
         jp = max(envelope(t, 8.2, TL.end("jac") - 0.2, 0.7, 0.6),
                  envelope(t, TL.start("null") + 0.4, TL.end("reach") + 0.4, 0.7, 0.8))
@@ -769,40 +755,8 @@ class Painter:
             ov.text(tgt_px[0], tgt_px[1] + 64, f"{gap * 100:.0f} cm out of reach", size=28, color=C_ERR,
                     alpha=g, kind="semibold", anchor="mm")
 
-        # outro
-        self.outro(t)
-        # fades to/from black
-        return None
-
-    def equations(self, t):
-        ov = self.ov
-        x, y = 70, 64
-        eqs = [
-            # (t_in, t_out, tex, note)
-            (8.6, 22.8, r"$\mathbf{x} = f(\mathbf{q})$", "forward kinematics"),
-            (14.2, 22.8, r"$T_{\mathrm{hand}} = T_1(q_1)\,T_2(q_2)\,\cdots\,T_7(q_7)$", None),
-            (24.2, 32.9, r"$\mathbf{q} = f^{-1}(\mathbf{x})\ \ ?$", "inverse kinematics"),
-            (41.0, 64.0, r"$\dot{\mathbf{x}} = J(\mathbf{q})\,\dot{\mathbf{q}}$", "the Jacobian"),
-            (49.0, 64.0, r"$\Delta\mathbf{q} = J^{T}\left(JJ^{T} + \lambda^{2} I\right)^{-1}\mathbf{e}$",
-             "damped least squares"),
-            (65.4, 76.8, r"$\dot{\mathbf{q}} = \left(I - J^{+}J\right)\mathbf{z}$", "motion in the null space"),
-        ]
-        rows = [e for e in eqs if e[0] - 0.1 <= t <= e[1] + 0.6]
-        if not rows:
-            return
-        sizes = [ov.math_size(tex, 40) for _, _, tex, _ in rows]
-        w = max(max(s[0] for s in sizes) + 60, 470)
-        h = sum(s[1] + (30 if note else 8) for s, (_, _, _, note) in zip(sizes, rows)) + 40
-        pa = max(envelope(t, a, b, 0.6, 0.6) for a, b, _, _ in rows)
-        ov.panel(x, y, w, h, radius=16, alpha=0.66 * pa, outline=0x8aa0c0, outline_alpha=0.16)
-        yy = y + 22
-        for (a, b, tex, note), (sw, sh) in zip(rows, sizes):
-            al = envelope(t, a, b, 0.6, 0.6)
-            if note:
-                ov.text(x + 30, yy, note.upper(), size=16, color=C_DIM, alpha=al, kind="semibold", tracking=2.2)
-                yy += 24
-            ov.math(x + 30, yy + sh / 2, tex, size=40, color=C_TEXT, alpha=al, anchor="lm")
-            yy += sh + 12
+        ov.summary(t, TL.start("outro"), TL.end("outro"), SUMMARY, "Rendered and solved with threepp", C_TARGET,
+                   C_TOOL)
 
     def joint_panel(self, t, i, alpha):
         ov = self.ov
@@ -872,35 +826,6 @@ class Painter:
         ov.text(x + 24, y + 96, f"{ms:.2f} ms", size=46, color=C_TEXT, alpha=a, kind="numeric", anchor="ls")
         ov.text(x + 344, y + 96, "median", size=20, color=C_DIM, alpha=a, anchor="rs")
 
-    def outro(self, t):
-        ov = self.ov
-        a = envelope(t, TL.start("outro") + 0.2, TL.end("outro") + 1, 0.8, 0.1)
-        if a <= 0:
-            return
-        W, H = ov.W, ov.H
-        # darken the picture behind the summary
-        ov.panel(-20, -20, W + 40, H + 40, radius=0, fill=0x070a10, alpha=0.8 * a)
-        x = 250
-        ov.text(x, 250, "IN SHORT", size=22, color=C_TARGET, alpha=a, kind="semibold", tracking=4)
-        rows = [
-            (r"$\mathbf{q}\ \rightarrow\ \mathbf{x}$", "Forward kinematics: one set of angles, one pose."),
-            (r"$\mathbf{x}\ \rightarrow\ \mathbf{q}$", "Inverse kinematics: search for the angles, step by step with J."),
-            (r"$7 - 6 = 1$", "A seven-joint arm has one spare motion to spend."),
-        ]
-        for k, (tex, txt) in enumerate(rows):
-            al = a * smooth(remap(t, TL.start("outro") + 0.6 + 0.5 * k, TL.start("outro") + 1.3 + 0.5 * k))
-            yy = 350 + k * 110
-            ov.math(x, yy, tex, size=46, color=C_TEXT, alpha=al, anchor="lm")
-            ov.text(x + 260, yy, txt, size=38, color=C_TEXT, alpha=al, kind="regular", anchor="lm")
-        al = a * smooth(remap(t, TL.start("outro") + 2.4, TL.start("outro") + 3.2))
-        ov.text(x, 780, "Rendered and solved with threepp", size=28, color=C_DIM, alpha=al, kind="semibold")
-        ov.text(x, 824, "github.com/markaren/threepp", size=26, color=C_TOOL, alpha=al, kind="regular")
-
-
-def fade_amount(t):
-    """Fade from black at the start, to black at the end."""
-    return 1.0 - min(smooth(remap(t, 0.0, 0.8)), 1.0 - smooth(remap(t, TL.duration - 0.9, TL.duration)))
-
 
 # ── main ──────────────────────────────────────────────────────────────────────
 def build(width, height):
@@ -913,22 +838,8 @@ def build(width, height):
     return st, robot
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=None, help="the film (default: <outdir>/ik_fr3.mp4)")
-    ap.add_argument("--outdir", default="lesson_out", help="stills, sheets and the default film")
-    ap.add_argument("--stills", default=None, help="comma-separated times (s)")
-    ap.add_argument("--sheet", action="store_true", help="contact sheet, one frame every --every seconds")
-    ap.add_argument("--every", type=float, default=3.0)
-    ap.add_argument("--preview", action="store_true", help="960x540 @ 30 fps")
-    ap.add_argument("--from", dest="t_from", type=float, default=0.0)
-    ap.add_argument("--to", dest="t_to", type=float, default=None)
-    ap.add_argument("--fps", type=int, default=None)
-    args = ap.parse_args()
-
-    W, H = (960, 540) if args.preview else (1920, 1080)
-    fps = args.fps or (30 if args.preview else FPS)
-    st, robot = build(W, H)
+def setup(width, height):
+    st, robot = build(width, height)
     t0 = time.time()
     rec, kin = choreograph(robot)
     print(f"[choreo] {rec.n} frames in {time.time() - t0:.1f}s")
@@ -942,48 +853,11 @@ def main():
         tool, tgt = painter.set3d(t, i)     # poses the robot AND the camera for this frame
         ov.begin()
         painter.draw2d(t, i, tool, tgt)     # callouts project with that camera
-        ov.fade(fade_amount(t))
+        ov.fade(fade_in_out(t, TL.duration))
         ov.end()
         return st.frame(t, hud=ov)
-
-    os.makedirs(args.outdir, exist_ok=True)
-    if args.stills:
-        for tok in args.stills.split(","):
-            t = float(tok)
-            p = os.path.join(args.outdir, f"ik_still_{t:06.2f}.png")
-            write_png(p, render(t))
-            print("saved", p)
-        return
-    if args.sheet:
-        f = max(1, W // 480)
-        thumbs = [shrink(render(float(t)), f) for t in np.arange(0.5, TL.duration, args.every)]
-        cols = 6
-        th, tw = thumbs[0].shape[:2]
-        rows = (len(thumbs) + cols - 1) // cols
-        sheet = np.zeros((rows * th, cols * tw, 3), np.uint8)
-        for k, im in enumerate(thumbs):
-            y, x = (k // cols) * th, (k % cols) * tw
-            sheet[y:y + th, x:x + tw] = im
-        p = os.path.join(args.outdir, "ik_sheet.png")
-        write_png(p, sheet)
-        print("saved", p, f"({len(thumbs)} frames, every {args.every} s from 0.5 s, row-major)")
-        return
-
-    t_to = args.t_to if args.t_to is not None else TL.duration
-    out = args.out or os.path.join(args.outdir, "ik_fr3.mp4")
-    film = Film(out, W, H, fps=fps, crf=16 if not args.preview else 22,
-                preset="slow" if not args.preview else "veryfast")
-    nfr = int(round((t_to - args.t_from) * fps))
-    t_start = time.time()
-    for f in range(nfr):
-        t = args.t_from + f / fps
-        film.write(render(t))
-        if f % (fps * 5) == 0:
-            el = time.time() - t_start
-            print(f"[film] {t:6.1f}s  frame {f}/{nfr}  {el / max(f, 1) * 1000:.0f} ms/frame", flush=True)
-    path = film.close()
-    print(f"[film] wrote {path} ({nfr} frames, {time.time() - t_start:.0f}s)")
+    return render, painter.captions
 
 
 if __name__ == "__main__":
-    main()
+    run("ik_fr3", TL.duration, setup, fps=FPS)

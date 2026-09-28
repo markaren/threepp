@@ -19,6 +19,7 @@ python ik_fr3.py --preview --out preview.mp4                 # 960x540, 30 fps
 python ik_fr3.py --stills 10.5,50,72 --outdir shots          # single frames
 python ik_fr3.py --sheet --outdir shots                      # contact sheet, one frame per 3 s
 python ik_fr3.py --from 48 --to 64 --out iter.mp4            # one beat
+python ik_fr3.py --srt                                       # captions as lesson_out/ik_fr3.srt, for YouTube
 ```
 
 `depth_map.py` takes the same flags. Output goes to `lesson_out/` in the current
@@ -77,16 +78,22 @@ field gets a light [1 2 1] blur before meshing.
 2. **Frame pass.** `render(t)` depends only on that record and the clock, so any
    frame can be rendered on its own: a still, a sheet, one beat, or the film.
 
+A lesson script defines `setup(width, height)`, which builds the stage, runs the
+choreography and returns `(render, captions)`, and ends with
+`run(name, duration, setup)`, which provides the command line above.
+
 Pieces in `lesson.py`:
 
 | | |
 |---|---|
+| `run` | the shared command line: film, preview, one stretch, stills, contact sheet, `.srt` captions |
 | `Timeline` | named beats; `p()` eased progress, `fade()` in/hold/out envelopes |
-| `Keys` | keyframed vectors with smootherstep between keys (cameras, poses) |
+| `Keys`, `OrbitCamera` | keyframed vectors with smootherstep between keys; a camera keyframed as azimuth, elevation, distance, look point and fov, with a slow drift |
 | `Stage` | headless canvas + GL (or Vulkan) renderer + dark studio set; `project()` maps 3D to HUD pixels |
-| `Arrow3D`, `Ring3D`, `Marker3D`, `Tube3D`, `xray()` | 3D annotations that fade and can ride on robot links |
+| `Arrow3D`, `Ring3D`, `Marker3D`, `Tube3D`, `xray()`, `set_pose()` | 3D annotations that fade and can ride on robot links; placing an object at a 4x4 pose |
 | `Cloud`, `Segments` | point clouds (round sprites) and line fans, updated in place |
 | `Hud` | immediate-mode 2D layer drawn by threepp: `Text2D` from the system TTF, `ShapeGeometry` panels, triangle-strip lines, images, colour bars, maths as matplotlib glyph outlines loaded through `SVGLoader` |
-| `turbo`, `write_png`, `Film` | colour map, stdlib PNG writer, and frames to H.264 via an ffmpeg pipe (written to a temp name and renamed on success) |
+| `Hud.title_card`, `captions`, `equation_card`, `summary` | the opening title, the lower-third captions, the top-left card of equations, and the closing "IN SHORT" card |
+| `turbo`, `write_png`, `write_srt`, `Film` | colour map, stdlib PNG writer, SubRip subtitles, and frames to H.264 via an ffmpeg pipe (written to a temp name and renamed on success) |
 
 The HUD is authored in a fixed 1920x1080 design space, whatever the render size.
