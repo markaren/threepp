@@ -1263,8 +1263,11 @@ class Hud:
                       anchor="ma")
 
     def captions(self, t, captions):
-        """All captions of a film, [(start, end, text)]: each fades in and out over its span."""
-        for a0, b0, txt in captions:
+        """All captions of a film, [(start, end, text)]: each fades in and out over its span.
+        An entry (start, end, text, False) is spoken but not drawn (a line over a title card)."""
+        for a0, b0, txt, *shown in captions:
+            if shown and not shown[0]:
+                continue
             al = envelope(t, a0, b0, 0.45, 0.4)
             if al > 0:
                 self.caption(txt, al)
@@ -1558,7 +1561,7 @@ def write_srt(path, captions):
         ms = int(round(s * 1000))
         return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
     with open(path, "w", encoding="utf-8") as f:
-        for k, (a, b, txt) in enumerate(captions, 1):
+        for k, (a, b, txt, *_) in enumerate(captions, 1):
             f.write(f"{k}\n{stamp(a)} --> {stamp(b)}\n{txt}\n\n")
 
 
@@ -1671,6 +1674,8 @@ def run(name, duration, setup, fps=60):
     lesson's own clock. A lesson that declares holds (`render.holds = [(t, seconds, tag)]`)
     takes `render(t, hold)`, where hold is (tag, 0..1) while the film stands still at t.
     `captions` is the [(start, end, text)] list the film shows, on the lesson's clock.
+    An entry (start, end, text, False) is read aloud and written to the .srt but not drawn:
+    use it to narrate the title card, so the film has sound from the start.
 
     The captions are read aloud (Kokoro, voice `--voice`) unless `--no-voice`. Where a
     line runs longer than its caption, the film holds the picture until it has been said.
@@ -1708,9 +1713,9 @@ def run(name, duration, setup, fps=60):
     if not args.no_voice:
         narr = Narration(args.voice, cache_dir=os.path.join(args.outdir, "voice_cache"))
         t0 = time.time()
-        clips = [narr.clip(txt) for _, _, txt in captions]
+        clips = [narr.clip(c[2]) for c in captions]
         said = sum(len(c) for c in clips) / Narration.RATE
-        for (a, b, _), c in zip(captions, clips):
+        for (a, b, *_), c in zip(captions, clips):
             need = len(c) / Narration.RATE
             have = tm.film(b - VOICE_TAIL) - tm.film(a + VOICE_LEAD)
             if need > have:
@@ -1727,7 +1732,7 @@ def run(name, duration, setup, fps=60):
 
     if args.srt:
         p = os.path.join(args.outdir, f"{name}.srt")
-        write_srt(p, [(tm.film(a), tm.film(b), txt) for a, b, txt in captions])
+        write_srt(p, [(tm.film(a), tm.film(b), txt) for a, b, txt, *_ in captions])
         print("saved", p, f"({len(captions)} captions)")
         return
     if args.stills:
@@ -1755,7 +1760,7 @@ def run(name, duration, setup, fps=60):
     audio = None
     if clips is not None:
         track = np.zeros(int(math.ceil(film_duration * Narration.RATE)) + 1, np.float32)
-        for (a, _, _), c in zip(captions, clips):
+        for (a, *_), c in zip(captions, clips):
             i0 = int(round((tm.film(a) + VOICE_LEAD) * Narration.RATE))
             n = min(len(c), len(track) - i0)
             track[i0:i0 + n] += c[:n]
