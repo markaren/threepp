@@ -21,6 +21,8 @@ python ik_fr3.py --stills 10.5,50,72 --outdir shots          # single frames
 python ik_fr3.py --sheet --outdir shots                      # contact sheet, one frame per 3 s
 python ik_fr3.py --from 48 --to 64 --out iter.mp4            # one beat
 python ik_fr3.py --srt                                       # captions as lesson_out/ik_fr3.srt, for YouTube
+python ik_fr3.py --voice am_michael                          # another narrator (default af_heart)
+python ik_fr3.py --no-voice                                  # a silent film
 ```
 
 `depth_map.py` and `imu_tilt.py` take the same flags. Output goes to `lesson_out/` in the current
@@ -33,6 +35,16 @@ standard library. The equations are typeset by matplotlib once and cached in
 `<lesson>.math.json`, so matplotlib is only needed when you add or edit one.
 Part 3 also needs the PhysX backend (`tp.HAS_PHYSX`) and the Evoque glTF from
 threepp_data, and a threepp module built after `PhysxVehicle.associate` was added.
+
+**Narration.** The captions are read aloud by [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M),
+an offline neural TTS model (82M parameters, Apache-2.0): `pip install kokoro soundfile`,
+and the weights (about 330 MB) download on first use. Each caption is turned into speakable
+text first (`lesson.spoken`: units after numbers and a few acronyms become words), and each
+clip is cached in `<outdir>/voice_cache` by voice and text, so a re-render only synthesises
+the lines whose measured numbers changed. Where a line is longer than its caption, the film
+holds the picture until it has been said (`lesson.TimeMap`); the captions, the `.srt` and
+`--stills` / `--from` times all follow the film's clock. The clips are placed on one track and
+muxed into the mp4 as AAC. `--no-voice` renders without Kokoro.
 
 Each threepp_data file is looked up in `THREEPP_DATA_DIR`, then a `threepp_data`
 (or `threepp-data`) checkout next to the repo, then the copies CMake fetches into
@@ -102,13 +114,16 @@ The heightfield collider is Z-up while the vehicle is Y-up, so the track is a
 
 A lesson script defines `setup(width, height)`, which builds the stage, runs the
 choreography and returns `(render, captions)`, and ends with
-`run(name, duration, setup)`, which provides the command line above.
+`run(name, duration, setup)`, which provides the command line above. A lesson works on its
+own clock; it can declare moments where the film stands still (`render.holds`, as Part 3
+does to introduce each estimate on its own), and `run` adds holds for the narration.
 
 Pieces in `lesson.py`:
 
 | | |
 |---|---|
-| `run` | the shared command line: film, preview, one stretch, stills, contact sheet, `.srt` captions |
+| `run` | the shared command line: film, preview, one stretch, stills, contact sheet, `.srt` captions, narration |
+| `Narration`, `spoken`, `TimeMap` | captions read aloud by Kokoro and cached; caption text in words; the film clock with holds |
 | `Timeline` | named beats; `p()` eased progress, `fade()` in/hold/out envelopes |
 | `Keys`, `OrbitCamera` | keyframed vectors with smootherstep between keys; a camera keyframed as azimuth, elevation, distance, look point and fov, with a slow drift, in a Z-up or Y-up frame, optionally following a moving target and its heading |
 | `Stage` | headless canvas + GL (or Vulkan) renderer + dark studio set; `project()` maps 3D to HUD pixels; `follow()` moves the key light's shadow area with a moving subject |

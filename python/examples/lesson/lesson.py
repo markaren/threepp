@@ -55,12 +55,16 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
+import inspect
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
 import time
+import wave
 
 import numpy as np
 import struct
@@ -1514,17 +1518,21 @@ def ffmpeg_exe():
 
 
 class Film:
-    """Frames -> H.264 mp4 through an ffmpeg pipe. Written to <path>.part, renamed on close."""
+    """Frames -> H.264 mp4 through an ffmpeg pipe. Written to <path>.part, renamed on close.
+    `audio`: a WAV muxed in as AAC, starting `audio_offset` seconds into it."""
 
-    def __init__(self, path, width, height, fps=60, crf=16, preset="slow", threads=0):
+    def __init__(self, path, width, height, fps=60, crf=16, preset="slow", threads=0, audio=None, audio_offset=0.0):
         self.path = path
         self.tmp = path + ".part.mp4"
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         cmd = [ffmpeg_exe(), "-y", "-loglevel", "error",
-               "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", str(fps), "-i", "-",
-               "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p",
-               "-profile:v", "high", "-movflags", "+faststart", "-color_primaries", "bt709",
-               "-color_trc", "bt709", "-colorspace", "bt709"]
+               "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", str(fps), "-i", "-"]
+        if audio:
+            cmd += ["-ss", f"{audio_offset:.3f}", "-i", audio, "-map", "0:v", "-map", "1:a",
+                    "-c:a", "aac", "-b:a", "192k", "-shortest"]
+        cmd += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p",
+                "-profile:v", "high", "-movflags", "+faststart", "-color_primaries", "bt709",
+                "-color_trc", "bt709", "-colorspace", "bt709"]
         if threads:
             cmd += ["-threads", str(threads)]
         cmd += [self.tmp]
@@ -1554,13 +1562,116 @@ def write_srt(path, captions):
             f.write(f"{k}\n{stamp(a)} --> {stamp(b)}\n{txt}\n\n")
 
 
+def write_wav(path, samples, rate):
+    """Mono float samples in [-1, 1] as a 16-bit WAV, with only the standard library."""
+    pcm = (np.clip(np.asarray(samples, np.float32), -1.0, 1.0) * 32767).astype("<i2")
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm.tobytes())
+
+
+def read_wav(path):
+    with wave.open(path, "rb") as w:
+        data = np.frombuffer(w.readframes(w.getnframes()), "<i2").astype(np.float32) / 32767
+        return data, w.getframerate()
+
+
+# ── the film's clock ──────────────────────────────────────────────────────────
+class TimeMap:
+    """The film's clock against a lesson's own (script) clock. A hold (a, d, tag) stops the
+    script clock at a for d seconds of film: the picture stands still there, and render() is
+    told which hold it is in and how far through (0..1)."""
+
+    def __init__(self, holds=()):
+        self.holds = sorted(holds, key=lambda h: h[0])
+
+    def add(self, a, d, tag):
+        self.holds = sorted(self.holds + [(a, d, tag)], key=lambda h: h[0])
+
+    def film(self, ts):
+        """Script time -> film time (a moment at a hold maps to before it)."""
+        return ts + sum(d for a, d, _ in self.holds if a < ts)
+
+    def script(self, tf):
+        """Film time -> (script time, (tag, 0..1 progress) inside a hold, else None)."""
+        shift = 0.0
+        for a, d, tag in self.holds:
+            if tf < a + shift:
+                break
+            if tf < a + shift + d:
+                return a, (tag, (tf - a - shift) / d)
+            shift += d
+        return tf - shift, None
+
+
+# ── narration ─────────────────────────────────────────────────────────────────
+SPOKEN_WORDS = {"IMU": "I M U", "GNSS": "G N S S", "fps": "frames per second", "threepp": "three p p",
+                "FR3": "F R 3"}
+_UNITS = [("m/s²", "metres per second squared"), ("°/s", "degrees per second"),
+          ("ms", "milliseconds"), ("mm", "millimetres"), ("cm", "centimetres"), ("s", "seconds"),
+          ("m", "metres"), ("%", "percent"), ("°", "degrees")]
+_UNIT_RE = re.compile(r"(\d)[  ]?(" + "|".join(re.escape(u) for u, _ in _UNITS) + r")(?![A-Za-z²])")
+
+
+def spoken(text, words=None):
+    """Caption text as it should be read aloud: units after numbers, and a few acronyms, in words."""
+    t = text.replace("×", " by ")
+    units = dict(_UNITS)
+    t = _UNIT_RE.sub(lambda m: m.group(1) + " " + units[m.group(2)], t)
+    for k, v in {**SPOKEN_WORDS, **(words or {})}.items():
+        t = re.sub(r"(?<![\w])" + re.escape(k) + r"(?![\w])", v, t)
+    return t.replace(" ", " ")
+
+
+class Narration:
+    """Captions read aloud by Kokoro (offline neural TTS, hexgrad/Kokoro-82M), one clip per
+    caption, cached as WAV by (voice, speed, spoken text) so a re-render only synthesises the
+    lines that changed."""
+
+    RATE = 24000
+
+    def __init__(self, voice="af_heart", speed=1.0, cache_dir="lesson_out/voice_cache", words=None):
+        self.voice, self.speed, self.cache_dir, self.words = voice, speed, cache_dir, words
+        self._pipe = None
+        os.makedirs(cache_dir, exist_ok=True)
+
+    def clip(self, text):
+        say = spoken(text, self.words)
+        key = hashlib.sha1(f"{self.voice}|{self.speed}|{say}".encode("utf-8")).hexdigest()[:16]
+        path = os.path.join(self.cache_dir, f"{self.voice}_{key}.wav")
+        if os.path.isfile(path):
+            return read_wav(path)[0]
+        if self._pipe is None:
+            try:
+                from kokoro import KPipeline
+            except ImportError as e:
+                raise RuntimeError("narration needs Kokoro (pip install kokoro soundfile); "
+                                   "or render without it with --no-voice") from e
+            # Kokoro voice names start with their language code: a = American, b = British English, ...
+            self._pipe = KPipeline(lang_code=self.voice[0], repo_id="hexgrad/Kokoro-82M")
+        audio = np.concatenate([np.asarray(a, np.float32)
+                                for _, _, a in self._pipe(say, voice=self.voice, speed=self.speed)])
+        write_wav(path, audio, self.RATE)
+        return read_wav(path)[0]
+
+
 # ── the command line ──────────────────────────────────────────────────────────
+VOICE_LEAD, VOICE_TAIL = 0.15, 0.45     # speech starts this far into a caption, and ends this far before its end
+
+
 def run(name, duration, setup, fps=60):
     """The command line every lesson shares.
 
     `setup(width, height)` builds the lesson at that render size and returns
-    `(render, captions)`: `render(t)` gives the (H, W, 3) frame at t seconds, and
-    `captions` is the [(start, end, text)] list the film shows.
+    `(render, captions)`. `render(t)` gives the (H, W, 3) frame at t seconds on the
+    lesson's own clock. A lesson that declares holds (`render.holds = [(t, seconds, tag)]`)
+    takes `render(t, hold)`, where hold is (tag, 0..1) while the film stands still at t.
+    `captions` is the [(start, end, text)] list the film shows, on the lesson's clock.
+
+    The captions are read aloud (Kokoro, voice `--voice`) unless `--no-voice`. Where a
+    line runs longer than its caption, the film holds the picture until it has been said.
 
         (no flags)            the film, 1920x1080 at `fps`, to <outdir>/<name>.mp4
         --preview             960x540 at 30 fps
@@ -1568,6 +1679,7 @@ def run(name, duration, setup, fps=60):
         --stills 5,15,40      single frames, <outdir>/<name>_still_<t>.png
         --sheet [--every S]   contact sheet, one frame every S seconds from 0.5 s
         --srt                 the captions as <outdir>/<name>.srt
+    Times on the command line are film times.
     """
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=None, help=f"the film (default: <outdir>/{name}.mp4)")
@@ -1576,6 +1688,8 @@ def run(name, duration, setup, fps=60):
     ap.add_argument("--sheet", action="store_true", help="contact sheet, one frame every --every seconds")
     ap.add_argument("--every", type=float, default=3.0)
     ap.add_argument("--srt", action="store_true", help=f"write the captions to <outdir>/{name}.srt")
+    ap.add_argument("--voice", default="af_heart", help="Kokoro voice for the narration (default af_heart)")
+    ap.add_argument("--no-voice", dest="no_voice", action="store_true", help="no narration: a silent film")
     ap.add_argument("--preview", action="store_true", help="960x540 @ 30 fps")
     ap.add_argument("--from", dest="t_from", type=float, default=0.0)
     ap.add_argument("--to", dest="t_to", type=float, default=None)
@@ -1585,23 +1699,45 @@ def run(name, duration, setup, fps=60):
     W, H = (960, 540) if args.preview else (1920, 1080)
     fps = args.fps or (30 if args.preview else fps)
     render, captions = setup(W, H)
-
     os.makedirs(args.outdir, exist_ok=True)
+
+    tm = TimeMap(getattr(render, "holds", ()))
+    clips = None
+    if not args.no_voice:
+        narr = Narration(args.voice, cache_dir=os.path.join(args.outdir, "voice_cache"))
+        t0 = time.time()
+        clips = [narr.clip(txt) for _, _, txt in captions]
+        said = sum(len(c) for c in clips) / Narration.RATE
+        for (a, b, _), c in zip(captions, clips):
+            need = len(c) / Narration.RATE
+            have = tm.film(b - VOICE_TAIL) - tm.film(a + VOICE_LEAD)
+            if need > have:
+                tm.add(b - VOICE_TAIL, need - have, ("voice", None))
+        held = sum(d for _, d, tag in tm.holds if tag[0] == "voice")
+        print(f"[voice] {len(clips)} lines, {said:.0f} s of speech ({args.voice}) in {time.time() - t0:.1f}s; "
+              f"the film holds {held:.1f} s for it")
+    film_duration = tm.film(duration)
+    takes_hold = len(inspect.signature(render).parameters) >= 2
+
+    def frame(t):
+        ts, hold = tm.script(t)
+        return render(ts, hold) if takes_hold else render(ts)
+
     if args.srt:
         p = os.path.join(args.outdir, f"{name}.srt")
-        write_srt(p, captions)
+        write_srt(p, [(tm.film(a), tm.film(b), txt) for a, b, txt in captions])
         print("saved", p, f"({len(captions)} captions)")
         return
     if args.stills:
         for tok in args.stills.split(","):
             t = float(tok)
             p = os.path.join(args.outdir, f"{name}_still_{t:06.2f}.png")
-            write_png(p, render(t))
+            write_png(p, frame(t))
             print("saved", p)
         return
     if args.sheet:
         f = max(1, W // 480)
-        thumbs = [shrink(render(float(t)), f) for t in np.arange(0.5, duration, args.every)]
+        thumbs = [shrink(frame(float(t)), f) for t in np.arange(0.5, film_duration, args.every)]
         cols = 6
         th, tw = thumbs[0].shape[:2]
         rows = (len(thumbs) + cols - 1) // cols
@@ -1614,15 +1750,24 @@ def run(name, duration, setup, fps=60):
         print("saved", p, f"({len(thumbs)} frames, every {args.every} s from 0.5 s, row-major)")
         return
 
-    t_to = args.t_to if args.t_to is not None else duration
+    audio = None
+    if clips is not None:
+        track = np.zeros(int(math.ceil(film_duration * Narration.RATE)) + 1, np.float32)
+        for (a, _, _), c in zip(captions, clips):
+            i0 = int(round((tm.film(a) + VOICE_LEAD) * Narration.RATE))
+            n = min(len(c), len(track) - i0)
+            track[i0:i0 + n] += c[:n]
+        audio = os.path.join(args.outdir, f"{name}.voice.wav")
+        write_wav(audio, track, Narration.RATE)
+    t_to = args.t_to if args.t_to is not None else film_duration
     out = args.out or os.path.join(args.outdir, f"{name}.mp4")
     film = Film(out, W, H, fps=fps, crf=16 if not args.preview else 22,
-                preset="slow" if not args.preview else "veryfast")
+                preset="slow" if not args.preview else "veryfast", audio=audio, audio_offset=args.t_from)
     nfr = int(round((t_to - args.t_from) * fps))
     t_start = time.time()
     for f in range(nfr):
         t = args.t_from + f / fps
-        film.write(render(t))
+        film.write(frame(t))
         if f % (fps * 5) == 0:
             el = time.time() - t_start
             print(f"[film] {t:6.1f}s  frame {f}/{nfr}  {el / max(f, 1) * 1000:.0f} ms/frame", flush=True)

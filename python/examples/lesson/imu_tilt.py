@@ -62,31 +62,13 @@ TL.add("heading", 94.0, 100.0)
 TL.add("outro", 100.0, 108.0)
 T_GYRO0 = 24.8               # the gyro-only estimate starts from the true tilt here
 
-# Each ghost is introduced on its own: the drive pauses, the car is hidden, the ghost
-# blinks with a label, and the drive goes on. The script above is written on the drive's
-# clock; the film clock runs PAUSE longer at every introduction.
+# Each ghost is introduced on its own: the film holds (the drive stands still), the car
+# is hidden, the ghost blinks with a label, and the drive goes on. Everything in this file
+# runs on the drive's clock; lesson.run maps it to the film's.
 INTRO = {"gyro": T_GYRO0, "acc": 42.6, "comp": 58.6, "kf": 83.0}
 PAUSE = 2.0
 INTRO_LABEL = {"gyro": "the gyroscope's estimate", "acc": "the accelerometer's estimate",
                "comp": "the complementary filter", "kf": "the Kalman filter"}
-FILM_DURATION = TL.duration + PAUSE * len(INTRO)
-
-
-def drive_time(t):
-    """Film time -> (drive time, (ghost, 0..1 progress) during an introduction or None)."""
-    shift = 0.0
-    for key, a in sorted(INTRO.items(), key=lambda kv: kv[1]):
-        if t < a + shift:
-            break
-        if t < a + shift + PAUSE:
-            return a, (key, (t - a - shift) / PAUSE)
-        shift += PAUSE
-    return t - shift, None
-
-
-def film_time(tb):
-    """Drive time -> film time (a moment at an introduction maps to before its pause)."""
-    return tb + PAUSE * sum(1 for a in INTRO.values() if a < tb)
 
 CAPTIONS = [
     (7.4, 13.4, "Phones, drones, cars and robots carry an IMU: a gyroscope and an accelerometer on one chip."),
@@ -915,17 +897,18 @@ def setup(width, height):
     ov = Hud(1920, 1080, math_cache=os.path.join(_HERE, "imu_tilt.math.json"))
     painter = Painter(st, f3, rec, ov)
 
-    def render(t):
-        tb, intro = drive_time(t)
-        i = painter.frameidx(tb)
-        painter.set3d(tb, i, intro)
+    def render(t, hold=None):
+        intro = (hold[0][1], hold[1]) if hold is not None and hold[0][0] == "intro" else None
+        i = painter.frameidx(t)
+        painter.set3d(t, i, intro)
         ov.begin()
-        painter.draw2d(tb, i, intro)
-        ov.fade(fade_in_out(t, FILM_DURATION))
+        painter.draw2d(t, i, intro)
+        ov.fade(fade_in_out(t, TL.duration))
         ov.end()
         return st.frame(t, hud=ov)
-    return render, [(film_time(a), film_time(b), txt) for a, b, txt in painter.captions]
+    render.holds = [(a, PAUSE, ("intro", key)) for key, a in INTRO.items()]
+    return render, painter.captions
 
 
 if __name__ == "__main__":
-    run("imu_tilt", FILM_DURATION, setup, fps=FPS)
+    run("imu_tilt", TL.duration, setup, fps=FPS)
