@@ -134,6 +134,17 @@ namespace {
     public:
         explicit PyVulkanRenderer(Canvas& canvas, int flush_frames)
             : canvas_(canvas), renderer_(canvas), flush_(flush_frames < 1 ? 1 : flush_frames) {
+            // An OrthographicCamera handed to render / save_frame / render_aov is
+            // a 3D view here (a top-down map, a BEV label, an orthophoto), so it
+            // takes the deferred path like a perspective camera. The C++ default
+            // (off) reads it as a 2D HUD instead: unlit fills in scene order with
+            // no depth test and no background, which draws a ground plane added
+            // after a box straight over the box. The HUD pattern this default
+            // protects cannot occur here anyway: outside canvas.animate each
+            // render() runs its own frames, so a second ortho render() never
+            // lands on an open frame. Inside canvas.animate it still does, and
+            // stays overlay-only whatever this says.
+            renderer_.setOrthographicSceneRendering(true);
         }
 
         void render(Object3D& scene, Camera& camera) {
@@ -954,6 +965,15 @@ namespace threepp_py {
                 .def_property("render_scale",
                               [](PyVulkanRenderer& r) { return r.native().renderScale(); },
                               [](PyVulkanRenderer& r, float s) { r.native().setRenderScale(s); })
+                .def_property("orthographic_scene_rendering",
+                              [](PyVulkanRenderer& r) { return r.native().orthographicSceneRendering(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setOrthographicSceneRendering(v); },
+                              "Is an OrthographicCamera a 3D view? Default True: a standalone render "
+                              "with one is shaded, depth-tested and backgrounded exactly like a "
+                              "perspective render. False draws it as a 2D overlay instead: unlit "
+                              "fills in scene order, no depth test, no background. A second ortho "
+                              "render() over an open frame inside canvas.animate is an overlay "
+                              "either way.")
                 // AMD FidelityFX FSR 3.1 temporal upscaler. Available only in a
                 // build with -DTHREEPP_WITH_FSR=ON (Windows/Vulkan) that ships
                 // amd_fidelityfx_vk.dll next to the module — see fsr_available.

@@ -283,6 +283,77 @@ def test_depth_occlusion(vk_renderer):
     assert depth[5, 5] == pytest.approx(8.0, abs=0.1)             # wall behind
 
 
+def test_orthographic_scene_rendering_defaults_on(vk_renderer):
+    assert vk_renderer.orthographic_scene_rendering is True
+    try:
+        vk_renderer.orthographic_scene_rendering = False
+        assert vk_renderer.orthographic_scene_rendering is False
+    finally:
+        vk_renderer.orthographic_scene_rendering = True
+
+
+def _dominant(px):
+    """'r', 'g' or 'b' when one channel leads the other two by a clear margin,
+    'grey' when all three sit together, else None."""
+    r, g, b = (int(c) for c in px)
+    if max(r, g, b) - min(r, g, b) < 24:
+        return "grey"
+    for name, (a, o1, o2) in (("r", (r, g, b)), ("g", (g, r, b)), ("b", (b, r, g))):
+        if a > o1 + 40 and a > o2 + 40:
+            return name
+    return None
+
+
+@pytest.mark.parametrize("projection", ["perspective", "orthographic"])
+def test_top_down_view_keeps_the_nearest_surface(vk_renderer, projection):
+    # A red box on a blue ground plane with a green patch on its lid, seen from
+    # straight above. Under an OrthographicCamera the Vulkan backend used to
+    # draw this as a 2D overlay (painter's order, no depth, black clear), so
+    # the ground, added last, covered the box and the background never showed.
+    # Both projections frame the ground plane at 1 m half-height, so the same
+    # pixel samples land on the same surfaces.
+    scene = tp.Scene()
+    scene.background = 0x808080
+    scene.add(tp.HemisphereLight(0xffffff, 0xffffff, 1.0))
+
+    def mat(c):
+        m = tp.MeshStandardMaterial()
+        m.color = c
+        m.roughness = 1.0
+        return m
+
+    box = tp.Mesh(tp.BoxGeometry(0.6, 0.6, 0.6), mat(0xff0000))
+    box.position.y = 0.3
+    scene.add(box)
+    lid = tp.Mesh(tp.PlaneGeometry(0.2, 0.2), mat(0x00ff00))
+    lid.rotation.x = -math.pi / 2
+    lid.position.y = 0.601
+    scene.add(lid)
+    ground = tp.Mesh(tp.PlaneGeometry(1.6, 1.6), mat(0x0000ff))
+    ground.rotation.x = -math.pi / 2
+    scene.add(ground)
+
+    if projection == "orthographic":
+        cam = tp.OrthographicCamera(-W / H, W / H, 1, -1, 0.1, 100)
+    else:  # tan(fov/2) = 1 m / 10 m puts the ground's half-height at 1 m too
+        cam = tp.PerspectiveCamera(2 * math.degrees(math.atan(0.1)), W / H, 0.1, 100)
+    cam.position.set(0, 10, 0)
+    cam.up.set(0, 0, -1)
+    cam.look_at(0, 0, 0)
+
+    img = vk_renderer.render_aov(scene, cam, "rgb")
+    px_per_m = H / 2
+    cy, cx = H // 2, W // 2
+
+    def at(metres):
+        return img[cy, cx + int(metres * px_per_m)]
+
+    assert _dominant(at(0.0)) == "g", f"lid patch: {at(0.0)}"
+    assert _dominant(at(0.2)) == "r", f"box lid: {at(0.2)}"
+    assert _dominant(at(0.55)) == "b", f"ground: {at(0.55)}"
+    assert _dominant(at(-1.25)) == "grey", f"background: {at(-1.25)}"
+
+
 def _ocean_scene():
     scene = tp.Scene()
     scene.add(tp.AmbientLight(0xffffff, 1.0))

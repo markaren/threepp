@@ -507,7 +507,10 @@ OrthographicCamera ortho(left, right, top, bottom, near, far);
 > GI, reflections, fog, tone mapping). Depth of field is skipped under it — a parallel
 > projection has no lens. The HUD pattern (a perspective `render()`, then a second
 > `render()` with an ortho camera over a HUD scene) is unaffected either way.
-> `GLRenderer` never had the ambiguity and needs nothing.
+> `GLRenderer` never had the ambiguity and needs nothing. The Python
+> `tp.VulkanRenderer` starts with it **on**, because an ortho render or `save_frame` from
+> Python is a view capture; set `renderer.orthographic_scene_rendering = False` for the 2D
+> overlay.
 
 Any change to a projection input (`fov`, `aspect`, `zoom`, `nearPlane`, `farPlane`) needs
 `camera.updateProjectionMatrix()`. This is why every example has the same resize handler:

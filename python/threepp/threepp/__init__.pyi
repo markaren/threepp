@@ -10208,6 +10208,14 @@ class VulkanRenderer:
     def occlusion_culling(self, arg1: bool) -> None:
         ...
     @property
+    def orthographic_scene_rendering(self) -> bool:
+        """
+        Is an OrthographicCamera a 3D view? Default True: a standalone render with one is shaded, depth-tested and backgrounded exactly like a perspective render. False draws it as a 2D overlay instead: unlit fills in scene order, no depth test, no background. A second ortho render() over an open frame inside canvas.animate is an overlay either way.
+        """
+    @orthographic_scene_rendering.setter
+    def orthographic_scene_rendering(self, arg1: bool) -> None:
+        ...
+    @property
     def physical_camera(self) -> bool:
         """
         Derive exposure from aperture/shutter/ISO (EV100) instead of tone_mapping_exposure; the HDR target is pre-exposed so 100k-lux daylight survives fp16. Defaults = sunny-16 (f/16, 1/125 s, ISO 100). Pair with physical_light_units. Default off.
