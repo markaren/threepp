@@ -20,3 +20,6 @@ set(LESSON_APP_STEP "" CACHE STRING "lesson_app as it stood after this step, 0..
 if (TARGET lesson_app AND NOT LESSON_APP_STEP STREQUAL "")
     target_compile_definitions(lesson_app PRIVATE STEP=${LESSON_APP_STEP})
 endif ()
+
+# the Snake program built in "Part 0c: threepp is the view"
+add_subdirectory(snake)

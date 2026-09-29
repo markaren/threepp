@@ -1,5 +1,6 @@
 // capture.hpp: only for the film. app.cpp includes it when LESSON_CAPTURE is defined,
-// after every threepp header, and it swaps three names for stand-ins:
+// after every threepp header; the Snake programs get it force-included by their capture
+// targets (so their sources stay as shown). It swaps three names for stand-ins:
 //
 //   Canvas      a headless canvas whose animate() plays a mouse script and saves frames
 //   GLRenderer  the same renderer, which tells the canvas where to read its pixels
@@ -8,7 +9,8 @@
 // Everything else is the program as written. Two environment variables drive it:
 //
 //   LESSON_SCRIPT   a text file: "frames N", then "<frame> move x y", "<frame> down b x y",
-//                   "<frame> up b x y" and "<frame> wheel dy", in window pixels
+//                   "<frame> up b x y" and "<frame> wheel dy", in window pixels, and
+//                   "<frame> key NAME" (a press and release; NAME as in KeyFromName.hpp: UP, A, SPACE)
 //   LESSON_OUT      where the frames go: N x height x width x 3 bytes, top row first
 //                   ("-" streams them to stdout, for a reader that takes them as they come)
 //   LESSON_STATS    optional: a text file for the renderer's draw calls and triangles per
@@ -16,15 +18,19 @@
 //
 // The mouse reaches the program through the canvas's own event path (so OrbitControls,
 // listeners and IOCapture see it as they would a real one), and Dear ImGui through its
-// input queue, as its GLFW backend would feed it.
+// input queue, as its GLFW backend would feed it. Keys go through the same event path.
 
 #ifndef THREEPP_LESSON_CAPTURE_HPP
 #define THREEPP_LESSON_CAPTURE_HPP
 
-#include "threepp/canvas/Canvas.hpp"
-#include "threepp/renderers/GLRenderer.hpp"
+// all of threepp first, so no threepp header is read after the names below are swapped
+#include "threepp/input/KeyFromName.hpp"
+#include "threepp/threepp.hpp"
 
+#if __has_include(<imgui.h>)
 #include <imgui.h>
+#define LESSON_CAPTURE_IMGUI
+#endif
 
 #include <cstdio>
 #ifdef _WIN32
@@ -47,6 +53,7 @@ namespace lesson_capture {
         std::string kind;
         int button{0};
         float x{0}, y{0};
+        std::string key;
     };
 
     class CaptureRenderer;
@@ -78,6 +85,7 @@ namespace lesson_capture {
                 in >> e.kind;
                 if (e.kind == "down" || e.kind == "up") in >> e.button;
                 if (e.kind == "wheel") in >> e.y;
+                else if (e.kind == "key") in >> e.key;
                 else in >> e.x >> e.y;
                 events[std::stoi(first)].push_back(e);
             }
@@ -108,6 +116,12 @@ namespace lesson_capture {
             threepp::Vector2 cursor{-1, -1};
             for (int k = 0; k < frames; k++) {
                 for (const auto& e : events[k]) {
+                    if (e.kind == "key") {
+                        const threepp::KeyEvent key(threepp::keyFromName(e.key), 0, 0);
+                        onKeyEvent(key, KeyAction::PRESS);
+                        onKeyEvent(key, KeyAction::RELEASE);
+                        continue;
+                    }
                     if (e.kind != "wheel") cursor.set(e.x, e.y);
                     feedImgui(e, cursor);
                     if (e.kind == "move") onMouseMoveEvent(cursor);
@@ -138,12 +152,14 @@ namespace lesson_capture {
         CaptureRenderer* renderer = nullptr;
 
     private:
-        static void feedImgui(const Event& e, const threepp::Vector2& cursor) {
+        static void feedImgui([[maybe_unused]] const Event& e, [[maybe_unused]] const threepp::Vector2& cursor) {
+#ifdef LESSON_CAPTURE_IMGUI
             if (!ImGui::GetCurrentContext()) return;
             auto& io = ImGui::GetIO();
             if (e.kind == "wheel") io.AddMouseWheelEvent(0, e.y);
             else io.AddMousePosEvent(cursor.x, cursor.y);
             if (e.kind == "down" || e.kind == "up") io.AddMouseButtonEvent(e.button, e.kind == "down");
+#endif
         }
 
         const threepp::gl::GLInfo& rendererInfo() const;
