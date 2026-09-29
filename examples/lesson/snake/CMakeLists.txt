@@ -54,8 +54,12 @@ endforeach ()
 endif ()
 
 # Catch2 is fetched after the examples are added; the name resolves when CMake generates.
+# The tests don't link threepp either, and neither do the two classes they bring
+# along: the text view and the AI build without it, so they can be tested without it.
 if (THREEPP_BUILD_TESTS AND NOT DEFINED EMSCRIPTEN)
-    add_executable(test_snake_model tests/test_game.cpp)
-    target_link_libraries(test_snake_model PRIVATE snake_model Catch2::Catch2WithMain)
-    add_test(NAME test_snake_model COMMAND test_snake_model)
+    add_executable(test_snake
+            tests/test_game.cpp tests/test_ascii_view.cpp tests/test_greedy_ai.cpp
+            view/AsciiView.cpp control/GreedyAI.cpp)
+    target_link_libraries(test_snake PRIVATE snake_model Catch2::Catch2WithMain)
+    add_test(NAME test_snake COMMAND test_snake)
 endif ()

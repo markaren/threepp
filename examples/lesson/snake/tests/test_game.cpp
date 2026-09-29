@@ -1,5 +1,5 @@
 // test_game.cpp: the rules of Snake, checked without a window.
-// These tests link snake_model only; threepp isn't part of this program.
+// This program links snake_model and Catch2; threepp isn't part of it.
 
 #include "model/Game.hpp"
 
