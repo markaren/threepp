@@ -100,6 +100,22 @@ void main() {
     // 1-spp GI noise survives unfiltered. ±N is the same surface there.
     const bool dsided = ifDoubleSided(texelFetch(gbufIdsTex, px, 0).z);
 
+    // Lighting views 2, 4 and 7 (VulkanRenderer::LightingView::DirectTemporal,
+    // IndirectTemporal, FinalTemporal): terms as the temporal accumulation
+    // left them, before any spatial filtering. The chain is then this single
+    // recombine pass with no history feedback
+    // (DeferredShade::recordFilterAndComposite), so the accumulation runs on
+    // its own. 7 adds both to the rest of the lit pixel, as the lit frame does.
+    if (pc.lightingView == 2u || pc.lightingView == 4u || pc.lightingView == 7u) {
+        const vec3 direct   = imageLoad(directUImage, px).rgb * clamp(imageLoad(shadowVisImage, px).x, 0.0, 1.0);
+        const vec3 indirect = imageLoad(indirectImage, px).rgb * imageLoad(demodColorImage, px).rgb;
+        const vec3 term = (pc.lightingView == 2u) ? direct : (pc.lightingView == 4u) ? indirect : direct + indirect;
+        const vec3 base = (pc.lightingView == 7u) ? imageLoad(outImage, px).rgb : vec3(0.0);
+        imageStore(outImage, px, vec4(base + term * fogTransmittance(camPos, Pc) * recombineCoverage(px)
+                                      * uintBitsToFloat(pc.preExpBits), 1.0));
+        return;
+    }
+
     vec4  cC   = readSrc(px);
     float lumC = dot(cC.rgb, LUMA);
 
@@ -324,8 +340,20 @@ void main() {
         // detail stays crisp.
         const vec3 demodColor   = imageLoad(demodColorImage, px).rgb;
         const vec3 dU           = imageLoad(directUImage, px).rgb;
-        const vec3 cur          = imageLoad(outImage, px).rgb;
-        imageStore(outImage, px, vec4(cur + (fC * demodColor + dU * clamp(fS, 0.0, 1.0))
+        vec3 cur                = imageLoad(outImage, px).rgb;
+        vec3 term               = fC * demodColor + dU * clamp(fS, 0.0, 1.0);
+        // Lighting views 1, 3, 5 and 6 replace the lit pixel with one term:
+        // the unshadowed direct light, the direct light under the denoised
+        // shadow ratio, the denoised diffuse bounce, or nothing here (6: the
+        // reflections, which deferred_refl_filter adds next).
+        if (pc.lightingView != 0u) {
+            cur  = vec3(0.0);
+            term = (pc.lightingView == 1u) ? dU
+                 : (pc.lightingView == 3u) ? dU * clamp(fS, 0.0, 1.0)
+                 : (pc.lightingView == 5u) ? fC * demodColor
+                                           : vec3(0.0);
+        }
+        imageStore(outImage, px, vec4(cur + term
                                             * fogTransmittance(camPos, Pc) * recombineCoverage(px)
                                             * uintBitsToFloat(pc.preExpBits), 1.0));
     } else if (pc.dstMode == 0u) {

@@ -115,6 +115,10 @@ namespace threepp::vulkan {
             haveWindow_ = false;
         }
         [[nodiscard]] bool gridFitted() const { return gridFitted_; }
+        // The fitted grid: the first probe's world position and the step
+        // between probes (probe (i, j, k) sits at origin + (i, j, k) · spacing).
+        [[nodiscard]] const float* gridOrigin() const { return gridOrigin_; }
+        [[nodiscard]] const float* gridSpacing() const { return gridSpacing_; }
 
         // Upload this frame's grid UBO (origin/spacing/dims + the sampling
         // enable). Call every frame BEFORE recording — deferred_shade reads

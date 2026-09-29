@@ -88,6 +88,10 @@ namespace threepp_py {
                      py::arg("distance") = 0.f, py::arg("decay") = 1.f)
                 .def_readwrite("distance", &PointLight::distance)
                 .def_readwrite("decay", &PointLight::decay)
+                .def_readwrite("radius", &PointLight::radius,
+                               "Physical source radius (world units). Above 0 the Vulkan renderer "
+                               "traces soft shadows with penumbras that widen with distance; 0 "
+                               "(default) keeps hard shadows. GL ignores it.")
                 .def("get_power", &PointLight::getPower)
                 .def("set_power", &PointLight::setPower, py::arg("power"));
 
@@ -105,6 +109,10 @@ namespace threepp_py {
                 .def_readwrite("angle", &SpotLight::angle)
                 .def_readwrite("penumbra", &SpotLight::penumbra)
                 .def_readwrite("decay", &SpotLight::decay)
+                .def_readwrite("radius", &SpotLight::radius,
+                               "Physical source radius (world units). Above 0 the Vulkan renderer "
+                               "traces soft shadows with penumbras that widen with distance; 0 "
+                               "(default) keeps hard shadows. GL ignores it.")
                 .def("set_target", [](SpotLight& l, Object3D& target) { l.setTarget(target); }, py::arg("target"))
                 .def("get_target", [](SpotLight& l) -> const Object3D& { return l.target(); }, py::return_value_policy::reference);
 

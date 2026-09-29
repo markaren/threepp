@@ -125,6 +125,14 @@ namespace {
                 "unknown AOV '" + aov + "' — use one of: rgb, normals, segmentation, albedo, motion");
     }
 
+    // VulkanRenderer::LightingView names, in enum order (lighting_view property).
+    const std::array<const char*, 8>& lighting_view_names() {
+        static const std::array<const char*, 8> names = {"final", "direct_unshadowed", "direct_temporal", "direct",
+                                                         "indirect_temporal", "indirect", "reflections",
+                                                         "final_temporal"};
+        return names;
+    }
+
     // Python-facing facade over VulkanRenderer that hides the deferred
     // frame-model: submit+present is deferred to the canvas frame-end callback,
     // so frames are driven through animateOnce() (not render() directly) and
@@ -1247,6 +1255,9 @@ namespace threepp_py {
                                            // deformer and every enable_vertex_interop mesh. This is
                                            // the column the interop path lands in.
                                            d["dyn_geom_refit_ms"] = t.dynGeomRefitMs;
+                                           // The probe-GI round-robin update and the per-frame TLAS refit.
+                                           d["probe_gi_ms"] = t.probeGiMs;
+                                           d["tlas_refit_ms"] = t.tlasRefitMs;
                                            d["gpu_total_ms"] = t.gpuTotalMs;
                                            d["gpu_pass_sum_ms"] = t.gpuPassSumMs;
                                            d["cpu_ensure_scene_ms"] = t.cpuEnsureSceneMs;
@@ -1703,6 +1714,58 @@ namespace threepp_py {
                               "denoise on. Interiors read physically dark — pair with "
                               "auto_exposure or a raised tone_mapping_exposure. False restores "
                               "the legacy cosmetic ambient.")
+                // One lighting term in place of the lit frame (VulkanRenderer::
+                // setLightingView), by name, for teaching and debugging.
+                .def_property(
+                        "lighting_view",
+                        [](PyVulkanRenderer& r) {
+                            return std::string(lighting_view_names()[static_cast<int>(r.native().lightingView())]);
+                        },
+                        [](PyVulkanRenderer& r, const std::string& name) {
+                            const auto& names = lighting_view_names();
+                            for (int k = 0; k < static_cast<int>(names.size()); ++k) {
+                                if (name == names[k]) {
+                                    r.native().setLightingView(static_cast<VulkanRenderer::LightingView>(k));
+                                    return;
+                                }
+                            }
+                            throw py::value_error("lighting_view: one of 'final', 'direct_unshadowed', "
+                                                  "'direct_temporal', 'direct', 'indirect_temporal', "
+                                                  "'indirect', 'reflections', 'final_temporal'");
+                        },
+                        "One lighting term in place of the lit frame: 'final' (default), "
+                        "'direct_unshadowed' (analytic direct light, no shadows), 'direct_temporal' "
+                        "(times the shadow ratio accumulated over frames, before spatial filtering), "
+                        "'direct' (times the denoised shadow ratio), 'indirect_temporal' (diffuse "
+                        "bounce light accumulated over frames, before spatial filtering), 'indirect' "
+                        "(denoised), 'reflections' (after the roughness blur), 'final_temporal' (the "
+                        "lit frame before spatial filtering). Tone mapping and TAA "
+                        "still run. Needs denoise on; primary view only.")
+                .def(
+                        "probe_grid",
+                        [](PyVulkanRenderer& r) -> py::object {
+                            float origin[3], spacing[3];
+                            int dims[3];
+                            if (!r.native().probeGrid(origin, spacing, dims)) return py::none();
+                            std::vector<uint8_t> bytes;
+                            if (!r.native().readProbeShDebug(bytes)) return py::none();
+                            const py::ssize_t n = static_cast<py::ssize_t>(dims[0]) * dims[1] * dims[2];
+                            py::array_t<float> sh({n, py::ssize_t(4), py::ssize_t(4)});
+                            std::memcpy(sh.mutable_data(), bytes.data(),
+                                        (std::min)(bytes.size(), static_cast<size_t>(sh.nbytes())));
+                            py::dict d;
+                            d["origin"]  = py::make_tuple(origin[0], origin[1], origin[2]);
+                            d["spacing"] = py::make_tuple(spacing[0], spacing[1], spacing[2]);
+                            d["dims"]    = py::make_tuple(dims[0], dims[1], dims[2]);
+                            d["sh"]      = sh;
+                            return d;
+                        },
+                        "The probe-GI grid as a dict: 'origin' (the first probe's world position), "
+                        "'spacing', 'dims' (x, y, z), and 'sh', float32 (N, 4, 4): per probe the "
+                        "SH-L1 irradiance rows L00, L1x, L1y, L1z (rgb) with validity, update count "
+                        "and two statistics in column 3. Probe (i, j, k) is row i + dims[0]*(j + "
+                        "dims[1]*k), at origin + (i, j, k)*spacing. None before the grid is fitted. "
+                        "Full device sync.")
                 // HDRI sun extraction: the env map's dominant bright disc is removed
                 // from the glossy/rough PMREM mips (kills the bright "spec blob"
                 // reflections) and re-injected as an analytic directional light with

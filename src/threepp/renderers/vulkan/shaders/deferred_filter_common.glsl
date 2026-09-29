@@ -60,7 +60,9 @@ layout(push_constant) uniform Pc {
                  // this slot. Kept so the 10-uint/40-byte block stays byte-for-
                  // byte the shared pipeline layout (deferred_shade.comp 19-uint).
     uint msaaInfo;// bits 0..2 = G-buffer MSAA sample count (≤1 = off), bit 4 = shade dispatch B active
-    uint _p9;
+    uint lightingView;// VulkanRenderer::LightingView: 0 = the lit frame; 1..6 = one lighting
+                      // term written in place of it; 7 = the lit frame before spatial
+                      // filtering (see deferred_gi_filter's recombine)
 } pc;
 
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);

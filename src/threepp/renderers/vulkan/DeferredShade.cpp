@@ -1210,7 +1210,7 @@ namespace threepp::vulkan {
     void DeferredShade::recordFilterAndComposite(VkCommandBuffer cb, uint32_t frame,
                                                  uint32_t width, uint32_t height,
                                                  uint32_t gbufMsaaSamples, bool shadeBActive,
-                                                 uint32_t preExpBits) {
+                                                 uint32_t preExpBits, uint32_t lightingView) {
         // GI SVGF filter + recombine (the à-trous passes below; count via
         // THREEPP_DENOISE_ATROUS_PASSES, default 4 — the wide passes
         // self-gate per pixel, see deferred_gi_filter.comp).
@@ -1268,24 +1268,29 @@ namespace threepp::vulkan {
         }();
         struct Pass { uint32_t step, srcMode, dstMode, feedback; };
         Pass passes[4]{};
-        for (int p = 0; p < kAtrousPasses; ++p) {
+        // Lighting views 2, 4 and 7 show terms before spatial filtering: one
+        // recombine pass straight from the temporal accumulators, no feedback.
+        const bool temporalOnly = lightingView == 2u || lightingView == 4u || lightingView == 7u;
+        const int  passCount    = temporalOnly ? 1 : kAtrousPasses;
+        for (int p = 0; p < passCount; ++p) {
             passes[p].step     = 1u << p;
             passes[p].srcMode  = (p == 0) ? 0u : ((p & 1) ? 1u : 2u);
-            passes[p].dstMode  = (p == kAtrousPasses - 1) ? 2u : ((p & 1) ? 1u : 0u);
+            passes[p].dstMode  = (p == passCount - 1) ? 2u : ((p & 1) ? 1u : 0u);
             passes[p].feedback = (p == 1) ? 1u : 0u;
         }
         VkMemoryBarrier mb{};
         mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;// RAW (scratch) + WAR (history feedback writes indirect that pass 0 read)
         mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        for (int p = 0; p < kAtrousPasses; ++p) {
+        for (int p = 0; p < passCount; ++p) {
             // Slot [0] = preExpBits: the recombine's sceneHdr adds bake the
             // same pre-exposure the shade pass stored with (1.0 legacy).
             const uint32_t pc[10] = {preExpBits, width, height, passes[p].step,
-                                     passes[p].srcMode, passes[p].dstMode, passes[p].feedback, 0u, msaaInfo, 0u};
+                                     passes[p].srcMode, passes[p].dstMode, passes[p].feedback, 0u, msaaInfo,
+                                     lightingView};
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
             vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
-            if (p < kAtrousPasses - 1)// make this pass's scratch write visible to the next pass's read
+            if (p < passCount - 1)// make this pass's scratch write visible to the next pass's read
                 vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
                                      1, &mb, 0, nullptr, 0, nullptr);
@@ -1311,7 +1316,8 @@ namespace threepp::vulkan {
                                  1, &mb, 0, nullptr, 0, nullptr);
             // Slot [7] is the now-reserved channel field (the pipeline choice
             // replaced it); still pushed as 1 for continuity — the shader ignores it.
-            const uint32_t rpc[10] = {preExpBits, width, height, s/*0=H,1=V*/, 0u, 0u, 0u, 1u/*reserved (ex-channel)*/, msaaInfo, 0u};
+            const uint32_t rpc[10] = {preExpBits, width, height, s/*0=H,1=V*/, 0u, 0u, 0u, 1u/*reserved (ex-channel)*/, msaaInfo,
+                                      lightingView};
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(rpc), rpc);
             vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
         }

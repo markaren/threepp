@@ -1289,6 +1289,36 @@ namespace threepp {
         void setHybridDebugView(int view);
         [[nodiscard]] int hybridDebugView() const;
 
+        // One lighting term in place of the lit frame, for teaching and
+        // debugging what each stage contributes. The denoiser's recombine
+        // writes it into the linear-HDR image, so tone mapping, TAA and the
+        // rest of the post chain still run; the sky and background are left
+        // as they are. Needs setDenoise(true) (the default); with the
+        // denoiser off every view shows the lit frame. Primary view only.
+        enum class LightingView {
+            Final = 0,        // the lit frame (default)
+            DirectUnshadowed, // analytic direct light with no shadows: exact, no rays
+            DirectTemporal,   // direct light × the shadow ratio accumulated over frames, before spatial filtering
+            Direct,           // direct light × the denoised shadow ratio
+            IndirectTemporal, // diffuse bounce light accumulated over frames, before spatial filtering
+            Indirect,         // diffuse bounce light, denoised
+            Reflections,      // traced specular reflections after the roughness-guided blur
+            FinalTemporal     // the lit frame with its shadow, bounce and reflection terms as the
+                              // temporal accumulation left them, before spatial filtering
+        };
+        // The *Temporal views skip the spatial filters and their history
+        // feedback while they are shown, so the accumulation runs on its own;
+        // after resetTemporalHistory() the next frame shows the estimate of
+        // that single frame.
+        void setLightingView(LightingView view);
+        [[nodiscard]] LightingView lightingView() const;
+
+        // The probe-GI grid (ProbeGI): probe (i, j, k) sits at
+        // origin + (i, j, k) · spacing, and its SH-L1 coefficients are at index
+        // i + dims[0] · (j + dims[1] · k) of readProbeShDebug's store. False
+        // before the grid has been fitted to a scene.
+        bool probeGrid(float origin[3], float spacing[3], int dims[3]) const;
+
         // ── Path-traced LIDAR scanner ─────────────────────────────────────
         // Synchronously trace beams against the same TLAS, evaluate a back-scatter
         // LIDAR equation at the first hit, and return per-beam tuples. Submits its

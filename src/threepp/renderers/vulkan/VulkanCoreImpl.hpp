@@ -2404,6 +2404,9 @@ namespace threepp {
             Albedo = 5,   // raster-first material G-buffer: linear albedo in rgb
         };
         HybridDebugView hybridDebugView_ = HybridDebugView::Off;
+        // VulkanRenderer::LightingView as an integer (0 = the lit frame);
+        // the primary view's denoise recombine reads it.
+        uint32_t lightingView_ = 0;
 
         // (cameraUbos moved to ViewContext.)
 

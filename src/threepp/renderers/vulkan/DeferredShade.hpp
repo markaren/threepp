@@ -369,11 +369,15 @@ namespace threepp::vulkan {
         // complex pixels (must match how the shade pass split the weights).
         // preExpBits: the recombine's sceneHdr adds bake the same
         // pre-exposure the shade stored with (0x3F800000 = 1.0f = legacy).
+        // lightingView: VulkanRenderer::LightingView as an integer (0 = the
+        // lit frame). 2, 4 and 7 (before spatial filtering) run a single
+        // unfiltered recombine pass with no history feedback.
         void recordFilterAndComposite(VkCommandBuffer cb, uint32_t frame,
                                       uint32_t width, uint32_t height,
                                       uint32_t gbufMsaaSamples = 1,
                                       bool shadeBActive = false,
-                                      uint32_t preExpBits = 0x3F800000u);
+                                      uint32_t preExpBits = 0x3F800000u,
+                                      uint32_t lightingView = 0u);
 
         // ── Render-graph declarations ────────────────────────────────────────
         // Every record* above binds this frame's shared descriptor set (the

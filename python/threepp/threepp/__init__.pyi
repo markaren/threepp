@@ -7049,6 +7049,14 @@ class PointLight(Light):
     def distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
+    def radius(self) -> float:
+        """
+        Physical source radius (world units). Above 0 the Vulkan renderer traces soft shadows with penumbras that widen with distance; 0 (default) keeps hard shadows. GL ignores it.
+        """
+    @radius.setter
+    def radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
     def shadow(self) -> LightShadow:
         """
         The light's LightShadow (bias, radius, intensity, map_size).
@@ -7561,6 +7569,11 @@ class SVGLoader:
         Parse SVG XML into a Group of filled meshes.
         """
 class ScalarField:
+    @staticmethod
+    def from_numpy(data: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], origin: Vector3, cell_size: typing.SupportsFloat | typing.SupportsIndex) -> ScalarField:
+        """
+        Field from a (nz, ny, nx) float32 array (the layout data_numpy returns); node (x, y, z) sits at origin + cell_size * (x, y, z).
+        """
     def __init__(self) -> None:
         ...
     def at(self, x: typing.SupportsInt | typing.SupportsIndex, y: typing.SupportsInt | typing.SupportsIndex, z: typing.SupportsInt | typing.SupportsIndex) -> float:
@@ -7568,11 +7581,6 @@ class ScalarField:
     def data_numpy(self) -> numpy.typing.NDArray[numpy.float32]:
         """
         Return field data as (nz, ny, nx) float32 numpy array.
-        """
-    @staticmethod
-    def from_numpy(data: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], origin: Vector3, cell_size: typing.SupportsFloat | typing.SupportsIndex) -> ScalarField:
-        """
-        Field from a (nz, ny, nx) float32 array (the layout data_numpy returns); node (x, y, z) sits at origin + cell_size * (x, y, z).
         """
     @property
     def cell_size(self) -> float:
@@ -8340,6 +8348,14 @@ class SpotLight(Light):
         ...
     @penumbra.setter
     def penumbra(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def radius(self) -> float:
+        """
+        Physical source radius (world units). Above 0 the Vulkan renderer traces soft shadows with penumbras that widen with distance; 0 (default) keeps hard shadows. GL ignores it.
+        """
+    @radius.setter
+    def radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def shadow(self) -> LightShadow:
@@ -9764,6 +9780,10 @@ class VulkanRenderer:
         """
         Back to a measurement camera: still rendered, still readable, no longer drawn into the frame.
         """
+    def probe_grid(self) -> typing.Any:
+        """
+        The probe-GI grid as a dict: 'origin' (the first probe's world position), 'spacing', 'dims' (x, y, z), and 'sh', float32 (N, 4, 4): per probe the SH-L1 irradiance rows L00, L1x, L1y, L1z (rgb) with validity, update count and two statistics in column 3. Probe (i, j, k) is row i + dims[0]*(j + dims[1]*k), at origin + (i, j, k)*spacing. None before the grid is fitted. Full device sync.
+        """
     def read_albedo(self, scene: Object3D, camera: Camera) -> numpy.typing.NDArray[numpy.uint8]:
         ...
     def read_aovs_typed(self, scene: Object3D, camera: Camera, aovs: collections.abc.Sequence[str] = ['rgb', 'depth', 'normals', 'instance_ids']) -> dict:
@@ -10234,6 +10254,14 @@ class VulkanRenderer:
         """
     @lens_overscan.setter
     def lens_overscan(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def lighting_view(self) -> str:
+        """
+        One lighting term in place of the lit frame: 'final' (default), 'direct_unshadowed' (analytic direct light, no shadows), 'direct_temporal' (times the shadow ratio accumulated over frames, before spatial filtering), 'direct' (times the denoised shadow ratio), 'indirect_temporal' (diffuse bounce light accumulated over frames, before spatial filtering), 'indirect' (denoised), 'reflections' (after the roughness blur), 'final_temporal' (the lit frame before spatial filtering). Tone mapping and TAA still run. Needs denoise on; primary view only.
+        """
+    @lighting_view.setter
+    def lighting_view(self, arg1: str) -> None:
         ...
     @property
     def occlusion_culling(self) -> bool:

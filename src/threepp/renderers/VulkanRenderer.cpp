@@ -292,10 +292,12 @@ namespace threepp {
         // the filter reads the indirect 5×5 neighbourhood and read-modify-
         // writes sceneHdr.
         if (denoiseEnabled_) {
-            auto pass = g.addPass("denoise", [this, f, viewMsaaSamples, shadeBActive](VkCommandBuffer c) {
+            const uint32_t lightingView = view().secondary ? 0u : lightingView_;
+            auto pass = g.addPass("denoise", [this, f, viewMsaaSamples, shadeBActive, lightingView](VkCommandBuffer c) {
                 gpuTimings_->begin(c, TP_Denoise, f);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
                 view().deferredShade_->recordFilterAndComposite(c, f, regionRenderExt_.width, regionRenderExt_.height,
-                                                                viewMsaaSamples, shadeBActive, preExpBits_);
+                                                                viewMsaaSamples, shadeBActive, preExpBits_,
+                                                                lightingView);
                 gpuTimings_->end(c, TP_Denoise, f);
             });
             shade.declare(g, pass, Stage::FilterComposite, f);
@@ -2827,6 +2829,27 @@ namespace threepp {
             case 5:  core()->hybridDebugView_ = V::Depth;  break;
             default: core()->hybridDebugView_ = V::Off;    break;
         }
+    }
+
+    void VulkanRenderer::setLightingView(LightingView view) {
+        core()->lightingView_ = static_cast<uint32_t>(view);
+    }
+
+    VulkanRenderer::LightingView VulkanRenderer::lightingView() const {
+        return static_cast<LightingView>(core()->lightingView_);
+    }
+
+    bool VulkanRenderer::probeGrid(float origin[3], float spacing[3], int dims[3]) const {
+        const auto* probes = core()->probeGI_.get();
+        if (!probes || !probes->gridFitted()) return false;
+        const int d[3] = {static_cast<int>(vulkan::ProbeGI::kDimX), static_cast<int>(vulkan::ProbeGI::kDimY),
+                          static_cast<int>(vulkan::ProbeGI::kDimZ)};
+        for (int a = 0; a < 3; ++a) {
+            origin[a]  = probes->gridOrigin()[a];
+            spacing[a] = probes->gridSpacing()[a];
+            dims[a]    = d[a];
+        }
+        return true;
     }
 
     int VulkanRenderer::hybridDebugView() const {

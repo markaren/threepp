@@ -32,6 +32,10 @@ layout(set = 0, binding = 31, rgba16f) uniform readonly image2D reflAuxImage;// 
 void main() {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
+    // Lighting views other than the lit frame (0), the reflections (6) and
+    // the lit frame before spatial filtering (7) show a term without
+    // reflections (deferred_gi_filter's recombine).
+    if (pc.lightingView != 0u && pc.lightingView != 6u && pc.lightingView != 7u) return;
     const ivec2 mx = ivec2(int(pc.width), int(pc.height)) - 1;
 
     // ── REFLECTION gloss reconstruction ──────────────────────────────────────
@@ -86,7 +90,9 @@ void main() {
         // AND bleeds the per-pixel Fresnel reflection across the face = the "washed,
         // detail-destroyed" look. Frosted glass (rough ≥ 0.12) still blurs below.
         // Separable: H passes it through untouched, V adds it sharp.
-        if (isGlass && rough < 0.12) {
+        // Lighting view 7 (the lit frame before spatial filtering) adds every
+        // reflection as the shade's temporal pass left it, as clear glass does.
+        if ((isGlass && rough < 0.12) || pc.lightingView == 7u) {
             if (!vert) { imageStore(atrousB, px, cR); return; }
             const vec3 cur = imageLoad(outImage, px).rgb;// pre-exposed by the shade
             imageStore(outImage, px, vec4(cur + cR.rgb * fogTransmittance(camPos, Pc) * recombineCoverage(px)
