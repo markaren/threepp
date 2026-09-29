@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 
 namespace threepp {
@@ -212,6 +213,16 @@ namespace threepp {
             return t * t * (3.f - 2.f * t);
         };
 
+        // Hull margin: mirrors ocean_cascade.glsl oceanHullMargin (0.6 x half-beam
+        // in [0.3, 2] m; THREEPP_OCEAN_HULL_MARGIN=0 = the old fixed 2 m).
+        static const bool kScaledHullMargin = [] {
+            const char* e = std::getenv("THREEPP_OCEAN_HULL_MARGIN");
+            return !(e && e[0] == '0');
+        }();
+        const float hullMargin = kScaledHullMargin
+                                         ? std::clamp(0.6f * hullExclusion.halfBeam, 0.3f, 2.f)
+                                         : 2.f;
+
         auto vWedgeAtPose = [&](float cx, float cz, float sinYaw, float cosYaw,
                                 float speed, float ageFade) -> float {
             const float spd  = std::abs(speed);
@@ -236,7 +247,7 @@ namespace threepp {
             }
             const float hullEdgeX = std::abs(lX) - halfBeamAtLZ;
             const float hullEdgeZ = std::abs(lZ) - hullExclusion.halfLength;
-            const float hullFade  = smoothstepF(0.f, 2.f,
+            const float hullFade  = smoothstepF(0.f, hullMargin,
                                                 std::max(hullEdgeX, hullEdgeZ));
             if (hullFade <= 0.f) return 0.f;
             const float tanAV = 0.36f;

@@ -2547,14 +2547,16 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
                 // and splat foam out across the stem line (gaussian bow splats used
                 // to paint foam metres ahead of the bow); THREEPP_OCEAN_THIN_WAKE
                 // lowers and narrows the analytic trail so it stops reading as a
-                // solid white carpet. See foam_world.comp.
+                // solid white carpet; THREEPP_OCEAN_HULL_MARGIN scales the hull
+                // margin with the hull (ocean_cascade.glsl). See foam_world.comp.
                 static const uint32_t kVesselFoamFlags = [] {
                     const auto on = [](const char* name) {
                         const char* e = std::getenv(name);
                         return !(e && e[0] == '0');
                     };
                     return (on("THREEPP_OCEAN_BOW_CLEAR") ? 1u : 0u) |
-                           (on("THREEPP_OCEAN_THIN_WAKE") ? 2u : 0u);
+                           (on("THREEPP_OCEAN_THIN_WAKE") ? 2u : 0u) |
+                           (on("THREEPP_OCEAN_HULL_MARGIN") ? 4u : 0u);
                 }();
                 fpc.vesselFoamFlags = kVesselFoamFlags;
                 if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanFoam, currentFrame);

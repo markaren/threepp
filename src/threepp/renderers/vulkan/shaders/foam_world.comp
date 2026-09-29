@@ -88,7 +88,8 @@ layout(push_constant, scalar) uniform Pc {
     float  decay;
     uint   wakeTrailCount;  // # valid samples in wakeTrailAddr
     float  natFoamScale;    // scales NATURAL Jacobian whitecaps; wake/splats unaffected
-    uint   vesselFoamFlags; // bit 0: clear ahead of the stem, bit 1: thin wake trail
+    uint   vesselFoamFlags; // bit 0: clear ahead of the stem, bit 1: thin wake trail,
+                            // bit 2: hull margin scales with the hull (oceanHullMargin)
     float  _pad0;
 } pc;
 
@@ -272,6 +273,7 @@ void main() {
     // populated (no historical buffer set, or vessel just spawned).
     float wakeFoam = 0.0;
     const int thin = (pc.vesselFoamFlags & 2u) != 0u ? 1 : 0;
+    const float hullMargin = oceanHullMargin(pc.hullHalfBeam, (pc.vesselFoamFlags & 4u) != 0u);
     if (pc.hullHalfLength > 0.0) {
         if (pc.wakeTrailAddr != 0ul && pc.wakeTrailCount > 0u) {
             WakeTrailBuf wt = WakeTrailBuf(pc.wakeTrailAddr);
@@ -313,7 +315,7 @@ void main() {
                     }
                     const float sHullEdgeX = abs(sLX) - sHalfBeamAtLZ;
                     const float sHullEdgeZ = abs(sLZ) - pc.hullHalfLength;
-                    const float sHullFade  = smoothstep(0.0, 2.0,
+                    const float sHullFade  = smoothstep(0.0, hullMargin,
                                                         max(sHullEdgeX, sHullEdgeZ));
                     if (sHullFade <= 0.0) continue;
                     const float tanAV     = 0.36;
@@ -354,7 +356,7 @@ void main() {
                     }
                     const float hullEdgeX = abs(lX) - halfBeamAtLZ;
                     const float hullEdgeZ = abs(lZ) - pc.hullHalfLength;
-                    const float curHullFade = smoothstep(0.0, 2.0,
+                    const float curHullFade = smoothstep(0.0, hullMargin,
                                                          max(hullEdgeX, hullEdgeZ));
                     const float tanAV     = 0.36;
                     const float expectedX = tanAV * distAft;
