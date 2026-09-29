@@ -24,14 +24,9 @@ What is on screen was checked against the program:
 """
 from __future__ import annotations
 
-import atexit
-import glob
 import math
 import os
-import re
-import subprocess
 import sys
-import tempfile
 import time
 
 import numpy as np
@@ -41,7 +36,7 @@ sys.path.insert(0, _HERE)
 import lesson  # noqa: E402
 from lesson import (DIM, TEXT, Hud, Stage, clamp01, ease_out, envelope, fade_in_out, remap,  # noqa: E402
                     run, smooth, tp)
-from lesson import card, tokenize  # noqa: E402  (the house card and the syntax colours)
+from lesson import Stream, card, indent, preprocess, step_rows, tokenize  # noqa: E402
 
 FPS = 60
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
@@ -125,115 +120,12 @@ BUILD_CMD = ["cmake -B build -DLESSON_APP_STEP=3", "cmake --build build --target
 
 
 # ── app.cpp, step by step ─────────────────────────────────────────────────────
-def _cond(directive, step, defines):
-    """The value of one #if / #ifdef / #ifndef line (STEP >= k and STEP < k are all app.cpp uses)."""
-    d = directive.strip()
-    m = re.match(r"#(?:el)?if\s+STEP\s*(>=|<)\s*(\d+)$", d)
-    if m:
-        k = int(m.group(2))
-        return step >= k if m.group(1) == ">=" else step < k
-    m = re.match(r"#if(n?)def\s+(\w+)$", d)
-    if m:
-        on = m.group(2) in defines
-        return not on if m.group(1) else on
-    raise ValueError(f"app.cpp: a directive the film cannot read: {d}")
-
-
-def preprocess(lines, step, defines=("STEP",)):
-    """Indices of the source lines the preprocessor keeps for STEP = step (directives dropped)."""
-    keep, stack, active = [], [], True
-    for i, line in enumerate(lines):
-        s = line.strip()
-        if s.startswith(("#if ", "#ifdef ", "#ifndef ")):
-            c = _cond(s, step, defines)
-            stack.append([active, c])
-            active = active and c
-        elif s.startswith("#elif"):
-            parent, taken = stack[-1]
-            c = _cond(s, step, defines)
-            active = parent and not taken and c
-            stack[-1][1] = taken or c
-        elif s.startswith("#else"):
-            parent, taken = stack[-1]
-            active = parent and not taken
-            stack[-1][1] = True
-        elif s.startswith("#endif"):
-            active = stack.pop()[0]
-        elif active:
-            keep.append(i)
-    return keep
-
-
-def _indent(s):
-    return len(s) - len(s.lstrip(" "))
-
-
-def step_rows(lines, step, defines=("STEP",), base=None):
-    """What step `step` changes, as display rows [(kind, text)]: 'add' and 'del' lines, and
-    dim 'ctx' lines (the block they sit in) and 'gap's between separate places."""
-    now = set(preprocess(lines, step, defines))
-    before = set(preprocess(lines, step - 1, ("STEP",))) if base is None else set(base)
-    changed = sorted((now - before) | (before - now))
-    rows, last, ctx_open = [], None, None
-    for i in changed:
-        if not lines[i].strip() and (last is None or i != last + 1):
-            continue
-        if last is not None and any(lines[j].strip() and (j in now or j in before) for j in range(last + 1, i)):
-            # an unchanged line sits between: a new place in the file
-            ind = _indent(lines[i])
-            ctx = None
-            if ind > 4:
-                for j in range(i - 1, -1, -1):
-                    if j in now and lines[j].strip() and _indent(lines[j]) < ind:
-                        ctx = j
-                        break
-            if ctx is not None and ctx == ctx_open:
-                rows.append(("gap", ""))
-            else:
-                if ctx_open is not None:
-                    rows.append(("ctx", "});"))
-                rows.append(("gap", ""))
-                if ctx is not None:
-                    rows.append(("ctx", lines[ctx][4:]))
-                ctx_open = ctx
-        elif last is None:
-            ind = _indent(lines[i])
-            if ind > 4:
-                for j in range(i - 1, -1, -1):
-                    if j in now and lines[j].strip() and _indent(lines[j]) < ind:
-                        rows.append(("ctx", lines[j][4:]))
-                        ctx_open = j
-                        break
-        kind = "add" if i in now else "del"
-        rows.append((kind, lines[i][4:] if lines[i].startswith("    ") else lines[i]))
-        last = i
-    while rows and not rows[-1][1].strip() and rows[-1][0] != "gap":
-        rows.pop()
-    if ctx_open is not None:
-        rows.append(("ctx", "});"))
-    # blank rows inside a run stay (they are part of the code); strip them at the ends
-    while rows and rows[0][0] == "gap":
-        rows.pop(0)
-    return rows
-
-
 def app_source():
     with open(APP_CPP, encoding="utf-8") as f:
         return f.read().split("\n")
 
 
 # ── the program's own window, streamed from its capture build ─────────────────
-def capture_exe(tag):
-    name = f"lesson_app_capture_{tag}.exe" if os.name == "nt" else f"lesson_app_capture_{tag}"
-    roots = [os.environ.get("LESSON_APP_BIN", "")] + sorted(glob.glob(os.path.join(REPO, "cmake-build-*", "bin")))
-    for r in roots:
-        p = os.path.join(r, name)
-        if r and os.path.isfile(p):
-            return p
-    raise FileNotFoundError(f"{name}: build the CMake targets lesson_app_capture_0..8 and "
-                            f"lesson_app_capture_6_separate (or point LESSON_APP_BIN at them)")
-
-
 class Script:
     """A mouse script for one capture: events at film times, turned into capture frames."""
 
@@ -293,103 +185,6 @@ class Script:
             else:
                 break
         return cur[1], cur[2], cur[3], a
-
-
-class Stream:
-    """One capture build, running headless and streaming its frames into a texture. Frames
-    come in order; asking for an earlier one restarts the program (it is deterministic)."""
-    W, H = 1280, 720
-
-    def __init__(self, tag, script, stats=False):
-        self.tag, self.script = tag, script
-        self.exe = capture_exe(tag)
-        fd, self.script_path = tempfile.mkstemp(prefix=f"lesson_app_{tag}_", suffix=".txt")
-        with os.fdopen(fd, "w") as f:
-            f.write(script.text() + "\n")
-        self.stats_path = self.script_path[:-4] + ".stats"
-        self.proc, self.k, self.cur = None, -1, None
-        self.texture = None
-        self.calls = None
-        atexit.register(self.close)
-        if stats:
-            self._read_stats()
-
-    def _start(self):
-        self.close_proc()
-        env = dict(os.environ, LESSON_SCRIPT=self.script_path, LESSON_OUT="-", LESSON_STATS=self.stats_path)
-        self.proc = subprocess.Popen([self.exe], env=env, cwd=os.path.dirname(self.exe), stdout=subprocess.PIPE,
-                                     stderr=subprocess.DEVNULL, bufsize=0)
-        # anything the program printed before its first frame comes first; the marker line ends it
-        buf = b""
-        while b"LESSON_FRAMES" not in buf or not buf[buf.index(b"LESSON_FRAMES"):].count(b"\n"):
-            ch = self.proc.stdout.read(1)
-            if not ch:
-                raise RuntimeError(f"{self.exe} ended before its first frame")
-            buf += ch
-        self.k = -1
-
-    def _read_one(self):
-        n = self.W * self.H * 3
-        data = bytearray()
-        while len(data) < n:
-            chunk = self.proc.stdout.read(n - len(data))
-            if not chunk:
-                raise RuntimeError(f"{self.exe} ended at frame {self.k + 1}")
-            data += chunk
-        self.k += 1
-        return data
-
-    def frame(self, k):
-        """Frame k (0-based, clamped to the script) as (H, W, 3) uint8."""
-        k = min(max(int(k), 0), self.script.frames - 1)
-        if self.proc is None or k < self.k:
-            self._start()
-        data = None
-        while self.k < k:
-            data = self._read_one()
-        if data is not None:
-            self.cur = np.frombuffer(bytes(data), np.uint8).reshape(self.H, self.W, 3)
-        return self.cur
-
-    def at(self, t):
-        return self.frame(self.script.frame(t))
-
-    def tex(self, t):
-        img = self.at(t)[::-1]            # textures take their rows bottom first
-        if self.texture is None:
-            self.texture = tp.data_texture(np.ascontiguousarray(img), True)
-            self._shown = self.k
-        elif self._shown != self.k:
-            self.texture.update_data(np.ascontiguousarray(img))
-            self._shown = self.k
-        return self.texture
-
-    def _read_stats(self):
-        """Run the program once through, for the renderer's counts on every frame."""
-        self.frame(self.script.frames - 1)
-        self.close_proc()
-        self.calls = np.loadtxt(self.stats_path).reshape(-1, 2)
-
-    def stat(self, t):
-        k = min(self.script.frame(t), len(self.calls) - 1)
-        return int(self.calls[k, 0]), int(self.calls[k, 1])
-
-    def close_proc(self):
-        if self.proc is not None:
-            try:
-                self.proc.kill()
-                self.proc.wait(timeout=5)
-            except Exception:
-                pass
-            self.proc = None
-
-    def close(self):
-        self.close_proc()
-        for p in (self.script_path, self.stats_path):
-            try:
-                os.remove(p)
-            except OSError:
-                pass
 
 
 # ── when each program runs, and what the mouse does ───────────────────────────
@@ -773,7 +568,7 @@ class Painter:
         for j, i in enumerate(shown):
             ra = a * smooth(remap(t, TL.start("end") + 0.4 + 0.006 * j, TL.start("end") + 0.7 + 0.006 * j))
             s = lines[i].rstrip()
-            ind = _indent(s)
+            ind = indent(s)
             if not s.strip():
                 continue
             ov.panel(x + 20 + ind * 4.2, y + 52 + j * lh, (len(s) - ind) * 4.2, max(lh - 1.0, 1.5), radius=0,
@@ -814,10 +609,10 @@ def setup(width, height):
             del owner[i]
     n_lines = sum(1 for i in owner if lines[i].strip())
     ws, sc = build_streams(rows)
-    streams = {"open": Stream(8, sc["open"])}
+    streams = {"open": Stream("lesson_app_capture_8", sc["open"])}
     for n in range(9):
-        streams[n] = Stream(n, sc[n], stats=(n == 6))
-    streams["6sep"] = Stream("6_separate", sc[6], stats=True)
+        streams[n] = Stream(f"lesson_app_capture_{n}", sc[n], stats=(n == 6))
+    streams["6sep"] = Stream("lesson_app_capture_6_separate", sc[6], stats=True)
     k2 = cap0("n2") + 2.0
     sep = streams["6sep"].calls[:, 0]
     k0, k1 = sc[6].frame(cap0("n2")), sc[6].frame(CAP["n2"][1])

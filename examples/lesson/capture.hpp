@@ -15,6 +15,8 @@
 //                   ("-" streams them to stdout, for a reader that takes them as they come)
 //   LESSON_STATS    optional: a text file for the renderer's draw calls and triangles per
 //                   frame (default <LESSON_OUT>.txt)
+//   LESSON_MARK_FRAMES  optional: print "LESSON_FRAME k" before frame k, so whatever the
+//                   program prints can be matched to the frame it was printed in
 //
 // The mouse reaches the program through the canvas's own event path (so OrbitControls,
 // listeners and IOCapture see it as they would a real one), and Dear ImGui through its
@@ -114,7 +116,9 @@ namespace lesson_capture {
             const char* statsPath = std::getenv("LESSON_STATS");
             std::ofstream stats(statsPath ? std::string(statsPath) : std::string(outPath) + ".txt");
             threepp::Vector2 cursor{-1, -1};
+            const bool markFrames = std::getenv("LESSON_MARK_FRAMES") != nullptr;
             for (int k = 0; k < frames; k++) {
+                if (markFrames) std::cout << "LESSON_FRAME " << k << std::endl;
                 for (const auto& e : events[k]) {
                     if (e.kind == "key") {
                         const threepp::KeyEvent key(threepp::keyFromName(e.key), 0, 0);

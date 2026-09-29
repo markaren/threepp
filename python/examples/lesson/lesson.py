@@ -30,13 +30,16 @@ and run alike:
 from __future__ import annotations
 
 import argparse
+import atexit
 import glob
 import inspect
 import json
 import math
 import os
 import re
+import subprocess
 import sys
+import tempfile
 import time
 
 import numpy as np
@@ -172,6 +175,240 @@ def code_card(ov, t, t_in, t_out, x, y, lines, lang, title, size=20, lh=27, stag
         for j, line in enumerate(out):
             ov.text(x + 30, yy + 2 + lh * j + lh / 2, line, size=size, color=out_color, alpha=oa, kind="mono",
                     anchor="lm")
+
+
+
+# ── C++ programs on screen: steps of a source, and capture builds ──────────────
+# A lesson program grows in steps marked `#if STEP >= n` (examples/lesson/app.cpp, snake/main.cpp),
+# and each step is built as a capture program (examples/lesson/capture.hpp): headless, on a fixed
+# 1/60 s clock, with the input replayed from a script. The film shows what a step adds, read
+# out of the source, and the window is that program's own output, streamed in as it runs.
+def _cond(directive, step, defines):
+    """The value of one #if / #ifdef / #ifndef line (STEP >= k and STEP < k are all the lessons use)."""
+    d = directive.strip()
+    m = re.match(r"#(?:el)?if\s+STEP\s*(>=|<)\s*(\d+)$", d)
+    if m:
+        k = int(m.group(2))
+        return step >= k if m.group(1) == ">=" else step < k
+    m = re.match(r"#if(n?)def\s+(\w+)$", d)
+    if m:
+        on = m.group(2) in defines
+        return not on if m.group(1) else on
+    raise ValueError(f"a directive the film cannot read: {d}")
+
+
+def preprocess(lines, step, defines=("STEP",)):
+    """Indices of the source lines the preprocessor keeps for STEP = step (directives dropped)."""
+    keep, stack, active = [], [], True
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s.startswith(("#if ", "#ifdef ", "#ifndef ")):
+            c = _cond(s, step, defines)
+            stack.append([active, c])
+            active = active and c
+        elif s.startswith("#elif"):
+            parent, taken = stack[-1]
+            c = _cond(s, step, defines)
+            active = parent and not taken and c
+            stack[-1][1] = taken or c
+        elif s.startswith("#else"):
+            parent, taken = stack[-1]
+            active = parent and not taken
+            stack[-1][1] = True
+        elif s.startswith("#endif"):
+            active = stack.pop()[0]
+        elif active:
+            keep.append(i)
+    return keep
+
+
+def indent(s):
+    return len(s) - len(s.lstrip(" "))
+
+def step_rows(lines, step, defines=("STEP",), base=None):
+    """What step `step` changes, as display rows [(kind, text)]: 'add' and 'del' lines, and
+    dim 'ctx' lines (the block they sit in) and 'gap's between separate places."""
+    now = set(preprocess(lines, step, defines))
+    before = set(preprocess(lines, step - 1, ("STEP",))) if base is None else set(base)
+    changed = sorted((now - before) | (before - now))
+    rows, last, ctx_open = [], None, None
+    for i in changed:
+        if not lines[i].strip() and (last is None or i != last + 1):
+            continue
+        if last is not None and any(lines[j].strip() and (j in now or j in before) for j in range(last + 1, i)):
+            # an unchanged line sits between: a new place in the file
+            ind = indent(lines[i])
+            ctx = None
+            if ind > 4:
+                for j in range(i - 1, -1, -1):
+                    if j in now and lines[j].strip() and indent(lines[j]) < ind:
+                        ctx = j
+                        break
+            if ctx is not None and ctx == ctx_open:
+                rows.append(("gap", ""))
+            else:
+                if ctx_open is not None:
+                    rows.append(("ctx", "});"))
+                rows.append(("gap", ""))
+                if ctx is not None:
+                    rows.append(("ctx", lines[ctx][4:]))
+                ctx_open = ctx
+        elif last is None:
+            ind = indent(lines[i])
+            if ind > 4:
+                for j in range(i - 1, -1, -1):
+                    if j in now and lines[j].strip() and indent(lines[j]) < ind:
+                        rows.append(("ctx", lines[j][4:]))
+                        ctx_open = j
+                        break
+        kind = "add" if i in now else "del"
+        rows.append((kind, lines[i][4:] if lines[i].startswith("    ") else lines[i]))
+        last = i
+    while rows and not rows[-1][1].strip() and rows[-1][0] != "gap":
+        rows.pop()
+    if ctx_open is not None:
+        rows.append(("ctx", "});"))
+    # blank rows inside a run stay (they are part of the code); strip them at the ends
+    while rows and rows[0][0] == "gap":
+        rows.pop(0)
+    return rows
+
+
+def capture_exe(name, env="LESSON_APP_BIN"):
+    """The capture build `name` (a CMake target beside the lesson's program), from the
+    directory in $`env` or a cmake-build-*/bin of this checkout."""
+    exe = f"{name}.exe" if os.name == "nt" else name
+    repo = os.path.dirname(_PY)
+    roots = [os.environ.get(env, "")] + sorted(glob.glob(os.path.join(repo, "cmake-build-*", "bin")))
+    for r in roots:
+        p = os.path.join(r, exe)
+        if r and os.path.isfile(p):
+            return p
+    raise FileNotFoundError(f"{exe}: build the CMake target {name} (or point {env} at its directory)")
+
+
+class Stream:
+    """One capture build, running headless and streaming its frames into a texture. Frames
+    come in order; asking for an earlier one restarts the program (it is deterministic).
+    `script` has .text() (the LESSON_SCRIPT file), .frames, .frame(t) and .t1. `stats`: run it
+    through once first, for the renderer's counts per frame (`stat`); `log`: the same, for what
+    the program prints in each frame (`printed`). `args` go on the program's command line."""
+    W, H = 1280, 720
+
+    def __init__(self, name, script, stats=False, log=False, args=()):
+        self.name, self.script, self.args = name, script, list(args)
+        self.exe = capture_exe(name)
+        fd, self.script_path = tempfile.mkstemp(prefix=f"{name}_", suffix=".txt")
+        with os.fdopen(fd, "w") as f:
+            f.write(script.text() + "\n")
+        self.stats_path = self.script_path[:-4] + ".stats"
+        self.proc, self.k, self.cur = None, -1, None
+        self.texture = None
+        self.calls = None
+        self.log = None
+        atexit.register(self.close)
+        if stats or log:
+            self._prepass(log)
+
+    def _start(self):
+        self.close_proc()
+        env = dict(os.environ, LESSON_SCRIPT=self.script_path, LESSON_OUT="-", LESSON_STATS=self.stats_path)
+        self.proc = subprocess.Popen([self.exe] + self.args, env=env, cwd=os.path.dirname(self.exe),
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+        # anything the program printed before its first frame comes first; the marker line ends it
+        buf = b""
+        while b"LESSON_FRAMES" not in buf or not buf[buf.index(b"LESSON_FRAMES"):].count(b"\n"):
+            ch = self.proc.stdout.read(1)
+            if not ch:
+                raise RuntimeError(f"{self.exe} ended before its first frame")
+            buf += ch
+        self.k = -1
+
+    def _read_one(self):
+        n = self.W * self.H * 3
+        data = bytearray()
+        while len(data) < n:
+            chunk = self.proc.stdout.read(n - len(data))
+            if not chunk:
+                raise RuntimeError(f"{self.exe} ended at frame {self.k + 1}")
+            data += chunk
+        self.k += 1
+        return data
+
+    def frame(self, k):
+        """Frame k (0-based, clamped to the script) as (H, W, 3) uint8."""
+        k = min(max(int(k), 0), self.script.frames - 1)
+        if self.proc is None or k < self.k:
+            self._start()
+        data = None
+        while self.k < k:
+            data = self._read_one()
+        if data is not None:
+            self.cur = np.frombuffer(bytes(data), np.uint8).reshape(self.H, self.W, 3)
+        return self.cur
+
+    def at(self, t):
+        return self.frame(self.script.frame(t))
+
+    def tex(self, t):
+        img = self.at(t)[::-1]            # textures take their rows bottom first
+        if self.texture is None:
+            self.texture = tp.data_texture(np.ascontiguousarray(img), True)
+            self._shown = self.k
+        elif self._shown != self.k:
+            self.texture.update_data(np.ascontiguousarray(img))
+            self._shown = self.k
+        return self.texture
+
+    def _prepass(self, log):
+        """Run the program once through, for the renderer's counts on every frame and, with
+        `log`, what it printed in each (capture.hpp marks the frames: LESSON_MARK_FRAMES)."""
+        if not log:     # as the stats were always read: streamed, then the program stopped
+            self.frame(self.script.frames - 1)
+            self.close_proc()
+            self.calls = np.loadtxt(self.stats_path).reshape(-1, 2)
+            return
+        env = dict(os.environ, LESSON_SCRIPT=self.script_path, LESSON_OUT=self.script_path[:-4] + ".rgb",
+                   LESSON_STATS=self.stats_path, LESSON_MARK_FRAMES="1")
+        out = subprocess.run([self.exe] + self.args, env=env, cwd=os.path.dirname(self.exe), capture_output=True,
+                             check=True).stdout.decode("utf-8", "replace")
+        try:
+            os.remove(self.script_path[:-4] + ".rgb")
+        except OSError:
+            pass
+        self.calls = np.loadtxt(self.stats_path).reshape(-1, 2)
+        self.log, k = {}, -1
+        for line in out.splitlines():
+            if line.startswith("LESSON_FRAME "):
+                k = int(line.split()[1])
+            else:
+                self.log.setdefault(k, []).append(line)
+
+    def printed(self, t):
+        """Every line the program printed up to the frame shown at t."""
+        k = self.script.frame(t)
+        return [line for f in sorted(self.log) if f <= k for line in self.log[f]]
+
+    def stat(self, t):
+        k = min(self.script.frame(t), len(self.calls) - 1)
+        return int(self.calls[k, 0]), int(self.calls[k, 1])
+
+    def close_proc(self):
+        if self.proc is not None:
+            try:
+                self.proc.kill()
+                self.proc.wait(timeout=5)
+            except Exception:
+                pass
+            self.proc = None
+
+    def close(self):
+        self.close_proc()
+        for p in (self.script_path, self.stats_path):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
 
 # ── the command line ──────────────────────────────────────────────────────────
