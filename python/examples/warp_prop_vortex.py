@@ -1,6 +1,6 @@
 """A twin-screw stern CAVITATING underwater -- NVIDIA Warp sim, Vulkan rendering.
 
-warp_nebula_vk.py proved the thesis on a cloud: particles carry the IMAGE, the
+warp_nebula.py --vulkan proved the thesis on a cloud: particles carry the IMAGE, the
 field's own density volume carries the LIGHT TRANSPORT. A nebula is the easy
 case for it, because a cloud has no shape you can be wrong about. This is the
 hard case, and the one the feature was built for: a five-bladed controllable-
