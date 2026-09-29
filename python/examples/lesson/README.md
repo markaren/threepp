@@ -1,13 +1,14 @@
 # lesson: explainer videos made with threepp
 
-`lesson.py` is a small toolkit for YouTube-style teaching clips. Eight lessons are
+`lesson.py` is a small toolkit for YouTube-style teaching clips. Nine lessons are
 made with it so far:
 
 | | |
 |---|---|
 | `threepp_intro.py` | Part 0, *What is threepp?* An introduction for new users, with the code in C++ (217 s) |
 | `first_app.py` | Part 0b, *Your first real app:* hello.cpp grows into an app in eight steps (194 s) |
-| `snake_oo.py` | Part 0c, *threepp is the view:* Snake, from one main() to a model, views and players (224 s) |
+| `snake_oo.py` | Part 0c, *threepp is the view:* Snake, written three times: all in main(), inheriting a Group, and the rules on their own (220 s) |
+| `snake_oo.py --part d` | Part 0d, *Who plays?* The same Snake grows players, events, more views and a second game |
 | `ik_fr3.py` | Part 1, *What does inverse kinematics actually solve?* (108 s, Franka FR3) |
 | `depth_map.py` | Part 2, *How a robot sees in 3D: from depth pixels to a map* (103 s) |
 | `imu_tilt.py` | Part 3, *Which way is up? How a robot measures its own tilt* (136 s, Range Rover on a PhysX track) |
@@ -188,8 +189,11 @@ for that frame:
 Part 0b needs those capture targets built (`cmake --build <dir> --target lesson_app_capture_0 ...`;
 set `LESSON_APP_BIN` if they are not in a `cmake-build-*/bin` beside the repo).
 
-**Part 0c.** The programs are in `examples/lesson/snake/`, for students who know Part 0b and now
-need to structure a program that grows. `tangle/` is Snake written the Part 0b way (all in
+**Parts 0c and 0d** (`snake_oo.py`, `--part d` for the second). The programs are in
+`examples/lesson/snake/`, for students who know Part 0b and now need to structure a program that
+grows. Part 0c opens on the game itself (the snake, the apple and a wall are labelled as the
+narrator names them, on the squares the scripted route puts them), says what it will do, and writes
+Snake three times; Part 0d carries on with the finished app's later steps. `tangle/` is Snake written the Part 0b way (all in
 `main()`, the meshes as the game's state), `trap/` the usual first try at objects (`class Snake :
 public Group`), and the finished app splits the rules (`model/`, a library that doesn't link
 threepp, so a threepp `#include` there fails to compile) from the looks (`view/`) and the players

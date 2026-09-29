@@ -1,0 +1,68 @@
+{
+ "af_heart": {
+  "title": {
+   "s": 3.98,
+   "said": "Who plays? Players, events, and more than one view of a game."
+  },
+  "a1": {
+   "s": 6.35,
+   "said": "Last time, Snake's rules moved into a model of their own, and three p p came back as a view."
+  },
+  "a2": {
+   "s": 8.5,
+   "said": "This time, the same program grows three more pieces: who plays, how the game tells others what happened, and more views of one game."
+  },
+  "k1": {
+   "s": 6.25,
+   "said": "First, a detail of the view. The rules tick at their own pace, and the screen draws much faster."
+  },
+  "k2": {
+   "s": 5.53,
+   "said": "So the view slides the snake between ticks. Only the view changed. The rules didn't."
+  },
+  "c1": {
+   "s": 5.12,
+   "said": "Who plays is an interface: one question, asked once per tick. Which way now?"
+  },
+  "c2": {
+   "s": 8.22,
+   "said": "The keyboard answers with the keys it has queued. The A I looks at the game and picks. Press tab, and the loop can't tell the difference."
+  },
+  "c3": {
+   "s": 8.45,
+   "said": "This is where inheritance belongs: a contract. The keyboard inherits two, ours and three p p's key listener, and no code."
+  },
+  "ev1": {
+   "s": 4.92,
+   "said": "When the snake eats, the game tells whoever is listening. The view pops a ring."
+  },
+  "ev2": {
+   "s": 3.23,
+   "said": "The game never knows who listens, or what they do."
+  },
+  "w1": {
+   "s": 8.03,
+   "said": "With the rules on their own, more views are cheap: a minimap in the corner, and the same game as text, with no three p p at all."
+  },
+  "w2": {
+   "s": 5.2,
+   "said": "Three views, one truth. They can't disagree, because none of them owns the game."
+  },
+  "r1": {
+   "s": 5.58,
+   "said": "And a second game is just more objects: another game, another view, another player."
+  },
+  "r2": {
+   "s": 5.15,
+   "said": "No globals to untangle, nothing to copy. Two A Is, side by side."
+  },
+  "z1": {
+   "s": 5.17,
+   "said": "The model owns the truth. Views only read it. Players only say what they want."
+  },
+  "z2": {
+   "s": 8.3,
+   "said": "three p p draws. It doesn't decide. Keep it at the edge, and the rest of your program stays yours to test, change and reuse."
+  }
+ }
+}

@@ -140,7 +140,7 @@ int main() {
     canvas.animate([&] {
         timer += clock.getDelta();
 
-        if (snake->alive() && timer > 0.125f) {
+        if (snake->alive() && timer > 0.2f) {
             timer = 0;
 
             const Vector3 next = snake->next();

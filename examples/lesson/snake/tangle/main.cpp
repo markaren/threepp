@@ -78,7 +78,7 @@ int main() {
     canvas.animate([&] {
         timer += clock.getDelta();
 
-        if (!dead && timer > 0.125f) {
+        if (!dead && timer > 0.2f) {
             timer = 0;
 
             Vector3 next = snake[0]->position + direction;

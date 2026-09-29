@@ -116,7 +116,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
     camera.lookAt(0, 0, -3.5f);
 #endif
 
-    const float tickTime = 0.125f;// eight ticks a second
+    const float tickTime = 0.2f;// five moves a second
     float sinceTick = 0;
 
     Clock clock;

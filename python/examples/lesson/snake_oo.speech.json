@@ -4,101 +4,85 @@
    "s": 4.88,
    "said": "three p p is the view. Where the code goes, when a program has to grow."
   },
+  "i1": {
+   "s": 5.85,
+   "said": "This is Snake. The snake moves on its own, one square at a time, and the arrow keys turn it."
+  },
+  "i2": {
+   "s": 5.12,
+   "said": "Eat the apple, and it grows. Hit a wall, or its own tail, and the game is over."
+  },
+  "i3": {
+   "s": 6.35,
+   "said": "It's a small game, which makes it a good place to ask a big question: where should each part of the code live?"
+  },
+  "i4": {
+   "s": 11.57,
+   "said": "We'll write it three times. First, everything in one function. Then, a class that inherits from three p p. And last, the rules on their own, with three p p only drawing them."
+  },
   "t1": {
-   "s": 4.95,
-   "said": "Here is Snake, written like our first app: everything lives in main, and it plays."
+   "s": 5.62,
+   "said": "Here is the first version, written like our first app. Everything lives in main, and it plays."
   },
   "t2": {
-   "s": 8.75,
-   "said": "But look at how it decides the snake has eaten: two float positions, less than half a unit apart. The truth of the game lives in the meshes."
+   "s": 8.5,
+   "said": "Look at how it decides that the snake has eaten: two float positions, less than half a unit apart. The game's truth lives in the meshes."
   },
   "t3": {
    "s": 6.85,
    "said": "And a key press turns the snake at once. Press two keys between moves, and it turns back into its own neck."
   },
   "t4": {
-   "s": 8.57,
-   "said": "Now three requests arrive: test the rules, run them without a window, add a second player. Here, each one means untangling main."
+   "s": 9.38,
+   "said": "Now three requests arrive: test the rules, run them without a window, and add a second player. Here, every one of them means untangling main."
   },
   "p1": {
-   "s": 8.65,
-   "said": "The first try at objects often looks like this: a Snake class that inherits from three p p's Group. Same game, frame for frame."
+   "s": 9.95,
+   "said": "The second version is the usual first try at objects: a Snake class that inherits from three p p's Group. It plays the same game, frame for frame."
   },
   "p2": {
-   "s": 7.75,
-   "said": "It's tidier, but a snake is now a scene node, and everything a Group has is public: position, scale, add, remove."
+   "s": 7.72,
+   "said": "It's tidier. But a snake is now a scene node, and everything a Group has is public: position, scale, add, remove."
   },
   "p3": {
-   "s": 9.78,
-   "said": "So one line anywhere can move it, and the snake you see and the snake the rules check part ways. It eats an apple it never touched, and dies off the board."
+   "s": 10.53,
+   "said": "So one line, anywhere, can move it. Now the snake you see and the snake the rules check have parted ways. It eats an apple it never touched, and dies off the board."
   },
   "p4": {
-   "s": 5.9,
-   "said": "A snake isn't a scene node. It has a look. So the rules move out, into classes of their own."
+   "s": 7.12,
+   "said": "A snake isn't a scene node. It has a look. So in the third version, the rules move out, into classes of their own."
   },
   "m1": {
-   "s": 7.42,
-   "said": "The model: whole cells on a board, a snake, an apple, and one tick of the rules. No floats, no meshes, no window."
+   "s": 7.88,
+   "said": "This is the model: whole squares on a board, a snake, an apple, and one tick of the rules. No floats, no meshes, no window."
   },
   "m2": {
-   "s": 7.05,
-   "said": "It's a library of its own that doesn't link three p p. Include a three p p header in it, and the build stops."
+   "s": 7.1,
+   "said": "It's a library of its own, and it doesn't link three p p. Include a three p p header in it, and the build stops."
   },
   "e1": {
-   "s": 7.05,
-   "said": "Rules without a window can be tested. A test sets up a game by hand, ticks it, and checks what happened."
+   "s": 7.3,
+   "said": "Rules without a window can be tested. A test sets up a game by hand, ticks it once, and checks what happened."
   },
   "e2": {
-   "s": 5.67,
-   "said": "The whole suite runs in the blink of an eye, and it pins down the double key press from before."
+   "s": 6.28,
+   "said": "The whole suite runs in the blink of an eye. And it pins down the double key press from the first version."
   },
   "v1": {
-   "s": 7.65,
-   "said": "Now three p p comes back, as a view. It holds a group of meshes, and every frame it reads the game and places them."
+   "s": 8.22,
+   "said": "Now three p p comes back, as a view. The view holds a group of meshes. Every frame, it reads the game and puts them in place."
   },
   "v2": {
-   "s": 7.83,
-   "said": "At first the view jumps from tick to tick. Then it slides between them. The rules keep their own clock, and never changed."
-  },
-  "c1": {
-   "s": 5.12,
-   "said": "Who plays is an interface: one question, asked once per tick. Which way now?"
-  },
-  "c2": {
-   "s": 8.22,
-   "said": "The keyboard answers with the keys it has queued. The A I looks at the game and picks. Press tab, and the loop can't tell the difference."
-  },
-  "c3": {
-   "s": 8.45,
-   "said": "This is where inheritance belongs: a contract. The keyboard inherits two, ours and three p p's key listener, and no code."
-  },
-  "ev1": {
-   "s": 6.83,
-   "said": "When the snake eats, the game tells whoever is listening. The view pops a ring. The game never knows it's there."
-  },
-  "w1": {
-   "s": 8.03,
-   "said": "With the rules on their own, more views are cheap: a minimap in the corner, and the same game as text, with no three p p at all."
-  },
-  "w2": {
-   "s": 5.2,
-   "said": "Three views, one truth. They can't disagree, because none of them owns the game."
-  },
-  "r1": {
-   "s": 5.58,
-   "said": "And a second game is just more objects: another game, another view, another player."
-  },
-  "r2": {
-   "s": 5.15,
-   "said": "No globals to untangle, nothing to copy. Two A Is, side by side."
+   "s": 5.08,
+   "said": "It never changes the game. The game is the truth, and the view only shows it."
   },
   "z1": {
-   "s": 5.17,
-   "said": "The model owns the truth. Views only read it. Players only say what they want."
+   "s": 7.78,
+   "said": "The model owns the truth. The view only reads it. And three p p stays at the edge, where it draws, but never decides."
   },
   "z2": {
-   "s": 8.3,
-   "said": "three p p draws. It doesn't decide. Keep it at the edge, and the rest of your program stays yours to test, change and reuse."
+   "s": 6.15,
+   "said": "Next time: who plays the game, how the game tells others what happened, and more than one view of it."
   }
  }
 }
