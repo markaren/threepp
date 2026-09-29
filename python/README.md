@@ -165,6 +165,7 @@ self-contained; what they share lives in [`examples/warp_common.py`](https://git
 | [`examples/warp_hydraulic_press.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_hydraulic_press.py) | A chrome sphere crushed by a hydraulic press in a Cornell box. |
 | [`examples/warp_explosion.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_explosion.py) | Blast Yard: a brick test range demolished by a charge (PhysX + Warp + Vulkan). |
 | [`examples/warp_gummy_rain.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_gummy_rain.py) | Hundreds of soft jelly candies pour into a glass bowl, each one its own XPBD lattice. |
+| [`examples/warp_soft_tentacle.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_soft_tentacle.py) | Soft robotic tentacles, tapered XPBD tet bodies, each wrap a ball and lift it. |
 | [`examples/warp_jelly_wreck.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_jelly_wreck.py) | A wall of jelly blocks smashed by a chrome wrecking ball, with an event-camera and lidar mosaic ([`sensor_panels.py`](https://github.com/markaren/threepp/blob/master/python/examples/sensor_panels.py)). |
 | [`examples/warp_nebula.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_nebula.py) | A particle nebula (GL). |
 | [`examples/warp_nebula_vk.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_nebula_vk.py) | The same nebula as a VOLUME, through the Vulkan particle sprites. |
