@@ -1,0 +1,210 @@
+{
+  "schema": "threepp.usv_spec/1",
+  "name": "Mariner",
+  "description": "A model of Maritime Robotics' Mariner USV (MKII) for the USV demos. One file drives the Blender generator (build_mariner_blender.py -> mariner.glb + mariner_hydro.json) and the physics.",
+  "reference": {
+    "vendor_figures": "Brochure (mr-mariner-usv-brochure-a3-digital.pdf, maritimerobotics.com/mariner): L x W x H 5980 x 2060 x 2700 mm, dry weight 2000 kg, draft 500 mm, polyethylene (PE) hull, one moonpool well, Hamilton waterjet with a 196 hp Yanmar diesel, bow thruster standard, top speed 24 kn, 200 L fuel, 72 h at survey speed, camera / AIS class B / radar, LTE (4G). Payload 400 kg (product page).",
+    "geometry_source": "No drawings are public. Every other number here is fitted to the vendor's side and front renders (the 'Primary Specifications' figure) and the top-down photo mariner-seadrone-maritime-robotics-02.jpg. Side view: 8.90 mm/px along X (LOA over 672 px), 9.15 mm/px along Y (lowest point to the camera top over 295 px). Treat anything not in vendor_figures as an estimate good to a few centimetres.",
+    "assumed": "Sensor models, fields of view, radar beam, thrust figures and the whole mass budget are assumptions, marked as such where they appear."
+  },
+  "units": "SI: metres, kilograms, newtons, seconds. Keys ending in _deg are degrees.",
+  "frame": {
+    "handedness": "right",
+    "forward": "+X",
+    "up": "+Y",
+    "right": "+Z (starboard)",
+    "left": "-Z (port)",
+    "origin": "On the centreline, on the moulded baseline (the canoe-body keel, y = 0), halfway along the length overall (bow extreme x = +2.99, stern extreme x = -2.99).",
+    "appendages_below_baseline": "The keel shoe and the gondola reach y = -0.082; that is the lowest point, and height 2.70 is measured from there.",
+    "gltf": "mariner.glb is Y-up, same axes and metres as this frame. Node 'mariner' is the root and sits at identity."
+  },
+  "principal": {
+    "loa": 5.98,
+    "beam": 2.06,
+    "height": 2.7,
+    "lowest_point_y": -0.082,
+    "draft_brochure": 0.5,
+    "draft_note": "The brochure draft is read as the maximum draft (lowest appendage to the waterline) at the departure condition; the generator asserts the hydrostatic draft lands within draft_tolerance of it."
+  },
+  "hull": {
+    "note": "Canoe body: a deep-V PE hull. Plan: straight parallel walls, then angled bow facets to a squared nose (top-down photo: ~20 deg facets, ~0.82 m across the collar at the nose). The collar (a D-section PE fender) is attached along the wall at the chine; above it the topsides rise with a little tumblehome to a flat deck that slopes down over the foredeck to the nose.",
+    "transom_x": -2.18,
+    "nose_x": 2.78,
+    "taper_start_x": 1.34,
+    "deck_taper_start_x": 1.14,
+    "chevron_tip": [1.64, 0.88],
+    "crease_nose_y": 1.075,
+    "bow_note": "Faceted bow: the flat side ends at a chevron whose forward edges run from chevron_tip up to the deck edge at deck_taper_start_x and down to the collar top at taper_start_x (the wall, chine and collar taper from there). Ahead of it an upper and a lower facet meet along a crease from the tip to crease_nose_y at the nose. The vendor front view shows no orange: the livery covers exactly the flat side.",
+    "wall_halfwidth": 0.84,
+    "nose_halfwidth": 0.31,
+    "keel_profile": [[-2.18, 0.0], [1.55, 0.0], [1.85, 0.03], [2.11, 0.1], [2.38, 0.21], [2.56, 0.32], [2.7, 0.46], [2.78, 0.6]],
+    "keel_profile_note": "Canoe-body keel/stem line (x, y). Flat to 1.55, then the forefoot rises to meet the nose collar; fitted to the side-view bottom silhouette minus the keel shoe.",
+    "deck_y": 1.22,
+    "deck_nose_y": 1.115,
+    "deck_crown": 0.025,
+    "tumblehome": 0.03,
+    "gunwale_round": 0.02,
+    "spray_rails": [
+      {"chord_fraction": 0.42, "width": 0.04, "x_end": 2.45, "gap_x": 1.49, "gap_half_length": 0.085},
+      {"chord_fraction": 0.78, "width": 0.035, "x_end": 2.55}
+    ],
+    "spray_rails_note": "Chord fraction is measured along the bottom from the keel (0) to the chine (1). A rail is a downward-facing ledge of the given width. The lower rail breaks around the bow-thruster tunnel.",
+    "stations": {"dx": 0.05, "dx_fine": 0.02, "fine_ranges": [[1.34, 1.64], [2.2, 2.78]]}
+  },
+  "collar": {
+    "note": "D-section PE fender along the hull wall from the stern tails, round the angled bow facets and across the squared nose. Faceted (mitred) at the plan corners, as on the real boat.",
+    "a": 0.19,
+    "b": 0.1875,
+    "superellipse": 2.0,
+    "embed": 0.03,
+    "centre_y": 0.4025,
+    "nose_rise": 0.48,
+    "rise_exponent": 1.8,
+    "facet_segments": 10,
+    "tail_x": -2.99,
+    "tail_start_x": -2.6,
+    "tail_min_b": 0.03,
+    "rub_strip": {"u": 0.095, "height": 0.028, "proud": 0.012, "x_aft": -2.5},
+    "derived": "Bottom = centre_y - b = 0.215 (the chine), top amidships = 0.59, nose top = 1.07; outer half-breadth = wall_halfwidth + a = 1.03 (beam 2.06)."
+  },
+  "appendages": {
+    "keel_shoe": {"note": "Black PE keel shoe and stem fin on the centreline; ends abruptly at x_aft (visible step in the side view). Aft of stem_from_x the outer edge is the keel line offset by depth; from there it follows stem_profile, the fin that stands proud of the forefoot up to the nose collar.", "x_aft": 0.6, "depth": 0.082, "stem_depth": 0.05, "thickness": 0.04, "top_y": 0.76, "stem_from_x": 2.2, "stem_profile": [[2.38, 0.137], [2.56, 0.26], [2.7, 0.29], [2.8, 0.33], [2.87, 0.43], [2.92, 0.56], [2.93, 0.68], [2.9, 0.76]]},
+    "gondola": {"note": "Wedge-shaped fairing under the hull (the fixed-gondola add-on in the side render); flat face at the front, faired into the bottom aft. Its flat carries the transducer mount.", "x_fwd": -0.21, "x_flat_aft": -0.55, "x_aft": -1.1, "depth": 0.082, "width": 0.3}
+  },
+  "deck": {
+    "hatches": {"note": "Two raised hatch lids fore-and-aft, split port/starboard, with longitudinal ribs (top-down photo).", "x_splits": [-2.03, -0.32, 1.16], "halfwidth": 0.66, "thickness": 0.055, "centre_gap": 0.012, "gap": 0.012, "ribs": 6, "rib_width": 0.03, "rib_height": 0.006},
+    "foredeck_ribs": {"count_per_side": 3, "z": [0.08, 0.2, 0.32], "x_range": [1.28, 2.55], "width": 0.03, "height": 0.006},
+    "bow_eye": {"note": "Centreline tow/lift eye plate at the nose with a transverse pin.", "profile_xy": [[2.38, 1.12], [2.48, 1.26], [2.56, 1.32], [2.65, 1.32], [2.72, 1.25], [2.76, 1.13]], "thickness": 0.025, "hole": [2.6, 1.24, 0.026]},
+    "stern_platform": {"x_range": [-2.62, -2.18], "y_range": [0.54, 0.6]},
+    "stern_boxes": {"note": "Low boxes at the stern corners on the platform (steering hydraulics / pod housings in the renders).", "x_range": [-2.6, -2.24], "z_range": [0.48, 0.8], "y_top": 0.84},
+    "cleats": [[-2.4, 0.605, 0.3], [-2.4, 0.605, -0.3]]
+  },
+  "livery": {
+    "note": "Orange side panel with the forward chevron and the vent notch, as in the vendor render; black elsewhere. No vendor marks: side_text is empty on purpose.",
+    "orange_polygon_xy": [[1.64, 0.88], [1.22, 1.15], [0.55, 1.15], [0.5, 1.07], [-0.02, 1.07], [-0.07, 1.15], [-1.36, 1.15], [-1.36, 0.74], [-2.16, 0.74], [-2.16, 0.6], [1.35, 0.6]],
+    "vent_slots": {"x0": 0.44, "pitch": 0.055, "count": 8, "size_xy": [0.04, 0.034], "y": 1.112},
+    "status_led": [0.0, 1.112],
+    "kill_switch": [-0.34, 1.11, 0.018],
+    "side_text": ""
+  },
+  "mast": {
+    "note": "Sensor tower aft of midships: four raked powder-coated legs from the deck edges to a wide lower shelf (radar, camera, antennas, sidelights) and a narrower roof with a fore-and-aft arm carrying the two GNSS antennas.",
+    "legs": {
+      "radius": 0.03,
+      "fore": {"deck": [-1.47, 1.22, 0.74], "shelf": [-1.15, 2.077, 0.55]},
+      "aft": {"deck": [-1.85, 1.22, 0.74], "shelf": [-1.36, 2.077, 0.55]},
+      "rung_y": 1.63,
+      "foot_plate": [0.14, 0.012, 0.1]
+    },
+    "shelf": {"x_range": [-1.72, -1.06], "y_range": [2.077, 2.17], "halfwidth": 0.61},
+    "under_box": {"x_range": [-1.62, -1.23], "y_range": [1.94, 2.077], "halfwidth": 0.3},
+    "aux_box": {"x_range": [-1.76, -1.62], "y_range": [1.95, 2.07], "halfwidth": 0.1},
+    "floodlights": {"x_range": [-1.14, -1.06], "y_range": [1.99, 2.077], "z_range": [0.165, 0.415]},
+    "posts": {"x": [-1.12, -1.67], "z": 0.32, "radius": 0.018},
+    "roof": {"x_range": [-1.71, -1.09], "y_range": [2.37, 2.44], "halfwidth": 0.43, "cap_size_xz": [0.56, 0.46], "cap_height": 0.03},
+    "arm": {"x_range": [-2.1, -0.67], "y_range": [2.37, 2.42], "halfwidth": 0.06},
+    "radome": {"centre_xz": [-1.4, 0.0], "y_range": [2.17, 2.355], "radius": 0.235, "band_height": 0.022}
+  },
+  "sensors": {
+    "convention": "Empties look down local -Z with local +Y up (threepp/glTF camera convention). Positions in the vessel frame.",
+    "camera_main": {"position": [-1.345, 2.585, -0.5], "look": [1.0, 0.0, 0.0], "pitch_down_deg": 3.0, "hfov_deg": 60.0, "resolution": [1920, 1080], "fps": 30, "housing": {"centre": [-1.42, 2.535, -0.5], "size": [0.13, 0.17, 0.11], "pole_radius": 0.02}, "assumed": "hfov, resolution, fps and tilt"},
+    "radar": {"position": [-1.4, 2.26, 0.0], "spin_axis": "+Y", "rpm": 24, "h_beam_deg": 5.2, "v_beam_deg": 25.0, "range_max": 44000.0, "assumed": "20-inch solid-state radome class; beam, rpm and range are class values, not the fitted unit"},
+    "gnss_fore": {"position": [-0.79, 2.6, 0.0], "post_height": 0.12, "disc_radius": 0.078, "disc_height": 0.055},
+    "gnss_aft": {"position": [-1.98, 2.6, 0.0], "post_height": 0.12, "disc_radius": 0.078, "disc_height": 0.055},
+    "gnss_baseline": 1.19,
+    "ais_vhf_antenna": {"base": [-1.5, 2.17, 0.45], "length": 0.85, "radius": 0.006},
+    "lte_antenna_1": {"base": [-1.62, 2.17, 0.53], "length": 0.16, "radius": 0.012},
+    "lte_antenna_2": {"position": [-1.22, 2.44, -0.34], "radius": 0.035, "height": 0.022},
+    "imu": {"position": [-1.4, 1.0, 0.0], "assumed": "inside the hull under the mast"},
+    "transducer": {"position": [-0.38, -0.082, 0.0], "look": [0.0, -1.0, 0.0], "note": "Flat of the gondola, looking down (echosounder / MBES mount)."},
+    "moonpool": {"position": [0.2, 0.0, 0.0], "diameter": 0.35, "assumed": "The vendor places one well 'in the mid area'; the exact spot is a guess. No geometry, mount only."}
+  },
+  "lights": {
+    "nav_light_stbd": {"position": [-1.39, 2.12, 0.64], "colour": "green", "look": [1.0, 0.0, 0.3]},
+    "nav_light_port": {"position": [-1.39, 2.12, -0.64], "colour": "red", "look": [1.0, 0.0, -0.3]},
+    "allround_light": {"position": [-1.4, 2.5, 0.0], "colour": "white"},
+    "floodlight_stbd": {"position": [-1.06, 2.053, 0.29], "look": [1.0, -0.15, 0.0], "cone_deg": 60.0},
+    "floodlight_port": {"position": [-1.06, 2.053, -0.29], "look": [1.0, -0.15, 0.0], "cone_deg": 60.0}
+  },
+  "propulsion": {
+    "waterjet": {
+      "note": "Hamilton-type waterjet on the transom centreline under the stern platform; the nozzle sits between the collar tails. Node jet_steering turns about its local +Y, node jet_reverse_bucket about its local +Z.",
+      "axis_y": 0.16,
+      "flange": {"x": -2.18, "radius": 0.16, "thickness": 0.02},
+      "body": {"x_range": [-2.5, -2.18], "radius": [0.12, 0.14]},
+      "tailpipe": {"x_range": [-2.66, -2.5], "radius": [0.075, 0.11]},
+      "steering": {"pivot_x": -2.66, "x_len": 0.14, "radius": [0.08, 0.07], "limit_deg": 27.0},
+      "reverse_bucket": {"pivot": [-2.78, 0.26], "radius": 0.095, "width": 0.24, "lowered_arc_deg": [115.0, 225.0], "lowered_centre_dx": -0.02, "limit_deg": [0.0, 40.0], "note": "Rest = raised (ahead). The bowl is a cylinder sector round the back of the nozzle exit when lowered; the node lowers it by rotating about local +Z, and +40 deg puts the bowl across the jet."},
+      "intake": {"x_range": [-2.1, -1.5], "halfwidth": 0.16},
+      "thrust_point": [-2.8, 0.16, 0.0],
+      "engine_power_kw": 146.0,
+      "bollard_thrust_n": 7500.0,
+      "assumed": "Thrust figure: a 146 kW jet at bollard, order of magnitude only."
+    },
+    "bow_thruster": {"position": [1.49, 0.07, 0.0], "tunnel_radius": 0.06, "thrust_axis": "+Z", "thrust_n": 250.0, "assumed": "thrust (a 125 mm class tunnel thruster)"},
+    "top_speed_mps": 12.35,
+    "top_speed_kn": 24.0
+  },
+  "mass": {
+    "note": "Component budget: engineering estimates that sum to the vendor's 2000 kg dry weight. Centroids are where each component sits in this model. The generator recomputes the CoM and the hydrostatic equilibrium for each loading condition.",
+    "dry": 2000.0,
+    "budget": [
+      {"item": "hull shell: bottom, walls, transom, bulkheads (PE)", "mass": 760.0, "centroid": [-0.06, 0.42, 0.0]},
+      {"item": "deck, topsides, hatch lids (PE)", "mass": 180.0, "centroid": [-0.12, 1.05, 0.0]},
+      {"item": "collar (foam-filled PE fender)", "mass": 140.0, "centroid": [0.0, 0.45, 0.0]},
+      {"item": "diesel engine 146 kW + coupling", "mass": 360.0, "centroid": [-1.0, 0.42, 0.0]},
+      {"item": "waterjet unit + intake", "mass": 140.0, "centroid": [-2.2, 0.2, 0.0]},
+      {"item": "bow thruster + tunnel", "mass": 40.0, "centroid": [1.49, 0.12, 0.0]},
+      {"item": "24 V battery bank, inverter, switchboards", "mass": 170.0, "centroid": [0.9, 0.3, 0.0]},
+      {"item": "fuel tank (empty)", "mass": 25.0, "centroid": [0.0, 0.3, 0.0]},
+      {"item": "autonomy + comms electronics, cabling", "mass": 60.0, "centroid": [0.3, 0.8, 0.0]},
+      {"item": "mast tower, radar, camera, GNSS, antennas, lights", "mass": 70.0, "centroid": [-1.42, 2.0, 0.0]},
+      {"item": "steering hydraulics, cooling, exhaust, pumps, fittings", "mass": 55.0, "centroid": [-1.4, 0.5, 0.0]}
+    ],
+    "com_dry": [-0.3405, 0.5146, 0.0],
+    "inertia_note": "Radii of gyration (estimates for a 6 m RIB): roll 0.40 B, pitch 0.25 L, yaw 0.26 L about the CoM.",
+    "gyradius": {"roll": 0.82, "pitch": 1.5, "yaw": 1.55},
+    "conditions": {
+      "lightship": {"extra": []},
+      "departure": {"extra": [{"item": "diesel 200 L", "mass": 168.0, "centroid": [0.0, 0.3, 0.0]}]},
+      "full_load": {"extra": [{"item": "diesel 200 L", "mass": 168.0, "centroid": [0.0, 0.3, 0.0]}, {"item": "payload 400 kg (moonpool / deck)", "mass": 400.0, "centroid": [0.1, 0.8, 0.0]}]}
+    },
+    "design_condition": "departure"
+  },
+  "hydrostatics": {
+    "rho": 1025.0,
+    "g": 9.81,
+    "grid": {"dx": 0.02, "dz": 0.02, "dy": 0.005, "y_range": [-0.12, 1.4]},
+    "draft_tolerance": 0.06,
+    "trim_limit_deg": 2.0,
+    "bonjean": {"station_dx": 0.2, "heights": [-0.1, 1.3, 0.02]},
+    "note": "Computed by the generator from the buoyant closed meshes (hull shell, collar, keel shoe, gondola, stern platform) by column integration of the winding number, so the overlapping parts count once. Written to mariner_hydro.json."
+  },
+  "materials": {
+    "note": "Linear RGB. Colours read off the vendor render under its studio light, pulled toward plausible albedos.",
+    "hull_pe_bottom": {"color": [0.048, 0.034, 0.025], "metallic": 0.0, "roughness": 0.55},
+    "collar_pe_black": {"color": [0.022, 0.021, 0.02], "metallic": 0.0, "roughness": 0.6},
+    "topside_black": {"color": [0.028, 0.028, 0.027], "metallic": 0.0, "roughness": 0.5},
+    "livery_orange": {"color": [0.62, 0.165, 0.068], "metallic": 0.0, "roughness": 0.42},
+    "deck_black": {"color": [0.034, 0.034, 0.033], "metallic": 0.0, "roughness": 0.78},
+    "hatch_grey": {"color": [0.052, 0.052, 0.05], "metallic": 0.0, "roughness": 0.62},
+    "mast_powder_black": {"color": [0.03, 0.03, 0.03], "metallic": 0.0, "roughness": 0.42},
+    "radome_grey": {"color": [0.46, 0.46, 0.46], "metallic": 0.0, "roughness": 0.35},
+    "radome_band_blue": {"color": [0.03, 0.07, 0.16], "metallic": 0.0, "roughness": 0.4},
+    "gnss_cream": {"color": [0.56, 0.5, 0.4], "metallic": 0.0, "roughness": 0.5},
+    "camera_white": {"color": [0.76, 0.76, 0.74], "metallic": 0.0, "roughness": 0.4},
+    "camera_window": {"color": [0.06, 0.065, 0.07], "metallic": 0.0, "roughness": 0.08},
+    "lens_glass": {"color": [0.01, 0.014, 0.02], "metallic": 0.0, "roughness": 0.05},
+    "antenna_white": {"color": [0.8, 0.8, 0.78], "metallic": 0.0, "roughness": 0.45},
+    "floodlight_lens": {"color": [0.85, 0.85, 0.83], "metallic": 0.0, "roughness": 0.2},
+    "nav_red": {"color": [0.5, 0.02, 0.02], "metallic": 0.0, "roughness": 0.3, "emissive": [1.0, 0.05, 0.03], "emissive_strength": 3.0},
+    "nav_green": {"color": [0.02, 0.4, 0.05], "metallic": 0.0, "roughness": 0.3, "emissive": [0.05, 1.0, 0.2], "emissive_strength": 3.0},
+    "nav_white": {"color": [0.9, 0.9, 0.88], "metallic": 0.0, "roughness": 0.3, "emissive": [1.0, 1.0, 0.95], "emissive_strength": 2.0},
+    "jet_grey": {"color": [0.34, 0.35, 0.36], "metallic": 0.0, "roughness": 0.4},
+    "jet_bucket_orange": {"color": [0.45, 0.12, 0.03], "metallic": 0.0, "roughness": 0.45},
+    "steel": {"color": [0.62, 0.62, 0.64], "metallic": 1.0, "roughness": 0.3},
+    "tunnel_dark": {"color": [0.01, 0.01, 0.01], "metallic": 0.0, "roughness": 0.9},
+    "vent_grey": {"color": [0.3, 0.3, 0.3], "metallic": 0.0, "roughness": 0.5},
+    "led_white": {"color": [0.9, 0.9, 0.9], "metallic": 0.0, "roughness": 0.3}
+  }
+}
