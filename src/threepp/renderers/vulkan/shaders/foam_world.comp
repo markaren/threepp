@@ -88,7 +88,18 @@ layout(push_constant, scalar) uniform Pc {
     float  decay;
     uint   wakeTrailCount;  // # valid samples in wakeTrailAddr
     float  natFoamScale;    // scales NATURAL Jacobian whitecaps; wake/splats unaffected
+    uint   vesselFoamFlags; // bit 0: clear ahead of the stem, bit 1: thin wake trail
+    float  _pad0;
 } pc;
+
+// The analytic trail's peak deposit, lateral spread (x half-beam) and bow
+// ridge strength. The old 0.95 over 1.5 half-beams sits far above the
+// shading's solid-sheet knee (coverage 0.55 after its x1.3), so every vessel
+// dragged a white carpet two to three beams wide; the thin set leaves the
+// centre solid and lets the edges break into lace.
+const float kTrailPeak[2]   = float[2](0.95, 0.55);
+const float kTrailSpread[2] = float[2](1.5, 1.0);
+const float kRidgePeak[2]   = float[2](0.6, 0.4);
 
 // Toroidal world-XZ delta: a − b, wrapped into (−tileSize/2, +tileSize/2].
 // The foam texture covers one cascade-0 tile and REPEAT-samples beyond,
@@ -260,6 +271,7 @@ void main() {
     // Falls back to a single current-pose evaluation when no trail is
     // populated (no historical buffer set, or vessel just spawned).
     float wakeFoam = 0.0;
+    const int thin = (pc.vesselFoamFlags & 2u) != 0u ? 1 : 0;
     if (pc.hullHalfLength > 0.0) {
         if (pc.wakeTrailAddr != 0ul && pc.wakeTrailCount > 0u) {
             WakeTrailBuf wt = WakeTrailBuf(pc.wakeTrailAddr);
@@ -278,12 +290,12 @@ void main() {
                 const float sDistBehind = -sLZ - pc.hullHalfLength;
                 if (sDistBehind > 0.0) {
                     const float lenDecay   = 30.0;
-                    const float beamSpread = pc.hullHalfBeam * 1.5;
+                    const float beamSpread = pc.hullHalfBeam * kTrailSpread[thin];
                     const float lateral    = exp(-(sLX * sLX) /
                                                  (beamSpread * beamSpread));
                     const float along      = exp(-sDistBehind / lenDecay);
                     wakeFoam = max(wakeFoam,
-                                   sGate * 0.95 * along * lateral * sAgeFade);
+                                   sGate * kTrailPeak[thin] * along * lateral * sAgeFade);
                 }
                 // D — bow V-wedge ridge foam, gated by per-sample
                 // hullFade so foam doesn't appear under the boat's
@@ -310,7 +322,7 @@ void main() {
                     const float ridgeFoam = exp(-(dRidge * dRidge) / (0.5 * 0.5));
                     const float alongDec  = exp(-sDistAft / (pc.hullHalfLength * 3.0));
                     wakeFoam = max(wakeFoam,
-                                   sGate * 0.6 * ridgeFoam * alongDec * sAgeFade * sHullFade);
+                                   sGate * kRidgePeak[thin] * ridgeFoam * alongDec * sAgeFade * sHullFade);
                 }
             }
         } else {
@@ -325,10 +337,10 @@ void main() {
                 const float distBehind = -lZ - pc.hullHalfLength;
                 if (distBehind > 0.0) {
                     const float lenDecay   = 30.0;
-                    const float beamSpread = pc.hullHalfBeam * 1.5;
+                    const float beamSpread = pc.hullHalfBeam * kTrailSpread[thin];
                     const float lateral    = exp(-(lX * lX) / (beamSpread * beamSpread));
                     const float along      = exp(-distBehind / lenDecay);
-                    wakeFoam = max(wakeFoam, wakeGate * 0.95 * along * lateral);
+                    wakeFoam = max(wakeFoam, wakeGate * kTrailPeak[thin] * along * lateral);
                 }
                 const float distAft = pc.hullHalfLength - lZ;
                 if (distAft > 0.0 && distAft < pc.hullHalfLength * 5.0) {
@@ -350,7 +362,7 @@ void main() {
                     const float ridgeFoam = exp(-(dRidge * dRidge) / (0.5 * 0.5));
                     const float alongDec  = exp(-distAft / (pc.hullHalfLength * 3.0));
                     wakeFoam = max(wakeFoam,
-                                   wakeGate * 0.6 * ridgeFoam * alongDec * curHullFade);
+                                   wakeGate * kRidgePeak[thin] * ridgeFoam * alongDec * curHullFade);
                 }
             }
         }
@@ -371,6 +383,27 @@ void main() {
             const float g   = dp.intensity * exp(-d2 / r2);
             disturbFoam = max(disturbFoam, g);
         }
+    }
+
+    // ── Nothing new ahead of the stem ────────────────────────────────
+    // Hull splats are gaussians placed at or near the bow, and exp(-d²/r²)
+    // stays above the shading's visible-foam floor out to ~1.9 r: a 1.6 m bow
+    // splat painted foam 3 m ahead of Gunnerus's stem, and the USV demo's
+    // did the same. The water ahead of a moving bow is undisturbed, so NEW
+    // vessel deposits (wake + splats) fade out across the stem line inside
+    // the hull's lateral band. Natural whitecaps and foam already on the
+    // water are untouched, so a boat backing into its own wash still meets it.
+    if ((pc.vesselFoamFlags & 1u) != 0u && pc.hullHalfLength > 0.0) {
+        const vec2 d = toroidalDelta(worldXZ, vec2(pc.hullCenterX, pc.hullCenterZ),
+                                     pc.foamTileSize);
+        const float lX = pc.hullCosYaw * d.x - pc.hullSinYaw * d.y;
+        const float lZ = pc.hullSinYaw * d.x + pc.hullCosYaw * d.y;
+        const float ahead = smoothstep(pc.hullHalfLength - 0.3, pc.hullHalfLength + 0.3, lZ);
+        const float band  = 1.0 - smoothstep(pc.hullHalfBeam + 2.0, pc.hullHalfBeam + 4.0, abs(lX));
+        const float near  = 1.0 - smoothstep(pc.hullHalfLength + 6.0, pc.hullHalfLength + 9.0, lZ);
+        const float keep  = 1.0 - ahead * band * near;
+        wakeFoam    *= keep;
+        disturbFoam *= keep;
     }
 
     // ── Combine + decay ──────────────────────────────────────────────

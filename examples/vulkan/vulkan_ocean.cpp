@@ -692,13 +692,14 @@ namespace {
 
 int main(int argc, char** argv) {
 
-    // --shot <name.png> [--frames N] [--night] [--pt] [--vista] [--close] [--island] [--toggle]
+    // --shot <name.png> [--frames N] [--night] [--pt] [--vista] [--close] [--island] [--bow] [--toggle]
     std::string shotPath;
     int  shotFrames = 240;
     bool startNight = false;
     bool shotVista  = false;
     bool shotClose  = false;// near-surface grazing view — surface-artifact hunting
     bool shotIsland = false;// low close-up of the −X archipelago island (terrain-detail capture)
+    bool shotBow    = false;// ahead of the boat looking back at the stem (bow foam)
     int  toggleNightAt = 0;// --toggle: start in day, flip to night mid-run (exercises the runtime toggle path)
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
@@ -707,6 +708,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--vista") == 0) shotVista = true;
         else if (std::strcmp(argv[i], "--close") == 0) shotClose = true;
         else if (std::strcmp(argv[i], "--island") == 0) shotIsland = true;
+        else if (std::strcmp(argv[i], "--bow") == 0) shotBow = true;
         else if (std::strcmp(argv[i], "--toggle") == 0) toggleNightAt = 60;
     }
     const bool capturing = !shotPath.empty();
@@ -715,7 +717,8 @@ int main(int argc, char** argv) {
     const capture::Args capArgs = capture::parseArgs(argc, argv);
     int shotFrame = 0;
 
-    Canvas canvas("Vulkan Ocean", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
+    // A --shot capture runs on a hidden window, so batches do not pop up over the desktop.
+    Canvas canvas("Vulkan Ocean", {{"vsync", false}, {"size", WindowSize{1600, 900}}, {"headless", capturing}});
 
     auto renderer = VulkanRenderer(canvas);
 
@@ -2433,6 +2436,18 @@ int main(int argc, char** argv) {
                 Vector3 tgt = boatPos;
                 tgt.addScaledVector(boatFwd, -45.f);// far into the wake — near-horizontal grazing
                 tgt.y = 0.5f;
+                camera.lookAt(tgt);
+            } else if (shotBow) {
+                // Ahead of the boat and off her starboard bow, looking back at the
+                // stem: the water she is about to meet, where no foam belongs.
+                const Vector3 side = Vector3(boatFwd.z, 0.f, -boatFwd.x);
+                camera.position.copy(boatPos)
+                        .addScaledVector(boatFwd, 34.f)
+                        .addScaledVector(side, 14.f)
+                        .add(Vector3(0.f, 6.f, 0.f));
+                Vector3 tgt = boatPos;
+                tgt.addScaledVector(boatFwd, 8.f);
+                tgt.y = 1.0f;
                 camera.lookAt(tgt);
             } else if (shotVista) {
                 // High oblique overview: lighthouse centre, archipelago ring,

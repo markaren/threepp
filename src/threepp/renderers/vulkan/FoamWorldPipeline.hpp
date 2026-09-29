@@ -27,8 +27,8 @@ namespace threepp::vulkan {
         // descriptor set here.
         static constexpr uint32_t kMaxOceans = 16;
 
-        // Must match foam_world.comp's `Pc` struct (96 bytes total):
-        // 2 × VkDeviceAddress (16) + 20 × u32/float (80) — `natFoamScale`
+        // Must match foam_world.comp's `Pc` struct (104 bytes total):
+        // 2 × VkDeviceAddress (16) + 22 × u32/float (88) — `natFoamScale`
         // (formerly a `_pad` slot) keeps the C++ struct a multiple of 8.
         struct PushConstants {
             VkDeviceAddress disturbAddr;   // 0 = no disturbance buffer
@@ -52,6 +52,8 @@ namespace threepp::vulkan {
             float           decay;
             uint32_t        wakeTrailCount;// # valid samples in wakeTrailAddr
             float           natFoamScale;  // scales NATURAL Jacobian whitecaps (wake/splats unaffected)
+            uint32_t        vesselFoamFlags;// bit 0: clear ahead of the stem, bit 1: thin wake trail
+            float           _pad0;
         };
 
         explicit FoamWorldPipeline(VulkanContext& ctx);
