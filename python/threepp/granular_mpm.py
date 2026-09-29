@@ -40,7 +40,7 @@ A grousered wheel on a grid too coarse for its lugs is the classic
 EFFECTIVE-RADIUS model: a CYLINDER at r + h_g with the soil's own friction
 mu = tan(phi). jh_k > 0 (GranularMPM and GranularPatches) makes that friction
 build with the local slip ratio (wheel_mu, Janosi-Hanamoto) instead of jumping
-to the Coulomb ceiling: examples/warp_rover_slope.py.
+to the Coulomb ceiling: examples/rover/warp_rover_slope.py.
 
 Stress units: E and cohesion in Pa, rho in kg/m^3, lengths in m. y is up.
 
@@ -58,7 +58,7 @@ BOX = 1
 # grouser height h_g); lug = (lug thickness, lug count, -). The lugs are straight
 # transverse bars, rotated with the wheel's spin angle. A lug thinner than a cell
 # falls between the grid nodes, so the caller inflates it (see
-# examples/warp_rover_slope.py for the rule); the rim itself is Coulomb (mu).
+# examples/rover/warp_rover_slope.py for the rule); the rim itself is Coulomb (mu).
 LUGGED = 2
 # The same wheel as its grouser ENVELOPE: a cylinder of radius r + h_g whose
 # nodes move with the rim tangentially (no-slip) and may only leave it normally:
@@ -1863,7 +1863,7 @@ class GranularPatches:
     a near-critical damper; at 8 m/s it cuts the frame-to-frame Fy/W spread
     from 0.33 to 0.01 (std).
 
-    A rover wheel (examples/warp_rover_slope.py --mode rt): radius = the grouser
+    A rover wheel (examples/rover/warp_rover_slope.py --mode rt): radius = the grouser
     tips r + h_g, mu = tan(phi), jh_k ~ 2.5-3 (slip-mobilised friction, see
     wheel_mu); jh_k = 0 (the default) is the car's plain Coulomb rim.
     """
@@ -2044,7 +2044,7 @@ class GranularPatches:
         radius), `thickness` along the tread. count 0 = the plain cylinder (the
         default). A lug thinner than a cell falls between the grid nodes: pass it
         at least h thick, and conserve the total lug volume with fewer lugs
-        (examples/warp_rover_demo.py). Device arrays: captured graphs stay valid."""
+        (examples/rover/warp_rover_demo.py). Device arrays: captured graphs stay valid."""
         lug = np.zeros((self.nb, 3), np.float32)
         lug[:, 0] = np.broadcast_to(np.asarray(thickness, np.float32), (self.nb,))
         lug[:, 1] = np.broadcast_to(np.asarray(count, np.float32), (self.nb,))

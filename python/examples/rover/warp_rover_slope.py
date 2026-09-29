@@ -38,7 +38,7 @@ and the 50 %-slip slope at 22.0 deg: D:/dev/rover_rt/E05).
 
 Output goes under --out (default D:/dev/rover_rt).
 
-    PYTHONPATH=python python python/examples/warp_rover_slope.py --mode wheel
+    PYTHONPATH=python python python/examples/rover/warp_rover_slope.py --mode wheel
 """
 import csv
 import json
@@ -716,7 +716,7 @@ def mode_rt():
     pdp = cli_arg("--patch-depth", DEPTH, float)
     s = cli_arg("--rt-slip", 0.3, float)
     om = V / ((1.0 - s) * R_EFF)
-    spec = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "rover", "rover_spec.json")))
+    spec = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "rover_spec.json")))
     hubs = np.array([spec["hubs"][k] for k in ("FL", "FR", "RL", "RR")], float)
     axis = np.tile([0.0, 0.0, 1.0], (4, 1))
     zero = np.zeros((4, 3))

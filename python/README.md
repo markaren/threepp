@@ -180,8 +180,8 @@ self-contained; what they share lives in [`examples/warp_common.py`](https://git
 | Script | What it shows |
 | --- | --- |
 | [`examples/warp_wheel_testbed.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_wheel_testbed.py) | One rigid wheel in a bin of grains, its height and drawbar pull set by the soil, not prescribed. |
-| [`examples/warp_rover_slope.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_rover_slope.py) | A VIPER-class rover wheel's slip sweep against NASA's single-wheel data, and the four-wheel cost. |
-| [`examples/warp_rover_demo.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_rover_demo.py) | TP-1, a four-wheeled lunar-rover-class vehicle, climbs a tilting sand bed until the grains stop it. Build the model once with [`rover/build_rover_blender.py`](https://github.com/markaren/threepp/blob/master/python/examples/rover/build_rover_blender.py). |
+| [`examples/rover/warp_rover_slope.py`](https://github.com/markaren/threepp/blob/master/python/examples/rover/warp_rover_slope.py) | A VIPER-class rover wheel's slip sweep against NASA's single-wheel data, and the four-wheel cost. |
+| [`examples/rover/warp_rover_demo.py`](https://github.com/markaren/threepp/blob/master/python/examples/rover/warp_rover_demo.py) | TP-1, a four-wheeled lunar-rover-class vehicle, climbs a tilting sand bed until the grains stop it. Build the model once with [`build_rover_blender.py`](https://github.com/markaren/threepp/blob/master/python/examples/rover/build_rover_blender.py). |
 
 **Film kits** — reusable pieces a film imports. Renderer-only (no Warp); each
 runs standalone too.

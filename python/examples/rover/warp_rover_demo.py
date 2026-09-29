@@ -1,15 +1,15 @@
 """TP-1 on a tilt bed: a lunar-rover-class vehicle drives up loose sand in GPU grains.
 
-A four-wheeled, VIPER-class rover of our own design (examples/rover/rover.glb,
+A four-wheeled, VIPER-class rover of our own design (rover.glb in this folder,
 its numbers in rover_spec.json; the .glb is not in git, build it once with
-examples/rover/build_rover_blender.py) drives up a 9 x 3 m sand bed that tilts like
+build_rover_blender.py) drives up a 9 x 3 m sand bed that tilts like
 NASA's tilt-bed rig. The sand under each wheel is MLS-MPM grains
 (threepp.granular_mpm.GranularPatches: four moving windows over a heightfield
 far field, one CUDA graph a frame); the wheels are carried by the grains, dig
 ruts, and slip more as the bed tilts up. No PhysX: the rover's rigid-body
 dynamics are here, in numpy.
 
-    PYTHONPATH=python python python/examples/warp_rover_demo.py             # interactive
+    PYTHONPATH=python python python/examples/rover/warp_rover_demo.py             # interactive
     ... warp_rover_demo.py --slope 15                                        # start tilted
     ... warp_rover_demo.py --shot                                            # headless stills
     ... warp_rover_demo.py --record 14                                       # headless mp4
@@ -54,8 +54,9 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))   # python/ (threepp)
+sys.path.insert(0, os.path.dirname(_HERE))                    # examples/ (warp_common)
 
 import numpy as np
 import warp as wp
@@ -70,7 +71,7 @@ from warp_common import Encoder, cli_arg, grain_detail_texture
 # =============================================================================
 PHYSICS = dict(
     # --- soil: loose GRC-1-like sand, Drucker-Prager + a BOUNDED compaction cap
-    #     (phase-A tuning, python/examples/warp_rover_slope.py "bcap") ---
+    #     (phase-A tuning, python/examples/rover/warp_rover_slope.py "bcap") ---
     h=0.030,                # MPM cell, m
     E=1.0e6,                # Young's modulus, Pa
     nu=0.3,
@@ -157,8 +158,7 @@ if "--size" in sys.argv:
 DT = 1.0 / 60.0
 MC_SIGN = 1.0
 
-SPEC = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "rover",
-                                   "rover_spec.json")))
+SPEC = json.load(open(os.path.join(_HERE, "rover_spec.json")))
 WN = ("FL", "FR", "RL", "RR")
 HUBS = np.array([SPEC["hubs"][k] for k in WN], float)            # chassis frame
 PIVOTS = np.array([SPEC["legs"]["pivots"][k] for k in WN], float)
@@ -1198,7 +1198,7 @@ if grains is not None:
 LOOK = dict(grains=True, xray=False, xray_wheel=3)   # what present() draws
 
 # --- the rover model ---
-gl = tp.GLTFLoader().load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "rover", "rover.glb"))
+gl = tp.GLTFLoader().load(os.path.join(_HERE, "rover.glb"))
 rover_root = gl.scene
 rover_root.traverse(lambda o: (setattr(o, "cast_shadow", True), setattr(o, "receive_shadow", True))
                     if isinstance(o, tp.Mesh) else None)
