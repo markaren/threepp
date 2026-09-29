@@ -9,8 +9,9 @@ Every moving picture is a real program's output. The cloth, the sparks and the e
 from ../warp_round_trip.py, run by the film in a subprocess (`--stream`) that steps its
 simulation at 60 Hz on the film's clock and pipes the frames in; its code on screen is read from
 that file (the `# [name]` markers). The other shots are clips the Warp examples render themselves
-(`ensure_clips`, cached in lesson_out/warp_clips): the jelly wall, the gummy candies, the fluid,
-the blast and the hull. Every example shown shares its simulation's buffers with the renderer
+(`ensure_clips`, cached in lesson_out/warp_clips): the fluid (the opening), the blast, the gummy
+candies and the jelly wall. The closing reel cuts on the narrator's words (Kokoro's own alignment),
+and the film ends on a wall of every shot at once, under the title. Every example shown shares its simulation's buffers with the renderer
 (vertex, particle-field or frame interop) rather than copying through the CPU.
 """
 from __future__ import annotations
@@ -55,15 +56,17 @@ CAPTION_TEXT = {
     "n1": "With no copies in the way, it scales. This blast is millions of particles.",
     "f1": "And back the other way: the finished frame goes straight to a Warp kernel, which turns it into an "
           "event camera.",
-    "g1": "Warp can even run kernels backwards, for gradients: here, carving a hull out of a blob, drawn as it goes.",
     "e1": "Cloth, sparks, jelly, water, fire. Python on the GPU, drawn by threepp.",
 }
 SPOKEN_ONLY = {"o1"}                         # read over the cold open and the title, not drawn
-SPEECH = {"o1": 7.30, "k1": 7.05, "m1": 7.17, "m2": 3.45, "n1": 5.17, "f1": 6.72, "g1": 6.92,
+SPEECH = {"o1": 7.30, "k1": 7.05, "m1": 7.22, "m2": 3.45, "n1": 5.17, "f1": 6.72,
           "e1": 6.20}                        # seconds, af_heart, measured
+# when each word of the last line is said, seconds into its clip (af_heart, measured); setup()
+# reads Kokoro's own alignment instead when it can, so the reel cuts land on the words
+E1_WORDS = {"Cloth": 0.28, "sparks": 0.71, "jelly": 1.20, "water": 1.57, "fire": 1.95, "Python": 2.79,
+            "drawn": 4.25}
 PLAN = [("open", 0.4, ["o1"], 0.4), ("kernel", 0.2, ["k1"], 0.6), ("share", 0.2, ["m1", "m2"], 0.7),
-        ("scale", 0.1, ["n1"], 0.4), ("out", 0.2, ["f1"], 0.9), ("grad", 0.2, ["g1"], 0.5),
-        ("reel", 0.1, ["e1"], 0.1), ("end", 0.0, [], 3.6)]
+        ("scale", 0.1, ["n1"], 0.4), ("out", 0.2, ["f1"], 0.9), ("reel", 0.1, ["e1"], 0.1), ("end", 0.0, [], 2.6)]
 SLACK = lesson.VOICE_LEAD + lesson.VOICE_TAIL + 0.1
 
 
@@ -87,15 +90,35 @@ def cap0(k):
     return CAP[k][0]
 
 
+def said(word, words=None):
+    """Film time at which a word of the last line is heard."""
+    return cap0("e1") + lesson.VOICE_LEAD + (words or E1_WORDS)[word]
+
+
+def e1_words():
+    """The last line's word onsets, from Kokoro's alignment (the table above without it)."""
+    try:
+        got = {}
+        for w, a, _ in lesson.Narration().word_times(CAPTION_TEXT["e1"]):
+            got.setdefault(w, a)
+        out = {w: got[w] for w in E1_WORDS}
+    except (RuntimeError, KeyError) as e:
+        print(f"[reel] no word alignment ({e}); cutting on the measured table")
+        return dict(E1_WORDS)
+    off = max(abs(out[w] - E1_WORDS[w]) for w in E1_WORDS)
+    if off > 0.05:
+        print(f"[reel] the spoken words moved by up to {off:.2f} s from the table: {out}")
+    return out
+
+
 # ── the clips the examples render themselves ──────────────────────────────────
 # (name, file, fps, the example's command line; run from CLIPS). Rendered once, then cached.
 CLIP_SPECS = {
     "jelly": ("jelly.mp4", 60, ["warp_jelly_wreck.py", "--video", "8", "--no-sensors", "--clean",
                                 "--out-dir", ".", "--tag", "jelly"]),
-    "gummy": ("gummy.mp4", 60, ["warp_gummy_rain.py", "--video", "8", "--clean", "--out", ".", "--tag", "gummy"]),
-    "fluid": ("warp_fluid.mp4", 60, ["warp_fluid.py", "--vulkan", "--video", "8", "--size", "1920x1080"]),
-    "blast": ("blast.mp4", 60, ["warp_explosion.py", "--video", "7", "--size", "1920x1080", "--out", "blast.mp4"]),
-    "hull": ("hull.mp4", 30, ["warp_hull_sculpt.py", "--film", "--film-out", "hull.mp4"]),
+    "gummy": ("gummy.mp4", 60, ["warp_gummy_rain.py", "--video", "11", "--clean", "--out", ".", "--tag", "gummy"]),
+    "fluid": ("warp_fluid.mp4", 60, ["warp_fluid.py", "--vulkan", "--video", "11", "--size", "1920x1080"]),
+    "blast": ("blast.mp4", 60, ["warp_explosion.py", "--video", "11", "--size", "1920x1080", "--out", "blast.mp4"]),
 }
 
 
@@ -106,8 +129,6 @@ def ensure_clips():
             continue
         print(f"[clips] rendering {name}: {' '.join(cmd)}", flush=True)
         rc = subprocess.run([sys.executable, os.path.join(EXAMPLES, cmd[0])] + cmd[1:], cwd=CLIPS).returncode
-        # the hull's film can stop after the descent (a self-check at the start of its second act);
-        # the descent is all this film uses, so a clip that was written is enough
         if not os.path.isfile(os.path.join(CLIPS, fname)):
             raise RuntimeError(f"{cmd[0]} exited {rc} without writing {fname}")
 
@@ -250,9 +271,13 @@ def dim(img, k):
 
 
 class Painter:
-    def __init__(self, ov, clips, heroes, code, sw, sh):
+    def __init__(self, ov, clips, heroes, code, sw, sh, words):
         self.ov, self.clips, self.heroes, self.code = ov, clips, heroes, code
         self.sw, self.sh = sw, sh
+        # the reel cuts a hair before each word is heard; the ending starts on "Python"
+        self.cuts = [TL.start("reel")] + [said(w, words) - 0.06 for *_, w in self.REEL[1:]]
+        self.end0 = said("Python", words) - 0.06
+        self.title0 = said("drawn", words)
         self.slots = {}
         self.captions = [(a, b, CAPTION_TEXT[k]) + ((False,) if k in SPOKEN_ONLY else ())
                          for k, (a, b) in CAP.items()]
@@ -297,7 +322,7 @@ class Painter:
 
     # beats ----------------------------------------------------------------------
     def draw(self, t):
-        for beat in (self.opening, self.kernel, self.share, self.scale, self.out, self.grad, self.reel, self.end):
+        for beat in (self.opening, self.kernel, self.share, self.scale, self.out, self.reel, self.end):
             beat(t)
         self.ov.captions(t, self.captions)
 
@@ -305,24 +330,25 @@ class Painter:
         t1 = TL.end("open")
         if t > t1 + 0.3:
             return
-        self.show("jelly", self.clips["jelly"].at(t), envelope(t, -1.0, t1 + 0.3, 0.1, 0.3))
-        # the title slams in once the wall has burst
+        self.show("fluid", self.clips["fluid"].at(t), envelope(t, -1.0, t1 + 0.3, 0.1, 0.3))
+        # the title comes in once the first wave has broken over the block
         ov = self.ov
-        ti = 3.7
+        ti = 2.4
         a = envelope(t, ti, t1 - 0.1, 0.25, 0.4)
         if a <= 0.003:
             return
-        ov.panel(-20, 300, 1960, 330, radius=0, fill=0x05070b, alpha=0.55 * a)
+        y0 = 700                                            # below the pool, over the loungers
+        ov.panel(-20, y0 - 50, 1960, 330, radius=0, fill=0x05070b, alpha=0.78 * a)
         rise = 22 * (1 - lesson.ease_out(remap(t, ti, ti + 0.5)))
         x0 = 150
-        ov.text(x0 + 4, 350 + rise, "GPU SIMULATION IN PYTHON", size=24, color=C_HOT, alpha=a, kind="semibold",
+        ov.text(x0 + 4, y0 + rise, "GPU SIMULATION IN PYTHON", size=24, color=C_HOT, alpha=a, kind="semibold",
                 tracking=5)
-        w = ov.rich(x0, 500 + rise, [("Warp", TEXT, "bold"), (" × ", C_HOT, "bold"), ("threepp", TEXT, "bold")],
+        w = ov.rich(x0, y0 + 150 + rise, [("Warp", TEXT, "bold"), (" × ", C_HOT, "bold"), ("threepp", TEXT, "bold")],
                     size=128, alpha=a)
         bar = smooth(remap(t, ti + 0.15, ti + 0.6))
-        ov.panel(x0 + 4, 528 + rise, w * bar, 7, radius=3, fill=C_HOT, alpha=a)
+        ov.panel(x0 + 4, y0 + 178 + rise, w * bar, 7, radius=3, fill=C_HOT, alpha=a)
         sa = a * smooth(remap(t, ti + 0.5, ti + 1.0))
-        ov.text(x0 + 4, 580 + rise, "Simulated, shared and drawn on the GPU, with no copy in between", size=32,
+        ov.text(x0 + 4, y0 + 230 + rise, "Simulated, shared and drawn on the GPU, with no copy in between", size=32,
                 color=DIM, alpha=sa, kind="light")
 
     def kernel(self, t):
@@ -430,52 +456,74 @@ class Painter:
         lines = self.code["out"] + [strip_comment(l) for l in self.code["see"] if "launch(events" in l]
         self.code_card(t, s + 2.4, e - 0.1, 40, 134, lines, "THE FRAME, BACK TO WARP", size=17, lh=24)
 
-    def grad(self, t):
-        s, e = TL.start("grad"), TL.end("grad")
-        if not s - 0.1 <= t <= e + 0.3:
-            return
-        # the descent, from the blob to the hull, a little faster than its own film plays it
-        ts = 3.0 + (t - s) * (12.0 / max(e - s, 1e-3))
-        self.show("hull", self.clips["hull"].at(ts), envelope(t, s - 0.05, e + 0.3, 0.05, 0.3))
-        self.flash(t, s, 0.4)
-        self.pill("Gradient descent, through Warp's own gradients", envelope(t, s + 0.5, e, 0.3, 0.3),
-                  x=60, y=60, sub="the shape shared with the renderer as it changes")
+    # (source, seconds into the clip at the cut, the word on screen, the word as it is said)
+    REEL = [("hero", None, "CLOTH", "Cloth"), ("hero", None, "SPARKS", "sparks"), ("gummy", 1.0, "JELLY", "jelly"),
+            ("fluid", 6.0, "WATER", "water"), ("blast", 1.2, "FIRE", "fire")]
 
-    REEL = [("hero", None, "CLOTH"), ("hero", None, "SPARKS"), ("gummy", 1.0, "JELLY"), ("fluid", 1.5, "WATER"),
-            ("blast", 2.0, "FIRE")]
+    def clip_at(self, k, t):
+        """Reel shot k at film time t: the clip running on from its cut."""
+        src, off, *_ = self.REEL[k]
+        return self.clips[src].at(off + t - self.cuts[k])
 
     def reel(self, t):
-        s, e = TL.start("reel"), TL.end("reel")
-        if not s - 0.1 <= t <= e + 0.2:
+        s = TL.start("reel")
+        if not s - 0.1 <= t < self.end0:
             return
-        n = len(self.REEL)
-        cut = 1.05                                    # a shot per word, the last one held
-        k = min(int((t - s) / cut), n - 1)
-        src, off, word = self.REEL[k]
-        tl = t - s - k * cut
-        if src == "hero":
-            img = self.heroes["c"].at(t)[0]
-        else:
-            img = self.clips[src].at(off + tl)
-        self.show("reel", img, envelope(t, s - 0.05, e + 0.2, 0.05, 0.2))
-        self.flash(t, s + k * cut, 0.35, 0.15)
-        a = envelope(t, s + k * cut, s + (k + 1) * cut + (e - s if k == n - 1 else 0), 0.08, 0.1)
-        self.ov.text(80, 150, word, size=110, color=TEXT if word != "SPARKS" else C_HOT, alpha=a, kind="bold",
+        k = max(i for i, c in enumerate(self.cuts) if c <= t) if t >= s else 0
+        img = self.heroes["c"].at(t)[0] if self.REEL[k][0] == "hero" else self.clip_at(k, t)
+        self.show("reel", img, envelope(t, s - 0.05, self.end0 + 1, 0.05, 0.1))
+        if k > 0:
+            self.flash(t, self.cuts[k], 0.25, 0.12)
+        nxt = self.cuts[k + 1] if k + 1 < len(self.cuts) else self.end0
+        word = self.REEL[k][2]
+        a = envelope(t, self.cuts[k], nxt, 0.06, 0.06)
+        self.ov.text(84, 155, word, size=110, color=0x000000, alpha=0.55 * a, kind="bold", tracking=6)
+        self.ov.text(80, 150, word, size=110, color=C_HOT if word == "SPARKS" else TEXT, alpha=a, kind="bold",
                      tracking=6)
 
+    # the ending: every shot at once, the fire shrinking into its place, then the title over them
+    TW, TH, GAP = 600, 338, 24
+    TILE_X0, TILE_Y0 = (1920 - 3 * 600 - 2 * 24) // 2, (1080 - 2 * 338 - 24) // 2
+
+    def tile(self, i):
+        c, r = i % 3, i // 3
+        return (self.TILE_X0 + c * (self.TW + self.GAP), self.TILE_Y0 + r * (self.TH + self.GAP), self.TW, self.TH)
+
     def end(self, t):
-        s = TL.start("end")
-        if t < s - 0.3:
+        s = self.end0
+        if t < s:
             return
         ov = self.ov
-        a = envelope(t, s - 0.3, TL.duration + 1, 0.4, 0.1)
-        ov.panel(-20, -20, 1960, 1120, radius=0, fill=0x05070b, alpha=0.92 * a)
-        ov.rich(960, 470, [("Warp", TEXT, "bold"), (" × ", C_HOT, "bold"), ("threepp", TEXT, "bold")],
-                size=112, alpha=a, anchor="ms")
-        la = a * smooth(remap(t, s + 0.4, s + 1.0))
-        ov.text(960, 560, "python/examples/warp_round_trip.py", size=30, color=DIM, alpha=la, kind="mono",
+        ov.panel(-20, -20, 1960, 1120, radius=0, fill=0x05070b, alpha=smooth(remap(t, s, s + 0.4)))
+        rgb, ev = self.heroes["c"].at(t)
+        # (the fire runs on from the reel; the others start afresh, where each clip has enough left)
+        shots = [("t_cloth", rgb), ("t_events", ev), ("t_jelly", self.clips["jelly"].at(0.5 + t - s)),
+                 ("t_gummy", self.clips["gummy"].at(2.0 + t - s)), ("t_water", self.clips["fluid"].at(1.0 + t - s))]
+        for i, (slot, img) in enumerate(shots):
+            u = smooth(remap(t, s + 0.15 + 0.08 * i, s + 0.55 + 0.08 * i))
+            x, y, w, h = self.tile(i)
+            g = 0.9 + 0.1 * u                                   # each settles into place as it appears
+            self.show(slot, img, u, (x + w * (1 - g) / 2, y + h * (1 - g) / 2, w * g, h * g))
+        u = smooth(remap(t, s, s + 0.7))
+        rect = tuple(a + (b - a) * u for a, b in zip(FULL, self.tile(5)))
+        self.show("reel", self.clip_at(4, t), 1.0, rect)
+        # the title, over the wall of shots, as "drawn by threepp" is said
+        ti = self.title0
+        a = smooth(remap(t, ti, ti + 0.5))
+        if a <= 0.003:
+            return
+        ov.panel(-20, -20, 1960, 1120, radius=0, fill=0x05070b, alpha=0.45 * a)
+        ov.panel(960 - 480, 385, 960, 310, radius=26, fill=0x0d131e, alpha=0.9 * a, outline=0x8aa0c0,
+                 outline_alpha=0.25 * a)
+        rise = 16 * (1 - lesson.ease_out(remap(t, ti, ti + 0.6)))
+        w = ov.rich(960, 500 + rise, [("Warp", TEXT, "bold"), (" × ", C_HOT, "bold"), ("threepp", TEXT, "bold")],
+                    size=112, alpha=a, anchor="ms")
+        bar = smooth(remap(t, ti + 0.2, ti + 0.7))
+        ov.panel(960 - w * bar / 2, 526 + rise, w * bar, 6, radius=3, fill=C_HOT, alpha=a)
+        la = a * smooth(remap(t, ti + 0.6, ti + 1.2))
+        ov.text(960, 590, "python/examples/warp_round_trip.py", size=30, color=DIM, alpha=la, kind="mono",
                 anchor="mm")
-        ov.text(960, 620, "github.com/markaren/threepp", size=30, color=C_COOL, alpha=la, anchor="mm")
+        ov.text(960, 650, "github.com/markaren/threepp", size=30, color=C_COOL, alpha=la, anchor="mm")
 
 
 def setup(width, height):
@@ -489,12 +537,12 @@ def setup(width, height):
         "dots": Hero(sw, sh, ks - 0.3, ke + 0.8, preroll=2.0, dots=True),
         "a": Hero(sw, sh, ke - 0.9, TL.end("share") + 0.3, preroll=2.0 + (ke - 0.9) - (ks - 0.3)),
         "b": Hero(sw, sh, TL.start("out") - 0.3, TL.end("out") + 0.5, preroll=9.0),
-        "c": Hero(sw, sh, TL.start("reel") - 0.1, TL.start("reel") + 2.2, preroll=5.0),
+        "c": Hero(sw, sh, TL.start("reel") - 0.1, TL.duration + 0.1, preroll=5.0),     # the reel and the ending
     }
     code = {name: quoted(name) for name in ("kernel", "in", "out", "see")}
     st = Stage(width, height, renderer="gl", floor=False, fog=None)
     ov = Hud(1920, 1080)
-    painter = Painter(ov, clips, heroes, code, sw, sh)
+    painter = Painter(ov, clips, heroes, code, sw, sh, e1_words())
     print(f"[setup] {time.time() - t0:.1f}s, film {TL.duration:.1f} s on the script clock, "
           + ", ".join(f"{n} {TL.start(n):.1f}-{TL.end(n):.1f}" for n, *_ in PLAN))
 

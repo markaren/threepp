@@ -57,6 +57,7 @@ import argparse
 import glob
 import hashlib
 import inspect
+import json
 import math
 import os
 import re
@@ -1642,12 +1643,29 @@ class Narration:
         self._pipe = None
         os.makedirs(cache_dir, exist_ok=True)
 
-    def clip(self, text):
+    def _path(self, text):
         say = spoken(text, self.words)
         key = hashlib.sha1(f"{self.voice}|{self.speed}|{say}".encode("utf-8")).hexdigest()[:16]
-        path = os.path.join(self.cache_dir, f"{self.voice}_{key}.wav")
+        return say, os.path.join(self.cache_dir, f"{self.voice}_{key}.wav")
+
+    def clip(self, text):
+        say, path = self._path(text)
         if os.path.isfile(path):
             return read_wav(path)[0]
+        self._synth(say, path)
+        return read_wav(path)[0]
+
+    def word_times(self, text):
+        """[(word, start, end)] in seconds into the clip, as Kokoro aligned them (punctuation
+        dropped), so a picture can cut on a spoken word. Cached beside the clip's WAV."""
+        say, path = self._path(text)
+        side = path[:-4] + ".words.json"
+        if not os.path.isfile(side):
+            self._synth(say, path)                  # the WAV again too, so the two always agree
+        with open(side, encoding="utf-8") as f:
+            return [tuple(w) for w in json.load(f)]
+
+    def _synth(self, say, path):
         if self._pipe is None:
             try:
                 from kokoro import KPipeline
@@ -1656,10 +1674,17 @@ class Narration:
                                    "or render without it with --no-voice") from e
             # Kokoro voice names start with their language code: a = American, b = British English, ...
             self._pipe = KPipeline(lang_code=self.voice[0], repo_id="hexgrad/Kokoro-82M")
-        audio = np.concatenate([np.asarray(a, np.float32)
-                                for _, _, a in self._pipe(say, voice=self.voice, speed=self.speed)])
-        write_wav(path, audio, self.RATE)
-        return read_wav(path)[0]
+        chunks, words, off = [], [], 0.0
+        for r in self._pipe(say, voice=self.voice, speed=self.speed):
+            a = np.asarray(r.audio, np.float32)
+            for tk in r.tokens or ():
+                if tk.start_ts is not None and any(ch.isalnum() for ch in tk.text):
+                    words.append((tk.text.strip(".,;:!?"), off + tk.start_ts, off + tk.end_ts))
+            chunks.append(a)
+            off += len(a) / self.RATE
+        write_wav(path, np.concatenate(chunks), self.RATE)
+        with open(path[:-4] + ".words.json", "w", encoding="utf-8") as f:
+            json.dump([[w, round(a, 3), round(b, 3)] for w, a, b in words], f)
 
 
 # ── the house rules ───────────────────────────────────────────────────────────

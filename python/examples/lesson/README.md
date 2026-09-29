@@ -228,18 +228,18 @@ The other shots are the examples' own films (`ensure_clips`, cached in `lesson_o
 each sharing its simulation with the renderer rather than copying it through the CPU:
 
 ```
-jelly  warp_jelly_wreck.py --no-sensors --clean   78 blocks, 9,750 particles, 85,644 constraints   vertex interop
-gummy  warp_gummy_rain.py --clean                 600 candies, 16,200 particles                    vertex interop
 fluid  warp_fluid.py --vulkan                     336,864 PBF particles, marching-cubes surface     vertex interop
 blast  warp_explosion.py                          5,869,024 gas particles                           particle-field interop
                                                   (the drums: vertex interop; the bricks: PhysX)
-hull   warp_hull_sculpt.py --film                 2,000 optimiser steps in 495 frames               vertex interop
+gummy  warp_gummy_rain.py --clean                 600 candies, 16,200 particles                    vertex interop
+jelly  warp_jelly_wreck.py --no-sensors --clean   78 blocks, 9,750 particles, 85,644 constraints   vertex interop
 ```
 
-`--clean` (new for this film) drops the jelly's and the gummies' burned-in captions. The hull's
-film stops after the descent: the buoyancy self-check at the start of its second act fails
-(-1.01 % against a 1 % tolerance). The descent is all this film uses, so `ensure_clips` accepts
-a clip that was written.
+`--clean` (new for this film) drops the jelly's and the gummies' burned-in captions. The film
+opens on the pool (the fluid). The closing reel cuts on the narrator's words: `Narration.word_times`
+returns Kokoro's own alignment of a line (cached beside its WAV), and the cuts land 0.06 s before
+each word is heard. It ends on a wall of every shot, live, with the fire shrinking into its tile,
+and the title over it as "drawn by threepp" is said.
 
 ## How a lesson is built
 
