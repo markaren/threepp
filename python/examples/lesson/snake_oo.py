@@ -1,31 +1,33 @@
-"""Snake, written three times: two films about where the code goes, about 4 min each.
+"""Snake, written three times: two films about where the code goes, for complete beginners.
 
     python snake_oo.py                               # Part 0c, "threepp is the view" (1080p60), lesson_out/snake_oo.mp4
     python snake_oo.py --part d                      # Part 0d, "Who plays?", lesson_out/snake_oo_d.mp4
     python snake_oo.py --stills 30,60,95             # individual frames (and the other flags every lesson takes)
 
-Part 0c opens on the game itself (what Snake is), says what the film will do, then writes Snake
-three times: all in main() (examples/lesson/snake/tangle), as a class that inherits from
-threepp's Group (trap), and with the rules in a model of their own (model/, a library that
-doesn't link threepp), tested without a window and drawn by a view. Part 0d carries on with the
-finished app's later steps: the view sliding between ticks, players behind an interface, events,
-more views of one game, and a second game.
+Part 0c shows one thing at a time. It opens on the game (what Snake is), says what it will do,
+then writes Snake three times: all in main() (examples/lesson/snake/tangle), whose lines it
+colours by their job (the rules in green, the drawing in blue, both where a line does both); a
+class that inherits from threepp's Group (trap), as "is a" against "has a"; and the rules in a
+Game class of their own (model/) with the drawing in SnakeView (view/). Then the game as text
+beside the 3D picture of it, the rules' own build (CMake), and one test. Part 0d carries on with
+the finished app's later steps: the view sliding between ticks, players behind an interface,
+events, more views of one game, and a second game.
 
 What is on screen was checked against the programs:
 
-* every snippet is read out of those files; a step's rows are the lines that appear (and
-  disappear) when the preprocessor runs with STEP = n instead of n - 1;
+* every snippet is read out of those files, and the stripes are their lines (indent and length);
+  the colours are this script's reading of each line (what it touches: a mesh, the renderer and
+  scene, or the game's state), not something the compiler says;
 * every window is that program's own output. Each program (and each step of main.cpp) is built
   as a capture target (lesson_snake_*_capture) and run while the film is made: headless, on a
   fixed 1/60 s clock, with the keys pressed by a script through the canvas's own event path
   (examples/lesson/capture.hpp). The keys drawn under the window are the ones the script presses,
-  and the labels in the opening point at the squares the script's route puts things on;
-* the text board is what lesson_snake_capture_5 --ascii printed, frame for frame; the test run
-  is test_snake's own output, run while the film is made;
-* the compile error is what MSVC printed when a threepp #include was added to model/Game.cpp
-  and snake_model was built (2026-09-29; shortened only where it carried the checkout's path);
-* "same frames": the tangle and trap captures are compared frame by frame while the film is
-  made, and the note is only shown if they match.
+  and the labels in the opening point at the squares the script's route puts things on. The 3D
+  board beside the text board is lesson_snake_capture_5's frame, cropped to the board;
+* the text board is what lesson_snake_capture_5 --ascii printed, frame for frame; the test run is
+  test_snake's own output (its first words), run while the film is made;
+* the compile error is what MSVC printed when a threepp #include was added to model/Game.cpp and
+  snake_model was built (2026-09-29; shortened only where it carried the checkout's path).
 """
 from __future__ import annotations
 
@@ -33,15 +35,14 @@ import os
 import subprocess
 import sys
 import time
-import xml.etree.ElementTree as ET
 
 import numpy as np
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 import lesson  # noqa: E402
-from lesson import (DIM, TEXT, Hud, Stage, Stream, card, envelope, fade_in_out, preprocess, remap,  # noqa: E402
-                    run, smooth, step_rows, tokenize)
+from lesson import (DIM, TEXT, Hud, Stage, Stream, card, envelope, fade_in_out, preprocess, remap, run,  # noqa: E402
+                    smooth, step_rows, tokenize, tp)
 
 
 def _part():
@@ -65,66 +66,62 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
 SNAKE = os.path.join(REPO, "examples", "lesson", "snake")
 
 C_ACCENT = 0x9be564
+C_RULE = 0x7bd389                                    # the rules
+C_DRAW = 0x4cc9f0                                    # the drawing
 C_BLUE = 0x4cc9f0
 C_WARM = 0xffb347
 C_OK = 0x5ee27a
 C_DEL = 0xef476f
 C_OUT = 0xa6e3a1
+C_GREY = 0x55627a
 
 CPP_KEYWORDS = lesson.KEYWORDS["cpp"] | {"for", "if", "else", "bool", "true", "false", "nullptr", "static", "void",
                                          "override", "virtual", "public", "private", "class", "struct", "const",
                                          "return", "while", "using"}
 
-WORDS = {"AI": "A I", "AIs": "A Is", "main": "main", "STEP": "step", "C++": "C plus plus"}
+WORDS = {"AI": "A I", "AIs": "A Is", "main": "main", "STEP": "step", "C++": "C plus plus", "SnakeView": "Snake View",
+         "CMake": "C Make"}
 
 # ── the scripts ───────────────────────────────────────────────────────────────
 # The narration sets the pace: each caption lasts as long as its spoken line (Kokoro, af_heart,
 # measured in <name>.speech.json), and the beats leave the picture room between lines.
 TEXT_C = {
-    "title": "threepp is the view. Where the code goes, when a program has to grow.",
-    "i1": "This is Snake. The snake moves on its own, one square at a time, and the arrow keys turn it.",
-    "i2": "Eat the apple, and it grows. Hit a wall, or its own tail, and the game is over.",
-    "i3": "It's a small game, which makes it a good place to ask a big question: where should each part of "
-          "the code live?",
-    "i4": "We'll write it three times. First, everything in one function. Then, a class that inherits from "
-          "threepp. And last, the rules on their own, with threepp only drawing them.",
-    "t1": "Here is the first version, written like our first app. Everything lives in main, and it plays.",
-    "t2": "Look at how it decides that the snake has eaten: two float positions, less than half a unit apart. "
-          "The game's truth lives in the meshes.",
-    "t3": "And a key press turns the snake at once. Press two keys between moves, and it turns back into its "
-          "own neck.",
-    "t4": "Now three requests arrive: test the rules, run them without a window, and add a second player. "
-          "Here, every one of them means untangling main.",
-    "p1": "The second version is the usual first try at objects: a Snake class that inherits from threepp's "
-          "Group. It plays the same game, frame for frame.",
-    "p2": "It's tidier. But a snake is now a scene node, and everything a Group has is public: position, "
-          "scale, add, remove.",
-    "p3": "So one line, anywhere, can move it. Now the snake you see and the snake the rules check have parted "
-          "ways. It eats an apple it never touched, and dies off the board.",
-    "p4": "A snake isn't a scene node. It has a look. So in the third version, the rules move out, into classes "
-          "of their own.",
-    "m1": "This is the model: whole squares on a board, a snake, an apple, and one tick of the rules. No floats, "
-          "no meshes, no window.",
-    "m2": "It's a library of its own, and it doesn't link threepp. Include a threepp header in it, and the build "
-          "stops.",
-    "e1": "Rules without a window can be tested. A test sets up a game by hand, ticks it once, and checks what "
-          "happened.",
-    "e2": "The whole suite runs in the blink of an eye. And it pins down the double key press from the first "
-          "version.",
-    "v1": "Now threepp comes back, as a view. The view holds a group of meshes. Every frame, it reads the game "
-          "and puts them in place.",
-    "v2": "It never changes the game. The game is the truth, and the view only shows it.",
-    "z1": "The model owns the truth. The view only reads it. And threepp stays at the edge, where it draws, but "
-          "never decides.",
-    "z2": "Next time: who plays the game, how the game tells others what happened, and more than one view of it.",
+    "title": "threepp is the view. Where does the code go?",
+    "i1": "This is Snake. The snake moves on its own, one square at a time. The arrow keys turn it.",
+    "i2": "Eat the apple, and it grows. Hit a wall, and the game is over.",
+    "i3": "We'll write this game three times, and each time, ask where the code should live.",
+    "i4": "First, everything in one function. Then, a class that inherits from threepp. And last, the rules on "
+          "their own.",
+    "t1": "Version one. Everything is in main, like in our first app. And it works.",
+    "t2": "Let's color each line by its job. Green lines are the rules of the game.",
+    "t3": "Blue lines draw the picture.",
+    "t4": "In version one, they are all mixed together.",
+    "t5": "Look at this line. To know if the snake has eaten, a rule asks a 3D shape where it is.",
+    "t6": "So to test the rules, you need a window. And to change the picture, you have to touch the rules.",
+    "p1": "Version two. A common first try is a Snake class that inherits from threepp's Group.",
+    "p2": "That says: a snake is a picture. But a snake is not a picture.",
+    "p3": "A snake has a picture. And something else can draw it.",
+    "m1": "Version three. The rules move into a class of their own, called Game.",
+    "m2": "The drawing moves into another class, called SnakeView.",
+    "m3": "Every step, main moves the game on, and then asks the view to draw it.",
+    "g1": "Inside Game, the snake is just squares on a grid. Here is the same game, printed as text.",
+    "g2": "threepp paints that grid in 3D. The grid is the truth. The 3D is a picture of it.",
+    "b1": "Game even gets a build of its own. Its CMake file doesn't mention threepp at all.",
+    "b2": "Try to use threepp in it, and the build stops. The rules can't draw, not even by accident.",
+    "e1": "And rules without a window are easy to test.",
+    "e2": "Set up a snake next to an apple. Take one step. Check that the snake grew.",
+    "e3": "It passes, without opening a single window.",
+    "z1": "The rules live in one place. The picture lives in another. threepp only draws.",
+    "z2": "Next time: who plays the game.",
 }
 PLAN_C = [("open", 0.4, ["title"], 2.6),
-          ("intro", 1.0, ["i1", "i2", "i3", "i4"], 2.2),
-          ("tangle", 1.2, ["t1", "t2", "t3", "t4"], 2.0),
-          ("trap", 1.2, ["p1", "p2", "p3", "p4"], 2.0),
-          ("model", 1.2, ["m1", "m2"], 2.0),
-          ("tests", 1.2, ["e1", "e2"], 2.0),
-          ("view", 1.2, ["v1", "v2"], 2.4),
+          ("intro", 1.0, ["i1", "i2", "i3", "i4"], 2.0),
+          ("v1", 1.2, ["t1", "t2", "t3", "t4", "t5", "t6"], 2.0),
+          ("v2", 1.2, ["p1", "p2", "p3"], 2.0),
+          ("v3", 1.2, ["m1", "m2", "m3"], 2.0),
+          ("grid", 1.2, ["g1", "g2"], 2.4),
+          ("build", 1.2, ["b1", "b2"], 2.0),
+          ("test", 1.2, ["e1", "e2", "e3"], 2.0),
           ("end", 1.2, ["z1", "z2"], 1.6),
           ("outro", 0.0, [], 9.0)]
 
@@ -161,10 +158,10 @@ PLAN_D = [("open", 0.4, ["title"], 2.6),
           ("end", 1.2, ["z1", "z2"], 1.6),
           ("outro", 0.0, [], 9.0)]
 
-CAPTION_TEXT, PLAN = (TEXT_C, PLAN_C) if PART == "c" else (TEXT_D, PLAN_D)
+CAPTION_TEXT, PLAN, GAP = (TEXT_C, PLAN_C, 1.2) if PART == "c" else (TEXT_D, PLAN_D, 0.9)
 SPEECH = lesson.Speech(CAPTION_TEXT, os.path.join(_HERE, f"{NAME}.speech.json"), words=WORDS,
                        voice_only={"title"})
-TL, CAP = SPEECH.layout(PLAN, gap=0.9)
+TL, CAP = SPEECH.layout(PLAN, gap=GAP)
 
 
 def cap0(k):
@@ -177,11 +174,10 @@ def cap1(k):
 
 if PART == "c":
     TITLE = ("A THREEPP LESSON  ·  PART 0c", "threepp is the view", "Snake, written three times")
-    PILLS = [("1  one function", ["tangle"]), ("2  inherits a Group", ["trap"]),
-             ("3  rules on their own", ["model", "tests", "view"])]
-    SUMMARY = [(r"$\mathrm{model}$", "Rules in plain classes: no threepp, tested without a window."),
-               (r"$\mathrm{view}$", "threepp reads the model and draws it. It never changes it."),
-               (r"$\mathrm{has\ a}$", "A class has a look. It doesn't inherit one.")]
+    PILLS = []
+    SUMMARY = [(r"$\mathrm{rules}$", "In a class of their own, with no threepp in it."),
+               (r"$\mathrm{picture}$", "threepp only draws what the rules say."),
+               (r"$\mathrm{has\ a}$", "A snake has a picture. It isn't one.")]
     FOOTER = "Every window in this film is the program's own output"
 else:
     TITLE = ("A THREEPP LESSON  ·  PART 0d", "Who plays?", "Snake: players, events and more views")
@@ -195,15 +191,9 @@ else:
 
 # What MSVC printed when `#include "threepp/math/Vector3.hpp"` was added to model/Game.cpp and
 # snake_model was built (2026-09-29), the checkout's absolute path left out.
-COMPILE_TRY = ['#include "Game.hpp"', '#include "threepp/math/Vector3.hpp"']
-COMPILE_OUT = ["> cmake --build build --target snake_model",
-               "FAILED: examples/lesson/snake/CMakeFiles/snake_model.dir/model/Game.cpp.obj",
-               "model\\Game.cpp(2): fatal error C1083: Cannot open include file:",
-               "  'threepp/math/Vector3.hpp': No such file or directory",
-               "ninja: build stopped: subcommand failed."]
-
-GROUP_MEMBERS = ["position", "rotation", "scale", "add()", "remove()", "clear()", "visible", "castShadow",
-                 "children", "lookAt()", "traverse()", "parent"]
+COMPILE_TRY = '#include "threepp/math/Vector3.hpp"'
+COMPILE_ERR = ["model\\Game.cpp(2): fatal error C1083: Cannot open include file:",
+               "  'threepp/math/Vector3.hpp': No such file or directory"]
 
 
 # ── the sources ───────────────────────────────────────────────────────────────
@@ -228,6 +218,33 @@ def uses_threepp(*parts):
 
 def code_rows(lines):
     return [("code", l) for l in lines]
+
+
+# what a line of tangle/main.cpp does: this film's reading of it, by what it touches
+_DRAW = ("Canvas", "GLRenderer", "renderer", "Scene", "scene", "camera", "Light", "light", "Material", "material",
+         "Geometry", "Mesh::create", "board", "->color", "rotation", "Color(")
+_STATE_IN_A_MESH = ("->position", "shared_ptr<Mesh>", "snake.push_back(segment)")
+_RULE = ("dead", "timer", "direction", "next", "score", "rng", "Key::", "KeyAdapter", "snake[", "snake.", "clock",
+         "std::abs", "for (int i", ": snake)")
+
+
+def job(line):
+    """'rule', 'draw', 'both' (a rule that keeps or reads its state in a mesh) or 'other'."""
+    s = line.strip()
+    if not s or s.startswith("//") or s in ("}", "});", "} else {") or s.startswith("canvas.animate"):
+        return "other"
+    if any(k in s for k in _STATE_IN_A_MESH) and not s.startswith("light->"):
+        return "both"
+    rule, draw = any(k in s for k in _RULE), any(k in s for k in _DRAW)
+    if rule and draw:
+        return "both"
+    return "draw" if draw else ("rule" if rule else "other")
+
+
+def main_body(lines):
+    i = next(k for k, l in enumerate(lines) if l.startswith("int main"))
+    j = max(k for k, l in enumerate(lines) if l.rstrip() == "}")
+    return lines[i + 1:j]
 
 
 # ── keys, pressed by a script, at the moments the program moves ───────────────
@@ -300,22 +317,17 @@ class KeyScript:
         k = (t - self.t0) * FPS
         return [(n, (k - f) / FPS) for f, n in self.keys if 0 <= k - f < span * FPS]
 
-    def drive(self, legs, start="R", head=None, until=None, bug_after=None):
+    def drive(self, legs, start="R", head=None, until=None):
         """Press the keys for a route of legs [(heading, moves)]: each turn goes down a few
-        frames before the move it applies to. With `bug_after` (a film time), two keys go down
-        between the next two moves: one to the side, then straight back. `head` (a cell) records
-        where the head is after each move."""
+        frames before the move it applies to. `head` (a square) records where the head is
+        after each move."""
         h, m = start, 0
         cell = head
         until = self.frames if until is None else self.frame(until)
         for heading, n in legs:
-            for j in range(n):
+            for _ in range(n):
                 f = self.mf[m]
                 if f >= until:
-                    return
-                if bug_after is not None and f - 7 >= self.frame(bug_after) and j > 0:
-                    self.press(f - 6, KEY[LEFT_OF[h]])
-                    self.press(f - 3, KEY[BACK[h]])
                     return
                 if heading != h:
                     self.press(f - 3, KEY[heading])
@@ -366,6 +378,7 @@ class Painter:
         self.st, self.ov, self.rec = st, ov, rec
         self.streams, self.win = rec["streams"], rec["windows"]
         self.captions = SPEECH.captions(CAP)
+        self._tex = {}
 
     # the window: where it is, and which picture it shows ------------------------
     def window_rect(self, t):
@@ -398,7 +411,7 @@ class Painter:
 
     def draw_window(self, t):
         ov = self.ov
-        alpha = envelope(t, 0.3, TL.end("end") + 0.6, 0.9, 0.8)
+        alpha = envelope(t, 0.3, TL.end("end") + 0.6, 0.9, 0.8) * self.rec["win_alpha"](t)
         if alpha <= 0.003:
             return None
         x0, y0, x1 = self.window_rect(t)
@@ -406,11 +419,8 @@ class Painter:
         ov.panel(x0, y0, x1 - x0, y1 - y0, radius=10, fill=0x000000, alpha=alpha)
         layers = self.window_layers(t)
         for key, a in layers:
-            if key == "term":
-                self.terminal(t, x0 + 2, y0 + WBAR + 2, x1 - x0 - 4, y1 - y0 - WBAR - 4, alpha * a)
-            else:
-                ov.image(x0 + 2, y0 + WBAR + 2, x1 - x0 - 4, y1 - y0 - WBAR - 4, self.streams[key].tex(t),
-                         alpha=alpha * a)
+            ov.image(x0 + 2, y0 + WBAR + 2, x1 - x0 - 4, y1 - y0 - WBAR - 4, self.streams[key].tex(t),
+                     alpha=alpha * a)
         ov.outline(x0, y0, x1 - x0, y1 - y0, 0x8aa0c0, 0.55 * alpha, width=2.0, radius=10)
         ov.panel(x0 + 2, y0 + 2, x1 - x0 - 4, WBAR, radius=8, fill=0x1a2233, alpha=0.95 * alpha)
         if layers:
@@ -419,7 +429,7 @@ class Painter:
             ov.circle(x1 - 26 - 22 * k, y0 + 19, 6, fill=c, alpha=0.8 * alpha)
         big = (x1 - x0) > 1100
         # the keys the script presses
-        if layers and layers[-1][0] != "term":
+        if layers:
             s = self.streams[layers[-1][0]].script
             px = x0 + 16
             size, hh = (24, 40) if big else (17, 32)
@@ -450,61 +460,33 @@ class Painter:
         s = (x1 - x0 - 4) / 1280
         return x0 + 2 + px * s, y0 + WBAR + 2 + py * s
 
-    def terminal(self, t, x, y, w, h, a):
-        """The window as a terminal: the compile error, then the test run."""
-        ov = self.ov
-        ov.panel(x, y, w, h, radius=0, fill=0x0a0e14, alpha=a)
-        size, lh = 17, 25
-        if t < TL.start("tests"):
-            ca = a * smooth(remap(t, cap0("m2") + 3.0, cap0("m2") + 3.4))
-            lines = [(l, C_BLUE if l.startswith(">") else (C_DEL if "error" in l or "FAILED" in l else TEXT))
-                     for l in COMPILE_OUT]
-            for j, (l, c) in enumerate(lines):
-                la = ca * smooth(remap(t, cap0("m2") + 3.2 + 0.35 * j, cap0("m2") + 3.4 + 0.35 * j))
-                ov.text(x + 24, y + 30 + j * lh, l, size=size, color=c, alpha=la, kind="mono", anchor="lm")
-            if ca < 0.01:
-                ov.text(x + 24, y + 30, ">", size=size, color=C_BLUE, alpha=a, kind="mono", anchor="lm")
-            return
-        names, summary = self.rec["tests"]
-        t0 = cap0("e1") + 1.5
-        ov.text(x + 24, y + 30, "> test_snake", size=size, color=C_BLUE, alpha=a * smooth(remap(t, t0, t0 + 0.3)),
-                kind="mono", anchor="lm")
-        for j, (name, ok) in enumerate(names):
-            la = a * smooth(remap(t, t0 + 0.8 + 0.05 * j, t0 + 0.9 + 0.05 * j))
-            yy = y + 30 + (j + 1) * 24
-            ov.text(x + 24, yy, "passed" if ok else "FAILED", size=16, color=C_OK if ok else C_DEL, alpha=la,
-                    kind="mono", anchor="lm")
-            ov.text(x + 110, yy, name, size=16, color=TEXT, alpha=la, kind="mono", anchor="lm")
-        la = a * smooth(remap(t, t0 + 1.0 + 0.05 * len(names), t0 + 1.2 + 0.05 * len(names)))
-        ov.text(x + 24, y + 30 + (len(names) + 1.4) * 24, summary, size=16, color=C_OUT, alpha=la, kind="mono",
-                anchor="lm")
-        # the test that covers the double key press (its sections are listed under the test case)
-        hl = smooth(remap(t, cap0("e2") + 3.0, cap0("e2") + 3.6)) * (1 - smooth(remap(t, TL.end("tests") - 0.5,
-                                                                                       TL.end("tests"))))
-        for j, (name, _) in enumerate(names):
-            if "turn back onto itself" in name and hl > 0.01:
-                yy = y + 30 + (j + 1) * 24
-                ov.panel(x + 12, yy - 13, w - 24, 26, radius=6, fill=0x223452, alpha=0.8 * hl * a)
-                ov.panel(x + 12, yy - 13, 4, 26, radius=2, fill=C_WARM, alpha=hl * a)
-                ov.text(x + 24, yy, "passed", size=16, color=C_OK, alpha=a, kind="mono", anchor="lm")
-                ov.text(x + 110, yy, name, size=16, color=C_WARM, alpha=a, kind="mono", anchor="lm")
+    def crop_tex(self, key, img):
+        """A texture of an (H, W, 3) image, updated in place from frame to frame."""
+        img = np.ascontiguousarray(img[::-1])            # textures take their rows bottom first
+        if key not in self._tex:
+            self._tex[key] = tp.data_texture(img, True)
+        else:
+            self._tex[key].update_data(img)
+        return self._tex[key]
 
     # 2D ----------------------------------------------------------------------
     def draw2d(self, t):
         ov = self.ov
         ov.title_card(t, *TITLE, C_ACCENT, t_in=0.6, t_out=TL.end("open") - 0.4, size=84)
-        geo = self.draw_window(t)
+        self.draw_window(t)
         self.pills(t)
         for spec in self.rec["cards"]:
             self.rows_card(t, *spec)
-        if geo is not None:
-            self.under_window(t, geo)
+        if self.rec.get("diagram"):
+            self.diagram(t)
         for f in self.rec["widgets"]:
             f(self, t)
         ov.captions(t, self.captions)
         ov.summary(t, TL.start("outro"), TL.end("outro"), SUMMARY, FOOTER, C_ACCENT, C_ACCENT, text_dx=300)
 
     def pills(self, t):
+        if not PILLS:
+            return
         ov = self.ov
         a = envelope(t, TL.start(PILLS[0][1][0]) - 0.6, TL.end("end"), 0.6, 0.6)
         if a <= 0.003:
@@ -549,8 +531,6 @@ class Painter:
                 ov.panel(x + 12, yy - 1, 4, lh, radius=2, fill=C_WARM, alpha=h_j * ra)
             if kind == "add":
                 ov.panel(x + 12, yy - 1, 4, lh, radius=2, fill=C_OK, alpha=0.9 * ra)
-            if kind == "bad":
-                ov.panel(x + 12, yy - 1, 4, lh, radius=2, fill=C_DEL, alpha=0.9 * ra)
             if kind == "del":
                 ra *= 0.55
                 ov.panel(x + 12, yy - 1, 4, lh, radius=2, fill=C_DEL, alpha=0.9 * ra)
@@ -561,37 +541,8 @@ class Painter:
             if kind == "del":
                 ov.line([(x + 30, yy + lh / 2), (x + 30 + len(text.rstrip()) * cw, yy + lh / 2)], C_DEL, 2.0, ra)
 
-    # under the window ----------------------------------------------------------
-    def under_window(self, t, geo):
-        x0, y0, x1, y1 = geo
-        ov = self.ov
-        if "p2" in CAP:
-            # everything a Group has, public on Snake
-            a = envelope(t, cap0("p2") + 1.5, cap1("p3") - 0.2, 0.6, 0.6)
-            if a > 0.003:
-                card(ov, WX0, DY0, WX1 - WX0, 150, a, "INHERITED FROM GROUP, PUBLIC ON EVERY SNAKE")
-                px, py = WX0 + 28, DY0 + 62
-                for k, m in enumerate(GROUP_MEMBERS):
-                    ma = a * smooth(remap(t, cap0("p2") + 1.8 + 0.15 * k, cap0("p2") + 2.1 + 0.15 * k))
-                    w = ov.text_width(m, 19, "mono") + 26
-                    if px + w > WX1 - 20:
-                        px, py = WX0 + 28, py + 44
-                    ov.panel(px, py - 16, w, 34, radius=8, fill=0x223452, alpha=0.8 * ma)
-                    ov.text(px + w / 2, py + 1, m, size=19, color=TEXT, alpha=ma, kind="mono", anchor="mm")
-                    px += w + 10
-            # same game, frame for frame
-            a = envelope(t, cap0("p1") + 4.0, cap0("p3"), 0.6, 0.6)
-            if a > 0.003 and self.rec["same_pixels"]:
-                txt = "same keys, same frames as the first version"
-                w = ov.text_width(txt, 19, "semibold") + 40
-                ov.panel(x1 - w - 16, y0 + WBAR + 16, w, 38, radius=19, fill=0x0d131e, alpha=0.85 * a)
-                ov.text(x1 - w / 2 - 16, y0 + WBAR + 35, txt, size=19, color=C_ACCENT, alpha=a, kind="semibold",
-                        anchor="mm")
-        self.diagram(t)
-
     def diagram(self, t):
-        """Who includes whom, built up beat by beat: the model in the middle, threepp at the edge.
-        The arrows are #includes (checked in setup against the files)."""
+        """Who includes whom, built up beat by beat: the model in the middle, threepp at the edge."""
         spec = self.rec["diagram"]
         ov = self.ov
         a = envelope(t, spec["t0"], TL.end("end") + 0.3, 0.6, 0.6)
@@ -629,12 +580,49 @@ class Painter:
                 ov.text(mx, my + (16 if below else -14), label, size=15, color=DIM, alpha=ea, anchor="mm")
 
 
-# ── widgets that belong to one film ───────────────────────────────────────────
+# ── Part 0c: one picture at a time ────────────────────────────────────────────
+def big_code(ov, x, y, lines, size, alpha, colors=None, lh=None, lang="cpp"):
+    """Lines of code in a large monospace font; `colors` [(line, col0, col1, color)] recolours
+    spans (and underlines them)."""
+    cw = ov.text_width("0", size, "mono")
+    lh = lh or size * 1.45
+    for j, line in enumerate(lines):
+        for col, s, c in tokenize(line, lang, CPP_KEYWORDS if lang == "cpp" else None):
+            for (lj, c0, c1, cc) in colors or ():
+                if lj == j and c0 <= col < c1:
+                    c = cc
+            ov.text(x + col * cw, y + j * lh, s, size=size, color=c, alpha=alpha, kind="mono", anchor="lm")
+    for (lj, c0, c1, cc) in colors or ():
+        ov.line([(x + c0 * cw, y + lj * lh + size * 0.72), (x + c1 * cw, y + lj * lh + size * 0.72)], cc, 3.0, alpha)
+    return cw
+
+
+def box(ov, x, y, w, h, title, sub, color, alpha, fill=0x0d131e):
+    ov.panel(x, y, w, h, radius=16, fill=fill, alpha=0.9 * alpha, outline=color, outline_alpha=0.9)
+    ov.text(x + w / 2, y + 36, title, size=30, color=color, alpha=alpha, kind="semibold", anchor="mm")
+    if sub:
+        ov.text(x + w / 2, y + 70, sub, size=20, color=DIM, alpha=alpha, anchor="mm")
+
+
+def stripe(ov, x, y, w, h, kind, alpha, split=0.5):
+    """One line of code as a bar, coloured by its job; a line that does both is half and half."""
+    if alpha <= 0.003 or w <= 0:
+        return
+    if kind == "rule":
+        ov.panel(x, y, w, h, radius=0, fill=C_RULE, alpha=alpha)
+    elif kind == "draw":
+        ov.panel(x, y, w, h, radius=0, fill=C_DRAW, alpha=alpha)
+    elif kind == "both":
+        ov.panel(x, y, w * split, h, radius=0, fill=C_RULE, alpha=alpha)
+        ov.panel(x + w * split, y, w * (1 - split), h, radius=0, fill=C_DRAW, alpha=alpha)
+    else:
+        ov.panel(x, y, w, h, radius=0, fill=C_GREY, alpha=0.6 * alpha)
+
+
 def w_intro(p, t):
     """The opening: what is on the board, then what the film will do."""
     ov = p.ov
     sc = p.streams["intro"].script
-    # the snake, the apple, a wall: labels that follow the words
     head = sc.head_at(t)
     a = envelope(t, p.rec["t_snake"], cap1("i1") - 0.2, 0.4, 0.5)
     if a > 0.003 and head is not None:
@@ -649,23 +637,271 @@ def w_intro(p, t):
         wx, wy = p.to_screen(t, (16.5, 19.5), 0.0)
         ov.callout((wx, wy), (wx + 180, wy - 40), "a wall", C_WARM, a, size=30)
     # the plan
-    a = envelope(t, cap0("i4"), TL.end("intro") + 0.4, 0.6, 0.6)
+    a = envelope(t, cap0("i4") - 0.2, TL.end("intro") + 0.4, 0.7, 0.7)
     if a > 0.003:
-        x, y = 40, 120
-        card(ov, x, y, 860, 380, a, "SNAKE, THREE TIMES")
+        x, y = 460, 170
+        card(ov, x, y, 1000, 420, a, "SNAKE, THREE TIMES")
         rows = [("1", "everything in one function", "all of it in main()"),
                 ("2", "a class that inherits from threepp", "class Snake : public Group"),
                 ("3", "the rules on their own", "and threepp only draws them")]
         for k, (n, what, how) in enumerate(rows):
             ra = a * smooth(remap(t, p.rec["t_plan"][k], p.rec["t_plan"][k] + 0.5))
-            yy = y + 110 + 92 * k
-            ov.circle(x + 58, yy, 22, fill=0x3d6b2e, alpha=ra)
-            ov.text(x + 58, yy, n, size=24, color=TEXT, alpha=ra, kind="semibold", anchor="mm")
-            ov.text(x + 100, yy - 12, what, size=30, color=TEXT, alpha=ra, kind="semibold", anchor="lm")
-            ov.text(x + 100, yy + 22, how, size=20, color=DIM, alpha=ra, kind="mono" if k == 1 else "regular",
+            yy = y + 120 + 100 * k
+            ov.circle(x + 70, yy, 26, fill=0x3d6b2e, alpha=ra)
+            ov.text(x + 70, yy, n, size=28, color=TEXT, alpha=ra, kind="semibold", anchor="mm")
+            ov.text(x + 120, yy - 14, what, size=34, color=TEXT, alpha=ra, kind="semibold", anchor="lm")
+            ov.text(x + 120, yy + 24, how, size=22, color=DIM, alpha=ra, kind="mono" if k == 1 else "regular",
                     anchor="lm")
 
 
+# where the stripes of version one sit, and the two boxes of version three
+SX0, SY0, SCW = 150, 140, 5.6                      # where the stripes end up (left), for the zoom and version three
+SX_MID, SCW_MID = 560, 8.4                         # where they are first shown: centred, larger
+GAME_BOX, VIEW_BOX = (1010, 150, 400, 620), (1460, 150, 400, 620)
+
+
+def w_version1(p, t):
+    """Version one's main(), one bar per line, coloured by job; then the line where a rule asks a
+    mesh; then (version three) the bars leave for the Game and SnakeView boxes."""
+    ov, R = p.ov, p.rec
+    lines, jobs = R["tangle_lines"], R["tangle_jobs"]
+    n = len(lines)
+    lh = min(7.5, 640 / n)
+    a = envelope(t, cap0("t2") - 0.2, TL.end("v1") - 0.2, 0.8, 0.6) + envelope(t, TL.start("v3"), cap1("m2") + 0.8,
+                                                                                0.6, 0.8)
+    if a <= 0.003:
+        return
+    green = smooth(remap(t, R["t_green"], R["t_green"] + 0.6)) if t < TL.start("v3") else 1.0
+    blue = smooth(remap(t, R["t_blue"], R["t_blue"] + 0.6)) if t < TL.start("v3") else 1.0
+    zoom = envelope(t, R["t_zoom"], TL.end("v1") - 0.2, 0.6, 0.6)
+    in_v3 = t >= TL.start("v3") - 0.3
+    u = 1.0 if in_v3 else smooth(remap(t, R["t_zoom"] - 0.8, R["t_zoom"] + 0.2))
+    sx0, scw = SX_MID + (SX0 - SX_MID) * u, SCW_MID + (SCW - SCW_MID) * u
+    card(ov, sx0 - 40, SY0 - 70, 100 * scw + 80, 60 + n * lh + 50, a, "version 1  ·  main()")
+    # the legend
+    la = a * max(green, 0.0)
+    lx = sx0 + 100 * scw - 280
+    ov.panel(lx, SY0 - 58, 16, 16, radius=3, fill=C_RULE, alpha=la)
+    ov.text(lx + 24, SY0 - 50, "the rules", size=18, color=TEXT, alpha=la, anchor="lm")
+    lb = a * blue
+    ov.panel(lx + 140, SY0 - 58, 16, 16, radius=3, fill=C_DRAW, alpha=lb)
+    ov.text(lx + 164, SY0 - 50, "the drawing", size=18, color=TEXT, alpha=lb, anchor="lm")
+    for i, (line, kind) in enumerate(zip(lines, jobs)):
+        s = line.rstrip()
+        if not s.strip():
+            continue
+        ind = len(s) - len(s.lstrip(" "))
+        x, y, w = sx0 + ind * scw, SY0 + i * lh, (len(s) - ind) * scw
+        shown = kind
+        if kind == "rule" and green < 0.5 or kind == "draw" and blue < 0.5:
+            shown = "other"
+        if kind == "both" and (green < 0.5 or blue < 0.5):
+            shown = "rule" if green >= 0.5 else "other"
+        la = a * (0.35 + 0.65 * (1 - zoom)) if i != R["eat_line"] else a
+        if in_v3:
+            fly(p, t, i, n, x, y, w, lh, kind, a)
+            continue
+        stripe(ov, x, y, w, max(lh - 1.5, 2), shown, la)
+    # the zoom: the line where a rule asks a mesh where it is
+    if zoom > 0.003 and not in_v3:
+        i = R["eat_line"]
+        s = lines[i].strip()
+        zx, zy = 900, 380
+        ov.panel(zx - 40, zy - 70, 1000, 240, radius=16, alpha=0.9 * zoom, outline=0x8aa0c0, outline_alpha=0.3)
+        y_line = SY0 + i * lh
+        ind = len(lines[i]) - len(lines[i].lstrip(" "))
+        ov.line([(sx0 + (len(lines[i].rstrip()) + 1) * scw, y_line), (zx - 42, zy)], C_WARM, 2.0, zoom)
+        c_rule0, c_rule1 = s.index("next"), s.index("(apple") + 1
+        c_mesh0 = s.index("apple->position")
+        c_mesh1 = c_mesh0 + len("apple->position")
+        cw = big_code(ov, zx, zy, [s], 34, zoom, colors=[(0, c_rule0, c_rule1, C_RULE), (0, c_mesh0, c_mesh1, C_DRAW)])
+        ov.text(zx + (c_rule0 + c_rule1) / 2 * cw, zy + 62, "a rule...", size=24, color=C_RULE, alpha=zoom,
+                anchor="mm")
+        ov.text(zx + (c_mesh0 + c_mesh1) / 2 * cw, zy + 62, "...asks a 3D shape", size=24, color=C_DRAW,
+                alpha=zoom, anchor="mm")
+
+
+def fly(p, t, i, n, x, y, w, lh, kind, a):
+    """Version three: bar i of version one flies into its box (a bar that does both splits)."""
+    ov = p.ov
+    parts = {"rule": [("rule", GAME_BOX, TL.start("v3"))], "draw": [("draw", VIEW_BOX, cap0("m2"))],
+             "both": [("rule", GAME_BOX, TL.start("v3")), ("draw", VIEW_BOX, cap0("m2"))],
+             "other": [("other", None, cap0("m2"))]}[kind]
+    for k, (piece, bx, t_go) in enumerate(parts):
+        t_i = t_go + 1.2 + 2.0 * i / n
+        u = smooth(remap(t, t_i, t_i + 1.0))
+        px, pw = (x, w) if kind != "both" else ((x, w / 2) if piece == "rule" else (x + w / 2, w / 2))
+        if bx is None:
+            stripe(ov, px, y, pw, max(lh - 1.5, 2), "other", a * (1 - u))
+            continue
+        tx, ty = bx[0] + 30 + (px - SX0) * 0.55, bx[1] + 110 + (y - SY0) * 0.75
+        stripe(ov, px + (tx - px) * u, y + (ty - y) * u, pw * (1 - 0.45 * u), max(lh - 1.5, 2), piece,
+               a * (1 - u) * (1 - 0.3 * u))
+
+
+def w_version3(p, t):
+    """The two boxes, filling with their files' own lines; then main's two calls between them."""
+    ov, R = p.ov, p.rec
+    a = envelope(t, TL.start("v3") + 0.2, TL.end("v3") - 0.1, 0.7, 0.6)
+    if a <= 0.003:
+        return
+    for (bx, by, bw, bh), title, sub, color, lines, t_go in (
+            (GAME_BOX, "Game", "model/  ·  the rules", C_RULE, R["game_lines"], TL.start("v3")),
+            (VIEW_BOX, "SnakeView", "view/  ·  the drawing", C_DRAW, R["view_lines"], cap0("m2"))):
+        ba = a * smooth(remap(t, t_go + 0.6, t_go + 1.2))
+        if ba <= 0.003:
+            continue
+        box(ov, bx, by, bw, bh, title, sub, color, ba)
+        n = len(lines)
+        lh = min(6.0, (bh - 130) / n)
+        for j, line in enumerate(lines):
+            s = line.rstrip()
+            if not s.strip():
+                continue
+            ind = len(s) - len(s.lstrip(" "))
+            ja = ba * smooth(remap(t, t_go + 1.6 + 2.0 * j / n, t_go + 2.2 + 2.0 * j / n))
+            stripe(ov, bx + 30 + ind * 3.2, by + 110 + j * lh, min((len(s) - ind) * 3.2, bw - 60 - ind * 3.2),
+                   max(lh - 1.2, 1.5),
+                   "rule" if color == C_RULE else "draw", ja * 0.9)
+    # main: move the game on, then draw it
+    ma = a * smooth(remap(t, cap0("m3") + 0.2, cap0("m3") + 0.9))
+    if ma > 0.003:
+        lines = R["main_loop"]
+        card(ov, 110, 250, 820, 120 + 52 * len(lines), ma, "main.cpp  ·  EVERY FRAME")
+        rows = [(j, 0, len(l.strip()) + (len(l) - len(l.lstrip(" "))), C_RULE if "game.tick" in l else C_DRAW)
+                for j, l in enumerate(lines) if "game.tick" in l or "view.update" in l]
+        big_code(ov, 150, 340, lines, 30, ma, lh=52, colors=[(j, len(lines[j]) - len(lines[j].lstrip(" ")), c1, c)
+                                                                for j, _, c1, c in rows])
+
+
+def w_version2(p, t):
+    """A snake is a Group (crossed out), or has a picture (a SnakeView that holds a Group)."""
+    ov, R = p.ov, p.rec
+    a = envelope(t, TL.start("v2") + 0.2, TL.end("v2") - 0.1, 0.7, 0.6)
+    if a <= 0.003:
+        return
+    line = R["trap_line"]
+    size = 40
+    cw = ov.text_width("0", size, "mono")
+    x = 960 - len(line) * cw / 2
+    big_code(ov, x, 170, [line], size, a)
+    no = smooth(remap(t, R["t_not"], R["t_not"] + 0.5))
+    if no > 0.003:
+        ov.line([(x - 10, 170), (x + len(line) * cw + 10, 170)], C_DEL, 4.0, a * no)
+    # is a
+    ia = a * (1 - smooth(remap(t, cap0("p3") - 0.2, cap0("p3") + 0.6)))
+    if ia > 0.003:
+        box(ov, 480, 380, 340, 110, "Snake", "the game's snake", C_RULE, ia)
+        box(ov, 1100, 380, 340, 110, "Group", "a picture, in threepp", C_DRAW, ia)
+        ov.arrow2d((830, 435), (1090, 435), TEXT, 3.0, 16, ia)
+        ov.text(960, 405, "is a", size=30, color=TEXT, alpha=ia, kind="semibold", anchor="mm")
+        if no > 0.003:
+            ov.line([(930, 400), (990, 470)], C_DEL, 6.0, ia * no)
+            ov.line([(930, 470), (990, 400)], C_DEL, 6.0, ia * no)
+            ov.text(960, 540, "a snake is not a picture", size=28, color=C_DEL, alpha=ia * no, anchor="mm")
+    # has a
+    ha = a * smooth(remap(t, cap0("p3") + 0.3, cap0("p3") + 1.0))
+    if ha > 0.003:
+        box(ov, 420, 400, 340, 110, "Snake", "just the rules", C_RULE, ha)
+        ov.panel(1000, 330, 520, 250, radius=18, fill=0x0d131e, alpha=0.9 * ha, outline=C_DRAW, outline_alpha=0.9)
+        ov.text(1260, 370, "SnakeView", size=30, color=C_DRAW, alpha=ha, kind="semibold", anchor="mm")
+        box(ov, 1130, 440, 260, 100, "Group", "", C_DRAW, ha, fill=0x1d3354)
+        ov.text(1260, 610, "has a picture, and draws the snake", size=24, color=DIM, alpha=ha, anchor="mm")
+        ov.arrow2d((990, 455), (770, 455), DIM, 2.5, 12, ha * smooth(remap(t, R["t_draw"], R["t_draw"] + 0.5)))
+        ov.text(880, 430, "draws", size=22, color=DIM, alpha=ha * smooth(remap(t, R["t_draw"], R["t_draw"] + 0.5)),
+                anchor="mm")
+
+
+def w_grid(p, t):
+    """The same game twice: as text (what lesson_snake --ascii prints) and in 3D (its window,
+    cropped to the board)."""
+    ov, R = p.ov, p.rec
+    a = envelope(t, TL.start("grid") + 0.2, TL.end("grid") - 0.1, 0.7, 0.6)
+    if a <= 0.003:
+        return
+    s = p.streams["grid"]
+    board = [l for l in s.printed(t) if l.startswith("#")][-22:]
+    size, lh = 24, 26
+    cw = ov.text_width("0", size, "mono")
+    x, y = 170, 190
+    card(ov, x - 40, y - 80, 22 * cw + 80, 22 * lh + 150, a, "THE GAME, AS TEXT")
+    for j, line in enumerate(board):
+        ov.text(x, y + j * lh, line.split("  score")[0], size=size, color=C_OUT, alpha=a, kind="mono", anchor="lm")
+    ov.text(x, y + 22 * lh + 20, "O  the head      o  the body      @  the apple", size=18, color=DIM, alpha=a,
+            anchor="lm")
+    # the 3D board, cropped from the same program's frame
+    x0, y0, x1, y1 = R["crop"]
+    img = s.at(t)[y0:y1, x0:x1]
+    w3 = 900
+    h3 = w3 * (y1 - y0) / (x1 - x0)
+    X, Y = 900, 150
+    ov.panel(X - 4, Y - 4, w3 + 8, h3 + 8, radius=10, fill=0x000000, alpha=a)
+    ov.image(X, Y, w3, h3, p.crop_tex("grid", img), alpha=a)
+    ov.text(X, Y - 26, "the same game, drawn by threepp", size=20, color=DIM, alpha=a, anchor="lm")
+    ga = a * smooth(remap(t, R["t_paint"], R["t_paint"] + 0.6))
+    if ga > 0.003:
+        ov.arrow2d((x + 22 * cw + 30, 430), (X - 20, 430), C_DRAW, 3.0, 16, ga)
+        ov.text((x + 22 * cw + X) / 2, 400, "threepp paints it", size=24, color=C_DRAW, alpha=ga, anchor="mm")
+
+
+def w_build(p, t):
+    """The rules' own build: CMake, then what happens when they try to use threepp."""
+    ov, R = p.ov, p.rec
+    a = envelope(t, TL.start("build") + 0.2, TL.end("build") - 0.1, 0.7, 0.6)
+    if a <= 0.003:
+        return
+    lines = R["cmake_lines"]
+    card(ov, 260, 130, 1400, 90 + 46 * len(lines), a, "CMakeLists.txt  ·  THE RULES' OWN BUILD")
+    big_code(ov, 300, 210, lines, 26, a, lh=46, lang="cmake")
+    ea = a * smooth(remap(t, cap0("b2") + 0.3, cap0("b2") + 1.0))
+    if ea > 0.003:
+        card(ov, 260, 460, 1400, 290, ea, "model/Game.cpp  ·  TRY IT")
+        big_code(ov, 300, 540, [COMPILE_TRY], 26, ea, colors=[(0, 0, len(COMPILE_TRY), C_DEL)])
+        er = a * smooth(remap(t, R["t_stops"], R["t_stops"] + 0.5))
+        for j, l in enumerate(COMPILE_ERR):
+            ov.text(300, 620 + j * 40, l, size=24, color=C_DEL, alpha=er, kind="mono", anchor="lm")
+        ov.text(300, 710, "the build stops", size=26, color=TEXT, alpha=er, kind="semibold", anchor="lm")
+
+
+def w_test(p, t):
+    """One test, three parts, and its run."""
+    ov, R = p.ov, p.rec
+    a = envelope(t, TL.start("test") + 0.2, TL.end("test") - 0.1, 0.7, 0.6)
+    if a <= 0.003:
+        return
+    card(ov, 200, 130, 1520, 400, a, "tests/test_game.cpp  ·  NO WINDOW")
+    y = 230
+    for k, (label, lines, t_on) in enumerate(R["test_parts"]):
+        pa = a * smooth(remap(t, t_on, t_on + 0.6))
+        ov.text(260, y, label, size=26, color=C_WARM, alpha=pa, kind="semibold", anchor="lm")
+        big_code(ov, 480, y, lines, 26, pa, lh=42)
+        y += 42 * len(lines) + 40
+    ra = a * smooth(remap(t, cap0("e3") + 0.2, cap0("e3") + 0.8))
+    if ra > 0.003:
+        card(ov, 200, 570, 1520, 150, ra, "TERMINAL")
+        ov.text(240, 640, f'> test_snake "{R["test_name"]}"', size=24, color=C_BLUE, alpha=ra, kind="mono",
+                anchor="lm")
+        ov.text(240, 682, R["test_out"], size=26, color=C_OK, alpha=a * smooth(remap(t, cap0("e3") + 0.9,
+                                                                                         cap0("e3") + 1.3)),
+                kind="mono", anchor="lm")
+
+
+def w_end(p, t):
+    ov = p.ov
+    a = envelope(t, TL.start("end") + 0.2, TL.end("end") + 0.4, 0.7, 0.6)
+    if a <= 0.003:
+        return
+    box(ov, 260, 360, 400, 130, "Game", "the rules", C_RULE, a)
+    box(ov, 760, 360, 400, 130, "SnakeView", "the picture", C_DRAW, a)
+    box(ov, 1260, 360, 400, 130, "threepp", "draws", TEXT, a * smooth(remap(t, TL.start("end") + 1.0,
+                                                                           TL.start("end") + 1.6)), fill=0x1d3354)
+    ov.arrow2d((750, 425), (670, 425), DIM, 2.5, 12, a)
+    ov.text(710, 400, "reads", size=20, color=DIM, alpha=a, anchor="mm")
+    ov.arrow2d((1170, 425), (1250, 425), DIM, 2.5, 12, a)
+    ov.text(1210, 400, "uses", size=20, color=DIM, alpha=a, anchor="mm")
+
+
+# ── Part 0d's widgets ─────────────────────────────────────────────────────────
 def w_recap(p, t):
     """Part 0d's start: what Part 0c did, then what this film adds."""
     ov = p.ov
@@ -688,47 +924,6 @@ def w_recap(p, t):
             ra = a * smooth(remap(t, t_on, t_on + 0.5))
             ov.circle(x + 50, 340 + 100 + 52 * k, 6, fill=C_WARM, alpha=ra)
             ov.text(x + 72, 340 + 100 + 52 * k, row, size=26, color=TEXT, alpha=ra, anchor="lm")
-
-
-def w_requests(p, t):
-    ov = p.ov
-    a = envelope(t, cap0("t4"), TL.end("tangle") - 0.1, 0.6, 0.6)
-    if a <= 0.003:
-        return
-    x, y = 40, 56
-    card(ov, x, y, 860, 360, a, "THREE REQUESTS")
-    rows = [("test the rules", "they run inside main's render loop"),
-            ("run without a window", "the game's state is the meshes"),
-            ("add a second player", "one of everything, in one function")]
-    for k, (req, why) in enumerate(rows):
-        ra = a * smooth(remap(t, cap0("t4") + 1.6 + 1.1 * k, cap0("t4") + 2.1 + 1.1 * k))
-        yy = y + 90 + 84 * k
-        ov.text(x + 40, yy, req, size=30, color=TEXT, alpha=ra, kind="semibold", anchor="lm")
-        ov.text(x + 40, yy + 34, why, size=21, color=C_DEL, alpha=ra, anchor="lm")
-
-
-def w_is_has(p, t):
-    ov = p.ov
-    a = envelope(t, cap0("p4"), TL.end("trap") - 0.1, 0.6, 0.6)
-    if a <= 0.003:
-        return
-    x, y = 40, 56
-    card(ov, x, y, 860, 300, a, "IS A, OR HAS A")
-    cw = ov.text_width("0", 20, "mono")
-    is_a, has_a = p.rec["is_has"]
-    rows = [(is_a, "trap/main.cpp: a snake is a scene node", C_DEL, 0.4),
-            (has_a, "view/SnakeView.hpp: a view has one, and the snake has none", C_OK, 2.6)]
-    yy = y + 80
-    for k, (code, why, c, dt) in enumerate(rows):
-        ra = a * smooth(remap(t, cap0("p4") + dt, cap0("p4") + dt + 0.6))
-        for j, line in enumerate(code):
-            for col, s, cc in tokenize(line, "cpp", CPP_KEYWORDS):
-                ov.text(x + 40 + col * cw, yy + 28 * j, s, size=20, color=cc, alpha=ra, kind="mono", anchor="lm")
-            if k == 0:
-                ov.line([(x + 34, yy + 28 * j), (x + 46 + len(line) * cw, yy + 28 * j)], C_DEL, 2.5, ra)
-        yy += 28 * len(code) + 12
-        ov.text(x + 40, yy, why, size=21, color=c, alpha=ra, anchor="lm")
-        yy += 64
 
 
 def w_ascii(p, t):
@@ -786,25 +981,7 @@ def word_time(key, word, default, nth=1):
     return cap0(key) + default
 
 
-def run_tests():
-    """test_snake's own run: every test case, passed or not, and its summary line."""
-    exe = lesson.capture_exe("test_snake")
-    xml = subprocess.run([exe, "-r", "junit"], capture_output=True, text=True).stdout
-    names, seen = [], set()
-    for tc in ET.fromstring(xml).iter("testcase"):
-        name = tc.get("name").split("/")[0]
-        ok = tc.find("failure") is None and tc.find("error") is None
-        if name in seen:
-            names = [(n, o and ok) if n == name else (n, o) for n, o in names]
-            continue
-        seen.add(name)
-        names.append((name, ok))
-    summary = subprocess.run([exe], capture_output=True, text=True).stdout.strip().split("\n")[-1]
-    return names, summary
-
-
-STREAM_OF = {"tangle": "lesson_snake_tangle_capture", "trap": "lesson_snake_trap_capture",
-             "moved": "lesson_snake_trap_moved_capture"}
+STREAM_OF = {"tangle": "lesson_snake_tangle_capture"}
 
 
 def make_streams(scripts, logged=()):
@@ -824,131 +1001,94 @@ def setup_c():
     rec = {}
     main = source("main.cpp")
     tangle, trap = source("tangle", "main.cpp"), source("trap", "main.cpp")
-    game_h, view_h = source("model", "Game.hpp"), source("view", "SnakeView.hpp")
     test_c, cmake = source("tests", "test_game.cpp"), source("CMakeLists.txt")
 
-    # The opening game: circle near the start, eat the apple as it is named, then run into a wall
-    # as that is named. The finished app starts its head at (10, 10), heading right, and (seed 7)
-    # its first apple at (13, 12): three right and two up.
+    # The opening game: circle near the start, eat the apple a second after it is named, then run
+    # into a wall. The finished app starts its head at (10, 10), heading right, and (seed 7) its
+    # first apple at (13, 12): three right and two up.
     t_snake = word_time("i1", "snake", 1.0, nth=2)
     t_apple = word_time("i2", "apple", 0.6)
     t_wall = word_time("i2", "wall", 2.0)
     lap = [("D", 3), ("L", 3), ("U", 3), ("R", 3)]              # round and back to (10, 10), heading right
-    # start the program early enough that, after whole laps, it eats just as "apple" is said
     t_eat = t_apple + 1.0
     probe = move_frames("app", 400)
     k_eat = next(k for k in range(30) if probe[12 * k + 4] / FPS >= t_eat - TL.start("intro"))
     eat_move = 12 * k_eat + 5
-    intro = KeyScript(t_eat - probe[eat_move - 1] / FPS, cap0("i3") + 1.0, "app", step=1)
+    intro = KeyScript(t_eat - probe[eat_move - 1] / FPS, cap0("i4") + 1.0, "app", step=1)
     after = [("U", 3), ("R", 3), ("D", 3), ("L", 3)]            # round and back to the apple's square
     m_after = max(0, int(round((t_wall + 0.6 - t_eat - 8 * TICK) / (12 * TICK))))
     intro.drive(lap * k_eat + [("R", 3), ("U", 2)] + after * m_after + [("U", 8)], head=(10, 10))
     t_die = intro.time(intro.mf[eat_move + 12 * m_after + 8 - 1])
     print(f"[intro] eats at {t_eat:.1f} s ('apple' at {t_apple:.1f}), hits the wall at {t_die:.1f} s "
           f"('wall' at {t_wall:.1f})")
-    calm = KeyScript(cap0("i3") + 0.3, TL.end("intro") + 1.2, "app", step=1)
-    calm.drive(lap * 30)
     rec.update(t_snake=t_snake, t_apple=t_apple, t_wall=t_wall, t_eat=t_eat, apple=(13, 12),
-               t_plan=[word_time("i4", w, d) for w, d in (("first", 2.0), ("then", 4.5), ("last", 7.5))])
+               t_plan=[word_time("i4", w, d) for w, d in (("first", 0.8), ("then", 3.0), ("last", 6.0))])
 
-    tangle_s = KeyScript(TL.start("tangle"), TL.end("tangle") + 1.2, "tangle")
-    tangle_s.drive(square(5, 6, 20), bug_after=word_time("t3", "press", 2.0) + 0.6)
-    trap_s = KeyScript(TL.start("trap"), TL.end("trap") + 1.2, "tangle")
-    trap_s.drive(square(5, 6, 20))
-    # the moved trap eats on its ninth move (UP from the sixth): start it so that lands on "eats"
-    eat_f = move_frames("tangle", 9)[8]
-    t_moved = word_time("p3", "eats", 6.0) - eat_f / FPS
-    moved = KeyScript(t_moved, TL.end("trap") + 1.2, "tangle")
-    moved.drive([("R", 5), ("U", 4), ("R", 12)])
-    view_s = KeyScript(TL.start("view"), TL.duration + 0.6, "app", step=1)
-    view_s.drive(square(3, 6, 40))
+    tangle_s = KeyScript(TL.start("v1"), cap0("t2") + 1.0, "tangle")
+    tangle_s.drive(square(5, 6, 20))
     open_s = KeyScript(0.0, TL.end("open") + 1.2, "app", step=1)
     open_s.drive(lap * 5)
+    grid_s = KeyScript(TL.start("grid"), TL.end("grid") + 1.0, "app", step=5)
+    grid_s.press(1, "TAB")                                       # the AI plays
     win = [("open", 0.0, TL.end("open") + 0.6, "snake"),
-           ("intro", TL.start("intro"), cap0("i3") + 0.3, "snake"),
-           ("calm", cap0("i3") + 0.3, TL.end("intro") + 0.6, "snake"),
-           ("tangle", TL.start("tangle"), TL.end("tangle") + 0.6, "version 1  ·  everything in main()"),
-           ("trap", TL.start("trap"), t_moved, "version 2  ·  class Snake : public Group"),
-           ("moved", t_moved, TL.end("trap") + 0.6, "version 2  ·  and one line moves the Group"),
-           ("term", TL.start("model"), TL.end("tests") + 0.6, "terminal"),
-           ("s1", TL.start("view"), TL.duration, "version 3  ·  snake, built with STEP=1")]
-    scripts = {"open": open_s, "intro": intro, "calm": calm, "tangle": tangle_s, "trap": trap_s, "moved": moved,
-               "s1": view_s}
-    streams = make_streams(scripts)
+           ("intro", TL.start("intro"), cap0("i4") + 1.0, "snake"),
+           ("tangle", TL.start("v1"), cap0("t2") + 1.0, "version 1  ·  everything in main()")]
+    scripts = {"open": open_s, "intro": intro, "tangle": tangle_s, "grid": grid_s}
+    streams = make_streams(scripts, logged=("grid",))
 
-    # the tangle and the trap, frame for frame (before the tangle's double key press)
-    k1 = min(trap_s.frames, min(k for k, _ in tangle_s.keys[-2:])) - 1
-    same = all(np.array_equal(streams["tangle"].frame(k), streams["trap"].frame(k)) for k in range(0, k1, 30))
-    streams["tangle"].close_proc()
-    streams["trap"].close_proc()
-    print(f"[same game] tangle and trap frames {'match' if same else 'DIFFER'} (every 30th of {k1})")
+    def win_alpha(t):
+        # the game, then out of the way: back for version one's first line, then gone
+        return (1 - smooth(remap(t, cap0("i4") - 0.6, cap0("i4") + 0.2))) + \
+            envelope(t, TL.start("v1") + 0.1, cap0("t2") + 0.6, 0.6, 0.6)
 
-    loop_rows = code_rows(excerpt(tangle, "Vector3 next = snake[0]", "apple->position.z ="))
-    key_rows = code_rows(excerpt(tangle, "KeyAdapter keys(", "canvas.addKeyListener(keys);"))
-    trap_rows = code_rows(excerpt(trap, "class Snake: public Group {", "        return false;") + ["    }", "    ..."])
-    moved_rows = code_rows(["auto snake = std::make_shared<Snake>();", "scene.add(snake);", "",
-                            "// one line, anywhere else in the program:"] +
-                           [l.split("//")[0].strip() for l in trap if "snake->position.x = 3" in l])
-    game_rows = code_rows(excerpt(game_h, "class Game {", "bool isFree(Vec2i cell) const;", drop=("Listener",)))
-    cm_rows = code_rows(excerpt(cmake, "add_library(snake_model", "target_compile_features(snake_model"))
-    try_rows = [("code", COMPILE_TRY[0]), ("bad", COMPILE_TRY[1])]
-    test_rows = code_rows(excerpt(test_c, 'TEST_CASE("eating grows', "CHECK(game.isFree(game.apple()));") + ["}"])
-    view_rows = code_rows(excerpt(view_h, "class SnakeView {", "void pop(Vec2i cell);", drop=("pop", "a ring")))
+    body = main_body(tangle)
+    rec["tangle_lines"] = body
+    rec["tangle_jobs"] = [job(l) for l in body]
+    rec["eat_line"] = next(i for i, l in enumerate(body) if "next.distanceTo(apple->position)" in l)
+    counts = {k: rec["tangle_jobs"].count(k) for k in ("rule", "draw", "both", "other")}
+    print(f"[jobs] tangle main(): {counts}")
+    rec["t_green"] = word_time("t2", "green", 3.0)
+    rec["t_blue"] = word_time("t3", "blue", 0.2)
+    rec["t_zoom"] = cap0("t5")
+    rec["game_lines"] = source("model", "Snake.cpp") + source("model", "Game.cpp")
+    rec["view_lines"] = source("view", "SnakeView.cpp")
+    # main's loop as it stands at step 1 (the alpha line left out: it is 1 until Part 0d)
     kept = preprocess(main, 1)
-    g0 = next(i for i in kept if "Game game(20" in main[i])
-    a0 = next(i for i in kept if "canvas.animate([&] {" in main[i])
-    a1 = max(i for i in kept if main[i].rstrip() == "    });")
-    step1 = [("code", main[i][4:]) for i in kept if g0 <= i <= g0 + 2] + [("gap", "")]
-    step1 += [("code", main[i][4:]) for i in kept if a0 <= i <= a1 and main[i].strip()]
-    E = TL.end
-    rec["cards"] = [
-        (TL.start("tangle") + 0.3, cap0("t3") - 0.1, 40, 56, "tangle/main.cpp  ·  EVERY MOVE, INSIDE THE RENDER LOOP",
-         loop_rows, hl_on(loop_rows, "distanceTo", cap0("t2") + 1.0, cap1("t2"))),
-        (cap0("t3"), cap0("t4") - 0.1, 40, 56, "tangle/main.cpp  ·  THE KEYS", key_rows,
-         hl_on(key_rows, "direction.set", cap0("t3") + 0.8, cap1("t3"))),
-        (TL.start("trap") + 0.3, cap0("p3") - 0.1, 40, 56, "trap/main.cpp  ·  THE FIRST TRY AT OBJECTS", trap_rows,
-         lambda j, t: envelope(t, cap0("p1") + 1.5, cap1("p2"), 0.4, 0.4) if j == 0 else 0.0),
-        (cap0("p3"), cap0("p4") - 0.1, 40, 56, "trap/main.cpp  ·  -DLESSON_MOVE_GROUP", moved_rows,
-         hl_on(moved_rows, "position.x", cap0("p3") + 1.0, cap1("p3"))),
-        (TL.start("model") + 0.3, cap0("m2") - 0.1, 40, 56, "model/Game.hpp  ·  THE RULES", game_rows,
-         hl_on(game_rows, "void tick();", cap0("m1") + 4.0, cap1("m1"))),
-        (cap0("m2"), E("model") - 0.1, 40, 56, "CMakeLists.txt  ·  A LIBRARY OF ITS OWN", cm_rows, None),
-        (cap0("m2") + 2.2, E("model") - 0.1, 40, 300, "model/Game.cpp  ·  TRY IT", try_rows, None),
-        (TL.start("tests") + 0.3, E("tests") - 0.1, 40, 56, "tests/test_game.cpp  ·  NO WINDOW", test_rows,
-         hl_on(test_rows, "game.tick();", cap0("e1") + 3.5, cap1("e1"))),
-        (TL.start("view") + 0.3, cap0("v2") + 1.0, 40, 56, "view/SnakeView.hpp", view_rows,
-         hl_on(view_rows, "void update(", cap0("v1") + 4.0, cap1("v1"))),
-        (cap0("v2") + 1.0, E("view") - 0.1, 40, 56, "main.cpp  ·  STEP 1  ·  THE GAME AND ITS VIEW", step1,
-         lambda j, t: envelope(t, cap0("v2") + 2.5, E("view"), 0.4, 0.4)
-         if ("view.update" in step1[j][1] or "game.tick" in step1[j][1]) else 0.0),
-    ]
-    view_cls = excerpt(view_h, "class SnakeView {", "std::shared_ptr<threepp::Object3D> root_;")
-    rec["is_has"] = ([next(l for l in trap if l.startswith("class Snake: public Group"))],
-                     [view_cls[0], "    ...", view_cls[-1]])
-    rec["tree"] = [("model/", "the rules", None),
-                   ("Vec2i  Snake  Game", "squares, the snake, one tick", uses_threepp("model", "Game.hpp")),
-                   ("view/", "how it looks", None),
-                   ("SnakeView", "3D, a group of meshes", uses_threepp("view", "SnakeView.hpp")),
-                   ("tests/", "the rules, without a window", uses_threepp("tests", "test_game.cpp")),
-                   ("main.cpp", "wires them together", True)]
-    rec["tests"] = run_tests()
-    print(f"[tests] {len(rec['tests'][0])} test cases, {rec['tests'][1]}")
-    beats = {"model": "model", "tests": "tests", "view": "view"}
-    rec["diagram"] = dict(
-        t0=TL.start("model") + 0.5,
-        boxes={"tests": (990, 100, 150, "tests", TL.start("tests")),
-               "model": (1210, 100, 170, "model", TL.start("model")),
-               "view": (1450, 58, 170, "view", TL.start("view")),
-               "threepp": (1700, 100, 150, "threepp", TL.start("model"))},
-        arrows=[("model", "threepp", "can't include", cap0("m2") + 3.5, None, True, False),
-                ("tests", "model", "checks", cap0("e1") + 0.8, 0x8aa0c0, False, False),
-                ("view", "model", "reads", cap0("v1") + 2.0, C_ACCENT, False, False),
-                ("view", "threepp", "draws with", cap0("v1") + 3.0, C_BLUE, False, False)],
-        lit=lambda t: next((v for b, v in beats.items() if TL.start(b) <= t < TL.end(b)), None))
-    rec["widgets"] = [w_intro, w_requests, w_is_has, w_tree]
-    rec["rect_keys"] = [(0.0, OPEN_RECT), (TL.end("open") - 0.2, OPEN_RECT), (TL.start("intro") + 1.0, BIG_RECT),
-                        (cap0("i4") - 0.4, BIG_RECT), (cap0("i4") + 0.8, STD_RECT)]
-    rec.update(streams=streams, windows=win, same_pixels=same)
+    w0 = next(i for i in kept if "while (sinceTick >= tickTime)" in main[i])
+    w1 = next(i for i in kept if "renderer.render(scene, camera);" in main[i] and i > w0)
+    rec["main_loop"] = [main[i][8:] for i in kept if w0 <= i <= w1 and main[i].strip() and "alpha = " not in main[i]]
+    rec["trap_line"] = next(l for l in trap if l.startswith("class Snake: public Group")).rstrip(" {") + " { ... };"
+    rec["t_not"] = word_time("p2", "not", 3.0, nth=1)
+    rec["t_draw"] = word_time("p3", "draw", 2.0)
+
+    # the grid: the finished app at step 5, the AI playing, its board as text beside its 3D frame
+    xs, ys = zip(*[board_to_capture(c, 0.0) for c in ((-0.5, -0.5), (19.5, -0.5), (-0.5, 19.5), (19.5, 19.5))])
+    rec["crop"] = (int(min(xs)) - 20, max(0, int(min(ys)) - 40), int(max(xs)) + 20, min(720, int(max(ys)) + 20))
+    assert rec["crop"][2] < 1280 - 160 - 16, "the crop would reach the minimap"
+    rec["t_paint"] = word_time("g2", "paints", 1.0)
+
+    i = next(k for k, l in enumerate(cmake) if l.startswith("# The rules are a library"))
+    rec["cmake_lines"] = [cmake[i], cmake[i + 1], "", next(l for l in cmake if l.startswith("add_library(snake_model"))]
+    rec["t_stops"] = word_time("b2", "stops", 2.5)
+
+    tc = excerpt(test_c, 'TEST_CASE("eating grows', "CHECK(game.isFree(game.apple()));")
+    setup_lines = [l.strip() for l in tc if l.strip().startswith(("Snake snake", "Game game"))]
+    step_line = [l.strip() for l in tc if l.strip() == "game.tick();"]
+    check_line = [l.strip() for l in tc if "length() == 4" in l]
+    rec["test_parts"] = [("set up", setup_lines, word_time("e2", "set", 0.3)),
+                         ("one step", step_line, word_time("e2", "take", 2.5)),
+                         ("check", check_line, word_time("e2", "check", 4.0))]
+    rec["test_name"] = tc[0].split('"')[1]
+    out = subprocess.run([lesson.capture_exe("test_snake"), rec["test_name"]], capture_output=True, text=True)
+    last = out.stdout.strip().split("\n")[-1]
+    rec["test_out"] = last.split(" (")[0]                        # its first words: no counts in the picture
+    print(f"[test] {rec['test_name']}: {last}")
+    assert out.returncode == 0 and last.startswith("All tests passed")
+
+    rec["cards"] = []
+    rec["widgets"] = [w_intro, w_version1, w_version2, w_version3, w_grid, w_build, w_test, w_end]
+    rec["rect_keys"] = [(0.0, OPEN_RECT), (TL.end("open") - 0.2, OPEN_RECT), (TL.start("intro") + 1.0, BIG_RECT)]
+    rec.update(streams=streams, windows=win, win_alpha=win_alpha)
     return rec
 
 
@@ -1029,7 +1169,7 @@ def setup_d():
     rec["t_this"] = [word_time("a2", w, d) for w, d in (("plays", 3.0), ("tells", 4.5), ("views", 7.0))]
     rec["widgets"] = [w_recap, w_ascii, w_tree]
     rec["rect_keys"] = [(0.0, OPEN_RECT), (TL.end("open") - 0.2, OPEN_RECT), (TL.end("open") + 1.0, STD_RECT)]
-    rec.update(streams=streams, windows=win, same_pixels=True)
+    rec.update(streams=streams, windows=win, win_alpha=lambda t: 1.0)
     return rec
 
 

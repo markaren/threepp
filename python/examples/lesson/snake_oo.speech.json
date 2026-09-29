@@ -1,88 +1,108 @@
 {
  "af_heart": {
   "title": {
-   "s": 4.88,
-   "said": "three p p is the view. Where the code goes, when a program has to grow."
+   "s": 3.2,
+   "said": "three p p is the view. Where does the code go?"
   },
   "i1": {
-   "s": 5.85,
-   "said": "This is Snake. The snake moves on its own, one square at a time, and the arrow keys turn it."
+   "s": 5.75,
+   "said": "This is Snake. The snake moves on its own, one square at a time. The arrow keys turn it."
   },
   "i2": {
-   "s": 5.12,
-   "said": "Eat the apple, and it grows. Hit a wall, or its own tail, and the game is over."
+   "s": 4.08,
+   "said": "Eat the apple, and it grows. Hit a wall, and the game is over."
   },
   "i3": {
-   "s": 6.35,
-   "said": "It's a small game, which makes it a good place to ask a big question: where should each part of the code live?"
+   "s": 4.7,
+   "said": "We'll write this game three times, and each time, ask where the code should live."
   },
   "i4": {
-   "s": 11.57,
-   "said": "We'll write it three times. First, everything in one function. Then, a class that inherits from three p p. And last, the rules on their own, with three p p only drawing them."
+   "s": 7.75,
+   "said": "First, everything in one function. Then, a class that inherits from three p p. And last, the rules on their own."
   },
   "t1": {
-   "s": 5.62,
-   "said": "Here is the first version, written like our first app. Everything lives in main, and it plays."
+   "s": 4.95,
+   "said": "Version one. Everything is in main, like in our first app. And it works."
   },
   "t2": {
-   "s": 8.5,
-   "said": "Look at how it decides that the snake has eaten: two float positions, less than half a unit apart. The game's truth lives in the meshes."
+   "s": 5.0,
+   "said": "Let's color each line by its job. Green lines are the rules of the game."
   },
   "t3": {
-   "s": 6.85,
-   "said": "And a key press turns the snake at once. Press two keys between moves, and it turns back into its own neck."
+   "s": 2.12,
+   "said": "Blue lines draw the picture."
   },
   "t4": {
-   "s": 9.38,
-   "said": "Now three requests arrive: test the rules, run them without a window, and add a second player. Here, every one of them means untangling main."
+   "s": 2.95,
+   "said": "In version one, they are all mixed together."
+  },
+  "t5": {
+   "s": 5.72,
+   "said": "Look at this line. To know if the snake has eaten, a rule asks a 3D shape where it is."
+  },
+  "t6": {
+   "s": 5.78,
+   "said": "So to test the rules, you need a window. And to change the picture, you have to touch the rules."
   },
   "p1": {
-   "s": 9.95,
-   "said": "The second version is the usual first try at objects: a Snake class that inherits from three p p's Group. It plays the same game, frame for frame."
+   "s": 6.08,
+   "said": "Version two. A common first try is a Snake class that inherits from three p p's Group."
   },
   "p2": {
-   "s": 7.72,
-   "said": "It's tidier. But a snake is now a scene node, and everything a Group has is public: position, scale, add, remove."
+   "s": 4.45,
+   "said": "That says: a snake is a picture. But a snake is not a picture."
   },
   "p3": {
-   "s": 10.53,
-   "said": "So one line, anywhere, can move it. Now the snake you see and the snake the rules check have parted ways. It eats an apple it never touched, and dies off the board."
-  },
-  "p4": {
-   "s": 7.12,
-   "said": "A snake isn't a scene node. It has a look. So in the third version, the rules move out, into classes of their own."
+   "s": 3.42,
+   "said": "A snake has a picture. And something else can draw it."
   },
   "m1": {
-   "s": 7.88,
-   "said": "This is the model: whole squares on a board, a snake, an apple, and one tick of the rules. No floats, no meshes, no window."
+   "s": 4.5,
+   "said": "Version three. The rules move into a class of their own, called Game."
   },
   "m2": {
-   "s": 7.1,
-   "said": "It's a library of its own, and it doesn't link three p p. Include a three p p header in it, and the build stops."
+   "s": 3.55,
+   "said": "The drawing moves into another class, called Snake View."
+  },
+  "m3": {
+   "s": 4.53,
+   "said": "Every step, main moves the game on, and then asks the view to draw it."
+  },
+  "g1": {
+   "s": 5.97,
+   "said": "Inside Game, the snake is just squares on a grid. Here is the same game, printed as text."
+  },
+  "g2": {
+   "s": 6.2,
+   "said": "three p p paints that grid in 3D. The grid is the truth. The 3D is a picture of it."
+  },
+  "b1": {
+   "s": 5.58,
+   "said": "Game even gets a build of its own. Its C Make file doesn't mention three p p at all."
+  },
+  "b2": {
+   "s": 6.25,
+   "said": "Try to use three p p in it, and the build stops. The rules can't draw, not even by accident."
   },
   "e1": {
-   "s": 7.3,
-   "said": "Rules without a window can be tested. A test sets up a game by hand, ticks it once, and checks what happened."
+   "s": 3.17,
+   "said": "And rules without a window are easy to test."
   },
   "e2": {
-   "s": 6.28,
-   "said": "The whole suite runs in the blink of an eye. And it pins down the double key press from the first version."
+   "s": 4.85,
+   "said": "Set up a snake next to an apple. Take one step. Check that the snake grew."
   },
-  "v1": {
-   "s": 8.22,
-   "said": "Now three p p comes back, as a view. The view holds a group of meshes. Every frame, it reads the game and puts them in place."
-  },
-  "v2": {
-   "s": 5.08,
-   "said": "It never changes the game. The game is the truth, and the view only shows it."
+  "e3": {
+   "s": 3.23,
+   "said": "It passes, without opening a single window."
   },
   "z1": {
-   "s": 7.78,
-   "said": "The model owns the truth. The view only reads it. And three p p stays at the edge, where it draws, but never decides."
+   "s": 5.67,
+   "said": "The rules live in one place. The picture lives in another. three p p only draws."
   },
   "z2": {
-   "s": 6.15,
-   "said": "Next time: who plays the game, how the game tells others what happened, and more than one view of it."
+   "s": 2.4,
+   "said": "Next time: who plays the game."
   }
  }
 }
