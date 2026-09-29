@@ -115,6 +115,7 @@ display is only required for the on-screen examples.
 | [`examples/imu_demo.py`](https://github.com/markaren/threepp/blob/master/python/examples/imu_demo.py) | **Headless IMU** — a box dropped onto the floor with an `Imu` mounted off-CoM; prints the physics-truth table (free fall ~0, at rest ~+9.81). Needs a PhysX build; no display. |
 | [`examples/cartpole/train_cartpole.py`](https://github.com/markaren/threepp/blob/master/python/examples/cartpole/train_cartpole.py) / [`play_cartpole.py`](https://github.com/markaren/threepp/blob/master/python/examples/cartpole/play_cartpole.py) | **GPU-vectorized RL end to end** — a `VecTask` cartpole swing-up trained with the owned `threepp.rl` PPO (committed checkpoint included; `play` renders the result). Needs a PhysX GPU build + torch. |
 | [`examples/spot/`](https://github.com/markaren/threepp/blob/master/python/examples/spot) | **Quadruped RL family** — Spot locomotion policies (steps, stairs, heightfield), sim-to-sim deploy into the editor, depth scanning; see its [README](https://github.com/markaren/threepp/blob/master/python/examples/spot/README.md). |
+| [`examples/lesson/`](https://github.com/markaren/threepp/blob/master/python/examples/lesson) | **Explainer videos** made with threepp: what threepp is, a first app, inverse kinematics, depth to map, an IMU, PID control, Warp. Narrated films rendered headless with `threepp.lesson`; see its [README](https://github.com/markaren/threepp/blob/master/python/examples/lesson/README.md). |
 | [`examples/probes/smoke_test.py`](https://github.com/markaren/threepp/blob/master/python/examples/probes/smoke_test.py) | Assertion-based regression test of the whole surface; prints `ALL OK`. |
 
 ```sh
@@ -341,10 +342,54 @@ writes) the answer. They live in [`examples/probes/`](https://github.com/markare
   in Warp) and `threepp.granular_mpm` (MLS-MPM granular soil with two-way rigid
   wheel and plate colliders, in Warp); `threepp.urdf` (a URDF straight into a
   PhysX articulation) and `threepp.rl`. The Warp modules import Warp only on
-  first use, so `import threepp` never needs it.
+  first use, so `import threepp` never needs it. `threepp.lesson` is the
+  experimental explainer-video toolkit (see below).
 
 Naming follows Python conventions (`snake_case` methods/properties), e.g.
 `camera.update_projection_matrix()`, `renderer.set_clear_color(...)`.
+
+## Explainer videos (experimental)
+
+`threepp.lesson` is the toolkit behind the [lesson films](https://github.com/markaren/threepp/blob/master/python/examples/lesson): named beats on a
+timeline, a headless studio stage, a 2D layer drawn by threepp (text, maths, plots, captions,
+source code), and H.264 out. A lesson renders in two passes: everything stateful runs once,
+then `render(t)` is a pure function of the clock, so any frame renders on its own. It is
+**experimental**: its API may change between releases, and `import threepp` does not load it.
+
+```python
+import threepp as tp
+from threepp.lesson import Film, Hud, Stage, Timeline, envelope, standard
+
+tl = Timeline().add("turn", 0.0, 4.0).then("hold", 2.0)
+st = Stage(1280, 720)                      # a headless GL renderer and a dark studio
+box = tp.Mesh(tp.BoxGeometry(0.6, 0.6, 0.6), standard(0x4cc9f0, roughness=0.35))
+box.position.y = 0.3
+st.scene.add(box)
+st.look([1.6, 1.1, 2.2], [0.0, 0.3, 0.0], fov=35)
+ov = Hud(1280, 720)                        # the 2D layer, in pixels
+
+film = Film("box.mp4", 1280, 720, fps=30)  # H.264 through ffmpeg (threepp[lesson])
+for f in range(int(tl.duration * 30)):
+    t = f / 30
+    box.rotation.y = 3.1416 * tl.p("turn", t)
+    ov.begin()
+    a = envelope(t, 0.5, tl.duration - 0.3)
+    ov.panel(60, 580, 470, 80, alpha=0.72 * a)
+    ov.text(90, 620, "A box that turns", size=40, alpha=a, anchor="lm")
+    ov.end()
+    film.write(st.frame(t, hud=ov))
+film.close()
+```
+
+It needs only numpy. The extras add what it imports on first use:
+
+```sh
+pip install "threepp[lesson]"      # matplotlib (equations) and imageio-ffmpeg (Film)
+pip install "threepp[narration]"   # Kokoro reads the captions aloud (Python 3.10 to 3.12)
+```
+
+On Python 3.13+, Kokoro installs only by hand; `Narration` prints the recipe. Never a plain
+`pip install kokoro`: it resolves to an old release that pins numpy 1.26.
 
 ## Tests
 

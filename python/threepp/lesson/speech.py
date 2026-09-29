@@ -81,8 +81,13 @@ class Narration:
             try:
                 from kokoro import KPipeline
             except ImportError as e:
-                raise RuntimeError("narration needs Kokoro (pip install kokoro soundfile); "
-                                   "or render without it with --no-voice") from e
+                raise RuntimeError(
+                    'narration needs Kokoro: pip install "threepp[narration]" (Python 3.10 to 3.12). On Python '
+                    "3.13+, kokoro 0.9.4 installs only by hand: pip install --only-binary=:all: "
+                    '"misaki[en]>=0.7.4" scipy loguru transformers huggingface-hub addict regex '
+                    "espeakng-loader phonemizer-fork, then pip install --no-deps --ignore-requires-python "
+                    "kokoro==0.9.4 misaki==0.9.4. Never a plain pip install kokoro: it resolves to 0.7.16, "
+                    "which pins numpy 1.26.4. Or render without narration (the lessons' --no-voice).") from e
             # Kokoro voice names start with their language code: a = American, b = British English, ...
             self._pipe = KPipeline(lang_code=self.voice[0], repo_id="hexgrad/Kokoro-82M")
         chunks, words, off = [], [], 0.0

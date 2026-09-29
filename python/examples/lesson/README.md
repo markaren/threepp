@@ -27,9 +27,10 @@ python ik_fr3.py --from 48 --to 64 --out iter.mp4            # one beat
 python ik_fr3.py --srt                                       # captions as lesson_out/ik_fr3.srt, for YouTube
 python ik_fr3.py --voice am_michael                          # another narrator (default af_heart)
 python ik_fr3.py --no-voice                                  # a silent film
+python threepp_intro.py --remeasure                          # measure the narration again (lessons paced by it)
 ```
 
-`threepp_intro.py`, `first_app.py`, `depth_map.py`, `imu_tilt.py` and `rocket_pid.py` take the same flags. Output goes to `lesson_out/` in the current
+`threepp_intro.py`, `first_app.py`, `depth_map.py`, `imu_tilt.py`, `rocket_pid.py` and `warp_threepp.py` take the same flags. Output goes to `lesson_out/` in the current
 directory unless `--out` / `--outdir` say otherwise.
 
 Needs threepp (GL renderer only, no Vulkan), numpy, threepp_data (for the FR3
@@ -259,23 +260,54 @@ choreography and returns `(render, captions)`, and ends with
 own clock; it can declare moments where the film stands still (`render.holds`, as Part 3
 does to introduce each estimate on its own), and `run` adds holds for the narration.
 
-Pieces, all importable from `lesson.py` (the toolkit is the `threepp.lesson` package; `lesson.py` re-exports it and adds the house `Stage`, `Hud.title_card` / `summary`, `card`, `code_card`, `data_file` and `run`):
+The toolkit is the experimental `threepp.lesson` package, which ships in the threepp wheel
+(`pip install "threepp[lesson]"`; see [python/README.md](../../README.md)). `lesson.py`
+re-exports all of it and adds the house layer these films share, so a lesson imports
+everything from `lesson`.
+
+In `threepp.lesson`:
 
 | | |
 |---|---|
-| `run` | the shared command line: film, preview, one stretch, stills, contact sheet, `.srt` captions, narration |
-| `Narration`, `spoken`, `TimeMap` | captions read aloud by Kokoro and cached; caption text in words; the film clock with holds |
-| `Speech`, `overruns` | a lesson's lines and their measured lengths (`<lesson>.speech.json`), and the captions laid out from them; the one rule for a line that needs more time than its caption |
 | `Timeline` | named beats; `p()` eased progress, `fade()` in/hold/out envelopes |
 | `Keys`, `OrbitCamera` | keyframed vectors with smootherstep between keys; a camera keyframed as azimuth, elevation, distance, look point and fov, with a slow drift, in a Z-up or Y-up frame, optionally following a moving target and its heading |
-| `Stage` | headless canvas + GL renderer (or one you pass in) + dark studio set; `project()` maps 3D to HUD pixels; `follow()` moves the key light's shadow area with a moving subject |
-| `Arrow3D`, `Ring3D`, `Marker3D`, `Tube3D`, `xray()`, `set_pose()`, `ghost()` | 3D annotations that fade and can ride on robot links; placing an object at a 4x4 pose; a translucent copy of any object |
+| `TimeMap` | the film clock with holds, where the picture stands still |
+| `Stage` | headless canvas + GL renderer (or one you pass in) + dark studio set, with an optional HDR for image-based light; `project()` maps 3D to HUD pixels; `follow()` moves the key light's shadow area with a moving subject |
+| `Arrow3D`, `Ring3D`, `Marker3D`, `Tube3D`, `xray()`, `set_pose()`, `ghost()`, `quat_y_to()` | 3D annotations that fade and can ride on robot links; placing an object at a 4x4 pose; a translucent copy of any object |
 | `Cloud`, `Segments` | point clouds (round sprites) and line fans, updated in place |
-| `Hud` | immediate-mode 2D layer drawn by threepp: `Text2D` from the system TTF, `ShapeGeometry` panels, triangle-strip lines, images, colour bars, maths as matplotlib glyph outlines loaded through `SVGLoader` |
-| `Hud.plot`, `readout` | line plots with several series and a legend on linear or log axes; a panel of live values |
-| `Hud.title_card`, `captions`, `equation_card`, `summary` | the opening title, the lower-third captions, the top-left card of equations, and the closing "IN SHORT" card |
+| `Hud` | immediate-mode 2D layer drawn by threepp: `Text2D` from the system TTF (or `fonts=`), `ShapeGeometry` panels, triangle-strip lines, images, colour bars, maths as matplotlib glyph outlines loaded through `SVGLoader` |
+| `Hud.plot`, `readout`, `captions`, `equation_card` | line plots with several series and a legend on linear or log axes; a panel of live values; the lower-third captions; the top-left card of equations |
 | `Hud.code`, `tokenize`, `KEYWORDS` | source lines with syntax colours, highlighted and typed in line by line; a lesson that wants more keywords passes its own set (`KEYWORDS["cpp"] \| {"for"}`) |
-| `card`, `code_card` | the house card, and a card of code that types itself in, with the program's output under it |
+| `Narration`, `spoken`, `DEFAULT_WORDS` | captions read aloud by Kokoro and cached; caption text in words; the pronunciation table every lesson starts from |
+| `Speech`, `overruns` | a lesson's lines and their measured lengths, and the captions laid out from them (below); the one rule for a line that needs more time than its caption |
 | `turbo`, `write_png`, `write_srt`, `Film` | colour map, stdlib PNG writer, SubRip subtitles, and frames to H.264 via an ffmpeg pipe (written to a temp name and renamed on success) |
+
+In `lesson.py`, the house layer:
+
+| | |
+|---|---|
+| `Stage` | the package's Stage with the lessons' defaults: GL, and `env` a file name in threepp_data/textures/env (the studio HDR unless told otherwise) |
+| `Hud.title_card`, `summary` | the opening title, and the closing "IN SHORT" card with the repo link |
+| `card`, `code_card` | the house card, and a card of code that types itself in, with the program's output under it |
+| `data_file` | a threepp_data file from `THREEPP_DATA_DIR`, a checkout next to the repo, or the build directories |
+| `run` | the shared command line: film, preview, one stretch, stills, contact sheet, `.srt` captions, narration, `--remeasure`, `--gate` |
+| `house_rule_warnings` | the house rules below, checked by `run` |
+
+### Speech
+
+A lesson paced by its narration keeps its lines in a `Speech`, with how long each takes to
+say, read from `<lesson>.speech.json` next to the lesson: `{voice: {key: {"s": seconds,
+"said": spoken text}}}`. Its captions are laid out from those lengths in one of three ways:
+`layout(plan)` for a plan of beats (Parts 0, 0b and the Warp film), `span(k, start)` for one
+line placed by hand (Part 4, around its flights' events), and `stretch(spans)` for captions
+written at fixed times, giving the script more time wherever a line would run over (Part 3).
+The lesson passes the `Speech` to `run(..., speech=SPEECH)`, which hands its pronunciation
+table (`WORDS`) to the narrator.
+
+The lengths never move by themselves. After editing a line, the lesson reports it as changed
+since it was measured, and `run` holds the picture wherever it runs long. `--remeasure` says
+every final line again (through the voice cache) and rewrites the `.speech.json`, and the next
+render lays the film out from the new lengths. The layout is timed for one voice; `--voice`
+with another prints a note and gets holds instead.
 
 The HUD is authored in a fixed 1920x1080 design space, whatever the render size.

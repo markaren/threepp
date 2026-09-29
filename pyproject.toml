@@ -58,9 +58,19 @@ dependencies = ["numpy"]
 # marker makes the extra a no-op on Linux/macOS rather than an install error:
 # editor wheels are Windows-only today (the exe embeds CPython, and
 # libpython-linking executables sit outside manylinux practice).
+#
+# `threepp[lesson]` adds what the experimental `threepp.lesson` video toolkit
+# imports on first use: matplotlib to typeset equations, imageio-ffmpeg for the
+# ffmpeg that Film pipes frames into. `threepp[narration]` adds Kokoro, which
+# reads captions aloud. kokoro>=0.9.4 is PINNED on purpose: an unpinned
+# install resolves to 0.7.16, which pins numpy==1.26.4 and would downgrade (or,
+# with no wheel for that numpy, fail to install) numpy. 0.9.4 declares
+# Python <3.13, hence the marker; on 3.13+ see the recipe in Narration's error.
 [project.optional-dependencies]
 rl = ["torch"]
 editor = ["threepp-editor; sys_platform == 'win32'"]
+lesson = ["matplotlib", "imageio-ffmpeg"]
+narration = ["kokoro>=0.9.4; python_version < '3.13'"]
 full = ["threepp[rl,editor]"]
 
 [project.urls]
