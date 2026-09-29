@@ -1662,6 +1662,24 @@ class Narration:
         return read_wav(path)[0]
 
 
+# ── the house rules ───────────────────────────────────────────────────────────
+TITLE_VOICE_BY = 2.0                     # the first spoken line starts this early: the title card is narrated
+_NUMBER_RE = re.compile(r"\d(?![dD]\b)")   # a digit, except the one in "2D" / "3D"
+
+
+def house_rule_warnings(captions):
+    """The house rules every lesson film follows, as warnings: no specific numbers in the
+    narration, and a narrated title card (a caption from the first seconds, spoken-only if the
+    title card should stay clean). The picture is the lesson's own to check."""
+    out = []
+    if not captions or min(c[0] for c in captions) > TITLE_VOICE_BY:
+        out.append(f"the title card is not narrated: no caption starts in the first {TITLE_VOICE_BY:.0f} s")
+    for a, _, txt, *_ in captions:
+        if _NUMBER_RE.search(txt):
+            out.append(f"the caption at {a:.1f} s has a number in it: {txt[:70]!r}")
+    return out
+
+
 # ── the command line ──────────────────────────────────────────────────────────
 VOICE_LEAD, VOICE_TAIL = 0.15, 0.45     # speech starts this far into a caption, and ends this far before its end
 
@@ -1706,6 +1724,8 @@ def run(name, duration, setup, fps=60):
     W, H = (960, 540) if args.preview else (1920, 1080)
     fps = args.fps or (30 if args.preview else fps)
     render, captions = setup(W, H)
+    for msg in house_rule_warnings(captions):
+        print("[house rules]", msg)
     os.makedirs(args.outdir, exist_ok=True)
 
     tm = TimeMap(getattr(render, "holds", ()))

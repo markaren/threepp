@@ -19,6 +19,7 @@ and refracts the blocks behind it.
     python warp_jelly_wreck.py --video 10      # headless film -> C:/dev/_softbody_films/jelly_wreck
     python warp_jelly_wreck.py --video 10 --size 960x540   # quick preview
     python warp_jelly_wreck.py --video 10 --no-sensors     # the plain film, no sensor mosaic
+    python warp_jelly_wreck.py --video 10 --no-sensors --clean   # ... and no caption or badge (for a film that titles it)
 
 The film is a 3x3 sensor mosaic by default: the RGB view in the top-left 2x2,
 and depth, instance ids, optical flow, event camera and lidar tiles, all from
@@ -48,6 +49,7 @@ OUT_DIR = cli_arg("--out-dir", r"C:\dev\_softbody_films\jelly_wreck", str)
 TAG = cli_arg("--tag", "jelly_wreck", str)
 OPAQUE = "--opaque" in sys.argv
 SENSORS = VIDEO > 0 and "--no-sensors" not in sys.argv
+CLEAN = "--clean" in sys.argv          # the picture alone: no caption, no slow-motion badge
 TW, TH = W // 3, H // 3                  # sensor tile
 RW, RH = (2 * TW, 2 * TH) if SENSORS else (W, H)   # render size (the RGB view)
 
@@ -973,6 +975,8 @@ CAPTION = (f"threepp + NVIDIA Warp  \u00b7  {NB} jelly blocks, {N:,} particles, 
 
 
 def overlay(rgb, spd):
+    if CLEAN:                                    # --clean: the picture alone, for a film that titles it
+        return rgb
     img = Image.fromarray(rgb)
     ov = Image.new("RGBA", img.size, (0, 0, 0, 0))
     dr = ImageDraw.Draw(ov)

@@ -1,6 +1,6 @@
 # lesson: explainer videos made with threepp
 
-`lesson.py` is a small toolkit for YouTube-style teaching clips. Six lessons are
+`lesson.py` is a small toolkit for YouTube-style teaching clips. Seven lessons are
 made with it so far:
 
 | | |
@@ -11,6 +11,7 @@ made with it so far:
 | `depth_map.py` | Part 2, *How a robot sees in 3D: from depth pixels to a map* (103 s) |
 | `imu_tilt.py` | Part 3, *Which way is up? How a robot measures its own tilt* (136 s, Range Rover on a PhysX track) |
 | `rocket_pid.py` | Part 4, *Hold still: PID control, flown on a rocket* (150 s, a hopper in PhysX, exhaust in Warp) |
+| `warp_threepp.py` | *Warp × threepp:* GPU simulation in Python, sharing its buffers with the renderer (about a minute; Vulkan, CUDA) |
 
 Everything in the picture is drawn by threepp. The robot, lights, shadows and 3D
 annotations are one scene. Captions, equations, panels and plots are a second,
@@ -65,6 +66,20 @@ Each threepp_data file is looked up in `THREEPP_DATA_DIR`, then a `threepp_data`
 `cmake-build-*/_deps/threepp_data-src`, and the first place that has that file wins.
 A missing studio HDR is reported and the lesson renders without its
 image-based lighting.
+
+## House rules
+
+Every lesson film follows two rules:
+
+- **No specific numbers**, in the narration or in the picture. Measured figures (times,
+  counts, errors) are printed to the console and written up in this README, not put in
+  the film.
+- **The title card is narrated**, so the film has sound from its first second. A caption
+  given as `(start, end, text, False)` is spoken without being drawn over the title.
+
+`lesson.run` checks the captions against both rules and prints a `[house rules]` warning
+for each break: a caption with a digit in it, or no caption in the first two seconds.
+The picture is each lesson's own to check. The earlier parts were made before these rules.
 
 ## Honest numbers
 
@@ -190,6 +205,41 @@ particles stepped by Warp kernels from the recorded engine state (a plume that t
 pad where it hits, dust kicked up while the engine is low) and drawn by threepp as soft points
 in age bands. They are the only part of the picture that is not the simulation's state; they
 are checkpointed so any frame can be rendered on its own.
+
+**Warp × threepp.** The film's own program is `../warp_round_trip.py`. The film runs it in a
+subprocess (`--stream`) that steps its simulation at 60 Hz on the film's clock and pipes each
+frame in, and the code on screen is read from that file between its `# [name]` markers. In it:
+
+- a curtain of 64 x 48 = 3,072 particles, 4 substeps of 1/240 s a frame with 24 Jacobi passes
+  each, hung from a rod, blown by a gusty wind and pushed by a chrome ball;
+- 8,192 sparks in the same wind, bouncing off the cloth (its nearest particle, through a Warp
+  hash grid), the ball and the floor, from a source just out of shot;
+- the cloth written into `enable_vertex_interop` buffers and the sparks into an
+  `enable_particle_field_interop` field, by `wp.copy` and kernels inside `render()`;
+- the finished colour image read in place through `enable_frame_interop` by an event-camera
+  kernel: a pixel fires when its log brightness has moved 0.12 from its last event (ON red,
+  OFF blue), and what is shown fades by 0.84 a frame.
+
+The sparks' sprites are drawn after the ray-traced frame, and `ParticleField`'s traced
+representation is not implemented yet, so each spark is also a 24-vertex emissive octahedron in a
+second `enable_vertex_interop` mesh (196,608 vertices): that is what the chrome reflects.
+
+The other shots are the examples' own films (`ensure_clips`, cached in `lesson_out/warp_clips`),
+each sharing its simulation with the renderer rather than copying it through the CPU:
+
+```
+jelly  warp_jelly_wreck.py --no-sensors --clean   78 blocks, 9,750 particles, 85,644 constraints   vertex interop
+gummy  warp_gummy_rain.py --clean                 600 candies, 16,200 particles                    vertex interop
+fluid  warp_fluid.py --vulkan                     336,864 PBF particles, marching-cubes surface     vertex interop
+blast  warp_explosion.py                          5,869,024 gas particles                           particle-field interop
+                                                  (the drums: vertex interop; the bricks: PhysX)
+hull   warp_hull_sculpt.py --film                 2,000 optimiser steps in 495 frames               vertex interop
+```
+
+`--clean` (new for this film) drops the jelly's and the gummies' burned-in captions. The hull's
+film stops after the descent: the buoyancy self-check at the start of its second act fails
+(-1.01 % against a 1 % tolerance). The descent is all this film uses, so `ensure_clips` accepts
+a clip that was written.
 
 ## How a lesson is built
 

@@ -155,6 +155,7 @@ self-contained; what they share lives in [`examples/warp_common.py`](https://git
 | Script | What it shows |
 | --- | --- |
 | [`examples/warp_cloth.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_cloth.py) | GPU cloth, the smallest complete Warp + threepp loop. |
+| [`examples/warp_round_trip.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_round_trip.py) | Warp both ways round: a cloth and sparks written into buffers the Vulkan renderer shares, and the finished frame read back in place by a Warp kernel that turns it into an event camera. |
 | [`examples/warp_cloth_toss.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_cloth_toss.py) | Can a cloth throw a ball? The spike behind the toss demo. |
 | [`examples/warp_cloth_catch.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_cloth_catch.py) | Four arms catch a cannonball in a cloth, throw it up, and four drones net it. |
 | [`examples/warp_squishy_ball.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_squishy_ball.py) | A pressurised shell: Verlet predict, volume constraint, normals. |

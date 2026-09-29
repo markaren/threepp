@@ -17,6 +17,7 @@ captured once into a CUDA graph and replayed each frame.
     python warp_gummy_rain.py                 # window; drag to orbit
     python warp_gummy_rain.py --video 10      # headless Vulkan film -> C:/dev/_softbody_films/gummy_rain
     python warp_gummy_rain.py --video 10 --size 960x540 --n 300
+    python warp_gummy_rain.py --video 10 --clean   # no caption (for a film that titles it)
     python warp_gummy_rain.py --glow-light    # the glow also lights the scene (much slower)
     python warp_gummy_rain.py --no-interop    # soup via numpy + update_attribute
 """
@@ -701,6 +702,8 @@ def camera_at(t, total):
 
 
 def caption(rgb, font):
+    if "--clean" in sys.argv:                    # the picture alone, for a film that titles it
+        return rgb
     from PIL import Image, ImageDraw
     im = Image.fromarray(rgb)
     dr = ImageDraw.Draw(im)
