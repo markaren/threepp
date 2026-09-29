@@ -23,7 +23,7 @@ tables, the manoeuvring is a sketch.
     python usv_ocean.py --record 36 --out usv.mp4
 
 Options: --wind 7 (m/s), --fetch 30000 (m, 0 = open ocean), --load
-departure|lightship|full_load, --size 1280x720, --cam chase|bow (headless framing),
+departure|lightship|full_load, --size 1280x720, --cam chase|bow|abeam (headless framing),
 --telemetry, --flat (no waves,
 scripted run), --drop (start displaced; with --calm she must come back to the
 solver's pose), --diag (roll-moment balance every 0.1 s).
@@ -77,7 +77,7 @@ WIND = cli_arg("--wind", 7.0, float)
 FETCH = cli_arg("--fetch", 30000.0, float)
 LOAD = cli_arg("--load", spec["mass"]["design_condition"], str)
 W, H = parse_size(cli_arg("--size", "1280x720", str))
-FILM_CAM = cli_arg("--cam", "chase", str)       # headless framing: chase | bow
+FILM_CAM = cli_arg("--cam", "chase", str)       # headless framing: chase | bow | abeam
 
 
 # --------------------------------------------------------------------------- #
@@ -664,6 +664,14 @@ def film_camera(t, dt):
     """A chase from her port quarter that swings slowly round to abeam, heading low-passed;
     --cam bow stands ahead of her starboard bow looking back at the stem instead."""
     fwd = st["R"][:, 0]
+    if FILM_CAM == "abeam":
+        # low, square off her starboard side: where the sea meets the hull
+        c = st["p"]
+        stb = st["R"][:, 2]
+        eye = c + 9.0 * np.array([stb[0], 0.0, stb[2]])
+        camera.position.set(float(eye[0]), 0.9, float(eye[2]))
+        camera.look_at(tp.Vector3(float(c[0]), 0.4, float(c[2])))
+        return
     if FILM_CAM == "bow":
         c = st["p"]
         stb = st["R"][:, 2]
