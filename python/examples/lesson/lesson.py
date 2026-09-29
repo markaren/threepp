@@ -872,8 +872,7 @@ def _find_font(kind):
 # KEYWORDS["cpp"] | {"for"}), and the colours of each kind of token.
 KEYWORDS = MappingProxyType({"py": frozenset({"import", "as", "def", "return", "for", "in", "if", "else", "True", "False", "None",
                              "from"}),
-            "cpp": frozenset({"using", "namespace", "int", "auto", "return", "const", "new", "float", "for", "if",
-                              "else", "bool", "true", "false", "nullptr", "static", "void"}),
+            "cpp": frozenset({"using", "namespace", "int", "auto", "return", "const", "new", "float"}),
             "js": frozenset({"const", "new", "let", "function"}), "cmake": frozenset(),
             "sh": frozenset({"pip", "python"})})
 CODE_COLOURS = {"kw": 0xc792ea, "str": 0xc3e88d, "num": 0xf78c6c, "fn": 0x82aaff, "type": 0xffcb6b, "mod": 0x89ddff,
