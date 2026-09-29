@@ -332,7 +332,7 @@ def build_rocket():
             m = add(tp.CylinderGeometry(rr, rr, L, 12), leg)
             mid = 0.5 * (top + foot)
             m.position.set(*mid)
-            q = lesson._quat_y_to(d / L)
+            q = lesson.quat_y_to(d / L)
             m.quaternion.set(*q)
         add(tp.CylinderGeometry(0.34, 0.4, 0.14, 24), leg, y=0.07, x=foot[0], z=foot[2])
     return root, glow
@@ -725,7 +725,7 @@ class LaunchSite:
             if on:
                 L = (2.2 + 5.5 * thr) * (1.0 if k == 0 else 0.62) * flick
                 cone.scale.set(0.8 + 0.4 * thr, L, 0.8 + 0.4 * thr)
-                q = lesson._quat_y_to(d)              # the apex (+y) downstream, the base in the bell
+                q = lesson.quat_y_to(d)              # the apex (+y) downstream, the base in the bell
                 cone.quaternion.set(*q)
                 cone.position.set(*(nozzle + d * (L / 2 - 0.1)))
                 m.opacity = op * clamp01(thr * 2.5)

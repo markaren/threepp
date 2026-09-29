@@ -30,8 +30,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 import lesson  # noqa: E402
 from lesson import (DIM, TEXT, Hud, Stage, envelope, fade_in_out, remap, run, smooth, tp)  # noqa: E402
-import threepp_intro as intro  # noqa: E402  (code cards and syntax colours)
-from threepp_intro import card, code_block  # noqa: E402
+from lesson import card  # noqa: E402  (the house card)
 
 FPS = 60
 EXAMPLES = os.path.dirname(_HERE)
@@ -43,8 +42,12 @@ C_COOL = 0x4cc9f0
 C_RED = 0xff5a5f
 BG = Stage.BG
 
-intro.KW["py"] |= {"not", "and", "or", "elif", "while", "self"}
-WORDS = {**intro.WORDS, "CPU": "C P U"}     # how the narrator says the names: Part 0's table, then this film's
+PY_KEYWORDS = lesson.KEYWORDS["py"] | {"not", "and", "or", "elif", "while", "self"}
+# how the narrator says the names on screen: Part 0's table, then this film's own
+WORDS = {"glTF": "G L T F", "OBJ": "O B J", "STL": "S T L", "URDF": "U R D F", "C++": "C plus plus",
+         "NumPy": "Num Pie", "CMake": "C Make", "FetchContent": "Fetch Content", "OpenGL": "Open G L",
+         "create()": "create",
+         "CPU": "C P U"}
 
 # ── the script ────────────────────────────────────────────────────────────────
 CAPTION_TEXT = {
@@ -294,8 +297,8 @@ class Painter:
         if max_w and w > max_w:
             return self.code_card(t, t_in, t_out, x, y, lines, title, size - 1, lh - 1, max_w)
         card(ov, x, y, w, 60 + lh * len(lines), a, title)
-        code_block(ov, x + 30, y + 46, lines, "py", size, lh, a,
-                   reveal=lambda j: remap(t, t_in + 0.15 + 0.12 * j, t_in + 0.45 + 0.12 * j))
+        ov.code(x + 30, y + 46, lines, "py", size, lh, a, keywords=PY_KEYWORDS,
+                reveal=lambda j: remap(t, t_in + 0.15 + 0.12 * j, t_in + 0.45 + 0.12 * j))
 
     def flash(self, t, t_cut, k=0.55, dur=0.22):
         u = (t - t_cut) / dur

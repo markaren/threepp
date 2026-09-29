@@ -265,6 +265,7 @@ Pieces in `lesson.py`:
 |---|---|
 | `run` | the shared command line: film, preview, one stretch, stills, contact sheet, `.srt` captions, narration |
 | `Narration`, `spoken`, `TimeMap` | captions read aloud by Kokoro and cached; caption text in words; the film clock with holds |
+| `Speech`, `overruns` | a lesson's lines and their measured lengths (`<lesson>.speech.json`), and the captions laid out from them; the one rule for a line that needs more time than its caption |
 | `Timeline` | named beats; `p()` eased progress, `fade()` in/hold/out envelopes |
 | `Keys`, `OrbitCamera` | keyframed vectors with smootherstep between keys; a camera keyframed as azimuth, elevation, distance, look point and fov, with a slow drift, in a Z-up or Y-up frame, optionally following a moving target and its heading |
 | `Stage` | headless canvas + GL (or Vulkan) renderer + dark studio set; `project()` maps 3D to HUD pixels; `follow()` moves the key light's shadow area with a moving subject |
@@ -273,6 +274,8 @@ Pieces in `lesson.py`:
 | `Hud` | immediate-mode 2D layer drawn by threepp: `Text2D` from the system TTF, `ShapeGeometry` panels, triangle-strip lines, images, colour bars, maths as matplotlib glyph outlines loaded through `SVGLoader` |
 | `Hud.plot`, `readout` | line plots with several series and a legend on linear or log axes; a panel of live values |
 | `Hud.title_card`, `captions`, `equation_card`, `summary` | the opening title, the lower-third captions, the top-left card of equations, and the closing "IN SHORT" card |
+| `Hud.code`, `tokenize`, `KEYWORDS` | source lines with syntax colours, highlighted and typed in line by line; a lesson that wants more keywords passes its own set (`KEYWORDS["cpp"] \| {"for"}`) |
+| `card`, `code_card` | the house card, and a card of code that types itself in, with the program's output under it |
 | `turbo`, `write_png`, `write_srt`, `Film` | colour map, stdlib PNG writer, SubRip subtitles, and frames to H.264 via an ffmpeg pipe (written to a temp name and renamed on success) |
 
 The HUD is authored in a fixed 1920x1080 design space, whatever the render size.

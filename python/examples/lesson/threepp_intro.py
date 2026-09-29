@@ -45,6 +45,7 @@ import lesson  # noqa: E402
 from lesson import (DIM, TEXT, Arrow3D, Hud, Keys, Marker3D, OrbitCamera, Cloud, Segments, Stage,  # noqa: E402
                     clamp01, data_file, ease_out, ease_out_back, envelope, fade_in_out, mat4, remap, run, smooth,
                     smoother, standard, tp, turbo)
+from lesson import card, code_card  # noqa: E402  (the house widgets)
 
 FPS = 60
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
@@ -252,108 +253,6 @@ SUMMARY = [(r"$\mathrm{API}$", "The three.js API in C++, and in Python too."),
            (r"$\mathrm{7\ pieces}$", "Canvas, renderer, scene, camera, mesh, light, loop."),
            (r"$\mathrm{shared\_ptr}$", "Share geometry and materials; memory frees itself."),
            (r"$\mathrm{a\ tree}$", "A scene is a graph: robots, physics and sensors join it.")]
-
-# ── syntax colouring ──────────────────────────────────────────────────────────
-KW = {"py": {"import", "as", "def", "return", "for", "in", "if", "else", "True", "False", "None", "from"},
-      "cpp": {"using", "namespace", "int", "auto", "return", "const", "new", "float"},
-      "js": {"const", "new", "let", "function"}, "cmake": set(), "sh": {"pip", "python"}}
-COL = {"kw": 0xc792ea, "str": 0xc3e88d, "num": 0xf78c6c, "fn": 0x82aaff, "type": 0xffcb6b, "mod": 0x89ddff,
-       "com": 0x6b7a90, "punc": 0x8fa3bf, "id": 0xe6ecf5, "pre": 0xc792ea}
-_TOK = re.compile(r'(//.*|#.*)|("[^"]*")|(\b0x[0-9a-fA-F]+\b|\b\d+\.?\d*f?\b)|([A-Za-z_][A-Za-z_0-9]*)|(\s+)|(.)')
-
-
-def tokenize(line, lang):
-    """(column, text, colour) per token; whitespace is skipped."""
-    out = []
-    ms = list(_TOK.finditer(line))
-    for k, m in enumerate(ms):
-        s = m.group(0)
-        if m.group(5):
-            continue
-        if m.group(1):
-            if lang == "cpp" and s.startswith("#"):          # #include "..."
-                word = s.split()[0]
-                out.append((m.start(), word, COL["pre"]))
-                rest = s[len(word):]
-                if rest.strip():
-                    out.append((m.start() + len(word) + (len(rest) - len(rest.lstrip())), rest.strip(), COL["str"]))
-                continue
-            if (lang == "cpp") != s.startswith("//"):         # a '#' in C++ or '//' elsewhere is not a comment
-                out.append((m.start(), s, COL["punc"]))
-                continue
-            out.append((m.start(), s, COL["com"]))
-        elif m.group(2):
-            out.append((m.start(), s, COL["str"]))
-        elif m.group(3):
-            out.append((m.start(), s, COL["num"]))
-        elif m.group(4):
-            nxt = line[m.end():].lstrip()[:1]
-            if s in KW.get(lang, ()):
-                c = COL["kw"]
-            elif s in ("tp", "THREE", "threepp"):
-                c = COL["mod"]
-            elif s[0].isupper():
-                c = COL["type"]
-            elif nxt == "(":
-                c = COL["fn"]
-            else:
-                c = COL["id"]
-            out.append((m.start(), s, c))
-        else:
-            out.append((m.start(), s, COL["punc"]))
-    return out
-
-
-def code_block(ov, x, y, lines, lang, size=20, lh=27, alpha=1.0, line_alpha=None, hl=None, reveal=None):
-    """Source lines in a monospace font with syntax colours. line_alpha(j), hl(j) and
-    reveal(j) (0..1 of the line's tokens shown) are optional per-line functions."""
-    if alpha <= 0.003:
-        return
-    cw = ov.text_width("0", size, "mono")
-    for j, line in enumerate(lines):
-        a = alpha * (line_alpha(j) if line_alpha else 1.0)
-        if a <= 0.003 or not line.strip():
-            continue
-        yy = y + j * lh
-        h = hl(j) if hl else 0.0
-        if h > 0.003:
-            ov.panel(x - 16, yy - 2, len(max(lines, key=len)) * cw + 30, lh + 2, radius=5, fill=0x223452,
-                     alpha=0.75 * h * alpha)
-            ov.panel(x - 16, yy - 2, 4, lh + 2, radius=2, fill=C_ACCENT, alpha=h * alpha)
-        toks = tokenize(line, lang)
-        n = len(toks) if reveal is None else int(math.ceil(reveal(j) * len(toks) - 1e-9))
-        for col, s, c in toks[:n]:
-            ov.text(x + col * cw, yy + lh / 2, s, size=size, color=c, alpha=a, kind="mono", anchor="lm")
-
-
-def card(ov, x, y, w, h, alpha, title=None):
-    ov.panel(x, y, w, h, radius=16, alpha=0.74 * alpha, outline=0x8aa0c0, outline_alpha=0.16)
-    if title:
-        ov.text(x + 26, y + 22, title, size=16, color=DIM, alpha=alpha, kind="semibold", tracking=2.2)
-
-
-def code_card(ov, t, t_in, t_out, x, y, lines, lang, title, size=20, lh=27, stagger=0.35, min_w=0, out=None,
-              out_t=None):
-    """A titled card of code whose lines type in one after another from t_in. `out`: lines
-    the program prints, shown under the code from `out_t` (default: once the code is in)."""
-    a = envelope(t, t_in, t_out, 0.6, 0.6)
-    if a <= 0.003:
-        return
-    cw = ov.text_width("0", size, "mono")
-    w = max(max(len(l) for l in lines + (out or [])) * cw + 60, min_w)
-    h = 64 + lh * len(lines) + (lh * len(out) + 26 if out else 0)
-    card(ov, x, y, w, h, a, title)
-    code_block(ov, x + 30, y + 50, lines, lang, size, lh, a,
-               reveal=lambda j: remap(t, t_in + 0.3 + stagger * j, t_in + 0.9 + stagger * j))
-    if out:
-        oa = a * smooth(remap(t, out_t if out_t is not None else t_in + 0.9 + stagger * len(lines),
-                              (out_t if out_t is not None else t_in + 0.9 + stagger * len(lines)) + 0.4))
-        yy = y + 50 + lh * len(lines) + 10
-        ov.panel(x + 12, yy - 4, w - 24, lh * len(out) + 12, radius=8, fill=0x070a10, alpha=0.8 * oa)
-        for j, line in enumerate(out):
-            ov.text(x + 30, yy + 2 + lh * j + lh / 2, line, size=size, color=C_OUT, alpha=oa, kind="mono",
-                    anchor="lm")
-
 
 # ── choreography ──────────────────────────────────────────────────────────────
 DOF = 7
@@ -778,7 +677,7 @@ class Painter:
             yy = y + 62 + 76 * k
             ov.text(x + 28, yy + 14, name, size=22, color=C_ACCENT if lang == "py" else DIM, alpha=ra,
                     kind="semibold", anchor="lm")
-            code_block(ov, x + 170, yy, [code], lang, size=21, lh=28, alpha=ra)
+            ov.code(x + 170, yy, [code], lang, size=21, lh=28, alpha=ra)
 
     def build_hud(self, t):
         ov = self.ov
@@ -816,9 +715,9 @@ class Painter:
             end = STEPS[k + 1][1] if k + 1 < len(STEPS) else TL.end("build") - 1.0
             return envelope(t, ts, end, 0.3, 0.4)
 
-        code_block(ov, x + 30, y + 48, HELLO_CPP, "cpp", size, lh, cpp_a, hl=hl, reveal=reveal)
-        code_block(ov, x + 30, y + 48, HELLO_PY, "py", size, lh, py_a,
-                   reveal=lambda j: remap(t, TL.start("py") + 0.2 + 0.07 * j, TL.start("py") + 0.6 + 0.07 * j))
+        ov.code(x + 30, y + 48, HELLO_CPP, "cpp", size, lh, cpp_a, hl=hl, reveal=reveal)
+        ov.code(x + 30, y + 48, HELLO_PY, "py", size, lh, py_a,
+                reveal=lambda j: remap(t, TL.start("py") + 0.2 + 0.07 * j, TL.start("py") + 0.6 + 0.07 * j))
 
         # the canvas: a window outline around the picture, and the step pills above it
         wa = envelope(t, S["Canvas"], TL.end("py") - 0.2, 0.6, 0.8)
@@ -892,8 +791,8 @@ class Painter:
                 if j == SHARE_T.index(ts - 0.5):
                     return envelope(t, ts - 0.5, ts + 2.8, 0.3, 0.4)
             return 0.0
-        code_block(ov, 100, 114, SHARE_CPP, "cpp", size, lh, a, hl=hl,
-                   reveal=lambda j: remap(t, SHARE_T[j], SHARE_T[j] + 0.5))
+        ov.code(100, 114, SHARE_CPP, "cpp", size, lh, a, hl=hl,
+                reveal=lambda j: remap(t, SHARE_T[j], SHARE_T[j] + 0.5))
 
         # who holds what: a line from each shared object to every cube that uses it
         n = sum(t >= share_pop(k) + 0.1 for k in range(N_SHARE))

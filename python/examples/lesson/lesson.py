@@ -66,6 +66,7 @@ import subprocess
 import sys
 import time
 import wave
+from types import MappingProxyType
 
 import numpy as np
 import struct
@@ -499,7 +500,7 @@ def set_pose(obj, M):
     obj.quaternion.set(x, y, z, w)
 
 
-def _quat_y_to(d):
+def quat_y_to(d):
     """Quaternion (x, y, z, w) rotating +Y onto unit vector d."""
     y = np.array([0.0, 1.0, 0.0])
     d = np.asarray(d, float)
@@ -583,7 +584,7 @@ class Arrow3D:
         hl = min(self.head_l * scale, 0.45 * L) if L < 2.2 * self.head_l * scale else self.head_l * scale
         sl = max(L - hl, 1e-4)
         self.group.position.set(*a)
-        self.group.quaternion.set(*_quat_y_to(u))
+        self.group.quaternion.set(*quat_y_to(u))
         self.shaft.scale.set(scale, sl, scale)
         self.shaft.position.set(0, sl / 2, 0)
         self.head.scale.set(scale, hl / self.head_l if self.head_l > 0 else 1.0, scale)
@@ -864,6 +865,65 @@ def _find_font(kind):
             if os.path.isfile(p):
                 return p
     return None
+
+
+# ── code on screen ────────────────────────────────────────────────────────────
+# Keywords per language (read-only: a lesson that wants more passes its own set, e.g.
+# KEYWORDS["cpp"] | {"for"}), and the colours of each kind of token.
+KEYWORDS = MappingProxyType({"py": frozenset({"import", "as", "def", "return", "for", "in", "if", "else", "True", "False", "None",
+                             "from"}),
+            "cpp": frozenset({"using", "namespace", "int", "auto", "return", "const", "new", "float"}),
+            "js": frozenset({"const", "new", "let", "function"}), "cmake": frozenset(),
+            "sh": frozenset({"pip", "python"})})
+CODE_COLOURS = {"kw": 0xc792ea, "str": 0xc3e88d, "num": 0xf78c6c, "fn": 0x82aaff, "type": 0xffcb6b, "mod": 0x89ddff,
+                "com": 0x6b7a90, "punc": 0x8fa3bf, "id": 0xe6ecf5, "pre": 0xc792ea}
+CODE_ACCENT = 0x4cc9f0       # the bar beside a highlighted line
+_TOK = re.compile(r'(//.*|#.*)|("[^"]*")|(\b0x[0-9a-fA-F]+\b|\b\d+\.?\d*f?\b)|([A-Za-z_][A-Za-z_0-9]*)|(\s+)|(.)')
+
+
+def tokenize(line, lang, keywords=None, palette=None):
+    """(column, text, colour) per token of one source line; whitespace is skipped. `keywords`
+    replaces KEYWORDS[lang], `palette` replaces CODE_COLOURS."""
+    kw = KEYWORDS.get(lang, ()) if keywords is None else keywords
+    col = CODE_COLOURS if palette is None else palette
+    out = []
+    ms = list(_TOK.finditer(line))
+    for k, m in enumerate(ms):
+        s = m.group(0)
+        if m.group(5):
+            continue
+        if m.group(1):
+            if lang == "cpp" and s.startswith("#"):          # #include "..."
+                word = s.split()[0]
+                out.append((m.start(), word, col["pre"]))
+                rest = s[len(word):]
+                if rest.strip():
+                    out.append((m.start() + len(word) + (len(rest) - len(rest.lstrip())), rest.strip(), col["str"]))
+                continue
+            if (lang == "cpp") != s.startswith("//"):         # a '#' in C++ or '//' elsewhere is not a comment
+                out.append((m.start(), s, col["punc"]))
+                continue
+            out.append((m.start(), s, col["com"]))
+        elif m.group(2):
+            out.append((m.start(), s, col["str"]))
+        elif m.group(3):
+            out.append((m.start(), s, col["num"]))
+        elif m.group(4):
+            nxt = line[m.end():].lstrip()[:1]
+            if s in kw:
+                c = col["kw"]
+            elif s in ("tp", "THREE", "threepp"):
+                c = col["mod"]
+            elif s[0].isupper():
+                c = col["type"]
+            elif nxt == "(":
+                c = col["fn"]
+            else:
+                c = col["id"]
+            out.append((m.start(), s, c))
+        else:
+            out.append((m.start(), s, col["punc"]))
+    return out
 
 
 class Hud:
@@ -1488,6 +1548,29 @@ class Hud:
         for k in range(steps):
             self._rrect(x + k * sw, y, sw + 0.6, h, 0, cmap((k + 0.5) / steps), alpha)
 
+    def code(self, x, y, lines, lang, size=20, lh=27, alpha=1.0, line_alpha=None, hl=None, reveal=None,
+             keywords=None, palette=None, accent=CODE_ACCENT):
+        """Source lines in a monospace font with syntax colours (see `tokenize`). line_alpha(j),
+        hl(j) (a highlight bar, 0..1) and reveal(j) (0..1 of the line's tokens shown) are
+        optional per-line functions."""
+        if alpha <= 0.003:
+            return
+        cw = self.text_width("0", size, "mono")
+        for j, line in enumerate(lines):
+            a = alpha * (line_alpha(j) if line_alpha else 1.0)
+            if a <= 0.003 or not line.strip():
+                continue
+            yy = y + j * lh
+            h = hl(j) if hl else 0.0
+            if h > 0.003:
+                self.panel(x - 16, yy - 2, len(max(lines, key=len)) * cw + 30, lh + 2, radius=5, fill=0x223452,
+                           alpha=0.75 * h * alpha)
+                self.panel(x - 16, yy - 2, 4, lh + 2, radius=2, fill=accent, alpha=h * alpha)
+            toks = tokenize(line, lang, keywords, palette)
+            n = len(toks) if reveal is None else int(math.ceil(reveal(j) * len(toks) - 1e-9))
+            for col, s, c in toks[:n]:
+                self.text(x + col * cw, yy + lh / 2, s, size=size, color=c, alpha=a, kind="mono", anchor="lm")
+
 
 # ── images without an imaging library ──────────────────────────────────────────
 def write_png(path, rgb):
@@ -1703,6 +1786,36 @@ def house_rule_warnings(captions):
         if _NUMBER_RE.search(txt):
             out.append(f"the caption at {a:.1f} s has a number in it: {txt[:70]!r}")
     return out
+
+
+def card(ov, x, y, w, h, alpha, title=None):
+    """The house card: a rounded panel with a small spaced-out title."""
+    ov.panel(x, y, w, h, radius=16, alpha=0.74 * alpha, outline=0x8aa0c0, outline_alpha=0.16)
+    if title:
+        ov.text(x + 26, y + 22, title, size=16, color=DIM, alpha=alpha, kind="semibold", tracking=2.2)
+
+
+def code_card(ov, t, t_in, t_out, x, y, lines, lang, title, size=20, lh=27, stagger=0.35, min_w=0, out=None,
+              out_t=None, keywords=None, out_color=0xa6e3a1):
+    """A titled card of code whose lines type in one after another from t_in. `out`: lines
+    the program prints, shown under the code from `out_t` (default: once the code is in)."""
+    a = envelope(t, t_in, t_out, 0.6, 0.6)
+    if a <= 0.003:
+        return
+    cw = ov.text_width("0", size, "mono")
+    w = max(max(len(l) for l in lines + (out or [])) * cw + 60, min_w)
+    h = 64 + lh * len(lines) + (lh * len(out) + 26 if out else 0)
+    card(ov, x, y, w, h, a, title)
+    ov.code(x + 30, y + 50, lines, lang, size, lh, a,
+            reveal=lambda j: remap(t, t_in + 0.3 + stagger * j, t_in + 0.9 + stagger * j), keywords=keywords)
+    if out:
+        oa = a * smooth(remap(t, out_t if out_t is not None else t_in + 0.9 + stagger * len(lines),
+                              (out_t if out_t is not None else t_in + 0.9 + stagger * len(lines)) + 0.4))
+        yy = y + 50 + lh * len(lines) + 10
+        ov.panel(x + 12, yy - 4, w - 24, lh * len(out) + 12, radius=8, fill=0x070a10, alpha=0.8 * oa)
+        for j, line in enumerate(out):
+            ov.text(x + 30, yy + 2 + lh * j + lh / 2, line, size=size, color=out_color, alpha=oa, kind="mono",
+                    anchor="lm")
 
 
 # ── measured speech ───────────────────────────────────────────────────────────

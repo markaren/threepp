@@ -41,8 +41,7 @@ sys.path.insert(0, _HERE)
 import lesson  # noqa: E402
 from lesson import (DIM, TEXT, Hud, Stage, clamp01, ease_out, envelope, fade_in_out, remap,  # noqa: E402
                     run, smooth, tp)
-import threepp_intro as intro  # noqa: E402  (the code cards and the syntax colours)
-from threepp_intro import card, tokenize  # noqa: E402
+from lesson import card, tokenize  # noqa: E402  (the house card and the syntax colours)
 
 FPS = 60
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
@@ -54,11 +53,13 @@ C_OK = 0x5ee27a
 C_DEL = 0xef476f
 C_OUT = 0xa6e3a1
 
-intro.KW["cpp"] |= {"for", "if", "else", "bool", "true", "false", "nullptr", "static", "void"}
+CPP_KEYWORDS = lesson.KEYWORDS["cpp"] | {"for", "if", "else", "bool", "true", "false", "nullptr", "static", "void"}
 
 # how the narrator says the names on screen: Part 0's table, then this film's own
-WORDS = {**intro.WORDS, "glTF": "G L T F", "HDR": "H D R", "C++": "C plus plus", "ImGui": "Im Gooey",
-         "OrbitControls": "Orbit Controls", "IOCapture": "I O Capture",
+WORDS = {"glTF": "G L T F", "OBJ": "O B J", "STL": "S T L", "URDF": "U R D F", "C++": "C plus plus",
+         "NumPy": "Num Pie", "CMake": "C Make", "FetchContent": "Fetch Content", "OpenGL": "Open G L",
+         "create()": "create",
+         "HDR": "H D R", "ImGui": "Im Gooey", "OrbitControls": "Orbit Controls", "IOCapture": "I O Capture",
          "examples/lesson/app.cpp": "examples, lesson, app dot C P P", "hello.cpp": "hello dot C P P",
          "STEP": "step"}
 
@@ -613,7 +614,7 @@ class Painter:
                 ov.panel(x + 12, yy - 1, 4, lh, radius=2, fill=C_DEL, alpha=0.9 * ra)
             if kind == "ctx":
                 ra *= 0.45
-            toks = tokenize(text, "cpp")
+            toks = tokenize(text, "cpp", CPP_KEYWORDS)
             for col, s, c in toks:
                 ov.text(x + 30 + col * cw, yy + lh / 2, s, size=size, color=c, alpha=ra, kind="mono", anchor="lm")
             if kind == "del":
@@ -658,7 +659,7 @@ class Painter:
             return
         card(ov, x, y, w, 60 + lh * len(rows), ca, "IN THE LOOP, THE SLOW WAY  ·  -DSEPARATE_MESHES")
         for j, text in enumerate(rows):
-            for col, s, c in tokenize(text, "cpp"):
+            for col, s, c in tokenize(text, "cpp", CPP_KEYWORDS):
                 ov.text(x + 30 + col * cw, y + 46 + j * lh + lh / 2, s, size=size, color=c, alpha=ca, kind="mono",
                         anchor="lm")
 
