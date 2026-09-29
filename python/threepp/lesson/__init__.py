@@ -37,9 +37,10 @@ The pieces, from bottom to top:
     loaded through SVGLoader, no TeX needed), lines, arrows, bars, plots, readouts, callouts,
     captions, a card of equations, and source code with syntax colours (`Hud.code`).
 
-`media`: `Film`, `write_png`, `write_srt`, `write_wav`
+`media`: `Film`, `FramePipe`, `write_png`, `write_srt`, `write_wav`
     Frames to H.264 through an ffmpeg pipe (written to a temporary name and renamed on
-    success), PNG without an imaging library, SubRip captions, WAV.
+    success; `FramePipe` is the pipe under it, for your own ffmpeg arguments), PNG without an
+    imaging library, SubRip captions, WAV.
 
 `speech`: `Narration`, `spoken`, `Speech`, `overruns`
     Captions read aloud by Kokoro and cached by text; caption text in words a TTS reads well;

@@ -11,7 +11,8 @@ import zlib
 
 import numpy as np
 
-__all__ = ["write_png", "shrink", "ffmpeg_exe", "Film", "write_srt", "write_wav", "read_wav"]
+__all__ = ["write_png", "shrink", "ffmpeg_exe", "rawvideo_args", "FramePipe", "Film", "write_srt", "write_wav",
+           "read_wav"]
 
 
 def write_png(path, rgb):
@@ -36,15 +37,51 @@ def shrink(rgb, factor):
     return a.mean(axis=(1, 3)).round().astype(np.uint8)
 
 
-def ffmpeg_exe():
-    try:
-        import imageio_ffmpeg
-        return imageio_ffmpeg.get_ffmpeg_exe()
-    except Exception:
-        return shutil.which("ffmpeg")
+def ffmpeg_exe(prefer="bundled"):
+    """An ffmpeg binary: imageio-ffmpeg's bundled one, or the one on PATH, whichever is found
+    first in the order `prefer` gives ("bundled" or "path"). None if there is neither."""
+    def bundled():
+        try:
+            import imageio_ffmpeg
+            return imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:                      # noqa: BLE001 - an optional dependency
+            return None
+    for find in ((bundled, lambda: shutil.which("ffmpeg")) if prefer == "bundled"
+                 else (lambda: shutil.which("ffmpeg"), bundled)):
+        exe = find()
+        if exe:
+            return exe
+    return None
 
 
-class Film:
+def rawvideo_args(exe, width, height, fps, loglevel="error", hide_banner=False):
+    """The start of an ffmpeg command that reads raw RGB frames of width x height from stdin."""
+    return [exe, "-y"] + (["-hide_banner"] if hide_banner else []) + [
+        "-loglevel", loglevel, "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", str(fps),
+        "-i", "-"]
+
+
+class FramePipe:
+    """(H, W, 3) uint8 frames written into the stdin of an ffmpeg command (`rawvideo_args` plus
+    the output options). Nothing touches the disk but what ffmpeg writes. `log`: an open file
+    that takes ffmpeg's stdout and stderr. `close()` returns ffmpeg's exit code."""
+
+    def __init__(self, cmd, log=None):
+        self.cmd = cmd
+        redirect = {"stdout": log, "stderr": log} if log is not None else {}
+        self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, **redirect)
+        self.n = 0
+
+    def write(self, rgb):
+        self.p.stdin.write(np.ascontiguousarray(rgb, np.uint8).tobytes())
+        self.n += 1
+
+    def close(self):
+        self.p.stdin.close()
+        return self.p.wait()
+
+
+class Film(FramePipe):
     """Frames -> H.264 mp4 through an ffmpeg pipe. Written to <path>.part, renamed on close.
     `audio`: a WAV muxed in as AAC, starting `audio_offset` seconds into it."""
 
@@ -52,8 +89,7 @@ class Film:
         self.path = path
         self.tmp = path + ".part.mp4"
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        cmd = [ffmpeg_exe(), "-y", "-loglevel", "error",
-               "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", str(fps), "-i", "-"]
+        cmd = rawvideo_args(ffmpeg_exe(), width, height, fps)
         if audio:
             cmd += ["-ss", f"{audio_offset:.3f}", "-i", audio, "-map", "0:v", "-map", "1:a",
                     "-c:a", "aac", "-b:a", "192k", "-shortest"]
@@ -62,17 +98,10 @@ class Film:
                 "-color_trc", "bt709", "-colorspace", "bt709"]
         if threads:
             cmd += ["-threads", str(threads)]
-        cmd += [self.tmp]
-        self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-        self.n = 0
-
-    def write(self, frame):
-        self.p.stdin.write(np.ascontiguousarray(frame, np.uint8).tobytes())
-        self.n += 1
+        super().__init__(cmd + [self.tmp])
 
     def close(self):
-        self.p.stdin.close()
-        rc = self.p.wait()
+        rc = super().close()
         if rc != 0:
             raise RuntimeError(f"ffmpeg exited {rc}")
         os.replace(self.tmp, self.path)

@@ -280,7 +280,7 @@ In `threepp.lesson`:
 | `Hud.code`, `tokenize`, `KEYWORDS` | source lines with syntax colours, highlighted and typed in line by line; a lesson that wants more keywords passes its own set (`KEYWORDS["cpp"] \| {"for"}`) |
 | `Narration`, `spoken`, `DEFAULT_WORDS` | captions read aloud by Kokoro and cached; caption text in words; the pronunciation table every lesson starts from |
 | `Speech`, `overruns` | a lesson's lines and their measured lengths, and the captions laid out from them (below); the one rule for a line that needs more time than its caption |
-| `turbo`, `write_png`, `write_srt`, `Film` | colour map, stdlib PNG writer, SubRip subtitles, and frames to H.264 via an ffmpeg pipe (written to a temp name and renamed on success) |
+| `turbo`, `write_png`, `write_srt`, `Film`, `FramePipe` | colour map, stdlib PNG writer, SubRip subtitles, and frames to H.264 via an ffmpeg pipe (written to a temp name and renamed on success); the pipe itself, which the film demos' `demo_common.Encoder` runs on too |
 
 In `lesson.py`, the house layer:
 

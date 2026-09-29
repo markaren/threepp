@@ -7,13 +7,13 @@ pure-renderer showcases and the renderer-only kits (`fireworks.py`,
 pieces they share live here instead, and `warp_common` re-exports them for
 the films.
 """
-import shutil
 import subprocess
 import sys
 
 import numpy as np
 
 import threepp as tp
+from threepp.lesson.media import FramePipe, ffmpeg_exe, rawvideo_args
 
 # --- command line --------------------------------------------------------------
 
@@ -38,24 +38,18 @@ def parse_size(text):
 
 def find_ffmpeg():
     """The ffmpeg binary on PATH, or imageio-ffmpeg's bundled one, or None."""
-    ff = shutil.which("ffmpeg")
-    if ff:
-        return ff
-    try:
-        import imageio_ffmpeg
-        return imageio_ffmpeg.get_ffmpeg_exe()
-    except Exception:                      # noqa: BLE001 - optional dependency
-        return None
+    return ffmpeg_exe(prefer="path")
 
 
-class Encoder:
+class Encoder(FramePipe):
     """A pipe to x264, fed raw RGB frames.
 
     The film demos all learned the same lesson: writing a PNG per frame and
     encoding the directory afterwards costs more than the render does (the hull
     film paid 5.4 GB of intermediates and eighteen minutes for eighty seconds of
     picture). So `read_pixels()` off the frame already on the GPU goes straight
-    down this pipe and nothing touches the disk but the mp4.
+    down this pipe and nothing touches the disk but the mp4. The pipe is
+    threepp.lesson's `FramePipe`, the one the lesson films' `Film` runs on.
 
     The keyword flags exist because the films disagree about them and their
     output must not change: `preset`, `faststart`, `an`, `hide_banner`,
@@ -70,11 +64,7 @@ class Encoder:
         exe = ffmpeg or find_ffmpeg()
         if exe is None:
             raise RuntimeError("no ffmpeg on PATH and no imageio-ffmpeg")
-        cmd = [exe, "-y"]
-        if hide_banner:
-            cmd += ["-hide_banner"]
-        cmd += ["-loglevel", loglevel, "-f", "rawvideo", "-pix_fmt", "rgb24",
-                "-s", f"{w}x{h}", "-r", str(fps), "-i", "-"]
+        cmd = rawvideo_args(exe, w, h, fps, loglevel=loglevel, hide_banner=hide_banner)
         if an:
             cmd += ["-an"]
         cmd += ["-c:v", "libx264", "-pix_fmt", pix_fmt, "-crf", str(crf)]
@@ -86,22 +76,17 @@ class Encoder:
             cmd += ["-vf", vf]
         if extra:
             cmd += list(extra)
-        self.cmd = cmd + [path]
         self._own_log = isinstance(log, str)
         self.log = open(log, "w") if self._own_log else log
-        redirect = {"stdout": self.log, "stderr": self.log} if self.log is not None else {}
-        self.p = subprocess.Popen(self.cmd, stdin=subprocess.PIPE, **redirect)
-        self.n = 0
+        super().__init__(cmd + [path], log=self.log)
 
     def send(self, rgb):
         """One RGB frame, HxWx3 uint8."""
-        self.p.stdin.write(np.ascontiguousarray(rgb, dtype=np.uint8).tobytes())
-        self.n += 1
+        self.write(rgb)
 
     def close(self):
         """Close the pipe and wait for the encoder; returns its exit code."""
-        self.p.stdin.close()
-        rc = self.p.wait()
+        rc = super().close()
         if self._own_log:
             self.log.close()
         return rc
