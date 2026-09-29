@@ -42,7 +42,7 @@ import numpy as np
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 import lesson  # noqa: E402
-from lesson import (DIM, TEXT, Arrow3D, Hud, Keys, Marker3D, OrbitCamera, Cloud, Segments, Stage, Timeline,  # noqa: E402
+from lesson import (DIM, TEXT, Arrow3D, Hud, Keys, Marker3D, OrbitCamera, Cloud, Segments, Stage,  # noqa: E402
                     clamp01, data_file, ease_out, ease_out_back, envelope, fade_in_out, mat4, remap, run, smooth,
                     smoother, standard, tp, turbo)
 
@@ -58,15 +58,15 @@ C_PEBBLE = 0xef476f
 C_OUT = 0xa6e3a1         # what a program prints
 
 # how the narrator says the names on screen (PhysX and three.js are in lesson.SPOKEN_WORDS)
-lesson.SPOKEN_WORDS.update({"glTF": "G L T F", "OBJ": "O B J", "STL": "S T L", "URDF": "U R D F",
-                            "C++": "C plus plus", "NumPy": "Num Pie", "CMake": "C Make",
-                            "FetchContent": "Fetch Content", "OpenGL": "Open G L", "create()": "create"})
+WORDS = {"glTF": "G L T F", "OBJ": "O B J", "STL": "S T L", "URDF": "U R D F", "C++": "C plus plus",
+         "NumPy": "Num Pie", "CMake": "C Make", "FetchContent": "Fetch Content", "OpenGL": "Open G L",
+         "create()": "create"}
 
 # ── the script ────────────────────────────────────────────────────────────────
 # The narration sets the pace: every caption lasts as long as its spoken line (Kokoro,
-# af_heart, measured) plus the voice's lead-in and tail and a small margin, and each beat's
-# events hang off its captions. A line whose text changes should be re-measured
-# (lesson.Narration(...).clip(text)); until then `run` holds the picture for any overrun.
+# af_heart, measured in threepp_intro.speech.json) plus the voice's lead-in and tail and a
+# small margin, and each beat's events hang off its captions. A line whose text changes should
+# be re-measured (--remeasure); until then `run` holds the picture for any overrun.
 CAPTION_TEXT = {
     "w1": "threepp is a 3D graphics library for C++, modelled on three.js, the most used 3D library on the web.",
     "w2": "It also comes as a Python package, with the same names and the same ideas.",
@@ -93,32 +93,14 @@ CAPTION_TEXT = {
     "t1": "To start in C++, pull threepp into your CMake project with FetchContent. For Python, it is pip install threepp.",
     "t2": "Then read the getting started guide, and run the examples. Each one is a small program to learn from.",
 }
-SPEECH = {"w1": 9.0, "w2": 5.08, "b1": 7.45, "b2": 2.9, "b3": 4.03, "b4": 5.65, "b5": 5.2, "b6": 5.08, "b7": 6.08,
-          "p1": 5.88, "s1": 7.97, "s2": 6.53, "s3": 7.67, "g1": 5.15, "g2": 6.0, "m1": 8.45, "m2": 7.0, "r1": 10.97,
-          "r2": 8.8, "f1": 6.53, "d1": 8.75, "v1": 10.82, "t1": 9.07, "t2": 6.67}     # seconds, af_heart
+SPEECH = lesson.Speech(CAPTION_TEXT, os.path.join(_HERE, "threepp_intro.speech.json"), words=WORDS)
 # beat, lead-in before its first caption, its captions, time after the last one
 PLAN = [("open", 0.0, [], 6.0), ("what", 0.4, ["w1", "w2"], 0.3),
         ("build", 0.6, ["b1", "b2", "b3", "b4", "b5", "b6", "b7"], 1.7), ("py", 0.4, ["p1"], 0.8),
         ("share", 0.4, ["s1", "s2", "s3"], 0.5), ("graph", 0.4, ["g1", "g2"], 0.5), ("mat", 0.4, ["m1", "m2"], 0.5),
         ("robot", 0.4, ["r1", "r2"], 0.5), ("physics", 0.4, ["f1"], 0.8), ("sensor", 0.4, ["d1"], 0.5),
         ("vulkan", 0.4, ["v1"], 0.5), ("start", 0.4, ["t1", "t2"], 0.6), ("outro", 0.0, [], 8.0)]
-SLACK = lesson.VOICE_LEAD + lesson.VOICE_TAIL + 0.3     # a caption outlasts its speech by this much
-
-
-def _layout():
-    tl, cap, t = Timeline(), {}, 0.0
-    for name, lead, keys, tail in PLAN:
-        c = t + lead
-        for k in keys:
-            cap[k] = (c, c + SPEECH[k] + SLACK)
-            c = cap[k][1] + 0.2
-        end = (c - 0.2 if keys else t) + tail
-        tl.add(name, t, end)
-        t = end
-    return tl, cap
-
-
-TL, CAP = _layout()
+TL, CAP = SPEECH.layout(PLAN)
 
 
 def cap0(k):
@@ -629,9 +611,8 @@ class Painter:
     def make_captions(self):
         """The captions, with the measured numbers filled in."""
         m = self.rec.meta
-        return [(a, b, CAPTION_TEXT[k].format(objects=m["robot_objects"],
-                                              points=f"{int(round(m['scan_pts'], -3)):,}"))
-                for k, (a, b) in CAP.items()]
+        return SPEECH.captions(CAP, fields={"objects": m["robot_objects"],
+                                            "points": f"{int(round(m['scan_pts'], -3)):,}"})
 
     # 3D ----------------------------------------------------------------------
     def pose_frame(self, t, i):
@@ -1329,4 +1310,4 @@ def setup(width, height):
 
 
 if __name__ == "__main__":
-    run("threepp_intro", TL.duration, setup, fps=FPS)
+    run("threepp_intro", TL.duration, setup, fps=FPS, speech=SPEECH)

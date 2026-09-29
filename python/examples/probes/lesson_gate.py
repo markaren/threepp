@@ -11,8 +11,10 @@ which writes the captions on the film clock (.srt), every caption's spoken text 
 --compare needs the .srt and .voice.json to match exactly. Without --null a frame must be
 identical. With --null, the two null runs mark where a frame is live and changes from run to run
 (16-pixel cells that differ by more than 4 levels, grown by a cell: warp_threepp's streamed hero
-shot). Outside that mask, no pixel may differ by more than the null runs did there (1 level for
-the GL lessons, up to 4 for warp), and at most 5000 pixels (or twice the null's count) may differ.
+shot). Outside that mask, a pixel may differ by no more than the null runs did there (1 level
+for the GL lessons, up to 4 for warp), except in specks of at most 3x3 pixels (200 pixels in
+all: the streamed shot's noise lands anew each run), and at most 5000 pixels (or twice the
+null's count) may differ.
 
 Each lesson runs from its film folder, so it finds the voice cache (and warp_threepp its clips)
 the film was made with. A voice line missing from the cache is synthesized and reported; a
@@ -107,6 +109,8 @@ def _images(d):
 TILE = 16          # the null mask's cell, in pixels
 MASK_LEVEL = 4     # a cell is live when two null runs differ there by more than this
 NOISE_PIXELS = 5000
+SPECK = 9          # outside the mask, a streamed shot's noise lands anew each run: specks up to 3x3 px pass
+SPECK_PIXELS = 200 # ... up to this many pixels of them per frame
 
 
 def _load(p):
@@ -143,6 +147,16 @@ def _null_mask(d):
     return np.repeat(np.repeat(grown, TILE, 0), TILE, 1)[:h, :w]
 
 
+def _specks(over):
+    """(pixels, largest 8-connected blob) of a boolean image."""
+    n = int(over.sum())
+    if not n:
+        return 0, 0
+    from scipy import ndimage
+    lab, _ = ndimage.label(over, structure=np.ones((3, 3)))
+    return n, int(np.bincount(lab.ravel())[1:].max())
+
+
 def _read_text(d, suffix):
     f = glob.glob(os.path.join(d, "*" + suffix))
     if not f:
@@ -153,8 +167,9 @@ def _read_text(d, suffix):
 
 
 def compare_lesson(da, db, null=None):
-    """Text must match exactly. With a null, a frame passes when, outside the null mask, no pixel
-    differs by more than the null did there (at least 1) and no more pixels differ than
+    """Text must match exactly. With a null, a frame passes when, outside the null mask, the
+    pixels that differ by more than the null did there (at least 1) are only specks (blobs of
+    at most SPECK pixels, SPECK_PIXELS in all), and no more pixels differ at all than
     NOISE_PIXELS or twice the null's count. Without a null, a frame must be identical."""
     rep = {"text": {}, "frames": {}}
     for suffix in (".srt", ".voice.json"):
@@ -179,10 +194,12 @@ def compare_lesson(da, db, null=None):
             nout, out = nd[~mask], d[~mask]
             level = max(1, int(nout.max()) if nout.size else 0)
             allowed = max(NOISE_PIXELS, 2 * int((nout > 0).sum()))
+            specks, blob = _specks((d > level) & ~mask)
             r["masked_fraction"] = round(float(mask.mean()), 4)
             r["outside_max"], r["outside_max_allowed"] = (int(out.max()) if out.size else 0), level
             r["outside_pixels"], r["outside_pixels_allowed"] = int((out > 0).sum()), allowed
-            r["pass"] = r["outside_max"] <= level and r["outside_pixels"] <= allowed
+            r["specks"], r["largest_speck"] = specks, blob
+            r["pass"] = blob <= SPECK and specks <= SPECK_PIXELS and r["outside_pixels"] <= allowed
         else:
             r["pass"] = r["pixels"] == 0
         rep["frames"][k] = r

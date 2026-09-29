@@ -1705,8 +1705,125 @@ def house_rule_warnings(captions):
     return out
 
 
-# ── the command line ──────────────────────────────────────────────────────────
+# ── measured speech ───────────────────────────────────────────────────────────
 VOICE_LEAD, VOICE_TAIL = 0.15, 0.45     # speech starts this far into a caption, and ends this far before its end
+SLACK = VOICE_LEAD + VOICE_TAIL + 0.3    # a caption laid out from its speech outlasts it by this much
+
+
+def overruns(spans, seconds, holds=(), margin=0.0):
+    """[(i, t, extra)]: every caption i whose line needs more time than it gets, and how much
+    more, placed at t, the moment its speech should have ended (VOICE_TAIL before its end).
+    A line gets the time from VOICE_LEAD into its caption to t, plus any holds (t, d) in that
+    window: the picture stands still there, the voice goes on. Each overrun found counts as a
+    hold for the captions after it. `spans` [(start, end)] and `seconds` go in step."""
+    holds, out = list(holds), []
+    for i, ((a, b), need) in enumerate(zip(spans, seconds)):
+        q, p = a + VOICE_LEAD, b - VOICE_TAIL
+        have = p - q + sum(d for h, d in holds if q <= h < p)
+        if need + margin > have:
+            out.append((i, p, need + margin - have))
+            holds.append((p, need + margin - have))
+    return out
+
+
+class Speech:
+    """A lesson's lines by key, and how long each takes to say. A lesson whose narration sets
+    its pace lays its timeline out from these lengths, so the lengths must not move by
+    themselves: they are measured once (`--remeasure`) and committed next to the lesson as
+    <lesson>.speech.json, {voice: {key: {"s": seconds, "said": spoken text}}}. A line with no
+    measurement gets an estimate from its word count, reported; a line whose text changed
+    since it was measured is reported by `run`. `words` is the lesson's own pronunciation
+    table (see `spoken`); `voice_only` lines are read aloud but not drawn."""
+
+    def __init__(self, lines, cache, voice="af_heart", words=None, voice_only=()):
+        self.lines, self.cache, self.voice = dict(lines), cache, voice
+        self.words, self.voice_only = dict(words or {}), set(voice_only)
+        self.measured = {}
+        if os.path.isfile(cache):
+            with open(cache, encoding="utf-8") as fh:
+                self.measured = json.load(fh).get(voice, {})
+        self.estimated, self.final = [], {}
+
+    def seconds(self, k):
+        m = self.measured.get(str(k))
+        if m is not None:
+            return m["s"]
+        if self.lines[k] is None:
+            raise KeyError(f"line {k!r} has no text yet and no measurement in {self.cache}")
+        if k not in self.estimated:
+            self.estimated.append(k)
+            print(f"[speech] line {k!r} is not measured for {self.voice}; estimating from its words "
+                  f"(--remeasure measures it)")
+        return 0.42 * len(self.lines[k].split()) + 0.4
+
+    def span(self, k, start, slack=SLACK):
+        """Caption k from `start`, as long as its line takes to say, plus `slack`."""
+        return (start, start + self.seconds(k) + slack)
+
+    def layout(self, plan, gap=0.2, slack=SLACK):
+        """(Timeline, {key: (start, end)}) from a plan of beats [(name, lead-in, keys, tail)]:
+        each beat's captions follow each other `gap` apart, after its lead-in, and the beat
+        ends `tail` after its last one (or after its lead-in's start when it has none)."""
+        tl, cap, t = Timeline(), {}, 0.0
+        for name, lead, keys, tail in plan:
+            c = t + lead
+            for k in keys:
+                cap[k] = (c, c + self.seconds(k) + slack)
+                c = cap[k][1] + gap
+            end = (c - gap if keys else t) + tail
+            tl.add(name, t, end)
+            t = end
+        return tl, cap
+
+    def stretch(self, spans, holds=(), margin=0.3):
+        """For captions written at fixed times, {key: (start, end)}: a TimeMap whose `.film`
+        maps the written clock onto one with more time just before a caption ends, wherever
+        its line (plus `margin`) would run over. `holds` [(t, d)] on the written clock count
+        as time to speak."""
+        keys = list(spans)
+        found = overruns([spans[k] for k in keys], [self.seconds(k) for k in keys], holds, margin)
+        return TimeMap([(t, d, ("speech", keys[i])) for i, t, d in found])
+
+    def captions(self, spans, fields=None, texts=None):
+        """[(start, end, text)] for run(), one per {key: (start, end)}. `texts` holds whole
+        lines written after the choreography (a line in `lines` may be None until then);
+        `fields` fills the {names} in the rest. Voice-only lines get the not-drawn flag."""
+        out = []
+        for k, (a, b) in spans.items():
+            txt = texts[k] if texts and k in texts else self.lines[k]
+            if fields is not None:
+                txt = txt.format(**fields)
+            self.final[k] = txt
+            out.append((a, b, txt) + ((False,) if k in self.voice_only else ()))
+        return out
+
+    def stale(self):
+        """The lines whose final text is not what was measured."""
+        return [k for k, txt in self.final.items()
+                if str(k) in self.measured and self.measured[str(k)].get("said") != spoken(txt, self.words)]
+
+    def remeasure(self, cache_dir, voice=None):
+        """Say every final line with Kokoro (through the voice cache) and write the lengths."""
+        voice = voice or self.voice
+        narr = Narration(voice, cache_dir=cache_dir, words=self.words)
+        data = {}
+        if os.path.isfile(self.cache):
+            with open(self.cache, encoding="utf-8") as fh:
+                data = json.load(fh)
+        old = data.get(voice, {})
+        new = {str(k): {"s": round(len(narr.clip(txt)) / Narration.RATE, 2), "said": spoken(txt, self.words)}
+               for k, txt in self.final.items()}
+        for k, v in new.items():
+            if old.get(k, {}).get("s") != v["s"]:
+                print(f"[speech] {k}: {old.get(k, {}).get('s')} -> {v['s']} s")
+        data[voice] = new
+        with open(self.cache, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(data, fh, indent=1, ensure_ascii=False)
+            fh.write("\n")
+        print(f"[speech] wrote {self.cache}: {len(new)} lines for {voice}")
+
+
+# ── the command line ──────────────────────────────────────────────────────────
 
 
 def _contact_sheet(thumbs, cols=6):
@@ -1759,7 +1876,7 @@ def _write_gate(out, name, captions, clips, narr, tm, duration, film_duration, f
           f"{len(thumbs)} sheet frames, {len(captions)} stills ({time.time() - t0:.0f}s)")
 
 
-def run(name, duration, setup, fps=60):
+def run(name, duration, setup, fps=60, speech=None):
     """The command line every lesson shares.
 
     `setup(width, height)` builds the lesson at that render size and returns
@@ -1772,6 +1889,9 @@ def run(name, duration, setup, fps=60):
 
     The captions are read aloud (Kokoro, voice `--voice`) unless `--no-voice`. Where a
     line runs longer than its caption, the film holds the picture until it has been said.
+    A lesson paced by its narration passes its `speech` (a Speech): its pronunciation table
+    reaches the narrator, and `--remeasure` measures its final lines and rewrites the
+    .speech.json its layout is read from.
 
         (no flags)            the film, 1920x1080 at `fps`, to <outdir>/<name>.mp4
         --preview             960x540 at 30 fps
@@ -1780,6 +1900,7 @@ def run(name, duration, setup, fps=60):
         --sheet [--every S]   contact sheet, one frame every S seconds from 0.5 s
         --srt                 the captions as <outdir>/<name>.srt
         --gate DIR            a regression record for refactors, into DIR (see `_write_gate`)
+        --remeasure           say every line (Kokoro, --voice) and rewrite <lesson>.speech.json
     Times on the command line are film times.
     """
     ap = argparse.ArgumentParser()
@@ -1797,7 +1918,13 @@ def run(name, duration, setup, fps=60):
     ap.add_argument("--fps", type=int, default=None)
     ap.add_argument("--gate", default=None, metavar="DIR",
                     help="write the captions, the spoken lines and holds, a sheet and a still per caption to DIR")
+    ap.add_argument("--remeasure", action="store_true", help="measure every spoken line and rewrite the "
+                    "lesson's .speech.json (the layout moves on the next run)")
     args = ap.parse_args()
+    if args.remeasure and speech is None:
+        ap.error("this lesson is not laid out from measured speech")
+    if speech is not None and args.voice != speech.voice and not args.no_voice:
+        print(f"[speech] the layout is timed for {speech.voice}; {args.voice} gets holds wherever it runs long")
 
     W, H = (960, 540) if args.preview else (1920, 1080)
     fps = args.fps or (30 if args.preview else fps)
@@ -1805,19 +1932,25 @@ def run(name, duration, setup, fps=60):
     for msg in house_rule_warnings(captions):
         print("[house rules]", msg)
     os.makedirs(args.outdir, exist_ok=True)
+    if speech is not None:
+        if args.remeasure:
+            speech.remeasure(os.path.join(args.outdir, "voice_cache"), args.voice)
+            return
+        stale = speech.stale()
+        if stale:
+            print(f"[speech] these lines changed since they were measured: {stale} (--remeasure)")
 
     tm = TimeMap(getattr(render, "holds", ()))
     clips = narr = None
     if not args.no_voice:
-        narr = Narration(args.voice, cache_dir=os.path.join(args.outdir, "voice_cache"))
+        narr = Narration(args.voice, cache_dir=os.path.join(args.outdir, "voice_cache"),
+                         words=speech.words if speech is not None else None)
         t0 = time.time()
         clips = [narr.clip(c[2]) for c in captions]
         said = sum(len(c) for c in clips) / Narration.RATE
-        for (a, b, *_), c in zip(captions, clips):
-            need = len(c) / Narration.RATE
-            have = tm.film(b - VOICE_TAIL) - tm.film(a + VOICE_LEAD)
-            if need > have:
-                tm.add(b - VOICE_TAIL, need - have, ("voice", None))
+        for _, t, d in overruns([c[:2] for c in captions], [len(c) / Narration.RATE for c in clips],
+                                [(a, d) for a, d, _ in tm.holds]):
+            tm.add(t, d, ("voice", None))
         held = sum(d for _, d, tag in tm.holds if tag[0] == "voice")
         print(f"[voice] {len(clips)} lines, {said:.0f} s of speech ({args.voice}) in {time.time() - t0:.1f}s; "
               f"the film holds {held:.1f} s for it")

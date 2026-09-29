@@ -54,12 +54,17 @@ holds the picture until it has been said (`lesson.TimeMap`); the captions, the `
 muxed into the mp4 as AAC. `--no-voice` renders without Kokoro. A caption given as
 `(start, end, text, False)` is spoken (and written to the `.srt`) but not drawn: Part 4 uses one to
 narrate its title card, so the film has sound from the first second.
-Kokoro's own reading of a word can be wrong; `lesson.SPOKEN_WORDS` respells those, and a
-`[word](/phonemes/)` entry sets the phonemes outright (PhysX is `/fˈɪzˌɛks/`). Parts 0 and 3
-go further and time their scripts from the measured length of each spoken line, so their films
-never hold for the voice: Part 0 lays its whole timeline out from them, and Part 3 gives its
-drive more time wherever a line would overrun its caption (`imu_tilt.SPEECH`, `at()`), so the
-car keeps driving while the line is said.
+Kokoro's own reading of a word can be wrong; `lesson.SPOKEN_WORDS` respells those for every
+lesson, a lesson's own table (`WORDS`) adds its names, and a `[word](/phonemes/)` entry sets
+the phonemes outright (PhysX is `/fˈɪzˌɛks/`). Parts 0, 0b, 3 and 4 and the Warp film go
+further and time their scripts from the measured length of each spoken line (`lesson.Speech`,
+read from `<lesson>.speech.json`), so their films never hold for the voice: Parts 0 and 0b and
+the Warp film lay their whole timeline out from them (`Speech.layout`), Part 4 places each line
+around its flight's events (`Speech.span`), and Part 3 gives its drive more time wherever a line
+would overrun its caption (`Speech.stretch`), so the car keeps driving while the line is said.
+The lengths never move by themselves: after editing a line, `--remeasure` says every line
+again and rewrites the `.speech.json`, and until then the lesson reports the line and `run`
+holds the picture for any overrun.
 
 Each threepp_data file is looked up in `THREEPP_DATA_DIR`, then a `threepp_data`
 (or `threepp-data`) checkout next to the repo, then the copies CMake fetches into

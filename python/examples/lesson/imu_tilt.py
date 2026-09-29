@@ -52,11 +52,11 @@ AXIS_C = (0xff5a5f, 0x5ee27a, 0x4f8dff)      # x right, y up, z forward
 
 # ── the script ────────────────────────────────────────────────────────────────
 # Written on a 108 s clock (the times below). The narration then sets the pace: where a
-# spoken line (Kokoro, af_heart, measured in SPEECH) runs past its caption, the script gets
-# that much more time just before the caption ends, so the car drives on while the line is
-# said instead of the film standing still. `at` maps a written time onto that clock. A line
-# whose text changes should be re-measured (lesson.Narration(...).clip(text)); until then
-# `run` holds the picture for any overrun.
+# spoken line (Kokoro, af_heart, measured in imu_tilt.speech.json) runs past its caption, the
+# script gets that much more time just before the caption ends, so the car drives on while the
+# line is said instead of the film standing still. `at` maps a written time onto that clock. A
+# line whose text changes should be re-measured (--remeasure); until then `run` holds the
+# picture for any overrun.
 _CAPTIONS = [
     (7.4, 13.4, "Phones, drones, cars and robots carry an IMU: a gyroscope and an accelerometer on one chip."),
     (13.8, 19.2, None),      # parked accelerometer reading
@@ -71,7 +71,8 @@ _CAPTIONS = [
     (83.4, 93.6, None),      # Kalman
     (94.4, 99.6, "None of this finds north: gravity says nothing about heading. That takes a compass, GNSS or a camera."),
 ]
-SPEECH = [7.17, 9.88, 6.4, 5.55, 10.85, 4.65, 9.95, 5.88, 11.72, 6.65, 10.12, 7.33]    # seconds, af_heart
+SPEECH = lesson.Speech({k: txt for k, (_, _, txt) in enumerate(_CAPTIONS)},
+                       os.path.join(_HERE, "imu_tilt.speech.json"))    # keyed by position; None = written later
 MARGIN = 0.3                 # a stretched caption outlasts its speech by this much
 
 # Each ghost is introduced on its own: the film holds (the drive stands still), the car
@@ -83,24 +84,10 @@ INTRO_LABEL = {"gyro": "the gyroscope's estimate", "acc": "the accelerometer's e
                "comp": "the complementary filter", "kf": "the Kalman filter"}
 
 
-def _stretch():
-    """(written time, seconds added there) for every caption whose line would overrun it.
-    Like lesson.run, an introduction's pause inside a caption counts as time to speak."""
-    out = []
-    for (a, b, _), need in zip(_CAPTIONS, SPEECH):
-        p = b - lesson.VOICE_TAIL
-        have = p - (a + lesson.VOICE_LEAD) + PAUSE * sum(a + lesson.VOICE_LEAD <= s < p for s in _INTRO.values())
-        if need + MARGIN > have:
-            out.append((p, need + MARGIN - have))
-    return out
-
-
-STRETCH = _stretch()
-
-
-def at(t):
-    """A written script time on the drive's clock."""
-    return t + sum(d for p, d in STRETCH if p < t)
+# Like lesson.run, an introduction's pause inside a caption counts as time to speak.
+CLOCK = SPEECH.stretch({k: (a, b) for k, (a, b, _) in enumerate(_CAPTIONS)},
+                       holds=[(s, PAUSE) for s in _INTRO.values()], margin=MARGIN)
+at = CLOCK.film              # a written script time on the drive's clock
 
 
 TL = Timeline()
@@ -670,7 +657,7 @@ class Painter:
             10: f"A Kalman filter does that, and learns the gyroscope's offset as it goes: {m['kf_rms']:.1f}° "
                 f"off on average, {m['comp_rms'] / m['kf_rms']:.0f} times closer than the best blend.",
         }
-        self.captions = [(a, b, fill.get(k, txt)) for k, (a, b, txt) in enumerate(CAPTIONS)]
+        self.captions = SPEECH.captions({k: (a, b) for k, (a, b, _) in enumerate(CAPTIONS)}, texts=fill)
         # the chase camera follows the car and turns with it, smoothed
         n = rec.n_frames
         head = np.unwrap([heading_of(rec.fwd[i * SUB + SUB - 1]) for i in range(n)])
@@ -939,4 +926,4 @@ def setup(width, height):
 
 
 if __name__ == "__main__":
-    run("imu_tilt", TL.duration, setup, fps=FPS)
+    run("imu_tilt", TL.duration, setup, fps=FPS, speech=SPEECH)

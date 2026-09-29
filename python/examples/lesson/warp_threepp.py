@@ -29,7 +29,7 @@ import numpy as np
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 import lesson  # noqa: E402
-from lesson import (DIM, TEXT, Hud, Stage, Timeline, envelope, fade_in_out, remap, run, smooth, tp)  # noqa: E402
+from lesson import (DIM, TEXT, Hud, Stage, envelope, fade_in_out, remap, run, smooth, tp)  # noqa: E402
 import threepp_intro as intro  # noqa: E402  (code cards and syntax colours)
 from threepp_intro import card, code_block  # noqa: E402
 
@@ -44,7 +44,7 @@ C_RED = 0xff5a5f
 BG = Stage.BG
 
 intro.KW["py"] |= {"not", "and", "or", "elif", "while", "self"}
-lesson.SPOKEN_WORDS.update({"CPU": "C P U"})
+WORDS = {**intro.WORDS, "CPU": "C P U"}     # how the narrator says the names: Part 0's table, then this film's
 
 # ── the script ────────────────────────────────────────────────────────────────
 CAPTION_TEXT = {
@@ -58,32 +58,15 @@ CAPTION_TEXT = {
           "event camera.",
     "e1": "Cloth, sparks, jelly, water, fire. Python on the GPU, drawn by threepp.",
 }
-SPOKEN_ONLY = {"o1"}                         # read over the cold open and the title, not drawn
-SPEECH = {"o1": 7.30, "k1": 7.05, "m1": 7.22, "m2": 3.45, "n1": 5.17, "f1": 6.72,
-          "e1": 6.20}                        # seconds, af_heart, measured
+SPEECH = lesson.Speech(CAPTION_TEXT, os.path.join(_HERE, "warp_threepp.speech.json"), words=WORDS,
+                       voice_only={"o1"})    # o1 is read over the cold open and the title, not drawn
 # when each word of the last line is said, seconds into its clip (af_heart, measured); setup()
 # reads Kokoro's own alignment instead when it can, so the reel cuts land on the words
 E1_WORDS = {"Cloth": 0.28, "sparks": 0.71, "jelly": 1.20, "water": 1.57, "fire": 1.95, "Python": 2.79,
             "drawn": 4.25}
 PLAN = [("open", 0.4, ["o1"], 0.4), ("kernel", 0.2, ["k1"], 0.6), ("share", 0.2, ["m1", "m2"], 0.7),
         ("scale", 0.1, ["n1"], 0.4), ("out", 0.2, ["f1"], 0.9), ("reel", 0.1, ["e1"], 0.1), ("end", 0.0, [], 2.6)]
-SLACK = lesson.VOICE_LEAD + lesson.VOICE_TAIL + 0.1
-
-
-def _layout():
-    tl, cap, t = Timeline(), {}, 0.0
-    for name, lead, keys, tail in PLAN:
-        c = t + lead
-        for k in keys:
-            cap[k] = (c, c + SPEECH[k] + SLACK)
-            c = cap[k][1] + 0.1
-        end = (c - 0.1 if keys else t) + tail
-        tl.add(name, t, end)
-        t = end
-    return tl, cap
-
-
-TL, CAP = _layout()
+TL, CAP = SPEECH.layout(PLAN, gap=0.1, slack=lesson.VOICE_LEAD + lesson.VOICE_TAIL + 0.1)
 
 
 def cap0(k):
@@ -99,7 +82,7 @@ def e1_words():
     """The last line's word onsets, from Kokoro's alignment (the table above without it)."""
     try:
         got = {}
-        for w, a, _ in lesson.Narration().word_times(CAPTION_TEXT["e1"]):
+        for w, a, _ in lesson.Narration(words=SPEECH.words).word_times(CAPTION_TEXT["e1"]):
             got.setdefault(w, a)
         out = {w: got[w] for w in E1_WORDS}
     except (RuntimeError, KeyError) as e:
@@ -279,8 +262,7 @@ class Painter:
         self.end0 = said("Python", words) - 0.06
         self.title0 = said("drawn", words)
         self.slots = {}
-        self.captions = [(a, b, CAPTION_TEXT[k]) + ((False,) if k in SPOKEN_ONLY else ())
-                         for k, (a, b) in CAP.items()]
+        self.captions = SPEECH.captions(CAP)
 
     # helpers ------------------------------------------------------------------
     def show(self, slot, img, a=1.0, rect=FULL):
@@ -559,4 +541,4 @@ def setup(width, height):
 
 
 if __name__ == "__main__":
-    run("warp_threepp", TL.duration, setup, fps=FPS)
+    run("warp_threepp", TL.duration, setup, fps=FPS, speech=SPEECH)

@@ -737,11 +737,11 @@ class LaunchSite:
 
 # ── the script ────────────────────────────────────────────────────────────────
 # The narration sets the pace, as in Part 0: every caption lasts as long as its spoken
-# line (Kokoro, af_heart, measured in SPEECH) plus the voice's lead-in and tail and a
-# margin, and each flight event is placed from those captions and from what the physics
-# needs (the P flight's crash, the climb's overshoot, the landing). A line whose text
-# changes should be re-measured (lesson.Narration(...).clip(text)); until then `run`
-# holds the picture for any overrun.
+# line (Kokoro, af_heart, measured in rocket_pid.speech.json) plus the voice's lead-in and
+# tail and a margin, and each flight event is placed from those captions and from what the
+# physics needs (the P flight's crash, the climb's overshoot, the landing). A line whose text
+# changes should be re-measured (--remeasure); until then `run` holds the picture for any
+# overrun.
 CAPTION_TEXT = {
     "t0": "Hold still: PID control, flown on a rocket.",
     "t1": "This is a hopper: a test rocket with one engine. Its job is to lift off, and hold still at a set height.",
@@ -766,16 +766,8 @@ CAPTION_TEXT = {
     "l1": "To land, move the target down a little every step, and let the same three terms follow it.",
     "l2": "The engine cuts at touchdown, and the rocket settles softly on its legs.",
 }
-VOICE_ONLY = {"t0"}          # spoken over the title card, not drawn as a caption
-lesson.SPOKEN_WORDS.update({"PID": "P I D"})
-SPEECH = {"t0": 3.65, "t1": 6.75, "t2": 8.88, "p1": 6.1, "p2": 8.1, "p3": 2.3, "d1": 7.88, "d2": 3.48,
-          "d3": 8.55, "i1": 6.22, "i2": 6.42, "w1": 7.95, "w2": 5.92, "g1": 8.82, "l1": 5.7, "l2": 4.83}   # s, af_heart
-SLACK = lesson.VOICE_LEAD + lesson.VOICE_TAIL + 0.3
-
-
-def speech(k):
-    """The measured length of line k, or an estimate from its words until it is measured."""
-    return SPEECH.get(k, 0.42 * len(CAPTION_TEXT[k].split()) + 0.4)
+SPEECH = lesson.Speech(CAPTION_TEXT, os.path.join(_HERE, "rocket_pid.speech.json"), words={"PID": "P I D"},
+                       voice_only={"t0"})     # t0 is spoken over the title card, not drawn as a caption
 
 
 IGNITE = 1.2                 # seconds from a flight's start to ignition
@@ -814,7 +806,7 @@ class Plan:
         cap, tl = {}, Timeline()
 
         def say(k, a):
-            cap[k] = (a, a + speech(k) + SLACK)
+            cap[k] = SPEECH.span(k, a)
             return cap[k][1]
         c = say("t0", 1.2)                       # spoken over the title card
         tl.add("open", 0.0, max(6.6, c + 0.8))
@@ -838,7 +830,7 @@ class Plan:
         c = say("d3", c + 0.2)
         tl.add("d", s, c + 0.2)
         s = tl.end("d")
-        self.I_on = s + 0.75 * speech("i1")
+        self.I_on = s + 0.75 * SPEECH.seconds("i1")
         c = say("i1", s)
         c = say("i2", max(c + 0.2, self.I_on + 11.0))
         tl.add("i", s, c + 0.5)
@@ -889,8 +881,7 @@ class Plan:
         m["drift"] = float(np.hypot(fc.pos[gw, 0], fc.pos[gw, 2]).max())
         m["td"] = abs(fc.touchdown[1]) if fc.touchdown else float("nan")
         self.m = m
-        self.captions = [(a, b, CAPTION_TEXT[k].format(**m)) + ((False,) if k in VOICE_ONLY else ())
-                         for k, (a, b) in cap.items()]
+        self.captions = SPEECH.captions(cap, fields=m)
         if verbose:
             print(f"[flights] 5 PhysX flights in {time.time() - t0:.1f}s; mass {fc.mass:.0f} kg, "
                   f"hover throttle {m['hover']:.1f} %")
@@ -1167,4 +1158,4 @@ def setup(width, height):
 
 
 if __name__ == "__main__":
-    run("rocket_pid", plan().duration, setup, fps=FPS)
+    run("rocket_pid", plan().duration, setup, fps=FPS, speech=SPEECH)

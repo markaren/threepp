@@ -39,7 +39,7 @@ import numpy as np
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 import lesson  # noqa: E402
-from lesson import (DIM, TEXT, Hud, Stage, Timeline, clamp01, ease_out, envelope, fade_in_out, remap,  # noqa: E402
+from lesson import (DIM, TEXT, Hud, Stage, clamp01, ease_out, envelope, fade_in_out, remap,  # noqa: E402
                     run, smooth, tp)
 import threepp_intro as intro  # noqa: E402  (the code cards and the syntax colours)
 from threepp_intro import card, tokenize  # noqa: E402
@@ -56,14 +56,16 @@ C_OUT = 0xa6e3a1
 
 intro.KW["cpp"] |= {"for", "if", "else", "bool", "true", "false", "nullptr", "static", "void"}
 
-lesson.SPOKEN_WORDS.update({"glTF": "G L T F", "HDR": "H D R", "C++": "C plus plus", "ImGui": "Im Gooey",
-                            "OrbitControls": "Orbit Controls", "IOCapture": "I O Capture",
-                            "examples/lesson/app.cpp": "examples, lesson, app dot C P P",
-                            "hello.cpp": "hello dot C P P", "STEP": "step"})
+# how the narrator says the names on screen: Part 0's table, then this film's own
+WORDS = {**intro.WORDS, "glTF": "G L T F", "HDR": "H D R", "C++": "C plus plus", "ImGui": "Im Gooey",
+         "OrbitControls": "Orbit Controls", "IOCapture": "I O Capture",
+         "examples/lesson/app.cpp": "examples, lesson, app dot C P P", "hello.cpp": "hello dot C P P",
+         "STEP": "step"}
 
 # ── the script ────────────────────────────────────────────────────────────────
 # As in Part 0, the narration sets the pace: each caption lasts as long as its spoken line
-# (Kokoro, af_heart, measured) plus the voice's lead-in and tail and a small margin.
+# (Kokoro, af_heart, measured in first_app.speech.json) plus the voice's lead-in and tail and
+# a small margin.
 CAPTION_TEXT = {
     "r1": "Part 0 ended with hello.cpp: a box that turns. Here it grows into a real app, one step at a time.",
     "r2": "Each step is a program that builds and runs, and the window shows what that program draws.",
@@ -95,31 +97,13 @@ CAPTION_TEXT = {
     "c2": "Build it with STEP set to any number from zero to eight, and you get the program as it stood after that "
           "step.",
 }
-SPEECH = {"r1": 7.8, "r2": 5.75, "o1": 7.33, "o2": 6.53, "m1": 9.78, "m2": 6.08, "k1": 8.1, "k2": 4.25, "a1": 7.1,
-          "a2": 6.67, "h1": 9.2, "h2": 7.2, "n1": 9.5, "n2": 9.47, "p1": 6.62, "p2": 7.88, "u1": 7.17, "u2": 4.67,
-          "c1": 8.88, "c2": 6.47}      # seconds, af_heart
+SPEECH = lesson.Speech(CAPTION_TEXT, os.path.join(_HERE, "first_app.speech.json"), words=WORDS)
 PLAN = [("open", 0.0, [], 6.0), ("recap", 0.4, ["r1", "r2"], 0.8),
         ("s1", 0.4, ["o1", "o2"], 0.8), ("s2", 0.4, ["m1", "m2"], 0.8), ("s3", 0.4, ["k1", "k2"], 1.4),
         ("s4", 0.4, ["a1", "a2"], 0.8), ("s5", 0.4, ["h1", "h2"], 0.8), ("s6", 0.4, ["n1", "n2"], 1.0),
         ("s7", 0.4, ["p1", "p2"], 1.0), ("s8", 0.4, ["u1", "u2"], 1.6), ("end", 0.4, ["c1", "c2"], 0.6),
         ("outro", 0.0, [], 8.0)]
-SLACK = lesson.VOICE_LEAD + lesson.VOICE_TAIL + 0.3
-
-
-def _layout():
-    tl, cap, t = Timeline(), {}, 0.0
-    for name, lead, keys, tail in PLAN:
-        c = t + lead
-        for k in keys:
-            cap[k] = (c, c + SPEECH[k] + SLACK)
-            c = cap[k][1] + 0.2
-        end = (c - 0.2 if keys else t) + tail
-        tl.add(name, t, end)
-        t = end
-    return tl, cap
-
-
-TL, CAP = _layout()
+TL, CAP = SPEECH.layout(PLAN)
 
 
 def cap0(k):
@@ -481,7 +465,7 @@ class Painter:
         self.rows = rec["rows"]
         self.ws, self.sc = rec["ws"], rec["sc"]
         self.streams = rec["streams"]
-        self.captions = [(a, b, CAPTION_TEXT[k].format(**rec["numbers"])) for k, (a, b) in CAP.items()]
+        self.captions = SPEECH.captions(CAP, fields=rec["numbers"])
 
     # which program the window shows at t, and how strongly (crossfades at each step)
     def window_layers(self, t):
@@ -870,4 +854,4 @@ def _body(lines, i, blank=False):
 
 
 if __name__ == "__main__":
-    run("first_app", TL.duration, setup, fps=FPS)
+    run("first_app", TL.duration, setup, fps=FPS, speech=SPEECH)
