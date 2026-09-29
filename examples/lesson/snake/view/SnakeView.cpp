@@ -17,7 +17,7 @@ using namespace threepp;
 
 namespace {
 
-    constexpr float ringLife = 0.4f;// seconds
+    constexpr float ringLife = 0.8f;// seconds
 
 }// namespace
 
@@ -86,7 +86,7 @@ void SnakeView::update(const Game& game, float alpha, float dt) {
     for (auto& ring : rings_) {
         ring.age += dt;
         const float t = std::min(ring.age / ringLife, 1.f);
-        ring.mesh->scale.setScalar(0.6f + 1.4f * t);
+        ring.mesh->scale.setScalar(0.8f + 2.7f * t);
         ring.mesh->material()->opacity = 1 - t;
     }
     std::erase_if(rings_, [this](const Ring& ring) {

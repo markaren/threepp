@@ -8,10 +8,12 @@ Part 0c shows one thing at a time. It opens on the game (what Snake is), says wh
 then writes Snake three times: all in main() (examples/lesson/snake/tangle), whose lines it
 colours by their job (the rules in green, the drawing in blue, both where a line does both); a
 class that inherits from threepp's Group (trap), as "is a" against "has a"; and the rules in a
-Game class of their own (model/) with the drawing in SnakeView (view/). Then the game as text
-beside the 3D picture of it, the rules' own build (CMake), and one test. Part 0d carries on with
-the finished app's later steps: the view sliding between ticks, players behind an interface,
-events, more views of one game, and a second game.
+Game class of their own (model/) with the drawing in SnakeView (view/). Then one game read
+by two views (AsciiView as text, SnakeView in 3D), the rules' own build (CMake), and one test.
+Part 0d, the same way, carries on with the finished app: who plays (the question the game loop
+asks, the Controller interface that writes it down, the keyboard and the computer answering it,
+and where inheritance fits), events (the game says the snake ate; the view pops a ring), and a
+second game as a second object.
 
 What is on screen was checked against the programs:
 
@@ -26,12 +28,16 @@ What is on screen was checked against the programs:
   board beside the text board is lesson_snake_capture_5's frame, cropped to the board;
 * the text board is what lesson_snake_capture_5 --ascii printed, frame for frame; the test run is
   test_snake's own output (its first words), run while the film is made;
+* Part 0d's ring window (lesson_snake_capture_4) is started so that one of its snake's meals lands
+  on the word "ring"; which frames it eats on is read from the step-5 build's printed score, which
+  plays the same game (step 5 only adds views);
 * the compile error is what MSVC printed when a threepp #include was added to model/Game.cpp and
   snake_model was built (2026-09-29; shortened only where it carried the checkout's path).
 """
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import time
@@ -42,7 +48,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 import lesson  # noqa: E402
 from lesson import (DIM, TEXT, Hud, Stage, Stream, card, envelope, fade_in_out, preprocess, remap, run,  # noqa: E402
-                    smooth, step_rows, tokenize, tp)
+                    smooth, tokenize, tp)
 
 
 def _part():
@@ -129,39 +135,34 @@ PLAN_C = [("open", 0.4, ["title"], 2.6),
           ("outro", 0.0, [], 9.0)]
 
 TEXT_D = {
-    "title": "Who plays? Players, events, and more than one view of a game.",
-    "a1": "Last time, Snake's rules moved into a model of their own, and threepp came back as a view.",
-    "a2": "This time, the same program grows three more pieces: who plays, how the game tells others what "
-          "happened, and more views of one game.",
-    "k1": "First, a detail of the view. The rules tick at their own pace, and the screen draws much faster.",
-    "k2": "So the view slides the snake between ticks. Only the view changed. The rules didn't.",
-    "c1": "Who plays is an interface: one question, asked once per tick. Which way now?",
-    "c2": "The keyboard answers with the keys it has queued. The AI looks at the game and picks. Press tab, and "
-          "the loop can't tell the difference.",
-    "c3": "This is where inheritance belongs: a contract. The keyboard inherits two, ours and threepp's key "
-          "listener, and no code.",
-    "ev1": "When the snake eats, the game tells whoever is listening. The view pops a ring.",
-    "ev2": "The game never knows who listens, or what they do.",
-    "w1": "With the rules on their own, more views are cheap: a minimap in the corner, and the same game as "
-          "text, with no threepp at all.",
-    "w2": "Three views, one truth. They can't disagree, because none of them owns the game.",
-    "r1": "And a second game is just more objects: another game, another view, another player.",
-    "r2": "No globals to untangle, nothing to copy. Two AIs, side by side.",
-    "z1": "The model owns the truth. Views only read it. Players only say what they want.",
-    "z2": "threepp draws. It doesn't decide. Keep it at the edge, and the rest of your program stays yours to "
-          "test, change and reuse.",
+    "title": "Who plays? Snake, part two.",
+    "a1": "Last time, we split Snake in two. Game holds the rules, with no threepp.",
+    "a2": "SnakeView draws the game in 3D. Only the view uses threepp.",
+    "a3": "Today, three more pieces: who plays, how the game tells others what happened, and a second game.",
+    "c1": "Who plays the game? It could be you, on the arrow keys. Or it could be the computer.",
+    "c2": "Every step, the game loop asks one question: which way now?",
+    "c3": "Anything that can answer that question can play. In C++, we write the question down as an interface.",
+    "c4": "The keyboard player answers with the keys you pressed. The computer player looks at the board, and "
+          "picks.",
+    "c5": "Press tab, and the computer takes over. The loop can't tell the difference.",
+    "c6": "Here, inheritance fits. The computer player is a kind of Controller.",
+    "v1": "When the snake eats, the game says so, to anyone who listens.",
+    "v2": "The view listens, and pops a ring. The game doesn't know who listens, or what they do.",
+    "r1": "Game is a class. A class is a blueprint, and you can build as many objects from it as you like.",
+    "r2": "So a second game is just a second object, with its own view and its own player.",
+    "r3": "Two computer players, side by side. Nothing was copied.",
+    "z1": "Game holds the rules. Players pick the moves. Views draw what happened.",
+    "z2": "Keep threepp at the edge, and the middle of your program stays simple, and easy to test.",
 }
 PLAN_D = [("open", 0.4, ["title"], 2.6),
-          ("recap", 1.0, ["a1", "a2"], 2.0),
-          ("clocks", 1.2, ["k1", "k2"], 2.0),
-          ("players", 1.2, ["c1", "c2", "c3"], 2.0),
-          ("events", 1.2, ["ev1", "ev2"], 2.0),
-          ("views", 1.2, ["w1", "w2"], 2.2),
-          ("rival", 1.2, ["r1", "r2"], 2.4),
+          ("recap", 1.0, ["a1", "a2", "a3"], 2.0),
+          ("players", 1.2, ["c1", "c2", "c3", "c4", "c5", "c6"], 2.0),
+          ("events", 1.2, ["v1", "v2"], 2.2),
+          ("rival", 1.2, ["r1", "r2", "r3"], 2.4),
           ("end", 1.2, ["z1", "z2"], 1.6),
           ("outro", 0.0, [], 9.0)]
 
-CAPTION_TEXT, PLAN, GAP = (TEXT_C, PLAN_C, 1.2) if PART == "c" else (TEXT_D, PLAN_D, 0.9)
+CAPTION_TEXT, PLAN, GAP = (TEXT_C, PLAN_C, 1.2) if PART == "c" else (TEXT_D, PLAN_D, 1.2)
 SPEECH = lesson.Speech(CAPTION_TEXT, os.path.join(_HERE, f"{NAME}.speech.json"), words=WORDS,
                        voice_only={"title"})
 TL, CAP = SPEECH.layout(PLAN, gap=GAP)
@@ -177,20 +178,16 @@ def cap1(k):
 
 if PART == "c":
     TITLE = ("A THREEPP LESSON  ·  PART 0c", "threepp is the view", "Snake, written three times")
-    PILLS = []
     SUMMARY = [(r"$\mathrm{rules}$", "In a class of their own, with no threepp in it."),
                (r"$\mathrm{view}$", "Only the view uses threepp, to draw what the rules say."),
                (r"$\mathrm{has\ a}$", "A snake has a 3D look. It isn't a scene object.")]
     FOOTER = "Every window in this film is the program's own output"
 else:
-    TITLE = ("A THREEPP LESSON  ·  PART 0d", "Who plays?", "Snake: players, events and more views")
-    PILLS = [("slide", ["clocks"]), ("players", ["players"]), ("events", ["events"]), ("views", ["views"]),
-             ("a second game", ["rival"])]
-    SUMMARY = [(r"$\mathrm{player}$", "An interface: the keys, an AI or a test can play."),
-               (r"$\mathrm{events}$", "The game says what happened; it never knows who listens."),
-               (r"$\mathrm{views}$", "As many as you like, and none of them owns the game."),
-               (r"$\mathrm{objects}$", "A second game is one more object, not a copy.")]
-    FOOTER = "Every window in this film is the program's own output, one build per step"
+    TITLE = ("A THREEPP LESSON  ·  PART 0d", "Who plays?", "Snake, part two")
+    SUMMARY = [(r"$\mathrm{player}$", "An interface: anything that answers which way now can play."),
+               (r"$\mathrm{events}$", "The game says what happened. It doesn't know who listens."),
+               (r"$\mathrm{objects}$", "A class is a blueprint. A second game is a second object.")]
+    FOOTER = "Every window in this film is the program's own output"
 
 # What MSVC printed when `#include "threepp/math/Vector3.hpp"` was added to model/Game.cpp and
 # snake_model was built (2026-09-29), the checkout's absolute path left out.
@@ -213,14 +210,6 @@ def excerpt(lines, first, last, drop=()):
     out = [l for l in lines[i:j + 1] if not any(d in l for d in drop)]
     ind = min(len(l) - len(l.lstrip(" ")) for l in out if l.strip())
     return [l[ind:] for l in out]
-
-
-def uses_threepp(*parts):
-    return any('#include "threepp/' in l for l in source(*parts))
-
-
-def code_rows(lines):
-    return [("code", l) for l in lines]
 
 
 # what a line of tangle/main.cpp does: this film's reading of it, by what it touches
@@ -398,8 +387,6 @@ def board_to_capture(cell, y=0.45):
 WX0, WY0, WX1 = 960, 112, 1880                       # the program's window beside the code
 WBAR = 34
 WY1 = WY0 + WBAR + (WX1 - WX0) * 9 / 16
-DY0 = WY1 + 22                                       # the diagram, under the window
-TYPE_S = 0.12                                        # seconds per code row as it types in
 OPEN_RECT, BIG_RECT, STD_RECT = (1010, 250, 1850), (300, 70, 1620), (WX0, WY0, WX1)
 
 
@@ -471,17 +458,6 @@ class Painter:
                 ov.text(px + w / 2, py + hh / 2, name, size=size, color=C_WARM, alpha=ka, kind="semibold",
                         anchor="mm")
                 px += w + 8
-        # the switch to a new step
-        for key, a, _, lab in self.win:
-            if not (len(key) == 2 and key[0] == "s" and key[1].isdigit()) or a < TL.end("open"):
-                continue
-            fa = alpha * envelope(t, a - 0.05, a + 1.8, 0.2, 0.6)
-            if fa > 0.003:
-                txt = f"STEP {key[1]}  ·  built and running"
-                w = ov.text_width(txt, 22, "semibold") + 48
-                cx, cy = (x0 + x1) / 2, y0 + WBAR + 40
-                ov.panel(cx - w / 2, cy - 22, w, 44, radius=22, fill=0x0d131e, alpha=0.85 * fa)
-                ov.text(cx, cy, txt, size=22, color=C_ACCENT, alpha=fa, kind="semibold", anchor="mm")
         return x0, y0, x1, y1
 
     def to_screen(self, t, cell, y=0.45):
@@ -504,111 +480,10 @@ class Painter:
         ov = self.ov
         ov.title_card(t, *TITLE, C_ACCENT, t_in=0.6, t_out=TL.end("open") - 0.4, size=84)
         self.draw_window(t)
-        self.pills(t)
-        for spec in self.rec["cards"]:
-            self.rows_card(t, *spec)
-        if self.rec.get("diagram"):
-            self.diagram(t)
         for f in self.rec["widgets"]:
             f(self, t)
         ov.captions(t, self.captions)
         ov.summary(t, TL.start("outro"), TL.end("outro"), SUMMARY, FOOTER, C_ACCENT, C_ACCENT, text_dx=300)
-
-    def pills(self, t):
-        if not PILLS:
-            return
-        ov = self.ov
-        a = envelope(t, TL.start(PILLS[0][1][0]) - 0.6, TL.end("end"), 0.6, 0.6)
-        if a <= 0.003:
-            return
-        px = WX0
-        for label, beats in PILLS:
-            seen = t >= TL.start(beats[0]) - 0.1
-            on = any(TL.start(b) <= t < TL.end(b) for b in beats)
-            wpx = ov.text_width(label, 17, "semibold") + 28
-            ov.panel(px, 58, wpx, 34, radius=17, fill=0x3d6b2e if on else 0x223452,
-                     alpha=a * (0.95 if on else 0.55 if seen else 0.3))
-            ov.text(px + wpx / 2, 75, label, size=17, color=TEXT if seen else DIM, alpha=a * (1.0 if seen else 0.45),
-                    kind="semibold", anchor="mm")
-            px += wpx + 8
-
-    def rows_card(self, t, t_in, t_out, x, y, title, rows, hl=None, size=18, lh=24):
-        """A card of source rows typing in from t_in: ('code', text) plain, ('add', text) with a
-        green bar, ('bad', text) with a red one, ('del', text) struck out, ('ctx', text) dim,
-        ('gap', ''). hl(j, t) -> 0..1 highlights row j."""
-        ov = self.ov
-        a = envelope(t, t_in, t_out, 0.8, 0.6)
-        if a <= 0.003:
-            return
-        longest = max(len(r[1]) for r in rows)
-        while size > 13 and longest * ov.text_width("0", size, "mono") + 64 > WX0 - 60 - x:
-            size, lh = size - 1, lh - 1
-        cw = ov.text_width("0", size, "mono")
-        w = max(longest * cw + 64, 560)
-        h = 74 + lh * len(rows)
-        card(ov, x, y, w, h, a, title)
-        t_type = t_in + 0.6
-        for j, (kind, text) in enumerate(rows):
-            if not text.strip():
-                continue
-            yy = y + 58 + j * lh
-            ra = a * smooth(remap(t, t_type + TYPE_S * j, t_type + TYPE_S * j + 0.4))
-            if ra <= 0.003:
-                continue
-            h_j = hl(j, t) if hl else 0.0
-            if h_j > 0.003:
-                ov.panel(x + 12, yy - 1, w - 24, lh, radius=5, fill=0x223452, alpha=0.8 * h_j * ra)
-                ov.panel(x + 12, yy - 1, 4, lh, radius=2, fill=C_WARM, alpha=h_j * ra)
-            if kind == "add":
-                ov.panel(x + 12, yy - 1, 4, lh, radius=2, fill=C_OK, alpha=0.9 * ra)
-            if kind == "del":
-                ra *= 0.55
-                ov.panel(x + 12, yy - 1, 4, lh, radius=2, fill=C_DEL, alpha=0.9 * ra)
-            if kind == "ctx":
-                ra *= 0.45
-            for col, s, c in tokenize(text, "cpp", CPP_KEYWORDS):
-                ov.text(x + 30 + col * cw, yy + lh / 2, s, size=size, color=c, alpha=ra, kind="mono", anchor="lm")
-            if kind == "del":
-                ov.line([(x + 30, yy + lh / 2), (x + 30 + len(text.rstrip()) * cw, yy + lh / 2)], C_DEL, 2.0, ra)
-
-    def diagram(self, t):
-        """Who includes whom, built up beat by beat: the model in the middle, threepp at the edge."""
-        spec = self.rec["diagram"]
-        ov = self.ov
-        a = envelope(t, spec["t0"], TL.end("end") + 0.3, 0.6, 0.6)
-        if a <= 0.003:
-            return
-        y = DY0
-        card(ov, WX0, y, WX1 - WX0, 196, a, "WHO INCLUDES WHOM")
-        boxes = {k: (bx, y + dy, bw, name, t_on) for k, (bx, dy, bw, name, t_on) in spec["boxes"].items()}
-        lit = spec["lit"](t)
-        for k, (bx, by, bw, name, t_on) in boxes.items():
-            ba = a * smooth(remap(t, t_on + 0.2, t_on + 0.8))
-            if ba <= 0.003:
-                continue
-            on = k == lit
-            ov.panel(bx, by - 22, bw, 44, radius=10,
-                     fill=0x3d6b2e if on else (0x1d3354 if k == "threepp" else 0x223452),
-                     alpha=0.95 * ba, outline=C_ACCENT if on else 0x8aa0c0, outline_alpha=0.6 if on else 0.2)
-            ov.text(bx + bw / 2, by, name, size=20, color=TEXT, alpha=ba, kind="semibold", anchor="mm")
-        for k0, k1, label, t_on, color, cut, below in spec["arrows"]:
-            ea = a * smooth(remap(t, t_on, t_on + 0.6))
-            if ea <= 0.003:
-                continue
-            bx0, by0, bw0, _, _ = boxes[k0]
-            bx1, by1, bw1, _, _ = boxes[k1]
-            p0 = (bx0 + bw0 + 4, by0) if bx1 > bx0 else (bx0 - 4, by0)
-            p1 = (bx1 - 6, by1) if bx1 > bx0 else (bx1 + bw1 + 6, by1)
-            mx, my = (p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2
-            if cut:
-                ov.dashed(p0, p1, C_DEL, 2.2, 0.8 * ea, dash=8, gap=6)
-                ov.line([(mx - 9, my - 9), (mx + 9, my + 9)], C_DEL, 3.0, ea)
-                ov.line([(mx - 9, my + 9), (mx + 9, my - 9)], C_DEL, 3.0, ea)
-                ov.text(mx, my + 18, label, size=15, color=C_DEL, alpha=ea, anchor="mm")
-            else:
-                ov.arrow2d(p0, p1, color, 2.2, 10, ea)
-                ov.text(mx, my + (16 if below else -14), label, size=15, color=DIM, alpha=ea, anchor="mm")
-
 
 # ── Part 0c: one picture at a time ────────────────────────────────────────────
 def big_code(ov, x, y, lines, size, alpha, colors=None, lh=None, lang="cpp"):
@@ -970,68 +845,167 @@ def w_end(p, t):
     ov.arrow2d((1275, 450), (1305, 450), DIM, 2.5, 10, ra)
 
 
-# ── Part 0d's widgets ─────────────────────────────────────────────────────────
-def w_recap(p, t):
-    """Part 0d's start: what Part 0c did, then what this film adds."""
-    ov = p.ov
-    x = 40
-    a = envelope(t, cap0("a1") + 0.3, TL.end("recap") - 0.1, 0.6, 0.6)
-    if a > 0.003:
-        card(ov, x, 56, 860, 250, a, "LAST TIME, IN PART 0c")
-        rows = ["the rules in a model of their own, with no threepp", "tested without a window",
-                "threepp back as a view, which only reads the game"]
-        for k, row in enumerate(rows):
-            ra = a * smooth(remap(t, cap0("a1") + 1.2 + 1.2 * k, cap0("a1") + 1.7 + 1.2 * k))
-            ov.circle(x + 50, 56 + 100 + 52 * k, 6, fill=C_OK, alpha=ra)
-            ov.text(x + 72, 56 + 100 + 52 * k, row, size=26, color=TEXT, alpha=ra, anchor="lm")
-    a = envelope(t, cap0("a2") + 0.3, TL.end("recap") - 0.1, 0.6, 0.6)
-    if a > 0.003:
-        card(ov, x, 340, 860, 250, a, "THIS TIME")
-        for k, (row, t_on) in enumerate(zip(["who plays: players behind an interface",
-                                             "events: the game says what happened",
-                                             "more views of one game, and a second game"], p.rec["t_this"])):
-            ra = a * smooth(remap(t, t_on, t_on + 0.5))
-            ov.circle(x + 50, 340 + 100 + 52 * k, 6, fill=C_WARM, alpha=ra)
-            ov.text(x + 72, 340 + 100 + 52 * k, row, size=26, color=TEXT, alpha=ra, anchor="lm")
+# ── Part 0d: one picture at a time ────────────────────────────────────────────
+def dashed_region(ov, x0, y0, x1, y1, label, color, alpha):
+    for q0, q1 in (((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)), ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0))):
+        ov.dashed(q0, q1, color, 2.0, 0.7 * alpha, dash=12, gap=8)
+    ov.text(x0 + 24, y0 + 30, label, size=22, color=color, alpha=alpha, kind="semibold", anchor="lm")
 
 
-def w_ascii(p, t):
-    """What lesson_snake_capture_5 --ascii printed: its latest board."""
-    ov = p.ov
-    a = envelope(t, cap0("w1") + 3.5, TL.end("views") - 0.1, 0.6, 0.6)
-    if a <= 0.003:
-        return
-    board = [l for l in p.streams["s5"].printed(t) if l.startswith("#")][-22:]
-    x, y = 40, 470
-    size, lh = 14, 15
+def centred_code(ov, y, line, size, alpha, colors=None):
     cw = ov.text_width("0", size, "mono")
-    card(ov, x, y, max(23 * cw + 150, 420), 60 + lh * 22, a, "STDOUT  ·  lesson_snake --ascii")
-    for j, line in enumerate(board):
-        ov.text(x + 30, y + 52 + j * lh, line, size=size, color=C_OUT, alpha=a, kind="mono", anchor="lm")
+    x = 960 - len(line) * cw / 2
+    big_code(ov, x, y, [line], size, alpha, colors=colors)
+    return x, cw
 
 
-def w_tree(p, t):
-    ov = p.ov
-    a = envelope(t, TL.start("end") + 0.2, TL.end("end") + 0.4, 0.6, 0.6)
+def w_recap(p, t):
+    """Part 0c's end picture, then what this film adds."""
+    ov, R = p.ov, p.rec
+    a = envelope(t, cap0("a1") - 0.2, cap0("a3") - 0.1, 0.7, 0.6)
+    if a > 0.003:
+        box(ov, 200, 380, 440, 140, "Game", "the rules  ·  no threepp", C_RULE, a)
+        ra = a * smooth(remap(t, cap0("a2") - 0.2, cap0("a2") + 0.5))
+        dashed_region(ov, 820, 300, 1740, 600, "uses threepp", C_DRAW, ra)
+        box(ov, 870, 380, 400, 140, "SnakeView", "the 3D look", C_DRAW, ra)
+        box(ov, 1310, 380, 380, 140, "threepp", "draws", TEXT, ra, fill=0x1d3354)
+        ov.arrow2d((860, 450), (650, 450), DIM, 2.5, 12, ra)
+        ov.text(755, 425, "reads", size=20, color=DIM, alpha=ra, anchor="mm")
+    a = envelope(t, cap0("a3") - 0.1, TL.end("recap") + 0.3, 0.7, 0.7)
+    if a > 0.003:
+        x, y = 460, 170
+        card(ov, x, y, 1000, 420, a, "TODAY")
+        rows = [("1", "who plays", "you, or the computer"), ("2", "events", "the game says what happened"),
+                ("3", "a second game", "one more object")]
+        for k, (n, what, how) in enumerate(rows):
+            ra = a * smooth(remap(t, R["t_today"][k], R["t_today"][k] + 0.5))
+            yy = y + 120 + 100 * k
+            ov.circle(x + 70, yy, 26, fill=0x3d6b2e, alpha=ra)
+            ov.text(x + 70, yy, n, size=28, color=TEXT, alpha=ra, kind="semibold", anchor="mm")
+            ov.text(x + 120, yy - 14, what, size=34, color=TEXT, alpha=ra, kind="semibold", anchor="lm")
+            ov.text(x + 120, yy + 24, how, size=22, color=DIM, alpha=ra, anchor="lm")
+
+
+def w_players(p, t):
+    """Who plays: the question the loop asks, the interface that writes it down, the two players
+    that answer it, and (after the window) where inheritance fits."""
+    ov, R = p.ov, p.rec
+    a = envelope(t, TL.start("players") + 0.2, cap0("c5") - 0.2, 0.7, 0.6)
+    if a > 0.003:
+        # c1: two ways to play
+        ca = a * (1 - smooth(remap(t, cap0("c3") - 0.3, cap0("c3") + 0.3)))
+        if ca > 0.003:
+            ov.text(960, 250, "who plays?", size=44, color=TEXT, alpha=ca, kind="semibold", anchor="mm")
+            box(ov, 460, 360, 420, 130, "you", "on the arrow keys", C_WARM, ca)
+            box(ov, 1040, 360, 420, 130, "the computer", "picks a way", C_WARM,
+                ca * smooth(remap(t, R["t_computer"], R["t_computer"] + 0.5)))
+        # c2: the question, in main's loop
+        qa = a * smooth(remap(t, cap0("c2") + 0.2, cap0("c2") + 0.9))
+        if qa > 0.003:
+            line = R["steer_line"]
+            c0, c1 = line.index("player->next"), line.index("(game))") + 6
+            y = 620 + (170 - 620) * smooth(remap(t, cap0("c3") + 0.3, cap0("c3") + 1.1))
+            x, cw = centred_code(ov, y, line, 30, qa, colors=[(0, c0, c1, C_WARM)])
+            ov.text(x + (c0 + c1) / 2 * cw, y + 50, "which way now?", size=26, color=C_WARM, alpha=qa,
+                    anchor="mm")
+        # c3: the interface
+        ia = a * smooth(remap(t, cap0("c3") + 1.1, cap0("c3") + 1.8))
+        if ia > 0.003:
+            lines = R["ctrl_lines"]
+            card(ov, 560, 290, 800, 70 + 44 * len(lines), ia, "control/Controller.hpp  ·  AN INTERFACE")
+            big_code(ov, 600, 370, lines, 26, ia, lh=44)
+        # c4: the two players answer it
+        pa = a * smooth(remap(t, cap0("c4") + 0.2, cap0("c4") + 0.9))
+        if pa > 0.003:
+            for (x, name, sub, t_on) in ((380, "KeyboardController", "answers with the keys you pressed",
+                                          cap0("c4")),
+                                         (1060, "GreedyAI", "looks at the board, and picks", R["t_picks"])):
+                ba = pa * smooth(remap(t, t_on, t_on + 0.5))
+                box(ov, x, 610, 480, 130, name, sub, C_WARM, ba)
+                ov.arrow2d((x + 240, 604), (x + 240 + (960 - x - 240) * 0.35, 520), DIM, 2.5, 12, ba)
+                ov.text(x + 240 + (960 - x - 240) * 0.2 + (40 if x > 900 else -40), 565, "is a", size=22,
+                        color=DIM, alpha=ba, anchor="mm")
+    # c6: where inheritance fits, beside where it didn't
+    ha = envelope(t, cap0("c6") - 0.1, TL.end("players") - 0.1, 0.7, 0.6)
+    if ha > 0.003:
+        size = 30
+        cw = ov.text_width("0", size, "mono")
+        x = 360
+        big_code(ov, x, 330, [R["trap_line"]], size, ha * 0.55)
+        ov.line([(x - 10, 330), (x + len(R["trap_line"]) * cw + 10, 330)], C_DEL, 3.0, ha * 0.55)
+        ov.text(x, 385, "last time: a snake is not a scene object", size=24, color=C_DEL, alpha=ha * 0.8,
+                anchor="lm")
+        ga = ha * smooth(remap(t, R["t_kind"], R["t_kind"] + 0.5))
+        big_code(ov, x, 520, [R["ai_line"]], size, ga)
+        ov.text(x, 575, "today: the computer player is a Controller", size=24, color=C_OK, alpha=ga, anchor="lm")
+        ov.line([(x - 60, 510), (x - 46, 526), (x - 22, 496)], C_OK, 5.0, ga)
+
+
+def w_events(p, t):
+    """The game says what happened; the view listens and pops a ring (then the window, timed so a
+    ring pops on the word)."""
+    ov, R = p.ov, p.rec
+    a = envelope(t, TL.start("events") + 0.2, cap0("v2") - 0.2, 0.7, 0.6)
     if a <= 0.003:
         return
-    x, y = 40, 56
-    rows = p.rec["tree"]
-    card(ov, x, y, 860, 90 + 34 * len(rows), a, "examples/lesson/snake")
-    for k, (name, desc, tp_) in enumerate(rows):
-        ra = a * smooth(remap(t, TL.start("end") + 0.5 + 0.15 * k, TL.start("end") + 0.9 + 0.15 * k))
-        yy = y + 66 + 34 * k
-        indent = 0 if name.endswith("/") or name == "main.cpp" else 34
-        if tp_ is not None:
-            ov.circle(x + 44 + indent, yy, 6, fill=C_BLUE if tp_ else C_OK, alpha=ra)
-        ov.text(x + 60 + indent, yy, name, size=20, color=TEXT, alpha=ra, kind="mono", anchor="lm")
-        ov.text(x + 440, yy, desc, size=19, color=DIM, alpha=ra, anchor="lm")
-    la = a * smooth(remap(t, TL.start("end") + 2.4, TL.start("end") + 3.0))
-    yy = y + 66 + 34 * len(rows) + 4
-    ov.circle(x + 44, yy, 6, fill=C_OK, alpha=la)
-    ov.text(x + 60, yy, "no threepp", size=19, color=DIM, alpha=la, anchor="lm")
-    ov.circle(x + 230, yy, 6, fill=C_BLUE, alpha=la)
-    ov.text(x + 246, yy, "includes threepp", size=19, color=DIM, alpha=la, anchor="lm")
+    box(ov, 260, 230, 400, 140, "Game", "the snake ate!", C_RULE, a)
+    la = a * smooth(remap(t, R["t_listens"], R["t_listens"] + 0.6))
+    box(ov, 1060, 150, 520, 120, "SnakeView", "listens, and pops a ring", C_DRAW, la)
+    box(ov, 1060, 330, 520, 120, "anyone else", "might listen too", DIM, la * 0.6)
+    ov.arrow2d((670, 290), (1050, 210), C_RULE, 2.5, 12, la)
+    ov.arrow2d((670, 310), (1050, 390), C_RULE, 2.0, 12, la * 0.6)
+    line = R["event_line"]
+    c0 = line.index("game.onEat")
+    c1 = c0 + len("game.onEat")
+    c2 = line.index("view.pop")
+    c3 = line.index("); });") + 1
+    x, cw = centred_code(ov, 620, line, 24, a, colors=[(0, c0, c1, C_RULE), (0, c2, c3, C_DRAW)])
+    ov.text(x + (c0 + c1) / 2 * cw, 670, "when the snake eats...", size=22, color=C_RULE, alpha=a, anchor="mm")
+    ov.text(x + (c2 + c3) / 2 * cw, 670, "...pop a ring at its head", size=22, color=C_DRAW, alpha=a, anchor="mm")
+
+
+def w_rival(p, t):
+    """A class is a blueprint; a second game is a second object."""
+    ov, R = p.ov, p.rec
+    a = envelope(t, TL.start("rival") + 0.2, cap0("r3") - 0.2, 0.7, 0.6)
+    if a <= 0.003:
+        return
+    ov.panel(760, 120, 400, 130, radius=16, fill=0x0d131e, alpha=0.9 * a)
+    for q0, q1 in (((760, 120), (1160, 120)), ((1160, 120), (1160, 250)), ((1160, 250), (760, 250)),
+                   ((760, 250), (760, 120))):
+        ov.dashed(q0, q1, C_RULE, 2.0, 0.8 * a, dash=10, gap=7)
+    ov.text(960, 158, "class Game", size=30, color=C_RULE, alpha=a, kind="semibold", anchor="mm")
+    ov.text(960, 196, "the blueprint", size=20, color=DIM, alpha=a, anchor="mm")
+    for k, (x, name, t_on) in enumerate(((520, "game", R["t_objects"]), (1000, "rival", R["t_objects"] + 0.6))):
+        oa = a * smooth(remap(t, t_on, t_on + 0.5))
+        box(ov, x, 360, 400, 120, name, "an object: a game of its own", C_RULE, oa)
+        ov.arrow2d((960 + (x - 760) * 0.25, 256), (x + 200, 352), DIM, 2.5, 12, oa)
+    ca = a * smooth(remap(t, cap0("r2") + 0.3, cap0("r2") + 1.0))
+    if ca > 0.003:
+        lines = R["rival_lines"]
+        card(ov, 560, 540, 800, 60 + 44 * len(lines), ca, "main.cpp  ·  ONE MORE OF EACH")
+        big_code(ov, 600, 612, lines, 26, ca, lh=44)
+
+
+def w_end_d(p, t):
+    """Game and the computer player need no threepp; the keyboard player and the view use it."""
+    ov = p.ov
+    a = envelope(t, TL.start("end") + 0.2, TL.end("end") + 0.4, 0.7, 0.6)
+    if a <= 0.003:
+        return
+    box(ov, 120, 400, 380, 130, "GreedyAI", "a player  ·  no threepp", C_WARM, a)
+    box(ov, 590, 400, 360, 130, "Game", "the rules  ·  no threepp", C_RULE, a)
+    ov.arrow2d((505, 465), (582, 465), DIM, 2.5, 12, a)
+    ra = a * smooth(remap(t, TL.start("end") + 1.0, TL.start("end") + 1.6))
+    dashed_region(ov, 1060, 250, 1840, 720, "uses threepp", C_DRAW, ra)
+    box(ov, 1110, 300, 400, 120, "KeyboardController", "a player: threepp's keys", C_WARM, ra)
+    box(ov, 1110, 540, 400, 120, "SnakeView", "a view: threepp draws", C_DRAW, ra)
+    box(ov, 1580, 420, 220, 120, "threepp", "", TEXT, ra, fill=0x1d3354)
+    ov.arrow2d((1100, 360), (958, 440), DIM, 2.5, 12, ra)
+    ov.text(1030, 380, "steers", size=20, color=DIM, alpha=ra, anchor="mm")
+    ov.arrow2d((1100, 600), (958, 500), DIM, 2.5, 12, ra)
+    ov.text(1030, 580, "reads", size=20, color=DIM, alpha=ra, anchor="mm")
+    ov.text(545, 440, "steers", size=20, color=DIM, alpha=a, anchor="mm")
 
 
 # ── the stage ─────────────────────────────────────────────────────────────────
@@ -1059,11 +1033,6 @@ def make_streams(scripts, logged=()):
         name = STREAM_OF.get(key) or f"lesson_snake_capture_{s.step}"
         streams[key] = Stream(name, s, log=key in logged, args=["--ascii"] if key in logged else ())
     return streams
-
-
-def hl_on(rows, needle, t_a, t_b):
-    idx = {j for j, (_, l) in enumerate(rows) if needle in l}
-    return lambda j, t: envelope(t, t_a, t_b, 0.4, 0.4) if j in idx else 0.0
 
 
 def setup_c():
@@ -1163,91 +1132,85 @@ def setup_c():
     print(f"[test] {rec['test_name']}: {last}")
     assert out.returncode == 0 and last.startswith("All tests passed")
 
-    rec["cards"] = []
     rec["widgets"] = [w_intro, w_version1, w_version2, w_version3, w_grid, w_build, w_test, w_end]
     rec["rect_keys"] = [(0.0, OPEN_RECT), (TL.end("open") - 0.2, OPEN_RECT), (TL.start("intro") + 1.0, BIG_RECT)]
     rec.update(streams=streams, windows=win, win_alpha=win_alpha)
     return rec
 
 
+def eat_frames(step, script):
+    """The frames on which the snake eats, in a capture of `step` with `script`, read from what
+    the step-5 build prints with --ascii (its board's score): steps 4 and 5 play the same game
+    (step 5 only adds views), so the frames hold for both."""
+    s = KeyScript(script.t0, script.t1, "app", step=5)
+    s.keys = list(script.keys)
+    log = Stream("lesson_snake_capture_5", s, log=True, args=["--ascii"]).log
+    out, score = [], 0
+    for f in sorted(log):
+        for line in log[f]:
+            m = re.search(r"score (\d+)", line)
+            if m and int(m.group(1)) > score:
+                score = int(m.group(1))
+                out.append(f)
+    return out
+
+
 def setup_d():
     rec = {}
     main = source("main.cpp")
-    game_h = source("model", "Game.hpp")
-    ctrl_h, key_h = source("control", "Controller.hpp"), source("control", "KeyboardController.hpp")
+    ctrl_h, ai_h, trap = source("control", "Controller.hpp"), source("control", "GreedyAI.hpp"), \
+        source("trap", "main.cpp")
 
-    t_tab = word_time("c2", "tab", 5.0)
-    t_slide = word_time("k2", "slides", 1.0) - 0.2
+    rec["t_today"] = [word_time("a3", w, d) for w, d in (("who", 2.5), ("tells", 4.5), ("second", 7.0))]
+    rec["t_computer"] = word_time("c1", "computer", 4.0)
+    rec["t_picks"] = word_time("c4", "computer", 3.5)
+    rec["t_kind"] = word_time("c6", "computer", 2.0)
+    rec["t_listens"] = word_time("v1", "anyone", 2.5)
+    rec["t_objects"] = word_time("r1", "objects", 4.0)
+    rec["steer_line"] = next(l.strip() for l in main if "game.steer(player->next(game));" in l)
+    rec["ctrl_lines"] = excerpt(ctrl_h, "class Controller {", "virtual Direction next(const Game& game) = 0;",
+                                drop=("public:", "~Controller", "        \n")) + ["};"]
+    rec["ctrl_lines"] = [l for l in rec["ctrl_lines"] if l.strip()]
+    rec["trap_line"] = next(l for l in trap if l.startswith("class Snake: public Group")).rstrip(" {") + " { ... };"
+    rec["ai_line"] = next(l.strip() for l in ai_h if "class GreedyAI: public Controller" in l).rstrip(" {") + \
+        " { ... };"
+    rec["event_line"] = next(l.strip() for l in main if l.strip().startswith("game.onEat("))
+    rec["rival_lines"] = [next(l.strip() for l in main if l.strip().startswith(k))
+                          for k in ("Game rival(", "SnakeView rivalView(", "GreedyAI rivalAI;")]
+
+    # the windows: the players (keys, then tab on the word), the ring (an eat on the word), two games
+    t_tab = word_time("c5", "tab", 0.8)
+    t_ring = word_time("v2", "ring", 2.2) + 0.15
+    players = KeyScript(cap0("c5") - 1.0, cap1("c5") + 1.0, "app", step=3)
+    players.drive(square(3, 6, 40), until=t_tab - 0.2)
+    players.press_at(t_tab, "TAB")
+    probe = KeyScript(0.0, 40.0, "app", step=4)
+    probe.press(1, "TAB")
+    eats = eat_frames(4, probe)
+    lead = t_ring - (cap0("v2") - 0.6)
+    eat = next(f for f in eats if f / FPS >= lead)
+    events = KeyScript(t_ring - eat / FPS, TL.end("events") + 1.0, "app", step=4)
+    events.press(1, "TAB")
+    print(f"[events] eats on frames {eats[:6]}...; the window starts {eat / FPS:.1f} s before the one on 'ring'")
+    rival = KeyScript(cap0("r3") - 1.5, TL.duration + 0.6, "app", step=6)
+    rival.press(1, "TAB")
+    open_s = KeyScript(0.0, TL.end("open") + 1.2, "app", step=6)
+    open_s.press(1, "TAB")
     win = [("open", 0.0, TL.end("open") + 0.6, "snake"),
-           ("s1", TL.start("recap"), t_slide, "snake, built with STEP=1"),
-           ("s2", t_slide, TL.end("clocks") + 0.6, "snake, built with STEP=2"),
-           ("s3", TL.start("players"), TL.end("players") + 0.6, "snake, built with STEP=3"),
-           ("s4", TL.start("events"), TL.end("events") + 0.6, "snake, built with STEP=4"),
-           ("s5", TL.start("views"), TL.end("views") + 0.6, "snake --ascii, built with STEP=5"),
-           ("s6", TL.start("rival"), TL.duration, "snake, built with STEP=6")]
-    scripts = {key: KeyScript(a, b + 0.6, "app", step=6 if key == "open" else int(key[1])) for key, a, b, _ in win}
-    scripts["open"].press(1, "TAB")
-    for k in ("s1", "s2"):
-        scripts[k].drive(square(3, 6, 40))
-    scripts["s3"].drive(square(3, 6, 40), until=t_tab - 0.2)
-    scripts["s3"].press_at(t_tab, "TAB")
-    for k in ("s4", "s5", "s6"):
-        scripts[k].press(1, "TAB")
-    streams = make_streams(scripts, logged=("s5",))
+           ("players", cap0("c5") - 0.4, cap1("c5") + 0.6, "snake  ·  a player behind an interface"),
+           ("events", cap0("v2") - 0.4, TL.end("events") + 0.6, "snake  ·  the view listens"),
+           ("rival", cap0("r3") - 0.4, TL.duration, "snake  ·  two games")]
+    streams = make_streams({"open": open_s, "players": players, "events": events, "rival": rival})
 
-    ctrl_rows = code_rows(excerpt(ctrl_h, "class Controller {", "virtual Direction next(const Game& game) = 0;") + ["};"])
-    key_h_rows = code_rows(excerpt(key_h, "class KeyboardController:", "std::deque<Direction> presses_;") + ["};"])
-    ev_rows = code_rows(excerpt(game_h, "// anyone may listen", "void onDie(Listener f);"))
-    E = TL.end
-    rec["cards"] = [
-        (TL.start("clocks") + 0.3, E("clocks") - 0.1, 40, 56, "main.cpp  ·  STEP 2  ·  WHAT CHANGES", step_rows(main, 2),
-         None),
-        (TL.start("players") + 0.3, cap0("c2") - 0.1, 40, 56, "control/Controller.hpp", ctrl_rows,
-         hl_on(ctrl_rows, "virtual Direction next", cap0("c1") + 2.5, cap1("c1"))),
-        (cap0("c2"), cap0("c3") - 0.1, 40, 56, "main.cpp  ·  STEP 3  ·  WHAT CHANGES", step_rows(main, 3), None),
-        (cap0("c3"), E("players") - 0.1, 40, 56, "control/KeyboardController.hpp", key_h_rows,
-         hl_on(key_h_rows, "class KeyboardController:", cap0("c3") + 2.0, cap1("c3"))),
-        (TL.start("events") + 0.3, E("events") - 0.1, 40, 56, "model/Game.hpp", ev_rows, None),
-        (TL.start("events") + 1.2, E("events") - 0.1, 40, 250, "main.cpp  ·  STEP 4  ·  WHAT CHANGES",
-         step_rows(main, 4), None),
-        (TL.start("views") + 0.3, E("views") - 0.1, 40, 56, "main.cpp  ·  STEP 5  ·  WHAT CHANGES", step_rows(main, 5),
-         None),
-        (TL.start("rival") + 0.3, E("rival") - 0.1, 40, 56, "main.cpp  ·  STEP 6  ·  WHAT CHANGES", step_rows(main, 6),
-         None),
-    ]
-    rec["tree"] = [("model/", "the rules", None),
-                   ("Vec2i  Snake  Game", "squares, the snake, one tick", uses_threepp("model", "Game.hpp")),
-                   ("view/", "how it looks", None),
-                   ("SnakeView", "3D, a group of meshes", uses_threepp("view", "SnakeView.hpp")),
-                   ("MinimapView", "one pixel per square", uses_threepp("view", "MinimapView.hpp")),
-                   ("AsciiView", "text", uses_threepp("view", "AsciiView.hpp")),
-                   ("control/", "who plays", None),
-                   ("Controller", "the interface", uses_threepp("control", "Controller.hpp")),
-                   ("KeyboardController", "the arrow keys", uses_threepp("control", "KeyboardController.hpp")),
-                   ("GreedyAI", "heads for the apple", uses_threepp("control", "GreedyAI.hpp")),
-                   ("tests/", "the rules, the text view, the AI", uses_threepp("tests", "test_game.cpp")),
-                   ("main.cpp", "wires them together", True)]
-    beats = {"recap": "model", "clocks": "views", "players": "players", "events": "views", "views": "views",
-             "rival": "model"}
-    t_rec = TL.start("recap") + 0.8
-    rec["diagram"] = dict(
-        t0=TL.start("recap") + 0.5,
-        boxes={"tests": (990, 100, 150, "tests", t_rec),
-               "model": (1210, 100, 170, "model", t_rec),
-               "views": (1450, 58, 170, "views", t_rec),
-               "players": (1450, 152, 170, "players", TL.start("players")),
-               "threepp": (1700, 100, 150, "threepp", t_rec)},
-        arrows=[("model", "threepp", "can't include", t_rec, None, True, False),
-                ("tests", "model", "checks", t_rec, 0x8aa0c0, False, False),
-                ("views", "model", "reads", t_rec, C_ACCENT, False, False),
-                ("views", "threepp", "draws with", t_rec, C_BLUE, False, False),
-                ("players", "model", "steers", cap0("c1") + 1.5, C_WARM, False, True),
-                ("players", "threepp", "keys only", cap0("c3") + 2.5, 0x55627a, False, True)],
-        lit=lambda t: next((v for b, v in beats.items() if TL.start(b) <= t < TL.end(b)), None))
-    rec["t_this"] = [word_time("a2", w, d) for w, d in (("plays", 3.0), ("tells", 4.5), ("views", 7.0))]
-    rec["widgets"] = [w_recap, w_ascii, w_tree]
-    rec["rect_keys"] = [(0.0, OPEN_RECT), (TL.end("open") - 0.2, OPEN_RECT), (TL.end("open") + 1.0, STD_RECT)]
-    rec.update(streams=streams, windows=win, win_alpha=lambda t: 1.0)
+    def win_alpha(t):
+        return (1 - smooth(remap(t, TL.end("open") - 0.4, TL.end("open") + 0.4))) + \
+            envelope(t, cap0("c5") - 0.4, cap1("c5") + 0.4, 0.6, 0.6) + \
+            envelope(t, cap0("v2") - 0.4, TL.end("events") + 0.2, 0.6, 0.6) + \
+            envelope(t, cap0("r3") - 0.4, TL.end("rival") + 0.2, 0.6, 0.6)
+
+    rec["widgets"] = [w_recap, w_players, w_events, w_rival, w_end_d]
+    rec["rect_keys"] = [(0.0, OPEN_RECT), (TL.end("open") - 0.2, OPEN_RECT), (TL.end("open") + 1.0, BIG_RECT)]
+    rec.update(streams=streams, windows=win, win_alpha=win_alpha)
     return rec
 
 
@@ -1256,8 +1219,6 @@ def setup(width, height):
     st = Stage(width, height, renderer="gl", fog=(4.0, 14.0))
     st.look((0.0, 1.6, 6.5), (0.0, 0.4, 0.0), 32)
     rec = setup_c() if PART == "c" else setup_d()
-    for spec in rec["cards"]:
-        print(f"[card] {spec[4]}: {len(spec[5])} rows")
     ov = Hud(1920, 1080, math_cache=os.path.join(_HERE, f"{NAME}.math.json"))
     painter = Painter(st, ov, rec)
     streams = rec["streams"]

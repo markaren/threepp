@@ -8,7 +8,7 @@ made with it so far:
 | `threepp_intro.py` | Part 0, *What is threepp?* An introduction for new users, with the code in C++ (217 s) |
 | `first_app.py` | Part 0b, *Your first real app:* hello.cpp grows into an app in eight steps (194 s) |
 | `snake_oo.py` | Part 0c, *threepp is the view:* Snake, written three times, for complete beginners: all in main(), inheriting a Group, and the rules on their own (228 s) |
-| `snake_oo.py --part d` | Part 0d, *Who plays?* The same Snake grows players, events, more views and a second game |
+| `snake_oo.py --part d` | Part 0d, *Who plays?* Snake, part two: players behind an interface, events, and a second game (142 s) |
 | `ik_fr3.py` | Part 1, *What does inverse kinematics actually solve?* (108 s, Franka FR3) |
 | `depth_map.py` | Part 2, *How a robot sees in 3D: from depth pixels to a map* (103 s) |
 | `imu_tilt.py` | Part 3, *Which way is up? How a robot measures its own tilt* (136 s, Range Rover on a PhysX track) |
@@ -202,8 +202,12 @@ sends the rule bars into a `Game` box and the snake's-look bars into a `SnakeVie
 those files' own lines; the window, camera and loop stay, and become version three's `main()`. Then
 one game read by two views (`AsciiView` as text, with no threepp, and `SnakeView` in 3D), the
 rules' own build, and one test.
-Part 0d carries on with the finished app's later steps. `tangle/` is Snake written the Part 0b way (all in
-`main()`, the meshes as the game's state), `trap/` the usual first try at objects (`class Snake :
+Part 0d is made the same way: who plays (the question the loop asks, the `Controller` interface, the
+keyboard and the computer answering it, and where inheritance does fit), events (the game says the
+snake ate, and the view pops a ring, on a meal timed to the word from the step-5 build's printed
+score), and a second game as a second object of the same class.
+
+`tangle/` is Snake written the Part 0b way (all in `main()`, the meshes as the game's state), `trap/` the usual first try at objects (`class Snake :
 public Group`), and the finished app splits the rules (`model/`, a library that doesn't link
 threepp, so a threepp `#include` there fails to compile) from the looks (`view/`) and the players
 (`control/`, behind a `Controller` interface). `main.cpp` only wires them together, in six steps
