@@ -1328,7 +1328,8 @@ def build_blender(spec, parts, hydro):
     jet = new_object("jet", body, mats, root, T(ox, oy, 0.0))
     st = J["steering"]
     new_object("jet_steering", steer, mats, jet, T(st["pivot_x"] - ox, 0.0, 0.0),
-               props={"axis": "+Y", "limit_deg": st["limit_deg"], "positive": "nozzle exit swings to port, boat turns to port"})
+               props={"axis": "+Y", "limit_deg": st["limit_deg"], "positive": "nozzle exit swings to starboard, the stern is pushed to port, "
+                                                   "the boat turns to starboard"})
     rb = J["reverse_bucket"]
     new_object("jet_reverse_bucket", bucket, mats, jet, T(rb["pivot"][0] - ox, rb["pivot"][1] - oy, 0.0),
                props={"axis": "+Z", "limit_deg": rb["limit_deg"], "rest": "raised (ahead)"})

@@ -128,7 +128,7 @@
   },
   "propulsion": {
     "waterjet": {
-      "note": "Hamilton-type waterjet on the transom centreline under the stern platform; the nozzle sits between the collar tails. Node jet_steering turns about its local +Y, node jet_reverse_bucket about its local +Z.",
+      "note": "Hamilton-type waterjet on the transom centreline under the stern platform; the nozzle sits between the collar tails. Node jet_steering turns about its local +Y (positive swings the exit to starboard and turns the boat to starboard), node jet_reverse_bucket about its local +Z.",
       "axis_y": 0.16,
       "flange": {"x": -2.18, "radius": 0.16, "thickness": 0.02},
       "body": {"x_range": [-2.5, -2.18], "radius": [0.12, 0.14]},
