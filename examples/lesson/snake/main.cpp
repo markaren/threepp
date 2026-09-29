@@ -92,7 +92,9 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
 
 #if STEP >= 4
     game.onEat([&](const Game& g) { view.pop(g.snake().head()); });
-    game.onDie([](const Game& g) { std::cout << "game over, score " << g.score() << std::endl; });
+    game.onDie([](const Game& g) {
+        std::cout << "game over, score " << g.score() << std::endl;
+    });
 #endif
 
 #if STEP >= 5

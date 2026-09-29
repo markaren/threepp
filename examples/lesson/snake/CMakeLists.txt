@@ -18,6 +18,15 @@ foreach (name tangle trap)
     endif ()
     set_target_properties("lesson_snake_${name}_capture" PROPERTIES EXCLUDE_FROM_ALL TRUE)
 endforeach ()
+# the trap with its Group moved by one line elsewhere (-DLESSON_MOVE_GROUP): drawn and rules part ways
+add_example(NAME "lesson_snake_trap_moved_capture" SOURCES trap/main.cpp)
+target_compile_definitions(lesson_snake_trap_moved_capture PRIVATE LESSON_CAPTURE LESSON_MOVE_GROUP)
+if (MSVC)
+    target_compile_options(lesson_snake_trap_moved_capture PRIVATE "/FI${LESSON_CAPTURE_HPP}")
+else ()
+    target_compile_options(lesson_snake_trap_moved_capture PRIVATE "SHELL:-include ${LESSON_CAPTURE_HPP}")
+endif ()
+set_target_properties(lesson_snake_trap_moved_capture PROPERTIES EXCLUDE_FROM_ALL TRUE)
 endif ()
 
 # The rules are a library of their own. It doesn't link threepp, so a threepp

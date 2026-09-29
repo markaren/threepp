@@ -368,14 +368,10 @@ class Stream:
             self.close_proc()
             self.calls = np.loadtxt(self.stats_path).reshape(-1, 2)
             return
-        env = dict(os.environ, LESSON_SCRIPT=self.script_path, LESSON_OUT=self.script_path[:-4] + ".rgb",
+        env = dict(os.environ, LESSON_SCRIPT=self.script_path, LESSON_OUT=os.devnull,
                    LESSON_STATS=self.stats_path, LESSON_MARK_FRAMES="1")
         out = subprocess.run([self.exe] + self.args, env=env, cwd=os.path.dirname(self.exe), capture_output=True,
                              check=True).stdout.decode("utf-8", "replace")
-        try:
-            os.remove(self.script_path[:-4] + ".rgb")
-        except OSError:
-            pass
         self.calls = np.loadtxt(self.stats_path).reshape(-1, 2)
         self.log, k = {}, -1
         for line in out.splitlines():

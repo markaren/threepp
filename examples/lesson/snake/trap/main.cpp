@@ -117,6 +117,9 @@ int main() {
 
     auto snake = std::make_shared<Snake>();
     scene.add(snake);
+#ifdef LESSON_MOVE_GROUP
+    snake->position.x = 3;// one line, anywhere: a Group can be moved by anyone
+#endif
     auto apple = std::make_shared<Apple>();
     scene.add(apple);
 

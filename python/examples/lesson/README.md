@@ -1,12 +1,13 @@
 # lesson: explainer videos made with threepp
 
-`lesson.py` is a small toolkit for YouTube-style teaching clips. Seven lessons are
+`lesson.py` is a small toolkit for YouTube-style teaching clips. Eight lessons are
 made with it so far:
 
 | | |
 |---|---|
 | `threepp_intro.py` | Part 0, *What is threepp?* An introduction for new users, with the code in C++ (217 s) |
 | `first_app.py` | Part 0b, *Your first real app:* hello.cpp grows into an app in eight steps (194 s) |
+| `snake_oo.py` | Part 0c, *threepp is the view:* Snake, from one main() to a model, views and players (224 s) |
 | `ik_fr3.py` | Part 1, *What does inverse kinematics actually solve?* (108 s, Franka FR3) |
 | `depth_map.py` | Part 2, *How a robot sees in 3D: from depth pixels to a map* (103 s) |
 | `imu_tilt.py` | Part 3, *Which way is up? How a robot measures its own tilt* (136 s, Range Rover on a PhysX track) |
@@ -30,7 +31,7 @@ python ik_fr3.py --no-voice                                  # a silent film
 python threepp_intro.py --remeasure                          # measure the narration again (lessons paced by it)
 ```
 
-`threepp_intro.py`, `first_app.py`, `depth_map.py`, `imu_tilt.py`, `rocket_pid.py` and `warp_threepp.py` take the same flags. Output goes to `lesson_out/` in the current
+`threepp_intro.py`, `first_app.py`, `snake_oo.py`, `depth_map.py`, `imu_tilt.py`, `rocket_pid.py` and `warp_threepp.py` take the same flags. Output goes to `lesson_out/` in the current
 directory unless `--out` / `--outdir` say otherwise.
 
 Needs threepp (GL renderer only, no Vulkan), numpy, threepp_data (for the FR3
@@ -186,6 +187,29 @@ for that frame:
 
 Part 0b needs those capture targets built (`cmake --build <dir> --target lesson_app_capture_0 ...`;
 set `LESSON_APP_BIN` if they are not in a `cmake-build-*/bin` beside the repo).
+
+**Part 0c.** The programs are in `examples/lesson/snake/`, for students who know Part 0b and now
+need to structure a program that grows. `tangle/` is Snake written the Part 0b way (all in
+`main()`, the meshes as the game's state), `trap/` the usual first try at objects (`class Snake :
+public Group`), and the finished app splits the rules (`model/`, a library that doesn't link
+threepp, so a threepp `#include` there fails to compile) from the looks (`view/`) and the players
+(`control/`, behind a `Controller` interface). `main.cpp` only wires them together, in six steps
+(`-DLESSON_SNAKE_STEP=n`). The code on screen is read out of those files, step rows as in Part 0b.
+Every window is the program's own output: each program and step is a capture build
+(`lesson_snake_*_capture`, not built by default) with `capture.hpp` force-included, driven by
+scripted keys through the canvas's key path (the keys are drawn under the window). The text board
+is what the step-5 build printed with `--ascii`, matched to its frames (`LESSON_MARK_FRAMES`); the
+test run is `test_snake`'s own, run while the film is made; the compile error is MSVC's, from
+adding a threepp include to `model/Game.cpp` (only the checkout's absolute path is left out). The
+tangle and the trap are compared frame by frame before the film shows "same frames":
+
+```
+[same game] tangle and trap frames match (every 30th of 1129)
+[tests] 15 test cases, All tests passed (260 assertions in 15 test cases)
+```
+
+`test_snake` also plays a whole seeded AI game on a 10 x 10 board (score 30, the same under MSVC
+and g++). Part 0c needs the `lesson_snake_*` capture targets and `test_snake` built.
 
 **Part 4.** A 6 t, 12 m hopper is a PhysX convex body. Its engine pushes along the body
 (`RigidBody.add_force_at_pos` at the nozzle) with up to 1.5 times its weight, no lower than
