@@ -53,8 +53,6 @@ C_OK = 0x5ee27a
 C_DEL = 0xef476f
 C_OUT = 0xa6e3a1
 
-CPP_KEYWORDS = lesson.KEYWORDS["cpp"] | {"for", "if", "else", "bool", "true", "false", "nullptr", "static", "void"}
-
 # how the narrator says the names on screen: Part 0's table, then this film's own
 WORDS = {"glTF": "G L T F", "OBJ": "O B J", "STL": "S T L", "URDF": "U R D F", "C++": "C plus plus",
          "NumPy": "Num Pie", "CMake": "C Make", "FetchContent": "Fetch Content", "OpenGL": "Open G L",
@@ -614,7 +612,7 @@ class Painter:
                 ov.panel(x + 12, yy - 1, 4, lh, radius=2, fill=C_DEL, alpha=0.9 * ra)
             if kind == "ctx":
                 ra *= 0.45
-            toks = tokenize(text, "cpp", CPP_KEYWORDS)
+            toks = tokenize(text, "cpp")
             for col, s, c in toks:
                 ov.text(x + 30 + col * cw, yy + lh / 2, s, size=size, color=c, alpha=ra, kind="mono", anchor="lm")
             if kind == "del":
@@ -659,7 +657,7 @@ class Painter:
             return
         card(ov, x, y, w, 60 + lh * len(rows), ca, "IN THE LOOP, THE SLOW WAY  ·  -DSEPARATE_MESHES")
         for j, text in enumerate(rows):
-            for col, s, c in tokenize(text, "cpp", CPP_KEYWORDS):
+            for col, s, c in tokenize(text, "cpp"):
                 ov.text(x + 30 + col * cw, y + 46 + j * lh + lh / 2, s, size=size, color=c, alpha=ca, kind="mono",
                         anchor="lm")
 
