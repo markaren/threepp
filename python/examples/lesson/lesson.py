@@ -1709,6 +1709,56 @@ def house_rule_warnings(captions):
 VOICE_LEAD, VOICE_TAIL = 0.15, 0.45     # speech starts this far into a caption, and ends this far before its end
 
 
+def _contact_sheet(thumbs, cols=6):
+    th, tw = thumbs[0].shape[:2]
+    rows = (len(thumbs) + cols - 1) // cols
+    sheet = np.zeros((rows * th, cols * tw, 3), np.uint8)
+    for k, im in enumerate(thumbs):
+        y, x = (k // cols) * th, (k % cols) * tw
+        sheet[y:y + th, x:x + tw] = im
+    return sheet
+
+
+def _write_gate(out, name, captions, clips, narr, tm, duration, film_duration, frame, W, every):
+    """`--gate DIR`: what a refactor of the toolkit must leave alone, from one setup().
+    <name>.srt, the captions on the film clock (as --srt writes them); <name>.voice.json,
+    every caption's clocks, text and spoken text, and every hold; <name>_sheet.png, one frame
+    every `every` s (as --sheet makes it); and stills/, a full-size frame at the middle of
+    every caption. Frames are rendered in film order, so a lesson that streams its pictures
+    (warp_threepp's subprocess) never has to rewind."""
+    os.makedirs(os.path.join(out, "stills"), exist_ok=True)
+    write_srt(os.path.join(out, f"{name}.srt"), [(tm.film(a), tm.film(b), txt) for a, b, txt, *_ in captions])
+    words = narr.words if narr is not None else None
+    record = {
+        "voice": narr.voice if narr is not None else None,
+        "duration": duration, "film_duration": film_duration,
+        "captions": [{"start": a, "end": b, "film_start": tm.film(a), "film_end": tm.film(b),
+                      "text": txt, "drawn": bool(rest[0]) if rest else True, "spoken": spoken(txt, words),
+                      "samples": None if clips is None else int(len(clips[k]))}
+                     for k, (a, b, txt, *rest) in enumerate(captions)],
+        "holds": [[a, d, list(tag) if isinstance(tag, tuple) else tag] for a, d, tag in tm.holds],
+    }
+    with open(os.path.join(out, f"{name}.voice.json"), "w", encoding="utf-8") as fh:
+        json.dump(record, fh, indent=1, ensure_ascii=False, default=repr)
+
+    f = max(1, W // 480)
+    jobs = [(float(t), "sheet", k) for k, t in enumerate(np.arange(0.5, film_duration, every))]
+    jobs += [(0.5 * (tm.film(a) + tm.film(b)), "still", k) for k, (a, b, *_) in enumerate(captions)]
+    thumbs = {}
+    t0 = time.time()
+    for n, (t, kind, k) in enumerate(sorted(jobs)):
+        img = frame(t)
+        if kind == "sheet":
+            thumbs[k] = shrink(img, f)
+        else:
+            write_png(os.path.join(out, "stills", f"{name}_cap{k:02d}_{t:07.2f}.png"), img)
+        if n % 10 == 0:
+            print(f"[gate] {n}/{len(jobs)} frames, {time.time() - t0:.0f}s", flush=True)
+    write_png(os.path.join(out, f"{name}_sheet.png"), _contact_sheet([thumbs[k] for k in sorted(thumbs)]))
+    print(f"[gate] wrote {out}: {len(captions)} captions, {len(tm.holds)} holds, "
+          f"{len(thumbs)} sheet frames, {len(captions)} stills ({time.time() - t0:.0f}s)")
+
+
 def run(name, duration, setup, fps=60):
     """The command line every lesson shares.
 
@@ -1729,6 +1779,7 @@ def run(name, duration, setup, fps=60):
         --stills 5,15,40      single frames, <outdir>/<name>_still_<t>.png
         --sheet [--every S]   contact sheet, one frame every S seconds from 0.5 s
         --srt                 the captions as <outdir>/<name>.srt
+        --gate DIR            a regression record for refactors, into DIR (see `_write_gate`)
     Times on the command line are film times.
     """
     ap = argparse.ArgumentParser()
@@ -1744,6 +1795,8 @@ def run(name, duration, setup, fps=60):
     ap.add_argument("--from", dest="t_from", type=float, default=0.0)
     ap.add_argument("--to", dest="t_to", type=float, default=None)
     ap.add_argument("--fps", type=int, default=None)
+    ap.add_argument("--gate", default=None, metavar="DIR",
+                    help="write the captions, the spoken lines and holds, a sheet and a still per caption to DIR")
     args = ap.parse_args()
 
     W, H = (960, 540) if args.preview else (1920, 1080)
@@ -1754,7 +1807,7 @@ def run(name, duration, setup, fps=60):
     os.makedirs(args.outdir, exist_ok=True)
 
     tm = TimeMap(getattr(render, "holds", ()))
-    clips = None
+    clips = narr = None
     if not args.no_voice:
         narr = Narration(args.voice, cache_dir=os.path.join(args.outdir, "voice_cache"))
         t0 = time.time()
@@ -1775,6 +1828,9 @@ def run(name, duration, setup, fps=60):
         ts, hold = tm.script(t)
         return render(ts, hold) if takes_hold else render(ts)
 
+    if args.gate:
+        _write_gate(args.gate, name, captions, clips, narr, tm, duration, film_duration, frame, W, args.every)
+        return
     if args.srt:
         p = os.path.join(args.outdir, f"{name}.srt")
         write_srt(p, [(tm.film(a), tm.film(b), txt) for a, b, txt, *_ in captions])
@@ -1790,15 +1846,8 @@ def run(name, duration, setup, fps=60):
     if args.sheet:
         f = max(1, W // 480)
         thumbs = [shrink(frame(float(t)), f) for t in np.arange(0.5, film_duration, args.every)]
-        cols = 6
-        th, tw = thumbs[0].shape[:2]
-        rows = (len(thumbs) + cols - 1) // cols
-        sheet = np.zeros((rows * th, cols * tw, 3), np.uint8)
-        for k, im in enumerate(thumbs):
-            y, x = (k // cols) * th, (k % cols) * tw
-            sheet[y:y + th, x:x + tw] = im
         p = os.path.join(args.outdir, f"{name}_sheet.png")
-        write_png(p, sheet)
+        write_png(p, _contact_sheet(thumbs))
         print("saved", p, f"({len(thumbs)} frames, every {args.every} s from 0.5 s, row-major)")
         return
 

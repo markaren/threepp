@@ -10,6 +10,7 @@ showcase; each is a measurement that a claim somewhere else rests on.
 | `sensor_audit.py` | Whether every sensor stream of one scripted scene replays bit for bit across fresh processes and GPUs (the paper's replay audit, against the pip wheel). |
 | `multiview_bench.py` | E2: the same-instant multi-view triptych and the frame-time curve for 1 to 8 views against sequential renders. |
 | `tendon_probe.py` | What PhysX articulation tendons actually do on a two-link finger; the numbers behind `TendonCable`. |
+| `lesson_gate.py` | Whether a change to the lesson toolkit changes a lesson film: captions, spoken lines and holds must match exactly, and frames may differ no more than two runs of one tree do. |
 
 ## Run
 
@@ -19,8 +20,10 @@ showcase; each is a measurement that a claim somewhere else rests on.
     python python/examples/probes/sensor_audit.py --compare a.json b.json     # exit 0 = bit-identical
     python python/examples/probes/multiview_bench.py --out e2/
     python python/examples/probes/tendon_probe.py --only E4
+    python python/examples/probes/lesson_gate.py --save base1          # then --compare base1 after --null base1 base2
 
 `smoke_test.py` and `idun_egl_smoke.py` put `python/` on `sys.path` and so run the in-tree build;
+`lesson_gate.py` runs the lessons, which do the same;
 the other three import whatever `threepp` is installed (the wheel, an editable install, or
 `PYTHONPATH=python`). `sensor_audit.py` is also a module: `../netpen/warp_netpen.py` imports it
 for its manifest format, and `../colab/make_sensor_audit_notebook.py` embeds it verbatim in the
