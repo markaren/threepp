@@ -49,32 +49,44 @@
    "said": "Version two. A common first try is a Snake class that inherits from three p p's Group."
   },
   "p2": {
-   "s": 4.45,
-   "said": "That says: a snake is a picture. But a snake is not a picture."
+   "s": 6.88,
+   "said": "A Group is a thing in three p p's 3D scene. So this says: the snake is a 3D scene object."
   },
   "p3": {
-   "s": 3.42,
-   "said": "A snake has a picture. And something else can draw it."
+   "s": 3.65,
+   "said": "But a snake is a piece of the game, not a scene object."
+  },
+  "p4": {
+   "s": 5.2,
+   "said": "It has a 3D look. And another class, Snake View, can own that look and draw it."
   },
   "m1": {
    "s": 4.5,
    "said": "Version three. The rules move into a class of their own, called Game."
   },
   "m2": {
-   "s": 3.55,
-   "said": "The drawing moves into another class, called Snake View."
+   "s": 4.35,
+   "said": "The snake's 3D look moves into another class, called Snake View."
   },
   "m3": {
-   "s": 4.53,
-   "said": "Every step, main moves the game on, and then asks the view to draw it."
+   "s": 4.08,
+   "said": "What's left stays in main. It sets up the window and the camera."
+  },
+  "m4": {
+   "s": 4.5,
+   "said": "And every step, main moves the game on, then asks the view to draw it."
   },
   "g1": {
-   "s": 5.97,
-   "said": "Inside Game, the snake is just squares on a grid. Here is the same game, printed as text."
+   "s": 5.0,
+   "said": "Game only knows squares on a grid. A view turns those squares into a picture."
   },
   "g2": {
-   "s": 6.2,
-   "said": "three p p paints that grid in 3D. The grid is the truth. The 3D is a picture of it."
+   "s": 6.97,
+   "said": "This view prints them as text, with no three p p at all. This one draws them in 3D, with three p p."
+  },
+  "g3": {
+   "s": 4.05,
+   "said": "One game, two pictures. The rules don't care who is watching."
   },
   "b1": {
    "s": 5.58,
@@ -97,8 +109,8 @@
    "said": "It passes, without opening a single window."
   },
   "z1": {
-   "s": 5.67,
-   "said": "The rules live in one place. The picture lives in another. three p p only draws."
+   "s": 7.8,
+   "said": "The rules live in Game, with no three p p. The 3D look lives in Snake View, and only the view uses three p p."
   },
   "z2": {
    "s": 2.4,

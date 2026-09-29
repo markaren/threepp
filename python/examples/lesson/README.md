@@ -7,7 +7,7 @@ made with it so far:
 |---|---|
 | `threepp_intro.py` | Part 0, *What is threepp?* An introduction for new users, with the code in C++ (217 s) |
 | `first_app.py` | Part 0b, *Your first real app:* hello.cpp grows into an app in eight steps (194 s) |
-| `snake_oo.py` | Part 0c, *threepp is the view:* Snake, written three times, for complete beginners: all in main(), inheriting a Group, and the rules on their own (203 s) |
+| `snake_oo.py` | Part 0c, *threepp is the view:* Snake, written three times, for complete beginners: all in main(), inheriting a Group, and the rules on their own (228 s) |
 | `snake_oo.py --part d` | Part 0d, *Who plays?* The same Snake grows players, events, more views and a second game |
 | `ik_fr3.py` | Part 1, *What does inverse kinematics actually solve?* (108 s, Franka FR3) |
 | `depth_map.py` | Part 2, *How a robot sees in 3D: from depth pixels to a map* (103 s) |
@@ -196,9 +196,12 @@ sentences with room between them. It opens on the game itself (the snake, the ap
 labelled as the narrator names them, on the squares the scripted route puts them) and says what it
 will do. Version one's `main()` is drawn one bar per line, coloured by its job (the rules green, the
 drawing blue, both where a line does both; the colours are the script's reading of what each line
-touches), then one line is read up close. Version two is "is a" against "has a", in two pictures.
-Version three sends the bars into a `Game` box and a `SnakeView` box that hold those files' own
-lines. Then the game as text beside the 3D picture of it, the rules' own build, and one test.
+touches), then one line is read up close. Version two is "is a" against "has a", in two pictures
+(a Group is a 3D scene object; a snake is a piece of the game that has a 3D look). Version three
+sends the rule bars into a `Game` box and the snake's-look bars into a `SnakeView` box, which hold
+those files' own lines; the window, camera and loop stay, and become version three's `main()`. Then
+one game read by two views (`AsciiView` as text, with no threepp, and `SnakeView` in 3D), the
+rules' own build, and one test.
 Part 0d carries on with the finished app's later steps. `tangle/` is Snake written the Part 0b way (all in
 `main()`, the meshes as the game's state), `trap/` the usual first try at objects (`class Snake :
 public Group`), and the finished app splits the rules (`model/`, a library that doesn't link
