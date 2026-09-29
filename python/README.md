@@ -158,7 +158,6 @@ self-contained; what they share lives in [`examples/warp_common.py`](https://git
 | [`examples/warp_round_trip.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_round_trip.py) | Warp both ways round: a cloth and sparks written into buffers the Vulkan renderer shares, and the finished frame read back in place by a Warp kernel that turns it into an event camera. |
 | [`examples/warp_cloth_toss.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_cloth_toss.py) | Can a cloth throw a ball? The spike behind the toss demo. |
 | [`examples/warp_cloth_catch.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_cloth_catch.py) | Four arms catch a cannonball in a cloth, throw it up, and four drones net it. |
-| [`examples/warp_squishy_ball.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_squishy_ball.py) | A pressurised shell: Verlet predict, volume constraint, normals. |
 | [`examples/warp_fluid.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_fluid.py) | A PBF liquid surfaced by marching cubes. |
 | [`examples/warp_water_balloon.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_water_balloon.py) | A water balloon and a needle — the shell tears and the water leaves. |
 | [`examples/warp_hydraulic_press.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_hydraulic_press.py) | A chrome sphere crushed by a hydraulic press in a Cornell box. |
