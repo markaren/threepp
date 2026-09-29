@@ -9,6 +9,10 @@
 #include "threepp/core/Object3D.hpp"
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
+#include "threepp/materials/MeshLambertMaterial.hpp"
+#include "threepp/materials/MeshPhongMaterial.hpp"
+#include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/materials/MeshToonMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Matrix4.hpp"
@@ -711,6 +715,19 @@ void OverlayPass::setPaneEnvironment(VkImageView view, VkSampler sampler, float 
     paneEnvView_     = view;
     paneEnvSampler_  = sampler;
     paneEnvExposure_ = exposure;
+}
+
+const Mesh* OverlayPass::litMeshInLastRecord() const {
+    for (const auto& md : scratch_->meshes) {
+        const Material* mat = md.mesh->material().get();
+        if (dynamic_cast<const MeshStandardMaterial*>(mat) ||
+            dynamic_cast<const MeshPhongMaterial*>(mat) ||
+            dynamic_cast<const MeshLambertMaterial*>(mat) ||
+            dynamic_cast<const MeshToonMaterial*>(mat)) {
+            return md.mesh;
+        }
+    }
+    return nullptr;
 }
 
 void OverlayPass::createPaneSkyPipeline() {

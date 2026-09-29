@@ -354,6 +354,32 @@ def test_top_down_view_keeps_the_nearest_surface(vk_renderer, projection):
     assert _dominant(at(-1.25)) == "grey", f"background: {at(-1.25)}"
 
 
+def test_ortho_overlay_warns_about_a_lit_scene(vk_renderer, capfd):
+    # With the flag off, a standalone ortho render is the 2D overlay, which
+    # draws every mesh as a flat fill. MeshBasicMaterial art is what that path
+    # is for and stays quiet; a lit material means the camera was a 3D view,
+    # and the renderer says which flag to set. The hint prints once per process.
+    cam = tp.OrthographicCamera(-W / H, W / H, 1, -1, 0.1, 100)
+    cam.position.set(0, 0, 10)
+    cam.look_at(0, 0, 0)
+    flat = tp.Scene()
+    flat.add(tp.Mesh(tp.PlaneGeometry(1, 1), tp.MeshBasicMaterial()))
+    lit = tp.Scene()
+    lit.add(tp.Mesh(tp.BoxGeometry(), tp.MeshStandardMaterial()))
+    try:
+        vk_renderer.orthographic_scene_rendering = False
+        capfd.readouterr()
+        vk_renderer.render(flat, cam)
+        err = capfd.readouterr().err
+        assert "setOrthographicSceneRendering" not in err, err
+        vk_renderer.render(lit, cam)
+        err = capfd.readouterr().err
+        assert "setOrthographicSceneRendering(true)" in err, \
+            "no hint was printed; stderr was:\n" + err
+    finally:
+        vk_renderer.orthographic_scene_rendering = True
+
+
 def _ocean_scene():
     scene = tp.Scene()
     scene.add(tp.AmbientLight(0xffffff, 1.0))

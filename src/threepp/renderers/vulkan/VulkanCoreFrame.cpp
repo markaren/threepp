@@ -1294,6 +1294,26 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
                     // frame-already-in-flight path below.
                     overlayPass_->record(cmdBuffers[currentFrame], currentFrame, frameImageIndex_,
                                          scene, camera, /*screenSpaceOnly=*/false);
+                    // A lit material drawn as a flat fill is never what the
+                    // caller asked for: it means the ortho camera was a 3D view
+                    // and the flag was not set. The picture gives no hint (the
+                    // last mesh added simply wins), so say so, once. Not on the
+                    // HUD-over-an-open-frame branch below: the flag cannot
+                    // change that one, so the advice would be wrong there.
+                    static bool warned = false;
+                    if (!warned) {
+                        if (const Mesh* lit = overlayPass_->litMeshInLastRecord()) {
+                            warned = true;
+                            std::cerr << "[VulkanRenderer] render() with an OrthographicCamera drew "
+                                         "the scene as a 2D overlay: unlit fills in scene order, no "
+                                         "depth test, no background. Mesh '"
+                                      << (lit->name.empty() ? lit->type() : lit->name)
+                                      << "' has a lit material, so this camera is probably a 3D "
+                                         "view - call setOrthographicSceneRendering(true) "
+                                         "(Python: orthographic_scene_rendering = True). "
+                                         "Printed once.\n";
+                        }
+                    }
                 } else {
 #if defined(THREEPP_WITH_DLSS)
                     // Self-heal a sticky NGX evaluate failure (0xBAD00005 after

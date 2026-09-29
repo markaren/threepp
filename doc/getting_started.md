@@ -504,7 +504,9 @@ OrthographicCamera ortho(left, right, top, bottom, near, far);
 > renderer.setOrthographicSceneRendering(true);
 > ```
 > and the frame takes the same deferred path a perspective camera does (lights, shadows,
-> GI, reflections, fog, tone mapping). Depth of field is skipped under it — a parallel
+> GI, reflections, fog, tone mapping). Leave it off and render a lit material (Lambert,
+> Phong, Standard, Physical, Toon) on the 2D path, and the renderer prints a one-time hint
+> naming this call. Depth of field is skipped under it — a parallel
 > projection has no lens. The HUD pattern (a perspective `render()`, then a second
 > `render()` with an ortho camera over a HUD scene) is unaffected either way.
 > `GLRenderer` never had the ambiguity and needs nothing. The Python

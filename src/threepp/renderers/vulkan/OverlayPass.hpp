@@ -32,6 +32,7 @@
 namespace threepp {
     class Object3D;
     class Camera;
+    class Mesh;
 }
 
 namespace threepp::vulkan {
@@ -108,6 +109,13 @@ namespace threepp::vulkan {
         // Call before record(); the view must outlive the frame (it does —
         // env swaps go through the retire queue).
         void setPaneEnvironment(VkImageView view, VkSampler sampler, float exposure);
+
+        // A mesh the last record() drew whose material responds to lights
+        // (Lambert, Phong, Standard/Physical, Toon), or nullptr. The flat path
+        // ignores lighting, so such a mesh in a standalone ortho render means
+        // the caller wanted a 3D view; the renderer warns about it. Valid until
+        // the next record(), while the scene it came from is alive.
+        [[nodiscard]] const Mesh* litMeshInLastRecord() const;
 
     private:
         // Cached uploaded sprite atlas. Keyed on Texture*; liveCheck detects
