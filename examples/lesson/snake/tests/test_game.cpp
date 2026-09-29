@@ -25,6 +25,7 @@ TEST_CASE("the snake moves one cell per tick") {
 
     CHECK(game.snake().head() == head + Vec2i{1, 0});
     CHECK(game.snake().length() == 3);
+    CHECK(game.ticks() == 1);
 }
 
 TEST_CASE("the snake can't turn back onto itself") {
@@ -75,6 +76,7 @@ TEST_CASE("hitting the wall ends the game") {
     CHECK_FALSE(game.alive());
     CHECK(game.snake().head() == Vec2i{9, 5});
     CHECK(deaths == 1);
+    CHECK(game.ticks() == 1);
 }
 
 TEST_CASE("biting itself ends the game") {

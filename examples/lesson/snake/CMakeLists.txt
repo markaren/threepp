@@ -26,6 +26,33 @@ add_library(snake_model STATIC model/Snake.cpp model/Game.cpp)
 target_include_directories(snake_model PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_features(snake_model PUBLIC cxx_std_20)
 
+# the finished app: rules in snake_model, looks in view/, players in control/
+set(SNAKE_APP_SOURCES main.cpp
+        view/SnakeView.cpp view/AsciiView.cpp view/MinimapView.cpp
+        control/KeyboardController.cpp control/GreedyAI.cpp)
+add_example(NAME "lesson_snake" SOURCES ${SNAKE_APP_SOURCES})
+target_link_libraries(lesson_snake PRIVATE snake_model)
+
+# build lesson_snake as it stood after one step: cmake -DLESSON_SNAKE_STEP=3 (1..6; empty = the whole app)
+set(LESSON_SNAKE_STEP "" CACHE STRING "lesson_snake as it stood after this step, 1..6 (empty: the whole app)")
+if (TARGET lesson_snake AND NOT LESSON_SNAKE_STEP STREQUAL "")
+    target_compile_definitions(lesson_snake PRIVATE STEP=${LESSON_SNAKE_STEP})
+endif ()
+
+if (NOT DEFINED EMSCRIPTEN)
+foreach (step RANGE 1 6)
+    add_example(NAME "lesson_snake_capture_${step}" SOURCES ${SNAKE_APP_SOURCES})
+    target_link_libraries("lesson_snake_capture_${step}" PRIVATE snake_model)
+    target_compile_definitions("lesson_snake_capture_${step}" PRIVATE STEP=${step} LESSON_CAPTURE)
+    if (MSVC)
+        target_compile_options("lesson_snake_capture_${step}" PRIVATE "/FI${LESSON_CAPTURE_HPP}")
+    else ()
+        target_compile_options("lesson_snake_capture_${step}" PRIVATE "SHELL:-include ${LESSON_CAPTURE_HPP}")
+    endif ()
+    set_target_properties("lesson_snake_capture_${step}" PROPERTIES EXCLUDE_FROM_ALL TRUE)
+endforeach ()
+endif ()
+
 # Catch2 is fetched after the examples are added; the name resolves when CMake generates.
 if (THREEPP_BUILD_TESTS AND NOT DEFINED EMSCRIPTEN)
     add_executable(test_snake_model tests/test_game.cpp)

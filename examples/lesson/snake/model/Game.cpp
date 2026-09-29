@@ -31,6 +31,7 @@ void Game::steer(Direction d) {
 
 void Game::tick() {
     if (!alive_ || won_) return;
+    ++ticks_;
 
     snake_.turn(wanted_);
     const Vec2i next = snake_.next();

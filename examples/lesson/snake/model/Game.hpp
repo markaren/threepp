@@ -33,6 +33,7 @@ namespace snake {
         const Snake& snake() const { return snake_; }
         Vec2i apple() const { return apple_; }
         int score() const { return score_; }
+        int ticks() const { return ticks_; }
         bool alive() const { return alive_; }
         bool won() const { return won_; }
 
@@ -50,6 +51,7 @@ namespace snake {
         Vec2i apple_;
         Direction wanted_;
         int score_ = 0;
+        int ticks_ = 0;
         bool alive_ = true;
         bool won_ = false;
         std::mt19937 rng_;
