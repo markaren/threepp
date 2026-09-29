@@ -260,6 +260,9 @@ install(FILES ${_threepp_py_sources}
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/threepp/rl"
         DESTINATION threepp COMPONENT python_module
         FILES_MATCHING PATTERN "*.py")
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/threepp/lesson"
+        DESTINATION threepp COMPONENT python_module
+        FILES_MATCHING PATTERN "*.py")
 
 # Type information (PEP 561). `py.typed` is the marker that tells type checkers
 # to honour this package's types once it is installed from a wheel — without it

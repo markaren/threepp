@@ -54,7 +54,7 @@ holds the picture until it has been said (`lesson.TimeMap`); the captions, the `
 muxed into the mp4 as AAC. `--no-voice` renders without Kokoro. A caption given as
 `(start, end, text, False)` is spoken (and written to the `.srt`) but not drawn: Part 4 uses one to
 narrate its title card, so the film has sound from the first second.
-Kokoro's own reading of a word can be wrong; `lesson.SPOKEN_WORDS` respells those for every
+Kokoro's own reading of a word can be wrong; `threepp.lesson.DEFAULT_WORDS` respells those for every
 lesson, a lesson's own table (`WORDS`) adds its names, and a `[word](/phonemes/)` entry sets
 the phonemes outright (PhysX is `/fˈɪzˌɛks/`). Parts 0, 0b, 3 and 4 and the Warp film go
 further and time their scripts from the measured length of each spoken line (`lesson.Speech`,
@@ -259,7 +259,7 @@ choreography and returns `(render, captions)`, and ends with
 own clock; it can declare moments where the film stands still (`render.holds`, as Part 3
 does to introduce each estimate on its own), and `run` adds holds for the narration.
 
-Pieces in `lesson.py`:
+Pieces, all importable from `lesson.py` (the toolkit is the `threepp.lesson` package; `lesson.py` re-exports it and adds the house `Stage`, `Hud.title_card` / `summary`, `card`, `code_card`, `data_file` and `run`):
 
 | | |
 |---|---|
@@ -268,7 +268,7 @@ Pieces in `lesson.py`:
 | `Speech`, `overruns` | a lesson's lines and their measured lengths (`<lesson>.speech.json`), and the captions laid out from them; the one rule for a line that needs more time than its caption |
 | `Timeline` | named beats; `p()` eased progress, `fade()` in/hold/out envelopes |
 | `Keys`, `OrbitCamera` | keyframed vectors with smootherstep between keys; a camera keyframed as azimuth, elevation, distance, look point and fov, with a slow drift, in a Z-up or Y-up frame, optionally following a moving target and its heading |
-| `Stage` | headless canvas + GL (or Vulkan) renderer + dark studio set; `project()` maps 3D to HUD pixels; `follow()` moves the key light's shadow area with a moving subject |
+| `Stage` | headless canvas + GL renderer (or one you pass in) + dark studio set; `project()` maps 3D to HUD pixels; `follow()` moves the key light's shadow area with a moving subject |
 | `Arrow3D`, `Ring3D`, `Marker3D`, `Tube3D`, `xray()`, `set_pose()`, `ghost()` | 3D annotations that fade and can ride on robot links; placing an object at a 4x4 pose; a translucent copy of any object |
 | `Cloud`, `Segments` | point clouds (round sprites) and line fans, updated in place |
 | `Hud` | immediate-mode 2D layer drawn by threepp: `Text2D` from the system TTF, `ShapeGeometry` panels, triangle-strip lines, images, colour bars, maths as matplotlib glyph outlines loaded through `SVGLoader` |

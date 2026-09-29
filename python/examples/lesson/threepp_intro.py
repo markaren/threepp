@@ -58,7 +58,7 @@ C_MOON = 0xf4a259
 C_PEBBLE = 0xef476f
 C_OUT = 0xa6e3a1         # what a program prints
 
-# how the narrator says the names on screen (PhysX and three.js are in lesson.SPOKEN_WORDS)
+# how the narrator says the names on screen (PhysX and three.js are in threepp.lesson.DEFAULT_WORDS)
 WORDS = {"glTF": "G L T F", "OBJ": "O B J", "STL": "S T L", "URDF": "U R D F", "C++": "C plus plus",
          "NumPy": "Num Pie", "CMake": "C Make", "FetchContent": "Fetch Content", "OpenGL": "Open G L",
          "create()": "create"}

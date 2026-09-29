@@ -10,6 +10,9 @@ GPU-vectorized RL helpers live in the optional `threepp.rl` subpackage (imported
 `import threepp` does not pull in torch):
 
     from threepp.rl import GpuSim, ActorCritic
+
+An experimental toolkit for explainer videos (timelines, a studio stage, a 2D overlay, captions
+read aloud, H.264 out) lives in `threepp.lesson`, also imported on demand.
 """
 from .threepp import *  # noqa: F401,F403  (re-export the native module's public API)
 from . import threepp as _native  # keep the native module reachable as threepp._native
