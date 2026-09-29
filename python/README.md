@@ -109,8 +109,7 @@ display is only required for the on-screen examples.
 | [`examples/load_model.py`](https://github.com/markaren/threepp/blob/master/python/examples/load_model.py) | `python load_model.py model.glb` — load a model with `ModelLoader`, auto-frame and render it. |
 | [`examples/vulkan_aovs.py`](https://github.com/markaren/threepp/blob/master/python/examples/vulkan_aovs.py) | Vulkan deferred render → G-buffer AOVs (normals / segmentation / albedo / depth) as numpy. Needs a Vulkan build. |
 | [`examples/vulkan_ocean.py`](https://github.com/markaren/threepp/blob/master/python/examples/vulkan_ocean.py) | The FFT-displaced **`Ocean`** — fancy water (waves, foam, transmission) in one line; orbit around it live. Needs a Vulkan build + display. |
-| [`examples/ui_demo.py`](https://github.com/markaren/threepp/blob/master/python/examples/ui_demo.py) | In-window Dear ImGui control panel (sliders/buttons) driving the scene live (GL). Needs a display. |
-| [`examples/vulkan_ui.py`](https://github.com/markaren/threepp/blob/master/python/examples/vulkan_ui.py) | The same ImGui control panel, over the **Vulkan** deferred renderer. Needs a Vulkan build + display. |
+| [`examples/ui_demo.py`](https://github.com/markaren/threepp/blob/master/python/examples/ui_demo.py) | In-window Dear ImGui control panel (sliders/buttons) driving the scene live, on GL or (`--vulkan`) over the Vulkan deferred renderer. Needs a display. |
 | [`examples/physics_demo.py`](https://github.com/markaren/threepp/blob/master/python/examples/physics_demo.py) | A pile of boxes tumbling onto the floor — `PhysxWorld` rigid bodies driving the scene graph. Needs a PhysX build + display. |
 | [`examples/imu_demo.py`](https://github.com/markaren/threepp/blob/master/python/examples/imu_demo.py) | **Headless IMU** — a box dropped onto the floor with an `Imu` mounted off-CoM; prints the physics-truth table (free fall ~0, at rest ~+9.81). Needs a PhysX build; no display. |
 | [`examples/cartpole/train_cartpole.py`](https://github.com/markaren/threepp/blob/master/python/examples/cartpole/train_cartpole.py) / [`play_cartpole.py`](https://github.com/markaren/threepp/blob/master/python/examples/cartpole/play_cartpole.py) | **GPU-vectorized RL end to end** — a `VecTask` cartpole swing-up trained with the owned `threepp.rl` PPO (committed checkpoint included; `play` renders the result). Needs a PhysX GPU build + torch. |
@@ -165,6 +164,7 @@ self-contained; what they share lives in [`examples/warp_common.py`](https://git
 | [`examples/warp_hydraulic_press.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_hydraulic_press.py) | A chrome sphere crushed by a hydraulic press in a Cornell box. |
 | [`examples/warp_explosion.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_explosion.py) | Blast Yard: a brick test range demolished by a charge (PhysX + Warp + Vulkan). |
 | [`examples/warp_gummy_rain.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_gummy_rain.py) | Hundreds of soft jelly candies pour into a glass bowl, each one its own XPBD lattice. |
+| [`examples/warp_soft_tentacle.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_soft_tentacle.py) | Soft robotic tentacles, tapered XPBD tet bodies, each wrap a ball and lift it. |
 | [`examples/warp_soft_tentacle.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_soft_tentacle.py) | Soft robotic tentacles, tapered XPBD tet bodies, each wrap a ball and lift it. |
 | [`examples/warp_jelly_wreck.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_jelly_wreck.py) | A wall of jelly blocks smashed by a chrome wrecking ball, with an event-camera and lidar mosaic ([`sensor_panels.py`](https://github.com/markaren/threepp/blob/master/python/examples/sensor_panels.py)). |
 | [`examples/warp_nebula.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_nebula.py) | A particle nebula (GL). |
@@ -608,7 +608,7 @@ It works on **both** renderers — pass the renderer so the backend matches:
 `ImguiContext(canvas, gl_renderer)` (or `ImguiContext(canvas)`) for GL, and
 `ImguiContext(canvas, vulkan_renderer)` for the Vulkan overlay (recorded into the
 deferred frame after the scene). Create the `ImguiContext` after the renderer. See
-[examples/vulkan_ui.py](https://github.com/markaren/threepp/blob/master/python/examples/vulkan_ui.py) for the Vulkan version.
+`python` [examples/ui_demo.py](https://github.com/markaren/threepp/blob/master/python/examples/ui_demo.py) `--vulkan` for the Vulkan version.
 
 One caveat: only **one** `ImguiContext` should be alive at a time (Dear ImGui has a
 single global context) — don't keep a GL and a Vulkan one simultaneously.
