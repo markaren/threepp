@@ -4,7 +4,7 @@ Blender is a build tool only; the threepp runtime loads the .glb with
 tp.GLTFLoader().load(path) and never imports bpy.
 
 Headless:
-    "C:\\Program Files\\Blender Foundation\\Blender 5.0\\blender.exe" --background --factory-startup \
+    blender --background --factory-startup \
         --python build_rover_blender.py -- --spec rover_spec.json --out rover.glb
 
 All geometry is authored in the spec's chassis frame (X forward, Y up, Z right,

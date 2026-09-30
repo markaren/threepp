@@ -4,7 +4,7 @@ Blender is a build tool only; the threepp runtime loads the .glb with
 tp.GLTFLoader().load(path) and never imports bpy.
 
 Headless:
-    "C:\\Program Files\\Blender Foundation\\Blender 5.0\\blender.exe" --background --factory-startup \
+    blender --background --factory-startup \
         --python build_mariner_blender.py -- --spec mariner_spec.json --out mariner.glb
 
 Hydrostatics only (plain Python + numpy, no Blender; writes mariner_hydro.json):

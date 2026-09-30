@@ -14,10 +14,10 @@ see [The Otter X](#the-otter-x) at the end.
 
 ## Build
 
-From this folder, once (about 45 s):
+From this folder, once (about 45 s; `blender` is your Blender executable):
 
 ```
-"C:\Program Files\Blender Foundation\Blender 5.0\blender.exe" --background --factory-startup --python build_mariner_blender.py -- --spec mariner_spec.json --out mariner.glb
+blender --background --factory-startup --python build_mariner_blender.py -- --spec mariner_spec.json --out mariner.glb
 ```
 
 `python build_mariner_blender.py --hydro-only` rebuilds just `mariner_hydro.json` without
@@ -90,7 +90,7 @@ Maritime Robotics' Otter X, a 4.6 m electric catamaran on two rim-drive azimuth 
 From this folder, once (about 90 s, most of it the hydrostatics):
 
 ```
-"C:\Program Files\Blender Foundation\Blender 5.0\blender.exe" --background --factory-startup --python build_otterx_blender.py -- --spec otterx_spec.json --out otterx.glb
+blender --background --factory-startup --python build_otterx_blender.py -- --spec otterx_spec.json --out otterx.glb
 ```
 
 `python build_otterx_blender.py --hydro-only` rebuilds just `otterx_hydro.json`. The build

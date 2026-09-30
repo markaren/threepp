@@ -10,7 +10,7 @@ chunk + env/), from a public CDN, and that is what this script pulls: about 430 
 is (SogLoader.is_sog(dir) is true), so nothing is converted.
 
     py -3.14 fetch_calico_asset.py                # -> ~/.cache/threepp/splats/calico_tanks (or $THREEPP_CALICO_ASSET)
-    py -3.14 fetch_calico_asset.py --out D:/scans/calico_tanks
+    py -3.14 fetch_calico_asset.py --out scans/calico_tanks
 
 Re-running skips files already present. An ATTRIBUTION.txt is written beside the
 data; keep it with any redistribution, the licence asks for the credit.

@@ -71,7 +71,7 @@ HYDRO = os.path.join(_HERE, f"{BOAT}_hydro.json")
 SPEC = os.path.join(_HERE, f"{BOAT}_spec.json")
 if not (os.path.exists(GLB) and os.path.exists(HYDRO)):
     print(f"{BOAT}.glb / {BOAT}_hydro.json are generated. Build them once, from this folder:\n"
-          '  "C:\\Program Files\\Blender Foundation\\Blender 5.0\\blender.exe" --background '
+          "  blender --background "
           f"--factory-startup --python build_{BOAT}_blender.py -- --spec {BOAT}_spec.json --out {BOAT}.glb")
     sys.exit(1)
 with open(SPEC, encoding="utf-8") as fh:

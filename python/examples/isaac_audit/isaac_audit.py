@@ -11,8 +11,8 @@ frame. Two runs are compared with sensor_audit.py --compare (same manifest
 format), and the per-frame hashes are kept so the first differing frame can be
 named.
 
-    D:\isaac-venv\Scripts\python.exe isaac_audit.py --frames 120 --out a.json --d3d12   (4.5, pip)
-    D:\isaacsim\python.bat isaac_audit.py --frames 120 --out a.json                    (6.1, standalone)
+    <isaac-venv>\Scripts\python.exe isaac_audit.py --frames 120 --out a.json --d3d12   (4.5, pip)
+    <isaacsim>\python.bat isaac_audit.py --frames 120 --out a.json                    (6.1, standalone)
     python ../probes/sensor_audit.py --compare a.json b.json
 
 Isaac Sim 6.x moves isaacsim.core.api and the isaacsim.sensors.{camera,physics,rtx} extensions to
