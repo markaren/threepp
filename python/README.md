@@ -114,7 +114,7 @@ display is only required for the on-screen examples.
 | [`examples/imu_demo.py`](https://github.com/markaren/threepp/blob/master/python/examples/imu_demo.py) | **Headless IMU** — a box dropped onto the floor with an `Imu` mounted off-CoM; prints the physics-truth table (free fall ~0, at rest ~+9.81). Needs a PhysX build; no display. |
 | [`examples/cartpole/train_cartpole.py`](https://github.com/markaren/threepp/blob/master/python/examples/cartpole/train_cartpole.py) / [`play_cartpole.py`](https://github.com/markaren/threepp/blob/master/python/examples/cartpole/play_cartpole.py) | **GPU-vectorized RL end to end** — a `VecTask` cartpole swing-up trained with the owned `threepp.rl` PPO (committed checkpoint included; `play` renders the result). Needs a PhysX GPU build + torch. |
 | [`examples/spot/`](https://github.com/markaren/threepp/blob/master/python/examples/spot) | **Quadruped RL family** — Spot locomotion policies (steps, stairs, heightfield), sim-to-sim deploy into the editor, depth scanning; see its [README](https://github.com/markaren/threepp/blob/master/python/examples/spot/README.md). |
-| [`examples/lesson/`](https://github.com/markaren/threepp/blob/master/python/examples/lesson) | **Explainer videos** made with threepp: what threepp is, a first app, inverse kinematics, depth to map, an IMU, PID control, Warp. Narrated films rendered headless with `threepp.lesson`; see its [README](https://github.com/markaren/threepp/blob/master/python/examples/lesson/README.md). |
+| [threepp-lessons](https://github.com/markaren/threepp-lessons) | **Explainer videos** made with threepp: what threepp is, a first app, Snake, inverse kinematics, depth to map, an IMU, PID control, Warp, sockets. Narrated films rendered headless with `threepp.lesson`, in a repository of their own. |
 | [`examples/probes/smoke_test.py`](https://github.com/markaren/threepp/blob/master/python/examples/probes/smoke_test.py) | Assertion-based regression test of the whole surface; prints `ALL OK`. |
 
 ```sh
@@ -349,7 +349,7 @@ Naming follows Python conventions (`snake_case` methods/properties), e.g.
 
 ## Explainer videos (experimental)
 
-`threepp.lesson` is the toolkit behind the [lesson films](https://github.com/markaren/threepp/blob/master/python/examples/lesson): named beats on a
+`threepp.lesson` is the toolkit behind the [lesson films](https://github.com/markaren/threepp-lessons): named beats on a
 timeline, a headless studio stage, a 2D layer drawn by threepp (text, maths, plots, captions,
 source code), and H.264 out. A lesson renders in two passes: everything stateful runs once,
 then `render(t)` is a pure function of the clock, so any frame renders on its own. It is

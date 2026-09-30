@@ -18,7 +18,8 @@ threshold since it last fired.
 
 `--dots` prints one dot per particle on the cloth, coloured by particle index:
 one dot is one Warp thread. NVIDIA only: every direction imports Vulkan memory
-into CUDA. The `# [name]` markers are where the lesson film quotes this file.
+into CUDA. The `# [name]` markers are where the lesson film (threepp-lessons, films/warp_threepp.py)
+quotes this file.
 """
 import math
 import os

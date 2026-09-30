@@ -263,7 +263,7 @@ to a rendered image that can be captured headless and judged.
 </tr>
 <tr>
 <td align="center"><img src="doc/screenshots/spot_slam.png" width="400" alt="Spot RL gait, procedural forest"><br><em>Vulkan: an RL-trained Spot walks a procedural forest while its depth camera builds a live SLAM surface (<a href="python/examples/spot/spot_slam.py">spot_slam.py</a>)</em></td>
-<td align="center"><img src="doc/screenshots/gl_fr3_depth.jpg" width="400" alt="Franka FR3 with a depth camera"><br><em>OpenGL: a depth camera on a Franka FR3, placed by IK, scans a tray (lesson part 2, <a href="python/examples/lesson/depth_map.py">depth_map.py</a>)</em></td>
+<td align="center"><img src="doc/screenshots/gl_fr3_depth.jpg" width="400" alt="Franka FR3 with a depth camera"><br><em>OpenGL: a depth camera on a Franka FR3, placed by IK, scans a tray (lesson part 2, <a href="https://github.com/markaren/threepp-lessons/blob/main/films/depth_map.py">depth_map.py</a>)</em></td>
 </tr>
 <tr>
 <td align="center"><img src="doc/screenshots/vulkan_fire.png" width="400" alt="GPU particle field"><br><em>Vulkan: a campfire <code>ParticleField</code>, marched as participating media (<a href="examples/vulkan/vulkan_fire.cpp">vulkan_fire</a>)</em></td>
