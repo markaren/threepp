@@ -40,7 +40,10 @@ set(SNAKE_APP_SOURCES main.cpp
         view/SnakeView.cpp view/AsciiView.cpp view/MinimapView.cpp
         control/KeyboardController.cpp control/GreedyAI.cpp)
 add_example(NAME "lesson_snake" SOURCES ${SNAKE_APP_SOURCES})
-target_link_libraries(lesson_snake PRIVATE snake_model)
+# add_example makes no target under Emscripten (not a WEB example), hence the guard
+if (TARGET lesson_snake)
+    target_link_libraries(lesson_snake PRIVATE snake_model)
+endif ()
 
 # build lesson_snake as it stood after one step: cmake -DLESSON_SNAKE_STEP=3 (1..6; empty = the whole app)
 set(LESSON_SNAKE_STEP "" CACHE STRING "lesson_snake as it stood after this step, 1..6 (empty: the whole app)")
