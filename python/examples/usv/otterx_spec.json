@@ -1,0 +1,194 @@
+{
+  "schema": "threepp.usv_spec/1",
+  "name": "Otter X",
+  "description": "A model of Maritime Robotics' Otter X electric catamaran USV for the USV demos. One file drives the Blender generator (build_otterx_blender.py -> otterx.glb + otterx_hydro.json) and the physics.",
+  "reference": {
+    "vendor_figures": "Brochure (mr-otterx-usv-brochure-a3-digital.pdf, maritimerobotics.com/otter-x): L x W x H 4600 x 2213 x 1900 mm, draft 400 +/- 100 mm, recycled PE hull, dry weight < 1000 kg, 4 lithium-ion battery packs, 2 rim-drive POD electric thrusters with azimuth steering (11 kW each on the product page), sea state Beaufort 3-4, two dry chambers, forward camera, AIS class B receiver, VHF over IP, depth transducer, 5 GHz MIMO radio / WiFi / LTE. Endurance and top speed: pending compliance testing. The product page lists width 1900 and height 2213; the front render puts the gantry at 2.17 m across (scaled by the mast light spacing, which both renders show), so the brochure's order is the right one.",
+    "geometry_source": "No drawings are public. Every other number is fitted to the vendor's side render (mr-otterx-04.png, 2470 x 1396) and front render (mr-otterx-02.png, 1924 x 2022). The side render is a mild perspective from above and astern: principal point (2400, -170) px, the near pontoon's keel plane at 1.930 mm/px (LOA over the 2383 px silhouette), scale growing 1/39 per metre further away. That model puts the far pontoon's bow outline, the far cleat and the far GNSS antenna where the render shows them to within 5 cm. The front render (nearly orthographic, 1.72 mm/px at the gantry) gives the athwartships positions. The vendor photos show a production boat with a customer's bow pole; the model follows the renders. Treat anything not in vendor_figures as an estimate good to a few centimetres.",
+    "assumed": "Mass budget, battery placement, loading conditions, thrust figures, sensor models and fields of view, the radar class, the transducer position, and the gondola's length are assumptions, marked as such where they appear."
+  },
+  "units": "SI: metres, kilograms, newtons, seconds. Keys ending in _deg are degrees.",
+  "frame": {
+    "handedness": "right",
+    "forward": "+X",
+    "up": "+Y",
+    "right": "+Z (starboard)",
+    "left": "-Z (port)",
+    "origin": "On the centreline, on the pontoon keel line (y = 0), halfway along the length overall (pontoon bow tips x = +2.30, transoms x = -2.29).",
+    "appendages_below_baseline": "The skegs reach y = -0.22 and the thruster ducts y = -0.207.",
+    "gltf": "otterx.glb is Y-up, same axes and metres as this frame. Node 'otterx' is the root and sits at identity."
+  },
+  "principal": {
+    "loa": 4.6,
+    "beam": 2.213,
+    "height": 1.9,
+    "height_note": "The brochure's 1.9 m falls between the radome top (1.82 above the keel in this fit) and the masthead light (2.00); the whip antenna reaches 2.29.",
+    "lowest_point_y": -0.22,
+    "draft_brochure": 0.4,
+    "draft_tolerance": 0.1,
+    "draft_note": "Read as the moulded draft (keel line to waterline) at the design condition; the skegs and pods reach 0.22 m deeper. At 1 t on two 0.43 m pontoons nothing else fits. The generator asserts the hydrostatic draft lands within draft_tolerance (the brochure's +/- 100 mm)."
+  },
+  "pontoons": {
+    "note": "Two asymmetric PE demihulls: vertical outer wall, round bilges, the inner side flaring out to the tunnel roof (front render). The keel line runs 15 cm inside the outer wall. Plan and sections taper forward of taper_start_x to a round bow tip low on the stem; the stem rakes aft from the tip to the pontoon deck (a reverse bow). The transom rakes aft going up.",
+    "keel_z": 0.955,
+    "outer_z": 1.1065,
+    "inner_z_deck": 0.63,
+    "inner_z_bilge": 0.69,
+    "bilge_y_outer": 0.16,
+    "bilge_y_inner": 0.3,
+    "deck_y": 0.65,
+    "keel_profile": [[-2.222, 0.105], [-2.19, 0.09], [-2.155, 0.085], [-1.58, 0.046], [-1.23, 0.027], [-0.88, 0.014], [-0.53, 0.006], [-0.19, 0.0], [0.28, 0.0], [0.74, 0.004], [1.09, 0.014], [1.43, 0.033], [1.67, 0.054], [1.9, 0.087], [2.01, 0.11], [2.11, 0.131], [2.22, 0.16], [2.28, 0.189], [2.3, 0.218]],
+    "keel_profile_note": "Keel line (x, y) from the side silhouette: flat amidships, 8.5 cm of rocker to the transom, the forefoot curving up into the bow tip at (2.30, 0.218).",
+    "stem_profile": [[1.94, 0.65], [2.0, 0.642], [2.032, 0.623], [2.088, 0.595], [2.124, 0.566], [2.153, 0.537], [2.194, 0.479], [2.227, 0.421], [2.256, 0.363], [2.281, 0.305], [2.298, 0.247], [2.3, 0.218]],
+    "stem_profile_note": "Top of the pontoon section forward of x = 1.94: the stem line from the deck down to the tip.",
+    "transom": {"bottom": [-2.222, 0.105], "top": [-2.29, 0.65]},
+    "taper_start_x": 0.9,
+    "taper_min": 0.02,
+    "stations": {"dx": 0.05, "fine": [[1.8, 2.28, 0.02], [2.28, 2.3, 0.004], [-2.222, -2.1, 0.02]]}
+  },
+  "appendages": {
+    "skeg": {"note": "PE skeg on each keel line ahead of the pod, with a squared heel box directly ahead of the duct (side render).", "profile_xy": [[-1.55, 0.1], [-1.585, 0.048], [-1.629, -0.149], [-1.768, -0.22], [-1.846, -0.193], [-1.846, 0.1]], "thickness": 0.05, "heel": {"x_range": [-1.971, -1.846], "y_range": [-0.037, 0.1], "halfwidth": 0.06}},
+    "gondola": {"note": "Grey fairing under the tunnel roof on the centreline (front render); chamfered sides and nose. Its length is not in any view and is assumed.", "x_range": [-0.9, 1.4], "nose_bottom_x": 1.25, "y_range": [0.53, 0.64], "halfwidth_top": 0.36, "halfwidth_bottom": 0.31}
+  },
+  "body": {
+    "note": "The deck structure between and above the pontoons: an orange head block at the bow (a parallelogram leaning forward, its front a chevron, capped by a thin roof slab that overhangs aft), a white midbody under two hatch covers (the two dry chambers) either side of the lifting-eye beam, and an orange stern block with a chamfered top that carries the gantry and raised side cheeks. It spans the beam 2 cm inside the pontoons' outer walls and sits on the pontoon decks; between the pontoons its flat bottom is the tunnel roof.",
+    "halfwidth": 1.085,
+    "bottom_y": 0.63,
+    "head_profile": [[1.348, 0.63], [1.348, 0.8], [1.266, 0.995], [1.326, 1.16], [1.33, 1.18], [1.0, 1.18], [1.0, 1.16], [1.125, 1.16], [1.016, 0.97], [1.016, 0.63]],
+    "head_profile_note": "Side profile (x, y): the lower front, the waist at 0.995, the upper front leaning forward, the roof slab (1.16..1.18) overhanging the aft face, which leans forward too (the render shows it in shadow under the slab).",
+    "head_white_edges": [0, 1],
+    "head_white_note": "The front render shows the faces below the waist white; the sides and everything above are orange.",
+    "midbody": {"x_range": [-1.351, 1.016], "top_y": 0.95},
+    "stern_profile": [[-1.351, 0.63], [-1.351, 0.98], [-1.95, 0.98], [-2.29, 0.72], [-2.29, 0.63]],
+    "stern_profile_note": "The chamfer lies between the render's silhouette (0.67 at the transom) and the near cheek's edge (0.79); the side cheeks follow it.",
+    "covers": {"note": "Two white hatch covers over the dry chambers (seams in the side render at -0.098 and -0.283, the lifting-eye beam between them); rounded shoulders, side skirt down to skirt_y, proud of the side by `proud`.", "x_splits": [[-1.34, -0.29], [-0.09, 1.0]], "top_y": 0.98, "skirt_y": 0.655, "shoulder_r": 0.06, "proud": 0.004},
+    "beam_strip": {"x_range": [-0.283, -0.098], "top_y": 0.99},
+    "stern_side_panels": {"note": "Raised orange cheeks on the stern block sides, flush with the pontoon walls: a chamfered forward-top corner, the top and aft chamfer 1 cm inside the block's.", "profile_xy": [[-2.28, 0.65], [-1.452, 0.65], [-1.452, 0.88], [-1.539, 0.97], [-1.955, 0.97], [-2.28, 0.722]], "proud": 0.02},
+    "stern_handles": {"centre_xy": [-1.58, 0.705], "half_axes": [0.13, 0.017]}
+  },
+  "livery": {
+    "note": "Orange panel on the forward midbody side, as in the side render; everything else takes the block colours. No vendor marks.",
+    "orange_polygon_xy": [[0.333, 0.65], [1.016, 0.65], [1.016, 0.92], [0.423, 0.853], [0.393, 0.842], [0.364, 0.803], [0.339, 0.765], [0.333, 0.745]],
+    "side_text": ""
+  },
+  "deck": {
+    "cleats": {"note": "Horn cleats on the pontoon bows (side render, vendor photos).", "x": 1.6, "z": 0.87, "length": 0.3},
+    "lifting_eye": {"note": "Central lifting eye on the beam strip, for crane launch: a fore-and-aft pin in a clamp block, and a bent flat bar up to the eye.", "pin": {"x_range": [-0.293, 0.037], "y": 1.028, "radius": 0.018}, "clamp": {"x_range": [-0.194, -0.06], "y_range": [0.97, 1.05], "halfwidth": 0.05}, "arm_xy": [[-0.267, 1.0], [-0.267, 1.2], [-0.19, 1.323]], "arm_width": 0.06, "eye_centre_xy": [-0.19, 1.323], "eye_r": 0.05, "hole_r": 0.026, "thickness": 0.02}
+  },
+  "gantry": {
+    "note": "A-frame over the stern block: two ladder plates raked forward from the stern block top to a flat top plate carrying the radome, the masthead lights and the antennas; equipment boxes hang under the plate. The plate's aft end overhangs the aft rails.",
+    "plate_z": [1.045, 1.085],
+    "front_rail": {"foot": [-1.379, 0.98], "head": [-0.885, 1.573], "width": 0.13},
+    "aft_rail": {"foot": [-1.946, 0.98], "head": [-1.432, 1.55], "width": 0.13},
+    "rungs_y": [[0.98, 1.15], [1.21, 1.32], [1.515, 1.56]],
+    "top_plate": {"x_range": [-1.566, -0.885], "y_range": [1.55, 1.59], "halfwidth": 1.085},
+    "radome": {"centre_xz": [-1.162, 0.5], "radius": 0.305, "pedestal": [0.12, 1.59, 1.645], "band_y": [1.645, 1.675], "top_y": 1.825, "note": "24-inch radome class (0.60 m in the side render, 0.61 m in the front one)."},
+    "masthead": {"centre_xz": [-1.404, 0.0], "pole": [0.015, 1.59, 1.805], "lanterns": [["nav_red", 1.812, 1.832], ["nav_white", 1.872, 1.892], ["nav_red", 1.97, 1.99]], "lantern_r": 0.03, "top_y": 2.005, "cage_r": 0.045},
+    "under_boxes": [{"x_range": [-1.46, -1.06], "y_range": [1.4, 1.55], "z_range": [0.33, 0.68]}, {"x_range": [-1.46, -1.06], "y_range": [1.4, 1.55], "z_range": [-0.31, 0.17], "window_z": [-0.14, 0.065], "window_y": [1.46, 1.51]}],
+    "sat_compass": {"centre_xz": [-1.2, -0.3], "size": [0.23, 0.08, 0.15], "cap": [0.18, 0.05, 0.12]}
+  },
+  "sensors": {
+    "convention": "Empties look down local -Z with local +Y up (threepp/glTF camera convention). Positions in the vessel frame.",
+    "camera_main": {"position": [1.335, 1.22, 0.0], "look": [1.0, 0.0, 0.0], "pitch_down_deg": 5.0, "hfov_deg": 60.0, "resolution": [1920, 1080], "fps": 30, "housing": {"centre_xz": [1.305, 0.0], "radius": 0.026, "y_range": [1.18, 1.31]}, "assumed": "hfov, resolution, fps, tilt and the lateral position (the side render shows the housing on the head top, the front render does not place it)"},
+    "radar": {"position": [-1.162, 1.72, 0.5], "spin_axis": "+Y", "rpm": 24, "h_beam_deg": 3.9, "v_beam_deg": 25.0, "range_max": 66000.0, "assumed": "24-inch solid-state radome class values, not the fitted unit"},
+    "gnss_port": {"position": [1.24, 1.4, -0.69], "post_radius": 0.015, "disc_radius": 0.083, "disc_y": [1.37, 1.435]},
+    "gnss_stbd": {"position": [1.24, 1.4, 0.69], "post_radius": 0.015, "disc_radius": 0.083, "disc_y": [1.37, 1.435]},
+    "gnss_baseline": 1.38,
+    "sat_compass": {"position": [-1.2, 1.7, -0.3], "assumed": "the white dome box beside the radome; the vendor photos show a satellite-compass-class unit there"},
+    "ais_vhf_antenna": {"base": [-1.3, 1.28, -1.02], "length": 1.01, "radius": 0.006, "note": "Whip on the inboard face of the port gantry plate."},
+    "mimo_antenna": {"base": [-1.34, 1.59, -0.81], "length": 0.517, "radius": 0.025, "below": [1.3, 1.55], "note": "Tall white omni on the top plate (5 GHz MIMO / LTE), its mount tube reaching below the plate."},
+    "lte_antenna": {"position": [-1.4, 1.59, -0.67], "radius": 0.04, "height": 0.025},
+    "imu": {"position": [0.0, 0.8, 0.0], "assumed": "inside the body on the centreline"},
+    "transducer": {"position": [0.5, 0.0, 0.955], "look": [0.0, -1.0, 0.0], "assumed": "in the starboard pontoon's keel; the vendor lists a depth transducer but no view shows where"},
+    "mbes_mount": {"position": [1.62, 0.63, 0.0], "note": "The vendor photos show a customer's survey pole here, between the pontoon bows just forward of the head block. No geometry, mount only."}
+  },
+  "lights": {
+    "nav_light_stbd": {"position": [-1.023, 1.54, 1.1], "colour": "green", "look": [1.0, 0.0, 0.3]},
+    "nav_light_port": {"position": [-1.023, 1.54, -1.1], "colour": "red", "look": [1.0, 0.0, -0.3]},
+    "ram_light_top": {"position": [-1.404, 1.98, 0.0], "colour": "red", "note": "red-white-red: restricted in her ability to manoeuvre"},
+    "ram_light_mid": {"position": [-1.404, 1.882, 0.0], "colour": "white"},
+    "ram_light_bottom": {"position": [-1.404, 1.822, 0.0], "colour": "red"},
+    "floodlight": {"position": [-1.056, 1.485, -0.04], "look": [1.0, -0.15, 0.0], "cone_deg": 60.0, "note": "The lit window in the front render."}
+  },
+  "propulsion": {
+    "thrusters": {
+      "note": "Two rim-drive pods with azimuth steering, one under each pontoon's keel line behind the skeg (side render). Node thruster_<side> turns about its local +Y; positive turns the thrust line toward port, which pushes the stern to port and turns the boat to starboard. Node thruster_<side>_rotor spins about its local +X.",
+      "axis_x": -2.023,
+      "mount_y": 0.085,
+      "collar": {"radius": 0.045, "y_range": [0.015, 0.11]},
+      "duct": {"centre_xy": [-2.027, -0.094], "outer_r": 0.113, "inner_r": 0.095, "length": 0.158, "band_r": 0.115, "band_length": 0.05},
+      "rotor": {"hub_r": 0.028, "hub_length": 0.07, "blades": 5, "blade_tip_r": 0.094, "blade_chord": 0.05, "pitch_deg": 30.0},
+      "limit_deg": 180.0,
+      "helm_deg": 35.0,
+      "helm_note": "The azimuth the helm in usv_ocean.py uses; the pods themselves turn all the way round.",
+      "power_kw": 11.0,
+      "bollard_thrust_n": 900.0,
+      "astern_fraction": 0.6,
+      "assumed": "Thrust: an 11 kW rim drive on a 0.19 m duct at bollard, order of magnitude only; astern gives 60 % of it. Full azimuth."
+    },
+    "top_speed": "pending compliance testing (brochure)",
+    "demo_top_speed_kn": 8.0,
+    "demo_top_speed_note": "Assumed for usv_ocean.py until the vendor publishes a figure: full throttle on both pods balances the lumped resistance at this speed."
+  },
+  "mass": {
+    "note": "Component budget: engineering estimates under the vendor's '< 1000 kg' dry weight. Centroids are where each component sits in this model; the batteries sit in the pontoons, placed fore and aft to trim her level at the survey load. The generator recomputes the CoM and the hydrostatic equilibrium for each loading condition.",
+    "dry": 950.0,
+    "budget": [
+      {"item": "pontoon shells, bulkheads, foam (recycled PE)", "mass": 220.0, "centroid": [-0.05, 0.3, 0.0]},
+      {"item": "body: dry chambers, deck, hatch covers, frame", "mass": 200.0, "centroid": [-0.25, 0.85, 0.0]},
+      {"item": "4 lithium-ion battery packs (2 per pontoon)", "mass": 240.0, "centroid": [0.25, 0.25, 0.0]},
+      {"item": "2 rim-drive pods, azimuth units, motor drives", "mass": 90.0, "centroid": [-1.95, 0.08, 0.0]},
+      {"item": "gantry, radar, masthead lights, antennas, boxes", "mass": 65.0, "centroid": [-1.35, 1.45, 0.0]},
+      {"item": "autonomy + comms electronics, power distribution, cabling", "mass": 55.0, "centroid": [0.3, 0.8, 0.0]},
+      {"item": "head block, GNSS, camera, cleats, lifting eye", "mass": 30.0, "centroid": [1.1, 0.95, 0.0]},
+      {"item": "skegs, gondola, depth transducer", "mass": 30.0, "centroid": [-0.6, 0.35, 0.0]},
+      {"item": "fittings, fenders, misc", "mass": 20.0, "centroid": [0.0, 0.8, 0.0]}
+    ],
+    "com_dry": [-0.2449, 0.5226, 0.0],
+    "inertia_note": "Radii of gyration (estimates for a 4.6 m catamaran with the mass in the pontoons): roll 0.40 B, pitch 0.26 L, yaw 0.27 L about the CoM.",
+    "gyradius": {"roll": 0.89, "pitch": 1.2, "yaw": 1.24},
+    "conditions": {
+      "lightship": {"extra": []},
+      "survey": {"extra": [{"item": "survey payload: MBES on a bow pole, SVP winch, topside unit", "mass": 80.0, "centroid": [1.5, 0.65, 0.0]}]},
+      "full_load": {"extra": [{"item": "survey payload: MBES on a bow pole, SVP winch, topside unit", "mass": 80.0, "centroid": [1.5, 0.65, 0.0]}, {"item": "payload in the dry chambers", "mass": 150.0, "centroid": [0.0, 0.8, 0.0]}]}
+    },
+    "design_condition": "survey"
+  },
+  "hydrostatics": {
+    "rho": 1025.0,
+    "g": 9.81,
+    "grid": {"dx": 0.02, "dz": 0.02, "dy": 0.005, "x_range": [-2.34, 2.34], "z_range": [-1.16, 1.16], "y_range": [-0.25, 1.3]},
+    "trim_limit_deg": 2.0,
+    "bonjean": {"station_dx": 0.2, "x_range": [-2.3, 2.3], "heights": [-0.24, 1.3, 0.02]},
+    "note": "Computed by the generator from the buoyant closed meshes (pontoons, skegs, gondola, body blocks, hatch covers) by column integration of the winding number, so the overlapping parts count once. The thruster ducts are open and left out. Written to otterx_hydro.json."
+  },
+  "materials": {
+    "note": "Linear RGB. Colours read off the vendor renders under their studio light, pulled toward plausible albedos.",
+    "pontoon_pe_black": {"color": [0.026, 0.026, 0.027], "metallic": 0.0, "roughness": 0.6},
+    "body_white": {"color": [0.7, 0.7, 0.68], "metallic": 0.0, "roughness": 0.45},
+    "hatch_white": {"color": [0.78, 0.78, 0.76], "metallic": 0.0, "roughness": 0.38},
+    "livery_orange": {"color": [0.8, 0.2, 0.08], "metallic": 0.0, "roughness": 0.42},
+    "panel_orange": {"color": [0.86, 0.26, 0.11], "metallic": 0.0, "roughness": 0.42},
+    "fairing_grey": {"color": [0.3, 0.3, 0.3], "metallic": 0.0, "roughness": 0.55},
+    "beam_grey": {"color": [0.12, 0.12, 0.12], "metallic": 0.0, "roughness": 0.5},
+    "gantry_black": {"color": [0.028, 0.028, 0.028], "metallic": 0.0, "roughness": 0.42},
+    "fitting_grey": {"color": [0.2, 0.2, 0.2], "metallic": 0.4, "roughness": 0.4},
+    "cleat_alu": {"color": [0.6, 0.61, 0.62], "metallic": 1.0, "roughness": 0.32},
+    "radome_white": {"color": [0.74, 0.74, 0.72], "metallic": 0.0, "roughness": 0.35},
+    "radome_band_blue": {"color": [0.02, 0.12, 0.5], "metallic": 0.0, "roughness": 0.4},
+    "gnss_white": {"color": [0.78, 0.78, 0.76], "metallic": 0.0, "roughness": 0.45},
+    "antenna_white": {"color": [0.8, 0.8, 0.78], "metallic": 0.0, "roughness": 0.45},
+    "box_grey": {"color": [0.4, 0.4, 0.4], "metallic": 0.0, "roughness": 0.5},
+    "floodlight_lens": {"color": [0.85, 0.85, 0.83], "metallic": 0.0, "roughness": 0.2, "emissive": [1.0, 1.0, 0.95], "emissive_strength": 1.0},
+    "camera_white": {"color": [0.76, 0.76, 0.74], "metallic": 0.0, "roughness": 0.4},
+    "lens_glass": {"color": [0.01, 0.014, 0.02], "metallic": 0.0, "roughness": 0.05},
+    "nav_red": {"color": [0.5, 0.02, 0.02], "metallic": 0.0, "roughness": 0.3, "emissive": [1.0, 0.05, 0.03], "emissive_strength": 3.0},
+    "nav_green": {"color": [0.02, 0.4, 0.05], "metallic": 0.0, "roughness": 0.3, "emissive": [0.05, 1.0, 0.2], "emissive_strength": 3.0},
+    "nav_white": {"color": [0.9, 0.9, 0.88], "metallic": 0.0, "roughness": 0.3, "emissive": [1.0, 1.0, 0.95], "emissive_strength": 2.0},
+    "pod_black": {"color": [0.035, 0.035, 0.037], "metallic": 0.0, "roughness": 0.35},
+    "pod_band_grey": {"color": [0.3, 0.3, 0.31], "metallic": 0.3, "roughness": 0.3},
+    "rotor_grey": {"color": [0.25, 0.25, 0.26], "metallic": 0.6, "roughness": 0.35},
+    "steel": {"color": [0.62, 0.62, 0.64], "metallic": 1.0, "roughness": 0.3},
+    "tunnel_dark": {"color": [0.01, 0.01, 0.01], "metallic": 0.0, "roughness": 0.9}
+  }
+}

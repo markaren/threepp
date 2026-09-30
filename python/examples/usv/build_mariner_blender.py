@@ -985,9 +985,9 @@ class Hydro:
 
     def __init__(self, tris, G):
         self.dx, self.dz, self.dy = G["dx"], G["dz"], G["dy"]
-        self.x0, self.z0 = -3.02, -1.08
-        self.nx = int(round(6.04 / self.dx))
-        self.nz = int(round(2.16 / self.dz))
+        (self.x0, x1), (self.z0, z1) = G.get("x_range", (-3.02, 3.02)), G.get("z_range", (-1.08, 1.08))
+        self.nx = int(round((x1 - self.x0) / self.dx))
+        self.nz = int(round((z1 - self.z0) / self.dz))
         self.y0, y1 = G["y_range"]
         self.ny = int(round((y1 - self.y0) / self.dy))
         self.xc = self.x0 + (np.arange(self.nx) + 0.5) * self.dx + 1.37e-4
@@ -1128,7 +1128,8 @@ class Hydro:
         sdx = B["station_dx"]
         h0, h1, dh = B["heights"]
         hs = np.round(np.arange(h0, h1 + 1e-9, dh), 4)
-        stations = np.round(np.arange(-3.0 + 0.5 * sdx, 3.0, sdx), 4)
+        xa, xb = B.get("x_range", (-3.0, 3.0))
+        stations = np.round(np.arange(xa + 0.5 * sdx, xb, sdx), 4)
         stb = self.zc > 0.0
         area, zc_, yc_ = [], [], []
         for xs in stations:
