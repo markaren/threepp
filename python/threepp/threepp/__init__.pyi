@@ -1830,6 +1830,37 @@ class DisplacedMesh(Mesh):
         @wind_theta.setter
         def wind_theta(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
+    class Vessel:
+        """
+        One vessel on the ocean (mesh.vessel(i)): a hull exclusion and its own wake. Vessel 0 is the mesh's own hull_exclusion / wake.
+        """
+        def __repr__(self) -> str:
+            ...
+        def add_wake_sample(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex, sin_yaw: typing.SupportsFloat | typing.SupportsIndex, cos_yaw: typing.SupportsFloat | typing.SupportsIndex, speed: typing.SupportsFloat | typing.SupportsIndex, max_samples: typing.SupportsInt | typing.SupportsIndex = 64) -> None:
+            """
+            Emit one wake snapshot at the vessel's current pose (age 0), dropping the oldest once the trail is full. The renderer's hard cap is 64 samples; overflow beyond it is dropped silently on upload. The C++ showcase's cadence is 10 Hz OR every 1 m travelled, whichever fires first.
+            """
+        def age_wake(self, dt: typing.SupportsFloat | typing.SupportsIndex, max_age: typing.SupportsFloat | typing.SupportsIndex = 6.0, max_samples: typing.SupportsInt | typing.SupportsIndex = 64) -> int:
+            """
+            Age every trail sample by dt, drop anything older than max_age, and keep at most max_samples (newest). Returns the surviving count. Call once per frame.
+            """
+        def clear_wake(self) -> None:
+            """
+            Drop the whole trail (e.g. after teleporting the vessel, so the wake does not stretch across the map).
+            """
+        @property
+        def hull_exclusion(self) -> DisplacedMesh.HullExclusion:
+            """
+            This vessel's footprint + waterline plane; set each frame before render(). half_length = 0 (the default) takes the vessel off the ocean.
+            """
+        @property
+        def index(self) -> int:
+            ...
+        @property
+        def wake(self) -> DisplacedMesh.VesselWake:
+            """
+            This vessel's Kelvin V-wake / bow bump / foam trail. Shares its hull_exclusion pose, so set that first.
+            """
     class VesselWake:
         enabled: bool
         @property
@@ -1893,6 +1924,7 @@ class DisplacedMesh(Mesh):
         @world_z.setter
         def world_z(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
+    MAX_VESSELS: typing.ClassVar[int] = 8
     def __init__(self, geometry: BufferGeometry, material: typing.Any) -> None:
         """
         Low-level constructor. Most callers want Ocean instead, which builds the plane + water material + cascade defaults for you.
@@ -1921,12 +1953,16 @@ class DisplacedMesh(Mesh):
         """
     def sample_wake_height(self, world_x: typing.SupportsFloat | typing.SupportsIndex, world_z: typing.SupportsFloat | typing.SupportsIndex) -> float:
         """
-        CPU mirror of the shader's wake height (bow bump + bow V-wedge + the trail-summed Kelvin V) at a world XZ. 0 with no active vessel or below the speed gate. Add to sample_height() to make a buoy bob through a passing wake.
+        CPU mirror of the shader's wake height (bow bump + bow V-wedge + the trail-summed Kelvin V) at a world XZ, summed over every vessel. 0 with no active vessel or below the speed gate. Add to sample_height() to make a buoy bob through a passing wake. Another vessel's footprint does NOT fade a wake here, so a hull sampling under itself feels the wake it is crossing.
+        """
+    def vessel(self, index: typing.SupportsInt | typing.SupportsIndex) -> DisplacedMesh.Vessel:
+        """
+        Vessel `index` (0..MAX_VESSELS-1) on this ocean: its own hull_exclusion, wake and add_wake_sample()/age_wake()/clear_wake(). Vessel 0 is the mesh's own hull_exclusion / wake. A vessel takes part while its half_length > 0; each footprint also flattens the other vessels' wakes.
         """
     @property
     def hull_exclusion(self) -> DisplacedMesh.HullExclusion:
         """
-        The vessel's footprint + waterline plane; set each frame before render(). half_length = 0 (the default) disables it AND the wake.
+        Vessel 0's footprint + waterline plane; set each frame before render(). half_length = 0 (the default) disables it AND the wake. More vessels: vessel(i).
         """
     @property
     def params(self) -> DisplacedMesh.Params:
@@ -1934,7 +1970,7 @@ class DisplacedMesh(Mesh):
     @property
     def wake(self) -> DisplacedMesh.VesselWake:
         """
-        Kelvin V-wake / bow bump / foam trail. Shares the hull_exclusion pose, so set that first.
+        Vessel 0's Kelvin V-wake / bow bump / foam trail. Shares the hull_exclusion pose, so set that first.
         """
     @property
     def warp(self) -> DisplacedMesh.MeshWarp:

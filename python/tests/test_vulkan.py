@@ -434,6 +434,48 @@ def test_ocean_is_displaced_mesh_with_knobs():
     assert ocean.sample_wake_height(6.0, -3.0) == pytest.approx(0.0)
 
 
+def test_ocean_carries_several_vessels():
+    ocean = tp.Ocean(size=500.0)
+    assert tp.DisplacedMesh.MAX_VESSELS == 8
+    with pytest.raises(IndexError):
+        ocean.vessel(tp.DisplacedMesh.MAX_VESSELS)
+    # vessel 0 IS the mesh-level hull_exclusion / wake (the single-vessel API)
+    boat = ocean.vessel(0)
+    boat.hull_exclusion.set_pose(0.0, 0.0, half_length=3.0, half_beam=1.0)
+    assert ocean.hull_exclusion.half_length == pytest.approx(3.0)
+    ocean.wake.forward_speed = 4.0
+    assert boat.wake.forward_speed == pytest.approx(4.0)
+    assert boat.index == 0
+
+    def bow_bump(x, z):
+        return ocean.sample_wake_height(x, z)
+
+    alone = bow_bump(0.0, 3.0)                # the boat's bow, current pose, no trail
+    assert alone > 0.0
+    # a second vessel far away: its own wake, its own trail, the boat's untouched
+    ship = ocean.vessel(1)
+    assert ship.hull_exclusion.half_length == 0.0 and "off" in repr(ship)
+    ship.hull_exclusion.set_pose(200.0, 0.0, yaw=0.0, half_length=30.0, half_beam=6.0)
+    ship.wake.forward_speed = 5.0
+    assert bow_bump(0.0, 3.0) == pytest.approx(alone)
+    assert bow_bump(200.0, 30.0) > 0.0        # the ship's own bow bump
+    ship.add_wake_sample(200.0, 0.0, 0.0, 1.0, 5.0)
+    assert ship.age_wake(0.5) == 1 and ship.wake.trail[0].age == pytest.approx(0.5)
+    assert len(ocean.wake.trail) == 0         # the trails are separate
+    ship.clear_wake()
+    assert len(ship.wake.trail) == 0
+    # wakes ADD where two vessels' wakes overlap (same pose twice = double)
+    twin = ocean.vessel(2)
+    twin.hull_exclusion.set_pose(0.0, 0.0, half_length=3.0, half_beam=1.0)
+    twin.wake.forward_speed = 4.0
+    assert bow_bump(0.0, 3.0) == pytest.approx(2.0 * alone)
+    twin.hull_exclusion.half_length = 0.0     # half_length 0 takes a vessel off the ocean
+    assert bow_bump(0.0, 3.0) == pytest.approx(alone)
+    # a handle keeps its ocean alive
+    del ocean, boat
+    assert ship.hull_exclusion.half_beam == pytest.approx(6.0)
+
+
 def test_ocean_renders_and_displaces(vk_renderer):
     scene, cam, ocean = _ocean_scene()
     # The CPU height mirror is a lazy sticky opt-in: the renderer only records
