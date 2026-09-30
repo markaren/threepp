@@ -20,6 +20,9 @@ examples/rover/rover.glb
 # Generated from mariner_spec.json by examples/usv/build_mariner_blender.py (headless Blender)
 examples/usv/mariner.glb
 examples/usv/mariner_hydro.json
+# Generated from otterx_spec.json by examples/usv/build_otterx_blender.py (headless Blender)
+examples/usv/otterx.glb
+examples/usv/otterx_hydro.json
 
 # Legacy artifacts from the experimental RL branch (not part of this package)
 *.dll
