@@ -449,6 +449,15 @@ void main() {
         const float H  = max(clouds.hfFalloff, 1e-3);
         const int   STEPS = 8;
         const float dt = dist / float(STEPS);
+        // Submerged camera, particle above the surface: the leg to the waterline
+        // is murk, and the air glow beyond it arrives through that much water
+        // (volumetricDirScatter's trWater; the same omission gave the shade pass
+        // a grey band above eye level under water).
+        float trWater = 1.0;
+        if (fog.murkDensity > 0.0 && fog.waterSurfaceY < 1e29 && camPos.y < fog.waterSurfaceY) {
+            if (rd.y <= 1e-6) trWater = 0.0;
+            else trWater = exp(-fog.murkDensity * (fog.waterSurfaceY - camPos.y) / rd.y);
+        }
         vec3 sum = vec3(0.0);
         for (int s = 0; s < STEPS; ++s) {
             const float t = (float(s) + 0.5) * dt;
@@ -469,7 +478,7 @@ void main() {
             }
             sum += stepSum * (trCam * sigmaX * cloudShadowSample(x));
         }
-        fogAdd += sum * airAlbedo * dt;
+        fogAdd += sum * airAlbedo * (dt * trWater);
     }
 
     // The particle medium composes LAST — nearest-to-camera in the sequential

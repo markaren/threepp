@@ -1074,6 +1074,21 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
     const float sigmaRef = max(clouds.hfDensity * exp(-max(ro.y - clouds.hfBaseY, 0.0) / H), 1e-6);
     const float tEnd = min(tMax, tStart + 6.0 / sigmaRef);
     if (tEnd <= tStart) return vec3(0.0);
+    // SUBMERGED ORIGIN: the leg from the camera to the surface is WATER, and its
+    // extinction is the murk's. The per-step skip below drops the submerged steps
+    // and heightFogOpticalDepth clips the AIR to above the waterline, so on a ray
+    // that surfaces the steps beyond the crossing were lit at the air's full
+    // transmittance — the sun's aerial glow over the swell reached a camera 28 m
+    // down as if the water were not there. Seen as a grey band above eye level
+    // in every upward-looking underwater frame (a sky pixel marches 2000 m; a
+    // seabed pixel a few metres, which is why only the env miss showed it).
+    // A ray that never surfaces has no air on it at all.
+    float trWater = 1.0;
+    if (murkLive() && ro.y < fog.waterSurfaceY) {
+        if (rd.y <= 1e-6) return vec3(0.0);
+        trWater = exp(-fog.murkDensity * (fog.waterSurfaceY - ro.y) / rd.y);
+        if (trWater < 0.003) return vec3(0.0);
+    }
 
     const int   STEPS  = 16;
     uint        seed   = pcgHash(uint(px.x) * 7919u + pcgHash(uint(px.y) * 104729u + pc.frame * 6271u));
@@ -1109,7 +1124,7 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
         // dims the shafts exactly like the (now-deleted) froxel sun term did.
         sum += stepSum * (trCam * sigmaX * cloudShadowSample(x));
     }
-    return sum * medAlbedo * dt;
+    return sum * medAlbedo * (dt * trWater);
 }
 
 // Fogged sky/background colour along this pixel's view ray — the term dispatch A
