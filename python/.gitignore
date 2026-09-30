@@ -27,6 +27,10 @@ examples/usv/otterx_hydro.json
 examples/turbine/turbine.glb
 # Renders, clips and survey data the turbine demo writes (TURBINE_OUT overrides the folder)
 examples/turbine/out/
+# Default output folders of the soft-body films, the snake net-pen and the rover demos (--out overrides)
+examples/out/
+examples/netpen/out/
+examples/rover/out/
 
 # Legacy artifacts from the experimental RL branch (not part of this package)
 *.dll

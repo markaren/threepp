@@ -39,7 +39,7 @@ for _p in (_HERE, _EX, _PY):
 
 import numpy as np
 
-OUT = "D:/dev/snake_out/sweep"
+OUT = os.path.join(_HERE, "out", "sweep")
 T_RUN, T0, T1 = 30.0, 10.0, 30.0
 ALPHAS = [10, 15, 20, 25, 30, 35, 40]
 OMEGAS = [60, 75, 90, 105, 120, 135, 150]

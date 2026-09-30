@@ -34,9 +34,9 @@ relative density), rho = 1650 kg/m^3, phi = 38 deg, Drucker-Prager with a
 BOUNDED compaction cap (SOILS below). Defaults = the phase-A choice: h = 30 mm,
 8 particles per cell, E = 1 MPa (elastic share of the static sinkage 5 % at
 h = 30 mm; 0.5 MPa is 13 % and 26 % fewer substeps, but puts DP/N(0) at +0.07
-and the 50 %-slip slope at 22.0 deg: D:/dev/rover_rt/E05).
+and the 50 %-slip slope at 22.0 deg).
 
-Output goes under --out (default D:/dev/rover_rt).
+Output goes under --out (default out/slope beside this script).
 
     PYTHONPATH=python python python/examples/rover/warp_rover_slope.py --mode wheel
 """
@@ -71,7 +71,7 @@ V = 0.2                 # m/s, the carriage speed (VV mode)
 SLIPS = [0.0, 0.1, 0.2, 0.3, 0.5, 0.7]    # s_eff, at r_eff
 
 # Loose GRC-1-like sand. Three laws, compared in phase A (h = 40 mm, phi = 35,
-# plain Coulomb envelope; D:/dev/rover_rt/scan):
+# plain Coulomb envelope):
 #   dp    pure Drucker-Prager, no cap: the tips never got below the surface
 #         (sinkage -7..-4 mm), no rut;
 #   gcap  a gentler, unbounded cap (lam 2x phase 1's, p0 1 kPa): DP/N +0.17 at
@@ -116,7 +116,7 @@ CONTACT = cli_arg("--contact", "none", str)
 # on the local slip ratio): mu_eff = mu (1 - exp(-k s_loc)); 0 = plain Coulomb.
 JH_K = cli_arg("--jh-k", 3.0, float)
 TAG = cli_arg("--tag", "", str)
-OUT = cli_arg("--out", "D:/dev/rover_rt", str)
+OUT = cli_arg("--out", os.path.join(os.path.dirname(os.path.abspath(__file__)), "out", "slope"), str)
 os.makedirs(OUT, exist_ok=True)
 
 # The bin: 3x the wheel width, 0.2 m deep (the 4-wheel patches use the same depth).

@@ -16,7 +16,7 @@ trick. Rendered on the Vulkan hybrid path tracer, the jelly is transmissive
 and refracts the blocks behind it.
 
     python warp_jelly_wreck.py                 # window; drag to orbit, Esc quits
-    python warp_jelly_wreck.py --video 10      # headless film -> C:/dev/_softbody_films/jelly_wreck
+    python warp_jelly_wreck.py --video 10      # headless film -> out/jelly_wreck beside this script
     python warp_jelly_wreck.py --video 10 --size 960x540   # quick preview
     python warp_jelly_wreck.py --video 10 --no-sensors     # the plain film, no sensor mosaic
     python warp_jelly_wreck.py --video 10 --no-sensors --clean   # ... and no caption or badge (for a film that titles it)
@@ -45,7 +45,8 @@ from warp_common import (Encoder, SoupInterop, accum_normals, cli_arg, load_font
 
 VIDEO = cli_arg("--video", 0.0, float)
 W, H = parse_size(cli_arg("--size", "1920x1080", str))
-OUT_DIR = cli_arg("--out-dir", r"C:\dev\_softbody_films\jelly_wreck", str)
+OUT_DIR = cli_arg("--out-dir", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                            "out", "jelly_wreck"), str)
 TAG = cli_arg("--tag", "jelly_wreck", str)
 OPAQUE = "--opaque" in sys.argv
 SENSORS = VIDEO > 0 and "--no-sensors" not in sys.argv

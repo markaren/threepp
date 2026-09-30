@@ -22,7 +22,7 @@ ground.
     python warp_mudsnow_drive.py --gravel --frames 600   # honest windowed fps, then exit
     python warp_mudsnow_drive.py --gravel --shot --script gravel_take   # launch mp4 + stills
     python warp_mudsnow_drive.py --sand                  # that lane as deep dune sand + a dune
-    python warp_mudsnow_drive.py --sand --shot --script sand_dune_stop --out-dir D:/x
+    python warp_mudsnow_drive.py --sand --shot --script sand_dune_stop --out-dir sand_out
                                                          # CSV + stills (--clip PATH: an mp4)
     python warp_mudsnow_drive.py --film --interop        # the film (see below)
     python warp_mudsnow_drive.py --film --gravel --interop   # + the spread's take
@@ -1853,7 +1853,7 @@ GR_WHEEL_MU = 0.6               # set_wheels' rim friction (its default)
 
 # --- the sand lane (--sand): the gravel slot with deep, loose, dry dune sand ----
 # Calibrated with ONE car wheel (r 0.40 = R_WHEEL, 240 mm tread, W 4.5 kN, h 40
-# mm, 0.5 m deep; D:/dev/sand_lane/probe_car_wheel.py, config "R"; plausible, NOT
+# mm, 0.5 m deep; a single-wheel probe, config "R"; plausible, NOT
 # validated): Drucker-Prager 32 deg (loose dune sand), rho 1650, E 1 MPa, cap
 # p0 20 kPa / lambda 0.015 / bound 150 kPa; lugs 12 x 15 mm x 40 mm, mu 0.45.
 #   static sinkage 112 mm (elastic share 7 %: E = 1 MPa is as soft as that allows)

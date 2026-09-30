@@ -1,7 +1,7 @@
 """Clearance between the snake's rendered body and the cradle's solid parts, per telemetry row
 (negative = the body passes through a part).
 
-    python snake_dock_clearance.py D:/dev/snake_out/film/raw_seed0_telemetry.npz [more.npz ...]
+    python snake_dock_clearance.py out/film/raw_seed0_telemetry.npz [more.npz ...]
 
 Exit code 1 if any row overlaps any part. Body: per link, points along the link axis at the visual
 radius (the head's lamp pods, the side thrusters' ducts on link 2 from the head, the tail cap to

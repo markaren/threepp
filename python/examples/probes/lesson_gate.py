@@ -1,6 +1,6 @@
 """Regression gate for the lesson films: does a refactor of the lesson toolkit change a film?
 
-    python lesson_gate.py --save D:/dev/lesson_out/_api/base1 [--only intro,rocket]
+    python lesson_gate.py --save lesson_out/_api/base1 [--only intro,rocket]
     python lesson_gate.py --compare base1 base2                    # the null: two runs of one tree
     python lesson_gate.py --compare base1 after --null base1 base2  # exit 0 = within the null
 
@@ -16,9 +16,10 @@ for the GL lessons, up to 4 for warp), except in specks of at most 3x3 pixels (2
 all: the streamed shot's noise lands anew each run), and at most 5000 pixels (or twice the
 null's count) may differ.
 
-Each lesson runs from its film folder, so it finds the voice cache (and warp_threepp its clips)
-the film was made with. A voice line missing from the cache is synthesized and reported; a
-missing Warp clip fails the run instead of being rendered again.
+Each lesson runs from its film folder (under lesson_out/ in the current directory, the lessons'
+own default --outdir), so it finds the voice cache (and warp_threepp its clips) the film was
+made with. A voice line missing from the cache is synthesized and reported; a missing Warp clip
+fails the run instead of being rendered again.
 """
 import argparse
 import glob
@@ -34,7 +35,7 @@ from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LESSON_DIR = os.path.join(os.path.dirname(HERE), "lesson")
-FILMS = "D:/dev/lesson_out"
+FILMS = os.path.abspath("lesson_out")
 
 # name: (script, cwd, --outdir relative to cwd)
 LESSONS = {

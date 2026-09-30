@@ -25,7 +25,7 @@ Everything runs in raw Warp kernels (graph-coloured Gauss-Seidel XPBD, one CUDA
 graph per frame); threepp's Vulkan path tracer draws it.
 
     python warp_soft_tentacle.py                 # window, drag to orbit
-    python warp_soft_tentacle.py --video 12.2    # headless film -> D:/dev/_softbody_films/soft_tentacle
+    python warp_soft_tentacle.py --video 12.2    # headless film -> out/soft_tentacle beside this script
     python warp_soft_tentacle.py --video 12.2 --size 960x540   # quick preview
     python warp_soft_tentacle.py --probe 10 --arms 1           # sim only, prints
 """
@@ -47,7 +47,8 @@ from warp_common import (Encoder, accum_normals, cli_arg, load_font, parse_size,
 
 VIDEO = cli_arg("--video", 0.0, float)
 PROBE = cli_arg("--probe", 0.0, float)      # sim only, print tip/ball, no render
-OUTDIR = cli_arg("--outdir", r"D:\dev\_softbody_films\soft_tentacle", str)
+OUTDIR = cli_arg("--outdir", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "out", "soft_tentacle"), str)
 W, H = parse_size(cli_arg("--size", "1920x1080", str))
 NOBALL = "--noball" in sys.argv
 

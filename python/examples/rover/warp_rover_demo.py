@@ -20,7 +20,7 @@ dynamics are here, in numpy.
     C        chase <-> lab camera                  R      reset the rover and the sand
     F        save a frame
 
-Outputs go under --out (default D:/dev/rover_demo).
+Outputs go under --out (default out/demo beside this script).
 
 The coupling, per 1/60 s frame (the same architecture as warp_mudsnow_drive.py's
 gravel lane, minus PhysX):
@@ -95,9 +95,9 @@ PHYSICS = dict(
     # --- soil back-end ---
     #   "lane":    ONE GranularMPM box over the rover's lane, wheels = LUGGED (the
     #              real 24 grousers, inflated to one cell thick, Coulomb rim and
-    #              lug faces). The lugs scoop: a stalled wheel DIGS (dig test,
-    #              D:/dev/rover_demo/dig_*: 225 mm in 12 s at 100 % slip, vs 38 mm
-    #              and stop for the envelope). ~10x the cost of the patches.
+    #              lug faces). The lugs scoop: a stalled wheel DIGS (dig test:
+    #              225 mm in 12 s at 100 % slip, vs 38 mm and stop for the
+    #              envelope). ~10x the cost of the patches.
     #   "patches": GranularPatches (4 moving windows), the grouser ENVELOPE
     #              cylinder: real time, but a stalled wheel only polishes its rut.
     soil="patches",
@@ -131,7 +131,7 @@ if "--P" in sys.argv:
         elif not isinstance(PHYSICS[_k], tuple):
             PHYSICS[_k] = type(PHYSICS[_k])(float(_v))
 
-OUT = cli_arg("--out", "D:/dev/rover_demo", str)
+OUT = cli_arg("--out", os.path.join(_HERE, "out", "demo"), str)
 os.makedirs(OUT, exist_ok=True)
 SHOT = "--shot" in sys.argv
 def _record_arg():

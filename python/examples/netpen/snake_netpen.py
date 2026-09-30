@@ -9,19 +9,19 @@ plugs in through the same pose-provider interface.
 
     python snake_netpen.py                                   # window; drag to orbit, Esc quits
     python snake_netpen.py --snake-shot snake_hud --out x.png --seconds 8 --size 1600x900
-    python snake_netpen.py --snake-shot all --out D:/dev/snake_out/shots --tag _v1
+    python snake_netpen.py --snake-shot all --tag _v1        # -> out/shots/<shot>_v1.png
 
 Flag contract
   Own flags (warp_netpen never sees them):
     --snake-shot NAME   headless still: snake_dock snake_school snake_tear snake_hud snake_top, a comma
                         list of them, or `all` (one process renders the list in order, top last)
-    --out PATH          the PNG (one shot) or the directory (a list; default D:/dev/snake_out/shots)
+    --out PATH          the PNG (one shot) or the directory (a list; default out/shots beside this script)
     --tag SUFFIX        appended to each still's name (e.g. _v1)
     --seed N            current heading jitter: N = 0 is the scene's own current, N > 0 rotates
                         warp_netpen.current_at by a seeded N(0, 0.15) rad
     --snake-film        pass 1 of the film: the mission (as --mission) rendered EVERY frame with the
                         film camera (a phase-driven shot director); writes to --out (default
-                        D:/dev/snake_out/film) raw_seedN.mp4 (the 3D frame, crf 12), raw_seedN_aux.mp4
+                        out/film) raw_seedN.mp4 (the 3D frame, crf 12), raw_seedN_aux.mp4
                         (head-camera view + sonar image, composited offline), the run's telemetry npz /
                         json and raw_seedN_film_log.npz (per frame: mission t, shot, cut, camera).
                         Pass 2 (the edit, panels, title and end card): snake_film_cut.py
@@ -79,7 +79,7 @@ TAG = cli_arg("--tag", "", str)
 SIZE = cli_arg("--size", "1920x1080" if SNAKE_FILM else "1600x900", str)
 SECONDS = cli_arg("--seconds", 8.0, float)
 SHOT_NAMES = ("snake_dock", "snake_school", "snake_tear", "snake_hud", "snake_top")
-OUT_DIR_DEFAULT = "D:/dev/snake_out/shots"
+OUT_DIR_DEFAULT = os.path.join(_HERE, "out", "shots")
 OUT = cli_arg("--out", "", str)
 SHOT_LIST = SHOT_NAMES if SNAKE_SHOT == "all" else tuple(n for n in SNAKE_SHOT.split(",") if n)
 if any(n not in SHOT_NAMES for n in SHOT_LIST):
@@ -1173,7 +1173,7 @@ def run_mission(shots=False):
     every frame of a still's 40-frame lead-in."""
     import json
     import snake_mission as MS
-    out_dir = OUT or "D:/dev/snake_out/mission"
+    out_dir = OUT or os.path.join(_HERE, "out", "mission")
     os.makedirs(out_dir, exist_ok=True)
     W.renderer.set_flush_frames(1)
     W.hud_park(True)                                      # the sonar only runs while the HUD is live
@@ -1479,7 +1479,7 @@ def run_film():
     from PIL import Image
     from demo_common import Encoder
     import snake_mission as MS
-    out_dir = OUT or "D:/dev/snake_out/film"
+    out_dir = OUT or os.path.join(_HERE, "out", "film")
     os.makedirs(out_dir, exist_ok=True)
     stem = os.path.join(out_dir, f"raw_seed{SEED}{TAG}")
     R = W.renderer

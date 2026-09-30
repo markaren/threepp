@@ -41,11 +41,11 @@ toward the hole, U-turns, returns and docks into the current through a funnel. S
 | `snake_dock_clearance.py` | The rendered body against the cradle's bars, rings, funnels and pad, per telemetry row; exit 1 on any overlap. |
 
     python python/examples/netpen/snake_model.py --selftest
-    python python/examples/netpen/snake_sweep.py                          # -> D:/dev/snake_out/sweep
+    python python/examples/netpen/snake_sweep.py                          # -> python/examples/netpen/out/sweep
     python python/examples/netpen/snake_netpen.py --mission --seed 0 --size 640x360 --render-every 3
-    python python/examples/netpen/snake_netpen.py --snake-film --seed 0   # 1920x1080, every frame -> D:/dev/snake_out/film
+    python python/examples/netpen/snake_netpen.py --snake-film --seed 0   # 1920x1080, every frame -> python/examples/netpen/out/film
     python python/examples/netpen/snake_netpen.py --snake-film --film-test   # stills per phase instead
-    python python/examples/netpen/snake_film_cut.py                       # -> D:/dev/snake_out/film/snake_film.mp4
+    python python/examples/netpen/snake_film_cut.py                       # -> python/examples/netpen/out/film/snake_film.mp4
 
 What is modelled and what is approximated:
 

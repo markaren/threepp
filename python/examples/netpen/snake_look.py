@@ -2,9 +2,9 @@
 
 Headless Vulkan, 1280x720, 30 fps, piped to x264 (demo_common.Encoder). The physics is
 snake_model.Snake at 240 Hz; the camera follows the centre of mass from a 3/4 view. Outputs
-D:/dev/snake_out/sweep/look.mp4 and look_strip.png (6 frames). Called by snake_sweep.py --look.
+look.mp4 and look_strip.png (6 frames) to out/sweep beside this script. Called by snake_sweep.py --look.
 
-    python snake_look.py [--seconds 10] [--out D:/dev/snake_out/sweep]
+    python snake_look.py [--seconds 10] [--out DIR]
 """
 import argparse
 import math
@@ -59,7 +59,7 @@ def main(argv=None):
     ap.add_argument("--seconds", type=float, default=10.0)
     ap.add_argument("--switch", type=float, default=4.5, help="film time of the switch to eel-like")
     ap.add_argument("--preroll", type=float, default=4.0, help="lateral swimming before the first frame")
-    ap.add_argument("--out", default="D:/dev/snake_out/sweep")
+    ap.add_argument("--out", default=os.path.join(_HERE, "out", "sweep"))
     args = ap.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
 

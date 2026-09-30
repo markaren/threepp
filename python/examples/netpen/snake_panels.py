@@ -4,10 +4,10 @@ Pure code: numpy + PIL (+ matplotlib for the end card's plots). No threepp, no G
 the 3D frames (with the head-camera inset and the sonar panel already in them); this module draws the
 HUD on top of each frame from the mission log, so the layout can change without a re-render.
 
-    python snake_panels.py --preview                      # PNGs in D:/dev/snake_out/film
+    python snake_panels.py --preview                      # PNGs in out/film beside this script
 
 API:
-    P = Panels("seed0_telemetry.npz", "seed0.json", "D:/dev/snake_out/sweep")
+    P = Panels("seed0_telemetry.npz", "seed0.json", "out/sweep")
     out = P.compose(frame_rgb, t_mission, speedup=1.0, sonar_rect=None, sonar_gap_xy=None)
     card = P.end_card((1920, 1080))
 
@@ -32,6 +32,8 @@ from functools import lru_cache
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+
+_OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out")
 
 SS = 2                                     # panels are drawn at 2x and downsampled (anti-aliasing)
 
@@ -953,11 +955,11 @@ def _test_frame(W=1920, H=1080):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--preview", action="store_true")
-    ap.add_argument("--telemetry", default="D:/dev/snake_out/mission/seed0_telemetry.npz")
-    ap.add_argument("--summary", default="D:/dev/snake_out/mission/seed0.json")
-    ap.add_argument("--sweep", default="D:/dev/snake_out/sweep")
-    ap.add_argument("--still", default="D:/dev/snake_out/mission/seed0_follow_wall.png")
-    ap.add_argument("--out", default="D:/dev/snake_out/film")
+    ap.add_argument("--telemetry", default=os.path.join(_OUT, "mission", "seed0_telemetry.npz"))
+    ap.add_argument("--summary", default=os.path.join(_OUT, "mission", "seed0.json"))
+    ap.add_argument("--sweep", default=os.path.join(_OUT, "sweep"))
+    ap.add_argument("--still", default=os.path.join(_OUT, "mission", "seed0_follow_wall.png"))
+    ap.add_argument("--out", default=os.path.join(_OUT, "film"))
     a = ap.parse_args()
     if not a.preview:
         ap.print_help()

@@ -6,12 +6,13 @@ film log (mission time, shot, cuts). This script cuts them into the film, from t
 telemetry: every time-lapse segment, inset emphasis and label hangs off the run's phase events
 and logged distances, never off a hard-coded time.
 
-    python snake_film_cut.py                                  # D:/dev/snake_out/film/raw_seed0*
-    python snake_film_cut.py --raw D:/dev/snake_out/film/raw_seed0 --workers 4
+    python snake_film_cut.py                                  # out/film/raw_seed0*
+    python snake_film_cut.py --raw out/film/raw_seed0 --workers 4
     python snake_film_cut.py --plan                           # print the schedule and exit
 
-Writes D:/dev/snake_out/film/snake_film.mp4 (1920x1080, 60 fps, libx264 crf 18, yuv420p),
-snake_film_contact.png (16 frames) and snake_film_poster.png.
+Writes out/film/snake_film.mp4 (1920x1080, 60 fps, libx264 crf 18, yuv420p),
+snake_film_contact.png (16 frames) and snake_film_poster.png. out/ is beside this script; the
+--raw, --seeds and --sweep defaults read from it too.
 
 The edit: a title card; the mission with speed-ramped time-lapse on the long transits (labelled by
 the panels' TIME-LAPSE badge; real time for the undock, the tear, the first pass, the U-turn and
@@ -344,12 +345,12 @@ def work(args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--raw", default="D:/dev/snake_out/film/raw_seed0")
-    ap.add_argument("--seeds", default="D:/dev/snake_out/mission/seed0.json,D:/dev/snake_out/mission/seed1.json,"
-                                       "D:/dev/snake_out/mission/seed2.json")
+    root = os.path.join(_HERE, "out")
+    ap.add_argument("--raw", default=os.path.join(root, "film", "raw_seed0"))
+    ap.add_argument("--seeds", default=",".join(os.path.join(root, "mission", f"seed{k}.json") for k in range(3)))
     ap.add_argument("--seeds-note", default="", help="the end card's seed-block note (e.g. which tree they ran on)")
-    ap.add_argument("--sweep", default="D:/dev/snake_out/sweep")
-    ap.add_argument("--out", default="D:/dev/snake_out/film/snake_film.mp4")
+    ap.add_argument("--sweep", default=os.path.join(root, "sweep"))
+    ap.add_argument("--out", default=os.path.join(root, "film", "snake_film.mp4"))
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--plan", action="store_true")
     ap.add_argument("--limit", type=float, default=0.0, help="only the first N s of the mission section (a test)")

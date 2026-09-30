@@ -15,7 +15,7 @@ glass bowl and the table are analytic colliders. The whole substep loop is
 captured once into a CUDA graph and replayed each frame.
 
     python warp_gummy_rain.py                 # window; drag to orbit
-    python warp_gummy_rain.py --video 10      # headless Vulkan film -> C:/dev/_softbody_films/gummy_rain
+    python warp_gummy_rain.py --video 10      # headless Vulkan film -> out/gummy_rain beside this script
     python warp_gummy_rain.py --video 10 --size 960x540 --n 300
     python warp_gummy_rain.py --video 10 --clean   # no caption (for a film that titles it)
     python warp_gummy_rain.py --glow-light    # the glow also lights the scene (much slower)
@@ -37,7 +37,8 @@ from warp_common import (Encoder, SoupInterop, accum_normals, cli_arg, load_font
 
 VIDEO = cli_arg("--video", 0.0, float)
 W, H = parse_size(cli_arg("--size", "1920x1080", str))
-OUTDIR = cli_arg("--out", "C:/dev/_softbody_films/gummy_rain", str)
+OUTDIR = cli_arg("--out", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       "out", "gummy_rain"), str)
 N_CANDY = cli_arg("--n", 600, int)
 SUBSTEPS = cli_arg("--substeps", 20, int)
 FPS = 60
