@@ -1,0 +1,179 @@
+{
+ "schema": "threepp.usv_spec/1",
+ "name": "sjark",
+ "description": "A modern Norwegian GRP coastal fishing sjark of the 10.99 m licence class (under 11 m): wheelhouse forward, open working deck aft, rigged for gillnet (net hauler to starboard, net stacker aft, landing derrick). Generic, no brand.",
+ "reference": {
+  "sourced": "fiskerforum.com, 'New sjark rigged for netting' (2017-03-08) and related articles on new 10.99 m GRP sjarks: LOA 10.99 m, beam 4.45 m, 18 m3 fish room, 1200 kg pull net hauler on the starboard side, net stacker aft, wheelhouse with 360 deg view, cabins below the wheelhouse. A narrower variant of the same licence class (finn.no listing of an Arctic 36-type): LOA 10.99 m, beam 3.82 m, draught 1.08 m. Class equipment: 300 hp inboard, 4-blade propeller, anchor winch, landing derrick, hydraulic side thruster.",
+  "geometry_source": "No lines are public. Proportions (freeboard, sheer, wheelhouse position and height, bulwark height) are read off side photos of 10.99 m sjarks in the fiskerforum articles: freeboard to the rubbing strake about 1.5 m aft and 2.0 m at the bow, a white bulwark of about 1.0 m aft, the wheelhouse front about 2 m aft of the stem.",
+  "assumed": "Everything not in 'sourced' is ASSUMED: hull lines, appendages, the whole mass budget, equipment dimensions, livery palette, registration marks (fictional)."
+ },
+ "units": "SI: metres, kilograms, newtons, seconds. Keys ending in _deg are degrees.",
+ "frame": {
+  "handedness": "right", "forward": "+X", "up": "+Y", "right": "+Z (starboard)", "left": "-Z (port)",
+  "origin": "On the centreline, on the moulded baseline (the canoe-body keel rabbet amidships, y = 0), halfway along the length overall (bow extreme x = +5.495, stern extreme x = -5.495).",
+  "appendages_below_baseline": "The bar keel, skeg and skeg shoe reach principal.lowest_point_y; the draft is measured from there.",
+  "gltf": "sjark.glb is Y-up, same axes and metres as this frame. Node 'sjark' is the root and sits at identity."
+ },
+ "principal": {
+  "loa": 10.99, "beam": 4.45, "height": 8.4, "lowest_point_y": -0.44,
+  "draft_reference": 1.08,
+  "draft_note": "SOURCED 1.08 m draught (the narrower 3.82 m variant of the class). Read as the maximum draft (lowest point of the skeg shoe to the waterline) at the departure condition; the generator asserts the solved draft within hydrostatics.draft_tolerance.",
+  "beam_note": "SOURCED 4.45 m, over the rubbing strakes."
+ },
+ "hull": {
+  "note": "ASSUMED lines of a hard-chine GRP sjark. Tables are (x, value) and are interpolated by a monotone cubic (pchip). keel_profile = canoe-body centreline bottom (rabbet), running up the forefoot into the stem. The section at each station: keel -> bottom (convex by bottom_convexity) -> chine -> flared topside -> sheer (deck edge) -> cambered deck to the centreline.",
+  "transom_x": -5.45, "stem_x": 5.45,
+  "keel_profile": [[-5.45, 0.62], [-4.4, 0.48], [-3.2, 0.2], [-1.8, 0.04], [0.0, 0.0], [2.5, 0.02], [3.8, 0.1], [4.6, 0.3], [5.1, 0.62], [5.35, 1.0], [5.45, 1.35]],
+  "chine_halfbreadth": [[-5.45, 1.72], [-3.0, 1.84], [-0.5, 1.86], [1.5, 1.8], [3.0, 1.6], [4.0, 1.22], [4.7, 0.74], [5.2, 0.3], [5.45, 0.035]],
+  "chine_height": [[-5.45, 0.75], [-3.0, 0.55], [-0.5, 0.5], [1.5, 0.56], [3.0, 0.72], [4.0, 0.92], [4.7, 1.12], [5.2, 1.32], [5.45, 1.5]],
+  "sheer_halfbreadth": [[-5.45, 2.08], [-3.0, 2.18], [-0.5, 2.18], [1.5, 2.14], [3.0, 1.98], [4.0, 1.7], [4.7, 1.3], [5.2, 0.75], [5.45, 0.12]],
+  "sheer_height": [[-5.45, 2.26], [-0.5, 2.26], [3.0, 2.33], [4.5, 2.4], [5.45, 2.46]],
+  "bottom_convexity": 0.05,
+  "topside_flare_power": 1.6,
+  "deck_camber": 0.08,
+  "stations": {"dx": 0.12, "fine_ranges": [[3.6, 5.45]], "dx_fine": 0.05},
+  "rubbing_strake": {"height": 0.14, "thickness": 0.045, "y_below_sheer": 0.02, "note": "ASSUMED; the black rub rail at deck level; its outboard face defines the 4.45 m beam."}
+ },
+ "paint": {
+  "note": "ASSUMED. The antifouling runs to antifouling_top_y (the design waterline plus a margin), the boot-top stripe above it to boot_top_y. Both levels are hull vertices, so the material split is exact.",
+  "antifouling_top_y": 0.75, "boot_top_y": 0.87
+ },
+ "appendages": {
+  "note": "ASSUMED. Bar keel along the bottom from the forefoot into a skeg; the skeg ends at the propeller aperture; a skeg shoe carries the rudder heel.",
+  "keel": {"x_fwd": 4.6, "x_aft": -4.15, "bottom": [[-4.15, -0.4], [-1.0, -0.34], [2.0, -0.24], [3.8, -0.05], [4.6, 0.22]], "half_thickness": [[-4.15, 0.1], [0.0, 0.08], [4.6, 0.05]], "embed": 0.06},
+  "skeg_shoe": {"x0": -5.02, "x1": -4.1, "y0": -0.44, "y1": -0.38, "half_width": 0.06}
+ },
+ "propulsion": {
+  "note": "SOURCED: 300 hp inboard, 4-blade propeller, hydraulic side thruster. ASSUMED: dimensions, thrust.",
+  "engine_power_kw": 221.0,
+  "propeller": {"x": -4.42, "axis_y": 0.02, "diameter": 0.72, "blades": 4, "hub_radius": 0.08, "hub_length": 0.26, "pitch_deg": 28.0, "shaft_radius": 0.035, "shaft_x0": -3.6, "bollard_thrust_n": 24000.0},
+  "rudder": {"stock_x": -4.86, "chord": 0.56, "leading_frac": 0.22, "y0": -0.36, "y1": 0.6, "half_thickness": 0.035, "stock_radius": 0.05, "limit_deg": 35.0},
+  "bow_thruster": {"position": [3.9, 0.45, 0.0], "tunnel_radius": 0.13, "thrust_axis": "+Z", "thrust_n": 3000.0}
+ },
+ "bulwark": {
+  "note": "ASSUMED. A wall on the sheer following the topside flare; height above the deck edge by x; a cap rail on top. Freeing ports are dark decals near the deck on the outer face.",
+  "height": [[-5.45, 1.15], [-0.6, 1.15], [0.4, 1.14], [3.0, 1.1], [5.45, 1.03]],
+  "thickness": 0.07, "flare_per_m": 0.03,
+  "cap": {"width": 0.12, "height": 0.05},
+  "transom_height": 1.15,
+  "freeing_ports": {"x": [-4.6, -3.4, -2.2, -1.0], "length": 0.45, "height": 0.16},
+  "bow_rail": {"x0": 1.8, "height": 0.3, "radius": 0.022, "stanchion_dx": 0.9}
+ },
+ "wheelhouse": {
+  "note": "ASSUMED sizes; SOURCED arrangement (forward wheelhouse, 360 deg view). Forward face reverse-raked (windows lean out at the top) as on Norwegian fishing boats.",
+  "x_front": 3.25, "x_aft": -0.55, "half_width_front": 1.42, "half_width_aft": 1.72,
+  "floor_y": 2.2, "height": 2.4, "front_rake": 0.32, "side_tumblehome": 0.08,
+  "roof": {"overhang": 0.12, "thickness": 0.12, "crown": 0.05},
+  "windows": {"front_panes": 3, "side_panes": 2, "aft_panes": 2, "head_below_roof": 0.2, "depth": 1.0, "side_depth": 0.62, "aft_depth": 0.6, "gap": 0.1, "inset": 0.12},
+  "door": {"x0": -0.35, "x1": 0.35, "height": 1.9, "note": "aft door, dark decal"},
+  "roof_rail": {"height": 0.35, "radius": 0.02, "stanchion_dx": 0.8}
+ },
+ "mast": {
+  "note": "ASSUMED. Pole mast on the aft roof with a radar platform and a yard for the lights; VHF whips and GNSS on the roof.",
+  "x": -0.1, "height_above_roof": 3.3, "radius_base": 0.075, "radius_top": 0.045,
+  "platform_y_above_roof": 1.05, "platform": [0.55, 0.06, 0.5],
+  "radar": {"pedestal": [0.34, 0.3, 0.26], "array_length": 1.25, "array_section": [0.12, 0.2], "rpm": 24, "range_max": 24000.0},
+  "yard": {"y_above_roof": 2.45, "half_span": 0.45, "radius": 0.025},
+  "vhf": [{"base": [0.4, 0.0, -1.2], "length": 2.4}, {"base": [0.4, 0.0, 1.2], "length": 2.4}],
+  "gnss": [{"base": [1.4, 0.0, -0.5]}, {"base": [1.4, 0.0, 0.5]}],
+  "searchlight": {"base": [2.7, 0.0, 0.0]},
+  "camera_mast": {"position_above_roof": [0.12, 1.55, 0.0], "look": [1.0, -0.08, 0.0], "note": "a place a demo can mount a camera, looking forward"}
+ },
+ "lights": {
+  "note": "COLREG positions for a power-driven vessel under 12 m; ASSUMED heights.",
+  "nav_light_port": {"on": "wheelhouse", "x": 2.7, "y_above_roof": -0.3, "colour": "red", "sector_deg": 112.5},
+  "nav_light_stbd": {"on": "wheelhouse", "x": 2.7, "y_above_roof": -0.3, "colour": "green", "sector_deg": 112.5},
+  "masthead_light": {"y_above_roof": 2.55, "colour": "white", "sector_deg": 225.0},
+  "stern_light": {"x": -5.4, "y": 3.3, "colour": "white", "sector_deg": 135.0}
+ },
+ "gear": {
+  "note": "SOURCED: net hauler (1200 kg pull) on the starboard side, net stacker aft, landing derrick, anchor winch. ASSUMED dimensions.",
+  "net_hauler": {"x": -1.25, "z": 1.9, "y_above_rail": 0.35, "disc_diameter": 0.72, "disc_width": 0.3, "post_z": 1.45, "pull_kg": 1200},
+  "line_hauler": {"x": -1.25, "z": 1.85, "y_above_rail": 0.3, "disc_diameter": 0.5, "disc_width": 0.18, "post_z": 1.5},
+  "hauling_roller": {"x0": -1.75, "x1": -0.75, "radius": 0.07},
+  "net_stacker": {"x": -4.6, "half_span": 1.35, "post_height": 1.45, "roller_radius": 0.09},
+  "derrick": {"pivot": [-0.75, 3.1, -0.55], "post_radius": 0.08, "boom_length": 4.2, "boom_elev_deg": 32.0, "boom_radius": 0.055, "boom_heading_deg": 180.0, "limit_deg": 120.0},
+  "fish_hatch": {"x": -2.6, "size": [1.0, 0.28, 1.0], "lid": 0.05},
+  "anchor_winch": {"x": 4.2, "size": [0.45, 0.35, 0.4], "drum_radius": 0.12},
+  "bollards": {"fwd_x": 4.55, "aft_x": -5.0, "radius": 0.06, "height": 0.28, "spacing": 0.24, "inset": 0.35},
+  "tow_point": [-5.3, 2.4, 0.0]
+ },
+ "registration": {
+  "note": "Norwegian fishing registration (county letter - number - district letters), FICTIONAL. Painted on both bows as text geometry. Letter height ASSUMED.",
+  "text": "M-101-HØ", "cap_height": 0.3, "stroke_offset": 0.0, "x_centre": 3.55, "y_centre": 1.95, "extrude": 0.003, "offset": 0.006
+ },
+ "livery": {
+  "note": "Seeded palettes (ASSUMED common sjark colours). Default build = 'white'. A livery sets the colours of hull_topside, bulwark_paint, house_paint, antifouling and boot_top; the registration is painted reg_light on a hull darker than reg_light_below_luminance.",
+  "hull": {"white": [0.82, 0.82, 0.8], "red": [0.5, 0.035, 0.03], "blue": [0.02, 0.07, 0.24], "green": [0.03, 0.2, 0.08], "cream": [0.78, 0.66, 0.42], "orange": [0.75, 0.18, 0.03], "yellow": [0.78, 0.55, 0.06]},
+  "house": {"white": [0.84, 0.84, 0.82], "light_grey": [0.6, 0.62, 0.62], "blue": [0.03, 0.09, 0.3], "cream": [0.8, 0.7, 0.5]},
+  "antifouling": {"red": [0.28, 0.035, 0.03], "black": [0.022, 0.022, 0.022], "blue": [0.03, 0.05, 0.12]},
+  "boot_top": {"black": [0.02, 0.02, 0.02], "red": [0.45, 0.03, 0.03], "blue": [0.02, 0.05, 0.2], "white": [0.82, 0.82, 0.8]},
+  "reg_light": [0.85, 0.85, 0.83], "reg_light_below_luminance": 0.3,
+  "county": ["F", "T", "N", "M", "SF", "H", "R", "VA", "AA"],
+  "district": ["HØ", "AE", "VV", "BD", "LN", "SA", "AV", "K", "ST", "B"]
+ },
+ "mass": {
+  "note": "ASSUMED component budget for a 10.99 m GRP sjark (10-15 t class). Centroids are where each component sits in this model. The generator recomputes the CoM and the floating position for each condition.",
+  "dry": 10250.0,
+  "budget": [
+   {"item": "GRP hull shell, bottom, topsides, transom, frames", "mass": 3300.0, "centroid": [0.1, 1.15, 0.0]},
+   {"item": "deck, bulwark, rubbing strakes", "mass": 1700.0, "centroid": [0.0, 2.75, 0.0]},
+   {"item": "keel, skeg, ballast in the keel", "mass": 500.0, "centroid": [-0.8, -0.05, 0.0]},
+   {"item": "engine 300 hp, gearbox, shaft, propeller", "mass": 1300.0, "centroid": [-1.6, 0.8, 0.0]},
+   {"item": "wheelhouse, roof, windows, interior below and in the house", "mass": 1700.0, "centroid": [1.5, 3.5, 0.0]},
+   {"item": "mast, radar, electronics, lights", "mass": 250.0, "centroid": [-0.1, 5.4, 0.0]},
+   {"item": "net hauler, stacker, derrick, anchor winch, hydraulics", "mass": 900.0, "centroid": [-1.9, 2.9, 0.55]},
+   {"item": "fish room insulation, tanks empty, systems", "mass": 600.0, "centroid": [-1.2, 1.0, 0.0]}
+  ],
+  "com_dry": [-0.2005, 1.9507, 0.0483],
+  "gyradius": {"roll": 1.6, "pitch": 2.7, "yaw": 2.8},
+  "inertia_note": "ASSUMED radii of gyration: roll 0.36 B, pitch 0.25 L, yaw 0.26 L about the CoM.",
+  "conditions": {
+   "lightship": {"extra": []},
+   "departure": {"extra": [
+    {"item": "diesel 1200 L", "mass": 1010.0, "centroid": [-1.6, 0.55, 0.0]},
+    {"item": "fresh water 300 L", "mass": 300.0, "centroid": [1.8, 0.7, 0.0]},
+    {"item": "nets, ice, crew of 2", "mass": 900.0, "centroid": [-2.8, 2.9, 0.0]}]},
+   "full_load": {"extra": [
+    {"item": "diesel 1200 L", "mass": 1010.0, "centroid": [-1.6, 0.55, 0.0]},
+    {"item": "fresh water 300 L", "mass": 300.0, "centroid": [1.8, 0.7, 0.0]},
+    {"item": "nets, ice, crew of 2", "mass": 900.0, "centroid": [-2.8, 2.9, 0.0]},
+    {"item": "catch in the fish room", "mass": 3200.0, "centroid": [-1.9, 1.05, 0.0]}]}
+  },
+  "design_condition": "departure"
+ },
+ "hydrostatics": {
+  "rho": 1025.0, "g": 9.81,
+  "grid": {"dx": 0.04, "dz": 0.04, "dy": 0.01, "x_range": [-5.6, 5.6], "z_range": [-2.4, 2.4], "y_range": [-0.46, 2.2]},
+  "draft_tolerance": 0.1, "trim_limit_deg": 2.0, "gm_t_range": [0.4, 1.5],
+  "bonjean": {"station_dx": 0.25, "heights": [-0.44, 2.1, 0.02], "x_range": [-5.5, 5.5]},
+  "note": "Computed by the generator from the buoyant closed meshes (hull shell, bar keel and skeg) with the Mariner's winding-number column integrator. Written to sjark_hydro.json."
+ },
+ "materials": {
+  "note": "Linear RGB. ASSUMED albedos. hull_topside, bulwark_paint, house_paint, antifouling and boot_top are overridden by the livery.",
+  "hull_topside": {"color": [0.82, 0.82, 0.8], "metallic": 0.0, "roughness": 0.3},
+  "antifouling": {"color": [0.28, 0.035, 0.03], "metallic": 0.0, "roughness": 0.75},
+  "boot_top": {"color": [0.02, 0.02, 0.02], "metallic": 0.0, "roughness": 0.35},
+  "bulwark_paint": {"color": [0.82, 0.82, 0.8], "metallic": 0.0, "roughness": 0.35},
+  "bulwark_inner": {"color": [0.7, 0.72, 0.7], "metallic": 0.0, "roughness": 0.5},
+  "deck_grey": {"color": [0.36, 0.38, 0.37], "metallic": 0.0, "roughness": 0.85},
+  "rub_black": {"color": [0.018, 0.018, 0.018], "metallic": 0.0, "roughness": 0.55},
+  "cap_rail": {"color": [0.02, 0.02, 0.02], "metallic": 0.0, "roughness": 0.5},
+  "house_paint": {"color": [0.84, 0.84, 0.82], "metallic": 0.0, "roughness": 0.3},
+  "roof_white": {"color": [0.8, 0.8, 0.78], "metallic": 0.0, "roughness": 0.45},
+  "window_glass": {"color": [0.012, 0.016, 0.02], "metallic": 0.0, "roughness": 0.05},
+  "door_dark": {"color": [0.05, 0.05, 0.05], "metallic": 0.0, "roughness": 0.4},
+  "freeing_port": {"color": [0.01, 0.01, 0.01], "metallic": 0.0, "roughness": 0.8},
+  "steel_galv": {"color": [0.45, 0.46, 0.46], "metallic": 0.9, "roughness": 0.45},
+  "stainless": {"color": [0.7, 0.7, 0.7], "metallic": 1.0, "roughness": 0.22},
+  "bronze": {"color": [0.55, 0.38, 0.18], "metallic": 1.0, "roughness": 0.3},
+  "hydraulic_blue": {"color": [0.02, 0.1, 0.35], "metallic": 0.0, "roughness": 0.4},
+  "hauler_rubber": {"color": [0.03, 0.03, 0.03], "metallic": 0.0, "roughness": 0.85},
+  "radar_white": {"color": [0.78, 0.78, 0.76], "metallic": 0.0, "roughness": 0.35},
+  "black_plastic": {"color": [0.02, 0.02, 0.02], "metallic": 0.0, "roughness": 0.45},
+  "reg_mark": {"color": [0.015, 0.015, 0.015], "metallic": 0.0, "roughness": 0.4},
+  "light_red": {"color": [0.6, 0.02, 0.02], "metallic": 0.0, "roughness": 0.2, "emissive": [1.0, 0.05, 0.03], "emissive_strength": 2.0},
+  "light_green": {"color": [0.02, 0.5, 0.1], "metallic": 0.0, "roughness": 0.2, "emissive": [0.05, 1.0, 0.2], "emissive_strength": 2.0},
+  "light_white": {"color": [0.8, 0.8, 0.75], "metallic": 0.0, "roughness": 0.2, "emissive": [1.0, 0.95, 0.85], "emissive_strength": 2.0}
+ }
+}
