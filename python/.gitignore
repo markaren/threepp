@@ -23,6 +23,10 @@ examples/usv/mariner_hydro.json
 # Generated from otterx_spec.json by examples/usv/build_otterx_blender.py (headless Blender)
 examples/usv/otterx.glb
 examples/usv/otterx_hydro.json
+# Generated from turbine_spec.json by examples/turbine/build_turbine_blender.py (headless Blender)
+examples/turbine/turbine.glb
+# Renders, clips and survey data the turbine demo writes (TURBINE_OUT overrides the folder)
+examples/turbine/out/
 
 # Legacy artifacts from the experimental RL branch (not part of this package)
 *.dll

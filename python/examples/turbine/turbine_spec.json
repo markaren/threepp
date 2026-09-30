@@ -1,0 +1,748 @@
+{
+  "name": "IEA Wind 15-MW offshore reference turbine on its monopile, inspection state",
+  "reference": "Gaertner et al. 2020, NREL/TP-5000-75698, Tables ES-1, 1-1, 2-1, 4-2 (read 2026-09-30)",
+  "frame": "X upwind (the rotor sits on +X of the tower and faces the wind, which blows toward -X), Y up, Z = X x Y; metres; origin on the pile axis at mean sea level; seabed at y = -30",
+  "sources": "report = read in the report's tables; assumed = chosen for the model (dressing, or read off a report figure by eye)",
+  "site": {
+    "water_depth": {
+      "value": 30.0,
+      "source": "report"
+    },
+    "current_toward_deg": {
+      "value": 180.0,
+      "source": "assumed",
+      "note": "azimuth atan2(z, x) the tidal current flows toward; the edge scour pit is on this side"
+    }
+  },
+  "monopile": {
+    "outer_diameter": {
+      "value": 10.0,
+      "source": "report"
+    },
+    "embedment_depth": {
+      "value": 45.0,
+      "source": "report"
+    },
+    "top_y": {
+      "value": 10.0,
+      "source": "assumed",
+      "note": "inside the TP grout sleeve"
+    },
+    "modelled_bottom_y": {
+      "value": -33.0,
+      "source": "assumed",
+      "note": "3 m into the seabed; the rest is buried"
+    }
+  },
+  "transition_piece": {
+    "top_y": {
+      "value": 15.0,
+      "source": "report",
+      "note": "transition piece height = tower start 15 m"
+    },
+    "bottom_y": {
+      "value": -2.5,
+      "source": "assumed"
+    },
+    "outer_diameter": {
+      "value": 10.6,
+      "source": "assumed"
+    },
+    "platform_y": {
+      "value": 12.4,
+      "source": "assumed"
+    },
+    "platform_outer_radius": {
+      "value": 8.6,
+      "source": "assumed"
+    },
+    "railing_height": {
+      "value": 1.1,
+      "source": "assumed"
+    },
+    "boat_landing_azimuth_deg": {
+      "value": 90.0,
+      "source": "assumed"
+    },
+    "boat_landing": {
+      "fender_radius": 0.3,
+      "fender_spacing": 1.9,
+      "standoff": 1.5,
+      "y_range": [
+        -4.0,
+        9.5
+      ],
+      "source": "assumed"
+    },
+    "ladder": {
+      "width": 0.6,
+      "standoff": 0.75,
+      "rung_pitch": 0.3,
+      "y_range": [
+        -3.5,
+        12.4
+      ],
+      "source": "assumed"
+    },
+    "door": {
+      "azimuth_deg": 90.0,
+      "width": 1.0,
+      "height": 2.1,
+      "source": "assumed"
+    },
+    "davit": {
+      "azimuth_deg": 25.0,
+      "height": 4.5,
+      "jib": 3.2,
+      "source": "assumed"
+    },
+    "id_text": {
+      "value": "K07",
+      "azimuths_deg": [
+        50.0,
+        230.0
+      ],
+      "y": 6.5,
+      "height": 2.2,
+      "source": "assumed"
+    }
+  },
+  "tower": {
+    "base_y": {
+      "value": 15.0,
+      "source": "report"
+    },
+    "top_y": {
+      "value": 144.582,
+      "source": "report"
+    },
+    "outer_diameter_profile": {
+      "value": [
+        [
+          15.0,
+          10.0
+        ],
+        [
+          28.0,
+          10.0
+        ],
+        [
+          41.0,
+          9.926
+        ],
+        [
+          54.0,
+          9.443
+        ],
+        [
+          67.0,
+          8.833
+        ],
+        [
+          80.0,
+          8.151
+        ],
+        [
+          93.0,
+          7.39
+        ],
+        [
+          106.0,
+          6.909
+        ],
+        [
+          119.0,
+          6.748
+        ],
+        [
+          132.0,
+          6.572
+        ],
+        [
+          144.582,
+          6.5
+        ]
+      ],
+      "source": "report",
+      "note": "Table 4-2, [y, OD]"
+    },
+    "flange_y": {
+      "value": [
+        41.0,
+        67.0,
+        93.0,
+        119.0
+      ],
+      "source": "assumed",
+      "note": "bolted section joints every other 13 m can of Table 4-2"
+    }
+  },
+  "rotor": {
+    "diameter": {
+      "value": 240.0,
+      "source": "report"
+    },
+    "hub_height": {
+      "value": 150.0,
+      "source": "report"
+    },
+    "hub_diameter": {
+      "value": 7.94,
+      "source": "report"
+    },
+    "hub_overhang": {
+      "value": 11.35,
+      "source": "report"
+    },
+    "shaft_tilt_deg": {
+      "value": 6.0,
+      "source": "report"
+    },
+    "precone_deg": {
+      "value": 4.0,
+      "source": "report",
+      "note": "-4 in OpenFAST sign; tips cone upwind, away from the tower"
+    },
+    "locked_azimuth_blade_1": {
+      "value": "6 o'clock",
+      "source": "assumed",
+      "note": "inspection state"
+    },
+    "pitch_deg": {
+      "value": 90.0,
+      "source": "assumed",
+      "note": "feathered: leading edges face upwind"
+    }
+  },
+  "blade": {
+    "length": {
+      "value": 117.0,
+      "source": "report"
+    },
+    "root_diameter": {
+      "value": 5.2,
+      "source": "report"
+    },
+    "root_cylinder_length": {
+      "value": 2.34,
+      "source": "report"
+    },
+    "max_chord": {
+      "value": 5.77,
+      "source": "report"
+    },
+    "max_chord_span": {
+      "value": 27.2,
+      "source": "report"
+    },
+    "tip_prebend": {
+      "value": 4.0,
+      "source": "report"
+    },
+    "planform": {
+      "source": "assumed",
+      "note": "read off report Fig. 2-4 by eye; [span fraction, chord m, twist deg, rel thickness, pitch axis chord fraction]",
+      "value": [
+        [
+          0.0,
+          5.2,
+          15.6,
+          1.0,
+          0.5
+        ],
+        [
+          0.02,
+          5.2,
+          15.6,
+          1.0,
+          0.5
+        ],
+        [
+          0.08,
+          5.3,
+          15.0,
+          0.8,
+          0.46
+        ],
+        [
+          0.15,
+          5.6,
+          13.5,
+          0.52,
+          0.4
+        ],
+        [
+          0.233,
+          5.77,
+          11.5,
+          0.38,
+          0.36
+        ],
+        [
+          0.3,
+          5.6,
+          9.8,
+          0.33,
+          0.33
+        ],
+        [
+          0.4,
+          5.1,
+          7.2,
+          0.28,
+          0.3
+        ],
+        [
+          0.5,
+          4.5,
+          5.0,
+          0.25,
+          0.3
+        ],
+        [
+          0.6,
+          3.9,
+          3.2,
+          0.24,
+          0.3
+        ],
+        [
+          0.7,
+          3.3,
+          1.8,
+          0.23,
+          0.3
+        ],
+        [
+          0.8,
+          2.7,
+          0.6,
+          0.22,
+          0.3
+        ],
+        [
+          0.9,
+          2.05,
+          -0.6,
+          0.21,
+          0.3
+        ],
+        [
+          0.96,
+          1.5,
+          -1.4,
+          0.21,
+          0.3
+        ],
+        [
+          0.99,
+          0.9,
+          -2.0,
+          0.21,
+          0.3
+        ],
+        [
+          1.0,
+          0.45,
+          -2.2,
+          0.21,
+          0.3
+        ]
+      ]
+    },
+    "stations": {
+      "value": 70,
+      "source": "assumed"
+    },
+    "section_points": {
+      "value": 56,
+      "source": "assumed"
+    }
+  },
+  "nacelle": {
+    "length": {
+      "value": 18.0,
+      "source": "assumed"
+    },
+    "width": {
+      "value": 8.6,
+      "source": "assumed"
+    },
+    "height": {
+      "value": 8.0,
+      "source": "assumed"
+    },
+    "x_range": {
+      "value": [
+        -9.5,
+        4.0
+      ],
+      "source": "assumed"
+    },
+    "generator_diameter": {
+      "value": 10.5,
+      "source": "assumed",
+      "note": "direct drive, near the report's air-gap diameter"
+    },
+    "generator_length": {
+      "value": 2.6,
+      "source": "assumed"
+    },
+    "helihoist": {
+      "x_range": [
+        -9.5,
+        -2.5
+      ],
+      "railing_height": 1.1,
+      "source": "assumed"
+    }
+  },
+  "empties": {
+    "cable_entry": {
+      "azimuth_deg": -135.0,
+      "y": -26.8,
+      "hole_diameter": 1.0,
+      "source": "assumed",
+      "note": "2.6 m above the rock top (-29.4 at the pile)"
+    },
+    "boat_landing": {
+      "note": "at the fender tubes, mid-height of the landing, facing out"
+    },
+    "helihoist": {
+      "note": "centre of the nacelle roof platform"
+    }
+  },
+  "underwater": {
+    "marine_growth": {
+      "top_y": -1.0,
+      "max_thickness": 0.22,
+      "peak_y": -4.0,
+      "bottom_thickness": 0.05,
+      "source": "assumed"
+    },
+    "depth_marks": {
+      "azimuth_deg": -150.0,
+      "strip_half_width": 0.9,
+      "from_m": 3,
+      "to_m": 28,
+      "source": "assumed",
+      "note": "metres below MSL, painted in a cleaned strip"
+    },
+    "anode_cage": {
+      "ring_y": [
+        -10.0,
+        -16.5
+      ],
+      "ring_radius": 5.9,
+      "anodes": 18,
+      "anode_size": [
+        0.26,
+        3.6,
+        0.26
+      ],
+      "source": "assumed"
+    }
+  },
+  "materials": {
+    "note": "Linear RGB",
+    "tp_yellow": {
+      "color": [
+        0.8,
+        0.52,
+        0.02
+      ],
+      "metallic": 0.0,
+      "roughness": 0.5
+    },
+    "tower_grey": {
+      "color": [
+        0.62,
+        0.64,
+        0.64
+      ],
+      "metallic": 0.0,
+      "roughness": 0.45
+    },
+    "flange_grey": {
+      "color": [
+        0.46,
+        0.48,
+        0.48
+      ],
+      "metallic": 0.2,
+      "roughness": 0.5
+    },
+    "pile_steel": {
+      "color": [
+        0.16,
+        0.16,
+        0.15
+      ],
+      "metallic": 0.3,
+      "roughness": 0.6
+    },
+    "grating": {
+      "color": [
+        0.18,
+        0.19,
+        0.19
+      ],
+      "metallic": 0.4,
+      "roughness": 0.7
+    },
+    "rail_yellow": {
+      "color": [
+        0.75,
+        0.48,
+        0.02
+      ],
+      "metallic": 0.0,
+      "roughness": 0.5
+    },
+    "fender_black": {
+      "color": [
+        0.025,
+        0.025,
+        0.025
+      ],
+      "metallic": 0.0,
+      "roughness": 0.6
+    },
+    "galv_steel": {
+      "color": [
+        0.45,
+        0.46,
+        0.46
+      ],
+      "metallic": 0.8,
+      "roughness": 0.45
+    },
+    "paint_black": {
+      "color": [
+        0.02,
+        0.02,
+        0.02
+      ],
+      "metallic": 0.0,
+      "roughness": 0.5
+    },
+    "door_grey": {
+      "color": [
+        0.3,
+        0.31,
+        0.31
+      ],
+      "metallic": 0.2,
+      "roughness": 0.5
+    },
+    "nacelle_white": {
+      "color": [
+        0.68,
+        0.7,
+        0.7
+      ],
+      "metallic": 0.0,
+      "roughness": 0.4
+    },
+    "blade_white": {
+      "color": [
+        0.72,
+        0.73,
+        0.72
+      ],
+      "metallic": 0.0,
+      "roughness": 0.35
+    },
+    "blade_root_grey": {
+      "color": [
+        0.4,
+        0.41,
+        0.41
+      ],
+      "metallic": 0.3,
+      "roughness": 0.5
+    },
+    "helideck_green": {
+      "color": [
+        0.06,
+        0.2,
+        0.08
+      ],
+      "metallic": 0.0,
+      "roughness": 0.7
+    },
+    "marking_yellow": {
+      "color": [
+        0.85,
+        0.6,
+        0.02
+      ],
+      "metallic": 0.0,
+      "roughness": 0.6
+    },
+    "aviation_red": {
+      "color": [
+        0.6,
+        0.02,
+        0.01
+      ],
+      "metallic": 0.0,
+      "roughness": 0.3,
+      "emissive": [
+        1.0,
+        0.05,
+        0.02
+      ],
+      "emissive_strength": 8.0
+    },
+    "hole_dark": {
+      "color": [
+        0.005,
+        0.005,
+        0.005
+      ],
+      "metallic": 0.0,
+      "roughness": 1.0
+    },
+    "anode_alu": {
+      "color": [
+        0.13,
+        0.13,
+        0.125
+      ],
+      "metallic": 0.2,
+      "roughness": 0.95
+    },
+    "mark_paint": {
+      "color": [
+        0.42,
+        0.33,
+        0.07
+      ],
+      "metallic": 0.0,
+      "roughness": 0.8
+    },
+    "mark_paint_deep": {
+      "color": [
+        0.26,
+        0.22,
+        0.08
+      ],
+      "metallic": 0.0,
+      "roughness": 0.85
+    },
+    "growth_base": {
+      "color": [
+        0.12,
+        0.11,
+        0.08
+      ],
+      "metallic": 0.0,
+      "roughness": 0.95
+    },
+    "growth_mussel": {
+      "color": [
+        0.03,
+        0.032,
+        0.035
+      ],
+      "metallic": 0.0,
+      "roughness": 0.95
+    },
+    "growth_weed": {
+      "color": [
+        0.085,
+        0.08,
+        0.035
+      ],
+      "metallic": 0.0,
+      "roughness": 0.95
+    },
+    "growth_anemone": {
+      "color": [
+        0.2,
+        0.17,
+        0.13
+      ],
+      "metallic": 0.0,
+      "roughness": 0.95
+    },
+    "growth_slime": {
+      "color": [
+        0.13,
+        0.15,
+        0.05
+      ],
+      "metallic": 0.0,
+      "roughness": 0.8
+    },
+    "growth_barnacle": {
+      "color": [
+        0.17,
+        0.17,
+        0.15
+      ],
+      "metallic": 0.0,
+      "roughness": 0.95
+    }
+  },
+  "blade_detail": {
+    "source": "assumed",
+    "note": "paint on the blades, each sheet a few mm proud along the local surface normal; built in turbine_site from build_turbine_blender.blade_paint",
+    "lep": {
+      "span_from_m": 58.5,
+      "half_width_m": 0.3,
+      "proud_m": 0.002,
+      "note": "leading-edge protection tape/coating, outer half",
+      "joint_every_m": 3.0
+    },
+    "bond_line": {
+      "span_from_m": 3.0,
+      "width_m": 0.015,
+      "proud_m": 0.0025,
+      "note": "the LE shell bond line"
+    },
+    "receptors": {
+      "radius_m": 0.06,
+      "at_span_arc_m": [
+        [
+          108.0,
+          0.75
+        ],
+        [
+          108.0,
+          -0.75
+        ],
+        [
+          114.5,
+          0.5
+        ],
+        [
+          114.5,
+          -0.5
+        ]
+      ]
+    },
+    "blade_id": {
+      "prefix": "K07-",
+      "span_m": 6.0,
+      "arc_m": -4.1,
+      "height_m": 0.42,
+      "note": "on the +Z (sunlit) face of blade_1"
+    },
+    "erosion": {
+      "blade": 1,
+      "span_m": 82.0,
+      "length_m": 1.5,
+      "half_width_m": 0.2,
+      "note": "leading-edge erosion at 70 % span: pitted, laminate showing, protection strip chipped round it"
+    },
+    "span_marks": {
+      "from_m": 10,
+      "every_m": 10,
+      "arc_m": -0.75,
+      "height_m": 0.28,
+      "note": "inspection span marks, numbers every 10 m on the +Z face beside the LE (assumed)"
+    }
+  }
+}
