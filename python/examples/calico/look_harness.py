@@ -9,7 +9,7 @@ on a flat collider at the known probed floor of spine waypoint 4, and renders th
 trackside and lookback poses. It shares no state with spot_calico -- it IMPORTS
 its Frame so the two cannot drift -- and it writes nothing but PNGs.
 
-    set PYTHONPATH=C:/dev/threepp/python
+    set PYTHONPATH=python
     py -3.14 python/examples/calico/look_harness.py --look before --tag before
     py -3.14 python/examples/calico/look_harness.py --look after  --tag after
     py -3.14 python/examples/calico/look_harness.py --look after --sky env --tag envsky

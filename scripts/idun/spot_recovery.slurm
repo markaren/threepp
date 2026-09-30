@@ -42,15 +42,15 @@
 #SBATCH --mem=32G
 #SBATCH --time=02:00:00
 #SBATCH --job-name=spotrecov
-#SBATCH --output=/cluster/work/laht/logs/spotrecov-%A_%a.out
-#SBATCH --error=/cluster/work/laht/logs/spotrecov-%A_%a.out
+#SBATCH --output=/cluster/work/%u/logs/spotrecov-%A_%a.out
+#SBATCH --error=/cluster/work/%u/logs/spotrecov-%A_%a.out
 set -euo pipefail
 
 WORK=${WORK:-/cluster/work/$USER}
 SRC=${SRC:-$WORK/threepp}
 RUNS_NAME=${RUNS_NAME:-spot_recovery3}
 RUNS=${RUNS:-$WORK/$RUNS_NAME}
-WARM=${WARM:-$WORK/spot_recovery2/recovA_s0/spot_recovery.pt}   # wave 2 arm A seed 0: /cluster/work/laht/spot_recovery2/...
+WARM=${WARM:-$WORK/spot_recovery2/recovA_s0/spot_recovery.pt}   # wave 2 arm A seed 0
 ENVS=${ENVS:-2048}
 ITERS=${ITERS:-2000}
 EVAL_ENVS=${EVAL_ENVS:-2048}

@@ -17,7 +17,7 @@
     }
   },
   "source": {
-    "asset": "C:\\dev\\splats\\calico_tanks",
+    "asset": "calico_tanks",
     "level": 2,
     "cell_m": 0.5,
     "opacity_min": 0.5,

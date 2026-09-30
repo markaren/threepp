@@ -23,7 +23,8 @@ host-memory upload path. Exit 2 = something more basic is wrong.
 import os
 import sys
 
-sys.path.insert(0, "/cluster/work/laht/threepp/python")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                                "python"))
 for extra in (os.environ.get("THREEPP_SRC"),):
     if extra:
         sys.path.insert(0, os.path.join(extra, "python"))

@@ -40,8 +40,8 @@
 #SBATCH --mem=48G
 #SBATCH --time=10:00:00
 #SBATCH --job-name=handarr
-#SBATCH --output=/cluster/work/laht/logs/handarr-%A_%a.out
-#SBATCH --error=/cluster/work/laht/logs/handarr-%A_%a.out
+#SBATCH --output=/cluster/work/%u/logs/handarr-%A_%a.out
+#SBATCH --error=/cluster/work/%u/logs/handarr-%A_%a.out
 set -euo pipefail
 
 WORK=${WORK:-/cluster/work/$USER}

@@ -425,7 +425,7 @@ def main() -> None:
             "yaw": "atan2(forward.x, forward.z), radians, about +Y",
             "anchor_supersplat": {"pos": [-11.82, 2.19, 1.66], "look": [-13.82, 2.09, 1.73]},
         },
-        "source": {"asset": str(asset), "level": args.level, "cell_m": CELL,
+        "source": {"asset": asset.name, "level": args.level, "cell_m": CELL,
                    "opacity_min": OPACITY_MIN, "floor_quantile": FLOOR_Q,
                    "rms_max_m": RMS_MAX, "slope_max_deg": SLOPE_MAX_DEG},
         "walkable_region": {

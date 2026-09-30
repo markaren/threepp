@@ -67,7 +67,7 @@ LUGGED = 2
 ENVELOPE = 3
 # Particle-level rim contact (on top of the node BC, which is the only force
 # channel in every mode). The default is NONE, on evidence (MGRU3 wheel, h = 16.7
-# mm, s = 0.3, D:/dev/rover_p1): on the grouser envelope, v1 and the velocity-only
+# mm, s = 0.3, the rover_p1 run): on the grouser envelope, v1 and the velocity-only
 # contact both made the soil's force 4.5x noisier (DP std 0.036 -> 0.16 N) and
 # leaked ~5 % of the load past the bin-floor closure, to cut a penetration that
 # was only 0.06 h without them; on the lugged wheel the rim never touches the

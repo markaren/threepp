@@ -26,8 +26,8 @@
 #SBATCH --mem=48G
 #SBATCH --time=01:00:00
 #SBATCH --job-name=warpvid
-#SBATCH --output=/cluster/work/laht/logs/warpvid-%j.out
-#SBATCH --error=/cluster/work/laht/logs/warpvid-%j.out
+#SBATCH --output=/cluster/work/%u/logs/warpvid-%j.out
+#SBATCH --error=/cluster/work/%u/logs/warpvid-%j.out
 
 set -euo pipefail
 

@@ -29,7 +29,7 @@ same test run with the balls thrown DOWN at 4 m/s is the tunneling test.
 
 Run it as a script to get the whole table plus the hole/spike maps:
 
-    set PYTHONPATH=C:/dev/threepp/python
+    set PYTHONPATH=python
     py -3.14 python/examples/calico/calico_collider.py --bake-cache   # bake once
     py -3.14 python/examples/calico/calico_collider.py --out shots
 """

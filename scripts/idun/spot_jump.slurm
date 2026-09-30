@@ -37,8 +37,8 @@
 #SBATCH --mem=32G
 #SBATCH --time=01:30:00
 #SBATCH --job-name=spotjump
-#SBATCH --output=/cluster/work/laht/logs/spotjump-%A_%a.out
-#SBATCH --error=/cluster/work/laht/logs/spotjump-%A_%a.out
+#SBATCH --output=/cluster/work/%u/logs/spotjump-%A_%a.out
+#SBATCH --error=/cluster/work/%u/logs/spotjump-%A_%a.out
 set -euo pipefail
 
 WORK=${WORK:-/cluster/work/$USER}

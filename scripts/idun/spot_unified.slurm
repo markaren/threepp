@@ -38,8 +38,8 @@
 #SBATCH --mem=32G
 #SBATCH --time=02:00:00
 #SBATCH --job-name=spotunify
-#SBATCH --output=/cluster/work/laht/logs/spotunify-%A_%a.out
-#SBATCH --error=/cluster/work/laht/logs/spotunify-%A_%a.out
+#SBATCH --output=/cluster/work/%u/logs/spotunify-%A_%a.out
+#SBATCH --error=/cluster/work/%u/logs/spotunify-%A_%a.out
 set -euo pipefail
 
 WORK=${WORK:-/cluster/work/$USER}

@@ -5,7 +5,7 @@ transform -> Vulkan headless render -> splats.bake_surface -> a Mesh PhysX
 accepts as a static trimesh. Prints bake time and triangle count and writes the
 surface as an OBJ next to the asset (NOT into the repo -- it is megabytes).
 
-    set PYTHONPATH=C:/dev/threepp/python
+    set PYTHONPATH=python
     py -3.14 python/examples/calico/bake_smoke.py [--level 2] [--pose-set interior]
 
 FRAME, decided once (plans/calico-splat-demo.md):

@@ -2112,7 +2112,7 @@ overwritten; delete the file and the editor writes a fresh one.
 
 ```jsonc
 {
-    "python.analysis.stubPath": "C:/dev/threepp/python/threepp",
+    "python.analysis.stubPath": "C:/path/to/threepp/python/threepp",
     "python.analysis.diagnosticSeverityOverrides": {
         "reportMissingModuleSource": "none"
     },

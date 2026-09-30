@@ -15,6 +15,7 @@ with the legacy cell, shipped s2. spot_steps_push.pt is deliberately absent: it 
 and regressed steering (c090e3e0), so it is no reference for anything here.
 """
 import argparse
+import getpass
 import os
 import sys
 
@@ -100,8 +101,9 @@ def showpiece_items(runs, ctrl):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--runs", default="/cluster/work/laht/spot_runs", help="the array's run root")
-    ap.add_argument("--ctrl", default="/cluster/work/laht/spot_ctrl", help="where the controls were scp'd")
+    work = os.environ.get("WORK") or f"/cluster/work/{getpass.getuser()}"   # as the .slurm files set WORK
+    ap.add_argument("--runs", default=f"{work}/spot_runs", help="the array's run root")
+    ap.add_argument("--ctrl", default=f"{work}/spot_ctrl", help="where the controls were scp'd")
     ap.add_argument("--out", default="jobs.tsv")
     # 7: one E0 item measured 65 s on a 4070 (K=2048, build 5.4 s + 1600 steps at 37 ms), so a task
     # of 7 (plus the odd legacy/steer extra) sits around 10 min of the hour, and 125 items fit in 18

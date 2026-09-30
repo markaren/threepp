@@ -11,7 +11,7 @@ layer and PhysX takes the very same mesh as a static trimesh. So one object is
     sensor-only layer once set_sensor_only_surfaces(True)),
   * and never drawn in the picture -- the real splats are what you see.
 
-    set PYTHONPATH=C:/dev/threepp/python
+    set PYTHONPATH=python
     py -3.14 python/examples/calico/spot_calico.py                 # interactive
     py -3.14 python/examples/calico/spot_calico.py --auto          # auto-walk the spine
     py -3.14 python/examples/calico/spot_calico.py --shot out.png --cam lookback --walk-m 8
