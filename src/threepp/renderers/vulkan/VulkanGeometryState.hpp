@@ -501,14 +501,22 @@ namespace threepp::vulkan::impl {
         Buffer    foamDisturbBuffer{};
         static constexpr uint32_t kMaxFoamDisturbances = 64;
 
-        // Per-mesh wake-trail SSBO. Host-mapped, written from
-        // dm.wake.trail each frame. Each sample is 32 bytes (matches
-        // DisplacedMesh::WakeSample). The water_displace shader
-        // iterates all valid samples and sums age-decayed Kelvin
-        // V-wake contributions so the wake traces the boat's past
-        // path rather than snapping to the current pose.
-        Buffer    wakeTrailBuffer{};
-        static constexpr uint32_t kMaxWakeSamples = 64;
+        // Per-mesh vessel buffer: the active vessels' hull records
+        // (vulkan::OceanHullGpu, kMaxVessels of them) followed by their wake
+        // trails, kMaxWakeSamples slots per vessel (32 B each, =
+        // DisplacedMesh::WakeSample). Rewritten from dm.vesselHull(i) /
+        // dm.vesselWake(i) every frame; water_displace and foam_world loop
+        // over the vessels and each vessel's samples, so every wake traces
+        // its own boat's past path rather than snapping to the current pose.
+        // A RING of kFramesInFlight indexed by currentFrame: the poses change
+        // every frame, and the frame still in flight must keep reading its
+        // own. Allocated on the first frame with an active vessel, never
+        // reallocated; null handles until then.
+        static constexpr uint32_t kMaxVessels     = 8;// = DisplacedMesh::kMaxVessels (asserted at the upload)
+        static constexpr uint32_t kMaxWakeSamples = 64;// per vessel
+        static constexpr VkDeviceSize kVesselHullBytes  = kMaxVessels * 48u;// vulkan::OceanHullGpu
+        static constexpr VkDeviceSize kVesselTrailBytes = kMaxVessels * kMaxWakeSamples * 32u;
+        Buffer    vesselBuffer[kFramesInFlight] = {};
 
         // World-space foam texture — 2D R32F covering the cascade-0
         // tile (foamTileSize × foamTileSize world m), REPEAT-sampled

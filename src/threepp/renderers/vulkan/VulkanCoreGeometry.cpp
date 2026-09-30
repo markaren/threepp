@@ -2433,28 +2433,73 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
                 }
             }
 
-            // (4b) Wake-trail SSBO upload. Same pattern as disturbance buffer:
-            // lazy-allocate, memcpy newest-first list, drop the tail beyond
-            // kMaxWakeSamples. Each entry is 32 B = DisplacedMesh::WakeSample.
-            const uint32_t kWakeSampleStride = 32u;
-            const uint32_t kWakeTrailBytes   =
-                    DisplacedMeshState::kMaxWakeSamples * kWakeSampleStride;
-            if (st.wakeTrailBuffer.handle == VK_NULL_HANDLE) {
-                st.wakeTrailBuffer = createBuffer(
-                        ctx->allocator(), ctx->device(), kWakeTrailBytes,
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                        VMA_MEMORY_USAGE_AUTO,
-                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                ctx->setObjectName(st.wakeTrailBuffer.handle, "ocean.wakeTrail");
+            // (4b) Vessel buffer: the active vessels' hull records, then each
+            // one's wake trail in its own kMaxWakeSamples-slot slice (the
+            // oldest kMaxWakeSamples samples; the rest are dropped). This
+            // frame's slot of the ring (see DisplacedMeshState::vesselBuffer),
+            // allocated with the first active vessel and rewritten in place —
+            // nothing is allocated per frame.
+            static_assert(DisplacedMeshState::kMaxVessels == DisplacedMesh::kMaxVessels);
+            static_assert(DisplacedMeshState::kVesselHullBytes ==
+                          DisplacedMeshState::kMaxVessels * sizeof(vulkan::OceanHullGpu));
+            static_assert(sizeof(DisplacedMesh::WakeSample) == 32u,
+                          "the trail slices are memcpy'd; water_displace/foam_world read 32-byte samples");
+            std::array<vulkan::OceanHullGpu, DisplacedMesh::kMaxVessels> hulls{};
+            std::array<const DisplacedMesh::VesselWake*, DisplacedMesh::kMaxVessels> hullWakes{};
+            uint32_t hullCount = 0;
+            for (uint32_t v = 0; v < DisplacedMesh::kMaxVessels; ++v) {
+                const DisplacedMesh::HullExclusion& he = dm.vesselHull(v);
+                if (!(he.halfLength > 0.f)) continue;
+                const DisplacedMesh::VesselWake& wk = dm.vesselWake(v);
+                vulkan::OceanHullGpu& g = hulls[hullCount];
+                g.centerX      = he.centerX;
+                g.centerZ      = he.centerZ;
+                g.halfLength   = he.halfLength;
+                g.halfBeam     = he.halfBeam;
+                g.sinYaw       = he.sinYaw;
+                g.cosYaw       = he.cosYaw;
+                g.forwardSpeed = wk.enabled ? wk.forwardSpeed : 0.0f;
+                g.centerY      = he.centerY;
+                g.pitch        = he.pitch;
+                g.roll         = he.roll;
+                g.trailFirst   = hullCount * DisplacedMeshState::kMaxWakeSamples;
+                g.trailCount   = static_cast<uint32_t>(std::min<size_t>(
+                        wk.trail.size(), DisplacedMeshState::kMaxWakeSamples));
+                hullWakes[hullCount] = &wk;
+                ++hullCount;
             }
-            const uint32_t wakeSampleCount = static_cast<uint32_t>(std::min<size_t>(
-                    dm.wake.trail.size(),
-                    DisplacedMeshState::kMaxWakeSamples));
-            if (wakeSampleCount > 0u) {
-                uploadHostVisible(ctx->allocator(), st.wakeTrailBuffer,
-                                  dm.wake.trail.data(),
-                                  wakeSampleCount * kWakeSampleStride);
+            VkDeviceAddress hullAddr = 0;
+            VkDeviceAddress wakeTrailAddr = 0;
+            if (hullCount > 0u) {
+                if (st.vesselBuffer[0].handle == VK_NULL_HANDLE) {
+                    for (uint32_t s = 0; s < kFramesInFlight; ++s) {
+                        st.vesselBuffer[s] = createBuffer(
+                                ctx->allocator(), ctx->device(),
+                                DisplacedMeshState::kVesselHullBytes + DisplacedMeshState::kVesselTrailBytes,
+                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                VMA_MEMORY_USAGE_AUTO,
+                                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                        ctx->setObjectName(st.vesselBuffer[s].handle,
+                                (std::string("ocean.vessels.") + std::to_string(s)).c_str());
+                    }
+                }
+                const Buffer& vb = st.vesselBuffer[currentFrame];
+                void* mapped = nullptr;
+                check(vmaMapMemory(ctx->allocator(), vb.alloc, &mapped), "vmaMapMemory(ocean vessels)");
+                auto* dst = static_cast<uint8_t*>(mapped);
+                std::memcpy(dst, hulls.data(), hullCount * sizeof(vulkan::OceanHullGpu));
+                for (uint32_t k = 0; k < hullCount; ++k) {
+                    if (hulls[k].trailCount == 0u) continue;
+                    std::memcpy(dst + DisplacedMeshState::kVesselHullBytes +
+                                        size_t(hulls[k].trailFirst) * sizeof(DisplacedMesh::WakeSample),
+                                hullWakes[k]->trail.data(),
+                                hulls[k].trailCount * sizeof(DisplacedMesh::WakeSample));
+                }
+                flushHostWrites(ctx->allocator(), vb.alloc);
+                vmaUnmapMemory(ctx->allocator(), vb.alloc);
+                hullAddr      = vb.address;
+                wakeTrailAddr = vb.address + DisplacedMeshState::kVesselHullBytes;
             }
 
             vulkan::WaterDisplacePipeline::PushConstants pc{};
@@ -2471,24 +2516,13 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
             pc.waveScale    = dm.params.waveScale;
             pc.choppiness   = dm.params.choppiness;
             pc.cascadeMask  = st.cascadeMask;
-            pc.hullCenterX    = dm.hullExclusion.centerX;
-            pc.hullCenterZ    = dm.hullExclusion.centerZ;
-            pc.hullHalfLength = dm.hullExclusion.halfLength;
-            pc.hullHalfBeam   = dm.hullExclusion.halfBeam;
-            pc.hullSinYaw     = dm.hullExclusion.sinYaw;
-            pc.hullCosYaw     = dm.hullExclusion.cosYaw;
-            pc.forwardSpeed   = dm.wake.enabled ? dm.wake.forwardSpeed : 0.0f;
             pc.warpCenterX    = dm.warp.centerX;
             pc.warpCenterZ    = dm.warp.centerZ;
             pc.warpHalfRange  = dm.warp.halfRange;
             pc.warpCoefA      = dm.warp.coefA;
-            pc.wakeTrailAddr  = st.wakeTrailBuffer.address;
-            pc.wakeTrailCount = wakeSampleCount;
-            // Waterline plane of the excluded patch (0/0/0 = ocean rest plane,
-            // the historical behaviour) — see DisplacedMesh::HullExclusion.
-            pc.hullCenterY    = dm.hullExclusion.centerY;
-            pc.hullPitch      = dm.hullExclusion.pitch;
-            pc.hullRoll       = dm.hullExclusion.roll;
+            pc.wakeTrailAddr  = wakeTrailAddr;
+            pc.hullAddr       = hullAddr;
+            pc.hullCount      = hullCount;
             if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanDisplace, currentFrame);
             waterDisplace_->recordDispatch(cb, st.displaceDS, pc);
             if (timed) gpuTimings_->end(cb, vulkan::TP_OceanDisplace, currentFrame);
@@ -2530,17 +2564,11 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
                 fpc.waveScale      = dm.params.waveScale;
                 fpc.choppiness     = dm.params.choppiness;
                 fpc.cascadeMask    = st.cascadeMask;
-                fpc.hullCenterX    = dm.hullExclusion.centerX;
-                fpc.hullCenterZ    = dm.hullExclusion.centerZ;
-                fpc.hullHalfLength = dm.hullExclusion.halfLength;
-                fpc.hullHalfBeam   = dm.hullExclusion.halfBeam;
-                fpc.hullSinYaw     = dm.hullExclusion.sinYaw;
-                fpc.hullCosYaw     = dm.hullExclusion.cosYaw;
-                fpc.forwardSpeed   = dm.wake.enabled ? dm.wake.forwardSpeed : 0.0f;
                 fpc.disturbCount   = disturbCount;
                 fpc.decay          = foamDecay;
-                fpc.wakeTrailAddr  = st.wakeTrailBuffer.address;
-                fpc.wakeTrailCount = wakeSampleCount;
+                fpc.wakeTrailAddr  = wakeTrailAddr;
+                fpc.hullAddr       = hullAddr;
+                fpc.hullCount      = hullCount;
                 fpc.natFoamScale   = std::clamp(dm.params.foamAmount, 0.0f, 1.0f);
                 // Vessel foam look, each switch ON unless its env var is "0" (the
                 // A/B against the old look): THREEPP_OCEAN_BOW_CLEAR fades new wake

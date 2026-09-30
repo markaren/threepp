@@ -22,6 +22,26 @@ namespace threepp::vulkan {
 
     class VulkanContext;
 
+    // One vessel as water_displace.comp and foam_world.comp read it: the
+    // DisplacedMesh::HullExclusion pose, the wake's forward speed and the
+    // vessel's slice of the wake-trail buffer. Mirrors `OceanHull` in
+    // ocean_cascade.glsl field for field (scalar layout, 48 bytes).
+    struct OceanHullGpu {
+        float    centerX;
+        float    centerZ;
+        float    halfLength;
+        float    halfBeam;
+        float    sinYaw;
+        float    cosYaw;
+        float    forwardSpeed;// 0 when the wake is disabled
+        float    centerY;
+        float    pitch;
+        float    roll;
+        uint32_t trailFirst;  // first WakeSample of this vessel in the trail buffer
+        uint32_t trailCount;
+    };
+    static_assert(sizeof(OceanHullGpu) == 48, "OceanHullGpu must match ocean_cascade.glsl's OceanHull");
+
     class WaterDisplacePipeline {
 
     public:
@@ -29,19 +49,15 @@ namespace threepp::vulkan {
         // combined-image-samplers (3 cascades × 2 images).
         static constexpr uint32_t kMaxOceans = 16;
 
-        // Must match water_displace.comp's `Pc` struct (128 bytes total —
-        // exactly the Vulkan-guaranteed maxPushConstantsSize; do NOT grow):
-        // 3 × VkDeviceAddress (24) + 26 × u32/float (104).
-        //
-        // The block is FULL. `disturbAddr` / `disturbCount` used to live here
-        // and were dead weight (foam moved to foam_world.comp long ago — see
-        // water_displace.comp's tail comment); their 12 bytes are what pays
-        // for hullCenterY / hullPitch / hullRoll. Anything else new needs a
-        // buffer, not a push constant.
+        // Must match water_displace.comp's `Pc` struct (96 bytes):
+        // 4 × VkDeviceAddress (32) + 16 × u32/float (64). The vessels live in
+        // a per-frame buffer (hullAddr → OceanHullGpu[hullCount]); one hull
+        // alone used to fill this block to the 128-byte maximum.
         struct PushConstants {
             VkDeviceAddress posOut;
             VkDeviceAddress normOut;
-            VkDeviceAddress wakeTrailAddr;// 0 = no historical trail
+            VkDeviceAddress wakeTrailAddr;// every vessel's trail, sliced per hull
+            VkDeviceAddress hullAddr;     // OceanHullGpu[hullCount]
             uint32_t        vertexCount;
             uint32_t        gridDimX;     // vertices along local X / Z — a
             uint32_t        gridDimZ;     // rectangle is first-class now
@@ -53,21 +69,11 @@ namespace threepp::vulkan {
             float           waveScale;
             float           choppiness;
             uint32_t        cascadeMask;
-            float           hullCenterX;
-            float           hullCenterZ;
-            float           hullHalfLength;
-            float           hullHalfBeam;
-            float           hullSinYaw;
-            float           hullCosYaw;
-            float           forwardSpeed;
             float           warpCenterX;   // adaptive vertex density: see
             float           warpCenterZ;   // DisplacedMesh::MeshWarp. Shader
             float           warpHalfRange; // gates the whole feature on
             float           warpCoefA;     // warpHalfRange > 0.
-            uint32_t        wakeTrailCount;// # valid samples in the trail
-            float           hullCenterY;   // vessel waterline plane: world y at
-            float           hullPitch;     // (hullCenterX, hullCenterZ), +bow up,
-            float           hullRoll;      // +starboard up. All 0 = rest plane.
+            uint32_t        hullCount;     // active vessels (0 = none)
         };
 
         explicit WaterDisplacePipeline(VulkanContext& ctx);

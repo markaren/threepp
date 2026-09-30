@@ -23,6 +23,7 @@
 
 #include "threepp/objects/Mesh.hpp"
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -181,6 +182,34 @@ namespace threepp {
         };
         VesselWake wake;
 
+        // Several vessels on one ocean. Vessel 0 is `hullExclusion` + `wake`
+        // above, the pair every single-vessel scene sets; vessels
+        // 1..kMaxVessels-1 live in `extraVessels`. Each is a footprint on its
+        // own waterline plane plus its own wake (bow bump, V-wedge over its
+        // own trail, foam trail), and takes part while its hull.halfLength
+        // > 0. vesselHull(i) / vesselWake(i) address them all by index.
+        // Every footprint also flattens the OTHER vessels' wakes, so a ship's
+        // V-wedge does not rise through a smaller boat's deck.
+        static constexpr uint32_t kMaxVessels = 8;
+        struct Vessel {
+            HullExclusion hull;
+            VesselWake    wake;
+        };
+        std::array<Vessel, kMaxVessels - 1> extraVessels;
+
+        HullExclusion& vesselHull(uint32_t i) {
+            return i == 0 ? hullExclusion : extraVessels.at(i - 1).hull;
+        }
+        [[nodiscard]] const HullExclusion& vesselHull(uint32_t i) const {
+            return i == 0 ? hullExclusion : extraVessels.at(i - 1).hull;
+        }
+        VesselWake& vesselWake(uint32_t i) {
+            return i == 0 ? wake : extraVessels.at(i - 1).wake;
+        }
+        [[nodiscard]] const VesselWake& vesselWake(uint32_t i) const {
+            return i == 0 ? wake : extraVessels.at(i - 1).wake;
+        }
+
         // Per-frame point sources of foam — splatted by water_displace.comp
         // into the per-vertex foam buffer with a gaussian falloff, persisted
         // via the existing decay (~1.4 s half-life). Use for boat-hull
@@ -300,6 +329,12 @@ namespace threepp {
         // (sampleHeight + sampleWakeHeight) bob through a passing
         // V-wake the way the rendered mesh does. Returns 0 if there is
         // no active vessel or the speed gate hasn't engaged.
+        //
+        // With several vessels it is the SUM of their wakes, each faded
+        // only inside its own footprint: the water a hull rides on, not the
+        // rendered surface (which another footprint flattens). So a boat
+        // crossing a ship's wake that samples this under her own hull feels
+        // the ship's wake.
         float sampleWakeHeight(float worldX, float worldZ) const;
     };
 

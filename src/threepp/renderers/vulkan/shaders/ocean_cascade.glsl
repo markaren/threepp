@@ -33,4 +33,23 @@ float oceanHullMargin(float halfBeam, bool scaled) {
     return scaled ? clamp(0.6 * halfBeam, 0.3, 2.0) : 2.0;
 }
 
+// One vessel as the ocean passes read it: DisplacedMesh::HullExclusion, the
+// wake's forward speed and the vessel's slice of the wake-trail buffer. The host
+// packs only the active vessels (halfLength > 0). 48 bytes, mirrored field for
+// field by vulkan::OceanHullGpu (WaterDisplacePipeline.hpp).
+struct OceanHull {
+    float centerX;
+    float centerZ;
+    float halfLength;
+    float halfBeam;
+    float sinYaw;
+    float cosYaw;
+    float forwardSpeed; // m/s along +heading; 0 = no wake (or the wake is disabled)
+    float centerY;      // waterline plane: world y at (centerX, centerZ),
+    float pitch;        // +bow up (+localZ),
+    float roll;         // +starboard up (+localX)
+    uint  trailFirst;   // this vessel's samples in the wake-trail buffer
+    uint  trailCount;
+};
+
 #endif// THREEPP_OCEAN_CASCADE_GLSL

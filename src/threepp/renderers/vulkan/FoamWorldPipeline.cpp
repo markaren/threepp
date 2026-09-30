@@ -9,8 +9,8 @@
 
 namespace threepp::vulkan {
 
-    static_assert(sizeof(FoamWorldPipeline::PushConstants) == 104,
-                  "FoamWorldPipeline::PushConstants must match foam_world.comp's Pc layout (104 bytes)");
+    static_assert(sizeof(FoamWorldPipeline::PushConstants) == 80,
+                  "FoamWorldPipeline::PushConstants must match foam_world.comp's Pc layout (80 bytes)");
 
     FoamWorldPipeline::FoamWorldPipeline(VulkanContext& ctx)
         : ctx_(ctx) {

@@ -27,12 +27,14 @@ namespace threepp::vulkan {
         // descriptor set here.
         static constexpr uint32_t kMaxOceans = 16;
 
-        // Must match foam_world.comp's `Pc` struct (104 bytes total):
-        // 2 × VkDeviceAddress (16) + 22 × u32/float (88) — `natFoamScale`
-        // (formerly a `_pad` slot) keeps the C++ struct a multiple of 8.
+        // Must match foam_world.comp's `Pc` struct (80 bytes total):
+        // 3 × VkDeviceAddress (24) + 14 × u32/float (56) — `_pad0` keeps the
+        // C++ struct a multiple of 8. The vessels are the same per-frame
+        // buffer WaterDisplacePipeline reads (OceanHullGpu[hullCount]).
         struct PushConstants {
             VkDeviceAddress disturbAddr;   // 0 = no disturbance buffer
-            VkDeviceAddress wakeTrailAddr; // 0 = no historical trail
+            VkDeviceAddress wakeTrailAddr; // every vessel's trail, sliced per hull
+            VkDeviceAddress hullAddr;      // OceanHullGpu[hullCount]
             uint32_t        foamRes;
             float           foamTileSize;
             float           tileSize0;
@@ -41,18 +43,12 @@ namespace threepp::vulkan {
             float           waveScale;
             float           choppiness;
             uint32_t        cascadeMask;
-            float           hullCenterX;
-            float           hullCenterZ;
-            float           hullHalfLength;
-            float           hullHalfBeam;
-            float           hullSinYaw;
-            float           hullCosYaw;
-            float           forwardSpeed;
             uint32_t        disturbCount;
             float           decay;
-            uint32_t        wakeTrailCount;// # valid samples in wakeTrailAddr
             float           natFoamScale;  // scales NATURAL Jacobian whitecaps (wake/splats unaffected)
-            uint32_t        vesselFoamFlags;// bit 0: clear ahead of the stem, bit 1: thin wake trail
+            uint32_t        vesselFoamFlags;// bit 0: clear ahead of the stem, bit 1: thin wake trail,
+                                            // bit 2: hull margin scales with the hull
+            uint32_t        hullCount;     // active vessels (0 = no vessel foam)
             float           _pad0;
         };
 

@@ -116,6 +116,115 @@ namespace threepp {
             return i < 2;
         }
 
+        // One vessel's wake height at a world XZ: the per-vessel block of
+        // water_displace.comp, faded only inside this vessel's own footprint.
+        float vesselWakeHeight(const DisplacedMesh::HullExclusion& hullExclusion,
+                               const DisplacedMesh::VesselWake& wake,
+                               float worldX, float worldZ) {
+            // Two contributions: a per-frame bow bump (current pose only,
+            // small) and the V-wedge ridge height that diverges from the
+            // bow at ~20° half-angle. The V-wedge is taken as MAX over the
+            // historical trail samples — same combiner as the shader, so
+            // 60 samples don't stack into fountain-shaped pillars.
+            if (!wake.enabled || hullExclusion.halfLength <= 0.f) return 0.f;
+
+            auto smoothstepF = [](float a, float b, float x) {
+                const float t = std::clamp((x - a) / (b - a), 0.f, 1.f);
+                return t * t * (3.f - 2.f * t);
+            };
+
+            // Hull margin: mirrors ocean_cascade.glsl oceanHullMargin (0.6 x half-beam
+            // in [0.3, 2] m; THREEPP_OCEAN_HULL_MARGIN=0 = the old fixed 2 m).
+            static const bool kScaledHullMargin = [] {
+                const char* e = std::getenv("THREEPP_OCEAN_HULL_MARGIN");
+                return !(e && e[0] == '0');
+            }();
+            const float hullMargin = kScaledHullMargin
+                                             ? std::clamp(0.6f * hullExclusion.halfBeam, 0.3f, 2.f)
+                                             : 2.f;
+
+            auto vWedgeAtPose = [&](float cx, float cz, float sinYaw, float cosYaw,
+                                    float speed, float ageFade) -> float {
+                const float spd  = std::abs(speed);
+                const float gate = smoothstepF(0.5f, 1.5f, spd);
+                if (gate <= 0.f) return 0.f;
+                const float dx = worldX - cx;
+                const float dz = worldZ - cz;
+                const float lX = cosYaw * dx - sinYaw * dz;
+                const float lZ = sinYaw * dx + cosYaw * dz;
+                const float distAft = hullExclusion.halfLength - lZ;
+                if (distAft <= 0.f || distAft > hullExclusion.halfLength * 6.f) return 0.f;
+                // Per-pose hullFade — V-wedge only fires outside the hull
+                // footprint, so a buoy passing close to the boat doesn't get
+                // lifted by the wake formula under the hull itself.
+                const float uHull = std::clamp(-lZ / hullExclusion.halfLength, -1.f, 1.f);
+                float halfBeamAtLZ;
+                if (uHull <= 0.f) {
+                    halfBeamAtLZ = hullExclusion.halfBeam *
+                                   std::pow(std::max(1.f - uHull * uHull, 0.f), 0.6f);
+                } else {
+                    halfBeamAtLZ = hullExclusion.halfBeam * (1.f - 0.25f * uHull * uHull);
+                }
+                const float hullEdgeX = std::abs(lX) - halfBeamAtLZ;
+                const float hullEdgeZ = std::abs(lZ) - hullExclusion.halfLength;
+                const float hullFade  = smoothstepF(0.f, hullMargin,
+                                                    std::max(hullEdgeX, hullEdgeZ));
+                if (hullFade <= 0.f) return 0.f;
+                const float tanAV = 0.36f;
+                const float expectedX = tanAV * distAft;
+                const float dRidge = std::abs(std::abs(lX) - expectedX);
+                const float sigmaR = 0.6f + 0.05f * distAft;
+                const float ridge  = std::exp(-(dRidge * dRidge) / (sigmaR * sigmaR));
+                const float alongDecay = std::exp(-distAft /
+                                                  (hullExclusion.halfLength * 4.f));
+                const float vAmp = std::clamp(0.016f * spd * spd + 0.06f * spd,
+                                              0.f, 1.0f);
+                return gate * vAmp * ridge * alongDecay * ageFade * hullFade;
+            };
+
+            // Current-pose bow bump (small, doesn't pile up across the trail).
+            float h = 0.f;
+            {
+                const float spd  = std::abs(wake.forwardSpeed);
+                const float gate = smoothstepF(0.5f, 1.5f, spd);
+                if (gate > 0.f) {
+                    const float dx = worldX - hullExclusion.centerX;
+                    const float dz = worldZ - hullExclusion.centerZ;
+                    const float lX = hullExclusion.cosYaw * dx - hullExclusion.sinYaw * dz;
+                    const float lZ = hullExclusion.sinYaw * dx + hullExclusion.cosYaw * dz;
+                    const float distFromBow = lZ - hullExclusion.halfLength;
+                    const float bowR = 1.5f;
+                    const float bowG = std::exp(-(distFromBow * distFromBow) /
+                                                (bowR * bowR));
+                    const float bowL = std::exp(-(lX * lX) /
+                                                (hullExclusion.halfBeam *
+                                                 hullExclusion.halfBeam));
+                    const float bowAmp = std::clamp(0.012f * spd * spd, 0.f, 0.4f);
+                    h += gate * bowAmp * bowG * bowL;
+                }
+            }
+
+            // Historical V-wedge ridge — MAX over the trail samples.
+            float vWedgeMax = 0.f;
+            if (!wake.trail.empty()) {
+                for (const auto& s : wake.trail) {
+                    const float ageFade = std::exp(-s.age / 5.f);
+                    vWedgeMax = std::max(vWedgeMax,
+                                         vWedgeAtPose(s.worldX, s.worldZ,
+                                                      s.sinYaw, s.cosYaw,
+                                                      s.speed, ageFade));
+                }
+            } else {
+                vWedgeMax = vWedgeAtPose(hullExclusion.centerX,
+                                         hullExclusion.centerZ,
+                                         hullExclusion.sinYaw,
+                                         hullExclusion.cosYaw,
+                                         wake.forwardSpeed, 1.f);
+            }
+            h += vWedgeMax;
+            return h;
+        }
+
     }// namespace
 
     float DisplacedMesh::sampleHeight(float worldX, float worldZ,
@@ -199,109 +308,11 @@ namespace threepp {
     float DisplacedMesh::sampleWakeHeight(float worldX, float worldZ) const {
         // Mirrors water_displace.comp wake formulas closely enough that
         // floaters (buoys, etc.) bob through the rendered wake. Keep
-        // in sync if the shader changes.
-        //
-        // Two contributions: a per-frame bow bump (current pose only,
-        // small) and the V-wedge ridge height that diverges from the
-        // bow at ~20° half-angle. The V-wedge is taken as MAX over the
-        // historical trail samples — same combiner as the shader, so
-        // 60 samples don't stack into fountain-shaped pillars.
-        if (!wake.enabled || hullExclusion.halfLength <= 0.f) return 0.f;
-
-        auto smoothstepF = [](float a, float b, float x) {
-            const float t = std::clamp((x - a) / (b - a), 0.f, 1.f);
-            return t * t * (3.f - 2.f * t);
-        };
-
-        // Hull margin: mirrors ocean_cascade.glsl oceanHullMargin (0.6 x half-beam
-        // in [0.3, 2] m; THREEPP_OCEAN_HULL_MARGIN=0 = the old fixed 2 m).
-        static const bool kScaledHullMargin = [] {
-            const char* e = std::getenv("THREEPP_OCEAN_HULL_MARGIN");
-            return !(e && e[0] == '0');
-        }();
-        const float hullMargin = kScaledHullMargin
-                                         ? std::clamp(0.6f * hullExclusion.halfBeam, 0.3f, 2.f)
-                                         : 2.f;
-
-        auto vWedgeAtPose = [&](float cx, float cz, float sinYaw, float cosYaw,
-                                float speed, float ageFade) -> float {
-            const float spd  = std::abs(speed);
-            const float gate = smoothstepF(0.5f, 1.5f, spd);
-            if (gate <= 0.f) return 0.f;
-            const float dx = worldX - cx;
-            const float dz = worldZ - cz;
-            const float lX = cosYaw * dx - sinYaw * dz;
-            const float lZ = sinYaw * dx + cosYaw * dz;
-            const float distAft = hullExclusion.halfLength - lZ;
-            if (distAft <= 0.f || distAft > hullExclusion.halfLength * 6.f) return 0.f;
-            // Per-pose hullFade — V-wedge only fires outside the hull
-            // footprint, so a buoy passing close to the boat doesn't get
-            // lifted by the wake formula under the hull itself.
-            const float uHull = std::clamp(-lZ / hullExclusion.halfLength, -1.f, 1.f);
-            float halfBeamAtLZ;
-            if (uHull <= 0.f) {
-                halfBeamAtLZ = hullExclusion.halfBeam *
-                               std::pow(std::max(1.f - uHull * uHull, 0.f), 0.6f);
-            } else {
-                halfBeamAtLZ = hullExclusion.halfBeam * (1.f - 0.25f * uHull * uHull);
-            }
-            const float hullEdgeX = std::abs(lX) - halfBeamAtLZ;
-            const float hullEdgeZ = std::abs(lZ) - hullExclusion.halfLength;
-            const float hullFade  = smoothstepF(0.f, hullMargin,
-                                                std::max(hullEdgeX, hullEdgeZ));
-            if (hullFade <= 0.f) return 0.f;
-            const float tanAV = 0.36f;
-            const float expectedX = tanAV * distAft;
-            const float dRidge = std::abs(std::abs(lX) - expectedX);
-            const float sigmaR = 0.6f + 0.05f * distAft;
-            const float ridge  = std::exp(-(dRidge * dRidge) / (sigmaR * sigmaR));
-            const float alongDecay = std::exp(-distAft /
-                                              (hullExclusion.halfLength * 4.f));
-            const float vAmp = std::clamp(0.016f * spd * spd + 0.06f * spd,
-                                          0.f, 1.0f);
-            return gate * vAmp * ridge * alongDecay * ageFade * hullFade;
-        };
-
-        // Current-pose bow bump (small, doesn't pile up across the trail).
+        // in sync if the shader changes. Every vessel's wake adds; see
+        // the header for why another vessel's footprint does not fade it.
         float h = 0.f;
-        {
-            const float spd  = std::abs(wake.forwardSpeed);
-            const float gate = smoothstepF(0.5f, 1.5f, spd);
-            if (gate > 0.f) {
-                const float dx = worldX - hullExclusion.centerX;
-                const float dz = worldZ - hullExclusion.centerZ;
-                const float lX = hullExclusion.cosYaw * dx - hullExclusion.sinYaw * dz;
-                const float lZ = hullExclusion.sinYaw * dx + hullExclusion.cosYaw * dz;
-                const float distFromBow = lZ - hullExclusion.halfLength;
-                const float bowR = 1.5f;
-                const float bowG = std::exp(-(distFromBow * distFromBow) /
-                                            (bowR * bowR));
-                const float bowL = std::exp(-(lX * lX) /
-                                            (hullExclusion.halfBeam *
-                                             hullExclusion.halfBeam));
-                const float bowAmp = std::clamp(0.012f * spd * spd, 0.f, 0.4f);
-                h += gate * bowAmp * bowG * bowL;
-            }
-        }
-
-        // Historical V-wedge ridge — MAX over the trail samples.
-        float vWedgeMax = 0.f;
-        if (!wake.trail.empty()) {
-            for (const auto& s : wake.trail) {
-                const float ageFade = std::exp(-s.age / 5.f);
-                vWedgeMax = std::max(vWedgeMax,
-                                     vWedgeAtPose(s.worldX, s.worldZ,
-                                                  s.sinYaw, s.cosYaw,
-                                                  s.speed, ageFade));
-            }
-        } else {
-            vWedgeMax = vWedgeAtPose(hullExclusion.centerX,
-                                     hullExclusion.centerZ,
-                                     hullExclusion.sinYaw,
-                                     hullExclusion.cosYaw,
-                                     wake.forwardSpeed, 1.f);
-        }
-        h += vWedgeMax;
+        for (uint32_t i = 0; i < kMaxVessels; ++i)
+            h += vesselWakeHeight(vesselHull(i), vesselWake(i), worldX, worldZ);
         return h;
     }
 

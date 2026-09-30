@@ -2606,7 +2606,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         for (auto& ring : st->heightReadback)
                             for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
                         destroyBuffer(ctx->allocator(), st->foamDisturbBuffer);
-                        destroyBuffer(ctx->allocator(), st->wakeTrailBuffer);
+                        for (auto& b : st->vesselBuffer) destroyBuffer(ctx->allocator(), b);
                         // PhillipsSpectrum / DynamicSpectrum / IFFT destructors
                         // run on unique_ptr reset.
                         it = displacedStates.erase(it);

@@ -335,7 +335,7 @@ VulkanRenderer::Impl::~Impl() {
                 for (auto& ring : st->heightReadback)
                     for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
                 destroyBuffer(ctx->allocator(), st->foamDisturbBuffer);
-                destroyBuffer(ctx->allocator(), st->wakeTrailBuffer);
+                for (auto& b : st->vesselBuffer) destroyBuffer(ctx->allocator(), b);
                 // Per-cascade Phillips / DynamicSpectrum / IFFT are RAII; their
                 // destructors handle their own VkImage / VkPipeline / DSet cleanup.
             }
