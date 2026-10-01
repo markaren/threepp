@@ -1030,17 +1030,65 @@ void main() {
         // chop stayed in N, razor-glinted, = the reported per-pixel noise. Complete
         // the hand-off by ~5·eps so mid-distance water converts to sheen.
         const float subPix   = smoothstep(0.5 * eps, 1.5 * eps, pixWorld);// 0 near → 1 sub-pixel
+        // THE FOOTPRINT IS NOT ROUND. pixWorld is the pixel's width ACROSS the line
+        // of sight; ALONG it the pixel covers pixWorld / cos(view, surface normal)
+        // of water, which from a camera 2 m over the sea is 50x as much 100 m out.
+        // Fading on pixWorld alone kept the point-sampled chop in N until the
+        // across-footprint outgrew it (300 m for a 12 m fine tile at 0.6 render
+        // scale) while every pixel past ~30 m already spanned whole waves
+        // lengthwise. And the TAA jitter moves the sample by half that length
+        // every frame: the slope was a different wave's each frame, so the mirror
+        // ray landed on shore, sky or water body in turn -- speckle in the far
+        // water seen along the surface, and a blink in what it reflects, even with
+        // the sea frozen (none from above, where cos ~ 1).
+        // So once the footprint is longer than the stencil the slope is the
+        // footprint's MEAN, both components (the across slope varies along the
+        // strip as much as the along slope does):
+        //   along   exactly, from the height at the strip's two ends
+        //   across  the stencil's across-difference at four places along it
+        // The mean is taken over TWO strip lengths (this pixel's and half of each
+        // neighbour's): a box one strip long still passes waves between one and two
+        // strips long, which one sample a strip cannot carry -- thin bright lines a
+        // pixel row high, shimmering under the jitter.
+        // Past a quarter of the tile the mean is eased out: it is small there, a
+        // hard mirror ray makes much of little at grazing (the far shoreline's
+        // reflection breathed), and at a whole tile it is exactly zero anyway. So
+        // the far water mirrors its macro plane, steadily, and the lost slope is
+        // banked as roughness below. Straight down the strip is pixWorld: no change.
+        const float pixAlong = pixWorld / max(dot(Nmacro, V), 0.02);
+        vec2 gMean = grad;
+        if (pixAlong > eps) {
+            const float vl     = length(V.xz);
+            const vec2  along  = vl > 1e-4 ? V.xz / vl : vec2(1.0, 0.0);
+            const vec2  across = vec2(-along.y, along.x);
+            const float len    = min(2.0 * pixAlong, pc.oceanFineTileSize);
+            const vec2  aUV    = along * (len * invTile);
+            const vec2  xUV    = across * depsUV;
+            const float hF = textureLod(oceanFineHeight, uvW + 0.5 * aUV, 0.0).r;
+            const float hB = textureLod(oceanFineHeight, uvW - 0.5 * aUV, 0.0).r;
+            float dAcross = 0.0;
+            for (int k = 0; k < 4; ++k) {
+                const vec2 c = uvW + aUV * ((float(k) + 0.5) * 0.25 - 0.5);
+                dAcross += textureLod(oceanFineHeight, c + xUV, 0.0).r - textureLod(oceanFineHeight, c - xUV, 0.0).r;
+            }
+            const vec2 mean = along * ((hF - hB) * invTile / len) + across * (dAcross * invTile / (8.0 * eps));
+            const float keep = 1.0 - smoothstep(0.25 * pc.oceanFineTileSize, 0.5 * pc.oceanFineTileSize, pixAlong);
+            // eased in over one stencil so the two estimates meet without a seam
+            gMean = mix(grad, mean * keep, smoothstep(eps, 2.0 * eps, pixAlong));
+        }
+        const vec2 gKept = (1.0 - subPix) * gMean;
         // Full physical slope: N ∝ up − ∇h. Until 2026-08 this carried a 0.5
         // (undocumented, from the first deferred commit) that rendered the
         // sub-mesh chop at HALF its steepness — the 1–9 m wind waves read as
         // a glassy sheen and a 10 m hull looked like a bath toy on the swell.
         // The speckle that factor presumably guarded against is handled by
         // the footprint fade + roughness banking below.
-        const vec3  tilt     = vec3(-grad.x, 0.0, -grad.y);
-        N = normalize(N + (1.0 - subPix) * tilt);
+        N = normalize(N + vec3(-gKept.x, 0.0, -gKept.y));
         // σ_slope² ≈ 2·roughness²; move the faded-out tilt's variance into roughness
-        // so shadeWater's glint + reflection lobe broaden as the chop leaves N.
-        fineKernelSq = 2.0 * dot(tilt, tilt) * subPix;
+        // so shadeWater's glint + reflection lobe broaden as the chop leaves N: all of
+        // the slope where even pixWorld is sub-pixel, and what the strip's mean took.
+        fineKernelSq = 2.0 * (dot(grad, grad) * subPix
+                              + (1.0 - subPix) * max(dot(grad, grad) - dot(gMean, gMean), 0.0));
         // FOOTPRINT FLOOR. The fine-cascade slope alone is tiny for a calm sea
         // (Phillips amplitude ∝ windSpeed⁴ → a 4 m/s coastal sea has a millimetric
         // fine cascade), so banking only IT leaves effRough ≈ the base 0.03 and the
