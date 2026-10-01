@@ -250,6 +250,9 @@ to a rendered image that can be captured headless and judged.
 
 <table>
 <tr>
+<td align="center" colspan="2"><img src="doc/screenshots/norvasundet_kayak.jpg" width="826" alt="Sea kayak in Nørvasundet"><br><em>Vulkan: a sea kayak under way in Nørvasundet, the cove below the NTNU campus in Ålesund, modelled from Kartverket lidar and sea charts (the scene is not in the repository)</em></td>
+</tr>
+<tr>
 <td align="center"><img src="doc/screenshots/turbine_survey.jpg" width="400" alt="Offshore wind turbine inspection"><br><em>Vulkan: five robots inspect an offshore wind turbine; the Otter X maps the seabed (<a href="python/examples/turbine">turbine</a>)</em></td>
 <td align="center"><img src="doc/screenshots/gl_showpiece.jpg" width="400" alt="OpenGL showpiece"><br><em>OpenGL: room lighting, glass, soft shadows, GTAO, bloom and outline in one frame (<a href="examples/misc/showpiece.cpp">showpiece</a>)</em></td>
 </tr>
