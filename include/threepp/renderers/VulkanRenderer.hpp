@@ -391,6 +391,10 @@ namespace threepp {
         // the rendered output replayable bit-for-bit across runs (raster AOVs
         // already are; the beauty frame additionally needs this because its
         // temporal-blend weights are otherwise functions of real frame time).
+        // While pinned, auto-LOD also waits for its background chains instead
+        // of taking whichever have finished, so a level switch lands on the
+        // same frame however busy the machine is; the wait is each chain's
+        // generation time, once per geometry (see setAutoLod).
         // Negative disables and returns to the wall clock (the default).
         // Sensor pipelines should drive this with the same sim clock that
         // stamps their measurements (see extras/sensors/Sensor.hpp).
@@ -633,6 +637,10 @@ namespace threepp {
         // background jobs are KEPT across a disable/enable cycle (results are
         // geometry-version-guarded, so nothing stale is ever consumed), and
         // autoLodStats() reflects the most recent render, not the setter.
+        // On the wall clock a chain becomes selectable whenever its job
+        // finishes, so the frame it lands on varies with machine load; with
+        // the clock pinned (setSimTime) the frame loop waits for the job and
+        // that frame is fixed.
         void setAutoLod(bool enabled);
         [[nodiscard]] bool autoLod() const;
 

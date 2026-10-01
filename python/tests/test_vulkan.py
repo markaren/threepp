@@ -171,6 +171,37 @@ def test_sample_height_mirror_is_pacing_independent():
         renderer.sim_time = None
 
 
+def test_auto_lod_chain_lands_on_a_fixed_frame_under_a_pinned_clock():
+    """Auto-LOD simplifies each eligible geometry on a background thread, and the
+    frame loop takes the chain when it is done. On the wall clock that is whenever
+    the thread finished. With sim_time pinned it has to be a function of the scene:
+    otherwise a replayed run switches level on a different frame whenever the
+    machine is busy, and every stochastically shaded pixel near the mesh diverges
+    from there (usv_ocean --cam abeam under CPU load, 2026-10-01: ~11,000 px of
+    the still, boat, reflection and wake). So a pinned frame waits for the chains
+    queued before it, and no render() ends with a job still in the worker. The
+    sphere's ~295k triangles take many frames' worth of wall time to simplify;
+    without the wait chains_queued read 1 for all of them."""
+    canvas = tp.Canvas("vk-test-lod-pinned", width=W, height=H, headless=True, vsync=False)
+    renderer = tp.VulkanRenderer(canvas, flush_frames=1)
+    scene, cam = make_scene()
+    ball = tp.Mesh(tp.SphereGeometry(0.5, 384, 384), tp.MeshStandardMaterial())
+    ball.position.set(-1.2, 0.0, 0.0)
+    scene.add(ball)
+    try:
+        ready_at = None
+        for i in range(40):
+            renderer.sim_time = i / 60.0
+            renderer.render(scene, cam)
+            stats = renderer.auto_lod_stats
+            assert stats["chains_queued"] == 0, f"frame {i} ended with a chain still in the worker"
+            if ready_at is None and stats["chains_ready"] == 1:
+                ready_at = i
+        assert ready_at is not None, "the sphere never got a chain"
+    finally:
+        renderer.sim_time = None
+
+
 def test_aov_shapes(vk_renderer):
     scene, cam = make_scene()
     out = vk_renderer.render_aovs(scene, cam, ["rgb", "normals", "segmentation", "albedo"])

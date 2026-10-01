@@ -971,6 +971,10 @@ namespace threepp {
         using LodResult = vulkan::impl::LodResult;
         std::mutex lodResultMutex_;
         std::deque<LodResult> lodResultQueue_;
+        // Signalled once per result. Only a pinned-clock drain waits on it
+        // (drainLodResults): there the frame a chain lands on must not
+        // depend on how fast the worker ran.
+        std::condition_variable lodResultCv_;
         // Running byte totals for every finalized LOD index buffer + BLAS
         // storage, updated as chains finalize / are evicted — cheap O(1)
         // bookkeeping instead of a full blasCache walk every frame. Gates
@@ -1022,9 +1026,13 @@ namespace threepp {
         bool enqueueLodJob(const BufferGeometry* geomPtr, unsigned int geomVersion, BufferGeometry& geom,
                            float normalWeight);
         // Per-frame chain-finalization budget (drainLodResults, called once
-        // per frame from ensureSceneBuilt): up to 16 geometries OR 8 MiB of
+        // per frame from ensureSceneBuilt): up to 2 geometries OR 1 MiB of
         // new level resources (index buffers + BLAS storage), whichever hits
-        // first. All of a frame's level BLAS builds are recorded into ONE
+        // first. On the wall clock it takes what the worker has finished; on
+        // a pinned clock (setSimTime) it waits for the worker until the
+        // budget is spent or no job is outstanding, so the frame each chain
+        // lands on is the same in every run.
+        // All of a frame's level BLAS builds are recorded into ONE
         // one-shot submit+wait (flushLodLevelBuilds) — a submit per level
         // (or even per geometry) at Bistro-scale entry counts costs more in
         // queue round-trips than the batching saves. Stale results (record

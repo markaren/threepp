@@ -708,6 +708,23 @@ void VulkanRenderer::Impl::drainLodResults() {
             constexpr uint32_t kMaxGeomsPerFrame = 2;
             constexpr uint64_t kMaxNewBytesPerFrame = 1ull * 1024ull * 1024ull;
 
+            // Pinned clock (setSimTime): the caller is asking for a run that
+            // replays, and the frame a chain lands on is otherwise a wall-clock
+            // race between the worker and the frame loop. On an idle machine the
+            // worker stays ahead of the budget above, so the schedule is the
+            // budget's and repeats; under CPU load, or with frames coming
+            // faster, it falls behind, a level switch moves by a frame, and
+            // every stochastically shaded pixel near that mesh takes a
+            // different path from then on (usv_ocean --cam abeam: ~11,000 px
+            // of the boat, her reflection and her wake, in every later frame).
+            // So wait for the worker rather than take only what is ready.
+            // Results come back in job order (one worker), jobs are queued on
+            // frames counted by frameSerial_, and the budget is a function of
+            // the results, so the whole schedule is then a function of the
+            // scene. The wait is the chain's own generation time, once per
+            // geometry. On the wall clock nothing waits.
+            const bool waitForWorker = simTimeSec_ >= 0.0;
+
             uint32_t finalizedGeoms = 0;
             uint64_t newBytes = 0;
             std::vector<LodPendingBuild> pending;
@@ -715,8 +732,14 @@ void VulkanRenderer::Impl::drainLodResults() {
             while (finalizedGeoms < kMaxGeomsPerFrame && newBytes < kMaxNewBytesPerFrame) {
                 LodResult result;
                 {
-                    std::lock_guard<std::mutex> lk(lodResultMutex_);
-                    if (lodResultQueue_.empty()) break;
+                    std::unique_lock<std::mutex> lk(lodResultMutex_);
+                    if (lodResultQueue_.empty()) {
+                        // lodChainsQueuedCount_ counts the jobs whose result
+                        // has not been taken here yet: nonzero with an empty
+                        // queue means the worker still owes one.
+                        if (!waitForWorker || lodChainsQueuedCount_ == 0) break;
+                        lodResultCv_.wait(lk, [this] { return !lodResultQueue_.empty(); });
+                    }
                     result = std::move(lodResultQueue_.front());
                     lodResultQueue_.pop_front();
                 }
@@ -3099,8 +3122,11 @@ void VulkanRenderer::Impl::lodWorkerMain() {
                         /*sparse=*/job.indices.empty(),
                         job.normals.empty() ? nullptr : job.normals.data(),
                         job.normalWeight);
-                std::lock_guard<std::mutex> lk(lodResultMutex_);
-                lodResultQueue_.push_back({job.geom, job.geomVersion, std::move(levels)});
+                {
+                    std::lock_guard<std::mutex> lk(lodResultMutex_);
+                    lodResultQueue_.push_back({job.geom, job.geomVersion, std::move(levels)});
+                }
+                lodResultCv_.notify_one();// a pinned-clock drain may be waiting
             }
         }
 
