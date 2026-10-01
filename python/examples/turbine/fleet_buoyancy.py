@@ -75,13 +75,23 @@ def wrap(a):
 
 
 class StripHull:
-    """One boat on its Bonjean strips. heading a: vessel +X points along world (cos a, 0, -sin a)."""
+    """One boat on its Bonjean strips. heading a: vessel +X points along world (cos a, 0, -sin a).
 
-    def __init__(self, boat, ocean, load=None):
+    Keyword-only, for boats other than the two drones (defaults keep the drones as they were):
+      spec_dir   folder holding <boat>_spec.json and <boat>_hydro.json (default USV_DIR)
+      probe_z    half-breadth where each side's water is read (default PROBE_Z[boat], else
+                 0.314 x the design waterline beam: the strip model heels the half-sections by
+                 the level change AT probe_z, so probe_z sets its roll stiffness, and 0.314 bwl
+                 reproduces the sjark's GM_T 1.39 m (sjark_hydro.json) under a known moment)
+      excl       ocean hull footprint (half length, half beam, waterplane centre x) (default
+                 EXCL[boat], else half the design waterline length, 0.42 x its beam, its LCF)"""
+
+    def __init__(self, boat, ocean, load=None, *, spec_dir=None, probe_z=None, excl=None):
         self.boat, self.ocean = boat, ocean
-        with open(os.path.join(USV_DIR, f"{boat}_spec.json"), encoding="utf-8") as fh:
+        spec_dir = spec_dir or USV_DIR
+        with open(os.path.join(spec_dir, f"{boat}_spec.json"), encoding="utf-8") as fh:
             spec = json.load(fh)
-        with open(os.path.join(USV_DIR, f"{boat}_hydro.json"), encoding="utf-8") as fh:
+        with open(os.path.join(spec_dir, f"{boat}_hydro.json"), encoding="utf-8") as fh:
             hydro = json.load(fh)
         self.spec = spec
         load = load or spec["mass"]["design_condition"]
@@ -107,7 +117,11 @@ class StripHull:
         self.sx = np.concatenate([xs, xs])
         self.side = np.concatenate([np.ones(ns), -np.ones(ns)])
         self.row = np.arange(2 * ns)
-        self.probe_z = PROBE_Z[boat]
+        if probe_z is None:
+            probe_z = PROBE_Z[boat] if boat in PROBE_Z else 0.314 * D["bwl"]
+        if excl is None:
+            excl = EXCL[boat] if boat in EXCL else (0.5 * D["lwl"], 0.42 * D["bwl"], D["lcf"])
+        self.probe_z, self.excl = probe_z, tuple(excl)
         self.lowest = spec["principal"]["lowest_point_y"]
         # damping from the design hydrostatics, a fraction of critical per axis (usv_ocean)
         rg = self.rho * self.g
@@ -215,7 +229,7 @@ class StripHull:
 
     def footprint(self, ocean):
         """Give the ocean's one hull footprint to this boat (usv_ocean sea_update)."""
-        hl, hb, xc = EXCL[self.boat]
+        hl, hb, xc = self.excl
         R = self.R
         fwd = R[:, 0]
         yaw_ex = math.atan2(fwd[0], fwd[2])
