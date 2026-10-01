@@ -217,7 +217,47 @@ namespace threepp_py {
                 .def_readwrite("detail_normal_scale", &MeshStandardMaterial::detailNormalScale,
                                "Tangent-space xy perturbation scale of the detail normal.")
                 .def_readwrite("detail_rough_strength", &MeshStandardMaterial::detailRoughStrength,
-                               "0..1 strength of the detail roughness modulation.");
+                               "0..1 strength of the detail roughness modulation.")
+                // Terrain splat bands (MaterialWithTerrainMaps): `map` stays the
+                // coarse macro colour; a weight map in the mesh's UVs picks up to
+                // four repeating, world-anchored band sets that resolve the
+                // surface at screen density (stochastic tiling, triplanar on steep
+                // faces, height-blended borders). Until now only TerrainTiles
+                // could set these; a terrain loaded from a file could not.
+                // Vulkan deferred G-buffer only; GL ignores it.
+                .def_readwrite("terrain_weight_map", &MeshStandardMaterial::terrainWeightMap,
+                               "LINEAR RGBA in the mesh's UVs: the coverage of bands 0..3. A sum under 1 "
+                               "leaves the rest to the macro `map` (roads: all zero). None switches the bands off.")
+                .def_readwrite("terrain_normal_map", &MeshStandardMaterial::terrainNormalMap,
+                               "LINEAR RGB in the mesh's UVs: the world-space surface normal (n * 0.5 + 0.5), "
+                               "in place of the interpolated vertex normal. Optional.")
+                .def(
+                        "set_terrain_band",
+                        [](MeshStandardMaterial& m, int band, std::shared_ptr<Texture> albedo,
+                           std::shared_ptr<Texture> normalRough, float repeat, float roughness) {
+                            if (band < 0 || band >= MeshStandardMaterial::kTerrainBands)
+                                throw py::index_error("set_terrain_band: band must be 0..3");
+                            const auto b = static_cast<size_t>(band);
+                            m.terrainBandAlbedo[b] = std::move(albedo);
+                            m.terrainBandNormalRough[b] = std::move(normalRough);
+                            m.terrainBandRepeat[b] = repeat;
+                            m.terrainBandRoughness[b] = roughness;
+                        },
+                        py::arg("band"), py::arg("albedo"), py::arg("normal_rough") = nullptr,
+                        py::arg("repeat") = 0.5f, py::arg("roughness") = 0.9f,
+                        "One band's repeating set. albedo: LINEAR RGBA, RGB a 0.5-neutral overlay of the macro "
+                        "colour, A the material's height (0.5 = neutral) for the height blend. normal_rough: LINEAR "
+                        "RGBA, RGB a tangent-space normal (0.5 = flat), A a roughness modulation (0.5 = neutral). "
+                        "repeat: repeats per world metre. roughness: the band's base roughness, which replaces the "
+                        "material's where the band covers.")
+                .def_readwrite("terrain_band_strength", &MeshStandardMaterial::terrainBandStrength,
+                               "0..1 strength of the bands' albedo overlay.")
+                .def_readwrite("terrain_band_normal_scale", &MeshStandardMaterial::terrainBandNormalScale,
+                               "Tangent-space xy perturbation scale of the bands' normals.")
+                .def_readwrite("terrain_band_rough_strength", &MeshStandardMaterial::terrainBandRoughStrength,
+                               "0..1 strength of the bands' roughness modulation.")
+                .def_readwrite("terrain_height_blend", &MeshStandardMaterial::terrainHeightBlend,
+                               "How sharply coverage turns to the band standing tallest (0 = a plain cross-fade).");
 
         // ---- MeshPhysicalMaterial -------------------------------------------
         // Extends Standard with the transmissive / clearcoat / attenuation set —
