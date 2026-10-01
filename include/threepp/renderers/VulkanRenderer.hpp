@@ -88,10 +88,20 @@ namespace threepp {
         RenderTarget* getRenderTarget() override;
         void setRenderTarget(RenderTarget* renderTarget, int activeCubeFace = 0, int activeMipmapLevel = 0) override;
 
+        // The swapchain image of the most recent frame: tone-mapped RGB8, top-down,
+        // framebufferSize()-shaped, with every overlay (HUD pass, sprites, ImGui)
+        // that was recorded before the call.
+        //
+        // render() only records a frame; the Canvas frame-end callback submits
+        // it. Called while that frame is still open (inside the animate body,
+        // after render()), the readback finishes the frame first, so it returns
+        // what was just rendered. That ends the frame for this iteration: render
+        // a HUD pass BEFORE the readback, a later one is skipped with a one-time
+        // hint. For a copy of the scene without overlays use readSceneRGBPixels().
         [[nodiscard]] std::vector<unsigned char> readRGBPixels() override;
 
-        // Save the last presented frame to disk (.png/.jpg/.jpeg/.bmp), creating
-        // parent dirs as needed. Wraps readRGBPixels(); call after render().
+        // Save that same image to disk (.png/.jpg/.jpeg/.bmp), creating parent
+        // dirs as needed. Wraps readRGBPixels(); call after render().
         void writeFramebuffer(const std::filesystem::path& filename) override;
 
         // Scene-only swapchain capture (post-TAA / pre-overlay) into a host-visible

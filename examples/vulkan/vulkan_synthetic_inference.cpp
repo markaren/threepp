@@ -213,6 +213,10 @@ int main(int argc, char** argv) {
         }
 
         renderer.render(scene, camera);
+        // HUD overlay pass. Before the readback: readRGBPixels() finishes the
+        // frame to read it, so a pass after it would have no frame to draw
+        // onto. The boxes are therefore the previous detection's.
+        renderer.render(ui, uiCam);
 
         // Detect every 3rd frame (RF-DETR ~25 ms; the readback serializes
         // CPU/GPU, so per-frame inference would halve the render rate).
@@ -265,8 +269,6 @@ int main(int argc, char** argv) {
                 std::printf("\n");
             }
         }
-
-        renderer.render(ui, uiCam);// HUD overlay pass
 
         if (!shotPath.empty() && frame == 150) {
             renderer.writeFramebuffer(shotPath);

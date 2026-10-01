@@ -9882,7 +9882,9 @@ class VulkanRenderer:
         Restart every temporal accumulator on every view; takes effect on the next render(). After a streaming scene has settled: reset, skip one frame, then record replayable frames.
         """
     def save_frame(self, scene: Object3D, camera: Camera, path: str) -> None:
-        ...
+        """
+        Render one frame of the scene as it is now and write it to path (.png, .jpg or .bmp).
+        """
     def scan_lidar(self, origins: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], directions: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], params: LidarParams = ...) -> dict:
         """
         Trace an arbitrary beam table in ONE dispatch: origins (N,3) + unit directions (N,3) -> the same dict of numpy arrays as PathTracedLidarSensor.scan(), row i belonging to beam i (x samples_per_beam x max_returns when those are raised; return_no > 0 is the real-return predicate). render() the scene once first. Use this when the beams do not follow a single pose - e.g. scoring an object from a ring of viewpoints in one round trip.

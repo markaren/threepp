@@ -2538,6 +2538,16 @@ namespace threepp {
         enum class FrameState { Idle, RecordingPostShade, RecordingOrthoOnly };
         FrameState frameState_ = FrameState::Idle;
 
+        // A swapchain readback (readRGBPixels) finished this canvas iteration's
+        // frame early, to read the pixels render() had only recorded. A pass
+        // that can only EXTEND an open frame (the HUD's ortho render, a
+        // split-screen pane) has nothing to draw onto after that, and from
+        // Idle it would open a frame of its own. render() drops it while this
+        // is set. Set only inside the canvas animate body, cleared by the
+        // frame-end callback: a caller driving render() directly has no
+        // iteration to speak of, and its next render() is a new frame anyway.
+        bool frameEndedByReadback_ = false;
+
         // setOrthographicSceneRendering: an ortho camera names a 3D VIEW, not a
         // 2D overlay, so a standalone render() with one takes the deferred path.
         // Off by default — every existing 2D/HUD user of this backend renders

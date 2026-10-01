@@ -618,10 +618,11 @@ namespace {
         }
 
         void save_frame(Object3D& scene, Camera& camera, const std::string& path) {
-            canvas_.animateOnce([&] {
-                renderer_.render(scene, camera);
-                renderer_.writeFramebuffer(path);
-            });
+            // Read back after the frame has ended, like every other capture
+            // here: render() only records, and the pixels exist once the
+            // frame-end callback has submitted it.
+            canvas_.animateOnce([&] { renderer_.render(scene, camera); });
+            renderer_.writeFramebuffer(path);
         }
 
         void set_clear_color(const Color& c, float alpha) { renderer_.setClearColor(c, alpha); }
@@ -1842,7 +1843,9 @@ namespace threepp_py {
                 .def("set_scissor", &PyVulkanRenderer::set_scissor,
                      py::arg("x"), py::arg("y"), py::arg("width"), py::arg("height"))
                 .def("set_scissor_test", &PyVulkanRenderer::set_scissor_test, py::arg("enabled"))
-                .def("save_frame", &PyVulkanRenderer::save_frame, py::arg("scene"), py::arg("camera"), py::arg("path"))
+                .def("save_frame", &PyVulkanRenderer::save_frame, py::arg("scene"), py::arg("camera"), py::arg("path"),
+                     "Render one frame of the scene as it is now and write it to path "
+                     "(.png, .jpg or .bmp).")
                 .def("size", &PyVulkanRenderer::size)
                 // Volumetric fog: Henyey-Greenstein phase anisotropy of the ONE air
                 // medium. Clamped to [-0.95, 0.95]. Takes effect whenever a medium is

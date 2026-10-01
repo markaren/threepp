@@ -23,9 +23,13 @@ W, H = 320, 240
 
 
 @pytest.fixture(scope="module")
-def vk_renderer():
-    canvas = tp.Canvas("vk-test", width=W, height=H, headless=True, vsync=False)
-    return tp.VulkanRenderer(canvas)
+def vk_canvas():
+    return tp.Canvas("vk-test", width=W, height=H, headless=True, vsync=False)
+
+
+@pytest.fixture(scope="module")
+def vk_renderer(vk_canvas):
+    return tp.VulkanRenderer(vk_canvas)
 
 
 def make_scene():
@@ -49,6 +53,136 @@ def test_rgb_render(vk_renderer):
     img = vk_renderer.render_aov(scene, cam, "rgb")
     assert img.shape == (H, W, 3) and str(img.dtype) == "uint8"
     assert int(img.max()) > int(img.min()), "shaded render is flat"
+
+
+def _renderer_without_presents(title):
+    """A canvas and renderer of their own, with presents suppressed. The switch
+    is read once, at context creation, so it is set for the constructor only."""
+    prev = os.environ.get("THREEPP_VULKAN_SUPPRESS_PRESENT")
+    os.environ["THREEPP_VULKAN_SUPPRESS_PRESENT"] = "1"
+    try:
+        canvas = tp.Canvas(title, width=W, height=H, headless=True, vsync=False)
+        return tp.VulkanRenderer(canvas)
+    finally:
+        if prev is None:
+            del os.environ["THREEPP_VULKAN_SUPPRESS_PRESENT"]
+        else:
+            os.environ["THREEPP_VULKAN_SUPPRESS_PRESENT"] = prev
+
+
+def _flat_scene(background):
+    scene = tp.Scene()
+    scene.background = background
+    cam = tp.PerspectiveCamera(55, W / H, 0.1, 100)
+    return scene, cam
+
+
+def _hud_patch():
+    """A blue unlit square over the middle of the view, and its 2D camera."""
+    hud = tp.Scene()
+    patch = tp.MeshBasicMaterial()
+    patch.color = 0x0000ff
+    hud.add(tp.Mesh(tp.PlaneGeometry(1, 1), patch))
+    cam = tp.OrthographicCamera(-W / H, W / H, 1, -1, 0.1, 10)
+    cam.position.z = 1
+    return hud, cam
+
+
+def _centre(img):
+    return _dominant(img[img.shape[0] // 2, img.shape[1] // 2][:3])
+
+
+@pytest.mark.parametrize("presents", ["presenting", "suppressed"])
+def test_save_frame_writes_the_frame_it_rendered(vk_renderer, presents, tmp_path):
+    """save_frame renders a frame and reads it back in one call. render() only
+    records: the submit and the present run from the canvas frame-end callback,
+    after the animate body returns. The readback used to copy the swapchain
+    image before that, so the PNG held whatever the image carried from its
+    previous use: the scene as it was three frames earlier (two with presents
+    suppressed, which pins one image per in-flight slot), or an image nothing
+    had ever drawn into when save_frame was the first call. A still taken after
+    a loop of render() calls looked right only because nothing had changed in
+    between."""
+    renderer = vk_renderer
+    scene, cam = _flat_scene(0xff0000)
+
+    def saved(name):
+        path = tmp_path / name
+        renderer.save_frame(scene, cam, str(path))
+        return tp.TextureLoader(False).load(str(path), False).to_numpy()[..., :3]
+
+    if presents == "suppressed":
+        # A renderer of its own, so this is also the first-call case.
+        renderer = _renderer_without_presents("vk-test-save-frame")
+        first = saved("first.png")
+        assert _centre(first) == "r", f"first call: {first[H // 2, W // 2]}"
+
+    for _ in range(3):
+        renderer.render(scene, cam)
+    scene.background = 0x00ff00
+    png = saved("changed.png")
+    assert _centre(png) == "g", f"after the change: {png[H // 2, W // 2]}"
+    # The file and read_pixels() are the same frame, so the same bytes.
+    assert np.array_equal(png, renderer.read_pixels())
+
+
+def test_readback_inside_the_frame_returns_that_frame(vk_canvas, vk_renderer):
+    """The same readback from inside the animate body, which is how the C++
+    examples take their stills (render(), then writeFramebuffer()). The readback
+    finishes the frame to read it, so what it returns is what was recorded up to
+    that point: the scene, and a HUD pass rendered before it."""
+    scene, cam = _flat_scene(0xff0000)
+    hud, hud_cam = _hud_patch()
+    got = {}
+
+    for _ in range(3):
+        vk_renderer.render(scene, cam)
+    scene.background = 0x00ff00
+
+    def scene_then_readback():
+        vk_renderer.render(scene, cam)
+        got["scene"] = vk_renderer.read_pixels()
+
+    assert vk_canvas.animate_once(scene_then_readback)
+    assert _centre(got["scene"]) == "g", f"scene: {got['scene'][H // 2, W // 2]}"
+    assert np.array_equal(got["scene"], vk_renderer.read_pixels())
+
+    def hud_then_readback():
+        vk_renderer.render(scene, cam)
+        vk_renderer.render(hud, hud_cam)
+        got["hud"] = vk_renderer.read_pixels()
+
+    assert vk_canvas.animate_once(hud_then_readback)
+    assert _centre(got["hud"]) == "b", f"HUD patch: {got['hud'][H // 2, W // 2]}"
+    assert _dominant(got["hud"][5, 5]) == "g", f"scene beside the HUD: {got['hud'][5, 5]}"
+
+
+def test_hud_pass_after_a_readback_is_dropped_with_a_hint(vk_canvas, vk_renderer, capfd):
+    """A HUD pass draws onto the frame the scene render opened. After a readback
+    that frame is finished, and the pass would open one of its own: the HUD over
+    a cleared image, presented right after the scene. It is dropped instead, and
+    the renderer says to move it before the readback. The hint prints once per
+    process."""
+    scene, cam = _flat_scene(0x00ff00)
+    hud, hud_cam = _hud_patch()
+    got = {}
+
+    def readback_then_hud():
+        vk_renderer.render(scene, cam)
+        got["scene"] = vk_renderer.read_pixels()
+        vk_renderer.render(hud, hud_cam)
+
+    capfd.readouterr()
+    assert vk_canvas.animate_once(readback_then_hud)
+    err = capfd.readouterr().err
+    assert "before the readback" in err, "no hint was printed; stderr was:\n" + err
+    assert _centre(got["scene"]) == "g"
+    # The frame that was presented is the scene, not the HUD over a cleared image.
+    assert _centre(vk_renderer.read_pixels()) == "g"
+    # The next frame is whole again: the drop does not outlive its frame.
+    assert vk_canvas.animate_once(
+        lambda: (vk_renderer.render(scene, cam), vk_renderer.render(hud, hud_cam)))
+    assert _centre(vk_renderer.read_pixels()) == "b"
 
 
 def test_sim_time_round_trips(vk_renderer):

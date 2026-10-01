@@ -344,7 +344,9 @@ namespace threepp {
         // so all draws land on the same swapchain image. See
         // Impl::endFrame() for the submit+present body.
         canvas.setFrameEndCallback([this] {
-            if (pimpl_) pimpl_->endFrame();
+            if (!pimpl_) return;
+            pimpl_->endFrame();
+            pimpl_->frameEndedByReadback_ = false;
         });
 
         // The window was created hidden (Canvas::initWindow, Vulkan branch) so
@@ -374,6 +376,27 @@ namespace threepp {
 
     void VulkanRenderer::render(Object3D& scene, Camera& camera) {
         const auto frameStart = std::chrono::high_resolution_clock::now();
+
+        // A readback already finished this canvas iteration's frame (see
+        // readRGBPixels). An ortho HUD pass or a split-screen pane only ever
+        // extends an open frame; from Idle it would open one of its own, the
+        // HUD over a cleared image, presented right after the scene. Drop the
+        // pass instead: the frame on screen stays whole, and the caller is told
+        // which two lines to swap.
+        if (core()->frameEndedByReadback_ &&
+            (camera.is<OrthographicCamera>() ||
+             (core()->scissorTest && core()->scissor.z >= 1.f && core()->scissor.w >= 1.f))) {
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                std::cerr << "[VulkanRenderer] render() of an overlay pass (HUD camera or "
+                             "scissored pane) after readRGBPixels() / writeFramebuffer() in the "
+                             "same frame: the readback finished the frame to read it, so there is "
+                             "nothing left to draw onto and the pass was skipped. Render it "
+                             "before the readback. Printed once.\n";
+            }
+            return;
+        }
 
         // ── Lens overscan ───────────────────────────────────────────────────
         // Widen the frustum for the duration of this render so the lens warp
@@ -637,6 +660,27 @@ namespace threepp {
         auto& impl = *core();
         auto* ctx  = impl.ctx.get();
         if (!ctx || ctx->swapchainImages().empty()) return {};
+
+        // render() only RECORDS a frame. Its submit and present run from the
+        // Canvas frame-end callback, after the animate body returns, so a
+        // readback inside that body (render(), then writeFramebuffer()) finds
+        // the frame still open, and the image acquired for it still holding
+        // what its previous use left there: the picture from three frames ago
+        // on a three-image swapchain, from two frames ago with presents
+        // suppressed, or nothing at all on a first frame. The wait below does
+        // not help, there is nothing in flight to wait for. Finish the frame
+        // first, so the pixels read are the ones just rendered. Before the
+        // extent is sampled: the present can recreate the swapchain.
+        //
+        // The frame is then over for this canvas iteration, which is what the
+        // caller's order asked for (pixels as of this point). An overlay pass
+        // that follows cannot join it any more; render() drops such a pass and
+        // says so. An ImGui panel drawn after the readback is one frame late in
+        // the capture and unaffected on screen.
+        if (impl.frameState_ != Impl::FrameState::Idle) {
+            impl.endFrame();
+            impl.frameEndedByReadback_ = impl.canvas.isInsideAnimateLoop();
+        }
 
         const VkExtent2D ext   = ctx->swapchainExtent();
         const auto       w     = ext.width;
