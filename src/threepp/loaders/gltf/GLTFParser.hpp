@@ -234,6 +234,9 @@ namespace threepp::gltf {
         // request. ColorSpace is stored as its underlying int.
         std::map<std::pair<int, int>, std::shared_ptr<Texture>> textureCache;
         std::unordered_map<int, std::shared_ptr<Material>> materialCache;
+        // The vertexColors = true copy of a material, for the primitives that
+        // carry COLOR_0. Keyed like materialCache (-1 = the default material).
+        std::unordered_map<int, std::shared_ptr<Material>> vertexColorMaterialCache;
 
         // Decoded-geometry cache, keyed by (meshIdx, primIdx, hasSkin).
         // loadMesh is invoked once per referencing node; without this the

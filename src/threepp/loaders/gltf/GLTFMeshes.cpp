@@ -187,6 +187,19 @@ namespace threepp::gltf {
                 mat = MeshStandardMaterial::create();
             }
 
+            // COLOR_0 multiplies the base colour (glTF 2.0, 3.7.2.1). vertexColors
+            // is a material switch here, so a primitive that carries COLOR_0 takes
+            // a copy of its material with the switch on, shared per material index.
+            if (attrs.contains("COLOR_0") && !mat->vertexColors) {
+                const int matIdx = prim.contains("material") ? prim["material"].get<int>() : -1;
+                auto& variant = vertexColorMaterialCache[matIdx];
+                if (!variant) {
+                    variant = mat->clone();
+                    variant->vertexColors = true;
+                }
+                mat = variant;
+            }
+
             std::shared_ptr<Mesh> mesh;
             if (hasSkin && attrs.contains("JOINTS_0"))
                 mesh = SkinnedMesh::create(geometry, mat);

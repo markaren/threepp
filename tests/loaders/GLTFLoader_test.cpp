@@ -630,6 +630,59 @@ TEST_CASE("GLTFLoader widens COLOR_0 when preserveNarrowAttributes is off") {
     CHECK(colWide->array()[4] == 1.f);
 }
 
+// COLOR_0 multiplies the base colour (glTF 2.0, 3.7.2.1). vertexColors is a
+// material switch, so the primitives with COLOR_0 share one copy of their
+// material with the switch on; a primitive without it keeps the original.
+TEST_CASE("GLTFLoader turns vertexColors on for the primitives that carry COLOR_0") {
+    Bin bin;
+    size_t posOff = bin.put<float>({0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f});
+    size_t colOff = bin.putBytes({255, 0, 0, 0, 255, 0, 128, 128, 128});
+
+    std::string json = R"({
+      "asset":{"version":"2.0"},
+      "buffers":[{"byteLength":)" + std::to_string(bin.data.size()) + R"(}],
+      "bufferViews":[
+        {"buffer":0,"byteOffset":)" + std::to_string(posOff) + R"(,"byteLength":36},
+        {"buffer":0,"byteOffset":)" + std::to_string(colOff) + R"(,"byteLength":9}],
+      "accessors":[
+        {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+        {"bufferView":1,"componentType":5121,"normalized":true,"count":3,"type":"VEC3"}],
+      "materials":[{"name":"m","pbrMetallicRoughness":{"baseColorFactor":[0.5,0.25,0.125,1.0]}}],
+      "meshes":[
+        {"primitives":[{"attributes":{"POSITION":0,"COLOR_0":1},"material":0}]},
+        {"primitives":[{"attributes":{"POSITION":0},"material":0}]},
+        {"primitives":[{"attributes":{"POSITION":0,"COLOR_0":1},"material":0}]}],
+      "nodes":[{"mesh":0},{"mesh":1},{"mesh":2}],
+      "scenes":[{"nodes":[0,1,2]}]
+    })";
+
+    auto path = writeTempGlb(makeGlb(json, bin.data));
+    GLTFLoader loader;
+    auto res = loader.load(path);
+    fs::remove(path);
+
+    REQUIRE(res);
+    std::vector<Mesh*> meshes;
+    collectMeshes(res->scene.get(), meshes);
+    REQUIRE(meshes.size() == 3);
+
+    auto coloured = meshes[0]->material();
+    auto plain = meshes[1]->material();
+    CHECK(coloured->vertexColors);
+    CHECK_FALSE(plain->vertexColors);
+    CHECK(coloured != plain);
+    CHECK(meshes[2]->material() == coloured);
+
+    auto* std0 = coloured->as<MeshStandardMaterial>();
+    auto* std1 = plain->as<MeshStandardMaterial>();
+    REQUIRE(std0);
+    REQUIRE(std1);
+    CHECK(std0->color.r == std1->color.r);
+    CHECK(std0->color.g == std1->color.g);
+    CHECK(std0->color.b == std1->color.b);
+    CHECK(std0->name == "m");
+}
+
 // OpenCASCADE's RWGltf_CafWriter emits {"POSITION":-1,"indices":-1} primitives
 // for faces it failed to triangulate. Those must not sink the whole document.
 TEST_CASE("GLTFLoader skips primitives with out-of-range accessors") {
