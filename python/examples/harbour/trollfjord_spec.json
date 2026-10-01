@@ -184,6 +184,27 @@
     ]
    },
    {
+    "name": "panorama_aft",
+    "note": "L3, read off the Bergen broadside photo (Wikimedia Commons, 2021-07-30): the glazed lounge on the top deck runs aft from the forward glass block (deck8) to just forward of the funnel and the name board, a little lower than deck8, glazed full height with a glass roof, its aft end rounded. Its mass is inside the decks 4-8 superstructure budget.",
+    "y0": 25.203,
+    "y1": 27.7,
+    "x_aft": -3.0,
+    "x_fwd": 21.0,
+    "half_width": 9.2,
+    "front_len": 1.0,
+    "front_power": 2.0,
+    "clip_to_deck": false,
+    "windows": [
+     {"kind": "band", "y0": 25.42, "y1": 27.48, "x0": 0.0, "x1": 20.0}
+    ],
+    "aft_len": 3.0,
+    "aft_power": 2.0,
+    "aft_windows": [
+     {"kind": "band", "y0": 25.42, "y1": 27.48}
+    ],
+    "roof_glass": {"inset": 0.7}
+   },
+   {
     "name": "funnel_casing",
     "y0": 25.203,
     "y1": 27.258,
@@ -203,7 +224,7 @@
    "inset": 0.15,
    "note": "rail round the open deck of each tier's roof where the tier above steps back (drawn round the whole roof edge; hidden where a tier stands on it)"
   },
-  "bridge_wings": {"x0": 54.0, "x1": 57.6, "y0": 18.809, "y1": 21.891, "half_span": 12.2, "window_y0": 19.608, "window_y1": 21.549, "note": "enclosed bridge wings reaching past the hull side (head-on photo)"},
+  "bridge_wings": {"x0": 54.0, "x1": 57.6, "y0": 18.809, "y1": 21.891, "half_span": 12.2, "inner_z": 6.0, "window_inner_z": 6.75, "window_y0": 19.608, "window_y1": 21.549, "note": "enclosed bridge wings reaching past the hull side (head-on photo). L3: the head-on photo (MS Trollfjord midt imot, Wikimedia Commons) shows the bridge as one glazed front from wing to wing: each wing reaches in to inner_z (into the deck6 front) and its front is glazed from window_inner_z out, so the band runs on from the deck6 front glass"},
   "sign_board": {"x0": -10.0, "x1": -3.0, "y0": 25.317, "y1": 26.23, "note": "the yellow name board beside the funnel, as a plain panel (no lettering)"}
  },
  "funnel": {

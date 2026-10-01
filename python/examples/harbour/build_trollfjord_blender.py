@@ -471,6 +471,22 @@ def build_superstructure(spec, L, part, glass):
                         glass.add(quad, [(0, 1, 2, 3)], "window_glass", closed=False, outward=(xm, 0.0, zm))
                 else:
                     panes_along(glass, arcpts, ctr, aw["y0"], aw["y1"], aw["pitch"], aw["width"], off)
+        rg = t.get("roof_glass")
+        if rg:
+            # a glass roof (open decal) over the tier's outline short of its front arc, shrunk by
+            # `inset` (affinely, so the rounded aft end stays convex for the fan)
+            ins, w_ = rg["inset"], t["half_width"]
+            al = t.get("aft_len", 0.0)
+            xc = t["x_aft"] + al
+            q = []
+            for (x, z) in ol:
+                if x > t["x_fwd"] - t["front_len"] + 1e-6:
+                    continue
+                xx = xc + (x - xc) * (al - ins) / al if (al > 0.0 and x < xc) else max(x, t["x_aft"] + ins)
+                p = (xx, t["y1"] + off, z * (w_ - ins) / w_)
+                if not q or math.hypot(p[0] - q[-1][0], p[2] - q[-1][2]) > 1e-3:
+                    q.append(p)
+            glass.add(q, [tuple(range(len(q)))], "window_glass", closed=False, outward=(0.0, 1.0, 0.0))
     # roof rails where no tier stands on the roof
     RR = S["roof_rail"]
     for name in RR["tiers"]:
@@ -496,10 +512,11 @@ def build_superstructure(spec, L, part, glass):
                 strut(part, (c[0], y, c[1]), (c[0], y + RR["height"], c[1]), 0.5 * RR["thickness"], "rail_white", n=4)
     BW = S["bridge_wings"]
     for s in (1, -1):
-        v, f, M = box_between((BW["x0"], BW["y0"], s * 9.5), (BW["x1"], BW["y1"], s * BW["half_span"]))
+        v, f, M = box_between((BW["x0"], BW["y0"], s * BW.get("inner_z", 9.5)), (BW["x1"], BW["y1"], s * BW["half_span"]))
         part.add(v, f, "super_white", M)
-        for (q, n_) in (([(BW["x1"] + off, BW["window_y0"], s * 10.6), (BW["x1"] + off, BW["window_y0"], s * (BW["half_span"] - 0.2)),
-                          (BW["x1"] + off, BW["window_y1"], s * (BW["half_span"] - 0.2)), (BW["x1"] + off, BW["window_y1"], s * 10.6)], (1.0, 0.0, 0.0)),
+        zi = BW.get("window_inner_z", 10.6)
+        for (q, n_) in (([(BW["x1"] + off, BW["window_y0"], s * zi), (BW["x1"] + off, BW["window_y0"], s * (BW["half_span"] - 0.2)),
+                          (BW["x1"] + off, BW["window_y1"], s * (BW["half_span"] - 0.2)), (BW["x1"] + off, BW["window_y1"], s * zi)], (1.0, 0.0, 0.0)),
                         ([(BW["x0"] + 0.3, BW["window_y0"], s * (BW["half_span"] + off)), (BW["x1"] - 0.3, BW["window_y0"], s * (BW["half_span"] + off)),
                           (BW["x1"] - 0.3, BW["window_y1"], s * (BW["half_span"] + off)), (BW["x0"] + 0.3, BW["window_y1"], s * (BW["half_span"] + off))], (0.0, 0.0, s))):
             glass.add(q, [(0, 1, 2, 3)], "window_glass", closed=False, outward=n_)
