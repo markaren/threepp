@@ -31,6 +31,8 @@ examples/harbour/sjark_hydro.json
 examples/harbour/buoys.glb
 examples/harbour/buoys_hydro.json
 examples/harbour/out/
+examples/harbour/trollfjord.glb
+examples/harbour/trollfjord_hydro.json
 # Renders, clips and survey data the turbine demo writes (TURBINE_OUT overrides the folder)
 examples/turbine/out/
 # Default output folders of the soft-body films, the snake net-pen and the rover demos (--out overrides)
