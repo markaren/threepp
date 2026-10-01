@@ -17,9 +17,9 @@ import numpy as np
 USV_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "usv")
 
 BUOY_MASK = 0b011                  # swell + mid band; cascade 2 is chop the hull ignores (usv_ocean)
-PROBE_Z = {"mariner": 0.55, "otterx": 0.87}         # where each half's water level is read (usv_ocean)
+PROBE_Z = {"mariner": 0.55, "otterx": 0.87, "otter": 0.37}         # where each half's water level is read (usv_ocean; the Otter's by the Otter X's ratio to the pontoon keel line)
 # ocean hull footprint (usv_ocean): half length, half beam, waterplane centre x
-EXCL = {"mariner": (2.95, 0.85, -0.1), "otterx": (2.0, 1.0, 0.0)}
+EXCL = {"mariner": (2.95, 0.85, -0.1), "otterx": (2.0, 1.0, 0.0), "otter": (0.9, 0.5, 0.0)}
 # the low points a draft is measured to (usv_ocean DEEP_PTS, simplified to the lowest y)
 
 

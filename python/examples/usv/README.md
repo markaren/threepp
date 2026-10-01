@@ -2,14 +2,14 @@
 
 A model of Maritime Robotics' Mariner sea drone (MKII) for the USV demos, built the
 way the TP-1 rover is (`../rover/`): one spec file, a headless-Blender generator, and a
-`.glb` that threepp loads with `GLTFLoader`. The Otter X catamaran is built the same way;
-see [The Otter X](#the-otter-x) at the end.
+`.glb` that threepp loads with `GLTFLoader`. The Otter X and the Otter catamarans are built
+the same way; see [The Otter X](#the-otter-x) and [The Otter](#the-otter) at the end.
 
 | file | what it is |
 |---|---|
 | `mariner_spec.json` | every number: brochure figures, the lines fitted to the vendor's renders and photo, the sensor tower, the waterjet, the mass budget, the materials |
 | `build_mariner_blender.py` | builds the geometry (numpy), exports `mariner.glb` through Blender, and integrates the hydrostatics into `mariner_hydro.json` |
-| `usv_ocean.py` | the demo: she floats on the FFT ocean on her own buoyancy tables and runs on a steerable jet (`--boat otterx`: the Otter X on her pods) |
+| `usv_ocean.py` | the demo: she floats on the FFT ocean on her own buoyancy tables and runs on a steerable jet (`--boat otterx`: the Otter X on her pods; `--boat otter`: the Otter) |
 | `mariner.glb`, `mariner_hydro.json` | generated, not committed |
 
 ## Build
@@ -125,8 +125,11 @@ the lines, the body blocks, the gantry and the fittings. The side render is a mi
 perspective from above and astern; projected through that camera, the model's silhouette
 overlaps the render at 0.957 IoU. Assumed, and marked in the spec: the mass budget and
 battery placement, the loading conditions, thrust, sensor models, the transducer and
-gondola. The vendor photos show a production boat carrying a customer's bow pole; the
-model follows the renders.
+gondola. The head is two blocks with a pole slot between them on the centreline, open
+forward, upward and down through the tunnel roof (`body.head_opening`): the front render
+shows it as the grey channel between the white panels, and the vendor photo shows a survey
+pole standing in it. The model has the slot and no pole; `mbes_mount` is in it, and
+`camera_main` stands on the bridge behind it.
 
 ### Otter X demo
 
@@ -152,3 +155,67 @@ she reaches 7.6 kn in the default sea, turns at about 20 deg/s on full helm, sto
 
 The ocean's hull footprint is a single monohull plan form, so the water in the tunnel
 between the pontoons lies flat on her waterline plane.
+
+## The Otter
+
+Maritime Robotics' Otter, the 2 m electric catamaran: 2000 x 1080 x 1065 mm, 62 kg dry,
+two fixed electric pods (she steers on differential thrust).
+
+| file | what it is |
+|---|---|
+| `otter_spec.json` | every number: the product page's figures, the lines and fittings read off the vendor's side and front renders, the mass budget, the materials |
+| `build_otter_blender.py` | builds the geometry with the Mariner generator's mesh, hydrostatics and export code and the Otter X's demihull lines, exports `otter.glb` through Blender, and integrates `otter_hydro.json` |
+| `otter.glb`, `otter_hydro.json` | generated, not committed |
+
+```
+blender --background --factory-startup --python build_otter_blender.py -- --spec otter_spec.json --out otter.glb
+```
+
+`python build_otter_blender.py --hydro-only` rebuilds just `otter_hydro.json`. The build
+fails if the budget does not add up to 62 kg, if the height or the length leave the
+vendor's, if any condition trims more than 2 deg or puts the pontoon decks within 5 cm
+of the water.
+
+Frame as the others; the origin is at the lowest point of the pontoon keel line, the
+thruster guards reach y = -0.178. The root node `otter` sits at identity.
+
+- `pontoons`, `body` (pod, deck plate, orange side panels), `frame` (the tube frames, the
+  thruster struts and guards, the cable loops), `deck_fittings`, `gantry`: meshes.
+- `thruster_port`, `thruster_stbd`: the pods, fixed. Each has a `thruster_<side>_rotor`
+  that spins about local +X and a `thrust_<side>` empty at the propeller.
+- Empties: `camera_main` (under the gantry's top plate), `gnss_fore`, `gnss_aft` (1.6 m
+  fore-and-aft baseline), `ais_vhf_antenna`, `lte_antenna`, `imu`, `transducer`,
+  `nav_light_port`, `nav_light_stbd`.
+
+Lightship 62 kg, survey (77 kg, the design condition) and full load (92 kg, the vendor's
+30 kg payload). At the survey load she floats at 0.185 m on the pontoons (0.36 m to the
+guards' feet), 0.9 deg by the stern, GM_T 1.56 m.
+
+From the vendor: the three dimensions, dry weight, speed, endurance, payload, the battery
+and thruster count. Read off the two renders (3.18 mm/px in the side one), to a few
+centimetres: everything else. Assumed, and marked in the spec: the mass budget, thrust,
+the fore frame's plan form, where the thruster struts pass the pontoons. No vendor marks.
+
+### Otter demo
+
+```
+python usv_ocean.py --boat otter             # drive: W/S throttle (S past zero: astern),
+                                             # A/D steer on the thrust difference,
+                                             # Space stop, C mast camera, X hull
+python usv_ocean.py --boat otter --calm --drop
+python usv_ocean.py --boat otter --record 36 --out otter.mp4
+```
+
+Her block in `usv_ocean.py` is the Otter X's at her size, with fixed pods: the helm moves
+60 % of full thrust from one pod to the other, so with the throttle at zero she turns on
+the spot. 110 N per pod at bollard (assumed), 60 % of it at the top speed and astern; the
+resistance is tuned so full throttle makes the vendor's 4.5 kn. The cameras stand at 0.45
+of the distances the larger boats use. In flat water she settles on the solver's pose
+(0.378 m to the guards' feet and +0.87 deg against 0.378 and +0.88). In the scripted run
+she reaches 4.4 kn, trims about 3 deg by the stern at that speed (the pods push 0.3 m
+below her centre of gravity), turns at about 22 deg/s under way and 38 deg/s on the spot,
+and stops from 2.5 kn in under 2 s. She rides the default sea (7 m/s over 30 km) within
+5 deg of roll.
+
+`../norvasundet/norvasundet_scene.py` also runs her, on her strips
+(`turbine/fleet_buoyancy.StripHull("otter", ...)`).

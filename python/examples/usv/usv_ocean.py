@@ -1,4 +1,4 @@
-"""A sea drone on the FFT ocean, floating on its own sections: the Mariner or the Otter X.
+"""A sea drone on the FFT ocean, floating on its own sections: the Mariner, the Otter X or the Otter.
 
 The boat is <boat>.glb, the model build_<boat>_blender.py makes from
 <boat>_spec.json, and it floats on <boat>_hydro.json: the same generator's
@@ -22,17 +22,23 @@ astern to stop her. A displacement catamaran's resistance, with a mild
 wave-making hump, is tuned so full throttle makes 8 kn, an assumption until the
 vendor publishes a figure.
 
-Both: the hydrostatics are the tables, the manoeuvring is a sketch.
+--boat otter: the 2 m electric catamaran on two fixed pods. The helm is the
+thrust difference between them, so with the throttle at zero she turns on the
+spot. The Otter X's resistance terms at her size, tuned so full throttle makes
+the vendor's 4.5 kn. The cameras stand closer to her.
+
+All: the hydrostatics are the tables, the manoeuvring is a sketch.
 
     python usv_ocean.py                          # drive the Mariner
     python usv_ocean.py --boat otterx            # drive the Otter X
+    python usv_ocean.py --boat otter             # drive the Otter
     python usv_ocean.py --calm                   # flat water: settle and compare
     python usv_ocean.py --shot 20 --out usv.png  # headless still after the scripted run
     python usv_ocean.py --record 36 --out usv.mp4
 
-Options: --boat mariner|otterx, --wind 7 (m/s), --fetch 30000 (m, 0 = open
+Options: --boat mariner|otterx|otter, --wind 7 (m/s), --fetch 30000 (m, 0 = open
 ocean), --load <condition> (the spec's: departure|lightship|full_load for the
-Mariner, survey|lightship|full_load for the Otter X), --size 1280x720, --cam
+Mariner, survey|lightship|full_load for the Otters), --size 1280x720, --cam
 chase|bow|abeam (headless framing), --telemetry, --flat (no waves, scripted
 run), --drop (start displaced; with --calm she must come back to the solver's
 pose), --diag (roll-moment balance every 0.1 s).
@@ -40,6 +46,7 @@ pose), --diag (roll-moment balance every 0.1 s).
 Keys: W/S throttle, A/D steer, Space all stop, C camera (chase / mast camera),
 X hull displacement on/off. The Mariner: Q/E bow thruster, R reverse bucket
 (hold). The Otter X: Q/E turn on the spot, S past zero runs the pods astern.
+The Otter: A/D is the thrust difference, S past zero runs the pods astern.
 Needs a Vulkan build and the boat's .glb (build it once, see build_<boat>_blender.py).
 """
 import json
@@ -63,8 +70,8 @@ if not tp.HAS_VULKAN:
     sys.exit(0)
 
 BOAT = cli_arg("--boat", "mariner", str)
-if BOAT not in ("mariner", "otterx"):
-    print("--boat is mariner or otterx")
+if BOAT not in ("mariner", "otterx", "otter"):
+    print("--boat is mariner, otterx or otter")
     sys.exit(1)
 GLB = os.path.join(_HERE, f"{BOAT}.glb")
 HYDRO = os.path.join(_HERE, f"{BOAT}_hydro.json")
@@ -212,6 +219,7 @@ def chase(key, target, rate, dt):
 
 if BOAT == "mariner":
     TITLE = "Mariner USV"
+    VIEW = 1.0                         # camera distances are hers; a smaller boat scales them
     PROBE_Z = 0.55                     # where each half's water level is read
     THROTTLE_MIN = 0.0
     HELM = {"throttle": 0.0, "throttle_cmd": 0.0, "steer": 0.0, "steer_cmd": 0.0,
@@ -350,8 +358,9 @@ if BOAT == "mariner":
         if CALM:
             st["throttle_cmd"] = st["steer_cmd"] = st["bucket_cmd"] = st["thruster"] = 0.0
 
-else:
+elif BOAT == "otterx":
     TITLE = "Otter X USV"
+    VIEW = 1.0
     PONTOON_Z = spec["pontoons"]["keel_z"]
     PROBE_Z = 0.87                     # where each half's water level is read: mid-pontoon
     THROTTLE_MIN = -0.5                # S past zero runs the pods astern
@@ -485,6 +494,136 @@ else:
         if CALM:
             st["throttle_cmd"] = st["steer_cmd"] = st["diff_cmd"] = 0.0
 
+else:
+    TITLE = "Otter USV"
+    VIEW = 0.45                        # a 2 m boat: the cameras stand this much closer
+    PONTOON_Z = spec["frame_tubes"]["aft"]["arm_z"]
+    PROBE_Z = 0.37                     # where each half's water level is read: mid-pontoon
+    THROTTLE_MIN = -0.5                # S past zero runs the pods astern
+    HELM = {"throttle": 0.0, "throttle_cmd": 0.0, "steer": 0.0, "steer_cmd": 0.0,
+            "spin_port": 0.0, "spin_stbd": 0.0}
+    HELP = ("W/S throttle (S past zero: astern)", "A/D steer on differential thrust  Space stop  C camera  X hull")
+
+    # Two fixed pods under the pontoons' sterns: the helm is the thrust difference.
+    # A/D adds DIFF_GAIN of thrust to one pod and takes it off the other, so with
+    # the throttle at zero she turns on the spot.
+    TH = spec["propulsion"]["thrusters"]
+    T_BOLLARD = TH["bollard_thrust_n"]                 # per pod
+    ASTERN = TH["astern_fraction"]
+    U_TOP = spec["propulsion"]["top_speed_kn"] * 0.5144
+    POD_AT = {side: np.array([TH["strut_x"] + TH["rotor"]["x"], TH["pod_y"], s * PONTOON_Z])
+              for side, s in (("port", -1.0), ("stbd", 1.0))}
+    STEER_MAX = 1.0                    # the helm is a fraction here, not an angle
+    DIFF_GAIN = 0.6
+    ROTOR_RATE = 60.0                  # rad/s of the drawn propellers at full thrust
+
+    def pod_thrust_max(u):
+        """An open propeller loses thrust with speed: bollard at rest, 60 % of it at the top."""
+        return T_BOLLARD * (1.0 - 0.4 * min(max(u / U_TOP, 0.0), 1.3))
+
+    def pod_command(side):
+        """-1 (full astern) .. 1 (full ahead) for one pod."""
+        return min(max(st["throttle"] + (DIFF_GAIN if side == "port" else -DIFF_GAIN) * st["steer"], -1.0), 1.0)
+
+    # A small displacement catamaran: the Otter X's terms at her size. Full throttle
+    # on both pods balances the resistance at the vendor's 4.5 kn.
+    HUMP_U, HUMP_W, HUMP_R = 0.45 * math.sqrt(G * DESIGN["lwl"]), 0.5, 15.0
+    R_LIN = 5.0
+    R_QUAD = (2.0 * pod_thrust_max(U_TOP) - R_LIN * U_TOP
+              - HUMP_R * math.exp(-((U_TOP - HUMP_U) / HUMP_W) ** 2)) / U_TOP ** 2
+
+    def resistance(u):
+        au = abs(u)
+        return math.copysign(R_LIN * au + R_QUAD * au * au
+                             + HUMP_R * math.exp(-((au - HUMP_U) / HUMP_W) ** 2), u)
+
+    SQUAT_M = 15.0                     # bow-up moment at the hump (N m), about half a degree of trim; the low thrust line adds more
+    K_BANK = 0.0
+    KV1, KV2 = 40.0, 330.0             # sway damping: two pontoons broadside
+    KR1, KR2 = 6.0, 80.0               # yaw damping
+    SWAY_Y = 0.1                       # height the lateral force acts at: mid-draft
+    # A pod draws air when the aft sections on its side come out of the water.
+    AFT = {"port": (SX < -0.6) & (SIDE < 0), "stbd": (SX < -0.6) & (SIDE > 0)}
+    POD_WET_AREA = 0.3 * float(TAB_A[AFT["stbd"], int(round((DESIGN["waterline_y_at_x0"] - H0) / DH))].sum())
+
+    EXCL_HALF_LENGTH, EXCL_HALF_BEAM = 0.9, 0.5        # one plan form over both pontoons, as the Otter X's
+    X_CENTRE = 0.0
+    _guard = TH["guard"]
+    _low = min(y for (_, y) in _guard["path_xy"])
+    # the thruster guards' feet, both sides
+    DEEP_PTS = np.array([[x, y - _guard["radius"], s * PONTOON_Z] for s in (-1.0, 1.0)
+                         for (x, y) in _guard["path_xy"] if y == _low])
+    # the tables hold the pontoons alone, so the solver's own draft stops at the keel line;
+    # --calm compares against its waterline taken down to the guards
+    SOLVER_DRAFT = float((DESIGN["waterline_y_at_x0"] - math.tan(math.radians(DESIGN["trim_deg"])) * DEEP_PTS[:, 0]
+                          - DEEP_PTS[:, 1]).max())
+
+    def boat_loads(u, heave, sway, w, wet, upright, trim_deg, roll, area):
+        """Hull resistance, the two pods, the squat moment, damping."""
+        Fb, Mb = np.zeros(3), np.zeros(3)
+
+        def load(force, at):
+            nonlocal Fb, Mb
+            Fb = Fb + force
+            Mb = Mb + np.cross(np.asarray(at) - COG, force)
+
+        load(np.array([-resistance(u) * wet, -C_HEAVE * heave, 0.0]), COG)
+        load(np.array([0.0, 0.0, -(KV1 * (abs(u) + 1.0) * sway + KV2 * sway * abs(sway)) * wet]),
+             (COG[0], SWAY_Y, COG[2]))
+        for side in ("port", "stbd"):
+            c = pod_command(side)
+            pod_wet = min(max(float(area[AFT[side]].sum()) / POD_WET_AREA, 0.0), 1.0) * upright
+            load(np.array([c * (pod_thrust_max(u) if c >= 0.0 else ASTERN * T_BOLLARD) * pod_wet, 0.0, 0.0]), POD_AT[side])
+        p_, r_, q_ = w                                  # roll, yaw, pitch rates (vessel X, Y, Z)
+        Mb = Mb + np.array([-C_ROLL * p_,
+                            -(KR1 * (abs(u) + 1.0) * r_ + KR2 * r_ * abs(r_)) * max(wet, 0.2),
+                            -C_PITCH * q_ + SQUAT_M * math.exp(-((abs(u) - HUMP_U) / HUMP_W) ** 2) * wet])
+        return Fb, Mb
+
+    def helm_tick(dt):
+        chase("throttle", st["throttle_cmd"], 0.8, dt)
+        chase("steer", st["steer_cmd"], 2.0, dt)
+        for side in ("port", "stbd"):
+            st["spin_" + side] = (st["spin_" + side] + ROTOR_RATE * pod_command(side) * dt) % (2.0 * math.pi)
+
+    def helm_keys():
+        pass
+
+    def helm_status():
+        return f"thr {st['throttle']:+.2f}  port {pod_command('port'):+.2f}  stbd {pod_command('stbd'):+.2f}"
+
+    def bind_nodes(root):
+        return {s: root.get_object_by_name(f"thruster_{s}_rotor") for s in ("port", "stbd")}
+
+    def pose_nodes():
+        for s in ("port", "stbd"):
+            NODES[s].rotation.x = st["spin_" + s]
+
+    def boat_foam(foam, u):
+        spd = min(abs(u) / U_TOP, 1.0)
+        for side, zs in (("port", -PONTOON_Z), ("stbd", PONTOON_Z)):
+            foam(0.6, zs, 0.25, 0.05 + 0.25 * spd)                           # bow wave off each pontoon
+            c = pod_command(side)
+            foam(POD_AT[side][0] - math.copysign(0.4, c), zs, 0.25 + 0.1 * spd, 0.4 * abs(c))   # propeller wash
+
+    def autopilot(t):
+        """Idle on the swell, both pods full ahead, a turn to port on the thrust difference, ease
+        off, stop her on the pods run astern, then turn her on the spot."""
+        thr = 0.0 if t < 3.0 else (1.0 if t < 20.0 else (0.35 if t < 25.0 else (-0.5 if t < 27.5 else 0.0)))
+        steer = 0.0
+        if 11.0 <= t < 16.0:
+            steer = -1.0
+        elif 20.0 <= t < 25.0:
+            steer = 0.6
+        st["throttle_cmd"] = thr
+        st["steer_cmd"] = 1.0 if t >= 28.5 else steer
+        if CALM:
+            st["throttle_cmd"] = st["steer_cmd"] = 0.0
+
+
+if BOAT != "otter":
+    SOLVER_DRAFT = DESIGN["draft_max"]
+
 
 # --------------------------------------------------------------------------- #
 #  Scene
@@ -550,10 +689,10 @@ NODES = bind_nodes(boat)
 node_cam = boat.get_object_by_name("camera_main")
 
 camera = tp.PerspectiveCamera(45.0, W / H, 0.1, 3000.0)
-camera.position.set(-14.0, 5.0, -9.0)
+camera.position.set(-14.0 * VIEW, 5.0 * VIEW, -9.0 * VIEW)
 controls = tp.OrbitControls(camera, canvas)
 controls.enable_damping = True
-controls.min_distance = 4.0
+controls.min_distance = 4.0 * VIEW
 controls.max_distance = 150.0
 controls.target = tp.Vector3(0.0, 1.0, 0.0)
 canvas.on_window_resize(resize_handler(camera, renderer))
@@ -845,16 +984,16 @@ def film_camera(t, dt):
         # low, square off her starboard side: where the sea meets the hull
         c = st["p"]
         stb = st["R"][:, 2]
-        eye = c + 9.0 * np.array([stb[0], 0.0, stb[2]])
-        camera.position.set(float(eye[0]), 0.9, float(eye[2]))
-        camera.look_at(tp.Vector3(float(c[0]), 0.4, float(c[2])))
+        eye = c + 9.0 * VIEW * np.array([stb[0], 0.0, stb[2]])
+        camera.position.set(float(eye[0]), 0.9 * VIEW, float(eye[2]))
+        camera.look_at(tp.Vector3(float(c[0]), 0.4 * VIEW, float(c[2])))
         return
     if FILM_CAM == "bow":
         c = st["p"]
         stb = st["R"][:, 2]
-        eye = c + 16.0 * np.array([fwd[0], 0.0, fwd[2]]) + 6.0 * np.array([stb[0], 0.0, stb[2]])
-        camera.position.set(float(eye[0]), 2.6, float(eye[2]))
-        tgt = c + 2.0 * np.array([fwd[0], 0.0, fwd[2]])
+        eye = c + 16.0 * VIEW * np.array([fwd[0], 0.0, fwd[2]]) + 6.0 * VIEW * np.array([stb[0], 0.0, stb[2]])
+        camera.position.set(float(eye[0]), 2.6 * VIEW, float(eye[2]))
+        tgt = c + 2.0 * VIEW * np.array([fwd[0], 0.0, fwd[2]])
         camera.look_at(tp.Vector3(float(tgt[0]), 0.3, float(tgt[2])))
         return
     yaw = math.atan2(fwd[0], fwd[2])
@@ -863,7 +1002,7 @@ def film_camera(t, dt):
     dy = (yaw - _film["yaw"] + math.pi) % (2 * math.pi) - math.pi
     _film["yaw"] += dy * (1.0 - math.exp(-dt / 1.2))
     a = _film["yaw"] + math.radians(200.0 - 70.0 * smoothstep(0.0, 34.0, t))
-    dist, height = 15.0 - 3.0 * smoothstep(20.0, 34.0, t), 3.6
+    dist, height = (15.0 - 3.0 * smoothstep(20.0, 34.0, t)) * VIEW, 3.6 * VIEW
     c = st["p"]
     camera.position.set(float(c[0] + dist * math.sin(a)), float(c[1]) * 0.3 + height,
                         float(c[2] + dist * math.cos(a)))
@@ -920,7 +1059,7 @@ if HEADLESS:
     if CALM:
         r = readout()
         print(f"[usv] calm water, load {LOAD}: draft {r['draft']:.3f} m (hydrostatic solver "
-              f"{DESIGN['draft_max']:.3f}), trim {r['trim']:+.2f} deg (solver {DESIGN['trim_deg']:+.2f}), "
+              f"{SOLVER_DRAFT:.3f}), trim {r['trim']:+.2f} deg (solver {DESIGN['trim_deg']:+.2f}), "
               f"buoyancy {r['buoy_kg']:.0f} kg of {MASS:.0f}")
 else:
     clock = tp.Clock()

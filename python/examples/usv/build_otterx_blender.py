@@ -227,16 +227,25 @@ def build_body(spec, part):
     B = spec["body"]
     hw, yb = B["halfwidth"], B["bottom_y"]
 
-    def block(profile, mat, face_mats):
-        """Side profile extruded across the body; face_mats overrides the faces of given profile edges.
-        The tunnel roof (every edge along bottom_y) is the hull's black PE."""
+    def block(profile, mat, face_mats, z0=-hw, z1=hw, caps=None):
+        """Side profile extruded across the body (z0..z1); face_mats overrides the faces of given
+        profile edges, caps the two end faces (z0, z1). The tunnel roof (every edge along bottom_y)
+        is the hull's black PE."""
         poly = [tuple(p) for p in profile]
-        v, f = extrude_xy(poly, -hw, hw)
+        v, f = extrude_xy(poly, z0, z1)
         mats = []
         for i, (p, q) in enumerate(zip(poly, poly[1:] + poly[:1])):
             mats.append("pontoon_pe_black" if abs(p[1] - yb) + abs(q[1] - yb) < 1e-9 else face_mats.get(i, mat))
-        part.add_multi(v, f, mats + [mat, mat], buoyant=True)
-    block(B["head_profile"], "livery_orange", {i: "body_white" for i in B["head_white_edges"]})
+        part.add_multi(v, f, mats + list(caps or (mat, mat)), buoyant=True)
+    # the head: two blocks either side of the pole slot, joined by a bridge under the roof's aft edge
+    white = {i: "body_white" for i in B["head_white_edges"]}
+    op = B["head_opening"]
+    ow = op["halfwidth"]
+    block(B["head_profile"], "livery_orange", white, -hw, -ow, ("livery_orange", op["wall_material"]))
+    block(B["head_profile"], "livery_orange", white, ow, hw, (op["wall_material"], "livery_orange"))
+    (bx0, bx1), (by0, by1) = op["bridge"]["x_range"], op["bridge"]["y_range"]
+    v, f, M = box_between((bx0, by0, -ow - 0.005), (bx1, by1, ow + 0.005))
+    part.add(v, f, "livery_orange", M, buoyant=True)
     mb = B["midbody"]
     v, f, M = box_between((mb["x_range"][0], yb, -hw), (mb["x_range"][1], mb["top_y"], hw))
     part.add_multi(v, f, ["body_white", "body_white", "pontoon_pe_black", "body_white", "body_white", "body_white"], M,

@@ -23,6 +23,9 @@ examples/usv/mariner_hydro.json
 # Generated from otterx_spec.json by examples/usv/build_otterx_blender.py (headless Blender)
 examples/usv/otterx.glb
 examples/usv/otterx_hydro.json
+# Generated from otter_spec.json by examples/usv/build_otter_blender.py (headless Blender)
+examples/usv/otter.glb
+examples/usv/otter_hydro.json
 # Generated from turbine_spec.json by examples/turbine/build_turbine_blender.py (headless Blender)
 examples/turbine/turbine.glb
 # Generated from sjark_spec.json / buoys_spec.json by examples/harbour/build_*_blender.py (headless Blender)

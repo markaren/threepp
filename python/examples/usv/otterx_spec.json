@@ -48,7 +48,7 @@
   },
   "appendages": {
     "skeg": {"note": "PE skeg on each keel line ahead of the pod, with a squared heel box directly ahead of the duct (side render).", "profile_xy": [[-1.55, 0.1], [-1.585, 0.048], [-1.629, -0.149], [-1.768, -0.22], [-1.846, -0.193], [-1.846, 0.1]], "thickness": 0.05, "heel": {"x_range": [-1.971, -1.846], "y_range": [-0.037, 0.1], "halfwidth": 0.06}},
-    "gondola": {"note": "Grey fairing under the tunnel roof on the centreline (front render); chamfered sides and nose. Its length is not in any view and is assumed.", "x_range": [-0.9, 1.4], "nose_bottom_x": 1.25, "y_range": [0.53, 0.64], "halfwidth_top": 0.36, "halfwidth_bottom": 0.31}
+    "gondola": {"note": "Grey fairing under the tunnel roof on the centreline (front render); chamfered sides and nose. Its length is not in any view and is assumed; it stops short of the head's pole slot.", "x_range": [-0.9, 1.0], "nose_bottom_x": 0.85, "y_range": [0.53, 0.64], "halfwidth_top": 0.36, "halfwidth_bottom": 0.31}
   },
   "body": {
     "note": "The deck structure between and above the pontoons: an orange head block at the bow (a parallelogram leaning forward, its front a chevron, capped by a thin roof slab that overhangs aft), a white midbody under two hatch covers (the two dry chambers) either side of the lifting-eye beam, and an orange stern block with a chamfered top that carries the gantry and raised side cheeks. It spans the beam 2 cm inside the pontoons' outer walls and sits on the pontoon decks; between the pontoons its flat bottom is the tunnel roof.",
@@ -58,6 +58,7 @@
     "head_profile_note": "Side profile (x, y): the lower front, the waist at 0.995, the upper front leaning forward, the roof slab (1.16..1.18) overhanging the aft face, which leans forward too (the render shows it in shadow under the slab).",
     "head_white_edges": [0, 1],
     "head_white_note": "The front render shows the faces below the waist white; the sides and everything above are orange.",
+    "head_opening": {"note": "The head is two blocks with a slot between them on the centreline, open forward, upward and down through the tunnel roof: the front render shows it as the grey channel between the two white panels (0.34 m of the 2.2 m beam), and the vendor photo shows a survey pole standing in it and going down into the water. Only a bridge under the roof slab's aft edge crosses it (the photo's orange rail behind the pole). The gondola ends aft of the slot so the way down is clear.", "halfwidth": 0.17, "wall_material": "body_white", "bridge": {"x_range": [1.0, 1.09], "y_range": [1.12, 1.18]}},
     "midbody": {"x_range": [-1.351, 1.016], "top_y": 0.95},
     "stern_profile": [[-1.351, 0.63], [-1.351, 0.98], [-1.95, 0.98], [-2.29, 0.72], [-2.29, 0.63]],
     "stern_profile_note": "The chamfer lies between the render's silhouette (0.67 at the transom) and the near cheek's edge (0.79); the side cheeks follow it.",
@@ -89,7 +90,7 @@
   },
   "sensors": {
     "convention": "Empties look down local -Z with local +Y up (threepp/glTF camera convention). Positions in the vessel frame.",
-    "camera_main": {"position": [1.335, 1.22, 0.0], "look": [1.0, 0.0, 0.0], "pitch_down_deg": 5.0, "hfov_deg": 60.0, "resolution": [1920, 1080], "fps": 30, "housing": {"centre_xz": [1.305, 0.0], "radius": 0.026, "y_range": [1.18, 1.31]}, "assumed": "hfov, resolution, fps, tilt and the lateral position (the side render shows the housing on the head top, the front render does not place it)"},
+    "camera_main": {"position": [1.075, 1.22, 0.0], "look": [1.0, 0.0, 0.0], "pitch_down_deg": 5.0, "hfov_deg": 60.0, "resolution": [1920, 1080], "fps": 30, "housing": {"centre_xz": [1.045, 0.0], "radius": 0.026, "y_range": [1.18, 1.31]}, "assumed": "hfov, resolution, fps and tilt. The housing stands on the bridge over the pole slot, on the centreline, where the front render shows a post; the camera looks out through the slot."},
     "radar": {"position": [-1.162, 1.72, 0.5], "spin_axis": "+Y", "rpm": 24, "h_beam_deg": 3.9, "v_beam_deg": 25.0, "range_max": 66000.0, "assumed": "24-inch solid-state radome class values, not the fitted unit"},
     "gnss_port": {"position": [1.24, 1.4, -0.69], "post_radius": 0.015, "disc_radius": 0.083, "disc_y": [1.37, 1.435]},
     "gnss_stbd": {"position": [1.24, 1.4, 0.69], "post_radius": 0.015, "disc_radius": 0.083, "disc_y": [1.37, 1.435]},
@@ -100,7 +101,7 @@
     "lte_antenna": {"position": [-1.4, 1.59, -0.67], "radius": 0.04, "height": 0.025},
     "imu": {"position": [0.0, 0.8, 0.0], "assumed": "inside the body on the centreline"},
     "transducer": {"position": [0.5, 0.0, 0.955], "look": [0.0, -1.0, 0.0], "assumed": "in the starboard pontoon's keel; the vendor lists a depth transducer but no view shows where"},
-    "mbes_mount": {"position": [1.62, 0.63, 0.0], "note": "The vendor photos show a customer's survey pole here, between the pontoon bows just forward of the head block. No geometry, mount only."}
+    "mbes_mount": {"position": [1.2, 0.63, 0.0], "note": "In the head's pole slot, at the tunnel roof: the vendor photo shows a survey pole standing here. No geometry, mount only."}
   },
   "lights": {
     "nav_light_stbd": {"position": [-1.023, 1.54, 1.1], "colour": "green", "look": [1.0, 0.0, 0.3]},
