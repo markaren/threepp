@@ -109,7 +109,7 @@ mooring buoy and two gillnet floats. Every boat floats on its own
 float on `harbour_float.BuoyFloat`, whose wave excitation decays over the draft (a 4.6 m
 spar sits nearly still in the short chop). The Mariner (`../usv/mariner.glb`) casts off
 from the east end of the quay and runs out on her DP along a smooth spline (5 kn in the
-basin, 8 kn past the mouth) and carries the ocean's one hull exclusion, so she has the
+basin, 8 kn past the mouth) and carries the ocean's hull exclusion, so she has the
 wake (no foam: the ocean's foam texture spans one 80 m swell tile and repeats over the
 sheet, so her foam would come back as a lattice of dashes over the basin). `S.registry`
 lists every placed object as (node, LaRS class, instance name) for the label pass.
@@ -123,6 +123,22 @@ python harbour_scene.py --film --out DIR                   # 30 fps frames, then
 
 The film's cuts sit in sim time; the simulation runs on (unsaved, at 5 fps) through the
 gaps between them. Headless only. A file in `--out` is never overwritten.
+
+The look is layered, and each layer has a switch so a before/after renders from one build:
+
+- `--quay real|plain`: `harbour_quay.py` gives the quay and the mole concrete panels, an edge
+  beam, a tidal zone at true heights (wet concrete, weed, barnacles), rust under the bollards
+  and three quay ladders; `plain` is the bare slabs.
+- `--weather AMOUNT` (default 1, 0 = clean): `harbour_weather.py` re-bakes the loaded boats and
+  marks with waterline scum, rust streaks, scuffs, weed bands and gull droppings, in each
+  asset's own frame, seeded per boat. The builders and the `.glb` files are not touched, and
+  the Mariner stays clean.
+- Trollfjord lies on ten lines to bollards on the mole, with floating fenders between.
+- `--light bright|overcast` and `--sun AZ:EL` (degrees; default 250:30, a late-summer
+  afternoon). The air's fog colour is its scattering albedo, so it is a blue, not the pale
+  horizon colour.
+- `--look-ab NAME --out DIR` renders twelve fixed frames from one continuous sim, and
+  `--look-compose DIR` pairs two such folders (`DIR/A`, `DIR/B`) into labelled composites.
 
 ### Labels: a synthetic LaRS split
 

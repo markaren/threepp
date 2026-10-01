@@ -10,6 +10,21 @@ from the east end of the quay and runs out on her DP along a smooth route. Headl
     python harbour_scene.py --film [--out DIR]          # the film: frames at 30 fps, then an mp4
     python harbour_scene.py --labels DIR [--out DIR]    # phase C: the POV cuts as a LaRS split in DIR
                                                         # (harbour_labels.py), POV | mask film, gates
+    python harbour_scene.py --look-ab L1 [--quay plain] --out DIR/B   # look pass: the fixed A/B frame set
+    python harbour_scene.py --look-compose DIR [--look-labels "A: x|B: y"]   # DIR/A | DIR/B -> DIR/ab_*.png
+
+--quay real (default: textured concrete, tidal zone, ladders) | plain (the committed slabs).
+--sun AZ:EL (look pass L4): the bright sun's azimuth (deg clockwise from north) and elevation;
+  default 250:30, a late-summer mid-afternoon from the west-south-west. The sky's sun follows it.
+--weather AMOUNT (look pass L2, harbour_weather.py): 1 (default) weathers the sjarks, Trollfjord,
+  the marks and the floats at runtime (seeds vary it per boat); 0 = the clean glbs. The Mariner
+  stays clean.
+Look pass L3 (always on): Trollfjord moored for real (moor_trollfjord: bollards on the mole,
+floating fenders, head lines, springs and stern lines from her bollards through her bulwark chocks);
+her glazed top-deck lounge and the bridge front come from her build (trollfjord_spec.json).
+Look pass L4 (--light bright): the air medium's colour is a blue scattering ALBEDO (blue aerial
+perspective on the far islands, not grey-white milk), the sky's horizon a deeper blue, and the sun
+from the west-south-west (--sun). --light overcast is phase A's look, unchanged.
 
 --terrain defaults to <repo>/geodata/aalesund; --out defaults to out/ beside this script.
 A file that already exists in --out is never overwritten (use a new folder per iteration).
@@ -58,6 +73,21 @@ QUAY_B = (468.0, 207.6)            # ... and east end: where GeoScene's ground c
 QUAY_TOP = 2.35                    # quay deck height above sea level (DTM, 4 m inland)
 QUAY_HDG = -math.atan2(QUAY_B[1] - QUAY_A[1], QUAY_B[0] - QUAY_A[0])   # +X along the quay, east: -0.80 deg
 FENDER_R = 0.18                    # rubber fenders on the quay face
+LADDER_X = (345.5, 390.5, 435.5)   # steel quay ladders (L1): between the berths, clear of fenders and bollards
+MOLE_GROW = (3.0, 2.0, 3.5)        # L1: the mole's walls moved out (south, north, tip m) to where the bed is deep
+# L3: Trollfjord moored for real. Floating pneumatic (Yokohama) fenders of 1.5 x 3.0 m between her
+# parallel midbody and the mole face (her waterline half-breadth is 10.75 m only over x -45..5 and
+# 10.5 m at x 20: the fenders sit there, at these hull stations); bollards on the mole every
+# TF_BOLLARD_DX m along the berth; 72 mm dark synthetic lines, doubled where a ship doubles them:
+# (her bollard, along-mole lead from it in m (+ ahead), how many parts, hull-side offsets in x).
+TF_FENDER_D, TF_FENDER_L = 1.5, 3.0
+TF_FENDER_X = (-38.0, -20.0, -2.0, 14.0)
+TF_BOLLARD_DX = 14.0
+TF_LINE_R = 0.036
+TF_LINES = [("bollard_fwd_port", +17.0, 2, "head"), ("bollard_fwd_stbd", +17.0, 1, "head"),
+            ("bollard_fwd_port", -30.0, 2, "spring_fwd"), ("bollard_aft_port", +30.0, 2, "spring_aft"),
+            ("bollard_aft_port", -20.0, 2, "stern"), ("bollard_aft_stbd", -20.0, 1, "stern")]
+ROOT_RAMP = 8.0                    # L1: m of ramp from the mole deck's root end down into the shore
 BERTH_X = 400.0                    # the phase-A sjark's centre along the quay
 # the mouth of the basin, and the route out (phase B drives it): off the berth, south through
 # the mouth between the mole's east end (~385, 390) and Buholmen (~650, 345), out into the sound
@@ -106,11 +136,26 @@ S_EASE = 35.0                      # m over which she eases up to V_OUT after th
 # --------------------------------------------------------------------------- #
 SUN_DIR_A = np.array([-0.52, 0.46, 0.72])     # phase A: afternoon sun from the south-west, 27 deg up (overcast)
 SUN_DIR_A /= np.linalg.norm(SUN_DIR_A)
-_hz = SUN_DIR_A[[0, 2]] / np.linalg.norm(SUN_DIR_A[[0, 2]])
-SUN_ELEV_B = math.radians(38.0)               # phase B: the same bearing (it lights the town front), 38 deg up
-SUN_DIR_B = np.array([_hz[0] * math.cos(SUN_ELEV_B), math.sin(SUN_ELEV_B), _hz[1] * math.cos(SUN_ELEV_B)])
-SUN_DIR = SUN_DIR_B
-HAZE_B = (0.47, 0.59, 0.78)                   # a clear day's horizon: the sky's horizon and the air fog agree
+
+
+def sun_vec(az_deg, el_deg):
+    """Unit vector toward the sun: azimuth clockwise from north (-z), elevation above the horizon."""
+    az, el = math.radians(az_deg), math.radians(el_deg)
+    return np.array([math.sin(az) * math.cos(el), math.sin(el), -math.cos(az) * math.cos(el)])
+
+
+# L4: a late-summer mid-afternoon sun from the west-south-west, 30 deg up (Ålesund, 62.5 N: about
+# 15:00 solar time at the end of August). It rakes the south-facing town front the drone looks at:
+# lit west faces, shaded east faces, shadows down the streets. Phase B's bearing (216 deg, 38 deg
+# up) sat behind the drone and lit the facades head-on, flat. The POV cuts head 134-153 deg, so
+# the sun stays ~100 deg off their bow: no glare in the detector's view.
+SUN_AZ_B, SUN_EL_B = 250.0, 30.0
+SUN_DIR_B = sun_vec(SUN_AZ_B, SUN_EL_B)
+HAZE_B = (0.30, 0.46, 0.78)                   # the sky's horizon colour (bright_sky); AgX greys a paler one
+AIR_ALBEDO_B = (0.20, 0.36, 0.75)             # the air medium's single-scattering ALBEDO, not its colour: the
+                                              # renderer lights it by the sun (warm white) and the env mean, so
+                                              # a pale albedo hazes distant land grey-white. A blue one gives
+                                              # blue aerial perspective: far land darker and bluish
 FOG = 0.00012                                 # air medium sigma_t (/m): 4 % at 300 m, the town crisp; the far ring
                                               # beyond the sheet edge (4.5 km, ~40 % hazed) carries the horizon
 MURK = 0.20                                   # the bed is not seen from the air
@@ -176,8 +221,103 @@ def bright_sky(sun_dir, w=2048, h=1024, haze=None, zenith=(0.03, 0.11, 0.40), co
     return tp.float_texture(out)
 
 
-def build(renderer, terrain_dir, light="bright"):
+def moor_trollfjord(S, scene, tf, iron):
+    """L3: Trollfjord's berth on the mole: a row of bollards along the berth face, floating
+    pneumatic fenders between her midbody and the face, and her lines (head lines, forward and aft
+    springs, stern lines; the port ones doubled) from her bollard empties to the mole's bollards.
+    The lines are S.tf["lines"] entries [vessel pt, world end, mesh, radius, material, sag per m],
+    swept by update_lines every frame. Bollards and fenders are one registry instance each
+    (static obstacle); the lines fall to the generic static tag like the sjarks'."""
+    mc, dm, mlen, mw, top = S.mole
+    nm = np.array([-dm[1], dm[0]])
+    if nm[1] < 0.0:
+        nm = -nm                                         # toward the berth (south) face
+    x, z, hdg = S.tf["berth"]
+    c = np.array([x, z])
+    fwd = np.array([math.cos(hdg), -math.sin(hdg)])
+    loa = S.tf["hull"].spec["principal"]["loa"]
+    face = 0.5 * mw
+
+    def u_of(p):
+        return float((np.asarray(p, float) - mc) @ dm)
+
+    def on_mole(u, d):
+        return mc + dm * u + nm * d
+    # ---- bollards: 1.0 m in from the face edge, every TF_BOLLARD_DX m from 3 m short of the tip
+    us = np.arange(0.5 * mlen - 3.0, u_of(c - fwd * 0.5 * loa) - 32.0, -TF_BOLLARD_DX)
+    bol = tp.Group()
+    tops = []
+    for u in us:
+        q = on_mole(u, face - 1.0)
+        g = tp.Group()
+        for geo_, y in ((tp.BoxGeometry(0.9, 0.06, 0.9), 0.03), (tp.CylinderGeometry(0.27, 0.31, 0.68, 16), 0.38),
+                        (tp.CylinderGeometry(0.40, 0.34, 0.10, 16), 0.74)):
+            m = tp.Mesh(geo_, iron)
+            m.position.set(0.0, y, 0.0)
+            g.add(m)
+        g.position.set(float(q[0]), float(top), float(q[1]))
+        bol.add(g)
+        tops.append(np.array([q[0], top + 0.52, q[1]]))
+    bol.traverse(shadows)
+    scene.add(bol)
+    S.registry.append((bol, "static_obstacle", "tf_berth_bollards"))
+    # ---- floating pneumatic fenders against the face, at her midbody stations
+    rubber = std_mat((0.028, 0.028, 0.03), 0.72)
+    fen = tp.Group()
+    for xs in TF_FENDER_X:
+        u = u_of(c + fwd * xs)
+        q = on_mole(u, face + 0.5 * TF_FENDER_D)
+        m = tp.Mesh(tp.CapsuleGeometry(0.5 * TF_FENDER_D, TF_FENDER_L - TF_FENDER_D, 8, 24), rubber)
+        m.rotation.z = 0.5 * math.pi                     # its axis along the face
+        g = tp.Group()
+        g.add(m)
+        g.position.set(float(q[0]), 0.22, float(q[1]))   # a pneumatic fender floats ~60 % out of the water
+        g.rotation.y = -math.atan2(dm[1], dm[0])
+        fen.add(g)
+    fen.traverse(shadows)
+    scene.add(fen)
+    S.registry.append((fen, "static_obstacle", "tf_berth_fenders"))
+    # ---- the lines
+    mat = std_mat((0.035, 0.04, 0.05), 0.8)
+    T = np.array(tops)
+    hl_ = S.tf["hull"].spec["hull"]
+    hd = np.array(hl_["half_breadth_deck"])
+    de = np.array(hl_["deck_edge_y"])
+    desc = []
+    for name, lead, parts, kind in TF_LINES:
+        e = tf.get_object_by_name(name).get_world_position()     # vessel frame: the root sits at identity here
+        pb = np.array([e.x, e.y - 0.25, e.z])                    # round the bollard's barrel
+        # the line leaves through a closed chock in the port bulwark (the mole side), 2 m from the
+        # bollard toward its lead: the onboard run is part of her (a child of her root, labelled
+        # with her), the run outboard of the chock is swept every frame
+        fwd_end = pb[0] > 0.0
+        toward = 1.0 if lead > 0.0 else -1.0                     # the lead's direction along her
+        xf = pb[0] + toward * (1.5 if (toward > 0.0) == fwd_end else 2.0)   # 1.5 m toward her end, 2 m inboard
+        bh = hl_["forecastle_bulwark"]["height"] if fwd_end else hl_["aft_bulwark"]["height"]
+        pv = np.array([xf, np.interp(xf, de[:, 0], de[:, 1]) + 0.55 * bh, -(np.interp(xf, hd[:, 0], hd[:, 1]) + 0.15)])
+        pw = c + fwd * pv[0]
+        k = int(np.argmin(np.abs(np.array([u_of(t[[0, 2]]) for t in T]) - (u_of(pw) + lead))))
+        for j in range(parts):
+            dx = 0.0 if parts == 1 else (j - 0.5 * (parts - 1)) * 0.35
+            off = np.array([dx, 0.0, 0.0])
+            on = tp.Mesh(ts.tube(np.linspace(pb + off, pv + off, 6), lambda s: np.full(len(s), TF_LINE_R), 8), mat)
+            on.cast_shadow = True
+            tf.add(on)
+            end = T[k] + np.array([dm[0] * dx * 0.5, 0.08 * j, dm[1] * dx * 0.5])
+            S.tf["lines"].append([pv + off, end, None, TF_LINE_R, mat, 0.012])
+        desc.append(f"{kind} {name[8:]} x{parts} via chock x {xf:+.1f} -> bollard {k} ({u_of(T[k][[0, 2]]) - u_of(pw):+.0f} m)")
+    print(f"[harbour] Trollfjord moored: {len(T)} mole bollards, {len(TF_FENDER_X)} fenders "
+          f"{TF_FENDER_D:.1f} x {TF_FENDER_L:.1f} m, {len(S.tf['lines'])} lines: " + "; ".join(desc))
+
+
+def build(renderer, terrain_dir, light="bright", quay="real", weather=1.0, sun_azel=None):
+    """quay: "real" (look pass L1: textured concrete, tidal zone, ladders, the mole's walls out to
+    deep water) or "plain" (the committed untextured slabs, kept for the A/B). weather: look pass
+    L2's amount of grime, rust and wear on everything afloat but the Mariner (0 = clean).
+    sun_azel: (azimuth, elevation) in degrees for the bright light (default SUN_AZ_B, SUN_EL_B)."""
     import types
+    import harbour_quay as hq
+    import harbour_weather as hw
     S = types.SimpleNamespace()
     S.registry = []                    # phase C's labels: (node, lars_class, instance_name)
     scene = tp.Scene()
@@ -185,8 +325,8 @@ def build(renderer, terrain_dir, light="bright"):
         sun_dir, haze, sun_i = SUN_DIR_A, ts.HAZE, 2.4
         sky = ts.sky_env(sun_dir)
     else:
-        sun_dir, haze, sun_i = SUN_DIR_B, HAZE_B, 5.6
-        sky = bright_sky(sun_dir)
+        sun_dir, haze, sun_i = (SUN_DIR_B if sun_azel is None else sun_vec(*sun_azel)), AIR_ALBEDO_B, 5.6
+        sky = bright_sky(sun_dir)          # the sky's sun disc and the light agree
     scene.background = sky
     scene.environment = sky
     sun = tp.DirectionalLight(0xfff2e0, sun_i)
@@ -240,15 +380,46 @@ def build(renderer, terrain_dir, light="bright"):
     conc = std_mat((0.42, 0.41, 0.39), 0.92)
     L = math.hypot(QUAY_B[0] - QUAY_A[0], QUAY_B[1] - QUAY_A[1]) + 4.0
     T, bottom = 3.0, -6.0
-    wall = tp.Mesh(tp.BoxGeometry(L, QUAY_TOP - bottom, T), conc)
     cx, cz = 0.5 * (QUAY_A[0] + QUAY_B[0]), 0.5 * (QUAY_A[1] + QUAY_B[1])
     n_sea = np.array([math.sin(QUAY_HDG), math.cos(QUAY_HDG)])          # local +Z in world xz: the sea side
-    wall.position.set(cx - n_sea[0] * T / 2, 0.5 * (QUAY_TOP + bottom), cz - n_sea[1] * T / 2)
+    e_quay = np.array([math.cos(QUAY_HDG), -math.sin(QUAY_HDG)])        # local +X in world xz: east along it
+    wc = np.array([cx, cz]) - n_sea * T / 2                              # the wall block's centre (xz)
+    bollard_x = np.arange(QUAY_A[0] + 5.0, QUAY_B[0] - 4.0, 9.0)
+    real = quay != "plain"
+    if not real:                      # the committed look (A of look pass L1): one untextured box
+        wall = tp.Mesh(tp.BoxGeometry(L, QUAY_TOP - bottom, T), conc)
+        wall.position.set(wc[0], 0.5 * (QUAY_TOP + bottom), wc[1])
+    else:
+        # L1: textured concrete placed by world metres (harbour_quay): perimeter u, height v
+        loc = lambda x: float((np.array([x, z_face(x)]) - wc) @ e_quay)      # along-wall local x of a face point
+        rust_s = [T + 0.5 * L + loc(x) + q for x in bollard_x for q in (-0.15,)]
+        rust_s += [T + 0.5 * L + loc(x) + q for x in LADDER_X for q in (-0.21, 0.21)]
+        rust_s += [T + 0.5 * L + loc(x) for x in np.arange(QUAY_A[0] + 3.0, QUAY_B[0] - 2.0, 5.0)[1::3]]
+        wmaps, wsz = hq.wall_textures(L + 2 * T, QUAY_TOP, bottom, rust_s, seed=11, ppm=40.0)
+        faces = {"-x": (0.0, T), "+z": (T, T + L), "+x": (T + L, 2 * T + L), "-z": (T + L, T), "len": L + 2 * T}
+        wall = tp.Group()
+        wm = tp.Mesh(hq.block_walls_geometry(L, T, QUAY_TOP, bottom, faces), hq.textured_material(wmaps, 1.0))
+        dmaps, dsz = hq.deck_textures(L, T, edges=("+z",), seed=12, ppm=24.0,
+                                      rust_pts=[(loc(x), 0.5 * T - 0.9) for x in bollard_x])
+        dm_ = tp.Mesh(hq.deck_geometry(L, T, QUAY_TOP), hq.textured_material(dmaps, 1.0))
+        wall.add(wm)
+        wall.add(dm_)
+        wall.add(hq.edge_beams([(-0.5 * L, 0.5 * T, 0.5 * L, 0.5 * T, 0.0, 1.0)], QUAY_TOP))
+        wall.position.set(wc[0], 0.0, wc[1])
+        print(f"[harbour] quay L1: wall atlas {wsz[0]}x{wsz[1]}, deck {dsz[0]}x{dsz[1]}")
     wall.rotation.y = QUAY_HDG
-    shadows(wall)
+    wall.traverse(shadows)
     scene.add(wall)
     S.registry.append((wall, "static_obstacle", "quay"))
     rubber = std_mat((0.035, 0.035, 0.035), 0.8)
+    if real:
+        rubber = hq.textured_material(hq.fender_textures(seed=13, y0=QUAY_TOP - 0.25 - 2.6, y1=QUAY_TOP - 0.25), 1.0)
+        for i, x in enumerate(LADDER_X):
+            lad = hq.quay_ladder(QUAY_TOP)
+            lad.position.set(float(x), 0.0, z_face(x))
+            lad.rotation.y = QUAY_HDG
+            scene.add(lad)
+            S.registry.append((lad, "static_obstacle", f"quay_ladder_{i + 1}"))
     iron = std_mat((0.06, 0.065, 0.07), 0.55, 0.3)
     for x in np.arange(QUAY_A[0] + 3.0, QUAY_B[0] - 2.0, 5.0):
         f = tp.Mesh(tp.CylinderGeometry(FENDER_R, FENDER_R, 2.6, 12), rubber)
@@ -257,7 +428,7 @@ def build(renderer, terrain_dir, light="bright"):
         scene.add(f)
         S.registry.append((f, "static_obstacle", f"fender_{len(S.registry)}"))
     S.bollard_tops = []
-    for x in np.arange(QUAY_A[0] + 5.0, QUAY_B[0] - 4.0, 9.0):
+    for x in bollard_x:
         b = tp.Mesh(tp.CylinderGeometry(0.16, 0.2, 0.5, 14), iron)
         bx, bz = float(x) - n_sea[0] * 0.9, z_face(x) - n_sea[1] * 0.9
         b.position.set(bx, QUAY_TOP + 0.25, bz)
@@ -279,10 +450,46 @@ def build(renderer, terrain_dir, light="bright"):
     mole_len = u.max() - u.min() + 12.0            # its root runs 10 m into the shore
     mole_w = w.max() - w.min() + 2.0               # the heightfield's sloping edges stay inside the walls
     mc = c + d * (0.5 * (u.max() + u.min()) - 5.0) + nrm * 0.5 * (w.max() + w.min())
-    mole = tp.Mesh(tp.BoxGeometry(float(mole_len), top - bottom, float(mole_w)), conc)
-    mole.position.set(float(mc[0]), 0.5 * (top + bottom), float(mc[1]))
+    if not real:
+        mole = tp.Mesh(tp.BoxGeometry(float(mole_len), top - bottom, float(mole_w)), conc)
+        mole.position.set(float(mc[0]), 0.5 * (top + bottom), float(mc[1]))
+    else:
+        # L1: the scalloped dark fringe along the old walls was the DTM's shore, not the box: the
+        # distance-to-shore bathymetry starts at the 2 m coastline, so within 1..2 m of the old walls
+        # the bed is at 0..-1.5 m (60 % of the south face's first metre above -1.5 m, the tip's up to
+        # +0.1 m) and reads through the clear water as a dark green-brown scallop. Stand the walls
+        # where the bed is already deep (the first 3 m past the old south wall rise no higher than
+        # -2.8 m; the north side's 2 m to -1.3 m and mostly < -4 m): +3.0 m south, +2.0 m north,
+        # +3.5 m at the tip.
+        mole_w = mole_w + MOLE_GROW[0] + MOLE_GROW[1]
+        mole_len = mole_len + MOLE_GROW[2]
+        mc = mc + nrm * 0.5 * (MOLE_GROW[0] - MOLE_GROW[1]) + d * 0.5 * MOLE_GROW[2]
+        Lm, Wm = float(mole_len), float(mole_w)
+        faces = {"+z": (0.0, Lm), "+x": (Lm, Lm + Wm), "-z": (Lm + Wm, 2 * Lm + Wm), "-x": (2 * Lm + Wm, 2 * Lm + 2 * Wm),
+                 "len": 2 * Lm + 2 * Wm}
+        rng_m = np.random.default_rng(21)
+        rust_m = list(rng_m.uniform(0.0, 2 * Lm + 2 * Wm, 40))
+        wmaps, wsz = hq.wall_textures(2 * Lm + 2 * Wm, top, bottom, rust_m, seed=22, ppm=16.0)
+        dmaps, dsz = hq.deck_textures(Lm, Wm, edges=("+z", "-z", "+x"), seed=23, ppm=8.0)
+        mole = tp.Group()
+        mole.add(tp.Mesh(hq.block_walls_geometry(Lm, Wm, top, bottom, faces), hq.textured_material(wmaps, 1.0)))
+        dmat = hq.textured_material(dmaps, 1.0)
+        mole.add(tp.Mesh(hq.deck_geometry(Lm, Wm, top), dmat))
+        # the root: the deck must clear the DTM's grassy mound inside the footprint (max 2.96 m,
+        # median 2.48 m), so it cannot drop to the shore's 2.3..2.8 m; a ramp 8 m inland from its
+        # end down to just under the ground takes the 0.2..0.7 m step out of the junction.
+        zs = np.linspace(-0.5 * Wm, 0.5 * Wm, 17)
+        far = [mc + d * (-0.5 * Lm - ROOT_RAMP) + nrm * z for z in zs]
+        y_far = np.clip([geo.height_at(float(q[0]), float(q[1])) - 0.03 for q in far], top - 1.2, top)
+        mole.add(tp.Mesh(hq.root_ramp_geometry(Lm, Wm, top, y_far, ROOT_RAMP), dmat))
+        print(f"[harbour] mole root ramp: {top:.2f} m down to {y_far.min():.2f}..{y_far.max():.2f} m over {ROOT_RAMP:.0f} m")
+        mole.add(hq.edge_beams([(-0.5 * Lm, 0.5 * Wm, 0.5 * Lm, 0.5 * Wm, 0.0, 1.0),
+                                (-0.5 * Lm, -0.5 * Wm, 0.5 * Lm, -0.5 * Wm, 0.0, -1.0),
+                                (0.5 * Lm, -0.5 * Wm, 0.5 * Lm, 0.5 * Wm, 1.0, 0.0)], top))
+        mole.position.set(float(mc[0]), 0.0, float(mc[1]))
+        print(f"[harbour] mole L1: wall atlas {wsz[0]}x{wsz[1]}, deck {dsz[0]}x{dsz[1]}")
     mole.rotation.y = -math.atan2(d[1], d[0])
-    shadows(mole)
+    mole.traverse(shadows)
     scene.add(mole)
     S.registry.append((mole, "static_obstacle", "cruise_pier_mole"))
     S.mole = (mc, d, mole_len, mole_w, top)
@@ -308,6 +515,10 @@ def build(renderer, terrain_dir, light="bright"):
         # budget puts the net hauler 0.55 m to starboard (cog z +0.04 m, a 1.6 deg list); the skipper
         # trims that out with fuel and gear, and the hydrostatics file is the condition of record.
         hull.cog = np.array(hull.design["cog"], float)
+        if weather > 0.0:
+            t_w = time.perf_counter()
+            print(f"[harbour] sjark_{i + 1} {hw.weather_sjark(obj, hull.spec, hull.design, seed=i, amount=weather)} "
+                  f"in {time.perf_counter() - t_w:.1f} s")
         half_beam = 0.5 * hull.spec["principal"]["beam"]
         off = 2.0 * FENDER_R + half_beam + 0.05 + 0.04 * (i % 3)
         hdg = QUAY_HDG + (0.0 if side == "port" else math.pi) + math.radians(dyaw)
@@ -346,15 +557,20 @@ def build(renderer, terrain_dir, light="bright"):
     tfh.wn_xy, tfh.wn_yaw = 0.25, 0.3                     # a stiff hold: lines tight on the fenders
     if "cog" in tfh.design:
         tfh.cog = np.array(tfh.design["cog"], float)
+    if weather > 0.0:
+        t_w = time.perf_counter()
+        print(f"[harbour] trollfjord {hw.weather_trollfjord(tf, tfh.spec, tfh.design, amount=weather)} "
+              f"in {time.perf_counter() - t_w:.1f} s")
     tf_half = 0.5 * tfh.spec["principal"]["beam"]
     tf_len = tfh.spec["principal"]["loa"]
     tip = mc + dm * mlen / 2.0
     along = tip - dm * (0.5 * tf_len + 12.0)             # her bow 12 m short of the tip
-    tf_off = 0.5 * mw + 0.6 + tf_half                    # 0.6 m of pneumatic fenders
+    tf_off = 0.5 * mw + TF_FENDER_D + tf_half            # L3: floating pneumatic fenders of TF_FENDER_D m
     tfx, tfz = along + nm * tf_off
     tf_hdg = -math.atan2(dm[1], dm[0])
     S.tf = {"name": "trollfjord", "obj": tf, "hull": tfh, "berth": (float(tfx), float(tfz), tf_hdg), "lines": []}
     S.registry.append((tf, "boat", "trollfjord"))
+    moor_trollfjord(S, scene, tf, iron)
     dep = [geo.height_at(*(np.array([tfx, tfz]) + dm * u + nm * v)) for u in (-60, -30, 0, 30, 60) for v in (-9, 0, 9)]
     bow = np.array([tfx, tfz]) + dm * tf_len / 2
     print(f"[harbour] Trollfjord berth ({tfx:.0f}, {tfz:.0f}), heading {math.degrees(tf_hdg):+.1f} deg, {tf_off:.1f} m "
@@ -390,8 +606,10 @@ def build(renderer, terrain_dir, light="bright"):
     lib = tp.GLTFLoader().load(glb_b).scene
     S.buoys = []
     items = [(k, k, v) for k, v in MARKS.items()] + EXTRA_FLOATS
-    for mark, inst, xz in items:
+    for j, (mark, inst, xz) in enumerate(items):
         obj = lib.get_object_by_name(mark).clone()
+        if weather > 0.0:
+            print(f"[harbour] {inst} {hw.weather_mark(obj, mark, marks, seed=j, amount=weather)}")
         obj.traverse(shadows)
         scene.add(obj)
         # the lateral numbers face +-X: yaw the mark so they face the fairway (the route runs N-S here)
@@ -418,7 +636,7 @@ def build(renderer, terrain_dir, light="bright"):
           + " ".join(f"{geo.height_at(*p):+.0f}" for p in ROUTE[1:]))
     print(f"[harbour] sea mesh spacing at the berth {S.spacing(math.hypot(bx - FOCUS[0], bz - FOCUS[1])):.2f} m")
 
-    S.__dict__.update(scene=scene, sky=sky, sun=sun, geo=geo, ocean=ocean, n_sea=n_sea)
+    S.__dict__.update(scene=scene, sky=sky, sun=sun, sun_dir=sun_dir, geo=geo, ocean=ocean, n_sea=n_sea)
     S.floaters = S.boats + [S.tf, S.mariner]
     print(f"[harbour] registry: {len(S.registry)} objects: " + ", ".join(
         f"{c} {sum(1 for r in S.registry if r[1] == c)}" for c in ("boat", "buoy", "float", "static_obstacle")))
@@ -567,17 +785,18 @@ def update_lines(S):
     tube is built once, then its positions and normals are rewritten in place."""
     for b in S.boats + [S.tf]:
         for ln in b["lines"]:
-            pv, p1, mesh = ln
+            pv, p1, mesh = ln[:3]
+            r, mat, k_sag, s0 = (ln[3], ln[4], ln[5], 0.05) if len(ln) > 3 else (0.02, S.rope, 0.025, 0.1)
             p0 = b["hull"].to_world(pv)
             span = float(np.linalg.norm(p1 - p0))
-            pts = sag_line(p0, p1, 0.025 * span + 0.1, 28)
+            pts = sag_line(p0, p1, k_sag * span + s0, 28)
             if mesh is None:
-                mesh = tp.Mesh(ts.tube(pts, lambda s: np.full(len(s), 0.02), 8), S.rope)
+                mesh = tp.Mesh(ts.tube(pts, lambda s: np.full(len(s), r), 8), mat)
                 mesh.cast_shadow = True
                 S.scene.add(mesh)
                 ln[2] = mesh
             else:
-                pos, nrm = rope_tube(pts)
+                pos, nrm = rope_tube(pts, r)
                 mesh.geometry.update_attribute("position", pos)
                 mesh.geometry.update_attribute("normal", nrm)
 
@@ -963,7 +1182,172 @@ def run_labels(renderer, S, camera, outdir, W, H, split_dir):
     print(f"[labels] contact sheet {p}")
 
 
+# --------------------------------------------------------------------------- #
+#  Look passes: a FIXED frame set from one continuous sim at fixed sim times, rendered once per
+#  side (--quay plain = A, the default = B) into DIR/A and DIR/B, then --look-compose DIR writes
+#  the A|B composites. (sim t, name, camera fn, the cut's t0, t1)
+# --------------------------------------------------------------------------- #
+def _look_sealevel_quay(S, t, t0, t1):
+    """At sea level (2.2 m, the USV camera's height) off the east end, looking west along the quay
+    face at the moored sjarks."""
+    eye = np.array([472.0, 0.0, z_face(472.0) + 9.0])
+    eye[1] = S.ocean.sample_height(float(eye[0]), float(eye[2])) + 2.2
+    return eye, np.array([380.0, 1.0, z_face(380.0) + 1.5]), 40.0
+
+
+def _look_sjarks_abeam(S, t, t0, t1):
+    """L2: at sea level (2.2 m), ~25 m abeam of the two middle sjarks (boats 3 and 4, lying port
+    side to: their starboard sides, the net hauler's side, face the camera)."""
+    c = 0.5 * (S.boats[2]["hull"].p + S.boats[3]["hull"].p)
+    eye = c + 25.0 * np.array([S.n_sea[0], 0.0, S.n_sea[1]])
+    eye[1] = S.ocean.sample_height(float(eye[0]), float(eye[2])) + 2.2
+    return eye, np.array([c[0], 1.5, c[2]]), 44.0
+
+
+def _look_tf_quarter(S, t, t0, t1):
+    """L2: Trollfjord's starboard quarter from ~120 m off her stern, 2.2 m above the sea."""
+    x, z, hdg = S.tf["berth"]
+    fwd = np.array([math.cos(hdg), 0.0, -math.sin(hdg)])
+    stbd = np.array([math.sin(hdg), 0.0, math.cos(hdg)])
+    stern = np.array([x, 0.0, z]) - fwd * 0.5 * S.tf["hull"].spec["principal"]["loa"]
+    eye = stern + 120.0 * (-fwd * math.cos(math.radians(55.0)) + stbd * math.sin(math.radians(55.0)))
+    eye[1] = S.ocean.sample_height(float(eye[0]), float(eye[2])) + 2.2
+    tgt = np.array([x, 7.0, z]) - fwd * 22.0
+    return eye, tgt, 26.0
+
+
+def _look_tf_bow(S, t, t0, t1):
+    """L2: Trollfjord's starboard bow quarter from ~120 m (the hawse pipes), 2.2 m above the sea."""
+    x, z, hdg = S.tf["berth"]
+    fwd = np.array([math.cos(hdg), 0.0, -math.sin(hdg)])
+    stbd = np.array([math.sin(hdg), 0.0, math.cos(hdg)])
+    bow = np.array([x, 0.0, z]) + fwd * 0.5 * S.tf["hull"].spec["principal"]["loa"]
+    eye = bow + 120.0 * (fwd * math.cos(math.radians(55.0)) + stbd * math.sin(math.radians(55.0)))
+    eye[1] = S.ocean.sample_height(float(eye[0]), float(eye[2])) + 2.2
+    tgt = np.array([x, 7.0, z]) + fwd * 30.0
+    return eye, tgt, 26.0
+
+
+def _look_tf_lines(S, t, t0, t1):
+    """L3: her berth from the water ~50 m ahead of her bow, a little to port of her centreline,
+    2.2 m above the sea, looking aft along the gap between her port bow and the mole tip: the head
+    lines, the forward springs, the bollards on the mole."""
+    x, z, hdg = S.tf["berth"]
+    fwd = np.array([math.cos(hdg), 0.0, -math.sin(hdg)])
+    stbd = np.array([math.sin(hdg), 0.0, math.cos(hdg)])
+    bow = np.array([x, 0.0, z]) + fwd * 0.5 * S.tf["hull"].spec["principal"]["loa"]
+    eye = bow + fwd * 50.0 - stbd * 3.0
+    eye[1] = S.ocean.sample_height(float(eye[0]), float(eye[2])) + 2.2
+    tgt = bow - fwd * 18.0 - stbd * 9.0
+    tgt[1] = 5.0
+    return eye, tgt, 36.0
+
+
+def _look_special(S, t, t0, t1):
+    """L2: the special mark from ~15 m on its sunny side, the USV camera's 2.2 m above the sea."""
+    fl = next(f for f, _ in S.buoys if f.mark == "special")
+    p = fl.p
+    d = np.array([S.sun_dir[0], 0.0, S.sun_dir[2]])
+    d /= np.linalg.norm(d)
+    eye = p + 15.0 * d
+    sea = S.ocean.sample_height(float(eye[0]), float(eye[2]))
+    eye[1] = sea + 2.2
+    return eye, np.array([p[0], sea + 1.6, p[2]]), 22.0
+
+
+LOOK_SHOTS = [(3.0, "1_drone_basin", _film_drone, 0.0, 7.0),
+              (9.0, "2_chase_castoff", _film_chase, 7.0, 17.0),
+              (9.0, "3_pov_c0_quay", _film_pov, 0.0, 1.0),
+              (12.0, "4_sealevel_quay", _look_sealevel_quay, 0.0, 1.0),
+              (104.0, "5_wide_close", _film_wide, 100.0, 109.0),
+              (12.0, "6_sjarks_abeam", _look_sjarks_abeam, 0.0, 1.0),
+              (12.0, "7_trollfjord_quarter", _look_tf_quarter, 0.0, 1.0),
+              (12.0, "8_special_mark", _look_special, 0.0, 1.0),
+              (12.0, "9_trollfjord_bow", _look_tf_bow, 0.0, 1.0),
+              (12.0, "10_trollfjord_lines", _look_tf_lines, 0.0, 1.0),
+              (44.0, "11_pov_c2_special", _film_pov, 40.0, 48.0),
+              (84.0, "12_pov_c3_gate", _film_pov, 79.0, 89.0)]
+
+
+def run_look_ab(renderer, S, camera, outdir, W, H):
+    t_end = max(s[0] for s in LOOK_SHOTS)
+    todo = sorted(LOOK_SHOTS, key=lambda s: s[0])
+    import harbour_labels as hl
+    t, dt, seated, assigned = -T_PRE, 0.2, False, False
+    t_wall = time.perf_counter()
+    while t <= t_end + 1e-6:
+        here = [s for s in todo if abs(s[0] - t) < 1e-6]
+        for ts_, name, fn, t0, t1 in here:
+            place_film_camera(S, camera, fn, t, t0, t1, W, H)
+            cp = camera.position
+            fw = camera.get_world_direction()
+            print(f"[look] {name}: eye ({cp.x:.1f}, {cp.y:.1f}, {cp.z:.1f}), ground there {S.geo.height_at(cp.x, cp.z):+.1f} m, "
+                  f"looking {math.degrees(math.atan2(fw.x, -fw.z)) % 360.0:.0f} deg from north", flush=True)
+            for _ in range(10):                # stream the terrain at this view, settle TAA
+                film_frame(renderer, S, camera, t)
+            path = new_path(outdir, name + ".png")
+            film_frame(renderer, S, camera, t, path)
+            print(f"[look] {name} at sim {t:.1f} s -> {path}", flush=True)
+            # label coverage: the static obstacles' pixels by registry instance (harbour_labels' ids)
+            ids = np.asarray(renderer.read_instance_ids(S.scene, camera))
+            codes, cnt = np.unique(ids[ids >= hl.LABEL_BASE] - hl.LABEL_BASE, return_counts=True)
+            px = dict(zip(codes.tolist(), cnt.tolist()))
+            st = {nm: px.get(hl.C_REG + k, 0) for k, (_, cls, nm) in enumerate(S.registry)
+                  if cls == "static_obstacle" and not nm.startswith("fender")}
+            print("[look]   static-obstacle px: " + ", ".join(f"{k} {v}" for k, v in st.items())
+                  + f"; generic static {px.get(hl.C_STATIC, 0)}", flush=True)
+            todo.remove((ts_, name, fn, t0, t1))
+        place_film_camera(S, camera, _film_drone if t < 0 else _film_chase, max(t, 0.0), 0.0, 1.0, W, H)
+        film_frame(renderer, S, camera, t)
+        if not seated:
+            seat_all(S, t)
+            seated = True
+        step_floats(S, dt, t)
+        if not assigned:
+            hl.assign_ids(renderer, S)          # the mooring lines exist after the first step
+            assigned = True
+        t = round(t + dt, 6)
+    print(f"[look] {len(LOOK_SHOTS)} shots in {time.perf_counter() - t_wall:.0f} s")
+
+
+def look_compose(d, labels=("A", "B")):
+    """DIR/A/*.png | DIR/B/*.png -> DIR/ab_*.png: each side scaled to 50 %, labelled; plus ab_all.png."""
+    from PIL import Image, ImageDraw
+    rows = []
+    for s in LOOK_SHOTS:
+        pa, pb = os.path.join(d, "A", s[1] + ".png"), os.path.join(d, "B", s[1] + ".png")
+        if not (os.path.exists(pa) and os.path.exists(pb)):
+            continue
+        a, b = Image.open(pa).convert("RGB"), Image.open(pb).convert("RGB")
+        w, h = a.width // 2, a.height // 2
+        im = Image.new("RGB", (2 * w, h + 26), (0, 0, 0))
+        im.paste(a.resize((w, h), Image.LANCZOS), (0, 26))
+        im.paste(b.resize((w, h), Image.LANCZOS), (w, 26))
+        dr = ImageDraw.Draw(im)
+        dr.text((8, 7), f"{s[1]}  t={s[0]:.1f} s   {labels[0]}", fill=(255, 255, 255))
+        dr.text((w + 8, 7), labels[1], fill=(255, 255, 255))
+        p = new_path(d, f"ab_{s[1]}.png")
+        im.save(p + ".tmp.png")
+        os.replace(p + ".tmp.png", p)
+        rows.append(im)
+        print(f"[look] {p}")
+    if rows:
+        sheet = Image.new("RGB", (rows[0].width, sum(r.height for r in rows)))
+        y = 0
+        for r in rows:
+            sheet.paste(r, (0, y))
+            y += r.height
+        p = new_path(d, "ab_all.png")
+        sheet.save(p + ".tmp.png")
+        os.replace(p + ".tmp.png", p)
+        print(f"[look] {p}")
+
+
 def main():
+    if "--look-compose" in sys.argv:
+        labels = cli_arg("--look-labels", "", str)
+        look_compose(cli_arg("--look-compose", "", str), *([tuple(labels.split("|"))] if labels else []))
+        return
     shot = cli_arg("--shot", "all", str)
     W, H = parse_size(cli_arg("--size", "1280x720" if "--labels" in sys.argv else "1600x900", str))
     t_shot = cli_arg("--time", T_SHOT, float)
@@ -983,8 +1367,13 @@ def main():
     renderer.auto_exposure = False
     t0 = time.perf_counter()
     light = cli_arg("--light", "bright", str)
-    S = build(renderer, terrain, light)
+    sun = cli_arg("--sun", "", str)
+    sun = tuple(float(v) for v in sun.split(":")) if sun else None
+    S = build(renderer, terrain, light, cli_arg("--quay", "real", str), cli_arg("--weather", 1.0, float), sun)
     camera = tp.PerspectiveCamera(45.0, W / H, 0.2, 20000.0)
+    if "--look-ab" in sys.argv:
+        run_look_ab(renderer, S, camera, outdir, W, H)
+        return
     if "--labels" in sys.argv:
         run_labels(renderer, S, camera, outdir, W, H, cli_arg("--labels", "", str))
         return

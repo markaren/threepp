@@ -383,7 +383,7 @@ class Exporter:
         self.assigned = True
         self.names = {k + 1: name for k, (_, _, name) in enumerate(self.S.registry)}
         print(f"[labels] ids assigned: {len(self.S.registry) - 1} registry objects + own vessel void, "
-              f"{n} meshes on the generic static tag (15 bollards + 10 mooring lines expected)")
+              f"{n} meshes on the generic static tag (15 quay bollards + 10 sjark lines + 10 Trollfjord lines expected)")
 
     # ---- film
     def _film_open(self):
