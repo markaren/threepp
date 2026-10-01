@@ -10,6 +10,7 @@
 #include <pybind11/numpy.h>
 
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 using namespace threepp;
@@ -128,6 +129,26 @@ namespace threepp_py {
                      "Rewrite a uint8 texture's pixels in place from a (height, width, 3|4) uint8 "
                      "array of the SAME size, and mark it dirty. For per-frame panels "
                      "(sensor readouts) without churning texture allocations.")
+                // update_data's counterpart: the pixels of a uint8 texture as a copy.
+                // The procedural bakers (TreeTextures, make_bark_textures) hand back a
+                // Texture; this is how their pixels reach a file or an asset builder.
+                .def("to_numpy",
+                     [](const Texture& t) {
+                         if (t.images().empty() || t.image().isFloat() || t.image().isHalfFloat())
+                             throw std::runtime_error("to_numpy: not a uint8 texture");
+                         const auto& img = t.image();
+                         const auto& src = img.data<unsigned char>();
+                         const auto h = static_cast<py::ssize_t>(img.height());
+                         const auto w = static_cast<py::ssize_t>(img.width());
+                         if (h == 0 || w == 0 || src.size() % static_cast<size_t>(h * w) != 0)
+                             throw std::runtime_error("to_numpy: the image has no whole number of channels");
+                         const auto c = static_cast<py::ssize_t>(src.size() / static_cast<size_t>(h * w));
+                         py::array_t<std::uint8_t> out({h, w, c});
+                         std::memcpy(out.mutable_data(), src.data(), src.size());
+                         return out;
+                     },
+                     "A copy of a uint8 texture's pixels as a (height, width, channels) uint8 array, "
+                     "rows in the texture's own order.")
                 .def("needs_update", &Texture::needsUpdate)
                 .def("update_matrix", &Texture::updateMatrix)
                 .def("dispose", &Texture::dispose)

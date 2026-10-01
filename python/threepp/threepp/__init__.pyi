@@ -8920,6 +8920,10 @@ class Texture:
         ...
     def needs_update(self) -> None:
         ...
+    def to_numpy(self) -> numpy.typing.NDArray[numpy.uint8]:
+        """
+        A copy of a uint8 texture's pixels as a (height, width, channels) uint8 array, rows in the texture's own order.
+        """
     def update_data(self, data: typing.Annotated[numpy.typing.ArrayLike, numpy.uint8]) -> None:
         """
         Rewrite a uint8 texture's pixels in place from a (height, width, 3|4) uint8 array of the SAME size, and mark it dirty. For per-frame panels (sensor readouts) without churning texture allocations.
