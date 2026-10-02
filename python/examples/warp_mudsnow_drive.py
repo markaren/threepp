@@ -195,6 +195,7 @@ import warp as wp
 import threepp as tp
 from threepp.terrain_deform import MATERIALS, DeformableTerrain
 from threepp import granular_mpm as gm
+import evoque_rig
 from warp_common import (DensitySurface, cli_arg, encode_png_sequence, find_ffmpeg,
                          grain_detail_texture, parse_size,
                          standard_material, write_radiance_hdr)
@@ -500,7 +501,7 @@ DIG_TAU = 0.6                     # seconds
 DRAG_CAP_FRAC = 1.5               # per-wheel drag cap, x wheel load (stability)
 
 RIGID_Y = -0.03                   # the packed ground the lanes sit on
-FALLBACK_MU = 1.1                 # see "handling" below
+FALLBACK_MU = evoque_rig.TYRE_MU  # 1.1; see the vehicle below
 
 
 # --- Bekker inversion ----------------------------------------------------------
@@ -645,24 +646,14 @@ rigid.receive_shadow = True
 world.add_static(rigid)
 
 # tire_friction is the ceiling on the RIGID fallback and on anything the road
-# override does not cover. The C++ demo's 2.0 out-grips the geometry -- a 1.65 m
-# track under a CoM ~0.85 m up rolls at about 1 g, and 2.0 of mu reaches 2 --
-# so this demo runs 1.1 everywhere. On the lanes it does not matter (the
+# override does not cover: evoque_rig.TYRE_MU, 1.1 against the C++ demo's 2.0
+# (which rolls the car before it slides). On the lanes it does not matter (the
 # Mohr-Coulomb override is 0.37-0.75 and slides long before the car tips); on
 # the clay strip and the fallback it is the difference between a scrub and a
-# roll. Measured: full lock at 50 km/h on clay peaks at 2.2 degrees of tilt.
-vehicle = tp.PhysxVehicle(world,
-                          chassis_width=1.95, chassis_height=1.4, chassis_length=4.4,
-                          chassis_mass=CHASSIS_MASS,
-                          wheelbase=2.66, track_width=1.65, wheel_radius=R_WHEEL,
-                          driven_wheels=[True, True, True, True],
-                          max_throttle_torque=1500.0,
-                          tire_friction=FALLBACK_MU,
-                          longitudinal_stiffness=100_000.0,
-                          suspension_travel=0.3, suspension_stiffness=35_000.0,
-                          suspension_damping=4500.0, suspension_attachment_y=-0.4,
-                          wheel_damping_rate=1.5,
-                          position=SPAWN_POS, rotation=SPAWN_ROT)
+# roll. Everything else is PhysxVehicle's Evoque tuning (evoque_rig.Car).
+car = evoque_rig.Car(world, SPAWN_POS, SPAWN_ROT, wheel_radius=R_WHEEL,
+                     tire_friction=FALLBACK_MU, chassis_mass=CHASSIS_MASS)
+vehicle = car.veh
 
 
 def qrot(q, v):
@@ -2492,114 +2483,15 @@ def belly_contact(q, origin):
 # --- the rover -----------------------------------------------------------------
 
 
-def data_dir():
-    """threepp_data's checkout. THREEPP_DATA_DIR wins; otherwise the usual
-    places -- note the checkout is commonly named with a hyphen."""
-    env = os.environ.get("THREEPP_DATA_DIR")
-    if env and os.path.isdir(env):
-        return env
-    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    for name in ("threepp-data", "threepp_data"):
-        cand = os.path.join(os.path.dirname(repo), name)
-        if os.path.isdir(cand):
-            return cand
-    return ""
-
-
-chassis = tp.Group()
+# The Evoque's model over PhysX's chassis and wheels (evoque_rig.Shell): the
+# hull hung under the chassis' middle, four rigs that take wheel_local_pose().
+# Without the model in threepp-data: a box on four cylinders.
+shell = evoque_rig.Shell(evoque_rig.model_path(), radius=R_WHEEL)
+if not shell.model:
+    print("  note: no Evoque in threepp-data -- driving a box (set THREEPP_DATA_DIR)")
+car.wear(shell)
+chassis = shell.node
 scene.add(chassis)
-
-# PhysX index -> the model's own wheel tag. The model labels its wheels from
-# inside the car, so its "FL" sits at +x, which is where PhysX puts wheel 0
-# (front-RIGHT, +x +z). The tags therefore look swapped and are not.
-WHEEL_TAG = ("WheelFL", "WheelFR", "WheelBL", "WheelBR")
-wheel_rigs = [tp.Group() for _ in range(4)]
-for rig in wheel_rigs:
-    chassis.add(rig)
-
-brake_mat = reverse_mat = None
-model_path = os.path.join(data_dir(), "models", "gltf",
-                          "2015_land-rover_range_rover_evoque_coupe", "scene.gltf")
-if os.path.isfile(model_path):
-    body = tp.ModelLoader().load(model_path)
-    body.scale.set(100.0, 100.0, 100.0)     # the gltf bakes a 0.01 at its root
-    # The model's contact patches sit at its own y = 0; the PhysX chassis centre
-    # rides wheel_radius + |attachment_y| + travel - jounce = 0.996 m above the
-    # road. Drop the shell by a metre and the wheel wells land on the rigs.
-    body.position.y = -1.0
-    chassis.add(body)
-
-    parts = [[] for _ in range(4)]
-    lamps = {"lights_position_back": [], "lights_reverse": []}
-
-    def _sort(o):
-        if type(o).__name__ != "Mesh":
-            return
-        # The .gltf packs AO and metal-roughness into ONE texture (R = AO,
-        # G = rough, B = metal) and never authored R, so an aoMap read is a
-        # constant zero and the whole body goes black. Drop it.
-        try:
-            o.material.ao_map = None
-        except Exception:                               # noqa: BLE001 - not all have one
-            pass
-        for i, tag in enumerate(WHEEL_TAG):
-            if tag in o.name:
-                parts[i].append(o)
-                return
-        for key in lamps:
-            if key in o.name:
-                lamps[key].append(o)
-
-    body.traverse(_sort)
-
-    for i, group in enumerate(parts):
-        if not group:
-            continue
-        # The per-wheel "pivot" nodes are identity transforms -- the wheel
-        # positions are baked into the geometry -- so the hub is the centre of
-        # the combined vertex AABB, and a clone recentred on it spins about its
-        # own axle under a rig driven by wheel_local_pose(). The wheel is
-        # axisymmetric about that axle, which is why the model's own axis
-        # convention does not need undoing here.
-        lo = np.full(3, 1.0e30)
-        hi = np.full(3, -1.0e30)
-        for part in group:
-            a = part.geometry.get_attribute("position")
-            lo = np.minimum(lo, a.min(0))
-            hi = np.maximum(hi, a.max(0))
-        hub = 0.5 * (lo + hi)
-        for part in group:
-            clone = part.clone()                # clone BEFORE hiding: copy() takes `visible`
-            part.visible = False
-            clone.visible = True
-            clone.position.set(float(-hub[0]), float(-hub[1]), float(-hub[2]))
-            wheel_rigs[i].add(clone)
-
-    # Brake and reverse lamps. The model gives them their own meshes but ONE
-    # shared emissive material, so they get a fresh material each and can flare
-    # independently.
-    for key, colour in (("lights_position_back", 0xff2a12), ("lights_reverse", 0xfff2e0)):
-        if not lamps[key]:
-            continue
-        mat = standard_material(0x201a18, 0.6, emissive=colour)
-        mat.emissive_intensity = 1.0
-        for m in lamps[key]:
-            m.set_material(mat)
-        if key == "lights_position_back":
-            brake_mat = mat
-        else:
-            reverse_mat = mat
-else:
-    print(f"  note: no Evoque at {model_path} -- driving a box "
-          f"(set THREEPP_DATA_DIR)")
-    shell = tp.Mesh(tp.BoxGeometry(1.95, 1.2, 4.4), standard_material(0x7a2f24, 0.5, 0.3))
-    shell.cast_shadow = True
-    chassis.add(shell)
-    for rig in wheel_rigs:
-        w = tp.Mesh(tp.CylinderGeometry(R_WHEEL, R_WHEEL, 0.3, 18), standard_material(0x1c1c1e, 0.8))
-        w.rotate_z(math.pi / 2)
-        w.cast_shadow = True
-        rig.add(w)
 
 # --- cameras -------------------------------------------------------------------
 
@@ -3011,14 +2903,7 @@ def drive_inputs(dt):
         steer_cmd, brake_cmd = 0.0, 0.0
         throttle_cmd = AUTO_THR if vehicle.forward_speed * 3.6 < AUTO_KMH else 0.0
         return
-    left = canvas.is_key_down("A") or canvas.is_key_down("LEFT")
-    rightk = canvas.is_key_down("D") or canvas.is_key_down("RIGHT")
-    steer_in = (1.0 if left else 0.0) - (1.0 if rightk else 0.0)
-    scale = 1.0 / (1.0 + abs(vehicle.forward_speed) * 3.6 * 0.015)
-    steer_cmd += (steer_in * scale - steer_cmd) * min(1.0, dt * 2.0)
-    throttle_cmd = 1.0 if (canvas.is_key_down("W") or canvas.is_key_down("UP")) else 0.0
-    brake_cmd = 1.0 if (canvas.is_key_down("S") or canvas.is_key_down("DOWN")
-                        or canvas.is_key_down("SPACE")) else 0.0
+    steer_cmd, throttle_cmd, brake_cmd = evoque_rig.keys(canvas, vehicle.forward_speed, steer_cmd, dt, slew=2.0)
 
     if pressed("R"):
         vehicle.gear = (tp.PhysxVehicle.Gear.REVERSE
@@ -3112,10 +2997,8 @@ def update_camera(dt):
     camera.look_at(tp.Vector3(*cam_tgt))
 
 
-brake_was = reverse_was = False
 wall_prev = None                  # last frame's wall clock, for the accumulator
 sim_debt = 0.0                    # wall time owed to the sim, in seconds
-pose_prev = pose_cur = None       # car pose at sim steps N-1 and N, for drawing
 _ft_steps = [0]                   # sim steps taken by frame() (--frames reports it)
 _flog = []                        # --frames-log rows
 
@@ -3136,29 +3019,8 @@ def _write_frames_log():
 atexit.register(_write_frames_log)
 
 
-def nlerp(q0, q1, a):
-    """Normalised quaternion lerp, sign-fixed so it never takes the long way.
-    The rotations this blends are one sim step apart -- a few degrees at the
-    worst wheelspin -- where nlerp and slerp are the same curve."""
-    if float(np.dot(q0, q1)) < 0.0:
-        q1 = -q1
-    q = q0 + (q1 - q0) * a
-    return q / max(float(np.linalg.norm(q)), 1e-12)
-
-
-def capture_pose():
-    """Chassis pose + the four wheel local poses, as plain arrays."""
-    p, q = vehicle.position, vehicle.quaternion
-    wheels = []
-    for i in range(4):
-        lp, lq = vehicle.wheel_local_pose(i)
-        wheels.append((np.array([lp.x, lp.y, lp.z]),
-                       np.array([lq.x, lq.y, lq.z, lq.w])))
-    return (np.array([p.x, p.y, p.z]), np.array([q.x, q.y, q.z, q.w]), wheels)
-
-
 def frame():
-    global fps_ema, brake_was, reverse_was, wall_prev, sim_debt, pose_prev, pose_cur
+    global fps_ema, wall_prev, sim_debt
     t0 = time.perf_counter()
     # The sim runs at 60 Hz on the WALL clock, not one step per rendered frame:
     # welded to the render loop, the car lived at (fps/60)x real time -- slow
@@ -3187,42 +3049,19 @@ def frame():
             gr_nsub = max(gr_nsub, gravel.nsub)
         mark_dirty(hub)
         spray_step(DT, hub)
-        pose_prev, pose_cur = pose_cur, capture_pose()
+        car.sync()
     t_steps = (time.perf_counter() - t_steps) * 1000.0
 
     # The DRAWN pose is the two newest sim states blended by the leftover
-    # debt, so the car advances a little every RENDERED frame instead of by
-    # whole 1/60 steps -- one or two per frame at 33 fps, zero or one above
-    # 60. Raw stepping plus a wall-time chase camera read as the car shaking
-    # against its own camera (field report); the cost of the blend is up to
-    # one sim step of visual latency, which nothing here can feel.
-    if pose_cur is None:
-        pose_cur = capture_pose()
-    if pose_prev is None or np.linalg.norm(pose_cur[0] - pose_prev[0]) > 5.0:
-        pose_prev = pose_cur          # first frame or a respawn teleport: snap
-    a = sim_debt / DT
-    p = pose_prev[0] + (pose_cur[0] - pose_prev[0]) * a
-    q = nlerp(pose_prev[1], pose_cur[1], a)
-    chassis.position.set(*p)
-    chassis.quaternion.set(*q)
-    for i in range(4):
-        lp = pose_prev[2][i][0] + (pose_cur[2][i][0] - pose_prev[2][i][0]) * a
-        lq = nlerp(pose_prev[2][i][1], pose_cur[2][i][1], a)
-        wheel_rigs[i].position.set(*lp)
-        wheel_rigs[i].quaternion.set(*lq)
+    # debt (evoque_rig.Car.draw), so the car advances a little every RENDERED
+    # frame instead of by whole 1/60 steps -- one or two per frame at 33 fps,
+    # zero or one above 60. Raw stepping plus a wall-time chase camera read as
+    # the car shaking against its own camera (field report); the cost of the
+    # blend is up to one sim step of visual latency, which nothing here can feel.
+    car.draw(sim_debt / DT)
 
-    # Lamps: only touch the material when the state flips -- needs_update()
-    # re-uploads it.
-    on = brake_cmd > 0.05
-    if brake_mat is not None and on != brake_was:
-        brake_was = on
-        brake_mat.emissive_intensity = 6.0 if on else 1.0
-        brake_mat.needs_update()
-    rev = vehicle.gear == tp.PhysxVehicle.Gear.REVERSE
-    if reverse_mat is not None and rev != reverse_was:
-        reverse_was = rev
-        reverse_mat.emissive_intensity = 6.0 if rev else 1.0
-        reverse_mat.needs_update()
+    shell.brake(brake_cmd > 0.05)
+    shell.reversing(vehicle.gear == tp.PhysxVehicle.Gear.REVERSE)
 
     # Presentation runs on wall time: the chase lerp's 1-exp(-k*dt) is frame
     # rate independent given the real dt, and snowfall advancing by wall time
@@ -3270,13 +3109,8 @@ for s in strips:
     s.publish()
 
 def pose_visuals():
-    p, q = vehicle.position, vehicle.quaternion
-    chassis.position.set(p.x, p.y, p.z)
-    chassis.quaternion.set(q.x, q.y, q.z, q.w)
-    for k in range(4):
-        lp, lq = vehicle.wheel_local_pose(k)
-        wheel_rigs[k].position.set(lp.x, lp.y, lp.z)
-        wheel_rigs[k].quaternion.set(lq.x, lq.y, lq.z, lq.w)
+    car.sync()
+    car.draw()
 
 
 def scripted(spawn_z, beats, eye, look, path, note=""):
@@ -4143,16 +3977,11 @@ elif FILM:
     def film_step(thr, st, br):
         """One sim frame with the visuals posed -- everything frame() does except
         the camera, the UI and the render."""
-        global brake_was
         hub = coupled_step(thr, st, br)
         mark_dirty(hub)
         spray_step(DT, hub)
         pose_visuals()
-        on = br > 0.05
-        if brake_mat is not None and on != brake_was:
-            brake_was = on
-            brake_mat.emissive_intensity = 6.0 if on else 1.0
-            brake_mat.needs_update()
+        shell.brake(br > 0.05)
 
     if PROBE:
         # DE-RISK, before a single frame of choreography. The header of this file
