@@ -1180,12 +1180,16 @@ def check_spec(spec):
     return com
 
 
-def hydrostatics(spec, tris):
+def hydrostatics(spec, tris, spec_name="mariner_spec.json", datum="baseline"):
+    """<boat>_hydro.json, schema threepp.usv_hydro/1 (what usv_rig.StripHull floats a boat on):
+    every mass condition of the spec solved for heave and trim, and the Bonjean tables. Every
+    boat's generator calls this one. tris: the buoyant closed meshes' triangles; spec_name:
+    the spec file, for the record; datum: what y = 0 is in the spec's frame."""
     HS = spec["hydrostatics"]
     hy = Hydro(tris, HS["grid"])
     assert hy.closure < 1e-6, ("buoyant meshes are not closed", hy.closure)
-    out = {"schema": "threepp.usv_hydro/1", "spec": "mariner_spec.json", "rho": HS["rho"], "g": HS["g"],
-           "frame": "vessel frame of the spec (X forward, Y up, Z starboard, baseline y = 0)", "conditions": {}}
+    out = {"schema": "threepp.usv_hydro/1", "spec": spec_name, "rho": HS["rho"], "g": HS["g"],
+           "frame": f"vessel frame of the spec (X forward, Y up, Z starboard, {datum} y = 0)", "conditions": {}}
     for cond in spec["mass"]["conditions"]:
         m, c = mass_condition(spec, cond)
         h, trim = hy.solve(m, c, HS["rho"])
@@ -1396,7 +1400,7 @@ def main(argv):
     used = set(m for p in list(parts.values()) + [body, steer, bucket] for m in p.mats)
     missing = sorted(used - set(spec["materials"]))
     assert not missing, ("materials used but not in the spec", missing)
-    hydro = hydrostatics(spec, tris)
+    hydro = hydrostatics(spec, tris, os.path.basename(a.spec))
     for cond, r in hydro["conditions"].items():
         print(f"[mariner] {cond:9s} {r['mass']:6.0f} kg  waterline y {r['waterline_y_at_x0']:.3f}  "
               f"max draft {r['draft_max']:.3f}  trim {r['trim_deg']:+.2f} deg  LCB {r['lcb']:+.3f}  "

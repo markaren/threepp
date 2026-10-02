@@ -61,7 +61,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "usv"))
 sys.path.insert(0, HERE)
 from build_mariner_blender import (Hydro, Part, T, Z_TO_X, Z_TO_Y, box_between, clip_slab,  # noqa: E402
-                                   cylinder, frustum, loft, make_materials, mass_condition,
+                                   cylinder, frustum, hydrostatics, loft, make_materials, mass_condition,
                                    new_object, pchip, revolve, sensor_frame, strut)
 from build_sjark_blender import check_gates, export, mass_check  # noqa: E402
 
@@ -791,21 +791,6 @@ def build_geometry(spec):
     return parts, tris, {"L": L, "mast": mp, "posts": posts}
 
 
-def hydrostatics(spec, tris):
-    HS = spec["hydrostatics"]
-    hy = Hydro(tris, HS["grid"])
-    assert hy.closure < 1e-6, ("buoyant meshes are not closed", hy.closure)
-    out = {"schema": "threepp.usv_hydro/1", "spec": "trollfjord_spec.json", "rho": HS["rho"], "g": HS["g"],
-           "frame": "vessel frame of the spec (X forward, Y up, Z starboard, baseline y = 0)", "conditions": {}}
-    for cond in spec["mass"]["conditions"]:
-        m, c = mass_condition(spec, cond)
-        h, trim = hy.solve(m, c, HS["rho"])
-        out["conditions"][cond] = hy.report(h, trim, m, c, HS["rho"], HS["g"])
-    out["design_condition"] = spec["mass"]["design_condition"]
-    out["bonjean"] = hy.bonjean(spec)
-    return out, hy
-
-
 def build_blender(spec, parts, hydro, info):
     import bpy
     import bmesh
@@ -912,7 +897,7 @@ def main(argv):
     used = set(m for p in parts.values() for m in p.mats) | {"name_white", "bronze"}
     missing = sorted(used - set(spec["materials"]))
     assert not missing, ("materials used but not in the spec", missing)
-    hydro, _ = hydrostatics(spec, tris)
+    hydro = hydrostatics(spec, tris, os.path.basename(a.spec))
     for cond, r in hydro["conditions"].items():
         print(f"[trollfjord] {cond:10s} {r['mass'] / 1000:8.1f} t  disp {r['displacement_m3']:.0f} m3  waterline y "
               f"{r['waterline_y_at_x0']:.3f}  max draft {r['draft_max']:.3f}  trim {r['trim_deg']:+.3f} deg  "

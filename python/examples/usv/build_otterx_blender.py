@@ -49,8 +49,8 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from build_mariner_blender import (Hydro, Part, R, T, Z_TO_X, Z_TO_Y, box, box_between, clip_slab,  # noqa: E402
-                                   cylinder, extrude_xy, frame_from_forward_up, loft, make_materials,
+from build_mariner_blender import (Part, R, T, Z_TO_X, Z_TO_Y, box, box_between, clip_slab,  # noqa: E402
+                                   cylinder, extrude_xy, frame_from_forward_up, hydrostatics, loft, make_materials,
                                    mass_condition, new_object, pchip, revolve, sensor_frame)
 
 
@@ -498,21 +498,6 @@ def check_spec(spec):
     return com
 
 
-def hydrostatics(spec, tris):
-    HS = spec["hydrostatics"]
-    hy = Hydro(tris, HS["grid"])
-    assert hy.closure < 1e-6, ("buoyant meshes are not closed", hy.closure)
-    out = {"schema": "threepp.usv_hydro/1", "spec": "otterx_spec.json", "rho": HS["rho"], "g": HS["g"],
-           "frame": "vessel frame of the spec (X forward, Y up, Z starboard, keel line y = 0)", "conditions": {}}
-    for cond in spec["mass"]["conditions"]:
-        m, c = mass_condition(spec, cond)
-        h, trim = hy.solve(m, c, HS["rho"])
-        out["conditions"][cond] = hy.report(h, trim, m, c, HS["rho"], HS["g"])
-    out["design_condition"] = spec["mass"]["design_condition"]
-    out["bonjean"] = hy.bonjean(spec)
-    return out
-
-
 # ---------------------------------------------------------------- Blender side
 def build_geometry(spec):
     """All parts in the vessel frame (numpy), plus the buoyant triangles."""
@@ -607,7 +592,7 @@ def main(argv):
     used = set(m for p in list(parts.values()) + [pod, rotor] for m in p.mats)
     missing = sorted(used - set(spec["materials"]))
     assert not missing, ("materials used but not in the spec", missing)
-    hydro = hydrostatics(spec, tris)
+    hydro = hydrostatics(spec, tris, os.path.basename(a.spec), "keel line")
     for cond, r in hydro["conditions"].items():
         print(f"[otterx] {cond:9s} {r['mass']:6.0f} kg  draft {r['draft_moulded_x0']:.3f}  max draft {r['draft_max']:.3f}  "
               f"trim {r['trim_deg']:+.2f} deg  LCB {r['lcb']:+.3f}  GM_T {r['gm_t']:.2f}  GM_L {r['gm_l']:.1f}  "
