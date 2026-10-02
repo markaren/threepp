@@ -190,6 +190,7 @@ runs standalone too.
 | --- | --- |
 | [`examples/fireworks.py`](https://github.com/markaren/threepp/blob/master/python/examples/fireworks.py) | `FireworkShow`: a staggered firework display as one `ParticleField` plus a `PointLight` per shell, closed-form in the scene clock so any frame can be seeked. Run it for the show over water, replaying; orbit it live. Needs a Vulkan build + display. |
 | [`examples/drone_rig.py`](https://github.com/markaren/threepp/blob/master/python/examples/drone_rig.py) | `Drone` (attitude derived from the path), `Route` (authored legs, smoothed as a signal and held above terrain and canopy) and `FollowCamera` (precomputed and filtered the same way). Renderer-free smoke test. |
+| [`examples/usv_rig.py`](https://github.com/markaren/threepp/blob/master/python/examples/usv_rig.py) | A boat on the FFT ocean for any scene: `StripHull` (Bonjean-strip buoyancy and a 6-DOF rigid body, held by a soft DP or moved by a drive), the drives of the Mariner, the Otter X and the Otter (thrust, resistance, helm, actuator nodes, foam) and `Wake` (hull footprint and Kelvin wake). Imports no renderer. |
 
 **Inverse design** — an optimiser, not an animator, decides the shape.
 

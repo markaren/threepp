@@ -42,14 +42,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 EXAMPLES = os.path.dirname(HERE)
 REPO = os.path.dirname(os.path.dirname(EXAMPLES))
 sys.path.insert(0, os.path.dirname(EXAMPLES))                  # python/ (threepp)
-sys.path.insert(0, EXAMPLES)                                   # examples/ (demo_common)
-sys.path.insert(0, os.path.join(EXAMPLES, "turbine"))          # fleet_buoyancy, turbine_site (sky, tube)
+sys.path.insert(0, EXAMPLES)                                   # examples/ (demo_common, usv_rig)
+sys.path.insert(0, os.path.join(EXAMPLES, "turbine"))          # turbine_site (sky, tube)
 sys.path.insert(0, HERE)
 
 import threepp as tp
 from demo_common import cli_arg, parse_size
 
-from fleet_buoyancy import StripHull
+from usv_rig import StripHull, Wake, drive_for
 from harbour_float import BuoyFloat, load_marks, sag_line
 import turbine_site as ts
 
@@ -592,11 +592,11 @@ def build(renderer, terrain_dir, light="bright", quay="real", weather=1.0, sun_a
     mbx, mbz = MARINER_X + n_sea[0] * m_off, z_face(MARINER_X) + n_sea[1] * m_off
     S.mariner = {"name": "mariner", "obj": mar, "hull": mh, "berth": (mbx, mbz, m_hdg), "lines": []}
     S.mariner_cam = mar.get_object_by_name("camera_main")
-    S.mariner_steer = mar.get_object_by_name("jet_steering")
+    S.mariner_drive = drive_for(mh).bind(mar)             # her jet's nodes; the DP moves her, not the jet
     S.u_top = mh.spec["propulsion"].get("top_speed_mps", 12.0)
     S.registry.append((mar, "boat", "mariner"))
     S.path = MarinerPath([(mbx, mbz)] + MARINER_ROUTE, m_hdg)
-    S.wake = {"accum": 0.0, "last": None}
+    S.wake = Wake(mh, ocean, floor=WAKE_FLOOR, gain=WAKE_GAIN, cap=WAKE_CAP)
 
     # ---- the marks and floats, each on its own BuoyFloat (depth-decayed wave excitation)
     marks = load_marks()
@@ -806,54 +806,26 @@ def seat_all(S, t):
         b["hull"].seat(*b["berth"])
     for fl, _ in S.buoys:
         fl.seat()
-    S.ocean.clear_wake()
-    S.wake = {"accum": 0.0, "last": None}
+    S.wake.clear()
 
 
-WAKE_MAX_AGE, WAKE_MAX_SAMPLES = 8.0, 64          # usv_ocean
 # NO FOAM from the Mariner. The ocean's foam texture spans ONE swell tile (tile_size_0 = 80 m,
 # foam_world.comp) and repeats over the whole sheet, so every splat and the wake's foam trail came
 # back as a lattice of white dashes 80 m apart over the basin (pB v4, the wide cut). The Kelvin
 # wake's HEIGHT is world-anchored (her trail samples) and stays; its foam trail gates on
 # smoothstep(0.5, 1.5, forward_speed), so the speed handed to it is held just over the wake's
-# 0.5 m/s floor: a faint V behind her and next to no foam. usv_ocean's 0.6 + 0.10 u (cap 1.2)
+# 0.5 m/s floor: a faint V behind her and next to no foam. usv_rig.Wake's 0.6 + 0.10 u (cap 1.2)
 # returns once the foam is anchored beyond one tile.
 WAKE_FLOOR, WAKE_GAIN, WAKE_CAP = 0.56, 0.02, 0.62
 FOAM_SPLATS = False
 
 
 def mariner_sea(S, t, dt):
-    """Her hull footprint, the Kelvin wake trail and her foam (usv_ocean.sea_update's pattern)."""
-    h = S.mariner["hull"]
-    h.footprint(S.ocean)
-    R = h.R
-    fwd = R[:, 0]
-    u = float(fwd @ h.v)
-    ws = math.copysign(min(WAKE_FLOOR + WAKE_GAIN * abs(u), WAKE_CAP), u) if abs(u) > 0.2 else 0.0
-    S.ocean.wake.forward_speed = ws
-    c = h.to_world([h.excl[2], 0.0, 0.0])
-    yaw_ex = math.atan2(fwd[0], fwd[2])
-    if dt > 0.0:
-        S.ocean.age_wake(dt, WAKE_MAX_AGE, WAKE_MAX_SAMPLES)
-        S.wake["accum"] += dt
-        last = S.wake["last"]
-        moved = 1e9 if last is None else math.hypot(c[0] - last[0], c[2] - last[1])
-        if abs(u) > 0.4 and (S.wake["accum"] >= 0.1 or moved >= 1.0):
-            S.wake["accum"] = 0.0
-            S.wake["last"] = (c[0], c[2])
-            S.ocean.add_wake_sample(float(c[0]), float(c[2]), math.sin(yaw_ex), math.cos(yaw_ex), float(ws),
-                                    WAKE_MAX_SAMPLES)
+    """Her hull footprint, the Kelvin wake trail and her foam."""
+    u = S.wake.update(dt)
     S.ocean.clear_foam_disturbances()
-    spd = min(abs(u) / 6.0, 1.0)
-
-    def foam(xb, zb, radius, k):
-        q = h.to_world([xb, 0.4, zb])
-        if k > 0.02:
-            S.ocean.add_foam_disturbance(float(q[0]), float(q[2]), radius, min(k, 1.0))
     if FOAM_SPLATS and abs(u) > 0.3:
-        for zs in (-0.75, 0.75):
-            foam(2.2, zs, 0.9, 0.10 + 0.45 * spd)            # bow wave, off the shoulders
-        foam(-3.4, 0.0, 1.0 + 0.6 * spd, 0.25 + 0.4 * spd)    # jet wash
+        S.mariner_drive.foam(S.ocean, u)
     return u
 
 
@@ -877,9 +849,9 @@ def step_floats(S, dt, t=None, substeps=None):
     for fl, obj in S.buoys:
         fl.place(obj)
     u = mariner_sea(S, t, dt)
-    if S.mariner_steer is not None:
-        # the jet nozzle from the path's turn rate (usv_ocean: steer < 0 turns her to port)
-        S.mariner_steer.rotation.y = float(np.clip(-getattr(S, "mariner_rate", 0.0) / 0.25, -1.0, 1.0) * math.radians(25.0))
+    # the jet nozzle from the path's turn rate
+    S.mariner_drive.follow(u, getattr(S, "mariner_rate", 0.0), dt, full_rate=0.25, lock=math.radians(25.0))
+    S.mariner_drive.pose()
     update_lines(S)
     return u
 

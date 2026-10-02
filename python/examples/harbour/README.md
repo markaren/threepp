@@ -105,7 +105,7 @@ the `geodata/aalesund` pack: five sjarks along the north quay below Keiser Wilhe
 (two lying starboard side to), MS Trollfjord alongside the Cruise Pier mole's outer face,
 the marks at the basin mouth (a 30 m lateral gate, the special mark, a south cardinal), a
 mooring buoy and two gillnet floats. Every boat floats on its own
-`turbine/fleet_buoyancy.StripHull` and its mooring lines follow it each frame; the marks
+`usv_rig.StripHull` (`../usv_rig.py`) and its mooring lines follow it each frame; the marks
 float on `harbour_float.BuoyFloat`, whose wave excitation decays over the draft (a 4.6 m
 spar sits nearly still in the short chop). The Mariner (`../usv/mariner.glb`) casts off
 from the east end of the quay and runs out on her DP along a smooth spline (5 kn in the

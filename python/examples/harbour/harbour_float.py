@@ -15,56 +15,29 @@ BuoyFloat puts one mark from buoys_hydro.json (schema threepp.buoy_hydro/1) on t
 
 Fixed 60 Hz steps, semi-implicit Euler; every natural frequency is well under the step rate.
 Sample the sea AFTER the frame's render (sample_height reads the last rendered field), as
-turbine/fleet_buoyancy.StripHull does.
+usv_rig.StripHull does.
 
 Frame of a mark (buoys README): origin on its axis at the lowest point of the buoyant body, +Y up.
 """
 import json
 import math
 import os
+import sys
 
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(HERE))          # examples/ (usv_rig)
+
+from usv_rig import quat_of, rot_x, rot_y, rot_z  # noqa: E402
+
 BUOYS_HYDRO = os.path.join(HERE, "buoys_hydro.json")
-SEA_MASK = 0b011                   # swell + mid band, as the boats (fleet_buoyancy.BUOY_MASK)
+SEA_MASK = 0b011                   # swell + mid band, as the boats (usv_rig.BUOY_MASK)
 # The wave pressure a float feels decays with depth as exp(-k d) (the Smith effect): a 4.6 m spar
 # barely feels the short chop, a 0.3 m float rides all of it. Each band is weighted by exp(-k d)
 # at one representative wavelength (ASSUMED: the swell cascade's energy near 20 m, the mid
 # cascade's near 6 m, for the harbour's 5 m/s wind over ~4 km of fetch), d = the mark's draft.
 BAND_LAMBDA = (20.0, 6.0)          # cascade 0, cascade 1 (m)
-
-
-def quat_of(R):
-    """(x, y, z, w) of a rotation matrix."""
-    t = R[0, 0] + R[1, 1] + R[2, 2]
-    if t > 0.0:
-        s = math.sqrt(t + 1.0) * 2.0
-        return ((R[2, 1] - R[1, 2]) / s, (R[0, 2] - R[2, 0]) / s, (R[1, 0] - R[0, 1]) / s, 0.25 * s)
-    i = int(np.argmax([R[0, 0], R[1, 1], R[2, 2]]))
-    j, k = (i + 1) % 3, (i + 2) % 3
-    s = math.sqrt(1.0 + R[i, i] - R[j, j] - R[k, k]) * 2.0
-    q = [0.0, 0.0, 0.0, 0.0]
-    q[i] = 0.25 * s
-    q[j] = (R[j, i] + R[i, j]) / s
-    q[k] = (R[k, i] + R[i, k]) / s
-    q[3] = (R[k, j] - R[j, k]) / s
-    return tuple(q)
-
-
-def rot_x(a):
-    c, s = math.cos(a), math.sin(a)
-    return np.array([[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]])
-
-
-def rot_y(a):
-    c, s = math.cos(a), math.sin(a)
-    return np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
-
-
-def rot_z(a):
-    c, s = math.cos(a), math.sin(a)
-    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
 
 
 def load_marks(path=BUOYS_HYDRO):

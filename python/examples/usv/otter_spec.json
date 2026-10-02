@@ -127,6 +127,11 @@
     "bonjean": {"station_dx": 0.1, "x_range": [-1.0, 1.0], "heights": [-0.02, 0.6, 0.01]},
     "note": "Computed by the generator from the buoyant closed meshes (the pontoons and the pod) by column integration of the winding number. The thruster pods and the guards are left out. Written to otter_hydro.json."
   },
+  "strip_model": {
+    "probe_z": 0.37,
+    "footprint": {"half_length": 0.9, "half_beam": 0.5, "x_centre": 0.0},
+    "note": "For usv_rig.StripHull. probe_z: the half-breadth where each side's water level is read, mid-pontoon (the Otter X's ratio to the pontoon keel line). footprint: the ocean's hull displacement footprint (half length, half beam, waterplane centre x): one plan form over both pontoons, as the Otter X's."
+  },
   "materials": {
     "note": "Linear RGB. Colours read off the vendor renders, pulled toward plausible albedos.",
     "pontoon_pe_black": {"color": [0.026, 0.026, 0.027], "metallic": 0.0, "roughness": 0.6},

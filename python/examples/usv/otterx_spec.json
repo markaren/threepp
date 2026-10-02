@@ -121,7 +121,7 @@
       "rotor": {"hub_r": 0.028, "hub_length": 0.07, "blades": 5, "blade_tip_r": 0.094, "blade_chord": 0.05, "pitch_deg": 30.0},
       "limit_deg": 180.0,
       "helm_deg": 35.0,
-      "helm_note": "The azimuth the helm in usv_ocean.py uses; the pods themselves turn all the way round.",
+      "helm_note": "The azimuth the helm in usv_rig.py uses; the pods themselves turn all the way round.",
       "power_kw": 11.0,
       "bollard_thrust_n": 900.0,
       "astern_fraction": 0.6,
@@ -129,7 +129,7 @@
     },
     "top_speed": "pending compliance testing (brochure)",
     "demo_top_speed_kn": 8.0,
-    "demo_top_speed_note": "Assumed for usv_ocean.py until the vendor publishes a figure: full throttle on both pods balances the lumped resistance at this speed."
+    "demo_top_speed_note": "Assumed for usv_rig.py until the vendor publishes a figure: full throttle on both pods balances the lumped resistance at this speed."
   },
   "mass": {
     "note": "Component budget: engineering estimates under the vendor's '< 1000 kg' dry weight. Centroids are where each component sits in this model; the batteries sit in the pontoons, placed fore and aft to trim her level at the survey load. The generator recomputes the CoM and the hydrostatic equilibrium for each loading condition.",
@@ -162,6 +162,11 @@
     "trim_limit_deg": 2.0,
     "bonjean": {"station_dx": 0.2, "x_range": [-2.3, 2.3], "heights": [-0.24, 1.3, 0.02]},
     "note": "Computed by the generator from the buoyant closed meshes (pontoons, skegs, gondola, body blocks, hatch covers) by column integration of the winding number, so the overlapping parts count once. The thruster ducts are open and left out. Written to otterx_hydro.json."
+  },
+  "strip_model": {
+    "probe_z": 0.87,
+    "footprint": {"half_length": 2.0, "half_beam": 1.0, "x_centre": 0.0},
+    "note": "For usv_rig.StripHull. probe_z: the half-breadth where each side's water level is read, mid-pontoon. footprint: the ocean's hull displacement footprint (half length, half beam, waterplane centre x). It is one monohull plan form (elliptic bow, 75 % beam at the stern) that holds the water on her waterline plane and fades out over 0.6 x its half-beam; anything wide enough to cover the pontoons covers the tunnel too, so the water between them lies flat. This one keeps its flat core inside her length so the fade, not a flat apron, is what trails past the transoms."
   },
   "materials": {
     "note": "Linear RGB. Colours read off the vendor renders under their studio light, pulled toward plausible albedos.",

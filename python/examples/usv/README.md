@@ -9,7 +9,8 @@ the same way; see [The Otter X](#the-otter-x) and [The Otter](#the-otter) at the
 |---|---|
 | `mariner_spec.json` | every number: brochure figures, the lines fitted to the vendor's renders and photo, the sensor tower, the waterjet, the mass budget, the materials |
 | `build_mariner_blender.py` | builds the geometry (numpy), exports `mariner.glb` through Blender, and integrates the hydrostatics into `mariner_hydro.json` |
-| `usv_ocean.py` | the demo: she floats on the FFT ocean on her own buoyancy tables and runs on a steerable jet (`--boat otterx`: the Otter X on her pods; `--boat otter`: the Otter) |
+| `../usv_rig.py` | the boat for any scene: `StripHull` (her buoyancy tables and the rigid body), her drive (`Waterjet`, `AzimuthPods`, `FixedPods`: thrust, resistance, helm, actuator nodes, foam) and `Wake` (her footprint and wake on the ocean); see [In another scene](#in-another-scene) |
+| `usv_ocean.py` | the demo on `usv_rig.py`: she floats on the FFT ocean on her own buoyancy tables and runs on a steerable jet (`--boat otterx`: the Otter X on her pods; `--boat otter`: the Otter) |
 | `mariner.glb`, `mariner_hydro.json` | generated, not committed |
 
 ## Build
@@ -51,7 +52,7 @@ and the hull overlapping count once) and checked against the exact volume (0.09 
   Departure (2168 kg) floats at 0.465 m maximum draft, 1.3 deg by the stern.
 - `bonjean`: the starboard half-section's immersed area and centroid at 30 stations x 71
   water heights. A strip model sums both halves at the local water height on each side of
-  each station; `usv_ocean.py` does exactly that, and in flat water it settles on the
+  each station; `usv_rig.StripHull` does exactly that, and in flat water it settles on the
   solver's pose (0.467 m, +1.31 deg).
 
 ## Demo
@@ -141,8 +142,8 @@ python usv_ocean.py --boat otterx --calm --drop
 python usv_ocean.py --boat otterx --record 36 --out otterx.mp4
 ```
 
-The strip model and the rigid body are the Mariner's; the boat-specific half is its own
-block in `usv_ocean.py`. Both pods steer to the helm's angle (+-35 deg) and push along
+The strip model and the rigid body are the Mariner's; the boat-specific half is her drive,
+`usv_rig.AzimuthPods`. Both pods steer to the helm's angle (+-35 deg) and push along
 that line from the duct centres; Q/E moves 60 % of full thrust from one pod to the other.
 Thrust falls from 900 N per pod at bollard to 60 % of that at the top speed, and astern
 gives 60 %. The resistance of a displacement catamaran (linear and quadratic terms and a
@@ -206,7 +207,7 @@ python usv_ocean.py --boat otter --calm --drop
 python usv_ocean.py --boat otter --record 36 --out otter.mp4
 ```
 
-Her block in `usv_ocean.py` is the Otter X's at her size, with fixed pods: the helm moves
+Her drive, `usv_rig.FixedPods`, is the Otter X's at her size with fixed pods: the helm moves
 60 % of full thrust from one pod to the other, so with the throttle at zero she turns on
 the spot. 110 N per pod at bollard (assumed), 60 % of it at the top speed and astern; the
 resistance is tuned so full throttle makes the vendor's 4.5 kn. The cameras stand at 0.45
@@ -218,4 +219,32 @@ and stops from 2.5 kn in under 2 s. She rides the default sea (7 m/s over 30 km)
 5 deg of roll.
 
 `../norvasundet/norvasundet_scene.py` also runs her, on her strips
-(`turbine/fleet_buoyancy.StripHull("otter", ...)`).
+(`usv_rig.StripHull("otter", ...)`).
+
+## In another scene
+
+`../usv_rig.py` imports no renderer and reads no scene's globals. A scene loads the `.glb`, makes
+the hull on its ocean, and steps her after each render (`sample_height` reads the last rendered
+field):
+
+```python
+from usv_rig import StripHull, Wake, drive_for
+
+boat = tp.GLTFLoader().load("usv/otter.glb").scene
+hull = StripHull("otter", ocean)             # spec_dir=... for a boat kept elsewhere
+hull.seat(x, z, heading)
+wake = Wake(hull, ocean)                    # ocean.vessel(i) where several boats share the sea
+drive = drive_for(hull).bind(boat)
+```
+
+Under her own power, `hull.drive = drive`: the scene writes `drive.throttle_cmd` and
+`drive.steer_cmd`, and each frame calls `drive.tick(dt)`, `hull.advance(dt, substeps)`,
+`wake.update(dt)`, `hull.place(boat)`, `drive.pose()`. That is `usv_ocean.py`.
+
+On a route, `hull.drive` stays `None` and a soft DP holds her to `hull.set_target(...)`; the
+drive then only shows the motion: `drive.follow(u, yaw_rate, dt)` turns the nozzle or pods and
+spins the rotors as the path implies. `harbour/harbour_scene.py` runs the Mariner that way.
+
+What the strip model needs beyond the tables is the spec's `strip_model` block: `probe_z`, the
+half-breadth where each side's water level is read, and `footprint`, the ocean's hull footprint.
+A spec without one gets both from its design waterline (the sjark, Trollfjord).

@@ -24,7 +24,7 @@ def _unit(v):
 
 def quat_from_axes(xa, ya):
     """Quaternion (x, y, z, w) of the frame whose local +X is xa and +Y is (close to) ya."""
-    from fleet_buoyancy import quat_of
+    from usv_rig import quat_of
     x = _unit(xa)
     z = _unit(np.cross(x, ya))
     y = np.cross(z, x)

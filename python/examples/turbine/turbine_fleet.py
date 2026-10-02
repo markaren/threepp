@@ -24,14 +24,14 @@ import numpy as np
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))   # python/ (threepp)
-sys.path.insert(0, os.path.dirname(_HERE))                     # examples/ (demo_common, drone_rig)
+sys.path.insert(0, os.path.dirname(_HERE))                     # examples/ (demo_common, drone_rig, usv_rig)
 sys.path.insert(0, _HERE)
 
 import threepp as tp
 from demo_common import cli_arg, parse_size
 
 import turbine_site as ts
-from fleet_buoyancy import StripHull, USV_DIR
+from usv_rig import StripHull, USV_DIR
 import fleet_vehicles as fv
 
 KN = 0.5144

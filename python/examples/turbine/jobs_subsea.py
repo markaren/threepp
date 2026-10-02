@@ -29,7 +29,7 @@ from demo_common import Encoder, cli_arg, standard_material
 import turbine_site as ts
 import turbine_fleet as tf
 import fleet_vehicles as fv
-from fleet_buoyancy import quat_of
+from usv_rig import quat_of
 
 UP = fv.UP
 _unit = fv._unit
