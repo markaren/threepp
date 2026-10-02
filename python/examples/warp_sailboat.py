@@ -112,6 +112,7 @@ import warp as wp
 
 import threepp as tp
 from warp_common import cli_arg, load_font, parse_size, resize_handler, standard_material
+from drone_rig import Drone
 
 # ---- the README gif ----------------------------------------------------------
 #  `--gif out.gif` runs the --shot loop headless and keeps the LAST --gif-seconds
@@ -2343,169 +2344,21 @@ def update_lightning(dt):
 
 
 # --------------------------------------------------------------------------- #
-#  The filming drone: a camera vehicle, not a quadrotor sim. The attitude is
-#  kinematic -- it leans the way the acceleration says it must be leaning for
-#  the path it is on -- which is all the eye reads at filming distance.
+#  The filming drone: drone_rig's survey quad, a camera vehicle and not a
+#  quadrotor sim. Its attitude is kinematic -- it leans the way the acceleration
+#  says it must be leaning for the path it is put on -- which is all the eye
+#  reads at filming distance. Its look here: a near-black airframe, and nav
+#  lights and a strobe set for a machine filmed from a few metres off.
 # --------------------------------------------------------------------------- #
-DRONE_SPAN = 0.45
-DRONE_ARM = DRONE_SPAN * 0.5 * 0.7071
-DRONE_G = 9.81
-# The eye sits on the gimbal, forward of and below the hull, so an FPV shot can
-# never see the machine it is flying on.
-DRONE_EYE = np.array([0.0, -0.090, 0.300])
-
-drone = tp.Group()
-drone.rotation.order = tp.RotationOrder.YXZ
-drone.visible = False
-scene.add(drone)
-
-body_mat = standard_material(0x1b1f26, 0.42, 0.25)
-trim_mat = standard_material(0x343b45, 0.55)
-# Bare blades, no blur disc: at this span and filming distance a disc reads as a
-# grey plate bolted to the arm, while the spinning blades alias into the slow
-# apparent counter-rotation a filmed prop has.
-prop_mat = standard_material(0x0c0e11, 0.60, side=tp.Side.Double)
-lens_mat = standard_material(0x07090c, 0.05, 0.2)
-
-_hull = tp.Mesh(tp.BoxGeometry(0.115, 0.052, 0.170), body_mat)
-_hull.cast_shadow = True
-drone.add(_hull)
-_canopy = tp.Mesh(tp.SphereGeometry(0.055, 14, 10), trim_mat)
-_canopy.scale.set(1.0, 0.52, 1.30)
-_canopy.position.set(0.0, 0.026, 0.005)
-drone.add(_canopy)
-for _s in (1.0, -1.0):
-    _bm = tp.Mesh(tp.BoxGeometry(DRONE_SPAN, 0.015, 0.021), trim_mat)
-    _bm.rotation.y = _s * math.radians(45.0)
-    _bm.cast_shadow = True
-    drone.add(_bm)
-
-props = []
-for _sx, _sz in ((1, 1), (-1, 1), (-1, -1), (1, -1)):
-    _px, _pz = _sx * DRONE_ARM, _sz * DRONE_ARM
-    _pod = tp.Mesh(tp.CylinderGeometry(0.017, 0.020, 0.032, 10, 1), body_mat)
-    _pod.position.set(_px, 0.013, _pz)
-    drone.add(_pod)
-    _hub = tp.Group()
-    _hub.position.set(_px, 0.035, _pz)
-    drone.add(_hub)
-    _bl = tp.Mesh(tp.BoxGeometry(0.126, 0.0024, 0.016), prop_mat)
-    _bl.rotation.z = math.radians(9.0)      # a little pitch, so it reads as a blade
-    _hub.add(_bl)
-    props.append((_hub, 1.0 if _sx * _sz > 0 else -1.0))
-
-led_mats = []
-for _col, _x, _z in ((0xff1408, -1.02, 1.02), (0x18ff3c, 1.02, 1.02)):
-    _m = standard_material(0x0a0a0a, 1.0, emissive=_col, emissive_intensity=0.0)
-    _s = tp.Mesh(tp.SphereGeometry(0.012, 10, 8), _m)
-    _s.position.set(_x * DRONE_ARM, 0.004, _z * DRONE_ARM)
-    drone.add(_s)
-    led_mats.append(_m)
-strobe_mat = standard_material(0x0a0a0a, 1.0, emissive=0xffffff, emissive_intensity=0.0)
-_st = tp.Mesh(tp.SphereGeometry(0.013, 10, 8), strobe_mat)
-_st.position.set(0.0, -0.030, -0.030)
-drone.add(_st)
-
-gimbal = tp.Group()
-gimbal.position.set(0.0, -0.038, 0.082)
-drone.add(gimbal)
-_gb = tp.Mesh(tp.SphereGeometry(0.027, 14, 10), body_mat)
-_gb.scale.set(1.0, 1.0, 0.85)
-gimbal.add(_gb)
-_lens = tp.Mesh(tp.CylinderGeometry(0.014, 0.017, 0.018, 12, 1), lens_mat)
-_lens.rotate_x(math.pi / 2)
-_lens.position.set(0.0, 0.0, 0.022)
-gimbal.add(_lens)
-
-drone_state = {
-    "pos": np.array([0.0, 6.0, 14.0]), "vel": np.zeros(3), "acc": np.zeros(3),
-    "look": np.array([0.0, 3.0, 0.0]),
-    "yaw": 0.0, "pitch": 0.0, "roll": 0.0,
-    "spin": 0.0, "spool": 0.0, "throttle": 0.5, "have": False,
-}
+quad = Drone(scene, body_color=0x1b1f26, body_finish=(0.42, 0.25), trim_color=0x343b45, trim_roughness=0.55,
+             led_level=(10.0, 70.0), strobe=(340.0, 0.065))
+drone = quad.root                  # the node: shown, hidden and parked by the scene
 drone_on = ("--drone" in sys.argv) or ("--fpv" in sys.argv)
-drone_auto = True          # False = the film script owns drone_set_pose
+drone_auto = True          # False = the film script owns quad.set_pose
 view_mode = "fpv" if "--fpv" in sys.argv else "orbit"
 drone.visible = drone_on
 _drone_phase = 0.0
 _night_level = 0.0
-
-
-def _wrap_toward(a, b, k):
-    d = (b - a + math.pi) % (2.0 * math.pi) - math.pi
-    return a + d * k
-
-
-def drone_set_pose(pos, look_at, dt=1.0 / 60.0):
-    """Put the drone at `pos` looking at `look_at`. THE call a shot makes.
-
-    Attitude is derived, never authored: the last few poses give a smoothed
-    velocity and acceleration, and a machine that is accelerating forward must
-    be nose-down by atan2(a_fwd, g) to be doing it. Yaw is the velocity heading
-    once it is actually moving and the look-at bearing when it is not, so a
-    hover does not spin on numerical noise.
-    """
-    d = drone_state
-    p = np.asarray(pos, np.float64).copy()
-    tgt = np.asarray(look_at, np.float64).copy()
-    dt = max(float(dt), 1e-4)
-    if not d["have"]:
-        d["have"] = True
-        d["vel"][:] = 0.0
-        d["acc"][:] = 0.0
-        to0 = tgt - p
-        d["yaw"] = math.atan2(to0[0], to0[2])
-    else:
-        v = (p - d["pos"]) / dt
-        vprev = d["vel"].copy()
-        d["vel"] += (v - d["vel"]) * (1.0 - math.exp(-dt / 0.12))
-        a = (d["vel"] - vprev) / dt
-        d["acc"] += (a - d["acc"]) * (1.0 - math.exp(-dt / 0.22))
-    d["pos"] = p
-    d["look"] = tgt
-
-    sp = float(np.linalg.norm(d["vel"][[0, 2]]))
-    to = tgt - p
-    yaw_t = _wrap_toward(math.atan2(to[0], to[2]),
-                         math.atan2(d["vel"][0], d["vel"][2]) if sp > 1e-3 else
-                         math.atan2(to[0], to[2]), smoothstep(0.6, 2.5, sp))
-    d["yaw"] = _wrap_toward(d["yaw"], yaw_t, 1.0 - math.exp(-dt / 0.15))
-    fwd = np.array([math.sin(d["yaw"]), 0.0, math.cos(d["yaw"])])
-    lat = np.array([math.cos(d["yaw"]), 0.0, -math.sin(d["yaw"])])
-    lim = math.radians(25.0)
-    # +x nose-down, -z starboard-down: the signs that make it bank INTO the turn
-    pt = max(-lim, min(lim, math.atan2(float(np.dot(d["acc"], fwd)), DRONE_G)))
-    rl = max(-lim, min(lim, -math.atan2(float(np.dot(d["acc"], lat)), DRONE_G)))
-    k = 1.0 - math.exp(-dt / 0.10)
-    d["pitch"] += (pt - d["pitch"]) * k
-    d["roll"] += (rl - d["roll"]) * k
-    d["throttle"] = float(np.clip(0.5 + d["acc"][1] / 9.0, 0.0, 1.0))
-
-    drone.position.set(float(p[0]), float(p[1]), float(p[2]))
-    drone.rotation.set(d["pitch"], d["yaw"], d["roll"])
-    # The gimbal holds the horizon and points where the shot points.
-    dh = math.hypot(float(to[0]), float(to[2]))
-    gp = math.atan2(-float(to[1]), max(dh, 1e-3))
-    gimbal.rotation.set(gp - d["pitch"], 0.0, -d["roll"])
-
-
-def drone_tick(dt):
-    """Props, LEDs and the strobe. Runs whenever the machine is in the world."""
-    d = drone_state
-    d["spool"] += (1.0 - d["spool"]) * (1.0 - math.exp(-dt / 0.55))
-    rate = (100.0 + 55.0 * d["throttle"]) * d["spool"]
-    d["spin"] += rate * dt
-    for hub, sgn in props:
-        hub.rotation.y = sgn * d["spin"]
-    lit = 10.0 + 70.0 * _night_level
-    for m in led_mats:
-        if abs(m.emissive_intensity - lit) > 0.5:
-            m.emissive_intensity = lit
-            m.needs_update()
-    blink = 340.0 if (world_time % 1.05) < 0.065 else 0.0
-    if blink != strobe_mat.emissive_intensity:
-        strobe_mat.emissive_intensity = blink
-        strobe_mat.needs_update()
 
 
 def drone_demo_path(dt):
@@ -2515,16 +2368,15 @@ def drone_demo_path(dt):
     bx, bz, by = boat_state["x"], boat_state["z"], boat_state["y"]
     r = 13.0 + 2.5 * math.sin(_drone_phase * 0.7)
     h = 6.0 + 1.7 * math.sin(_drone_phase * 1.3 + 0.8)
-    drone_set_pose((bx + r * math.sin(_drone_phase), by + h, bz + r * math.cos(_drone_phase)),
-                   (bx, by + 4.2, bz), dt)
+    quad.set_pose((bx + r * math.sin(_drone_phase), by + h, bz + r * math.cos(_drone_phase)),
+                  (bx, by + 4.2, bz), dt)
 
 
 def drone_camera_apply():
     """FPV: the render camera IS the gimbal eye."""
-    d = drone_state
-    eye = d["pos"] + yxz_matrix(d["pitch"], d["yaw"], d["roll"]) @ DRONE_EYE
+    eye = quad.eye()
     camera.position.set(float(eye[0]), float(eye[1]), float(eye[2]))
-    camera.look_at(float(d["look"][0]), float(d["look"][1]), float(d["look"][2]))
+    camera.look_at(float(quad.look[0]), float(quad.look[1]), float(quad.look[2]))
 
 
 camera = tp.PerspectiveCamera(48, canvas.aspect(), 0.1, 4000)
@@ -3415,7 +3267,7 @@ def handle_keys(dt):
         if not drone_on:
             view_mode = "orbit"
         else:
-            drone_state["have"] = False     # re-seed the kinematics on the way in
+            quad.have = False     # re-seed the kinematics on the way in
     if pressed("V") and drone_on:
         view_mode = "orbit" if view_mode == "fpv" else "fpv"
     if pressed("B"):
@@ -3794,7 +3646,7 @@ def _set_drone(on):
     if not drone_on:
         view_mode = "orbit"
     else:
-        drone_state["have"] = False
+        quad.have = False
 
 
 def _set_view(mode):
@@ -3963,7 +3815,7 @@ def shot_target(sh, e, org, fwd, rgt):
         t = np.array([org[0] * (1.0 - k) + ISLET_X * k, y,
                       org[2] * (1.0 - k) + ISLET_Z * k])
     elif p.get("tgt_drone"):
-        t = drone_state["pos"] + np.array(p.get("tgt_drone_off", (0.0, 0.0, 0.0)))
+        t = quad.pos + np.array(p.get("tgt_drone_off", (0.0, 0.0, 0.0)))
         k = p.get("tgt_drone_mix", 1.0)
         if k < 1.0:                          # keep the boat in frame behind it
             t = t * k + _pt(org, fwd, rgt, np.array(p.get("tgt", (0.0, 0.0, 5.0)),
@@ -4104,7 +3956,7 @@ def drone_eval(spec, uu):
 # The film NEVER flips `drone.visible`: a visibility change is a snapshot
 # invalidation (entry-list rebuild + device idle + TAA clear), and one in the
 # same gap as a forced env re-bake can lose the device. So the airframe is
-# parked by TRANSFORM, exactly the way the lightning pool is, and `drone_state`
+# parked by TRANSFORM, exactly the way the lightning pool is, and the quad's state
 # keeps the real pose so the FPV camera still rides the machine that is no
 # longer in the picture.
 DRONE_PARK = -20000.0
@@ -4116,7 +3968,7 @@ def _film_drone(dt):
         drone.position.set(0.0, DRONE_PARK, 0.0)
         return
     pos, look = drone_eval(sh.drone, _lerp(sh.du[0], sh.du[1], _cur_u))
-    drone_set_pose(pos, look, dt)
+    quad.set_pose(pos, look, dt)
     if sh.view == "fpv":
         drone.position.y = float(pos[1]) + DRONE_PARK
 
@@ -4314,7 +4166,7 @@ SHORT_CUT = [
     #  What the drone's camera sees, three ways. The leg has to read as SENSOR
     #  OUTPUT and not as a filter, which means three things:
     #   * it is ONE continuous drone move, cut three ways. All three shots fly
-    #     the same DRONE_REVEAL arc (the same object, so drone_state's velocity
+    #     the same DRONE_REVEAL arc (the same object, so the quad's velocity
     #     / acceleration / attitude filters carry across the cuts) at the same
     #     tod and weather, split by `du` in proportion to their seconds. The
     #     picture does not jump; only the way it is SENSED does.
@@ -4425,7 +4277,7 @@ def _film_cut(sh, prev):
     film_drone = _film_drone
     want = sh.drone is not None
     if want and (prev is None or prev.drone is not sh.drone):
-        drone_state["have"] = False
+        quad.have = False
     drone_on = True                 # always: the machine is parked, not removed
     view_mode = "fpv" if sh.view == "fpv" else "orbit"
     _film_drone(1.0 / max(FPS, 1))
@@ -5062,7 +4914,7 @@ def frame(dt):
             drone_demo_path(dt)              # the live G-key orbit
         elif film_drone is not None:
             film_drone(dt)                   # the film owns the trajectory
-        drone_tick(dt)
+        quad.tick(dt, world_time, _night_level)
     # FPV means the render camera IS the drone: the orbit rig has to keep its
     # hands off it, or controls.update() puts the camera back on its sphere.
     fpv = drone_on and view_mode == "fpv"
@@ -5155,7 +5007,7 @@ elif SHOT:
         pos = (cp + to * (6.2 + 0.5 * math.sin(ph * 0.6))
                + left * (2.3 + 0.7 * math.sin(ph))
                + np.array([0.0, -0.9 + 0.35 * math.sin(0.7 * ph + 1.0), 0.0]))
-        drone_set_pose(pos, (bx_, boat_state["y"] + 5.0, bz_), dt)
+        quad.set_pose(pos, (bx_, boat_state["y"] + 5.0, bz_), dt)
     if FACE == "gif" and drone_on:
         drone_auto = False
         film_drone = _gif_drone
@@ -5190,7 +5042,7 @@ elif SHOT:
         elif FACE == "drone":
             # Stand outside the drone's orbit and look in, so the boat is the
             # background and the machine is the subject.
-            dp = drone_state["pos"]
+            dp = quad.pos
             to = np.array([dp[0] - bx, 0.0, dp[2] - bz])
             to = to / max(float(np.linalg.norm(to)), 1e-6)
             camera.position.set(dp[0] + to[0] * 5.2 + 1.4, dp[1] + 1.15,

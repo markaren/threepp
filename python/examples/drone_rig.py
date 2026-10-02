@@ -117,17 +117,27 @@ class Drone:
 
     The only call a shot makes is ``set_pose(pos, look_at, dt)``: attitude is
     derived from the motion, so the flight is authored purely as a path.
+
+    The look is the scene's: the airframe's colours and finish (body_finish is
+    (roughness, metalness)), led_level (the nav lights' emissive intensity by
+    day, and what full night adds) and strobe (its flash intensity and how
+    many seconds of every 1.05 it is on). On Vulkan an emissive mesh is a
+    light source, so these are set against the scene's exposure and how far
+    off the machine is filmed.
     """
 
     def __init__(self, scene, span=DRONE_SPAN, eye_offset=DRONE_EYE,
                  body_color=0x39404d, trim_color=0x59616e,
                  prop_color=0x0c0e11, lens_color=0x07090c,
                  led_colors=(0xff1408, 0x18ff3c), strobe_color=0xffffff,
-                 start_pos=(0.0, 6.0, 14.0), start_look=(0.0, 3.0, 0.0)):
+                 start_pos=(0.0, 6.0, 14.0), start_look=(0.0, 3.0, 0.0),
+                 body_finish=(0.38, 0.35), trim_roughness=0.45,
+                 led_level=(40.0, 180.0), strobe=(1400.0, 0.055)):
         self.span = float(span)
         self.arm = self.span * 0.5 * 0.7071
         k = self.span / DRONE_SPAN          # everything below is drawn at 0.45 m
         self.eye_offset = np.asarray(eye_offset, np.float64) * k
+        self.led_level, self.strobe = tuple(led_level), tuple(strobe)
 
         self.root = tp.Group()
         self.root.rotation.order = tp.RotationOrder.YXZ
@@ -136,8 +146,8 @@ class Drone:
         # Not black. At blue hour a 0x1b1f26 airframe against a treeline is a
         # hole in the picture; this is still dark grey but it catches the sky
         # and the rim light, so the hull and booms have form.
-        body = standard_material(body_color, 0.38, 0.35)
-        trim = standard_material(trim_color, 0.45)
+        body = standard_material(body_color, *body_finish)
+        trim = standard_material(trim_color, trim_roughness)
         # Bare blades, no blur disc: at this span and filming distance a disc
         # reads as a grey plate bolted to the arm, while the spinning blades
         # alias into the slow apparent counter-rotation a filmed prop has.
@@ -188,6 +198,7 @@ class Drone:
         self.root.add(st)
 
         self.gimbal = tp.Group()
+        self.gimbal.rotation.order = tp.RotationOrder.YXZ   # set_pose's aim is solved in this order
         self.gimbal.position.set(0.0, -0.038 * k, 0.082 * k)
         self.root.add(self.gimbal)
         gb = tp.Mesh(tp.SphereGeometry(0.027 * k, 14, 10), body)
@@ -303,20 +314,21 @@ class Drone:
         self.spin += rate * dt
         for hub, sgn in self.props:
             hub.rotation.y = sgn * self.spin
-        # Driven HARD. These are 12 mm spheres on a 0.45 m machine, and in the
-        # wide shots that machine is ninety metres out: at sane intensities it
-        # is a grey speck and the shot has no hero in it. On Vulkan an emissive
-        # mesh is a real light source, so cranking them also throws a red and a
-        # green wash onto the booms, which is what nav lights actually do and
-        # what makes the silhouette read as a machine rather than as a dot.
-        lit = 40.0 + 180.0 * night
+        # The defaults drive them HARD. These are 12 mm spheres on a 0.45 m
+        # machine, and in the wide shots that machine is ninety metres out: at
+        # sane intensities it is a grey speck and the shot has no hero in it.
+        # On Vulkan an emissive mesh is a real light source, so cranking them
+        # also throws a red and a green wash onto the booms, which is what nav
+        # lights actually do and what makes the silhouette read as a machine
+        # rather than as a dot. A scene that films it close turns led_level down.
+        lit = self.led_level[0] + self.led_level[1] * night
         for m in self.leds:
             if abs(m.emissive_intensity - lit) > 0.5:
                 m.emissive_intensity = lit
                 m.needs_update()
         # A short, hot anti-collision flash. Short so it reads as a strobe and
         # not as a lamp; hot so it survives the auto-exposure clamp at range.
-        blink = 1400.0 if (t % 1.05) < 0.055 else 0.0
+        blink = self.strobe[0] if (t % 1.05) < self.strobe[1] else 0.0
         if blink != self.strobe_mat.emissive_intensity:
             self.strobe_mat.emissive_intensity = blink
             self.strobe_mat.needs_update()

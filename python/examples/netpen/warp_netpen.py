@@ -28,6 +28,7 @@ import warp as wp
 
 import threepp as tp
 from warp_common import cli_arg, orbit_loop, parse_size, sky_env, standard_material
+from drone_rig import Drone
 try:
     from threepp.cuda_interop import VkInteropArray
 except ImportError:
@@ -2849,145 +2850,18 @@ def hud_update():
 
 
 
-# ---- the filming drone (ported from warp_sailboat.py) ------------------------
+# ---- the filming drone (drone_rig.Drone) --------------------------------------
 #  A camera vehicle, not a quadrotor sim: the attitude is kinematic -- it leans the way
 #  the acceleration says it must be leaning for the path it is on, which is all the eye
-#  reads at filming distance. Names are _dr_-prefixed: `props` is already the ROV's.
-DRONE_SPAN = 0.45
-DRONE_ARM = DRONE_SPAN * 0.5 * 0.7071
-DRONE_G = 9.81
-
-drone = tp.Group()
-drone.rotation.order = tp.RotationOrder.YXZ
+#  reads at filming distance. Its look here: a dark grey airframe, nav lights that do not
+#  follow the hour, the strobe at this film's exposure.
+quad = Drone(scene, body_color=0x2c333d, body_finish=(0.42, 0.25), trim_color=0x515a66, trim_roughness=0.55,
+             prop_color=0x14171c, led_level=(6.0, 0.0), strobe=(340.0, 0.065), start_pos=(0.0, 19.0, 0.0))
+drone = quad.root
 drone.visible = False
-scene.add(drone)
-
-_dr_body = standard_material(0x2c333d, roughness=0.42, metalness=0.25)
-_dr_trim = standard_material(0x515a66, roughness=0.55)
-# Bare blades, no blur disc: at this span and filming distance a disc reads as a grey
-# plate bolted to the arm, while the blades alias into a filmed prop's counter-rotation.
-_dr_prop = standard_material(0x14171c, roughness=0.60, side=tp.Side.Double)
-_dr_lens = standard_material(0x07090c, roughness=0.05, metalness=0.2)
-
-_dh = tp.Mesh(tp.BoxGeometry(0.115, 0.052, 0.170), _dr_body)
-_dh.cast_shadow = True
-drone.add(_dh)
-_dc = tp.Mesh(tp.SphereGeometry(0.055, 14, 10), _dr_trim)
-_dc.scale.set(1.0, 0.52, 1.30)
-_dc.position.set(0.0, 0.026, 0.005)
-drone.add(_dc)
-for _s in (1.0, -1.0):
-    _bm = tp.Mesh(tp.BoxGeometry(DRONE_SPAN, 0.015, 0.021), _dr_trim)
-    _bm.rotation.y = _s * math.radians(45.0)
-    _bm.cast_shadow = True
-    drone.add(_bm)
-
-_dr_props = []
-for _sx, _sz in ((1, 1), (-1, 1), (-1, -1), (1, -1)):
-    _px, _pz = _sx * DRONE_ARM, _sz * DRONE_ARM
-    _pod = tp.Mesh(tp.CylinderGeometry(0.017, 0.020, 0.032, 10, 1), _dr_body)
-    _pod.position.set(_px, 0.013, _pz)
-    drone.add(_pod)
-    _hub = tp.Group()
-    _hub.position.set(_px, 0.035, _pz)
-    drone.add(_hub)
-    _bl = tp.Mesh(tp.BoxGeometry(0.126, 0.0024, 0.016), _dr_prop)
-    _bl.rotation.z = math.radians(9.0)      # a little pitch, so it reads as a blade
-    _hub.add(_bl)
-    _dr_props.append((_hub, 1.0 if _sx * _sz > 0 else -1.0))
-
-_dr_leds = []
-for _col, _x, _z in ((0xff1408, -1.02, 1.02), (0x18ff3c, 1.02, 1.02)):
-    _m = standard_material(0x0a0a0a, roughness=1.0, emissive=_col, emissive_intensity=6.0)
-    _sp = tp.Mesh(tp.SphereGeometry(0.012, 10, 8), _m)
-    _sp.position.set(_x * DRONE_ARM, 0.004, _z * DRONE_ARM)
-    drone.add(_sp)
-    _dr_leds.append(_m)
-_dr_strobe = standard_material(0x0a0a0a, roughness=1.0, emissive=0xffffff, emissive_intensity=0.0)
-_st = tp.Mesh(tp.SphereGeometry(0.013, 10, 8), _dr_strobe)
-_st.position.set(0.0, -0.030, -0.030)
-drone.add(_st)
-
-_dr_gimbal = tp.Group()
-_dr_gimbal.position.set(0.0, -0.038, 0.082)
-drone.add(_dr_gimbal)
-_gb = tp.Mesh(tp.SphereGeometry(0.027, 14, 10), _dr_body)
-_gb.scale.set(1.0, 1.0, 0.85)
-_dr_gimbal.add(_gb)
-_gl = tp.Mesh(tp.CylinderGeometry(0.014, 0.017, 0.018, 12, 1), _dr_lens)
-_gl.rotate_x(math.pi / 2)
-_gl.position.set(0.0, 0.0, 0.022)
-_dr_gimbal.add(_gl)
-
-drone_state = {
-    "pos": np.array([0.0, 19.0, 0.0]), "vel": np.zeros(3), "acc": np.zeros(3),
-    "yaw": 0.0, "pitch": 0.0, "roll": 0.0, "spin": 0.0, "spool": 0.0,
-    "throttle": 0.5, "have": False,
-}
+for _m in quad.leds:
+    _m.emissive_intensity = 6.0    # lit from the start: a still that never ticks the machine shows them
 DRONE_LIVE = [True]            # terrain_scan replays cam_approach 600+ times: freeze the machine
-
-
-def _dr_step01(a, b, x):
-    x = min(max((x - a) / (b - a), 0.0), 1.0)
-    return x * x * (3.0 - 2.0 * x)
-
-
-def _dr_wrap(a, b, k):
-    return a + ((b - a + math.pi) % (2.0 * math.pi) - math.pi) * k
-
-
-def drone_set_pose(pos, look_at, dt=1.0 / 60.0):
-    """Put the drone at `pos` looking at `look_at`. THE call a shot makes.
-    Attitude is derived, never authored: smoothed velocity and acceleration give the lean a
-    machine on that path must have. Yaw follows the velocity heading once it is actually
-    moving and the look bearing when it is not, so a hover does not spin on noise."""
-    d = drone_state
-    pp = np.asarray(pos, np.float64).copy()
-    tgt = np.asarray(look_at, np.float64).copy()
-    dt = max(float(dt), 1e-4)
-    if not d["have"]:
-        d["have"] = True
-        d["vel"][:] = 0.0
-        d["acc"][:] = 0.0
-        d["yaw"] = math.atan2((tgt - pp)[0], (tgt - pp)[2])
-    else:
-        v = (pp - d["pos"]) / dt
-        vprev = d["vel"].copy()
-        d["vel"] += (v - d["vel"]) * (1.0 - math.exp(-dt / 0.12))
-        d["acc"] += ((d["vel"] - vprev) / dt - d["acc"]) * (1.0 - math.exp(-dt / 0.22))
-    d["pos"] = pp
-    sp = float(np.linalg.norm(d["vel"][[0, 2]]))
-    to = tgt - pp
-    yaw_t = _dr_wrap(math.atan2(to[0], to[2]),
-                     math.atan2(d["vel"][0], d["vel"][2]) if sp > 1e-3 else math.atan2(to[0], to[2]),
-                     _dr_step01(0.6, 2.5, sp))
-    d["yaw"] = _dr_wrap(d["yaw"], yaw_t, 1.0 - math.exp(-dt / 0.15))
-    fwd = np.array([math.sin(d["yaw"]), 0.0, math.cos(d["yaw"])])
-    lat = np.array([math.cos(d["yaw"]), 0.0, -math.sin(d["yaw"])])
-    lim = math.radians(25.0)
-    pt = max(-lim, min(lim, math.atan2(float(np.dot(d["acc"], fwd)), DRONE_G)))
-    rl = max(-lim, min(lim, -math.atan2(float(np.dot(d["acc"], lat)), DRONE_G)))
-    k = 1.0 - math.exp(-dt / 0.10)
-    d["pitch"] += (pt - d["pitch"]) * k
-    d["roll"] += (rl - d["roll"]) * k
-    d["throttle"] = float(np.clip(0.5 + d["acc"][1] / 9.0, 0.0, 1.0))
-    drone.position.set(float(pp[0]), float(pp[1]), float(pp[2]))
-    drone.rotation.set(d["pitch"], d["yaw"], d["roll"])
-    dh = math.hypot(float(to[0]), float(to[2]))              # the gimbal holds the horizon
-    _dr_gimbal.rotation.set(math.atan2(-float(to[1]), max(dh, 1e-3)) - d["pitch"], 0.0, -d["roll"])
-
-
-def drone_tick(dt):
-    """Props and the strobe. Runs whenever the machine is in the world."""
-    d = drone_state
-    d["spool"] += (1.0 - d["spool"]) * (1.0 - math.exp(-dt / 0.55))
-    d["spin"] += (100.0 + 55.0 * d["throttle"]) * d["spool"] * dt
-    for hub, sgn in _dr_props:
-        hub.rotation.y = sgn * d["spin"]
-    blink = 340.0 if (world_t % 1.05) < 0.065 else 0.0
-    if blink != _dr_strobe.emissive_intensity:
-        _dr_strobe.emissive_intensity = blink
-        _dr_strobe.needs_update()
 
 
 # ---- cameras -----------------------------------------------------------------
@@ -3304,8 +3178,8 @@ def cam_approach(u, t):
     if DRONE_PATH is not None and DRONE_LIVE[0]:
         # it flies the whole cut: on station it is still in frame behind the sweep, and it
         # parks with the gulls once the eye goes under
-        drone_set_pose(DRONE_PATH(min(t, T_END)), [0.0, WATER_Y + 0.6, 0.0])   # it films the pen throughout
-        drone_tick(1.0 / 60.0)
+        quad.set_pose(DRONE_PATH(min(t, T_END)), [0.0, WATER_Y + 0.6, 0.0])   # it films the pen throughout
+        quad.tick(1.0 / 60.0, world_t)
     drone.visible = eye[1] > WATER_Y - 0.5
     gulls.position.y = 0.0 if eye[1] > WATER_Y - 0.5 else -9000.0
     tgt = APPROACH["tgt"](t) + float(pchip(*APPROACH["w"], t)) * (rov_pos - rov_at(t)[0])
