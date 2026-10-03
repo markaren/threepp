@@ -49,6 +49,41 @@ The spec's ``strip_model`` block holds what the strip model needs beyond the tab
 half's water level is read (``probe_z``) and the ocean's hull footprint. A spec without one
 gets both from its design waterline. The drives read the spec's ``propulsion`` block; their
 lumped resistance and damping figures are tuned per boat and stand in the classes below.
+
+MANOEUVRING (opt-in, ``hull.manoeuvring = True``, a hull under her own power with pods)
+--------------------------------------------------------------------------------------
+Off by default; with it off nothing above changes. On, the horizontal plane (surge, sway, yaw)
+follows the 3-DOF manoeuvring model in water-relative velocity (Fossen, Handbook of Marine
+Craft Hydrodynamics and Motion Control, 2011, ch. 6 and 10), and heave, roll and pitch stay
+on the strips::
+
+    M nu_r' + C(nu_r) nu_r + D(nu_r) nu_r = tau        nu_r = (u_r, v_r, r), body x ahead, y to starboard
+    eta' = R(psi) nu_r + V_c                            eta = (north, east, psi), psi clockwise from north
+
+    M = M_RB + M_A = diag(m + a11, m + a22, I_z + a66)  (the origin is the CoG)
+    C = C_RB + C_A, both on nu_r (Kirchhoff):  C nu_r = (-(m + a22) v_r r, (m + a11) u_r r, (a22 - a11) u_r v_r)
+
+The third term of C nu_r is the Munk moment. V_c is ``hull.current``, a uniform steady current
+(world x east, y up, z south, m/s; its y is not used). The numbers are the rig's own, none of
+them identified: a11, a22, a66 are the added-mass fractions StripHull has always used (0.05 m,
+0.60 m, 0.30 I_z, "the usual rough figures for a hull this shape"); D(nu_r) nu_r is the
+drive's lumped terms taken on water-relative velocity: surge resistance R(u_r) (linear,
+quadratic, the wave-making hump), sway KV1 (|u_r| + 1) v_r + KV2 v_r |v_r| acting at the CoG's
+station (so no yaw moment from sway: N_v = 0), yaw KR1 (|u_r| + 1) r + KR2 r |r|. tau is the
+pods' thrust (thrust_max(u_r)) along their thrust line, its force and its yaw moment about the
+CoG. Heave, roll and pitch: the strips' buoyancy, the heave, roll and pitch damping, the
+thrust's and the sway damping's roll and pitch moments, the squat moment, as in loads(). The
+heading is psi, integrated from r; the rotation R takes its roll and pitch from the strips and
+its heading from psi. The horizontal plane reads nothing from the sea but the share of the
+weight it carries and the pods' immersion (both clamped to 1 while she floats), so on a sea
+that keeps her afloat her track does not depend on the waves.
+
+Open-loop directional stability (``drive.sway_yaw(u)``, pods amidships, the linear sway-yaw
+pair at surge u): with N_v = 0 the Munk moment is the only yaw moment from sideslip, and the
+pair is stable only while KV1 (u + 1) KR1 (u + 1) > (m + a11) (a22 - a11) u^2. The Otter X at
+her design load (1030 kg) is directionally unstable above 0.98 m/s through the water: its
+unstable root is +0.10 /s at 1.5 m/s, +0.20 at 2.0, +0.29 at 2.5 (the stable one -1.31, -1.65,
+-1.99). Her heading needs a controller.
 """
 import json
 import math
@@ -217,6 +252,11 @@ class StripHull:
         self.target_v = (0.0, 0.0, 0.0)        # vx, vz, heading rate
         self.target_a = (0.0, 0.0)             # feed-forward horizontal acceleration
         self.log = []
+        # MANOEUVRING (opt-in): the 3-DOF horizontal plane in water-relative velocity
+        self.manoeuvring = False
+        self.current = np.zeros(3)             # uniform steady current, world (x east, z south), m/s
+        self.nu_r = None                       # (u_r, v_r, r): body x ahead, y to starboard, r clockwise from above
+        self.psi = 0.0                         # heading, rad clockwise from north (NED)
 
     # ---- the sea under her
     def probe_points(self):
@@ -239,6 +279,7 @@ class StripHull:
         self.p[1] = h0 - float(self.R[1] @ rel)
         self.v[:] = 0.0
         self.w[:] = 0.0
+        self.nu_r = None                               # MANOEUVRING: taken from v, w and R at the next step
         self.target = (float(self.p[0]), float(self.p[2]), heading)
 
     def set_target(self, x, z, heading, vx=0.0, vz=0.0, rate=0.0, ax=0.0, az=0.0):
@@ -261,9 +302,10 @@ class StripHull:
         Mb = np.array([-self.c_roll * w[0], M_yaw, -self.c_pitch * w[2]])
         return Fb, Mb
 
-    def step(self, dt):
-        """One substep: strip buoyancy + the DP's or the drive's loads, semi-implicit Euler."""
-        R, v, w = self.R, self.v, self.w
+    def buoyancy(self):
+        """The strips' buoyancy less the weight, world frame: (force, moment about the CoG, each
+        half-section's immersed area). Sets self.buoy."""
+        R = self.R
         cog, sx, side = self.cog, self.sx, self.side
         # buoyancy: each half-section at its own water level, in vessel y
         rx, rz = sx - cog[0], side * self.probe_z - cog[2]
@@ -280,6 +322,14 @@ class StripHull:
         F = np.array([0.0, float(fb.sum()) - self.mass * self.g, 0.0])
         tau = np.array([-float(arm[:, 2] @ fb), 0.0, float(arm[:, 0] @ fb)])     # sum r x (0, fb, 0)
         self.buoy = float(fb.sum())
+        return F, tau, area
+
+    def step(self, dt):
+        """One substep: strip buoyancy + the DP's or the drive's loads, semi-implicit Euler."""
+        if self.manoeuvring and self.drive is not None:
+            return self.step_manoeuvring(dt)
+        R, v, w = self.R, self.v, self.w
+        F, tau, area = self.buoyancy()
         # vessel-frame loads from everything but buoyancy and gravity, damping included
         vb = R.T @ v
         self.u = vb[0]
@@ -294,6 +344,63 @@ class StripHull:
         Iw = self.i_eff * w
         self.w = w + (tv - np.cross(w, Iw)) / self.i_eff * dt
         self.R = orthonormal(R @ rodrigues(self.w * dt))
+
+    # ---- MANOEUVRING (opt-in)
+    def mass_3dof(self):
+        """(m11, m22, m66, a11, a22, a66): M = M_RB + M_A of the 3-DOF model, from the rig's added-mass
+        fractions (m_eff, i_eff)."""
+        return (self.m_eff[0], self.m_eff[2], self.i_eff[1], self.m_eff[0] - self.mass, self.m_eff[2] - self.mass,
+                self.i_eff[1] - self.mass * self.spec["mass"]["gyradius"]["yaw"] ** 2)
+
+    def current_ned(self):
+        """hull.current as (north, east), m/s."""
+        return -float(self.current[2]), float(self.current[0])
+
+    def init_manoeuvring(self):
+        """nu_r and psi from the rigid body's v, w and R (and the current)."""
+        self.psi = 0.5 * math.pi - attitude(self.R)[0]
+        cn, ce = self.current_ned()
+        rn, re = -float(self.v[2]) - cn, float(self.v[0]) - ce
+        c, s = math.cos(self.psi), math.sin(self.psi)
+        self.nu_r = np.array([c * rn + s * re, -s * rn + c * re, -float(self.w[1])])
+
+    def step_manoeuvring(self, dt):
+        """One substep with the horizontal plane on the 3-DOF model in water-relative velocity
+        (MANOEUVRING), heave, roll and pitch on the strips; semi-implicit Euler like step()."""
+        if self.nu_r is None:
+            self.init_manoeuvring()
+        R, v, w = self.R, self.v, self.w
+        F, tau, area = self.buoyancy()
+        vb = R.T @ v
+        self.u = vb[0]
+        (X, Y, N), Fb, Mb = self.drive.loads_3dof(self.nu_r, vb, w, area)
+        m11, m22, m66, a11, a22, _ = self.mass_3dof()
+        u, vr, r = self.nu_r
+        # M nu_r' = tau - C(nu_r) nu_r - D(nu_r) nu_r (D is in the drive's X, Y, N)
+        u_n = u + (X + m22 * vr * r) / m11 * dt
+        v_n = vr + (Y - m11 * u * r) / m22 * dt
+        r_n = r + (N - (a22 - a11) * u * vr) / m66 * dt
+        self.nu_r = np.array([u_n, v_n, r_n])
+        psi = self.psi + r_n * dt
+        # eta' = R(psi) nu_r + V_c
+        cn, ce = self.current_ned()
+        c, s = math.cos(psi), math.sin(psi)
+        vn, ve = c * u_n - s * v_n + cn, s * u_n + c * v_n + ce
+        # heave, roll and pitch: the strips and the drive's vertical loads, as step()
+        tb = R.T @ tau
+        Fv = R.T @ F + Fb
+        tv = tb + Mb
+        self.balance = (vb, w, tb, Mb)
+        vy = float(v[1] + (R @ (Fv / self.m_eff))[1] * dt)
+        self.v = np.array([ve, vy, -vn])
+        self.p = self.p + self.v * dt
+        Iw = self.i_eff * w
+        wn = w + (tv - np.cross(w, Iw)) / self.i_eff * dt
+        wn[1] = -r_n                                    # the yaw rate is the 3-DOF model's
+        self.w = wn
+        Rn = orthonormal(R @ rodrigues(wn * dt))
+        self.R = rot_y(wrap(0.5 * math.pi - psi - attitude(Rn)[0])) @ Rn      # its heading is psi
+        self.psi = psi
 
     def advance(self, dt, substeps=1):
         """Sample the (already rendered) sea, then step. Logs draft, trim, roll."""
@@ -389,6 +496,9 @@ class Drive:
         trim_deg = math.degrees(math.asin(max(-1.0, min(1.0, R[1, 0]))))
         roll = math.atan2(-R[1, 2], R[1, 1])
         return u, heave, sway, wet, upright, trim_deg, roll
+
+    def loads_3dof(self, nu_r, vb, w, area):
+        raise NotImplementedError(f"{type(self).__name__} has no 3-DOF manoeuvring loads (MANOEUVRING: the pods have)")
 
     def bind(self, root):
         """Find the actuator nodes under a loaded .glb's root. Returns self."""
@@ -596,6 +706,40 @@ class _Pods(Drive):
                              -(self.KR1 * (abs(u) + 1.0) * r_ + self.KR2 * r_ * abs(r_)) * max(wet, 0.2),
                              -h.c_pitch * q_ + self.SQUAT_M * math.exp(-((abs(u) - self.hump_u) / self.HUMP_W) ** 2) * wet])
         return L.F, Mb
+
+    def loads_3dof(self, nu_r, vb, w, area):
+        """loads() for a hull on the 3-DOF manoeuvring model (MANOEUVRING): the same terms with the
+        resistance, the sway and yaw damping and the pods' thrust taken on the water-relative surge,
+        sway and yaw rate nu_r = (u_r, v_r, r) (body x ahead, y to starboard, r clockwise from above).
+        Returns ((X, Y, N) in that frame, the vessel-frame force (heave), the vessel-frame moment
+        (roll and pitch; its yaw is N))."""
+        h = self.hull
+        cog = h.cog
+        u, v, r = (float(a) for a in nu_r)
+        _, heave, _, wet, upright, trim_deg, roll = self._state(vb)
+        L = _Loads(cog)
+        x_res = -self.resistance(u) * wet
+        L.add(np.array([0.0, 0.0, -(self.KV1 * (abs(u) + 1.0) * v + self.KV2 * v * abs(v)) * wet]),
+              (cog[0], self.SWAY_Y, cog[2]))           # vessel z is starboard: sway v_r
+        line = self._thrust_line()
+        for side in ("port", "stbd"):
+            c = self.pod_command(side)
+            pod_wet = min(max(float(area[self.aft[side]].sum()) / self.pod_wet_area, 0.0), 1.0) * upright
+            L.add(c * (self.thrust_max(u) if c >= 0.0 else self.astern * self.t_bollard) * pod_wet * line, self.pod_at[side])
+        n_damp = -(self.KR1 * (abs(u) + 1.0) * r + self.KR2 * r * abs(r)) * max(wet, 0.2)
+        p_, _, q_ = w                                   # roll and pitch rates (vessel X, Z)
+        Fb = np.array([0.0, -h.c_heave * heave, 0.0])
+        Mb = np.array([L.M[0] - h.c_roll * p_, 0.0,
+                       L.M[2] - h.c_pitch * q_ + self.SQUAT_M * math.exp(-((abs(u) - self.hump_u) / self.HUMP_W) ** 2) * wet])
+        return (x_res + L.F[0], L.F[2], n_damp - L.M[1]), Fb, Mb
+
+    def sway_yaw(self, u):
+        """The open-loop sway-yaw pair of the 3-DOF model at water-relative surge u, linearised about
+        straight running with the pods amidships: (A, eigenvalues), x' = A x for x = (v_r, r)."""
+        m11, m22, m66, a11, a22, _ = self.hull.mass_3dof()
+        A = np.array([[-self.KV1 * (abs(u) + 1.0) / m22, -m11 * u / m22],
+                      [-(a22 - a11) * u / m66, -self.KR1 * (abs(u) + 1.0) / m66]])
+        return A, np.linalg.eigvals(A)
 
     def _spin(self, dt):
         for side in ("port", "stbd"):
