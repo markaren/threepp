@@ -1,6 +1,7 @@
 """threepp.lesson, the experimental explainer-video toolkit: its clocks and cameras, the
 measured-speech layout, the code tokenizer, the HUD's wrapping and its pool, the file writers
-and Film, and one headless frame through Stage and Hud on the session renderer."""
+and Film, every mode of the shared command line but the film itself, and one headless frame
+through Stage and Hud on the session renderer."""
 import json
 import math
 import struct
@@ -196,6 +197,40 @@ def test_media(tmp_path):
     lesson.write_srt(str(s), [(0.5, 2.25, "Hello."), (61.0, 3725.5, "Spoken, not drawn.", False)])
     assert s.read_text(encoding="utf-8") == ("1\n00:00:00,500 --> 00:00:02,250\nHello.\n\n"
                                              "2\n00:01:01,000 --> 01:02:05,500\nSpoken, not drawn.\n\n")
+
+
+def test_run_modes(tmp_path, capsys):
+    seen = []
+
+    def setup(width, height):
+        def render(t, hold):
+            seen.append((t, hold))
+            return np.full((height, width, 3), int(min(t, 1.0) * 200), np.uint8)
+        render.holds = [(1.0, 0.5, "pause")]                       # the picture stands still at 1 s
+        return render, [(0.0, 1.2, "First line."), (1.5, 2.0, "Over the title.", False)]
+
+    out = tmp_path / "out"
+    notes = []
+
+    def warn(captions):
+        notes.append(len(captions))
+        return ["a note"]
+    lesson.run("demo", 2.0, setup, fps=10, warn=warn, argv=["--no-voice", "--srt", "--outdir", str(out)])
+    assert notes == [2] and "[captions] a note" in capsys.readouterr().out
+    srt = (out / "demo.srt").read_text(encoding="utf-8")
+    assert "00:00:00,000 --> 00:00:01,700" in srt and "00:00:02,000 --> 00:00:02,500" in srt   # the film clock
+    lesson.run("demo", 2.0, setup, fps=10, argv=["--no-voice", "--preview", "--stills", "0.5,1.25", "--outdir", str(out)])
+    assert (out / "demo_still_000.50.png").exists() and (out / "demo_still_001.25.png").exists()
+    assert seen[-1] == (1.0, ("pause", pytest.approx(0.5)))         # film time 1.25 is halfway through the hold
+    lesson.run("demo", 2.0, setup, fps=10, argv=["--no-voice", "--preview", "--sheet", "--every", "1", "--outdir", str(out)])
+    assert (out / "demo_sheet.png").exists()
+    gate = tmp_path / "gate"
+    lesson.run("demo", 2.0, setup, fps=10, argv=["--no-voice", "--preview", "--gate", str(gate), "--outdir", str(out)])
+    rec = json.loads((gate / "demo.voice.json").read_text(encoding="utf-8"))
+    assert rec["voice"] is None and rec["film_duration"] == pytest.approx(2.5) and rec["holds"] == [[1.0, 0.5, "pause"]]
+    assert rec["captions"][1]["drawn"] is False and rec["captions"][1]["film_start"] == pytest.approx(2.0)
+    assert len(list((gate / "stills").glob("*.png"))) == 2 and (gate / "demo_sheet.png").exists()
+    assert (gate / "demo.srt").read_text(encoding="utf-8") == srt
 
 
 def test_stage_and_hud_render(renderer):

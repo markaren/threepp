@@ -359,27 +359,37 @@ then `render(t)` is a pure function of the clock, so any frame renders on its ow
 
 ```python
 import threepp as tp
-from threepp.lesson import Film, Hud, Stage, Timeline, envelope, standard
+from threepp.lesson import Hud, Stage, Timeline, fade_in_out, run, standard
 
-tl = Timeline().add("turn", 0.0, 4.0).then("hold", 2.0)
-st = Stage(1280, 720)                      # a headless GL renderer and a dark studio
-box = tp.Mesh(tp.BoxGeometry(0.6, 0.6, 0.6), standard(0x4cc9f0, roughness=0.35))
-box.position.y = 0.3
-st.scene.add(box)
-st.look([1.6, 1.1, 2.2], [0.0, 0.3, 0.0], fov=35)
-ov = Hud(1280, 720)                        # the 2D layer, in pixels; project() answers in them
 
-with Film("box.mp4", 1280, 720, fps=30) as film:   # H.264 through ffmpeg (threepp[lesson])
-    for f in range(int(tl.duration * 30)):
-        t = f / 30
+def setup(width, height):
+    tl = Timeline().add("turn", 0.5, 4.5).then("hold", 1.5)
+    st = Stage(width, height)                  # a headless GL renderer and a dark studio
+    box = tp.Mesh(tp.BoxGeometry(0.6, 0.6, 0.6), standard(0x4cc9f0, roughness=0.35))
+    box.position.y = 0.3
+    st.scene.add(box)
+    st.look([1.6, 1.1, 2.2], [0.0, 0.3, 0.0], fov=35)
+    ov = Hud(width, height)                    # the 2D layer, in pixels; st.project() answers in them
+    captions = [(0.5, 3.5, "A box that turns."), (3.8, 5.6, "Then it holds still.")]
+
+    def render(t):                             # pure in t, so any frame renders on its own
         box.rotation.y = 3.1416 * tl.p("turn", t)
         ov.begin()
-        a = envelope(t, 0.5, tl.duration - 0.3)
-        ov.panel(60, 580, 470, 80, alpha=0.72 * a)
-        ov.text(90, 620, "A box that turns", size=40, alpha=a, anchor="lm")
+        ov.captions(t, captions)
+        ov.fade(fade_in_out(t, tl.duration))
         ov.end()
-        film.write(st.frame(t, hud=ov))
+        return st.frame(t, hud=ov)
+    return render, captions
+
+
+run("box", 6.0, setup)      # lesson_out/box.mp4, narrated by Kokoro; --help lists the rest
 ```
+
+`run` owns the command line: the film at 1920x1080 (`--preview` for 960x540 at 30 fps), one
+stretch (`--from`/`--to`), `--stills`, a contact `--sheet`, the captions as an `--srt`, or
+`--gate DIR`, a record of frames and narration to compare after a refactor. Kokoro reads the
+captions aloud unless `--no-voice`, and where a line outruns its caption the film holds the
+picture until it has been said. A frame loop of your own writes H.264 through `Film`.
 
 It needs only numpy. The extras add what it imports on first use:
 

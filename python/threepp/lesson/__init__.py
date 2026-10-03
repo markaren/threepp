@@ -12,7 +12,7 @@ A lesson is rendered in two passes:
    to back, and records per-frame state. No rendering.
 2. **Frames.** `render(t)` is a pure function of the recorded state and the clock, so any
    frame can be rendered on its own: a still, a contact sheet, a low-res preview of one beat,
-   or the final film.
+   or the final film (`run` is the command line for each).
 
 The pieces, from bottom to top:
 
@@ -45,12 +45,20 @@ The pieces, from bottom to top:
 `speech`: `Narration`, `spoken`, `Speech`, `overruns`
     Captions read aloud by Kokoro and cached by text; caption text in words a TTS reads well;
     a lesson's lines with their measured lengths, from which the captions are laid out.
+
+`cli`: `run`, `contact_sheet`, `write_gate`
+    The command line every lesson shares. `run(name, duration, setup)` renders the film at
+    1920x1080 (`--preview`: 960x540), one stretch, stills, a contact sheet, the captions as
+    SubRip, or a regression record of frames and narration (`--gate DIR`); the captions are
+    read aloud unless `--no-voice`, and the picture is held where a line outruns its caption.
+    `setup(width, height)` returns `(render, captions)`.
 """
-from . import hud, media, scene, speech, timing
+from . import cli, hud, media, scene, speech, timing
+from .cli import *  # noqa: F401,F403
 from .hud import *  # noqa: F401,F403
 from .media import *  # noqa: F401,F403
 from .scene import *  # noqa: F401,F403
 from .speech import *  # noqa: F401,F403
 from .timing import *  # noqa: F401,F403
 
-__all__ = timing.__all__ + scene.__all__ + hud.__all__ + media.__all__ + speech.__all__
+__all__ = timing.__all__ + scene.__all__ + hud.__all__ + media.__all__ + speech.__all__ + cli.__all__
