@@ -1,0 +1,208 @@
+{
+  "schema": "threepp.uav_spec/1",
+  "name": "Skywalker X8",
+  "description": "The Skywalker X8 flying wing for the threepp examples. One file holds every number: the published 6-DOF flight model (x8_rig.py runs it), the airframe for the Blender generator (build_x8_blender.py -> x8.glb), and what the article does not give, marked as such.",
+  "reference": {
+    "article": {
+      "authors": "Bogdan Løw-Hansen, Richard Hann, Kristoffer Gryte, Tor Arne Johansen, Christoph Deiler",
+      "title": "Modeling and identification of a small fixed-wing UAV using estimated aerodynamic angles",
+      "journal": "CEAS Aeronautical Journal 16, 501-523 (2025)",
+      "doi": "https://doi.org/10.1007/s13272-025-00816-3",
+      "licence": "Open access under CC BY 4.0, https://creativecommons.org/licenses/by/4.0/",
+      "use": "The flight model in x8_rig.py is the article's equations (5)-(29) as written, with the numbers of its Tables 1, 6, 7, 8 and 9 copied unchanged into the blocks `physical`, `propeller`, `propulsion`, `aero` and `actuators`. Its trim point (36)-(38), linear matrices (40), (42), (44) and poles (Tables 10, 11) are in `article_linearisation` for the comparison. Nothing in those blocks is tuned. Added, and marked in each block: the air density, gravity, the battery voltage, the guards outside the identified envelope, the autopilot and the guidance.",
+      "identified_at": "Flights at 18 m/s in a north-west wind of about 9 m/s (Breivika airfield, Agdenes, May 2023), output-error method with DLR Fitlab; propeller and motor identified in a wind tunnel at 18 m/s."
+    },
+    "airframe": {
+      "page": "https://www.uavmodel.com/products/skywalker-x8-2122mm-uav-fixed-wing",
+      "read": "2026-10-03",
+      "figures": "Wingspan 2120 mm, fuselage length 790 mm, wing area 80 dm^2, EPO foam with carbon tubes, kit about 1.22 kg, ready to fly about 1.72 kg, maximum take-off 6 kg, CG 430-440 mm from the nose. A blended flying wing with foam winglets, two elevons (one servo each), a 14x8 pusher propeller behind the fuselage, three hatches on top. Catapult launch, belly landing.",
+      "geometry_source": "No drawings are public. The planform is fitted to the vendor's underside photo (3_1_ff200855...jpg on that page, 713 x 839 px, near orthographic): its silhouette spans 675 px tip to tip, 3.14 mm/px for the published 2120 mm, and at that scale the nose-to-motor length measures 0.79 m against the published 790 mm. Leading and trailing edges were read column by column off the silhouette (threshold 251 of 255 on the white background). Heights, thicknesses, the winglets and the colours are from the article's Fig. 1 (the NTNU aircraft: light grey airframe, orange winglets and hatch, black folding propeller) and the vendor's oblique photos, by eye. Treat anything not in `figures` as an estimate good to a centimetre or two."
+    },
+    "assumed": "The air density model, gravity, the battery voltage, the elevon throw, the envelope limits, the autopilot and guidance, the 3D model's thicknesses, heights and colours. Each is marked where it appears."
+  },
+  "units": "SI: metres, kilograms, seconds, radians, newtons, volts, ohms. Keys ending in _deg are degrees.",
+  "frames": {
+    "ned": "The article's inertial frame {n}: x north, y east, z down. Position (N, E, D).",
+    "body": "The article's body frame {b}: x forward, y right, z down, origin at the aerodynamic centre, taken to coincide with the CG (the article's section 2.1).",
+    "model": "The .glb's frame: X forward, Y up, Z right (starboard), metres, origin at the CG. A body vector (x, y, z) is (x, -z, y) in it. The same axes as the boats' specs.",
+    "world": "threepp's world as the drone rig and the Nørvasundet twin use it: x east, y up, z south (-north). A NED position (N, E, D) is (E, h0 - D, -N), h0 the height of the NED origin. Heading psi (the article's yaw, from north toward east) points the nose along (sin psi, 0, -cos psi): psi = 0 is -z, psi = 90 deg is +x."
+  },
+  "physical": {
+    "source": "Article Table 1",
+    "mass": 3.364,
+    "Ix": 0.325,
+    "Iy": 0.140,
+    "Iz": 0.400,
+    "Ixz": 0.029,
+    "inertia_note": "I = [[Ix, 0, -Ixz], [0, Iy, 0], [-Ixz, 0, Iz]] (article eq. 24).",
+    "cbar": 0.36,
+    "b": 2.10,
+    "S": 0.75
+  },
+  "aero": {
+    "source": "Article Table 8, the value column (flights at 18 m/s). Forces in the stability frame, moments in the body frame, eqs. (17)-(21). Angles in radians.",
+    "CD0": 0.058, "CDq": 0.480, "CDCT": -0.217, "CDk1": -0.034, "CDk2": 0.225,
+    "CL0": -0.077, "CLa": 2.573, "CLq": 17.119, "CLde": 1.369,
+    "Cm0": 0.027, "Cma": -0.274, "Cmq": -1.608, "Cmde": -0.276,
+    "CY0": 0.011, "CYb": -0.285, "CYp": -0.270, "CYr": 0.108, "CYda": 0.097,
+    "Cl0": 0.007, "Clb": -0.108, "Clp": -0.313, "Clr": 0.037, "Clda": 0.102,
+    "Cn0": -0.00063, "Cnb": 0.022, "Cnp": -0.009, "Cnr": -0.050, "Cnda": -0.007,
+    "uncertainty_note": "The article reports CYr, Clr and Cnp as the least certain (no rudder to excite yaw), and the phugoid and spiral modes as poorly excited. Table 8's '(Rel. %)' column does not equal std/|value| for about two thirds of the rows (e.g. Clr: 3.60e-3 / 0.037 = 9.7 %, printed 6.12 %); the value column is used."
+  },
+  "propeller": {
+    "source": "Article Table 6 (14x8 Aeronaut CAM folding propeller, wind tunnel at 18 m/s), eqs. (5)-(9).",
+    "CT0": 0.1400, "CT1": -0.0300, "CT2": -0.2370, "CT3": 0.0847,
+    "CQ0": 0.0082, "CQ1": 0.0112, "CQ2": -0.0211
+  },
+  "propulsion": {
+    "source": "Article Table 7 (Hacker A40-12S V2 14-pole KV610, Jeti SPIN Pro 66), eqs. (10)-(13), (28), (29).",
+    "KE": 0.0157,
+    "R": 0.017,
+    "D": 0.3556,
+    "Ip": 3.46e-4,
+    "battery_voltage": 15.8,
+    "battery_voltage_note": "ASSUMED: the article's flights ran the battery between 15.2 and 16.4 V (its Fig. 7); 15.8 V is the middle of that range. The article identified with the measured voltage as an input and added a throttle offset (size not given) to match the measured power; neither is reproduced here.",
+    "rear_sign": "The propeller is rear-mounted, so its torque on the airframe is -M_prop (eq. 13): -(Q + Ip dOmega/dt) about x, -Ip Omega r about y, +Ip Omega q about z. That is the reaction of a rotor whose spin vector points along body +x (clockwise seen from behind)."
+  },
+  "actuators": {
+    "source": "Article Table 9.",
+    "servo_wn": 100.0,
+    "servo_zeta": 0.707,
+    "servo_delay": 0.07,
+    "throttle_tau": 0.2,
+    "throttle_delay": 0.05,
+    "elevon_limit_deg": 25.0,
+    "elevon_limit_note": "ASSUMED: not in the article. Commands to each elevon are clipped to +-25 deg before the delay. Positive elevon deflection is trailing edge down (eq. 14 with Clda > 0 and Cmde < 0).",
+    "mixing": "delta_e = (delta_er + delta_el) / 2, delta_a = (delta_el - delta_er) / 2 (eq. 14); so delta_er = delta_e - delta_a, delta_el = delta_e + delta_a."
+  },
+  "environment": {
+    "rho": "isa",
+    "rho_sea_level": 1.225,
+    "rho_note": "ASSUMED: the article quotes no air density. The International Standard Atmosphere's troposphere, rho = 1.225 (1 - 0.0065 h / 288.15)^4.2559 at the height h above mean sea level, gives 1.2042 kg/m^3 at the article's trim altitude of 178 m; the linear matrices it prints are reproduced best near that value (README, linearisation). A number here in place of 'isa' fixes rho.",
+    "g": 9.82,
+    "g_note": "Not stated in the article. Its linearisation prints g cos(theta) cos(phi) as 9.82 (A_lat row 1, A_lon row 1, eq. 44), which needs g between 9.817 and 9.827 at the trim attitude; the normal gravity at the test site (63.6 N) is 9.822 and at Alesund (62.5 N) 9.821. 9.81 would print 9.81."
+  },
+  "article_linearisation": {
+    "source": "Article eqs. (36)-(44), Tables 10 and 11; deltas in radians in the matrices, wind in body axes (m/s).",
+    "trim_x": {"u": 11.8, "v": -6.26, "w": -0.28, "p": 0.0, "q": 0.0, "r": 0.0, "h": 178.0, "phi_deg": -0.47, "theta_deg": -1.11, "psi_deg": 92.89},
+    "trim_u": {"de_deg": -2.35, "da_deg": -2.16, "dt": 0.44, "uw": -5.93, "vw": -6.62, "ww": -2.75},
+    "trim_air": {"Va": 17.9, "alpha_deg": 7.9, "beta_deg": 1.2, "gamma_deg": 0.0},
+    "lat_states": ["v", "p", "r", "phi", "psi"],
+    "lat_inputs": ["da", "uw", "vw", "ww"],
+    "A_lat": [[-0.68, -0.96, -11.52, 9.82, 0.0], [-5.45, -16.81, 1.80, 0.0, 0.0], [0.53, -1.62, -2.10, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0, 0.0]],
+    "B_lat": [[4.17, -0.02, 0.68, -0.003], [92.93, -0.24, 5.45, -0.03], [1.64, -0.003, -0.53, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]],
+    "lon_states": ["u", "w", "q", "theta"],
+    "lon_inputs": ["de", "dt", "uw", "vw", "ww"],
+    "A_lon": [[-0.59, 0.92, 0.61, -9.82], [-0.23, -6.31, 4.42, 0.19], [0.78, -5.59, -5.92, 0.0], [0.0, 0.0, 1.0, 0.0]],
+    "B_lon": [[4.26, 19.43, 0.59, 0.01, -0.92], [-58.88, 0.25, 0.23, 0.02, 6.31], [-101.91, 0.0, -0.78, 0.0, 5.59], [0.0, 0.0, 0.0, 0.0, 0.0]],
+    "coupled_states": ["u", "v", "w", "p", "q", "r", "phi", "theta", "psi"],
+    "coupled_inputs": ["de", "da", "dt", "uw", "vw", "ww"],
+    "A": [[-0.59, -0.01, 0.92, 0.0, 0.61, -6.26, 0.0, -9.82, 0.0],
+          [0.02, -0.68, 0.0, -0.96, 0.0, -11.52, 9.82, -0.00, 0.0],
+          [-0.23, -0.02, -6.31, 6.26, 4.42, 0.0, 0.08, 0.19, 0.0],
+          [0.24, -5.45, 0.03, -16.81, 0.0, 1.80, 0.0, 0.0, 0.0],
+          [0.78, 0.0, -5.59, 0.0, -5.92, 0.0, 0.0, 0.0, 0.0],
+          [0.0, 0.53, 0.0, -1.62, 0.0, -2.10, 0.0, 0.0, 0.0]],
+    "A_note": "Rows u..r; the rows for phi, theta, psi are [0_3x3 I_3x3 0_3x3] in the article.",
+    "B": [[4.26, 0.0, 19.43, 0.59, 0.01, -0.92],
+          [0.0, 4.17, 0.0, -0.02, 0.68, 0.0],
+          [-58.88, 0.0, 0.25, 0.23, 0.02, 6.31],
+          [0.0, 92.93, -5.76, -0.24, 5.45, -0.03],
+          [-101.91, 0.0, 0.0, -0.78, 0.0, 5.59],
+          [0.0, 1.64, -0.42, 0.0, -0.53, 0.0]],
+    "poles_lat": {"roll": -17.50, "dutch_roll": [-0.84, 3.73], "spiral": -0.42, "dutch_roll_wn": 3.83, "dutch_roll_zeta": 0.22},
+    "poles_lon": {"short_period": [-6.19, 4.93], "phugoid": [-0.22, 0.97], "short_period_wn": 7.92, "short_period_zeta": 0.78, "phugoid_wn": 0.99, "phugoid_zeta": 0.22}
+  },
+  "envelope": {
+    "source": "OURS, not the article's: guards that keep the model finite outside the range it was identified in. They act on what enters the article's equations, never on the equations.",
+    "alpha_deg": [-10.0, 20.0],
+    "alpha_note": "The flight data of the article's Fig. 4 span alpha -10..+20 deg (C_L -0.7..+0.8, no stall visible). Outside it the coefficients (17), (18) are evaluated at the nearest end: the lift holds its value there (no stall model, no lift break); the lift and drag directions still follow the true alpha (19), (20).",
+    "beta_deg": [-15.0, 15.0],
+    "beta_note": "The lateral manoeuvres of the article's Fig. 11 reach beta -10..+15 deg; the same treatment as alpha.",
+    "va_min": 1.0,
+    "va_min_note": "The normalised rates p*, q*, r*, beta and the advance ratio divide by V_a; below 1 m/s they use 1 m/s. The forces scale with V_a^2 and vanish anyway.",
+    "j_max": 1.93,
+    "j_max_note": "Table 6's C_T(J) falls to its minimum at J = 1.93 and rises again after it, which no propeller does; J is held at 1.93 beyond it. That only happens with the propeller nearly stopped (J = 2 pi V_a / (Omega D)), where T and Q vanish with Omega^2. C_T crosses zero at J = 0.83 and C_Q at J = 0.94 (windmilling); those are left as identified.",
+    "omega_min": 0.0,
+    "omega_note": "The motor model (28) brakes the propeller at zero throttle (U = 0: Q_m = -Omega K_E^2 / R); Omega is held at or above zero, the ESC drives one way."
+  },
+  "autopilot": {
+    "source": "OURS, not the article's (its flights flew ArduPilot). Successive loop closure (Beard and McLain, Small Unmanned Aircraft, ch. 6): inner roll and pitch loops on the elevons, course (or heading) on roll, altitude on pitch, airspeed on throttle. The inner gains are computed in x8_rig.Autopilot from the article's coefficients at the operating point; what is chosen here is each loop's natural frequency or stiffness, its damping, its integral and its limits.",
+    "airspeed": 18.0,
+    "roll":     {"wn": 8.0, "zeta": 0.9, "ki": 0.2, "integral_deg": 5.0, "limit_deg": 30.0},
+    "course":   {"bandwidth_ratio": 12.0, "zeta": 1.0},
+    "pitch":    {"stiffness": 1.0, "wi": 1.0, "integral_deg": 6.0, "limit_deg": 15.0},
+    "altitude": {"wn": 0.4, "zeta": 1.0, "zone": 15.0},
+    "speed":    {"wn": 0.6, "zeta": 1.0, "throttle": [0.0, 1.0]},
+    "note": "roll: kp = wn^2 / a_phi2, rate feedback only if the airframe's roll damping falls short of 2 zeta wn (at 18 m/s it does not), ki = ki x kp, the integral limited to integral_deg of aileron. course: wn = roll wn / bandwidth_ratio. pitch: the X8's open-loop pitch stiffness (about 10 rad/s at 18 m/s) is above what the 0.07 s servo delay allows a pitch loop to reach, so kp adds `stiffness` times the airframe's own (kp = -stiffness Cma / Cmde) and the integral (wi rad/s, at most integral_deg of elevator) removes the steady error; no rate feedback (the article's short period has zeta 0.78). altitude: wn and zeta of h' = V_a theta. zone: outside +-15 m of the commanded height the pitch command saturates, as in the textbook's altitude state machine without its take-off states. speed: wn and zeta of the airspeed loop on the throttle, from the model's d(u')/du and d(u')/d(throttle) at the trim."
+  },
+  "guidance": {
+    "source": "OURS: a line-of-sight law on a polyline of waypoints, the hook a film's own law replaces. Course command chi_d = path angle + atan(-e / delta) (e the cross-track error, positive to the right of the path; delta the look-ahead distance). A leg is done when the aircraft comes within `accept` metres (along the leg) of its end.",
+    "lookahead": 60.0,
+    "accept": "turn",
+    "turn_bank": 0.75,
+    "note": "accept 'turn': R tan(|dchi| / 2) before the corner, R = V_g^2 / (g tan(turn_bank x the roll limit)), the distance a turn needs to come round onto the next leg (at most half the leg). Measured on a 600 m leg north and a right turn onto a 600 m leg east at 18 m/s: a fixed 25 m switch carried the aircraft 44.5 m past the corner in still air and 63 m with 6 m/s from the west; 'turn' 0 m in still air and 17 m with 6 m/s from the west (the ground speed rises from 17 to 24 m/s through that turn, and the switch is computed at the speed before it)."
+  },
+  "geometry": {
+    "note": "The 3D model (build_x8_blender.py). Planform tables are (l, s): l the distance outboard of the centreline, s the distance aft of the nose, both in metres, fitted to the underside photo (reference.airframe.geometry_source). The model frame puts the nose at X = cg_from_nose and the chord plane at Y = 0.",
+    "span": 2.12,
+    "span_note": "The product page's 2120 mm, tip to tip over the winglets. The article's b = 2.10 m is its reference span, kept in `physical`.",
+    "length": 0.79,
+    "cg_from_nose": 0.435,
+    "cg_note": "The product page's CG range 430-440 mm, its middle. The model's origin, and the article's body origin.",
+    "leading_edge": [[0.0, 0.0], [0.04, 0.017], [0.068, 0.053], [0.097, 0.091], [0.145, 0.129], [0.209, 0.167], [0.283, 0.203], [0.384, 0.258], [0.585, 0.340], [0.786, 0.418], [0.937, 0.478], [1.0, 0.508]],
+    "trailing_edge": [[0.0, 0.64], [0.055, 0.64], [0.09, 0.705], [0.15, 0.71], [0.175, 0.64], [0.19, 0.592], [0.283, 0.601], [0.384, 0.610], [0.484, 0.629], [0.585, 0.645], [0.686, 0.667], [0.786, 0.686], [0.887, 0.704], [0.987, 0.723], [1.0, 0.726]],
+    "trailing_edge_note": "Outboard of l = 0.19 the photo's wing trailing edge. Inboard of it the photo shows the centre body's two short lobes either side of the motor (l 0.09..0.17, to s = 0.71) and a notch between them for the motor mount, which runs on to 0.75 (`motor`).",
+    "thickness": [[0.0, 0.135], [0.05, 0.13], [0.09, 0.112], [0.13, 0.082], [0.17, 0.058], [0.21, 0.047], [0.3, 0.040], [0.6, 0.031], [0.9, 0.024], [1.0, 0.021]],
+    "thickness_note": "ASSUMED: absolute thickness (m) at l, the centre body about 13.5 cm deep (the vendor's oblique photos), the outer wing about 10 % of its chord.",
+    "upper_share": [[0.0, 0.72], [0.12, 0.66], [0.2, 0.58], [1.0, 0.58]],
+    "upper_share_note": "ASSUMED: the share of the thickness above the chord line; the hatches make the centre body deeper on top.",
+    "camber": 0.012,
+    "camber_note": "ASSUMED: a reflexed camber line m sin(pi x) (1 - 1.3 x) on the wing (x the chord fraction): positive ahead, slightly negative over the last 23 % (a flying wing's reflex). The centre body (l < 0.15) has none.",
+    "winglet": {
+      "note": "ASSUMED from the article's Fig. 1: near vertical, orange, a trapezoid swept back. The spar line turns up through a bend of radius bend_r at l = bend_l, so the winglet's outer face stands at l = bend_l + bend_r + thickness / 2 = 1.06 (the 2.12 m span).",
+      "bend_l": 1.0, "bend_r": 0.054, "cant_deg": 90.0,
+      "top_height": 0.17, "top_chord": 0.10, "le_sweep_deg": 32.0, "thickness": 0.012
+    },
+    "elevons": {
+      "note": "ASSUMED from the underside photo (the hinge lines show from l = 0.44 to 0.87): one per outer wing, a straight hinge line, chord at the inboard and outboard ends. Each is its own node on its hinge line, local +Z along the hinge toward starboard, so a positive turn about local +Z puts the trailing edge down on either side. 4 mm gaps at the ends.",
+      "l_range": [0.42, 0.94], "chord": [0.075, 0.060], "gap": 0.004
+    },
+    "hatches": {
+      "note": "Three hatch covers on the centre body's top (product page), orange as on the article's aircraft (Fig. 1). s range, half-width, how far proud of the skin.",
+      "covers": [[0.07, 0.20, 0.055], [0.22, 0.40, 0.08], [0.42, 0.56, 0.07]],
+      "proud": 0.004, "corner_r": 0.02
+    },
+    "motor": {
+      "note": "The motor mount fairing, the motor can (Hacker A40 class, 49 mm, ASSUMED) and the spinner, on the body's x axis: the article puts the thrust on body x through the origin (F_prop = [T, 0, 0]).",
+      "fairing_r": 0.03, "fairing_s": [0.58, 0.705], "can_r": 0.0245, "can_s": [0.705, 0.755], "spinner_r": 0.02, "spinner_s": [0.765, 0.795]
+    },
+    "propeller": {
+      "note": "A two-blade 14x8 folding propeller (article Table 7, D = 0.3556 m; 8 in pitch), its disc at s = disc_s. Node 'propeller' spins about its local +X; the rig turns it by the model's Omega_p.",
+      "disc_s": 0.775, "diameter": 0.3556, "pitch": 0.2032, "root_r": 0.028, "chord_root": 0.030, "chord_tip": 0.012, "thickness": 0.004, "hub_r": 0.022
+    },
+    "pitot": {"note": "ASSUMED: the article's X8 carries a pitot-static tube; placed at the nose.", "length": 0.06, "radius": 0.003},
+    "sensors": {
+      "convention": "Empties look down local -Z with local +Y up (threepp/glTF camera convention). Positions in the model frame.",
+      "imu": {"position": [0.0, 0.0, 0.0], "note": "at the CG"},
+      "gnss": {"position": [-0.06, 0.075, 0.0], "note": "ASSUMED: on the rear hatch"},
+      "pitot_tip": {"position": [0.495, 0.0, 0.0]},
+      "camera_nadir": {"position": [0.15, -0.035, 0.0], "look": [0.0, -1.0, 0.0], "note": "ASSUMED: a downward camera in the belly, the usual survey payload"},
+      "camera_fpv": {"position": [0.415, 0.02, 0.0], "look": [1.0, -0.15, 0.0], "note": "ASSUMED: a forward camera in the nose"}
+    }
+  },
+  "materials": {
+    "note": "Linear RGB. Colours of the article's aircraft (Fig. 1), pulled toward plausible albedos. No vendor marks.",
+    "foam_grey": {"color": [0.46, 0.50, 0.57], "metallic": 0.0, "roughness": 0.78},
+    "winglet_orange": {"color": [0.90, 0.40, 0.015], "metallic": 0.0, "roughness": 0.65},
+    "hatch_orange": {"color": [0.85, 0.27, 0.03], "metallic": 0.0, "roughness": 0.55},
+    "seam_dark": {"color": [0.05, 0.05, 0.055], "metallic": 0.0, "roughness": 0.8},
+    "carbon_black": {"color": [0.018, 0.018, 0.02], "metallic": 0.0, "roughness": 0.35},
+    "prop_black": {"color": [0.02, 0.02, 0.022], "metallic": 0.0, "roughness": 0.45},
+    "motor_grey": {"color": [0.25, 0.25, 0.27], "metallic": 0.9, "roughness": 0.35},
+    "spinner_alu": {"color": [0.62, 0.62, 0.64], "metallic": 1.0, "roughness": 0.28},
+    "pitot_steel": {"color": [0.6, 0.6, 0.62], "metallic": 1.0, "roughness": 0.3},
+    "antenna_white": {"color": [0.8, 0.8, 0.78], "metallic": 0.0, "roughness": 0.45},
+    "lens_glass": {"color": [0.01, 0.014, 0.02], "metallic": 0.0, "roughness": 0.05}
+  }
+}
