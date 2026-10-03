@@ -1,0 +1,212 @@
+{
+  "schema": "threepp.auv_spec/1",
+  "name": "REMUS 100",
+  "description": "The REMUS 100 autonomous underwater vehicle for the threepp examples. One file holds every number: the published 6-DOF model (remus_rig.py runs it), the hull, fins and fittings for the Blender generator (build_remus_blender.py -> remus100.glb), and what the thesis does not give, marked as such.",
+  "reference": {
+    "thesis": {
+      "author": "Timothy Prestero",
+      "title": "Verification of a Six-Degree of Freedom Simulation Model for the REMUS Autonomous Underwater Vehicle",
+      "degree": "S.M. thesis, Massachusetts Institute of Technology / Woods Hole Oceanographic Institution Joint Program in Applied Ocean Science and Engineering, September 2001",
+      "handle": "http://hdl.handle.net/1721.1/65068",
+      "rights": "MIT's notice on the thesis: it may be viewed for any purpose; reproduction or distribution requires permission. Nothing of the thesis's text, figures or PDF is in this repository; this file holds its equations' coefficient values and parameters, each cited to its table and page, and the rig implements its equations.",
+      "use": "The model in remus_rig.py is the thesis's non-linear equations of motion: the rigid body (3.8), the hydrostatics (4.2), the force and moment sums (4.49), solved as (6.8)/(6.9), with the kinematics (3.1)-(3.5), integrated by fourth-order Runge-Kutta (6.16)-(6.18). The numbers of its Tables 2.2-2.7 and A.1-A.5 are in `physical`, `geometry` and `fins`; the coefficients of its Appendix B (Tables B.1, B.2), the set the thesis states its simulator ran with the adjustment factors of Section 8.1.2 applied, are in `coefficients`, unchanged. Its steady conditions, simulated responses and linearised depth-plane model are in `thesis_results` for the comparison. Nothing in those blocks is tuned. Added, and marked where it appears: g, the fin and propeller dynamics, the propeller's thrust and torque away from 1500 RPM, the guards outside the model's range of validity, the current, the autopilot and the guidance.",
+      "vehicle": "The 'STD REMUS' of 1998-2001 (Woods Hole Oceanographic Institution, Oceanographic Systems Laboratory): Myring hull 1.33 m long, 0.191 m diameter, four identical all-moving tail fins in a cruciform (NACA 0012), one propeller. Field trials at Woods Hole (Hadley's Cove) and the Rutgers Marine Field Station, 1998-1999, at 1500 RPM."
+    },
+    "assumed": "g, the fin servo and propeller-speed lags, the thrust and torque law away from 1500 RPM, the envelope guards, the current, the autopilot and guidance, the 3D model's propeller, antenna, sonar and ADCP placements and the colours. Each is marked where it appears."
+  },
+  "units": "SI: metres, kilograms, seconds, radians, newtons. Keys ending in _deg are degrees; rpm is revolutions per minute.",
+  "frames": {
+    "ned": "Earth-fixed: x north, y east, z down (the thesis's inertial frame, Fig. 3-1). Position (N, E, D), D the depth below the NED origin.",
+    "body": "The thesis's body frame (Section 3.1, Fig. 3-1): x forward, y starboard, z down, origin at the centre of buoyancy, 0.611 m behind the nose (Table 2.4).",
+    "model": "The .glb's frame: X forward, Y up, Z right (starboard), metres, origin at the centre of buoyancy. A body vector (x, y, z) is (x, -z, y) in it. The same axes as the boats' and the X8's specs.",
+    "world": "threepp's world as the X8 rig and the drone rig use it: x east, y up, z south. A NED position (N, E, D) is (E, h0 - D, -N), h0 the world height of the NED origin (the sea surface when the origin is on it). Heading psi points the nose along (sin psi, 0, -cos psi): psi = 0 is -z, psi = 90 deg is +x."
+  },
+  "physical": {
+    "source": "Thesis Table 2.3 (p. 17), Tables 2.5 and 2.6 (p. 18), Table 2.4 (p. 17), Table A.1 (p. 101).",
+    "W": 299.0,
+    "B": 306.0,
+    "B_note": "Table 2.3 gives B = 306 N, Table A.1 308 N ('measured vehicle buoyancy'). 306 N is taken: Sections 2.4 and 7.4.2 state the vehicle is ballasted to about 1.5 lb (6.7 N) of positive buoyancy, which is 306 - 299. The linearised model of Chapter 9 prints X_theta = +8.90 N (Table 9.3), B - W for B = 308.",
+    "g": 9.81,
+    "g_note": "ASSUMED: the thesis prints no value of g. The mass is m = W / g = 30.48 kg.",
+    "rho": 1030.0,
+    "rho_note": "Seawater, Table A.1. Used by no equation of the model (the coefficients are dimensional); kept for the hull checks.",
+    "xg": 0.0, "yg": 0.0, "zg": 0.0196,
+    "cg_note": "Centre of gravity relative to the centre of buoyancy, body axes (Table 2.5): 19.6 mm below it.",
+    "xb": 0.0, "yb": 0.0, "zb": 0.0,
+    "cb_note": "The body origin is the centre of buoyancy (Section 3.1).",
+    "Ixx": 0.177, "Iyy": 3.45, "Izz": 3.45,
+    "inertia_note": "About the centre of buoyancy, products of inertia zero (Table 2.6, Section 2.6)."
+  },
+  "coefficients": {
+    "source": "Thesis Appendix B: Table B.1 (forces, p. 103) and Table B.2 (moments, p. 104), which include the adjustment factors of Section 8.1.2 (Table 8.2). Added mass from Table C.5 (p. 106), the same values. Units as the thesis prints them (kg/m, kg, kg/rad, kg m/rad, N, N m ...); angles in radians. Used unchanged.",
+    "Xuu": -1.62, "Xud": -0.93, "Xwq": -35.5, "Xqq": -1.93, "Xvr": 35.5, "Xrr": -1.93,
+    "Yvv": -1310.0, "Yrr": 0.632, "Yuv": -28.6, "Yvd": -35.5, "Yrd": 1.93, "Yur": 5.22, "Ywp": 35.5, "Ypq": 1.93, "Yuudr": 9.64,
+    "Zww": -131.0, "Zqq": -0.632, "Zuw": -28.6, "Zwd": -35.5, "Zqd": -1.93, "Zuq": -5.22, "Zvp": -35.5, "Zrp": 1.93, "Zuuds": -9.64,
+    "Kpp": -0.130, "Kpd": -0.0704,
+    "Mww": 3.18, "Mqq": -188.0, "Muw": 24.0, "Mwd": -1.93, "Mqd": -4.88, "Muq": -2.0, "Mvp": -1.93, "Mrp": 4.86, "Muuds": -6.15,
+    "Nvv": -3.18, "Nrr": -94.0, "Nuv": -24.0, "Nvd": 1.93, "Nrd": -4.88, "Nur": -2.0, "Nwp": -1.93, "Npq": -4.86, "Nuudr": -6.15,
+    "notes": {
+      "adjustments": "Table 8.2 (p. 60) multiplies Kpp by 100, Kpd by 5, Yvv, Zww and Nrr by 10 and Mqq by 12.5 over the derived values of Tables 4.2 and 4.3 (p. 35). Appendix B prints Kpp, Kpd, Yvv and Nrr so multiplied, but Zww unmultiplied (-131, as in Table 4.2) and Mqq multiplied by 20 (-188 against -9.40). Table C.2 (p. 105) agrees with Appendix B. The Appendix B values are used: the thesis states they are the coefficients its simulator ran (Section 8.1.2, Appendix B's preamble). The alternative reading (Zww -1310, Mqq -117.5) is compared in auv/README.md.",
+      "Xuu": "-1.62 kg/m is -0.5 rho cd Af with cd = 0.110 (Af 0.0285 m^2, rho 1030); Section 4.2.1 states the measured cd = 0.27 is used, Table A.1 prints cd = 0.30, Section 5.4 0.267. The printed coefficient is used; X_prop = 3.86 N balances it at 1.54 m/s.",
+      "Yuv_Zuw": "Eq. (4.48) sums body lift and fin lift: Yuv = Yuvl + Yuvf. Table C.4 (p. 106) gives Yuvl = Zuwl = -28.6 and Table C.10 (p. 110) Yuvf = Zuwf = -9.64, so the sum is -38.2; Table B.1 prints -28.6. The moment sums do include their fin terms (Muw = 34.6 - 4.47 - 6.15 = 24.0, Table B.2). B.1's value is used.",
+      "fin_lift": "Table C.10's 9.64 kg/(m rad) is 0.902 x (1/2) rho cLa Sfin from Table 2.2 (10.69). Eq. (4.44) prints rho cLa Sfin without the 1/2 that eq. (4.43) has; Chapter 9's linear Z_delta_s = -50.6 kg m/s^2 (Table 9.3) is rho cLa Sfin U^2 with both fins. The nonlinear coefficients of Appendix B are used.",
+      "Mrp_Npq": "Mrp = Kpd - Nrd and Npq = -(Kpd - Mqd) (eqs. 4.25, 4.26) with the unadjusted Kpd = -0.0141; with the adjusted -0.0704 they would be 4.81 and -4.81. As printed.",
+      "body_lift_moment": "Table C.4's Muwl = -4.47 kg is not -0.5 rho d^2 cyd_beta x_cp from Table A.1's numbers (-7.2 with x_cp = -0.321 m; Chapter 9's linear M_wl = -11.1 kg m/s at 1.54 m/s is that). Only the combined Muw = 24.0 enters the model."
+    }
+  },
+  "propulsion": {
+    "source": "Thesis Section 4.6 (p. 33), Table C.9 (p. 109): the propeller is a constant thrust and torque at 1500 RPM.",
+    "Xprop": 3.86,
+    "Kprop": -0.543,
+    "rpm_ref": 1500.0,
+    "u_ref": 1.54,
+    "ref_note": "Xprop = -Xuu u|u| at the speed the vehicle holds at 1500 RPM: 3.86 / 1.62 gives 1.544 m/s, the 1.54 m/s of Section 8.1.1 and Table 8.1; Section 4.6.1 says 1.51 m/s and prints '-2.28 Xuu' (1.51^2), which would give 3.69 N. Kprop = -(zg W) sin(phi) at the roll offset phi = -5.3 deg measured at sea (eq. 4.47).",
+    "law": "ASSUMED, not the thesis's: away from 1500 RPM the thrust and torque scale with the square of the propeller speed, Xprop (n / 1500)^2 and Kprop (n / 1500)^2 (a fixed advance ratio: with Xuu u|u| the steady speed is then 1.544 n / 1500 m/s). At 1500 RPM this is the thesis's model.",
+    "rpm_tau": 0.3,
+    "rpm_tau_note": "ASSUMED: a first-order lag of the propeller speed toward its command (the thesis runs at a constant 1500 RPM).",
+    "rpm_max": 2000.0,
+    "rpm_max_note": "ASSUMED: commands are clipped to 0..2000 RPM (2.06 m/s by the law above); see `envelope` for where the model is believable."
+  },
+  "fins": {
+    "source": "Thesis Table 2.2 (p. 17) / Table A.5 (p. 102), Section 4.5, Figs. 4-1 and 4-2.",
+    "delta_max_deg": 13.6,
+    "delta_max_note": "Table 2.2's maximum fin angle. The listing E.1.2 (p. 117) clips only positive angles (`if delta_s > delta_max`); here both signs are clipped.",
+    "x_fin": -0.638,
+    "x_fin_note": "The fin post, body x (Table 2.2). The stern planes and the rudders turn about it.",
+    "S_fin": 0.00665, "b_fin": 0.0857, "c_mean": 0.0747, "taper": 0.654, "cdf": 0.558, "ARe": 2.21, "a_lift": 0.9, "cLa": 3.12,
+    "a_fin_note": "Table 2.2 prints the maximum fin height above the centreline as 5.14 m (sic); Fig. 2-3 shows the tips 0.131 m from the centreline and Section 4.3.3 uses 0.1172 m as its mean. Not used by the model.",
+    "signs": "Positive stern plane delta_s puts the trailing edge down (Fig. 4-2) and pitches the nose down (Zuuds < 0 at the tail, Muuds < 0); positive rudder delta_r puts the trailing edge to port (Fig. 4-1) and yaws the nose to port (Nuudr < 0). Each is a positive turn of the fin about the body axis it turns on: +y for the stern planes, +z for the rudders. The pairs move together (Section 4.5).",
+    "tau": 0.1,
+    "tau_note": "ASSUMED: a first-order lag of each pair toward its command. The thesis assumes instantaneous fins (Section 1.5.2); tau = 0 recovers that, and the comparison with the thesis runs with it."
+  },
+  "environment": {
+    "current_note": "OURS: a steady, uniform current enters through the water-relative velocity (remus_rig.py says which terms take it). The thesis assumes none (Section 1.5.1)."
+  },
+  "envelope": {
+    "source": "OURS, not the thesis's: guards that keep the model inside what its coefficients describe. They act on what enters the thesis's equations, never on the equations, and Remus.guards counts every step they act.",
+    "fin_stall_deg": 12.0,
+    "fin_stall_note": "The thesis assumes fins that never stall (Section 1.5.2) and states in Section 9.5 that the stern planes stall past an effective fin angle of about 12 deg. With the guard on, the fin pair's lift (delta + the effective inflow angle of eq. 4.42, through the coefficients of Table C.10) is held at its value at +-12 deg: a lift plateau, not a stall.",
+    "u_min": 0.1,
+    "u_min_note": "The effective fin angle divides by u (eq. 4.42); below 0.1 m/s the stall guard is not evaluated (the fin forces scale with u^2 and vanish).",
+    "pitch_max_deg": 85.0,
+    "pitch_max_note": "The Euler-angle kinematics (3.5) are singular at theta = +-90 deg (the listing sets pitch_max = 90). cos(theta) is held at or above cos(85 deg) in them.",
+    "speed_range": [1.0, 2.0],
+    "speed_note": "Where the model is believable: the propeller model is fixed at the 1.54 m/s trial point ('small deviations from this forward speed', Section 4.6.1), and every trial ran at 1500 RPM. Remus.flags counts the steps outside this range; nothing is changed there.",
+    "alpha_max_deg": 15.0,
+    "alpha_note": "The body lift and crossflow terms are small-angle derivations (Sections 4.4, 4.5). Remus.flags counts steps with the hull's angle of attack or sideslip past 15 deg; nothing is changed there. REMUS aborts a mission past 30 deg of pitch (Section 9.5)."
+  },
+  "thesis_results": {
+    "source": "What the thesis reports, for the comparison in auv/README.md. Read off its text, tables and figures (figure readings good to about one grid division's tenth).",
+    "steady_speed": {"rpm": 1500, "u": 1.54, "where": "Sections 4.6.1, 8.1.1, Table 8.1; 1.51 m/s in Section 4.6.1"},
+    "roll_offset_deg": {"value": -5.3, "where": "Section 4.6.2 (sea trials at 1500 RPM); -5 deg in Section 7.5 and Table 8.1"},
+    "initial_conditions": {"u": 1.54, "phi_deg": -5.0, "zg": 0.0196, "where": "Table 8.1 (p. 59); all other states zero"},
+    "rudder_steps": {
+      "input": "Section 8.3: fins zero for 10 s, rudder +4 deg for 25 s, then -4 deg for 30 s (Figs. 8-1 to 8-4). The plotted force sums (Fig. 8-3) step at 10 s and 40 s: +4 deg for 30 s.",
+      "w_minus_b": 0.0,
+      "w_minus_b_note": "Not stated for any run; Fig. 8-3's Z at t = 0 is 0 N, so W = B in this run.",
+      "fig_8_2_yaw_rate_deg_s": [-9.0, -9.5, 9.25],
+      "fig_8_2_note": "Steady yaw rate under +4 deg: -9.5 deg/s at 14 s settling to -9.0 at 30-40 s; under -4 deg: +9.3 deg/s at 45-70 s.",
+      "fig_8_1_surge": [1.54, 1.39],
+      "fig_8_1_sway": [0.07, -0.04],
+      "fig_8_1_note": "Surge falls from 1.54 to 1.38-1.40 m/s in the turns; sway +0.07 m/s under +4 deg, -0.04 under -4 deg; y spans -14..+3 m (a turning circle about 17 m across).",
+      "fig_8_2_pitch_deg": [-10.0, 10.0],
+      "fig_8_2_pitch_note": "Pitch oscillates +-10 deg with a period of about 11 s through the turns, pitch rate +-6 deg/s; roll rate oscillates about 1 Hz at +-1.5 deg/s.",
+      "sea_trial": "Fig. 7-7, Section 7.5.1: about 10 deg/s of yaw rate at about 4 deg of rudder; Fig. 8-5 puts the simulated and measured yaw within a few degrees over 4.8 s (-45 and -50 deg)."
+    },
+    "pitch_up": {
+      "input": "Section 8.4.1: stern planes 0 for 2 s, then -4 deg (Figs. 8-6 to 8-10); Fig. 8-8's force sums step at 2 s. The pitch moves before it, from the ballast.",
+      "w_minus_b": 2.26,
+      "w_minus_b_note": "Fig. 8-8's Z at t = 0 is +2.25 N with phi = -5 deg: W - B = 2.25 / cos(5 deg) (heavy).",
+      "fig_8_7": {"t": [1.0, 2.0, 3.0, 3.8], "theta_deg": [1.0, 6.0, 15.5, 24.5], "q_deg_s": [2.7, 6.8, 11.0, 11.0], "q_peak_deg_s": 11.2, "psi_deg_at_3_8": 4.0, "r_deg_s_at_3_8": 4.5, "phi_deg": [-5.3, -4.6], "p_period_s": 1.2},
+      "fig_8_6": {"u_at_3_8": 1.43, "w_at_3_8": 0.17},
+      "fig_8_10": {"depth_change_at_3_8": -0.47, "theta_deg_at_3_8": 25.0},
+      "text": "'a vehicle depth change of roughly 0.5 meters and a pitch change of twenty degrees' (Section 8.4.1); at sea (Fig. 7-8) about 0.5 m and 20 deg."
+    },
+    "pitch_down": {
+      "input": "Section 8.4.2: stern planes 0 for 2 s, then +8 deg (Figs. 8-11 to 8-15); Fig. 8-13's force sums step at 2 s.",
+      "w_minus_b": -6.63,
+      "w_minus_b_note": "Fig. 8-13's Z at t = 0 is -6.6 N: W - B = -6.6 / cos(5 deg) (1.5 lb buoyant).",
+      "fig_8_12": {"t": [1.0, 2.0, 3.0, 3.8], "theta_deg": [-2.3, -12.0, -26.0, -36.5], "q_deg_s": [-6.6, -11.8, -13.7, -11.5], "q_min_deg_s": -14.1, "q_min_t": 2.6, "psi_deg_at_3_8": -7.5, "r_deg_s_at_3_8": -6.2, "phi_deg_at_3_8": -7.2},
+      "fig_8_11": {"u_at_3_8": 1.19, "w_at_3_8": -0.20, "v_at_3_8": 0.07},
+      "fig_8_15": {"depth_change": 0.6, "pitch_change_deg": 30.0},
+      "text": "'a vehicle depth change of roughly 0.6 meters and a pitch change of thirty degrees' (Section 8.4.2); at sea (Fig. 7-9) about 0.4 m and 18 deg."
+    },
+    "linearised": {
+      "source": "Chapter 9: Tables 9.2 and 9.3 (pp. 83, 84) / D.1, D.2; eqs. (9.36), (9.40), (9.52), (9.53). Depth plane about U = 1.54 m/s, theta = 0, with its own linearised coefficient set (crossflow drag linearised by slopes m_w = 0.12 m/s and m_q = 0.30 rad/s, Table 9.1).",
+      "table_9_3": {"X_theta": 8.90, "X_u": -13.5, "X_ud": -0.93, "X_q": -0.578, "Z_w": -66.6, "Z_q": -9.67, "Z_wd": -35.5, "Z_qd": -1.93, "Z_ds": -50.6, "M_theta": -5.77, "M_w": 30.7, "M_q": -6.87, "M_wd": -1.93, "M_qd": -4.88, "M_ds": -34.6},
+      "table_9_3_note": "The last row is printed 'Z_delta_s' with units kg m^2/s^2; it is M_delta_s.",
+      "A4_states": ["w", "q", "z", "theta"],
+      "A4": [[-2.38, 1.26, 0.0, 0.04], [4.23, -1.12, 0.0, -0.70], [1.0, 0.0, 0.0, -1.54], [0.0, 1.0, 0.0, 0.0]],
+      "B4": [-1.38, -3.84, 0.0, 0.0],
+      "A3_states": ["q", "z", "theta"],
+      "A3": [[-0.82, 0.0, -0.69], [0.0, 0.0, -1.54], [1.0, 0.0, 0.0]],
+      "B3": [-4.16, 0.0, 0.0],
+      "G_theta": {"num": -3.18, "den": [1.0, 1.09, 0.52], "poles": [-0.55, 0.47]},
+      "G_theta_note": "Eq. (9.52) and (9.53). (9.40)'s A3 and B3 give -4.16 / (s^2 + 0.82 s + 0.69) instead, poles -0.41 +- 0.72i.",
+      "controller": {"Kp": 10.345, "tau_d": 0.21, "gamma": -0.772, "where": "Figs. 9-5 and 9-8: PD pitch loop and proportional depth loop designed on (9.40)"}
+    }
+  },
+  "autopilot": {
+    "source": "OURS, not the thesis's (REMUS ran a field-tuned PID controller, Section 1.3). Successive loop closure like x8_rig: stern planes on pitch, pitch on depth, rudder on heading or course, propeller on speed. Gains are computed in remus_rig.Autopilot from the model's own linearisation at the commanded speed; what is chosen here is each loop's frequency, damping, integral and limits.",
+    "speed": 1.75,
+    "speed_note": "1.75 m/s, not the thesis's 1.54: at 1.54 m/s the model's straight trim needs the stern planes at -12.0 deg of effective angle (Remus.trim), the stall angle the guard holds, and depth is lost in the first manoeuvre; at 1.75 m/s the trim needs -8.8 deg (auv/README.md).",
+    "speed_loop": {"wn": 0.3, "ki": 0.1, "integral_rpm": 150.0},
+    "pitch":   {"wn": 1.2, "zeta": 0.8, "limit_deg": 12.0},
+    "depth":   {"wn": 0.18, "zeta": 1.0, "zone": 4.0},
+    "heading": {"wn": 0.5, "zeta": 0.9, "ki": 0.1, "integral_deg": 8.0, "zone_deg": 10.0},
+    "note": "pitch: delta_s = delta_s* + kp (theta - theta_c) + kd q, kp and kd placing a closed-loop pair at wn and zeta on the 3-state model (w, q, theta) of the Jacobian at the trim (the model is open-loop unstable in pitch at speed, so the angle-and-rate model alone does not do); limit_deg bounds the pitch command. depth: theta_c = theta* + kz (D - D_c) + ki int(D - D_c), the pair at wn and zeta on D' = -U theta; past `zone` metres of error the pitch command saturates. heading: delta_r = delta_r* + kp e + ki int e - kd r, kp and kd placing the pair on (v, r, psi); ki = ki x kp, the integral bounded to integral_deg of rudder and active only within zone_deg of the set point (it carries the rudder trim and the crab in a current). speed_loop: n = n* + kp (U_c - u) + ki int, the pole at wn on u' = a_u u + b_n n, the integral bounded to integral_rpm."
+  },
+  "guidance": {
+    "source": "OURS: line of sight on a polyline of waypoints (the law of x8_rig.LOS): course command chi_d = path angle + atan(-e / delta), e the cross-track error (positive to the right of the path), delta the look-ahead. A leg is done when the vehicle comes within `accept` metres (along the leg) of its end.",
+    "lookahead": 8.0,
+    "accept": "turn",
+    "turn_rudder": 0.6,
+    "note": "accept 'turn': R tan(|dchi| / 2) before the corner, R the model's own steady turning radius at turn_rudder x the rudder limit at the commanded speed (Remus.turn_radius), at most half the leg."
+  },
+  "geometry": {
+    "note": "The 3D model (build_remus_blender.py). Hull from the thesis's Myring parameters; fins from Fig. 2-3; the LBL transducer from Fig. 2-2; the sonar fittings' sizes from Table 5.3; the rest ASSUMED, marked. Positions s are distances aft of the nose tip, metres.",
+    "myring": {
+      "source": "Table 2.1 (p. 15), eqs. (2.1)-(2.3) (p. 14).",
+      "a": 0.191, "a_offset": 0.0165, "b": 0.654, "c": 0.541, "c_offset": 0.0368, "n": 2.0, "theta": 0.436, "d": 0.191, "lf": 0.828, "l": 1.33,
+      "note": "Nose r = d/2 [1 - ((s + a_offset - a)/a)^2]^(1/n) for s < a - a_offset; tail r = d/2 - (3d/(2c^2) - tan(theta)/c)(s - lf)^2 + (d/c^3 - tan(theta)/c^2)(s - lf)^3 for s > lf, s from the nose tip. Eq. (2.2) prints (s - l)^2 in its second term; the Myring form, and the only one that gives r = d/2 at lf and the 62 mm of Fig. 2-3 at the fin's leading edge, is (s - lf)^2. The hull ends at s = a + b + c - a_offset - c_offset = 1.3327 m, radius 16 mm, and starts at s = 0 with radius 39 mm (the blunt nose). Table 2.1 calls theta the 'included tail angle'; Section 2.1 calls 2 theta that; the tail's slope at the full Myring length is tan(theta).",
+      "cb_from_nose": 0.611
+    },
+    "hull_checks": {"Af": 0.0285, "Ap": 0.226, "Sw": 0.709, "volume": 0.0315, "source": "Table A.1 (p. 101), for the generator's --check"},
+    "fins": {
+      "source": "Fig. 2-3 (p. 16) and Table 2.2: root leading edge 142 mm, tip leading edge 112 mm and trailing edge 53 mm ahead of the tail end, tips 131 mm from the centreline, NACA 0012 sections. The hinge (fin post) at x_fin = -0.638 m, 84 mm ahead of the tail end.",
+      "root_le_from_end": 0.142, "tip_le_from_end": 0.112, "te_from_end": 0.053, "tip_r": 0.131, "thickness_ratio": 0.12, "root_gap": 0.002
+    },
+    "lbl_transducer": {
+      "source": "Fig. 2-2 (p. 16): a cylinder 50 mm in radius under the nose, its axis 126 mm aft of the nose tip, reaching 142 mm below the centreline.",
+      "s": 0.126, "radius": 0.05, "bottom": 0.142
+    },
+    "nose_pockets": {"note": "Three pockets in the nose section (Table 5.2, Fig. 2-5); their places ASSUMED: at 120 deg round the nose, 70 mm aft of the tip.", "count": 3, "s": 0.07, "radius": 0.012, "depth": 0.006},
+    "side_scan": {"note": "Two side-scan sonar transducers, 0.40 m x 0.04 m (Table 5.3, the sonar vehicle). Place ASSUMED: low on each side of the mid-body, 30 deg below the horizontal.", "s0": 0.33, "length": 0.40, "width": 0.04, "proud": 0.008, "angle_deg": 30.0},
+    "adcp": {"note": "An up- and down-looking ADCP, four transducers each, 0.05 m across (Table 5.3: eight). Place ASSUMED: the mid-body, the beams 30 deg off the vertical.", "s": 0.86, "radius": 0.025, "beam_deg": 30.0, "proud": 0.006},
+    "seams": {"note": "ASSUMED: dark rings at the section joints (Fig. 2-5 shows them), s of each.", "s": [0.19, 0.30, 0.76, 0.96], "width": 0.006, "proud": 0.0015},
+    "antenna": {"note": "ASSUMED: a GPS / radio antenna mast on top of the tail cone, as REMUS 100 vehicles carry.", "s": 1.06, "height": 0.07, "chord": 0.04, "thickness": 0.012},
+    "propeller": {"note": "ASSUMED: the thesis gives no propeller geometry. Three blades on a hub at the tail end, 0.15 m across, pitch 0.12 m (REMUS 100 photographs). Node 'propeller' spins about its local +X; the rig turns it by the propeller speed, positive a spin vector along body +x (clockwise seen from behind), the sense in which the hull's reaction is the thesis's Kprop < 0.", "blades": 3, "diameter": 0.15, "pitch": 0.12, "hub_r": 0.018, "hub_len": 0.04, "chord_root": 0.03, "chord_tip": 0.02, "thickness": 0.003, "gap": 0.006},
+    "sensors": {
+      "convention": "Empties look down local -Z with local +Y up (threepp/glTF camera convention). Positions in the model frame.",
+      "imu": {"position": [0.0, 0.0, 0.0], "note": "at the centre of buoyancy"},
+      "depth": {"position": [0.25, 0.0, 0.0], "note": "ASSUMED: the pressure sensor (Section 7.3.4)"},
+      "lbl": {"s": 0.126, "look": [0.0, -1.0, 0.0], "note": "the transducer's face (Fig. 2-2)"},
+      "adcp_down": {"look": [0.0, -1.0, 0.0]},
+      "adcp_up": {"look": [0.0, 1.0, 0.0]},
+      "sss_port": {"note": "looks out to port, 30 deg down"},
+      "sss_starboard": {"note": "looks out to starboard, 30 deg down"},
+      "gnss": {"note": "the antenna's top"}
+    }
+  },
+  "materials": {
+    "note": "Linear RGB, ASSUMED from public photographs of REMUS 100 vehicles (yellow hull, black nose cap and fins). No vendor marks.",
+    "hull_yellow": {"color": [0.80, 0.52, 0.02], "metallic": 0.0, "roughness": 0.45},
+    "nose_black": {"color": [0.03, 0.03, 0.035], "metallic": 0.0, "roughness": 0.5},
+    "fin_black": {"color": [0.025, 0.025, 0.03], "metallic": 0.0, "roughness": 0.55},
+    "seam_dark": {"color": [0.05, 0.05, 0.055], "metallic": 0.3, "roughness": 0.5},
+    "transducer_grey": {"color": [0.12, 0.13, 0.14], "metallic": 0.0, "roughness": 0.7},
+    "prop_bronze": {"color": [0.55, 0.40, 0.22], "metallic": 0.4, "roughness": 0.4},
+    "hub_steel": {"color": [0.6, 0.6, 0.62], "metallic": 0.5, "roughness": 0.35},
+    "antenna_white": {"color": [0.8, 0.8, 0.78], "metallic": 0.0, "roughness": 0.45}
+  }
+}
