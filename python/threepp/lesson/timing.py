@@ -58,8 +58,10 @@ class Timeline:
         self.order = []
 
     def add(self, name, start, end):
+        """Add a beat; adding a name again redefines its span and keeps its place in the order."""
+        if name not in self.beats:
+            self.order.append(name)
         self.beats[name] = (float(start), float(end))
-        self.order.append(name)
         return self
 
     def then(self, name, duration, gap=0.0):

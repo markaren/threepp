@@ -51,7 +51,7 @@ class Stage:
     BG = 0x0b0f17
 
     def __init__(self, width=1920, height=1080, renderer=None, headless=True, msaa=8,
-                 floor=True, env=None, env_intensity=0.35, design=(1920, 1080),
+                 floor=True, env=None, env_intensity=0.35, design=None,
                  fog=None, shadow_extent=1.6, far=60.0):
         """`renderer`: a GLRenderer whose canvas is width x height (the Stage sets its tone
         mapping, exposure and shadows), or None for a new headless canvas and renderer.
@@ -59,9 +59,10 @@ class Stage:
         (None: none). `fog` = (near, far) in metres (default 3.5..9 with the studio floor,
         none without). `shadow_extent` is the half-size of the key light's shadow area
         around its target; `follow()` moves that area with a subject. `far` is the camera's
-        far plane."""
+        far plane. `design` is the pixel space `project()` answers in, the Hud's width and
+        height; None means the render size."""
         self.W, self.H = int(width), int(height)
-        self.design = design     # project() answers in these units, the Hud's
+        self.design = (self.W, self.H) if design is None else (int(design[0]), int(design[1]))
         if renderer is None:
             self.canvas = tp.Canvas("lesson", width=self.W, height=self.H, antialiasing=msaa, headless=headless)
             self.r = tp.GLRenderer(self.canvas)
@@ -70,7 +71,6 @@ class Stage:
         self.r.shadow_map_enabled = True
         self.r.tone_mapping = tp.ToneMapping.ACESFilmic
         self.r.tone_mapping_exposure = 0.95
-        self.frame_index = 0
 
         self.scene = tp.Scene()
         self.scene.background = tp.Background(self.BG)
@@ -154,26 +154,20 @@ class Stage:
         film time; the GL renderer does not need it."""
         self.r.render(self.scene, self.camera)
         if hud is not None:
+            auto_clear = self.r.auto_clear
             self.r.auto_clear = False
             self.r.render(hud.scene, hud.camera)
-            self.r.auto_clear = True
-        self.frame_index += 1
+            self.r.auto_clear = auto_clear
         return self.r.read_pixels()
 
     # projection --------------------------------------------------------------
     def _vp(self):
+        """Clip from world, from the camera's own projection and view matrices, so `project()`
+        agrees with what the renderer draws (fov, aspect, zoom, near and far as set)."""
         self.camera.update_matrix_world()
-        view = np.linalg.inv(self.camera.matrix_world.to_numpy())
-        f = math.radians(self.camera.fov)
-        a = self.W / self.H
-        n, fa = self.camera.near, self.camera.far
-        P = np.zeros((4, 4))
-        P[0, 0] = 1.0 / (a * math.tan(f / 2))
-        P[1, 1] = 1.0 / math.tan(f / 2)
-        P[2, 2] = -(fa + n) / (fa - n)
-        P[2, 3] = -2 * fa * n / (fa - n)
-        P[3, 2] = -1.0
-        return P @ view
+        P = self.camera.projection_matrix.to_numpy().astype(np.float64)
+        V = self.camera.matrix_world_inverse.to_numpy().astype(np.float64)
+        return P @ V
 
     def project(self, p_world):
         """World point(s) -> pixel (x, y) and view depth. Accepts (3,) or (N, 3)."""

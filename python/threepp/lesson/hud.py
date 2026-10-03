@@ -21,17 +21,19 @@ __all__ = ["TEXT", "DIM", "FONT_DIRS", "FONT_FILES", "KEYWORDS", "CODE_COLOURS",
 TEXT = 0xf2f5fa     # body text and maths
 DIM = 0x9fb2cc      # labels, notes, secondary text
 
-FONT_DIRS = [os.path.join(os.environ.get("WINDIR", "C:/Windows"), "Fonts"),
-             "/usr/share/fonts/truetype/dejavu", "/usr/share/fonts"]
-FONT_FILES = {
-    "regular": ["segoeui.ttf", "DejaVuSans.ttf"],
-    "light": ["segoeuil.ttf", "segoeuisl.ttf", "DejaVuSans.ttf"],
-    "semibold": ["seguisb.ttf", "segoeuib.ttf", "DejaVuSans-Bold.ttf"],
-    "bold": ["segoeuib.ttf", "DejaVuSans-Bold.ttf"],
-    "italic": ["segoeuii.ttf", "DejaVuSans-Oblique.ttf"],
-    "numeric": ["bahnschrift.ttf", "DejaVuSansMono.ttf"],
-    "mono": ["consola.ttf", "DejaVuSansMono.ttf"],
-}
+# Where system fonts are looked for, and the files that serve each kind, in order of
+# preference (read-only: a lesson with fonts of its own passes `Hud(fonts=)`).
+FONT_DIRS = (os.path.join(os.environ.get("WINDIR", "C:/Windows"), "Fonts"),
+             "/usr/share/fonts/truetype/dejavu", "/usr/share/fonts")
+FONT_FILES = MappingProxyType({
+    "regular": ("segoeui.ttf", "DejaVuSans.ttf"),
+    "light": ("segoeuil.ttf", "segoeuisl.ttf", "DejaVuSans.ttf"),
+    "semibold": ("seguisb.ttf", "segoeuib.ttf", "DejaVuSans-Bold.ttf"),
+    "bold": ("segoeuib.ttf", "DejaVuSans-Bold.ttf"),
+    "italic": ("segoeuii.ttf", "DejaVuSans-Oblique.ttf"),
+    "numeric": ("bahnschrift.ttf", "DejaVuSansMono.ttf"),
+    "mono": ("consola.ttf", "DejaVuSansMono.ttf"),
+})
 
 
 def _find_font(kind):
@@ -44,13 +46,13 @@ def _find_font(kind):
 
 
 # Keywords per language (read-only: a lesson that wants more passes its own set, e.g.
-# KEYWORDS["cpp"] | {"for"}), and the colours of each kind of token.
+# KEYWORDS["cpp"] | {"for"}), and the colours of each kind of token (read-only too: `tokenize(palette=)`).
 KEYWORDS = MappingProxyType({
     "py": frozenset({"import", "as", "def", "return", "for", "in", "if", "else", "True", "False", "None", "from"}),
     "cpp": frozenset({"using", "namespace", "int", "auto", "return", "const", "new", "float"}),
     "js": frozenset({"const", "new", "let", "function"}), "cmake": frozenset(), "sh": frozenset({"pip", "python"})})
-CODE_COLOURS = {"kw": 0xc792ea, "str": 0xc3e88d, "num": 0xf78c6c, "fn": 0x82aaff, "type": 0xffcb6b, "mod": 0x89ddff,
-                "com": 0x6b7a90, "punc": 0x8fa3bf, "id": 0xe6ecf5, "pre": 0xc792ea}
+CODE_COLOURS = MappingProxyType({"kw": 0xc792ea, "str": 0xc3e88d, "num": 0xf78c6c, "fn": 0x82aaff, "type": 0xffcb6b,
+                                 "mod": 0x89ddff, "com": 0x6b7a90, "punc": 0x8fa3bf, "id": 0xe6ecf5, "pre": 0xc792ea})
 CODE_ACCENT = 0x4cc9f0       # the bar beside a highlighted line
 _TOK = re.compile(r'(//.*|#.*)|("[^"]*")|(\b0x[0-9a-fA-F]+\b|\b\d+\.?\d*f?\b)|([A-Za-z_][A-Za-z_0-9]*)|(\s+)|(.)')
 
@@ -100,6 +102,17 @@ def tokenize(line, lang, keywords=None, palette=None):
     return out
 
 
+def _dispose(o):
+    """Free what a pooled HUD object owns, its geometry and material; the renderer's caches
+    listen for it and drop their copies."""
+    g = getattr(o, "geometry", None)
+    if g is not None:
+        g.dispose()
+    m = getattr(o, "material", None)
+    if m is not None:
+        m.dispose()
+
+
 class Hud:
     """The 2D layer, drawn by threepp: an orthographic scene rendered over the 3D one.
 
@@ -111,17 +124,20 @@ class Hud:
     real geometry too. Objects a frame does not touch are hidden, and each call is
     drawn on top of the previous one (render order = call order, no depth test).
 
-    Coordinates are pixels in a fixed 1920x1080 design space, origin top-left,
-    whatever the actual render size. Text is measured with the same threepp Font
+    Coordinates are pixels in a design space of `width` x `height`, origin top-left,
+    whatever the actual render size; `Stage(design=)` names the same space, so that
+    `project()` lands on these pixels. Text is measured with the same threepp Font
     that draws it (`Font.advance`, `ascender`, `descender`), so layout and glyphs agree.
     """
 
-    def __init__(self, width=1920, height=1080, math_cache=None, fonts=None):
+    def __init__(self, width=1920, height=1080, math_cache=None, fonts=None, pool_limit=2000):
         """`math_cache`: a JSON file of typeset equations. With it, a lesson whose
         equations are all cached renders without matplotlib; a new or edited
         equation is typeset once and appended. `fonts`: {kind: TTF path} to use instead
         of the search in FONT_DIRS (kinds as in FONT_FILES); a kind with no font found
-        falls back to threepp's default font."""
+        falls back to threepp's default font. `pool_limit`: how many drawn things (a
+        string at a size, a panel of a size, an equation, ...) are kept ready between
+        frames; past it, `end()` releases the least recently drawn."""
         self.W, self.H = int(width), int(height)
         self._font_paths = dict(fonts or {})
         self._math_file = math_cache
@@ -133,9 +149,13 @@ class Hud:
         self.scene = tp.Scene()
         self.camera = tp.OrthographicCamera(0, self.W, self.H, 0, -10, 10)
         self._fonts_tp = {}
-        self._pool = {}
-        self._used = {}
+        self._pool = {}          # key -> the pooled objects, in the scene, hidden when unused
+        self._used = {}          # key -> how many of them this frame has drawn
+        self._last = {}          # key -> the frame that last drew one
+        self._held = {}          # key -> the texture an image mesh shows (its id is in the key)
+        self._frame = 0
         self._order = 0
+        self.pool_limit = int(pool_limit)
         self._math_cache = {}
 
     # fonts -----------------------------------------------------------------
@@ -156,6 +176,7 @@ class Hud:
     def begin(self):
         self._used = {k: 0 for k in self._pool}
         self._order = 0
+        self._frame += 1
         return self
 
     def end(self):
@@ -163,6 +184,24 @@ class Hud:
             n = self._used.get(k, 0)
             for o in objs[n:]:
                 o.visible = False
+        self._evict()
+
+    def _evict(self):
+        """Release the least recently drawn pooled objects, never this frame's, until the pool
+        is within `pool_limit`; what they own is disposed."""
+        total = sum(len(objs) for objs in self._pool.values())
+        for key in sorted(self._pool, key=self._last.__getitem__):
+            if total <= self.pool_limit:
+                break
+            if self._last[key] == self._frame:
+                continue
+            for o in self._pool.pop(key):
+                self.scene.remove(o)
+                o.traverse(_dispose)
+                total -= 1
+            self._used.pop(key, None)
+            self._last.pop(key, None)
+            self._held.pop(key, None)
 
     def _acquire(self, key, factory):
         objs = self._pool.setdefault(key, [])
@@ -174,6 +213,7 @@ class Hud:
             self.scene.add(o)
             objs.append(o)
         self._used[key] = n + 1
+        self._last[key] = self._frame
         o.visible = True
         self._order += 1
         o.render_order = self._order
@@ -261,22 +301,27 @@ class Hud:
             return tp.Text2D(self._tp_font(kind), s, size=size, curve_segments=segs, material=self._material())
         return self._acquire(key, make)
 
-    def text(self, x, y, s, size=28, color=0xffffff, alpha=1.0, kind="regular", anchor="la", tracking=0.0):
-        """anchor = horizontal (l/m/r) + vertical (a ascender, m middle, s baseline, d descender)."""
+    def text(self, x, y, s, size=28, color=0xffffff, alpha=1.0, kind="regular", anchor="la", tracking=0.0,
+             live=False):
+        """anchor = horizontal (l/m/r) + vertical (a ascender, m middle, s baseline, d descender).
+        A string is one pooled mesh; `live` draws it one glyph at a time from a per-character
+        pool instead, for text that changes every frame (a readout). The font has no kerning,
+        so both lay the string out alike."""
         if alpha <= 0.003 or not s:
             return
         f = self._tp_font(kind)
         asc, desc = f.ascender(size), -f.descender(size)
         v = anchor[1]
         base = y + (asc if v == "a" else (asc - desc) / 2 if v == "m" else -desc if v == "d" else 0.0)
-        if tracking:
+        glyphs = bool(tracking) or live
+        if glyphs:
             widths = [f.advance(ch, size) for ch in s]
             total = sum(widths) + tracking * (len(s) - 1)
         else:
             total = f.advance(s, size)
         h = anchor[0]
         x0 = x - (total if h == "r" else total / 2 if h == "m" else 0.0)
-        if tracking:
+        if glyphs:
             cx = x0
             for ch, w in zip(s, widths):
                 if ch != " ":
@@ -536,7 +581,7 @@ class Hud:
         n = len(self.wrap(text, size, width, kind))
         if n <= 1:
             return [text]
-        lo, hi = 200.0, float(width)
+        lo, hi = min(200.0, width / 2), float(width)      # lo < hi: narrow widths too
         best = self.wrap(text, size, width, kind)
         for _ in range(18):
             mid = (lo + hi) / 2
@@ -682,7 +727,9 @@ class Hud:
             mat = self._material()
             mat.map = texture
             return tp.Mesh(tp.PlaneGeometry(1, 1), mat)
-        m = self._acquire(("image", id(texture)), make)
+        key = ("image", id(texture))
+        m = self._acquire(key, make)
+        self._held[key] = texture       # alive while pooled, so no other texture can take its id
         m.position.set(x + w / 2, self._Y(y + h / 2), 0)
         m.scale.set(w, h, 1)
         m.material.opacity = clamp01(alpha)

@@ -367,19 +367,18 @@ box = tp.Mesh(tp.BoxGeometry(0.6, 0.6, 0.6), standard(0x4cc9f0, roughness=0.35))
 box.position.y = 0.3
 st.scene.add(box)
 st.look([1.6, 1.1, 2.2], [0.0, 0.3, 0.0], fov=35)
-ov = Hud(1280, 720)                        # the 2D layer, in pixels
+ov = Hud(1280, 720)                        # the 2D layer, in pixels; project() answers in them
 
-film = Film("box.mp4", 1280, 720, fps=30)  # H.264 through ffmpeg (threepp[lesson])
-for f in range(int(tl.duration * 30)):
-    t = f / 30
-    box.rotation.y = 3.1416 * tl.p("turn", t)
-    ov.begin()
-    a = envelope(t, 0.5, tl.duration - 0.3)
-    ov.panel(60, 580, 470, 80, alpha=0.72 * a)
-    ov.text(90, 620, "A box that turns", size=40, alpha=a, anchor="lm")
-    ov.end()
-    film.write(st.frame(t, hud=ov))
-film.close()
+with Film("box.mp4", 1280, 720, fps=30) as film:   # H.264 through ffmpeg (threepp[lesson])
+    for f in range(int(tl.duration * 30)):
+        t = f / 30
+        box.rotation.y = 3.1416 * tl.p("turn", t)
+        ov.begin()
+        a = envelope(t, 0.5, tl.duration - 0.3)
+        ov.panel(60, 580, 470, 80, alpha=0.72 * a)
+        ov.text(90, 620, "A box that turns", size=40, alpha=a, anchor="lm")
+        ov.end()
+        film.write(st.frame(t, hud=ov))
 ```
 
 It needs only numpy. The extras add what it imports on first use:

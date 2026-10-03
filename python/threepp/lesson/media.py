@@ -80,16 +80,40 @@ class FramePipe:
         self.p.stdin.close()
         return self.p.wait()
 
+    def abort(self):
+        """Stop ffmpeg where it is (the frame loop failed); what it wrote so far stays."""
+        try:
+            self.p.stdin.close()
+        except OSError:
+            pass
+        self.p.kill()
+        self.p.wait()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self.close()
+        else:
+            self.abort()
+
 
 class Film(FramePipe):
-    """Frames -> H.264 mp4 through an ffmpeg pipe. Written to <path>.part, renamed on close.
-    `audio`: a WAV muxed in as AAC, starting `audio_offset` seconds into it."""
+    """Frames -> H.264 mp4 through an ffmpeg pipe. Written to <path>.part.mp4 and renamed by
+    `close()`; as a context manager, closed when the block ends and aborted (the part file
+    removed) when it raises. `audio`: a WAV muxed in as AAC, starting `audio_offset` seconds
+    into it."""
 
     def __init__(self, path, width, height, fps=60, crf=16, preset="slow", threads=0, audio=None, audio_offset=0.0):
+        exe = ffmpeg_exe()
+        if exe is None:
+            raise RuntimeError('Film needs ffmpeg: pip install imageio-ffmpeg (or "threepp[lesson]"), or put an '
+                               "ffmpeg executable on PATH")
         self.path = path
         self.tmp = path + ".part.mp4"
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        cmd = rawvideo_args(ffmpeg_exe(), width, height, fps)
+        cmd = rawvideo_args(exe, width, height, fps)
         if audio:
             cmd += ["-ss", f"{audio_offset:.3f}", "-i", audio, "-map", "0:v", "-map", "1:a",
                     "-c:a", "aac", "-b:a", "192k", "-shortest"]
@@ -106,6 +130,14 @@ class Film(FramePipe):
             raise RuntimeError(f"ffmpeg exited {rc}")
         os.replace(self.tmp, self.path)
         return self.path
+
+    def abort(self):
+        """Stop ffmpeg and remove the part file: a failed loop leaves no film behind."""
+        super().abort()
+        try:
+            os.remove(self.tmp)
+        except OSError:
+            pass
 
 
 def write_srt(path, captions):
