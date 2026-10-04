@@ -577,8 +577,10 @@ class Autopilot:
     0.55 m over; a 90 deg course change in 5.2 s, 5.4 deg over, the height within 0.9 m; +2 m/s of
     airspeed in 1.3 s, 0.34 m/s over.
 
-    hold: "course" (the ground track, which turns into the wind and compensates for it) or
-    "heading" (the nose, which drifts with the wind)."""
+    hold: "course" (the ground track, which turns into the wind and compensates for it),
+    "heading" (the nose, which drifts with the wind) or "roll" (``command(roll=...)``: the roll
+    angle is handed in, for an outer course loop of the caller's own; the course loop here and
+    its integral stand still)."""
 
     def __init__(self, x8, airspeed=None, hold="course"):
         self.x8 = x8
@@ -590,7 +592,7 @@ class Autopilot:
         self.h_c = x8.h
         self.design(self.va_c)
         self.i_phi = self.i_chi = self.i_h = self.i_v = self.i_th = 0.0
-        self.phi_c = self.theta_c = 0.0
+        self.phi_c = self.theta_c = self.phi_cmd = 0.0
 
     def design(self, va):
         """The gains at airspeed va (and the air density at the aircraft's height)."""
@@ -653,13 +655,16 @@ class Autopilot:
         self.t_lim = tuple(c["throttle"])
         self.a_v = (av1, av2)
 
-    def command(self, course=None, heading=None, altitude=None, airspeed=None):
-        """The guidance hook: a course (ground track) or a heading, rad from north toward east;
-        a height above the NED origin, m; an airspeed, m/s. What is not given is kept."""
+    def command(self, course=None, heading=None, altitude=None, airspeed=None, roll=None):
+        """The guidance hook: a course (ground track) or a heading, rad from north toward east,
+        or a roll angle, rad (right wing down +); a height above the NED origin, m; an airspeed,
+        m/s. What is not given is kept."""
         if course is not None:
             self.chi_c, self.hold = course, "course"
         if heading is not None:
             self.chi_c, self.hold = heading, "heading"
+        if roll is not None:
+            self.phi_cmd, self.hold = roll, "roll"
         if altitude is not None:
             self.h_c = altitude
         if airspeed is not None and abs(airspeed - self.va_c) > 1e-9:
@@ -679,18 +684,21 @@ class Autopilot:
         out = x8.out if x8._out_at == x8.steps else x8.evaluate()
         phi, theta, psi, p, q = x[6], x[7], x[8], x[9], x[10]
         # course (or heading) -> roll
-        if self.hold == "course":
-            vg = x8.ground_velocity()
-            chi = math.atan2(vg[1], vg[0])
-            spd = max(math.hypot(vg[0], vg[1]), 5.0)
+        if self.hold == "roll":
+            phi_c = self.phi_cmd                           # the caller's own outer loop gives the roll angle
         else:
-            chi, spd = psi, max(out["Va"], 5.0)
-        e_chi = wrap(self.chi_c - chi)
-        kp = 2.0 * self.z_chi * self.w_chi * spd / x8.g
-        ki = self.w_chi * self.w_chi * spd / x8.g
-        phi_c = kp * e_chi + ki * self.i_chi
-        if abs(phi_c) < self.phi_max or phi_c * e_chi < 0.0:
-            self.i_chi += e_chi * dt                       # anti-windup: hold the integral while saturated
+            if self.hold == "course":
+                vg = x8.ground_velocity()
+                chi = math.atan2(vg[1], vg[0])
+                spd = max(math.hypot(vg[0], vg[1]), 5.0)
+            else:
+                chi, spd = psi, max(out["Va"], 5.0)
+            e_chi = wrap(self.chi_c - chi)
+            kp = 2.0 * self.z_chi * self.w_chi * spd / x8.g
+            ki = self.w_chi * self.w_chi * spd / x8.g
+            phi_c = kp * e_chi + ki * self.i_chi
+            if abs(phi_c) < self.phi_max or phi_c * e_chi < 0.0:
+                self.i_chi += e_chi * dt                   # anti-windup: hold the integral while saturated
         self.phi_c = phi_c = clamp(phi_c, -self.phi_max, self.phi_max)
         # roll -> aileron
         e_phi = phi_c - phi
