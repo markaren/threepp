@@ -1880,13 +1880,58 @@ namespace threepp_py {
                 // unclipped) and this is the SEPARATE below-water medium, so a scene
                 // can hold clear air above the waterline and murk below. density =
                 // sigma_t (1/m; 0 = off); color = inscatter tint.
+                // chromatic = 0 is the scalar murk, and the call it always was.
+                // Above 0 the extinction is per channel, derived from the colour
+                // (VulkanRenderer::murkExtinctionFromColor), so that what is seen
+                // through the water takes the water's hue with distance.
                 .def("set_underwater_murk",
-                     [](PyVulkanRenderer& r, float density, const Color& color) {
-                         r.native().setUnderwaterMurk(density, color);
+                     [](PyVulkanRenderer& r, float density, const Color& color, float chromatic) {
+                         if (chromatic > 0.f)
+                             r.native().setUnderwaterMurk(
+                                     VulkanRenderer::murkExtinctionFromColor(density, color, chromatic), color);
+                         else
+                             r.native().setUnderwaterMurk(density, color);
                      },
-                     py::arg("density"), py::arg("color") = Color(1.f, 1.f, 1.f),
+                     py::arg("density"), py::arg("color") = Color(1.f, 1.f, 1.f), py::arg("chromatic") = 0.f,
                      "Enable underwater murk (below fog_water_surface_y). density = "
-                     "sigma_t (1/m; 0 disables); color = inscatter tint.")
+                     "sigma_t (1/m; 0 disables); color = inscatter tint. chromatic = 0 "
+                     "extinguishes red, green and blue alike: what is under water dims and "
+                     "keeps its hue. chromatic > 0 gives each channel its own extinction, "
+                     "density * (max(color) / channel)^chromatic (at most 8 * density), so "
+                     "the channel the colour holds most of keeps `density` and the others "
+                     "die sooner: what is under water moves to the water's hue with "
+                     "distance. 1 is a water that scatters all three alike.")
+                // The per-channel form, with the three extinctions given outright.
+                .def("set_underwater_murk",
+                     [](PyVulkanRenderer& r, const Vector3& extinction, const Color& color) {
+                         r.native().setUnderwaterMurk(extinction, color);
+                     },
+                     py::arg("extinction"), py::arg("color") = Color(1.f, 1.f, 1.f),
+                     "Underwater murk with sigma_t per channel (1/m; red, green, blue). "
+                     "Off unless all three are positive.")
+                .def_property_readonly("underwater_murk_extinction",
+                                       [](PyVulkanRenderer& r) { return r.native().underwaterMurkExtinction(); },
+                                       "The murk's sigma_t per channel (1/m), as last set.")
+                // The sky's light under water. 0 (the default) is what the renderer
+                // has always done: the environment, AmbientLight and HemisphereLight
+                // terms reach a submerged surface at full strength at any depth.
+                .def_property("underwater_ambient_falloff",
+                              [](PyVulkanRenderer& r) { return r.native().underwaterAmbientFalloff(); },
+                              [](PyVulkanRenderer& r, float k) { r.native().setUnderwaterAmbientFalloff(k); },
+                              "How fast the sky's light dies with depth under the murk: the environment, "
+                              "AmbientLight and HemisphereLight terms of a submerged point are scaled by "
+                              "exp(-falloff * sigma_t * depth) per channel, and what they lose is made up "
+                              "by the water's own light (murk colour times the ambient light). 1 uses the "
+                              "murk's extinction over the vertical distance to the surface; 0 (default) "
+                              "leaves the ambient terms as they are at any depth.")
+                .def_property("underwater_sprite_foreshortening",
+                              [](PyVulkanRenderer& r) { return r.native().underwaterSpriteForeshortening(); },
+                              [](PyVulkanRenderer& r, bool on) { r.native().setUnderwaterSpriteForeshortening(on); },
+                              "ParticleField billboards under the murk, seen from a camera in the air, scaled by "
+                              "the solid angle refraction leaves them (about cos i / cos t, on top of the Fresnel "
+                              "loss at the crossing): motes just under the surface fade out toward the horizon "
+                              "instead of sparkling on the water. True by default; False draws them at the full light of "
+                              "their path length.")
                 // Volumetric clouds — a far-field raymarched, wind-driven cloud
                 // deck in the world-space shell [bottom_y, top_y], composited
                 // over the sky and (depth-aware) in front of terrain. Lit by the

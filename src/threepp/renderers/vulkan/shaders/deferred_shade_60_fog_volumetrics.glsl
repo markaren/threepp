@@ -450,7 +450,7 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
         trAir *= T;
     }
     if (fog.murkDensity > 0.0) {
-        const vec3 T = exp(-vec3(fog.murkDensity) * fogPathLength(ro, cen));
+        const vec3 T = exp(-fog.murkSigma * fogPathLength(ro, cen));
         airIn += fog.murkColor * amb * (vec3(1.0) - T);
         trAir *= T;
     }
@@ -503,11 +503,19 @@ vec3 applySceneFog(vec3 col, vec3 ro, vec3 hit) {
 // camera-above-water case (fogPathLength returns 0 above the surface), so there is
 // no double count; a fully-submerged leg would get both, an accepted approximation.
 // murkDensity == 0 → exact no-op (byte-identical when murk is off).
+//
+// The extinction is PER CHANNEL (fog.murkSigma). With one scalar a surface seen
+// through the water was dimmed and kept its hue at any distance: a yellow hull
+// 3 m down, seen from the air, read as a pale yellow hull lying at the surface.
+// The in-scatter term is untouched, so the colour the leg saturates to is still
+// murkColor * fogLight * grade whatever the three extinctions are; only how fast
+// each channel gets there differs. The scalar setUnderwaterMurk uploads the same
+// value three times, and this is then the expression it was.
 vec3 applyMurk(vec3 col, vec3 ro, vec3 hit) {
     if (fog.murkDensity <= 0.0) return col;
     const float d = fogPathLength(ro, hit);// clipped to y < waterSurfaceY
     if (d <= 0.0) return col;
-    const vec3  tr = exp(-vec3(fog.murkDensity) * d);
+    const vec3  tr = exp(-fog.murkSigma * d);
     const vec3  fogLight = lights.ambient
                          + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
     // The in-scatter must be graded by view ELEVATION exactly as applyMurkSky
@@ -740,11 +748,12 @@ vec3 murkSunScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
         for (int s = 0; s < STEPS; ++s) {
             const float t     = t0 + (float(s) + jitter) * dt;
             const vec3  x     = ro + rd * t;
-            const float trCam = exp(-fog.murkDensity * (t - t0));
-            if (trCam < 0.003) break;              // nothing behind this survives
+            // Per channel, like applyMurk; the two cut-offs test the clearest one.
+            const vec3  trCam = exp(-fog.murkSigma * (t - t0));
+            if (max(max(trCam.r, trCam.g), trCam.b) < 0.003) break;// nothing behind this survives
             const float depth = max(fog.waterSurfaceY - x.y, 0.0);
-            const float trSun = exp(-fog.murkDensity * depth / sy);
-            if (trSun < 0.002) continue;           // too deep for this sun to reach
+            const vec3  trSun = exp(-fog.murkSigma * depth / sy);
+            if (max(max(trSun.r, trSun.g), trSun.b) < 0.002) continue;// too deep for this sun to reach
             const float vis = shadowVis(x, -sd, 1e30);// hull/keel carve the real shafts
             if (vis <= 0.0) continue;
             float caus = 1.0;
@@ -753,9 +762,9 @@ vec3 murkSunScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
                 const float h  = textureLod(oceanFineHeight, sp, 0.0).r * kMurkCausticScale;
                 caus = mix(1.0, smoothstep(-0.10, 0.55, h) * kMurkCausticPeak, kMurkCausticBite);
             }
-            acc += vec3(trCam * trSun * vis * caus);
+            acc += trCam * trSun * vis * caus;
         }
-        sum += lights.dirLights[li].color * (phase * fog.murkDensity * dt) * acc;
+        sum += lights.dirLights[li].color * (phase * fog.murkSigma * dt) * acc;
     }
     // σ_s = σ_t · albedo, with murkColor the single-scattering albedo — the same
     // convention applyMurk's in-scatter term uses, so the shafts and the ambient
@@ -843,19 +852,57 @@ float murkSunCaustic(vec3 P, vec3 L) {
 // as one at the surface. Bends L to the in-water direction and returns the leg
 // transmittance; EXACTLY 1.0 with L untouched for no murk, a point at or above
 // the surface, or a light below the horizon (the upwelling fill every murk
-// scene has, which never crossed the surface).
-float murkSunLeg(vec3 P, inout vec3 L) {
-    if (!murkLive()) return 1.0;
+// scene has, which never crossed the surface). Per channel: the sun that
+// reaches a plate 3 m down has lost its red to the same water the view leg
+// back up loses it to.
+vec3 murkSunLeg(vec3 P, inout vec3 L) {
+    if (!murkLive()) return vec3(1.0);
     const float depth = fog.waterSurfaceY - P.y;
-    if (depth <= 0.0) return 1.0;
+    if (depth <= 0.0) return vec3(1.0);
     const vec3 up = (dot(fog.worldUp, fog.worldUp) > 1e-6) ? normalize(fog.worldUp) : vec3(0.0, 1.0, 0.0);
-    if (dot(L, up) <= 0.02) return 1.0;
+    if (dot(L, up) <= 0.02) return vec3(1.0);
     vec3 sd = refract(-L, up, kMurkEtaAirWater);
-    if (dot(sd, sd) < 1e-6) return 1.0;
+    if (dot(sd, sd) < 1e-6) return vec3(1.0);
     sd = normalize(sd);
     const float sy = max(-dot(sd, up), 0.08);
     L = -sd;
-    return exp(-fog.murkDensity * depth / sy);
+    return exp(-fog.murkSigma * depth / sy);
+}
+// The SKY as a submerged point sees it (setUnderwaterAmbientFalloff). murkSunLeg
+// takes the sun down through the water; nothing did the same for the light that
+// comes from everywhere, so a plate 3 m down had the sun it should have and the
+// whole sky's fill on top, at full strength, at any depth. Seen from the air
+// that fill came back up through the water as the plate's own colour, several
+// times brighter than the water round it, and the plate read as lying at the
+// surface.
+//
+// Two halves. The sky's light falls off with the column over P, per channel:
+// exp(-K * sigma * depth), K = fog.murkAmbientK (1 = the murk's own extinction
+// over the vertical distance; a diffuse sky's mean path is a little longer and
+// its attenuation a little slower than a beam's, which is what K is for). And
+// what the column took does not vanish: it is the light the water scatters, the
+// radiance applyMurk fades every submerged leg to. A point deep in the water is
+// lit by that, from all round. So the term goes to murkColor * fogLight, graded
+// by direction as applyMurkSky grades it (more from above than from below), and
+// a white wall far down comes out the colour of the water behind it instead of
+// black. `dir` is the direction the term was gathered about; for a diffuse term
+// the grade is the cosine-weighted mean of applyMurkSky's ramp over that
+// hemisphere (1.37 facing up, 0.53 facing down, 0.97 sideways).
+//
+// EXACTLY `amb` with K = 0 (the default), with no murk, and at or above the
+// surface: every scene that never calls setUnderwaterAmbientFalloff runs the
+// arithmetic it ran before.
+vec3 murkAmbient(vec3 amb, vec3 P, vec3 dir) {
+    if (fog.murkAmbientK <= 0.0 || !murkLive()) return amb;
+    const float depth = fog.waterSurfaceY - P.y;
+    if (depth <= 0.0) return amb;
+    const vec3  tr = exp(-fog.murkSigma * (fog.murkAmbientK * depth));
+    const vec3  up = (dot(fog.worldUp, fog.worldUp) > 1e-6) ? normalize(fog.worldUp) : vec3(0.0, 1.0, 0.0);
+    const vec3  fogLight = lights.ambient
+                         + sampleEnvLod(up, float(max(pc.envMipCount, 1u) - 1u));
+    const float elev  = clamp(dot(dir, up), -1.0, 1.0);
+    const float grade = (elev >= 0.0) ? mix(1.0, 1.37, elev) : mix(1.0, 0.53, -elev);
+    return amb * tr + fog.murkColor * fogLight * grade * (vec3(1.0) - tr);
 }
 // ── Sky aerial perspective (deferred) ────────────────────────────────────────
 // The HDR background is infinitely far, so applySceneFog never touches it — a
@@ -968,6 +1015,7 @@ vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
                             : pc.volDensity;
     float hgG   = fogDriven ? fog.anisotropy : pc.volAniso;
     vec3  medAlbedo = fogDriven ? fog.color : vec3(1.0);
+    vec3  sigmaRgb  = vec3(sigma);// the air's is one value; the murk's is per channel
     float tLo = 0.0, tHi = tMax;
     // Submerged camera: the beam lives in the MURK, not the air medium (which
     // is clipped to above the waterline, so an ROV's lamps under water had no
@@ -976,6 +1024,7 @@ vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
     // and at the optical-depth horizon.
     if (murkLive() && ro.y < fog.waterSurfaceY) {
         sigma     = fog.murkDensity;
+        sigmaRgb  = fog.murkSigma;
         hgG       = fogDriven ? fog.anisotropy : kMurkShaftG;
         medAlbedo = fog.murkColor;
         if (rd.y > 1e-6) tHi = min(tHi, (fog.waterSurfaceY - ro.y) / rd.y);
@@ -1021,11 +1070,11 @@ vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
             const float mu    = dot(-toL, -rd);
             const float phase = hgPhase(mu, hgG);
             // Transmittance camera→x and light→x (uniform thin haze).
-            const float trans = exp(-sigma * (t + dist));
+            const vec3 trans = exp(-sigmaRgb * (t + dist));
             acc += sl.color * (cone * atten * phase * trans);
         }
         // σ_s = σ_t · albedo: the medium's tint scales what gets IN-scattered.
-        sum += acc * medAlbedo * (sigma * dt);
+        sum += acc * medAlbedo * (sigmaRgb * dt);
     }
     return sum;
 }
@@ -1083,11 +1132,11 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
     // in every upward-looking underwater frame (a sky pixel marches 2000 m; a
     // seabed pixel a few metres, which is why only the env miss showed it).
     // A ray that never surfaces has no air on it at all.
-    float trWater = 1.0;
+    vec3 trWater = vec3(1.0);
     if (murkLive() && ro.y < fog.waterSurfaceY) {
         if (rd.y <= 1e-6) return vec3(0.0);
-        trWater = exp(-fog.murkDensity * (fog.waterSurfaceY - ro.y) / rd.y);
-        if (trWater < 0.003) return vec3(0.0);
+        trWater = exp(-fog.murkSigma * (fog.waterSurfaceY - ro.y) / rd.y);
+        if (max(max(trWater.r, trWater.g), trWater.b) < 0.003) return vec3(0.0);
     }
 
     const int   STEPS  = 16;

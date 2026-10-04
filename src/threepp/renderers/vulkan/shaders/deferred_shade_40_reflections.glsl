@@ -284,6 +284,12 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     vec3  tput       = vec3(1.0);
     vec3  o          = origin;
     vec3  d          = dir;
+    // Where the ray last LEFT a surface: the caller's origin, then each
+    // reflective bounce. `o` also advances through pass-throughs, so a ray
+    // from a submerged plate that threads the water surface on its way out
+    // has `o` in the air by the time it misses; this stays under the water,
+    // which is where murkAmbient has to measure the depth from.
+    vec3  legOrigin  = origin;
     float curMissLod = missLod;
     gTraceHitT = -1.0;
     gTraceHitMoved = false;
@@ -301,6 +307,10 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         while (rayQueryProceedEXT(rq)) {}
         if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
             if (b == 0 && gTraceDeferMiss) gTraceMissTput = tput;// the caller shades it
+            // A bounce off a SUBMERGED surface that escapes sees the sky through
+            // the column over it (murkAmbient; b == 0 is the caller's own leg and
+            // the caller's business — the water's reflection starts in a trough).
+            else if (b > 0) radiance += tput * murkAmbient(sampleEnvLod(d, curMissLod), legOrigin, d) * envInt;
             else radiance += tput * sampleEnvLod(d, curMissLod) * envInt;// escaped → environment
             break;
         }
@@ -472,6 +482,12 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                 hitDiffInd *= gEnvFillVis;
             }
         }
+        // A hit UNDER the water gets the sky through the column over it. This
+        // is the hull seen from the air: shadeWater's refracted ray lands here,
+        // and with the fill above at full strength at any depth the hull came
+        // back up as itself. After the probe blend: the probes measure the sky
+        // as the air has it and know nothing of the water.
+        hitDiffInd = murkAmbient(hitDiffInd, hitP, hitN);
         // gReflEmitterScale hands an emitter's reflected glow to emissiveSpecNEE;
         // a glow-only emissive (GeometryDesc bit 4) is in no emitter list, so it
         // keeps all of it here.
@@ -507,7 +523,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             // Transmission retrace: the split-sum env cap-off takes the same
             // surface sky-visibility scale as the diffuse fill (a rough metal
             // behind glass has no diffuse — this term is its whole shade).
-            radiance += tput * specW * sampleEnvLod(hitR, hRough * maxLod)
+            radiance += tput * specW * murkAmbient(sampleEnvLod(hitR, hRough * maxLod), hitP, hitR)
                       * (probeHitFill ? 1.0 : gEnvFillVis);
             break;
         }
@@ -517,6 +533,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         d          = (hRough < 0.08) ? hitR : sampleGGXReflectionFib(hitV, hitN, hRough, 0, 1);
         if (dot(d, hitN) <= 0.0) d = hitR;
         o          = hitP + hitN * SHADOW_EPS;
+        legOrigin  = o;
         curMissLod = hRough * maxLod;
     }
     // STEP budget exhausted — the ray threaded REFL_MAX_STEPS surfaces without

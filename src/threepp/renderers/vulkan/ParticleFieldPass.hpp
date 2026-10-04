@@ -355,12 +355,19 @@ namespace threepp::vulkan {
         float         _pad3;         // 108
         float         sunDirWorld[3];// 112 unit, TOWARD the sun
         float         _pad4;         // 124
-    };                               // 128
-    static_assert(sizeof(BillboardViewGpu) == 128,
+        // The murk's extinction per channel. murkDensity above is its clearest
+        // channel and still sets the sprite's brightness; this adds what the
+        // other two lose over the same leg. Three equal values (the scalar
+        // setUnderwaterMurk) leave the sprite as it was.
+        float         murkSigma[3];  // 128
+        float         _pad5;         // 140
+    };                               // 144
+    static_assert(sizeof(BillboardViewGpu) == 144,
                   "BillboardViewGpu drifted from particlefield_billboard.vert");
     // Flag bits, mirrored in the shader.
     inline constexpr std::uint32_t kBbViewFogActive = 1u;
     inline constexpr std::uint32_t kBbViewLinearOut = 2u;
+    inline constexpr std::uint32_t kBbViewRefractFlux = 4u;// setUnderwaterSpriteForeshortening
 
     class ParticleFieldPass {
 

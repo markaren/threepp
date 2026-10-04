@@ -9,9 +9,10 @@
 //   float rnd(inout uint seed)
 //   float shadowVis(vec3 origin, vec3 dir, float tMax)
 //   vec3  emissiveIrradiance(vec3 P, vec3 N, int samples, bool doShadows)
-//   float giSunLeg(vec3 P, inout vec3 L) — a directional light's leg to P:
+//   vec3  giSunLeg(vec3 P, inout vec3 L) — a directional light's leg to P:
 //         deferred_shade bends L into the water and returns the in-water
-//         transmittance (murkSunLeg); probe_update has no murk and returns 1.0.
+//         transmittance per channel (murkSunLeg); probe_update has no murk and
+//         returns 1.0.
 
 // Distance term of the point/spot falloff, d^decay. decay is a per-light uniform
 // copied verbatim from the host, so it round-trips through the UBO bit-exact and
@@ -95,7 +96,7 @@ vec3 giHitDirect(vec3 hitP, vec3 hitN, vec3 shadowOrig, vec3 diff, bool doShadow
     for (uint i = 0u; i < lights.dirCount; ++i) {
         if (pickOne && i != pick) continue;
         vec3        L   = normalize(lights.dirLights[i].direction);
-        const float leg = giSunLeg(hitP, L);
+        const vec3  leg = giSunLeg(hitP, L);
         const float ndl = dot(hitN, L);
         if (ndl <= 0.0) continue;
         const float vis = doShadows ? shadowVis(shadowOrig, L, 1e30) : 1.0;

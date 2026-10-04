@@ -44,8 +44,9 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
     float hfFalloff;     // air-medium exponential height scale (m)
     // Underwater murk (setUnderwaterMurk) — a separate homogeneous medium clipped
     // to below waterSurfaceY. Composes with the air extinction (see fogTransmittance).
-    float murkDensity;   // murk σ_t (1/m; 0 = off)
+    float murkDensity;   // murk σ_t (1/m; 0 = off); the clearest channel of murkSigma
     vec3  murkColor;     // murk tint (unused here — the recombine carries extinction only)
+    vec3  murkSigma;     // murk σ_t per channel (all three = murkDensity for the scalar murk)
 } fog;
 
 layout(push_constant) uniform Pc {
@@ -131,7 +132,7 @@ vec3 fogTransmittance(vec3 a, vec3 b) {
                 d *= (ya < 0.0) ? t : (1.0 - t);
             }
         }
-        T *= exp(-vec3(fog.murkDensity) * d);
+        T *= exp(-fog.murkSigma * d);// per channel, as applyMurk
     }
     return T;
 }

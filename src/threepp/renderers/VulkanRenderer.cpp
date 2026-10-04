@@ -1587,6 +1587,17 @@ namespace threepp {
 
     void VulkanRenderer::setUnderwaterMurk(float density, const Color& color) {
         core()->murkDensity_  = density < 0.f ? 0.f : density;
+        core()->murkSigma_[0] = core()->murkSigma_[1] = core()->murkSigma_[2] = core()->murkDensity_;
+        core()->murkColor_[0] = color.r;
+        core()->murkColor_[1] = color.g;
+        core()->murkColor_[2] = color.b;
+    }
+
+    void VulkanRenderer::setUnderwaterMurk(const Vector3& extinction, const Color& color) {
+        const float s[3] = {std::max(extinction.x, 0.f), std::max(extinction.y, 0.f), std::max(extinction.z, 0.f)};
+        // The scalar every gate and optical-depth budget reads: the clearest channel.
+        core()->murkDensity_ = std::min(s[0], std::min(s[1], s[2]));
+        for (int i = 0; i < 3; ++i) core()->murkSigma_[i] = core()->murkDensity_ > 0.f ? s[i] : 0.f;
         core()->murkColor_[0] = color.r;
         core()->murkColor_[1] = color.g;
         core()->murkColor_[2] = color.b;
@@ -1595,6 +1606,37 @@ namespace threepp {
     std::pair<float, Color> VulkanRenderer::underwaterMurk() const {
         return {core()->murkDensity_,
                 Color(core()->murkColor_[0], core()->murkColor_[1], core()->murkColor_[2])};
+    }
+
+    Vector3 VulkanRenderer::underwaterMurkExtinction() const {
+        return {core()->murkSigma_[0], core()->murkSigma_[1], core()->murkSigma_[2]};
+    }
+
+    Vector3 VulkanRenderer::murkExtinctionFromColor(float density, const Color& color, float strength) {
+        const float d    = density < 0.f ? 0.f : density;
+        const float c[3] = {color.r, color.g, color.b};
+        const float mx   = std::max(c[0], std::max(c[1], c[2]));
+        float s[3] = {d, d, d};
+        if (mx > 0.f && strength > 0.f)
+            for (int i = 0; i < 3; ++i)
+                s[i] = d * std::min(std::pow(mx / std::max(c[i], 1e-6f), strength), 8.f);
+        return {s[0], s[1], s[2]};
+    }
+
+    void VulkanRenderer::setUnderwaterAmbientFalloff(float falloff) {
+        core()->murkAmbientFalloff_ = falloff < 0.f ? 0.f : falloff;
+    }
+
+    float VulkanRenderer::underwaterAmbientFalloff() const {
+        return core()->murkAmbientFalloff_;
+    }
+
+    void VulkanRenderer::setUnderwaterSpriteForeshortening(bool on) {
+        core()->murkSpriteForeshortening_ = on;
+    }
+
+    bool VulkanRenderer::underwaterSpriteForeshortening() const {
+        return core()->murkSpriteForeshortening_;
     }
 
     void VulkanRenderer::setRenderScale(float scale) {

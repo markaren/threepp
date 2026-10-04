@@ -294,8 +294,10 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
     float hfFalloff;
     // Underwater murk (setUnderwaterMurk) — a separate homogeneous medium clipped
     // to BELOW waterSurfaceY (applyMurk). 0 density = off.
-    float murkDensity;
+    float murkDensity;   // the clearest channel of murkSigma: every gate and optical-depth budget reads this
     vec3  murkColor;
+    vec3  murkSigma;     // σ_t per channel; all three equal murkDensity for the scalar murk
+    float murkAmbientK;  // setUnderwaterAmbientFalloff; 0 = the ambient terms ignore depth
 } fog;
 
 // ── World-space irradiance probe grid (multi-bounce GI, on by default) ──────
@@ -680,9 +682,19 @@ float specularOcclusion(float NdotV, float ao, float roughness) {
 float murkSunCaustic(vec3 P, vec3 L);
 // Its sibling: bends L to the in-water direction for a submerged P and returns
 // the in-water leg transmittance (1.0, L untouched, everywhere else).
-float murkSunLeg(vec3 P, inout vec3 L);
+// Per channel: a murk with setUnderwaterMurk's per-channel extinction takes the
+// red out of the sun first.
+vec3 murkSunLeg(vec3 P, inout vec3 L);
 // gi_bounce.glsl's directional-light leg at a GI hit: the murk leg above.
-float giSunLeg(vec3 P, inout vec3 L) { return murkSunLeg(P, L); }
+vec3 giSunLeg(vec3 P, inout vec3 L) { return murkSunLeg(P, L); }
+// The same for the light that has no direction: `amb` is an environment,
+// AmbientLight or HemisphereLight term arriving at a submerged P about the
+// direction `dir` (a normal for a diffuse term, the mirror direction for a
+// specular one). Returns it as the water column over P leaves it, plus the
+// water's own light for what the column took. `amb` itself, untouched, with
+// setUnderwaterAmbientFalloff at 0 (the default), no murk, or P at or above
+// the surface.
+vec3 murkAmbient(vec3 amb, vec3 P, vec3 dir);
 
 #include "deferred_shade_10_lighting_utils.glsl"
 #include "deferred_shade_20_restir_di.glsl"
@@ -1436,6 +1448,13 @@ void main() {
     } else {
         diffInd = sampleEnvLod(N, maxLod) + lights.ambient + hemiAmbient(N);
     }
+    // A point UNDER the water gets all of that through the column over it
+    // (murkAmbient): the sky, the probes' and the gather's bounce of it, the
+    // scene ambient. Whichever branch above built it, and before the emitters
+    // below are added — a lamp on an ROV did not come down from the sky.
+    // The same call the traced hits make, so a plate reads the same seen
+    // direct from under water and through the surface from over it.
+    if (!giSkip) diffInd = murkAmbient(diffInd, worldPos, N);
     // The diffuse base gets what the environment specular LEFT. The specular
     // lobe below takes envSpecularWeight(F0, ab) of the environment; adding the
     // indirect diffuse at full albedo on top returned more light than arrived,
@@ -1534,7 +1553,7 @@ void main() {
         vec3        tSum  = vec3(0.0);
         for (uint i = 0u; i < lights.dirCount; ++i) {
             vec3        L    = normalize(lights.dirLights[i].direction);
-            const float leg  = murkSunLeg(worldPos, L);// submerged: refracted, attenuated
+            const vec3  leg  = murkSunLeg(worldPos, L);// submerged: refracted, attenuated
             const float ndl  = dot(N, L);
             const float back = max(-ndl, 0.0);// sun behind the card
             const float fwd  = pow(max(dot(V, -L), 0.0), kTransScatterPower) * kTransScatterWeight;
@@ -1668,7 +1687,8 @@ void main() {
                 (dot(pm.sheenColor, pm.sheenColor) > 0.0)
                         ? sheenBaseShare(pm.sheenColor, IBLSheenBRDF(NdotV, pm.sheenRoughness))
                         : 1.0;
-        lit += sampleEnvLod(R, roughness * maxLod) * envSpecularWeight(F0, ab) * envSpecW * envSpecVis
+        // murkAmbient: a submerged rough surface's sky lobe, through the water over it.
+        lit += murkAmbient(sampleEnvLod(R, roughness * maxLod), worldPos, R) * envSpecularWeight(F0, ab) * envSpecW * envSpecVis
              * pm.envMapIntensity * envSpecBaseShare;
     }
     // ── Emitter-specular ESTIMATOR SPLIT by lobe width ──────────────────────

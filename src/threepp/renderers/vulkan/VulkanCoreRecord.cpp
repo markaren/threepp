@@ -2014,10 +2014,14 @@ VkDeviceAddress VulkanRenderer::Impl::pushBillboardViewRecord(const Matrix4& vie
             const bool medium = mediumActiveThisFrame_ || murkDensity_ > 0.f;
             if (medium) {
                 rec.flags |= vulkan::kBbViewFogActive;
+                if (murkSpriteForeshortening_) rec.flags |= vulkan::kBbViewRefractFlux;
                 rec.hfDensity     = mediumActiveThisFrame_ ? mediumDensityThisFrame_ : 0.f;
                 rec.hfBaseY       = mediumBaseYThisFrame_;
                 rec.hfFalloff     = mediumFalloffThisFrame_;
                 rec.murkDensity   = murkDensity_;
+                rec.murkSigma[0]  = murkSigma_[0];
+                rec.murkSigma[1]  = murkSigma_[1];
+                rec.murkSigma[2]  = murkSigma_[2];
                 rec.waterSurfaceY = fogWaterSurfaceY_;
                 // The inverse view supplies the camera height and the world-Y
                 // row, which is all the fragment needs to reconstruct a

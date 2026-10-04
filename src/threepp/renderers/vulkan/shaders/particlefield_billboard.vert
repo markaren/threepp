@@ -161,7 +161,8 @@ layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Tra
 layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer BbView {
     float exposure;     // currentExposure(), for the display transform
     uint  toneMapMode;  // threepp::ToneMapping
-    uint  flags;        // bit0 = a fog medium is present, bit1 = LINEAR HDR out
+    uint  flags;        // bit0 = a fog medium is present, bit1 = LINEAR HDR out,
+                        // bit2 = submerged sprites take refraction's flux factor
     float hfDensity;    // air-medium sigma_t at baseY
     float hfBaseY;
     float hfFalloff;    // exponential height scale, metres
@@ -192,9 +193,12 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Bb
     float _pad3;
     vec3  sunDirWorld;  // unit, TOWARD the sun
     float _pad4;
+    vec3  murkSigma;    // murk sigma_t per channel; all three = murkDensity for
+    float _pad5;        // the scalar murk (murkDensity is the clearest channel)
 };
 const uint kViewFogActive = 1u;
 const uint kViewLinearOut = 2u;
+const uint kViewRefractFlux = 4u;// setUnderwaterSpriteForeshortening
 
 // NOTE: this stage sampled the field's r16f density mirror through a set of
 // its own until plans/particle-volumetric-sprites R8 moved the marches into
@@ -274,8 +278,8 @@ float bbAirOpticalDepth(BbView V, float partY, float len) {
                                     V.hfBaseY, V.waterSurfaceY);
 }
 
-// Homogeneous murk over the BELOW-waterSurfaceY portion of the leg only.
-float bbMurkOpticalDepth(BbView V, float partY, float len) {
+// The BELOW-waterSurfaceY portion of the leg, in metres: what the murk acts over.
+float bbMurkLeg(BbView V, float partY, float len) {
     if (V.murkDensity <= 0.0) return 0.0;
     float d = len;
     if (V.waterSurfaceY < 1e29) {
@@ -287,7 +291,25 @@ float bbMurkOpticalDepth(BbView V, float partY, float len) {
             d *= (ya < 0.0) ? t : (1.0 - t);
         }
     }
-    return V.murkDensity * d;
+    return d;
+}
+// Homogeneous murk over that portion, in the murk's CLEAREST channel. The
+// brightness factor every sprite takes is this one; bbMurkTint is what the
+// other two channels lose on top of it.
+float bbMurkOpticalDepth(BbView V, float partY, float len) {
+    return V.murkDensity * bbMurkLeg(V, partY, len);
+}
+// What a per-channel murk takes from each channel BEYOND the clearest one, over
+// the same leg. An additive sprite gets no in-scatter (the deferred pass put
+// the water's own light in the frame already), so the scalar transmittance
+// alone left a white mote white at any distance while the hull beside it went
+// to the water's hue. Exactly 1.0 for the scalar murk (returned, not left to
+// exp(0)), and a multiply by 1.0 is exact: a density-only scene gets the sprite
+// it had.
+vec3 bbMurkTint(BbView V, float partY, float len) {
+    const vec3 excess = V.murkSigma - vec3(V.murkDensity);
+    if (all(equal(excess, vec3(0.0)))) return vec3(1.0);
+    return exp(-excess * bbMurkLeg(V, partY, len));
 }
 
 // Fresnel transmission at the air→water crossing, for a camera ABOVE the
@@ -330,7 +352,25 @@ float bbWaterCrossingT(BbView V, float partY, float len) {
 // (eye->crossing->particle), so the sprite keeps the size, the depth and the
 // fog leg it had, and only its bearing moves. The deferred bottom trace and
 // this now put a screw and its rope on the same line from the same eye.
-vec3 bbApparentAbove(BbView V, vec3 vp) {
+//
+// `flux` is the other thing the interface does to it: how much of the sprite's
+// light is left once refraction has had its way with its SIZE. A flat surface
+// seen at a slant squeezes what is under it toward the horizon — the hull the
+// deferred water shows through its refracted ray is squashed by exactly this —
+// while a billboard is drawn round, at the size its path length gives it, and so
+// carries the light of a mote several times its apparent size. With the crossing
+// at incidence i and refraction t, air leg a and water leg b, the sprite's two
+// image distances are
+//     sagittal    d_s = L / sin i
+//     tangential  d_t = a cos t / cos i + b cos i / (n cos t),
+// its solid angle goes as 1 / (d_s d_t), and the quad was sized for 1 / path^2,
+// so flux = path^2 / (d_s d_t): about cos i / cos t for a mote near the surface
+// seen from far off, which is 0.6 looking down at 30 degrees and 0.1 at 5.
+// Capped at 1 (looking down the image is LARGER than the path makes it; the
+// quad keeps its size there, as it always has). 1.0 wherever vp is returned
+// unchanged.
+vec3 bbApparentAbove(BbView V, vec3 vp, out float flux) {
+    flux = 1.0;
     if (V.murkDensity <= 0.0 || V.waterSurfaceY >= 1e29) return vp;
     const float hc = V.camWorldY - V.waterSurfaceY;
     if (hc <= 0.0) return vp;                         // the eye is in the water
@@ -355,6 +395,18 @@ vec3 bbApparentAbove(BbView V, vec3 vp) {
     const vec3  cross = hdir * x - up * hc;
     const float lx = L - x;
     const float path = length(cross) + sqrt(lx * lx + hp * hp);
+    {
+        const float a    = length(cross);
+        const float b    = path - a;
+        const float cosI = hc / a;
+        const float sinI = x / a;
+        const float cosT = hp / max(b, 1e-6);
+        if (sinI > 1e-4 && cosI > 1e-4 && cosT > 1e-4) {
+            const float ds = L / sinI;
+            const float dt = a * cosT / cosI + b * cosI / (n * cosT);
+            flux = clamp(path * path / (ds * dt), 0.0, 1.0);
+        }
+    }
     return normalize(cross) * path;
 }
 
@@ -389,7 +441,8 @@ void main() {
     float radius = (((P.flags & kBbRadiusInW) != 0u) ? pw.w : P.uniformRadius) * P.sizeScale;
     radius *= max(1.0 - P.sizeTaper * ageFrac, 0.0);
 
-    const vec3 vp = bbApparentAbove(V, viewOf(vec4(pw.xyz, 1.0)));
+    float refrFlux;// what refraction leaves of the sprite's light; see bbApparentAbove
+    const vec3 vp = bbApparentAbove(V, viewOf(vec4(pw.xyz, 1.0)), refrFlux);
     // Distance to the eye. For a perspective camera this is the literal camera
     // distance; for an orthographic one it is the distance to the view origin,
     // which is the only thing "near" can mean there and is what every
@@ -444,7 +497,8 @@ void main() {
         // A slot reborn between the two samples has prevPos == pos by the
         // emitter's own cycle guard, so this needs no second dead test: the
         // displacement is exactly zero and the quad stays round.
-        const vec2 d = (vp.xy - bbApparentAbove(V, viewOf(vec4(pp.xyz, 1.0))).xy) * P.stretchOverDt;
+        float prevFlux;// unused: the streak only wants where the sprite was
+        const vec2 d = (vp.xy - bbApparentAbove(V, viewOf(vec4(pp.xyz, 1.0)), prevFlux).xy) * P.stretchOverDt;
         const float len = length(d);
         if (len > 1e-7) {
             axisMajor = d / len;
@@ -558,11 +612,16 @@ void main() {
     //
     // Per particle, not per fragment: a sprite is a handful of pixels wide and
     // the optical depth across it is effectively constant.
+    vec3 murkTint = vec3(1.0);// the per-channel share of the murk; see bbMurkTint
     if ((V.flags & kViewFogActive) != 0u) {
         const float partY = dot(V.viewToWorldY, vp) + V.camWorldY;
         const float od    = bbAirOpticalDepth(V, partY, camDist) +
                             bbMurkOpticalDepth(V, partY, camDist);
         distFade *= exp(-od) * bbWaterCrossingT(V, partY, camDist);
+        murkTint  = bbMurkTint(V, partY, camDist);
+        // setUnderwaterSpriteForeshortening. A branch and not a multiply by a
+        // 1.0 the flag would select: with it off the factor is never applied.
+        if ((V.flags & kViewRefractFlux) != 0u) distFade *= refrFlux;
     }
 
     // The GLOW pass draws the same quads a second time into a small offscreen
@@ -655,9 +714,9 @@ void main() {
     // without this its billboards can only ever be colorHot at age 0, which is
     // one flat colour for the whole field.
     const vec3 ramp = mix(P.colorHot, P.colorCool, cf);
-    const vec3 tint = ((P.flags & kBbAttrs) != 0u)
-                              ? AttrBuf(P.attrAddr).v[pi].rgb
-                              : ramp;
+    const vec3 tint = (((P.flags & kBbAttrs) != 0u)
+                               ? AttrBuf(P.attrAddr).v[pi].rgb
+                               : ramp) * murkTint;
 
     // ── 4c: alpha-over vs additive ──────────────────────────────────────────
     // The same radiance, split between the two channels differently. Additive

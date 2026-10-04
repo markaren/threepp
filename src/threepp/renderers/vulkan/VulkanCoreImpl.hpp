@@ -598,8 +598,11 @@ namespace threepp {
         std::array<Buffer, kFramesInFlight> fogUbos{};
         float    fogAnisotropy_ = 0.0f;
         float    fogWaterSurfaceY_ = 1e30f;
-        float    murkDensity_ = 0.0f;               // setUnderwaterMurk (0 = off)
+        float    murkDensity_ = 0.0f;               // setUnderwaterMurk (0 = off); the clearest channel of murkSigma_
+        float    murkSigma_[3] = {0.0f, 0.0f, 0.0f};// setUnderwaterMurk extinction per channel (all = murkDensity_ in the scalar form)
         float    murkColor_[3] = {1.0f, 1.0f, 1.0f};// setUnderwaterMurk tint
+        float    murkAmbientFalloff_ = 0.0f;        // setUnderwaterAmbientFalloff (0 = off)
+        bool     murkSpriteForeshortening_ = true;  // setUnderwaterSpriteForeshortening
         // ── Resolved unified fog medium for THIS frame (computed by updateFogUbo,
         // consumed by updateCloudUbo + the froxel gate) ──────────────────────────
         // Phase 2 "one knob": scene.fog is the primary control — when present it

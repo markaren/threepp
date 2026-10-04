@@ -475,7 +475,7 @@ vec3 analyticDirectSplit(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         // murkSunLeg takes the ORIGINAL L (the caustic walks back along it) and
         // hands the loop the in-water direction + the leg's transmittance.
         const float caus = murkSunCaustic(P, L);
-        const float leg  = murkSunLeg(P, L);
+        const vec3  leg  = murkSunLeg(P, L);
         vec3 c = vec3(0.0);
         if (dot(N, L) > 0.0)
             c = evalLight(N, V, L, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)

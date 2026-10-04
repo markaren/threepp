@@ -178,7 +178,7 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         if (pickOne && i != pickIdx) continue;
         vec3 L = normalize(lights.dirLights[i].direction);
         const float caus = murkSunCaustic(P, L);// walks back along the ORIGINAL L
-        const float leg  = murkSunLeg(P, L);     // submerged: refracted, attenuated
+        const vec3  leg  = murkSunLeg(P, L);     // submerged: refracted, attenuated
         if (dot(N, L) <= 0.0) continue;
         // Soft sun shadow: adaptive multi-ray disc visibility (see sunShadowVis;
         // pc.sunTanHalfAngle = 0 → exact hard single-ray shadow). The BRDF

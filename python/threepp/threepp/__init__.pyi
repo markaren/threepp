@@ -10039,9 +10039,15 @@ class VulkanRenderer:
         """
         enable_vertex_interop's stable_correspondence switch for the HOST attribute path (update_attribute). stable=False for a mesh re-uploaded every frame as a re-triangulated soup (marching cubes): its vertex slots are not the same surface points frame to frame, so per-vertex motion vectors are noise and the temporal passes boil wherever the soup changed. The mesh then reprojects as world-static. Remembered per geometry; may be called before the first render.
         """
-    def set_underwater_murk(self, density: typing.SupportsFloat | typing.SupportsIndex, color: Color = ...) -> None:
+    @typing.overload
+    def set_underwater_murk(self, density: typing.SupportsFloat | typing.SupportsIndex, color: Color = ..., chromatic: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
         """
-        Enable underwater murk (below fog_water_surface_y). density = sigma_t (1/m; 0 disables); color = inscatter tint.
+        Enable underwater murk (below fog_water_surface_y). density = sigma_t (1/m; 0 disables); color = inscatter tint. chromatic = 0 extinguishes red, green and blue alike: what is under water dims and keeps its hue. chromatic > 0 gives each channel its own extinction, density * (max(color) / channel)^chromatic (at most 8 * density), so the channel the colour holds most of keeps `density` and the others die sooner: what is under water moves to the water's hue with distance. 1 is a water that scatters all three alike.
+        """
+    @typing.overload
+    def set_underwater_murk(self, extinction: Vector3, color: Color = ...) -> None:
+        """
+        Underwater murk with sigma_t per channel (1/m; red, green, blue). Off unless all three are positive.
         """
     def set_view_camera(self, handle: typing.SupportsInt | typing.SupportsIndex, camera: Camera) -> bool:
         """
@@ -10447,6 +10453,27 @@ class VulkanRenderer:
         ...
     @tone_mapping_exposure.setter
     def tone_mapping_exposure(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def underwater_ambient_falloff(self) -> float:
+        """
+        How fast the sky's light dies with depth under the murk: the environment, AmbientLight and HemisphereLight terms of a submerged point are scaled by exp(-falloff * sigma_t * depth) per channel, and what they lose is made up by the water's own light (murk colour times the ambient light). 1 uses the murk's extinction over the vertical distance to the surface; 0 (default) leaves the ambient terms as they are at any depth.
+        """
+    @underwater_ambient_falloff.setter
+    def underwater_ambient_falloff(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def underwater_murk_extinction(self) -> Vector3:
+        """
+        The murk's sigma_t per channel (1/m), as last set.
+        """
+    @property
+    def underwater_sprite_foreshortening(self) -> bool:
+        """
+        ParticleField billboards under the murk, seen from a camera in the air, scaled by the solid angle refraction leaves them (about cos i / cos t, on top of the Fresnel loss at the crossing): motes just under the surface fade out toward the horizon instead of sparkling on the water. True by default; False draws them at the full light of their path length.
+        """
+    @underwater_sprite_foreshortening.setter
+    def underwater_sprite_foreshortening(self, arg1: bool) -> None:
         ...
 class WrenchSample:
     """

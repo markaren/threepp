@@ -500,7 +500,49 @@ namespace threepp {
         // (the fjord). density = σ_t (1/m; 0 = off, the default); color = inscatter
         // tint. Pair it with setFogWaterSurfaceY to set the clip plane.
         void setUnderwaterMurk(float density, const Color& color);
+        // The same medium with an extinction PER CHANNEL (1/m; red, green, blue).
+        // The scalar form extinguishes all three alike, so what is seen through
+        // the water is dimmed and keeps its hue. With red extinguished fastest,
+        // as in any natural water, it moves to the water's own hue with distance,
+        // on the view leg and on the sun's leg down to it. The colour the water
+        // saturates to is unchanged (color times the ambient light). The murk is
+        // off unless all three are positive.
+        void setUnderwaterMurk(const Vector3& extinction, const Color& color);
+        // density is the extinction of the clearest channel.
         [[nodiscard]] std::pair<float, Color> underwaterMurk() const;
+        [[nodiscard]] Vector3 underwaterMurkExtinction() const;
+        // A per-channel extinction from the murk colour: density for the channel
+        // the colour holds most of, and density * (max / channel)^strength for the
+        // other two (at most 8 times density). strength 1 is a water that
+        // scatters all three channels alike and takes its colour from what it
+        // absorbs; 0 gives the scalar murk.
+        [[nodiscard]] static Vector3 murkExtinctionFromColor(float density, const Color& color, float strength = 1.f);
+
+        // How fast the light of the sky dies with depth under the murk. The
+        // environment, AmbientLight and HemisphereLight terms of a point under
+        // the water surface are scaled by exp(-falloff * extinction * depth), per
+        // channel, and what they lose is made up by the water's own light (the
+        // murk colour times the ambient light, as the murk in-scatter), so that
+        // a surface far down is lit by the water round it and not by a sky it
+        // cannot see. 1 takes the murk's extinction over the vertical distance
+        // to the surface; 0 (the default) leaves the ambient terms as they are
+        // at any depth.
+        void setUnderwaterAmbientFalloff(float falloff);
+        [[nodiscard]] float underwaterAmbientFalloff() const;
+
+        // ParticleField billboards under the murk, seen from a camera in the air.
+        // A flat water surface seen at a slant squeezes what is under it toward
+        // the horizon; a billboard is drawn round at the size its path length
+        // gives it, and so shows more light than the mote sends (10 times at 5
+        // degrees over the surface). On, a submerged sprite is scaled by the
+        // solid angle refraction leaves it: about cos i / cos t, on top of the
+        // Fresnel loss it already takes at the crossing. Motes just under the
+        // surface then fade out toward the horizon instead of sparkling on the
+        // water. On by default; off draws the sprite at the full light of its
+        // path length, as the renderer did before 2026-10. No effect on a camera
+        // under water or a sprite in the air.
+        void setUnderwaterSpriteForeshortening(bool on);
+        [[nodiscard]] bool underwaterSpriteForeshortening() const;
 
         // Render scale. The scene shade + hybrid raster G-buffer run at (swapchain
         // extent × scale); TAA reconstructs full resolution. Clamped to

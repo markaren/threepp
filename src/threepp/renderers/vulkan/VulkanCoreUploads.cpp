@@ -1595,6 +1595,10 @@ namespace threepp {
         ubo.murkColor[0]  = murkColor_[0];
         ubo.murkColor[1]  = murkColor_[1];
         ubo.murkColor[2]  = murkColor_[2];
+        ubo.murkSigma[0]  = murkSigma_[0];
+        ubo.murkSigma[1]  = murkSigma_[1];
+        ubo.murkSigma[2]  = murkSigma_[2];
+        ubo.murkAmbientK  = murkAmbientFalloff_;
 
         // Froxel-volumetrics gate: the deferred leaf records the froxel
         // passes only when a medium exists this frame (fog, or the

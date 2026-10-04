@@ -124,10 +124,13 @@ namespace threepp::vulkan::impl {
         // clipped to BELOW waterSurfaceY (the water body's own absorption),
         // decoupled from the air fog in Phase 2 so a scene can hold clear air
         // above the waterline and murk below (the fjord). 0 density = off.
-        float murkDensity;   // murk σ_t (1/m); 0 = off
+        float murkDensity;   // murk σ_t (1/m); 0 = off. The clearest channel of murkSigma
         float murkColor[3];  // murk inscatter tint (sRGB-linear)
+        // Appended, so a shader block that stops at murkColor still lines up.
+        float murkSigma[3];  // murk σ_t per channel; all three = murkDensity for the scalar murk
+        float murkAmbientK;  // setUnderwaterAmbientFalloff; 0 = the ambient terms ignore depth
     };
-    static_assert(sizeof(GpuFogUbo) == 76);
+    static_assert(sizeof(GpuFogUbo) == 92);
 
     // Volumetric cloud layer (VulkanRenderer::setClouds) + near-field
     // heterogeneous height fog (VulkanRenderer::setHeightFog). Both ride the

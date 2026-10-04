@@ -707,6 +707,77 @@ def test_point_light_lights_the_ocean(vk_renderer):
     assert lit > dark + 20.0, "the point light left the water under it dark"
 
 
+def test_underwater_murk_takes_the_hue_of_what_is_under_it(vk_renderer):
+    """A yellow slab 2 m under the sea, seen from straight over it. The scalar
+    murk dims it and leaves it yellow, which is why it read as lying at the
+    surface. A per-channel murk takes its red first, and the ambient falloff
+    takes the sky's fill off it; neither touches the open water beside it, and
+    the scalar call renders what it rendered before either existed."""
+    scene = tp.Scene()
+    scene.background = 0x9db4d0
+    scene.add(tp.HemisphereLight(0xffffff, 0x808080, 1.0))
+    sun = tp.DirectionalLight(0xffffff, 2.0)
+    sun.position.set(2, 6, 1)
+    scene.add(sun)
+    scene.add(tp.Ocean(size=200.0, resolution=128, fft_size=256, wind_speed=2.0, choppiness=0.0))
+    mat = tp.MeshStandardMaterial()
+    mat.color = tp.Color(0.85, 0.65, 0.02)
+    mat.roughness = 0.8
+    slab = tp.Mesh(tp.BoxGeometry(8.0, 0.5, 8.0), mat)
+    slab.position.set(0, -2.25, 0)                       # its top face 2 m down
+    scene.add(slab)
+    cam = tp.PerspectiveCamera(40, W / H, 0.1, 400)
+    cam.position.set(0, 14, 0.01)
+    cam.look_at(0, 0, 0)
+    colour = tp.Color(0.055, 0.14, 0.125)                # a fjord's green
+
+    def shot():
+        """(the slab, the open water beside it) as mean RGB."""
+        vk_renderer.reset_temporal_history()
+        for _ in range(6):
+            vk_renderer.sim_time = 5.0                    # the same sea every time
+            vk_renderer.render(scene, cam)
+        img = vk_renderer.read_pixels().astype(np.float64)
+        return (img[H // 2 - 15:H // 2 + 15, W // 2 - 20:W // 2 + 20].reshape(-1, 3).mean(0),
+                img[H // 2 - 15:H // 2 + 15, 4:24].reshape(-1, 3).mean(0))
+
+    assert vk_renderer.underwater_ambient_falloff == 0.0
+    assert vk_renderer.underwater_sprite_foreshortening is True
+    try:
+        vk_renderer.set_fog_water_surface_y(0.0)
+        vk_renderer.set_underwater_murk(0.3, colour)
+        e = vk_renderer.underwater_murk_extinction
+        assert (e.x, e.y, e.z) == pytest.approx((0.3, 0.3, 0.3))
+        slab_s, sea_s = shot()
+        assert slab_s[0] > sea_s[0] + 25.0, "the slab does not show through 2 m of this murk"
+
+        # three equal extinctions are the scalar murk
+        vk_renderer.set_underwater_murk(tp.Vector3(0.3, 0.3, 0.3), colour)
+        slab_v, sea_v = shot()
+        assert slab_v == pytest.approx(slab_s, abs=0.5) and sea_v == pytest.approx(sea_s, abs=0.5)
+
+        # per channel, from the colour: green keeps 0.3, red gets 0.3 * 0.14 / 0.055
+        vk_renderer.set_underwater_murk(0.3, colour, chromatic=1.0)
+        e = vk_renderer.underwater_murk_extinction
+        assert (e.x, e.y, e.z) == pytest.approx((0.3 * 0.14 / 0.055, 0.3, 0.3 * 0.14 / 0.125), rel=1e-4)
+        slab_c, sea_c = shot()
+        assert slab_c[0] < slab_s[0] - 25.0, "the per-channel murk left the slab its red"
+        assert abs(slab_c[1] - slab_s[1]) < 4.0, "the clearest channel moved"
+        assert sea_c == pytest.approx(sea_s, abs=2.0), "the open water changed colour"
+
+        # the sky's fill dies with depth
+        vk_renderer.set_underwater_murk(0.3, colour)
+        vk_renderer.underwater_ambient_falloff = 1.0
+        slab_a, sea_a = shot()
+        assert slab_a[1] < slab_s[1] - 6.0, "the ambient falloff left the slab its fill"
+        assert sea_a == pytest.approx(sea_s, abs=2.0), "the open water changed with the ambient falloff"
+    finally:
+        vk_renderer.underwater_ambient_falloff = 0.0
+        vk_renderer.set_underwater_murk(0.0)
+        vk_renderer.set_fog_water_surface_y(1e30)
+        vk_renderer.sim_time = None
+
+
 def test_depthsensor_pathtraced(vk_renderer):
     # The backend-neutral tp.DepthSensor.scan must work on Vulkan (path-traced
     # through the renderer's TLAS) and reconstruct world-space heights — the same

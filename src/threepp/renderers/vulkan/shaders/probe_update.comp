@@ -317,7 +317,7 @@ vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
 }
 
 // gi_bounce.glsl's directional-light leg: the probe pass has no murk.
-float giSunLeg(vec3 P, inout vec3 L) { return 1.0; }
+vec3 giSunLeg(vec3 P, inout vec3 L) { return vec3(1.0); }
 
 // distFalloff, the analytic-light pick and giHitDirect, shared with
 // deferred_shade.comp's giRadiance.
