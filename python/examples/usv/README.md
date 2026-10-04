@@ -218,9 +218,6 @@ below her centre of gravity), turns at about 22 deg/s under way and 38 deg/s on 
 and stops from 2.5 kn in under 2 s. She rides the default sea (7 m/s over 30 km) within
 5 deg of roll.
 
-`../norvasundet/norvasundet_scene.py` also runs her, on her strips
-(`usv_rig.StripHull("otter", ...)`).
-
 ## In another scene
 
 `../usv_rig.py` imports no renderer and reads no scene's globals. A scene loads the `.glb`, makes

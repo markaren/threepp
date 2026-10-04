@@ -52,7 +52,7 @@ sight to it, the flown track, and the wind as an arrow on the ground (1 m per m/
 Inside the model everything is the article's: NED position (N, E, D), body axes x forward,
 y right, z down, Euler angles (phi, theta, psi) with psi from north toward east. One mapping
 to threepp's world, at the boundary (`x8_rig.ned_to_world`): world = (E, h0 - D, -N), x east,
-y up, z south, as the drone rig and the Nørvasundet twin use it. Heading psi = 0 points the
+y up, z south, as the drone rig uses it. Heading psi = 0 points the
 nose along -z, psi = 90 deg along +x. Wind is the air's velocity over the ground, NED; the
 example's `--from` is where it blows from.
 

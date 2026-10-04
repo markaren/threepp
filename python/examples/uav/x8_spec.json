@@ -25,7 +25,7 @@
     "ned": "The article's inertial frame {n}: x north, y east, z down. Position (N, E, D).",
     "body": "The article's body frame {b}: x forward, y right, z down, origin at the aerodynamic centre, taken to coincide with the CG (the article's section 2.1).",
     "model": "The .glb's frame: X forward, Y up, Z right (starboard), metres, origin at the CG. A body vector (x, y, z) is (x, -z, y) in it. The same axes as the boats' specs.",
-    "world": "threepp's world as the drone rig and the Nørvasundet twin use it: x east, y up, z south (-north). A NED position (N, E, D) is (E, h0 - D, -N), h0 the height of the NED origin. Heading psi (the article's yaw, from north toward east) points the nose along (sin psi, 0, -cos psi): psi = 0 is -z, psi = 90 deg is +x."
+    "world": "threepp's world as the drone rig uses it: x east, y up, z south (-north). A NED position (N, E, D) is (E, h0 - D, -N), h0 the height of the NED origin. Heading psi (the article's yaw, from north toward east) points the nose along (sin psi, 0, -cos psi): psi = 0 is -z, psi = 90 deg is +x."
   },
   "physical": {
     "source": "Article Table 1",

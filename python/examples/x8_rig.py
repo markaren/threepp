@@ -36,8 +36,8 @@ FRAMES
 ------
 Inside the model everything is the article's: NED position (N, E, D), body axes x forward, y
 right, z down, attitude (phi, theta, psi) with psi from north toward east. The one mapping to
-threepp's world (x east, y up, z south; the drone rig's and the Nørvasundet twin's) is at the
-boundary, in ``ned_to_world``, ``X8.world_position`` and ``X8.world_rotation``::
+threepp's world (x east, y up, z south; the drone rig's) is at the boundary, in
+``ned_to_world``, ``X8.world_position`` and ``X8.world_rotation``::
 
     world = (E, h0 - D, -N)            h0: the height of the NED origin in the world
 
