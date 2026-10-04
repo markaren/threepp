@@ -5233,6 +5233,10 @@ class MeshStandardMaterial(Material):
         ...
     def needs_update(self) -> None:
         ...
+    def set_terrain_band(self, band: typing.SupportsInt | typing.SupportsIndex, albedo: Texture, normal_rough: Texture = None, repeat: typing.SupportsFloat | typing.SupportsIndex = 0.5, roughness: typing.SupportsFloat | typing.SupportsIndex = 0.8999999761581421) -> None:
+        """
+        One band's repeating set. albedo: LINEAR RGBA, RGB a 0.5-neutral overlay of the macro colour, A the material's height (0.5 = neutral) for the height blend. normal_rough: LINEAR RGBA, RGB a tangent-space normal (0.5 = flat), A a roughness modulation (0.5 = neutral). repeat: repeats per world metre. roughness: the band's base roughness, which replaces the material's where the band covers.
+        """
     @property
     def alpha_test(self) -> float:
         ...
@@ -5316,6 +5320,54 @@ class MeshStandardMaterial(Material):
         ...
     @roughness.setter
     def roughness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def terrain_band_normal_scale(self) -> float:
+        """
+        Tangent-space xy perturbation scale of the bands' normals.
+        """
+    @terrain_band_normal_scale.setter
+    def terrain_band_normal_scale(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def terrain_band_rough_strength(self) -> float:
+        """
+        0..1 strength of the bands' roughness modulation.
+        """
+    @terrain_band_rough_strength.setter
+    def terrain_band_rough_strength(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def terrain_band_strength(self) -> float:
+        """
+        0..1 strength of the bands' albedo overlay.
+        """
+    @terrain_band_strength.setter
+    def terrain_band_strength(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def terrain_height_blend(self) -> float:
+        """
+        How sharply coverage turns to the band standing tallest (0 = a plain cross-fade).
+        """
+    @terrain_height_blend.setter
+    def terrain_height_blend(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def terrain_normal_map(self) -> Texture:
+        """
+        LINEAR RGB in the mesh's UVs: the world-space surface normal (n * 0.5 + 0.5), in place of the interpolated vertex normal. Optional.
+        """
+    @terrain_normal_map.setter
+    def terrain_normal_map(self, arg0: Texture) -> None:
+        ...
+    @property
+    def terrain_weight_map(self) -> Texture:
+        """
+        LINEAR RGBA in the mesh's UVs: the coverage of bands 0..3. A sum under 1 leaves the rest to the macro `map` (roads: all zero). None switches the bands off.
+        """
+    @terrain_weight_map.setter
+    def terrain_weight_map(self, arg0: Texture) -> None:
         ...
     @property
     def translucency(self) -> float:
