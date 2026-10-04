@@ -92,6 +92,17 @@ def _centre(img):
     return _dominant(img[img.shape[0] // 2, img.shape[1] // 2][:3])
 
 
+def _change_background(renderer, scene, colour):
+    """Change the background and restart the temporal history. TAA weights a new
+    frame by its duration (the blend is anchored at 90 fps), so without the reset
+    the first frame after a full-screen change is mostly the old picture when
+    frames come fast: (202, 53, 0) for red to green at 1.4 ms a frame, green
+    alone from 50 ms. With the reset that frame is the new picture at any frame
+    rate, and a readback of an older swapchain image still reads the old one."""
+    scene.background = colour
+    renderer.reset_temporal_history()
+
+
 @pytest.mark.parametrize("presents", ["presenting", "suppressed"])
 def test_save_frame_writes_the_frame_it_rendered(vk_renderer, presents, tmp_path):
     """save_frame renders a frame and reads it back in one call. render() only
@@ -119,7 +130,7 @@ def test_save_frame_writes_the_frame_it_rendered(vk_renderer, presents, tmp_path
 
     for _ in range(3):
         renderer.render(scene, cam)
-    scene.background = 0x00ff00
+    _change_background(renderer, scene, 0x00ff00)
     png = saved("changed.png")
     assert _centre(png) == "g", f"after the change: {png[H // 2, W // 2]}"
     # The file and read_pixels() are the same frame, so the same bytes.
@@ -137,7 +148,7 @@ def test_readback_inside_the_frame_returns_that_frame(vk_canvas, vk_renderer):
 
     for _ in range(3):
         vk_renderer.render(scene, cam)
-    scene.background = 0x00ff00
+    _change_background(vk_renderer, scene, 0x00ff00)
 
     def scene_then_readback():
         vk_renderer.render(scene, cam)
