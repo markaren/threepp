@@ -54,6 +54,25 @@ const float kWaterInScatterPhaseMax = 8.0;
 // murkLive() alone.
 const float kMurkIsWater = 0.01;
 
+// The water surface's analytic response to ONE light direction: a GGX glint on
+// the wave facet plus the clearcoat layer's tighter lobe. shadeWater's
+// directional, spot and point loops all evaluate this one lobe, so the three
+// light types cannot drift apart on the same water.
+float waterGlint(vec3 N, vec3 V, vec3 L, float NdotV, float ndl, float r0,
+                 float specRough, float kG, float clearcoat, float ccRough) {
+    const vec3  H   = normalize(V + L);
+    const float ndh = max(dot(N, H), 0.0);
+    const float vdh = max(dot(V, H), 0.0);
+    const float Gs  = geomSmithG1(NdotV, kG) * geomSmithG1(ndl, kG);
+    const float Fb  = r0 + (1.0 - r0) * pow(1.0 - vdh, 5.0);
+    float spec = distGGX(ndh, specRough) * Gs * Fb / max(4.0 * NdotV * ndl, 1e-4);
+    if (clearcoat > 0.0) {
+        const float Fc = 0.04 + 0.96 * pow(1.0 - vdh, 5.0);
+        spec += clearcoat * distGGX(ndh, ccRough) * Gs * Fc / max(4.0 * NdotV * ndl, 1e-4);
+    }
+    return spec;
+}
+
 // Thin-shell water (RenderMode::RasterFirst). Replicates closest_hit's
 // DETERMINISTIC thin-shell BSDF — noise-free because it's an analytic Fresnel
 // split, not a stochastic reflect/refract pick:
@@ -567,16 +586,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             if (ndl <= 0.0) continue;
             const float vis = doShadows ? shadowVis(sunOrig, L, 1e30) : 1.0;
             if (vis <= 0.0) continue;
-            const vec3  H   = normalize(V + L);
-            const float ndh = max(dot(N, H), 0.0);
-            const float vdh = max(dot(V, H), 0.0);
-            const float Gs  = geomSmithG1(NdotV, kG) * geomSmithG1(ndl, kG);
-            const float Fb  = r0 + (1.0 - r0) * pow(1.0 - vdh, 5.0);
-            float spec = distGGX(ndh, specRough) * Gs * Fb / max(4.0 * NdotV * ndl, 1e-4);
-            if (pm.clearcoat > 0.0) {
-                const float Fc = 0.04 + 0.96 * pow(1.0 - vdh, 5.0);
-                spec += pm.clearcoat * distGGX(ndh, ccRough) * Gs * Fc / max(4.0 * NdotV * ndl, 1e-4);
-            }
+            const float spec = waterGlint(N, V, L, NdotV, ndl, r0, specRough, kG, pm.clearcoat, ccRough);
             vec3 c = spec * ndl * lights.dirLights[i].color * (vis * cloudShadowSample(P));
             // Directional lights are deltas → GGX spikes; clamp so a glint blooms
             // bright but never fireflies. (×4 over the global clamp → bright suns.)
@@ -610,16 +620,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             if (atten <= 1e-6) continue;
             const float vis = doShadows ? shadowVis(sunOrig, toL, dist - 1e-2) : 1.0;
             if (vis <= 0.0) continue;
-            const vec3  H   = normalize(V + toL);
-            const float ndh = max(dot(N, H), 0.0);
-            const float vdh = max(dot(V, H), 0.0);
-            const float Gs  = geomSmithG1(NdotV, kG) * geomSmithG1(ndl, kG);
-            const float Fb  = r0 + (1.0 - r0) * pow(1.0 - vdh, 5.0);
-            float spec = distGGX(ndh, specRough) * Gs * Fb / max(4.0 * NdotV * ndl, 1e-4);
-            if (pm.clearcoat > 0.0) {
-                const float Fc = 0.04 + 0.96 * pow(1.0 - vdh, 5.0);
-                spec += pm.clearcoat * distGGX(ndh, ccRough) * Gs * Fc / max(4.0 * NdotV * ndl, 1e-4);
-            }
+            float spec = waterGlint(N, V, toL, NdotV, ndl, r0, specRough, kG, pm.clearcoat, ccRough);
             // Beam POOL — a broad faint sheen where the beam strikes the
             // surface. Real water returns part of a grazing beam diffusely
             // (micro-facets beyond the GGX tail, spray, top-layer scatter);
@@ -627,6 +628,37 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             // pool would otherwise be invisible unless perfectly aligned.
             spec += 0.035 / PI;
             vec3 c = spec * ndl * lights.spotLights[i].color * atten * vis;
+            const float cl = max(max(c.r, c.g), c.b);
+            const float gMax = pc.fireflyClamp * 4.0;
+            if (cl > gMax) c *= gMax / cl;
+            col += c;
+        }
+        // POINT lights — the spot loop without its cone: the same glint and the
+        // same pool, so a lantern over the sea lights the waves under it as it
+        // lights the hull beside it. Falloff and range window are the opaque
+        // path's point loop (shadeDiffuseDirect), so the two surfaces agree on
+        // how far the light reaches.
+        for (uint i = 0u; i < lights.pointCount; ++i) {
+            vec3 toL = lights.pointLights[i].position - P;
+            const float dist = length(toL);
+            if (dist < 1e-4) continue;
+            toL /= dist;
+            const float ndl = dot(N, toL);
+            if (ndl <= 0.0) continue;
+            float atten = 1.0 / max(distFalloff(dist, lights.pointLights[i].decay), 0.01);
+            const float range = lights.pointLights[i].range;
+            if (range > 0.0) {
+                const float tt = dist / range;
+                const float t4 = tt * tt * tt * tt;
+                const float wnd = max(1.0 - t4, 0.0);
+                atten *= wnd * wnd;
+            }
+            if (atten <= 1e-6) continue;
+            const float vis = doShadows ? shadowVis(sunOrig, toL, dist - 1e-2) : 1.0;
+            if (vis <= 0.0) continue;
+            const float spec = waterGlint(N, V, toL, NdotV, ndl, r0, specRough, kG, pm.clearcoat, ccRough)
+                             + 0.035 / PI;// the pool, as the spot loop
+            vec3 c = spec * ndl * lights.pointLights[i].color * atten * vis;
             const float cl = max(max(c.r, c.g), c.b);
             const float gMax = pc.fireflyClamp * 4.0;
             if (cl > gMax) c *= gMax / cl;

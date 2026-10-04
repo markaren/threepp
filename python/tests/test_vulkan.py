@@ -673,6 +673,40 @@ def test_ocean_renders_and_displaces(vk_renderer):
     assert np.ptp(heights) > 1e-3, "wave height field looks flat"
 
 
+def test_point_light_lights_the_ocean(vk_renderer):
+    """A PointLight over the sea is the water's light too. The water shade
+    looped the directional and spot lights only, so a lantern lit the hull
+    beside it and left the water under it black. Night scene, no environment:
+    the lamp is the only thing that can put light on the water."""
+    scene = tp.Scene()
+    scene.background = 0x000000
+    # No choppiness, so no folded crests and no foam: foam is shaded as an
+    # opaque surface and took the lamp all along, which is not the water.
+    scene.add(tp.Ocean(size=200.0, resolution=128, fft_size=256, wind_speed=6.0, choppiness=0.0))
+    lamp = tp.PointLight(0xffffff, 300.0, 0.0, 2.0)
+    lamp.position.set(0, 4, 0)
+    cam = tp.PerspectiveCamera(55, W / H, 0.1, 400)
+    cam.position.set(0, 9, -24)
+    cam.look_at(0, 0, 0)                                  # the water under the lamp = frame centre
+
+    def water_under_lamp():
+        vk_renderer.reset_temporal_history()
+        for _ in range(4):
+            vk_renderer.sim_time = 5.0                    # the same sea both times
+            vk_renderer.render(scene, cam)
+        img = vk_renderer.read_pixels()
+        return float(img[H // 2 - 12:H // 2 + 12, W // 2 - 16:W // 2 + 16].mean())
+
+    try:
+        dark = water_under_lamp()
+        scene.add(lamp)
+        lit = water_under_lamp()
+    finally:
+        vk_renderer.sim_time = None
+    assert dark < 2.0, "the unlit night sea is not black"
+    assert lit > dark + 20.0, "the point light left the water under it dark"
+
+
 def test_depthsensor_pathtraced(vk_renderer):
     # The backend-neutral tp.DepthSensor.scan must work on Vulkan (path-traced
     # through the renderer's TLAS) and reconstruct world-space heights — the same
