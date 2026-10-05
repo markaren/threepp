@@ -94,7 +94,7 @@ float waterGlint(vec3 N, vec3 V, vec3 L, float NdotV, float ndl, float r0,
 // razor-sharp). σ_slope² adds to α² (≈roughness²) for a GGX lobe.
 vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 bool doShadows, float maxLod, uint frame, inout uint seed,
-                float slopeVarSq, vec3 Nmacro) {
+                float slopeVarSq, vec3 Nmacro, ivec2 px, float clusterDist) {
     const float NdotV = max(dot(N, V), 1e-4);
     const float ior   = max(pm.ior, 1.0);
     // ── FROM BELOW ───────────────────────────────────────────────────────────
@@ -619,22 +619,44 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             if (cl > gMax) c *= gMax / cl;
             col += c;
         }
-        // SPOT lights — same GGX glints with cone + range + inverse-square
-        // attenuation, so a sweeping beam (lighthouse) lights the waves it
-        // crosses instead of existing only as the in-scattered air volume.
-        for (uint i = 0u; i < lights.spotCount; ++i) {
-            vec3 toL = lights.spotLights[i].position - P;
+        // POINT and SPOT lights — the same GGX glints with range and
+        // inverse-square attenuation (and, for a spot, its cone), so a sweeping
+        // beam (lighthouse) lights the waves it crosses instead of existing only
+        // as the in-scattered air volume, and a lantern over the sea lights the
+        // waves under it as it lights the hull beside it.
+        // The lights are THIS PIXEL'S CLUSTER CELL, as the opaque path's are
+        // (analyticDirectSplit), not the UBO's eight strongest of each type: in
+        // a scene with more than eight (a town's street lamps, a road's head
+        // lamps) a boat's flood light is rarely among those, and it lit her deck
+        // and left the water under it black. A cell is culled by each light's
+        // range, so what is looped here is what can reach the pixel.
+        const uint cellBase = clusterCellBase(px, clusterDist);
+        const uint cCnt = (pc.clusterLightCount == 0u)
+                              ? 0u
+                              : min(clusterGrid[cellBase], kClusterMaxPerCell);
+        for (uint ci = 0u; ci < cCnt; ++ci) {
+            const uint li = min(clusterGrid[cellBase + 1u + ci], pc.clusterLightCount - 1u);
+            const bool isSpot = clusterLights[li].type > 0.5;
+            vec3 toL = clusterLights[li].position - P;
             const float dist = length(toL);
             if (dist < 1e-4) continue;
             toL /= dist;
             const float ndl = dot(N, toL);
             if (ndl <= 0.0) continue;
-            const float spotCos   = dot(-toL, lights.spotLights[i].direction);
-            const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter,
-                                               lights.spotLights[i].cosAngleInner, spotCos);
-            if (spotAtten <= 0.0) continue;
-            float atten = spotAtten / max(pow(dist, lights.spotLights[i].decay), 0.01);
-            const float range = lights.spotLights[i].range;
+            // Falloff as the opaque path's two loops (shadeDiffuseDirect), so the
+            // two surfaces agree on how far a light reaches: a spot's cone over
+            // dist^decay, a point's distFalloff.
+            float atten;
+            if (isSpot) {
+                const float spotCos   = dot(-toL, clusterLights[li].direction);
+                const float spotAtten = smoothstep(clusterLights[li].cosAngleOuter,
+                                                   clusterLights[li].cosAngleInner, spotCos);
+                if (spotAtten <= 0.0) continue;
+                atten = spotAtten / max(pow(dist, clusterLights[li].decay), 0.01);
+            } else {
+                atten = 1.0 / max(distFalloff(dist, clusterLights[li].decay), 0.01);
+            }
+            const float range = clusterLights[li].range;
             if (range > 0.0) {
                 const float tt = dist / range;
                 const float t4 = tt * tt * tt * tt;
@@ -651,38 +673,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             // at roughness 0.04 the pure specular lobe is so tight the lit
             // pool would otherwise be invisible unless perfectly aligned.
             spec += 0.035 / PI;
-            vec3 c = spec * ndl * lights.spotLights[i].color * atten * vis;
-            const float cl = max(max(c.r, c.g), c.b);
-            const float gMax = pc.fireflyClamp * 4.0;
-            if (cl > gMax) c *= gMax / cl;
-            col += c;
-        }
-        // POINT lights — the spot loop without its cone: the same glint and the
-        // same pool, so a lantern over the sea lights the waves under it as it
-        // lights the hull beside it. Falloff and range window are the opaque
-        // path's point loop (shadeDiffuseDirect), so the two surfaces agree on
-        // how far the light reaches.
-        for (uint i = 0u; i < lights.pointCount; ++i) {
-            vec3 toL = lights.pointLights[i].position - P;
-            const float dist = length(toL);
-            if (dist < 1e-4) continue;
-            toL /= dist;
-            const float ndl = dot(N, toL);
-            if (ndl <= 0.0) continue;
-            float atten = 1.0 / max(distFalloff(dist, lights.pointLights[i].decay), 0.01);
-            const float range = lights.pointLights[i].range;
-            if (range > 0.0) {
-                const float tt = dist / range;
-                const float t4 = tt * tt * tt * tt;
-                const float wnd = max(1.0 - t4, 0.0);
-                atten *= wnd * wnd;
-            }
-            if (atten <= 1e-6) continue;
-            const float vis = doShadows ? shadowVis(sunOrig, toL, dist - 1e-2) : 1.0;
-            if (vis <= 0.0) continue;
-            const float spec = waterGlint(N, V, toL, NdotV, ndl, r0, specRough, kG, pm.clearcoat, ccRough)
-                             + 0.035 / PI;// the pool, as the spot loop
-            vec3 c = spec * ndl * lights.pointLights[i].color * atten * vis;
+            vec3 c = spec * ndl * clusterLights[li].color * atten * vis;
             const float cl = max(max(c.r, c.g), c.b);
             const float gMax = pc.fireflyClamp * 4.0;
             if (cl > gMax) c *= gMax / cl;

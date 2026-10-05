@@ -1192,8 +1192,11 @@ void main() {
         // pre-Phase-2 behaviour. Not a regression: msaa=1 never reaches here
         // with shadeMode==1 at all.
         if (pc.shadeMode == 1u) return;
+        // Its point and spot lights are this pixel's cluster cell: the slice by
+        // view-space -z, as the opaque path's (matches cluster_build's AABB axis).
         vec3 wcol = shadeWater(worldPos, N, V, pm, int(id - 1u),
-                               shadowsOn, maxLod, pc.frame, seed, fineKernelSq, Nmacro);
+                               shadowsOn, maxLod, pc.frame, seed, fineKernelSq, Nmacro,
+                               px, max(-(viewH.z / viewH.w), 0.0));
         // Coverage weighting as in the main path — water-dominant edge pixels
         // reserve geoMinW for dispatch B and blend their own sky minority;
         // the volumetric in-scatter is per-pixel and stays at full weight.
