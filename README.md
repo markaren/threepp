@@ -250,7 +250,10 @@ to a rendered image that can be captured headless and judged.
 
 <table>
 <tr>
-<td align="center" colspan="2"><img src="doc/screenshots/norvasundet_kayak.jpg" width="826" alt="Sea kayak in Nørvasundet"><br><em>Vulkan: a sea kayak under way in Nørvasundet, the cove below the NTNU campus in Ålesund, modelled from Kartverket lidar and sea charts (the scene is not in the repository)</em></td>
+<td align="center" colspan="2"><img src="doc/screenshots/norvasundet_kayak.jpg" width="826" alt="Sea kayak in Nørvasundet"><br><em>Vulkan: a sea kayak under way in a digital twin of a real waterfront in Ålesund, Norway, modelled from Kartverket lidar and sea charts (the scene is not in the repository)</em></td>
+</tr>
+<tr>
+<td align="center" colspan="2"><img src="doc/screenshots/norvasundet_otter.jpg" width="826" alt="Otter X sea drone in Nørvasundet"><br><em>Vulkan: an Otter X sea drone under way in the same twin, the water reflecting the moored boats and the buildings ashore</em></td>
 </tr>
 <tr>
 <td align="center"><img src="doc/screenshots/turbine_survey.jpg" width="400" alt="Offshore wind turbine inspection"><br><em>Vulkan: five robots inspect an offshore wind turbine; the Otter X maps the seabed (<a href="python/examples/turbine">turbine</a>)</em></td>
