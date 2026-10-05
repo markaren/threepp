@@ -1820,9 +1820,9 @@ namespace threepp {
         // the CPU values — so this costs an instance-matrix upload and a
         // dispatch and saves nothing yet. It is the verified foundation for
         // moving those consumers onto the GPU; see
-        // plans/gpu-driven-instances.md. ON by default so the pass is covered
-        // by the same tests as everything else; turn it OFF to A/B its cost or
-        // to take it out of the frame entirely.
+        // plans/gpu-driven-instances.md. OFF by default until a consumer reads
+        // the buffer (the pass measured about 1 ms of wall time at 85k
+        // instances); turn it ON to A/B its cost or to run instanceExpandCheck.
         void setGpuInstanceExpansion(bool enabled);
         [[nodiscard]] bool gpuInstanceExpansion() const;
 
