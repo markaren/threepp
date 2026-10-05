@@ -1,7 +1,7 @@
 """
 usv_rig -- a boat on the FFT ocean: her strips, her drive, her mark on the sea.
 
-Three things, and nothing scene-specific:
+Four things, and nothing scene-specific:
 
   * ``StripHull`` -- one boat on her Bonjean strips: <boat>_spec.json and <boat>_hydro.json
                      (schema threepp.usv_hydro/1, what build_<boat>_blender.py writes). The
@@ -16,6 +16,9 @@ Three things, and nothing scene-specific:
                      actuator nodes of the .glb, the foam. ``drive_for(hull)`` makes a boat's.
   * ``Wake``      -- the hull footprint and the Kelvin wake trail on the ocean, or on one of
                      its vessels (``ocean.vessel(i)``) where several boats share a sea.
+  * ``Wash``      -- what her propulsors and her hull leave ON the water: the races of her
+                     propellers or her jet, and the lane astern of her hull, as sources of the
+                     ocean's wake field (``ocean.wake_field``, a patch of it for each boat).
 
 Nothing here imports threepp or opens a window, and nothing reads a module global belonging to
 a scene: a scene hands in its ocean, its loaded .glb and its own wake figures.
@@ -34,6 +37,7 @@ ocean.sample_height reads the last rendered field, so a boat steps AFTER a rende
     hull = StripHull("otter", ocean)
     hull.seat(x, z, heading)
     wake = Wake(hull, ocean)
+    wash = Wash(hull, drive_for(hull), ocean, 0)      # ocean.wake_field.resolution set before the first render
 
     # on a DP, along a route                    # under her own power
     drive = drive_for(hull).bind(glb_root)      hull.drive = drive_for(hull).bind(glb_root)
@@ -41,6 +45,8 @@ ocean.sample_height reads the last rendered field, so a boat steps AFTER a rende
     hull.advance(dt, substeps)                  hull.drive.tick(dt); hull.advance(dt, substeps)
     u = wake.update(dt)                         u = wake.update(dt)
     drive.follow(u, rate, dt)
+    ocean.clear_wake_sources()                  # once a frame, before the boats' washes
+    wash.update(dt)
     hull.place(glb_root); drive.pose()          hull.place(glb_root); hull.drive.pose()
 
 PER-BOAT NUMBERS
@@ -500,6 +506,14 @@ class Drive:
     def loads_3dof(self, nu_r, vb, w, area):
         raise NotImplementedError(f"{type(self).__name__} has no 3-DOF manoeuvring loads (MANOEUVRING: the pods have)")
 
+    def thrusts(self, u):
+        """Her propulsors at surge speed u, each as (name, where it is, the force it puts on the
+        boat (N), its disc's or nozzle's radius, is it a jet), the first two in the vessel frame.
+        Wash turns these into races on the water. A drive that is the hull's own reports what its
+        actuators are doing; one that only follows a hull something else moves (a DP on a route)
+        reports the thrust her speed takes."""
+        return []
+
     def bind(self, root):
         """Find the actuator nodes under a loaded .glb's root. Returns self."""
         self.nodes = {k: root.get_object_by_name(n) for k, n in self.NODE_NAMES.items()}
@@ -546,6 +560,7 @@ class Waterjet(Drive):
         self.t_bollard = jet["bollard_thrust_n"]
         self.u_top = spec["propulsion"]["top_speed_mps"]
         self.jet_at = np.array(jet["thrust_point"])
+        self.nozzle_r = jet["tailpipe"]["radius"][0]
         self.steer_max = math.radians(jet["steering"]["limit_deg"])
         self.bucket_max = math.radians(jet["reverse_bucket"]["limit_deg"][1])
         self.bt = spec["propulsion"]["bow_thruster"]
@@ -605,6 +620,18 @@ class Waterjet(Drive):
                              -h.c_pitch * q_ + self.HUMP_M * math.exp(-((u - self.HUMP_U) / 2.0) ** 2) * wet
                              * min(max(1.0 - trim_deg / 8.0, 0.0), 1.0)])
         return L.F, Mb
+
+    def thrusts(self, u):
+        d = self.steer
+        if self.hull.drive is self:
+            t = self.throttle * self.thrust_max(u) * (1.0 - 1.6 * self.bucket)
+        else:
+            t = self.resistance(u)
+        out = [("jet", self.jet_at, t * np.array([math.cos(d), 0.0, -math.sin(d)]), self.nozzle_r, True)]
+        if abs(self.thruster) > 0.05:
+            out.append(("bow_thruster", self.bt_at, np.array([0.0, 0.0, self.bt["thrust_n"] * self.thruster]),
+                        self.bt["tunnel_radius"], False))
+        return out
 
     def tick(self, dt):
         self.throttle = slew(self.throttle, self.throttle_cmd, 0.8, dt)
@@ -677,6 +704,18 @@ class _Pods(Drive):
     def thrust_max(self, u):
         """A pod loses thrust with speed: bollard at rest, 60 % of it at the top."""
         return self.t_bollard * (1.0 - 0.4 * min(max(u / self.u_top, 0.0), 1.3))
+
+    def thrusts(self, u):
+        line = self._thrust_line()
+        out = []
+        for side in ("port", "stbd"):
+            if self.hull.drive is self:
+                c = self.pod_command(side)
+                t = c * (self.thrust_max(u) if c >= 0.0 else self.astern * self.t_bollard)
+            else:
+                t = 0.5 * self.resistance(u)
+            out.append(("pod_" + side, self.pod_at[side], t * line, self.disc_r, False))
+        return out
 
     def pod_command(self, side):
         """-1 (full astern) .. 1 (full ahead) for one pod."""
@@ -782,6 +821,7 @@ class AzimuthPods(_Pods):
         self._setup(th, spec["propulsion"]["demo_top_speed_kn"] * 0.5144, spec["pontoons"]["keel_z"],
                     duct["centre_xy"][0], duct["centre_xy"][1])
         self.steer_max = math.radians(th["helm_deg"])
+        self.disc_r = duct["inner_r"]
         self.diff = self.diff_cmd = 0.0
         heel = min(spec["appendages"]["skeg"]["profile_xy"], key=lambda p: p[1])
         # skeg heels and duct bottoms, both sides
@@ -850,6 +890,7 @@ class FixedPods(_Pods):
         self._setup(th, spec["propulsion"]["top_speed_kn"] * 0.5144, spec["frame_tubes"]["aft"]["arm_z"],
                     th["strut_x"] + th["rotor"]["x"], th["pod_y"])
         self.steer_max = 1.0
+        self.disc_r = th["rotor"]["blade_tip_r"]
         guard = th["guard"]
         low = min(y for (_, y) in guard["path_xy"])
         # the thruster guards' feet, both sides
@@ -939,3 +980,179 @@ class Wake:
     def clear(self):
         self.target.clear_wake()
         self.accum, self.last = 0.0, None
+
+
+# --------------------------------------------------------------------------- #
+#  What she leaves ON the water: her races and her lane, in the ocean's wake field
+# --------------------------------------------------------------------------- #
+def race(thrust, advance, area, jet=False, rho=1025.0):
+    """The speed of a propulsor's race THROUGH the water (m/s) from momentum theory: what a
+    thrust (N) takes from a disc or a nozzle of `area` (m2) that the water meets at `advance`
+    (m/s). A propeller is an actuator disc, T = 2 rho A (V + v) v, and its race far astern runs
+    2 v faster than the water round it; a jet takes water in at V and throws it out at Vj,
+    T = rho A Vj (Vj - V), and its race is Vj - V."""
+    t, v = abs(thrust), max(advance, 0.0)
+    if t <= 0.0 or area <= 0.0:
+        return 0.0
+    if jet:
+        return 0.5 * (v + math.sqrt(v * v + 4.0 * t / (rho * area))) - v
+    return math.sqrt(v * v + 2.0 * t / (rho * area)) - v
+
+
+class Wash:
+    """What a boat leaves on the water behind her: a patch of the ocean's wake field that
+    trails her, and her sources in it. Two kinds of producer, and neither knows the other:
+
+      her propulsors   drive.thrusts(u). Each one's race is taken from its thrust (race()), run
+                       down its own line until it has widened to the surface (it widens by
+                       SPREAD of the way it has run; the boat has moved on meanwhile), and put
+                       there as a source: the water moving at what is left of the race's speed,
+                       turbulence a share of that, and air by how hard the race is for how
+                       little water it has over it (w^2 / g d, a Froude number on its
+                       submergence): none under about 1, bubbles above, a white film well above,
+                       and a race that hard breaks the surface wider than it came up.
+                       A second, fainter source lies over the disc itself: the race's air seen
+                       through the water it has not yet come up through, so the mark starts at
+                       her stern. A race is not steady, and where it surfaces wanders a part of
+                       its own width (WANDER).
+      her hulls        the turbulent water a hull drags astern: a lane a hull's breadth wide
+                       from each stern, with no air in it until she is fast for her length.
+
+    hull, drive   the boat; the drive need not be the one that moves her (see Drive.thrusts),
+                  and None is a hull with no propulsor (a kayak: her paddle is put() by the scene)
+    ocean         its wake field must be on (ocean.wake_field.resolution, before the first
+                  render); on a sea that has none (GL) a Wash does nothing
+    index         the patch of the wake field that is hers
+    size          the patch's side (m): how much water astern she keeps. The patch has the
+                  field's resolution whatever its size, so this also sets how fine her mark is
+                  drawn (default 20 lengths of her, between 30 and 120 m)
+    air           scales the air her propulsors take down (1 = as computed)
+
+    The scene clears the ocean's sources once a frame (ocean.clear_wake_sources()) and then
+    updates every boat's Wash."""
+
+    SPREAD = 0.3          # a race's radius grows by this much of the distance it has run
+    TURBULENCE = 0.45     # rms turbulent speed of a race where it surfaces, as a share of its speed there
+    EDDY = 2.4            # her patch's large eddies, in radii of her widest race at the surface
+    WANDER = 0.45         # how far a race's surfacing point strays to either side, in its radii there
+    G = 9.81
+
+    def __init__(self, hull, drive, ocean, index, size=None, air=1.0):
+        self.hull, self.drive, self.ocean = hull, drive, ocean
+        self.patch = ocean.wake_patch(index) if hasattr(ocean, "wake_patch") else None
+        self.size = size or min(max(20.0 * hull.spec["principal"]["loa"], 30.0), 120.0)
+        self.air = air
+        self.last = {}                         # each producer's source point at the last update (world x, z)
+        self.report = {}                       # each producer's last figures, for a readout
+        self.t = 0.0
+        self.put_names = set()                 # the scene's own producers that put() since the last update
+
+    def clear(self):
+        """Empty her patch and forget where her producers were (after she is seated elsewhere)."""
+        if self.patch is not None:
+            self.patch.size = 0.0
+        self.last = {}
+
+    def put(self, name, at, vel, radius, foam=0.0, aeration=0.0, turbulence=0.0, lane=0.0):
+        """A source of any other producer of hers (a paddle's blade, an anchor going down): `at` a
+        point and `vel` the water velocity it imparts over the ground, both in the vessel frame.
+        After update(), every frame the producer is at work; a frame without it ends its trail."""
+        if self.patch is None or not self.patch.size > 0.0:
+            return
+        h = self.hull
+        q = h.to_world(at)
+        v = h.R @ np.asarray(vel, float)
+        texel = self.size / max(self.ocean.wake_field.resolution, 1)
+        self._put("put:" + name, q[[0, 2]], v[[0, 2]], max(radius, 1.25 * texel), foam, aeration, turbulence, lane)
+        self.put_names.add("put:" + name)
+
+    def _put(self, name, p, vel, radius, foam, aeration, turbulence, lane):
+        x0, z0 = self.last.get(name, (p[0], p[1]))
+        if math.hypot(p[0] - x0, p[1] - z0) > 0.5 * self.size:
+            x0, z0 = p[0], p[1]                # she was moved, not sailed
+        self.ocean.add_wake_source(float(p[0]), float(p[1]), float(vel[0]), float(vel[1]), float(radius),
+                                   float(foam), float(aeration), float(turbulence), float(lane), float(x0), float(z0))
+        self.last[name] = (float(p[0]), float(p[1]))
+
+    def update(self, dt, on=True):
+        """After the hull's advance: move her patch and add this frame's sources."""
+        if self.patch is None:
+            return
+        if not on:
+            self.clear()
+            return
+        h = self.hull
+        fwd = np.array([h.R[0, 0], h.R[2, 0]])
+        fwd /= max(float(np.linalg.norm(fwd)), 1e-9)
+        loa = h.spec["principal"]["loa"]
+        # she sits a length inside its leading edge; the rest of it lies astern
+        c = h.p[[0, 2]] - fwd * (0.5 * self.size - 0.08 * self.size - loa)
+        self.patch.set(float(c[0]), float(c[1]), float(self.size))
+        texel = self.size / max(self.ocean.wake_field.resolution, 1)
+        self.t += dt
+        for name in [n for n in self.last if n.startswith("put:") and n not in self.put_names]:
+            del self.last[name]                # it was not put last frame: its trail has ended
+        self.put_names = set()
+        u = float(h.R[:, 0] @ h.v)
+        vb = h.v[[0, 2]]
+        widest = 0.0
+
+        for k, (name, at, force, r0, jet) in enumerate(self.drive.thrusts(u) if self.drive is not None else ()):
+            t = float(np.linalg.norm(force))
+            if t < 1e-3:
+                self.last.pop(name, None)
+                self.last.pop(name + "_disc", None)
+                continue
+            line = -(h.R @ (np.asarray(force, float) / t))       # the race runs against the force (world)
+            d = line[[0, 2]]
+            d /= max(float(np.linalg.norm(d)), 1e-9)
+            q = h.to_world(at)
+            depth = float(self.ocean.sample_height(float(q[0]), float(q[2]), h.mask)) - float(q[1])
+            if depth < -r0:                                      # out of the water: it draws air and makes no race
+                self.last.pop(name, None)
+                self.last.pop(name + "_disc", None)
+                continue
+            w = race(t, -float(vb @ d), math.pi * r0 * r0, jet)
+            if w < 0.02:
+                self.last.pop(name, None)
+                self.last.pop(name + "_disc", None)
+                continue
+            cover = max(depth - r0, 0.0)                         # water over the top of the race where it starts
+            run = cover / self.SPREAD                            # how far it runs before it has widened to the surface
+            rs = r0 + self.SPREAD * run
+            ws = w * r0 / rs                                     # momentum kept, spread over the wider race
+            ts = run / max(0.5 * (w + ws), 1e-3)
+            p = q[[0, 2]] - vb * ts + d * run                    # where that water is when it gets there
+            a, b = 1.7 * self.t + 2.4 * k, 3.1 * self.t + 4.1 * k
+            p = p + np.array([-d[1], d[0]]) * (self.WANDER * rs * (math.sin(a) + 0.6 * math.sin(b)) / 1.6)
+            fr = self.air * w * w / (self.G * max(cover, 0.02))
+            aer = 1.0 - math.exp(-(fr / 2.5) ** 2)
+            foam = 1.0 - math.exp(-max(fr - 1.5, 0.0) ** 2 / 20.0)
+            turb = self.TURBULENCE * ws
+            rs *= 1.0 + 0.25 * min(math.sqrt(fr), 6.0)           # a hard race breaks the surface wider than it arrived
+            widest = max(widest, rs)
+            self._put(name, p, d * ws, max(rs, 1.25 * texel), foam, aer, turb, min(turb / 0.05, 1.0))
+            if run > 2.0 * r0:                                   # over the disc: its air, through the water above it
+                self._put(name + "_disc", q[[0, 2]], d * (0.4 * w), max(1.3 * r0, 1.25 * texel), 0.0,
+                          0.6 * aer * math.exp(-1.2 * cover), 0.0, 0.0)
+            else:
+                self.last.pop(name + "_disc", None)
+            self.report[name] = {"thrust": t, "race": w, "at_surface": ws, "run": run, "froude": fr,
+                                 "aeration": aer, "foam": foam}
+
+        # her hulls: the water she drags, a lane from each stern
+        hl, hb, xc = h.excl
+        zs = getattr(self.drive, "pontoon_z", 0.0)
+        rh = max(hb - zs, 0.1)                                   # a hull's half-breadth at the water
+        self.patch.eddy = float(max(self.EDDY * max(widest, rh), 4.0 * texel))
+        fn = abs(u) / math.sqrt(self.G * 2.0 * hl)
+        lane = smoothstep(0.15, 0.6, abs(u))
+        if lane > 0.0:
+            air = smoothstep(0.35, 0.85, fn)                     # a transom runs dry and white when she is fast for her length
+            for k, z in enumerate((-zs, zs) if zs > 0.0 else (0.0,)):
+                q = h.to_world([xc - math.copysign(hl, u), h.design["waterline_y_at_x0"], z])
+                self._put(f"hull_{k}", q[[0, 2]], 0.15 * vb, max(rh, 1.25 * texel), smoothstep(0.45, 1.05, fn) * air,
+                          air, 0.07 * abs(u), lane)
+        else:
+            for k in range(2):
+                self.last.pop(f"hull_{k}", None)

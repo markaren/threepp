@@ -68,7 +68,7 @@ sys.path.insert(0, os.path.dirname(_HERE))                     # examples/ (demo
 
 import threepp as tp
 from demo_common import Encoder, cli_arg, parse_size, resize_handler, write_radiance_hdr
-from usv_rig import StripHull, Wake, attitude, drive_for, rot_y, rot_z, smoothstep
+from usv_rig import StripHull, Wake, Wash, attitude, drive_for, rot_y, rot_z, smoothstep
 
 if not tp.HAS_VULKAN:
     print("The FFT ocean needs a Vulkan build of threepp (-DTHREEPP_WITH_VULKAN=ON).")
@@ -221,6 +221,7 @@ ocean = tp.Ocean(size=SEA, resolution=512, wind_speed=max(WIND, 0.5), wind_theta
                  choppiness=0.5, fetch=FETCH)
 if FLAT:
     ocean.params.wave_scale = 0.0
+ocean.wake_field.resolution, ocean.wake_field.patches = 1024, 1      # what she leaves on the water (usv_rig.Wash)
 scene.add(ocean)
 floor_mat = tp.MeshStandardMaterial()
 floor_mat.color = 0x04070a
@@ -246,6 +247,7 @@ hull = StripHull(BOAT, ocean, LOAD)
 hull.drive = drive = drive_for(hull).bind(boat)
 hull.R = rot_y(0.0) @ rot_z(math.radians(hull.design["trim_deg"]))
 wake = Wake(hull, ocean)
+wash = Wash(hull, drive, ocean, 0)
 
 camera = tp.PerspectiveCamera(45.0, W / H, 0.1, 3000.0)
 camera.position.set(-14.0 * VIEW, 5.0 * VIEW, -9.0 * VIEW)
@@ -287,6 +289,8 @@ def sea_update(dt):
     u = wake.update(dt, hull_excl_on)
     ocean.clear_foam_disturbances()
     drive.foam(ocean, u)
+    ocean.clear_wake_sources()
+    wash.update(dt, hull_excl_on)             # her propulsors' races and her hull's lane, in the wake field
     c = wake.centre
     ocean.warp_toward(float(c[0]), float(c[2]), 0.3)
 

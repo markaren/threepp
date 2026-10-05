@@ -9,7 +9,7 @@ the same way; see [The Otter X](#the-otter-x) and [The Otter](#the-otter) at the
 |---|---|
 | `mariner_spec.json` | every number: brochure figures, the lines fitted to the vendor's renders and photo, the sensor tower, the waterjet, the mass budget, the materials |
 | `build_mariner_blender.py` | builds the geometry (numpy), exports `mariner.glb` through Blender, and integrates the hydrostatics into `mariner_hydro.json` |
-| `../usv_rig.py` | the boat for any scene: `StripHull` (her buoyancy tables and the rigid body), her drive (`Waterjet`, `AzimuthPods`, `FixedPods`: thrust, resistance, helm, actuator nodes, foam) and `Wake` (her footprint and wake on the ocean); see [In another scene](#in-another-scene) |
+| `../usv_rig.py` | the boat for any scene: `StripHull` (her buoyancy tables and the rigid body), her drive (`Waterjet`, `AzimuthPods`, `FixedPods`: thrust, resistance, helm, actuator nodes, foam), `Wake` (her footprint and wake on the ocean) and `Wash` (her propulsors' races and her hull's lane on the water, in the ocean's wake field); see [In another scene](#in-another-scene) |
 | `usv_ocean.py` | the demo on `usv_rig.py`: she floats on the FFT ocean on her own buoyancy tables and runs on a steerable jet (`--boat otterx`: the Otter X on her pods; `--boat otter`: the Otter) |
 | `mariner.glb`, `mariner_hydro.json` | generated, not committed |
 
@@ -225,14 +225,30 @@ the hull on its ocean, and steps her after each render (`sample_height` reads th
 field):
 
 ```python
-from usv_rig import StripHull, Wake, drive_for
+from usv_rig import StripHull, Wake, Wash, drive_for
 
+ocean.wake_field.resolution = 1024          # before the first render; .patches = one for each boat
 boat = tp.GLTFLoader().load("usv/otter.glb").scene
 hull = StripHull("otter", ocean)             # spec_dir=... for a boat kept elsewhere
 hull.seat(x, z, heading)
 wake = Wake(hull, ocean)                    # ocean.vessel(i) where several boats share the sea
 drive = drive_for(hull).bind(boat)
+wash = Wash(hull, drive, ocean, 0)          # patch 0 of the wake field is hers
 ```
+
+What she leaves on the water is the ocean's wake field (`ocean.wake_field`, `tp.DisplacedMesh.WakeField`):
+patches of simulated surface that trail whoever is making a mark, world-anchored and without the
+foam texture's repeat. Each texel carries foam, the bubbles under the surface, turbulence, the lane
+where the short waves are flattened, and the water's own velocity; the field is carried by that
+velocity and stirred by its turbulence, so a race is drawn out and torn by motion. The field knows
+nothing of boats. A producer is a source (`ocean.add_wake_source`): a point, the water velocity it
+imparts, a radius, and how much of each quantity it puts in. `Wash` makes the sources of a boat:
+each propulsor's race from its thrust by momentum theory (`race()`; `Drive.thrusts(u)` names a
+drive's propulsors), run to where it has widened to the surface, with air by how hard it is for the
+water over it, and the lane her hull drags from each stern. Each frame: `ocean.clear_wake_sources()`
+once, then every boat's `wash.update(dt)`. Anything else puts its own with `wash.put(...)`, as the
+Nørvasundet scene does for a kayak's paddle blades (`Wash(hull, None, ...)` is a hull with no
+propulsor).
 
 Under her own power, `hull.drive = drive`: the scene writes `drive.throttle_cmd` and
 `drive.steer_cmd`, and each frame calls `drive.tick(dt)`, `hull.advance(dt, substeps)`,
