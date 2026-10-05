@@ -10,8 +10,8 @@ Headless, from this folder:
 Hydrostatics only (plain Python + numpy, no Blender; writes buoys_hydro.json):
     python build_buoys_blender.py --hydro-only
 
-The mesh primitives and the Blender material/object helpers are the Mariner generator's
-(../usv/build_mariner_blender.py); this script adds the marks. Geometry is built with numpy in
+The mesh primitives and the Blender material/object helpers are build_common's
+(../build_common.py, shared by every generator); this script adds the marks. Geometry is built with numpy in
 the frame X forward, Y up, Z starboard (metres) and converted to Blender's Z-up only when handed
 to bpy; the glTF exporter's Y-up conversion maps it back.
 
@@ -43,9 +43,9 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "usv"))
-from build_mariner_blender import (Part, R, T, Z_TO_Y, box, box_between, make_materials,  # noqa: E402
-                                   new_object, revolve, signed_volume)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # examples/ (build_common)
+from build_common import (Part, R, T, Z_TO_Y, box, box_between, make_materials, new_object, revolve,  # noqa: E402
+                          signed_volume)
 
 
 # ---------------------------------------------------------------- extra primitives

@@ -10,9 +10,9 @@ Headless:
 Hydrostatics only (plain Python + numpy, no Blender; writes trollfjord_hydro.json):
     python build_trollfjord_blender.py --hydro-only
 
-The mesh primitives, the Newell closure check (Part), the hydrostatic integrator and
-the Blender export are the Mariner generator's (../usv/build_mariner_blender.py); the
-export and the gates are the sjark's (build_sjark_blender.py). All geometry is built
+The mesh primitives, the Newell closure check (Part), the hydrostatic integrator, its
+gates and the Blender export are build_common's (../build_common.py, shared by every
+generator); this script adds the ship. All geometry is built
 with numpy in the spec's vessel frame (X forward, Y up, Z starboard, metres, origin on
 the centreline on the baseline at mid-LOA) and converted to Blender's Z-up only when a
 mesh or a transform is handed to bpy; the glTF exporter maps it straight back.
@@ -58,17 +58,10 @@ import sys
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "..", "usv"))
-sys.path.insert(0, HERE)
-from build_mariner_blender import (Hydro, Part, T, Z_TO_X, Z_TO_Y, box_between, clip_slab,  # noqa: E402
-                                   cylinder, frustum, hydrostatics, loft, make_materials, mass_condition,
-                                   new_object, pchip, revolve, sensor_frame, strut)
-from build_sjark_blender import check_gates, export, mass_check  # noqa: E402
-
-
-def table(t):
-    a = np.asarray(t, float)
-    return pchip(a[:, 0], a[:, 1])
+sys.path.insert(0, os.path.dirname(HERE))          # examples/ (build_common)
+from build_common import (Hydro, Part, T, Z_TO_X, Z_TO_Y, box_between, check_gates, clip_slab, cylinder,  # noqa: E402
+                          export, frustum, hydrostatics, loft, make_materials, mass_check, mass_condition,
+                          new_object, revolve, sensor_frame, strut, table)
 
 
 # ---------------------------------------------------------------- hull lines

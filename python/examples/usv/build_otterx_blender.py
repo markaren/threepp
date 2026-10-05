@@ -10,8 +10,8 @@ Headless:
 Hydrostatics only (plain Python + numpy, no Blender; writes otterx_hydro.json):
     python build_otterx_blender.py --hydro-only
 
-The mesh primitives, the hydrostatic integrator and the Blender export are the
-Mariner generator's (build_mariner_blender.py, next to this file); this script
+The mesh primitives, the hydrostatic integrator and the Blender export are
+build_common's (../build_common.py, shared by every generator); this script
 adds the catamaran. All geometry is built with numpy in the spec's vessel frame
 (X forward, Y up, Z starboard, metres) and converted to Blender's Z-up only when
 a mesh or a transform is handed to bpy. The glTF exporter's Y-up conversion maps
@@ -48,26 +48,10 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from build_mariner_blender import (Part, R, T, Z_TO_X, Z_TO_Y, box, box_between, clip_slab,  # noqa: E402
-                                   cylinder, extrude_xy, frame_from_forward_up, hydrostatics, loft, make_materials,
-                                   mass_condition, new_object, pchip, revolve, sensor_frame)
-
-
-def annulus(r0, r1, z0, z1, n):
-    """Closed ring (a thick-walled tube) about +Z from z0 to z1, inner radius r0, outer r1."""
-    loops = [(r0, z0), (r1, z0), (r1, z1), (r0, z1)]
-    v, f = [], []
-    for (r, z) in loops:
-        for i in range(n):
-            a = 2 * math.pi * i / n
-            v.append((r * math.cos(a), r * math.sin(a), z))
-    for k in range(4):
-        a, b = k * n, ((k + 1) % 4) * n
-        for i in range(n):
-            j = (i + 1) % n
-            f.append((a + i, a + j, b + j, b + i))
-    return v, f
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # examples/ (build_common)
+from build_common import (Part, R, T, Z_TO_X, Z_TO_Y, annulus, box, box_between, clip_slab, cylinder,  # noqa: E402
+                          extrude_xy, frame_from_forward_up, hydrostatics, loft, make_materials,
+                          mass_condition, new_object, pchip, revolve, sensor_frame)
 
 
 def lerp2(p, q, y):

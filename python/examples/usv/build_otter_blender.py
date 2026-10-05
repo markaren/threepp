@@ -10,9 +10,9 @@ Headless:
 Hydrostatics only (plain Python + numpy, no Blender; writes otter_hydro.json):
     python build_otter_blender.py --hydro-only
 
-The mesh primitives, the hydrostatic integrator and the Blender export are the
-Mariner generator's (build_mariner_blender.py) and the demihull lines are the
-Otter X's (build_otterx_blender.py), both next to this file. Geometry is built
+The mesh primitives, the hydrostatic integrator and the Blender export are
+build_common's (../build_common.py) and the demihull lines are the
+Otter X's (build_otterx_blender.py, next to this file). Geometry is built
 with numpy in the spec's vessel frame (X forward, Y up, Z starboard, metres).
 
 Node hierarchy (all names exact):
@@ -38,10 +38,11 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from build_mariner_blender import (Part, R, T, Z_TO_X, Z_TO_Y, box, box_between, cylinder,  # noqa: E402
-                                   extrude_xy, frame_from_forward_up, hydrostatics, loft, make_materials, mass_condition,
-                                   new_object, revolve, sensor_frame, strut)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # examples/ (build_common)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))                    # build_otterx_blender
+from build_common import (Part, R, T, Z_TO_X, Z_TO_Y, box, box_between, cylinder, extrude_xy,  # noqa: E402
+                          frame_from_forward_up, hydrostatics, loft, make_materials, mass_condition,
+                          new_object, revolve, sensor_frame, strut)
 from build_otterx_blender import PontoonLines, lerp2  # noqa: E402
 
 XZ_PRISM = np.array([[1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], float)   # extrude_xy's (a, b, c) -> (x=a, y=c, z=b)

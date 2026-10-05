@@ -10,8 +10,8 @@ Headless:
 Geometry only (plain Python + numpy, no Blender; prints the checks):
     python build_remus_blender.py --check
 
-The mesh primitives and the Blender export are the Mariner generator's
-(../usv/build_mariner_blender.py); this script adds the vehicle. All geometry is built
+The mesh primitives and the Blender export are build_common's
+(../build_common.py, shared by every generator); this script adds the vehicle. All geometry is built
 with numpy in the model frame (X forward, Y up, Z right, metres, origin at the centre of
 buoyancy) and converted to Blender's Z-up only when a mesh or a transform is handed to
 bpy. The glTF exporter's Y-up conversion maps it straight back, so every number in the
@@ -46,9 +46,9 @@ import numpy as np
 
 TRAPZ = getattr(np, "trapezoid", None) or np.trapz      # numpy 2 renamed it; Blender's may be older
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(os.path.dirname(HERE), "usv"))
-from build_mariner_blender import (Part, R, T, Z_TO_X, box, cylinder, loft,  # noqa: E402
-                                   make_materials, new_object, revolve, sensor_frame)
+sys.path.insert(0, os.path.dirname(HERE))          # examples/ (build_common)
+from build_common import (Part, R, T, Z_TO_X, box, cylinder, loft, make_materials, new_object, revolve,  # noqa: E402
+                          sensor_frame)
 
 
 # ---------------------------------------------------------------- the hull

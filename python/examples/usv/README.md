@@ -9,6 +9,7 @@ the same way; see [The Otter X](#the-otter-x) and [The Otter](#the-otter) at the
 |---|---|
 | `mariner_spec.json` | every number: brochure figures, the lines fitted to the vendor's renders and photo, the sensor tower, the waterjet, the mass budget, the materials |
 | `build_mariner_blender.py` | builds the geometry (numpy), exports `mariner.glb` through Blender, and integrates the hydrostatics into `mariner_hydro.json` |
+| `../build_common.py` | what every generator shares: the mesh accumulator and its primitives, the hydrostatic integrator, the Blender export |
 | `../usv_rig.py` | the boat for any scene: `StripHull` (her buoyancy tables and the rigid body), her drive (`Waterjet`, `AzimuthPods`, `FixedPods`: thrust, resistance, helm, actuator nodes, foam), `Wake` (her footprint and wake on the ocean) and `Wash` (her propulsors' races, her hull's lane and her waves on the water, in the ocean's wake field); see [In another scene](#in-another-scene) |
 | `usv_ocean.py` | the demo on `usv_rig.py`: she floats on the FFT ocean on her own buoyancy tables and runs on a steerable jet (`--boat otterx`: the Otter X on her pods; `--boat otter`: the Otter) |
 | `mariner.glb`, `mariner_hydro.json` | generated, not committed |
@@ -85,7 +86,7 @@ Maritime Robotics' Otter X, a 4.6 m electric catamaran on two rim-drive azimuth 
 | file | what it is |
 |---|---|
 | `otterx_spec.json` | every number: brochure figures, the lines and fittings fitted to the vendor's side and front renders, the mass budget, the materials |
-| `build_otterx_blender.py` | builds the geometry (numpy) with the Mariner generator's mesh, hydrostatics and export code, exports `otterx.glb` through Blender, and integrates `otterx_hydro.json` |
+| `build_otterx_blender.py` | builds the geometry (numpy) with `../build_common.py`'s mesh, hydrostatics and export code, exports `otterx.glb` through Blender, and integrates `otterx_hydro.json` |
 | `otterx.glb`, `otterx_hydro.json` | generated, not committed |
 
 From this folder, once (about 90 s, most of it the hydrostatics):
@@ -165,7 +166,7 @@ two fixed electric pods (she steers on differential thrust).
 | file | what it is |
 |---|---|
 | `otter_spec.json` | every number: the product page's figures, the lines and fittings read off the vendor's side and front renders, the mass budget, the materials |
-| `build_otter_blender.py` | builds the geometry with the Mariner generator's mesh, hydrostatics and export code and the Otter X's demihull lines, exports `otter.glb` through Blender, and integrates `otter_hydro.json` |
+| `build_otter_blender.py` | builds the geometry with `../build_common.py`'s mesh, hydrostatics and export code and the Otter X's demihull lines, exports `otter.glb` through Blender, and integrates `otter_hydro.json` |
 | `otter.glb`, `otter_hydro.json` | generated, not committed |
 
 ```

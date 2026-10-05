@@ -14,8 +14,8 @@ Seeded liveries (colours, registration, gear) for synthetic-data diversity, one 
 Hydrostatics only (plain Python + numpy, no Blender; writes sjark_hydro.json):
     python build_sjark_blender.py --hydro-only
 
-The mesh primitives, the hydrostatic integrator and the Blender export are the
-Mariner generator's (../usv/build_mariner_blender.py); this script adds the sjark.
+The mesh primitives, the hydrostatic integrator, its gates and the Blender export are
+build_common's (../build_common.py, shared by every generator); this script adds the sjark.
 All geometry is built with numpy in the spec's vessel frame (X forward, Y up,
 Z starboard, metres) and converted to Blender's Z-up only when a mesh or a
 transform is handed to bpy. The glTF exporter's Y-up conversion maps it straight
@@ -61,15 +61,10 @@ import sys
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "..", "usv"))
-from build_mariner_blender import (Part, T, Z_TO_X, Z_TO_Y, box_between, clip_slab,  # noqa: E402
-                                   cylinder, frame_from_forward_up, frustum, hydrostatics, loft, make_materials,
-                                   mass_condition, new_object, pchip, revolve, sensor_frame, strut)
-
-
-def table(t):
-    a = np.asarray(t, float)
-    return pchip(a[:, 0], a[:, 1])
+sys.path.insert(0, os.path.dirname(HERE))          # examples/ (build_common)
+from build_common import (Part, T, Z_TO_X, Z_TO_Y, box_between, check_gates, clip_slab, cylinder, export,  # noqa: E402
+                          frame_from_forward_up, frustum, hydrostatics, loft, make_materials, mass_check,
+                          mass_condition, new_object, revolve, sensor_frame, strut, table)
 
 
 # ---------------------------------------------------------------- hull lines
@@ -731,15 +726,6 @@ def apply_livery(spec, lv):
 spec_cache = {}
 
 
-def mass_check(spec):
-    M = spec["mass"]
-    tot = sum(b["mass"] for b in M["budget"])
-    assert abs(tot - M["dry"]) < 1e-6, ("budget does not sum to dry", tot)
-    m, com = mass_condition(spec, "lightship")
-    assert all(abs(com[i] - M["com_dry"][i]) < 0.005 for i in range(3)), ("com_dry stale", [round(c, 4) for c in com])
-    return com
-
-
 def build_geometry(spec, gear):
     L = Lines(spec)
     house = House(spec, L)
@@ -756,20 +742,6 @@ def build_geometry(spec, gear):
     parts = {"hull": hull, "bulwark": bulwark, "wheelhouse": wh, "windows": glass, "mast": mast,
              "deck_fittings": fit, "net_hauler": hauler}
     return parts, tris, {"L": L, "house": house, "mast": mast_pts, "posts": posts, "hub": hub}
-
-
-def check_gates(spec, hydro):
-    HS, P = spec["hydrostatics"], spec["principal"]
-    d = hydro["conditions"][spec["mass"]["design_condition"]]
-    errs = []
-    if abs(d["draft_max"] - P["draft_reference"]) > HS["draft_tolerance"]:
-        errs.append(f"draft {d['draft_max']:.3f} vs {P['draft_reference']} +- {HS['draft_tolerance']}")
-    if abs(d["trim_deg"]) > HS["trim_limit_deg"]:
-        errs.append(f"trim {d['trim_deg']:.2f} deg")
-    lo, hi = HS["gm_t_range"]
-    if not lo <= d["gm_t"] <= hi:
-        errs.append(f"GM_T {d['gm_t']:.3f} outside {lo}..{hi}")
-    assert not errs, ("hydrostatic gates failed", errs)
 
 
 def build_blender(spec, parts, hydro, info, lv, reg, gear, seed):
@@ -854,23 +826,6 @@ def build_blender(spec, parts, hydro, info, lv, reg, gear, seed):
         new_object(name, None, mats, root, reg_frame(spec, L, s),
                    props={"text": reg, "convention": "local +Z = outward hull normal, +X = reading direction"})
     return root
-
-
-def export(path_out):
-    import bpy
-    bpy.context.view_layer.update()
-    tris_n = 0
-    for ob in bpy.context.scene.objects:
-        if ob.type == "MESH":
-            tris_n += sum(len(p.vertices) - 2 for p in ob.data.polygons)
-    os.makedirs(os.path.dirname(path_out) or ".", exist_ok=True)
-    tmp = path_out + ".tmp.glb"
-    bpy.ops.export_scene.gltf(filepath=tmp, export_format="GLB", export_yup=True,
-                              export_apply=False, export_extras=True, export_cameras=False,
-                              export_lights=False, use_selection=False, export_animations=False,
-                              export_texcoords=True, export_normals=True)
-    os.replace(tmp, path_out)
-    return tris_n
 
 
 def main(argv):

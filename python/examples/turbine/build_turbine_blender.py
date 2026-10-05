@@ -10,8 +10,8 @@ Headless:
 Geometry only (plain Python + numpy, no Blender; runs the checks):
     python build_turbine_blender.py --check
 
-The mesh primitives and the Blender export are the Mariner generator's
-(../usv/build_mariner_blender.py). Frame of the spec: X upwind (the rotor is on
+The mesh primitives and the Blender export are build_common's
+(../build_common.py, shared by every generator). Frame of the spec: X upwind (the rotor is on
 +X of the tower), Y up, Z = X x Y, metres, origin on the pile axis at MSL.
 
 Node hierarchy (all names exact):
@@ -40,11 +40,9 @@ import time
 import numpy as np
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "usv"))
-from build_mariner_blender import (Part, R, T, Z_TO_X, Z_TO_Y, box, box_between, cylinder,  # noqa: E402
-                                   frame_from_forward_up, frustum, loft, make_materials, new_object,
-                                   revolve, strut)
-from build_otterx_blender import annulus  # noqa: E402
+sys.path.insert(0, os.path.dirname(_HERE))         # examples/ (build_common)
+from build_common import (Part, R, T, Z_TO_X, Z_TO_Y, annulus, box, box_between, cylinder,  # noqa: E402
+                          frame_from_forward_up, frustum, loft, make_materials, new_object, revolve, strut)
 
 
 def val(d):

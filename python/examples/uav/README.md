@@ -13,7 +13,7 @@ a `.glb` that threepp loads with `GLTFLoader`, and a rig any scene imports.
 |---|---|
 | `x8_spec.json` | every number, each with its source: the article's tables, the product page, or ASSUMED with the reason; the article's trim point, linear matrices and poles for the comparison; the 3D model's planform (fitted to the vendor's underside photo), the materials |
 | `../x8_rig.py` | the aircraft for any scene: `X8` (the article's model), `Autopilot` and `LOS` (ours), `Visual` (the `.glb` posed from the model); no threepp import |
-| `build_x8_blender.py` | builds the geometry (numpy) with the Mariner generator's mesh and export code and exports `x8.glb` through Blender |
+| `build_x8_blender.py` | builds the geometry (numpy) with `../build_common.py`'s mesh and export code and exports `x8.glb` through Blender |
 | `x8_flight.py` | the example: the X8 flies a route (a straight leg, a turn, a leg) over a lake in a wind you set; window, stills or telemetry |
 | `x8.glb` | generated, not committed |
 

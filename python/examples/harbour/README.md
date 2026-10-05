@@ -4,7 +4,7 @@ Boats and floating marks for the maritime demos and for synthetic perception dat
 the way the Mariner is (`../usv/`): one spec file holds every number, the geometry is
 built in numpy, headless Blender only assembles and exports the `.glb`, and the
 hydrostatics go to a JSON file. The builders import their primitives, the Newell closure
-check and the hydrostatic integrator from `../usv/build_mariner_blender.py`.
+check and the hydrostatic integrator from `../build_common.py`.
 
 | file | what it is |
 |---|---|
