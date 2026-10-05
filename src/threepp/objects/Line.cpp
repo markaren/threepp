@@ -22,9 +22,10 @@ Line::Line(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> m
     : geometry_(geometry ? std::move(geometry) : BufferGeometry::create()),
       ObjectWithMaterials({material ? std::move(material) : LineBasicMaterial::create()}) {}
 
-std::string Line::type() const {
+const std::string& Line::type() const {
 
-    return "Line";
+    static const std::string typeName = "Line";
+    return typeName;
 }
 
 std::shared_ptr<BufferGeometry> Line::geometry() const {

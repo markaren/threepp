@@ -12,7 +12,7 @@ namespace threepp {
     class AmbientLight: public Light {
 
     public:
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<AmbientLight> create(const Color& color = 0xffffff, std::optional<float> intensity = std::nullopt);
 

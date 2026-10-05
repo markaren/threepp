@@ -663,7 +663,7 @@ struct GLMaterials::Impl {
 
     void refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height, RenderTarget* transmissionRenderTarget) {
 
-        const auto type = material->type();
+        const auto& type = material->type();
 
         if (type == "MeshBasicMaterial") {
 

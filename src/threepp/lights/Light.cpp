@@ -8,9 +8,10 @@ Light::Light(const Color& color, std::optional<float> intensity)
     : color(color), intensity(intensity.value_or(1)) {}
 
 
-std::string Light::type() const {
+const std::string& Light::type() const {
 
-    return "Light";
+    static const std::string typeName = "Light";
+    return typeName;
 }
 
 void Light::copy(const Object3D& source, bool recursive) {

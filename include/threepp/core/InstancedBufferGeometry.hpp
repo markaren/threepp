@@ -43,9 +43,10 @@ namespace threepp {
         explicit InstancedBufferGeometry(size_t instanceCount = 0)
             : instanceCount(instanceCount) {}
 
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] const std::string& type() const override {
 
-            return "InstancedBufferGeometry";
+            static const std::string typeName = "InstancedBufferGeometry";
+            return typeName;
         }
 
         static std::shared_ptr<InstancedBufferGeometry> create(size_t instanceCount = 0) {

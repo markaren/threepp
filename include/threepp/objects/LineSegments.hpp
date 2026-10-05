@@ -14,7 +14,7 @@ namespace threepp {
                 const std::shared_ptr<BufferGeometry>& geometry,
                 const std::shared_ptr<Material>& material);
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         void computeLineDistances() override;
 

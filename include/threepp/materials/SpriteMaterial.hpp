@@ -52,7 +52,7 @@ namespace threepp {
             std::optional<bool> sizeAttenuation_;
         };
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<SpriteMaterial> create(const std::unordered_map<std::string, MaterialValue>& values = {});
 

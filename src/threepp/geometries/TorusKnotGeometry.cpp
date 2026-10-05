@@ -138,9 +138,10 @@ TorusKnotGeometry::TorusKnotGeometry(const Params& params)
     this->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
 }
 
-std::string TorusKnotGeometry::type() const {
+const std::string& TorusKnotGeometry::type() const {
 
-    return "TorusKnotGeometry";
+    static const std::string typeName = "TorusKnotGeometry";
+    return typeName;
 }
 
 std::shared_ptr<TorusKnotGeometry> TorusKnotGeometry::create(const Params& params) {

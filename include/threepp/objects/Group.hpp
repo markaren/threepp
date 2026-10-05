@@ -10,7 +10,7 @@ namespace threepp {
     class Group: public Object3D {
 
     public:
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<Group> create();
 

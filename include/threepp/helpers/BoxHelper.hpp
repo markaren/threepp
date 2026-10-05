@@ -10,7 +10,7 @@ namespace threepp {
     class BoxHelper: public LineSegments {
 
     public:
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         void update();
 

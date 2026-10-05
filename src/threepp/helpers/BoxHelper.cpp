@@ -22,9 +22,10 @@ BoxHelper::BoxHelper(Object3D& object, const Color& color)
 }
 
 
-std::string BoxHelper::type() const {
+const std::string& BoxHelper::type() const {
 
-    return "BoxHelper";
+    static const std::string typeName = "BoxHelper";
+    return typeName;
 }
 
 void BoxHelper::update() {

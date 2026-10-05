@@ -245,7 +245,10 @@ namespace threepp::uav {
         [[nodiscard]] const std::shared_ptr<ParticleField>& field() const { return field_; }
         [[nodiscard]] const Params& params() const { return p_; }
 
-        [[nodiscard]] std::string type() const override { return "DownwashEffect"; }
+        [[nodiscard]] const std::string& type() const override {
+            static const std::string typeName = "DownwashEffect";
+            return typeName;
+        }
 
         explicit DownwashEffect(const Params& params);
         ~DownwashEffect() override = default;

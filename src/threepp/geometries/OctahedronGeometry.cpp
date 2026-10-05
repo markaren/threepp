@@ -21,9 +21,10 @@ namespace {
 OctahedronGeometry::OctahedronGeometry(float radius, unsigned int detail)
     : PolyhedronGeometry(vertices(), indices(), radius, detail) {}
 
-std::string OctahedronGeometry::type() const {
+const std::string& OctahedronGeometry::type() const {
 
-    return "OctahedronGeometry";
+    static const std::string typeName = "OctahedronGeometry";
+    return typeName;
 }
 
 std::shared_ptr<OctahedronGeometry> OctahedronGeometry::create(float radius, unsigned int detail) {

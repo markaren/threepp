@@ -78,9 +78,10 @@ PlaneGeometry::PlaneGeometry(const Params& params)
     this->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
 }
 
-std::string PlaneGeometry::type() const {
+const std::string& PlaneGeometry::type() const {
 
-    return "PlaneGeometry";
+    static const std::string typeName = "PlaneGeometry";
+    return typeName;
 }
 
 std::shared_ptr<PlaneGeometry> PlaneGeometry::create(const PlaneGeometry::Params& params) {

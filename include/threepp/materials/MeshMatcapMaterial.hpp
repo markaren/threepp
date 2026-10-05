@@ -80,9 +80,10 @@ namespace threepp {
             std::optional<bool> flatShading_;
         };
 
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] const std::string& type() const override {
 
-            return "MeshMatcapMaterial";
+            static const std::string typeName = "MeshMatcapMaterial";
+            return typeName;
         }
 
         void copyInto(Material& material) const override {

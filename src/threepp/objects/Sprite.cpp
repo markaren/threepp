@@ -78,9 +78,10 @@ Sprite::Sprite(const std::shared_ptr<SpriteMaterial>& material)
     _geometry->setAttribute("uv", std::make_unique<InterleavedBufferAttribute>(interleavedBuffer, 2, 3, false));
 }
 
-std::string Sprite::type() const {
+const std::string& Sprite::type() const {
 
-    return "Sprite";
+    static const std::string typeName = "Sprite";
+    return typeName;
 }
 
 std::shared_ptr<Material> Sprite::material() const {

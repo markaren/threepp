@@ -616,9 +616,10 @@ std::shared_ptr<ExtrudeGeometry> ExtrudeGeometry::create(const std::vector<Shape
     return std::shared_ptr<ExtrudeGeometry>(new ExtrudeGeometry(shapes, options));
 }
 
-std::string ExtrudeGeometry::type() const {
+const std::string& ExtrudeGeometry::type() const {
 
-    return "ExtrudeGeometry";
+    static const std::string typeName = "ExtrudeGeometry";
+    return typeName;
 }
 
 ExtrudeGeometry::Options::Options()

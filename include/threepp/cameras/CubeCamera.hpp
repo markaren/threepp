@@ -56,9 +56,10 @@ namespace threepp {
             this->add(cameraNZ);
         }
 
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] const std::string& type() const override {
 
-            return "CubeCamera";
+            static const std::string typeName = "CubeCamera";
+            return typeName;
         }
 
         void update(GLRenderer& renderer, Object3D& scene) {

@@ -5,9 +5,10 @@ using namespace threepp;
 
 LineDashedMaterial::LineDashedMaterial() {}
 
-std::string LineDashedMaterial::type() const {
+const std::string& LineDashedMaterial::type() const {
 
-    return "LineDashedMaterial";
+    static const std::string typeName = "LineDashedMaterial";
+    return typeName;
 }
 
 void LineDashedMaterial::copyInto(Material& material) const {

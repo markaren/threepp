@@ -27,7 +27,7 @@ namespace threepp {
                                     float top = 1, float bottom = -1,
                                     float nearPlane = 0.1f, float farPlane = 2000);
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         // Sets an offset in a larger viewing frustum.
         // This is useful for multi-window or multi-monitor/multi-machine setups.

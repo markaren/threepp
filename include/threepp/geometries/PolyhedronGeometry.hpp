@@ -17,7 +17,7 @@ namespace threepp {
         const float radius;
         const unsigned int detail;
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
     protected:
         PolyhedronGeometry(const std::vector<float>& vertices, const std::vector<unsigned int>& indices, float radius, unsigned int detail);

@@ -425,7 +425,10 @@ namespace threepp {
         // would put a second, drifting copy of the sines in the caller.
         [[nodiscard]] float flickerAt(float timeSec) const;
 
-        [[nodiscard]] std::string type() const override { return "FireEffect"; }
+        [[nodiscard]] const std::string& type() const override {
+            static const std::string typeName = "FireEffect";
+            return typeName;
+        }
 
         explicit FireEffect(const Params& params);
         ~FireEffect() override;

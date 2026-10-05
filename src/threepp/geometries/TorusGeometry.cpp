@@ -89,9 +89,10 @@ TorusGeometry::TorusGeometry(const Params& params)
     this->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
 }
 
-std::string TorusGeometry::type() const {
+const std::string& TorusGeometry::type() const {
 
-    return "TorusGeometry";
+    static const std::string typeName = "TorusGeometry";
+    return typeName;
 }
 
 std::shared_ptr<TorusGeometry> TorusGeometry::create(const Params& params) {

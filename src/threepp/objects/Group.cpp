@@ -5,9 +5,10 @@
 
 using namespace threepp;
 
-std::string Group::type() const {
+const std::string& Group::type() const {
 
-    return "Group";
+    static const std::string typeName = "Group";
+    return typeName;
 }
 
 std::shared_ptr<Group> Group::create() {

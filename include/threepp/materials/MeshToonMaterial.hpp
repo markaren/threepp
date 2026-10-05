@@ -99,9 +99,10 @@ namespace threepp {
             std::optional<float> wireframeLinewidth_;
         };
 
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] const std::string& type() const override {
 
-            return "MeshToonMaterial";
+            static const std::string typeName = "MeshToonMaterial";
+            return typeName;
         }
 
         void copyInto(Material& material) const override {

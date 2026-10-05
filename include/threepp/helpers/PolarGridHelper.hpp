@@ -26,7 +26,7 @@ namespace threepp {
                              const Color& color2 = 0x888888);
         };
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<PolarGridHelper> create(PolarGridHelper::Options options);
 

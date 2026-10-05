@@ -19,9 +19,10 @@ MeshPhongMaterial::MeshPhongMaterial()
       MaterialWithFlatShading(false) {}
 
 
-std::string MeshPhongMaterial::type() const {
+const std::string& MeshPhongMaterial::type() const {
 
-    return "MeshPhongMaterial";
+    static const std::string typeName = "MeshPhongMaterial";
+    return typeName;
 }
 
 void MeshPhongMaterial::copyInto(threepp::Material& material) const {

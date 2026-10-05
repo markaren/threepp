@@ -15,7 +15,7 @@ namespace threepp {
     public:
         using LoadedCallback = std::function<void(AsyncGroup&)>;
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         [[nodiscard]] bool isLoaded() const;
 

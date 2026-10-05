@@ -351,9 +351,10 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
     }
 }
 
-std::string Mesh::type() const {
+const std::string& Mesh::type() const {
 
-    return "Mesh";
+    static const std::string typeName = "Mesh";
+    return typeName;
 }
 
 std::shared_ptr<BufferGeometry> Mesh::geometry() const {

@@ -235,7 +235,10 @@ namespace threepp {
         // cloud is what selection actually wants.
         void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) override;
 
-        [[nodiscard]] std::string type() const override { return "SplatCloud"; }
+        [[nodiscard]] const std::string& type() const override {
+            static const std::string typeName = "SplatCloud";
+            return typeName;
+        }
 
         // The GLSL, exposed so tests can assert the shader and the C++ SH table
         // still share their constants.

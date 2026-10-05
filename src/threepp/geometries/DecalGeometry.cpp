@@ -301,7 +301,8 @@ std::shared_ptr<DecalGeometry> DecalGeometry::create(const Mesh& mesh, const Vec
     return std::shared_ptr<DecalGeometry>(new DecalGeometry(mesh, position, orientation, size));
 }
 
-std::string DecalGeometry::type() const {
+const std::string& DecalGeometry::type() const {
 
-    return "DecalGeometry";
+    static const std::string typeName = "DecalGeometry";
+    return typeName;
 }

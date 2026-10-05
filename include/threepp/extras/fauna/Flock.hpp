@@ -264,9 +264,10 @@ namespace threepp {
             return create(Params{});
         }
 
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] const std::string& type() const override {
 
-            return "Flock";
+            static const std::string typeName = "Flock";
+            return typeName;
         }
 
         // Advance the simulation and rebake the geometry. CALL ONCE PER FRAME.

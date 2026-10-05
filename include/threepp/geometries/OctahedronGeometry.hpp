@@ -10,7 +10,7 @@ namespace threepp {
     class OctahedronGeometry: public PolyhedronGeometry {
 
     public:
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<OctahedronGeometry> create(float radius = 1, unsigned int detail = 0);
 

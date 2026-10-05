@@ -92,9 +92,10 @@ RoomEnvironment::RoomEnvironment() {
     }
 }
 
-std::string RoomEnvironment::type() const {
+const std::string& RoomEnvironment::type() const {
 
-    return "Scene";
+    static const std::string typeName = "Scene";
+    return typeName;
 }
 
 void RoomEnvironment::dispose() {

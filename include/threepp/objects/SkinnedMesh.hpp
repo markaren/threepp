@@ -24,7 +24,7 @@ namespace threepp {
 
         SkinnedMesh(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material);
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         void bind(const std::shared_ptr<Skeleton>& skeleton, std::optional<Matrix4> bindMatrix = {});
 

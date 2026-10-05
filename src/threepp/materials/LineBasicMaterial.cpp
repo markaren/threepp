@@ -8,9 +8,10 @@ LineBasicMaterial::LineBasicMaterial()
       MaterialWithLineWidth(1) {}
 
 
-std::string LineBasicMaterial::type() const {
+const std::string& LineBasicMaterial::type() const {
 
-    return "LineBasicMaterial";
+    static const std::string typeName = "LineBasicMaterial";
+    return typeName;
 }
 
 void LineBasicMaterial::copyInto(Material& material) const {

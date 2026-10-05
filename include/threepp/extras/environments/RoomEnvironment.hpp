@@ -24,7 +24,7 @@ namespace threepp {
     public:
         RoomEnvironment();
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         // Frees the geometry and materials the room owns.
         void dispose();

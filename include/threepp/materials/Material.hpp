@@ -133,7 +133,7 @@ namespace threepp {
 
         void needsUpdate();
 
-        [[nodiscard]] virtual std::string type() const = 0;
+        [[nodiscard]] virtual const std::string& type() const = 0;
 
         template<class T>
             requires std::derived_from<T, Material>

@@ -14,9 +14,10 @@ MeshNormalMaterial::MeshNormalMaterial()
 }
 
 
-std::string MeshNormalMaterial::type() const {
+const std::string& MeshNormalMaterial::type() const {
 
-    return "MeshNormalMaterial";
+    static const std::string typeName = "MeshNormalMaterial";
+    return typeName;
 }
 
 

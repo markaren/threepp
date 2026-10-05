@@ -89,9 +89,10 @@ RingGeometry::RingGeometry(const Params& params)
     this->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
 }
 
-std::string RingGeometry::type() const {
+const std::string& RingGeometry::type() const {
 
-    return "RingGeometry";
+    static const std::string typeName = "RingGeometry";
+    return typeName;
 }
 
 std::shared_ptr<RingGeometry> RingGeometry::create(const RingGeometry::Params& params) {

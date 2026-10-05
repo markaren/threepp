@@ -12,7 +12,7 @@ namespace threepp {
     public:
         Color groundColor;
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         void copy(const Object3D& source, bool recursive) override;
 

@@ -25,9 +25,10 @@ CapsuleGeometry::CapsuleGeometry(const Params& params)
       radius(params.radius),
       length(params.length) {}
 
-std::string CapsuleGeometry::type() const {
+const std::string& CapsuleGeometry::type() const {
 
-    return "CapsuleGeometry";
+    static const std::string typeName = "CapsuleGeometry";
+    return typeName;
 }
 
 std::shared_ptr<CapsuleGeometry> CapsuleGeometry::create(const CapsuleGeometry::Params& params) {

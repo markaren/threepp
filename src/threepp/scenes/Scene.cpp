@@ -7,9 +7,10 @@
 using namespace threepp;
 
 
-std::string Scene::type() const {
+const std::string& Scene::type() const {
 
-    return "Scene";
+    static const std::string typeName = "Scene";
+    return typeName;
 }
 
 void Scene::copy(const Object3D& source, bool recursive) {

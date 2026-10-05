@@ -29,7 +29,7 @@ namespace threepp {
 
         const float radius;
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         [[nodiscard]] const FrenetFrames& getFrenetFrames() const {
             return frames_;

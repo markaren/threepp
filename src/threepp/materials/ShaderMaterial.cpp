@@ -23,9 +23,10 @@ ShaderMaterial::ShaderMaterial()
 }
 
 
-std::string ShaderMaterial::type() const {
+const std::string& ShaderMaterial::type() const {
 
-    return "ShaderMaterial";
+    static const std::string typeName = "ShaderMaterial";
+    return typeName;
 }
 
 std::shared_ptr<ShaderMaterial> ShaderMaterial::create() {

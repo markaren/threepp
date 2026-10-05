@@ -15,9 +15,10 @@ DirectionalLight::DirectionalLight(const Color& color, std::optional<float> inte
 }
 
 
-std::string DirectionalLight::type() const {
+const std::string& DirectionalLight::type() const {
 
-    return "DirectionalLight";
+    static const std::string typeName = "DirectionalLight";
+    return typeName;
 }
 
 void DirectionalLight::dispose() {

@@ -80,7 +80,7 @@ namespace threepp {
 
         bool autoUpdate = true;
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         // Background, environment, fog and override material are shared with
         // the source, not cloned.

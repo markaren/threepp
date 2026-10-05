@@ -20,9 +20,10 @@ SkinnedMesh::SkinnedMesh(const std::shared_ptr<BufferGeometry>& geometry, const 
     : Mesh(geometry, material) {}
 
 
-std::string SkinnedMesh::type() const {
+const std::string& SkinnedMesh::type() const {
 
-    return "SkinnedMesh";
+    static const std::string typeName = "SkinnedMesh";
+    return typeName;
 }
 
 void SkinnedMesh::copy(const Object3D& source, bool recursive) {

@@ -13,9 +13,10 @@ HemisphereLight::HemisphereLight(const Color& skyColor, const Color& groundColor
 }
 
 
-std::string HemisphereLight::type() const {
+const std::string& HemisphereLight::type() const {
 
-    return "HemisphereLight";
+    static const std::string typeName = "HemisphereLight";
+    return typeName;
 }
 
 void HemisphereLight::copy(const Object3D& source, bool recursive) {

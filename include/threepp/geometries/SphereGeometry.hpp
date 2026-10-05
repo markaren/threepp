@@ -38,7 +38,7 @@ namespace threepp {
 
         const float radius;
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<SphereGeometry> create(const Params& params);
 

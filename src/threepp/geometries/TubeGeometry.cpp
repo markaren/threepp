@@ -130,9 +130,10 @@ TubeGeometry::TubeGeometry(std::variant<Curve3*, std::shared_ptr<Curve3>> path, 
     this->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
 }
 
-std::string TubeGeometry::type() const {
+const std::string& TubeGeometry::type() const {
 
-    return "TubeGeometry";
+    static const std::string typeName = "TubeGeometry";
+    return typeName;
 }
 
 std::shared_ptr<TubeGeometry> TubeGeometry::create(std::variant<Curve3*, std::shared_ptr<Curve3>> path, const Params& params) {

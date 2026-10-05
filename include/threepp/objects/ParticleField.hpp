@@ -971,7 +971,10 @@ namespace threepp {
         void setLiveCount(std::uint32_t n);
         [[nodiscard]] std::uint32_t liveCount() const { return liveCount_; }
 
-        [[nodiscard]] std::string type() const override { return "ParticleField"; }
+        [[nodiscard]] const std::string& type() const override {
+            static const std::string typeName = "ParticleField";
+            return typeName;
+        }
 
         // ── Renderer-internal ───────────────────────────────────────────────
         // The staging block submit() writes. Sized to capacity once, at create,

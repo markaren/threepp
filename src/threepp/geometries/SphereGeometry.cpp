@@ -97,9 +97,10 @@ SphereGeometry::SphereGeometry(const Params& params)
     this->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
 }
 
-std::string SphereGeometry::type() const {
+const std::string& SphereGeometry::type() const {
 
-    return "SphereGeometry";
+    static const std::string typeName = "SphereGeometry";
+    return typeName;
 }
 
 std::shared_ptr<SphereGeometry> SphereGeometry::create(const SphereGeometry::Params& params) {

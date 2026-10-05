@@ -17,9 +17,10 @@ namespace threepp {
         float nearDistance = 1;
         float farDistance = 1000;
 
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] const std::string& type() const override {
 
-            return "MeshDistanceMaterial";
+            static const std::string typeName = "MeshDistanceMaterial";
+            return typeName;
         }
 
         static std::shared_ptr<MeshDistanceMaterial> create() {

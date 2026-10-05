@@ -98,9 +98,10 @@ WireframeGeometry::WireframeGeometry(const BufferGeometry& geometry) {
     setAttribute("position", FloatBufferAttribute::create(vertices, 3));
 }
 
-std::string WireframeGeometry::type() const {
+const std::string& WireframeGeometry::type() const {
 
-    return "WireframeGeometry";
+    static const std::string typeName = "WireframeGeometry";
+    return typeName;
 }
 
 std::shared_ptr<WireframeGeometry> WireframeGeometry::create(const BufferGeometry& geometry) {

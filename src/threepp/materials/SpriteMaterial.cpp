@@ -9,9 +9,10 @@ SpriteMaterial::SpriteMaterial()
     transparent = true;
 }
 
-std::string SpriteMaterial::type() const {
+const std::string& SpriteMaterial::type() const {
 
-    return "SpriteMaterial";
+    static const std::string typeName = "SpriteMaterial";
+    return typeName;
 }
 
 void SpriteMaterial::copyInto(Material& material) const {

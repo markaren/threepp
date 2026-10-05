@@ -28,9 +28,10 @@ RectAreaLight::RectAreaLight(const Color& color, std::optional<float> intensity,
 }
 
 
-std::string RectAreaLight::type() const {
+const std::string& RectAreaLight::type() const {
 
-    return "RectAreaLight";
+    static const std::string typeName = "RectAreaLight";
+    return typeName;
 }
 
 float RectAreaLight::getPower() const {

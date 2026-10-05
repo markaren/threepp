@@ -124,7 +124,7 @@ namespace threepp {
             std::optional<bool> vertexTangents_;
         };
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<MeshStandardMaterial> create(const std::unordered_map<std::string, MaterialValue>& values = {});
 

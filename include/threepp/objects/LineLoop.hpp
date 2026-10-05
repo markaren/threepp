@@ -12,7 +12,7 @@ namespace threepp {
     public:
         LineLoop(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material);
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<LineLoop> create(
                 const std::shared_ptr<BufferGeometry>& geometry = nullptr,

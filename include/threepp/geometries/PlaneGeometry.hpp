@@ -32,7 +32,7 @@ namespace threepp {
         const unsigned int widthSegments;
         const unsigned int heightSegments;
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<PlaneGeometry> create(const Params& params);
 

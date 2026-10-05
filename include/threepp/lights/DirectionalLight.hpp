@@ -11,7 +11,7 @@ namespace threepp {
     class DirectionalLight: public Light, public LightWithShadow, public LightWithTarget {
 
     public:
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         void dispose() override;
 

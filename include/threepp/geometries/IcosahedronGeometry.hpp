@@ -12,7 +12,7 @@ namespace threepp {
     class IcosahedronGeometry: public PolyhedronGeometry {
 
     public:
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<IcosahedronGeometry> create(float radius = 1, unsigned int detail = 0);
 

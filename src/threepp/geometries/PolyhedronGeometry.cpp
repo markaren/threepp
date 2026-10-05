@@ -278,7 +278,8 @@ PolyhedronGeometry::PolyhedronGeometry(
 }
 
 
-std::string PolyhedronGeometry::type() const {
+const std::string& PolyhedronGeometry::type() const {
 
-    return "PolyhedronGeometry";
+    static const std::string typeName = "PolyhedronGeometry";
+    return typeName;
 }

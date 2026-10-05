@@ -12,9 +12,10 @@ LineLoop::LineLoop(
     : Line(geometry, material) {}
 
 
-std::string LineLoop::type() const {
+const std::string& LineLoop::type() const {
 
-    return "LineLoop";
+    static const std::string typeName = "LineLoop";
+    return typeName;
 }
 
 std::shared_ptr<LineLoop> LineLoop::create(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material) {

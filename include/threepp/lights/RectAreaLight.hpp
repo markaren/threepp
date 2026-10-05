@@ -24,7 +24,7 @@ namespace threepp {
         const float width;
         const float height;
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         /// Total luminous power emitted by the rectangle (Lambertian):
         ///   power = intensity * PI * width * height

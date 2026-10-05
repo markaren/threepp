@@ -33,7 +33,7 @@ namespace threepp {
         // three.js' compact parametric form (see ObjectExporter).
         const Params parameters;
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<TorusKnotGeometry> create(const Params& params);
 

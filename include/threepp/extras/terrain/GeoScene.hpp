@@ -283,7 +283,10 @@ namespace threepp::terrain {
             return s;
         }
 
-        [[nodiscard]] std::string type() const override { return "GeoScene"; }
+        [[nodiscard]] const std::string& type() const override {
+            static const std::string typeName = "GeoScene";
+            return typeName;
+        }
 
         ~GeoScene() override {
             // The member order at the bottom of this class is necessary and not

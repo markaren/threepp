@@ -25,9 +25,10 @@ MeshStandardMaterial::MeshStandardMaterial()
 }
 
 
-std::string MeshStandardMaterial::type() const {
+const std::string& MeshStandardMaterial::type() const {
 
-    return "MeshStandardMaterial";
+    static const std::string typeName = "MeshStandardMaterial";
+    return typeName;
 }
 
 std::shared_ptr<Material> MeshStandardMaterial::createDefault() const {

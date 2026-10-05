@@ -17,8 +17,9 @@ namespace threepp {
                                  const std::shared_ptr<Material>& material)
         : Mesh(geometry, material) {}
 
-    std::string DisplacedMesh::type() const {
-        return "DisplacedMesh";
+    const std::string& DisplacedMesh::type() const {
+        static const std::string typeName = "DisplacedMesh";
+        return typeName;
     }
 
     namespace {

@@ -9,9 +9,10 @@ namespace threepp {
     class Bone: public Object3D {
 
     public:
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] const std::string& type() const override {
 
-            return "Bone";
+            static const std::string typeName = "Bone";
+            return typeName;
         }
 
         static std::shared_ptr<Bone> create() {

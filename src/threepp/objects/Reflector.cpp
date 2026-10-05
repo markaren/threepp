@@ -212,9 +212,10 @@ Reflector::Reflector(const std::shared_ptr<BufferGeometry>& geometry, Reflector:
     : Mesh(geometry, nullptr), pimpl_(std::make_unique<Impl>(*this, std::move(options))) {}
 
 
-std::string threepp::Reflector::type() const {
+const std::string& threepp::Reflector::type() const {
 
-    return "Reflector";
+    static const std::string typeName = "Reflector";
+    return typeName;
 }
 
 std::shared_ptr<Reflector> Reflector::create(const std::shared_ptr<BufferGeometry>& geometry, Reflector::Options options) {

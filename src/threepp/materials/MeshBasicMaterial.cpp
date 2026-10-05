@@ -13,9 +13,10 @@ MeshBasicMaterial::MeshBasicMaterial()
       MaterialWithCombine(CombineOperation::Multiply) {}
 
 
-std::string MeshBasicMaterial::type() const {
+const std::string& MeshBasicMaterial::type() const {
 
-    return "MeshBasicMaterial";
+    static const std::string typeName = "MeshBasicMaterial";
+    return typeName;
 }
 
 void MeshBasicMaterial::copyInto(Material& material) const {

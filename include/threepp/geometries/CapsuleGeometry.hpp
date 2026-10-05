@@ -25,7 +25,7 @@ namespace threepp {
         const float radius;
         const float length;
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<CapsuleGeometry> create(const Params& params);
 

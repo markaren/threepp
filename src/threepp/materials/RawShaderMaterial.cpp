@@ -7,9 +7,10 @@ using namespace threepp;
 RawShaderMaterial::RawShaderMaterial() = default;
 
 
-std::string RawShaderMaterial::type() const {
+const std::string& RawShaderMaterial::type() const {
 
-    return "RawShaderMaterial";
+    static const std::string typeName = "RawShaderMaterial";
+    return typeName;
 }
 
 std::shared_ptr<RawShaderMaterial> RawShaderMaterial::create() {

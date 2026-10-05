@@ -24,7 +24,7 @@ namespace threepp {
     public:
         bool autoUpdate = true;
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         LOD& addLevel(Object3D& object, float distance = 0);
 

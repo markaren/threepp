@@ -14,9 +14,10 @@ MeshLambertMaterial::MeshLambertMaterial()
       MaterialWithCombine(CombineOperation::Multiply) {}
 
 
-std::string MeshLambertMaterial::type() const {
+const std::string& MeshLambertMaterial::type() const {
 
-    return "MeshLambertMaterial";
+    static const std::string typeName = "MeshLambertMaterial";
+    return typeName;
 }
 
 void MeshLambertMaterial::copyInto(threepp::Material& material) const {

@@ -137,9 +137,10 @@ BoxGeometry::BoxGeometry(const Params& params)
     this->setAttribute("uv", FloatBufferAttribute::create(h.uvs, 2));
 }
 
-std::string BoxGeometry::type() const {
+const std::string& BoxGeometry::type() const {
 
-    return "BoxGeometry";
+    static const std::string typeName = "BoxGeometry";
+    return typeName;
 }
 
 std::shared_ptr<BoxGeometry> BoxGeometry::create(const Params& params) {

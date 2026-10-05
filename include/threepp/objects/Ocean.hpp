@@ -140,7 +140,7 @@ namespace threepp {
         // the enclosing class's complete-class context.
         static std::shared_ptr<Ocean> create();
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         // Pack adaptive vertex density toward a world-space focus point. The
         // mesh keeps fixed topology but clusters vertices near (worldX, worldZ)

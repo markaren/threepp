@@ -45,8 +45,9 @@ AsyncGroup::AsyncGroup(): pimpl_(std::make_unique<Impl>()) {}
 
 AsyncGroup::~AsyncGroup() = default;
 
-std::string AsyncGroup::type() const {
-    return "AsyncGroup";
+const std::string& AsyncGroup::type() const {
+    static const std::string typeName = "AsyncGroup";
+    return typeName;
 }
 
 bool AsyncGroup::isLoaded() const {

@@ -108,7 +108,8 @@ std::shared_ptr<ShapeGeometry> ShapeGeometry::create(const std::vector<Shape>& s
     return std::shared_ptr<ShapeGeometry>(new ShapeGeometry(shapes, curveSegments));
 }
 
-std::string ShapeGeometry::type() const {
+const std::string& ShapeGeometry::type() const {
 
-    return "ShapeGeometry";
+    static const std::string typeName = "ShapeGeometry";
+    return typeName;
 }

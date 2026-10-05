@@ -22,7 +22,7 @@ namespace threepp {
 
         Reflector(const std::shared_ptr<BufferGeometry>& geometry, Options options);
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<Reflector> create(const std::shared_ptr<BufferGeometry>& geometry, Options options = Options());
 

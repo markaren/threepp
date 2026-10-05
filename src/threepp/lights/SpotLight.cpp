@@ -14,9 +14,10 @@ SpotLight::SpotLight(const Color& color, std::optional<float> intensity, float d
 }
 
 
-std::string SpotLight::type() const {
+const std::string& SpotLight::type() const {
 
-    return "SpotLight";
+    static const std::string typeName = "SpotLight";
+    return typeName;
 }
 
 float SpotLight::getPower() {

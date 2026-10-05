@@ -14,9 +14,10 @@ PerspectiveCamera::PerspectiveCamera(float fov, float aspect, float near, float 
     PerspectiveCamera::updateProjectionMatrix();
 }
 
-std::string PerspectiveCamera::type() const {
+const std::string& PerspectiveCamera::type() const {
 
-    return "PerspectiveCamera";
+    static const std::string typeName = "PerspectiveCamera";
+    return typeName;
 }
 
 void PerspectiveCamera::setFocalLength(float focalLength) {

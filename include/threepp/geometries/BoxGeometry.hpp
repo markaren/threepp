@@ -35,7 +35,7 @@ namespace threepp {
         const float height;
         const float depth;
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<BoxGeometry> create(const Params& params);
 

@@ -32,9 +32,10 @@ namespace {
 IcosahedronGeometry::IcosahedronGeometry(float radius, unsigned int detail)
     : PolyhedronGeometry(generateVertices(), generateIndices(), radius, detail) {}
 
-std::string IcosahedronGeometry::type() const {
+const std::string& IcosahedronGeometry::type() const {
 
-    return "IcosahedronGeometry";
+    static const std::string typeName = "IcosahedronGeometry";
+    return typeName;
 }
 
 std::shared_ptr<IcosahedronGeometry> IcosahedronGeometry::create(float radius, unsigned int detail) {

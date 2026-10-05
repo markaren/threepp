@@ -28,7 +28,7 @@ namespace threepp {
 
         [[nodiscard]] FloatBufferAttribute* instanceColor() const;
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         void getColorAt(size_t index, Color& color) const;
 

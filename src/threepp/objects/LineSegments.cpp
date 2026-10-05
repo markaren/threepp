@@ -12,9 +12,10 @@ LineSegments::LineSegments(
     : Line(geometry, material) {}
 
 
-std::string LineSegments::type() const {
+const std::string& LineSegments::type() const {
 
-    return "LineSegments";
+    static const std::string typeName = "LineSegments";
+    return typeName;
 }
 
 void LineSegments::computeLineDistances() {

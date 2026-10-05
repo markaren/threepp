@@ -26,7 +26,7 @@ namespace threepp {
                 return &lights.at(light.id);
             }
 
-            const auto type = light.type();
+            const auto& type = light.type();
             LightUniforms uniforms;
             if (type == "DirectionalLight") {
 
@@ -87,7 +87,7 @@ namespace threepp {
                 return &lights.at(light.id);
             }
 
-            const auto type = light.type();
+            const auto& type = light.type();
             LightUniforms uniforms;
             if (type == "DirectionalLight") {
 

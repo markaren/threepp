@@ -9,9 +9,10 @@ OrthographicCamera::OrthographicCamera(float left, float right, float top, float
     OrthographicCamera::updateProjectionMatrix();
 }
 
-std::string OrthographicCamera::type() const {
+const std::string& OrthographicCamera::type() const {
 
-    return "OrthographicCamera";
+    static const std::string typeName = "OrthographicCamera";
+    return typeName;
 }
 
 void OrthographicCamera::setViewOffset(int fullWidth, int fullHeight, int x, int y, int width, int height) {

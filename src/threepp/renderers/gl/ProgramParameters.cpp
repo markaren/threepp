@@ -229,7 +229,7 @@ ProgramParameters::ProgramParameters(
         // derivatives instead of reading an unbound normal attribute (black).
         const auto wireMaterial = dynamic_cast<MaterialWithWireframe*>(material);
         const bool wireframe = wireMaterial && wireMaterial->wireframe;
-        const auto type = material->type();
+        const auto& type = material->type();
         const bool litMesh = type == "MeshLambertMaterial" || type == "MeshPhongMaterial" ||
                              type == "MeshStandardMaterial" || type == "MeshPhysicalMaterial";
         if (litMesh && !wireframe && !normalMap && object->geometry() &&

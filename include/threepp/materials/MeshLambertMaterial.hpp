@@ -85,7 +85,7 @@ namespace threepp {
             std::optional<float> refractionRatio_;
         };
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<MeshLambertMaterial> create(const std::unordered_map<std::string, MaterialValue>& values = {});
 

@@ -153,7 +153,7 @@ namespace threepp {
             std::optional<Color> specularColor_;
         };
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         void setIor(float value) {
 

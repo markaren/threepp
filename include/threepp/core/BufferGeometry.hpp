@@ -46,7 +46,7 @@ namespace threepp {
         BufferGeometry(BufferGeometry&&) = delete;
         BufferGeometry& operator=(BufferGeometry&&) = delete;
 
-        [[nodiscard]] virtual std::string type() const;
+        [[nodiscard]] virtual const std::string& type() const;
 
         [[nodiscard]] bool hasIndex() const;
 

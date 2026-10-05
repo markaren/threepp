@@ -56,7 +56,7 @@ namespace threepp {
             std::optional<float> displacementScale_;
         };
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<MeshNormalMaterial> create(const std::unordered_map<std::string, MaterialValue>& values = {});
 

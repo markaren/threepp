@@ -13,7 +13,7 @@ namespace threepp {
     class DecalGeometry: public BufferGeometry {
 
     public:
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<DecalGeometry> create(const Mesh& mesh, const Vector3& position, const Euler& orientation, const Vector3& size);
 

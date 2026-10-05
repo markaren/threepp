@@ -25,7 +25,7 @@ namespace threepp {
     public:
         Sky();
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<Sky> create();
     };

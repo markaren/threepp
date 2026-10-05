@@ -118,7 +118,7 @@ namespace threepp {
             std::optional<Vector2> normalScale_;
         };
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<MeshPhongMaterial> create(const std::unordered_map<std::string, MaterialValue>& values = {});
 

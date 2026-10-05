@@ -10,9 +10,10 @@ ConeGeometry::ConeGeometry(const ConeGeometry::Params& params)
       parameters(params) {}
 
 
-std::string ConeGeometry::type() const {
+const std::string& ConeGeometry::type() const {
 
-    return "ConeGeometry";
+    static const std::string typeName = "ConeGeometry";
+    return typeName;
 }
 
 std::shared_ptr<ConeGeometry> ConeGeometry::create(const ConeGeometry::Params& params) {

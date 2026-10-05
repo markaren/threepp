@@ -11,8 +11,9 @@ using namespace threepp::gl;
 
 class DummyMaterial: public Material {
 public:
-    [[nodiscard]] std::string type() const override {
-        return "";
+    [[nodiscard]] const std::string& type() const override {
+        static const std::string typeName;
+        return typeName;
     }
 
 protected:

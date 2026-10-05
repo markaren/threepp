@@ -30,7 +30,7 @@ namespace threepp {
         std::optional<std::string> index0AttributeName;
         bool uniformsNeedUpdate = false;
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<ShaderMaterial> create();
 

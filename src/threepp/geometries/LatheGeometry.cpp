@@ -124,7 +124,8 @@ LatheGeometry::LatheGeometry(const std::vector<Vector2>& points, unsigned int se
     }
 }
 
-std::string LatheGeometry::type() const {
+const std::string& LatheGeometry::type() const {
 
-    return "LatheGeometry";
+    static const std::string typeName = "LatheGeometry";
+    return typeName;
 }

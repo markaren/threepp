@@ -72,9 +72,10 @@ PolarGridHelper::PolarGridHelper(float radius, unsigned int sectors, unsigned in
 }
 
 
-std::string PolarGridHelper::type() const {
+const std::string& PolarGridHelper::type() const {
 
-    return "PolarGridHelper";
+    static const std::string typeName = "PolarGridHelper";
+    return typeName;
 }
 
 std::shared_ptr<PolarGridHelper> PolarGridHelper::create(float radius, unsigned int sectors, unsigned int rings, unsigned int divisions, const Color& color1, const Color& color2) {

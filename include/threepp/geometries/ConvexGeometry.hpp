@@ -15,7 +15,7 @@ namespace threepp {
     public:
         [[nodiscard]] bool containsPoint(const Vector3& v, float tolerance = -1) const;
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         ~ConvexGeometry() override;
 

@@ -8,9 +8,10 @@ PointsMaterial::PointsMaterial()
       MaterialWithSize(1, true) {}
 
 
-std::string PointsMaterial::type() const {
+const std::string& PointsMaterial::type() const {
 
-    return "PointsMaterial";
+    static const std::string typeName = "PointsMaterial";
+    return typeName;
 }
 
 void PointsMaterial::copyInto(Material& material) const {

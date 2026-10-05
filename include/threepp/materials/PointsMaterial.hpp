@@ -52,7 +52,7 @@ namespace threepp {
             std::shared_ptr<Texture> alphaMap_;
         };
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<PointsMaterial> create(const std::unordered_map<std::string, MaterialValue>& values = {});
 

@@ -12,7 +12,7 @@ namespace threepp {
     public:
         static std::shared_ptr<EdgesGeometry> create(const BufferGeometry& geometry, float thresholdAngle = 90);
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
     protected:
         EdgesGeometry(const BufferGeometry& geometry, float thresholdAngle);

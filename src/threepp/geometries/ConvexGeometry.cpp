@@ -105,7 +105,8 @@ bool ConvexGeometry::containsPoint(const Vector3& v, float tolerance) const {
     return pimpl_->containsPoint(v, tolerance);
 }
 
-std::string ConvexGeometry::type() const {
+const std::string& ConvexGeometry::type() const {
 
-    return "ConvexGeometry";
+    static const std::string typeName = "ConvexGeometry";
+    return typeName;
 }

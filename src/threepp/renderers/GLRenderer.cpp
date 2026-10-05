@@ -1065,12 +1065,13 @@ struct GLRenderer::Impl {
         auto* scene = _scene->as<Scene>();
         if (!scene) scene = _emptyScene.get();// scene could be a Mesh, Line, Points, ...
 
-        bool isMeshBasicMaterial = material->type() == "MeshBasicMaterial";
-        bool isMeshLambertMaterial = material->type() == "MeshLambertMaterial";
-        bool isMeshToonMaterial = material->type() == "MeshToonMaterial";
-        bool isMeshPhongMaterial = material->type() == "MeshPhongMaterial";
-        bool isMeshStandardMaterial = material->type() == "MeshStandardMaterial" || material->type() == "MeshPhysicalMaterial";
-        bool isShadowMaterial = material->type() == "ShadowMaterial";
+        const auto& type = material->type();
+        bool isMeshBasicMaterial = type == "MeshBasicMaterial";
+        bool isMeshLambertMaterial = type == "MeshLambertMaterial";
+        bool isMeshToonMaterial = type == "MeshToonMaterial";
+        bool isMeshPhongMaterial = type == "MeshPhongMaterial";
+        bool isMeshStandardMaterial = type == "MeshStandardMaterial" || type == "MeshPhysicalMaterial";
+        bool isShadowMaterial = type == "ShadowMaterial";
         bool isShaderMaterial = material->is<ShaderMaterial>();
         bool isEnvMap = material->is<MaterialWithEnvMap>() && material->as<MaterialWithEnvMap>()->envMap;
 
@@ -1113,8 +1114,9 @@ struct GLRenderer::Impl {
         //
 
         bool needsProgramChange = false;
-        bool isInstancedMesh = object->type() == "InstancedMesh";
-        bool isSkinnedMesh = object->type() == "SkinnedMesh";
+        const auto& objectType = object->type();
+        bool isInstancedMesh = objectType == "InstancedMesh";
+        bool isSkinnedMesh = objectType == "SkinnedMesh";
 
         if (material->version() == materialProperties->version) {
 
@@ -1452,12 +1454,13 @@ struct GLRenderer::Impl {
     }
 
     bool materialNeedsLights(Material* material) {
-        bool isMeshLambertMaterial = material->type() == "MeshLambertMaterial";
-        bool isMeshToonMaterial = material->type() == "MeshToonMaterial";
-        bool isMeshPhongMaterial = material->type() == "MeshPhongMaterial";
-        bool isMeshStandardMaterial = material->type() == "MeshStandardMaterial";
-        bool isMeshPhysicalMaterial = material->type() == "MeshPhysicalMaterial";
-        bool isShadowMaterial = material->type() == "ShadowMaterial";
+        const auto& type = material->type();
+        bool isMeshLambertMaterial = type == "MeshLambertMaterial";
+        bool isMeshToonMaterial = type == "MeshToonMaterial";
+        bool isMeshPhongMaterial = type == "MeshPhongMaterial";
+        bool isMeshStandardMaterial = type == "MeshStandardMaterial";
+        bool isMeshPhysicalMaterial = type == "MeshPhysicalMaterial";
+        bool isShadowMaterial = type == "ShadowMaterial";
         bool isShaderMaterial = material->is<ShaderMaterial>();
         bool lights = false;
 

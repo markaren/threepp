@@ -140,9 +140,10 @@ EdgesGeometry::EdgesGeometry(const BufferGeometry& geometry, float thresholdAngl
     this->setAttribute("position", FloatBufferAttribute::create(vertices, 3));
 }
 
-std::string EdgesGeometry::type() const {
+const std::string& EdgesGeometry::type() const {
 
-    return "EdgesGeometry";
+    static const std::string typeName = "EdgesGeometry";
+    return typeName;
 }
 
 std::shared_ptr<EdgesGeometry> EdgesGeometry::create(const BufferGeometry& geometry, float thresholdAngle) {

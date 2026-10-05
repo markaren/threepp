@@ -231,9 +231,10 @@ CylinderGeometry::CylinderGeometry(const Params& params)
     this->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
 }
 
-std::string CylinderGeometry::type() const {
+const std::string& CylinderGeometry::type() const {
 
-    return "CylinderGeometry";
+    static const std::string typeName = "CylinderGeometry";
+    return typeName;
 }
 
 std::shared_ptr<CylinderGeometry> CylinderGeometry::create(const CylinderGeometry::Params& params) {

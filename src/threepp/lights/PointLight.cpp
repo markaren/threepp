@@ -13,9 +13,10 @@ PointLight::PointLight(const Color& color, std::optional<float> intensity, float
     : Light(color, intensity), LightWithShadow(PointLightShadow::create()), distance(distance), decay(decay) {}
 
 
-std::string PointLight::type() const {
+const std::string& PointLight::type() const {
 
-    return "PointLight";
+    static const std::string typeName = "PointLight";
+    return typeName;
 }
 
 float PointLight::getPower() const {

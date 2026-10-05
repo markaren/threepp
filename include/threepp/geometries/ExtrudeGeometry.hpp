@@ -27,7 +27,7 @@ namespace threepp {
             Options();
         };
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         static std::shared_ptr<ExtrudeGeometry> create(const std::vector<Shape>& shape, const Options& options = {});
 

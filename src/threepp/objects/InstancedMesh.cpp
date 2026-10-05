@@ -59,9 +59,10 @@ FloatBufferAttribute* InstancedMesh::instanceColor() const {
 }
 
 
-std::string InstancedMesh::type() const {
+const std::string& InstancedMesh::type() const {
 
-    return "InstancedMesh";
+    static const std::string typeName = "InstancedMesh";
+    return typeName;
 }
 
 void InstancedMesh::getColorAt(size_t index, Color& color) const {

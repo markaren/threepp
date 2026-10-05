@@ -57,9 +57,10 @@ namespace threepp {
             std::optional<DepthPacking> depthPacking_;
         };
 
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] const std::string& type() const override {
 
-            return "MeshDepthMaterial";
+            static const std::string typeName = "MeshDepthMaterial";
+            return typeName;
         }
 
         void copyInto(Material& material) const override {

@@ -81,8 +81,9 @@ namespace threepp {
                  const std::shared_ptr<Material>& material)
         : DisplacedMesh(geometry, material) {}
 
-    std::string Ocean::type() const {
-        return "Ocean";
+    const std::string& Ocean::type() const {
+        static const std::string typeName = "Ocean";
+        return typeName;
     }
 
     std::shared_ptr<Ocean> Ocean::create() {

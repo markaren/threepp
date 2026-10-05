@@ -40,9 +40,10 @@ namespace threepp {
             std::optional<Color> color_;
         };
 
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] const std::string& type() const override {
 
-            return "ShadowMaterial";
+            static const std::string typeName = "ShadowMaterial";
+            return typeName;
         }
 
         static std::shared_ptr<ShadowMaterial> create() {

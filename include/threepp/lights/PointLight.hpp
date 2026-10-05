@@ -19,7 +19,7 @@ namespace threepp {
         // three.js has no analytic-light source size.)
         float radius = 0.f;
 
-        [[nodiscard]] std::string type() const override;
+        [[nodiscard]] const std::string& type() const override;
 
         [[nodiscard]] float getPower() const;
 

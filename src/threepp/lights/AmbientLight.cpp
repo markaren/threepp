@@ -8,9 +8,10 @@ AmbientLight::AmbientLight(const Color& color, std::optional<float> intensity)
     : Light(color, intensity) {}
 
 
-std::string AmbientLight::type() const {
+const std::string& AmbientLight::type() const {
 
-    return "AmbientLight";
+    static const std::string typeName = "AmbientLight";
+    return typeName;
 }
 
 std::shared_ptr<AmbientLight> AmbientLight::create(const Color& color, std::optional<float> intensity) {

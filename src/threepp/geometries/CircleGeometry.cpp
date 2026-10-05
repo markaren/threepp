@@ -66,9 +66,10 @@ CircleGeometry::CircleGeometry(const Params& params)
     this->setAttribute("uv", FloatBufferAttribute ::create(uvs, 2));
 }
 
-std::string CircleGeometry::type() const {
+const std::string& CircleGeometry::type() const {
 
-    return "CircleGeometry";
+    static const std::string typeName = "CircleGeometry";
+    return typeName;
 }
 
 std::shared_ptr<CircleGeometry> CircleGeometry::create(const CircleGeometry::Params& params) {

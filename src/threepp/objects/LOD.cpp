@@ -7,9 +7,10 @@
 
 using namespace threepp;
 
-std::string LOD::type() const {
+const std::string& LOD::type() const {
 
-    return "LOD";
+    static const std::string typeName = "LOD";
+    return typeName;
 }
 
 std::shared_ptr<LOD> LOD::create() {
