@@ -236,6 +236,11 @@ layout(set = 0, binding = 14) uniform sampler2D oceanFoamWorld;
 // ocean's GeometryDesc::foamAddress names (1 = an ocean without a wake field).
 layout(set = 0, binding = 78) uniform sampler2DArray oceanWakeField;
 #define OCEAN_WAKE_SAMPLER oceanWakeField
+// The patches' RIPPLES, the waves their producers make: one layer a patch, a
+// period of the patch's own small sea (slope x, slope z, their squares' sum),
+// mipped, REPEAT. The same 1x1 dummy when no ocean has any.
+layout(set = 0, binding = 79) uniform sampler2DArray oceanWakeRipple;
+#define OCEAN_WAKE_RIPPLE_SAMPLER oceanWakeRipple
 #include "ocean_wake.glsl"
 // This pixel's read of it, taken once in main() where the ocean's fine normal
 // is built and used again by shadeWater (bubbles, film). Zero off a wake.
@@ -1126,6 +1131,20 @@ void main() {
                 const vec2  b2  = oceanWakeNoised(vec3(worldPos.xz * 8.3 + 11.0, pc.timeSec * 2.9)).yz;
                 gKept += amp * (0.6 * k1 * b1 + 0.4 * k2 * b2);
                 wakeBoilVar = amp * amp * (0.36 * (1.0 - k1 * k1) + 0.16 * (1.0 - k2 * k2));
+            }
+            // The waves the producers made (the fan a hull throws, a paddle's
+            // rings). Their slope goes on the normal as the wind waves' does,
+            // read over the pixel's footprint on the water, a strip along the
+            // line of sight; what the strip is too coarse to hold goes to the
+            // roughness with the boil's. The lane does not touch them.
+            {
+                const float vl    = length(V.xz);
+                const vec2  along = vl > 1e-4 ? V.xz / vl : vec2(1.0, 0.0);
+                const vec3  rp    = oceanWakeRipples(geoms[id - 1u].foamAddress, worldPos.xz,
+                                                     vec2(-along.y, along.x) * pixWorld,
+                                                     along * min(pixAlong, 64.0 * pixWorld));
+                gKept       += rp.xy;
+                wakeBoilVar += rp.z;
             }
         }
         // Full physical slope: N ∝ up − ∇h. Until 2026-08 this carried a 0.5

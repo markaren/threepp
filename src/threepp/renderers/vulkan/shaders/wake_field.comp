@@ -181,6 +181,9 @@ void main() {
 
     for (uint k = 0u; k < pc.sourceCount; ++k) {
         const WakeSource sc = tb.sources[k];
+        // One that only pushes (the ripples' forcing, wake_ripple.comp) leaves
+        // nothing here, and must not still the flow under it.
+        if (sc.push != 0.0 && sc.foam <= 0.0 && sc.aeration <= 0.0 && sc.turbulence <= 0.0 && sc.lane <= 0.0) continue;
         const vec2  ab   = sc.p1 - sc.p0;
         const float len2 = dot(ab, ab);
         const float h    = len2 > 1e-10 ? clamp(dot(x - sc.p0, ab) / len2, 0.0, 1.0) : 1.0;

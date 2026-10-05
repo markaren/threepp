@@ -1940,6 +1940,38 @@ class DisplacedMesh(Mesh):
         def resolution(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
             ...
         @property
+        def ripple_gain(self) -> float:
+            """
+            Scales the slope the water shade reads; 1 = what linear theory gives.
+            """
+        @ripple_gain.setter
+        def ripple_gain(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def ripple_life(self) -> float:
+            """
+            e-folding time (s) of a ripple. A patch's waves are also made to die before they have crossed it (1.5 x its fastest pusher's speed / its side, a second), because its sea is periodic over its side.
+            """
+        @ripple_life.setter
+        def ripple_life(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def ripple_resolution(self) -> int:
+            """
+            The patches' RIPPLES, the waves their producers make (a hull's fan, a paddle's rings): wavenumbers a side of each patch's small linear sea, a power of two in 128..1024; 0 = none, the default. Latched with resolution. What forces them is a source's `push`.
+            """
+        @ripple_resolution.setter
+        def ripple_resolution(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def ripple_viscosity(self) -> float:
+            """
+            m2/s: a ripple of wavenumber k also dies at 2 nu k^2, the shortest first.
+            """
+        @ripple_viscosity.setter
+        def ripple_viscosity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
         def spread(self) -> float:
             """
             Eddy diffusivity K = spread x turbulence x eddy size (m2/s): how fast the lane and the bubbles widen.
@@ -1971,6 +2003,10 @@ class DisplacedMesh(Mesh):
             ...
         def set(self, center_x: typing.SupportsFloat | typing.SupportsIndex, center_z: typing.SupportsFloat | typing.SupportsIndex, size: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
+        def set_ripples(self, center_x: typing.SupportsFloat | typing.SupportsIndex, center_z: typing.SupportsFloat | typing.SupportsIndex, size: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            """
+            Give its ripples their own window (move the centre every frame; a new size starts them from still water).
+            """
         @property
         def center_x(self) -> float:
             ...
@@ -1990,6 +2026,26 @@ class DisplacedMesh(Mesh):
             """
         @eddy.setter
         def eddy(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def ripple_center_x(self) -> float:
+            ...
+        @ripple_center_x.setter
+        def ripple_center_x(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def ripple_center_z(self) -> float:
+            ...
+        @ripple_center_z.setter
+        def ripple_center_z(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def ripple_size(self) -> float:
+            """
+            Side (m) of the window its RIPPLES are shown through, which is also the period of its small sea: the smaller, the finer its waves are drawn and the sooner they have to die. 0 = the patch's own window.
+            """
+        @ripple_size.setter
+        def ripple_size(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
         def size(self) -> float:
@@ -2046,7 +2102,7 @@ class DisplacedMesh(Mesh):
             ...
     MAX_VESSELS: typing.ClassVar[int] = 8
     MAX_WAKE_PATCHES: typing.ClassVar[int] = 8
-    MAX_WAKE_SOURCES: typing.ClassVar[int] = 96
+    MAX_WAKE_SOURCES: typing.ClassVar[int] = 256
     def __init__(self, geometry: BufferGeometry, material: typing.Any) -> None:
         """
         Low-level constructor. Most callers want Ocean instead, which builds the plane + water material + cascade defaults for you.
@@ -2059,9 +2115,11 @@ class DisplacedMesh(Mesh):
         """
         Emit one wake snapshot at the vessel's current pose (age 0), dropping the oldest once the trail is full. The renderer's hard cap is 64 samples; overflow beyond it is dropped silently on upload. The C++ showcase's cadence is 10 Hz OR every 1 m travelled, whichever fires first.
         """
-    def add_wake_source(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex, vx: typing.SupportsFloat | typing.SupportsIndex = 0.0, vz: typing.SupportsFloat | typing.SupportsIndex = 0.0, radius: typing.SupportsFloat | typing.SupportsIndex = 0.30000001192092896, foam: typing.SupportsFloat | typing.SupportsIndex = 0.0, aeration: typing.SupportsFloat | typing.SupportsIndex = 0.0, turbulence: typing.SupportsFloat | typing.SupportsIndex = 0.0, lane: typing.SupportsFloat | typing.SupportsIndex = 0.0, x_prev: typing.Any = None, z_prev: typing.Any = None) -> None:
+    def add_wake_source(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex, vx: typing.SupportsFloat | typing.SupportsIndex = 0.0, vz: typing.SupportsFloat | typing.SupportsIndex = 0.0, radius: typing.SupportsFloat | typing.SupportsIndex = 0.30000001192092896, foam: typing.SupportsFloat | typing.SupportsIndex = 0.0, aeration: typing.SupportsFloat | typing.SupportsIndex = 0.0, turbulence: typing.SupportsFloat | typing.SupportsIndex = 0.0, lane: typing.SupportsFloat | typing.SupportsIndex = 0.0, x_prev: typing.Any = None, z_prev: typing.Any = None, push: typing.SupportsFloat | typing.SupportsIndex = 0.0, ax: typing.SupportsFloat | typing.SupportsIndex = 0.0, az: typing.SupportsFloat | typing.SupportsIndex = 0.0, patch: typing.SupportsInt | typing.SupportsIndex = -1) -> None:
         """
         One producer's mark for this frame: a gaussian of `radius` m on the surface, swept from (x_prev, z_prev), where the producer was at the last frame, to (x, z), so a coarse time step leaves no gaps. (vx, vz) is the water velocity it imparts, over the ground (a propeller's race runs astern at its speed THROUGH the water). foam and aeration are 0..1, turbulence is an rms speed in m/s, lane 0..1 is how far the short waves are flattened. It lands in every patch that covers it. More than MAX_WAKE_SOURCES a frame are dropped.
+        
+        `push` is what forces the RIPPLES (wake_field.ripple_resolution): the force in N the producer bears down on the water with, a gaussian of `radius` drawn out to a line that reaches (ax, az) to either side of (x, z). A floating hull pushes with its weight along its length; where it moves, the waves that keep up with it are the ones that grow, which is its wake. `patch` is the patch whose ripples it forces (-1 = the first that holds it); a source with a push and nothing else leaves only waves.
         """
     def age_wake(self, dt: typing.SupportsFloat | typing.SupportsIndex, max_age: typing.SupportsFloat | typing.SupportsIndex = 6.0, max_samples: typing.SupportsInt | typing.SupportsIndex = 64) -> int:
         """

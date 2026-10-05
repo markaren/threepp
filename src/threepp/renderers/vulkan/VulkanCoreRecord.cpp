@@ -187,6 +187,14 @@ void VulkanRenderer::Impl::addDeformAndTlasPasses(rg::RenderGraph& g) {
                                                    VK_IMAGE_LAYOUT_GENERAL),
                                      oceanOut);
                         }
+                        if (st.wake->rippleRes > 0u) {
+                            pass.use(g.importImage("ocean.wake.ripples", st.wake->slopeImage, VK_IMAGE_ASPECT_COLOR_BIT,
+                                                   st.wake->rippleMips, VK_IMAGE_LAYOUT_GENERAL),
+                                     oceanOut);
+                            pass.use(g.importImage("ocean.wake.spectrum", st.wake->ampImage, VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                                                   VK_IMAGE_LAYOUT_GENERAL),
+                                     oceanOut);
+                        }
                     }
                 }
             }

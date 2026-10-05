@@ -497,7 +497,8 @@ void VulkanRenderer::Impl::createOceanFoamDummy_() {
                 wakeField_->initDummy(cb);
                 endAndSubmitOneShot(cb);
             }
-            oceanWakeView = wakeField_->dummyView();
+            oceanWakeView   = wakeField_->dummyView();
+            oceanRippleView = wakeField_->dummyView();
         }
 
 bool VulkanRenderer::Impl::refreshEnvTextureFromScene(Object3D& scene) {

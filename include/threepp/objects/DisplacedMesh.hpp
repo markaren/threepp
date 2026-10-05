@@ -269,11 +269,32 @@ namespace threepp {
         // numbers (python/examples/usv_rig.py does, per kind of producer).
         // Clear and repopulate the sources each frame before render().
         //
+        // RIPPLES. A patch can also carry the waves its producers make: the
+        // fan a hull throws, the rings round a paddle. They are not painted
+        // and not an analytic V: each patch holds the spectrum of a small
+        // linear sea (`rippleResolution` squared wavenumbers over the patch's
+        // side), every wavenumber turning at its own deep-water rate
+        // (omega^2 = g k), so short waves travel slower than long ones and a
+        // moving source leaves the Kelvin pattern for its speed, whatever
+        // that is, bent where it turned. What forces it is a source's `push`:
+        // the force (N) it bears down on the water with, over its radius (a
+        // floating hull bears down with its weight; a blade with its pull).
+        // Only the waves are shown: the still dent under a weight at rest is
+        // taken out. The shade adds their slope to the water's normal, and
+        // what a pixel is too coarse to hold goes to the roughness.
+        // The small sea is periodic over its side, so it is shown through a
+        // window of that side and its waves are made to die before they have
+        // come round: at least 1.5 x speed / side a second for the fastest of
+        // the patch's pushing sources. That side need not be the patch's: a
+        // patch can name a smaller window for its ripples (WakePatch::
+        // rippleSize), which is a finer sea for the same resolution, as a
+        // small slow boat's short waves need.
+        //
         // Off by default (resolution 0): no memory, no pass, and the water
         // shade is byte-identical. `resolution` and `patches` are LATCHED when
         // the renderer first sees the mesh; the other knobs are live.
         static constexpr uint32_t kMaxWakePatches = 8;
-        static constexpr uint32_t kMaxWakeSources = 96;
+        static constexpr uint32_t kMaxWakeSources = 256;
         struct WakeField {
             uint32_t resolution = 0;              // texels a side per patch; 0 = off (latched)
             uint32_t patches    = kMaxWakePatches;// layers allocated (latched)
@@ -293,6 +314,12 @@ namespace threepp {
             float eddyTexels     = 12.0f;
             // Eddy diffusivity K = spread * turbulence * eddy size (m2/s).
             float spread         = 0.03f;
+            // Ripples: wavenumbers a side of each patch's small sea (a power
+            // of two, 128..1024); 0 = none (latched with resolution).
+            uint32_t rippleResolution = 0;
+            float rippleLife      = 14.0f;// e-folding time (s) of a wave, where the patch's side allows it
+            float rippleViscosity = 2e-4f;// m2/s: a wave of wavenumber k also dies at 2 nu k^2 (the shortest first)
+            float rippleGain      = 1.0f; // on the slope the shade reads; 1 = what linear theory gives
         };
         WakeField wakeField;
 
@@ -304,10 +331,14 @@ namespace threepp {
             // about the width of what stirs it (a race, a hull). 0 = the
             // field's eddyTexels texels.
             float eddy    = 0.f;
+            // Its ripples' own window: side (m) and centre. 0 = the patch's.
+            float rippleSize    = 0.f;
+            float rippleCenterX = 0.f;
+            float rippleCenterZ = 0.f;
         };
         std::array<WakePatch, kMaxWakePatches> wakePatches;
 
-        // 48 bytes, memcpy'd to the GPU (mirrors WakeSource in ocean_wake.glsl).
+        // 64 bytes, memcpy'd to the GPU (mirrors WakeSource in ocean_wake.glsl).
         struct WakeSource {
             float x0 = 0.f, z0 = 0.f;// where the producer was at the last frame (world)
             float x1 = 0.f, z1 = 0.f;// where it is now
@@ -317,6 +348,16 @@ namespace threepp {
             float aeration   = 0.f;
             float turbulence = 0.f;  // m/s
             float lane       = 0.f;
+            // Ripples: the force (N) it bears down on the water with, spread
+            // as a gaussian of `radius` drawn out to a line that reaches
+            // (ax, az) to either side of the point (a hull's half length along
+            // her heading; 0, 0 = round). A source with only a push leaves no
+            // foam, air, turbulence or lane.
+            float push       = 0.f;
+            float ax = 0.f, az = 0.f;
+            // The patch whose ripples it forces; -1 = the first that holds it.
+            // (The other quantities go into every patch the source lies in.)
+            int32_t patch    = -1;
             float _pad       = 0.f;
         };
         std::vector<WakeSource> wakeSources;

@@ -14,7 +14,7 @@
 #define OCEAN_WAKE_MAX_PATCHES 8
 
 // One patch: a square window of water, world-anchored, `res` texels a side.
-// 32 bytes.
+// 56 bytes.
 struct WakePatch {
     float originX;      // world min corner, snapped to whole texels
     float originZ;
@@ -24,9 +24,15 @@ struct WakePatch {
     float prevOriginZ;
     float live;         // 0 = off; 1 = on, its images empty until this step; 2 = on, with last step's water
     float eddy;         // size of its large turbulent eddies (m)
+    float ripple;       // its ripples: 0 = none; 1 = from still water this step; 2 = running
+    float rippleDecay;  // 1/s, every wavenumber's
+    float rippleOriginX;// the window its ripples are shown through (world min corner)
+    float rippleOriginZ;
+    float rippleSize;   // that window's side, and the period of its small sea (m)
+    float _pad;
 };
 
-// What makes a mark. 48 bytes (= DisplacedMesh::WakeSource).
+// What makes a mark. 64 bytes (= DisplacedMesh::WakeSource).
 struct WakeSource {
     vec2  p0;           // where the producer was at the last step (world xz)
     vec2  p1;           // where it is now
@@ -36,10 +42,13 @@ struct WakeSource {
     float aeration;
     float turbulence;   // m/s
     float lane;
+    float push;         // N it bears down on the water with (the ripples' forcing)
+    vec2  axis;         // the push is a line that reaches this far to either side of the point
+    int   owner;        // the patch whose ripples it forces (the CPU has resolved a -1)
     float _pad;
 };
 
-// 48-byte header, then the patches, then the sources of this step.
+// 64-byte header, then the patches, then the sources of this step.
 layout(buffer_reference, scalar) readonly buffer WakeTable {
     uint  patchCount;
     uint  res;
@@ -53,6 +62,10 @@ layout(buffer_reference, scalar) readonly buffer WakeTable {
     float velocityLife;
     float eddyTexels;
     float spread;
+    uint  rippleRes;        // wavenumbers a side of a patch's ripples; 0 = the field has none
+    float rippleViscosity;  // m2/s
+    float rippleGain;
+    float _pad0;
     WakePatch  patches[OCEAN_WAKE_MAX_PATCHES];
     WakeSource sources[];
 };
@@ -137,5 +150,37 @@ vec4 oceanWakeSample(uint64_t tableAddr, vec2 xz, float footprint) {
     return acc;
 }
 #endif// OCEAN_WAKE_SAMPLER
+
+#ifdef OCEAN_WAKE_RIPPLE_SAMPLER
+// The patches' ripples at a world XZ: (slope x, slope z, the slope variance
+// the pixel is too coarse to hold). Each patch's image is a period of its own
+// small sea (texel i lies at world i * rippleSize / rippleRes, modulo that side), its
+// texels (slope x, slope z, their squares' sum), mipped: the mean of the third
+// less the square of the mean of the first two is what the filter took away.
+// Patches ADD (each holds only its own producers' waves), each shown through
+// its ripples' window and faded over that window's outer margin. `across` and `along` are the pixel's footprint on the water
+// (m, world xz): the sampler is anisotropic, so a pixel that is a long strip
+// at a grazing view is filtered as one.
+vec3 oceanWakeRipples(uint64_t tableAddr, vec2 xz, vec2 across, vec2 along) {
+    WakeTable tb = WakeTable(tableAddr);
+    if (tb.rippleRes == 0u) return vec3(0.0);
+    vec3 acc = vec3(0.0);
+    const uint  n    = min(tb.patchCount, uint(OCEAN_WAKE_MAX_PATCHES));
+    const float mid  = 0.5 / float(tb.rippleRes);
+    for (uint k = 0u; k < n; ++k) {
+        const WakePatch p = tb.patches[k];
+        if (p.ripple < 0.5) continue;
+        const vec2 uv = (xz - vec2(p.rippleOriginX, p.rippleOriginZ)) / p.rippleSize;
+        if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) continue;
+        const vec2  e    = min(uv, 1.0 - uv);
+        const float edge = smoothstep(0.0, 0.10, min(e.x, e.y));
+        const vec4  t    = textureGrad(OCEAN_WAKE_RIPPLE_SAMPLER, vec3(xz / p.rippleSize + mid, float(k)),
+                                       across / p.rippleSize, along / p.rippleSize);
+        acc.xy += edge * t.xy;
+        acc.z  += edge * edge * max(t.z - dot(t.xy, t.xy), 0.0);
+    }
+    return acc;
+}
+#endif// OCEAN_WAKE_RIPPLE_SAMPLER
 
 #endif// THREEPP_OCEAN_WAKE_GLSL

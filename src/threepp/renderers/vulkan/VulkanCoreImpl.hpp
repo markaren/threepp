@@ -705,6 +705,8 @@ namespace threepp {
         // ocean's, or WakeFieldPipeline's 1x1 dummy. The shade samples it only
         // through the patch table the ocean's GeometryDesc::foamAddress names.
         VkImageView oceanWakeView = VK_NULL_HANDLE;
+        // Its ripples' slopes (binding 79), or the same dummy.
+        VkImageView oceanRippleView = VK_NULL_HANDLE;
 
         // Tileable foam detail texture (deferred shade foam binding).
         // R = micro bubble brightness (three value-noise octaves matching the

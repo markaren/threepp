@@ -3927,12 +3927,14 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             // patch count are latched here). Its table's address goes on the
             // BLAS record, from where the GeometryDesc picks it up.
             if (dm.wakeField.resolution > 0u) {
-                state->wake = wakeField_->createState(dm.wakeField.resolution, dm.wakeField.patches);
+                state->wake = wakeField_->createState(dm.wakeField.resolution, dm.wakeField.patches,
+                                                      dm.wakeField.rippleResolution);
                 VkCommandBuffer cb = beginOneShot();
                 wakeField_->initState(cb, *state->wake);
                 endAndSubmitOneShot(cb);
                 state->blas->oceanWakeTable = state->wake->tableAddress();
                 oceanWakeView = state->wake->stateView();
+                if (state->wake->rippleView() != VK_NULL_HANDLE) oceanRippleView = state->wake->rippleView();
             }
             rewriteDeferredDescriptors();
 

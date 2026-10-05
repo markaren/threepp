@@ -1472,6 +1472,12 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/wake_field.comp"
         kWakeFieldCompSpv
         _wake_field_spv_h)
+    # Its ripples: a spectrum a patch, turned and forced (wake_ripple.comp),
+    # through the ocean's own inverse FFT.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/wake_ripple.comp"
+        kWakeRippleCompSpv
+        _wake_ripple_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/grass_wind.comp"
         kGrassWindCompSpv

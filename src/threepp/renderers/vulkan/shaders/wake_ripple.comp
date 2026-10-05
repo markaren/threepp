@@ -1,0 +1,143 @@
+#version 460
+#extension GL_EXT_scalar_block_layout                    : require
+#extension GL_EXT_buffer_reference                       : require
+#extension GL_EXT_buffer_reference2                      : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive                   : enable
+
+#include "ocean_wake.glsl"
+
+// The wake field's RIPPLES, one patch (DisplacedMesh::WakeField, "RIPPLES").
+//
+// A patch's ripples are a small linear sea, periodic over its window's side L,
+// held as its spectrum: for every wavenumber k = (id - N/2) 2 pi / L one
+// complex amplitude
+//
+//     a(k) = eta^(k) + i (omega / g) phi^(k)        omega^2 = g |k|
+//
+// (eta the surface height, phi the velocity potential at the surface). The
+// linear free surface, eta_t = |k| phi and phi_t = -g eta - p / rho, is then
+//
+//     a_t = -i omega a - i (omega / (rho g)) p^(k)
+//
+// one turn a wavenumber at its own rate, forced by the pressure p the
+// producers bear down with. So short waves run slower than long ones, as on
+// deep water, and nothing about the pattern is put in by hand: a source that
+// moves at U forces, of all the waves there are, the ones that stand still
+// beside it (omega = k . U), which is the Kelvin wake of that speed.
+//
+// Three dispatches a step, around the ocean's own inverse FFT:
+//
+//   0 TURN    a <- a e^(-i omega dt) + the step's forcing, in place; then
+//             what is not a weight's still dent decays. A source is a force W over a gaussian of its radius,
+//             drawn out to a line (its axis), that moved from p0 to p1 in the
+//             step: the forcing is integrated over that move exactly,
+//                 -i c omega dt sinc(theta / 2) e^(-i (omega dt / 2 + k . pm))
+//             with c = W shape(k) / (rho g L^2), pm the midpoint and
+//             theta = omega dt - k . (p1 - p0). Any dt does.
+//             The same loop leaves the weight's STILL dent, c e^(-i k . p1),
+//             summed over the sources, in the texel's other half.
+//   1 PACK    eta^(k) = (a(k) + conj a(-k)) / 2, plus the dent (which takes
+//             the dent out: at rest a = -dent), times (i kx - kz): the
+//             spectrum of slope_x + i slope_z, so ONE complex inverse FFT
+//             gives both slopes.
+//   2 SLOPES  after the FFT: (slope x, slope z, their squares' sum) into the
+//             patch's layer of the image the water shade samples. The mips
+//             are made from it by the caller.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform image2DArray ampImg;            // rg = a(k), ba = the still dent
+layout(set = 0, binding = 1, rg32f)   uniform image2D      workImg;           // the FFT's field
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2DArray outImg;  // mip 0 of what the shade samples
+
+// 24 bytes, mirrored by WakeFieldPipeline::PushConstants.
+layout(push_constant, scalar) uniform Pc {
+    uint64_t tableAddr;
+    uint     layer;
+    uint     mode;        // 0 turn, 1 pack, 2 slopes
+    uint     sourceCount;
+    uint     _pad;
+} pc;
+
+const float G   = 9.81;
+const float RHO = 1025.0;
+
+void main() {
+    WakeTable tb = WakeTable(pc.tableAddr);
+    const int   N  = int(tb.rippleRes);
+    const ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    if (id.x >= N || id.y >= N) return;
+    const int       li = int(pc.layer);
+    const WakePatch p  = tb.patches[pc.layer];
+
+    if (pc.mode == 2u) {
+        const vec2 s = clamp(imageLoad(workImg, id).rg, vec2(-4.0), vec2(4.0));
+        imageStore(outImg, ivec3(id, li), vec4(s, dot(s, s), 0.0));
+        return;
+    }
+
+    const float L  = p.rippleSize;
+    const vec2  k  = (vec2(id) - 0.5 * float(N)) * (6.28318530718 / L);
+    const float kl = length(k);
+    // The mean level, and the row and column at the Nyquist wavenumber (which
+    // are their own negatives), carry nothing.
+    const bool dead = id.x == 0 || id.y == 0 || kl < 1e-6;
+
+    if (pc.mode == 0u) {
+        if (dead) {
+            imageStore(ampImg, ivec3(id, li), vec4(0.0));
+            return;
+        }
+        const float dt = tb.dt;
+        const float w  = sqrt(G * kl);
+        vec2 a = vec2(0.0);
+        if (p.ripple > 1.5) {
+            a = imageLoad(ampImg, ivec3(id, li)).rg;
+            const float th = -w * dt;
+            a = vec2(a.x * cos(th) - a.y * sin(th), a.x * sin(th) + a.y * cos(th));
+        }
+        vec2 dent = vec2(0.0);
+        const float texel = L / float(N);
+        for (uint i = 0u; i < pc.sourceCount; ++i) {
+            const WakeSource sc = tb.sources[i];
+            if (sc.push == 0.0 || sc.owner != li) continue;
+            // nothing narrower than a texel and a half: the spectrum has to be gone at Nyquist
+            const float r  = max(sc.radius, 1.5 * texel);
+            float shape = exp(-0.25 * kl * kl * r * r);
+            const float ka = dot(k, sc.axis);
+            if (abs(ka) > 1e-3) shape *= sin(ka) / ka;
+            const float c = sc.push * shape / (RHO * G * L * L);
+            if (abs(c) < 1e-12) continue;
+            const float ps = -dot(k, sc.p1);
+            dent += c * vec2(cos(ps), sin(ps));
+            if (dt > 0.0 && p.ripple > 1.5) {
+                const float ht = 0.5 * (w * dt - dot(k, sc.p1 - sc.p0));
+                const float sn = abs(ht) > 1e-3 ? sin(ht) / ht : 1.0;
+                const float ph = -(0.5 * w * dt + dot(k, 0.5 * (sc.p0 + sc.p1)));
+                // -i e^(i ph) = (sin ph, -cos ph)
+                a += (c * w * dt * sn) * vec2(sin(ph), -cos(ph));
+            }
+        }
+        // What dies is the WAVES, a less the weights' still dents: a weight at
+        // rest stays in its dent exactly, however long it lies there. From
+        // still water that is all there is.
+        a = p.ripple > 1.5
+            ? (a + dent) * exp(-dt * (p.rippleDecay + 2.0 * tb.rippleViscosity * kl * kl)) - dent
+            : -dent;
+        imageStore(ampImg, ivec3(id, li), vec4(a, dent));
+        return;
+    }
+
+    // ── PACK ────────────────────────────────────────────────────────────
+    if (dead) {
+        imageStore(workImg, id, vec4(0.0));
+        return;
+    }
+    const vec4 A = imageLoad(ampImg, ivec3(id, li));
+    const vec4 B = imageLoad(ampImg, ivec3((ivec2(N) - id) & (N - 1), li));
+    const vec2 eta = 0.5 * (A.rg + vec2(B.r, -B.g)) + A.ba;
+    // (i kx - kz) eta
+    const vec2 f = k.x * vec2(-eta.y, eta.x) - k.y * eta;
+    imageStore(workImg, id, vec4(f * tb.rippleGain, 0.0, 0.0));
+}

@@ -33,7 +33,7 @@ namespace threepp::vulkan {
     // that no validation layer can see). Both tables are std::array of this
     // size now, filled through .at(), and the fill count is checked, so the
     // failure mode is a loud throw at init instead.
-    constexpr uint32_t kDeferredBindingCount = 78;
+    constexpr uint32_t kDeferredBindingCount = 79;
 
     // ParticleField density volumes bound at once (binding 67 is an array of
     // this many). KEEP IN SYNC with kMaxDensityFields in
@@ -235,6 +235,9 @@ namespace threepp::vulkan {
         // no ocean has one); the water shade reads it only through the patch
         // table the ocean's GeometryDesc::foamAddress names.
         set(78, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // ocean wake field (rgba16f 2D array)
+        // Its ripples: the slopes of the waves the producers make, mipped,
+        // REPEAT and anisotropic. The same dummy when no ocean has any.
+        set(79, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // ocean wake ripples (rgba16f 2D array, mipped)
 
         // Exact fit is the contract: a new binding must bump
         // kDeferredBindingCount, and rewriteDescriptors must gain the matching
@@ -1001,6 +1004,11 @@ namespace threepp::vulkan {
             oceanWakeInfo.imageView   = in.oceanWakeView;
             oceanWakeInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
             setw(77, 78, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanWakeInfo,      nullptr);
+            VkDescriptorImageInfo oceanRippleInfo{};
+            oceanRippleInfo.sampler     = in.oceanRippleSampler;
+            oceanRippleInfo.imageView   = in.oceanRippleView;
+            oceanRippleInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            setw(78, 79, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanRippleInfo,    nullptr);
             vulkan::updateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
         }
     }

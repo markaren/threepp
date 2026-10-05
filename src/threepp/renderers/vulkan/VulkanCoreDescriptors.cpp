@@ -341,6 +341,8 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             in.oceanFoamSampler = oceanFoamSampler;
             in.oceanWakeView    = oceanWakeView;
             in.oceanWakeSampler = wakeField_->sampler();
+            in.oceanRippleView    = oceanRippleView;
+            in.oceanRippleSampler = wakeField_->rippleSampler();
             in.foamDetailView    = foamDetailImage.view;
             in.foamDetailSampler = foamDetailImage.sampler;
             // Shared blue-noise tile — dithers the deferred GI hemisphere

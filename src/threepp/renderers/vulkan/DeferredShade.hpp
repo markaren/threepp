@@ -94,6 +94,8 @@ namespace threepp::vulkan {
             VkSampler          oceanFoamSampler = VK_NULL_HANDLE;
             VkImageView        oceanWakeView    = VK_NULL_HANDLE;// wake-field state (2D array), or its 1x1 dummy
             VkSampler          oceanWakeSampler = VK_NULL_HANDLE;
+            VkImageView        oceanRippleView    = VK_NULL_HANDLE;// its ripples' slopes (2D array, mipped), or the dummy
+            VkSampler          oceanRippleSampler = VK_NULL_HANDLE;
             // Baked tileable foam detail (R=bubbles, G=lace) — created once at
             // renderer startup, mipped, SHADER_READ_ONLY. Mirrors RT binding 45.
             VkImageView        foamDetailView    = VK_NULL_HANDLE;

@@ -181,7 +181,10 @@ namespace threepp::water {
     // input image.
     class IFFT {
     public:
-        IFFT(vulkan::VulkanContext& ctx, uint32_t textureSize);
+        // maxGroups: how many distinct (input, scratch) image pairs this IFFT
+        // will be applied to over its life (a cascade has two; the wake
+        // field's ripples have one a patch).
+        IFFT(vulkan::VulkanContext& ctx, uint32_t textureSize, uint32_t maxGroups = 4);
         ~IFFT();
 
         IFFT(const IFFT&) = delete;
@@ -242,7 +245,7 @@ namespace threepp::water {
             std::array<VkDescriptorSet, 2> v{};
             std::array<VkDescriptorSet, 2> p{};// same orientation convention
         };
-        static constexpr uint32_t kMaxDescGroups = 4;// 2 pairs/cascade (height, displacement) + headroom
+        uint32_t maxGroups_ = 4;// 2 pairs/cascade (height, displacement) + headroom
         std::vector<DescGroup> groups_;
 
         bool twiddleComputed_ = false;

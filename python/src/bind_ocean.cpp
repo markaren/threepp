@@ -264,7 +264,20 @@ namespace threepp_py {
                                "name its own (WakePatch.eddy).")
                 .def_readwrite("spread", &DisplacedMesh::WakeField::spread,
                                "Eddy diffusivity K = spread x turbulence x eddy size (m2/s): how fast the "
-                               "lane and the bubbles widen.");
+                               "lane and the bubbles widen.")
+                .def_readwrite("ripple_resolution", &DisplacedMesh::WakeField::rippleResolution,
+                               "The patches' RIPPLES, the waves their producers make (a hull's fan, a paddle's "
+                               "rings): wavenumbers a side of each patch's small linear sea, a power of two in "
+                               "128..1024; 0 = none, the default. Latched with resolution. What forces them is "
+                               "a source's `push`.")
+                .def_readwrite("ripple_life", &DisplacedMesh::WakeField::rippleLife,
+                               "e-folding time (s) of a ripple. A patch's waves are also made to die before "
+                               "they have crossed it (1.5 x its fastest pusher's speed / its side, a second), "
+                               "because its sea is periodic over its side.")
+                .def_readwrite("ripple_viscosity", &DisplacedMesh::WakeField::rippleViscosity,
+                               "m2/s: a ripple of wavenumber k also dies at 2 nu k^2, the shortest first.")
+                .def_readwrite("ripple_gain", &DisplacedMesh::WakeField::rippleGain,
+                               "Scales the slope the water shade reads; 1 = what linear theory gives.");
 
         py::class_<DisplacedMesh::WakePatch>(displaced, "WakePatch",
                                              "One patch of the wake field (mesh.wake_patch(i)): a square of water, "
@@ -284,6 +297,20 @@ namespace threepp_py {
                          p.size    = size;
                      },
                      py::arg("center_x"), py::arg("center_z"), py::arg("size"))
+                .def_readwrite("ripple_size", &DisplacedMesh::WakePatch::rippleSize,
+                               "Side (m) of the window its RIPPLES are shown through, which is also the "
+                               "period of its small sea: the smaller, the finer its waves are drawn and the "
+                               "sooner they have to die. 0 = the patch's own window.")
+                .def_readwrite("ripple_center_x", &DisplacedMesh::WakePatch::rippleCenterX)
+                .def_readwrite("ripple_center_z", &DisplacedMesh::WakePatch::rippleCenterZ)
+                .def("set_ripples", [](DisplacedMesh::WakePatch& p, float x, float z, float size) {
+                         p.rippleCenterX = x;
+                         p.rippleCenterZ = z;
+                         p.rippleSize    = size;
+                     },
+                     py::arg("center_x"), py::arg("center_z"), py::arg("size"),
+                     "Give its ripples their own window (move the centre every frame; a new size "
+                     "starts them from still water).")
                 .def("__repr__", [](const DisplacedMesh::WakePatch& p) {
                     return p.size > 0.f ? "<DisplacedMesh.WakePatch " + std::to_string(p.size) + " m at (" +
                                                   std::to_string(p.centerX) + ", " + std::to_string(p.centerZ) + ")>"
@@ -366,7 +393,8 @@ namespace threepp_py {
                 .def("clear_wake_sources", &DisplacedMesh::clearWakeSources)
                 .def("add_wake_source",
                      [](DisplacedMesh& o, float x, float z, float vx, float vz, float radius, float foam,
-                        float aeration, float turbulence, float lane, const py::object& xPrev, const py::object& zPrev) {
+                        float aeration, float turbulence, float lane, const py::object& xPrev, const py::object& zPrev,
+                        float push, float ax, float az, int patch) {
                          DisplacedMesh::WakeSource s{};
                          s.x1 = x;
                          s.z1 = z;
@@ -379,17 +407,28 @@ namespace threepp_py {
                          s.aeration   = aeration;
                          s.turbulence = turbulence;
                          s.lane       = lane;
+                         s.push       = push;
+                         s.ax         = ax;
+                         s.az         = az;
+                         s.patch      = patch;
                          o.addWakeSource(s);
                      },
                      py::arg("x"), py::arg("z"), py::arg("vx") = 0.0f, py::arg("vz") = 0.0f, py::arg("radius") = 0.3f,
                      py::arg("foam") = 0.0f, py::arg("aeration") = 0.0f, py::arg("turbulence") = 0.0f,
                      py::arg("lane") = 0.0f, py::arg("x_prev") = py::none(), py::arg("z_prev") = py::none(),
+                     py::arg("push") = 0.0f, py::arg("ax") = 0.0f, py::arg("az") = 0.0f, py::arg("patch") = -1,
                      "One producer's mark for this frame: a gaussian of `radius` m on the surface, swept from "
                      "(x_prev, z_prev), where the producer was at the last frame, to (x, z), so a coarse time "
                      "step leaves no gaps. (vx, vz) is the water velocity it imparts, over the ground (a "
                      "propeller's race runs astern at its speed THROUGH the water). foam and aeration are 0..1, "
                      "turbulence is an rms speed in m/s, lane 0..1 is how far the short waves are flattened. "
-                     "It lands in every patch that covers it. More than MAX_WAKE_SOURCES a frame are dropped.")
+                     "It lands in every patch that covers it. More than MAX_WAKE_SOURCES a frame are dropped.\n\n"
+                     "`push` is what forces the RIPPLES (wake_field.ripple_resolution): the force in N the "
+                     "producer bears down on the water with, a gaussian of `radius` drawn out to a line that "
+                     "reaches (ax, az) to either side of (x, z). A floating hull pushes with its weight along "
+                     "its length; where it moves, the waves that keep up with it are the ones that grow, "
+                     "which is its wake. `patch` is the patch whose ripples it forces (-1 = the first that "
+                     "holds it); a source with a push and nothing else leaves only waves.")
                 // CPU mirror of the GPU wave height — for buoyancy / placing floats.
                 // Valid after a Vulkan render() has filled the height fields.
                 .def("sample_height", &DisplacedMesh::sampleHeight,

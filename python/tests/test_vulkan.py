@@ -726,6 +726,14 @@ def test_ocean_wake_field_knobs_patches_and_sources():
         ocean.wake_patch(tp.DisplacedMesh.MAX_WAKE_PATCHES)
     ocean.add_wake_source(1.0, 2.0, vx=-0.5, radius=0.3, foam=1.0, x_prev=0.0, z_prev=2.0)
     ocean.add_wake_source(1.0, 2.0)                       # a point, nothing in it
+    # the ripples: off until asked for, a window of their own for a patch, a source's push
+    assert wf.ripple_resolution == 0
+    wf.ripple_resolution, wf.ripple_life, wf.ripple_gain = 256, 9.0, 0.8
+    assert (ocean.wake_field.ripple_resolution, ocean.wake_field.ripple_life) == (256, pytest.approx(9.0))
+    assert again.ripple_size == 0.0                       # the patch's own window
+    patch.set_ripples(5.0, -1.0, 16.0)
+    assert (again.ripple_center_x, again.ripple_center_z, again.ripple_size) == pytest.approx((5.0, -1.0, 16.0))
+    ocean.add_wake_source(1.0, 2.0, radius=0.2, push=500.0, ax=0.6, az=0.8, patch=1)
     ocean.clear_wake_sources()
 
 
@@ -772,6 +780,75 @@ def test_wake_field_marks_the_water_where_it_was_made(vk_renderer):
         patch.size = 0.0
         mid3, _ = look(6.2)
         assert abs(mid3 - mid0) < 6.0, "a patch that is off still marks the water"
+    finally:
+        vk_renderer.sim_time = None
+
+
+def test_wake_ripples_are_the_waves_a_moving_weight_makes(vk_renderer):
+    """A weight at rest on the water makes no waves (its still dent is taken
+    out); the same weight under way leaves waves astern, which stay in the
+    world when its patch moves on; a patch that is off shows none. The sea is
+    flat and the sun mirrored in the middle of the frame, so every unevenness
+    in the picture is a ripple's slope."""
+    scene = tp.Scene()
+    scene.background = 0x000000
+    scene.add(tp.HemisphereLight(0xffffff, 0x404040, 0.4))
+    sun = tp.DirectionalLight(0xffffff, 3.0)
+    sun.position.set(0, 6, -14)
+    scene.add(sun)
+    ocean = tp.Ocean(size=200.0, resolution=128, fft_size=256, wind_speed=0.05, choppiness=0.0)
+    ocean.params.wave_scale = 0.0
+    ocean.params.foam_amount = 0.0
+    wf = ocean.wake_field
+    wf.resolution, wf.patches, wf.ripple_resolution = 64, 1, 128
+    patch = ocean.wake_patch(0)
+    patch.set(0.0, 0.0, 32.0)
+    scene.add(ocean)
+    cam = tp.PerspectiveCamera(55, W / H, 0.1, 400)
+    cam.position.set(0, 6, 14)
+    cam.look_at(0, 0, 0)
+    clock = [5.0]
+
+    def look():
+        vk_renderer.reset_temporal_history()
+        for _ in range(4):
+            vk_renderer.sim_time = clock[0]               # four frames at one instant: the field steps once
+            vk_renderer.render(scene, cam)
+        return vk_renderer.read_pixels().astype(float)[H // 4:3 * H // 4, W // 8:7 * W // 8, :3].mean(axis=2)
+
+    def differs(a, b):
+        return float(np.abs(a - b).mean())
+
+    def sail(seconds, x0, speed, dt=0.05):
+        """A 4 kN weight two metres long from x0 along +x; returns where it ends."""
+        x_prev = x0
+        for k in range(1, int(round(seconds / dt)) + 1):
+            x = x0 + speed * dt * k
+            ocean.clear_wake_sources()
+            ocean.add_wake_source(x, 0.0, radius=0.3, x_prev=x_prev, z_prev=0.0, push=4000.0, ax=1.0, patch=0)
+            x_prev = x
+            clock[0] += dt
+            vk_renderer.sim_time = clock[0]
+            vk_renderer.render(scene, cam)
+        return x_prev
+
+    try:
+        still = look()
+        sail(1.0, -9.0, 0.0)
+        rest = look()
+        assert differs(rest, still) < 0.2, "a weight at rest made waves"
+        sail(4.0, -9.0, 2.5)
+        way = look()
+        assert differs(way, still) > 1.5, "a weight under way left no waves"
+        ocean.clear_wake_sources()
+        patch.set(3.0, 0.0, 32.0)                         # the patch moves on; the waves are the world's
+        clock[0] += 0.05
+        moved = look()
+        assert differs(moved, still) > 1.5, "the waves went when their patch moved"
+        patch.size = 0.0
+        clock[0] += 0.05
+        off = look()
+        assert differs(off, still) < 0.2, "a patch that is off still shows waves"
     finally:
         vk_renderer.sim_time = None
 

@@ -2596,6 +2596,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         }
                         if (st->wake) {
                             if (st->wake->stateView() == oceanWakeView) oceanWakeView = wakeField_->dummyView();
+                            if (st->wake->rippleView() == oceanRippleView) oceanRippleView = wakeField_->dummyView();
                             wakeField_->destroyState(*st->wake);
                         }
                         if (st->blas) destroyBlasRecord(*st->blas);

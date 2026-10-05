@@ -15,6 +15,7 @@
 
 #include "threepp/math/Rng.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -593,9 +594,10 @@ namespace threepp::water {
     //   IFFT
     // ─────────────────────────────────────────────────────────────────
 
-    IFFT::IFFT(vulkan::VulkanContext& ctx, uint32_t textureSize)
+    IFFT::IFFT(vulkan::VulkanContext& ctx, uint32_t textureSize, uint32_t maxGroups)
         : ctx_(ctx), textureSize_(textureSize),
-          logSize_(static_cast<uint32_t>(std::log2(static_cast<double>(textureSize)))) {
+          logSize_(static_cast<uint32_t>(std::log2(static_cast<double>(textureSize)))),
+          maxGroups_(std::max(maxGroups, 1u)) {
         sampler_ = makeNearestSampler(ctx_);
         createTwiddleImage();
         createPipelines();
@@ -693,17 +695,17 @@ namespace threepp::water {
         pipePermute_ = makeComputePipeline(ctx_, modP, layoutPermute_);
         vkDestroyShaderModule(ctx_.device(), modP, nullptr);
 
-        // ── Pool: 1 twiddle set + kMaxDescGroups write-once groups, each
+        // ── Pool: 1 twiddle set + maxGroups_ write-once groups, each
         // 4 butterfly (2 horizontal + 2 vertical) + 2 permute sets. A butterfly
         // set is 2 sampled + 1 storage; an in-place permute set is 1 storage
         // and samples nothing.
         const std::array<VkDescriptorPoolSize, 2> poolSizes{
-            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxDescGroups * (4 * 2)},
-            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1 + kMaxDescGroups * (4 * 1 + 2 * 1)},
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, maxGroups_ * (4 * 2)},
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1 + maxGroups_ * (4 * 1 + 2 * 1)},
         };
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpci.maxSets       = 1 + kMaxDescGroups * 6;
+        dpci.maxSets       = 1 + maxGroups_ * 6;
         dpci.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
         dpci.pPoolSizes    = poolSizes.data();
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &pool_),
@@ -752,7 +754,7 @@ namespace threepp::water {
         for (auto& g : groups_) {
             if (g.input == a.view && g.scratch == b.view) return g;
         }
-        if (groups_.size() >= kMaxDescGroups) {
+        if (groups_.size() >= maxGroups_) {
             // An image pair this IFFT has never seen, with the cache full,
             // means images were recreated without recreating the IFFT — the
             // DisplacedMeshState contract says that cannot happen. Reusing or
