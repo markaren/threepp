@@ -222,6 +222,7 @@ ocean = tp.Ocean(size=SEA, resolution=512, wind_speed=max(WIND, 0.5), wind_theta
 if FLAT:
     ocean.params.wave_scale = 0.0
 ocean.wake_field.resolution, ocean.wake_field.patches = 1024, 1      # what she leaves on the water (usv_rig.Wash)
+ocean.wake_field.ripple_resolution = 512                             # and the waves she makes
 scene.add(ocean)
 floor_mat = tp.MeshStandardMaterial()
 floor_mat.color = 0x04070a

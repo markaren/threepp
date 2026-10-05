@@ -9,7 +9,7 @@ the same way; see [The Otter X](#the-otter-x) and [The Otter](#the-otter) at the
 |---|---|
 | `mariner_spec.json` | every number: brochure figures, the lines fitted to the vendor's renders and photo, the sensor tower, the waterjet, the mass budget, the materials |
 | `build_mariner_blender.py` | builds the geometry (numpy), exports `mariner.glb` through Blender, and integrates the hydrostatics into `mariner_hydro.json` |
-| `../usv_rig.py` | the boat for any scene: `StripHull` (her buoyancy tables and the rigid body), her drive (`Waterjet`, `AzimuthPods`, `FixedPods`: thrust, resistance, helm, actuator nodes, foam), `Wake` (her footprint and wake on the ocean) and `Wash` (her propulsors' races and her hull's lane on the water, in the ocean's wake field); see [In another scene](#in-another-scene) |
+| `../usv_rig.py` | the boat for any scene: `StripHull` (her buoyancy tables and the rigid body), her drive (`Waterjet`, `AzimuthPods`, `FixedPods`: thrust, resistance, helm, actuator nodes, foam), `Wake` (her footprint and wake on the ocean) and `Wash` (her propulsors' races, her hull's lane and her waves on the water, in the ocean's wake field); see [In another scene](#in-another-scene) |
 | `usv_ocean.py` | the demo on `usv_rig.py`: she floats on the FFT ocean on her own buoyancy tables and runs on a steerable jet (`--boat otterx`: the Otter X on her pods; `--boat otter`: the Otter) |
 | `mariner.glb`, `mariner_hydro.json` | generated, not committed |
 
@@ -228,6 +228,7 @@ field):
 from usv_rig import StripHull, Wake, Wash, drive_for
 
 ocean.wake_field.resolution = 1024          # before the first render; .patches = one for each boat
+ocean.wake_field.ripple_resolution = 512    # and the waves she makes (0, the default: none)
 boat = tp.GLTFLoader().load("usv/otter.glb").scene
 hull = StripHull("otter", ocean)             # spec_dir=... for a boat kept elsewhere
 hull.seat(x, z, heading)
@@ -249,6 +250,17 @@ water over it, and the lane her hull drags from each stern. Each frame: `ocean.c
 once, then every boat's `wash.update(dt)`. Anything else puts its own with `wash.put(...)`, as the
 Nørvasundet scene does for a kayak's paddle blades (`Wash(hull, None, ...)` is a hull with no
 propulsor).
+
+Her waves are the field's ripples (`wake_field.ripple_resolution`). Each patch holds the spectrum of
+a small linear sea, every wavenumber turning at its own deep-water rate, and a source's `push` (the
+force in N it bears down on the water with) forces it. `Wash` lays her weight out as her hulls carry
+it: the Bonjean strips at her design waterline, a stretch of hull's share of the buoyancy where its
+centroid is and as wide as it is at the water, so a fine bow is a narrow load and a catamaran is
+two. No wave is drawn. At rest she makes none; under way the waves that keep up with her are the
+ones that grow, which is the Kelvin fan of her speed, bent where she turned; two boats' fans pass
+through each other. The sea is periodic over its side, so her waves live in a window round her
+(`Wash(..., ripples=side)`, 10 of her lengths by default) and die before they have crossed it. They
+are slope on the water's normal, not height: they do not move a boat, and they meet no shore.
 
 Under her own power, `hull.drive = drive`: the scene writes `drive.throttle_cmd` and
 `drive.steer_cmd`, and each frame calls `drive.tick(dt)`, `hull.advance(dt, substeps)`,

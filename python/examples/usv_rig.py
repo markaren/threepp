@@ -1017,6 +1017,15 @@ class Wash:
                        its own width (WANDER).
       her hulls        the turbulent water a hull drags astern: a lane a hull's breadth wide
                        from each stern, with no air in it until she is fast for her length.
+                       And her WAVES, where the wake field has ripples
+                       (ocean.wake_field.ripple_resolution): she bears down on the water with her
+                       weight, laid out as her hulls carry it (the Bonjean strips at her design
+                       waterline: a stretch of hull's share of the buoyancy, where its centroid
+                       is, as wide as it is at the water, so a fine bow is a narrow load and a
+                       catamaran is two), and the field's small linear sea makes of that the
+                       waves a weight of that shape makes at her speed. No wave is drawn: at
+                       rest she makes none, at speed the fan has the angle and the wavelengths
+                       of that speed, and it bends where she turned.
 
     hull, drive   the boat; the drive need not be the one that moves her (see Drive.thrusts),
                   and None is a hull with no propulsor (a kayak: her paddle is put() by the scene)
@@ -1027,6 +1036,8 @@ class Wash:
                   field's resolution whatever its size, so this also sets how fine her mark is
                   drawn (default 20 lengths of her, between 30 and 120 m)
     air           scales the air her propulsors take down (1 = as computed)
+    ripples       the side (m) of the window her waves are kept in (default 10 lengths of her,
+                  at least 16 m and at most her patch): the smaller, the finer they are drawn
 
     The scene clears the ocean's sources once a frame (ocean.clear_wake_sources()) and then
     updates every boat's Wash."""
@@ -1035,13 +1046,18 @@ class Wash:
     TURBULENCE = 0.45     # rms turbulent speed of a race where it surfaces, as a share of its speed there
     EDDY = 2.4            # her patch's large eddies, in radii of her widest race at the surface
     WANDER = 0.45         # how far a race's surfacing point strays to either side, in its radii there
+    STRIPS = 8            # stretches a side her weight is laid out in along her hulls
     G = 9.81
 
-    def __init__(self, hull, drive, ocean, index, size=None, air=1.0):
+    def __init__(self, hull, drive, ocean, index, size=None, air=1.0, ripples=None):
         self.hull, self.drive, self.ocean = hull, drive, ocean
         self.patch = ocean.wake_patch(index) if hasattr(ocean, "wake_patch") else None
+        self.index = index
         self.size = size or min(max(20.0 * hull.spec["principal"]["loa"], 30.0), 120.0)
         self.air = air
+        self.ripple_size = min(self.size, ripples or max(10.0 * hull.spec["principal"]["loa"], 16.0))
+        self.ripples = False                   # the wake field has ripples (read at each update)
+        self.strips = None                     # her weight along her hulls (weight_strips(), once)
         self.last = {}                         # each producer's source point at the last update (world x, z)
         self.report = {}                       # each producer's last figures, for a readout
         self.t = 0.0
@@ -1053,9 +1069,10 @@ class Wash:
             self.patch.size = 0.0
         self.last = {}
 
-    def put(self, name, at, vel, radius, foam=0.0, aeration=0.0, turbulence=0.0, lane=0.0):
+    def put(self, name, at, vel, radius, foam=0.0, aeration=0.0, turbulence=0.0, lane=0.0, push=0.0):
         """A source of any other producer of hers (a paddle's blade, an anchor going down): `at` a
-        point and `vel` the water velocity it imparts over the ground, both in the vessel frame.
+        point and `vel` the water velocity it imparts over the ground, both in the vessel frame;
+        `push` the force (N) it bears down on the water with, which is what makes waves.
         After update(), every frame the producer is at work; a frame without it ends its trail."""
         if self.patch is None or not self.patch.size > 0.0:
             return
@@ -1063,15 +1080,44 @@ class Wash:
         q = h.to_world(at)
         v = h.R @ np.asarray(vel, float)
         texel = self.size / max(self.ocean.wake_field.resolution, 1)
-        self._put("put:" + name, q[[0, 2]], v[[0, 2]], max(radius, 1.25 * texel), foam, aeration, turbulence, lane)
+        self._put("put:" + name, q[[0, 2]], v[[0, 2]], max(radius, 1.25 * texel), foam, aeration, turbulence, lane,
+                  push)
         self.put_names.add("put:" + name)
 
-    def _put(self, name, p, vel, radius, foam, aeration, turbulence, lane):
+    def weight_strips(self):
+        """Her weight along her hulls at the design waterline, from the Bonjean strips: a list of
+        (x, z, share of her weight, radius, half length) in the vessel frame, starboard and port,
+        at most STRIPS stretches a side. A stretch's radius is that of the gaussian with the
+        spread of a load as wide as the hull is at the water there."""
+        h = self.hull
+        t = min(max((h.design["waterline_y_at_x0"] - h.h0) / h.dh, 0.0), h.nh - 1.001)
+        i, f = int(t), t - int(t)
+        ns = len(h.sx) // 2                                      # the starboard halves come first
+        a = h.tab_a[:ns, i] + (h.tab_a[:ns, i + 1] - h.tab_a[:ns, i]) * f
+        zc = h.tab_z[:ns, i] + (h.tab_z[:ns, i + 1] - h.tab_z[:ns, i]) * f
+        b = (h.tab_a[:ns, i + 1] - h.tab_a[:ns, i]) / h.dh       # dA/dh: the half-section's breadth at the water
+        wet = np.flatnonzero(a > 1e-4 * float(a.max()))
+        out = []
+        for g in np.array_split(wet, min(self.STRIPS, len(wet))):
+            w = float(a[g].sum())
+            x = 0.5 * float(h.sx[g[0]] + h.sx[g[-1]])            # the stretches tile her length
+            z = float(zc[g] @ a[g]) / w
+            r = 0.41 * float(b[g] @ a[g]) / w
+            for side in (1.0, -1.0):
+                out.append((x, side * z, 0.5 * w / float(a[wet].sum()), r, 0.5 * h.dx * len(g)))
+        return out
+
+    def _put(self, name, p, vel, radius, foam, aeration, turbulence, lane, push=0.0, axis=(0.0, 0.0)):
         x0, z0 = self.last.get(name, (p[0], p[1]))
         if math.hypot(p[0] - x0, p[1] - z0) > 0.5 * self.size:
             x0, z0 = p[0], p[1]                # she was moved, not sailed
-        self.ocean.add_wake_source(float(p[0]), float(p[1]), float(vel[0]), float(vel[1]), float(radius),
-                                   float(foam), float(aeration), float(turbulence), float(lane), float(x0), float(z0))
+        if push and self.ripples:
+            self.ocean.add_wake_source(float(p[0]), float(p[1]), float(vel[0]), float(vel[1]), float(radius),
+                                       float(foam), float(aeration), float(turbulence), float(lane), float(x0), float(z0),
+                                       push=float(push), ax=float(axis[0]), az=float(axis[1]), patch=self.index)
+        else:
+            self.ocean.add_wake_source(float(p[0]), float(p[1]), float(vel[0]), float(vel[1]), float(radius),
+                                       float(foam), float(aeration), float(turbulence), float(lane), float(x0), float(z0))
         self.last[name] = (float(p[0]), float(p[1]))
 
     def update(self, dt, on=True):
@@ -1089,6 +1135,10 @@ class Wash:
         c = h.p[[0, 2]] - fwd * (0.5 * self.size - 0.08 * self.size - loa)
         self.patch.set(float(c[0]), float(c[1]), float(self.size))
         texel = self.size / max(self.ocean.wake_field.resolution, 1)
+        self.ripples = getattr(self.ocean.wake_field, "ripple_resolution", 0) > 0
+        if self.ripples:                       # her waves' window: she sits a fifth of it inside its leading edge
+            cr = h.p[[0, 2]] - fwd * (0.3 * self.ripple_size)
+            self.patch.set_ripples(float(cr[0]), float(cr[1]), float(self.ripple_size))
         self.t += dt
         for name in [n for n in self.last if n.startswith("put:") and n not in self.put_names]:
             del self.last[name]                # it was not put last frame: its trail has ended
@@ -1156,3 +1206,13 @@ class Wash:
         else:
             for k in range(2):
                 self.last.pop(f"hull_{k}", None)
+
+        # her weight on the water, laid out along her hulls: what makes her waves
+        if self.ripples:
+            if self.strips is None:
+                self.strips = self.weight_strips()
+            wl = h.design["waterline_y_at_x0"]
+            for k, (x, z, share, r, half) in enumerate(self.strips):
+                q = h.to_world([x, wl, z])
+                self._put(f"weight_{k}", q[[0, 2]], (0.0, 0.0), r, 0.0, 0.0, 0.0, 0.0,
+                          push=h.mass * self.G * share, axis=fwd * half)
