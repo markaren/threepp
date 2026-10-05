@@ -234,6 +234,96 @@ namespace threepp {
             foamDisturbances.push_back({worldX, worldZ, radius, intensity});
         }
 
+        // ── Wake field ────────────────────────────────────────────────────
+        // What something moving through the water leaves ON it: a propeller's
+        // race, a waterjet's wash, a bow thruster, a paddle's puddle, a
+        // hull's stern. The foam accumulator above cannot carry these: it is
+        // ONE cascade-0 tile repeated over the sheet (a boat's foam comes back
+        // every tileSize0) at about a metre a texel.
+        //
+        // The wake field is a set of PATCHES: square windows of simulated
+        // water surface, each `resolution` texels a side, placed in the world
+        // by the application (usually trailing one vessel) and moved as it
+        // likes. A patch is world-anchored and does not repeat: what is
+        // deposited stays where it was put while the patch slides over it
+        // (the origin snaps to whole texels, so nothing is resampled), and
+        // what the patch leaves behind is dropped. Each texel carries
+        //
+        //   foam        the white film on the surface                 (0..1)
+        //   aeration    bubbles under the surface, the pale water     (0..1)
+        //   turbulence  rms turbulent speed of the water (m/s): it stirs
+        //               everything here and ruffles the surface
+        //   lane        how far the short wind waves are damped       (0..1)
+        //   velocity    the water's own mean flow (m/s, world x/z)
+        //
+        // and every frame the field is carried by its own velocity plus a
+        // turbulent flow scaled by `turbulence` (so a deposit is drawn out
+        // into streaks and eddies by motion; no structure is painted), spread
+        // by an eddy diffusivity, and decayed at each quantity's own rate.
+        //
+        // What makes a mark is a SOURCE: a capsule on the surface (where the
+        // producer was last frame to where it is now, so a coarse time step
+        // leaves no gaps), a radius, the water velocity it imparts and how
+        // much of each quantity it puts in. Nothing here knows what a
+        // propeller is: the caller turns thrust, depth and speed into these
+        // numbers (python/examples/usv_rig.py does, per kind of producer).
+        // Clear and repopulate the sources each frame before render().
+        //
+        // Off by default (resolution 0): no memory, no pass, and the water
+        // shade is byte-identical. `resolution` and `patches` are LATCHED when
+        // the renderer first sees the mesh; the other knobs are live.
+        static constexpr uint32_t kMaxWakePatches = 8;
+        static constexpr uint32_t kMaxWakeSources = 96;
+        struct WakeField {
+            uint32_t resolution = 0;              // texels a side per patch; 0 = off (latched)
+            uint32_t patches    = kMaxWakePatches;// layers allocated (latched)
+            // e-folding times (s). Foam's is for a thick film; a thin one
+            // goes `foamThinning` times faster, so a patch dies from its
+            // edges and breaks up instead of dimming as a whole.
+            float foamLife       = 5.0f;
+            float foamThinning   = 3.0f;
+            // Bubbles a propeller takes down are back at the surface in
+            // seconds; the few that are small enough to stay are not seen.
+            float aerationLife   = 4.5f;
+            float turbulenceLife = 5.0f;
+            float laneLife       = 40.0f;
+            float velocityLife   = 2.5f;
+            // Large eddies of the turbulent flow, in texels, for a patch that
+            // does not name its own size (WakePatch::eddy).
+            float eddyTexels     = 12.0f;
+            // Eddy diffusivity K = spread * turbulence * eddy size (m2/s).
+            float spread         = 0.03f;
+        };
+        WakeField wakeField;
+
+        struct WakePatch {
+            float centerX = 0.f;
+            float centerZ = 0.f;
+            float size    = 0.f;// side (m); 0 = this patch is off
+            // Size (m) of the large eddies of the turbulent flow in this patch:
+            // about the width of what stirs it (a race, a hull). 0 = the
+            // field's eddyTexels texels.
+            float eddy    = 0.f;
+        };
+        std::array<WakePatch, kMaxWakePatches> wakePatches;
+
+        // 48 bytes, memcpy'd to the GPU (mirrors WakeSource in ocean_wake.glsl).
+        struct WakeSource {
+            float x0 = 0.f, z0 = 0.f;// where the producer was at the last frame (world)
+            float x1 = 0.f, z1 = 0.f;// where it is now
+            float vx = 0.f, vz = 0.f;// water velocity it imparts (m/s, world, over the ground)
+            float radius     = 0.3f; // m, gaussian
+            float foam       = 0.f;
+            float aeration   = 0.f;
+            float turbulence = 0.f;  // m/s
+            float lane       = 0.f;
+            float _pad       = 0.f;
+        };
+        std::vector<WakeSource> wakeSources;
+
+        void clearWakeSources() { wakeSources.clear(); }
+        void addWakeSource(const WakeSource& s) { wakeSources.push_back(s); }
+
         DisplacedMesh(const std::shared_ptr<BufferGeometry>& geometry,
                       const std::shared_ptr<Material>& material);
 

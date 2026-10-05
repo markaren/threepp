@@ -550,6 +550,30 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     }
     }
 
+    // ── WAKE FIELD: bubbles under the surface ────────────────────────────────
+    // A propeller's race is full of air for seconds after the film on top has
+    // gone. Seen from above that is not white: the bubbles turn back light
+    // that has been through a few decimetres of this water, so it is the
+    // water's own hue, pale and milky, and it takes the sun and the shadows a
+    // lit surface takes. Shaded as a diffuse body under the surface (the macro
+    // normal: it is a volume, the chop is not in it) and laid in place of the
+    // deep body by its optical thickness. The hue is the material's own
+    // attenuation colour brought most of the way to white, so it follows
+    // whatever sea the scene has made.
+    if (!below && gWake.g > 2e-3) {
+        vec3 hue = max(pm.attenuationColor, vec3(1e-4));
+        hue = mix(vec3(1.0), hue / max(max(hue.r, hue.g), hue.b), 0.7);
+        const vec3 aerDiff = sampleEnvLod(Nmacro, maxLod) + lights.ambient + hemiAmbient(Nmacro);
+        const vec3 aerLit  = shadeDiffuseDirect(P, Nmacro, V, 0.30 * hue, 1.0, 0.0,
+                                                vec3(0.0), doShadows, aerDiff,
+                                                vec3(0.0), 0.0,
+                                                vec3(0.0),
+                                                0.0, 1.3, 0.0, seed,
+                                                /*addEmissive=*/true,
+                                                /*cheapHit=*/false);
+        transmitColor = mix(transmitColor, aerLit, 1.0 - exp(-1.8 * gWake.g));
+    }
+
 #if SCOUT_WATER == 6
     // Reflection hit classification: red = SELF-HIT on water (< 60 m),
     // green = other geometry, blue = escaped to sky.
@@ -736,6 +760,26 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 col = mix(col, foamLit, foamMask);
             }
         }
+    }
+
+    // ── WAKE FIELD: the film on top ──────────────────────────────────────────
+    // The wake field's foam is a density that the water's own flow has carried
+    // and torn (wake_field.comp), so its shape is already what motion made of
+    // it and nothing is cut into it here: coverage is a soft step on the
+    // density, thin film grey and wet, thick film white. Lit as the whitecaps
+    // above are. From below it is the dull raft the whitecaps are too.
+    if (gWake.r > 4e-3) {
+        const float cover = smoothstep(0.10, 0.45, gWake.r) * (below ? 0.12 : 1.0);
+        const vec3  filmCol  = mix(vec3(0.66, 0.72, 0.75), vec3(0.97, 0.99, 1.00), smoothstep(0.15, 0.85, gWake.r));
+        const vec3  filmDiff = sampleEnvLod(N, maxLod) + lights.ambient + hemiAmbient(N);
+        const vec3  filmLit  = shadeDiffuseDirect(P, N, V, filmCol, 0.8, 0.0,
+                                                  vec3(0.0), doShadows, filmDiff,
+                                                  vec3(0.0), 0.0,
+                                                  vec3(0.04),
+                                                  0.0, 1.3, 0.0, seed,
+                                                  /*addEmissive=*/true,
+                                                  /*cheapHit=*/false);
+        col = mix(col, filmLit, cover);
     }
     return col;
 }

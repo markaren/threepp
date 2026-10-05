@@ -491,6 +491,13 @@ void VulkanRenderer::Impl::createOceanFoamDummy_() {
             oceanFoamView     = oceanFoamDummy.view;
             oceanFoamSampler  = oceanFoamDummy.sampler;
             oceanFoamTileSize = 0.0f;
+            // The wake field's stand-in (binding 78), same contract.
+            {
+                VkCommandBuffer cb = beginOneShot();
+                wakeField_->initDummy(cb);
+                endAndSubmitOneShot(cb);
+            }
+            oceanWakeView = wakeField_->dummyView();
         }
 
 bool VulkanRenderer::Impl::refreshEnvTextureFromScene(Object3D& scene) {

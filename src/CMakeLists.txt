@@ -917,6 +917,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/ParticleFieldPass.cpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.cpp"
             "threepp/renderers/vulkan/FoamWorldPipeline.cpp"
+            "threepp/renderers/vulkan/WakeFieldPipeline.cpp"
             "threepp/renderers/vulkan/GrassWindPipeline.cpp"
             "threepp/renderers/vulkan/VertexSanitizePipeline.cpp"
             "threepp/renderers/vulkan/water/OceanFFT.cpp"
@@ -1464,6 +1465,13 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/foam_world.comp"
         kFoamWorldCompSpv
         _foam_world_spv_h)
+    # The ocean's wake field (DisplacedMesh::WakeField): what propellers, jets
+    # and paddles leave on the water, in world-anchored patches. See
+    # WakeFieldPipeline.{hpp,cpp} and shaders/ocean_wake.glsl.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/wake_field.comp"
+        kWakeFieldCompSpv
+        _wake_field_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/grass_wind.comp"
         kGrassWindCompSpv

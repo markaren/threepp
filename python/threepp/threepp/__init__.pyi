@@ -1879,6 +1879,126 @@ class DisplacedMesh(Mesh):
         @trail.setter
         def trail(self, arg0: collections.abc.Sequence[DisplacedMesh.WakeSample]) -> None:
             ...
+    class WakeField:
+        """
+        The ocean's wake field (mesh.wake_field): world-anchored patches of simulated water surface that carry foam, bubbles under the surface, turbulence, the lane of flattened short waves, and the water's own velocity. Fed by mesh.add_wake_source(), placed with mesh.wake_patch(i). Off until resolution > 0.
+        """
+        @property
+        def aeration_life(self) -> float:
+            """
+            e-folding time (s) of the bubbles under the surface.
+            """
+        @aeration_life.setter
+        def aeration_life(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def eddy_texels(self) -> float:
+            """
+            Size of the large turbulent eddies, in texels, for a patch that does not name its own (WakePatch.eddy).
+            """
+        @eddy_texels.setter
+        def eddy_texels(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def foam_life(self) -> float:
+            """
+            e-folding time (s) of a thick film of foam.
+            """
+        @foam_life.setter
+        def foam_life(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def foam_thinning(self) -> float:
+            """
+            How many times faster a thin film goes than a thick one (>= 1): foam dies from its edges in and breaks up, rather than dimming as a whole.
+            """
+        @foam_thinning.setter
+        def foam_thinning(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def lane_life(self) -> float:
+            """
+            e-folding time (s) of the lane where the short waves are flattened.
+            """
+        @lane_life.setter
+        def lane_life(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def patches(self) -> int:
+            """
+            Patches allocated (1..MAX_WAKE_PATCHES). Latched with resolution.
+            """
+        @patches.setter
+        def patches(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def resolution(self) -> int:
+            """
+            Texels a side per patch (64..2048); 0 = off, the default. LATCHED when the renderer first sees the mesh: set it before the first render().
+            """
+        @resolution.setter
+        def resolution(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def spread(self) -> float:
+            """
+            Eddy diffusivity K = spread x turbulence x eddy size (m2/s): how fast the lane and the bubbles widen.
+            """
+        @spread.setter
+        def spread(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def turbulence_life(self) -> float:
+            """
+            e-folding time (s) of the turbulence.
+            """
+        @turbulence_life.setter
+        def turbulence_life(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def velocity_life(self) -> float:
+            """
+            e-folding time (s) of the water's mean flow (a race slowing down).
+            """
+        @velocity_life.setter
+        def velocity_life(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+    class WakePatch:
+        """
+        One patch of the wake field (mesh.wake_patch(i)): a square of water, `size` m a side at the field's resolution, centred where you put it. World-anchored: move the centre every frame (it snaps to whole texels) and what was deposited stays where it was; what the patch leaves behind is dropped. size = 0 turns the patch off and empties it.
+        """
+        def __repr__(self) -> str:
+            ...
+        def set(self, center_x: typing.SupportsFloat | typing.SupportsIndex, center_z: typing.SupportsFloat | typing.SupportsIndex, size: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def center_x(self) -> float:
+            ...
+        @center_x.setter
+        def center_x(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def center_z(self) -> float:
+            ...
+        @center_z.setter
+        def center_z(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def eddy(self) -> float:
+            """
+            Size (m) of the large eddies of this patch's turbulent flow: about the width of what stirs it. 0 = wake_field.eddy_texels texels.
+            """
+        @eddy.setter
+        def eddy(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def size(self) -> float:
+            """
+            Side (m). 0 = off.
+            """
+        @size.setter
+        def size(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
     class WakeSample:
         def __init__(self) -> None:
             ...
@@ -1925,6 +2045,8 @@ class DisplacedMesh(Mesh):
         def world_z(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
     MAX_VESSELS: typing.ClassVar[int] = 8
+    MAX_WAKE_PATCHES: typing.ClassVar[int] = 8
+    MAX_WAKE_SOURCES: typing.ClassVar[int] = 96
     def __init__(self, geometry: BufferGeometry, material: typing.Any) -> None:
         """
         Low-level constructor. Most callers want Ocean instead, which builds the plane + water material + cascade defaults for you.
@@ -1937,6 +2059,10 @@ class DisplacedMesh(Mesh):
         """
         Emit one wake snapshot at the vessel's current pose (age 0), dropping the oldest once the trail is full. The renderer's hard cap is 64 samples; overflow beyond it is dropped silently on upload. The C++ showcase's cadence is 10 Hz OR every 1 m travelled, whichever fires first.
         """
+    def add_wake_source(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex, vx: typing.SupportsFloat | typing.SupportsIndex = 0.0, vz: typing.SupportsFloat | typing.SupportsIndex = 0.0, radius: typing.SupportsFloat | typing.SupportsIndex = 0.30000001192092896, foam: typing.SupportsFloat | typing.SupportsIndex = 0.0, aeration: typing.SupportsFloat | typing.SupportsIndex = 0.0, turbulence: typing.SupportsFloat | typing.SupportsIndex = 0.0, lane: typing.SupportsFloat | typing.SupportsIndex = 0.0, x_prev: typing.Any = None, z_prev: typing.Any = None) -> None:
+        """
+        One producer's mark for this frame: a gaussian of `radius` m on the surface, swept from (x_prev, z_prev), where the producer was at the last frame, to (x, z), so a coarse time step leaves no gaps. (vx, vz) is the water velocity it imparts, over the ground (a propeller's race runs astern at its speed THROUGH the water). foam and aeration are 0..1, turbulence is an rms speed in m/s, lane 0..1 is how far the short waves are flattened. It lands in every patch that covers it. More than MAX_WAKE_SOURCES a frame are dropped.
+        """
     def age_wake(self, dt: typing.SupportsFloat | typing.SupportsIndex, max_age: typing.SupportsFloat | typing.SupportsIndex = 6.0, max_samples: typing.SupportsInt | typing.SupportsIndex = 64) -> int:
         """
         Age every trail sample by dt, drop anything older than max_age, and keep at most max_samples (newest). Returns the surviving count. Call once per frame.
@@ -1947,6 +2073,8 @@ class DisplacedMesh(Mesh):
         """
         Drop the whole trail (e.g. after teleporting the vessel, so the wake does not stretch across the map).
         """
+    def clear_wake_sources(self) -> None:
+        ...
     def sample_height(self, world_x: typing.SupportsFloat | typing.SupportsIndex, world_z: typing.SupportsFloat | typing.SupportsIndex, cascade_mask: typing.SupportsInt | typing.SupportsIndex = 7) -> float:
         """
         Combined wave height (m) at a world XZ. cascade_mask selects cascades (bit i = cascade i). Returns 0 until a Vulkan render() has run.
@@ -1958,6 +2086,10 @@ class DisplacedMesh(Mesh):
     def vessel(self, index: typing.SupportsInt | typing.SupportsIndex) -> DisplacedMesh.Vessel:
         """
         Vessel `index` (0..MAX_VESSELS-1) on this ocean: its own hull_exclusion, wake and add_wake_sample()/age_wake()/clear_wake(). Vessel 0 is the mesh's own hull_exclusion / wake. A vessel takes part while its half_length > 0; each footprint also flattens the other vessels' wakes.
+        """
+    def wake_patch(self, index: typing.SupportsInt | typing.SupportsIndex) -> DisplacedMesh.WakePatch:
+        """
+        Patch `index` (0..MAX_WAKE_PATCHES-1) of the wake field.
         """
     @property
     def hull_exclusion(self) -> DisplacedMesh.HullExclusion:
@@ -1971,6 +2103,11 @@ class DisplacedMesh(Mesh):
     def wake(self) -> DisplacedMesh.VesselWake:
         """
         Vessel 0's Kelvin V-wake / bow bump / foam trail. Shares the hull_exclusion pose, so set that first.
+        """
+    @property
+    def wake_field(self) -> DisplacedMesh.WakeField:
+        """
+        The wake field's switch and knobs (DisplacedMesh.WakeField).
         """
     @property
     def warp(self) -> DisplacedMesh.MeshWarp:

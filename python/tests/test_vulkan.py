@@ -707,6 +707,75 @@ def test_point_light_lights_the_ocean(vk_renderer):
     assert lit > dark + 20.0, "the point light left the water under it dark"
 
 
+def test_ocean_wake_field_knobs_patches_and_sources():
+    ocean = tp.Ocean(size=500.0)
+    wf = ocean.wake_field
+    assert wf.resolution == 0                             # off until asked for
+    assert tp.DisplacedMesh.MAX_WAKE_PATCHES == 8 and tp.DisplacedMesh.MAX_WAKE_SOURCES >= 64
+    wf.resolution, wf.patches = 256, 2
+    wf.foam_life = 3.0
+    assert (ocean.wake_field.resolution, ocean.wake_field.patches) == (256, 2)
+    assert ocean.wake_field.foam_life == pytest.approx(3.0)
+    patch = ocean.wake_patch(1)
+    assert patch.size == 0.0 and "off" in repr(patch)
+    patch.set(4.0, -2.0, 32.0)
+    patch.eddy = 0.8
+    again = ocean.wake_patch(1)                           # a reference into the mesh, not a copy
+    assert (again.center_x, again.center_z, again.size, again.eddy) == pytest.approx((4.0, -2.0, 32.0, 0.8))
+    with pytest.raises(IndexError):
+        ocean.wake_patch(tp.DisplacedMesh.MAX_WAKE_PATCHES)
+    ocean.add_wake_source(1.0, 2.0, vx=-0.5, radius=0.3, foam=1.0, x_prev=0.0, z_prev=2.0)
+    ocean.add_wake_source(1.0, 2.0)                       # a point, nothing in it
+    ocean.clear_wake_sources()
+
+
+def test_wake_field_marks_the_water_where_it_was_made(vk_renderer):
+    """A source of foam whitens the water under it and not the water beside it,
+    the mark stays in the world when its patch moves on, a frame at the same
+    instant changes nothing, and turning the patch off takes the mark away."""
+    scene = tp.Scene()
+    scene.background = 0x000000
+    scene.add(tp.HemisphereLight(0xffffff, 0x404040, 1.0))
+    ocean = tp.Ocean(size=200.0, resolution=128, fft_size=256, wind_speed=3.0, choppiness=0.0)
+    ocean.params.foam_amount = 0.0
+    ocean.wake_field.resolution, ocean.wake_field.patches = 256, 1
+    patch = ocean.wake_patch(0)
+    patch.set(0.0, 0.0, 32.0)
+    scene.add(ocean)
+    cam = tp.PerspectiveCamera(55, W / H, 0.1, 400)
+    cam.position.set(0, 20, 0.01)
+    cam.look_at(0, 0, 0)                                  # straight down: world (0, 0) is the frame's centre
+
+    def look(t):
+        vk_renderer.reset_temporal_history()
+        for _ in range(4):
+            vk_renderer.sim_time = t                      # four frames at one instant: the field steps once
+            vk_renderer.render(scene, cam)
+        img = vk_renderer.read_pixels().astype(float)
+        mid = img[H // 2 - 6:H // 2 + 6, W // 2 - 6:W // 2 + 6].mean()
+        side = img[H // 2 - 6:H // 2 + 6, W // 8 - 6:W // 8 + 6].mean()
+        return mid, side
+
+    try:
+        mid0, side0 = look(5.0)
+        ocean.add_wake_source(0.0, 0.0, radius=1.2, foam=1.0)
+        for k in range(1, 11):                            # a second of it: air goes down in gulps, no one instant fills the mark
+            vk_renderer.sim_time = 5.0 + 0.1 * k
+            vk_renderer.render(scene, cam)
+        mid1, side1 = look(6.0)
+        assert mid1 > mid0 + 40.0, "the source left no foam under it"
+        assert abs(side1 - side0) < 6.0, "the mark reached water it was not put on"
+        ocean.clear_wake_sources()
+        patch.set(3.0, 0.0, 32.0)                         # the patch moves on; the mark is the world's
+        mid2, _ = look(6.1)
+        assert mid2 > mid0 + 30.0, "the mark went with its patch"
+        patch.size = 0.0
+        mid3, _ = look(6.2)
+        assert abs(mid3 - mid0) < 6.0, "a patch that is off still marks the water"
+    finally:
+        vk_renderer.sim_time = None
+
+
 def test_underwater_murk_takes_the_hue_of_what_is_under_it(vk_renderer):
     """A yellow slab 2 m under the sea, seen from straight over it. The scalar
     murk dims it and leaves it yellow, which is why it read as lying at the

@@ -1,0 +1,205 @@
+#version 460
+#extension GL_EXT_scalar_block_layout                    : require
+#extension GL_EXT_buffer_reference                       : require
+#extension GL_EXT_buffer_reference2                      : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive                   : enable
+
+#include "ocean_wake.glsl"
+
+// The ocean's wake field, one step of one patch (DisplacedMesh::WakeField).
+//
+// A patch is a square of water surface, world-anchored, that carries
+//
+//     state    R foam   G aeration   B turbulence (m/s)   A lane
+//     velocity RG the water's mean flow over the ground (m/s, world x / z)
+//
+// Three dispatches a step, each over the whole patch:
+//
+//   0 ADVECT   Carry both fields with the flow, semi-Lagrangian: this texel's
+//              water came from x - v dt. v is the mean flow plus a turbulent
+//              flow, the curl of a potential that changes in time and whose
+//              strength is the local `turbulence`. The curl has no divergence,
+//              so it creates and destroys nothing: it shears a deposit into
+//              streaks and winds them up, which is where the wake's structure
+//              comes from. Nothing is painted.
+//   1 CORRECT  MacCormack: carry the result of 0 back again, compare with what
+//              was there, and give back half the difference. Plain
+//              semi-Lagrangian blurs like a diffusion of about texel^2 / dt
+//              where the water moves a fraction of a texel a step, which in
+//              three seconds turns every filament into a smear four texels
+//              wide. Clamped to the four texels step 0 read, so the correction
+//              never makes a new maximum.
+//   2 SETTLE   Eddy diffusion (K = spread x turbulence x eddy size), each
+//              quantity's decay, the flow feeding its own turbulence and the
+//              turbulence flattening the short waves, then this step's
+//              SOURCES: capsules from where each producer was to where it is.
+//
+// The patch's origin moves by whole texels, so steps 0 and 1 read last step's
+// images through last step's origin and nothing is resampled by the move;
+// water that the patch has left is gone, and water it has not held yet reads
+// as undisturbed (the samplers clamp to a zero border).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2DArray srcState0;
+layout(set = 0, binding = 1) uniform sampler2DArray srcState1;
+layout(set = 0, binding = 2) uniform sampler2DArray srcVel;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2DArray dstState;
+layout(set = 0, binding = 4, rg16f)   uniform writeonly image2DArray dstVel;
+
+// 24 bytes, mirrored by WakeFieldPipeline::PushConstants.
+layout(push_constant, scalar) uniform Pc {
+    uint64_t tableAddr;
+    uint     layer;
+    uint     mode;        // 0 advect, 1 correct, 2 settle
+    uint     sourceCount;
+    uint     _pad;
+} pc;
+
+float wkHash(ivec3 p) {
+    uint h = uint(p.x) * 0x8da6b343u ^ uint(p.y) * 0xd8163841u ^ uint(p.z) * 0xcb1ab31fu;
+    h ^= h >> 15; h *= 0x2c1b3c6du;
+    h ^= h >> 12; h *= 0x297a2d39u;
+    h ^= h >> 15;
+    return float(h) * (1.0 / 4294967296.0);
+}
+
+// Value noise over (x, y, time): (value in -1..1, d/dx, d/dy). Quintic fade,
+// so the derivative is continuous across cells.
+vec3 wkNoised(vec3 p) {
+    const ivec3 i  = ivec3(floor(p));
+    const vec3  f  = p - vec3(i);
+    const vec3  u  = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    const vec2  du = 30.0 * f.xy * f.xy * (f.xy * (f.xy - 2.0) + 1.0);
+    const float A = mix(wkHash(i),                  wkHash(i + ivec3(0, 0, 1)), u.z);
+    const float B = mix(wkHash(i + ivec3(1, 0, 0)), wkHash(i + ivec3(1, 0, 1)), u.z);
+    const float C = mix(wkHash(i + ivec3(0, 1, 0)), wkHash(i + ivec3(0, 1, 1)), u.z);
+    const float D = mix(wkHash(i + ivec3(1, 1, 0)), wkHash(i + ivec3(1, 1, 1)), u.z);
+    const float k1 = B - A, k2 = C - A, k4 = A - B - C + D;
+    const float v  = A + k1 * u.x + k2 * u.y + k4 * u.x * u.y;
+    return vec3(2.0 * v - 1.0, 2.0 * du * vec2(k1 + k4 * u.y, k2 + k4 * u.x));
+}
+
+// The turbulent flow at x: T x curl(psi), psi two octaves of noise in space
+// and time (the second turned 37 degrees so the two lattices never line up).
+// `eddy` is the large eddies' size (m).
+vec2 wakeTurbulentFlow(vec2 x, float t, float T, float eddy) {
+    if (T <= 1e-4) return vec2(0.0);
+    const mat2  R  = mat2(0.8, -0.6, 0.6, 0.8);
+    const float e2 = 0.38 * eddy;
+    const vec2 g1 = wkNoised(vec3(x / eddy, 0.30 * t)).yz;
+    const vec2 g2 = transpose(R) * wkNoised(vec3((R * x) / e2 + 31.7, 0.75 * t + 5.0)).yz;
+    const vec2 g  = 0.75 * g1 + 0.55 * g2;
+    return T * vec2(g.y, -g.x);
+}
+
+vec4 stateAt(sampler2DArray tex, ivec2 q, int res, int layer) {
+    if (q.x < 0 || q.y < 0 || q.x >= res || q.y >= res) return vec4(0.0);
+    return texelFetch(tex, ivec3(q, layer), 0);
+}
+
+void main() {
+    WakeTable tb = WakeTable(pc.tableAddr);
+    const int   res = int(tb.res);
+    const ivec2 px  = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= res || px.y >= res) return;
+    const int       li    = int(pc.layer);
+    const float     layer = float(pc.layer);
+    const ivec3     dst   = ivec3(px, li);
+    const WakePatch p     = tb.patches[pc.layer];
+    const vec2  origin     = vec2(p.originX, p.originZ);
+    const vec2  prevOrigin = vec2(p.prevOriginX, p.prevOriginZ);
+    const vec2  x    = origin + (vec2(px) + 0.5) * p.texel;
+    const float dt   = tb.dt;
+    const float eddy = p.eddy;
+    const bool  history = p.live > 1.5;
+
+    if (pc.mode == 0u) {
+        if (!history) {
+            imageStore(dstState, dst, vec4(0.0));
+            imageStore(dstVel, dst, vec4(0.0));
+            return;
+        }
+        const vec2 uv0 = (x - prevOrigin) / p.size;
+        const vec4 s0  = textureLod(srcState0, vec3(uv0, layer), 0.0);
+        const vec2 v   = textureLod(srcVel, vec3(uv0, layer), 0.0).rg + wakeTurbulentFlow(x, tb.timeSec, s0.b, eddy);
+        const vec2 uvb = (x - v * dt - prevOrigin) / p.size;
+        imageStore(dstState, dst, textureLod(srcState0, vec3(uvb, layer), 0.0));
+        // the mean flow is carried too, eddies and all: the race meanders
+        imageStore(dstVel, dst,
+                   vec4(textureLod(srcVel, vec3(uvb, layer), 0.0).rg * exp(-dt / tb.velocityLife), 0.0, 0.0));
+        return;
+    }
+
+    if (pc.mode == 1u) {
+        if (!history) {
+            imageStore(dstState, dst, vec4(0.0));
+            return;
+        }
+        const vec2 uv0 = (x - prevOrigin) / p.size;
+        const vec4 s0  = textureLod(srcState0, vec3(uv0, layer), 0.0);// what was here
+        const vec2 v   = textureLod(srcVel, vec3(uv0, layer), 0.0).rg + wakeTurbulentFlow(x, tb.timeSec, s0.b, eddy);
+        const vec4 s1  = texelFetch(srcState1, dst, 0);               // carried forward
+        const vec4 sb  = textureLod(srcState1, vec3((x + v * dt - origin) / p.size, layer), 0.0);// and back
+        vec4 s = s1 + 0.5 * (s0 - sb);
+        const vec2  st = ((x - v * dt - prevOrigin) / p.size) * float(res) - 0.5;
+        const ivec2 i0 = ivec2(floor(st));
+        const vec4 c00 = stateAt(srcState0, i0, res, li);
+        const vec4 c10 = stateAt(srcState0, i0 + ivec2(1, 0), res, li);
+        const vec4 c01 = stateAt(srcState0, i0 + ivec2(0, 1), res, li);
+        const vec4 c11 = stateAt(srcState0, i0 + ivec2(1, 1), res, li);
+        s = clamp(s, min(min(c00, c10), min(c01, c11)), max(max(c00, c10), max(c01, c11)));
+        imageStore(dstState, dst, s);
+        return;
+    }
+
+    // ── SETTLE ──────────────────────────────────────────────────────────
+    vec4 s = texelFetch(srcState0, dst, 0);
+    vec2 v = texelFetch(srcVel, dst, 0).rg;
+    {
+        const ivec2 lo = ivec2(0), hi = ivec2(res - 1);
+        const vec4 nb = texelFetch(srcState0, ivec3(clamp(px + ivec2( 1, 0), lo, hi), li), 0) +
+                        texelFetch(srcState0, ivec3(clamp(px + ivec2(-1, 0), lo, hi), li), 0) +
+                        texelFetch(srcState0, ivec3(clamp(px + ivec2(0,  1), lo, hi), li), 0) +
+                        texelFetch(srcState0, ivec3(clamp(px + ivec2(0, -1), lo, hi), li), 0);
+        // K dt / texel^2 with K = spread T eddy. Bubbles and the
+        // lane mix with the water; the film on top is torn rather than mixed,
+        // so it takes a seventh of it.
+        const float a = min(tb.spread * s.b * eddy * dt / (p.texel * p.texel), 0.2);
+        s += a * vec4(0.15, 1.0, 1.0, 1.0) * (nb - 4.0 * s);
+    }
+    // A thin film goes faster than a thick one: a patch dies from its edges in.
+    s.r *= exp(-dt * mix(tb.foamThinning, 1.0, clamp(s.r, 0.0, 1.0)) / tb.foamLife);
+    s.g *= exp(-dt * mix(2.0, 1.0, clamp(s.g, 0.0, 1.0)) / tb.aerationLife);// a thin cloud clears first
+    s.b *= exp(-dt / tb.turbulenceLife);
+    s.a *= exp(-dt / tb.laneLife);
+    // A stream through still water is turbulent at about a quarter of its
+    // speed, and turbulent water has lost its short waves.
+    s.b = max(s.b, 0.25 * length(v));
+    s.a = max(s.a, smoothstep(0.01, 0.12, s.b));
+
+    for (uint k = 0u; k < pc.sourceCount; ++k) {
+        const WakeSource sc = tb.sources[k];
+        const vec2  ab   = sc.p1 - sc.p0;
+        const float len2 = dot(ab, ab);
+        const float h    = len2 > 1e-10 ? clamp(dot(x - sc.p0, ab) / len2, 0.0, 1.0) : 1.0;
+        const vec2  dv   = x - (sc.p0 + h * ab);
+        const float d2   = dot(dv, dv);
+        const float r2   = sc.radius * sc.radius;
+        if (d2 > 24.0 * r2) continue;
+        const float w  = exp(-d2 / r2);
+        const float wl = exp(-d2 / (2.56 * r2));// the lane reaches 1.6 radii
+        // Air is taken down in gulps and the race comes in puffs, not as a
+        // ribbon: two noises over the source's own size, quick in time.
+        const float gulp = 0.5 + 0.5 * wkNoised(vec3(x / (1.3 * sc.radius) + 7.1, 2.3 * tb.timeSec)).x;
+        const float puff = 0.5 + 0.5 * wkNoised(vec3(x / (2.1 * sc.radius) - 3.3, 1.4 * tb.timeSec + 9.0)).x;
+        s.r = max(s.r, sc.foam * w * smoothstep(0.32, 0.68, gulp));
+        s.g = max(s.g, sc.aeration * w * mix(0.15, 1.0, smoothstep(0.30, 0.70, gulp)));
+        s.b = max(s.b, sc.turbulence * w * mix(0.6, 1.0, puff));
+        s.a = max(s.a, sc.lane * wl);
+        v = mix(v, sc.vel, min(w, 1.0));
+    }
+    imageStore(dstState, dst, max(s, vec4(0.0)));
+    imageStore(dstVel, dst, vec4(v, 0.0, 0.0));
+}

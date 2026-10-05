@@ -2594,6 +2594,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             oceanFoamView     = oceanFoamDummy.view;
                             oceanFoamTileSize = 0.0f;
                         }
+                        if (st->wake) {
+                            if (st->wake->stateView() == oceanWakeView) oceanWakeView = wakeField_->dummyView();
+                            wakeField_->destroyState(*st->wake);
+                        }
                         if (st->blas) destroyBlasRecord(*st->blas);
                         if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(ctx->device(), st->scratchA.view, nullptr);
                         if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
@@ -2992,7 +2996,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // which only lines up against that exact index array.
                 gdesc.indexAddress  = lodSel.indexAddress;
                 gdesc.uvAddress     = recPtr->uv.address;// 0 if no UV attribute
-                gdesc.foamAddress   = recPtr->isOceanSurface ? 1ull : 0ull;// 0/1 flag (not an address); 1 == FFT-displaced ocean surface
+                // 0 = not water; 1 = an FFT-displaced ocean surface; anything
+                // else = one with a wake field, and this is its patch table.
+                gdesc.foamAddress   = recPtr->isOceanSurface
+                                              ? (recPtr->oceanWakeTable ? recPtr->oceanWakeTable : 1ull)
+                                              : 0ull;
                 // prevVertexAddress: skinned + displaced meshes have a real
                 // prev-vertex buffer (different from current). Static meshes
                 // get vertex.address as a fallback — the chit reads the same

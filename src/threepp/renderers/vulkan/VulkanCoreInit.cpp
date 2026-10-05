@@ -70,6 +70,7 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
             tetSkinning_ = std::make_unique<vulkan::TetSkinningPipeline>(*ctx);
             waterDisplace_ = std::make_unique<vulkan::WaterDisplacePipeline>(*ctx);
             foamWorld_     = std::make_unique<vulkan::FoamWorldPipeline>(*ctx);
+            wakeField_     = std::make_unique<vulkan::WakeFieldPipeline>(*ctx);
             grassWind_     = std::make_unique<vulkan::GrassWindPipeline>(*ctx);
             // Hybrid raster G-buffer infrastructure. Costs a few hundred MB
             // at 1080p for six attachments × kFramesInFlight.
@@ -336,6 +337,7 @@ VulkanRenderer::Impl::~Impl() {
                     for (auto& b : ring) destroyBuffer(ctx->allocator(), b);
                 destroyBuffer(ctx->allocator(), st->foamDisturbBuffer);
                 for (auto& b : st->vesselBuffer) destroyBuffer(ctx->allocator(), b);
+                if (st->wake && wakeField_) wakeField_->destroyState(*st->wake);
                 // Per-cascade Phillips / DynamicSpectrum / IFFT are RAII; their
                 // destructors handle their own VkImage / VkPipeline / DSet cleanup.
             }
@@ -408,6 +410,7 @@ VulkanRenderer::Impl::~Impl() {
             // World-space foam pipeline; foam ping-pong images are owned by
             // each DisplacedMeshState and destroyed there.
             foamWorld_.reset();
+            wakeField_.reset();
             // Grass-wind pipeline; per-mesh buffers freed in the grassStates
             // loop above.
             grassWind_.reset();

@@ -1105,7 +1105,9 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
                     gd.normalAddress = recPtr->normal.address;
                     gd.indexAddress  = lodSel0.indexAddress;
                     gd.uvAddress     = recPtr->uv.address;
-                    gd.foamAddress   = recPtr->isOceanSurface ? 1ull : 0ull;
+                    gd.foamAddress   = recPtr->isOceanSurface
+                                               ? (recPtr->oceanWakeTable ? recPtr->oceanWakeTable : 1ull)
+                                               : 0ull;
                     // interopWorldStatic is not set on the fresh record yet;
                     // the caller's flag is what it is about to become.
                     gd.prevVertexAddress =
@@ -2618,6 +2620,9 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
                 // declares the image).
             }
 
+            // (4d) The wake field: carry, settle and feed every patch that is on.
+            if (st.wake) wakeField_->record(cb, *st.wake, dm, frameNowSec());
+
             // Buffer barrier: compute write → AS-build read on the vertex/normal buffers.
             VkBufferMemoryBarrier bbs[2]{};
             bbs[0].sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
@@ -3917,6 +3922,18 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             // until the DisplacedMesh is destroyed, so we only rewrite once.
             oceanFoamView     = state->foamImage.view;
             oceanFoamTileSize = state->foamTileSize;
+
+            // The wake field, if the mesh has one switched on (resolution and
+            // patch count are latched here). Its table's address goes on the
+            // BLAS record, from where the GeometryDesc picks it up.
+            if (dm.wakeField.resolution > 0u) {
+                state->wake = wakeField_->createState(dm.wakeField.resolution, dm.wakeField.patches);
+                VkCommandBuffer cb = beginOneShot();
+                wakeField_->initState(cb, *state->wake);
+                endAndSubmitOneShot(cb);
+                state->blas->oceanWakeTable = state->wake->tableAddress();
+                oceanWakeView = state->wake->stateView();
+            }
             rewriteDeferredDescriptors();
 
             auto* raw = state.get();

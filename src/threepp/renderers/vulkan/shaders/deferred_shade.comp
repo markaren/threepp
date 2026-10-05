@@ -229,6 +229,17 @@ layout(set = 0, binding = 12, scalar) readonly buffer EmissiveTriBuf { EmTri emi
 // thin-shell water branch's `tileSize > 0` gates skip sampling them entirely.
 layout(set = 0, binding = 13) uniform sampler2D oceanFineHeight;
 layout(set = 0, binding = 14) uniform sampler2D oceanFoamWorld;
+// The ocean's wake field (DisplacedMesh::WakeField, WakeFieldPipeline): what
+// propellers, jets and paddles left on the water, as one 2D array of
+// world-anchored patches (R foam, G aeration, B turbulence m/s, A lane). A 1x1
+// dummy when no ocean has one. It is read only through the patch table that an
+// ocean's GeometryDesc::foamAddress names (1 = an ocean without a wake field).
+layout(set = 0, binding = 78) uniform sampler2DArray oceanWakeField;
+#define OCEAN_WAKE_SAMPLER oceanWakeField
+#include "ocean_wake.glsl"
+// This pixel's read of it, taken once in main() where the ocean's fine normal
+// is built and used again by shadeWater (bubbles, film). Zero off a wake.
+vec4 gWake = vec4(0.0);
 // Baked tileable foam detail (RG8, mipped): R = micro bubble brightness
 // (designed for a 4 m world mapping), G = ridged lace/filament pattern
 // (12 m mapping). Replaces the per-pixel procedural noise octaves in the
@@ -1088,7 +1099,35 @@ void main() {
             // eased in over one stencil so the two estimates meet without a seam
             gMean = mix(grad, mean * keep, smoothstep(eps, 2.0 * eps, pixAlong));
         }
-        const vec2 gKept = (1.0 - subPix) * gMean;
+        vec2 gKept = (1.0 - subPix) * gMean;
+        // ── WAKE FIELD ────────────────────────────────────────────────────────
+        // Where something has churned the water the short wind waves are gone
+        // (turbulence under the surface breaks them up: the smooth lane a boat
+        // leaves across a ruffled sea), and while the churn lasts the surface
+        // has a quick, fine ruffle of its own, the boil. So the lane scales the
+        // fine cascade's slope down and the turbulence adds its own slope.
+        float wakeCalm    = 1.0;
+        float wakeBoilVar = 0.0;// slope variance of the boil that went under a pixel
+        if (geoms[id - 1u].foamAddress > 1ul) {
+            gWake = oceanWakeSample(geoms[id - 1u].foamAddress, worldPos.xz,
+                                    clamp(sqrt(pixWorld * pixAlong), pixWorld, 8.0 * pixWorld));
+            wakeCalm = 1.0 - 0.9 * clamp(gWake.a, 0.0, 1.0);
+            gKept *= wakeCalm;
+            if (gWake.b > 2e-3) {
+                // Slope of the boil, by the turbulent speed (m/s), capped. Two
+                // scales (about 0.3 m and 0.1 m). What a pixel can no longer
+                // hold is not dropped: its variance goes to the roughness, so
+                // from far off churned water is the matt strip it is and not
+                // a mirror with nothing on it.
+                const float amp = min(1.1 * gWake.b, 0.24);
+                const float k1  = 1.0 - smoothstep(0.10, 0.35, pixAlong);
+                const float k2  = 1.0 - smoothstep(0.035, 0.12, pixAlong);
+                const vec2  b1  = oceanWakeNoised(vec3(worldPos.xz * 3.1, pc.timeSec * 1.7)).yz;
+                const vec2  b2  = oceanWakeNoised(vec3(worldPos.xz * 8.3 + 11.0, pc.timeSec * 2.9)).yz;
+                gKept += amp * (0.6 * k1 * b1 + 0.4 * k2 * b2);
+                wakeBoilVar = amp * amp * (0.36 * (1.0 - k1 * k1) + 0.16 * (1.0 - k2 * k2));
+            }
+        }
         // Full physical slope: N ∝ up − ∇h. Until 2026-08 this carried a 0.5
         // (undocumented, from the first deferred commit) that rendered the
         // sub-mesh chop at HALF its steepness — the 1–9 m wind waves read as
@@ -1101,6 +1140,8 @@ void main() {
         // the slope where even pixWorld is sub-pixel, and what the strip's mean took.
         fineKernelSq = 2.0 * (dot(grad, grad) * subPix
                               + (1.0 - subPix) * max(dot(grad, grad) - dot(gMean, gMean), 0.0));
+        // the lane took those waves away, banked or not; the boil's own go in
+        fineKernelSq = fineKernelSq * wakeCalm * wakeCalm + 2.0 * wakeBoilVar;
         // FOOTPRINT FLOOR. The fine-cascade slope alone is tiny for a calm sea
         // (Phillips amplitude ∝ windSpeed⁴ → a 4 m/s coastal sea has a millimetric
         // fine cascade), so banking only IT leaves effRough ≈ the base 0.03 and the

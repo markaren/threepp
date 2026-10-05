@@ -234,6 +234,64 @@ namespace threepp_py {
                 });
         displaced.attr("MAX_VESSELS") = DisplacedMesh::kMaxVessels;
 
+        // ── The wake field: what propellers, jets and paddles leave on the water ──
+        py::class_<DisplacedMesh::WakeField>(displaced, "WakeField",
+                                             "The ocean's wake field (mesh.wake_field): world-anchored patches of "
+                                             "simulated water surface that carry foam, bubbles under the surface, "
+                                             "turbulence, the lane of flattened short waves, and the water's own "
+                                             "velocity. Fed by mesh.add_wake_source(), placed with "
+                                             "mesh.wake_patch(i). Off until resolution > 0.")
+                .def_readwrite("resolution", &DisplacedMesh::WakeField::resolution,
+                               "Texels a side per patch (64..2048); 0 = off, the default. LATCHED when the "
+                               "renderer first sees the mesh: set it before the first render().")
+                .def_readwrite("patches", &DisplacedMesh::WakeField::patches,
+                               "Patches allocated (1..MAX_WAKE_PATCHES). Latched with resolution.")
+                .def_readwrite("foam_life", &DisplacedMesh::WakeField::foamLife,
+                               "e-folding time (s) of a thick film of foam.")
+                .def_readwrite("foam_thinning", &DisplacedMesh::WakeField::foamThinning,
+                               "How many times faster a thin film goes than a thick one (>= 1): foam dies "
+                               "from its edges in and breaks up, rather than dimming as a whole.")
+                .def_readwrite("aeration_life", &DisplacedMesh::WakeField::aerationLife,
+                               "e-folding time (s) of the bubbles under the surface.")
+                .def_readwrite("turbulence_life", &DisplacedMesh::WakeField::turbulenceLife,
+                               "e-folding time (s) of the turbulence.")
+                .def_readwrite("lane_life", &DisplacedMesh::WakeField::laneLife,
+                               "e-folding time (s) of the lane where the short waves are flattened.")
+                .def_readwrite("velocity_life", &DisplacedMesh::WakeField::velocityLife,
+                               "e-folding time (s) of the water's mean flow (a race slowing down).")
+                .def_readwrite("eddy_texels", &DisplacedMesh::WakeField::eddyTexels,
+                               "Size of the large turbulent eddies, in texels, for a patch that does not "
+                               "name its own (WakePatch.eddy).")
+                .def_readwrite("spread", &DisplacedMesh::WakeField::spread,
+                               "Eddy diffusivity K = spread x turbulence x eddy size (m2/s): how fast the "
+                               "lane and the bubbles widen.");
+
+        py::class_<DisplacedMesh::WakePatch>(displaced, "WakePatch",
+                                             "One patch of the wake field (mesh.wake_patch(i)): a square of water, "
+                                             "`size` m a side at the field's resolution, centred where you put it. "
+                                             "World-anchored: move the centre every frame (it snaps to whole texels) "
+                                             "and what was deposited stays where it was; what the patch leaves "
+                                             "behind is dropped. size = 0 turns the patch off and empties it.")
+                .def_readwrite("center_x", &DisplacedMesh::WakePatch::centerX)
+                .def_readwrite("center_z", &DisplacedMesh::WakePatch::centerZ)
+                .def_readwrite("size", &DisplacedMesh::WakePatch::size, "Side (m). 0 = off.")
+                .def_readwrite("eddy", &DisplacedMesh::WakePatch::eddy,
+                               "Size (m) of the large eddies of this patch's turbulent flow: about the width "
+                               "of what stirs it. 0 = wake_field.eddy_texels texels.")
+                .def("set", [](DisplacedMesh::WakePatch& p, float x, float z, float size) {
+                         p.centerX = x;
+                         p.centerZ = z;
+                         p.size    = size;
+                     },
+                     py::arg("center_x"), py::arg("center_z"), py::arg("size"))
+                .def("__repr__", [](const DisplacedMesh::WakePatch& p) {
+                    return p.size > 0.f ? "<DisplacedMesh.WakePatch " + std::to_string(p.size) + " m at (" +
+                                                  std::to_string(p.centerX) + ", " + std::to_string(p.centerZ) + ")>"
+                                        : std::string("<DisplacedMesh.WakePatch (off)>");
+                });
+        displaced.attr("MAX_WAKE_PATCHES") = DisplacedMesh::kMaxWakePatches;
+        displaced.attr("MAX_WAKE_SOURCES") = DisplacedMesh::kMaxWakeSources;
+
         displaced
                 .def(py::init([](std::shared_ptr<BufferGeometry> g, const py::object& mat) {
                          return std::make_shared<DisplacedMesh>(std::move(g), as_material(mat));
@@ -293,6 +351,45 @@ namespace threepp_py {
                 .def("add_foam_disturbance", &DisplacedMesh::addFoamDisturbance,
                      py::arg("world_x"), py::arg("world_z"), py::arg("radius"), py::arg("intensity"),
                      "Splat a gaussian foam blob at a world XZ (radius m, intensity in [0,1]).")
+                // The wake field. Sources last one frame: clear and repopulate
+                // before render(), as the foam disturbances are.
+                .def_property_readonly("wake_field", [](DisplacedMesh& o) { return &o.wakeField; },
+                                       py::return_value_policy::reference_internal,
+                                       "The wake field's switch and knobs (DisplacedMesh.WakeField).")
+                .def("wake_patch",
+                     [](DisplacedMesh& o, uint32_t index) -> DisplacedMesh::WakePatch& {
+                         if (index >= DisplacedMesh::kMaxWakePatches) throw py::index_error("wake patch index out of range");
+                         return o.wakePatches[index];
+                     },
+                     py::arg("index"), py::return_value_policy::reference_internal,
+                     "Patch `index` (0..MAX_WAKE_PATCHES-1) of the wake field.")
+                .def("clear_wake_sources", &DisplacedMesh::clearWakeSources)
+                .def("add_wake_source",
+                     [](DisplacedMesh& o, float x, float z, float vx, float vz, float radius, float foam,
+                        float aeration, float turbulence, float lane, const py::object& xPrev, const py::object& zPrev) {
+                         DisplacedMesh::WakeSource s{};
+                         s.x1 = x;
+                         s.z1 = z;
+                         s.x0 = xPrev.is_none() ? x : xPrev.cast<float>();
+                         s.z0 = zPrev.is_none() ? z : zPrev.cast<float>();
+                         s.vx = vx;
+                         s.vz = vz;
+                         s.radius     = radius;
+                         s.foam       = foam;
+                         s.aeration   = aeration;
+                         s.turbulence = turbulence;
+                         s.lane       = lane;
+                         o.addWakeSource(s);
+                     },
+                     py::arg("x"), py::arg("z"), py::arg("vx") = 0.0f, py::arg("vz") = 0.0f, py::arg("radius") = 0.3f,
+                     py::arg("foam") = 0.0f, py::arg("aeration") = 0.0f, py::arg("turbulence") = 0.0f,
+                     py::arg("lane") = 0.0f, py::arg("x_prev") = py::none(), py::arg("z_prev") = py::none(),
+                     "One producer's mark for this frame: a gaussian of `radius` m on the surface, swept from "
+                     "(x_prev, z_prev), where the producer was at the last frame, to (x, z), so a coarse time "
+                     "step leaves no gaps. (vx, vz) is the water velocity it imparts, over the ground (a "
+                     "propeller's race runs astern at its speed THROUGH the water). foam and aeration are 0..1, "
+                     "turbulence is an rms speed in m/s, lane 0..1 is how far the short waves are flattened. "
+                     "It lands in every patch that covers it. More than MAX_WAKE_SOURCES a frame are dropped.")
                 // CPU mirror of the GPU wave height — for buoyancy / placing floats.
                 // Valid after a Vulkan render() has filled the height fields.
                 .def("sample_height", &DisplacedMesh::sampleHeight,

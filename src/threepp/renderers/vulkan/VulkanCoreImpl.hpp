@@ -49,6 +49,7 @@
 #include "ProbeGI.hpp"
 #include "WaterDisplacePipeline.hpp"
 #include "FoamWorldPipeline.hpp"
+#include "WakeFieldPipeline.hpp"
 #include "GrassWindPipeline.hpp"
 #include "VertexSanitizePipeline.hpp"
 #include "shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures — same source the shaders read
@@ -325,6 +326,11 @@ namespace threepp {
         // waterDisplace. Builds the per-DisplacedMesh foam texture each
         // frame; replaces the per-vertex foam buffer.
         std::unique_ptr<vulkan::FoamWorldPipeline> foamWorld_;
+
+        // The ocean's wake field — see vulkan/WakeFieldPipeline.{hpp,cpp}. One
+        // pipeline; each DisplacedMesh with a wake field owns a State
+        // (DisplacedMeshState::wake).
+        std::unique_ptr<vulkan::WakeFieldPipeline> wakeField_;
 
         // Definition moved to VulkanGeometryState.hpp.
         using GrassMeshState = vulkan::impl::GrassMeshState;
@@ -695,6 +701,10 @@ namespace threepp {
         VkImageView oceanFoamView   = VK_NULL_HANDLE;
         VkSampler   oceanFoamSampler = VK_NULL_HANDLE;
         float       oceanFoamTileSize = 0.f;              // 0 disables sampling
+        // The wake field's state images (deferred shade binding 78): the live
+        // ocean's, or WakeFieldPipeline's 1x1 dummy. The shade samples it only
+        // through the patch table the ocean's GeometryDesc::foamAddress names.
+        VkImageView oceanWakeView = VK_NULL_HANDLE;
 
         // Tileable foam detail texture (deferred shade foam binding).
         // R = micro bubble brightness (three value-noise octaves matching the

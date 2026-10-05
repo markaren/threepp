@@ -33,7 +33,7 @@ namespace threepp::vulkan {
     // that no validation layer can see). Both tables are std::array of this
     // size now, filled through .at(), and the fill count is checked, so the
     // failure mode is a loud throw at init instead.
-    constexpr uint32_t kDeferredBindingCount = 77;
+    constexpr uint32_t kDeferredBindingCount = 78;
 
     // ParticleField density volumes bound at once (binding 67 is an array of
     // this many). KEEP IN SYNC with kMaxDensityFields in
@@ -230,6 +230,11 @@ namespace threepp::vulkan {
         // Per-pixel demodulation colour for the GI recombine (the shade writes
         // it, deferred_gi_filter multiplies the filtered irradiance by it).
         set(77, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // demodColor (rgba16f, current frame only)
+        // The ocean's wake field (WakeFieldPipeline): the patches' state as one
+        // 2D array, LINEAR with a zero border. Always bound (a 1x1 dummy when
+        // no ocean has one); the water shade reads it only through the patch
+        // table the ocean's GeometryDesc::foamAddress names.
+        set(78, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // ocean wake field (rgba16f 2D array)
 
         // Exact fit is the contract: a new binding must bump
         // kDeferredBindingCount, and rewriteDescriptors must gain the matching
@@ -991,6 +996,11 @@ namespace threepp::vulkan {
             setw(74, 75, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &rtaoAuxCurInfo,     nullptr);
             setw(75, 76, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &rtaoAuxPrevInfo,    nullptr);
             setw(76, 77, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &demodColorInfo,     nullptr);
+            VkDescriptorImageInfo oceanWakeInfo{};
+            oceanWakeInfo.sampler     = in.oceanWakeSampler;
+            oceanWakeInfo.imageView   = in.oceanWakeView;
+            oceanWakeInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            setw(77, 78, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanWakeInfo,      nullptr);
             vulkan::updateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
         }
     }

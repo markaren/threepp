@@ -16,6 +16,7 @@
 #include "VulkanResources.hpp"
 #include "SkinningPipeline.hpp"
 #include "TetSkinningPipeline.hpp"
+#include "WakeFieldPipeline.hpp"
 
 #include "threepp/core/BufferAttribute.hpp"
 #include "threepp/core/BufferGeometry.hpp"
@@ -66,6 +67,10 @@ namespace threepp::vulkan::impl {
         // foam buffer that used to live on the BLAS but was never read for
         // its contents — only its non-null address served as this marker.
         bool isOceanSurface = false;
+        // An ocean with a wake field: the device address of its patch table
+        // (WakeFieldPipeline::State::tableAddress), which is what
+        // GeometryDesc::foamAddress then carries in place of the bare 1.
+        VkDeviceAddress oceanWakeTable = 0;
         // Previous-frame vertex positions, allocated for skinned + displaced
         // meshes only. Used by the hybrid raster prepass to compute
         // per-vertex motion vectors (skinned/displaced surfaces deform
@@ -531,6 +536,9 @@ namespace threepp::vulkan::impl {
         // dependency, so `imageLoad` + `imageStore` on the same image
         // is race-free.
         water::OceanImage foamImage;
+        // The wake field (DisplacedMesh::WakeField), when the mesh had one
+        // switched on as the renderer first saw it; null otherwise.
+        std::unique_ptr<vulkan::WakeFieldPipeline::State> wake;
         uint32_t foamRes      = 0;          // texels per side
         float    foamTileSize = 0.f;        // world extent (m) covered
         VkDescriptorSet foamWorldDS = VK_NULL_HANDLE;
