@@ -1247,6 +1247,22 @@ namespace threepp_py {
                                            d["overlay_ms"] = t.overlayMs;
                                            d["dof_ms"] = t.dofMs;
                                            d["froxel_ms"] = t.froxelMs;
+                                           // The Gaussian-splat pass and the three stages that
+                                           // partition it (first splat cloud of the frame only).
+                                           d["splat_ms"] = t.splatMs;
+                                           d["splat_project_ms"] = t.splatProjectMs;
+                                           d["splat_sort_ms"] = t.splatSortMs;
+                                           d["splat_raster_ms"] = t.splatRasterMs;
+                                           // ParticleField: the density scatter and the device emitter.
+                                           d["particle_density_ms"] = t.particleDensityMs;
+                                           d["particle_emit_ms"] = t.particleEmitMs;
+                                           // Ocean / DisplacedMesh update, by stage (first displaced
+                                           // mesh of the frame only): spectrum + IFFT, the vertex and
+                                           // normal displacement, the foam accumulator, the BLAS refit.
+                                           d["ocean_fft_ms"] = t.oceanFftMs;
+                                           d["ocean_displace_ms"] = t.oceanDisplaceMs;
+                                           d["ocean_foam_ms"] = t.oceanFoamMs;
+                                           d["ocean_blas_ms"] = t.oceanBlasMs;
                                            // Half-res RT AO + bent normals (rtao.comp);
                                            // 0 unless deferred AO is enabled.
                                            d["rtao_ms"] = t.rtaoMs;

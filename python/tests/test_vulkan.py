@@ -55,6 +55,29 @@ def test_rgb_render(vk_renderer):
     assert int(img.max()) > int(img.min()), "shaded render is flat"
 
 
+def test_frame_timings_name_every_timed_pass(vk_renderer):
+    """frame_timings carries a key for every pass gpu_pass_sum_ms adds up. The
+    ocean's four stages once had none: 2.8 ms of a harbour frame was in the sum
+    and under no name, so a profile of that scene could not say where it went."""
+    scene, cam = make_scene()
+    for _ in range(4):                                    # the queries of a frame are read a frame later
+        vk_renderer.render(scene, cam)
+    ft = dict(vk_renderer.frame_timings)
+    for key in ("ocean_fft_ms", "ocean_displace_ms", "ocean_foam_ms", "ocean_blas_ms",
+                "particle_density_ms", "particle_emit_ms",
+                "splat_ms", "splat_project_ms", "splat_sort_ms", "splat_raster_ms"):
+        assert key in ft, f"frame_timings has no {key}"
+    assert all(isinstance(v, float) and v >= 0.0 for v in ft.values())
+    # The three splat stages partition splat_ms, and the totals and CPU times
+    # are not passes; what is left is the disjoint set the sum is built from
+    # (plus the sensor-image pass, which has no field and is off here).
+    not_summed = {"splat_project_ms", "splat_sort_ms", "splat_raster_ms",
+                  "gpu_total_ms", "gpu_pass_sum_ms",
+                  "cpu_ensure_scene_ms", "cpu_record_ms", "cpu_frame_ms"}
+    named = sum(v for k, v in ft.items() if k not in not_summed)
+    assert named == pytest.approx(ft["gpu_pass_sum_ms"], abs=1e-3)
+
+
 def _renderer_without_presents(title):
     """A canvas and renderer of their own, with presents suppressed. The switch
     is read once, at context creation, so it is set for the constructor only."""
