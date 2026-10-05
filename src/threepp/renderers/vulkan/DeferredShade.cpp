@@ -1067,7 +1067,10 @@ namespace threepp::vulkan {
                    | (p.bgIsSolidColor ? 1024u : 0u) // solid bg: sky store NOT pre-exposed
                    | (p.particleDensity ? 2048u : 0u) // bit 11: ParticleField dust live
                    | (p.splatVolume ? 4096u : 0u)     // bit 12: splat reflection volume live
-                   | (p.historyStale ? 8192u : 0u);   // bit 13: histories cleared, prev G-buffer stale
+                   | (p.historyStale ? 8192u : 0u)    // bit 13: histories cleared, prev G-buffer stale
+                   | (std::min(p.cutoutRayCap, 15u) << 16u)// bits 16-19: cutout ray cap (0 = off)
+                   | (std::min(static_cast<uint32_t>(std::max(p.cutoutRayCapFrom, 0.f) / 4.f + 0.5f), 255u)
+                      << 20u);                       // bits 20-27: ...from this distance, in 4 m steps
         push.frame              = p.frameCounter;
         push.emissiveCount      = p.emissiveCount;
         push.emissiveTotalPower = p.emissiveTotalPower;

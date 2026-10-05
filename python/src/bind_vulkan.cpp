@@ -1678,6 +1678,27 @@ namespace threepp_py {
                               "Toggle automatic mesh LOD (background-simplified chains chosen "
                               "by projected screen-space error). Default ON; False pins every "
                               "mesh to full detail.")
+                .def_property("cutout_ray_distance",
+                              [](PyVulkanRenderer& r) { return r.native().cutoutRayDistance(); },
+                              [](PyVulkanRenderer& r, float v) { r.native().setCutoutRayDistance(v); },
+                              "Beyond this distance from the camera an alpha-cutout surface (a leaf "
+                              "card) is opaque to shadow rays: the first card a ray meets blocks it, "
+                              "with no alpha test. 0 (the default) is off.")
+                .def_property("cutout_ray_cap",
+                              [](PyVulkanRenderer& r) { return r.native().cutoutRayCap(); },
+                              [](PyVulkanRenderer& r, unsigned int v) {
+                                  r.native().setCutoutRayCap(v, r.native().cutoutRayCapFrom());
+                              },
+                              "A shadow ray counts as blocked once it has passed this many transparent "
+                              "texels of alpha-cutout surfaces (leaf cards). 0 (the default) is off, "
+                              "15 the most.")
+                .def_property("cutout_ray_cap_from",
+                              [](PyVulkanRenderer& r) { return r.native().cutoutRayCapFrom(); },
+                              [](PyVulkanRenderer& r, float v) {
+                                  r.native().setCutoutRayCap(r.native().cutoutRayCap(), v);
+                              },
+                              "The distance from the eye from which cutout_ray_cap holds (0 = "
+                              "everywhere): nearer shadows are exact.")
                 .def_property_readonly("auto_lod_stats",
                                        [](PyVulkanRenderer& r) {
                                            const auto s = r.native().autoLodStats();

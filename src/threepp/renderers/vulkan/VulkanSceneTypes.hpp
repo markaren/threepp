@@ -133,6 +133,13 @@ namespace threepp::vulkan::impl {
         // re-expansion (rare, and the selection pass re-picks it that
         // same frame anyway).
         uint8_t  lodLevel    = 0;
+        // Cutout ray distance (setCutoutRayDistance): this entry's cutout
+        // material is forced opaque for rays, its bounds being farther from
+        // the camera than the distance. Written by classifyCutoutFar (lean
+        // frames) and the full rebuild's instance loop, read by both TLAS
+        // instance fills. Resets to false on a full re-expansion, which
+        // un-classifies (cutoutRayClassified_) so the bits are re-derived.
+        bool     rayFarOpaque = false;
         // Auto-LOD selection caches, derived ONCE at full expansion so the
         // per-frame selection pass is pure float math — the uncached
         // version paid a dynamic_cast + ancestor hash-walk + shared_ptr

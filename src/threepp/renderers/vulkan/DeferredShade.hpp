@@ -251,6 +251,12 @@ namespace threepp::vulkan {
             // so the previous G-buffer slot must not be reprojected against
             // (flags bit 13): every temporal path starts fresh this frame.
             bool historyStale = false;
+            // setCutoutRayCap (flags bits 16-19): a shadow ray counts as
+            // blocked after this many transparent cutout texels; 0 = off.
+            uint32_t cutoutRayCap = 0u;
+            // ...for shading points at least this far from the eye (flags
+            // bits 20-27, in 4 m steps, so 1020 m at most); 0 = everywhere.
+            float cutoutRayCapFrom = 0.f;
             // Float-bits of the pre-exposure baked into every sceneHdr store
             // (physical camera keeps 100k lux in fp16). 0x3F800000 = legacy 1.
             uint32_t preExpBits = 0x3F800000u;

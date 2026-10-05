@@ -918,6 +918,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // entry rebuild"). Cheap: it bumps a counter, and only the fields
             // that actually use a map pay for a re-trace.
             if (particleFieldPass_) particleFieldPass_->invalidateSurfaceBakes();
+            cutoutRayClassified_ = false;// the fresh entries' rayFarOpaque bits are all reset
             }// !snapLean
 
             // ── Automatic mesh LOD selection (setAutoLod; ON by default) ────
@@ -1167,6 +1168,18 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     stats.entriesPerLevel[0] = nonOverlay;
                 }
                 autoLodStats_ = stats;
+            }
+
+            // Camera position for the cutout ray distance (setCutoutRayDistance):
+            // read by the lean path's classifyCutoutFar and by the full
+            // rebuild's instance loop.
+            float rayCamPos[3];
+            {
+                Vector3 p;
+                p.setFromMatrixPosition(*camera.matrixWorld);
+                rayCamPos[0] = p.x;
+                rayCamPos[1] = p.y;
+                rayCamPos[2] = p.z;
             }
 
             // Change flags shared by the LEAN in-place diff and the generic
@@ -2266,6 +2279,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         }
                         cacheCullFlags(matDescsCached_);
                     }
+                    // Cutout ray distance: after the material patch (it reads
+                    // matDescsCached_). A flipped bit changes an instance's
+                    // flags, which is a class change like any other.
+                    if (classifyCutoutFar(rayCamPos)) instClassChanged = true;
                     if (!matricesSame || bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny || interopDirtyAny || lodChangedThisFrame_ || instClassChanged) {
                         THREEPP_CPUPROF("scene.7_tlasRefitFill");
                         // TLAS refit: needed when instance transforms change
@@ -2308,10 +2325,14 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             uint8_t spanMask = kRayMaskOpaque;
                             VkGeometryInstanceFlagsKHR spanFlags =
                                     VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+                            // A cutout caster's far entries are force-opaque
+                            // (setCutoutRayDistance; the bits are classifyCutoutFar's).
+                            bool spanCutout = false;
                             if (sp.first < matDescsCached_.size()) {
                                 const auto& cmd = matDescsCached_[sp.first];
                                 if (!e0.isDisplaced && alphaMaskGroup(cmd)) spanMask = kRayMaskAlpha;
                                 spanFlags = tlasInstanceFlags(cmd);
+                                spanCutout = cutoutRayDistance_ > 0.f && cutoutCaster(cmd);
                             }
                             if (e0.camAttached) spanMask = kRayMaskNoShadow;
                             if (e0.sensorOnly)
@@ -2401,7 +2422,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 inst.instanceCustomIndex = static_cast<uint32_t>(i);
                                 inst.mask = spanMask;
                                 inst.instanceShaderBindingTableRecordOffset = 0;
-                                inst.flags = spanFlags;
+                                inst.flags = (spanCutout && en.rayFarOpaque)
+                                                     ? (spanFlags | VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR)
+                                                     : spanFlags;
                                 inst.accelerationStructureReference = blasAddr;
                                 instances.push_back(inst);
                             }
@@ -3140,8 +3163,17 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                               ? kRayMaskAlpha
                                               : kRayMaskOpaque;
                     instances.back().flags = tlasInstanceFlags(md);
+                    // Cutout ray distance: the same bit classifyCutoutFar
+                    // derives on lean frames, for this frame's camera.
+                    const bool beyond = cutoutRayDistance_ > 0.f && cutoutCaster(md) &&
+                                        entryBeyond(en, rayCamPos, cutoutRayDistance_);
+                    entries[i].rayFarOpaque = beyond;
+                    if (beyond) instances.back().flags |= VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR;
                 }
             }
+            cutoutRayClassified_    = true;
+            cutoutRayClassifiedFor_ = cutoutRayDistance_;
+            std::copy(rayCamPos, rayCamPos + 3, cutoutRayCamPos_);
 
             // Submit the whole tile-admit batch once (BLAS builds + prevVertex
             // seeds + texture staging/blits), waiting a single time. After this
@@ -3317,6 +3349,39 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 dumpMemoryStats("scene-built");
             }
         }
+
+bool VulkanRenderer::Impl::classifyCutoutFar(const float camPos[3]) {
+    const float dist = cutoutRayDistance_;
+    // Off, and no bit left set from a time it was on.
+    if (dist <= 0.f && cutoutRayClassifiedFor_ <= 0.f) return false;
+    if (cutoutRayClassified_ && cutoutRayClassifiedFor_ == dist) {
+        const float dx = camPos[0] - cutoutRayCamPos_[0], dy = camPos[1] - cutoutRayCamPos_[1],
+                    dz = camPos[2] - cutoutRayCamPos_[2];
+        const float step = 0.05f * dist;
+        if (dx * dx + dy * dy + dz * dz < step * step) return false;
+    }
+    auto& entries = lastVisibleEntries_;
+    if (matDescsCached_.size() != entries.size()) return false;// no materials to class by yet
+    THREEPP_CPUPROF("scene.8b_cutoutFar");
+    bool changed = false;
+    for (const auto& sp : entrySpans_) {
+        const MeshEntry& e0 = entries[sp.first];
+        if (e0.isOverlay || e0.isParticle) continue;
+        const bool caster = dist > 0.f && cutoutCaster(matDescsCached_[sp.first]);
+        for (uint32_t j = 0; j < sp.count; ++j) {
+            MeshEntry& en = entries[sp.first + j];
+            const bool beyond = caster && entryBeyond(en, camPos, dist);
+            if (beyond != en.rayFarOpaque) {
+                en.rayFarOpaque = beyond;
+                changed = true;
+            }
+        }
+    }
+    cutoutRayClassified_    = true;
+    cutoutRayClassifiedFor_ = dist;
+    std::copy(camPos, camPos + 3, cutoutRayCamPos_);
+    return changed;
+}
 
 void VulkanRenderer::Impl::cacheCullFlags(const std::vector<MaterialDesc>& mds) {
             lastVisibleCullMode_.resize(mds.size());

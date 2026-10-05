@@ -312,7 +312,9 @@ struct MaterialDesc {
 // valid this frame, 9 = shadow-dwell kill switch, 10 = solid display-
 // referred background (sky store skips the pre-exposure), 11 = a ParticleField
 // density volume is live, 12 = a baked splat reflection volume is live
-// (PRIMARY view only — see DeferredShade::DispatchParams::splatVolume).
+// (PRIMARY view only — see DeferredShade::DispatchParams::splatVolume),
+// 13 = histories cleared, 16-19 = cutout ray cap (0 = off; see shadowVis),
+// 20-27 = the distance from the eye it holds from, in 4 m steps.
 //
 // NO default member initializers on the C++ side: `ShadePush p{};` must
 // zero-fill, exactly like the positional `uint32_t pc[19] = {}` blocks it

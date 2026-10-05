@@ -242,6 +242,8 @@ namespace threepp {
         shadeParams.clusterLightCount  = clusterLightCountThisFrame_;
         shadeParams.froxelsActive      = froxelsActive;
         shadeParams.historyStale       = view().shadeHistoryStale;
+        shadeParams.cutoutRayCap       = cutoutRayCap_;
+        shadeParams.cutoutRayCapFrom   = cutoutRayCapFrom_;
         shadeParams.particleDensity    = densityActive;
         // ── Splats in the mirror: PRIMARY VIEW ONLY ──────────────────────────
         // The volume descriptors are world-anchored and shared by every view's
@@ -2815,6 +2817,27 @@ namespace threepp {
 
     float VulkanRenderer::autoLodError() const {
         return core()->lodErrorPx_;
+    }
+
+    void VulkanRenderer::setCutoutRayDistance(float metres) {
+        core()->cutoutRayDistance_ = std::max(0.f, metres);
+    }
+
+    float VulkanRenderer::cutoutRayDistance() const {
+        return core()->cutoutRayDistance_;
+    }
+
+    void VulkanRenderer::setCutoutRayCap(unsigned int texels, float fromDistance) {
+        core()->cutoutRayCap_     = std::min(texels, 15u);
+        core()->cutoutRayCapFrom_ = std::clamp(fromDistance, 0.f, 1020.f);
+    }
+
+    float VulkanRenderer::cutoutRayCapFrom() const {
+        return core()->cutoutRayCapFrom_;
+    }
+
+    unsigned int VulkanRenderer::cutoutRayCap() const {
+        return core()->cutoutRayCap_;
     }
 
     VulkanRenderer::AutoLodStats VulkanRenderer::autoLodStats() const {

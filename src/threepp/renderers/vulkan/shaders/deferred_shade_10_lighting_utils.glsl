@@ -534,7 +534,10 @@ vec2 fetchUvAt(int instIdx, int primId, vec2 bary) {
 //   cutoff < 0 (blend)  → never blocks (e.g. textured decals — light passes through)
 //   cutoff > 0 (cutout) → occludes iff alpha ≥ cutoff (foliage, grids)
 //   opaque              → occludes
-bool shadowOccludes(int instIdx, int primId, vec2 bary) {
+// cutoutMiss: the candidate was a cutout's transparent texel (the one kind of
+// pass-through shadowVis counts against the cutout ray cap).
+bool shadowOccludes(int instIdx, int primId, vec2 bary, out bool cutoutMiss) {
+    cutoutMiss = false;
     const MaterialDesc m = mats[instIdx];
     // STRONG emitters never occlude — an analytic light that sits INSIDE its
     // own glowing housing (a lighthouse lamp room) must shine through it. Same
@@ -559,7 +562,12 @@ bool shadowOccludes(int instIdx, int primId, vec2 bary) {
     const vec2  uv = fetchUvAt(instIdx, primId, bary);
     const int   ti = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
     const float a  = textureLod(albedoMaps[nonuniformEXT(ti)], (m.uvTransform * vec3(uv, 1.0)).xy, 0.0).a;
-    return a >= m.alphaCutoff;
+    cutoutMiss = a < m.alphaCutoff;
+    return !cutoutMiss;
+}
+bool shadowOccludes(int instIdx, int primId, vec2 bary) {
+    bool cutoutMiss;
+    return shadowOccludes(instIdx, primId, bary, cutoutMiss);
 }
 
 // Inline hard-shadow test (TerminateOnFirstHit). 1.0 lit / 0.0 occluded.
@@ -571,16 +579,37 @@ bool shadowOccludes(int instIdx, int primId, vec2 bary) {
 // would ignore those candidates anyway (transmission>0 / alphaCutoff<0 never
 // block), so this is a pure traversal saving; water stays opaque-mask and is
 // still ignored by the material test.
+// CUTOUT RAY CAP (setCutoutRayCap; pc.flags bits 16-19, 0 = off): a ray through
+// a card tree's crown meets card after card, each a round trip here (material
+// read, UV fetch, texture sample), and in a scene of such trees that is most of
+// what the sun's shadows cost. With a cap N the ray is taken as blocked once it
+// has passed N transparent texels: a ray that deep in foliage is nearly always
+// blocked further on anyway. Rays that cross fewer cards (a crown's lit top, a
+// lone branch's shadow) are exact as before. The candidates come in traversal
+// order, not by distance, which a count does not mind.
 float shadowVis(vec3 origin, vec3 dir, float tMax) {
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT,
                           kRayMaskOpaque, origin, 0.0, dir, tMax);
+    // Bits 20-27: the distance from the eye, in steps of 4 m, from which the cap
+    // holds. Nearer than that a shadow is exact: it is at a few metres that a
+    // capped shadow shows the cards' outlines.
+    uint cutoutCap = (pc.flags >> 16) & 15u;
+    if (cutoutCap != 0u) {
+        const float from = 4.0 * float((pc.flags >> 20) & 255u);
+        const vec3  eyeToOrigin = origin - gPrimaryOrigin;
+        if (dot(eyeToOrigin, eyeToOrigin) < from * from) cutoutCap = 0u;
+    }
+    uint cutoutMisses = 0u;
     while (rayQueryProceedEXT(rq)) {
-        if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
-            shadowOccludes(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
-                           rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
-                           rayQueryGetIntersectionBarycentricsEXT(rq, false)))
-            rayQueryConfirmIntersectionEXT(rq);
+        if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
+            bool cutoutMiss;
+            if (shadowOccludes(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
+                               rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                               rayQueryGetIntersectionBarycentricsEXT(rq, false), cutoutMiss) ||
+                (cutoutMiss && cutoutCap != 0u && ++cutoutMisses >= cutoutCap))
+                rayQueryConfirmIntersectionEXT(rq);
+        }
     }
     if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT)
         return 1.0;

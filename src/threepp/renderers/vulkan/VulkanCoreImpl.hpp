@@ -458,6 +458,31 @@ namespace threepp {
             if (alwaysOccludes) f |= VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR;
             return f;
         }
+        // A material whose ONLY reason not to be force-opaque is a live cutout
+        // (alphaCutoff > 0 with an albedo texture): foliage cards, grids. The
+        // class setCutoutRayDistance may force opaque beyond its distance.
+        [[nodiscard]] static bool cutoutCaster(const MaterialDesc& m) {
+            const float emMax = std::max({m.emissive[0] * m.emissiveIntensity,
+                                          m.emissive[1] * m.emissiveIntensity,
+                                          m.emissive[2] * m.emissiveIntensity});
+            return emMax < 0.05f && !(m.transmission > 0.0f) &&
+                   m.alphaCutoff > 0.0f && m.albedoTexIndex >= 0;
+        }
+        // Is the whole of an entry's bounding sphere farther from `cam` than
+        // `dist`? Unknown bounds (lodRadius 0) are never far.
+        [[nodiscard]] static bool entryBeyond(const vulkan::impl::MeshEntry& en, const float cam[3], float dist) {
+            if (en.lodRadius <= 0.f) return false;
+            const float* M = en.worldMatrix.data();
+            const float cx = M[0] * en.lodCenter[0] + M[4] * en.lodCenter[1] + M[8] * en.lodCenter[2] + M[12];
+            const float cy = M[1] * en.lodCenter[0] + M[5] * en.lodCenter[1] + M[9] * en.lodCenter[2] + M[13];
+            const float cz = M[2] * en.lodCenter[0] + M[6] * en.lodCenter[1] + M[10] * en.lodCenter[2] + M[14];
+            const float s0 = M[0] * M[0] + M[1] * M[1] + M[2] * M[2];
+            const float s1 = M[4] * M[4] + M[5] * M[5] + M[6] * M[6];
+            const float s2 = M[8] * M[8] + M[9] * M[9] + M[10] * M[10];
+            const float reach = dist + en.lodRadius * std::sqrt(std::max(s0, std::max(s1, s2)));
+            const float dx = cam[0] - cx, dy = cam[1] - cy, dz = cam[2] - cz;
+            return dx * dx + dy * dy + dz * dz > reach * reach;
+        }
         // The ray-mask half of the same per-material classification (see the
         // visibility groups in vulkan_shared.h). Water (displaced) stays in the
         // opaque group whatever its material says.
@@ -947,6 +972,32 @@ namespace threepp {
         // coarser BLAS would misindex the still-LOD0
         // GeometryDesc::indexAddress.
         bool lodChangedThisFrame_ = false;
+
+        // ── Cutout ray distance (setCutoutRayDistance; 0 = off, the default) ─
+        // Every BLAS is non-opaque so that a cutout caster's hits come back to
+        // the shader as candidates to alpha-test. A shadow ray through a tree
+        // crosses many leaf cards, and each is a round trip (material read, UV
+        // fetch, texture sample). Beyond this distance from the camera a
+        // cutout caster's instance is FORCE_OPAQUE instead: the RT core
+        // commits the first card it meets. Its shadow is then the cards' own
+        // outline, not the leaves'. Reflection and GI rays already trace with
+        // gl_RayFlagsOpaqueEXT and are unchanged.
+        // The entries are classified for a camera position and re-classified
+        // once the camera has moved 5 % of the distance from it (a flag flip
+        // is a full TLAS build, so not every frame of a moving camera pays
+        // one); an entry that moves by itself waits for that too.
+        float cutoutRayDistance_ = 0.f;
+        // setCutoutRayCap: the per-ray answer to the same cost (shadowVis in
+        // deferred_shade_10_lighting_utils.glsl; ShadePush flags bits 16-19).
+        uint32_t cutoutRayCap_ = 0u;
+        float    cutoutRayCapFrom_ = 0.f;// ...for what is shaded at least this far from the eye
+        float cutoutRayClassifiedFor_ = 0.f;// the distance the entries' bits were derived for
+        float cutoutRayCamPos_[3] = {0.f, 0.f, 0.f};// ...and the camera position
+        bool  cutoutRayClassified_ = false;// false after a full re-expansion (the bits were reset)
+        // Lean frames: re-derive MeshEntry::rayFarOpaque when due. Reads
+        // matDescsCached_, so call after the material patch. True when any
+        // entry's bit flipped (the TLAS must then be refilled and rebuilt).
+        bool classifyCutoutFar(const float camPos[3]);
         // Host mirror of the last-uploaded GeometryDesc array (entries-
         // indexed, same layout as the `geomDescs` local built in the full
         // rebuild). The lean auto-LOD path patches indexAddress/indexed in

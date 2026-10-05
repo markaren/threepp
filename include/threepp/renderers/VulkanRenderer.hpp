@@ -706,6 +706,40 @@ namespace threepp {
         void setAutoLodError(float px);
         [[nodiscard]] float autoLodError() const;
 
+        // Cutout ray distance, in world units; 0 (the default) is off.
+        // A shadow ray that crosses an alpha-cutout surface (a leaf card, a
+        // grid) alpha-tests it in the shader, one round trip per surface
+        // crossed: in a scene of card trees that is most of what the sun's
+        // shadows cost. Beyond this distance from the camera such a surface
+        // is opaque to visibility rays (shadow, emitter, probe): the first
+        // card a ray meets blocks it. A far tree's shadow is then its cards'
+        // outline, without the light between the leaves. What the camera sees
+        // of the surface itself is unchanged, and so are reflections and GI
+        // (their rays already take a cutout as solid).
+        // An object counts as far when the whole of its bounds is; the
+        // camera in question is the one render() is called with, for every
+        // view of that frame. Re-evaluated as the camera moves, in steps of
+        // 5 % of the distance. Takes effect at the next render().
+        void setCutoutRayDistance(float metres);
+        [[nodiscard]] float cutoutRayDistance() const;
+
+        // Cutout ray cap; 0 (the default) is off, 15 the most.
+        // The other answer to the same cost, per ray instead of per object: a
+        // shadow ray is taken as blocked once it has passed this many
+        // transparent texels of alpha-cutout surfaces. A ray that deep in
+        // foliage is nearly always blocked further on, so the test stops
+        // paying for it. Rays that cross fewer cutouts are exact: a crown's
+        // sunlit top and a lone branch's shadow keep their leaves; what goes
+        // is the light that finds its way through a whole crown. Applies to
+        // the deferred path's direct-light shadow rays and needs no rebuild.
+        // fromDistance (world units, 0 = everywhere, 1020 at most, in steps
+        // of 4): the cap holds for what is shaded at least that far from the
+        // eye. Nearer shadows are exact; it is at a few metres that a capped
+        // shadow shows the cards' outlines. Takes effect at the next render().
+        void setCutoutRayCap(unsigned int texels, float fromDistance = 0.f);
+        [[nodiscard]] unsigned int cutoutRayCap() const;
+        [[nodiscard]] float cutoutRayCapFrom() const;
+
         // Debug/harness stats snapshot from the last render()'s LOD
         // selection pass. entriesPerLevel[0] is LOD0 (unsimplified); [1..4]
         // are the generated chain levels; [5] is a defensive catch-all
