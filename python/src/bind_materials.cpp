@@ -80,6 +80,18 @@ namespace threepp_py {
                 // A transparent double-sided material draws back faces, then front
                 // faces; True restores the single pass (three.js forceSinglePass).
                 .def_readwrite("force_single_pass", &T::forceSinglePass)
+                // The stencil test and its writes (three.js stencil*), for clipping one
+                // draw by an earlier one. stencil_write also switches the TEST on, so a
+                // material that only tests sets it too, with its ops left at Keep. GL only.
+                .def_readwrite("color_write", &T::colorWrite)
+                .def_readwrite("stencil_write", &T::stencilWrite)
+                .def_readwrite("stencil_ref", &T::stencilRef)
+                .def_readwrite("stencil_func", &T::stencilFunc)
+                .def_readwrite("stencil_func_mask", &T::stencilFuncMask)
+                .def_readwrite("stencil_write_mask", &T::stencilWriteMask)
+                .def_readwrite("stencil_fail", &T::stencilFail)
+                .def_readwrite("stencil_z_fail", &T::stencilZFail)
+                .def_readwrite("stencil_z_pass", &T::stencilZPass)
                 // Bump the material version so backends that cache derived
                 // per-material GPU state (Vulkan MaterialDesc SSBO) re-upload
                 // after a runtime property edit. No-op visual cost on GL.
@@ -115,6 +127,26 @@ namespace threepp_py {
         py::enum_<DepthPacking>(m, "DepthPacking")
                 .value("Basic", DepthPacking::Basic)
                 .value("RGBA", DepthPacking::RGBA);
+
+        py::enum_<StencilFunc>(m, "StencilFunc")
+                .value("Never", StencilFunc::Never)
+                .value("Less", StencilFunc::Less)
+                .value("Equal", StencilFunc::Equal)
+                .value("LessEqual", StencilFunc::LessEqual)
+                .value("Greater", StencilFunc::Greater)
+                .value("NotEqual", StencilFunc::NotEqual)
+                .value("GreaterEqual", StencilFunc::GreaterEqual)
+                .value("Always", StencilFunc::Always);
+
+        py::enum_<StencilOp>(m, "StencilOp")
+                .value("Zero", StencilOp::Zero)
+                .value("Keep", StencilOp::Keep)
+                .value("Replace", StencilOp::Replace)
+                .value("Increment", StencilOp::Increment)
+                .value("Decrement", StencilOp::Decrement)
+                .value("IncrementWrap", StencilOp::IncrementWrap)
+                .value("DecrementWrap", StencilOp::DecrementWrap)
+                .value("Invert", StencilOp::Invert);
 
         // ---- Material base ---------------------------------------------------
         // Abstract; never instantiated. Registered so concrete materials can

@@ -8,7 +8,7 @@ import numpy.typing
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'FBXLoader', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_EGL', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'Ray', 'RayHit', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'SkeletonHelper', 'SoftBody', 'SogLoader', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
+__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'FBXLoader', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_EGL', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'Ray', 'RayHit', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'SkeletonHelper', 'SoftBody', 'SogLoader', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'StencilFunc', 'StencilOp', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
 class AmbientLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
@@ -1890,6 +1890,14 @@ class DisplacedMesh(Mesh):
             """
         @aeration_life.setter
         def aeration_life(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def albedo(self) -> float:
+            """
+            Scales the light the film and the bubbles turn back; 1 = as the water shade has them (the default). Read every frame. A scene whose camera opens wide at night turns it down: under a moon, or the night sky's own light, a race is otherwise a pale band on a sea that mirrors a dark sky.
+            """
+        @albedo.setter
+        def albedo(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
         def eddy_texels(self) -> float:
@@ -4670,6 +4678,7 @@ class LineBasicMaterial(Material):
     alpha_hash: bool
     blending: Blending
     color: Color
+    color_write: bool
     depth_test: bool
     depth_write: bool
     fog: bool
@@ -4677,6 +4686,11 @@ class LineBasicMaterial(Material):
     name: str
     premultiplied_alpha: bool
     side: Side
+    stencil_fail: StencilOp
+    stencil_func: StencilFunc
+    stencil_write: bool
+    stencil_z_fail: StencilOp
+    stencil_z_pass: StencilOp
     tone_mapped: bool
     transparent: bool
     vertex_colors: bool
@@ -4706,6 +4720,24 @@ class LineBasicMaterial(Material):
         ...
     @opacity.setter
     def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_func_mask(self) -> int:
+        ...
+    @stencil_func_mask.setter
+    def stencil_func_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_ref(self) -> int:
+        ...
+    @stencil_ref.setter
+    def stencil_ref(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_write_mask(self) -> int:
+        ...
+    @stencil_write_mask.setter
+    def stencil_write_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
 class LineCurve(Curve2):
     v1: Vector2
@@ -5002,6 +5034,7 @@ class MeshBasicMaterial(Material):
     ao_map: Texture
     blending: Blending
     color: Color
+    color_write: bool
     combine: CombineOperation
     depth_test: bool
     depth_write: bool
@@ -5013,6 +5046,11 @@ class MeshBasicMaterial(Material):
     premultiplied_alpha: bool
     side: Side
     specular_map: Texture
+    stencil_fail: StencilOp
+    stencil_func: StencilFunc
+    stencil_write: bool
+    stencil_z_fail: StencilOp
+    stencil_z_pass: StencilOp
     tone_mapped: bool
     transparent: bool
     vertex_colors: bool
@@ -5051,6 +5089,24 @@ class MeshBasicMaterial(Material):
     def refraction_ratio(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
+    def stencil_func_mask(self) -> int:
+        ...
+    @stencil_func_mask.setter
+    def stencil_func_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_ref(self) -> int:
+        ...
+    @stencil_ref.setter
+    def stencil_ref(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_write_mask(self) -> int:
+        ...
+    @stencil_write_mask.setter
+    def stencil_write_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
     def wireframe_linewidth(self) -> float:
         ...
     @wireframe_linewidth.setter
@@ -5060,6 +5116,7 @@ class MeshDepthMaterial(Material):
     alpha_hash: bool
     alpha_map: Texture
     blending: Blending
+    color_write: bool
     depth_packing: DepthPacking
     depth_test: bool
     depth_write: bool
@@ -5070,6 +5127,11 @@ class MeshDepthMaterial(Material):
     name: str
     premultiplied_alpha: bool
     side: Side
+    stencil_fail: StencilOp
+    stencil_func: StencilFunc
+    stencil_write: bool
+    stencil_z_fail: StencilOp
+    stencil_z_pass: StencilOp
     tone_mapped: bool
     transparent: bool
     vertex_colors: bool
@@ -5108,6 +5170,24 @@ class MeshDepthMaterial(Material):
     def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
+    def stencil_func_mask(self) -> int:
+        ...
+    @stencil_func_mask.setter
+    def stencil_func_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_ref(self) -> int:
+        ...
+    @stencil_ref.setter
+    def stencil_ref(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_write_mask(self) -> int:
+        ...
+    @stencil_write_mask.setter
+    def stencil_write_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
     def wireframe_linewidth(self) -> float:
         ...
     @wireframe_linewidth.setter
@@ -5119,6 +5199,7 @@ class MeshLambertMaterial(Material):
     ao_map: Texture
     blending: Blending
     color: Color
+    color_write: bool
     depth_test: bool
     depth_write: bool
     emissive: Color
@@ -5130,6 +5211,11 @@ class MeshLambertMaterial(Material):
     name: str
     premultiplied_alpha: bool
     side: Side
+    stencil_fail: StencilOp
+    stencil_func: StencilFunc
+    stencil_write: bool
+    stencil_z_fail: StencilOp
+    stencil_z_pass: StencilOp
     tone_mapped: bool
     transparent: bool
     vertex_colors: bool
@@ -5167,10 +5253,29 @@ class MeshLambertMaterial(Material):
     @reflectivity.setter
     def reflectivity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
+    @property
+    def stencil_func_mask(self) -> int:
+        ...
+    @stencil_func_mask.setter
+    def stencil_func_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_ref(self) -> int:
+        ...
+    @stencil_ref.setter
+    def stencil_ref(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_write_mask(self) -> int:
+        ...
+    @stencil_write_mask.setter
+    def stencil_write_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
 class MeshNormalMaterial(Material):
     alpha_hash: bool
     blending: Blending
     bump_map: Texture
+    color_write: bool
     depth_test: bool
     depth_write: bool
     displacement_map: Texture
@@ -5182,6 +5287,11 @@ class MeshNormalMaterial(Material):
     normal_scale: Vector2
     premultiplied_alpha: bool
     side: Side
+    stencil_fail: StencilOp
+    stencil_func: StencilFunc
+    stencil_write: bool
+    stencil_z_fail: StencilOp
+    stencil_z_pass: StencilOp
     tone_mapped: bool
     transparent: bool
     vertex_colors: bool
@@ -5207,6 +5317,24 @@ class MeshNormalMaterial(Material):
     @opacity.setter
     def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
+    @property
+    def stencil_func_mask(self) -> int:
+        ...
+    @stencil_func_mask.setter
+    def stencil_func_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_ref(self) -> int:
+        ...
+    @stencil_ref.setter
+    def stencil_ref(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_write_mask(self) -> int:
+        ...
+    @stencil_write_mask.setter
+    def stencil_write_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
 class MeshPhongMaterial(Material):
     alpha_hash: bool
     alpha_map: Texture
@@ -5214,6 +5342,7 @@ class MeshPhongMaterial(Material):
     blending: Blending
     bump_map: Texture
     color: Color
+    color_write: bool
     combine: CombineOperation
     depth_test: bool
     depth_write: bool
@@ -5230,6 +5359,11 @@ class MeshPhongMaterial(Material):
     side: Side
     specular: Color
     specular_map: Texture
+    stencil_fail: StencilOp
+    stencil_func: StencilFunc
+    stencil_write: bool
+    stencil_z_fail: StencilOp
+    stencil_z_pass: StencilOp
     tone_mapped: bool
     transparent: bool
     vertex_colors: bool
@@ -5272,6 +5406,24 @@ class MeshPhongMaterial(Material):
         ...
     @shininess.setter
     def shininess(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_func_mask(self) -> int:
+        ...
+    @stencil_func_mask.setter
+    def stencil_func_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_ref(self) -> int:
+        ...
+    @stencil_ref.setter
+    def stencil_ref(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_write_mask(self) -> int:
+        ...
+    @stencil_write_mask.setter
+    def stencil_write_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
 class MeshPhysicalMaterial(MeshStandardMaterial):
     def __init__(self) -> None:
@@ -5397,6 +5549,7 @@ class MeshStandardMaterial(Material):
     blending: Blending
     bump_map: Texture
     color: Color
+    color_write: bool
     depth_test: bool
     depth_write: bool
     displacement_map: Texture
@@ -5414,6 +5567,11 @@ class MeshStandardMaterial(Material):
     premultiplied_alpha: bool
     roughness_map: Texture
     side: Side
+    stencil_fail: StencilOp
+    stencil_func: StencilFunc
+    stencil_write: bool
+    stencil_z_fail: StencilOp
+    stencil_z_pass: StencilOp
     tone_mapped: bool
     translucency_color: Color
     transparent: bool
@@ -5515,6 +5673,24 @@ class MeshStandardMaterial(Material):
         ...
     @roughness.setter
     def roughness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_func_mask(self) -> int:
+        ...
+    @stencil_func_mask.setter
+    def stencil_func_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_ref(self) -> int:
+        ...
+    @stencil_ref.setter
+    def stencil_ref(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_write_mask(self) -> int:
+        ...
+    @stencil_write_mask.setter
+    def stencil_write_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
     @property
     def terrain_band_normal_scale(self) -> float:
@@ -7414,6 +7590,7 @@ class PointsMaterial(Material):
     alpha_map: Texture
     blending: Blending
     color: Color
+    color_write: bool
     depth_test: bool
     depth_write: bool
     fog: bool
@@ -7423,6 +7600,11 @@ class PointsMaterial(Material):
     premultiplied_alpha: bool
     side: Side
     size_attenuation: bool
+    stencil_fail: StencilOp
+    stencil_func: StencilFunc
+    stencil_write: bool
+    stencil_z_fail: StencilOp
+    stencil_z_pass: StencilOp
     tone_mapped: bool
     transparent: bool
     vertex_colors: bool
@@ -7452,6 +7634,24 @@ class PointsMaterial(Material):
         ...
     @size.setter
     def size(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_func_mask(self) -> int:
+        ...
+    @stencil_func_mask.setter
+    def stencil_func_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_ref(self) -> int:
+        ...
+    @stencil_ref.setter
+    def stencil_ref(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_write_mask(self) -> int:
+        ...
+    @stencil_write_mask.setter
+    def stencil_write_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
 class PolarGridHelper(LineSegments):
     def __init__(self, radius: typing.SupportsFloat | typing.SupportsIndex = 10.0, sectors: typing.SupportsInt | typing.SupportsIndex = 16, rings: typing.SupportsInt | typing.SupportsIndex = 8, divisions: typing.SupportsInt | typing.SupportsIndex = 64, color1: Color = ..., color2: Color = ...) -> None:
@@ -7807,13 +8007,13 @@ class STLLoader:
 class SVGLoader:
     def __init__(self) -> None:
         ...
-    def load(self, path: str) -> Group:
+    def load(self, path: str, curve_segments: typing.SupportsInt | typing.SupportsIndex = 12) -> Group:
         """
-        Load an .svg file as a Group of filled meshes.
+        Load an .svg file as a Group of flat meshes: fills and strokes in document order (render_order), each named after its element's id. curve_segments: points per curve.
         """
-    def parse(self, text: str) -> Group:
+    def parse(self, text: str, curve_segments: typing.SupportsInt | typing.SupportsIndex = 12) -> Group:
         """
-        Parse SVG XML into a Group of filled meshes.
+        Parse SVG XML into a Group of flat meshes: fills and strokes in document order (render_order), each named after its element's id. curve_segments: points per curve.
         """
 class ScalarField:
     @staticmethod
@@ -7921,6 +8121,7 @@ class ShadowMaterial(Material):
     alpha_hash: bool
     blending: Blending
     color: Color
+    color_write: bool
     depth_test: bool
     depth_write: bool
     fog: bool
@@ -7928,6 +8129,11 @@ class ShadowMaterial(Material):
     name: str
     premultiplied_alpha: bool
     side: Side
+    stencil_fail: StencilOp
+    stencil_func: StencilFunc
+    stencil_write: bool
+    stencil_z_fail: StencilOp
+    stencil_z_pass: StencilOp
     tone_mapped: bool
     transparent: bool
     vertex_colors: bool
@@ -7951,6 +8157,24 @@ class ShadowMaterial(Material):
         ...
     @opacity.setter
     def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_func_mask(self) -> int:
+        ...
+    @stencil_func_mask.setter
+    def stencil_func_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_ref(self) -> int:
+        ...
+    @stencil_ref.setter
+    def stencil_ref(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_write_mask(self) -> int:
+        ...
+    @stencil_write_mask.setter
+    def stencil_write_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
 class Shape(Path):
     def __init__(self, points: collections.abc.Sequence[Vector2] = []) -> None:
@@ -8628,6 +8852,7 @@ class SpriteMaterial(Material):
     alpha_map: Texture
     blending: Blending
     color: Color
+    color_write: bool
     depth_test: bool
     depth_write: bool
     fog: bool
@@ -8637,6 +8862,11 @@ class SpriteMaterial(Material):
     premultiplied_alpha: bool
     side: Side
     size_attenuation: bool
+    stencil_fail: StencilOp
+    stencil_func: StencilFunc
+    stencil_write: bool
+    stencil_z_fail: StencilOp
+    stencil_z_pass: StencilOp
     tone_mapped: bool
     transparent: bool
     vertex_colors: bool
@@ -8672,6 +8902,134 @@ class SpriteMaterial(Material):
         ...
     @size.setter
     def size(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_func_mask(self) -> int:
+        ...
+    @stencil_func_mask.setter
+    def stencil_func_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_ref(self) -> int:
+        ...
+    @stencil_ref.setter
+    def stencil_ref(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stencil_write_mask(self) -> int:
+        ...
+    @stencil_write_mask.setter
+    def stencil_write_mask(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+class StencilFunc:
+    """
+    Members:
+    
+      Never
+    
+      Less
+    
+      Equal
+    
+      LessEqual
+    
+      Greater
+    
+      NotEqual
+    
+      GreaterEqual
+    
+      Always
+    """
+    Always: typing.ClassVar[StencilFunc]  # value = <StencilFunc.Always: 519>
+    Equal: typing.ClassVar[StencilFunc]  # value = <StencilFunc.Equal: 514>
+    Greater: typing.ClassVar[StencilFunc]  # value = <StencilFunc.Greater: 516>
+    GreaterEqual: typing.ClassVar[StencilFunc]  # value = <StencilFunc.GreaterEqual: 518>
+    Less: typing.ClassVar[StencilFunc]  # value = <StencilFunc.Less: 513>
+    LessEqual: typing.ClassVar[StencilFunc]  # value = <StencilFunc.LessEqual: 515>
+    Never: typing.ClassVar[StencilFunc]  # value = <StencilFunc.Never: 512>
+    NotEqual: typing.ClassVar[StencilFunc]  # value = <StencilFunc.NotEqual: 517>
+    __members__: typing.ClassVar[dict[str, StencilFunc]]  # value = {'Never': <StencilFunc.Never: 512>, 'Less': <StencilFunc.Less: 513>, 'Equal': <StencilFunc.Equal: 514>, 'LessEqual': <StencilFunc.LessEqual: 515>, 'Greater': <StencilFunc.Greater: 516>, 'NotEqual': <StencilFunc.NotEqual: 517>, 'GreaterEqual': <StencilFunc.GreaterEqual: 518>, 'Always': <StencilFunc.Always: 519>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class StencilOp:
+    """
+    Members:
+    
+      Zero
+    
+      Keep
+    
+      Replace
+    
+      Increment
+    
+      Decrement
+    
+      IncrementWrap
+    
+      DecrementWrap
+    
+      Invert
+    """
+    Decrement: typing.ClassVar[StencilOp]  # value = <StencilOp.Decrement: 7683>
+    DecrementWrap: typing.ClassVar[StencilOp]  # value = <StencilOp.DecrementWrap: 34056>
+    Increment: typing.ClassVar[StencilOp]  # value = <StencilOp.Increment: 7682>
+    IncrementWrap: typing.ClassVar[StencilOp]  # value = <StencilOp.IncrementWrap: 34055>
+    Invert: typing.ClassVar[StencilOp]  # value = <StencilOp.Invert: 5386>
+    Keep: typing.ClassVar[StencilOp]  # value = <StencilOp.Keep: 7680>
+    Replace: typing.ClassVar[StencilOp]  # value = <StencilOp.Replace: 7681>
+    Zero: typing.ClassVar[StencilOp]  # value = <StencilOp.Zero: 0>
+    __members__: typing.ClassVar[dict[str, StencilOp]]  # value = {'Zero': <StencilOp.Zero: 0>, 'Keep': <StencilOp.Keep: 7680>, 'Replace': <StencilOp.Replace: 7681>, 'Increment': <StencilOp.Increment: 7682>, 'Decrement': <StencilOp.Decrement: 7683>, 'IncrementWrap': <StencilOp.IncrementWrap: 34055>, 'DecrementWrap': <StencilOp.DecrementWrap: 34056>, 'Invert': <StencilOp.Invert: 5386>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
         ...
 class SurfaceMesh:
     """
@@ -10336,6 +10694,30 @@ class VulkanRenderer:
         """
         Pinhole intrinsics in RENDER-extent pixels (top-left origin, OpenCV convention) as a dict fx/fy/cx/cy/width/height. Derived from the camera's own film gauge and focal length -- set a real camera with `cam.film_gauge = 6.3; cam.set_focal_length(4.8)`. Valid after the first render.
         """
+    @property
+    def cutout_ray_cap(self) -> int:
+        """
+        A shadow ray counts as blocked once it has passed this many transparent texels of alpha-cutout surfaces (leaf cards). 0 (the default) is off, 15 the most.
+        """
+    @cutout_ray_cap.setter
+    def cutout_ray_cap(self, arg1: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def cutout_ray_cap_from(self) -> float:
+        """
+        The distance from the eye from which cutout_ray_cap holds (0 = everywhere): nearer shadows are exact.
+        """
+    @cutout_ray_cap_from.setter
+    def cutout_ray_cap_from(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def cutout_ray_distance(self) -> float:
+        """
+        Beyond this distance from the camera an alpha-cutout surface (a leaf card) is opaque to shadow rays: the first card a ray meets blocks it, with no alpha test. 0 (the default) is off.
+        """
+    @cutout_ray_distance.setter
+    def cutout_ray_distance(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
     @property
     def deferred_ao(self) -> bool:
         """

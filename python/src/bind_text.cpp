@@ -1,6 +1,6 @@
 // Text + 2D vector overlay: fonts (FontLoader/Font), flat & extruded text
 // (Text2D/Text3D, both Meshes), world-anchored billboard labels (TextSprite),
-// and SVG -> filled meshes (SVGLoader). FontLoader.default_font() ships an
+// and SVG -> flat fill and stroke meshes (SVGLoader). FontLoader.default_font() ships an
 // embedded font, so text needs no asset. Pairs with an OrthographicCamera +
 // auto_clear=False overlay pass for HUDs, or place text anywhere in the scene.
 #include "bindings.hpp"
@@ -25,22 +25,42 @@ using namespace threepp;
 
 namespace threepp_py {
 
-    // Turn parsed SVG paths into a Group of flat filled meshes (z=0). The group is
-    // y-flipped so SVG's y-down coordinates come out upright in the scene.
-    static std::shared_ptr<Group> svg_to_group(const std::vector<SVGLoader::SVGData>& datas) {
+    // Turn parsed SVG paths into a Group of flat meshes (z=0), in document order: per
+    // element its fill, then one mesh per stroked sub-path, each named after the
+    // element's id. Shapes that overlap share a depth, so the SVG's painter's order is
+    // carried by renderOrder with depth writes off. The group is y-flipped so SVG's
+    // y-down coordinates come out upright in the scene.
+    static std::shared_ptr<Group> svg_to_group(const std::vector<SVGLoader::SVGData>& datas, unsigned int curveSegments) {
         auto group = Group::create();
-        for (const auto& d : datas) {
-            auto shapes = SVGLoader::createShapes(d);
-            if (shapes.empty()) continue;
-            auto geom = ShapeGeometry::create(shapes);
+        int order = 0;
+        const auto add = [&](const std::shared_ptr<BufferGeometry>& geom, const std::string& paint, float opacity, const std::string& id) {
             auto mat = MeshBasicMaterial::create();
             mat->side = Side::Double;
-            if (d.style.fill && *d.style.fill != "none") {
-                Color c;
-                c.setStyle(*d.style.fill);
-                mat->color = c;
+            mat->color.setStyle(paint);
+            mat->opacity = opacity;
+            mat->transparent = true;// one render list, so renderOrder alone decides
+            mat->depthWrite = false;
+            auto mesh = Mesh::create(geom, mat);
+            mesh->name = id;
+            mesh->renderOrder = order++;
+            group->add(mesh);
+        };
+        const auto painted = [](const std::optional<std::string>& paint) {
+            return paint && !paint->empty() && *paint != "none";
+        };
+        for (const auto& d : datas) {
+            const auto& style = d.style;
+            if (painted(style.fill)) {
+                auto shapes = SVGLoader::createShapes(d);
+                if (!shapes.empty()) add(ShapeGeometry::create(shapes, curveSegments), *style.fill, style.fillOpacity, style.id);
             }
-            group->add(Mesh::create(geom, mat));
+            if (painted(style.stroke) && style.strokeWidth > 0) {
+                for (const auto& subPath : d.path.subPaths) {
+                    if (auto geom = SVGLoader::pointsToStroke(subPath->getPoints(curveSegments), style)) {
+                        add(geom, *style.stroke, style.strokeOpacity, style.id);
+                    }
+                }
+            }
         }
         group->scale.y = -1;
         return group;
@@ -130,13 +150,17 @@ namespace threepp_py {
                 .def("set_vertical_alignment", [](TextSprite& t, TextSprite::VerticalAlignment a) { t.setVerticalAlignment(a); }, py::arg("alignment"))
                 .def("get_text", [](const TextSprite& t) { return t.getText(); });
 
-        // ---- SVGLoader (SVG -> Group of filled meshes) ----------------------
+        // ---- SVGLoader (SVG -> Group of fill and stroke meshes) ---------------
         py::class_<SVGLoader>(m, "SVGLoader")
                 .def(py::init<>())
-                .def("load", [](SVGLoader& l, const std::string& path) { return svg_to_group(l.load(path)); },
-                     py::arg("path"), "Load an .svg file as a Group of filled meshes.")
-                .def("parse", [](SVGLoader& l, const std::string& text) { return svg_to_group(l.parse(text)); },
-                     py::arg("text"), "Parse SVG XML into a Group of filled meshes.");
+                .def("load", [](SVGLoader& l, const std::string& path, unsigned int curveSegments) { return svg_to_group(l.load(path), curveSegments); },
+                     py::arg("path"), py::arg("curve_segments") = 12,
+                     "Load an .svg file as a Group of flat meshes: fills and strokes in document order "
+                     "(render_order), each named after its element's id. curve_segments: points per curve.")
+                .def("parse", [](SVGLoader& l, const std::string& text, unsigned int curveSegments) { return svg_to_group(l.parse(text), curveSegments); },
+                     py::arg("text"), py::arg("curve_segments") = 12,
+                     "Parse SVG XML into a Group of flat meshes: fills and strokes in document order "
+                     "(render_order), each named after its element's id. curve_segments: points per curve.");
     }
 
 }// namespace threepp_py
