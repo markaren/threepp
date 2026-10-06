@@ -187,6 +187,7 @@ import time
 from dataclasses import replace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "rigs"))   # evoque_rig
 
 import numpy as np
 import torch

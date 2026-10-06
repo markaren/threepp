@@ -85,7 +85,7 @@ import os
 
 import numpy as np
 
-AUV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auv")
+AUV_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "auv")
 SPEC_PATH = os.path.join(AUV_DIR, "remus100_spec.json")
 TWO_PI = 2.0 * math.pi
 

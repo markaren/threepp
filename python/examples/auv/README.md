@@ -13,7 +13,7 @@ spec cites each number to its table and page. Built the way the X8 (`../uav/`) a
 | file | what it is |
 |---|---|
 | `remus100_spec.json` | every number, each with its source: the thesis's tables, or ASSUMED with the reason; the thesis's results (steady conditions, simulated fin steps read off its figures, its linearised depth-plane model) for the comparison; the hull, fins and fittings; the materials |
-| `../remus_rig.py` | the vehicle for any scene: `Remus` (the thesis's model), `Autopilot` and `LOS` (ours), `Visual` (the `.glb` posed from the model); no threepp import |
+| `../rigs/remus_rig.py` | the vehicle for any scene: `Remus` (the thesis's model), `Autopilot` and `LOS` (ours), `Visual` (the `.glb` posed from the model); no threepp import |
 | `build_remus_blender.py` | builds the geometry (numpy) with `../build_common.py`'s mesh and export code and exports `remus100.glb` through Blender |
 | `remus_dive.py` | the example: the REMUS runs a route (a leg at 4 m, a leg down to 12 m, a leg at 12 m) over a seabed in a current you set; window, stills or telemetry |
 | `remus100.glb` | generated, not committed |
@@ -288,7 +288,7 @@ small-angle derivations: `Remus.flags` counts those steps; none occurred on the 
 
 ## In another scene
 
-`../remus_rig.py` imports no renderer and reads no scene's globals:
+`../rigs/remus_rig.py` imports no renderer and reads no scene's globals:
 
 ```python
 from remus_rig import Remus, Autopilot, LOS, Visual, model_path

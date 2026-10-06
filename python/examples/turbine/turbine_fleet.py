@@ -24,7 +24,8 @@ import numpy as np
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))   # python/ (threepp)
-sys.path.insert(0, os.path.dirname(_HERE))                     # examples/ (demo_common, drone_rig, usv_rig)
+sys.path.insert(0, os.path.dirname(_HERE))                     # examples/ (demo_common)
+sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "rigs"))   # examples/rigs/ (drone_rig, usv_rig)
 sys.path.insert(0, _HERE)
 
 import threepp as tp

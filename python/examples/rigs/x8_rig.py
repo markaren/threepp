@@ -71,7 +71,7 @@ import os
 
 import numpy as np
 
-UAV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uav")
+UAV_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uav")
 SPEC_PATH = os.path.join(UAV_DIR, "x8_spec.json")
 TWO_PI = 2.0 * math.pi
 

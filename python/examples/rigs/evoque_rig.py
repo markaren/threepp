@@ -80,7 +80,7 @@ def data_dir():
     env = os.environ.get("THREEPP_DATA_DIR")
     if env and os.path.isdir(env):
         return env
-    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     for name in ("threepp-data", "threepp_data"):
         cand = os.path.join(os.path.dirname(repo), name)
         if os.path.isdir(cand):

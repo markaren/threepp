@@ -2,7 +2,7 @@
 12 m, a leg south at 12 m, over a sand seabed at 20 m, with line-of-sight guidance and a
 current you set.
 
-The vehicle is ../remus_rig.py, which any scene can import: Remus (the 6-DOF model of T.
+The vehicle is ../rigs/remus_rig.py, which any scene can import: Remus (the 6-DOF model of T.
 Prestero's thesis, MIT / WHOI 2001, with its numbers from remus100_spec.json), Autopilot and LOS
 (ours: stern planes on pitch and depth, rudder on course, propeller on speed, and line-of-sight
 guidance), and Visual (remus100.glb posed from the model). This file is the scene, the cameras and
@@ -37,7 +37,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))   # python/ (threepp)
-sys.path.insert(0, os.path.dirname(HERE))                    # examples/ (remus_rig)
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "rigs"))   # examples/rigs/ (remus_rig)
 
 from remus_rig import LOS, Autopilot, Remus, Visual, cross_track, model_path, ned_to_world  # noqa: E402
 

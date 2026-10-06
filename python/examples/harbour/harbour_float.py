@@ -27,7 +27,7 @@ import sys
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(HERE))          # examples/ (usv_rig)
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "rigs"))   # examples/rigs/ (usv_rig)
 
 from usv_rig import quat_of, rot_x, rot_y, rot_z  # noqa: E402
 

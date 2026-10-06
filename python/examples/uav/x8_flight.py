@@ -1,7 +1,7 @@
 """The Skywalker X8 flying a route on its published flight model: a straight leg north, a right
 turn, a leg east, over a lake, with line-of-sight guidance and a wind you set.
 
-The aircraft is ../x8_rig.py, which any scene can import: X8 (the 6-DOF model of Løw-Hansen,
+The aircraft is ../rigs/x8_rig.py, which any scene can import: X8 (the 6-DOF model of Løw-Hansen,
 Hann, Gryte, Johansen and Deiler, CEAS Aeronautical Journal 16, 501-523 (2025), with its
 numbers from x8_spec.json), Autopilot and LOS (ours: successive loop closure on the elevons
 and the throttle, and line-of-sight guidance), and Visual (x8.glb posed from the model). This
@@ -36,7 +36,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))   # python/ (threepp)
-sys.path.insert(0, os.path.dirname(HERE))                    # examples/ (x8_rig)
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "rigs"))   # examples/rigs/ (x8_rig)
 
 from x8_rig import LOS, X8, Autopilot, Visual, cross_track, model_path, ned_to_world  # noqa: E402
 

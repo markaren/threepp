@@ -266,7 +266,7 @@ namespace threepp {
         // leaves no gaps), a radius, the water velocity it imparts and how
         // much of each quantity it puts in. Nothing here knows what a
         // propeller is: the caller turns thrust, depth and speed into these
-        // numbers (python/examples/usv_rig.py does, per kind of producer).
+        // numbers (python/examples/rigs/usv_rig.py does, per kind of producer).
         // Clear and repopulate the sources each frame before render().
         //
         // RIPPLES. A patch can also carry the waves its producers make: the

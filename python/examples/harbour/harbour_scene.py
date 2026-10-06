@@ -42,7 +42,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 EXAMPLES = os.path.dirname(HERE)
 REPO = os.path.dirname(os.path.dirname(EXAMPLES))
 sys.path.insert(0, os.path.dirname(EXAMPLES))                  # python/ (threepp)
-sys.path.insert(0, EXAMPLES)                                   # examples/ (demo_common, usv_rig)
+sys.path.insert(0, EXAMPLES)                                   # examples/ (demo_common)
+sys.path.insert(0, os.path.join(EXAMPLES, "rigs"))             # usv_rig
 sys.path.insert(0, os.path.join(EXAMPLES, "turbine"))          # turbine_site (sky, tube)
 sys.path.insert(0, HERE)
 

@@ -10,7 +10,7 @@ the same way; see [The Otter X](#the-otter-x) and [The Otter](#the-otter) at the
 | `mariner_spec.json` | every number: brochure figures, the lines fitted to the vendor's renders and photo, the sensor tower, the waterjet, the mass budget, the materials |
 | `build_mariner_blender.py` | builds the geometry (numpy), exports `mariner.glb` through Blender, and integrates the hydrostatics into `mariner_hydro.json` |
 | `../build_common.py` | what every generator shares: the mesh accumulator and its primitives, the hydrostatic integrator, the Blender export |
-| `../usv_rig.py` | the boat for any scene: `StripHull` (her buoyancy tables and the rigid body), her drive (`Waterjet`, `AzimuthPods`, `FixedPods`: thrust, resistance, helm, actuator nodes, foam), `Wake` (her footprint and wake on the ocean) and `Wash` (her propulsors' races, her hull's lane and her waves on the water, in the ocean's wake field); see [In another scene](#in-another-scene) |
+| `../rigs/usv_rig.py` | the boat for any scene: `StripHull` (her buoyancy tables and the rigid body), her drive (`Waterjet`, `AzimuthPods`, `FixedPods`: thrust, resistance, helm, actuator nodes, foam), `Wake` (her footprint and wake on the ocean) and `Wash` (her propulsors' races, her hull's lane and her waves on the water, in the ocean's wake field); see [In another scene](#in-another-scene) |
 | `usv_ocean.py` | the demo on `usv_rig.py`: she floats on the FFT ocean on her own buoyancy tables and runs on a steerable jet (`--boat otterx`: the Otter X on her pods; `--boat otter`: the Otter) |
 | `mariner.glb`, `mariner_hydro.json` | generated, not committed |
 
@@ -221,7 +221,7 @@ and stops from 2.5 kn in under 2 s. She rides the default sea (7 m/s over 30 km)
 
 ## In another scene
 
-`../usv_rig.py` imports no renderer and reads no scene's globals. A scene loads the `.glb`, makes
+`../rigs/usv_rig.py` imports no renderer and reads no scene's globals. A scene loads the `.glb`, makes
 the hull on its ocean, and steps her after each render (`sample_height` reads the last rendered
 field):
 

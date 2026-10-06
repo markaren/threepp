@@ -19,7 +19,7 @@ import time
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _EX = os.path.dirname(_HERE)                 # python/examples
 _PY = os.path.dirname(_EX)                   # python
-for _p in (os.path.join(_EX, "probes"), _HERE, _EX, _PY):   # probes: sensor_audit
+for _p in (os.path.join(_EX, "probes"), os.path.join(_EX, "rigs"), _HERE, _EX, _PY):   # probes: sensor_audit; rigs: drone_rig
     if _p not in sys.path:
         sys.path.insert(0, _p)
 

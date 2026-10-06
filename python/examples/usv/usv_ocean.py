@@ -10,7 +10,7 @@ body. Nothing pulls the hull toward the surface: a crest under the bow lifts the
 bow because the bow's sections got deeper. In flat water it settles where the
 generator's hydrostatic solver put it; --calm prints that comparison.
 
-The boat herself is ../usv_rig.py, which any scene can import: StripHull (the
+The boat herself is ../rigs/usv_rig.py, which any scene can import: StripHull (the
 strips and the rigid body), her drive (thrust, resistance, the helm, the
 actuator nodes, the foam) and Wake (her footprint and wake on the ocean). This
 file is the scene around her, the keys, the scripted run and the cameras.
@@ -64,7 +64,8 @@ import numpy as np
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))   # python/ (threepp)
-sys.path.insert(0, os.path.dirname(_HERE))                     # examples/ (demo_common, usv_rig)
+sys.path.insert(0, os.path.dirname(_HERE))                     # examples/ (demo_common)
+sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "rigs"))   # examples/rigs/ (usv_rig)
 
 import threepp as tp
 from demo_common import Encoder, cli_arg, parse_size, resize_handler, write_radiance_hdr

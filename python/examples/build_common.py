@@ -6,7 +6,7 @@ metres), floats it if it is a boat (`hydrostatics`), and hands the parts to Blen
 (`make_materials`, `new_object`, `export`) only to write the .glb. bpy and mathutils are imported
 inside the functions that need them, so `--check` and `--hydro-only` run on plain Python + numpy.
 
-A generator in a folder of examples/ imports it as the demos import `usv_rig`:
+A generator in a folder of examples/ imports it as the demos import `demo_common`:
 
     sys.path.insert(0, os.path.dirname(HERE))          # examples/ (build_common)
     from build_common import Part, T, loft, hydrostatics, make_materials, new_object, export

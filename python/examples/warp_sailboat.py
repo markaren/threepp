@@ -106,6 +106,7 @@ import time
 
 # Make the built `threepp` module (in the parent python/ dir) importable.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "rigs"))   # drone_rig
 
 import numpy as np
 import warp as wp

@@ -63,11 +63,12 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_EXAMPLES = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(_EXAMPLES))
 # Appended, not inserted, so a caller run from elsewhere still gets its own
 # modules first and `demo_common` below resolves either way.
-if os.path.dirname(os.path.abspath(__file__)) not in sys.path:
-    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+if _EXAMPLES not in sys.path:
+    sys.path.append(_EXAMPLES)
 
 import threepp as tp
 from demo_common import standard_material

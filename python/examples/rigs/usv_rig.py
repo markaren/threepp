@@ -97,7 +97,7 @@ import os
 
 import numpy as np
 
-USV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "usv")
+USV_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "usv")
 
 BUOY_MASK = 0b011                  # swell + mid band; cascade 2 is chop the hull ignores
 

@@ -26,7 +26,7 @@ import numpy as np
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _EX = os.path.dirname(_HERE)
-for _p in (os.path.dirname(_EX), _EX, _HERE, os.path.join(_EX, "netpen")):
+for _p in (os.path.dirname(_EX), _EX, os.path.join(_EX, "rigs"), _HERE, os.path.join(_EX, "netpen")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
