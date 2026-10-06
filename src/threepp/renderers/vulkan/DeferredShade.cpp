@@ -1110,15 +1110,20 @@ namespace threepp::vulkan {
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         char label[96];
         std::snprintf(label, sizeof(label), "deferred_shade key=0x%llx", static_cast<unsigned long long>(key));
-        // Under THREEPP_VULKAN_PIPELINE_STATS the line carries the register
-        // count too: the default permutation's is the one to watch after a
-        // shade edit (the cliff in deferred_shade.comp's constants comment).
-        char regs[32] = "";
-        if (const int64_t n = ctx_.pipelineStat(perm, "Register Count"); n >= 0) {
-            std::snprintf(regs, sizeof(regs), ", %lld registers", static_cast<long long>(n));
+        // A pipeline-cache hit takes about 0.1 ms and is not worth a line; a
+        // miss is the 95 s compile this shader is known for, and the line is
+        // the only place it shows. Under THREEPP_VULKAN_PIPELINE_STATS every
+        // create is reported, with the register count: the default
+        // permutation's is the one to watch after a shade edit (the cliff in
+        // deferred_shade.comp's constants comment).
+        if (ctx_.pipelineStatsEnabled() || ms >= 1000.0) {
+            char regs[32] = "";
+            if (const int64_t n = ctx_.pipelineStat(perm, "Register Count"); n >= 0) {
+                std::snprintf(regs, sizeof(regs), ", %lld registers", static_cast<long long>(n));
+            }
+            std::fprintf(stderr, "[shade-spec] %s flags=0x%x mask=0x%x probe=%u: %.0f ms%s\n", label,
+                         values[0], values[1], values[2], ms, regs);
         }
-        std::fprintf(stderr, "[shade-spec] %s flags=0x%x mask=0x%x probe=%u: %.0f ms%s\n", label,
-                     values[0], values[1], values[2], ms, regs);
         ctx_.dumpPipelineStats(perm, label);
         return perm;
     }
