@@ -233,7 +233,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // so a scene with no fields, and a dust-only scene as well, runs the
     // pre-change arithmetic textually.
 #ifdef PD_LINEAR
-    if ((pc.flags & 2048u) != 0u && pd.counts.y != 0u) {
+    if (flagOn(2048u) && pd.counts.y != 0u) {
         vec3 legEmis;
         const float legT = pdEmissiveLeg(reflOrig, R, gTraceHitT > 0.0 ? gTraceHitT : 1e30,
                                          legEmis);
@@ -250,7 +250,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // (plans/splat-volume-reflections.md); flags bit 12 is the single uniform
     // gate, set only for the PRIMARY view, so a splat-free scene — and every
     // secondary/sensor view — runs the pre-change arithmetic textually.
-    if ((pc.flags & 4096u) != 0u) {
+    if (flagOn(4096u)) {
         vec3 svEmis;
         const float svT = svLeg(reflOrig, R, gTraceHitT > 0.0 ? gTraceHitT : 1e30, svEmis);
         reflectColor = reflectColor * svT + svEmis;
@@ -984,7 +984,7 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
         // this path's own origin/direction and bounded by its own traced hit
         // distance. See that block for the argument; flags bit 12 is the same
         // single uniform gate, primary view only.
-        if ((pc.flags & 4096u) != 0u) {
+        if (flagOn(4096u)) {
             vec3 svEmis;
             const float svT = svLeg(reflOrig, R, gTraceHitT > 0.0 ? gTraceHitT : 1e30, svEmis);
             reflectColor = reflectColor * svT + svEmis;

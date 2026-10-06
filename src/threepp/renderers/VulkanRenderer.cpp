@@ -258,6 +258,7 @@ namespace threepp {
         shadeParams.splatVolume        = splatVolumeActiveThisFrame_ && !view().secondary;
         shadeParams.preExpBits         = preExpBits_;
         shadeParams.bgIsSolidColor     = envIsBgColor;
+        shadeParams.probeGi            = probeGI_ && probeGIEnabled_;// what updateGridUbo wrote
 
         {
             auto pass = g.addPass("shade", [this, f, shadeParams](VkCommandBuffer c) {

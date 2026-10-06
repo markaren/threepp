@@ -247,7 +247,7 @@ float gReflStarvedFill = 0.0;
 // geometry) means "unmeasured", not "dark" — return 1.0 so the env fill
 // survives untouched (the watch-dial/goggles cavity case).
 float probeEnvFillVis(vec3 P, vec3 N, float maxLod) {
-    if (probeGrid.enabled <= 0.5) return 1.0;
+    if (!probesEnabled()) return 1.0;
     const vec3  LUMW   = vec3(0.2126, 0.7152, 0.0722);
     float conf;
     const float actE   = dot(probeIrradianceConf(P, N, conf), LUMW) * (1.0 / PI);
@@ -430,7 +430,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // near-black. Low confidence falls back to the legacy env fill.
         // Probes off keeps the original approximation.
         vec3 hitDiffInd = sampleEnvLod(hitN, maxLod) + lights.ambient + hemiAmbient(hitN);
-        if (probeGrid.enabled > 0.5) {
+        if (probesEnabled()) {
             if (probeHitFill) {
                 float probeConf;
                 const vec3 probeFill = probeIrradianceConf(hitP, hitN, probeConf) * (1.0 / PI);

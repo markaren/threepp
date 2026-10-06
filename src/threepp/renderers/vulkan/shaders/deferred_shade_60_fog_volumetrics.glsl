@@ -202,7 +202,7 @@ vec3 applyHeteroSurfaceFog(vec3 col, vec2 fuv, float viewDist, vec3 ro, vec3 hit
 //      marches' jitter; without TAA it reads as fine stationary noise instead
 //      of hard shells, which is the better failure.
 vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
-    if ((pc.flags & 2048u) == 0u) return col;
+    if (!flagOn(2048u)) return col;
 #ifdef PD_LINEAR
     const uint n = min(pd.counts.x, uint(kMaxDensityFields));
     if (n == 0u) return col;

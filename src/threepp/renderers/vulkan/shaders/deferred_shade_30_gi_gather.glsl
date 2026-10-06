@@ -13,6 +13,9 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stocha
     const vec3 B  = cross(N, T);
     const vec3 orig = P + N * SHADOW_EPS;
     openness = 1.0;
+    // kStrip bit 2 (deferred_shade.comp's diagnostic probe): no gather, zero
+    // indirect from it. Wrong by design; a register and timing probe only.
+    if ((kStrip & 4u) != 0u) return vec3(0.0);
 
     if (stochastic) {
         // Real stochastic 1-bounce GI (accumulated + denoised downstream).
@@ -59,7 +62,7 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stocha
         // miss-fraction noise rides diffInd's temporal + SVGF like the rest of
         // the gather. Probes OFF keeps the cosmetic openness = 1 fill (there is
         // nothing to replace the ambient with — enclosures would just go black).
-        if (probeGrid.enabled > 0.5) openness = missN / float(N_GI);
+        if (probesEnabled()) openness = missN / float(N_GI);
         return acc / float(N_GI);
     }
 

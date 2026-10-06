@@ -22,6 +22,7 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace threepp::vulkan {
@@ -284,6 +285,10 @@ namespace threepp::vulkan {
             // a cloud would be a silent scope change — so the caller clears this
             // for every secondary view (VulkanRenderer.cpp, recordSceneDispatch).
             bool splatVolume = false;
+            // Probe GI is live this frame (the grid UBO's `enabled`). The shader
+            // reads the UBO; this copy only picks the pipeline permutation when
+            // THREEPP_VK_SHADE_SPEC_PROBE specializes the probe gate.
+            bool probeGi = false;
         };
         // Dispatch the deferred shade over the render extent.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame, const DispatchParams& p);
@@ -408,7 +413,17 @@ namespace threepp::vulkan {
         VkSampler             lutSampler_   = VK_NULL_HANDLE;// LINEAR clamp — froxel LUT trilinear sampling
         VkDescriptorSetLayout dsLayout_     = VK_NULL_HANDLE;
         VkPipelineLayout      pipeLayout_   = VK_NULL_HANDLE;
-        VkPipeline            pipe_         = VK_NULL_HANDLE;
+        VkPipeline            pipe_         = VK_NULL_HANDLE;// the shade, every knob at its default (key 0)
+        // Specialization probes (diagnostic; the THREEPP_VK_SHADE_* knobs read
+        // at construction, see shadePipeline). With every knob at its default
+        // none of this is used and pipe_ is the only shade pipeline.
+        uint32_t              specMask_     = 0;    // THREEPP_VK_SHADE_SPEC_MASK
+        bool                  specProbe_    = false;// THREEPP_VK_SHADE_SPEC_PROBE
+        uint32_t              strip_        = 0;    // THREEPP_VK_SHADE_STRIP
+        VkShaderModule        shadeMod_     = VK_NULL_HANDLE;// kept while a knob is set
+        std::vector<std::pair<uint64_t, VkPipeline>> shadePerms_;// key -> permutation
+        VkPipeline shadePipeline(uint32_t flags, bool probeGi);
+        VkPipeline createShadePipeline(uint64_t key);
         VkPipeline            giFilterPipe_ = VK_NULL_HANDLE;// SVGF GI + shadow-ratio filter + recombine
         VkPipeline            reflFilterPipe_ = VK_NULL_HANDLE;// reflection gloss reconstruction + recombine
         VkPipeline            clusterPipe_  = VK_NULL_HANDLE;// clustered light culling (cluster_build.comp)

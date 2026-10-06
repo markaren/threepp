@@ -22,6 +22,13 @@
 //                origin = the FIRST probe's world position (cell centers:
 //                aabbMin + 0.5·spacing), probes at origin + coord·spacing.
 //
+// An includer may define PROBE_GRID_OFF to replace the `enabled` test below
+// (deferred_shade.comp does, for its specialization probe); without it the
+// test is the UBO's, as it always was.
+#ifndef PROBE_GRID_OFF
+#define PROBE_GRID_OFF (probeGrid.enabled < 0.5)
+#endif
+//
 // ENERGY ACCOUNTING (why nothing double-counts):
 //   A probe stores the INCIDENT irradiance from (a) surfaces shaded with
 //   direct analytic light + emissive NEE + their own probe-fed indirect —
@@ -157,7 +164,7 @@ float probeChebyshev(uint pIdx, vec3 pPos, vec3 Pb) {
 // ambient) should blend by conf instead of trusting a starved neighbourhood.
 vec3 probeIrradianceConf(vec3 P, vec3 N, out float conf) {
     conf = 0.0;
-    if (probeGrid.enabled < 0.5) return vec3(0.0);
+    if (PROBE_GRID_OFF) return vec3(0.0);
     const float minSp = min(probeGrid.spacing.x,
                             min(probeGrid.spacing.y, probeGrid.spacing.z));
     const vec3 Pb = P + N * (0.25 * minSp);

@@ -334,6 +334,26 @@ layout(set = 0, binding = 37, scalar) uniform ProbeGridUbo {
 // Octahedral depth store (Chebyshev visibility — see probe_common.glsl).
 layout(set = 0, binding = 54, scalar) readonly buffer ProbeDepthBuf { uint probeDepth[]; };
 
+// ── Specialization probes (diagnostic; DeferredShade's THREEPP_VK_SHADE_* knobs) ─
+// With every constant at its default the kernel is the runtime one: effFlags()
+// folds to pc.flags and probesEnabled() to the UBO test, so the default
+// pipeline computes exactly what it did before these existed. A knob makes
+// some of the scene toggles compile-time instead, so the driver can drop the
+// code they turn off; that is a question about registers and occupancy, asked
+// of the same source. kSpecMask names the pc.flags bits that are known,
+// kSpecFlags carries their values. kProbeGi: 0 runtime (the UBO), 1 forced
+// off, 2 forced on. kStrip removes whole stages (bit 0 the traced
+// reflection, bit 1 water and glass, bit 2 the GI gather) with a neutral
+// result in their place; the IMAGE IS WRONG under kStrip by design, it exists
+// to time and count registers on the rest of the kernel, never to look at.
+layout(constant_id = 0) const uint kSpecFlags = 0u;
+layout(constant_id = 1) const uint kSpecMask  = 0u;
+layout(constant_id = 2) const uint kProbeGi   = 0u;
+layout(constant_id = 3) const uint kStrip     = 0u;
+bool probesEnabled() { return kProbeGi == 0u ? probeGrid.enabled > 0.5 : kProbeGi == 2u; }
+// probe_common.glsl's own gate, made the same test here (its default is the UBO).
+#define PROBE_GRID_OFF (!probesEnabled())
+
 // (Binding 56 retired — it carried a removed hybrid-SSR input; 55 lives on
 // above as gbufIdsPrevTex. Binding 57, the raster camera UBO, lives on for
 // cloud_march.comp's temporal reprojection — declared there, unused by this
@@ -476,6 +496,9 @@ layout(set = 0, binding = 65) uniform sampler2D cloudShadowTex;
 // shading at COMPLEX (edge) pixels — see main()'s top (tap selection) and
 // bottom (imageStore gating) for the shadeMode == 1 branches.
 layout(push_constant) uniform Pc { ShadePush pc; };
+// Every pc.flags read in the shade goes through these (see kSpecMask above).
+uint effFlags() { return (pc.flags & ~kSpecMask) | (kSpecFlags & kSpecMask); }
+bool flagOn(uint bits) { return (effFlags() & bits) != 0u; }
 
 // DEPTH-AWARE 2×2 upsample of the half-res cloud layer at this full-res pixel.
 // A plain bilinear tap bleeds across depth discontinuities: a full-res pixel
@@ -727,7 +750,7 @@ void main() {
     const vec2 uv   = (vec2(px) + 0.5) / size;
 
     // ── MSAA sample count (setGbufferMsaa; 0=1x/1=2x/2=4x, pc.flags bits 5-6) ──
-    const uint msaaCode = (pc.flags >> 5u) & 0x3u;
+    const uint msaaCode = (effFlags() >> 5u) & 0x3u;
     const int  K = (msaaCode == 2u) ? 4 : (msaaCode == 1u ? 2 : 1);
 
     // ── Dispatch B (shadeMode==1, MSAA edge shading) gate + tap selection ──
@@ -782,7 +805,7 @@ void main() {
         // exactly those edges, so mirror B's rep selection + early-outs and
         // fold the weight back into the dominant surface in those cases.
         float geoMinW = 0.0;
-        if ((pc.flags & 128u) != 0u && repIdx >= 0) {
+        if (flagOn(128u) && repIdx >= 0) {
             const uint repId    = texelFetch(gbufIdsMS, px, repIdx).x;
             const bool repUnlit = texelFetch(gbufNormalMS, px, repIdx).w < 0.0;
             const bool repWater = mats[repId - 1u].thinWalled != 0
@@ -904,7 +927,7 @@ void main() {
         // any cross-pixel mixing into sky (DoF, bloom) gets amplified by
         // 1/preExposure at the bypass → white silhouette rims. Legacy mode:
         // preExp is 1.0 and both branches are identical.
-        const float skyPe = ((pc.flags & 1024u) != 0u) ? 1.0 : uintBitsToFloat(pc.preExpBits);
+        const float skyPe = (flagOn(1024u)) ? 1.0 : uintBitsToFloat(pc.preExpBits);
         sky *= skyPe;
         // Volumetric sun glow / god rays added on top → blooms THROUGH the
         // haze. Per-pixel view-ray integral: full weight, independent of
@@ -991,7 +1014,7 @@ void main() {
     const MaterialDesc pm = mats[id - 1u];
 
     const vec3 V          = normalize(camPos - worldPos);
-    const bool shadowsOn  = (pc.flags & 1u) != 0u;
+    const bool shadowsOn  = flagOn(1u);
     // Per-pixel RNG stream (frame-jittered) for emissive NEE; advanced through
     // the primary + reflection shades so the draws decorrelate. TAA averages.
     // Temporally stable (no `frame`) — same reasoning as gatherEnv: reflections /
@@ -1187,7 +1210,8 @@ void main() {
     // thin-walled too (no KHR_volume → thinWalled), and routing it here painted
     // it milky-teal ocean water instead of clear refraction. Thin-walled glass
     // now falls through to the refractive glass branch below like closed glass.
-    if (pm.thinWalled != 0 && pm.transmission > 0.0 && geoms[id - 1u].foamAddress != 0ul) {
+    // (kStrip bit 1, the diagnostic probe: water falls through to the opaque shade.)
+    if ((kStrip & 2u) == 0u && pm.thinWalled != 0 && pm.transmission > 0.0 && geoms[id - 1u].foamAddress != 0ul) {
         // Dispatch B skips water's minority-sample refinement (rare at an
         // ocean's silhouette against sky/terrain, and shadeWater's own
         // internal accumulation state is dispatch-A-only) — dispatch A's
@@ -1296,7 +1320,7 @@ void main() {
     // the gather picks the right path: stochastic real GI ONLY for the demod path
     // (it gets accumulated/denoised); the INLINE path uses the DETERMINISTIC GI
     // (1-spp would just be noisy there — that was the transparent-quad wobble).
-    const bool denoiseOn = (pc.flags & 4u) != 0u;
+    const bool denoiseOn = flagOn(4u);
     // Dispatch B forces the INLINE path (demodIndirect=false) — same
     // precedent as glass: a self-contained pixel color with no
     // dependency on the demod GI accumulator's cross-frame state, which
@@ -1382,8 +1406,8 @@ void main() {
     }
 
     // Diffuse indirect: visibility-gated env irradiance (RT, flags bit 1).
-    const bool aoOn    = (pc.flags & 2u) != 0u;
-    const bool probesOn = probeGrid.enabled > 0.5;
+    const bool aoOn    = flagOn(2u);
+    const bool probesOn = probesEnabled();
     // Half-res RT ambient occlusion + bent normal (rtao.comp), depth-aware
     // upsampled to this pixel. ao=1 / bentN=N when AO is off (identity).
     float rtAo = 1.0;
@@ -1415,7 +1439,7 @@ void main() {
         // neighbourhood is trusted outright; a starved one (conf → 0) means
         // "unmeasured", not "dark" — fall back to the env fill, never black.
         diffInd = sampleEnvLod(N, maxLod) + lights.ambient + hemiAmbient(N);
-        if (probeGrid.enabled > 0.5) {
+        if (probesEnabled()) {
             float bConf;
             const vec3 bFill = probeIrradianceConf(worldPos, N, bConf) * (1.0 / PI);
             diffInd = mix(diffInd, bFill, smoothstep(0.0, 0.25, bConf));
@@ -1425,7 +1449,7 @@ void main() {
         // ReSTIR reservoirs PING-PONG (read prev fif, write curr): a skipped
         // pixel must still pass its reservoir through, or next frame's read
         // sees stale data in a checkerboard pattern.
-        if ((pc.flags & 8u) != 0u) {
+        if (flagOn(8u)) {
             imageStore(reservoirPosWrite, px, imageLoad(reservoirPosRead, px));
             imageStore(reservoirWWrite,  px, imageLoad(reservoirWRead,  px));
         }
@@ -1560,7 +1584,7 @@ void main() {
     // converges light selection; this denoises the 1-sample radiance). Added before
     // the demod split so it flows through BOTH the denoise accum path AND the inline
     // (denoise-off) path. restirEmissiveDI also persists this pixel's reservoir.
-    if (pc.shadeMode != 1u && !giSkip && (pc.flags & 8u) != 0u) {
+    if (pc.shadeMode != 1u && !giSkip && flagOn(8u)) {
         const float rNdotV = max(dot(N, V), 1e-4);
         diffInd += restirEmissiveDI(worldPos, N, rNdotV, F0, shadowsOn);// F0 already iridescence-modulated
     }
@@ -1594,7 +1618,7 @@ void main() {
                                   pm.sheenColor, pm.sheenRoughness,
                                   dielF0,
                                   pm.iridescence, pm.iridescenceIOR, pm.iridescenceThicknessNm, seed,
-                                  /*addEmissive=*/((pc.flags & 8u) == 0u),// ReSTIR on → emissive via main()/diffInd; off → coherent emissiveNEE here
+                                  /*addEmissive=*/(!flagOn(8u)),// ReSTIR on → emissive via main()/diffInd; off → coherent emissiveNEE here
                                   /*cheapHit=*/false);// primary: exhaustive lights + full NEE
     gSkipAnalyticDirect = false;// reflection/GI/glass hits below keep inline lights
 
@@ -1716,7 +1740,7 @@ void main() {
             envSpecVis = specularOcclusion(NdotV, min(rtAo, rtSkyVis), roughness);
         } else {
             envSpecVis = 1.0;// assign the outer decl (do NOT shadow it)
-            if (probeGrid.enabled > 0.5) {
+            if (probesEnabled()) {
                 // Pure measured ratio — NO validity-confidence floor. A conf-mix
                 // toward 1.0 here re-admitted (1−conf) of the full-sky specular on
                 // every interior wall (probes near walls are only partially valid)
@@ -1794,7 +1818,8 @@ void main() {
         if (reflReproject(uv, N, roughness, length(worldPos - camPos), rUv, rCap))
             reflSkip = rCap >= 4.0 && texture(reflAuxPrevTex, paneToPhys(reflAuxPrevTex, rUv)).x >= 4.0;
     }
-    if (reflBlend > 0.0 && opaqueRefl && !reflSkip) {
+    // (kStrip bit 0, the diagnostic probe: no traced reflection, reflOut stays 0.)
+    if ((kStrip & 1u) == 0u && reflBlend > 0.0 && opaqueRefl && !reflSkip) {
         // Emitter self-emission scale for the ray (the other half of the split):
         // (1−specNEET) for EVERYONE — near-mirror keeps the sharp BRDF-sampled
         // lamp image, rough hands the energy to the NEE above. Safe for
@@ -1909,7 +1934,7 @@ void main() {
         // bright cloud takes the same anti-speckle ceiling as a bright sun
         // texel. gTraceHitT is read before reflHitT latches it, and svLeg
         // leaves it untouched.
-        if ((pc.flags & 4096u) != 0u) {
+        if (flagOn(4096u)) {
             vec3 svEmis;
             const float svT = svLeg(shadowOrig, Rd, gTraceHitT > 0.0 ? gTraceHitT : 1e30, svEmis);
             r    = r * svT + svEmis;
@@ -1987,7 +2012,8 @@ void main() {
     // transmissive geometry at an edge keeps dispatch A's dominant-sample
     // result — same as the pre-Phase-2 (msaa=1) behaviour for that pixel,
     // not a regression, just an untreated edge on (rare) glass/blend props.
-    if (pc.shadeMode != 1u) {
+    // (kStrip bit 1, the diagnostic probe: every transmissive surface stays opaque.)
+    if (pc.shadeMode != 1u && (kStrip & 2u) == 0u) {
         if (pm.transmission > 1.0) {
             // ADDITIVE blend (muzzle flashes, sparks, energy glows). The surface
             // GLOWS over the scene behind: dst = behind + src*strength. The opaque
@@ -2281,7 +2307,7 @@ void main() {
         // wrong frame; it must not choose the branch. Every temporal path in
         // this shader starts fresh on such a frame (also the shadow ratio and
         // the reflection, below and in reflSVGFTemporal).
-        if ((pc.flags & 8192u) != 0u) valid = false;
+        if (flagOn(8192u)) valid = false;
         const vec4  prevT = valid ? texture(giPrevTex, paneToPhys(giPrevTex, prevUv))
                                   : (giSkip ? texture(giPrevTex, paneToPhys(giPrevTex, uv)) : vec4(0.0));
         const vec3  prev  = prevT.rgb;
@@ -2516,7 +2542,7 @@ void main() {
             } else {
                 // .z==0 = cold-start marker (sky/glass/off); the magnitude guards
                 // reject first-frame / garbage fp16 history (NaN compares false).
-                const bool sValid = (pc.flags & 8192u) == 0u &&// stale-history frame: fresh
+                const bool sValid = !flagOn(8192u) &&// stale-history frame: fresh
                                     sAnyTap && sPrev.z > 0.5 && sPrev.z < 4096.0 &&
                                     abs(sPrev.x) <= 1.5 && abs(sPrev.w) <= 1.5;
                 const float dev      = visEst - sPrev.x;
@@ -2589,7 +2615,7 @@ void main() {
                 // an ungated release TRAPPED those pixels at cap 2 forever
                 // (permanent shadow boil on the Bistro lamp walls).
                 const bool sRelease   = sTopUp && sValid && sPrev.z <= 2.5 && abs(visEst - sPrev.x) > 0.1;
-                if ((pc.flags & 512u) == 0u && (sOccMoved || sRelease))// bit 9 = dwell kill switch
+                if (!flagOn(512u) && (sOccMoved || sRelease))// bit 9 = dwell kill switch
                     sCap = min(sCap, sTopUp ? 1.0 : 2.0);
                 const float sHist    = sValid ? min(sPrev.z + 1.0, sCap) : 1.0;
                 const float sAcc     = sValid ? mix(sPrev.x, visEst, 1.0 / sHist) : visEst;

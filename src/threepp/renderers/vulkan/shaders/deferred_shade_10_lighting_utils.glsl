@@ -8,7 +8,7 @@
 // trilinear LUT sample replaces the per-pixel volumetric marches (see the
 // binding-53 note). flags bit 8 = the froxel passes ran this frame.
 vec3 froxelInscatter(vec2 fuv, float viewDist) {
-    if ((pc.flags & 256u) == 0u) return vec3(0.0);
+    if (!flagOn(256u)) return vec3(0.0);
     const float t = log(max(viewDist, kFroxelZMin) / kFroxelZMin)
                   / log(kFroxelZMax / kFroxelZMin);
     // Texel k holds the cumulative integral to slice k's FAR edge
@@ -42,7 +42,7 @@ float cloudShadowSample(vec3 worldPos) {
 // integral (applyHeteroSurfaceFog says why), and dust — neither smooth nor
 // analytic — is the term that genuinely wants the LUT's per-slice walk.
 float froxelParticleTransmittance(vec2 fuv, float viewDist) {
-    if ((pc.flags & 256u) == 0u) return 1.0;
+    if (!flagOn(256u)) return 1.0;
     const float t = log(max(viewDist, kFroxelZMin) / kFroxelZMin)
                   / log(kFroxelZMax / kFroxelZMin);
     // Same half-texel shift as froxelInscatter above (texel = slice FAR edge).
@@ -176,7 +176,7 @@ vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool 
     bool valid = reflReproject(uv, N, rough, viewDist, pUv, histCap);
     // Stale-history frame (flags bit 13): the prev G-buffer slot predates the
     // cleared histories, so the reprojection verdict is void. Start fresh.
-    if ((pc.flags & 8192u) != 0u) valid = false;
+    if (flagOn(8192u)) valid = false;
     // MOVING REFLECTED CONTENT — the reflected hit is a moving mesh (its content
     // slides frame-to-frame while the reflecting surface reproject tracks the
     // surface, not the content). Near-MIRROR: HARD-reset history so the moving
@@ -594,9 +594,9 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
     // Bits 20-27: the distance from the eye, in steps of 4 m, from which the cap
     // holds. Nearer than that a shadow is exact: it is at a few metres that a
     // capped shadow shows the cards' outlines.
-    uint cutoutCap = (pc.flags >> 16) & 15u;
+    uint cutoutCap = (effFlags() >> 16) & 15u;
     if (cutoutCap != 0u) {
-        const float from = 4.0 * float((pc.flags >> 20) & 255u);
+        const float from = 4.0 * float((effFlags() >> 20) & 255u);
         const vec3  eyeToOrigin = origin - gPrimaryOrigin;
         if (dot(eyeToOrigin, eyeToOrigin) < from * from) cutoutCap = 0u;
     }
