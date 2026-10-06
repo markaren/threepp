@@ -322,8 +322,8 @@ namespace threepp {
             float rippleGain      = 1.0f; // on the slope the shade reads; 1 = what linear theory gives
             // Scales the light the film and the bubbles turn back (their albedo);
             // 1 = as the water shade has them. A scene whose camera opens wide
-            // at night turns it down: lit by the night sky alone, a race is
-            // otherwise a pale band on a sea that mirrors a dark sky.
+            // at night turns it down: under a moon, or the night sky's own light,
+            // a race is otherwise a pale band on a sea that mirrors a dark sky.
             float albedo          = 1.0f;
         };
         WakeField wakeField;
