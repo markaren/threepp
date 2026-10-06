@@ -1532,7 +1532,8 @@ namespace threepp {
             // have no timestamp bracket at all (skinned/tet/grass deformers,
             // bloom/post, RCAS, cluster build, cloud march, auto-exposure,
             // particle light, ImGui/present transition) and every secondary view, whose
-            // timestamps are suppressed. Read against cpuFrameMs to tell "the CPU
+            // bracket timestamps are suppressed; `passes` below has a row for
+            // each of them. Read against cpuFrameMs to tell "the CPU
             // is the wall" from "the CPU is waiting".
             float gpuTotalMs     = 0.f;
             // The bracketed passes, summed over a DISJOINT set (the three splat
@@ -1543,6 +1544,32 @@ namespace threepp {
             float cpuEnsureSceneMs = 0.f;// ensureSceneBuilt
             float cpuRecordMs      = 0.f;// recordCommandBuffer
             float cpuFrameMs       = 0.f;// total render() wall time
+
+            // One row per render-graph pass of the frame, in execution order,
+            // every view included. A row is the GPU span from the point the
+            // pass's barriers are recorded to the end of its work, so a pass
+            // carries the barriers it needed; both ends are stamped after all
+            // earlier work has completed, so consecutive rows meet rather than
+            // overlap and their sum is the span of the graph. Two rows open and
+            // close it, "graph.entry" and "graph.exit": the graph's boundary
+            // barriers. `view` is 0 for the primary and the addView handle for
+            // a secondary; the record tail after the views (scene capture,
+            // frame interop, event camera, composite) is the primary's. Names
+            // are the graph's pass names, the same THREEPP_RG_DUMP prints, and a
+            // name repeats across views. Nothing outside the graph has a row:
+            // the screen-space sprite overlay, HUD render() calls, ImGui and the
+            // present transition are gpuTotalMs minus the rows' sum. Empty when
+            // the device has no timestamps. A row and the bracket field for the
+            // same pass are not the same number: the bracket opens at
+            // TOP_OF_PIPE (stamped as the front end reaches it, while earlier
+            // work may still be running) and excludes the pass's barriers; the
+            // row includes the barriers and begins once earlier work is done.
+            struct PassTiming {
+                std::string name;
+                uint32_t    view  = 0;
+                float       gpuMs = 0.f;
+            };
+            std::vector<PassTiming> passes;
         };
         [[nodiscard]] FrameTimings lastFrameTimings() const;
 

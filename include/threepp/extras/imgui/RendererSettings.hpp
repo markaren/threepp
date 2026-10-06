@@ -703,6 +703,17 @@ private:
             ImGui::Text("overlay %.2f  dof %.2f", t.overlayMs, t.dofMs);
             ImGui::Text("cpu: scene %.2f  record %.2f  frame %.2f",
                         t.cpuEnsureSceneMs, t.cpuRecordMs, t.cpuFrameMs);
+            // The render graph's own table: a row per pass per view, in
+            // execution order (FrameTimings::passes).
+            if (!t.passes.empty() && ImGui::TreeNode("Render graph passes")) {
+                float sum = 0.f;
+                for (const auto& p : t.passes) {
+                    sum += p.gpuMs;
+                    ImGui::Text("%-20s v%-3u %7.3f", p.name.c_str(), p.view, p.gpuMs);
+                }
+                ImGui::TextDisabled("passes %.3f  frame %.3f", sum, t.gpuTotalMs);
+                ImGui::TreePop();
+            }
             ImGui::TreePop();
         }
     }

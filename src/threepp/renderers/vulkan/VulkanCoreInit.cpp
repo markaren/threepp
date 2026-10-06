@@ -172,6 +172,9 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
             rewriteBloomDescriptors();// bloom composite reads gbuf + writes the TAA input
             rewriteDeferredDescriptors();// raster-first deferred shade inputs
             gpuTimings_ = std::make_unique<vulkan::GpuTimings>(*ctx, kFramesInFlight);
+            // The frame graph times every pass it records through it
+            // (FrameTimings::passes). gpuTimings_ outlives frameGraph_'s use.
+            frameGraph_.setPassTimer(gpuTimings_.get());
             overlayPass_ = std::make_unique<vulkan::OverlayPass>(
                     *ctx, kFramesInFlight,
                     // Atlas uploads are recorded into the frame's own cb (no

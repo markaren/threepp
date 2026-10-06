@@ -198,6 +198,7 @@ namespace threepp::vulkan::rg {
         layoutErrors_.clear();
         entryMemory_ = exitMemory_ = false;
         compiled_ = false;
+        group_ = 0;
     }
 
     std::vector<std::string> RenderGraph::diagnostics() const {
@@ -274,6 +275,7 @@ namespace threepp::vulkan::rg {
             passes_.emplace_back();
         }
         passes_.back().name    = name ? name : "";
+        passes_.back().group   = group_;
         passes_.back().execute = std::move(execute);
         compiled_ = false;
         return {*this, static_cast<uint32_t>(passes_.size() - 1)};
@@ -621,12 +623,21 @@ namespace threepp::vulkan::rg {
     void RenderGraph::execute(VkCommandBuffer cb) {
         compile();
         if (passes_.empty()) return;
+        // Each span opens BEFORE the barriers it needs: a layout transition or
+        // a cache flush is part of what the pass costs, and with every span
+        // starting where the previous one ended the spans partition the graph.
+        if (timer_) timer_->passBegin(cb, "graph.entry", 0);
         record(cb, entry_, entryMemory_, kAll, usedStages_);
+        if (timer_) timer_->passEnd(cb);
         for (const auto& pass : passes_) {
+            if (timer_) timer_->passBegin(cb, pass.name, pass.group);
             record(cb, pass.barriers, false, 0, 0);
             if (pass.execute) pass.execute(cb);
+            if (timer_) timer_->passEnd(cb);
         }
+        if (timer_) timer_->passBegin(cb, "graph.exit", 0);
         record(cb, exit_, exitMemory_, usedStages_, kAll);
+        if (timer_) timer_->passEnd(cb);
     }
 
     std::string RenderGraph::dump() const {

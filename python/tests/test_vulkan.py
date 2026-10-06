@@ -78,6 +78,27 @@ def test_frame_timings_name_every_timed_pass(vk_renderer):
     assert named == pytest.approx(ft["gpu_pass_sum_ms"], abs=1e-3)
 
 
+def test_pass_timings_rows_partition_the_graph(vk_renderer):
+    """pass_timings is the render graph's own table: one (name, view, gpu_ms)
+    row per pass in execution order, opened by graph.entry and closed by
+    graph.exit, every row under view 0 on a single-view render, and the rows'
+    sum no more than the frame's span (they partition the graph, which sits
+    inside the command buffer gpu_total_ms measures)."""
+    scene, cam = make_scene()
+    for _ in range(4):                                    # read a frame later, like frame_timings
+        vk_renderer.render(scene, cam)
+    rows = vk_renderer.pass_timings
+    ft = dict(vk_renderer.frame_timings)
+    if not rows:
+        pytest.skip("no timestamp support on this device")
+    names = [name for name, _, _ in rows]
+    assert names[0] == "graph.entry" and names[-1] == "graph.exit"
+    assert "gbuffer" in names and "post" in names
+    assert all(view == 0 for _, view, _ in rows)
+    assert all(isinstance(ms, float) and ms >= 0.0 for _, _, ms in rows)
+    assert sum(ms for _, _, ms in rows) <= ft["gpu_total_ms"] + 0.25
+
+
 def _renderer_without_presents(title):
     """A canvas and renderer of their own, with presents suppressed. The switch
     is read once, at context creation, so it is set for the constructor only."""

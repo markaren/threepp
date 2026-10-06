@@ -1282,6 +1282,28 @@ namespace threepp_py {
                                            d["cpu_frame_ms"] = t.cpuFrameMs;
                                            return d;
                                        })
+                // The render graph's per-pass GPU table for the last completed
+                // frame — see VulkanRenderer::FrameTimings::passes. A list, not
+                // more keys in frame_timings: a pass name repeats across views,
+                // and frame_timings' consumers format every value as a float.
+                .def_property_readonly("pass_timings",
+                                       [](PyVulkanRenderer& r) {
+                                           const auto t = r.native().lastFrameTimings();
+                                           py::list rows;
+                                           for (const auto& p : t.passes)
+                                               rows.append(py::make_tuple(p.name, p.view, p.gpuMs));
+                                           return rows;
+                                       },
+                                       "Per-pass GPU times of the last completed frame: a list of "
+                                       "(name, view, gpu_ms) tuples in render-graph execution order, "
+                                       "every view included (view 0 is the primary, otherwise the "
+                                       "add_view handle). A row spans the pass and the barriers "
+                                       "before it; rows meet rather than overlap, so their sum is "
+                                       "the render graph's span and gpu_total_ms minus that sum is "
+                                       "the work outside the graph (HUD passes, sprites, ImGui, "
+                                       "present). The first and last rows, graph.entry and "
+                                       "graph.exit, are the graph's boundary barriers. Empty when "
+                                       "the device has no timestamps.")
                 // ── Zero-copy mesh-vertex interop (CUDA -> Vulkan) ────────────
                 // Export a mesh's position/normal buffers so an external GPU
                 // producer (Warp, PhysX, torch) writes them in place, with no

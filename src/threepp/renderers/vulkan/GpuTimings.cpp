@@ -2,6 +2,7 @@
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
+#include <algorithm>
 #include <array>
 
 namespace threepp::vulkan {
@@ -26,20 +27,75 @@ namespace threepp::vulkan {
             check(vkCreateQueryPool(ctx_.device(), &qpci, nullptr, &pools_[f]),
                   "vkCreateQueryPool(timing)");
         }
+        // The pass table's pools are made at each slot's first beginFrame
+        // (ensurePassPool), sized to passWanted_.
+        passPools_.resize(framesInFlight_, VK_NULL_HANDLE);
+        passCapacity_.resize(framesInFlight_, 0u);
+        passSlots_.resize(framesInFlight_);
     }
 
     GpuTimings::~GpuTimings() {
         VkDevice d = ctx_.device();
         for (auto p : pools_)
             if (p) vkDestroyQueryPool(d, p, nullptr);
+        for (auto p : passPools_)
+            if (p) vkDestroyQueryPool(d, p, nullptr);
+    }
+
+    void GpuTimings::ensurePassPool(uint32_t frame) {
+        if (passCapacity_[frame] >= passWanted_) return;
+        // The slot's previous use has signalled its fence and been read back
+        // (readBack runs before beginFrame), so its pool is free to go.
+        VkDevice d = ctx_.device();
+        if (passPools_[frame] != VK_NULL_HANDLE) vkDestroyQueryPool(d, passPools_[frame], nullptr);
+        passPools_[frame]    = VK_NULL_HANDLE;
+        passCapacity_[frame] = 0u;
+        VkQueryPoolCreateInfo qpci{};
+        qpci.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        qpci.queryType  = VK_QUERY_TYPE_TIMESTAMP;
+        qpci.queryCount = passWanted_ * 2u;
+        check(vkCreateQueryPool(d, &qpci, nullptr, &passPools_[frame]), "vkCreateQueryPool(pass table)");
+        passCapacity_[frame] = passWanted_;
+        passSlots_[frame].reserve(passWanted_);
+    }
+
+    void GpuTimings::passBegin(VkCommandBuffer cb, const char* name, uint32_t group) {
+        passOpen_ = false;
+        if (!timingsSupported_) return;
+        auto& slots = passSlots_[recordFrame_];
+        if (slots.size() >= passCapacity_[recordFrame_]) {
+            // Full: this span and the frame's remaining ones go unrecorded, and
+            // the slot's next use gets a pool twice the size.
+            passWanted_ = std::max(passWanted_, std::min(passCapacity_[recordFrame_] * 2u, kPassTableMax));
+            return;
+        }
+        vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, passPools_[recordFrame_],
+                             static_cast<uint32_t>(slots.size()) * 2u);
+        slots.push_back({name ? name : "", group});
+        passOpen_ = true;
+    }
+
+    void GpuTimings::passEnd(VkCommandBuffer cb) {
+        if (!passOpen_) return;
+        passOpen_ = false;
+        const auto& slots = passSlots_[recordFrame_];
+        vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, passPools_[recordFrame_],
+                             static_cast<uint32_t>(slots.size() - 1u) * 2u + 1u);
     }
 
     void GpuTimings::beginFrame(VkCommandBuffer cb, uint32_t frame) {
         recordStartTp_ = std::chrono::high_resolution_clock::now();
+        recordFrame_   = frame;
+        passOpen_      = false;
         // Timing pool reset must run on the command stream (CPU-side
         // vkResetQueryPool also works on 1.2+ but we keep the GPU-side
         // reset for portability with older Vulkan toolchains). Clear
         // the host-side recorded-mask in lockstep.
+        if (timingsSupported_) {
+            ensurePassPool(frame);
+            vkCmdResetQueryPool(cb, passPools_[frame], 0, passCapacity_[frame] * 2u);
+            passSlots_[frame].clear();
+        }
         if (timingsSupported_ && pools_[frame] != VK_NULL_HANDLE) {
             vkCmdResetQueryPool(cb, pools_[frame], 0, kTimingSlots);
             maskRecorded_[frame] = 0u;
@@ -115,10 +171,41 @@ namespace threepp::vulkan {
         lastTimings_.dynGeomRefitMs  = 0.f;
         lastTimings_.gpuTotalMs     = 0.f;
         lastTimings_.gpuPassSumMs   = 0.f;
+        lastTimings_.passes.clear();
         if (!timingsSupported_) return;
+        const float toMs = timestampPeriodNs_ * 1e-6f;
+
+        // The pass table: every span this slot's previous use recorded, in one
+        // fetch. Read with availability rather than WAIT: the fence has
+        // signalled, so every query that was executed is available, and a
+        // command buffer that was recorded but never submitted (a swapchain
+        // out-of-date frame) leaves its queries unavailable instead of hanging
+        // the readback. Rows whose begin or end is unavailable are dropped.
+        if (const auto& slots = passSlots_[frame]; !slots.empty()) {
+            const uint32_t n = static_cast<uint32_t>(slots.size()) * 2u;
+            passResults_.assign(size_t(n) * 2u, 0u);// (value, availability) per query
+            const VkResult r = vkGetQueryPoolResults(
+                    ctx_.device(), passPools_[frame], 0, n,
+                    passResults_.size() * sizeof(uint64_t), passResults_.data(),
+                    2u * sizeof(uint64_t),
+                    VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+            if (r == VK_SUCCESS || r == VK_NOT_READY) {
+                lastTimings_.passes.reserve(slots.size());
+                for (size_t i = 0; i < slots.size(); ++i) {
+                    const uint64_t t0 = passResults_[i * 4u + 0u], a0 = passResults_[i * 4u + 1u];
+                    const uint64_t t1 = passResults_[i * 4u + 2u], a1 = passResults_[i * 4u + 3u];
+                    if (!a0 || !a1) continue;
+                    VulkanRenderer::FrameTimings::PassTiming row;
+                    row.name  = slots[i].name;
+                    row.view  = slots[i].group;
+                    row.gpuMs = t1 >= t0 ? static_cast<float>(t1 - t0) * toMs : 0.f;
+                    lastTimings_.passes.push_back(std::move(row));
+                }
+            }
+        }
+
         const uint32_t mask = maskRecorded_[frame];
         if (mask == 0u) return;// first use of this slot
-        const float toMs = timestampPeriodNs_ * 1e-6f;
         // We read pairs individually (not in one bulk fetch) because slots
         // for passes that didn't run this cycle are RESET but never WRITTEN,
         // and VK_QUERY_RESULT_WAIT_BIT on a reset query blocks indefinitely.

@@ -124,6 +124,20 @@ namespace threepp::vulkan::rg {
 
     class RenderGraph;
 
+    // Told the span of everything execute() records: passBegin() right before
+    // a pass's barriers, passEnd() right after its callback, so a pass's span
+    // carries the barriers it needed and consecutive spans meet. The entry and
+    // exit barriers are reported as spans of their own, "graph.entry" and
+    // "graph.exit". `group` is what setGroup() held when the pass was added
+    // (the renderer tags each view's passes with the view). Names are the
+    // graph's pass names (the pointers addPass was given).
+    class PassTimer {
+    public:
+        virtual ~PassTimer() = default;
+        virtual void passBegin(VkCommandBuffer cb, const char* name, uint32_t group) = 0;
+        virtual void passEnd(VkCommandBuffer cb) = 0;
+    };
+
     class PassBuilder {
     public:
         // mipCount 0 = every mip from baseMip on.
@@ -175,6 +189,14 @@ namespace threepp::vulkan::rg {
         // Passes run in the order they are added.
         PassBuilder addPass(const char* name, ExecuteFn execute);
 
+        // The group tag the passes added from now on carry (PassTimer's
+        // `group`). reset() returns it to 0.
+        void setGroup(uint32_t group) { group_ = group; }
+
+        // Receives every span execute() records (see PassTimer). Not owned;
+        // survives reset(). nullptr, the default, times nothing.
+        void setPassTimer(PassTimer* timer) { timer_ = timer; }
+
         // Plan every barrier. Idempotent; execute() calls it.
         void compile();
 
@@ -211,6 +233,7 @@ namespace threepp::vulkan::rg {
         };
         struct Pass {
             const char*                 name = "";
+            uint32_t                    group = 0;// setGroup() when added
             ExecuteFn                   execute;
             std::vector<Use>            uses;
             std::vector<PlannedBarrier> barriers;
@@ -267,6 +290,8 @@ namespace threepp::vulkan::rg {
         bool entryMemory_ = false, exitMemory_ = false;
         bool compiled_ = false;
         VkPipelineStageFlags2 usedStages_ = 0;
+        uint32_t   group_ = 0;
+        PassTimer* timer_ = nullptr;
 
         static void plan(State& s, const Access& a, bool isImage, uint32_t resource,
                          uint32_t mip, std::vector<PlannedBarrier>& out);

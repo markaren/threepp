@@ -1,9 +1,15 @@
 // GpuTimings — per-frame GPU timestamp readback + CPU record/frame timing.
 //
-// Owns one VkQueryPool per frame-in-flight. Each pool holds begin/end pairs
-// for every TimingPass. After the per-frame fence signals, readBack() reads
-// the previous use of that slot and populates a VulkanRenderer::FrameTimings
-// struct for the public getter.
+// Two instruments, one query-pool pair per frame-in-flight each:
+//   * the BRACKETS: a fixed slot pair per TimingPass, placed by hand around a
+//     dispatch (begin/end), one pool per frame-in-flight;
+//   * the PASS TABLE: a slot pair per render-graph pass of the frame, taken in
+//     execution order as the graph records (this class is the graph's
+//     rg::PassTimer), every view included, in a pool that grows to the
+//     frame's pass count. It is what FrameTimings::passes reports.
+// After the per-frame fence signals, readBack() reads the previous use of
+// that slot from both and populates a VulkanRenderer::FrameTimings struct for
+// the public getter.
 //
 // Extracted from VulkanRenderer.cpp during the file split.
 
@@ -11,6 +17,7 @@
 #define THREEPP_VULKAN_GPU_TIMINGS_HPP
 
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/renderers/vulkan/RenderGraph.hpp"
 
 #include <vulkan/vulkan.h>
 
@@ -55,8 +62,9 @@ namespace threepp::vulkan {
         // Deliberately not a sum of the slots above — it also covers every pass
         // that has no bracket at all (skinned/tet/grass deformers, bloom/post,
         // RCAS, cluster build, cloud march, auto-exposure, particle
-        // light, ImGui/present transition) AND every secondary view, whose timestamps
-        // are suppressed. Read gpuTotalMs - gpuPassSumMs to see how much GPU work
+        // light, ImGui/present transition) AND every secondary view, whose brackets
+        // are suppressed (the pass table has a row for each of these). Read
+        // gpuTotalMs - gpuPassSumMs to see how much GPU work
         // is invisible to the bracketed passes. It is a SPAN, not busy time: the
         // TOP_OF_PIPE open is not covered by the imageAvailable wait's stage mask,
         // so a swapchain-acquire stall can land inside it.
@@ -118,20 +126,33 @@ namespace threepp::vulkan {
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
 
-    class GpuTimings {
+    class GpuTimings final: public rg::PassTimer {
     public:
         // Probes device timestamp support and creates one VkQueryPool per
         // frame-in-flight. Pools are sized for kTimingSlots = TP_COUNT × 2.
         GpuTimings(VulkanContext& ctx, uint32_t framesInFlight);
-        ~GpuTimings();
+        ~GpuTimings() override;
         GpuTimings(const GpuTimings&)            = delete;
         GpuTimings& operator=(const GpuTimings&) = delete;
 
         // --- per-frame command-buffer operations ---
 
         // Call at the start of command recording. Captures the CPU record-start
-        // time and GPU-resets this frame's query pool slot.
+        // time and GPU-resets this frame's query pool slots (brackets and pass
+        // table); the pass table's pool is recreated here when an earlier frame
+        // had more passes than it could hold.
         void beginFrame(VkCommandBuffer cb, uint32_t frame);
+
+        // rg::PassTimer — the render graph calls these around every pass it
+        // records (and its entry/exit barriers) into the frame beginFrame
+        // opened. Each span takes the next slot pair of this frame's pass
+        // pool; both ends are stamped at ALL_COMMANDS, so a span starts once
+        // all earlier work has completed and spans never overlap. Not subject
+        // to setSuppressed: a secondary view's passes are rows of their own.
+        // Past the pool's capacity the frame's remaining spans go unrecorded
+        // and the next use of the slot gets a larger pool.
+        void passBegin(VkCommandBuffer cb, const char* name, uint32_t group) override;
+        void passEnd(VkCommandBuffer cb) override;
 
         // GPU timestamp pairs — call begin before a pass, end after it.
         void begin(VkCommandBuffer cb, TimingPass pass, uint32_t frame);
@@ -159,13 +180,14 @@ namespace threepp::vulkan {
         // --- out-of-band setters (called outside the cmd-buffer window) ---
         void setCpuFrameMs(float ms) { lastTimings_.cpuFrameMs = ms; }
 
-        // Silence begin/end for a stretch of recording. There is ONE query
+        // Silence the BRACKETS for a stretch of recording. There is ONE bracket
         // pool per frame-in-flight, with one slot pair per pass, so a second
         // view re-running the same passes into the same command buffer would
         // write timestamps that are already written — every one of them a
         // VUID-vkCmdWriteTimestamp2-None-03864, and the resulting numbers a
         // meaningless mix of two views. Secondary views therefore record
-        // silently and lastFrameTimings() keeps meaning "the primary".
+        // their brackets silently and the bracket fields keep meaning "the
+        // primary"; the pass table is per pass instance and is not silenced.
         void setSuppressed(bool s) { suppressed_ = s; }
 
         // --- accessors ---
@@ -181,6 +203,26 @@ namespace threepp::vulkan {
         float timestampPeriodNs_ = 1.0f;
         bool  timingsSupported_  = false;
         bool  suppressed_        = false;
+
+        // Pass table. One pool per frame-in-flight, 2 × passCapacity_ queries;
+        // passSlots_ names the spans taken in this use of the slot, in order.
+        // A capacity miss raises passWanted_, and the slot's pool is recreated
+        // to it at its next beginFrame (its previous use has been read back
+        // by then). Pass names are the graph's literals, kept by pointer.
+        struct PassSlot {
+            const char* name = "";
+            uint32_t    group = 0;
+        };
+        static constexpr uint32_t kPassTableInitial = 256;// passes
+        static constexpr uint32_t kPassTableMax     = 8192;
+        std::vector<VkQueryPool>           passPools_;
+        std::vector<uint32_t>              passCapacity_;
+        std::vector<std::vector<PassSlot>> passSlots_;
+        std::vector<uint64_t>              passResults_;// readBack scratch
+        uint32_t passWanted_ = kPassTableInitial;
+        uint32_t recordFrame_ = 0;   // the slot beginFrame opened
+        bool     passOpen_    = false;// passBegin took a slot: passEnd stamps
+        void ensurePassPool(uint32_t frame);
 
         VulkanRenderer::FrameTimings                   lastTimings_{};
         std::chrono::high_resolution_clock::time_point recordStartTp_{};

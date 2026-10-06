@@ -70,7 +70,9 @@
 //   --frames N, --w W, --h H, --autolod 1, --autoexp 0,
 //   --restir 0|1, --ao 0|1, --denoise 0|1
 //   --time N         after the run, N more frames; prints the median GPU frame
-//                    time and CPU record time (first 8 dropped); no files
+//                    time and CPU record time (first 8 dropped), then a PASS
+//                    line per render-graph pass (median row, frames seen) and
+//                    the median of their per-frame sum; no files
 //   --audit <file>   per-frame debugHashShadeImages() hashes
 //   --selfcheck      no --out; probe GI off unless --probe is given; renders
 //                    and exits with the render-graph verdict
@@ -499,7 +501,8 @@ int main(int argc, char** argv) {
     }
     if (!cmpA.empty()) return compareDirs(cmpA, cmpB);
     if (selfCheck && probe < 0) probe = 0;
-    if (outDir.empty() && !selfCheck) { std::printf("--out <dir> required\n"); return 2; }
+    // --time and --selfcheck write no files.
+    if (outDir.empty() && !selfCheck && timeFrames <= 0) { std::printf("--out <dir> required\n"); return 2; }
 
     std::unordered_map<std::string, Canvas::ParameterValue> canvasParams{
             {"vsync", false}, {"size", WindowSize{W, H}}, {"headless", true}};
@@ -680,17 +683,46 @@ int main(int argc, char** argv) {
     }
 
     if (timeFrames > 0) {
-        std::vector<float> gpu, rec;
+        std::vector<float> gpu, rec, passSum;
+        // The render graph's rows (FrameTimings::passes), keyed "v<view> <name>"
+        // in the order they were first seen.
+        std::vector<std::string> passKeys;
+        std::unordered_map<std::string, std::vector<float>> passMs;
         for (int i = 0; i < timeFrames; ++i) {
             renderer.setSimTime((frames + i) / 60.0);
             canvas.animateOnce([&] { renderer.render(scene, camera); });
             const auto t = renderer.lastFrameTimings();
-            if (i >= 8) { gpu.push_back(t.gpuTotalMs); rec.push_back(t.cpuRecordMs); }
+            if (i < 8) continue;
+            gpu.push_back(t.gpuTotalMs);
+            rec.push_back(t.cpuRecordMs);
+            float sum = 0.f;
+            for (const auto& p : t.passes) {
+                const std::string key = "v" + std::to_string(p.view) + " " + p.name;
+                auto it = passMs.find(key);
+                if (it == passMs.end()) {
+                    passKeys.push_back(key);
+                    it = passMs.emplace(key, std::vector<float>{}).first;
+                }
+                it->second.push_back(p.gpuMs);
+                sum += p.gpuMs;
+            }
+            passSum.push_back(sum);
         }
-        std::sort(gpu.begin(), gpu.end());
-        std::sort(rec.begin(), rec.end());
+        auto median = [](std::vector<float> v) {
+            if (v.empty()) return 0.f;
+            std::sort(v.begin(), v.end());
+            return v[v.size() / 2];
+        };
         std::printf("TIME %s gpu_median_ms %.3f record_median_ms %.3f\n", sceneName.c_str(),
-                    gpu[gpu.size() / 2], rec[rec.size() / 2]);
+                    median(gpu), median(rec));
+        // One line per render-graph pass: its median row over the timed frames
+        // and the number of those frames it appeared in, then the median of
+        // the per-frame row sums (the graph's span; the TIME line's gpu is the
+        // whole command buffer).
+        for (const auto& key : passKeys)
+            std::printf("PASS %s %s %.3f %zu\n", sceneName.c_str(), key.c_str(),
+                        median(passMs[key]), passMs[key].size());
+        std::printf("PASS %s sum %.3f\n", sceneName.c_str(), median(passSum));
         return graphVerdict(renderer, sceneName);
     }
 

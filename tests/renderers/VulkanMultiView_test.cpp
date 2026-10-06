@@ -210,6 +210,57 @@ namespace {
         (void) r.removeView(vh);
     }
 
+    // ── Gate: the pass table has every view ─────────────────────────────────
+    // FrameTimings::passes is the render graph's per-pass GPU table, taken as
+    // the graph records, so unlike the bracket fields (suppressed for a
+    // secondary) it has a row for every pass of every view, tagged with the
+    // view's handle. With one secondary: rows under 0 and under its handle with
+    // the same pass names (a secondary runs its own G-buffer and post), the
+    // graph's entry and exit rows first and last, and the rows' sum inside the
+    // frame's span (they partition the graph, which is inside the command
+    // buffer).
+    void gatePassTable(Canvas& canvas, VulkanRenderer& r, Scene& scene, Camera& primaryCam) {
+        std::printf("\n[passes] per-pass GPU rows cover every view\n");
+        auto secCam = makeCam(Vector3(4.f, 2.5f, 6.f), Vector3(0.f, 1.5f, 0.f));
+        uint32_t vh = 0;
+        runFrames(canvas, r, scene, primaryCam, 12, [&](int i) {
+            if (i == 0) vh = r.addView(*secCam, 320, 200);
+        });
+        if (!vh) {
+            check(false, "addView returned a handle");
+            return;
+        }
+        const auto t = r.lastFrameTimings();
+        if (t.passes.empty()) {
+            std::printf("  (no timestamp support: the table is empty, nothing to gate)\n");
+            (void) r.removeView(vh);
+            return;
+        }
+        check(t.passes.front().name == "graph.entry" && t.passes.back().name == "graph.exit",
+              "graph.entry opens and graph.exit closes the table");
+        auto has = [&](uint32_t view, const char* name) {
+            for (const auto& p : t.passes)
+                if (p.view == view && p.name == name) return true;
+            return false;
+        };
+        check(has(0, "view.primary") && has(0, "gbuffer") && has(0, "post"),
+              "primary rows: view.primary, gbuffer, post");
+        check(has(vh, "view.secondary") && has(vh, "gbuffer") && has(vh, "post"),
+              "secondary rows under its handle: view.secondary, gbuffer, post");
+        bool  nonneg = true;
+        float sum    = 0.f;
+        for (const auto& p : t.passes) {
+            nonneg = nonneg && p.gpuMs >= 0.f;
+            sum += p.gpuMs;
+        }
+        check(nonneg, "every row is non-negative");
+        std::printf("  rows %zu  sum %.3f ms  frame %.3f ms\n", t.passes.size(), sum, t.gpuTotalMs);
+        // Slack for the frame bracket's TOP_OF_PIPE open against the rows'
+        // ALL_COMMANDS stamps, and for the timestamp period.
+        check(sum <= t.gpuTotalMs + 0.25f, "rows sum to no more than the frame's span");
+        (void) r.removeView(vh);
+    }
+
     // ── Gate: history independence ──────────────────────────────────────────
     // Two secondary views. One is left alone; the other's camera is yanked
     // across the scene. If any temporal state is shared, the still view shows
@@ -964,6 +1015,7 @@ int main(int argc, char** argv) {
     }
 
     gateParity(canvas, renderer, scene, *primaryCam);
+    gatePassTable(canvas, renderer, scene, *primaryCam);
     gateHistory(canvas, renderer, scene, *primaryCam);
     gateLifecycle(canvas, renderer, scene, *primaryCam);
     gateCullIsolation(canvas, renderer, scene, *primaryCam);

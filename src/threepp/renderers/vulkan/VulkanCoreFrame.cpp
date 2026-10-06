@@ -1689,6 +1689,10 @@ void VulkanRenderer::Impl::applyViewRecordState(const ViewRecordState& s) {
 void VulkanRenderer::Impl::addViewEnterPass(rg::RenderGraph& g, size_t index) {
             // views_[0] is the primary; the state itself is saved after this
             // view's passes are built, so it is read only when the pass runs.
+            // The passes from here to the next view pass are tagged with the
+            // view's public handle (0 for the primary): FrameTimings::passes
+            // reports a row per pass per view under it.
+            g.setGroup(index == 0 ? 0u : views_[index]->id);
             g.addPass(index == 0 ? "view.primary" : "view.secondary",
                       [this, index](VkCommandBuffer) { applyViewRecordState(viewRecordStates_[index]); });
         }
