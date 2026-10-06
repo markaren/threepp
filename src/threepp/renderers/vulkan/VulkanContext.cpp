@@ -1145,6 +1145,14 @@ namespace threepp::vulkan {
             load("vkCreateRayTracingPipelinesKHR",       reinterpret_cast<void**>(&rt_.createRayTracingPipelines));
             load("vkGetRayTracingShaderGroupHandlesKHR", reinterpret_cast<void**>(&rt_.getRayTracingShaderGroupHandles));
             load("vkCmdTraceRaysKHR",                    reinterpret_cast<void**>(&rt_.cmdTraceRays));
+            // Not through `load`: a missing compaction entry point turns
+            // compaction off instead of failing device creation.
+            rt_.cmdWriteAccelerationStructuresProperties =
+                    reinterpret_cast<PFN_vkCmdWriteAccelerationStructuresPropertiesKHR>(
+                            vkGetDeviceProcAddr(device_, "vkCmdWriteAccelerationStructuresPropertiesKHR"));
+            rt_.cmdCopyAccelerationStructure =
+                    reinterpret_cast<PFN_vkCmdCopyAccelerationStructureKHR>(
+                            vkGetDeviceProcAddr(device_, "vkCmdCopyAccelerationStructureKHR"));
         }
     }
 

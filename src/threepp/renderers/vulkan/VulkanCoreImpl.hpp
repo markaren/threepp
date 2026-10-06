@@ -1136,6 +1136,11 @@ namespace threepp {
         // LOD chain and calls destroyBlasLodLevels() itself, which also keeps
         // the lodBlasBytes_ accounting straight.
         void destroyBlasRecord(BlasRecord& rec) {
+            if (!blasCompactPending_.empty()) {
+                blasCompactPending_.erase(
+                        std::remove(blasCompactPending_.begin(), blasCompactPending_.end(), &rec),
+                        blasCompactPending_.end());
+            }
             if (rec.as) ctx->rt().destroyAccelerationStructure(ctx->device(), rec.as, nullptr);
             destroyBuffer(ctx->allocator(), rec.storage);
             destroyBuffer(ctx->allocator(), rec.vertex);
@@ -2800,6 +2805,82 @@ namespace threepp {
 
         void beginOneShotBatch() { oneShotBatch_ = true; }
         void flushOneShotBatch();
+
+        // ── Static BLAS compaction ───────────────────────────────────────────
+        // A static record (built once, traced for its lifetime) is built
+        // PREFER_FAST_TRACE | ALLOW_COMPACTION, its compacted size is queried
+        // in the build's own command buffer, and it is then copied with
+        // COPY_MODE_COMPACT into storage of exactly that size; the build-size
+        // pair is freed. Deformer and interop records are refit in place and
+        // keep the updatable lineage, uncompacted.
+        //
+        // Two knobs, read once at construction, exist to separate the two
+        // effects of this in an A/B on the same binary:
+        //   THREEPP_VK_BLAS_COMPACT=0    no compaction (static builds then stay
+        //                                at their build size)
+        //   THREEPP_VK_BLAS_UPDATABLE=1  static builds carry ALLOW_UPDATE again
+        // With both set, static BLASes are built exactly as before compaction
+        // existed. blasCompact_ is also false when the device does not resolve
+        // the two compaction entry points.
+        bool blasCompact_ = false;
+        bool blasStaticUpdatable_ = false;
+        // Compacted-size queries, kBlasCompactPoolQueries per pool; pools are
+        // appended as a larger batch needs them and live until teardown.
+        // Slot k of one compaction round is query k % N of pool k / N.
+        static constexpr uint32_t kBlasCompactPoolQueries = 256;
+        std::vector<VkQueryPool> blasCompactPools_;
+        // Batch mode: static records built into the open one-shot batch,
+        // compacted by flushOneShotBatch after its wait. destroyBlasRecord
+        // takes a record off this list.
+        std::vector<BlasRecord*> blasCompactPending_;
+        // A batch-built record's uncompacted address was already pushed into
+        // ensureSceneBuilt's TLAS instance array when the batch flushes, so the
+        // flush records old -> new here and keeps the old pair alive (retired),
+        // which also keeps a later build in the same pass from being handed
+        // the old address. applyBlasCompactionRemap rewrites the instances and
+        // frees the retired pairs.
+        std::unordered_map<VkDeviceAddress, VkDeviceAddress> blasAddressRemap_;
+        struct RetiredBlas {
+            VkAccelerationStructureKHR as = VK_NULL_HANDLE;
+            Buffer storage;
+        };
+        std::vector<RetiredBlas> blasCompactRetired_;
+
+        // The flags a static record is built with.
+        VkBuildAccelerationStructureFlagsKHR staticBlasBuildFlags() const {
+            VkBuildAccelerationStructureFlagsKHR f = lodLevelBuildFlags();
+            if (blasStaticUpdatable_) f |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+            return f;
+        }
+        // The flags an auto-LOD level is built with. Never ALLOW_UPDATE, not
+        // even under THREEPP_VK_BLAS_UPDATABLE: levels were never built with it.
+        VkBuildAccelerationStructureFlagsKHR lodLevelBuildFlags() const {
+            VkBuildAccelerationStructureFlagsKHR f = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+            if (blasCompact_) f |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR;
+            return f;
+        }
+        // Records, after builds already recorded into `cb`, one barrier and the
+        // compacted-size query of ases[k] into slot k.
+        void recordCompactedSizeQueries(VkCommandBuffer cb, const std::vector<VkAccelerationStructureKHR>& ases);
+        // One compaction round over structures whose sizes were queried into
+        // slots 0..n-1 by recordCompactedSizeQueries and whose build has
+        // completed: creates each compacted pair, copies all of them in ONE
+        // one-shot (one wait), then swaps the handles in. `retire` keeps the
+        // replaced pairs alive and records address remaps (batch mode);
+        // otherwise they are destroyed at once. A job whose compacted size is
+        // not smaller than its storage is left as it is. Returns the bytes
+        // freed per job (0 for a job left as it was).
+        struct BlasCompactJob {
+            VkAccelerationStructureKHR* as = nullptr;
+            Buffer* storage = nullptr;
+            VkDeviceAddress* address = nullptr;
+            bool* compacted = nullptr;// may be null (auto-LOD levels)
+        };
+        std::vector<VkDeviceSize> compactBlases(const std::vector<BlasCompactJob>& jobs, bool retire);
+        // Rewrites TLAS instance references built from batch-compacted records
+        // and frees the replaced pairs. Called right before buildTlas.
+        void applyBlasCompactionRemap(std::vector<VkAccelerationStructureInstanceKHR>& instances);
+        void destroyBlasCompactionResources();
         // Free `buf` now, or defer it to the next flush when a batch is open.
         void destroyBufferMaybeBatched(Buffer& buf) {
             if (oneShotBatch_) {
@@ -2831,7 +2912,11 @@ namespace threepp {
         // callers (skinned / tet / displaced / grass / morphed) keep the
         // default false because their per-frame compute rewrites assume
         // tightly-packed float layouts.
-        std::unique_ptr<BlasRecord> buildBlasFor(const BufferGeometry& geom, bool allowPacked = false);
+        // `updatable`: the record is refit in place later (deformers), so it is
+        // built ALLOW_UPDATE and never compacted. Static records pass false and
+        // are compacted (see staticBlasBuildFlags); an interop-marked geometry
+        // is always updatable.
+        std::unique_ptr<BlasRecord> buildBlasFor(const BufferGeometry& geom, bool allowPacked, bool updatable);
 
         // Allocate or look up the per-SkinnedMesh BLAS state. Builds the BLAS
         // once with the current pose; subsequent dirty frames go through
@@ -2978,7 +3063,7 @@ namespace threepp {
             auto it = morphedMeshStates.find(&mesh);
             if (it != morphedMeshStates.end()) return it->second.get();
 
-            auto rec = buildBlasFor(*mesh.geometry());
+            auto rec = buildBlasFor(*mesh.geometry(), /*allowPacked=*/false, /*updatable=*/true);
             if (!rec) return nullptr;
             rec->liveCheck = mesh.geometry();
 
@@ -3447,7 +3532,7 @@ namespace threepp {
             if (!geom) return nullptr;
             auto it = blasCache.find(geom.get());
             if (it != blasCache.end()) return it->second.get();
-            auto rec = buildBlasFor(*geom, /*allowPacked=*/true);
+            auto rec = buildBlasFor(*geom, /*allowPacked=*/true, /*updatable=*/false);
             if (!rec) return nullptr;
             rec->liveCheck = geom;
             return blasCache.emplace(geom.get(), std::move(rec)).first->second.get();

@@ -5,6 +5,7 @@
 #include "threepp/core/AttributeView.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -92,7 +93,7 @@ namespace {
 
 namespace threepp {
 
-std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBlasFor(const BufferGeometry& geom, bool allowPacked) {
+std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBlasFor(const BufferGeometry& geom, bool allowPacked, bool updatable) {
             // Escape hatch for A/B triage: THREEPP_NO_PACK=1 forces every
             // attribute buffer back to tightly-packed float, same binary.
             static const bool noPack = std::getenv("THREEPP_NO_PACK") != nullptr;
@@ -110,6 +111,9 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             // sized for both build-flag lineages, not just FAST_TRACE.)
             const bool interopTarget = forceUnpackedGeoms_.count(&geom) != 0;
             if (allowPacked && interopTarget) allowPacked = false;
+            // Interop records are rebuilt every frame (recordDynamicGeomRefits)
+            // into the storage sized below for both lineages: never compacted.
+            updatable = updatable || interopTarget;
 
             auto* posAttr = geom.getAttribute<float>("position");
             if (!posAttr) return nullptr;
@@ -369,12 +373,20 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
             blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
             blasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-            // ALLOW_UPDATE so refitTlas's MODE_UPDATE on the TLAS still
-            // resolves to a valid build chain even if a future BLAS-level
-            // refit lands. PREFER_FAST_BUILD is intentionally not set —
-            // BLAS is still built once per geometry and queried-many.
-            blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
-                              VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+            // A deformer's record is refit in place every frame, so it is built
+            // ALLOW_UPDATE. A static record is built once and traced for its
+            // lifetime: no ALLOW_UPDATE (an updatable BVH is laid out loosely
+            // enough for a refit to move leaves, which costs traversal), and
+            // ALLOW_COMPACTION, after which it is copied into storage of its
+            // compacted size below. If a static record later turns dynamic
+            // (needsUpdate), refreshGeomBlasBatch rebuilds it updatable into
+            // fresh storage. PREFER_FAST_TRACE in both cases: even a deformer
+            // is traced many times per build.
+            const bool compactThis = !updatable && blasCompact_;
+            blasBuild.flags = updatable
+                    ? (VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                       VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR)
+                    : staticBlasBuildFlags();
             blasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
             blasBuild.geometryCount = 1;
             blasBuild.pGeometries = &blasGeom;
@@ -476,6 +488,10 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             seedCopy.size = vbBytes;
             vkCmdCopyBuffer(cb, rec->vertex.handle, rec->prevVertex.handle, 1, &seedCopy);
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
+            // Batch mode: the compacted-size queries of every static record in
+            // the batch are recorded once, at the flush (one barrier for all).
+            const bool batched = oneShotBatch_;
+            if (compactThis && !batched) recordCompactedSizeQueries(cb, {rec->as});
             endAndSubmitOneShot(cb, "buildBlasFor");
             // Deferred when a batch is open (the shared submit hasn't run yet, so
             // the scratch is still in use); freed immediately otherwise.
@@ -485,6 +501,19 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             addrInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
             addrInfo.accelerationStructure = rec->as;
             rec->address = ctx->rt().getAccelerationStructureDeviceAddress(ctx->device(), &addrInfo);
+            if (compactThis) {
+                if (batched) {
+                    // Compacted by flushOneShotBatch; the address above is the
+                    // one the caller's TLAS instance carries until then, and
+                    // ensureSceneBuilt remaps it (applyBlasCompactionRemap).
+                    blasCompactPending_.push_back(rec.get());
+                } else {
+                    // The build has completed (the one-shot waited): compact
+                    // now, so no caller ever sees the build-size structure.
+                    compactBlases({{&rec->as, &rec->storage, &rec->address, &rec->compacted}},
+                                  /*retire=*/false);
+                }
+            }
 
             rec->geomVersion = geomVersionOf(geom);
             rec->vertexCount = vertexCount;
@@ -501,6 +530,151 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             if (worldStaticGeoms_.count(&geom) != 0) rec->interopWorldStatic = true;
 
             return rec;
+        }
+
+void VulkanRenderer::Impl::recordCompactedSizeQueries(VkCommandBuffer cb,
+                                                      const std::vector<VkAccelerationStructureKHR>& ases) {
+            const uint32_t n = static_cast<uint32_t>(ases.size());
+            if (n == 0) return;
+            const uint32_t poolsNeeded = (n + kBlasCompactPoolQueries - 1) / kBlasCompactPoolQueries;
+            while (blasCompactPools_.size() < poolsNeeded) {
+                VkQueryPoolCreateInfo qpci{};
+                qpci.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+                qpci.queryType = VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR;
+                qpci.queryCount = kBlasCompactPoolQueries;
+                VkQueryPool pool = VK_NULL_HANDLE;
+                check(vkCreateQueryPool(ctx->device(), &qpci, nullptr, &pool), "vkCreateQueryPool(BLAS compaction)");
+                blasCompactPools_.push_back(pool);
+            }
+            for (uint32_t p = 0; p < poolsNeeded; ++p) {
+                const uint32_t cnt = std::min(kBlasCompactPoolQueries, n - p * kBlasCompactPoolQueries);
+                vkCmdResetQueryPool(cb, blasCompactPools_[p], 0, cnt);
+            }
+            // The size query reads the built structures: build writes before it.
+            VkMemoryBarrier mb{};
+            mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            mb.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+            mb.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+            vkCmdPipelineBarrier(cb,
+                                 VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                 VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                 0, 1, &mb, 0, nullptr, 0, nullptr);
+            for (uint32_t p = 0; p < poolsNeeded; ++p) {
+                const uint32_t first = p * kBlasCompactPoolQueries;
+                const uint32_t cnt = std::min(kBlasCompactPoolQueries, n - first);
+                ctx->rt().cmdWriteAccelerationStructuresProperties(
+                        cb, cnt, ases.data() + first,
+                        VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
+                        blasCompactPools_[p], 0);
+            }
+        }
+
+std::vector<VkDeviceSize> VulkanRenderer::Impl::compactBlases(const std::vector<BlasCompactJob>& jobs,
+                                                              bool retire) {
+            const uint32_t n = static_cast<uint32_t>(jobs.size());
+            std::vector<VkDeviceSize> freed(n, 0);
+            if (n == 0) return freed;
+
+            std::vector<VkDeviceSize> sizes(n, 0);
+            for (uint32_t p = 0; p * kBlasCompactPoolQueries < n; ++p) {
+                const uint32_t first = p * kBlasCompactPoolQueries;
+                const uint32_t cnt = std::min(kBlasCompactPoolQueries, n - first);
+                check(vkGetQueryPoolResults(ctx->device(), blasCompactPools_[p], 0, cnt,
+                                            cnt * sizeof(VkDeviceSize), sizes.data() + first,
+                                            sizeof(VkDeviceSize),
+                                            VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+                      "vkGetQueryPoolResults(BLAS compacted size)");
+            }
+
+            struct Fresh {
+                VkAccelerationStructureKHR as = VK_NULL_HANDLE;
+                Buffer storage;
+            };
+            std::vector<Fresh> fresh(n);
+            VkCommandBuffer cb = VK_NULL_HANDLE;
+            for (uint32_t k = 0; k < n; ++k) {
+                const VkDeviceSize sz = sizes[k];
+                // A driver may report a compacted size no smaller than the
+                // build size; then there is nothing to gain and the job stays.
+                if (sz == 0 || sz >= jobs[k].storage->size) continue;
+                fresh[k].storage = createBuffer(
+                        ctx->allocator(), ctx->device(), sz,
+                        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                        VMA_MEMORY_USAGE_AUTO);
+                VkAccelerationStructureCreateInfoKHR ci{};
+                ci.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+                ci.buffer = fresh[k].storage.handle;
+                ci.size = sz;
+                ci.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+                check(ctx->rt().createAccelerationStructure(ctx->device(), &ci, nullptr, &fresh[k].as),
+                      "vkCreateAccelerationStructureKHR(compacted BLAS)");
+                vulkan::registerAccelerationStructure(fresh[k].as, ci.buffer);
+
+                if (cb == VK_NULL_HANDLE) cb = beginOneShot();
+                VkCopyAccelerationStructureInfoKHR copy{};
+                copy.sType = VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR;
+                copy.src = *jobs[k].as;
+                copy.dst = fresh[k].as;
+                copy.mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
+                ctx->rt().cmdCopyAccelerationStructure(cb, &copy);
+            }
+            if (cb == VK_NULL_HANDLE) return freed;
+            endAndSubmitOneShot(cb, "BLAS compaction");
+
+            for (uint32_t k = 0; k < n; ++k) {
+                if (fresh[k].as == VK_NULL_HANDLE) continue;
+                const BlasCompactJob& j = jobs[k];
+                freed[k] = j.storage->size - fresh[k].storage.size;
+                const VkDeviceAddress oldAddress = *j.address;
+                if (retire) {
+                    blasCompactRetired_.push_back({*j.as, *j.storage});
+                } else {
+                    ctx->rt().destroyAccelerationStructure(ctx->device(), *j.as, nullptr);
+                    destroyBuffer(ctx->allocator(), *j.storage);
+                }
+                *j.as = fresh[k].as;
+                *j.storage = fresh[k].storage;
+                VkAccelerationStructureDeviceAddressInfoKHR ai{};
+                ai.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+                ai.accelerationStructure = *j.as;
+                *j.address = ctx->rt().getAccelerationStructureDeviceAddress(ctx->device(), &ai);
+                if (retire && oldAddress != 0) blasAddressRemap_[oldAddress] = *j.address;
+                if (j.compacted) *j.compacted = true;
+            }
+            return freed;
+        }
+
+void VulkanRenderer::Impl::applyBlasCompactionRemap(std::vector<VkAccelerationStructureInstanceKHR>& instances) {
+            if (!blasAddressRemap_.empty()) {
+                // One lookup per instance, never chained: the retired pairs are
+                // still alive, so no address among the map's keys can have been
+                // handed to a structure built after it.
+                for (auto& inst : instances) {
+                    auto it = blasAddressRemap_.find(inst.accelerationStructureReference);
+                    if (it != blasAddressRemap_.end()) inst.accelerationStructureReference = it->second;
+                }
+                blasAddressRemap_.clear();
+            }
+            // The flush that retired these waited on the queue, and nothing
+            // references them once the instances above are rewritten.
+            for (auto& r : blasCompactRetired_) {
+                ctx->rt().destroyAccelerationStructure(ctx->device(), r.as, nullptr);
+                destroyBuffer(ctx->allocator(), r.storage);
+            }
+            blasCompactRetired_.clear();
+        }
+
+void VulkanRenderer::Impl::destroyBlasCompactionResources() {
+            for (auto& r : blasCompactRetired_) {
+                ctx->rt().destroyAccelerationStructure(ctx->device(), r.as, nullptr);
+                destroyBuffer(ctx->allocator(), r.storage);
+            }
+            blasCompactRetired_.clear();
+            blasAddressRemap_.clear();
+            blasCompactPending_.clear();
+            for (VkQueryPool p : blasCompactPools_) vkDestroyQueryPool(ctx->device(), p, nullptr);
+            blasCompactPools_.clear();
         }
 
 // Creates one auto-LOD chain level's resources: a new index buffer + a
@@ -578,12 +752,12 @@ bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
             VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
             blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
             blasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-            // No ALLOW_UPDATE: LOD levels are static once built (their vertex
-            // source never refits in place — a geometry-version bump instead
-            // destroys the whole chain, see the geomVersion-changed rebuild
-            // path in VulkanCoreScene.cpp), so PREFER_FAST_TRACE alone is
-            // strictly better (smaller build, faster trace).
-            blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+            // No ALLOW_UPDATE: LOD levels are never refit (their vertex source
+            // never refits in place — a geometry-version bump instead destroys
+            // the whole chain, see the geomVersion-changed rebuild path in
+            // VulkanCoreScene.cpp). Compacted like a static record, by
+            // flushLodLevelBuilds after the build.
+            blasBuild.flags = lodLevelBuildFlags();
             blasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
             blasBuild.geometryCount = 1;
             blasBuild.pGeometries = &blasGeom;
@@ -628,6 +802,9 @@ bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
             // buffer must not alias scratch memory (same rule as
             // refreshGeomBlasBatch's per-record persistent scratch).
             build.scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
+            // The caller appends `out` to rec.lodLevels right after this returns.
+            build.rec = &rec;
+            build.level = static_cast<uint32_t>(rec.lodLevels.size());
             pending.push_back(build);
 
             out.indexCount  = static_cast<uint32_t>(level.indices.size());
@@ -664,7 +841,7 @@ void VulkanRenderer::Impl::flushLodLevelBuilds(std::vector<LodPendingBuild>& pen
 
                 blasBuilds[k].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
                 blasBuilds[k].type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-                blasBuilds[k].flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+                blasBuilds[k].flags = lodLevelBuildFlags();// = buildLodLevelFor's size query
                 blasBuilds[k].mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
                 blasBuilds[k].geometryCount = 1;
                 blasBuilds[k].pGeometries = &blasGeoms[k];
@@ -675,11 +852,35 @@ void VulkanRenderer::Impl::flushLodLevelBuilds(std::vector<LodPendingBuild>& pen
                 rangePtrs[k] = &ranges[k];
             }
 
+            // Never inside a one-shot batch (drainLodResults runs before the
+            // admit loop opens one): the compaction below reads the query
+            // results, which needs this submit to have completed.
+            assert(!oneShotBatch_);
             VkCommandBuffer cb = beginOneShot();
             ctx->rt().cmdBuildAccelerationStructures(cb, N, blasBuilds.data(), rangePtrs.data());
+            if (blasCompact_) {
+                std::vector<VkAccelerationStructureKHR> ases(N);
+                for (uint32_t k = 0; k < N; ++k) ases[k] = pending[k].as;
+                recordCompactedSizeQueries(cb, ases);
+            }
             endAndSubmitOneShot(cb, "auto-LOD level BLAS batch");
 
             for (auto& b : pending) destroyBuffer(ctx->allocator(), b.scratch);
+
+            // Compact every level of the frame in one copy one-shot. Nothing has
+            // read a level's address yet: the chains were marked Ready inside
+            // this same drainLodResults call, and selection runs after it.
+            // lodBlasBytes_ counted each level at its build size; take off what
+            // compaction gave back.
+            if (blasCompact_) {
+                std::vector<BlasCompactJob> jobs(N);
+                for (uint32_t k = 0; k < N; ++k) {
+                    auto& lvl = pending[k].rec->lodLevels[pending[k].level];
+                    jobs[k] = {&lvl.as, &lvl.storage, &lvl.address, nullptr};
+                }
+                const auto freed = compactBlases(jobs, /*retire=*/false);
+                for (const VkDeviceSize f : freed) lodBlasBytes_ -= std::min<uint64_t>(lodBlasBytes_, f);
+            }
             pending.clear();
         }
 
@@ -1060,7 +1261,7 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
                 check(vkDeviceWaitIdle(ctx->device()),
                       "vkDeviceWaitIdle (vertex interop unpacked rebuild)");
                 flushRetireQueue();// device idle ⇒ reclaim now, don't carry across
-                auto fresh = buildBlasFor(*geomSp, /*allowPacked=*/true);// mark forces false
+                auto fresh = buildBlasFor(*geomSp, /*allowPacked=*/true, /*updatable=*/false);// mark forces false
                 if (!fresh) {
                     std::cerr << "[VulkanRenderer] enableVertexInterop: unpacked rebuild of the "
                                  "geometry failed - the mesh keeps its CPU attribute path.\n";
@@ -1585,6 +1786,43 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
                         VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                         &blasBuilds[kk], &primitiveCount, &blasSizes);
 
+                // A static record that just turned dynamic (needsUpdate on a
+                // geometry buildBlasFor built static) lives in storage sized for
+                // its static build, or for its compacted copy: too small for the
+                // updatable lineage. Move it to storage of the updatable size.
+                // Safe to free the old pair: the only caller drains the device
+                // before this batch, and the old structure is referenced only by
+                // the previous TLAS, whose instances this frame refills from
+                // rec.address (lodChangedThisFrame_ forces that refill).
+                if (rec.compacted || rec.storage.size < blasSizes.accelerationStructureSize) {
+                    ctx->rt().destroyAccelerationStructure(ctx->device(), rec.as, nullptr);
+                    destroyBuffer(ctx->allocator(), rec.storage);
+                    rec.storage = createBuffer(
+                            ctx->allocator(), ctx->device(), blasSizes.accelerationStructureSize,
+                            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                            VMA_MEMORY_USAGE_AUTO);
+                    VkAccelerationStructureCreateInfoKHR ci{};
+                    ci.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+                    ci.buffer = rec.storage.handle;
+                    ci.size = blasSizes.accelerationStructureSize;
+                    ci.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+                    check(ctx->rt().createAccelerationStructure(ctx->device(), &ci, nullptr, &rec.as),
+                          "vkCreateAccelerationStructureKHR(BLAS turned dynamic)");
+                    vulkan::registerAccelerationStructure(rec.as, ci.buffer);
+                    VkAccelerationStructureDeviceAddressInfoKHR ai{};
+                    ai.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+                    ai.accelerationStructure = rec.as;
+                    rec.address = ctx->rt().getAccelerationStructureDeviceAddress(ctx->device(), &ai);
+                    rec.compacted = false;
+                    lodChangedThisFrame_ = true;
+                    // A fresh structure has nothing to update from.
+                    rec.blasRefitCounter = 0;
+                    blasBuilds[kk].mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+                    blasBuilds[kk].srcAccelerationStructure = VK_NULL_HANDLE;
+                    blasBuilds[kk].dstAccelerationStructure = rec.as;
+                }
+
                 // Persistent scratch: size to max(buildScratch, updateScratch)
                 // on first use (buildScratch is always >= updateScratch per
                 // spec), then reuse across frames. Reallocate only if a future
@@ -1941,6 +2179,11 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                 rangePtrs.resize(N);
                 for (uint32_t kk = 0; kk < N; ++kk) {
                     auto& rec = *pendingDynamicGeomRefits_[liveOps[kk]].rec;
+                    // Never a compacted record: graduation takes
+                    // kDynamicGraduationStreak dirty frames, the first of which
+                    // ran refreshGeomBlasBatch, which moves a compacted record
+                    // to updatable storage; interop records are never compacted.
+                    assert(!rec.compacted);
                     const bool indexed = rec.indexCount != 0u;
                     // Only [0, drawRange start+count) is built — same clamp
                     // and same no-offset rationale as buildBlasFor.
@@ -3179,7 +3422,7 @@ VulkanRenderer::Impl::SkinnedMeshState* VulkanRenderer::Impl::ensureSkinnedBlas(
             // Build BLAS with the bind-pose positions/normals first. The
             // BLAS buffers are then re-written each frame by the skinning
             // compute shader (binding 5/6) and rebuilt in-place.
-            auto rec = buildBlasFor(*sm.geometry());
+            auto rec = buildBlasFor(*sm.geometry(), /*allowPacked=*/false, /*updatable=*/true);
             if (!rec) return nullptr;
             rec->liveCheck = sm.geometry();
 
@@ -3358,7 +3601,7 @@ VulkanRenderer::Impl::TetMeshState* VulkanRenderer::Impl::ensureTetBlas(Mesh& m)
 
             // BLAS built from the rest positions; the tet_skinning compute then
             // rewrites the vertex/normal buffers each frame and the BLAS is refit.
-            auto rec = buildBlasFor(*geom);
+            auto rec = buildBlasFor(*geom, /*allowPacked=*/false, /*updatable=*/true);
             if (!rec) return nullptr;
             rec->liveCheck = geom;
 
@@ -3516,7 +3759,7 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             const float planeSizeZ = zMax - zMin;
             if (!(planeSizeX > 0.f) || !(planeSizeZ > 0.f)) return nullptr;
 
-            auto blas = buildBlasFor(*dm.geometry());
+            auto blas = buildBlasFor(*dm.geometry(), /*allowPacked=*/false, /*updatable=*/true);
             if (!blas) return nullptr;
             blas->liveCheck = dm.geometry();
 
@@ -3953,7 +4196,7 @@ VulkanRenderer::Impl::GrassMeshState* VulkanRenderer::Impl::ensureGrassState(Gra
             const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
             if (vertexCount == 0 || static_cast<uint32_t>(hfAttr->count()) != vertexCount) return nullptr;
 
-            auto blas = buildBlasFor(*gm.geometry());
+            auto blas = buildBlasFor(*gm.geometry(), /*allowPacked=*/false, /*updatable=*/true);
             if (!blas) return nullptr;
             blas->liveCheck = gm.geometry();
 

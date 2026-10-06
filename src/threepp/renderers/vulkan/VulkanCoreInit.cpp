@@ -49,6 +49,18 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
                                                                          "gbufferMs");
             }
 
+            // Static BLAS compaction and its two A/B knobs (see blasCompact_):
+            // THREEPP_VK_BLAS_COMPACT=0 leaves static BLASes at their build
+            // size, THREEPP_VK_BLAS_UPDATABLE=1 builds them ALLOW_UPDATE again.
+            {
+                const char* c = std::getenv("THREEPP_VK_BLAS_COMPACT");
+                const char* u = std::getenv("THREEPP_VK_BLAS_UPDATABLE");
+                blasCompact_ = !(c && *c == '0') &&
+                               ctx->rt().cmdWriteAccelerationStructuresProperties != nullptr &&
+                               ctx->rt().cmdCopyAccelerationStructure != nullptr;
+                blasStaticUpdatable_ = u && *u && *u != '0';
+            }
+
             // The scene-dependent AS build runs lazily on the first render()
             // call. Everything below is scene-independent and safe at ctor time.
             createCommandResources();
@@ -302,6 +314,7 @@ VulkanRenderer::Impl::~Impl() {
                 destroyBlasRecord(*rec);
             }
             blasCache.clear();
+            destroyBlasCompactionResources();
 
             for (auto& [_, st] : skinnedMeshStates) {
                 // Destroy the GPU-skinning input buffers + scratch first;

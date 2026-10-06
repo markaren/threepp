@@ -2894,7 +2894,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 // refit — this same frame's recorded refit then
                                 // overwrites vertex/normal from the exports, so
                                 // the stale host positions are never presented.
-                                auto fresh = buildBlasFor(*m->geometry(), /*allowPacked=*/true);
+                                auto fresh = buildBlasFor(*m->geometry(), /*allowPacked=*/true, /*updatable=*/false);
                                 // >=, not ==: createExternalBuffer reports the
                                 // ALLOCATION size, which the allocator pads up
                                 // (30752 for a 30744-byte request), so equality
@@ -2973,7 +2973,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         }
                     }
                     if (it == blasCache.end()) {
-                        auto rec = buildBlasFor(*m->geometry(), /*allowPacked=*/true);
+                        auto rec = buildBlasFor(*m->geometry(), /*allowPacked=*/true, /*updatable=*/false);
                         if (!rec) continue;// degenerate / unsupported geometry
                         rec->liveCheck = m->geometry();
                         it = blasCache.emplace(geomKey, std::move(rec)).first;
@@ -3180,6 +3180,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // returns every new BLAS is built and every new albedo texture is
             // resident, so buildTlas below can reference the fresh BLAS.
             flushOneShotBatch();
+            // Records compacted by the batch flushes in this pass were pushed
+            // above with their build-size addresses.
+            applyBlasCompactionRemap(instances);
             buildTlas(instances);
             // Every per-frame GeometryDesc slot seeded fresh — same ring
             // model as the matDescs loop below; the lean auto-LOD patch

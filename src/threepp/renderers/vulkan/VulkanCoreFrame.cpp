@@ -128,10 +128,17 @@ void VulkanRenderer::Impl::flushOneShotBatch() {
                 // parked (defensive — normally empty when no cb was opened).
                 for (auto& b : oneShotBatchGarbage_) destroyBuffer(ctx->allocator(), b);
                 oneShotBatchGarbage_.clear();
+                blasCompactPending_.clear();
                 return;
             }
             VkCommandBuffer cb = oneShotBatchCb_;
             oneShotBatchCb_ = VK_NULL_HANDLE;
+            // Static records built into this batch: one barrier and their
+            // compacted-size queries, after every build in it.
+            std::vector<VkAccelerationStructureKHR> compactAses;
+            compactAses.reserve(blasCompactPending_.size());
+            for (const BlasRecord* r : blasCompactPending_) compactAses.push_back(r->as);
+            recordCompactedSizeQueries(cb, compactAses);
             check(vkEndCommandBuffer(cb), "end one-shot batch cb");
             VkSubmitInfo si{};
             si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -146,6 +153,19 @@ void VulkanRenderer::Impl::flushOneShotBatch() {
             // transient (BLAS scratch, image staging) — reclaim them now.
             for (auto& b : oneShotBatchGarbage_) destroyBuffer(ctx->allocator(), b);
             oneShotBatchGarbage_.clear();
+            // Compact them, all copies in one more one-shot. Their build-size
+            // addresses may already sit in the caller's TLAS instance array, so
+            // the replaced pairs are retired, not freed: ensureSceneBuilt
+            // remaps the instances and frees them (applyBlasCompactionRemap).
+            if (!blasCompactPending_.empty()) {
+                std::vector<BlasCompactJob> jobs;
+                jobs.reserve(blasCompactPending_.size());
+                for (BlasRecord* r : blasCompactPending_) {
+                    jobs.push_back({&r->as, &r->storage, &r->address, &r->compacted});
+                }
+                blasCompactPending_.clear();
+                compactBlases(jobs, /*retire=*/true);
+            }
         }
 
 void VulkanRenderer::Impl::createReservoirImages() {

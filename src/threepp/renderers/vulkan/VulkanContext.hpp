@@ -165,6 +165,12 @@ namespace threepp::vulkan {
             PFN_vkCreateRayTracingPipelinesKHR          createRayTracingPipelines          = nullptr;
             PFN_vkGetRayTracingShaderGroupHandlesKHR    getRayTracingShaderGroupHandles    = nullptr;
             PFN_vkCmdTraceRaysKHR                       cmdTraceRays                       = nullptr;
+            // BLAS compaction (the compacted-size query and the compacting
+            // copy). Optional: null when the driver does not resolve them,
+            // and the renderer then leaves every static BLAS uncompacted.
+            PFN_vkCmdWriteAccelerationStructuresPropertiesKHR
+                                                        cmdWriteAccelerationStructuresProperties = nullptr;
+            PFN_vkCmdCopyAccelerationStructureKHR       cmdCopyAccelerationStructure       = nullptr;
         };
         const RtFunctions& rt() const { return rt_; }
 

@@ -110,6 +110,10 @@ namespace threepp::vulkan::impl {
         // (interop wants PREFER_FAST_BUILD, the CPU routes FAST_TRACE) — a
         // mismatch forces MODE_BUILD to re-establish the lineage.
         VkBuildAccelerationStructureFlagsKHR blasBuiltFlags = 0;
+        // `as` lives in storage of its compacted size (a static record, see
+        // buildBlasFor). Too small for any rebuild: a compacted record that
+        // turns dynamic is reallocated first (refreshGeomBlasBatch).
+        bool compacted = false;
         // `storage` was sized for the max of BOTH flag lineages
         // (PREFER_FAST_TRACE and PREFER_FAST_BUILD size queries), so a
         // per-frame interop rebuild may legally take FAST_BUILD. Set by
@@ -655,6 +659,10 @@ namespace threepp::vulkan::impl {
         uint32_t primitiveCount = 0;
         bool packedIdx = false;// index buffer is uint16 (base record's bit 3)
         Buffer scratch{};// per-build scratch: concurrent builds in one cmdbuf must not alias
+        // Where the level lands: rec->lodLevels[level], swapped to its
+        // compacted pair after the build (flushLodLevelBuilds).
+        BlasRecord* rec = nullptr;
+        uint32_t level = 0;
     };
 
     // Per-entry fingerprint used to detect scene changes between frames.
