@@ -49,6 +49,13 @@ namespace threepp::vulkan {
     // array in its own layout, not the class that fills it.
     constexpr uint32_t kMaxSplatVolumeSlots = 8;
 
+    // The pc.flags bits that every shade pipeline has compile-time: 5-6, the
+    // G-buffer MSAA sample count. It is renderer configuration, so this costs
+    // one pipeline per sample count in use, and it is worth one: the runtime
+    // sample-count code is what holds the single-sample kernel on the high side
+    // of its register cliff (deferred_shade.comp, the specialization constants).
+    constexpr uint32_t kShadeSpecMsaa = 0x60u;
+
     DeferredShade::DeferredShade(VulkanContext& ctx, uint32_t framesInFlight)
         : ctx_(ctx), framesInFlight_(framesInFlight) {
         createPipeline();
@@ -57,7 +64,6 @@ namespace threepp::vulkan {
 
     DeferredShade::~DeferredShade() {
         VkDevice d = ctx_.device();
-        if (pipe_)          vkDestroyPipeline(d, pipe_, nullptr);
         for (auto& [key, perm] : shadePerms_) vkDestroyPipeline(d, perm, nullptr);
         if (shadeMod_)      vkDestroyShaderModule(d, shadeMod_, nullptr);
         if (giFilterPipe_)   vkDestroyPipeline(d, giFilterPipe_, nullptr);
@@ -339,34 +345,25 @@ namespace threepp::vulkan {
         // here because a cached pipeline has no statistics to report.
         const bool wantStats = ctx_.pipelineStatsEnabled();
         if (wantStats) cpci.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
-        // Specialization probes, a diagnostic for what the shade kernel's size
-        // costs (none is set in normal use, and then the one pipeline below is
-        // built exactly as it always was):
-        //   THREEPP_VK_SHADE_SPEC_MASK=<bits> (decimal or 0x hex): the pc.flags
+        // The shade itself is not built here. recordDispatch picks a
+        // specialization permutation per (flags & specMask_, probe state) and
+        // builds it on first use from the module kept below; specMask_ always
+        // holds kShadeSpecMsaa, so with no knob set that is one pipeline per
+        // G-buffer sample count in use. Two diagnostics extend it, for what the
+        // kernel's size costs in registers and time:
+        //   THREEPP_VK_SHADE_SPEC_MASK=<bits> (decimal or 0x hex): more pc.flags
         //     bits made compile-time, so the driver drops the code they turn off.
+        //     ORed onto kShadeSpecMsaa; it cannot take the MSAA bits out.
         //   THREEPP_VK_SHADE_SPEC_PROBE=1: the probe GI gate made compile-time.
-        //   THREEPP_VK_SHADE_STRIP=<bits>: whole stages removed (bit 0 the traced
-        //     reflection, bit 1 water and glass, bit 2 the GI gather). The image
-        //     is WRONG under this one by design; it is for timing and registers.
-        // With any of them set, pipe_ is not built: recordDispatch picks a
-        // permutation per (flags & mask, probe state, strip), built on first use.
         {
             auto knob = [](const char* name) -> uint32_t {
                 const char* e = std::getenv(name);
                 return e ? static_cast<uint32_t>(std::strtoul(e, nullptr, 0)) : 0u;
             };
-            specMask_  = knob("THREEPP_VK_SHADE_SPEC_MASK");
+            specMask_  = kShadeSpecMsaa | knob("THREEPP_VK_SHADE_SPEC_MASK");
             specProbe_ = knob("THREEPP_VK_SHADE_SPEC_PROBE") != 0u;
-            strip_     = knob("THREEPP_VK_SHADE_STRIP") & 7u;
         }
-        if (specMask_ == 0u && !specProbe_ && strip_ == 0u) {
-            check(vkCreateComputePipelines(d, wantStats ? VK_NULL_HANDLE : ctx_.pipelineCache(),
-                                           1, &cpci, nullptr, &pipe_),
-                  "vkCreateComputePipelines(deferred_shade)");
-            ctx_.dumpPipelineStats(pipe_, "deferred_shade");
-        } else {
-            shadeMod_ = mod;// the permutations are built from it later
-        }
+        shadeMod_ = mod;
 
         // Filter + composite pipelines — GI SVGF and reflection gloss
         // reconstruction (formerly the two channels of deferred_denoise). Both
@@ -510,7 +507,6 @@ namespace threepp::vulkan {
             vkDestroyShaderModule(d, modP, nullptr);
         }
 
-        if (mod != shadeMod_) vkDestroyShaderModule(d, mod, nullptr);
         vkDestroyShaderModule(d, modGi, nullptr);
         vkDestroyShaderModule(d, modRefl, nullptr);
         vkDestroyShaderModule(d, modC, nullptr);
@@ -1065,14 +1061,13 @@ namespace threepp::vulkan {
         }
     }
 
-    // The shade pipeline for this dispatch: pipe_ unless a specialization knob
-    // is set (see createPipeline), then the permutation for
-    // key = (flags & mask) | probe state << 32 | strip << 40, built on first use.
+    // The shade pipeline for this dispatch: the permutation for
+    // key = (flags & mask) | probe state << 32, built on first use (see
+    // createPipeline). With no knob set the key is the MSAA code alone, so an
+    // app holds one pipeline per G-buffer sample count its views use.
     VkPipeline DeferredShade::shadePipeline(uint32_t flags, bool probeGi) {
-        if (!shadeMod_) return pipe_;
         const uint64_t probeState = specProbe_ ? (probeGi ? 2u : 1u) : 0u;
-        const uint64_t key = static_cast<uint64_t>(flags & specMask_) | (probeState << 32u)
-                           | (static_cast<uint64_t>(strip_) << 40u);
+        const uint64_t key = static_cast<uint64_t>(flags & specMask_) | (probeState << 32u);
         for (const auto& [k, perm] : shadePerms_) {
             if (k == key) return perm;
         }
@@ -1082,12 +1077,11 @@ namespace threepp::vulkan {
     }
 
     VkPipeline DeferredShade::createShadePipeline(uint64_t key) {
-        const std::array<uint32_t, 4> values{static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
-                                            static_cast<uint32_t>((key >> 32u) & 0xFFu),
-                                            static_cast<uint32_t>((key >> 40u) & 0xFFu)};
-        std::array<VkSpecializationMapEntry, 4> entries{};
-        for (uint32_t i = 0; i < 4; ++i) {
-            entries[i].constantID = i;// kSpecFlags, kSpecMask, kProbeGi, kStrip
+        const std::array<uint32_t, 3> values{static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
+                                            static_cast<uint32_t>((key >> 32u) & 0xFFu)};
+        std::array<VkSpecializationMapEntry, 3> entries{};
+        for (uint32_t i = 0; i < 3; ++i) {
+            entries[i].constantID = i;// kSpecFlags, kSpecMask, kProbeGi
             entries[i].offset     = i * sizeof(uint32_t);
             entries[i].size       = sizeof(uint32_t);
         }
@@ -1116,8 +1110,15 @@ namespace threepp::vulkan {
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         char label[96];
         std::snprintf(label, sizeof(label), "deferred_shade key=0x%llx", static_cast<unsigned long long>(key));
-        std::fprintf(stderr, "[shade-spec] %s flags=0x%x mask=0x%x probe=%u strip=%u: %.0f ms\n", label,
-                     values[0], values[1], values[2], values[3], ms);
+        // Under THREEPP_VULKAN_PIPELINE_STATS the line carries the register
+        // count too: the default permutation's is the one to watch after a
+        // shade edit (the cliff in deferred_shade.comp's constants comment).
+        char regs[32] = "";
+        if (const int64_t n = ctx_.pipelineStat(perm, "Register Count"); n >= 0) {
+            std::snprintf(regs, sizeof(regs), ", %lld registers", static_cast<long long>(n));
+        }
+        std::fprintf(stderr, "[shade-spec] %s flags=0x%x mask=0x%x probe=%u: %.0f ms%s\n", label,
+                     values[0], values[1], values[2], ms, regs);
         ctx_.dumpPipelineStats(perm, label);
         return perm;
     }

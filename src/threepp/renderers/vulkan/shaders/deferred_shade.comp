@@ -334,22 +334,24 @@ layout(set = 0, binding = 37, scalar) uniform ProbeGridUbo {
 // Octahedral depth store (Chebyshev visibility — see probe_common.glsl).
 layout(set = 0, binding = 54, scalar) readonly buffer ProbeDepthBuf { uint probeDepth[]; };
 
-// ── Specialization probes (diagnostic; DeferredShade's THREEPP_VK_SHADE_* knobs) ─
-// With every constant at its default the kernel is the runtime one: effFlags()
-// folds to pc.flags and probesEnabled() to the UBO test, so the default
-// pipeline computes exactly what it did before these existed. A knob makes
-// some of the scene toggles compile-time instead, so the driver can drop the
-// code they turn off; that is a question about registers and occupancy, asked
-// of the same source. kSpecMask names the pc.flags bits that are known,
-// kSpecFlags carries their values. kProbeGi: 0 runtime (the UBO), 1 forced
-// off, 2 forced on. kStrip removes whole stages (bit 0 the traced
-// reflection, bit 1 water and glass, bit 2 the GI gather) with a neutral
-// result in their place; the IMAGE IS WRONG under kStrip by design, it exists
-// to time and count registers on the rest of the kernel, never to look at.
+// ── Specialization constants (DeferredShade picks the pipeline per dispatch) ──
+// kSpecMask names the pc.flags bits that are compile-time in this pipeline and
+// kSpecFlags carries their values; effFlags() reads every other bit from
+// pc.flags, so each permutation computes exactly what the runtime kernel does.
+// The G-buffer MSAA sample count (bits 5-6) is always in the mask: it is
+// renderer configuration, not per-frame state, so DeferredShade builds one
+// pipeline per sample count in use. That is for registers. This kernel sits on
+// a register-allocation cliff, landing at 128 or 168 depending on what is live
+// at its peak, and the runtime sample-count code alone puts the 1x kernel on
+// the far side; after an edit to what the kernel holds live, check the default
+// permutation's register count with THREEPP_VULKAN_PIPELINE_STATS=1. The rest
+// are diagnostics (DeferredShade's THREEPP_VK_SHADE_* knobs): more mask bits
+// make more scene toggles compile-time, so the driver can drop the code they
+// turn off, and kProbeGi does the same for the probe GI gate (0 runtime, the
+// UBO; 1 forced off; 2 forced on).
 layout(constant_id = 0) const uint kSpecFlags = 0u;
 layout(constant_id = 1) const uint kSpecMask  = 0u;
 layout(constant_id = 2) const uint kProbeGi   = 0u;
-layout(constant_id = 3) const uint kStrip     = 0u;
 bool probesEnabled() { return kProbeGi == 0u ? probeGrid.enabled > 0.5 : kProbeGi == 2u; }
 // probe_common.glsl's own gate, made the same test here (its default is the UBO).
 #define PROBE_GRID_OFF (!probesEnabled())
@@ -1210,8 +1212,7 @@ void main() {
     // thin-walled too (no KHR_volume → thinWalled), and routing it here painted
     // it milky-teal ocean water instead of clear refraction. Thin-walled glass
     // now falls through to the refractive glass branch below like closed glass.
-    // (kStrip bit 1, the diagnostic probe: water falls through to the opaque shade.)
-    if ((kStrip & 2u) == 0u && pm.thinWalled != 0 && pm.transmission > 0.0 && geoms[id - 1u].foamAddress != 0ul) {
+    if (pm.thinWalled != 0 && pm.transmission > 0.0 && geoms[id - 1u].foamAddress != 0ul) {
         // Dispatch B skips water's minority-sample refinement (rare at an
         // ocean's silhouette against sky/terrain, and shadeWater's own
         // internal accumulation state is dispatch-A-only) — dispatch A's
@@ -1818,8 +1819,7 @@ void main() {
         if (reflReproject(uv, N, roughness, length(worldPos - camPos), rUv, rCap))
             reflSkip = rCap >= 4.0 && texture(reflAuxPrevTex, paneToPhys(reflAuxPrevTex, rUv)).x >= 4.0;
     }
-    // (kStrip bit 0, the diagnostic probe: no traced reflection, reflOut stays 0.)
-    if ((kStrip & 1u) == 0u && reflBlend > 0.0 && opaqueRefl && !reflSkip) {
+    if (reflBlend > 0.0 && opaqueRefl && !reflSkip) {
         // Emitter self-emission scale for the ray (the other half of the split):
         // (1−specNEET) for EVERYONE — near-mirror keeps the sharp BRDF-sampled
         // lamp image, rough hands the energy to the NEE above. Safe for
@@ -2012,8 +2012,7 @@ void main() {
     // transmissive geometry at an edge keeps dispatch A's dominant-sample
     // result — same as the pre-Phase-2 (msaa=1) behaviour for that pixel,
     // not a regression, just an untreated edge on (rare) glass/blend props.
-    // (kStrip bit 1, the diagnostic probe: every transmissive surface stays opaque.)
-    if (pc.shadeMode != 1u && (kStrip & 2u) == 0u) {
+    if (pc.shadeMode != 1u) {
         if (pm.transmission > 1.0) {
             // ADDITIVE blend (muzzle flashes, sparks, energy glows). The surface
             // GLOWS over the scene behind: dst = behind + src*strength. The opaque

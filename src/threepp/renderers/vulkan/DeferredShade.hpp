@@ -233,7 +233,9 @@ namespace threepp::vulkan {
             float sunTanHalfAngle = 0.f;
             // setGbufferMsaa's sample count (1/2/4) → pc.flags bits 5-6 so
             // dispatch A can weight complex pixels by their dominant-cluster
-            // fraction; 1 = no weighting, MS G-buffer bindings unused.
+            // fraction; 1 = no weighting, MS G-buffer bindings unused. Also
+            // picks the shade pipeline: each sample count is its own
+            // specialization (see shadePipeline).
             uint32_t gbufMsaaSamples = 1;
             // 0 = dispatch A (always). 1 = dispatch B, the MSAA per-sample
             // edge-shading pass — only when gbufMsaaSamples > 1, AFTER
@@ -413,14 +415,13 @@ namespace threepp::vulkan {
         VkSampler             lutSampler_   = VK_NULL_HANDLE;// LINEAR clamp — froxel LUT trilinear sampling
         VkDescriptorSetLayout dsLayout_     = VK_NULL_HANDLE;
         VkPipelineLayout      pipeLayout_   = VK_NULL_HANDLE;
-        VkPipeline            pipe_         = VK_NULL_HANDLE;// the shade, every knob at its default (key 0)
-        // Specialization probes (diagnostic; the THREEPP_VK_SHADE_* knobs read
-        // at construction, see shadePipeline). With every knob at its default
-        // none of this is used and pipe_ is the only shade pipeline.
-        uint32_t              specMask_     = 0;    // THREEPP_VK_SHADE_SPEC_MASK
+        // The shade is a set of specialization permutations, built on first use
+        // (see shadePipeline). The mask always holds the MSAA sample-count bits,
+        // so the default path has one pipeline per sample count in use; the
+        // THREEPP_VK_SHADE_* knobs read at construction add diagnostics to it.
+        uint32_t              specMask_     = 0;    // kShadeSpecMsaa | THREEPP_VK_SHADE_SPEC_MASK
         bool                  specProbe_    = false;// THREEPP_VK_SHADE_SPEC_PROBE
-        uint32_t              strip_        = 0;    // THREEPP_VK_SHADE_STRIP
-        VkShaderModule        shadeMod_     = VK_NULL_HANDLE;// kept while a knob is set
+        VkShaderModule        shadeMod_     = VK_NULL_HANDLE;// kept for the lazy creates
         std::vector<std::pair<uint64_t, VkPipeline>> shadePerms_;// key -> permutation
         VkPipeline shadePipeline(uint32_t flags, bool probeGi);
         VkPipeline createShadePipeline(uint64_t key);

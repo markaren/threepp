@@ -1223,6 +1223,35 @@ namespace threepp::vulkan {
         }
     }
 
+    int64_t VulkanContext::pipelineStat(VkPipeline pipe, const char* name) const {
+        if (!pipelineStatsEnabled_ || pipe == VK_NULL_HANDLE) return -1;
+
+        auto getStats = reinterpret_cast<PFN_vkGetPipelineExecutableStatisticsKHR>(
+                vkGetDeviceProcAddr(device_, "vkGetPipelineExecutableStatisticsKHR"));
+        if (!getStats) return -1;
+
+        VkPipelineExecutableInfoKHR ei{};
+        ei.sType           = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR;
+        ei.pipeline        = pipe;
+        ei.executableIndex = 0;
+
+        uint32_t nStats = 0;
+        if (getStats(device_, &ei, &nStats, nullptr) != VK_SUCCESS || nStats == 0) return -1;
+        std::vector<VkPipelineExecutableStatisticKHR> stats(nStats);
+        for (auto& s : stats) s.sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_STATISTIC_KHR;
+        getStats(device_, &ei, &nStats, stats.data());
+
+        for (const auto& s : stats) {
+            if (std::strcmp(s.name, name) != 0) continue;
+            switch (s.format) {
+                case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_INT64_KHR:  return s.value.i64;
+                case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR: return static_cast<int64_t>(s.value.u64);
+                default: return -1;
+            }
+        }
+        return -1;
+    }
+
     void VulkanContext::setObjectName(VkImage image, const char* name) const {
         setObjectNameImpl(setObjectNameFn_, device_, VK_OBJECT_TYPE_IMAGE,
                           reinterpret_cast<uint64_t>(image), name);

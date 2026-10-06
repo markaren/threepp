@@ -138,6 +138,11 @@ namespace threepp::vulkan {
         // pipeline creation.
         void dumpPipelineStats(VkPipeline pipe, const char* label) const;
 
+        // One statistic of `pipe`'s first executable, by its driver-given name
+        // ("Register Count" on NVIDIA), as an integer; -1 when statistics are
+        // off or the driver reports no integer statistic of that name.
+        int64_t pipelineStat(VkPipeline pipe, const char* name) const;
+
         // Attach a debug-utils name to a Vulkan object so validation messages
         // and RenderDoc / Nsight reports identify it by label instead of by
         // raw uint64 handle. No-op when validation is off (the EXT extension
