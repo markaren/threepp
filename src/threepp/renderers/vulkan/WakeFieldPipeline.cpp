@@ -474,6 +474,7 @@ namespace threepp::vulkan {
         tb.rippleRes       = st.rippleRes;
         tb.rippleViscosity = std::max(wf.rippleViscosity, 0.0f);
         tb.rippleGain      = wf.rippleGain;
+        tb.albedo          = std::max(wf.albedo, 0.0f);
 
         uint32_t liveMask = 0;
         for (uint32_t i = 0; i < st.layers; ++i) {

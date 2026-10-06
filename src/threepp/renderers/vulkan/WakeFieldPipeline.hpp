@@ -70,7 +70,7 @@ namespace threepp::vulkan {
         uint32_t rippleRes;
         float    rippleViscosity;
         float    rippleGain;
-        float    _pad0;
+        float    albedo;
         WakePatchGpu patches[DisplacedMesh::kMaxWakePatches];
     };
     static_assert(sizeof(WakeTableGpu) == 64 + 56 * DisplacedMesh::kMaxWakePatches,

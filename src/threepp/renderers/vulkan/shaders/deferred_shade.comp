@@ -245,6 +245,8 @@ layout(set = 0, binding = 79) uniform sampler2DArray oceanWakeRipple;
 // This pixel's read of it, taken once in main() where the ocean's fine normal
 // is built and used again by shadeWater (bubbles, film). Zero off a wake.
 vec4 gWake = vec4(0.0);
+// The field's own scale on what its film and bubbles turn back (WakeField::albedo).
+float gWakeAlbedo = 1.0;
 // Baked tileable foam detail (RG8, mipped): R = micro bubble brightness
 // (designed for a 4 m world mapping), G = ridged lace/filament pattern
 // (12 m mapping). Replaces the per-pixel procedural noise octaves in the
@@ -1114,6 +1116,7 @@ void main() {
         float wakeCalm    = 1.0;
         float wakeBoilVar = 0.0;// slope variance of the boil that went under a pixel
         if (geoms[id - 1u].foamAddress > 1ul) {
+            gWakeAlbedo = WakeTable(geoms[id - 1u].foamAddress).albedo;
             gWake = oceanWakeSample(geoms[id - 1u].foamAddress, worldPos.xz,
                                     clamp(sqrt(pixWorld * pixAlong), pixWorld, 8.0 * pixWorld));
             wakeCalm = 1.0 - 0.9 * clamp(gWake.a, 0.0, 1.0);

@@ -564,7 +564,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
         vec3 hue = max(pm.attenuationColor, vec3(1e-4));
         hue = mix(vec3(1.0), hue / max(max(hue.r, hue.g), hue.b), 0.7);
         const vec3 aerDiff = sampleEnvLod(Nmacro, maxLod) + lights.ambient + hemiAmbient(Nmacro);
-        const vec3 aerLit  = shadeDiffuseDirect(P, Nmacro, V, 0.30 * hue, 1.0, 0.0,
+        const vec3 aerLit  = shadeDiffuseDirect(P, Nmacro, V, 0.30 * gWakeAlbedo * hue, 1.0, 0.0,
                                                 vec3(0.0), doShadows, aerDiff,
                                                 vec3(0.0), 0.0,
                                                 vec3(0.0),
@@ -761,7 +761,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // above are. From below it is the dull raft the whitecaps are too.
     if (gWake.r > 4e-3) {
         const float cover = smoothstep(0.10, 0.45, gWake.r) * (below ? 0.12 : 1.0);
-        const vec3  filmCol  = mix(vec3(0.66, 0.72, 0.75), vec3(0.97, 0.99, 1.00), smoothstep(0.15, 0.85, gWake.r));
+        const vec3  filmCol  = gWakeAlbedo * mix(vec3(0.66, 0.72, 0.75), vec3(0.97, 0.99, 1.00), smoothstep(0.15, 0.85, gWake.r));
         const vec3  filmDiff = sampleEnvLod(N, maxLod) + lights.ambient + hemiAmbient(N);
         const vec3  filmLit  = shadeDiffuseDirect(P, N, V, filmCol, 0.8, 0.0,
                                                   vec3(0.0), doShadows, filmDiff,

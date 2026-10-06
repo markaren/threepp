@@ -65,7 +65,7 @@ layout(buffer_reference, scalar) readonly buffer WakeTable {
     uint  rippleRes;        // wavenumbers a side of a patch's ripples; 0 = the field has none
     float rippleViscosity;  // m2/s
     float rippleGain;
-    float _pad0;
+    float albedo;           // scales what the film and the bubbles turn back; 1 = as shaded
     WakePatch  patches[OCEAN_WAKE_MAX_PATCHES];
     WakeSource sources[];
 };

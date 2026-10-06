@@ -277,7 +277,12 @@ namespace threepp_py {
                 .def_readwrite("ripple_viscosity", &DisplacedMesh::WakeField::rippleViscosity,
                                "m2/s: a ripple of wavenumber k also dies at 2 nu k^2, the shortest first.")
                 .def_readwrite("ripple_gain", &DisplacedMesh::WakeField::rippleGain,
-                               "Scales the slope the water shade reads; 1 = what linear theory gives.");
+                               "Scales the slope the water shade reads; 1 = what linear theory gives.")
+                .def_readwrite("albedo", &DisplacedMesh::WakeField::albedo,
+                               "Scales the light the film and the bubbles turn back; 1 = as the water shade "
+                               "has them (the default). Read every frame. A scene whose camera opens wide at "
+                               "night turns it down: lit by the night sky alone, a race is otherwise a pale "
+                               "band on a sea that mirrors a dark sky.");
 
         py::class_<DisplacedMesh::WakePatch>(displaced, "WakePatch",
                                              "One patch of the wake field (mesh.wake_patch(i)): a square of water, "
