@@ -159,6 +159,7 @@ namespace threepp::vulkan {
                             VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                             VK_IMAGE_USAGE_STORAGE_BIT;
         ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+        applyConcurrentSharing(ici);
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         VmaAllocationCreateInfo aci{};

@@ -69,6 +69,26 @@ namespace threepp::vulkan {
         VkQueue presentQueue() const { return presentQueue_; }
         VkQueue computeQueue() const { return computeQueue_; }
         const QueueFamilies& queueFamilies() const { return queueFamilies_; }
+        // THREEPP_VK_ASYNC_PILOT=1: the async-compute pilot (plans/vulkan-cpu-
+        // and-async-compute-2026-10.md, item 6). =2 is its control: the same
+        // compute-only family and CONCURRENT resources, but every frame on the
+        // graphics queue as without the knob, so an A/B of 2 against 1 is the
+        // queue split alone. =3 is =1 with the ocean BLAS rebuild and the TLAS
+        // refit left on the graphics queue (only probeGI, clusterBuild,
+        // cloudShadow and froxels move); =4 moves nothing (the four command
+        // buffers and both semaphores, an empty compute submit), so =4
+        // against =2 is the cost of the submit structure and of using a
+        // second queue at all; =5 is =4 without the compute submit and the
+        // semaphores (three graphics command buffers, one queue), which
+        // splits those two. asyncComputeQueue() is true under =1, =3, =4 and
+        // =5 when the device gave the compute queue its own family, so the
+        // renderer can take the four-command-buffer path on this alone.
+        static int asyncComputePilotMode();
+        static bool asyncComputePilotRequested() { return asyncComputePilotMode() != 0; }
+        bool asyncComputeQueue() const {
+            return asyncComputePilotMode() != 2 && asyncComputePilotMode() != 0 &&
+                   queueFamilies_.compute != UINT32_MAX && queueFamilies_.compute != queueFamilies_.graphics;
+        }
 
         VkSwapchainKHR     swapchain() const { return swapchain_; }
         VkFormat           swapchainFormat() const { return swapchainFormat_; }

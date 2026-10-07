@@ -202,6 +202,25 @@ namespace threepp::vulkan::rg {
 
         // Record entry barrier, (barrier, pass) pairs, exit barrier.
         void execute(VkCommandBuffer cb);
+        // The same recording spread over consecutive command buffers that are
+        // submitted in this order on ONE queue: cbs[0] takes the entry barrier
+        // and the passes before splits[0], cbs[i] the passes from splits[i-1]
+        // on, the last one the exit barrier. A pass's barriers go with it.
+        // Pipeline barriers order across command buffers and submits of one
+        // queue, so the plan is unchanged; what the cut buys is a point to
+        // signal or wait a semaphore at (the async-compute pilot).
+        void execute(const VkCommandBuffer* cbs, const uint32_t* splits, uint32_t splitCount);
+
+        // Declares on `pass` of `target` every resource a pass of THIS graph
+        // uses, so that one pass of `target` stands in for this whole graph
+        // when it runs on another queue between two parts of `target`: images
+        // in the layout this graph takes them in (and leaves them in), as
+        // written if any pass here writes them; buffers and memory likewise.
+        // The stand-in's barriers then bring every resource into the state
+        // this graph expects before the cut, and order `target`'s later uses
+        // after it. Images imported UNDEFINED are not supported (their
+        // contents are dead on entry, so no layout to hand over).
+        void declareAsPass(RenderGraph& target, PassBuilder& pass) const;
 
         // ── Introspection (tests, THREEPP_RG_DUMP) ───────────────────────────
         [[nodiscard]] size_t passCount() const { return passes_.size(); }

@@ -39,7 +39,7 @@ namespace threepp {
     // shade rays traverse them via ray query from COMPUTE) and the previous
     // frame-in-flight's writes to the GI/shadow/reflection histories this
     // frame reprojects from.
-    void VulkanRenderer::Impl::addSceneDispatchPasses(vulkan::rg::RenderGraph& g) {
+    void VulkanRenderer::Impl::addSceneDispatchPasses(vulkan::rg::RenderGraph& g, DispatchPart part) {
         namespace rg = vulkan::rg;
         using Stage  = vulkan::DeferredShade::Stage;
         const uint32_t f = currentFrame;
@@ -49,13 +49,16 @@ namespace threepp {
         // descriptor-derived imports below don't pick its layout.
         g.importImage("sceneHdr", view().bloom_->sceneHdrImage(f), VK_IMAGE_ASPECT_COLOR_BIT, 1,
                       VK_IMAGE_LAYOUT_GENERAL);
+        // The async-compute pilot's split (DispatchPart): the four passes up
+        // to the froxels need no G-buffer, everything from cloudMarch on does.
+        const bool asyncPart = part != DispatchPart::SkipAsync;
 
         // ── Probe-GI update (on by default, setProbeGI) ─────────────────
         // Refresh a round-robin window of world-space irradiance probes
         // BEFORE the shade so this frame's gather taps a current grid. The
         // grid UBO is re-uploaded every frame — its `enabled` flag is what the
         // shader-side sampling gates on.
-        if (probeGI_) {
+        if (probeGI_ && asyncPart) {
             // The UBO write is per view on purpose: it targets the
             // frame-in-flight slot every view of this frame shares, and the
             // content is identical, so it is idempotent — writing it once per
@@ -125,7 +128,7 @@ namespace threepp {
         const bool shadeBActive = viewMsaaSamples > 1 && gbufShadeBEnabled_;
         // Clustered light culling: per-cell light lists for the shade's
         // analytic split (all point/spot lights, no 8-per-type cap).
-        if (clusterLightCountThisFrame_ > 0) {
+        if (clusterLightCountThisFrame_ > 0 && asyncPart) {
             auto pass = g.addPass("clusterBuild", [this, f](VkCommandBuffer c) {
                 view().deferredShade_->recordClusterBuild(c, f, clusterLightCountThisFrame_,
                                                           regionRenderExt_.width, regionRenderExt_.height);
@@ -136,7 +139,7 @@ namespace threepp {
         // frame, sampled by the surface/froxel/water sun terms below (moving
         // cloud shadows on the ground). Only when clouds are on (off = free /
         // image-identical).
-        if (cloudsEnabled_) {
+        if (cloudsEnabled_ && asyncPart) {
             auto pass = g.addPass("cloudShadow", [this, f](VkCommandBuffer c) {
                 view().deferredShade_->recordCloudShadow(c, f, sampleIndex);
             });
@@ -174,7 +177,7 @@ namespace threepp {
         const bool froxelsActive = ((mediumActiveThisFrame_ || deferredVolDensity_ > 0.f) &&
                                     clusterLightCountThisFrame_ > 0) ||
                                    densityActive;
-        if (froxelsActive) {
+        if (froxelsActive && asyncPart) {
             auto pass = g.addPass("froxels", [this, f](VkCommandBuffer c) {
                 gpuTimings_->begin(c, TP_Froxel, f);
                 view().deferredShade_->recordFroxels(c, f, regionRenderExt_.width, regionRenderExt_.height,
@@ -186,6 +189,7 @@ namespace threepp {
             });
             shade.declare(g, pass, Stage::Froxels, f);
         }
+        if (part == DispatchPart::AsyncOnly) return;
         // Half-res volumetric cloud march (cloud_march.comp): raymarch the
         // cloud deck + temporally reproject at half res, off the per-pixel
         // shade critical path. Only when clouds are enabled (off = free /

@@ -3128,6 +3128,12 @@ namespace threepp {
         // frame — the query pool has one slot pair per pass, and the one-shot
         // first-build cb never reset those slots at all.
         void recordDisplacedDeform(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds, bool timed = false);
+        // Its two halves, which recordDisplacedDeform runs back to back: the
+        // update (FFT, displace, foam, wake, readback copies) and the BLAS
+        // rebuild over the displaced vertices. The async-compute pilot records
+        // them into different command buffers on different queues.
+        void recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds, bool timed);
+        void recordDisplacedBlasRebuild(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, bool timed);
 
         // Mirror cascade height fields into DisplacedMesh for CPU sampling
         // (boat hydrodynamics etc.). On the batched per-frame path this reads
@@ -4699,7 +4705,11 @@ namespace threepp {
         // approximate diffuse IBL + ray-query accents). Adds its passes to
         // the frame graph between the G-buffer/AS head and the splats + post
         // tail (recordCommandBuffer); defined in VulkanRenderer.cpp.
-        void addSceneDispatchPasses(vulkan::rg::RenderGraph& g);
+        // The async-compute pilot builds it in two calls: AsyncOnly (probeGI,
+        // clusterBuild, cloudShadow, froxels, into computeGraph_) and
+        // SkipAsync (everything else, into the frame graph).
+        enum class DispatchPart { All, AsyncOnly, SkipAsync };
+        void addSceneDispatchPasses(vulkan::rg::RenderGraph& g, DispatchPart part = DispatchPart::All);
 
         // Called once after bloom_->createImages(); wires sceneHdr views.
         void onAfterBloomCreateImages() {
@@ -4831,6 +4841,48 @@ namespace threepp {
         // built in full and then executed once (beginDeferredFrame).
         vulkan::rg::RenderGraph frameGraph_;
 
+        // ── The async-compute pilot (THREEPP_VK_ASYNC_PILOT=1) ─────────────
+        // plans/vulkan-cpu-and-async-compute-2026-10.md, item 6. With the knob
+        // and a compute-only queue family (ctx->asyncComputeQueue()), a full
+        // frame goes out as four command buffers:
+        //   graphics 1  frame graph: head, deformers (the ocean WITHOUT its
+        //               BLAS rebuild), "async.join"; signals S1
+        //   graphics 2  frame graph: the G-buffer passes (no wait)
+        //   compute     computeGraph_: ocean BLAS rebuild, tlas, probeGI,
+        //               clusterBuild, cloudShadow, froxels; waits S1, signals S2
+        //   graphics 3  frame graph: the rest, every secondary view, the tail,
+        //               the overlay; waits S2, carries the fence and present
+        // so the compute work can run under the G-buffer raster. "async.join"
+        // is a pass with no commands that declares everything computeGraph_
+        // touches (RenderGraph::declareAsPass): its barriers bring those
+        // resources into the compute graph's layouts in graphics 1, and order
+        // the frame graph's later uses after it. Semaphore rules: a signal
+        // covers every command earlier in its queue's submission order and a
+        // wait every command later, so compute(N+1) waiting S1(N+1) is behind
+        // graphics 3 of frame N (the previous frame's TLAS and probe readers),
+        // and graphics 3 waiting S2 is behind compute(N). Off (the default) or
+        // without such a family nothing here is created or used.
+        vulkan::rg::RenderGraph computeGraph_;
+        bool asyncPilot_ = false;// ctx->asyncComputeQueue(), fixed at createCommandResources
+        // What moves to the compute queue (THREEPP_VK_ASYNC_PILOT: =1 both,
+        // =3 the dispatches only, =4 nothing; see VulkanContext).
+        bool asyncMoveAs_ = false;      // ocean BLAS rebuild + TLAS refit
+        bool asyncMoveDispatch_ = false;// probeGI, clusterBuild, cloudShadow, froxels
+        bool asyncFrame_ = false;// this frame took the four-command-buffer path
+        uint32_t asyncSplits_[2] = {0, 0};// first frame-graph pass of graphics 2 and 3
+        VkCommandPool computeCmdPool_ = VK_NULL_HANDLE;
+        std::array<VkCommandBuffer, kFramesInFlight> computeCmdBuffers_{};
+        std::array<VkCommandBuffer, kFramesInFlight> asyncGbufCmdBuffers_{};
+        std::array<VkCommandBuffer, kFramesInFlight> asyncTailCmdBuffers_{};
+        std::array<VkSemaphore, kFramesInFlight> asyncHeadDone_{};   // S1
+        std::array<VkSemaphore, kFramesInFlight> asyncComputeDone_{};// S2
+        // The command buffer this frame's recording continues in after the
+        // graph (overlay, HUD render() calls, the present transition).
+        VkCommandBuffer frameCb() const {
+            return asyncFrame_ ? asyncTailCmdBuffers_[currentFrame] : cmdBuffers[currentFrame];
+        }
+        void destroyAsyncPilotResources();
+
         // ── Several views, one graph ────────────────────────────────────────
         // Every view's passes are BUILT before any is RECORDED, so the CPU
         // state a view's pass callbacks read at record time — the current
@@ -4872,11 +4924,18 @@ namespace threepp {
         // barriers to stderr whenever they differ from what was last printed
         // under the same name (a pass appearing, a layout changing).
         void executeGraph(VkCommandBuffer cb, vulkan::rg::RenderGraph& graph, const char* name) {
+            executeGraph(&cb, nullptr, 0, graph, name);
+        }
+        // The same over consecutive command buffers of one queue
+        // (RenderGraph::execute with splits; the async-compute pilot).
+        void executeGraph(const VkCommandBuffer* cbs, const uint32_t* splits, uint32_t splitCount,
+                          vulkan::rg::RenderGraph& graph, const char* name) {
             // Which imported images share memory (TransientPool); the graph
             // orders the hand-over between them and checks their lifetimes.
             if (transientPool_) transientPool_->declare(graph);
             if (gbufMsPool_) gbufMsPool_->declare(graph);
-            graph.execute(cb);
+            if (splitCount == 0) graph.execute(cbs[0]);
+            else graph.execute(cbs, splits, splitCount);
             // Diagnostics (two-layout declarations, overlapping aliases): every
             // occurrence is counted, each distinct message printed and kept once.
             for (auto& e : graph.diagnostics()) {

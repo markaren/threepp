@@ -2645,6 +2645,11 @@ void VulkanRenderer::Impl::refreshMorphedBlas(Mesh& mesh, MorphedMeshState& st) 
         }
 
 void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds, bool timed) {
+            recordDisplacedUpdate(cb, dm, st, elapsedSeconds, timed);
+            recordDisplacedBlasRebuild(cb, dm, st, timed);
+        }
+
+void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds, bool timed) {
 
             // (0) Live sea state. The Phillips h0 pass is normally one-shot,
             // but windSpeed/windTheta/fetch are plain Params fields — when
@@ -3088,8 +3093,12 @@ void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMe
 
             // (4d) The wake field: carry, settle and feed every patch that is on.
             if (st.wake) wakeField_->record(cb, *st.wake, dm, frameNowSec());
+        }
 
+void VulkanRenderer::Impl::recordDisplacedBlasRebuild(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, bool timed) {
             // Buffer barrier: compute write → AS-build read on the vertex/normal buffers.
+            // (Under the async-compute pilot the write was on the graphics queue
+            // and S1 is what orders it; the barrier then orders nothing.)
             VkBufferMemoryBarrier bbs[2]{};
             bbs[0].sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
             bbs[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;

@@ -37,6 +37,16 @@ namespace threepp::vulkan {
     // file's own). Registers the view for the render graph's descriptor shadow.
     VkResult createImageView(VkDevice device, const VkImageViewCreateInfo* info,
                              const VkAllocationCallbacks* allocator, VkImageView* view);
+    // Same header: the async-compute pilot's CONCURRENT sharing switch.
+    void setConcurrentSharingFamilies(uint32_t a, uint32_t b);
+
+    int VulkanContext::asyncComputePilotMode() {
+        static const int mode = [] {
+            const char* e = std::getenv("THREEPP_VK_ASYNC_PILOT");
+            return (e && *e >= '1' && *e <= '5') ? *e - '0' : 0;
+        }();
+        return mode;
+    }
 
 #if defined(THREEPP_WITH_DLSS)
     // Defined in DlssUpscaler.cpp (free function so this TU doesn't pull in
@@ -856,6 +866,31 @@ namespace threepp::vulkan {
         }
         if (queueFamilies_.graphics == UINT32_MAX || queueFamilies_.present == UINT32_MAX) {
             throw std::runtime_error("[VulkanContext] required queue families not present on GPU");
+        }
+        // The async-compute pilot (THREEPP_VK_ASYNC_PILOT=1) wants a queue the
+        // graphics queue does not serialise against: a family with COMPUTE and
+        // without GRAPHICS (NVIDIA exposes one). Without the knob, or on a
+        // device with no such family (lavapipe), the choice above stands and
+        // computeQueue() is the graphics queue. Under the knob every buffer and
+        // image the central helpers create is CONCURRENT over the two families,
+        // so the pilot needs no ownership transfers.
+        if (asyncComputePilotRequested()) {
+            for (uint32_t i = 0; i < qn; ++i) {
+                const auto f = qprops[i].queueFlags;
+                if ((f & VK_QUEUE_COMPUTE_BIT) && !(f & VK_QUEUE_GRAPHICS_BIT)) {
+                    queueFamilies_.compute = i;
+                    break;
+                }
+            }
+            if (queueFamilies_.compute != queueFamilies_.graphics && queueFamilies_.compute != UINT32_MAX) {
+                setConcurrentSharingFamilies(queueFamilies_.graphics, queueFamilies_.compute);
+            }
+            std::cerr << "[VulkanContext] async compute pilot =" << asyncComputePilotMode()
+                      << ": compute family " << queueFamilies_.compute << ", graphics family "
+                      << queueFamilies_.graphics
+                      << (asyncComputeQueue()               ? " (separate queue)\n"
+                          : asyncComputePilotMode() == 2    ? " (control: CONCURRENT resources, one queue)\n"
+                                                            : " (same queue: the pilot is off)\n");
         }
     }
 

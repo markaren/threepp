@@ -640,6 +640,56 @@ namespace threepp::vulkan::rg {
         if (timer_) timer_->passEnd(cb);
     }
 
+    void RenderGraph::execute(const VkCommandBuffer* cbs, const uint32_t* splits, uint32_t splitCount) {
+        compile();
+        if (passes_.empty()) return;
+        uint32_t part = 0;
+        VkCommandBuffer cb = cbs[0];
+        if (timer_) timer_->passBegin(cb, "graph.entry", 0);
+        record(cb, entry_, entryMemory_, kAll, usedStages_);
+        if (timer_) timer_->passEnd(cb);
+        for (uint32_t i = 0; i < passes_.size(); ++i) {
+            while (part < splitCount && i >= splits[part]) cb = cbs[++part];
+            const auto& pass = passes_[i];
+            if (timer_) timer_->passBegin(cb, pass.name, pass.group);
+            record(cb, pass.barriers, false, 0, 0);
+            if (pass.execute) pass.execute(cb);
+            if (timer_) timer_->passEnd(cb);
+        }
+        cb = cbs[splitCount];
+        if (timer_) timer_->passBegin(cb, "graph.exit", 0);
+        record(cb, exit_, exitMemory_, usedStages_, kAll);
+        if (timer_) timer_->passEnd(cb);
+    }
+
+    void RenderGraph::declareAsPass(RenderGraph& target, PassBuilder& pass) const {
+        constexpr VkAccessFlags2 kRead  = VK_ACCESS_2_MEMORY_READ_BIT;
+        constexpr VkAccessFlags2 kWrite = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+        // 0 = unused, 1 = read, 2 = written.
+        std::vector<uint8_t> imageUse(images_.size(), 0), bufferUse(buffers_.size(), 0);
+        for (const auto& p : passes_) {
+            for (const auto& u : p.uses) {
+                auto& slot = u.isImage ? imageUse[u.resource] : bufferUse[u.resource];
+                slot = std::max<uint8_t>(slot, u.access.write ? 2 : 1);
+            }
+        }
+        for (uint32_t i = 0; i < images_.size(); ++i) {
+            if (!imageUse[i]) continue;
+            const auto& img = images_[i];
+            const VkImageLayout exit = img.exitLayout == VK_IMAGE_LAYOUT_UNDEFINED ? img.entryLayout : img.exitLayout;
+            pass.use(target.importImage(img.name, img.image, img.aspect, img.mipLevels, img.entryLayout, exit),
+                     Access{kAll, imageUse[i] == 2 ? kWrite : kRead, img.entryLayout, imageUse[i] == 2});
+        }
+        for (uint32_t i = 0; i < buffers_.size(); ++i) {
+            if (!bufferUse[i]) continue;
+            const auto& b = buffers_[i];
+            const BufferHandle h = b.buffer == VK_NULL_HANDLE ? target.importMemory(b.name)
+                                                              : target.importBuffer(b.name, b.buffer);
+            pass.use(h, Access{kAll, bufferUse[i] == 2 ? kWrite : kRead, VK_IMAGE_LAYOUT_UNDEFINED,
+                               bufferUse[i] == 2});
+        }
+    }
+
     std::string RenderGraph::dump() const {
         std::ostringstream os;
         auto line = [&](const PlannedBarrier& b) {

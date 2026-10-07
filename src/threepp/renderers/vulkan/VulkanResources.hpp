@@ -48,6 +48,15 @@ namespace threepp::vulkan {
     // Zeroes the struct on exit so subsequent calls are no-ops.
     void destroyBuffer(VmaAllocator alloc, Buffer& b);
 
+    // The async-compute pilot (THREEPP_VK_ASYNC_PILOT=1, VulkanContext): once
+    // the two families are set, createBuffer, createAsScratchBuffer and the
+    // renderer's central image helpers create CONCURRENT over them, so a
+    // resource can move between the graphics and the compute queue without an
+    // ownership transfer. Never set otherwise: everything stays EXCLUSIVE.
+    void setConcurrentSharingFamilies(uint32_t a, uint32_t b);
+    void applyConcurrentSharing(VkBufferCreateInfo& info);
+    void applyConcurrentSharing(VkImageCreateInfo& info);
+
     // ── Host-visible memory traffic (portable flush/invalidate) ─────────
     // Desktop GPUs expose HOST_COHERENT on every host-visible heap, so raw
     // map→memcpy→unmap "just works" there — but the Vulkan spec doesn't

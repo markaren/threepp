@@ -251,10 +251,12 @@ VulkanRenderer::Impl::~Impl() {
             // fence is fine — no queued work depends on it — and the cmd
             // pool destroy below releases the buffer regardless.
             if (frameState_ != FrameState::Idle) {
-                vkEndCommandBuffer(cmdBuffers[currentFrame]);
+                // Under the async-compute pilot the open one is graphics 3.
+                vkEndCommandBuffer(frameCb());
                 frameState_ = FrameState::Idle;
             }
             vkDeviceWaitIdle(d);
+            if (asyncPilot_) destroyAsyncPilotResources();
             // Device idle ⇒ nothing references retired resources. Destroy them
             // now or they leak at device destroy (VUID-vkDestroyDevice-device-
             // 05137 — the class of bug that bit lineGeomCache_ below).
