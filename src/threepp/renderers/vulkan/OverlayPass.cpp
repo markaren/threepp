@@ -18,6 +18,7 @@
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector3.hpp"
 #include "threepp/scenes/Scene.hpp"
+#include "threepp/objects/Group.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -84,11 +85,36 @@ struct OverlayRecordScratch {
         float   size      = 3.f;
         bool    attenuate = false;
     };
+    // One flat fill or sprite of the 2D pass, in draw order: an index into
+    // `meshes` or `sprites` plus GLRenderer's painter keys (see the sort in
+    // record()).
+    struct FlatDraw {
+        // 0 opaque, 1 transparent, 2 screen-space sprite — GL's two render
+        // lists, then its screen-space sprite drain.
+        int      list = 0;
+        int      groupOrder = 0;
+        int      renderOrder = 0;
+        bool     sprite = false;
+        uint32_t index = 0;
+    };
     std::vector<SpriteDraw>     sprites;
     std::vector<OrthoLineDraw>  lines;
     std::vector<OrthoMeshDraw>  meshes;
     std::vector<OrthoPointDraw> points;
+    std::vector<FlatDraw>       flat;
 };
+
+// GLRenderer's groupOrder for an object under `root`: the renderOrder of the
+// nearest Group above it (projectObject hands it down the subtree), 0 outside
+// any Group.
+static int groupOrderOf(const Object3D& o, const Object3D& root) {
+    if (&o == &root) return 0;
+    for (const Object3D* p = o.parent; p; p = p->parent) {
+        if (dynamic_cast<const Group*>(p)) return p->renderOrder;
+        if (p == &root) break;
+    }
+    return 0;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Construction / destruction
@@ -1717,6 +1743,46 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
         draws.resize(kMaxSpritesPerFrame);
     }
 
+    // Draw order of the flat fills and the sprites, as GLRenderer orders the
+    // same scene: its opaque list, then its transparent one (where a Sprite
+    // lands, SpriteMaterial being transparent), each sorted by the enclosing
+    // Group's renderOrder and then the object's own. The pass has no depth
+    // buffer, so GL's z keys have no counterpart; the tie-break is the order
+    // this pass always drew in — meshes in traversal order, then sprites —
+    // which is what an SVG's layers and a label over its panel rely on.
+    // Screen-space sprites come last and unsorted, like GL's drain of them.
+    auto& flatDraws = scratch_->flat;
+    flatDraws.clear();
+    {
+        const Object3D* siblingsOf = nullptr;
+        int             siblingsOrder = 0;
+        const auto groupOrder = [&](const Object3D& o) {
+            if (o.parent != siblingsOf || !siblingsOf) {
+                siblingsOf    = o.parent;
+                siblingsOrder = groupOrderOf(o, scene);
+            }
+            return siblingsOrder;
+        };
+        for (uint32_t i = 0; i < meshDraws.size(); ++i) {
+            const Mesh& m = *meshDraws[i].mesh;
+            flatDraws.push_back({meshDraws[i].transparent ? 1 : 0, groupOrder(m), m.renderOrder, false, i});
+        }
+        for (uint32_t i = 0; i < draws.size(); ++i) {
+            Sprite& sp = *draws[i].sprite;
+            if (sp.screenSpace) {
+                flatDraws.push_back({2, 0, 0, true, i});
+            } else {
+                flatDraws.push_back({sp.material()->transparent ? 1 : 0, groupOrder(sp), sp.renderOrder, true, i});
+            }
+        }
+        std::stable_sort(flatDraws.begin(), flatDraws.end(),
+                         [](const auto& a, const auto& b) {
+                             if (a.list != b.list) return a.list < b.list;
+                             if (a.groupOrder != b.groupOrder) return a.groupOrder < b.groupOrder;
+                             return a.renderOrder < b.renderOrder;
+                         });
+    }
+
     // Hoist atlas (re)uploads OUT of the render-pass instance: they record
     // transfer commands into this frame's cb (illegal inside
     // vkCmdBeginRendering), and recording them here — instead of a one-shot
@@ -2032,58 +2098,19 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     VkRect2D sc{{static_cast<int32_t>(rgx), static_cast<int32_t>(rgy)}, {static_cast<uint32_t>(rgw), static_cast<uint32_t>(rgh)}};
     vkCmdSetScissor(cb, 0, 1, &sc);
 
-    // ── Filled Mesh overlays ────────────────────────────────────────
-    // Drawn FIRST so Sprites/TextSprites composite on top of the vector
-    // art (panels behind labels). Uses the same flat-color overlay
-    // shader + ortho MVP (with GL→Vulkan clip-z remap) as the lines.
-    // In a lit pane this loop only picks up what the lit scope could not
-    // (meshes without a float normal attribute).
-    if (!meshDraws.empty()) {
-        if (orthoMeshPipeline_ == VK_NULL_HANDLE) createOrthoLinePipelines();
-        const Matrix4& cvp = paneCvp;
+    // ── Filled Mesh + Sprite overlays ───────────────────────────────
+    // One loop over flatDraws (sorted above), so a mesh and a sprite layer
+    // by renderOrder and, on a tie, the mesh goes first: Sprites/TextSprites
+    // composite on top of the vector art (panels behind labels). The meshes
+    // use the same flat-color overlay shader + ortho MVP (with GL→Vulkan
+    // clip-z remap) as the lines. In a lit pane this loop only picks up what
+    // the lit scope could not (meshes without a float normal attribute).
+    if (!meshDraws.empty() && orthoMeshPipeline_ == VK_NULL_HANDLE) createOrthoLinePipelines();
 
-        struct MeshPC {
-            float mvp[16];
-            float color[4];
-        };
-        VkPipeline curMesh = VK_NULL_HANDLE;
-        for (const auto& md : meshDraws) {
-            if (litPane && md.lit) continue;// already drawn, depth-tested and lit
-            const LineRec* rec = ensureLineGeometryUploaded(md.mesh->geometry().get());
-            if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
-
-            VkPipeline want = md.transparent ? orthoMeshTransparentPipeline_ : orthoMeshPipeline_;
-            if (want != curMesh) {
-                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
-                curMesh = want;
-            }
-
-            Matrix4 mvp;
-            mvp.multiplyMatrices(cvp, md.world);
-            MeshPC pc{};
-            std::memcpy(pc.mvp, mvp.elements.data(), 64);
-            pc.color[0] = md.color.r;
-            pc.color[1] = md.color.g;
-            pc.color[2] = md.color.b;
-            pc.color[3] = md.opacity;
-            vkCmdPushConstants(cb, orthoLinePipelineLayout_,
-                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0, sizeof(pc), &pc);
-
-            VkBuffer     vb[1] = {rec->vertex.handle};
-            VkDeviceSize vo[1] = {0};
-            vkCmdBindVertexBuffers(cb, 0, 1, vb, vo);
-            if (rec->index.handle != VK_NULL_HANDLE) {
-                vkCmdBindIndexBuffer(cb, rec->index.handle, 0, VK_INDEX_TYPE_UINT32);
-                vkCmdDrawIndexed(cb, rec->indexCount, 1, 0, 0, 0);
-            } else {
-                vkCmdDraw(cb, rec->vertexCount, 1, 0, 0);
-            }
-        }
-    }
-
-    // ── Sprite overlay ──────────────────────────────────────────────
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, overlaySpritePipeline_);
+    struct MeshPC {
+        float mvp[16];
+        float color[4];
+    };
 
     // Per-frame projection (ortho) extracted from the camera. matrixWorldInverse
     // is the view matrix; we precompute modelView for each sprite below.
@@ -2104,9 +2131,52 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     static_assert(sizeof(SpritePC) == 128,
                   "SpritePC must match push-constant layout");
 
-    for (const auto& d : draws) {
+    VkPipeline curFlat = VK_NULL_HANDLE;
+    for (const auto& fd : flatDraws) {
+        if (!fd.sprite) {
+            const auto& md = meshDraws[fd.index];
+            if (litPane && md.lit) continue;// already drawn, depth-tested and lit
+            const LineRec* rec = ensureLineGeometryUploaded(md.mesh->geometry().get());
+            if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
+
+            VkPipeline want = md.transparent ? orthoMeshTransparentPipeline_ : orthoMeshPipeline_;
+            if (want != curFlat) {
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+                curFlat = want;
+            }
+
+            Matrix4 mvp;
+            mvp.multiplyMatrices(paneCvp, md.world);
+            MeshPC pc{};
+            std::memcpy(pc.mvp, mvp.elements.data(), 64);
+            pc.color[0] = md.color.r;
+            pc.color[1] = md.color.g;
+            pc.color[2] = md.color.b;
+            pc.color[3] = md.opacity;
+            vkCmdPushConstants(cb, orthoLinePipelineLayout_,
+                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(pc), &pc);
+
+            VkBuffer     vb[1] = {rec->vertex.handle};
+            VkDeviceSize vo[1] = {0};
+            vkCmdBindVertexBuffers(cb, 0, 1, vb, vo);
+            if (rec->index.handle != VK_NULL_HANDLE) {
+                vkCmdBindIndexBuffer(cb, rec->index.handle, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(cb, rec->indexCount, 1, 0, 0, 0);
+            } else {
+                vkCmdDraw(cb, rec->vertexCount, 1, 0, 0);
+            }
+            continue;
+        }
+
+        const auto& d = draws[fd.index];
         const auto* atlas = ensureSpriteAtlasTexture(d.atlas, VK_NULL_HANDLE);// lookup-only (in-pass)
         if (!atlas) continue;
+
+        if (curFlat != overlaySpritePipeline_) {
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, overlaySpritePipeline_);
+            curFlat = overlaySpritePipeline_;
+        }
 
         // Per-sprite descriptor set bound to the atlas texture.
         VkDescriptorSetAllocateInfo asi{};

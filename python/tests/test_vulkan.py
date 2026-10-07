@@ -240,6 +240,110 @@ def test_hud_pass_after_a_readback_is_dropped_with_a_hint(vk_canvas, vk_renderer
     assert _centre(vk_renderer.read_pixels()) == "b"
 
 
+_LAYER_COLOURS = {"red": 0xff0000, "green": 0x00ff00, "blue": 0x0000ff, "yellow": 0xffff00,
+                  "magenta": 0xff00ff, "cyan": 0x00ffff, "white": 0xffffff, "orange": 0xff8000,
+                  "grey": 0x808080}
+
+
+def _layered_hud():
+    """A 2D scene whose layering is decided by render_order, not by the order
+    things were added in, with the colour each probe point must show."""
+    def quad(colour, x, y, order=0, transparent=False):
+        mat = tp.MeshBasicMaterial()
+        mat.color = _LAYER_COLOURS[colour]
+        mat.tone_mapped = False
+        mat.transparent = transparent
+        mesh = tp.Mesh(tp.PlaneGeometry(0.4, 0.4), mat)
+        mesh.position.set(x, y, 0)
+        mesh.render_order = order
+        return mesh
+
+    hud = tp.Scene()
+    # Three quads added bottom-up by render_order: the first one in is on top.
+    hud.add(quad("red", -1.00, 0.60, order=2))
+    hud.add(quad("green", -0.88, 0.50, order=1))
+    hud.add(quad("blue", -0.76, 0.40, order=0))
+    # A Group's render_order outranks the orders of the meshes inside.
+    over, under = tp.Group(), tp.Group()
+    over.render_order = 1
+    over.add(quad("yellow", -0.15, 0.60, order=0))
+    under.add(quad("magenta", -0.03, 0.48, order=5))
+    hud.add(over)
+    hud.add(under)
+    # Opaque draws before transparent, whatever the orders say.
+    hud.add(quad("cyan", 0.75, 0.60, order=0, transparent=True))
+    hud.add(quad("white", 0.87, 0.48, order=5))
+    # A sprite sits in the transparent list: a transparent mesh of a higher
+    # order covers it, an opaque one never does.
+    hud.add(quad("orange", -0.70, -0.45, order=1, transparent=True))
+    label = tp.SpriteMaterial()
+    label.map = tp.data_texture(np.full((2, 2, 4), 255, np.uint8), True)
+    label.tone_mapped = False
+    sprite = tp.Sprite(label)
+    sprite.position.set(-0.95, -0.45, 0)
+    sprite.scale.set(0.5, 0.5, 1)
+    hud.add(sprite)
+    hud.add(quad("grey", -0.95, -0.75, order=9))
+    # Equal orders keep the order they were added in: the last one in is on top.
+    hud.add(quad("red", 0.55, -0.40))
+    hud.add(quad("green", 0.67, -0.50))
+    hud.add(quad("blue", 0.79, -0.60))
+
+    cam = tp.OrthographicCamera(-W / H, W / H, 1, -1, 0.1, 10)
+    cam.position.z = 1
+    probes = {(-0.88, 0.50): "red", (-0.74, 0.50): "green", (-0.62, 0.30): "blue",
+              (-0.09, 0.54): "yellow", (0.11, 0.34): "magenta",
+              (0.81, 0.54): "cyan", (0.99, 0.36): "white",
+              (-0.80, -0.40): "orange", (-1.05, -0.62): "white", (-0.95, -0.85): "grey",
+              (0.67, -0.50): "blue", (0.53, -0.50): "green", (0.40, -0.25): "red"}
+    return hud, cam, probes
+
+
+def _layer_at(img, x, y):
+    """The name of the layer colour at a point of the 2D camera's view."""
+    h, w = img.shape[:2]
+    px = img[int((1 - y) / 2 * h), int((x / (W / H) + 1) / 2 * w)][:3].astype(int)
+    name, colour = min(_LAYER_COLOURS.items(),
+                       key=lambda kv: np.abs(px - [kv[1] >> 16, kv[1] >> 8 & 255, kv[1] & 255]).sum())
+    off = np.abs(px - [colour >> 16, colour >> 8 & 255, colour & 255]).sum()
+    return name if off < 60 else f"none of the layers {tuple(px)}"
+
+
+def test_hud_pass_layers_by_render_order_like_gl(vk_canvas, vk_renderer, renderer):
+    """The 2D pass (a second render() with an OrthographicCamera) layers a scene
+    the way GLRenderer does: opaque before transparent, then the render_order of
+    the enclosing Group, then the object's own, and the order of the scene graph
+    only between equals. It used to draw every mesh in scene order and every
+    sprite after them, so a panel added early with a high render_order was on
+    top under GL and underneath under Vulkan, and no mesh could cover a label."""
+    world, cam = _flat_scene(0x202830)
+
+    hud, hud_cam, probes = _layered_hud()
+    got = {}
+
+    def scene_then_hud():
+        vk_renderer.render(world, cam)
+        vk_renderer.render(hud, hud_cam)
+        got["vk"] = vk_renderer.read_pixels()
+
+    assert vk_canvas.animate_once(scene_then_hud)
+
+    # A scene of its own for GL: the two renderers share no GPU state.
+    hud, hud_cam, _ = _layered_hud()
+    renderer.render(world, cam)
+    renderer.auto_clear = False
+    try:
+        renderer.clear(False, True, False)
+        renderer.render(hud, hud_cam)
+        got["gl"] = renderer.read_pixels()
+    finally:
+        renderer.auto_clear = True
+
+    for (x, y), want in probes.items():
+        seen = {name: _layer_at(img, x, y) for name, img in got.items()}
+        assert seen == {"vk": want, "gl": want}, f"at ({x}, {y})"
+
+
 def test_sim_time_round_trips(vk_renderer):
     """The deterministic frame clock: None on the wall clock (the default), a
     pinned value reads back exactly, and None or a negative value releases it."""
