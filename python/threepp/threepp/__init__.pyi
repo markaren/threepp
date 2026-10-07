@@ -10950,6 +10950,14 @@ class VulkanRenderer:
     def lighting_view(self, arg1: str) -> None:
         ...
     @property
+    def motion_blur(self) -> float:
+        """
+        Camera motion blur from per-pixel motion vectors: the shutter's open fraction of the frame interval (0.5 = a 180 degree shutter, 1 = a full frame of smear). 0 disables (default).
+        """
+    @motion_blur.setter
+    def motion_blur(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
     def occlusion_culling(self) -> bool:
         """
         Two-phase GPU occlusion culling: hidden objects stop paying raster cost (phase-2 same-frame recovery, no popping). Works with gbuffer_msaa. Wins scale with occlusion (interiors, city blocks). Default off.
@@ -11029,6 +11037,14 @@ class VulkanRenderer:
         """
         Whether sensor-only surfaces are perceivable at all (the scene master switch).
         """
+    @property
+    def sharpen_strength(self) -> float:
+        """
+        Post-TAA RCAS sharpen strength (default 0.5). 0 disables.
+        """
+    @sharpen_strength.setter
+    def sharpen_strength(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
     @property
     def sim_time(self) -> float | None:
         """

@@ -1019,6 +1019,15 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r) { return r.native().bloomClamp(); },
                               [](PyVulkanRenderer& r, float v) { r.native().setBloomClamp(v); },
                               "Bloom input clamp to stabilise flickery ultra-bright highlights. <=0 disables (default); typical 8-32.")
+                .def_property("sharpen_strength",
+                              [](PyVulkanRenderer& r) { return r.native().sharpenStrength(); },
+                              [](PyVulkanRenderer& r, float v) { r.native().setSharpenStrength(v); },
+                              "Post-TAA RCAS sharpen strength (default 0.5). 0 disables.")
+                .def_property("motion_blur",
+                              [](PyVulkanRenderer& r) { return r.native().motionBlur(); },
+                              [](PyVulkanRenderer& r, float v) { r.native().setMotionBlur(v); },
+                              "Camera motion blur from per-pixel motion vectors: the shutter's open fraction of the frame "
+                              "interval (0.5 = a 180 degree shutter, 1 = a full frame of smear). 0 disables (default).")
                 // Procedural stars on SKY pixels — hash-based points in
                 // direction space, so they stay pixel-crisp at any resolution
                 // or FOV instead of smearing the way a baked star map does.
