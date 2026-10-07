@@ -8,22 +8,42 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace threepp {
 
     // A class for creating 2D text sprites in a 3D scene.
+    //
+    // `worldScale` is the sprite's height, and `box` says what of the text that
+    // height spans:
+    //   TextBox::Ink (default)  the string's own ink. Simple for a lone label,
+    //       but the glyph size then depends on the string: at one worldScale
+    //       "OTTER" is drawn about 40 % larger than "Kayak", whose y hangs below
+    //       the baseline, and their baselines differ.
+    //   TextBox::Line  one line of the font, ascender to descender. Every string
+    //       gets the same glyph size, and its baseline lies
+    //       -descender / (ascender - descender) of worldScale above the sprite's
+    //       bottom edge (Font::ascender, Font::descender), so text can be laid
+    //       out without measuring it. Each line break in the text adds a line
+    //       to the sprite's height.
+    // The sprite's width is the string's ink in both.
     class TextSprite: public Sprite {
 
     public:
         enum class HorizontalAlignment { Left, Center, Right };
         enum class VerticalAlignment { Above, Center, Below };
 
-        explicit TextSprite(const Font& font, std::optional<float> worldScale = {});
+        explicit TextSprite(const Font& font, std::optional<float> worldScale = {}, TextBox box = TextBox::Ink);
 
         void setColor(const Color& color);
 
         void setWorldScale(float worldScale);
+
+        // What worldScale spans: the string's ink, or a line of the font.
+        void setTextBox(TextBox box);
+
+        [[nodiscard]] TextBox getTextBox() const;
 
         void setText(const std::string& text);
 
@@ -43,7 +63,7 @@ namespace threepp {
 
         [[nodiscard]] std::string getText() const;
 
-        static std::shared_ptr<TextSprite> create(const Font& font, std::optional<float> worldScale = {});
+        static std::shared_ptr<TextSprite> create(const Font& font, std::optional<float> worldScale = {}, TextBox box = TextBox::Ink);
 
         ~TextSprite() override;
 

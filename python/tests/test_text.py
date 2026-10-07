@@ -41,6 +41,37 @@ def test_text_sprite_label():
     assert s.get_text() == "robot-1"
 
 
+def test_text_sprite_line_box():
+    font = tp.FontLoader().default_font()
+    strings = ["OTTER X", "Kayak 2", "gypq", "0.1 m"]   # capitals, a descender, descenders only, digits
+
+    def sprite(text, box=None):
+        s = tp.TextSprite(font, world_scale=20) if box is None else tp.TextSprite(font, world_scale=20, box=box)
+        s.set_text(text)
+        return s
+
+    # the default sizes the sprite by its string's ink: 20 tall whatever the glyphs are, so
+    # capitals alone are drawn larger than the same capitals beside a descender
+    assert sprite("H").get_text_box() == tp.TextBox.Ink
+    assert all(abs(sprite(t).scale.y - 20) < 1e-4 for t in strings)
+    assert sprite("H").scale.x > 1.2 * sprite("Hg").scale.x * font.advance("H") / font.advance("Hg")
+
+    # TextBox.Line: 20 is the height of a line of the font, so the glyphs are one size. The
+    # sprite's width is its string's ink plus a fixed margin: I and II differ by one advance.
+    line = {t: sprite(t, tp.TextBox.Line) for t in strings + ["I", "II"]}
+    assert all(abs(s.scale.y - 20) < 1e-4 for s in line.values())
+    advance = font.advance("I", 20 / (font.ascender() - font.descender()))
+    assert abs(line["II"].scale.x - line["I"].scale.x - advance) < 0.4
+
+    # switching an existing sprite re-rasterizes it; a line break adds a line
+    s = sprite("H")
+    wide = s.scale.x
+    s.set_text_box(tp.TextBox.Line)
+    assert s.get_text_box() == tp.TextBox.Line and s.scale.x < 0.9 * wide
+    s.set_text("H\nH")
+    assert s.scale.y > 30
+
+
 def test_svg_parse_to_group():
     svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'
            '<path d="M0,0 L10,0 L5,10 Z" fill="#ff3300"/></svg>')

@@ -137,15 +137,28 @@ namespace threepp_py {
                 .value("Center", TextSprite::VerticalAlignment::Center)
                 .value("Below", TextSprite::VerticalAlignment::Below);
 
+        // What a TextSprite's world_scale is the height of.
+        py::enum_<TextBox>(m, "TextBox")
+                .value("Ink", TextBox::Ink, "The string's own ink: the glyph size depends on the string.")
+                .value("Line", TextBox::Line, "One line of the font, ascender to descender: the same glyph size and baseline for every string.");
+
         py::class_<TextSprite, Sprite, std::shared_ptr<TextSprite>>(m, "TextSprite")
-                .def(py::init([](const Font& font, const py::object& world_scale) {
+                .def(py::init([](const Font& font, const py::object& world_scale, TextBox box) {
                     std::optional<float> ws;
                     if (!world_scale.is_none()) ws = world_scale.cast<float>();
-                    return TextSprite::create(font, ws);
-                }), py::arg("font"), py::arg("world_scale") = py::none())
+                    return TextSprite::create(font, ws, box);
+                }), py::arg("font"), py::arg("world_scale") = py::none(), py::arg("box") = TextBox::Ink,
+                     "world_scale is the sprite's height. With box=TextBox.Ink (the default) that is the height "
+                     "of the string's own ink, so capitals come out larger than a string with a descender. With "
+                     "box=TextBox.Line it is the height of one line of the font, the same for every string: the "
+                     "baseline lies -descender / (ascender - descender) of world_scale above the bottom edge "
+                     "(Font.ascender, Font.descender).")
                 .def("set_text", [](TextSprite& t, const std::string& s) { t.setText(s); }, py::arg("text"))
                 .def("set_color", [](TextSprite& t, const Color& c) { t.setColor(c); }, py::arg("color"))
                 .def("set_world_scale", [](TextSprite& t, float s) { t.setWorldScale(s); }, py::arg("scale"))
+                .def("set_text_box", [](TextSprite& t, TextBox b) { t.setTextBox(b); }, py::arg("box"),
+                     "What world_scale is the height of: the string's ink, or a line of the font.")
+                .def("get_text_box", [](const TextSprite& t) { return t.getTextBox(); })
                 .def("set_horizontal_alignment", [](TextSprite& t, TextSprite::HorizontalAlignment a) { t.setHorizontalAlignment(a); }, py::arg("alignment"))
                 .def("set_vertical_alignment", [](TextSprite& t, TextSprite::VerticalAlignment a) { t.setVerticalAlignment(a); }, py::arg("alignment"))
                 .def("get_text", [](const TextSprite& t) { return t.getText(); });

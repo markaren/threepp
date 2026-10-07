@@ -138,15 +138,25 @@ std::vector<Shape> Font::generateShapes(const std::string& text, float size) con
 }
 
 Image Font::rasterize(const std::string& text, float pixelHeight, const Color& color,
-                      int supersampling) const {
+                      int supersampling, TextBox box) const {
 
     const std::vector<unsigned char> empty(4, 0);
     if (text.empty() || pixelHeight < 1.f) return {empty, 1, 1};
 
     const int ss = std::max(1, supersampling);
 
+    // The font's line, in font units: ascender to descender, or the bounding
+    // box for a typeface file that carries neither.
+    float lineTop = static_cast<float>(ascender), lineBottom = static_cast<float>(descender);
+    if (lineTop <= lineBottom) {
+        lineTop = boundingBox.yMax;
+        lineBottom = boundingBox.yMin;
+    }
+    const bool lineBox = box == TextBox::Line && lineTop > lineBottom && resolution > 0;
+
     // Scale 'size' up by ss so we rasterize at ss× the output resolution.
-    const float lineSpan = boundingBox.yMax - boundingBox.yMin + static_cast<float>(underlineThickness);
+    const float bboxSpan = boundingBox.yMax - boundingBox.yMin + static_cast<float>(underlineThickness);
+    const float lineSpan = lineBox ? lineTop - lineBottom : bboxSpan;
     const float size = (lineSpan > 0.f)
                                ? pixelHeight * static_cast<float>(ss) * static_cast<float>(resolution) / lineSpan
                                : pixelHeight * static_cast<float>(ss);
@@ -188,7 +198,22 @@ Image Font::rasterize(const std::string& text, float pixelHeight, const Color& c
     // High-res (super-sampled) buffer dimensions.
     const int pad = 2 * ss;
     const int hiW = static_cast<int>(std::ceil(mxX - mnX)) + 2 * pad;
-    const int hiH = static_cast<int>(std::ceil(mxY - mnY)) + 2 * pad;
+    int hiH = static_cast<int>(std::ceil(mxY - mnY)) + 2 * pad;
+
+    // Buffer row `padY` starts at y = originY: the ink's bottom edge, above a
+    // margin of `pad` rows.
+    float originY = mnY;
+    int padY = pad;
+    if (lineBox) {
+        // The rows are the line's own instead, whatever the ink: ascender down
+        // to descender, and as far again as createPaths moved down per '\n'.
+        const float unit = size / static_cast<float>(resolution);
+        const auto newlines = static_cast<float>(std::ranges::count(text, '\n'));
+        originY = lineBottom * unit - newlines * bboxSpan * unit;
+        padY = 0;
+        const float rows = (lineTop * unit - originY) / static_cast<float>(ss);
+        hiH = ss * std::max(1, static_cast<int>(std::lround(rows)));
+    }
 
     std::vector<unsigned char> mask(static_cast<size_t>(hiW * hiH), 0);
 
@@ -201,7 +226,7 @@ Image Font::rasterize(const std::string& text, float pixelHeight, const Color& c
         xs.reserve(16);
         for (int row = 0; row < hiH; row++) {
             xs.clear();
-            const float fy = mnY + static_cast<float>(/*hiH - 1 -*/ row - pad) + 0.5f;
+            const float fy = originY + static_cast<float>(/*hiH - 1 -*/ row - padY) + 0.5f;
             for (int i = 0; i < n; i++) {
                 const Vector2& a = ring[i];
                 const Vector2& b = ring[(i + 1) % n];

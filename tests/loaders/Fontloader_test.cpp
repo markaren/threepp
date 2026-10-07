@@ -8,6 +8,7 @@
 #include <cmath>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace threepp;
@@ -133,4 +134,61 @@ TEST_CASE("Font metrics for laying text out") {
         CHECK(font->advance("", 50) == 0.f);
     }
     CHECK(ttf->advance("\xC2\xB5", 50) < ttf->advance("??", 50));
+}
+
+TEST_CASE("A line-box raster has one height and one baseline for every string") {
+
+    FontLoader loader;
+    auto json = loader.load(std::string(DATA_FOLDER) + "/fonts/typeface/optimer_regular.typeface.json");
+    auto ttf = roboto();
+    REQUIRE(json);
+    REQUIRE(ttf);
+
+    // The lowest and the highest row holding ink. Row 0 is the image's bottom.
+    const auto inkRows = [](const Image& image) {
+        const auto& rgba = image.data();
+        int lo = -1, hi = -1;
+        for (unsigned row = 0; row < image.height(); ++row) {
+            for (unsigned col = 0; col < image.width(); ++col) {
+                if (rgba[(row * image.width() + col) * 4 + 3] < 128) continue;
+                if (lo < 0) lo = static_cast<int>(row);
+                hi = static_cast<int>(row);
+                break;
+            }
+        }
+        return std::pair{lo, hi};
+    };
+
+    const float px = 96;
+    for (const auto* font : {&*json, &*ttf}) {
+        INFO(font->familyName);
+        const auto line = [&](const std::string& text) { return font->rasterize(text, px, Color::white, 4, TextBox::Line); };
+
+        // capitals only, a descender, descenders only, digits: all one height
+        for (const char* text : {"OTTER X", "Kayak 2", "gypq", "0.1 m"}) {
+            INFO(text);
+            CHECK(line(text).height() == 96u);
+        }
+
+        // H stands on the baseline, which is where the font's metrics put it,
+        // and neither a descender beside it nor the digits move it
+        const float baseline = px * static_cast<float>(-font->descender) / static_cast<float>(font->ascender - font->descender);
+        const auto [hLo, hHi] = inkRows(line("H"));
+        const auto [gLo, gHi] = inkRows(line("Hg"));
+        CHECK(std::abs(static_cast<float>(hLo) - baseline) <= 1.f);
+        CHECK(hHi == gHi);
+        CHECK(gLo < hLo - 5);
+        CHECK(std::abs(inkRows(line("1")).first - hLo) <= 1);
+
+        // the default crops to the ink, so a descender makes the image taller
+        const auto ink = [&](const std::string& text) { return font->rasterize(text, px, Color::white, 4); };
+        CHECK(ink("Hg").height() > ink("H").height() + 5);
+    }
+
+    // a second line adds the line advance, and the first line keeps its rows
+    // from the top
+    const auto one = json->rasterize("H", px, Color::white, 4, TextBox::Line);
+    const auto two = json->rasterize("H\nH", px, Color::white, 4, TextBox::Line);
+    CHECK(two.height() > one.height() + 48);
+    CHECK(two.height() - inkRows(two).second == one.height() - inkRows(one).second);
 }

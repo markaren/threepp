@@ -280,7 +280,10 @@ writes) the answer. They live in [`examples/probes/`](https://github.com/markare
 - **2D text & SVG**: `FontLoader().default_font()` (embedded — no font file),
   `Text2D` / `Text3D` (text meshes), `TextSprite` (billboard labels), and
   `SVGLoader().parse(...)` → a `Group` of filled meshes. Pair with an
-  `OrthographicCamera` + `auto_clear=False` for a HUD.
+  `OrthographicCamera` + `auto_clear=False` for a HUD. For HUD text, build the
+  labels as `TextSprite(font, world_scale=h, box=tp.TextBox.Line)`: `h` is then
+  the height of a line of the font, so every string has the same glyph size
+  and baseline (the default sizes each sprite by its own string's ink).
 - **In-window UI**: `ImguiContext` + the `threepp.imgui` submodule — Dear ImGui
   immediate-mode widgets (window/text/button/slider/checkbox/color/combo/…) for
   control panels. Works on **both** the GL and Vulkan renderers (`tp.HAS_IMGUI`).

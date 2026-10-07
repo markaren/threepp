@@ -3,19 +3,43 @@
 
 #include "threepp/utils/ImageUtils.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
 using namespace threepp;
+
+namespace {
+
+    // Font::rasterize's pixelHeight for the glyph atlas.
+    constexpr float kAtlasPixels = 64.f;
+
+    // The pixelHeight that gives a TextBox::Line atlas the glyph resolution of a
+    // TextBox::Ink one, so the box changes which rows are kept and not how sharp
+    // the glyphs are. For the ink box, kAtlasPixels is the height of the font's
+    // bounding box (its em, for a font that carries none); for the line box it
+    // is the height of ascender to descender.
+    float linePixels(const Font& font) {
+        const float bbox = font.boundingBox.yMax - font.boundingBox.yMin;
+        const float ink = bbox + static_cast<float>(font.underlineThickness);
+        const float line = font.ascender > font.descender ? static_cast<float>(font.ascender - font.descender) : bbox;
+        const float reference = ink > 0.f ? ink : static_cast<float>(font.resolution);
+        if (line <= 0.f || reference <= 0.f) return kAtlasPixels;
+        return std::max(1.f, std::round(kAtlasPixels * line / reference));
+    }
+
+}// namespace
 
 struct TextSprite::Impl {
 
     Color color_;
     float worldScale_{};
+    TextBox box_;
     std::string text_{"empty"};
     bool rasterized_ = false;// "empty" above is a placeholder, not an atlas
 
-    Impl(TextSprite* that, Font font, std::optional<float> worldScale)
-        : worldScale_(worldScale.value_or(1.f)), that(that), font_(std::move(font)) {
+    Impl(TextSprite* that, Font font, std::optional<float> worldScale, TextBox box)
+        : worldScale_(worldScale.value_or(1.f)), box_(box), that(that), font_(std::move(font)), linePixels_(linePixels(font_)) {
 
         that->setHorizontalAlignment(HorizontalAlignment::Left);
         that->setVerticalAlignment(VerticalAlignment::Below);
@@ -34,8 +58,22 @@ struct TextSprite::Impl {
         this->text_ = text;
         rasterized_ = true;
 
-        auto image = createText(text);
+        rasterize();
+    }
+
+    void setTextBox(TextBox box) {
+        if (box == box_) return;
+        box_ = box;
+        if (rasterized_) rasterize();
+    }
+
+    void rasterize() {
+
+        auto image = createText(text_);
         imgAspect_ = static_cast<float>(image.width()) / static_cast<float>(image.height());
+        // TextBox::Ink: the image, whatever its height, is worldScale tall.
+        // TextBox::Line: one line of it is, so two lines are twice that.
+        lines_ = box_ == TextBox::Line ? std::max(1.f, static_cast<float>(image.height()) / linePixels_) : 1.f;
 
         const auto material = that->materialAs<MaterialWithMap>();
         material->map->images() = {image};
@@ -58,7 +96,7 @@ struct TextSprite::Impl {
     }
 
     [[nodiscard]] Image createText(const std::string& text) const {
-        return font_.rasterize(text, 64, color_, 2);
+        return font_.rasterize(text, box_ == TextBox::Line ? linePixels_ : kAtlasPixels, color_, 2, box_);
     }
 
     void setWorldScale(float worldScale) {
@@ -67,17 +105,20 @@ struct TextSprite::Impl {
     }
 
     void applyScale() {
-        that->scale.set(imgAspect_ * worldScale_, worldScale_, 1.f);
+        const float height = worldScale_ * lines_;
+        that->scale.set(imgAspect_ * height, height, 1.f);
     }
 
 private:
     Sprite* that;
     Font font_;
+    float linePixels_;
     float imgAspect_{1.f};
+    float lines_{1.f};
 };
 
-TextSprite::TextSprite(const Font& font, std::optional<float> worldScale)
-    : Sprite(nullptr), pimpl_(std::make_unique<Impl>(this, font, worldScale)) {
+TextSprite::TextSprite(const Font& font, std::optional<float> worldScale, TextBox box)
+    : Sprite(nullptr), pimpl_(std::make_unique<Impl>(this, font, worldScale, box)) {
 }
 
 void TextSprite::setText(const std::string& text) {
@@ -92,8 +133,8 @@ std::string TextSprite::getText() const {
     return pimpl_->text_;
 }
 
-std::shared_ptr<TextSprite> TextSprite::create(const Font& fontPath, std::optional<float> worldScale) {
-    return std::make_shared<TextSprite>(fontPath, worldScale);
+std::shared_ptr<TextSprite> TextSprite::create(const Font& fontPath, std::optional<float> worldScale, TextBox box) {
+    return std::make_shared<TextSprite>(fontPath, worldScale, box);
 }
 
 void TextSprite::setColor(const Color& color) {
@@ -102,6 +143,14 @@ void TextSprite::setColor(const Color& color) {
 
 void TextSprite::setWorldScale(float worldScale) {
     pimpl_->setWorldScale(worldScale);
+}
+
+void TextSprite::setTextBox(TextBox box) {
+    pimpl_->setTextBox(box);
+}
+
+TextBox TextSprite::getTextBox() const {
+    return pimpl_->box_;
 }
 
 void TextSprite::setHorizontalAlignment(HorizontalAlignment h) {
