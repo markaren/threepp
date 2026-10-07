@@ -2,6 +2,7 @@
 
 FontLoader.default_font() is embedded, so none of this needs a font asset.
 """
+import numpy as np
 import threepp as tp
 
 
@@ -48,6 +49,47 @@ def test_svg_parse_to_group():
     meshes = [0]
     group.traverse(lambda o: meshes.__setitem__(0, meshes[0] + (1 if isinstance(o, tp.Mesh) else 0)))
     assert meshes[0] >= 1                    # at least one filled shape became a mesh
+
+
+def _covers(geometry, x, y):
+    """Whether a triangle of a flat geometry contains the point (x, y)."""
+    pos = geometry.get_attribute("position")[:, :2].astype(np.float64)
+    a, b, c = (pos[i] for i in np.asarray(geometry.get_index()).reshape(-1, 3).T)
+
+    def side(u, v):
+        return (v[:, 0] - u[:, 0]) * (y - u[:, 1]) - (v[:, 1] - u[:, 1]) * (x - u[:, 0])
+
+    d = np.stack([side(a, b), side(b, c), side(c, a)])
+    return bool(np.any(np.all(d >= 0, axis=0) | np.all(d <= 0, axis=0)))
+
+
+def _rect_geometry(attrs):
+    svg = f'<svg xmlns="http://www.w3.org/2000/svg"><rect {attrs} fill="#fff"/></svg>'
+    return tp.SVGLoader().parse(svg, curve_segments=48).children[0].geometry
+
+
+def test_svg_rounded_rect_corners():
+    # a pill: rx is half the width, so each end is a semicircle about (256, 102) / (256, 282)
+    pill = _rect_geometry('x="250" y="96" width="12" height="192" rx="6" ry="6"')
+    pos = pill.get_attribute("position")
+    assert np.allclose(pos.min(axis=0)[:2], (250, 96), atol=1e-3)   # the rect's own box,
+    assert np.allclose(pos.max(axis=0)[:2], (262, 288), atol=1e-3)  # not one grown or shrunk
+    assert _covers(pill, 256, 192)
+    assert _covers(pill, 252, 98)            # 5.7 from the arc's centre: inside it
+    # in the corner's 6x6 square but 7.8 from the centre. A corner used to be spread over
+    # twice its radius, which collapsed at rx = w/4 and left this pill with square ends.
+    assert not _covers(pill, 250.5, 96.5)
+    assert not _covers(pill, 261.5, 287.5)
+
+    # a radius is clamped to half its side, so an oversized one gives the same pill
+    clamped = _rect_geometry('x="250" y="96" width="12" height="192" rx="50" ry="6"')
+    assert np.allclose(clamped.get_attribute("position"), pos, atol=1e-4)
+
+    # rx alone also sets ry; the r=8 arc crosses the corner's diagonal at 2.34
+    card = _rect_geometry('x="0" y="0" width="100" height="60" rx="8"')
+    assert _covers(card, 2.6, 2.6)
+    assert not _covers(card, 2.15, 2.15)     # the old over-round corner crossed at 2.0
+    assert not _covers(card, 97.85, 57.85)
 
 
 def test_font_metrics_for_layout():

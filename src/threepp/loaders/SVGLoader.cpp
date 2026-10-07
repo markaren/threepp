@@ -1296,29 +1296,51 @@ ShapePath SVGLoader::Impl::parseRectNode(const pugi::xml_node& node) const {
 
     const auto x = parseFloatWithUnits(node.attribute("x").as_string("0"));
     const auto y = parseFloatWithUnits(node.attribute("y").as_string("0"));
-    const auto rx = parseFloatWithUnits(node.attribute("rx").as_string("0"));
-    const auto ry = parseFloatWithUnits(node.attribute("ry").as_string("0"));
     const auto w = parseFloatWithUnits(node.attribute("width").as_string("0"));
     const auto h = parseFloatWithUnits(node.attribute("height").as_string("0"));
 
-    ShapePath path;
-    path.moveTo(x + 2 * rx, y);
-    path.lineTo(x + w - 2 * rx, y);
-    if (rx != 0 || ry != 0) path.bezierCurveTo(x + w, y, x + w, y, x + w, y + 2 * ry);
-    path.lineTo(x + w, y + h - 2 * ry);
-    if (rx != 0 || ry != 0) path.bezierCurveTo(x + w, y + h, x + w, y + h, x + w - 2 * rx, y + h);
-    path.lineTo(x + 2 * rx, y + h);
+    // A radius that is not given takes the other one's value, and neither reaches
+    // past half the side it rounds (the SVG spec's clamp).
+    const auto rxAttr = node.attribute("rx");
+    const auto ryAttr = node.attribute("ry");
+    const auto rx = std::min(parseFloatWithUnits((rxAttr ? rxAttr : ryAttr).as_string("0")), w / 2);
+    const auto ry = std::min(parseFloatWithUnits((ryAttr ? ryAttr : rxAttr).as_string("0")), h / 2);
 
+    // Ellipse arc to Bezier approximation Coefficient (Inversed). See:
+    // https://spencermortensen.com/articles/bezier-circle/
+    constexpr float bci = 1 - 0.551915024494f;
+
+    ShapePath path;
+
+    // top left
+    path.moveTo(x + rx, y);
+
+    // top right
+    path.lineTo(x + w - rx, y);
     if (rx != 0 || ry != 0) {
 
-        path.bezierCurveTo(x, y + h, x, y + h, x, y + h - 2 * ry);
+        path.bezierCurveTo(x + w - rx * bci, y, x + w, y + ry * bci, x + w, y + ry);
     }
 
-    path.lineTo(x, y + 2 * ry);
-
+    // bottom right
+    path.lineTo(x + w, y + h - ry);
     if (rx != 0 || ry != 0) {
 
-        path.bezierCurveTo(x, y, x, y, x + 2 * rx, y);
+        path.bezierCurveTo(x + w, y + h - ry * bci, x + w - rx * bci, y + h, x + w - rx, y + h);
+    }
+
+    // bottom left
+    path.lineTo(x + rx, y + h);
+    if (rx != 0 || ry != 0) {
+
+        path.bezierCurveTo(x + rx * bci, y + h, x, y + h - ry * bci, x, y + h - ry);
+    }
+
+    // back to top left
+    path.lineTo(x, y + ry);
+    if (rx != 0 || ry != 0) {
+
+        path.bezierCurveTo(x, y + ry * bci, x + rx * bci, y, x + rx, y);
     }
 
     return path;
