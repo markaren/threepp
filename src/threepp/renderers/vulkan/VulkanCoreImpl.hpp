@@ -3958,33 +3958,54 @@ namespace threepp {
                                      VkSamplerAddressMode addrV,
                                      const char* debugName = nullptr);
 
-        // In-frame variant: records the upload into the CALLER's command
-        // buffer (must be outside a render-pass instance) and retires the
-        // staging buffer through the frame-serial queue — no submit, no
-        // queue drain. A mid-record one-shot's vkQueueWaitIdle blocks on
-        // every in-flight frame (~2 frames of GPU time); HUD TextSprites
-        // re-rasterizing their atlas per ammo-counter change made that a
-        // 40-50 ms hitch on every shot. Same-queue execution order + the
-        // final SHADER_READ_ONLY barrier make samples in this and later
-        // frames safe without any host wait.
-        Image2D createSampledImage2DInFrame(VkCommandBuffer cb,
-                                            uint32_t w, uint32_t h, VkFormat format,
-                                            const void* pixels, VkDeviceSize byteSize,
-                                            VkFilter filter, VkSamplerAddressMode addrU,
-                                            VkSamplerAddressMode addrV,
-                                            const char* debugName = nullptr) {
+        // In-frame upload of CPU-built levels (level 0 first; one level is an
+        // unmipped image): records it into the CALLER's command buffer (must
+        // be outside a render-pass instance) and retires the staging buffer
+        // through the frame-serial queue — no submit, no queue drain. A
+        // mid-record one-shot's vkQueueWaitIdle blocks on every in-flight
+        // frame (~2 frames of GPU time); HUD TextSprites re-rasterizing their
+        // atlas per ammo-counter change made that a 40-50 ms hitch on every
+        // shot. Same-queue execution order + the final SHADER_READ_ONLY
+        // barrier make samples in this and later frames safe without any host
+        // wait. The caller builds the mips because the sprite atlases that
+        // come this way are odd-sized, where buildSampledImage2D's blit chain
+        // skips rows (bcn::buildMipChainRGBA8Area).
+        Image2D createSampledImageLevelsInFrame(VkCommandBuffer cb,
+                                                uint32_t w, uint32_t h, VkFormat format,
+                                                const std::vector<std::vector<std::uint8_t>>& levels,
+                                                VkFilter magFilter, VkFilter minFilter,
+                                                VkSamplerMipmapMode mipmapMode,
+                                                VkSamplerAddressMode addrU,
+                                                VkSamplerAddressMode addrV,
+                                                const char* debugName = nullptr) {
             Buffer staging{};
-            Image2D out = buildSampledImage2D(cb, w, h, format, pixels, byteSize,
-                                              filter, addrU, addrV, debugName, staging);
+            Image2D out = buildSampledImageLevels(cb, w, h, format, levels,
+                                                  magFilter, minFilter, mipmapMode,
+                                                  addrU, addrV, debugName, staging);
             retire(std::move(staging));
             return out;
         }
 
-        // Shared body of the two variants above: image + view + sampler
+        // Shared body of createSampledImageBC and the in-frame variant above:
+        // image + view + sampler creation and the recorded upload of every
+        // level (one staging buffer, one copy region per level, final
+        // transition) into `cb`. `stagingOut` is still referenced by cb when
+        // this returns — the caller covers its lifetime (drain+free for the
+        // one-shot, frame-serial retire for the in-frame path).
+        Image2D buildSampledImageLevels(VkCommandBuffer cb,
+                                        uint32_t w, uint32_t h, VkFormat format,
+                                        const std::vector<std::vector<std::uint8_t>>& levels,
+                                        VkFilter magFilter, VkFilter minFilter,
+                                        VkSamplerMipmapMode mipmapMode,
+                                        VkSamplerAddressMode addrU,
+                                        VkSamplerAddressMode addrV,
+                                        const char* debugName,
+                                        Buffer& stagingOut);
+
+        // Shared body of createSampledImage2D: image + view + sampler
         // creation and the recorded upload (staging copy + mip-blit chain +
         // final transition) into `cb`. `stagingOut` is still referenced by
-        // cb when this returns — the caller covers its lifetime (drain+free
-        // for the one-shot, frame-serial retire for the in-frame path).
+        // cb when this returns — the caller covers its lifetime (drain+free).
         Image2D buildSampledImage2D(VkCommandBuffer cb,
                                     uint32_t w, uint32_t h, VkFormat format,
                                     const void* pixels, VkDeviceSize byteSize,

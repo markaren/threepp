@@ -904,6 +904,26 @@ Image2D VulkanRenderer::Impl::createSampledImageBC(uint32_t w, uint32_t h, VkFor
                                      VkFilter filter, VkSamplerAddressMode addrU,
                                      VkSamplerAddressMode addrV,
                                      const char* debugName) {
+            if (levels.empty()) return {};
+            VkCommandBuffer cb = beginOneShot();
+            Buffer staging{};
+            Image2D out = buildSampledImageLevels(cb, w, h, format, levels,
+                                                  filter, filter, VK_SAMPLER_MIPMAP_MODE_LINEAR,
+                                                  addrU, addrV, debugName, staging);
+            endAndSubmitOneShot(cb);
+            destroyBufferMaybeBatched(staging);
+            return out;
+        }
+
+Image2D VulkanRenderer::Impl::buildSampledImageLevels(VkCommandBuffer cb,
+                                     uint32_t w, uint32_t h, VkFormat format,
+                                     const std::vector<std::vector<std::uint8_t>>& levels,
+                                     VkFilter magFilter, VkFilter minFilter,
+                                     VkSamplerMipmapMode mipmapMode,
+                                     VkSamplerAddressMode addrU,
+                                     VkSamplerAddressMode addrV,
+                                     const char* debugName,
+                                     Buffer& stagingOut) {
             Image2D out{};
             if (levels.empty()) return out;
             out.width  = w;
@@ -928,11 +948,11 @@ Image2D VulkanRenderer::Impl::createSampledImageBC(uint32_t w, uint32_t h, VkFor
             VmaAllocationCreateInfo aci{};
             aci.usage = VMA_MEMORY_USAGE_AUTO;
             check(vmaCreateImage(ctx->allocator(), &ici, &aci, &out.image, &out.alloc, nullptr),
-                  "vmaCreateImage(bc)");
+                  "vmaCreateImage(levels)");
 
             VkDeviceSize total = 0;
             for (const auto& l : levels) total += static_cast<VkDeviceSize>(l.size());
-            Buffer staging = createBuffer(
+            stagingOut = createBuffer(
                     ctx->allocator(), ctx->device(), total,
                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                     VMA_MEMORY_USAGE_AUTO,
@@ -940,17 +960,15 @@ Image2D VulkanRenderer::Impl::createSampledImageBC(uint32_t w, uint32_t h, VkFor
                             VMA_ALLOCATION_CREATE_MAPPED_BIT);
             {
                 void* mapped = nullptr;
-                vmaMapMemory(ctx->allocator(), staging.alloc, &mapped);
+                vmaMapMemory(ctx->allocator(), stagingOut.alloc, &mapped);
                 auto* dst = static_cast<std::uint8_t*>(mapped);
                 for (const auto& l : levels) {
                     std::memcpy(dst, l.data(), l.size());
                     dst += l.size();
                 }
-                flushHostWrites(ctx->allocator(), staging.alloc, 0, total);
-                vmaUnmapMemory(ctx->allocator(), staging.alloc);
+                flushHostWrites(ctx->allocator(), stagingOut.alloc, 0, total);
+                vmaUnmapMemory(ctx->allocator(), stagingOut.alloc);
             }
-
-            VkCommandBuffer cb = beginOneShot();
 
             VkImageMemoryBarrier toDst{};
             toDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -973,14 +991,14 @@ Image2D VulkanRenderer::Impl::createSampledImageBC(uint32_t w, uint32_t h, VkFor
             VkDeviceSize offset = 0;
             for (uint32_t i = 0; i < mipLevels; ++i) {
                 regions[i] = {};
-                regions[i].bufferOffset = offset;// multiples of the 16-byte block size
+                regions[i].bufferOffset = offset;// multiples of the texel (block) size
                 regions[i].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                 regions[i].imageSubresource.mipLevel = i;
                 regions[i].imageSubresource.layerCount = 1;
                 regions[i].imageExtent = {std::max(1u, w >> i), std::max(1u, h >> i), 1};
                 offset += static_cast<VkDeviceSize>(levels[i].size());
             }
-            vkCmdCopyBufferToImage(cb, staging.handle, out.image,
+            vkCmdCopyBufferToImage(cb, stagingOut.handle, out.image,
                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                    mipLevels, regions.data());
 
@@ -995,9 +1013,6 @@ Image2D VulkanRenderer::Impl::createSampledImageBC(uint32_t w, uint32_t h, VkFor
                                          VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
                                  0, 0, nullptr, 0, nullptr, 1, &toRead);
 
-            endAndSubmitOneShot(cb);
-            destroyBufferMaybeBatched(staging);
-
             VkImageViewCreateInfo vci{};
             vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
             vci.image = out.image;
@@ -1009,30 +1024,34 @@ Image2D VulkanRenderer::Impl::createSampledImageBC(uint32_t w, uint32_t h, VkFor
             vci.subresourceRange.levelCount = mipLevels;
             vci.subresourceRange.layerCount = 1;
             check(vulkan::createImageView(ctx->device(), &vci, nullptr, &out.view),
-                  "vulkan::createImageView(bc)");
+                  "vulkan::createImageView(levels)");
 
             VkPhysicalDeviceProperties props{};
             vkGetPhysicalDeviceProperties(ctx->physicalDevice(), &props);
             const float maxAniso = std::min(16.0f, props.limits.maxSamplerAnisotropy);
+            // Anisotropy widens a linear, mipped footprint; a nearest filter
+            // asked for the texels themselves.
+            const bool aniso = mipLevels > 1u && magFilter == VK_FILTER_LINEAR &&
+                               minFilter == VK_FILTER_LINEAR;
 
             VkSamplerCreateInfo sci{};
             sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-            sci.magFilter = filter;
-            sci.minFilter = filter;
-            sci.mipmapMode = (mipLevels > 1u) ? VK_SAMPLER_MIPMAP_MODE_LINEAR
+            sci.magFilter = magFilter;
+            sci.minFilter = minFilter;
+            sci.mipmapMode = (mipLevels > 1u) ? mipmapMode
                                               : VK_SAMPLER_MIPMAP_MODE_NEAREST;
             sci.addressModeU = addrU;
             sci.addressModeV = addrV;
             sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            sci.anisotropyEnable = (mipLevels > 1u) ? VK_TRUE : VK_FALSE;
-            sci.maxAnisotropy = (mipLevels > 1u) ? maxAniso : 1.0f;
+            sci.anisotropyEnable = aniso ? VK_TRUE : VK_FALSE;
+            sci.maxAnisotropy = aniso ? maxAniso : 1.0f;
             sci.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
             sci.unnormalizedCoordinates = VK_FALSE;
             sci.compareEnable = VK_FALSE;
             sci.minLod = 0.0f;
             sci.maxLod = (mipLevels > 1u) ? VK_LOD_CLAMP_NONE : 0.0f;
             check(vkCreateSampler(ctx->device(), &sci, nullptr, &out.sampler),
-                  "vkCreateSampler(bc)");
+                  "vkCreateSampler(levels)");
 
             if (debugName) {
                 ctx->setObjectName(out.image, debugName);

@@ -193,13 +193,15 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
                     // one-shot submit + queue drain — that stalled on every
                     // in-flight frame each time a HUD TextSprite re-rasterized).
                     [this](VkCommandBuffer cb, uint32_t w, uint32_t h, VkFormat fmt,
-                           const void* pix, VkDeviceSize sz,
-                           VkFilter filter,
+                           const std::vector<std::vector<std::uint8_t>>& levels,
+                           VkFilter magFilter, VkFilter minFilter,
+                           VkSamplerMipmapMode mipmapMode,
                            VkSamplerAddressMode addrU,
                            VkSamplerAddressMode addrV,
                            const char* name) {
-                        return createSampledImage2DInFrame(cb, w, h, fmt, pix, sz,
-                                                           filter, addrU, addrV, name);
+                        return createSampledImageLevelsInFrame(cb, w, h, fmt, levels,
+                                                               magFilter, minFilter, mipmapMode,
+                                                               addrU, addrV, name);
                     },
                     // Retire stale sprite atlases through the frame-serial queue
                     // (no per-swap vkDeviceWaitIdle). Stamped with the frame

@@ -30,6 +30,18 @@ namespace threepp::bcn {
     std::vector<std::vector<std::uint8_t>> buildMipChainRGBA8(
             const std::uint8_t* rgba, int w, int h, bool srgb);
 
+    // The same chain, area-weighted: a level of odd size spreads each texel of
+    // the next over 2 + 1/floor(n/2) of its own instead of pairing them up and
+    // leaving the last row or column out. Every level then covers the whole
+    // image, as a GL driver's glGenerateMipmap does. For images that are drawn
+    // minified as they are (a sprite's glyph atlas is neither a power of two
+    // nor even): the paired-up chain shifts each odd level against the one
+    // above it, and a chain of bilinear blits skips rows outright, which drops
+    // a glyph's horizontal strokes. Equal to buildMipChainRGBA8 where every
+    // level is even (to a code, for sRGB).
+    std::vector<std::vector<std::uint8_t>> buildMipChainRGBA8Area(
+            const std::uint8_t* rgba, int w, int h, bool srgb);
+
 }// namespace threepp::bcn
 
 #endif//THREEPP_BC7ENCODE_HPP

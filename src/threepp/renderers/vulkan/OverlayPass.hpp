@@ -42,18 +42,20 @@ namespace threepp::vulkan {
 
     class OverlayPass {
     public:
-        // Callback type that wraps Impl::createSampledImage2DInFrame. Called
-        // from ensureSpriteAtlasTexture when a new or stale atlas needs to be
-        // uploaded: the upload is RECORDED into the frame's own command
+        // Callback type that wraps Impl::createSampledImageLevelsInFrame.
+        // Called from ensureSpriteAtlasTexture when a new or stale atlas needs
+        // to be uploaded: the upload is RECORDED into the frame's own command
         // buffer (before the overlay's render-pass instance opens) instead of
         // a one-shot submit — a mid-record one-shot's vkQueueWaitIdle drains
         // every in-flight frame, which turned each HUD-text re-rasterization
-        // (ammo counters) into a 40-50 ms hitch.
+        // (ammo counters) into a 40-50 ms hitch. `levels` is the RGBA8 image
+        // and, for a mipped texture, its chain below it.
         using SampledImageCreator = std::function<Image2D(
                 VkCommandBuffer cb,
                 uint32_t w, uint32_t h, VkFormat fmt,
-                const void* pixels, VkDeviceSize byteSize,
-                VkFilter filter,
+                const std::vector<std::vector<std::uint8_t>>& levels,
+                VkFilter magFilter, VkFilter minFilter,
+                VkSamplerMipmapMode mipmapMode,
                 VkSamplerAddressMode addrU,
                 VkSamplerAddressMode addrV,
                 const char* debugName)>;

@@ -24,6 +24,7 @@
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Points.hpp"
 #include "threepp/objects/Sprite.hpp"
+#include "threepp/renderers/common/BC7Encode.hpp"
 
 // SPIR-V blobs shared with createOverlayPipeline (3D hybrid overlay) and
 // createOrthoLinePipelines. const arrays have internal linkage in C++ so
@@ -1221,7 +1222,7 @@ OverlayPass::ensureSpriteAtlasTexture(const std::shared_ptr<Texture>& texSp,
     // (image-file loaded textures) usually do too. Anything else
     // we don't bother supporting here — the user can manually
     // upload via the bindless texture path before render().
-    std::vector<unsigned char> rgba;
+    std::vector<std::uint8_t> rgba;
     const size_t pixels = static_cast<size_t>(w) * h;
     try {
         auto& src = img.data<unsigned char>();
@@ -1250,19 +1251,60 @@ OverlayPass::ensureSpriteAtlasTexture(const std::shared_ptr<Texture>& texSp,
     // raw (UNORM), and overlay_sprite.frag applies the linear→sRGB
     // output encode for the UNORM swapchain. (Was: NoColorSpace fell
     // to SRGB here → double sRGB decode → dark non-white text.)
-    const VkFormat fmt = (tex->colorSpace == ColorSpace::sRGB)
-                                 ? VK_FORMAT_R8G8B8A8_SRGB
-                                 : VK_FORMAT_R8G8B8A8_UNORM;
+    const bool srgb = tex->colorSpace == ColorSpace::sRGB;
+    const VkFormat fmt = srgb ? VK_FORMAT_R8G8B8A8_SRGB
+                              : VK_FORMAT_R8G8B8A8_UNORM;
+
+    // The texture's own filters and wrap modes, and a mip chain under GL's
+    // rule (GLTextures: generateMipmaps and a mipmap min filter), so a sprite
+    // is sampled as GLRenderer samples it: a Nearest checker stays crisp, and
+    // a glyph atlas (64 px a line) drawn as 8 px HUD text is trilinear.
+    //
+    // The chain is built here, area-weighted, not blitted on the GPU. A glyph
+    // atlas is odd-sized (594 x 87, say), and halving 87 -> 43 -> 21 -> 10 with
+    // a bilinear blit takes two texels of every 2.02 to 2.1: it skips rows, a
+    // few more per level, and small text lost its horizontal strokes ("HDG"
+    // read "I IDG"). Channels are averaged apart, as glGenerateMipmap and the
+    // blit both do; the glyph atlas has one colour in every texel and its
+    // coverage in alpha, so its RGB is the same at every level.
+    const Filter minF = tex->minFilter;
+    const bool mipped = tex->generateMipmaps && minF != Filter::Nearest && minF != Filter::Linear;
+    std::vector<std::vector<std::uint8_t>> levels;
+    if (mipped) {
+        levels = bcn::buildMipChainRGBA8Area(rgba.data(), static_cast<int>(w),
+                                             static_cast<int>(h), srgb);
+    }
+    levels.insert(levels.begin(), std::move(rgba));
+    const VkFilter magFilter = tex->magFilter == Filter::Nearest ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+    const VkFilter minFilter = (minF == Filter::Nearest || minF == Filter::NearestMipmapNearest ||
+                                minF == Filter::NearestMipmapLinear)
+                                       ? VK_FILTER_NEAREST
+                                       : VK_FILTER_LINEAR;
+    const VkSamplerMipmapMode mipmapMode =
+            (minF == Filter::NearestMipmapLinear || minF == Filter::LinearMipmapLinear)
+                    ? VK_SAMPLER_MIPMAP_MODE_LINEAR
+                    : VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    auto wrap = [](TextureWrapping t) {
+        switch (t) {
+            case TextureWrapping::ClampToEdge:
+                return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            case TextureWrapping::MirroredRepeat:
+                return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+            default:
+                return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        }
+    };
+
     char spriteName[64];
     std::snprintf(spriteName, sizeof(spriteName),
                   "spriteAtlas[%p]", static_cast<const void*>(tex));
     Image2D up = uploadFn_(
             cb,
             w, h, fmt,
-            rgba.data(), rgba.size(),
-            VK_FILTER_LINEAR,
-            VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-            VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            levels,
+            magFilter, minFilter, mipmapMode,
+            wrap(tex->wrapS),
+            wrap(tex->wrapT),
             spriteName);
 
     SpriteAtlasRec rec{};

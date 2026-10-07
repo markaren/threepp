@@ -186,3 +186,60 @@ TEST_CASE("sRGB mip filtering averages in linear space") {
     // Alpha is linear regardless.
     CHECK(mips[0][3] == 255);
 }
+
+// A glyph atlas is odd-sized, and its mips are what small HUD text is drawn
+// from. One lit row of an 87-row image must still be there three levels down
+// (10 rows), wherever it lies: a chain that pairs rows up and drops the odd
+// one, or one that blits bilinearly, loses it at some positions, and the text
+// loses a stroke.
+TEST_CASE("Area-weighted mip chain keeps every row of an odd-sized image") {
+
+    const int w = 5, h = 87;
+    for (int lit = 0; lit < h; ++lit) {
+        std::vector<std::uint8_t> img(w * h * 4, 0);
+        for (int x = 0; x < w; ++x) img[(lit * w + x) * 4 + 3] = 255;
+
+        const auto mips = bcn::buildMipChainRGBA8Area(img.data(), w, h, false);
+        // 5x87 -> 2x43 -> 1x21 -> 1x10 -> 1x5 -> 1x2 -> 1x1
+        REQUIRE(mips.size() == 6);
+        REQUIRE(mips[0].size() == 2u * 43u * 4u);
+        REQUIRE(mips[2].size() == 1u * 10u * 4u);
+
+        // The row is 1/87 of the image; a level of n rows holds it as n/87 of
+        // one texel's alpha, split over at most two rows.
+        int nh = h;
+        for (int level = 0; level < 3; ++level) {
+            nh /= 2;
+            const int nw = static_cast<int>(mips[level].size()) / 4 / nh;
+            int sum = 0;
+            for (int y = 0; y < nh; ++y) sum += mips[level][(y * nw) * 4 + 3];
+            const double expected = 255.0 * nh / h;
+            INFO("lit row " << lit << ", level " << level + 1);
+            CHECK(std::abs(sum - expected) <= 3.0);
+        }
+    }
+}
+
+TEST_CASE("Area-weighted mip chain is the paired-up one where every level is even") {
+
+    const int w = 64, h = 16;
+    std::mt19937 rng(7);
+    std::vector<std::uint8_t> img(w * h * 4);
+    for (auto& v : img) v = static_cast<std::uint8_t>(rng() & 0xff);
+
+    CHECK(bcn::buildMipChainRGBA8Area(img.data(), w, h, false) ==
+          bcn::buildMipChainRGBA8(img.data(), w, h, false));
+
+    // sRGB sums the same linear values in another order: within one code.
+    const auto a = bcn::buildMipChainRGBA8Area(img.data(), w, h, true);
+    const auto b = bcn::buildMipChainRGBA8(img.data(), w, h, true);
+    REQUIRE(a.size() == b.size());
+    int maxDiff = 0;
+    for (size_t l = 0; l < a.size(); ++l) {
+        REQUIRE(a[l].size() == b[l].size());
+        for (size_t i = 0; i < a[l].size(); ++i) {
+            maxDiff = std::max(maxDiff, std::abs(int(a[l][i]) - int(b[l][i])));
+        }
+    }
+    CHECK(maxDiff <= 1);
+}

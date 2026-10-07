@@ -259,6 +259,42 @@ namespace {
         }
     };
 
+    // One axis of an area-weighted halving, n texels to max(1, n / 2):
+    // destination texel j averages `taps` source texels from first[j] on, by
+    // weight[j] / total. An even n pairs them up; an odd n has each
+    // destination texel cover 2 + 1/floor(n/2) source texels, so three take
+    // part, weighted by how much of each it covers.
+    struct HalvingAxis {
+        int taps;
+        std::uint32_t total;
+        std::vector<int> first;
+        std::vector<std::array<std::uint32_t, 3>> weight;
+
+        explicit HalvingAxis(int n)
+            : taps(n == 1 ? 1 : (n % 2 == 0 ? 2 : 3)),
+              total(n == 1 ? 1u : (n % 2 == 0 ? 2u : static_cast<std::uint32_t>(n))) {
+            const int m = std::max(1, n >> 1);
+            first.resize(m);
+            weight.resize(m);
+            for (int j = 0; j < m; ++j) {
+                if (n % 2 == 0) {
+                    first[j] = 2 * j;
+                    weight[j] = {1u, 1u, 0u};
+                    continue;
+                }
+                // In units of 1/m source texels: destination j covers [lo, hi),
+                // source i covers [i * m, (i + 1) * m).
+                const long long lo = static_cast<long long>(j) * n, hi = lo + n;
+                first[j] = static_cast<int>(lo / m);
+                for (int k = 0; k < 3; ++k) {
+                    const long long i = first[j] + k;
+                    const long long overlap = std::min(hi, (i + 1) * m) - std::max(lo, i * m);
+                    weight[j][k] = overlap > 0 ? static_cast<std::uint32_t>(overlap) : 0u;
+                }
+            }
+        }
+    };
+
 }// namespace
 
 std::vector<std::uint8_t> bc7EncodeMode6(const std::uint8_t* rgba, int w, int h) {
@@ -344,6 +380,79 @@ std::vector<std::vector<std::uint8_t>> buildMipChainRGBA8(
                         d[c] = static_cast<std::uint8_t>((s00[c] + s01[c] + s10[c] + s11[c] + 2) / 4);
                     }
                 }
+            }
+        }
+
+        levels.push_back(std::move(next));
+        src = levels.back().data();
+        cw = nw;
+        ch = nh;
+    }
+
+    return levels;
+}
+
+std::vector<std::vector<std::uint8_t>> buildMipChainRGBA8Area(
+        const std::uint8_t* rgba, int w, int h, bool srgb) {
+
+    static const SrgbTables kTables;
+
+    std::vector<std::vector<std::uint8_t>> levels;
+    const std::uint8_t* src = rgba;// level 0 read straight from the caller
+    int cw = w, ch = h;
+
+    while (cw > 1 || ch > 1) {
+        const HalvingAxis ax(cw), ay(ch);
+        const int nw = std::max(1, cw >> 1);
+        const int nh = std::max(1, ch >> 1);
+        std::vector<std::uint8_t> next(static_cast<size_t>(nw) * nh * 4);
+
+        // Weights are whole numbers (texel overlaps), so a level is summed in
+        // integers and divided once per texel.
+        const double inv = 1.0 / (static_cast<double>(ax.total) * static_cast<double>(ay.total));
+        const int tx = ax.taps, ty = ay.taps;
+        const size_t stride = static_cast<size_t>(cw) * 4;
+        std::uint8_t* d = next.data();
+        for (int y = 0; y < nh; ++y) {
+            const std::uint8_t* rows = src + static_cast<size_t>(ay.first[y]) * stride;
+            const std::uint32_t* wy = ay.weight[y].data();
+            for (int x = 0; x < nw; ++x, d += 4) {
+                const std::uint8_t* corner = rows + static_cast<size_t>(ax.first[x]) * 4;
+                const std::uint32_t* wx = ax.weight[x].data();
+                // Signed: every sum is far below 2^63, and that converts to
+                // double in one instruction.
+                std::int64_t sum[4] = {0, 0, 0, 0};
+                if (srgb) {
+                    // RGB in linear space, alpha linearly.
+                    float lin[3] = {0.f, 0.f, 0.f};
+                    for (int ky = 0; ky < ty; ++ky) {
+                        const std::uint8_t* s = corner + ky * stride;
+                        for (int kx = 0; kx < tx; ++kx, s += 4) {
+                            const std::uint32_t wgt = wy[ky] * wx[kx];
+                            for (int c = 0; c < 3; ++c) lin[c] += static_cast<float>(wgt) * kTables.toLinear[s[c]];
+                            sum[3] += static_cast<std::int64_t>(wgt) * s[3];
+                        }
+                    }
+                    for (int c = 0; c < 3; ++c) {
+                        const int li = std::clamp(static_cast<int>(lin[c] * static_cast<float>(inv) * 4096.f), 0, 4095);
+                        d[c] = kTables.toSrgb[li];
+                    }
+                } else {
+                    for (int ky = 0; ky < ty; ++ky) {
+                        const std::uint8_t* s = corner + ky * stride;
+                        for (int kx = 0; kx < tx; ++kx, s += 4) {
+                            const std::int64_t wgt = wy[ky] * wx[kx];
+                            sum[0] += wgt * s[0];
+                            sum[1] += wgt * s[1];
+                            sum[2] += wgt * s[2];
+                            sum[3] += wgt * s[3];
+                        }
+                    }
+                    for (int c = 0; c < 3; ++c) {
+                        d[c] = static_cast<std::uint8_t>(static_cast<double>(sum[c]) * inv + 0.5);
+                    }
+                }
+                d[3] = static_cast<std::uint8_t>(static_cast<double>(sum[3]) * inv + 0.5);
             }
         }
 
