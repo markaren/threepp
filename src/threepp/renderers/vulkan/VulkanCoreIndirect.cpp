@@ -110,8 +110,9 @@ namespace threepp {
         // verbatim instead of rebuilding and re-copying them.
         const std::array<uint64_t, 2> buildSig = {
                 (uint64_t(drawInputsVersion_) << 32) | uint64_t(view().cullVersion),
-                (wantOcclMeta ? (1ull << 63) : 0ull) ^
-                        (wantOcclMeta ? reinterpret_cast<uint64_t>(occlHiz_->view()) : 0ull)};
+                // The pyramid's generation, not its view handle: a recreated
+                // pyramid can hand back the view value the last one had.
+                wantOcclMeta ? ((1ull << 63) | occlHiz_->generation()) : 0ull};
         // A scene with a ParticleField never takes the skip path. The DrawInfo
         // contents would restore correctly, but particleDrawSlots_ (which is
         // per-view and holds the push-constant index the particle pipeline

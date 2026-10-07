@@ -989,8 +989,12 @@ namespace threepp::vulkan {
         VkDescriptorSet       tlasSet_        = VK_NULL_HANDLE;
         VkPipelineLayout      bakePipeLayout_ = VK_NULL_HANDLE;
         VkPipeline            bakePipe_       = VK_NULL_HANDLE;
-        VkAccelerationStructureKHR tlasBound_  = VK_NULL_HANDLE;// what the set holds
+        // "What the set holds" and "what the scene has" are compared by
+        // accelerationStructureSerial: a scene rebuild destroys the TLAS and
+        // creates another, which can come back with the handle value it had.
+        std::uint64_t              tlasBoundSerial_ = 0;       // what the set holds
         VkAccelerationStructureKHR wantTlas_  = VK_NULL_HANDLE;// what the scene has
+        std::uint64_t              wantTlasSerial_  = 0;
         std::uint64_t         bakeStructGen_  = 0;
         std::vector<BakeDispatch> bakeDispatch_;
         // Reported once rather than every frame: a device with no ray query

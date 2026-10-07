@@ -1229,12 +1229,14 @@ bool VulkanRenderer::Impl::splatStampPrepare() {
             const auto& g = view().rasterGbufs[currentFrame];
             if (g.splatDepth.view == VK_NULL_HANDLE) return false;
 
-            // Per-frame-in-flight set, rewritten only when the AOV view handle
-            // actually changed (a resize / render-scale realloc). The set for
+            // Per-frame-in-flight set, rewritten only when the AOV view
+            // actually changed (a resize / render-scale realloc) — by serial,
+            // since the reallocated view can keep its value. The set for
             // THIS frame slot cannot be in flight — its fence was waited on
             // before recording began — so the update is safe where a shared set
             // would be VUID-vkCmdBindDescriptorSets-...-03047 material.
-            if (splatStampSetViews_[currentFrame] != g.splatDepth.view) {
+            const uint64_t aovSerial = vulkan::imageViewSerial(g.splatDepth.view);
+            if (splatStampSetSerials_[currentFrame] != aovSerial) {
                 VkDescriptorImageInfo ii{VK_NULL_HANDLE, g.splatDepth.view, VK_IMAGE_LAYOUT_GENERAL};
                 VkWriteDescriptorSet w{};
                 w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1244,7 +1246,7 @@ bool VulkanRenderer::Impl::splatStampPrepare() {
                 w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 w.pImageInfo      = &ii;
                 vulkan::updateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
-                splatStampSetViews_[currentFrame] = g.splatDepth.view;
+                splatStampSetSerials_[currentFrame] = aovSerial;
             }
 
             // No timing bracket: TP_OverlayDepth's slot pair is already spent

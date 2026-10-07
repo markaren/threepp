@@ -11,9 +11,11 @@
 //
 //   1. prepareFrame — grow this frame-in-flight's SpanDesc + instance-matrix
 //      pools and the shared world-matrix buffer, then rewrite the frame's
-//      descriptor set if any handle moved. Runs AFTER the per-frame fence wait
-//      and BEFORE recording, which is what makes writing this slot's buffers
-//      and its descriptor set safe (invariant 4 — the VUID-03047 zone).
+//      descriptor set (every frame: a reallocated buffer can come back with
+//      the handle value it had, so there is no cheap "nothing moved"). Runs
+//      AFTER the per-frame fence wait and BEFORE recording, ONCE per frame,
+//      which is what makes writing this slot's buffers and its descriptor
+//      set safe (invariant 4 — the VUID-03047 zone).
 //   2. the host fills spanPtr()/matrixPtr() (version-gated; see EntrySpan's
 //      meshWorld / instMatVersion contract) and flushes.
 //   3. record — one dispatch over the summed instance count.
@@ -68,7 +70,8 @@ namespace threepp::vulkan {
 
         // Grow this frame's pools to hold `spanCount` spans and `matrixCount`
         // instance matrices, and the shared output to hold `entryCount`
-        // matrices; then rewrite this frame's descriptor set if anything moved.
+        // matrices; then rewrite this frame's descriptor set. Once per frame,
+        // before this frame's record().
         void prepareFrame(uint32_t frame, uint32_t spanCount,
                           uint32_t matrixCount, uint32_t entryCount);
 
@@ -130,13 +133,6 @@ namespace threepp::vulkan {
         VkPipeline            pipe_       = VK_NULL_HANDLE;
         VkDescriptorPool      descPool_   = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> sets_;// [fif]
-
-        struct CachedInputs {
-            VkBuffer spans = VK_NULL_HANDLE;
-            VkBuffer mats  = VK_NULL_HANDLE;
-            VkBuffer world = VK_NULL_HANDLE;
-        };
-        std::vector<CachedInputs> cached_;// [fif]
 
         void createPipeline();
         void retireBuffer(Buffer& b);

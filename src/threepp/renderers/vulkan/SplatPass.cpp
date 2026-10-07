@@ -948,8 +948,12 @@ namespace threepp::vulkan {
 
     void SplatPass::setEnvironment(VkImageView view, VkSampler sampler, uint32_t mips) {
         if (view == VK_NULL_HANDLE) return;// nothing to point at yet
-        if (view == envView_ && sampler == envSampler_) return;
+        // Same view OBJECT, not same handle value: a rebuilt environment can
+        // come back with the value the freed one had.
+        const uint64_t serial = imageViewSerial(view);
+        if (serial == envSerial_ && sampler == envSampler_) return;
         envView_    = view;
+        envSerial_  = serial;
         envSampler_ = sampler;
         envMips_    = std::max(mips, 1u);
         envDirty_   = true;
@@ -958,6 +962,7 @@ namespace threepp::vulkan {
     void SplatPass::rewriteEnvironment(VkImageView view, VkSampler sampler, uint32_t mips) {
         if (view == VK_NULL_HANDLE) return;// nothing to point at yet
         envView_    = view;
+        envSerial_  = imageViewSerial(view);
         envSampler_ = sampler;
         envMips_    = std::max(mips, 1u);
         // Caller has drained the device; the old env image is already freed,
@@ -1312,6 +1317,7 @@ namespace threepp::vulkan {
         if (in.lightsUbos) lightsUbos_.assign(in.lightsUbos, in.lightsUbos + framesInFlight_);
         if (in.envView) {
             envView_    = in.envView;
+            envSerial_  = imageViewSerial(in.envView);
             envSampler_ = in.envSampler;
             envMips_    = std::max(in.envMips, 1u);
         }

@@ -1647,7 +1647,7 @@ namespace threepp {
         VkPipelineLayout      splatStampPipelineLayout_ = VK_NULL_HANDLE;
         VkPipeline            splatStampPipeline_       = VK_NULL_HANDLE;
         std::array<VkDescriptorSet, kFramesInFlight> splatStampSets_{};
-        std::array<VkImageView, kFramesInFlight>     splatStampSetViews_{};
+        std::array<uint64_t, kFramesInFlight>        splatStampSetSerials_{};// imageViewSerial
         // Sticky: set the first frame a scene holds BOTH splat clouds and
         // overlay content, and never cleared. It forces the depth AOV on
         // (splatDepthAov()) because the stamp has nothing to read otherwise.

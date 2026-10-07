@@ -126,7 +126,7 @@ namespace threepp::vulkan {
         // The swapchain view each frame slot's descriptor currently points at;
         // the swapchain image index varies per frame, so the destination write
         // is refreshed only when it actually changes.
-        std::vector<VkImageView> boundDst_;
+        std::vector<uint64_t> boundDst_;// imageViewSerial of the swapchain view each set holds
 
         void createPipeline();
         void createDescriptorPool();

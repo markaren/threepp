@@ -7,7 +7,8 @@
 //
 // Follows the SkinningPipeline / ProbeGI house pattern: one class, own
 // pipeline + descriptor pool, record(cb, frame). resize() is idempotent and
-// recreates image/views/sets only when the extent or depth views change;
+// recreates image/views/sets only when the extent or depth views change (a
+// different view OBJECT, by imageViewSerial; a handle value says nothing);
 // record() lazily transitions the fresh image to GENERAL, builds the chain
 // with per-mip barriers, and ends with the write→sampled-read barrier the
 // shade dispatch needs — callers add nothing.
@@ -53,6 +54,10 @@ namespace threepp::vulkan {
         [[nodiscard]] VkImageView view()    const { return fullView_; }// all mips, sampled
         [[nodiscard]] VkSampler   sampler() const { return sampler_; }// NEAREST, unclamped LOD
         [[nodiscard]] uint32_t    mips()    const { return mipCount_; }
+        // Bumped every time resize() recreates the pyramid. What a consumer
+        // keys "built against this pyramid" on: view() can keep its value
+        // across a recreate.
+        [[nodiscard]] uint64_t    generation() const { return generation_; }
 
     private:
         VulkanContext& ctx_;
@@ -72,9 +77,10 @@ namespace threepp::vulkan {
         VkPipeline            pipe_       = VK_NULL_HANDLE;
         VkDescriptorPool      descPool_   = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> sets_;// [frame * mipCount_ + mip]
-        VkImageView cachedDepthViews_[8]{};  // change detection for resize()
-        VkImageView cachedMsDepthViews_[8]{};
-        uint32_t    msSamples_ = 1;
+        uint64_t cachedDepthSerials_[8]{};  // change detection for resize():
+        uint64_t cachedMsDepthSerials_[8]{};// imageViewSerial of each depth view
+        uint32_t msSamples_  = 1;
+        uint64_t generation_ = 0;
 
         void createPipeline();
         void destroyImage();

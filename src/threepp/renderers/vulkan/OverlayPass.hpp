@@ -243,7 +243,7 @@ namespace threepp::vulkan {
         VkDescriptorSetLayout        paneSkySetLayout_ = VK_NULL_HANDLE;
         VkDescriptorPool             paneSkyDescPool_  = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> paneSkySets_;       // per FIF
-        std::vector<VkImageView>     paneSkyWrittenView_;// what each set holds
+        std::vector<uint64_t>        paneSkyWrittenSerial_;// imageViewSerial each set holds
         VkPipelineLayout paneSkyPipelineLayout_ = VK_NULL_HANDLE;
         VkPipeline       paneSkyPipeline_       = VK_NULL_HANDLE;
 

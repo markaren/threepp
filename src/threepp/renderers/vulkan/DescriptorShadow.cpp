@@ -15,6 +15,7 @@ namespace threepp::vulkan {
             VkImage            image = VK_NULL_HANDLE;
             VkImageAspectFlags aspect = 0;
             uint32_t           baseMip = 0, mipCount = 1, imageMips = 1;
+            uint64_t           serial = 0;// see imageViewSerial
         };
 
         struct Element {
@@ -40,7 +41,11 @@ namespace threepp::vulkan {
         struct AccelInfo {
             VkBuffer    storage = VK_NULL_HANDLE;
             const char* contents = nullptr;
+            uint64_t    serial = 0;// see accelerationStructureSerial
         };
+        // One counter for views and acceleration structures: a serial is never
+        // handed out twice, so 0 can stand for "none".
+        uint64_t nextSerial = 0;// guarded by mtx()
         std::unordered_map<VkAccelerationStructureKHR, AccelInfo>& accels() {
             static std::unordered_map<VkAccelerationStructureKHR, AccelInfo> a;
             return a;
@@ -84,7 +89,16 @@ namespace threepp::vulkan {
         if (view == VK_NULL_HANDLE) return;
         std::lock_guard lock(mtx());
         views()[view] = {image, aspect, baseMip, mipCount == 0 ? 1u : mipCount,
-                         imageMipLevels == 0 ? 1u : imageMipLevels};
+                         imageMipLevels == 0 ? 1u : imageMipLevels, ++nextSerial};
+    }
+
+    uint64_t imageViewSerial(VkImageView view) {
+        if (view == VK_NULL_HANDLE) return 0;
+        std::lock_guard lock(mtx());
+        const auto it = views().find(view);
+        // Unregistered: a fresh number, so a cache keyed on it misses (and
+        // rewrites) rather than matching a view it has never seen.
+        return it == views().end() ? ++nextSerial : it->second.serial;
     }
 
     VkResult createImageView(VkDevice device, const VkImageViewCreateInfo* info,
@@ -103,7 +117,14 @@ namespace threepp::vulkan {
                                        const char* contents) {
         if (as == VK_NULL_HANDLE) return;
         std::lock_guard lock(mtx());
-        accels()[as] = {storage, contents};
+        accels()[as] = {storage, contents, ++nextSerial};
+    }
+
+    uint64_t accelerationStructureSerial(VkAccelerationStructureKHR as) {
+        if (as == VK_NULL_HANDLE) return 0;
+        std::lock_guard lock(mtx());
+        const auto it = accels().find(as);
+        return it == accels().end() ? ++nextSerial : it->second.serial;
     }
 
     VkBuffer accelerationStructureBuffer(VkAccelerationStructureKHR as) {

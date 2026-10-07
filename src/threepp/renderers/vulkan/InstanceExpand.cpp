@@ -32,7 +32,6 @@ namespace threepp::vulkan {
         matBufs_.resize(framesInFlight_);
         matrixPtrs_.resize(framesInFlight_, nullptr);
         matFresh_.resize(framesInFlight_, 0u);
-        cached_.resize(framesInFlight_);
         createPipeline();
     }
 
@@ -186,12 +185,11 @@ namespace threepp::vulkan {
     }
 
     void InstanceExpand::rewriteSet(uint32_t frame) {
-        auto& c = cached_[frame];
-        if (c.spans == spanBufs_[frame].handle && c.mats == matBufs_[frame].handle &&
-            c.world == world_.handle)
-            return;
-        c = {spanBufs_[frame].handle, matBufs_[frame].handle, world_.handle};
-
+        // Unconditionally. The pools are destroyed and recreated in place on
+        // growth, and the driver hands the new buffer the old one's handle
+        // value often enough that "the handles are the ones I wrote" does not
+        // mean "the set names live buffers" (the OcclusionCull device loss).
+        // Three writes a frame, on a set whose slot fence has signaled.
         VkDescriptorBufferInfo bi[3]{
                 {spanBufs_[frame].handle, 0, VK_WHOLE_SIZE},
                 {matBufs_[frame].handle, 0, VK_WHOLE_SIZE},

@@ -42,7 +42,7 @@ namespace threepp::vulkan {
     SensorPass::SensorPass(VulkanContext& ctx, VkCommandPool cmdPool, uint32_t framesInFlight)
         : ctx_(ctx), cmdPool_(cmdPool), framesInFlight_(framesInFlight) {
         snapshot_.resize(framesInFlight_);
-        boundDst_.assign(framesInFlight_, VK_NULL_HANDLE);
+        boundDst_.assign(framesInFlight_, 0);
         createPipeline();
         createDescriptorPool();
     }
@@ -61,7 +61,7 @@ namespace threepp::vulkan {
         VkDevice d = ctx_.device();
         for (auto& img : snapshot_) destroyImage2D(ctx_.allocator(), d, img);
         width_ = height_ = 0;
-        boundDst_.assign(framesInFlight_, VK_NULL_HANDLE);
+        boundDst_.assign(framesInFlight_, 0);
     }
 
     void SensorPass::createPipeline() {
@@ -235,7 +235,10 @@ namespace threepp::vulkan {
         // last pointed at. (The prior frame using this slot has retired — the
         // caller's framesInFlight fence guarantees it — so rewriting here
         // cannot touch a descriptor an in-flight command buffer still reads.)
-        if (boundDst_[frame] != swapView) {
+        // Compared by serial: a recreated swapchain's views can keep their
+        // values, and the set would go on naming the destroyed ones.
+        const uint64_t swapSerial = imageViewSerial(swapView);
+        if (boundDst_[frame] != swapSerial) {
             VkDescriptorImageInfo dstI{};
             dstI.imageView   = swapView;
             dstI.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -247,7 +250,7 @@ namespace threepp::vulkan {
             w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             w.pImageInfo      = &dstI;
             vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
-            boundDst_[frame] = swapView;
+            boundDst_[frame] = swapSerial;
         }
         return true;
     }

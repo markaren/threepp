@@ -1027,7 +1027,7 @@ bool ParticleFieldPass::ensureTlasSet() {
     }
     if (tlasSet_ == VK_NULL_HANDLE || wantTlas_ == VK_NULL_HANDLE) return false;
 
-    if (tlasBound_ != wantTlas_) {
+    if (tlasBoundSerial_ != wantTlasSerial_) {
         VkWriteDescriptorSetAccelerationStructureKHR asInfo{};
         asInfo.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
         asInfo.accelerationStructureCount = 1;
@@ -1040,7 +1040,7 @@ bool ParticleFieldPass::ensureTlasSet() {
         w.descriptorCount = 1;
         w.descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         vulkan::updateDescriptorSets(d, 1, &w, 0, nullptr);
-        tlasBound_ = wantTlas_;
+        tlasBoundSerial_ = wantTlasSerial_;
     }
     return true;
 }
@@ -1094,17 +1094,21 @@ void ParticleFieldPass::ensureBakePipeline() {
 }
 
 // The TLAS the bake traces. Called every frame from prepareParticleFields, and
-// the descriptor is rewritten ONLY when the handle actually moved.
+// the descriptor is rewritten ONLY when the structure actually changed — a
+// different OBJECT, by serial: the rebuilt TLAS can come back with the handle
+// value the destroyed one had, and the set would go on naming that one.
 //
-// That conditional is the whole safety argument. A TLAS handle is recreated
+// That conditional is the whole safety argument. A TLAS is recreated
 // only by a structural scene rebuild, which is bracketed by vkDeviceWaitIdle,
 // so a write that happens on that frame cannot land on a set an in-flight frame
 // names (R6 / VUID-03047). A steady-state scene refits the SAME acceleration
 // structure object in place and this function writes nothing.
 void ParticleFieldPass::setTlas(VkAccelerationStructureKHR tlas) {
 
-    if (tlas == wantTlas_) return;
-    wantTlas_ = tlas;
+    const std::uint64_t serial = accelerationStructureSerial(tlas);
+    if (serial == wantTlasSerial_) return;
+    wantTlas_       = tlas;
+    wantTlasSerial_ = serial;
     // Every baked map was traced against the old structure.
     ++bakeStructGen_;
 }

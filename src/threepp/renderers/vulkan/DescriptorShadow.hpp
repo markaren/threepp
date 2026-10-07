@@ -43,6 +43,10 @@ namespace threepp::vulkan {
     void registerAccelerationStructure(VkAccelerationStructureKHR as, VkBuffer storage,
                                        const char* contents = nullptr);
     [[nodiscard]] VkBuffer accelerationStructureBuffer(VkAccelerationStructureKHR as);
+    // imageViewSerial's counterpart (VulkanResources.hpp): a number for THIS
+    // acceleration structure, assigned by registerAccelerationStructure and
+    // never reused. 0 for null; a new number per call for an unregistered one.
+    [[nodiscard]] uint64_t accelerationStructureSerial(VkAccelerationStructureKHR as);
 
     // updateDescriptorSets and createImageView (the recording wrappers) are
     // declared in VulkanResources.hpp, next to the other resource helpers.

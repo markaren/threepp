@@ -27,7 +27,7 @@ namespace threepp::vulkan {
 
     HiZPyramid::HiZPyramid(VulkanContext& ctx, uint32_t framesInFlight)
         : ctx_(ctx), framesInFlight_(framesInFlight) {
-        assert(framesInFlight_ <= 8);// cachedDepthViews_ bound
+        assert(framesInFlight_ <= 8);// cachedDepthSerials_ bound
         // NEAREST + unclamped LOD: the occlusion cull texelFetches explicit mips.
         VkSamplerCreateInfo sci{};
         sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -121,12 +121,21 @@ namespace threepp::vulkan {
 
     void HiZPyramid::resize(VkExtent2D extent, const VkImageView* depthViews,
                             const VkImageView* msDepthViews, uint32_t msSamples) {
+        // Serials, not handles: G-buffer depth images recreated at the same
+        // extent and sample count come back with the view values they had, and
+        // the sets below would go on naming the destroyed views.
+        uint64_t depthSerials[8]{};
+        uint64_t msDepthSerials[8]{};
         bool sameDepth = msSamples == msSamples_;
-        for (uint32_t f = 0; f < framesInFlight_; ++f)
-            sameDepth = sameDepth && cachedDepthViews_[f] == depthViews[f] &&
-                        cachedMsDepthViews_[f] == msDepthViews[f];
+        for (uint32_t f = 0; f < framesInFlight_; ++f) {
+            depthSerials[f]   = imageViewSerial(depthViews[f]);
+            msDepthSerials[f] = imageViewSerial(msDepthViews[f]);
+            sameDepth = sameDepth && cachedDepthSerials_[f] == depthSerials[f] &&
+                        cachedMsDepthSerials_[f] == msDepthSerials[f];
+        }
         if (image_ && extent.width == extent_.width && extent.height == extent_.height && sameDepth)
             return;
+        ++generation_;
 
         VkDevice d = ctx_.device();
         destroyImage();
@@ -139,8 +148,8 @@ namespace threepp::vulkan {
         while (mipDim(extent.width, mipCount_) > 1 || mipDim(extent.height, mipCount_) > 1)
             ++mipCount_;
         for (uint32_t f = 0; f < framesInFlight_; ++f) {
-            cachedDepthViews_[f]   = depthViews[f];
-            cachedMsDepthViews_[f] = msDepthViews[f];
+            cachedDepthSerials_[f]   = depthSerials[f];
+            cachedMsDepthSerials_[f] = msDepthSerials[f];
         }
         msSamples_ = msSamples;
 

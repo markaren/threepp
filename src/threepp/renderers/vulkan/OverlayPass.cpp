@@ -783,7 +783,7 @@ void OverlayPass::createPaneSkyPipeline() {
               "vkCreateDescriptorPool(paneSky)");
 
         paneSkySets_.resize(framesInFlight_, VK_NULL_HANDLE);
-        paneSkyWrittenView_.resize(framesInFlight_, VK_NULL_HANDLE);
+        paneSkyWrittenSerial_.resize(framesInFlight_, 0);
         for (uint32_t f = 0; f < framesInFlight_; ++f) {
             VkDescriptorSetAllocateInfo asi{};
             asi.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -1992,7 +1992,9 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
         // untouched, so the meshes below simply overdraw it.
         if (paneEnvView_ != VK_NULL_HANDLE) {
             createPaneSkyPipeline();
-            if (paneSkyWrittenView_[frame] != paneEnvView_) {
+            // By serial: a rebuilt environment can keep its view's value.
+            const uint64_t envSerial = imageViewSerial(paneEnvView_);
+            if (paneSkyWrittenSerial_[frame] != envSerial) {
                 // This slot's fence has passed (frame-start wait), so its set
                 // is not referenced by any in-flight command buffer.
                 VkDescriptorImageInfo ii{};
@@ -2007,7 +2009,7 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
                 w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w.pImageInfo      = &ii;
                 vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
-                paneSkyWrittenView_[frame] = paneEnvView_;
+                paneSkyWrittenSerial_[frame] = envSerial;
             }
 
             struct SkyPC {

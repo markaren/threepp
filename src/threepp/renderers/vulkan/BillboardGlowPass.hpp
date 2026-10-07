@@ -195,7 +195,7 @@ namespace threepp::vulkan {
         // changes when the renderer reallocates that attachment, which it does
         // with the device idled. Rewriting only on a change keeps this out of
         // the VUID-03047 zone the class comment describes.
-        std::vector<VkImageView> reduceSetViews_;
+        std::vector<uint64_t> reduceSetSerials_;// imageViewSerial each reduce set holds
 
         // In pool_ (TransientPhase::Tail) for `slot` when set.
         Image2D createImage(uint32_t w, uint32_t h, VkImageUsageFlags usage, const char* label, uint32_t slot);

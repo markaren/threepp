@@ -189,6 +189,16 @@ namespace threepp::vulkan {
     VkResult createImageView(VkDevice device, const VkImageViewCreateInfo* info,
                              const VkAllocationCallbacks* allocator, VkImageView* view);
 
+    // A number for THIS view object: assigned when createImageView registers
+    // it and never handed out again. A handle VALUE is not an identity — a
+    // driver gives a destroyed view's value to the next one created at the
+    // same size, and the validation layers (which hand out unique handles)
+    // hide it — so "does my descriptor set already name this view" compares
+    // serials, never handles. 0 for a null view. A view that never went through
+    // createImageView gets a new number on every call: a cache keyed on it
+    // always misses, which is slow and visible instead of stale and silent.
+    [[nodiscard]] uint64_t imageViewSerial(VkImageView view);
+
     // vkUpdateDescriptorSets, recording each write in the descriptor shadow
     // (DescriptorShadow.hpp). Every descriptor update the backend makes goes
     // through this.

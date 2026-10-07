@@ -656,6 +656,7 @@ namespace threepp::vulkan {
 
         std::vector<VkBuffer>    fogUbos_, cloudUbos_, lightsUbos_;
         VkImageView envView_    = VK_NULL_HANDLE;
+        uint64_t    envSerial_  = 0;// imageViewSerial(envView_): the identity setEnvironment compares
         bool        envDirty_   = false;// sets hold a dead env view; rewrite post-idle
         VkSampler   envSampler_ = VK_NULL_HANDLE;
         uint32_t    envMips_    = 1;

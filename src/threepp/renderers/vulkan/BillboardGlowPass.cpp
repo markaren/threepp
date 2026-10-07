@@ -55,7 +55,7 @@ namespace threepp::vulkan {
         // The reduce sets name an image this pass does not own, and the caller
         // reallocates that image on the same events that bring us here. Forget
         // what they hold; recordDepthReduce rewrites on the next mismatch.
-        std::fill(reduceSetViews_.begin(), reduceSetViews_.end(), VkImageView{VK_NULL_HANDLE});
+        std::fill(reduceSetSerials_.begin(), reduceSetSerials_.end(), uint64_t{0});
         levels_ = 0;
         srcW_ = srcH_ = dispW_ = dispH_ = 0;
     }
@@ -515,7 +515,7 @@ namespace threepp::vulkan {
         alloc(upSets_, bloomDsLayout_, up);
         alloc(compositeSets_, compositeDsLayout_, comp);
         alloc(reduceSets_, reduceDsLayout_, red);
-        reduceSetViews_.assign(red, VkImageView{VK_NULL_HANDLE});
+        reduceSetSerials_.assign(red, uint64_t{0});
     }
 
     void BillboardGlowPass::rewriteDescriptors() {
@@ -583,8 +583,10 @@ namespace threepp::vulkan {
 
         // The set names an attachment this pass does not own, so it is rewritten
         // whenever the caller hands over a different view — which only happens
-        // when that attachment is reallocated, with the device idled.
-        if (haveSrc && reduceSetViews_[frame] != srcView) {
+        // when that attachment is reallocated, with the device idled. Different
+        // by SERIAL: the reallocated attachment's view can keep its value.
+        const uint64_t srcSerial = haveSrc ? imageViewSerial(srcView) : 0;
+        if (haveSrc && reduceSetSerials_[frame] != srcSerial) {
             VkDescriptorImageInfo ii{};
             ii.sampler   = depthSampler_;
             ii.imageView = srcView;
@@ -600,7 +602,7 @@ namespace threepp::vulkan {
             w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w.pImageInfo      = &ii;
             vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
-            reduceSetViews_[frame] = srcView;
+            reduceSetSerials_[frame] = srcSerial;
         }
 
         VkRenderingAttachmentInfo depthAtt{};
