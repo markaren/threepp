@@ -29,7 +29,6 @@ namespace threepp::vulkan {
           retireFn_(std::move(retireFn)) {
         metaBufs_.resize(framesInFlight_);
         metaPtrs_.resize(framesInFlight_, nullptr);
-        cached_.resize(framesInFlight_);
         createPipeline();
         createDummyHiz();
 
@@ -279,16 +278,6 @@ namespace threepp::vulkan {
     }
 
     void OcclusionCull::rewriteSets(uint32_t frame, const FrameInputs& in) {
-        auto& c = cached_[frame];
-        if (c.srcCmds == in.srcCmds && c.rasterCam == in.rasterCam &&
-            c.hizView == in.hizView && c.meta == metaBufs_[frame].handle &&
-            c.phase1 == phase1_.handle && c.phase2 == phase2_.handle &&
-            c.visBits == visBits_.handle)
-            return;
-        c = {in.srcCmds, in.rasterCam, in.hizView,
-             metaBufs_[frame].handle, phase1_.handle, phase2_.handle,
-             visBits_.handle};
-
         auto writeSet = [&](VkDescriptorSet ds, VkBuffer dst, VkImageView hiz,
                             VkSampler hizSamp, VkImageLayout hizLayout) {
             VkDescriptorBufferInfo bSrc{in.srcCmds, 0, VK_WHOLE_SIZE};

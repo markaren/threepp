@@ -505,6 +505,29 @@ void VulkanRenderer::Impl::recordGbufferRaster(VkCommandBuffer cb) {
                 occlHiz_->record(cb, currentFrame);
                 occl_->recordCullTest(cb, currentFrame, indirectTotalDraws_,
                                       occlHiz_->mips(), renderExtent());
+                // The pyramid build sampled pass A's depth; pass B loads and
+                // writes the same attachments. Its render pass carries the
+                // single pass's subpass dependencies (see
+                // createOcclRenderPasses), which know nothing of that compute
+                // read, so it is ordered here.
+                {
+                    VkMemoryBarrier2 mb{};
+                    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    mb.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                    mb.dstStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                       VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                       VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                    mb.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                                       VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                                       VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                       VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                    VkDependencyInfo dep{};
+                    dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dep.memoryBarrierCount = 1;
+                    dep.pMemoryBarriers    = &mb;
+                    vkCmdPipelineBarrier2(cb, &dep);
+                }
                 recordRasterGbufPassInternal(cb, currentFrame, occlB, occlFb,
                                              occlMsaa,
                                              occl_->phase2Buffer(), /*clear=*/false,

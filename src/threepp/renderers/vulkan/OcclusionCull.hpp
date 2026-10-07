@@ -74,10 +74,10 @@ namespace threepp::vulkan {
 
         // Grow the per-frame meta buffer + the shared phase buffers to hold
         // `drawCount` records and the visBits store to hold `bitDomain` bits
-        // (the cull-bit allocator's high-water mark), then (re)write this
-        // frame's descriptor sets if any input changed (safe: the frame's
-        // fence retired this fif's prior use). Call BEFORE filling metaPtr
-        // each frame. A grown visBits buffer is re-armed ALL-VISIBLE inside
+        // (the cull-bit allocator's high-water mark), then rewrite this
+        // frame's descriptor sets (safe: the frame's fence retired this
+        // fif's prior use). EVERY call rewrites them, on purpose: see
+        // rewriteSets. Call BEFORE filling metaPtr each frame. A grown visBits buffer is re-armed ALL-VISIBLE inside
         // the next recordFilter (the fill needs a command buffer) — one
         // conservative frame, never a hole.
         struct FrameInputs {
@@ -145,18 +145,6 @@ namespace threepp::vulkan {
         std::vector<VkDescriptorSet> filterSets_;// [fif] dst = phase1, hiz = dummy
         std::vector<VkDescriptorSet> cullSets_;  // [fif] dst = phase2, hiz = real
 
-        // Change detection for prepareFrame's descriptor rewrites.
-        struct CachedInputs {
-            VkBuffer    srcCmds = VK_NULL_HANDLE;
-            VkBuffer    rasterCam = VK_NULL_HANDLE;
-            VkImageView hizView = VK_NULL_HANDLE;
-            VkBuffer    meta = VK_NULL_HANDLE;
-            VkBuffer    phase1 = VK_NULL_HANDLE;
-            VkBuffer    phase2 = VK_NULL_HANDLE;
-            VkBuffer    visBits = VK_NULL_HANDLE;// handle changes when the bit domain grows
-        };
-        std::vector<CachedInputs> cached_;// [fif]
-
         void createPipeline();
         void createDummyHiz();
         // Free a grown-out shared buffer safely: hand it to the retire queue
@@ -164,6 +152,16 @@ namespace threepp::vulkan {
         // callback was wired, fall back to a full device drain + destroy.
         void retireBuffer(Buffer& b);
         void ensureCapacity(uint32_t frame, uint32_t drawCount, uint32_t bitDomain);
+        // Unconditional. This used to skip the writes when every handle
+        // compared equal to the last ones written, and a handle VALUE is not
+        // an identity: a buffer destroyed and recreated (the caller's indirect
+        // record buffer growing as a scene streams in, this class's own meta
+        // buffer) routinely comes back with the value it had, the comparison
+        // called it unchanged, and the set went on naming the destroyed
+        // buffer: device lost, on a scene whose draw count grows over its
+        // first frames. The validation layers hand out unique handles, so
+        // under them the comparison never matched and the fault never showed.
+        // Twelve descriptor writes a frame are not worth a cache.
         void rewriteSets(uint32_t frame, const FrameInputs& in);
     };
 

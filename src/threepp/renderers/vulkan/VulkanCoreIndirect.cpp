@@ -124,8 +124,8 @@ namespace threepp {
             indirectTotalDraws_ = view().cachedIndirectTotal;
             if (!view().secondary) occlActiveThisFrame_ = view().cachedOcclActive;
             if (view().cachedOcclActive && indirectTotalDraws_ > 0u) {
-                // Descriptor upkeep only — handles and capacity are unchanged
-                // by definition of the signature match.
+                // Descriptor upkeep only: the records and the meta are the
+                // ones this slot already holds.
                 vulkan::OcclusionCull::FrameInputs oin{};
                 oin.srcCmds    = view().indirectCmdBuffers[frame].handle;
                 oin.rasterCam  = view().rasterCameraUbos[frame].handle;

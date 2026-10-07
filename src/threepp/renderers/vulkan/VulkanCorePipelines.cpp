@@ -397,29 +397,36 @@ void VulkanRenderer::Impl::createOcclRenderPasses(VkSampleCountFlagBits samples,
                 subpass.pColorAttachments       = colorRefs;
                 subpass.pDepthStencilAttachment = &depthRef;
 
-                // A entry: prior RT/compute reads of last frame's attachments.
-                // A exit / B entry: the between-pass compute (HiZ + cull) and
-                // the indirect-buffer read. B exit: same consumers as the
-                // single pass (the deferred shade compute dispatch).
+                // The dependencies are, field for field, those of the pass the
+                // framebuffer and the pipelines were created with
+                // (createRasterGbufRenderPass at 1x, createRasterGbufRenderPassMS
+                // otherwise; keep the three in step). The validation layers count
+                // them into render-pass compatibility, so a variant that widened
+                // them for its own needs drew VUID-VkRenderPassBeginInfo-
+                // renderPass-00904 and VUID-vkCmdDrawIndirect-renderPass-02684 on
+                // every frame of the two-phase path. What the widening was for is
+                // still covered: A's exit already makes the attachments visible
+                // to COMPUTE (the pyramid build), and the one thing the base
+                // dependencies do not order, the between-pass compute against B
+                // loading and writing the attachments, is an explicit barrier in
+                // recordGbufferRaster.
                 VkSubpassDependency deps[2]{};
                 deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
                 deps[0].dstSubpass    = 0;
-                deps[0].srcStageMask  = VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR |
-                                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                deps[0].srcStageMask  = (samples == VK_SAMPLE_COUNT_1_BIT
+                                                 ? VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR
+                                                 : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) |
                                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
                 deps[0].dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                                         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
                 deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
                 deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
-                                        VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-                                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+                                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
                 deps[1].srcSubpass    = 0;
                 deps[1].dstSubpass    = VK_SUBPASS_EXTERNAL;
                 deps[1].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                                         VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-                deps[1].dstStageMask  = VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR |
-                                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+                deps[1].dstStageMask  = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
                 deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                                         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
                 deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
