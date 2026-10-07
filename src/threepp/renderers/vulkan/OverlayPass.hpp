@@ -186,7 +186,10 @@ namespace threepp::vulkan {
         // so their heap storage is reused frame to frame instead of realloc'd.
         std::unique_ptr<OverlayRecordScratch> scratch_;
 
-        static constexpr uint32_t kMaxSpritesPerFrame = 64;
+        // Sprites an ortho/HUD pass draws in one frame (one descriptor set each, from a
+        // per-frame pool); more are dropped with a warning. A lettered instrument panel has
+        // a hundred lines of text, each a TextSprite.
+        static constexpr uint32_t kMaxSpritesPerFrame = 256;
 
         // Sprite pipeline
         VkDescriptorSetLayout spriteDescSetLayout_   = VK_NULL_HANDLE;
