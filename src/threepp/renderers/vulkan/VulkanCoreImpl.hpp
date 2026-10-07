@@ -1172,6 +1172,7 @@ namespace threepp {
             destroyBuffer(ctx->allocator(), rec.storage);
             destroyBuffer(ctx->allocator(), rec.vertex);
             destroyBuffer(ctx->allocator(), rec.index);
+            destroyBuffer(ctx->allocator(), rec.rtIndex);
             destroyBuffer(ctx->allocator(), rec.normal);
             destroyBuffer(ctx->allocator(), rec.uv);
             destroyBuffer(ctx->allocator(), rec.color);
@@ -2943,7 +2944,11 @@ namespace threepp {
         // built ALLOW_UPDATE and never compacted. Static records pass false and
         // are compacted (see staticBlasBuildFlags); an interop-marked geometry
         // is always updatable.
-        std::unique_ptr<BlasRecord> buildBlasFor(const BufferGeometry& geom, bool allowPacked, bool updatable);
+        // `rtIndices`: when given, the AS is built over these uint32 indices
+        // instead of the geometry's own (BlasRecord::rtIndex); the record's
+        // `index` still carries the geometry's for the raster.
+        std::unique_ptr<BlasRecord> buildBlasFor(const BufferGeometry& geom, bool allowPacked, bool updatable,
+                                                 const std::vector<uint32_t>* rtIndices = nullptr);
 
         // Allocate or look up the per-SkinnedMesh BLAS state. Builds the BLAS
         // once with the current pose; subsequent dirty frames go through

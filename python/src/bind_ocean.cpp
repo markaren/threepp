@@ -336,6 +336,11 @@ namespace threepp_py {
                                        py::return_value_policy::reference_internal)
                 .def_property_readonly("warp", [](DisplacedMesh& o) { return &o.warp; },
                                        py::return_value_policy::reference_internal)
+                .def_readwrite("rt_proxy_cells", &DisplacedMesh::rtProxyCells,
+                               "The surface the rays see: the acceleration structure is built over every s-th "
+                               "grid line, s chosen so the traced grid has at most this many cells a side (the "
+                               "raster draws the full grid). 0 = trace the full grid. Read when the renderer "
+                               "first sees the mesh.")
                 .def_property_readonly("hull_exclusion", [](DisplacedMesh& o) { return &o.hullExclusion; },
                                        py::return_value_policy::reference_internal,
                                        "Vessel 0's footprint + waterline plane; set each frame before "

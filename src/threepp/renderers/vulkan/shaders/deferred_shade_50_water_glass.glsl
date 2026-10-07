@@ -95,6 +95,26 @@ float waterGlint(vec3 N, vec3 V, vec3 L, float NdotV, float ndl, float r0,
 vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 bool doShadows, float maxLod, uint frame, inout uint seed,
                 float slopeVarSq, vec3 Nmacro, ivec2 px, float clusterDist) {
+    // The surface the rays see may be the mesh's ray-tracing proxy
+    // (DisplacedMesh::rtProxyCells, GeometryDesc flags bit 5): a coarser grid
+    // than the one the raster drew P from, above or below it by the proxy's
+    // interpolation error. Every ray below starts a SHADOW_EPS off P, so
+    // against the proxy it met the water at once: a crest's refraction ray
+    // found a "bottom" at zero depth, and the bay lit up along every ridge.
+    // Put P on the proxy: a short vertical probe through the surface (the
+    // water is single-valued in y), kept only when what it finds is this
+    // water; under a hull or a quay P stays where the raster put it.
+    if ((geoms[instIdx].flags & 32u) != 0u) {
+        const float h = 0.5;
+        rayQueryEXT pq;
+        rayQueryInitializeEXT(pq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskOpaque,
+                              P + vec3(0.0, h, 0.0), 0.0, vec3(0.0, -1.0, 0.0), 2.0 * h);
+        while (rayQueryProceedEXT(pq)) {}
+        if (rayQueryGetIntersectionTypeEXT(pq, true) != gl_RayQueryCommittedIntersectionNoneEXT &&
+            rayQueryGetIntersectionInstanceCustomIndexEXT(pq, true) == instIdx) {
+            P.y += h - rayQueryGetIntersectionTEXT(pq, true);
+        }
+    }
     const float NdotV = max(dot(N, V), 1e-4);
     const float ior   = max(pm.ior, 1.0);
     // ── FROM BELOW ───────────────────────────────────────────────────────────

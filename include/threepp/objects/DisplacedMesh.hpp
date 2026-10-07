@@ -395,6 +395,17 @@ namespace threepp {
         uint32_t gridWidth = 0;// vertices along local X
         uint32_t gridDepth = 0;// vertices along local Z
 
+        // The surface the RAYS see: the renderer builds and refits the mesh's
+        // acceleration structure over every s-th grid line, s chosen so the
+        // traced grid has at most this many cells a side (the raster always
+        // draws the full grid; the per-vertex normals are shared). Reflection
+        // and refraction rays, GI and shadow tests then meet the water at that
+        // coarser spacing. 0 = trace the full grid. Read when the renderer
+        // first sees the mesh. The per-frame refit of a 1024 x 1024 grid
+        // (2.09 M triangles) cost 5.0 ms on an RTX 4070 against 0.36 ms for
+        // 512 x 512: the cost is not linear in the triangle count.
+        uint32_t rtProxyCells = 512;
+
         // Sticky opt-in for the CPU height mirror. Set by sampleHeight() on
         // first use; the Vulkan renderer skips the per-frame GPU→host cascade
         // copies (and the mirror memcpy) entirely until then, so scenes that

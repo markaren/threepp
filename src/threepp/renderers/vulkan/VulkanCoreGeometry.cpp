@@ -93,7 +93,8 @@ namespace {
 
 namespace threepp {
 
-std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBlasFor(const BufferGeometry& geom, bool allowPacked, bool updatable) {
+std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBlasFor(const BufferGeometry& geom, bool allowPacked, bool updatable,
+                                                                                     const std::vector<uint32_t>* rtIndices) {
             // Escape hatch for A/B triage: THREEPP_NO_PACK=1 forces every
             // attribute buffer back to tightly-packed float, same binary.
             static const bool noPack = std::getenv("THREEPP_NO_PACK") != nullptr;
@@ -346,13 +347,44 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                 }
             }
 
+            // Ray-tracing proxy topology: the AS is built over these indices
+            // (always uint32), the raster keeps rec->index. Validated like the
+            // geometry's own: an out-of-range index is device-lost at build.
+            if (rtIndices && rtIndices->size() >= 3u) {
+                for (const uint32_t v : *rtIndices) {
+                    if (v >= vertexCount) {
+                        std::cerr << "[VulkanRenderer] buildBlasFor: proxy index " << v
+                                  << " >= vertexCount=" << vertexCount << ", proxy ignored\n";
+                        rtIndices = nullptr;
+                        break;
+                    }
+                }
+            } else {
+                rtIndices = nullptr;
+            }
+            if (rtIndices) {
+                const VkDeviceSize ibBytes = rtIndices->size() * sizeof(uint32_t);
+                rec->rtIndex = createBuffer(
+                        ctx->allocator(), ctx->device(), ibBytes,
+                        geomUsage, VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                uploadHostVisible(ctx->allocator(), rec->rtIndex, rtIndices->data(), ibBytes);
+                rec->rtIndexCount = static_cast<uint32_t>(rtIndices->size() - rtIndices->size() % 3u);
+            }
+            // What the AS is built over: the proxy's triangles, else the
+            // geometry's (the draw-range span below only applies to the latter).
+            const uint32_t buildPrims = rec->rtIndexCount ? rec->rtIndexCount / 3u : primitiveCount;
+
             VkAccelerationStructureGeometryTrianglesDataKHR triData{};
             triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
             triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
             triData.vertexData.deviceAddress = rec->vertex.address;
             triData.vertexStride = 3 * sizeof(float);
             triData.maxVertex = vertexCount - 1;
-            if (indexed) {
+            if (rec->rtIndexCount) {
+                triData.indexType = VK_INDEX_TYPE_UINT32;
+                triData.indexData.deviceAddress = rec->rtIndex.address;
+            } else if (indexed) {
                 triData.indexType = packIdx ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
                 triData.indexData.deviceAddress = rec->index.address;
             } else {
@@ -396,7 +428,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             ctx->rt().getAccelerationStructureBuildSizes(
                     ctx->device(),
                     VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                    &blasBuild, &primitiveCount, &blasSizes);
+                    &blasBuild, &buildPrims, &blasSizes);
 
             // An interop record's per-frame rebuilds take PREFER_FAST_BUILD
             // (recordDynamicGeomRefits), and the two flag lineages are
@@ -460,7 +492,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             const DrawSpan span = drawSpanOf(
                     geom, indexed ? static_cast<uint32_t>(idxAttr->count()) : vertexCount);
             VkAccelerationStructureBuildRangeInfoKHR range{};
-            range.primitiveCount = (span.first + span.elems) / 3u;
+            range.primitiveCount = rec->rtIndexCount ? buildPrims : (span.first + span.elems) / 3u;
             const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
 
             // Per-vertex previous-pose buffer for the chit's per-vertex motion
@@ -3121,7 +3153,11 @@ void VulkanRenderer::Impl::recordDisplacedBlasRebuild(VkCommandBuffer cb, Displa
             auto* idxAttr = dm.geometry()->getIndex();
             const uint32_t vc = static_cast<uint32_t>(posAttr->count());
             const bool indexed = idxAttr != nullptr;
-            const uint32_t primCount = indexed ? static_cast<uint32_t>(idxAttr->count() / 3)
+            // The ray-tracing proxy's triangles when the record has one (see
+            // ensureDisplacedState), else the geometry's own.
+            const bool proxy = st.blas->rtIndexCount != 0u;
+            const uint32_t primCount = proxy   ? st.blas->rtIndexCount / 3u
+                                     : indexed ? static_cast<uint32_t>(idxAttr->count() / 3)
                                                : vc / 3;
 
             VkAccelerationStructureGeometryTrianglesDataKHR triData{};
@@ -3130,7 +3166,10 @@ void VulkanRenderer::Impl::recordDisplacedBlasRebuild(VkCommandBuffer cb, Displa
             triData.vertexData.deviceAddress = st.blas->vertex.address;
             triData.vertexStride = 3 * sizeof(float);
             triData.maxVertex = vc - 1;
-            if (indexed) {
+            if (proxy) {
+                triData.indexType = VK_INDEX_TYPE_UINT32;
+                triData.indexData.deviceAddress = st.blas->rtIndex.address;
+            } else if (indexed) {
                 triData.indexType = VK_INDEX_TYPE_UINT32;
                 triData.indexData.deviceAddress = st.blas->index.address;
             } else {
@@ -3998,7 +4037,42 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             const float planeSizeZ = zMax - zMin;
             if (!(planeSizeX > 0.f) || !(planeSizeZ > 0.f)) return nullptr;
 
-            auto blas = buildBlasFor(*dm.geometry(), /*allowPacked=*/false, /*updatable=*/true);
+            // The ray-tracing proxy (DisplacedMesh::rtProxyCells): the AS is
+            // built and refit over every s-th grid line of the displaced
+            // vertices, s chosen so the proxy has at most rtProxyCells cells a
+            // side, with the last grid line always kept so the proxy spans the
+            // whole sheet. Same vertex buffer, same winding as PlaneGeometry:
+            // (a, b, d), (b, c, d) per cell. The raster draws the full grid.
+            // Measured on the Nørvasundet twin (RTX 4070, 1024 x 1024 grid,
+            // 2.09 M triangles): the per-frame MODE_UPDATE refit of the full
+            // grid costs 5.0 ms, a 512-cell grid's 0.36 ms — the cost is not
+            // linear in the triangle count, the full grid sits past a cliff.
+            std::vector<uint32_t> rtIndices;
+            if (dm.rtProxyCells > 0u) {
+                const uint32_t cellsX = gridDimX - 1u, cellsZ = gridDimZ - 1u;
+                const uint32_t stride = (std::max(cellsX, cellsZ) + dm.rtProxyCells - 1u) / dm.rtProxyCells;
+                if (stride > 1u) {
+                    auto lines = [stride](uint32_t n) {
+                        std::vector<uint32_t> l;
+                        for (uint32_t i = 0; i + 1u < n; i += stride) l.push_back(i);
+                        l.push_back(n - 1u);
+                        return l;
+                    };
+                    const auto lx = lines(gridDimX), lz = lines(gridDimZ);
+                    rtIndices.reserve((lx.size() - 1u) * (lz.size() - 1u) * 6u);
+                    for (size_t j = 0; j + 1u < lz.size(); ++j) {
+                        for (size_t i = 0; i + 1u < lx.size(); ++i) {
+                            const uint32_t a = lz[j] * gridDimX + lx[i];
+                            const uint32_t b = lz[j + 1u] * gridDimX + lx[i];
+                            const uint32_t c = lz[j + 1u] * gridDimX + lx[i + 1u];
+                            const uint32_t d = lz[j] * gridDimX + lx[i + 1u];
+                            rtIndices.insert(rtIndices.end(), {a, b, d, b, c, d});
+                        }
+                    }
+                }
+            }
+            auto blas = buildBlasFor(*dm.geometry(), /*allowPacked=*/false, /*updatable=*/true,
+                                     rtIndices.empty() ? nullptr : &rtIndices);
             if (!blas) return nullptr;
             blas->liveCheck = dm.geometry();
 

@@ -45,6 +45,13 @@ namespace threepp::vulkan::impl {
         Buffer storage;
         Buffer vertex;
         Buffer index;// .handle == VK_NULL_HANDLE for non-indexed geometry
+        // Ray-tracing proxy topology (DisplacedMesh::rtProxyCells): when set,
+        // the acceleration structure is built and refit over THESE uint32
+        // indices, a coarser grid over the same vertex buffer, and every ray
+        // hit's GeometryDesc names them (gl_PrimitiveID resolves against the
+        // array the AS was built from). The raster keeps `index`.
+        Buffer   rtIndex;
+        uint32_t rtIndexCount = 0;
         Buffer normal;
         Buffer uv;   // .handle == VK_NULL_HANDLE if geometry has no "uv"
         // Per-vertex RGB color (BufferGeometry "color" attribute, itemSize 3).
@@ -621,6 +628,9 @@ namespace threepp::vulkan::impl {
         // Bit 4: the instance's emissive glows but is not a light
         // (setEmissiveCastsLight): it is not in the emitter list, so a ray
         // hit on it keeps its own emission.
+        // Bit 5: the rays see a coarser proxy of this mesh (BlasRecord::
+        // rtIndex, DisplacedMesh::rtProxyCells); shadeWater moves its surface
+        // point onto the proxy before launching rays.
         uint32_t flags;
     };
 

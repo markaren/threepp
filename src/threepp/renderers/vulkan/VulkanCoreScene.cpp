@@ -3020,8 +3020,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // Must reference the SAME index buffer the selected BLAS
                 // level was built from — RT secondary hits (reflections/GI/
                 // lidar/probe update) read this keyed by gl_PrimitiveID,
-                // which only lines up against that exact index array.
-                gdesc.indexAddress  = lodSel.indexAddress;
+                // which only lines up against that exact index array. A
+                // record with a ray-tracing proxy (DisplacedMesh) was built
+                // over rtIndex; its `index` is the raster's.
+                gdesc.indexAddress  = recPtr->rtIndexCount ? recPtr->rtIndex.address
+                                                           : lodSel.indexAddress;
                 gdesc.uvAddress     = recPtr->uv.address;// 0 if no UV attribute
                 // 0 = not water; 1 = an FFT-displaced ocean surface; anything
                 // else = one with a wake field, and this is its patch table.
@@ -3067,7 +3070,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // seed it 0 here and carry the packed-attribute bits above it.
                 // Bit 4: an emissive that glows but is not a light
                 // (setEmissiveCastsLight) — its ray hits keep their emission.
-                gdesc.flags = (recPtr->packedMask << 1) | (isGlowOnly(*en.mesh) ? 16u : 0u);
+                // Bit 5: the record traces a ray-tracing proxy (rtIndex), a
+                // coarser grid than the raster drew; the water shade moves its
+                // surface point onto it before it launches rays.
+                gdesc.flags = (recPtr->packedMask << 1) | (isGlowOnly(*en.mesh) ? 16u : 0u) |
+                              (recPtr->rtIndexCount ? 32u : 0u);
                 geomDescs[i] = gdesc;
                 // Read-only: assignment of auto ids stays in the indirect draw
                 // builder so this cannot renumber what the Ids AOV reports.
