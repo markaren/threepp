@@ -3948,10 +3948,13 @@ namespace threepp {
         // Block-compressed sampled image from PRE-ENCODED mip levels (level 0
         // first, every level present down to 1x1). BC images cannot be blit-
         // downsampled, so unlike buildSampledImage2D there is no GPU mip-gen:
-        // the caller encodes each level (bcn::buildMipChainRGBA8 +
+        // the caller encodes each level (bcn::buildMipChainRGBA8Area +
         // bcn::bc7EncodeMode6) and this uploads the chain verbatim — one
         // staging buffer, one copy region per level. View/sampler setup
-        // matches buildSampledImage2D (aniso + full LOD range).
+        // matches buildSampledImage2D (aniso + full LOD range). Nothing here
+        // is specific to block formats: an uncompressed material texture
+        // whose size is not a power of two comes this way too, with RGBA8
+        // levels, because the blit chain is only exact on even levels.
         Image2D createSampledImageBC(uint32_t w, uint32_t h, VkFormat format,
                                      const std::vector<std::vector<std::uint8_t>>& levels,
                                      VkFilter filter, VkSamplerAddressMode addrU,

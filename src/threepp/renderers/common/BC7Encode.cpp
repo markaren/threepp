@@ -338,16 +338,13 @@ std::vector<std::uint8_t> bc7EncodeMode6(const std::uint8_t* rgba, int w, int h)
     return out;
 }
 
-std::vector<std::vector<std::uint8_t>> buildMipChainRGBA8(
-        const std::uint8_t* rgba, int w, int h, bool srgb) {
+namespace {
 
-    static const SrgbTables kTables;
+    // One level of buildMipChainRGBA8: cw x ch texels to max(1, cw / 2) x
+    // max(1, ch / 2), each the box of the 2x2 above it.
+    std::vector<std::uint8_t> halvePaired(const std::uint8_t* src, int cw, int ch, bool srgb,
+                                          const SrgbTables& kTables) {
 
-    std::vector<std::vector<std::uint8_t>> levels;
-    const std::uint8_t* src = rgba;// level 0 read straight from the caller
-    int cw = w, ch = h;
-
-    while (cw > 1 || ch > 1) {
         const int nw = std::max(1, cw >> 1);
         const int nh = std::max(1, ch >> 1);
         std::vector<std::uint8_t> next(static_cast<size_t>(nw) * nh * 4);
@@ -383,10 +380,25 @@ std::vector<std::vector<std::uint8_t>> buildMipChainRGBA8(
             }
         }
 
-        levels.push_back(std::move(next));
+        return next;
+    }
+
+}// namespace
+
+std::vector<std::vector<std::uint8_t>> buildMipChainRGBA8(
+        const std::uint8_t* rgba, int w, int h, bool srgb) {
+
+    static const SrgbTables kTables;
+
+    std::vector<std::vector<std::uint8_t>> levels;
+    const std::uint8_t* src = rgba;// level 0 read straight from the caller
+    int cw = w, ch = h;
+
+    while (cw > 1 || ch > 1) {
+        levels.push_back(halvePaired(src, cw, ch, srgb, kTables));
         src = levels.back().data();
-        cw = nw;
-        ch = nh;
+        cw = std::max(1, cw >> 1);
+        ch = std::max(1, ch >> 1);
     }
 
     return levels;
@@ -402,6 +414,17 @@ std::vector<std::vector<std::uint8_t>> buildMipChainRGBA8Area(
     int cw = w, ch = h;
 
     while (cw > 1 || ch > 1) {
+        // A level that is even both ways is 2x2 boxes, the paired-up
+        // builder's level at its cost: only the odd levels pay for the
+        // weights, and a power-of-two image costs what it did.
+        if (cw % 2 == 0 && ch % 2 == 0) {
+            levels.push_back(halvePaired(src, cw, ch, srgb, kTables));
+            src = levels.back().data();
+            cw >>= 1;
+            ch >>= 1;
+            continue;
+        }
+
         const HalvingAxis ax(cw), ay(ch);
         const int nw = std::max(1, cw >> 1);
         const int nh = std::max(1, ch >> 1);

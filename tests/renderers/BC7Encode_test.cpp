@@ -229,17 +229,52 @@ TEST_CASE("Area-weighted mip chain is the paired-up one where every level is eve
 
     CHECK(bcn::buildMipChainRGBA8Area(img.data(), w, h, false) ==
           bcn::buildMipChainRGBA8(img.data(), w, h, false));
+    CHECK(bcn::buildMipChainRGBA8Area(img.data(), w, h, true) ==
+          bcn::buildMipChainRGBA8(img.data(), w, h, true));
+}
 
-    // sRGB sums the same linear values in another order: within one code.
-    const auto a = bcn::buildMipChainRGBA8Area(img.data(), w, h, true);
-    const auto b = bcn::buildMipChainRGBA8(img.data(), w, h, true);
-    REQUIRE(a.size() == b.size());
-    int maxDiff = 0;
-    for (size_t l = 0; l < a.size(); ++l) {
-        REQUIRE(a[l].size() == b[l].size());
-        for (size_t i = 0; i < a[l].size(); ++i) {
-            maxDiff = std::max(maxDiff, std::abs(int(a[l][i]) - int(b[l][i])));
-        }
+// A material texture of any size goes through the area-weighted chain. Its
+// even levels are the paired-up ones, and the first odd level is where the
+// two part: 24x12 -> 12x6 -> 6x3 -> 3x1 -> 1x1, with 6x3 odd in its height.
+TEST_CASE("Area-weighted mip chain follows the paired-up one down to the first odd level") {
+
+    const int w = 24, h = 12;
+    std::mt19937 rng(11);
+    std::vector<std::uint8_t> img(w * h * 4);
+    for (auto& v : img) v = static_cast<std::uint8_t>(rng() & 0xff);
+
+    for (const bool srgb : {false, true}) {
+        const auto a = bcn::buildMipChainRGBA8Area(img.data(), w, h, srgb);
+        const auto b = bcn::buildMipChainRGBA8(img.data(), w, h, srgb);
+        REQUIRE(a.size() == 4);
+        REQUIRE(b.size() == 4);
+        CHECK(a[0] == b[0]);
+        CHECK(a[1] == b[1]);
+        CHECK(a[2] != b[2]);
     }
-    CHECK(maxDiff <= 1);
+}
+
+// The frame of a tile is its last row and column as much as its first. Down
+// an odd-sized chain every level must still hold both: 37x21 -> 18x10 -> 9x5.
+TEST_CASE("Area-weighted mip chain keeps the last row and column of an odd-sized image") {
+
+    const int w = 37, h = 21;
+    std::vector<std::uint8_t> img(w * h * 4, 0);
+    for (int y = 0; y < h; ++y) img[(y * w + (w - 1)) * 4 + 0] = 255;// last column, red
+    for (int x = 0; x < w; ++x) img[((h - 1) * w + x) * 4 + 1] = 255;// last row, green
+
+    const auto area = bcn::buildMipChainRGBA8Area(img.data(), w, h, false);
+    const auto paired = bcn::buildMipChainRGBA8(img.data(), w, h, false);
+
+    // Level 2 is 9x5: its last column holds 9/37 of the red column, its last
+    // row 5/21 of the green row.
+    const int nw = 9, nh = 5;
+    REQUIRE(area[1].size() == static_cast<size_t>(nw * nh * 4));
+    const auto red = [&](const std::vector<std::uint8_t>& l) { return l[(2 * nw + (nw - 1)) * 4 + 0]; };
+    const auto green = [&](const std::vector<std::uint8_t>& l) { return l[((nh - 1) * nw + 4) * 4 + 1]; };
+    CHECK(std::abs(red(area[1]) - 255.0 * nw / w) <= 2.0);
+    CHECK(std::abs(green(area[1]) - 255.0 * nh / h) <= 2.0);
+    // The paired-up chain dropped them at the first level.
+    CHECK(red(paired[1]) == 0);
+    CHECK(green(paired[1]) == 0);
 }

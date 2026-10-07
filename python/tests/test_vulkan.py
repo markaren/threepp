@@ -344,6 +344,51 @@ def test_hud_pass_layers_by_render_order_like_gl(vk_canvas, vk_renderer, rendere
         assert seen == {"vk": want, "gl": want}, f"at ({x}, {y})"
 
 
+def test_material_texture_mips_cover_an_odd_sized_image(vk_renderer):
+    """A material texture whose size is not a power of two is box-filtered all
+    the way down its mip chain. 437 x 301 drawn 4x minified samples level 2
+    (109 x 75): its last column is a quarter of the texture's last column, and
+    one-texel stripes are an even grey. The BC7 chain used to pair texels up
+    and leave the odd one out at every odd level, so a 1 px frame was gone two
+    levels down and a tiling texture no longer met itself. The uncompressed
+    chain (THREEPP_NO_BC, or no BC7 on the device) was blitted bilinearly: two
+    taps over 2 + 1/218 texels, a box at the image's edges and a point sample
+    at its middle, where the stripes came out solid."""
+    tw, th, qw, qh, x0, y0 = 437, 301, 109, 75, 100, 80
+    px = np.full((th, tw, 4), 255, np.uint8)
+    px[th // 3:2 * th // 3, 0::2, :3] = 0                 # a band of 1 px stripes
+    px[:, -1, :2] = 0                                     # the last column, blue
+    px[-1, :, :2] = 0                                     # the last row (v = 1, the top on screen)
+    tex = tp.data_texture(px, True)
+    tex.wrap_s = tex.wrap_t = tp.TextureWrapping.ClampToEdge
+    mat = tp.MeshBasicMaterial()
+    mat.map = tex
+    quad = tp.Mesh(tp.PlaneGeometry(qw, qh), mat)         # one world unit is one pixel
+    quad.position.set(x0 + qw / 2, H - (y0 + qh / 2), 0)
+    scene = tp.Scene()
+    scene.background = 0x000000
+    scene.add(quad)
+    fov = 30.0
+    cam = tp.PerspectiveCamera(fov, W / H, 10.0, 5000.0)
+    cam.position.set(W / 2, H / 2, (H / 2) / math.tan(math.radians(fov / 2)))
+    cam.look_at(W / 2, H / 2, 0)
+
+    albedo = vk_renderer.render_aov(scene, cam, "albedo").astype(int)   # linear
+    assert albedo[y0 + qh // 6, x0 + qw // 2].min() > 250, "the quad is not where the test looks"
+    # Black and white in equal parts are 0.5 in linear light, wherever they lie.
+    stripes = albedo[y0 + qh // 3 + 3:y0 + 2 * qh // 3 - 3, x0 + 5:x0 + qw - 5]
+    assert np.abs(stripes - 127.5).max() < 30, "1 px stripes are not an even grey two levels down"
+    # A quarter blue in white is (191, 191, 255); the raster's sub-pixel jitter
+    # can blend that halfway into the white texel beside it, and move the
+    # quad's edge by one pixel. White (the old chain) and the background are
+    # neither.
+    framed = (albedo[..., 2] > 240) & (albedo[..., 0] < 235) & (albedo[..., 1] < 235)
+    right = framed[y0 + 10:y0 + qh // 3 - 3, x0 + qw - 2:x0 + qw]   # above the stripes
+    top = framed[y0:y0 + 2, x0 + 10:x0 + qw - 10]
+    assert right.any(axis=1).all(), "the texture's last column is missing from its mips"
+    assert top.any(axis=0).all(), "the texture's last row is missing from its mips"
+
+
 def test_sim_time_round_trips(vk_renderer):
     """The deterministic frame clock: None on the wall clock (the default), a
     pinned value reads back exactly, and None or a negative value releases it."""

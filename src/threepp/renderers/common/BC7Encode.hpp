@@ -37,8 +37,8 @@ namespace threepp::bcn {
     // minified as they are (a sprite's glyph atlas is neither a power of two
     // nor even): the paired-up chain shifts each odd level against the one
     // above it, and a chain of bilinear blits skips rows outright, which drops
-    // a glyph's horizontal strokes. Equal to buildMipChainRGBA8 where every
-    // level is even (to a code, for sRGB).
+    // a glyph's horizontal strokes. A level that is even both ways is
+    // buildMipChainRGBA8's, at its cost; only the odd levels are weighted.
     std::vector<std::vector<std::uint8_t>> buildMipChainRGBA8Area(
             const std::uint8_t* rgba, int w, int h, bool srgb);
 

@@ -839,10 +839,14 @@ Image2D VulkanRenderer::Impl::buildMaterialImage2D(const Texture* tex) {
             // images cannot blit-downsample); tiny images (LUT-like defaults,
             // 1x1 constants) stay uncompressed, as does everything when the
             // device lacks BC7 or THREEPP_NO_BC=1 (same-binary A/B hatch).
+            // The chain is area-weighted: a size that is not a power of two
+            // has an odd level somewhere down it, and pairing texels up there
+            // leaves the last row and column out and stretches the rest over
+            // them (a 1 px frame is gone, a tile no longer meets itself).
             static const bool noBc = std::getenv("THREEPP_NO_BC") != nullptr;
             if (!noBc && w >= 8u && h >= 8u && bc7SampledSupported()) {
-                auto mips = bcn::buildMipChainRGBA8(rgba.data(), static_cast<int>(w),
-                                                    static_cast<int>(h), srgb);
+                auto mips = bcn::buildMipChainRGBA8Area(rgba.data(), static_cast<int>(w),
+                                                        static_cast<int>(h), srgb);
                 std::vector<std::vector<std::uint8_t>> blocks;
                 blocks.reserve(mips.size() + 1);
                 blocks.push_back(bcn::bc7EncodeMode6(rgba.data(), static_cast<int>(w),
@@ -865,6 +869,27 @@ Image2D VulkanRenderer::Impl::buildMaterialImage2D(const Texture* tex) {
 
             const VkFormat fmt = srgb ? VK_FORMAT_R8G8B8A8_SRGB
                                       : VK_FORMAT_R8G8B8A8_UNORM;
+
+            // createSampledImage2D builds its chain by blitting level to
+            // level, which is exact while every level is even: 2x2 boxes. At
+            // an odd level the two bilinear taps of a blit cover two texels of
+            // every 2 + 1/floor(n/2), weighted anywhere between a box and a
+            // point sample across the image, so one-texel lines come and go
+            // with where they lie and fine patterns alias. A size that is not
+            // a power of two has such a level, and gets the BC7 branch's
+            // area-weighted chain instead, uploaded as it is.
+            const auto isPow2 = [](uint32_t n) { return (n & (n - 1u)) == 0u; };
+            if (!isPow2(w) || !isPow2(h)) {
+                auto levels = bcn::buildMipChainRGBA8Area(rgba.data(), static_cast<int>(w),
+                                                          static_cast<int>(h), srgb);
+                levels.insert(levels.begin(), std::move(rgba));
+                return createSampledImageBC(// uploads pre-built levels of any format
+                        w, h, fmt, levels,
+                        VK_FILTER_LINEAR,
+                        wrapToVk(tex->wrapS),
+                        wrapToVk(tex->wrapT),
+                        texName);
+            }
             return createSampledImage2D(
                     w, h, fmt,
                     rgba.data(), rgba.size(),
