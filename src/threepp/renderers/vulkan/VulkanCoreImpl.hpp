@@ -1099,7 +1099,8 @@ namespace threepp {
         // budget is spent or no job is outstanding, so the frame each chain
         // lands on is the same in every run.
         // All of a frame's level BLAS builds are recorded into ONE
-        // one-shot submit+wait (flushLodLevelBuilds) — a submit per level
+        // one-shot submit (fenced and unwaited, see LodLandingBatch below;
+        // submit+wait under THREEPP_VK_LOD_DRAIN_WAIT=1) — a submit per level
         // (or even per geometry) at Bistro-scale entry counts costs more in
         // queue round-trips than the batching saves. Stale results (record
         // evicted / geomVersion moved on) and failed chains are processed
@@ -1121,7 +1122,33 @@ namespace threepp {
                               BlasRecord::LodLevel& out, std::vector<LodPendingBuild>& pending);
         // Records every pending level build into one one-shot command
         // buffer, submits, waits, and frees the per-build scratches.
+        // THREEPP_VK_LOD_DRAIN_WAIT=1 only; the default is the fenced path below.
         void flushLodLevelBuilds(std::vector<LodPendingBuild>& pending);
+        // The level builds of one drain as cmdBuildAccelerationStructures
+        // into `cb` (shared by both paths).
+        void recordLodLevelBuilds(VkCommandBuffer cb, std::vector<LodPendingBuild>& pending);
+        // Default path. The drain used to end in a submit + vkQueueWaitIdle,
+        // i.e. a wait for up to both frames in flight inside render() on every
+        // frame a chain landed (the twin: 18 ms of a 24 ms ensureSceneBuilt
+        // while its chains landed). Now the builds go out in a fenced,
+        // unwaited submit and the chain lands kLodLandDrains drains later,
+        // when that fence has signalled (the frame fences between make the
+        // wait at landing a formality); compaction is a second such submit.
+        // Each landing is a fixed drain count after its submit, so the
+        // schedule is the same on the wall clock and under setSimTime.
+        using LodLandingBatch = vulkan::impl::LodLandingBatch;
+        static constexpr uint64_t kLodLandDrains = kFramesInFlight + 1;
+        bool lodDrainWait_ = false;// THREEPP_VK_LOD_DRAIN_WAIT=1: the old submit + wait
+        uint64_t lodDrainSerial_ = 0;
+        uint64_t lodBatchSerial_ = 0;
+        std::vector<LodLandingBatch> lodLanding_;
+        void submitLodLevelBuilds(std::vector<LodPendingBuild>& pending,
+                                  const std::vector<const BufferGeometry*>& pendingGeoms,
+                                  const std::vector<const BufferGeometry*>& chainGeoms);
+        void landLodBatches();
+        // Submits `cb` (ended here) with a fresh fence and files the batch.
+        void submitLodBatch(LodLandingBatch&& b, VkCommandBuffer cb, std::vector<LodLandingBatch>& into);
+        void destroyLodLandingBatches();// teardown, device idle
         // Destroys every level's AS/storage/index and decrements the running
         // byte totals — called from every blasCache erase site (destructor,
         // eviction prune, geomVersion-changed rebuild) so a record's LOD

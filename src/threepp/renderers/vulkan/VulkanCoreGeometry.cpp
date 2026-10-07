@@ -802,9 +802,10 @@ bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
             // buffer must not alias scratch memory (same rule as
             // refreshGeomBlasBatch's per-record persistent scratch).
             build.scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
-            // The caller appends `out` to rec.lodLevels right after this returns.
+            // The caller appends `out` to rec.lodLevels (or, on the fenced
+            // path, rec.lodLanding) right after this returns, and sets `level`
+            // to its index there.
             build.rec = &rec;
-            build.level = static_cast<uint32_t>(rec.lodLevels.size());
             pending.push_back(build);
 
             out.indexCount  = static_cast<uint32_t>(level.indices.size());
@@ -812,12 +813,10 @@ bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
             return true;
         }
 
-void VulkanRenderer::Impl::flushLodLevelBuilds(std::vector<LodPendingBuild>& pending) {
-            if (pending.empty()) return;
+void VulkanRenderer::Impl::recordLodLevelBuilds(VkCommandBuffer cb, std::vector<LodPendingBuild>& pending) {
             const uint32_t N = static_cast<uint32_t>(pending.size());
-            // The build-info structs must stay pointer-stable until the GPU
-            // executes them (pGeometries / rangePtrs are read at submit), so
-            // they live in N-sized vectors that outlast the submit-wait —
+            // The build-info structs must stay pointer-stable for the record
+            // call (pGeometries / rangePtrs), so they live in N-sized vectors —
             // same shape as refreshGeomBlasBatch's Phase D.
             std::vector<VkAccelerationStructureGeometryTrianglesDataKHR> triDatas(N);
             std::vector<VkAccelerationStructureGeometryKHR>              blasGeoms(N);
@@ -851,13 +850,18 @@ void VulkanRenderer::Impl::flushLodLevelBuilds(std::vector<LodPendingBuild>& pen
                 ranges[k].primitiveCount = b.primitiveCount;
                 rangePtrs[k] = &ranges[k];
             }
+            ctx->rt().cmdBuildAccelerationStructures(cb, N, blasBuilds.data(), rangePtrs.data());
+        }
 
+void VulkanRenderer::Impl::flushLodLevelBuilds(std::vector<LodPendingBuild>& pending) {
+            if (pending.empty()) return;
+            const uint32_t N = static_cast<uint32_t>(pending.size());
             // Never inside a one-shot batch (drainLodResults runs before the
             // admit loop opens one): the compaction below reads the query
             // results, which needs this submit to have completed.
             assert(!oneShotBatch_);
             VkCommandBuffer cb = beginOneShot();
-            ctx->rt().cmdBuildAccelerationStructures(cb, N, blasBuilds.data(), rangePtrs.data());
+            recordLodLevelBuilds(cb, pending);
             if (blasCompact_) {
                 std::vector<VkAccelerationStructureKHR> ases(N);
                 for (uint32_t k = 0; k < N; ++k) ases[k] = pending[k].as;
@@ -905,7 +909,10 @@ void VulkanRenderer::Impl::drainLodResults() {
             // time a batch landed. Two geometries / 1 MiB spreads the same total
             // work over more frames, trading a few frames of latency before a
             // chain becomes selectable for a stall small enough to stay inside
-            // a 60 Hz budget.
+            // a 60 Hz budget. That wait is now THREEPP_VK_LOD_DRAIN_WAIT=1
+            // only: by default the submit is fenced and lands drains later
+            // (landLodBatches), so the budget bounds the CPU work of a drain
+            // and the GPU build burst it queues, not a stall.
             constexpr uint32_t kMaxGeomsPerFrame = 2;
             constexpr uint64_t kMaxNewBytesPerFrame = 1ull * 1024ull * 1024ull;
 
@@ -926,9 +933,17 @@ void VulkanRenderer::Impl::drainLodResults() {
             // geometry. On the wall clock nothing waits.
             const bool waitForWorker = simTimeSec_ >= 0.0;
 
+            // Fenced path: the chains submitted kLodLandDrains drains ago land
+            // first (their levels become selectable this frame), then this
+            // drain's builds go out unwaited. Both steps count drains, not
+            // time, so the pinned-clock schedule above still replays.
+            if (!lodDrainWait_) landLodBatches();
+
             uint32_t finalizedGeoms = 0;
             uint64_t newBytes = 0;
             std::vector<LodPendingBuild> pending;
+            std::vector<const BufferGeometry*> pendingGeoms;// per pending build
+            std::vector<const BufferGeometry*> chainGeoms;  // per landing chain
 
             while (finalizedGeoms < kMaxGeomsPerFrame && newBytes < kMaxNewBytesPerFrame) {
                 LodResult result;
@@ -959,7 +974,7 @@ void VulkanRenderer::Impl::drainLodResults() {
                     // level onto the Ready chain.
                     continue;
                 }
-                if (rec.lodState != BlasRecord::LodState::Queued) {
+                if (rec.lodState != BlasRecord::LodState::Queued || !rec.lodLanding.empty()) {
                     // Version matches but no job is outstanding for it —
                     // this is the second result of a double-enqueue (or the
                     // state moved on some other way). Appending would
@@ -971,7 +986,10 @@ void VulkanRenderer::Impl::drainLodResults() {
                     continue;
                 }
 
-                rec.lodLevels.reserve(result.levels.size());
+                // Where the levels go: straight into the chain (the waited
+                // path), or into lodLanding until their batch lands.
+                auto& dst = lodDrainWait_ ? rec.lodLevels : rec.lodLanding;
+                dst.reserve(result.levels.size());
                 for (const auto& lvl : result.levels) {
                     // HARD budget enforcement at allocation time. The enqueue
                     // gate only sees RESIDENT bytes — a burst of jobs queued
@@ -990,24 +1008,229 @@ void VulkanRenderer::Impl::drainLodResults() {
                     }
                     BlasRecord::LodLevel out{};
                     if (!buildLodLevelFor(rec, lvl, out, pending)) continue;
+                    pending.back().level = static_cast<uint32_t>(dst.size());
+                    pendingGeoms.push_back(result.geom);
                     lodIndexBytes_ += out.index.size;
                     lodBlasBytes_  += out.storage.size;
                     newBytes       += out.index.size + out.storage.size;
-                    rec.lodLevels.push_back(out);
+                    dst.push_back(out);
                 }
-                if (rec.lodLevels.empty()) {
+                if (dst.empty()) {
                     // Includes the over-budget-before-first-level case: Failed
                     // (not None) so selection doesn't spin re-enqueuing while
                     // the cap holds. Deliberately never retried this session.
                     rec.lodState = BlasRecord::LodState::Failed;
-                } else {
+                } else if (lodDrainWait_) {
                     rec.lodState = BlasRecord::LodState::Ready;
                     ++lodChainsReadyCount_;
+                    ++finalizedGeoms;
+                } else {
+                    // Stays Queued (selection neither uses nor re-enqueues it)
+                    // until landLodBatches moves lodLanding into lodLevels.
+                    chainGeoms.push_back(result.geom);
                     ++finalizedGeoms;
                 }
             }
 
-            flushLodLevelBuilds(pending);
+            if (lodDrainWait_) {
+                flushLodLevelBuilds(pending);
+            } else {
+                submitLodLevelBuilds(pending, pendingGeoms, chainGeoms);
+                ++lodDrainSerial_;
+            }
+        }
+
+void VulkanRenderer::Impl::submitLodBatch(LodLandingBatch&& b, VkCommandBuffer cb,
+                                          std::vector<LodLandingBatch>& into) {
+            check(vkEndCommandBuffer(cb), "end auto-LOD batch cb");
+            VkFenceCreateInfo fci{};
+            fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            check(vkCreateFence(ctx->device(), &fci, nullptr, &b.fence), "vkCreateFence(auto-LOD batch)");
+            VkSubmitInfo si{};
+            si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            si.commandBufferCount = 1;
+            si.pCommandBuffers = &cb;
+            check(vkQueueSubmit(ctx->graphicsQueue(), 1, &si, b.fence), "submit auto-LOD batch");
+            b.cb = cb;
+            b.landAt = lodDrainSerial_ + kLodLandDrains;
+            into.push_back(std::move(b));
+        }
+
+void VulkanRenderer::Impl::submitLodLevelBuilds(std::vector<LodPendingBuild>& pending,
+                                                const std::vector<const BufferGeometry*>& pendingGeoms,
+                                                const std::vector<const BufferGeometry*>& chainGeoms) {
+            if (pending.empty()) return;
+            const uint32_t N = static_cast<uint32_t>(pending.size());
+            LodLandingBatch b;
+            b.id = ++lodBatchSerial_;
+            b.geoms = chainGeoms;
+            for (const BufferGeometry* g : chainGeoms) blasCache.at(g)->lodLandingBatch = b.id;
+
+            assert(!oneShotBatch_);
+            VkCommandBuffer cb = beginOneShot();
+            recordLodLevelBuilds(cb, pending);
+            if (blasCompact_) {
+                // A pool of the batch's own: its results are read drains later,
+                // and the shared blasCompactPools_ are reused by every
+                // synchronous compaction in between.
+                VkQueryPoolCreateInfo qpci{};
+                qpci.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+                qpci.queryType = VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR;
+                qpci.queryCount = N;
+                check(vkCreateQueryPool(ctx->device(), &qpci, nullptr, &b.queries),
+                      "vkCreateQueryPool(auto-LOD compaction)");
+                vkCmdResetQueryPool(cb, b.queries, 0, N);
+                VkMemoryBarrier mb{};
+                mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+                mb.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+                mb.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+                vkCmdPipelineBarrier(cb,
+                                     VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                     VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                     0, 1, &mb, 0, nullptr, 0, nullptr);
+                std::vector<VkAccelerationStructureKHR> ases(N);
+                for (uint32_t k = 0; k < N; ++k) {
+                    ases[k] = pending[k].as;
+                    b.queryLevels.emplace_back(pendingGeoms[k], pending[k].level);
+                }
+                ctx->rt().cmdWriteAccelerationStructuresProperties(
+                        cb, N, ases.data(), VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
+                        b.queries, 0);
+            }
+            for (auto& p : pending) b.garbage.push_back(p.scratch);
+            pending.clear();
+            submitLodBatch(std::move(b), cb, lodLanding_);
+        }
+
+void VulkanRenderer::Impl::landLodBatches() {
+            // The record a batch carries, if it is still the one the batch
+            // built for: an eviction or version bump in between ran
+            // destroyBlasLodLevels, which freed the landing levels and zeroed
+            // lodLandingBatch (ids are never reused).
+            auto carried = [this](const BufferGeometry* g, uint64_t id) -> BlasRecord* {
+                auto it = blasCache.find(g);
+                if (it == blasCache.end()) return nullptr;
+                BlasRecord* rec = it->second.get();
+                if (rec->lodLandingBatch != id || rec->lodLanding.empty() ||
+                    rec->lodState != BlasRecord::LodState::Queued) return nullptr;
+                return rec;
+            };
+            std::vector<LodLandingBatch> next;// compaction batches submitted here
+            size_t keep = 0;
+            for (size_t i = 0; i < lodLanding_.size(); ++i) {
+                LodLandingBatch& b = lodLanding_[i];
+                if (b.landAt > lodDrainSerial_) {
+                    if (keep != i) lodLanding_[keep] = std::move(b);
+                    ++keep;
+                    continue;
+                }
+                // Normally signalled long ago: kLodLandDrains frames' fences
+                // have been waited since the submit. Under a pinned clock this
+                // is also what keeps the schedule fixed when frames run ahead.
+                {
+                    THREEPP_CPUPROF("scene.4b_lodLandWait");
+                    check(vkWaitForFences(ctx->device(), 1, &b.fence, VK_TRUE, UINT64_MAX),
+                          "wait auto-LOD batch");
+                }
+                vkDestroyFence(ctx->device(), b.fence, nullptr);
+                vkFreeCommandBuffers(ctx->device(), cmdPool, 1, &b.cb);
+                for (auto& buf : b.garbage) destroyBuffer(ctx->allocator(), buf);
+                for (VkAccelerationStructureKHR as : b.garbageAs)
+                    ctx->rt().destroyAccelerationStructure(ctx->device(), as, nullptr);
+
+                bool landNow = true;
+                if (b.queries != VK_NULL_HANDLE) {
+                    // Build stage done: compact every level still carried, all
+                    // copies in one more fenced submit. Nothing references a
+                    // landing level, so the build-size pair is simply freed
+                    // when that submit lands (no remap, unlike static records).
+                    const uint32_t n = static_cast<uint32_t>(b.queryLevels.size());
+                    std::vector<VkDeviceSize> sizes(n, 0);
+                    check(vkGetQueryPoolResults(ctx->device(), b.queries, 0, n, n * sizeof(VkDeviceSize),
+                                                sizes.data(), sizeof(VkDeviceSize),
+                                                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+                          "vkGetQueryPoolResults(auto-LOD compacted size)");
+                    vkDestroyQueryPool(ctx->device(), b.queries, nullptr);
+                    b.queries = VK_NULL_HANDLE;
+                    LodLandingBatch c;
+                    c.id = ++lodBatchSerial_;
+                    c.compactStage = true;
+                    VkCommandBuffer cb = VK_NULL_HANDLE;
+                    for (uint32_t k = 0; k < n; ++k) {
+                        BlasRecord* rec = carried(b.queryLevels[k].first, b.id);
+                        if (!rec) continue;
+                        BlasRecord::LodLevel& lvl = rec->lodLanding[b.queryLevels[k].second];
+                        const VkDeviceSize sz = sizes[k];
+                        if (sz == 0 || sz >= lvl.storage.size) continue;// same rule as compactBlases
+                        Buffer storage = createBuffer(
+                                ctx->allocator(), ctx->device(), sz,
+                                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                VMA_MEMORY_USAGE_AUTO);
+                        VkAccelerationStructureCreateInfoKHR ci{};
+                        ci.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+                        ci.buffer = storage.handle;
+                        ci.size = sz;
+                        ci.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+                        VkAccelerationStructureKHR as = VK_NULL_HANDLE;
+                        check(ctx->rt().createAccelerationStructure(ctx->device(), &ci, nullptr, &as),
+                              "vkCreateAccelerationStructureKHR(compacted LOD level)");
+                        vulkan::registerAccelerationStructure(as, ci.buffer);
+                        if (cb == VK_NULL_HANDLE) cb = beginOneShot();
+                        VkCopyAccelerationStructureInfoKHR copy{};
+                        copy.sType = VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR;
+                        copy.src = lvl.as;
+                        copy.dst = as;
+                        copy.mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
+                        ctx->rt().cmdCopyAccelerationStructure(cb, &copy);
+                        lodBlasBytes_ -= std::min<uint64_t>(lodBlasBytes_, lvl.storage.size - sz);
+                        c.garbage.push_back(lvl.storage);
+                        c.garbageAs.push_back(lvl.as);
+                        lvl.storage = storage;
+                        lvl.as = as;
+                        VkAccelerationStructureDeviceAddressInfoKHR ai{};
+                        ai.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+                        ai.accelerationStructure = as;
+                        lvl.address = ctx->rt().getAccelerationStructureDeviceAddress(ctx->device(), &ai);
+                    }
+                    if (cb != VK_NULL_HANDLE) {
+                        // The chains ride on to the compaction batch.
+                        for (const BufferGeometry* g : b.geoms) {
+                            if (BlasRecord* rec = carried(g, b.id)) {
+                                rec->lodLandingBatch = c.id;
+                                c.geoms.push_back(g);
+                            }
+                        }
+                        submitLodBatch(std::move(c), cb, next);
+                        landNow = false;
+                    }
+                }
+                if (landNow) {
+                    for (const BufferGeometry* g : b.geoms) {
+                        BlasRecord* rec = carried(g, b.id);
+                        if (!rec) continue;
+                        rec->lodLevels = std::move(rec->lodLanding);
+                        rec->lodLanding.clear();
+                        rec->lodLandingBatch = 0;
+                        rec->lodState = BlasRecord::LodState::Ready;
+                        ++lodChainsReadyCount_;
+                    }
+                }
+            }
+            lodLanding_.resize(keep);
+            for (auto& c : next) lodLanding_.push_back(std::move(c));
+        }
+
+void VulkanRenderer::Impl::destroyLodLandingBatches() {
+            // Device idle (teardown). The command buffers went with cmdPool.
+            for (auto& b : lodLanding_) {
+                if (b.fence) vkDestroyFence(ctx->device(), b.fence, nullptr);
+                if (b.queries) vkDestroyQueryPool(ctx->device(), b.queries, nullptr);
+                for (auto& buf : b.garbage) destroyBuffer(ctx->allocator(), buf);
+                for (VkAccelerationStructureKHR as : b.garbageAs)
+                    ctx->rt().destroyAccelerationStructure(ctx->device(), as, nullptr);
+            }
+            lodLanding_.clear();
         }
 
 void VulkanRenderer::Impl::refreshSkinnedBlas(SkinnedMesh& sm, SkinnedMeshState& st) {
@@ -3379,16 +3602,23 @@ void VulkanRenderer::Impl::lodWorkerMain() {
         }
 
 void VulkanRenderer::Impl::destroyBlasLodLevels(BlasRecord& rec) {
-            for (auto& lvl : rec.lodLevels) {
-                if (lvl.as) ctx->rt().destroyAccelerationStructure(ctx->device(), lvl.as, nullptr);
-                lodBlasBytes_  -= std::min<uint64_t>(lodBlasBytes_,  lvl.storage.size);
-                lodIndexBytes_ -= std::min<uint64_t>(lodIndexBytes_, lvl.index.size);
-                destroyBuffer(ctx->allocator(), lvl.storage);
-                destroyBuffer(ctx->allocator(), lvl.index);
+            // A landing chain's levels too: every caller runs after a device
+            // wait, so its in-flight build or compaction has finished; the
+            // batch then finds lodLandingBatch zeroed and only frees its own.
+            for (auto* levels : {&rec.lodLevels, &rec.lodLanding}) {
+                for (auto& lvl : *levels) {
+                    if (lvl.as) ctx->rt().destroyAccelerationStructure(ctx->device(), lvl.as, nullptr);
+                    lodBlasBytes_  -= std::min<uint64_t>(lodBlasBytes_,  lvl.storage.size);
+                    lodIndexBytes_ -= std::min<uint64_t>(lodIndexBytes_, lvl.index.size);
+                    destroyBuffer(ctx->allocator(), lvl.storage);
+                    destroyBuffer(ctx->allocator(), lvl.index);
+                }
             }
             if (rec.lodState == BlasRecord::LodState::Ready && !rec.lodLevels.empty()) {
                 lodChainsReadyCount_ = lodChainsReadyCount_ > 0 ? lodChainsReadyCount_ - 1 : 0;
             }
+            rec.lodLanding.clear();
+            rec.lodLandingBatch = 0;
             rec.lodLevels.clear();
             rec.lodState = BlasRecord::LodState::None;
         }

@@ -278,6 +278,14 @@ namespace threepp::vulkan::impl {
         // Index i backs MeshEntry::lodLevel == i+1 (level 0 is this
         // record's own vertex/index/etc — never stored here).
         std::vector<LodLevel> lodLevels;
+        // A chain whose level BLASes are still building (or compacting) on
+        // the GPU: created and counted like lodLevels, invisible to selection
+        // until drainLodResults lands it (moves it into lodLevels, state
+        // Ready). lodLandingBatch is the id of the LodLandingBatch that
+        // carries it; 0 when nothing is landing. destroyBlasLodLevels frees
+        // these too, so a record evicted mid-flight takes them with it.
+        std::vector<LodLevel> lodLanding;
+        uint64_t lodLandingBatch = 0;
     };
 
     // Resolved index/AS data for whichever LOD level an entry currently
@@ -663,6 +671,33 @@ namespace threepp::vulkan::impl {
         // compacted pair after the build (flushLodLevelBuilds).
         BlasRecord* rec = nullptr;
         uint32_t level = 0;
+    };
+
+    // One fenced, unwaited submit of auto-LOD work (drainLodResults without
+    // THREEPP_VK_LOD_DRAIN_WAIT): the level builds of one drain (plus their
+    // compacted-size queries), or the compaction copies of one earlier build
+    // batch. It lands on drain number `landAt`, a fixed count after the
+    // submit, so the frame a chain becomes selectable is a function of the
+    // drain count alone and replays under a pinned clock. Records are named
+    // by geometry key and checked against BlasRecord::lodLandingBatch at
+    // landing, never held by pointer: an eviction in between destroys the
+    // record and its landing levels, and the batch then finds nothing.
+    struct LodLandingBatch {
+        uint64_t id = 0;
+        uint64_t landAt = 0;
+        bool compactStage = false;
+        VkFence fence = VK_NULL_HANDLE;
+        VkCommandBuffer cb = VK_NULL_HANDLE;
+        // Build stage with compaction on: query k is the compacted size of
+        // queryLevels[k] = (geometry key, index into its lodLanding).
+        VkQueryPool queries = VK_NULL_HANDLE;
+        std::vector<std::pair<const BufferGeometry*, uint32_t>> queryLevels;
+        // The records whose lodLanding this batch carries.
+        std::vector<const BufferGeometry*> geoms;
+        // Owned by the batch, freed once its fence has signalled: the build
+        // scratches, or the build-size pairs a compaction replaced.
+        std::vector<Buffer> garbage;
+        std::vector<VkAccelerationStructureKHR> garbageAs;
     };
 
     // Per-entry fingerprint used to detect scene changes between frames.

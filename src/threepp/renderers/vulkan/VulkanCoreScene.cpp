@@ -932,7 +932,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // TLAS-refit instance loop) and in the full-rebuild instance loop
             // further down — both read en.lodLevel verbatim, never re-deriving.
             lodChangedThisFrame_ = false;
-            if (autoLod_) drainLodResults();// budget: 2 geoms / 1 MiB of new levels per frame
+            if (autoLod_) {
+                THREEPP_CPUPROF("scene.4a_lodDrain");
+                drainLodResults();// budget: 2 geoms / 1 MiB of new levels per frame
+            }
             {
                 THREEPP_CPUPROF("scene.4_lodSelect");
                 VulkanRenderer::AutoLodStats stats{};

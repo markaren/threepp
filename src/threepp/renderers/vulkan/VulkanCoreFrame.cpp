@@ -112,7 +112,11 @@ void VulkanRenderer::Impl::endAndSubmitOneShot(VkCommandBuffer cb, const char* l
             if (sr != VK_SUCCESS) {
                 check(sr, (std::string("submit one-shot (") + label + ")").c_str());
             }
-            const VkResult wr = vkQueueWaitIdle(ctx->graphicsQueue());
+            VkResult wr;
+            {
+                THREEPP_CPUPROF("frame.Z_oneShotWait");
+                wr = vkQueueWaitIdle(ctx->graphicsQueue());
+            }
             if (wr != VK_SUCCESS) {
                 check(wr, (std::string("wait one-shot (") + label + ")").c_str());
             }
