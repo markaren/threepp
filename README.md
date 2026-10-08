@@ -251,6 +251,9 @@ to a rendered image that can be captured headless and judged.
 
 <table>
 <tr>
+<td align="center" colspan="2"><img src="doc/screenshots/trollstigen_show.jpg" width="826" alt="A drone light show writes threepp over the Stigfossen waterfall at Trollstigen"><br><em>Vulkan and Warp: a drone light show writes the name at dusk over Stigfossen, in a digital twin of Trollstigen, Norway; the drones are a <code>ParticleField</code> and the waterfall is GPU parcels (the scene is not in the repository)</em></td>
+</tr>
+<tr>
 <td align="center" colspan="2"><img src="doc/screenshots/norvasundet_kayak.jpg" width="826" alt="Sea kayak in a digital twin of a waterfront in Ålesund"><br><em>Vulkan: a sea kayak under way in the same digital twin as the Otter X at the top of this page (the scene is not in the repository)</em></td>
 </tr>
 <tr>
