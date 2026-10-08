@@ -12,9 +12,10 @@ ray-traced shadows, reflections, AO and GI.
 On top of that: a scene editor, PhysX robot simulation, simulated sensors with ground-truth labels
 for synthetic data, hardware-in-the-loop flight with ArduPilot, and Python bindings on PyPI.
 
-![Warp cloth sails on a real-time FFT ocean](doc/screenshots/sailboat_golden.gif)<br>
-*Golden hour, live: NVIDIA Warp cloth sails drive the hull on a JONSWAP FFT sea, rendered by the
-Vulkan backend ([warp_sailboat.py](python/examples/warp_sailboat.py))*
+![An Otter X sea drone in a digital twin of a waterfront in Ålesund](doc/screenshots/norvasundet_otter.jpg)<br>
+*An Otter X sea drone under way in a digital twin of a real waterfront in Ålesund, Norway, modelled
+from Kartverket lidar and sea charts and rendered by the Vulkan backend: the water reflects the
+moored boats and the buildings ashore (the scene is not in the repository)*
 
 **New here?** [Getting started](doc/getting_started.md) walks through the concepts the library is
 built from: the scene graph, ownership and lifetimes, geometry and materials, lights, the frame
@@ -250,30 +251,22 @@ to a rendered image that can be captured headless and judged.
 
 <table>
 <tr>
-<td align="center" colspan="2"><img src="doc/screenshots/norvasundet_kayak.jpg" width="826" alt="Sea kayak in Nørvasundet"><br><em>Vulkan: a sea kayak under way in a digital twin of a real waterfront in Ålesund, Norway, modelled from Kartverket lidar and sea charts (the scene is not in the repository)</em></td>
-</tr>
-<tr>
-<td align="center" colspan="2"><img src="doc/screenshots/norvasundet_otter.jpg" width="826" alt="Otter X sea drone in Nørvasundet"><br><em>Vulkan: an Otter X sea drone under way in the same twin, the water reflecting the moored boats and the buildings ashore</em></td>
-</tr>
-<tr>
-<td align="center"><img src="doc/screenshots/turbine_survey.jpg" width="400" alt="Offshore wind turbine inspection"><br><em>Vulkan: five robots inspect an offshore wind turbine; the Otter X maps the seabed (<a href="python/examples/turbine">turbine</a>)</em></td>
-<td align="center"><img src="doc/screenshots/gl_showpiece.jpg" width="400" alt="OpenGL showpiece"><br><em>OpenGL: room lighting, glass, soft shadows, GTAO, bloom and outline in one frame (<a href="examples/misc/showpiece.cpp">showpiece</a>)</em></td>
-</tr>
-<tr>
-<td align="center"><img src="doc/screenshots/usv_mariner.jpg" width="400" alt="Sea drone on the FFT ocean"><br><em>Vulkan: a sea drone under way on the FFT ocean (<a href="python/examples/usv">usv</a>)</em></td>
-<td align="center"><img src="doc/screenshots/gl_studio.jpg" width="400" alt="OpenGL studio scene"><br><em>OpenGL from Python: soft shadows, ambient occlusion and a selection outline (<a href="python/examples/gl_studio.py">gl_studio.py</a>)</em></td>
+<td align="center" colspan="2"><img src="doc/screenshots/norvasundet_kayak.jpg" width="826" alt="Sea kayak in a digital twin of a waterfront in Ålesund"><br><em>Vulkan: a sea kayak under way in the same digital twin as the Otter X at the top of this page (the scene is not in the repository)</em></td>
 </tr>
 <tr>
 <td align="center"><img src="doc/screenshots/rover_sand.jpg" width="400" alt="Rover on a sand slope"><br><em>Vulkan and Warp: a rover climbs loose sand in GPU grains, with slip plotted against tilt-bed data (<a href="python/examples/rover">rover</a>)</em></td>
-<td align="center"><img src="doc/screenshots/aalesund.png" width="400" alt="Ålesund terrain"><br><em>Vulkan: Ålesund from Kartverket elevation, NVDB roads and OSM footprints (<a href="examples/extras/terrain/norway_terrain.cpp">norway_terrain</a>)</em></td>
+<td align="center"><img src="doc/screenshots/gl_showpiece.jpg" width="400" alt="OpenGL showpiece"><br><em>OpenGL: room lighting, glass, soft shadows, GTAO, bloom and outline in one frame (<a href="examples/misc/showpiece.cpp">showpiece</a>)</em></td>
 </tr>
 <tr>
 <td align="center"><img src="doc/screenshots/spot_slam.png" width="400" alt="Spot RL gait, procedural forest"><br><em>Vulkan: an RL-trained Spot walks a procedural forest while its depth camera builds a live SLAM surface (<a href="python/examples/spot/spot_slam.py">spot_slam.py</a>)</em></td>
-<td align="center"><img src="doc/screenshots/gl_fr3_depth.jpg" width="400" alt="Franka FR3 with a depth camera"><br><em>OpenGL: a depth camera on a Franka FR3, placed by IK, scans a tray (lesson part 2, <a href="https://github.com/markaren/threepp-lessons/blob/main/films/depth_map.py">depth_map.py</a>)</em></td>
+<td align="center"><img src="doc/screenshots/gl_studio.jpg" width="400" alt="OpenGL studio scene"><br><em>OpenGL from Python: soft shadows, ambient occlusion and a selection outline (<a href="python/examples/gl_studio.py">gl_studio.py</a>)</em></td>
 </tr>
 <tr>
 <td align="center"><img src="doc/screenshots/vulkan_fire.png" width="400" alt="GPU particle field"><br><em>Vulkan: a campfire <code>ParticleField</code>, marched as participating media (<a href="examples/vulkan/vulkan_fire.cpp">vulkan_fire</a>)</em></td>
-<td align="center"><img src="doc/screenshots/tiger_svg.png" width="400" alt="SVG loader"><br><em>OpenGL and Vulkan: the SVG loader (<a href="examples/loaders/svg_loader.cpp">svg_loader</a>)</em></td>
+<td align="center"><img src="doc/screenshots/gl_fr3_depth.jpg" width="400" alt="Franka FR3 with a depth camera"><br><em>OpenGL: a depth camera on a Franka FR3, placed by IK, scans a tray (lesson part 2, <a href="https://github.com/markaren/threepp-lessons/blob/main/films/depth_map.py">depth_map.py</a>)</em></td>
+</tr>
+<tr>
+<td align="center" colspan="2"><img src="doc/screenshots/tiger_svg.png" width="400" alt="SVG loader"><br><em>OpenGL and Vulkan: the SVG loader (<a href="examples/loaders/svg_loader.cpp">svg_loader</a>)</em></td>
 </tr>
 </table>
 
