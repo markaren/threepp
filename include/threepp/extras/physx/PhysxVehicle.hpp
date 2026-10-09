@@ -12,6 +12,18 @@ namespace threepp {
         // Drive parameters. Throttle torque goes to the wheels selected by
         // drivenWheels (default = rear-wheel drive).
         float maxThrottleTorque = 1500.f;// N*m at full throttle
+
+        // Engine braking. Direct drive has no engine, and with the throttle
+        // released nothing but the chassis' linear damping slows the car: a
+        // wheel that is neither driven nor braked rolls free (PhysX hands it
+        // the road's speed and integrates no torque, so wheelDampingRate never
+        // reaches it), and down a grade the car gathers speed until the brake.
+        // This is the engine's drag: a brake torque on each DRIVEN wheel while
+        // the throttle is released and a gear is in. An engine at idle does not
+        // brake, so there is none of it below engineBrakeIdleSpeed, and all of
+        // it from twice that. 0 (the default) is no engine braking.
+        float engineBrakeTorque = 0.f;    // N*m on each driven wheel
+        float engineBrakeIdleSpeed = 1.5f;// m/s (5 km/h)
     };
 
     // Direct-drive 4-wheel vehicle built on PxVehicle2 components: throttle torque
@@ -48,9 +60,14 @@ namespace threepp {
 
         void setGear(Gear g) { transmissionCommands_.gear = static_cast<::physx::vehicle2::PxVehicleDirectDriveTransmissionCommandState::Enum>(g); }
 
+        // Engine braking, N*m on each driven wheel (Settings::engineBrakeTorque).
+        // May be changed under way: a lower gear is more of it.
+        void setEngineBrakeTorque(float torque) { settings_.engineBrakeTorque = std::max(0.f, torque); }
+
         // -- Readouts --
 
         Gear gear() const { return static_cast<Gear>(transmissionCommands_.gear); }
+        float engineBrakeTorque() const { return settings_.engineBrakeTorque; }
 
     private:
         // ---- Construction helpers ----
@@ -80,9 +97,44 @@ namespace threepp {
         void addDrivetrainComponents() override {
             using namespace ::physx::vehicle2;
             componentSequence_.add(static_cast<PxVehicleDirectDriveCommandResponseComponent*>(this));
+            // The engine's drag goes onto the brake torques the command response
+            // just wrote, before the actuation state reads them (a wheel rolls
+            // free unless that says a drive or a brake is applied). Its own
+            // one-line component, for the reason the road override is one: see
+            // PhysxVehicleBase::buildComponentSequence().
+            engineBrakeComponent_.owner = this;
+            componentSequence_.add(&engineBrakeComponent_);
             componentSequence_.add(static_cast<PxVehicleDirectDriveActuationStateComponent*>(this));
             componentSequence_.add(static_cast<PxVehicleDirectDrivetrainComponent*>(this));
         }
+
+        // Add the engine's drag to the driven wheels' brake torques. Runs every
+        // substep, right after the command response. It is not one of the
+        // driver's brakes: the sticky tires' hold (PhysxVehicleBase::
+        // updateStickyDamping) asks commands_, which this leaves alone, and
+        // below the idle speed there is none of it, so a car let go on a grade
+        // still rolls away.
+        void applyEngineBrake() {
+            if (settings_.engineBrakeTorque <= 0.f || commands_.throttle > 0.f || gear() == Gear::Neutral) return;
+            const float speed = std::abs(rigidBodyState_.getLongitudinalSpeed(simContext_.frame));
+            const float idle = settings_.engineBrakeIdleSpeed;
+            const float share = idle > 0.f ? std::clamp(speed / idle - 1.f, 0.f, 1.f) : 1.f;
+            if (share <= 0.f) return;
+            for (std::size_t i = 0; i < 4; ++i) {
+                if (settings_.drivenWheels[i]) brakeResponseStates_[i] += settings_.engineBrakeTorque * share;
+            }
+        }
+
+        // Sequence element that does nothing but call applyEngineBrake().
+        struct EngineBrakeComponent : public ::physx::vehicle2::PxVehicleComponent {
+            PhysxVehicle* owner = nullptr;
+
+            bool update(const ::physx::PxReal,
+                        const ::physx::vehicle2::PxVehicleSimulationContext&) override {
+                owner->applyEngineBrake();
+                return true;
+            }
+        };
 
         // ---- Component getDataFor* overrides (drive-specific) ----
 
@@ -195,6 +247,7 @@ namespace threepp {
         ::physx::vehicle2::PxVehicleBrakeCommandResponseParams brakeResponseParams_{};
 
         ::physx::vehicle2::PxVehicleDirectDriveTransmissionCommandState transmissionCommands_{};
+        EngineBrakeComponent engineBrakeComponent_{};
     };
 
 }// namespace threepp

@@ -81,19 +81,41 @@ namespace threepp {
         // the tire responds to throttle/brake. Pre-friction-cap value.
         float longitudinalStiffness = 50'000.f;
 
-        // Sticky-tire engagement. Once the tire's slip speed has stayed below
-        // `stickySpeedThreshold` for `stickyTimeThreshold` seconds (without a
-        // drive torque applied), a velocity constraint pins the contact patch
-        // to the road, killing residual drift that the slip-based tire force
-        // can't fully resolve at near-zero speeds. PhysX's stock defaults
-        // (time = 1.0 s, lateral damping = 0.1) let the car visibly creep
-        // forward and slide sideways while stopping — tighter values here
-        // make stops decisive without hurting normal driving (sticky only
-        // engages near 0 m/s).
-        float stickySpeedThreshold = 0.2f;     // m/s; same as PhysX default
-        float stickyTimeThreshold = 0.1f;      // s;   PhysX default is 1.0
-        float stickyDampingLongitudinal = 1.0f;// same as PhysX default
-        float stickyDampingLateral = 1.0f;     // PhysX default is 0.1
+        // Sticky tires: what holds a car that has come to rest. Once the tire's
+        // speeds have stayed below `stickySpeedThreshold` for
+        // `stickyTimeThreshold` seconds with no drive torque applied (or at
+        // once, for a braked wheel that has locked), PhysX zeroes that tire's
+        // slip, and with it the slip-based tire force (singular at v = 0), and
+        // puts a velocity constraint on the contact patch instead.
+        //
+        // That constraint is a DAMPER, not a lock: an acceleration spring with
+        // no stiffness (vehicleConstraintSolverPrep in
+        // PxVehiclePhysXConstraintStates.h), so it decelerates the patch at
+        // damping * v. Against a steady pull a (gravity on a grade: g * sin)
+        // the car does not stop, it settles at v = a / damping. At PhysX's
+        // stock damping of 1.0 that is 0.98 m/s on a 10 % grade, far above the
+        // speed threshold, so a fully braked car ran away until the constraint
+        // let go, was caught by the tire force, and was handed back: measured,
+        // it backed down the grade at the threshold speed (0.7 km/h, 1.8 m in
+        // 10 s), and slid 0.9 m sideways in 10 s parked across it.
+        //
+        // So there are two dampings. `stickyDampingHold` is stiff enough that
+        // the car stands (measured on grades of 10 to 25 %: under 0.4 mm in a
+        // minute once it has settled on its springs, and nothing once PhysX has
+        // put the actor to sleep): it is used sideways always (a tire does not
+        // roll sideways), and lengthways while a brake is applied.
+        // `stickyDamping` is the soft one, lengthways with the brakes off: a
+        // car let go on a grade rolls away, and on the flat it coasts to rest.
+        // Neither acts above the speed threshold, so driving is untouched.
+        //
+        // On ground that itself moves (a deck, a platform) both directions
+        // stay soft: the constraint pulls the patch towards rest in the WORLD,
+        // not on the road, and the stiff one would nail the car to the world
+        // while the ground left from under it.
+        float stickySpeedThreshold = 0.2f;  // m/s; same as PhysX default
+        float stickyTimeThreshold = 0.1f;   // s;   PhysX default is 1.0
+        float stickyDamping = 1.0f;         // 1/s; PhysX default (1.0 lengthways, 0.1 sideways)
+        float stickyDampingHold = 10'000.f; // 1/s
 
         // Vehicle sub-stepping. The wheel rotational dynamics — drive torque
         // fought by the slip-proportional tire force — form a stiff ODE. At a
@@ -592,13 +614,13 @@ namespace threepp {
             simContext_.physxActorUpdateMode = ::physx::vehicle2::PxVehiclePhysXActorUpdateMode::eAPPLY_VELOCITY;
 
             // Override the stock sticky-tire defaults — see Settings docs above.
+            // The dampings are chosen per step, in updateStickyDamping().
             auto& sticky = simContext_.tireStickyParams;
             sticky.stickyParams[PxVehicleTireDirectionModes::eLONGITUDINAL].thresholdSpeed = settings_.stickySpeedThreshold;
             sticky.stickyParams[PxVehicleTireDirectionModes::eLONGITUDINAL].thresholdTime = settings_.stickyTimeThreshold;
-            sticky.stickyParams[PxVehicleTireDirectionModes::eLONGITUDINAL].damping = settings_.stickyDampingLongitudinal;
             sticky.stickyParams[PxVehicleTireDirectionModes::eLATERAL].thresholdSpeed = settings_.stickySpeedThreshold;
             sticky.stickyParams[PxVehicleTireDirectionModes::eLATERAL].thresholdTime = settings_.stickyTimeThreshold;
-            sticky.stickyParams[PxVehicleTireDirectionModes::eLATERAL].damping = settings_.stickyDampingLateral;
+            updateStickyDamping();
 
             // Raise the longitudinal slip-ratio denominator floor to match the
             // sim timestep — see Settings docs. Without this the wheel spin-up is
@@ -607,6 +629,35 @@ namespace threepp {
             slip.minActiveLongSlipDenominator = settings_.minLongSlipDenominatorActive;
             slip.minPassiveLongSlipDenominator = settings_.minLongSlipDenominatorPassive;
             slip.minLatSlipDenominator = settings_.minLatSlipDenominator;
+        }
+
+        // The sticky-tire dampings for the coming step — see Settings docs. The
+        // constraint component reads them from the context each update. The
+        // road states are the previous step's query, which is as good: ground
+        // does not start moving within a step.
+        void updateStickyDamping() {
+            using namespace ::physx::vehicle2;
+            bool braked = false;
+            for (::physx::PxU32 i = 0; i < commands_.nbBrakes; ++i) {
+                braked = braked || commands_.brakes[i] > 0.f;
+            }
+            // A held car comes fully to rest, and PhysX puts its actor to sleep.
+            // PhysX wakes a sleeping vehicle for the throttle and the steering
+            // only (PxVehiclePhysxActorWakeup), and a sleeping one is not even
+            // given gravity: let go of the brake on a grade and it would stay
+            // where it was.
+            if (wasBraked_ && !braked && chassisActor_ && chassisActor_->isSleeping()) {
+                chassisActor_->wakeUp();
+            }
+            wasBraked_ = braked;
+            bool groundMoves = false;
+            for (const auto& road : roadGeometryStates_) {
+                groundMoves = groundMoves || (road.hitState && road.velocity.magnitudeSquared() > 1e-6f);
+            }
+            const float hold = groundMoves ? settings_.stickyDamping : settings_.stickyDampingHold;
+            auto& sticky = simContext_.tireStickyParams;
+            sticky.stickyParams[PxVehicleTireDirectionModes::eLONGITUDINAL].damping = braked ? hold : settings_.stickyDamping;
+            sticky.stickyParams[PxVehicleTireDirectionModes::eLATERAL].damping = hold;
         }
 
         void createPhysxActor() {
@@ -724,6 +775,7 @@ namespace threepp {
                                           : settings_.subStepCountHighSpeed;
             componentSequence_.setSubsteps(substepGroupHandle_,
                                            static_cast<::physx::PxU8>(std::max(1u, nSub)));
+            updateStickyDamping();
             componentSequence_.update(dt, simContext_);
             // PxVehicle's component sequence updates wheelLocalPoses_ but doesn't
             // push them onto the chassis-attached wheel shapes — debug visualization
@@ -1049,6 +1101,7 @@ namespace threepp {
         ::physx::vehicle2::PxVehicleSteerCommandResponseParams steerResponseParams_{};
 
         ::physx::vehicle2::PxVehicleCommandState commands_{};
+        bool wasBraked_ = false;// a brake was applied last step — see updateStickyDamping()
 
         ::physx::vehicle2::PxVehiclePhysXActor physxActor_{};
         ::physx::vehicle2::PxVehiclePhysXSteerState physxSteerState_{};

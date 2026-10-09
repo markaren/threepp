@@ -2166,6 +2166,14 @@ class DisplacedMesh(Mesh):
     def params(self) -> DisplacedMesh.Params:
         ...
     @property
+    def rt_proxy_cells(self) -> int:
+        """
+        The surface the rays see: the acceleration structure is built over every s-th grid line, s chosen so the traced grid has at most this many cells a side (the raster draws the full grid). 0 = trace the full grid. Read when the renderer first sees the mesh.
+        """
+    @rt_proxy_cells.setter
+    def rt_proxy_cells(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
     def wake(self) -> DisplacedMesh.VesselWake:
         """
         Vessel 0's Kelvin V-wake / bow bump / foam trail. Shares the hull_exclusion pose, so set that first.
@@ -7237,9 +7245,9 @@ class PhysxVehicle:
         @property
         def value(self) -> int:
             ...
-    def __init__(self, world: PhysxWorld, chassis_width: typing.SupportsFloat | typing.SupportsIndex = 1.9500000476837158, chassis_height: typing.SupportsFloat | typing.SupportsIndex = 1.399999976158142, chassis_length: typing.SupportsFloat | typing.SupportsIndex = 4.400000095367432, chassis_mass: typing.SupportsFloat | typing.SupportsIndex = 1500.0, wheelbase: typing.SupportsFloat | typing.SupportsIndex = 2.6600000858306885, track_width: typing.SupportsFloat | typing.SupportsIndex = 1.649999976158142, wheel_radius: typing.SupportsFloat | typing.SupportsIndex = 0.4000000059604645, wheel_half_width: typing.SupportsFloat | typing.SupportsIndex = 0.15000000596046448, wheel_mass: typing.SupportsFloat | typing.SupportsIndex = 25.0, driven_wheels: typing.Annotated[collections.abc.Sequence[bool], "FixedSize(4)"] = [True, True, True, True], max_throttle_torque: typing.SupportsFloat | typing.SupportsIndex = 1500.0, max_brake_torque: typing.SupportsFloat | typing.SupportsIndex = 5000.0, max_steer_angle: typing.SupportsFloat | typing.SupportsIndex = 0.6000000238418579, tire_friction: typing.SupportsFloat | typing.SupportsIndex = 2.0, longitudinal_stiffness: typing.SupportsFloat | typing.SupportsIndex = 100000.0, lateral_stiffness: typing.SupportsFloat | typing.SupportsIndex = 80000.0, suspension_travel: typing.SupportsFloat | typing.SupportsIndex = 0.30000001192092896, suspension_stiffness: typing.SupportsFloat | typing.SupportsIndex = 35000.0, suspension_damping: typing.SupportsFloat | typing.SupportsIndex = 4500.0, suspension_attachment_y: typing.SupportsFloat | typing.SupportsIndex = -0.4000000059604645, wheel_damping_rate: typing.SupportsFloat | typing.SupportsIndex = 1.5, position: Vector3 = ..., rotation: Quaternion = ...) -> None:
+    def __init__(self, world: PhysxWorld, chassis_width: typing.SupportsFloat | typing.SupportsIndex = 1.9500000476837158, chassis_height: typing.SupportsFloat | typing.SupportsIndex = 1.399999976158142, chassis_length: typing.SupportsFloat | typing.SupportsIndex = 4.400000095367432, chassis_mass: typing.SupportsFloat | typing.SupportsIndex = 1500.0, wheelbase: typing.SupportsFloat | typing.SupportsIndex = 2.6600000858306885, track_width: typing.SupportsFloat | typing.SupportsIndex = 1.649999976158142, wheel_radius: typing.SupportsFloat | typing.SupportsIndex = 0.4000000059604645, wheel_half_width: typing.SupportsFloat | typing.SupportsIndex = 0.15000000596046448, wheel_mass: typing.SupportsFloat | typing.SupportsIndex = 25.0, driven_wheels: typing.Annotated[collections.abc.Sequence[bool], "FixedSize(4)"] = [True, True, True, True], max_throttle_torque: typing.SupportsFloat | typing.SupportsIndex = 1500.0, max_brake_torque: typing.SupportsFloat | typing.SupportsIndex = 5000.0, max_steer_angle: typing.SupportsFloat | typing.SupportsIndex = 0.6000000238418579, tire_friction: typing.SupportsFloat | typing.SupportsIndex = 2.0, longitudinal_stiffness: typing.SupportsFloat | typing.SupportsIndex = 100000.0, lateral_stiffness: typing.SupportsFloat | typing.SupportsIndex = 80000.0, suspension_travel: typing.SupportsFloat | typing.SupportsIndex = 0.30000001192092896, suspension_stiffness: typing.SupportsFloat | typing.SupportsIndex = 35000.0, suspension_damping: typing.SupportsFloat | typing.SupportsIndex = 4500.0, suspension_attachment_y: typing.SupportsFloat | typing.SupportsIndex = -0.4000000059604645, wheel_damping_rate: typing.SupportsFloat | typing.SupportsIndex = 1.5, engine_brake_torque: typing.SupportsFloat | typing.SupportsIndex = 0.0, engine_brake_idle_speed: typing.SupportsFloat | typing.SupportsIndex = 1.5, position: Vector3 = ..., rotation: Quaternion = ...) -> None:
         """
-        Spawn a vehicle in `world`. Defaults are the Range Rover Evoque tuning of the C++ demo: 4WD direct drive, tire_friction 2.0 (dry asphalt). Dimensions are the chassis box PhysX simulates — match them to whatever body you draw on top. driven_wheels selects which wheels take throttle torque, in wheel-index order.
+        Spawn a vehicle in `world`. Defaults are the Range Rover Evoque tuning of the C++ demo: 4WD direct drive, tire_friction 2.0 (dry asphalt). Dimensions are the chassis box PhysX simulates — match them to whatever body you draw on top. driven_wheels selects which wheels take throttle torque, in wheel-index order. engine_brake_torque (N m on each driven wheel, 0 = none) is the engine's drag with the throttle released: see the engine_brake_torque property.
         """
     def add_force_at_pos(self, force: Vector3, world_pos: Vector3) -> None:
         """
@@ -7319,6 +7327,14 @@ class PhysxVehicle:
         """
         Wheel spin angle (radians, wrapped to ±2π).
         """
+    @property
+    def engine_brake_torque(self) -> float:
+        """
+        Engine braking: a brake torque (N m) on each driven wheel while the throttle is released and the gear is not NEUTRAL. Direct drive has no engine, so without it only the chassis' damping slows a coasting car, and down a grade it gathers speed until the brake. None of it below engine_brake_idle_speed (an engine at idle does not brake, and a car let go on a grade still rolls away), all of it from twice that. 0 = none (the default). May be set under way: a lower gear is more of it.
+        """
+    @engine_brake_torque.setter
+    def engine_brake_torque(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
     @property
     def forward_speed(self) -> float:
         """

@@ -113,6 +113,62 @@ def test_instanced_bodies():
     assert bodies[0].position.y < y_before, "instances should have fallen"
 
 
+# --- The vehicle. The physics of it is tests/extras/PhysxVehicle_test.cpp's; here, that the
+# binding reaches it: a car on a slab that climbs 10 % towards +z, nose uphill.
+
+def car_on_a_grade(**settings):
+    """(world, vehicle, moved): moved() is how far the chassis has gone along the slab (m)."""
+    import math
+    a = math.atan(0.10)
+    tilt = tp.Quaternion()
+    tilt.set_from_axis_angle(tp.Vector3(1, 0, 0), -a)
+    up = np.array([0.0, math.cos(a), -math.sin(a)])
+    slab = tp.Mesh(tp.BoxGeometry(60, 1, 400), tp.MeshStandardMaterial())
+    slab.quaternion.set(tilt.x, tilt.y, tilt.z, tilt.w)
+    slab.position.set(*(-0.5 * up))
+    world = tp.PhysxWorld()
+    world.add_static(slab)
+    veh = tp.PhysxVehicle(world, position=tp.Vector3(*(0.996 * up)), rotation=tilt, **settings)   # at its ride height
+    start = np.array([veh.position.x, veh.position.y, veh.position.z])
+
+    def moved():
+        d = np.array([veh.position.x, veh.position.y, veh.position.z]) - start
+        return float(np.linalg.norm(d - up * (d @ up)))
+    return world, veh, moved
+
+
+def test_vehicle_brake_holds_on_a_grade_and_lets_go():
+    world, veh, moved = car_on_a_grade()
+    veh.set_brake(1.0)
+    for _ in range(600):  # 10 s
+        world.step(1 / 60)
+    assert moved() < 0.01, "a fully braked vehicle must stand still on a 10 % grade"
+    veh.set_brake(0.0)
+    for _ in range(300):
+        world.step(1 / 60)
+    assert veh.forward_speed < -3.0, "let go, it rolls back down (the hold is the brake's)"
+
+
+def test_vehicle_engine_brake_torque_is_a_setting_and_a_property():
+    world, veh, _ = car_on_a_grade(engine_brake_torque=40.0)
+    assert veh.engine_brake_torque == 40.0
+    veh.engine_brake_torque = 75.0
+    assert veh.engine_brake_torque == 75.0
+    veh.engine_brake_torque = -5.0
+    assert veh.engine_brake_torque == 0.0, "a torque that drives is not an engine's brake"
+
+
+def test_vehicle_engine_brake_holds_it_back():
+    def rolled_back(torque):  # one world at a time: each is gone when this returns
+        world, veh, _ = car_on_a_grade(engine_brake_torque=torque)
+        for _ in range(1200):  # 20 s let go, never braked
+            world.step(1 / 60)
+        return -veh.forward_speed
+    free, geared = rolled_back(0.0), rolled_back(75.0)
+    assert free > 6.0, "with no engine brake only the chassis' damping holds it back"
+    assert 1.5 < geared < 0.8 * free, "the engine holds it back, and lets it roll under the idle speed"
+
+
 # --- Soft bodies (deformable volumes). GPU-only: PhysX cooks and solves these on
 # CUDA, so the world needs gpu_dynamics and the box gets skipped on a CPU-only
 # machine rather than failing there.
