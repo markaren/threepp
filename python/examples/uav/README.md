@@ -239,3 +239,94 @@ visual.pose(x8, h0=0.0)
 `los.aim` is the aim point, `los.e` the cross-track error; `x8.out` holds the last evaluated air
 data, forces and coefficients; `x8.world_position(h0)` and `x8.world_rotation()` give the
 aircraft in the world for a camera.
+
+# The Matrice 350 RTK
+
+A multirotor for the examples: the DJI Matrice 350 RTK carrying a Zenmuse H20T, as a rigid body on four
+rotors in wind. Unlike the X8 above it has no published flight model behind it: DJI publishes dimensions,
+masses and limits, and no thrust, torque, drag or inertia. So the model here is a standard multirotor model
+with the product page's numbers where there are any, every other number ASSUMED and marked so in
+`m350_spec.json`, and two of them CALIBRATED against the two flight figures the product page does give.
+Nothing is validated against a flight log.
+
+| file | what it is |
+|---|---|
+| `m350_spec.json` | every number with its source: DJI's specification pages (read 2026-10-09), or ASSUMED with the reason; the layout, the mass budget, the propulsion, the drag, the controller's gains, the 3D model's parts and materials |
+| `../rigs/m350_rig.py` | the aircraft for any scene: `M350` (the rigid body, the rotors, the skids on the ground), `Wind` (a mean wind and Dryden turbulence), `Autopilot`, `Mission` and `Gimbal` (ours, not DJI's), `Visual` (the `.glb` posed from the model); no threepp import |
+| `build_m350_blender.py` | builds the geometry (numpy) with `../build_common.py` and exports `m350.glb` through Blender |
+| `m350_flight.py` | the checks and a short flight, on the command line; numpy only, no window |
+| `m350.glb` | generated, not committed |
+
+```
+blender --background --factory-startup --python build_m350_blender.py -- --spec m350_spec.json --out m350.glb
+python build_m350_blender.py --check             # the geometry's gates and projected areas, without Blender
+python m350_flight.py --checks                   # the eight checks below
+python m350_flight.py --telemetry --wind 8 --from 250 [--csv m350.csv]
+```
+
+## The model
+
+The product's: 895 mm between diagonal motor axes, 670 mm wide over the motors, 430 mm tall, 21 in
+propellers, 3.77 kg without and 6.47 kg with its two batteries, the H20T's 0.828 kg and its size. The
+model meets those; it does not meet the product page's length of 810 mm (it is 745 mm: with the rotor axes
+the wheelbase and the width give, nothing on the aircraft reaches 810). The motors and propellers hang
+UNDER the arm ends and the body stands above the arm plane, as on the aircraft (a first build had them on
+top; the owner's photograph of the aircraft corrected it). Shapes are fitted by eye to DJI's photographs
+and that photograph; what could not be seen in them is listed in the spec (`model.unverified`: the side,
+top and bottom vision windows, the lamps' places, the gimbal's yoke, which window of the camera head is
+which). No logos or lettering. Nodes: `airframe`, `prop_fr/fl/rl/rr` (each at its disc centre, spun about
+local +Y), `gimbal_pan` > `gimbal_roll` > `gimbal_tilt` (about +Y, +X, +Z), lamps with their own emissive
+materials, empties for the cameras and antennas.
+
+## The flight model
+
+`M350.rates` has the equations (its docstring writes them out). A rotor's thrust is kT w^2 less what the
+air's speed through the disc takes (blade element and momentum theory), its in-plane force is linear in
+the air's speed across the disc, its torque kQ w^2 with the rotor's angular momentum in the rigid-body
+equation; the airframe's drag is its projected areas (measured on the model's own meshes) times an ASSUMED
+drag coefficient of 1; the rotors follow their commands with a first-order lag. Mass, centre of gravity
+and inertia come from a budget of boxes (batteries and payload at the product's masses; the split of the
+rest ASSUMED). Fourth-order Runge-Kutta at 1/300 s; two runs are bit-identical.
+
+CALIBRATED, which is not validated: the figure of merit and the drive efficiency (0.72, 0.88, both
+ASSUMED) are chosen together so the hover at 6.47 kg draws the 574 W that the product's 55 min from 526 Wh
+implies; the rotors' in-plane force coefficient is solved so 23 m/s needs the product's 30 deg of tilt
+(with the drag coefficient at 1 the airframe alone is 96 % of the drag there: that coefficient is nearly
+calibrated away). The maximum thrust (64 N a rotor) is ASSUMED, set so that point is inside the rotors'
+range. Battery power away from the hover is not to be quoted: the torque is the static one and there is no
+translational lift, so power only rises with speed.
+
+`Wind`: a logarithmic mean profile (or a scene's own field: `field(n, e, h)`), and on it the low-altitude
+Dryden turbulence of MIL-F-8785C / MIL-HDBK-1797 as shaping filters on seeded noise. OURS: a hovering
+aircraft has no airspeed to carry it through frozen turbulence, so the turbulence is convected past it at
+the speed of the mean air past the aircraft. It is a point model: all four rotors see the same gust.
+
+`Autopilot` (ours, not DJI's): position, velocity, thrust vector with the product's 25 deg tilt limit,
+quaternion attitude, body rates, mixer. It does not know the wind and rejects it by feedback. It is fed
+the EXACT state: no GNSS, no vision, no estimator, no sensor noise, so what it holds is a floor under what
+a real aircraft holds. `Mission` flies straight legs on jerk-limited profiles, takes off and lands;
+`Gimbal` holds the camera on a point within the H20T's published ranges (its slew rate ASSUMED).
+
+## The checks (`m350_flight.py --checks`, with the payload unless said)
+
+- 7.298 kg; hover 260 rad/s (2490 rpm), 17.9 N a rotor, 681 W, 46 min. Without the payload 574 W and
+  55.0 min: the calibration above, not a result.
+- Holding position in a steady 8 m/s: 3.7 deg of tilt nose into it, 5.0 deg beam on.
+- Steps from a hover in still air: 5 m sideways in 1.2 s (10 to 90 %) with 3.2 % overshoot, 2 m up in
+  1.3 s with none, 90 deg of yaw in 1.1 s with 2.2 %; tilt and rates inside the limits.
+- Hovering 30 m up for 120 s in turbulence at the standard's intensities: 0.02 m rms sideways in 4 m/s,
+  0.06 m in 8 m/s (0.21 m at the most), 0.44 m in 12 m/s (2.0 m at the most: 12 m/s 10 m up is 15 m/s at
+  30 m, and the tilt limit, not the thrust, bounds it). The product states +-0.1 m with RTK and no wind
+  for that figure.
+- A 5 m/s gust over 2 s on the beam: pushed 0.09 m, back inside 0.02 m after 3.7 s.
+- Take-off to 10 m, a hold, a landing: touchdown at 0.24 m/s, no bounce; at rest on a 5 deg slope with
+  the rotors at idle.
+- A torque-free tumble keeps energy and angular momentum to 1e-10; in a still-air flight the change in
+  energy equals the work of the non-conservative forces to 0.001 %.
+- 45 to 60 times real time, autopilot and wind included.
+
+Not in the model: ground effect, vortex ring state in a descent, blade flapping, the rotors' wash on the
+airframe, any sensor.
+
+`python/examples/trollstigen/trollstigen_inspect.py` (a site project outside this repository) flies it on
+a bridge inspection in a terrain-shaped wind.

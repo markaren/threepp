@@ -1,0 +1,289 @@
+{
+ "note": "Every number of the M350 example (m350.glb, ../rigs/m350_rig.py). 'product' = DJI's specification pages as read on 2026-10-09 (source.aircraft, source.payload). ASSUMED = not published: the reason is beside it. Frame of the layout and the .glb: X forward, Y up, Z right (starboard), metres; the origin is on the centreline, midway between the four motor axes, at the height of the arm tubes' axes at the motor mounts.",
+ "source": {
+  "aircraft": "https://enterprise.dji.com/matrice-350-rtk/specs",
+  "payload": "https://enterprise.dji.com/zenmuse-h20-series/specs",
+  "read": "2026-10-09"
+ },
+ "aircraft": {
+  "name": "DJI Matrice 350 RTK",
+  "dimensions_unfolded_m": {"length": 0.810, "width": 0.670, "height": 0.430, "note": "product: 810x670x430 mm (LxWxH), unfolded, without propellers"},
+  "wheelbase_m": 0.895,
+  "mass_without_batteries_kg": 3.77,
+  "mass_with_batteries_kg": 6.47,
+  "max_takeoff_kg": 9.2,
+  "battery": {"name": "TB65", "count": 2, "mass_kg": 1.35, "voltage_v": 44.76, "capacity_ah": 5.88, "energy_wh": 263.2},
+  "propeller": {"name": "2110s", "diameter_m": 0.5334, "pitch_m": 0.254, "blades": 2,
+                "note": "the product page names the propeller only. ASSUMED from the name, as such names are read: 21 in diameter, 10 in pitch; folding, two blades"},
+  "limits": {
+   "max_tilt_deg": 30.0,
+   "max_tilt_forward_vision_deg": 25.0,
+   "max_pitch_rate_dps": 300.0,
+   "max_yaw_rate_dps": 100.0,
+   "max_ascent_ms": 6.0,
+   "max_descent_ms": 5.0,
+   "max_tilted_descent_ms": 7.0,
+   "max_horizontal_ms": 23.0,
+   "max_wind_ms": 12.0,
+   "max_flight_time_min": 55.0,
+   "hover_accuracy_rtk_m": {"horizontal": 0.1, "vertical": 0.1},
+   "note": "product, all of them. 25 deg is the limit in N mode with the forward vision system on, which is how an inspection is flown"
+  }
+ },
+ "payload": {
+  "name": "DJI Zenmuse H20T",
+  "mass_kg": 0.828,
+  "dimensions_m": [0.167, 0.135, 0.161],
+  "gimbal": {
+   "controllable_deg": {"tilt": [-120.0, 30.0], "pan": [-320.0, 320.0]},
+   "mechanical_deg": {"tilt": [-132.5, 42.5], "pan": [-330.0, 330.0], "roll": [-90.0, 60.0]},
+   "angular_vibration_deg": 0.01,
+   "max_rate_dps": 90.0,
+   "max_rate_note": "ASSUMED: the product page gives no slew rate"
+  },
+  "zoom": {"sensor": "1/1.7 in CMOS, 20 MP", "focal_mm": [6.83, 119.94], "equivalent_mm": [31.7, 556.2], "dfov_deg": [66.6, 4.0], "photo_px": [5184, 3888], "video_px": [3840, 2160]},
+  "wide": {"sensor": "1/2.3 in CMOS, 12 MP", "focal_mm": 4.5, "equivalent_mm": 24.0, "dfov_deg": 82.9, "video_px": [1920, 1080]},
+  "thermal": {"px": [640, 512], "dfov_deg": 40.6, "focal_mm": 13.5},
+  "rangefinder": {"wavelength_nm": 905, "range_m": [3.0, 1200.0], "accuracy": "+-(0.2 m + 0.15 % of the distance)"},
+  "note": "product, but for the slew rate. Mounted as a single downward gimbal"
+ },
+ "layout": {
+  "note": "Where things are, in the frame of the note at the top. The rotor axes follow from the product page: the wheelbase (0.895 m between diagonal motor axes) and the width without propellers (0.670 m, taken as the outer motor cans, each motor_can_diameter_m across): z = (0.670 - 0.076) / 2 = 0.297, x = sqrt(0.4475^2 - 0.297^2) = 0.3347. Everything else here is ASSUMED: fitted by eye to the product photographs by the model's generator (build_m350_blender.py), which may refine these numbers and must keep its nodes on them. Refitted to the owner's front photograph of the aircraft (2026-10-09): the propellers hang under the arm ends (rotor_disc_y_m is negative), the arms are level and leave the body at its foot, so the body stands ABOVE the frame's origin and the skids are 0.235 m below it.",
+  "motor_can_diameter_m": 0.076,
+  "rotor_x_m": 0.3347,
+  "rotor_z_m": 0.297,
+  "rotor_disc_y_m": -0.075,
+  "rotors": {
+   "note": "name: position of the disc centre, and the sense the propeller turns seen from above (+1 counter-clockwise). ASSUMED: DJI's usual order, M1 front right counter-clockwise, then M2 front left clockwise, M3 rear left, M4 rear right. The propellers are UNDER the arms: each motor hangs from its arm end, shaft down, the hub and the two blades below it (the owner's photograph of the aircraft, 2026-10-09), so the disc centres are below the frame's origin",
+   "fr": {"pos": [0.3347, -0.075, 0.297], "spin": 1},
+   "fl": {"pos": [0.3347, -0.075, -0.297], "spin": -1},
+   "rl": {"pos": [-0.3347, -0.075, -0.297], "spin": 1},
+   "rr": {"pos": [-0.3347, -0.075, 0.297], "spin": -1}
+  },
+  "skid_bottom_y_m": -0.235,
+  "gimbal_pivot": [0.165, -0.030, 0.0],
+  "gimbal_note": "where the pan axis leaves the damper plate; the camera head hangs below it"
+ },
+ "mass_budget": {
+  "note": "name: mass (kg), centre (m, the layout's frame), and the box (m: x, y, z sides) its own inertia is taken as. Batteries and payload are the product pages' masses; the split of the 3.77 kg without batteries is ASSUMED (no breakdown is published); the positions are the model's parts' centres as its generator built them (2026-10-09, after the owner's photo put the propellers under the arms and the body above them): the generator's geometry is laid out on these.",
+  "body":       {"mass": 1.45, "at": [0.03, 0.075, 0.0],   "box": [0.400, 0.170, 0.220]},
+  "battery_l":  {"mass": 1.35, "at": [-0.14, 0.09, -0.057], "box": [0.180, 0.150, 0.095]},
+  "battery_r":  {"mass": 1.35, "at": [-0.14, 0.09, 0.057],  "box": [0.180, 0.150, 0.095]},
+  "arm_fr":     {"mass": 0.12, "at": [0.215, 0.0, 0.206],  "box": [0.240, 0.032, 0.210]},
+  "arm_fl":     {"mass": 0.12, "at": [0.215, 0.0, -0.206], "box": [0.240, 0.032, 0.210]},
+  "arm_rl":     {"mass": 0.12, "at": [-0.242, 0.0, -0.206], "box": [0.240, 0.032, 0.210]},
+  "arm_rr":     {"mass": 0.12, "at": [-0.242, 0.0, 0.206],  "box": [0.240, 0.032, 0.210]},
+  "motor_fr":   {"mass": 0.30, "at": [0.3347, -0.035, 0.297],  "box": [0.076, 0.060, 0.076]},
+  "motor_fl":   {"mass": 0.30, "at": [0.3347, -0.035, -0.297], "box": [0.076, 0.060, 0.076]},
+  "motor_rl":   {"mass": 0.30, "at": [-0.3347, -0.035, -0.297], "box": [0.076, 0.060, 0.076]},
+  "motor_rr":   {"mass": 0.30, "at": [-0.3347, -0.035, 0.297],  "box": [0.076, 0.060, 0.076]},
+  "prop_fr":    {"mass": 0.06, "at": [0.3347, -0.075, 0.297],  "box": [0.377, 0.010, 0.377]},
+  "prop_fl":    {"mass": 0.06, "at": [0.3347, -0.075, -0.297], "box": [0.377, 0.010, 0.377]},
+  "prop_rl":    {"mass": 0.06, "at": [-0.3347, -0.075, -0.297], "box": [0.377, 0.010, 0.377]},
+  "prop_rr":    {"mass": 0.06, "at": [-0.3347, -0.075, 0.297],  "box": [0.377, 0.010, 0.377]},
+  "gear_l":     {"mass": 0.20, "at": [0.0, -0.125, -0.125],  "box": [0.300, 0.220, 0.090]},
+  "gear_r":     {"mass": 0.20, "at": [0.0, -0.125, 0.125],   "box": [0.300, 0.220, 0.090]},
+  "payload":    {"mass": 0.828, "at": [0.165, -0.13, 0.0],  "box": [0.167, 0.161, 0.135]}
+ },
+ "propulsion": {
+  "note": "DJI publishes no thrust, torque or motor figures. ASSUMED, each with what it rests on; the rig checks the set against the product page's flight time (m350_rig.py, hover_power).",
+  "thrust_coefficient": 0.105,
+  "thrust_coefficient_note": "C_T in T = C_T rho n^2 D^4 (n in rev/s), static. ASSUMED: carbon propellers of this size and pitch test at 0.09 to 0.12",
+  "figure_of_merit": 0.72,
+  "figure_of_merit_note": "ideal induced power over shaft power in the hover; fixes the torque coefficient. ASSUMED, inside the 0.65 to 0.75 large multirotor propellers reach, and chosen together with drive_efficiency so the hover at 6.47 kg draws what the product page's 55 min implies (526.4 Wh / 55 min = 574 W): a calibration, not a validation",
+  "drive_efficiency": 0.88,
+  "drive_efficiency_note": "shaft power over battery power (motor, speed controller, wiring). ASSUMED, and chosen together with figure_of_merit (see its note): only their product is fixed by the flight time",
+  "avionics_w": 35.0,
+  "avionics_note": "what the aircraft draws beside the motors (flight computer, vision, radio, payload). ASSUMED",
+  "max_thrust_n": 64.0,
+  "max_thrust_note": "per rotor, static, at sea level. ASSUMED; chosen so the product page's 23 m/s at 30 deg of tilt is inside the rotors' range, which 48 N (twice the 9.2 kg maximum take-off weight, as multirotors are often sized) was not: the model's trim at that point asks 60 N of static thrust from the rear rotors (what the air through the tilted discs takes, kz, has to be made up in speed), and 64 N leaves a few percent for control there (m350_flight.py --checks 2)",
+  "idle_speed_fraction": 0.12,
+  "motor_time_constant_s": 0.09,
+  "motor_time_constant_note": "first-order lag of the rotor speed on its command. ASSUMED: 0.05 to 0.15 s is what 21 in propellers on such motors show",
+  "rotor_inertia_kgm2": 0.00125,
+  "rotor_inertia_note": "one propeller with its motor bell about the shaft. ASSUMED: two 26 g blades as rods of 0.267 m (2 x 0.026 x 0.267^2 / 3 = 0.00124) and a small hub",
+  "blade_chord_m": 0.040,
+  "lift_slope": 5.7,
+  "blade_note": "mean chord and section lift slope, for the thrust's change with the air's speed through the disc (blade element and momentum theory). ASSUMED"
+ },
+ "aero": {
+  "note": "The airframe's drag. The product page gives one point: 23 m/s at 30 deg of tilt (taken at 6.47 kg, without a payload, as its flight time is). The body's drag is its projected area times drag_coefficient; what is left of the drag at that point is the rotors' (their H force, linear in the speed across the disc), which the rig solves for (m350_rig.py, M350.calibrate).",
+  "drag_coefficient": 1.0,
+  "drag_coefficient_note": "ASSUMED: a bluff body of boxes, tubes and struts",
+  "projected_area_m2": {"front": 0.1057, "side": 0.1477, "top": 0.1688},
+  "projected_area_note": "measured on the model's meshes by build_m350_blender.py --check --write-areas: the area of everything but the propeller blades (the payload and the rotor hubs are in) seen along X (front), Z (side) and Y (top), rasterised on a 2 mm grid",
+  "centre_of_pressure": [0.02, 0.03, 0.0]
+ },
+ "atmosphere": {
+  "note": "Not from the product pages. ASSUMED: the ISA troposphere's density at the aircraft's height above mean sea level (m350_rig.isa_density, from rho_sea_level), and gravity rounded to 9.81 m/s^2.",
+  "g": 9.81,
+  "rho_sea_level": 1.225
+ },
+ "ground": {
+  "note": "The skids on the ground (m350_rig.py, M350.rates). All ASSUMED. Contact points: the four ends of the two skids, read from model.gear (foot and skid.length) where the model's generator has published them, else skids along X from -skid_half_length_m to +skid_half_length_m at z = +-skid_z_m; their underside is layout.skid_bottom_y_m. Each point: a spring and damper along the ground's normal (4 x 6000 N/m carries 7.3 kg on 3 mm of sag at 57 rad/s; 4 x 210 N s/m is its critical damping, so a touchdown does not bounce) and a bristle across it (the same stiffness, damped) that holds up to friction times the normal force and slides beyond, so the aircraft stands still on a slope instead of creeping.",
+  "skid_half_length_m": 0.15,
+  "skid_z_m": 0.17,
+  "stiffness_n_m": 6000.0,
+  "damping_ns_m": 210.0,
+  "tangential_stiffness_n_m": 6000.0,
+  "tangential_damping_ns_m": 150.0,
+  "friction": 0.7,
+  "friction_note": "ASSUMED: rubber feet on dry rock or asphalt",
+  "check_height_m": 1.5,
+  "check_height_note": "the contact points are evaluated only with the centre of gravity closer to the ground than this"
+ },
+ "wind": {
+  "note": "m350_rig.Wind. The turbulence is the low-altitude Dryden model of MIL-F-8785C / MIL-HDBK-1797 as written (its lengths and intensities are in the rig's docstring); these are the numbers around it.",
+  "roughness_length_m": 0.1,
+  "roughness_note": "ASSUMED: z0 of the logarithmic mean profile; 0.1 m is rough open country (low vegetation, scattered obstacles). Unused when a scene hands in its own wind field",
+  "reference_height_m": 10.0,
+  "reference_note": "the height above the ground the wind speed is given at, the meteorological convention",
+  "w20_height_ft": 20.0,
+  "dryden_height_ft": [10.0, 1000.0],
+  "dryden_note": "the standard's: W20 is the mean wind 20 ft up; the height above the ground is floored at 10 ft and the low-altitude form ends at 1000 ft (held there above it)",
+  "min_convection_speed_ms": 1.0,
+  "convection_note": "OURS: the standard carries frozen turbulence past the aircraft at its airspeed; a hovering aircraft has none, so the rig takes the speed of the mean air past the aircraft, with this floor"
+ },
+ "control": {
+  "note": "OURS, not DJI's flight controller (m350_rig.Autopilot, Mission): the cascade multirotor autopilots are built as. State feedback is EXACT: no estimator, no sensor noise. The limits not listed here are the product page's (aircraft.limits: tilt 25 deg, ascent 6 and descent 5 m/s, yaw rate 100 deg/s). Every bandwidth is set against the motor's lag (propulsion.motor_time_constant_s: 0.09 s, 11 rad/s), from the inside out, then tuned on m350_flight.py --checks 3 to 6.",
+  "rate": {
+   "note": "angular acceleration = kp (w_c - w) + ki int - kd w', times the inertia. With the motor's lag tau the roll and pitch loop is tau s^3 + (1 + kd) s^2 + kp s + kp kp_tilt: kp, kd and attitude.kp_tilt put its poles at -a and a pair of natural frequency a and damping 0.8, with a = 10 rad/s just inside the motor's 11 rad/s (kp = 2.6 a^2 tau, kd = 2.6 a tau - 1, kp_tilt = a / 2.6): about 2 % of overshoot. ki only takes out steady moments (the H forces act above the centre of gravity). kd acts on the rate's derivative through a first-order filter at d_cutoff_hz. Yaw has far less torque (the rotors' drag torque, an arm of 0.03 m against 0.3 m), so its loop is slower and has no derivative: kp_yaw, ki_yaw. integral_rads2 bounds each integral.",
+   "kp": 23.4, "ki": 2.0, "kd": 1.34, "kp_yaw": 4.0, "ki_yaw": 2.0, "integral_rads2": 10.0, "d_cutoff_hz": 40.0
+  },
+  "attitude": {
+   "note": "body rates = 2 kp (the vector part of the error quaternion). kp_tilt: see rate. kp_yaw is half the yaw rate loop's gain; beyond yaw_accel_rads2 / kp_yaw^2 of error the yaw rate follows the square root of the error, the rate it can still stop from at yaw_accel_rads2 (chosen low enough that the rotors' drag torque turns the 0.47 kg m^2 airframe that hard without the mixer giving yaw up), so a 90 deg turn overshoots by a couple of percent. rate_max_dps: roll and pitch rates, well inside the product's 300 deg/s. tilt_margin_deg: the tilt COMMAND stops this far short of the product's 25 deg, so the attitude's overshoot stays inside it.",
+   "kp_tilt": 3.85, "kp_yaw": 2.0, "yaw_accel_rads2": 1.2, "rate_max_dps": 120.0, "tilt_margin_deg": 1.0
+  },
+  "velocity": {
+   "note": "acceleration = feed-forward + kp (v_c - v) + ki int. Horizontal: kp_xy a quarter of the attitude loop's 10 rad/s; ki_xy is what leans the aircraft into a wind it is not told about (time constant kp / ki = 3 s). Vertical: the thrust answers with the motor's lag alone, so kp_z is higher (6 rad/s against 11). The integrals take in at most integral_error_ms of error (a commanded manoeuvre's error is not the wind's), stand still while their axis is limited, and are bounded by integral_xy_ms2 (4 m/s^2 is a 22 deg lean) and integral_z_ms2.",
+   "kp_xy": 2.5, "ki_xy": 0.8, "kp_z": 6.0, "ki_z": 3.0, "integral_xy_ms2": 4.0, "integral_z_ms2": 4.0, "integral_error_ms": 1.0
+  },
+  "position": {
+   "note": "velocity = feed-forward + kp (p_c - p): kp_xy 0.4 of the velocity loop's, kp_z a quarter of the vertical one's. Beyond brake_ms2 / kp_xy^2 of horizontal error the speed follows the square root of the distance, the speed it can still brake from at brake_ms2 (inside the 4.4 m/s^2 the tilt limit gives), so a long step does not overshoot. speed_xy_max_ms bounds the horizontal speed command (the model's level flight ends near 21 m/s: m350_flight.py --checks 2).",
+   "kp_xy": 1.0, "kp_z": 1.5, "speed_xy_max_ms": 15.0, "brake_ms2": 3.0
+  },
+  "mission": {
+   "note": "m350_rig.Mission. speed_ms: a leg's speed where it gives none. accel_ms2 and jerk_ms3: the limits of the S-curve a leg's setpoint follows (2 m/s^2 is 11.5 deg of lean; at 1.5 m/s^3 the lean of a 1 to 3 m/s leg builds over 0.8 to 1.3 s and comes off over the same, with no step in the tilt command: a 1.2 m/s leg peaks at 1.34 m/s^2); a leg's own accel and jerk keys override them, which is how a slow pass close to a structure is made calmer still. The acceleration is handed to the autopilot as the profile has it, the position and the velocity 1 / control.attitude.kp_tilt (0.26 s, the attitude loop's lag) later, when that acceleration has become a lean. climb_fraction: the share of the product's ascent and descent limits a steep leg may use. A waypoint is reached inside accept_radius_m and below accept_speed_ms. yaw_rate_dps: the yaw setpoint's slew, well inside the product's 100 deg/s, for a steady picture; a leg's own yaw_rate key (deg/s) overrides it. yaw_accel_dps2: how fast that rate builds and comes off, so the yaw rate has no step either (the setpoint closes on its heading with the time constant yaw_rate / yaw_accel, 1 s here; kept under the autopilot's own control.attitude.yaw_accel_rads2, 69 deg/s^2). track_min_m: a leg or a point of interest closer than this horizontally does not turn the nose. Take-off: spool_s at idle before the climb. Landing: land_rate_ms down to land_slow_height_m above the ground, land_slow_rate_ms below it, rotors to idle on contact, land_settle_s before the leg is done.",
+   "speed_ms": 3.0, "accel_ms2": 2.0, "jerk_ms3": 1.5, "climb_fraction": 0.8, "accept_radius_m": 0.3, "accept_speed_ms": 0.3,
+   "yaw_rate_dps": 45.0, "yaw_accel_dps2": 45.0, "track_min_m": 0.5, "spool_s": 2.0, "land_rate_ms": 1.0, "land_slow_height_m": 1.5,
+   "land_slow_rate_ms": 0.4, "land_settle_s": 2.0
+  }
+ },
+ "model": {
+  "note": "The 3D model's own numbers (build_m350_blender.py), metres, in the frame of the note at the top. ASSUMED, all of them: fitted by eye to DJI's product photographs (enterprise.dji.com/matrice-350-rtk, viewed 2026-10-09) inside the product's dimensions and on the layout above. What the photographs show: the body is a tower forward (taller than wide) on a wider chassis, a flat top shell with cut corners overhangs two upright batteries at the rear, the arms leave the chassis' corners at the batteries' foot and rise to the motors, the blades carry two orange bands at the tip. The owner's front photograph of the aircraft (2026-10-09) corrected the first fit: the motors hang UNDER the arm ends with the propellers below them, the arms are level and leave the body at its foot, a slim antenna stands on each front arm end and a domed cylinder on each rear one, the camera hangs in a tubular frame, the legs splay to feet 0.33 m apart. See unverified for what they do not show.",
+  "gates": {
+   "note": "what --check fails the build on, name: [value, tolerance]. length_m is the length the layout gives over the motor cans, 2 x (rotor_x_m + motor_can_diameter_m / 2) = 0.745: the product's 0.810 m is NOT met and cannot be on these rotor axes without a part no photograph shows (the body and the skids are under 0.43 m, the folded length). The three product numbers agree with each other only if both the length and the width are taken over something 0.111 m across at each motor (rotor_x 0.3495, rotor_z 0.2795): the layout's owner decides",
+   "diagonal_m": [0.895, 0.002],
+   "width_over_cans_m": [0.670, 0.005],
+   "height_m": [0.430, 0.008],
+   "height_note": "from the skids' underside to the highest fixed point, which is the top beacon on the body (the antennas on the arm ends are lower); the propellers hang under the arms and do not count",
+   "length_m": [0.745, 0.015],
+   "product_length_m": 0.810,
+   "tip_circle_m": [0.5334, 0.002]
+  },
+  "body": {
+   "chassis": {"x": [-0.238, 0.112], "y": [-0.020, 0.018], "half_width": 0.106, "corner_r": 0.014},
+   "tower": {"x": [-0.052, 0.212], "y": [-0.005, 0.170], "half_width": 0.080, "corner_r": 0.030, "edge_r": 0.020},
+   "top_shell": {"x": [-0.240, 0.216], "y": [0.156, 0.184], "half_width": 0.090, "chamfer": 0.040, "edge_r": 0.006},
+   "rib": {"count": 11, "x": [-0.020, 0.150], "half_width": 0.052, "height": 0.004, "thickness": 0.005},
+   "seam_y": 0.056,
+   "nose_vent": {"count": 5, "y": [0.130, 0.147], "pitch": 0.016, "width": 0.007}
+  },
+  "battery": {
+   "note": "TB65, two, upright side by side, the locking knob in the gap between them; the size, centre_x and centre_z are the mass budget's; centre_y is 0.120 above its first value, since the body was lifted onto the level arms",
+   "size": [0.180, 0.150, 0.095], "centre_x": -0.140, "centre_y": 0.090, "centre_z": 0.057, "corner_r": 0.012,
+   "panel": {"y": 0.130, "size": [0.046, 0.016], "leds": 4},
+   "side_ribs": {"count": 9, "x": [-0.215, -0.105], "y": [0.035, 0.140], "thickness": 0.004, "proud": 0.003},
+   "knob": {"y": 0.090, "radius": 0.021, "proud": 0.016, "lobes": 8}
+  },
+  "arm": {
+   "tube_radius": 0.016,
+   "root_front": [0.095, 0.0, 0.114], "root_rear": [-0.150, 0.0, 0.114],
+   "root_note": "starboard side, mirrored to port; the tube runs level from here to the motor axis (the photograph shows level arms)",
+   "sleeve": {"start": 0.022, "length": 0.050, "radius": 0.0245},
+   "clamp": {"length": 0.062, "radius": 0.022},
+   "red_band": {"from_motor": 0.075, "length": 0.030},
+   "antenna_front": {"height": 0.068, "chord": [0.028, 0.017], "thickness": [0.013, 0.008]},
+   "radome_rear": {"radius": 0.030, "height": 0.050},
+   "top_note": "what stands on the arm ends, above the motors: a slim upright antenna on the two front arms, a short wide cylinder with a domed cap on the two rear ones (the owner's photograph); sizes by eye from it"
+  },
+  "motor": {
+   "note": "the motor hangs under the arm end, shaft down: base_y, can_y and bell_top_y are measured DOWN from the arm tube's axis (the base reaches from 0.021 above the axis, where the antenna stands, to 0.012 below it; then the stator in the gap, the bell, the propeller's hub)",
+   "base_radius": 0.033, "base_y": [-0.021, 0.012],
+   "stator_radius": 0.033, "can_radius": 0.038, "can_y": [0.018, 0.050], "bell_top_y": 0.057,
+   "lamp": {"radius": 0.006, "proud": 0.004}
+  },
+  "propeller": {
+   "note": "2110s, folding, two blades: the disc and the pitch are the aircraft block's; chord and thickness along the blade by eye, f = 0 at root_r, 1 at the tip. The hub is under the motor: hub_y is measured DOWN from the disc centre (it starts 0.019 above it, at the bell)",
+   "root_r": 0.035, "hub_radius": 0.018, "hub_y": [-0.019, 0.003], "clamp": [0.094, 0.009, 0.022],
+   "chord": [[0.0, 0.020], [0.10, 0.032], [0.30, 0.041], [0.70, 0.034], [0.90, 0.026], [0.97, 0.019], [1.0, 0.009]],
+   "thickness": [0.0046, 0.0016], "max_twist_deg": 15.0,
+   "bands": [[0.875, 0.905, "prop_orange"], [0.935, 1.0, "prop_orange"]]
+  },
+  "gear": {
+   "note": "one leg a side with a foot bar along X; the skids' underside is the layout's skid_bottom_y_m. The splay is the owner's front photograph's: the feet 0.33 m apart. The foot bars are end on in it and their length is ASSUMED",
+   "top": [0.0, -0.016, 0.085], "foot": [0.0, -0.223, 0.165], "foot_sleeve": {"length": 0.050, "radius": 0.0165}, "upper_radius": 0.017, "upper_share": 0.36, "tube_radius": 0.013,
+   "collar": {"at": 0.10, "length": 0.034, "radius": 0.0255},
+   "skid": {"length": 0.300, "radius": 0.0105, "rubber_radius": 0.012, "rubber_length": 0.070}
+  },
+  "damper": {
+   "note": "under the nose, above the layout's gimbal_pivot: two plates on four rubber balls, inside a tubular frame that narrows downward (the frame is the owner's photograph's, its tubes' run by eye)",
+   "frame": {"x": [0.125, 0.196], "top_y": 0.010, "top_half_width": 0.068, "tube_radius": 0.0045},
+   "half_size": 0.046, "upper_y": [-0.009, -0.004], "lower_y": [-0.027, -0.022], "ball_radius": 0.008, "ball_offset": 0.031, "connector_radius": 0.027
+  },
+  "gimbal": {
+   "note": "Zenmuse H20T: 0.167 wide over the tilt motors, 0.148 from the damper to the head's underside (the product's 167 x 135 x 161 mm read as width x depth x height). head_drop is the tilt axis below the layout's gimbal_pivot, and the yoke stands far enough behind the head, that the head's corners clear the pan motor and the yoke at every tilt. Which window is which on the head's face is ASSUMED",
+   "head_drop": 0.100, "head": {"x": [-0.042, 0.060], "half_height": 0.048, "half_width": 0.060, "corner_r": 0.014, "edge_r": 0.010},
+   "pan_motor": {"radius": 0.026, "height": 0.034},
+   "roll_motor": {"radius": 0.023, "x": [-0.110, -0.079]},
+   "tilt_motor": {"radius": 0.021, "z": [0.0625, 0.0835]},
+   "yoke": {"bar_x": [-0.080, -0.066], "half_height": 0.014, "arm_z": [0.066, 0.080]},
+   "windows": {
+    "zoom":    {"at": [0.060, 0.004, 0.027], "barrel_r": 0.027, "glass_r": 0.021, "proud": 0.015},
+    "thermal": {"at": [0.060, 0.004, -0.037], "barrel_r": 0.017, "glass_r": 0.0135, "proud": 0.006},
+    "wide":    {"at": [0.060, 0.031, -0.010], "barrel_r": 0.009, "glass_r": 0.0065, "proud": 0.003},
+    "rangefinder": {"at": [0.060, -0.030, -0.030], "size": [0.014, 0.032], "proud": 0.002}
+   }
+  },
+  "sensors": {
+   "note": "the empties: position (and what it looks along). ASSUMED, all of them: DJI publishes no positions",
+   "camera_fpv": {"position": [0.214, 0.104, 0.0], "look": [1.0, 0.0, 0.0]},
+   "imu": {"position": [0.030, 0.075, 0.0]},
+   "rtk_antenna_l": {"position": [-0.150, 0.184, -0.060]},
+   "rtk_antenna_r": {"position": [-0.150, 0.184, 0.060]},
+   "beacon_top": {"position": [0.176, 0.191, 0.0]},
+   "beacon_bottom": {"position": [-0.110, -0.027, 0.0]}
+  },
+  "vision": {
+   "note": "six-directional sensing: the window pairs, each [centre, outward direction, half the pair's spacing along its row, lens radius]. The front, rear and rear corner ones are placed as the photographs show them; the side, top and bottom ones are ASSUMED",
+   "front": [[0.212, 0.104, 0.0], [1, 0, 0], 0.050, 0.010],
+   "rear": [[-0.240, 0.170, 0.0], [-1, 0, 0], 0.024, 0.0055],
+   "top": [[0.060, 0.184, 0.0], [0, 1, 0], 0.062, 0.008],
+   "bottom": [[-0.060, -0.020, 0.0], [0, -1, 0], 0.045, 0.009],
+   "side": [[0.105, 0.100, 0.080], [0, 0, 1], 0.045, 0.009]
+  },
+  "unverified": "not seen in a photograph, kept plain: where the arm lamps are (a small lens on the outer side of each motor's base here) and the red bands on the front arms (from the description of DJI's in-flight photograph), the side, top and bottom vision windows, the bottom beacon, the foot bars' length, the damper's plates, the gimbal's yoke and which of the head's windows is the zoom, the wide, the thermal and the rangefinder, the motor can's diameter (the layout's 0.076; it looks smaller in the photograph). No lettering or logos"
+ },
+ "materials": {
+  "note": "name: linear base colour, metallic, roughness, and for a lamp its emissive colour and strength. ASSUMED from the product photographs: a matte dark grey body, satin carbon tubes, black rubber, dark glass. led_front, led_rear and beacon are the lamps a scene drives",
+  "body_grey":      {"color": [0.072, 0.074, 0.080], "metallic": 0.0, "roughness": 0.58},
+  "chassis_grey":   {"color": [0.095, 0.097, 0.104], "metallic": 0.0, "roughness": 0.55},
+  "trim_black":     {"color": [0.018, 0.018, 0.020], "metallic": 0.0, "roughness": 0.50},
+  "battery_grey":   {"color": [0.058, 0.060, 0.066], "metallic": 0.0, "roughness": 0.52},
+  "carbon":         {"color": [0.022, 0.022, 0.025], "metallic": 0.0, "roughness": 0.32},
+  "rubber":         {"color": [0.012, 0.012, 0.012], "metallic": 0.0, "roughness": 0.92},
+  "motor_anodised": {"color": [0.040, 0.041, 0.045], "metallic": 0.85, "roughness": 0.36},
+  "motor_steel":    {"color": [0.350, 0.350, 0.360], "metallic": 1.0, "roughness": 0.34},
+  "payload_grey":   {"color": [0.070, 0.072, 0.078], "metallic": 0.0, "roughness": 0.50},
+  "lens_ring":      {"color": [0.020, 0.020, 0.022], "metallic": 0.35, "roughness": 0.42},
+  "lens_glass":     {"color": [0.010, 0.012, 0.020], "metallic": 0.0, "roughness": 0.10},
+  "thermal_lens":   {"color": [0.110, 0.070, 0.130], "metallic": 0.8, "roughness": 0.14},
+  "prop_black":     {"color": [0.020, 0.020, 0.022], "metallic": 0.0, "roughness": 0.38},
+  "prop_orange":    {"color": [0.900, 0.210, 0.020], "metallic": 0.0, "roughness": 0.42},
+  "marking_red":    {"color": [0.620, 0.030, 0.020], "metallic": 0.0, "roughness": 0.50},
+  "indicator_green": {"color": [0.05, 0.30, 0.08], "metallic": 0.0, "roughness": 0.40, "emissive": [0.10, 1.0, 0.25], "emissive_strength": 1.5},
+  "led_front":      {"color": [0.30, 0.02, 0.02], "metallic": 0.0, "roughness": 0.30, "emissive": [1.0, 0.05, 0.03], "emissive_strength": 4.0},
+  "led_rear":       {"color": [0.02, 0.30, 0.05], "metallic": 0.0, "roughness": 0.30, "emissive": [0.05, 1.0, 0.15], "emissive_strength": 4.0},
+  "beacon":         {"color": [0.80, 0.80, 0.80], "metallic": 0.0, "roughness": 0.30, "emissive": [1.0, 1.0, 1.0], "emissive_strength": 4.0}
+ }
+}

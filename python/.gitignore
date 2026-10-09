@@ -28,6 +28,9 @@ examples/usv/otter.glb
 examples/usv/otter_hydro.json
 # Generated from x8_spec.json by examples/uav/build_x8_blender.py (headless Blender)
 examples/uav/x8.glb
+# Generated from m350_spec.json by examples/uav/build_m350_blender.py (headless Blender), and its stills
+examples/uav/m350.glb
+examples/uav/out/
 # Generated from remus100_spec.json by examples/auv/build_remus_blender.py (headless Blender)
 examples/auv/remus100.glb
 # Generated from turbine_spec.json by examples/turbine/build_turbine_blender.py (headless Blender)
