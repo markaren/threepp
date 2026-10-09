@@ -625,12 +625,18 @@ namespace threepp::vulkan::impl {
         // packed data (bit1 nrm oct-snorm16x2 / bit2 uv unorm16x2 / bit3
         // col unorm8x4). Shaders mask accordingly; a bare `!= 0` test on
         // this word is WRONG for the moved gate.
-        // Bit 4: the instance's emissive glows but is not a light
-        // (setEmissiveCastsLight): it is not in the emitter list, so a ray
-        // hit on it keeps its own emission.
+        // Bit 4: packedMask's fourth bit (8 << 1): the index buffer is
+        // uint16, two indices to a word. The ray hits read their triangles
+        // through it (gfetchTri, lidar.rchit), so a bit that is wrong here
+        // is vertices fetched at fused or halved indices, far out of bounds
+        // in the first case (a device loss, and no validation message).
         // Bit 5: the rays see a coarser proxy of this mesh (BlasRecord::
         // rtIndex, DisplacedMesh::rtProxyCells); shadeWater moves its surface
         // point onto the proxy before launching rays.
+        // Bit 6: the instance's emissive glows but is not a light
+        // (setEmissiveCastsLight): it is not in the emitter list, so a ray
+        // hit on it keeps its own emission. It was bit 4 until 2026-10-09,
+        // on top of the uint16 one (VulkanEmissiveCastsLight_test).
         uint32_t flags;
     };
 

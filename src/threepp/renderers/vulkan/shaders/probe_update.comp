@@ -104,7 +104,7 @@ struct GeometryDesc {
     uint64_t colorAddress;
     uint     indexed;
     uint     flags;// bit 0: sticky moved (unused here), bit 1: normal oct-snorm16x2,
-                   // bit 2: uv unorm16x2, bit 3: color unorm8x4
+                   // bit 2: uv unorm16x2, bit 3: color unorm8x4, bit 4: indices uint16
 };
 layout(set = 0, binding = 5, scalar) readonly buffer GeomDescBuf { GeometryDesc geoms[]; };
 

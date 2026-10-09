@@ -1210,7 +1210,7 @@ namespace threepp {
         uint32_t cachedEmissiveVersion_ = 0;
         // Objects whose emissive glows but is not sampled as a light
         // (setEmissiveCastsLight), keyed by Object3D::id like classIds_. The
-        // emitter walk skips them; GeometryDesc.flags bit 4 tells the ray hits
+        // emitter walk skips them; GeometryDesc.flags bit 6 tells the ray hits
         // to keep their emission. glowOnlyVersion_ is bumped on every change so
         // the cached emitter list above is rebuilt.
         std::unordered_set<unsigned int> glowOnlyObjects_;

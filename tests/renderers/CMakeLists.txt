@@ -263,6 +263,17 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanRecycledAddress_test COMMAND VulkanRecycledAddress_test)
     set_tests_properties(VulkanRecycledAddress_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # setEmissiveCastsLight shared a GeometryDesc.flags bit with "the index buffer
+    # is uint16": switching a mesh back to a light made every ray that hit it read
+    # its indices at the wrong width and fetch vertices far out of bounds (device
+    # lost), and switching one with uint32 indices to glow-only crumpled it in
+    # every reflection.
+    add_executable(VulkanEmissiveCastsLight_test VulkanEmissiveCastsLight_test.cpp)
+    target_link_libraries(VulkanEmissiveCastsLight_test PRIVATE threepp)
+    target_include_directories(VulkanEmissiveCastsLight_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME VulkanEmissiveCastsLight_test COMMAND VulkanEmissiveCastsLight_test)
+    set_tests_properties(VulkanEmissiveCastsLight_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # Glass with ior exactly 1.0 (glTF sample SunglassesKhronos, lens front) was
     # taken for a flat alpha blend at opacity 0, whose marker WAS ior = 1, and not
     # drawn. Also gates the thin film on glass, which the glass Fresnel ignored.
