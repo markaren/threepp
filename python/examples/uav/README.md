@@ -330,3 +330,244 @@ airframe, any sensor.
 
 `python/examples/trollstigen/trollstigen_inspect.py` (a site project outside this repository) flies it on
 a bridge inspection in a terrain-shaped wind.
+
+# The Babyshark 260 VTOL
+
+A hybrid for the examples: the Foxtech Babyshark 260 VTOL, a 2.5 m quadplane (four lift rotors on two
+booms, a pusher propeller, an inverted V-tail), on the flight model that B. P. Graesdal identified from
+flight tests: "Full Nonlinear System Identification for a Vertical-Takeoff-and-Landing Unmanned Aerial
+Vehicle", Master's thesis, NTNU, 2021, <https://ntnuopen.ntnu.no/ntnu-xmlui/handle/11250/2981320>, with
+the model itself at <https://github.com/bernhardpg/babyshark_vtol_model>. Between the X8 above (a wing with
+a published model) and the Matrice (a multirotor with none), this one has a published model for the wing
+and none for the hover or the way between them: so the wing is the thesis's, and the rest is built around
+it and marked for what it is.
+
+Neither of the thesis's repositories carries a licence. Its README asks that the thesis be cited and says
+every equation and parameter is there to be ported, so the equations and numbers are taken and cited; no
+code is copied, and its 3D model is not used: `babyshark.glb` is built here from the author's own
+measurements of the lifting surfaces (his vortex-lattice input file) and the thesis's figures.
+
+| file | what it is |
+|---|---|
+| `babyshark_spec.json` | every number with its source: the thesis's Tables 6.2 to 6.5 unchanged, its linear matrices and modes for the comparison, Foxtech's figures, and what is ASSUMED or OURS with the reason (propulsion, the range outside the data, the ground, both autopilots, the transition); the layout and the 3D model's parts |
+| `../rigs/babyshark_rig.py` | the aircraft for any scene: `Babyshark` (the thesis's model and what a hover needs), `Autopilot`, `Mission` and `Pilot` (ours), `Visual` (the `.glb` posed from the model); it uses `m350_rig.Wind` and `x8_rig.LOS` as they are; no threepp import |
+| `build_babyshark_blender.py` | builds the geometry (numpy) with `../build_common.py` and exports `babyshark.glb` through Blender |
+| `babyshark_flight.py` | the checks, a flight's telemetry, and stills or a window of that flight |
+| `babyshark_fly.py` | the aircraft in a window, flown with the keyboard, the camera on the mouse |
+| `babyshark.glb` | generated, not committed |
+
+```
+blender --background --factory-startup --python build_babyshark_blender.py -- --spec babyshark_spec.json --out babyshark.glb
+python build_babyshark_blender.py --check          # the geometry's gates, without Blender
+python babyshark_flight.py --checks                # the ten checks below
+python babyshark_flight.py --telemetry --wind 8 --from 250 [--csv babyshark.csv]
+python babyshark_flight.py --stills 12,26,45,150 --out-dir out/babyshark [--cam chase|side|high]
+python babyshark_flight.py --window                # the same flight in a window; C cycles the camera
+python babyshark_fly.py [--wind 4 --from 250]      # fly it yourself (below)
+```
+
+The flight is a take-off to 60 m, a front transition flown level, a circuit of 800 by 250 m there at
+20 m/s laid out so its last leg is into the wind, a back transition 140 m short of the pad, and a landing
+on it.
+
+## The 3D model
+
+`babyshark.glb`: X forward, Y up, Z right, metres, origin at the centre of gravity (the thesis's body
+origin). The wing's six sections, the tail's panels and the rotor axes are met exactly (the author's
+vortex-lattice file and the thesis's Table 4.3); the pod, the moulded booms, the motors and the landing
+gear are fitted by eye to the thesis's renders of the author's CAD model (Figs. 3-1, 3-2, 4-1), scaled by
+the rotor axes. 40 480 triangles. `--check` fails the build unless: the span is 2.500 m, each lift rotor is
+on its axis, the tip circles are 0.4064 and 0.381 m, the discs clear the wing, the tail, each other and
+the ground (the pusher's tip passes 25 mm above the feet's plane), the tail's ends and the feet are on the
+layout, and every part is closed and wound outward. It prints: wing planform 0.575 m^2; wing and tail
+0.715 m^2 projected, 0.659 with what the pod covers left out (the thesis's S is 0.6617); length 1.46 m,
+height 0.61 m; and the projected areas the flight model's bluff body uses (front 0.130, side 0.223,
+top 0.894 m^2).
+
+- `airframe`: pod, wing, tail, booms, motors, gear, fittings.
+- `aileron_left`, `aileron_right`, `ruddervator_left`, `ruddervator_right`: on their hinge lines, local +Z
+  along the hinge toward starboard; a positive turn puts an aileron's trailing edge down and a
+  ruddervator's toward its panel's lower, inner face.
+- `lift_fr`, `lift_fl`, `lift_rl`, `lift_rr`: at their disc centres, spun about local +Y, the blades handed
+  by the spin sense. `pusher`: spun about local +X.
+- Empties: `imu`, `gnss`, `pitot_tip`, `camera_nadir`, `camera_fpv`.
+
+Checked on the posed model through `babyshark_rig.Visual`: a positive aileron (20 deg) lowers the left
+trailing edge 17 mm and raises the right one; a positive elevator moves both ruddervators' trailing edges
+down and inward; a positive rudder moves both to port; rotors 1 and 2 (front right, rear left) turn
+counter-clockwise seen from above; the pusher turns clockwise seen from behind; heading 90, pitch 10,
+roll 20 deg puts the nose along world (0.985, 0.174, 0) and the right wing down.
+
+Not seen in the thesis's renders and kept plain (the spec's `model.unverified`): the wing's section (a
+stand-in for the Eppler 397), how the wing blends into the pod, the motors' and propellers' shapes, the
+pitot tube and the GNSS puck, hatches and seams. Foxtech's product photographs were not consulted. No
+logos or lettering.
+
+## What is the thesis's, what is assumed, what is ours
+
+The thesis's, as written (`Babyshark.rates` numbers each step): the rigid body (6.6) with the Gamma
+constants of Table 6.2; lift, drag, side force and moments (6.7)-(6.10), the rates made non-dimensional by
+the TRIM airspeed (6.11) and the surfaces measured from their trim (6.13); the lift rotors' thrusts,
+torques and moments (6.14)-(6.16); the pusher's static thrust (6.15a); the servos (3.41). It was identified
+in fixed-wing flight around 21 m/s with the lift rotors stopped, in air taken as still; its data reach
+alpha -13 to +16 deg and its propellers were measured with no incoming air. The thesis says itself what
+that leaves out: the stall, any flight on the lift rotors, the transition, wind, and the propellers' loss
+of thrust with airspeed.
+
+OURS or ASSUMED, each in the spec with its reason, none of it fitted to a flight:
+
+- Wind: the air-relative velocity stands where the thesis has the body velocity in the airspeed, alpha
+  and beta (6.12). The air density follows the height (ISA; 1.225 at the sea, the thesis's constant).
+- Outside the identified alpha and beta (`envelope`): the coefficients are held at the edge and the forces
+  and moments go over, across 10 deg, to a bluff body's (the airframe's projected areas, each at its centre
+  of pressure). That is the stall, and what the hover and both transitions fly in. `Babyshark.guards`
+  counts the steps spent there: none on the wing.
+- The pusher: T = rho D^4 cT n^2 (1 - J / J0), the thesis's law at J = 0, with J0 = 0.80 from the
+  propeller's pitch. `Babyshark(thesis_propeller=True)` is the thesis's static law at every speed.
+- A lift rotor's thrust loses kz n v_ax to the air through its disc and has a small in-plane force (the
+  Matrice's rotor model): in a still hover it is the thesis's law. This is what damps the hover.
+- Motors: first-order lags; the pusher's limit is the top of the thesis's thrust-stand run (142 rev/s),
+  the lift rotors' a thrust-to-weight ratio of 1.8. Two battery packs, read off the thesis's mass table.
+- The landing gear on a ground you hand in (the Matrice's contact model).
+
+Not in the model: the propellers' gyroscopic moment and the pusher's torque (the thesis neglects both),
+translational lift and what the lift rotors and the wing do to each other in the transition (a
+wind-tunnel study of a quadplane found more drag and less thrust there: Mathur and Atkins,
+arXiv:2301.12316), ground effect, any sensor.
+
+`Autopilot` (ours, not PX4, which the thesis's aircraft flew) is two autopilots and the way between them:
+the Matrice's cascade on the lift rotors for the hover, with a weathervane that turns the nose into the
+wind the velocity loop's integral has learned (the rotors' drag torque cannot hold the tail across a wind);
+the X8's successive loop closure for the wing, on three surfaces, its gains computed from the thesis's
+coefficients; and a transition laid out as PX4's standard-VTOL one. Front: the pusher ramps up, the lift
+rotors hold the height it has and, with a weight that fades between 12 and 18 m/s, the attitude, while
+the surfaces fly the same attitude throughout (a mission's cruise altitude is the wing's to reach
+afterwards, at the wing's own climb rate). Back: the pusher stops, the lift rotors take over at once and
+brake, with the nose kept a degree under the angle of attack at which the wing would carry the whole
+weight, so the braking does not balloon it. It is fed the EXACT state: no estimator, no sensor noise.
+
+## Flying it yourself (`babyshark_fly.py`)
+
+```
+python babyshark_fly.py                            # on the pad, nose into 4 m/s from 250 deg
+python babyshark_fly.py --wind 0                   # still air
+python babyshark_fly.py --demo                     # the keys press themselves: a hand flight to watch
+python babyshark_fly.py --demo --stills 26,68,160 --out-dir out/babyshark_fly     # the same without a window
+```
+
+| key | hovering | on the wing |
+|---|---|---|
+| `W` `S` (or up, down) | forward (8 m/s), back (4 m/s) | the airspeed setpoint, 18 to 22 m/s |
+| `A` `D` (or left, right) | turn, 30 deg/s | bank, 30 deg; let go and it levels and holds the course it has |
+| `Q` `E` | sideways (4 m/s) | |
+| `SPACE` `SHIFT` | up (3 m/s), down (2 m/s; 0.5 m/s near the ground) | the height setpoint, up at what the pusher has to give (0.6 m/s at 21 m/s), down at 2.5 m/s |
+| `T` | to the wing | to the hover |
+| `M`, `H` | the autopilot flies the circuit and lands on the pad; flies home and lands | the same |
+| `V`, `C`, `R` | the weathervane on and off; the camera; back on the pad | |
+
+On the ground `SPACE` starts the rotors and lifts off, and `SHIFT` held on the ground stops them. Any of
+the eight stick keys takes the aircraft back from the autopilot. The mouse looks around the aircraft
+(drag) and zooms (wheel); the camera is a chase that turns with the nose, the same without the turning,
+or a spectator's 60 m beside the pad. The panel down the left edge has what it is doing, the numbers
+against their setpoints, the motors and the batteries, the keys (lit while held) and a chart.
+
+The keys go through `babyshark_rig.Pilot`: four sticks that move the autopilot's setpoints, the way a
+VTOL's assisted modes take a pilot's, the same four hovering and on the wing; the transitions stay the
+autopilot's. Sticks at rest, the hover brakes and holds its place and its heading, and after five seconds
+of standing still the weathervane has the nose (not sooner: after a turn at speed the velocity loop's
+integral still leans the aircraft, and the weathervane would follow that). On the wing the airspeed
+setpoint stops at the transition's 18 m/s and the bank the stick gets shrinks to nothing between there
+and 16.5 m/s: a level turn banked 30 deg needs 16.2 m/s of this model, and the two loops (height on the
+elevator, airspeed on the pusher) do not look after each other at that edge. Flown onto the ground on the
+wing, every motor stops and `R` is what is left. All of it is ours and ASSUMED (`control.pilot`), and
+the two things that will be noticed are the model's: the wing climbs slowly (slower climbs better), and
+a hover cannot hold its tail across a fresh wind.
+
+The window itself was not opened for testing here: `--demo --stills` plays the same keys through the same
+frame, camera and panel on a hidden canvas, and check 10 flies the sticks without a renderer.
+
+## The checks (`babyshark_flight.py --checks`)
+
+1. 12.14 kg. The eight Gamma constants from Table 6.2's four inertias agree with the numbers the thesis's
+   code carries to 6e-5. Hover: 100.1 rev/s on the front rotors (33.3 N each) and 88.9 on the rear (26.3 N),
+   since the centre of gravity is nearer the front axes; 1848 W at the shafts by the thesis's torque
+   coefficient (figure of merit 0.62), 8.0 min on the lift battery as ASSUMED.
+2. Against the thesis's printed linearisation (6.17), (6.18), at its trim with its static propeller law:
+   45 of 48 entries agree to the printed digits. The three that do not are the derivatives the drag's change
+   with alpha enters (u' by u, u' by w, w' by w); with the drag held at cD0 in the linearisation, 47 of 48
+   agree, and the last is 0.689 against 0.686. The thesis's matrices are its model with the drag's alpha
+   terms left out; the model here keeps (6.8d) whole. Modes against Table 6.7: short period -3.29 +- 7.77i
+   (-3.28 +- 7.79i), roll -8.82 (-8.82), dutch roll -0.942 +- 4.940i (the same), spiral +0.116 (the same),
+   phugoid -0.077 +- 0.657i (-0.067 +- 0.657i). The thesis's trim point is not an equilibrium of its model
+   (the lift is 9 % over the weight there); it was read off manual flights.
+3. Level flight on the wing: alpha 1.8 deg, elevator -1.7 deg, 18.4 N of thrust and L/D 6.5 at 21 m/s.
+   Slowest steady flight 15.1 m/s, where the elevator's throw ends (Foxtech: a stall speed of 15 to 16 m/s);
+   fastest 22.6 m/s, 81 km/h, with the pusher at 142 rev/s (Foxtech: about 100 km/h). Neither is fitted.
+   At 21 m/s the pusher turns 133 rev/s with the advance-ratio law (the thesis's Table 6.5 prints 125) and
+   92 rev/s with the thesis's static law (delta_t = 8470; the recorded inputs the thesis's repository ships
+   sit near 9750). Past the data the lift peaks at cL 1.64 at 16 deg and falls.
+4. The wing's loops, from the 21 m/s trim: +10 m of height in 13.8 s with 0.2 m over (the pusher can hold a
+   climb of 0.7 m/s at 21 m/s, and the pitch command stops at 80 % of it, so a climb costs height rate and
+   not airspeed); a 90 deg course change in 4.1 s, 1.6 deg over, bank to 33 deg, sideslip to 4.0 deg, the
+   height within 3.1 m; -2 m/s of airspeed in 1.1 s.
+5. The hover's loops: 5 m sideways in 1.7 s (10 to 90 %) with no overshoot, 2 m up in 1.5 s, 90 deg of
+   yaw in 2.4 s.
+6. Hovering 30 m up in 8 m/s on the beam (10 m/s at that height): the weathervane has the nose within
+   10 deg of the wind after 13 s, the aircraft pushed 0.6 m off its point while it turns; in turbulence at
+   the standard's intensities it then holds 0.11 m rms (0.24 m at the most), the nose 7 deg rms off the wind.
+   The wing carries part of the weight there (the front rotors turn at 90 against 100 rev/s).
+7. Transitions at 60 m. Still air: front in 11.9 s and 115 m, the height within -1.0 / +0.7 m; back from
+   21 m/s to a standstill in 10.6 s and 125 m, within -0.3 / +1.0 m. Into 8 m/s (11 m/s up there): front in
+   7.4 s and 21 m over the ground; back in 8.9 s and 30 m, the height 3.6 m over at the most.
+8. The flight above. Still air: down after 187 s, sinking 0.23 m/s at the touch, on the pad to a
+   centimetre; at most 35 m from the route (it cuts each corner by its turn radius), -2.6 / +0.7 m off the
+   height; the lift battery gave 18 %, the cruise battery 3.2 %. In 8 m/s from 250 deg with turbulence: 232 s,
+   0.30 m/s, 4 cm, 64 m, -5.5 / +2.2 m, 22 % and 4.1 %.
+9. A torque-free tumble keeps its energy to 4e-12 and its angular momentum to 3e-10 over 60 s; a minute on
+   the wing changes the energy by exactly the work of the aerodynamic and propeller forces (1786.4 J);
+   two runs in turbulence are bit-identical; about 20 times real time, autopilot and wind included.
+10. The pilot's sticks, in still air. Hovering: up from the ground, the feet leave it after 2.1 s and it
+    climbs at 3.0 m/s; let go, it rises 1.5 m more. Forward: 8.2 m/s after 8 s; let go, it stops in 18 m
+    and 4.1 s. Turn: 31 deg/s; let go, the nose goes 17 deg further and stops there (the rotors' drag
+    torque again). `T`: 11.9 s later the wing has it, the height within -1.0 / +0.7 m. Banked 31 deg it
+    turns 15.2 deg/s and is 1.0 m under its height after 8 s; let go, it holds the course it then has
+    within 0.7 deg. Up: 0.58 m/s. Slowed to the 18 m/s the setpoint stops at, a descent, the level-off and
+    a turn never see less than 16.3 m/s of airspeed. `T` and down: on the ground 17 s after the stick
+    went down, sinking 0.30 m/s at the touch, the rotors stopped. Handed to the autopilot for the circuit
+    and taken back on the first leg with a touch of a stick; handed back to land, it is on the pad's
+    middle 100 s later with the motors stopped.
+
+Believe the wing from about 17 to 22 m/s in gentle manoeuvres. The hover, the stall and the transitions
+are a standard model with assumed numbers: they are finite, signed the right way and conserve what they
+should, and nothing more is claimed. The battery powers are not to be quoted (the pusher's torque is its
+static one at every airspeed).
+
+## In another scene
+
+```python
+from babyshark_rig import Babyshark, Wind, Autopilot, Mission, Visual, load_spec, model_path
+
+spec = load_spec()
+a = Babyshark(spec, wind=Wind(6.0, from_deg=250.0, spec=spec, seed=3), ground=height_at, h0=0.0)
+a.place_on_ground(0.0, 0.0, yaw=math.radians(250.0))          # nose into the wind
+ap = Autopilot(a)
+mission = Mission([dict(kind="takeoff", height=60.0),
+                   dict(kind="cruise", route=[(400.0, -300.0), (400.0, 300.0)], altitude=60.0, airspeed=20.0),
+                   dict(kind="land", pos=(0.0, 0.0))])
+visual = Visual(tp.GLTFLoader().load(model_path()).scene)
+# each step (a.dt = 1/300 s):
+mission.update(a, ap)
+ap.update()
+a.step()
+# each frame:
+visual.pose(a, h0=0.0)
+```
+
+By hand: `pilot = Pilot(a, ap)`, then each step `pilot.keys(canvas)` (or `pilot.sticks(forward=..., turn=...,
+side=..., up=...)`) and `pilot.update()` before `ap.update()`; `pilot.toggle()` for the transitions,
+`pilot.fly(legs)` to hand it to a `Mission`.
+
+Without a mission or a pilot: `ap.command(position=(n, e, h), yaw=...)` in a hover, `ap.transition("fw", course=...)`,
+then `ap.command(course=..., altitude=..., airspeed=...)` on the wing, `ap.transition("mc")` to come back.
+`a.out` holds the last evaluated air data, coefficients, thrusts and powers; `a.guards` the steps outside
+the identified range; `a.world_position(h0)` and `a.world_rotation()` the aircraft in the world.
