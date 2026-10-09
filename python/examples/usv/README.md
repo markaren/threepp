@@ -269,8 +269,8 @@ Under her own power, `hull.drive = drive`: the scene writes `drive.throttle_cmd`
 
 On a route, `hull.drive` stays `None` and a soft DP holds her to `hull.set_target(...)`; the
 drive then only shows the motion: `drive.follow(u, yaw_rate, dt)` turns the nozzle or pods and
-spins the rotors as the path implies. `harbour/harbour_scene.py` runs the Mariner that way.
+spins the rotors as the path implies.
 
 What the strip model needs beyond the tables is the spec's `strip_model` block: `probe_z`, the
 half-breadth where each side's water level is read, and `footprint`, the ocean's hull footprint.
-A spec without one gets both from its design waterline (the sjark, Trollfjord).
+A spec without one gets both from its design waterline.
