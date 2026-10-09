@@ -6,13 +6,16 @@ Three things, and nothing scene-specific:
 
   * ``Shell``   -- the model on a node whose +z is ahead, four wheel rigs to turn, the tail and
                    reverse lamps on materials of their own, a paint, and on request the head
-                   lamps' glass as a skin that can glow. Without the model: a box on four
-                   cylinders, so a scene still drives.
+                   lamps: their glass as a skin that can glow (``headlamps()``), their light
+                   as two spot lights (``beams()``), turned up and down by ``lit()``; and a
+                   seat, a place fixed in the cabin for a camera to ride in (``seat()``,
+                   ``ride()``). Without the model: a box on four cylinders, so a scene still
+                   drives.
   * ``Car``     -- ``tp.PhysxVehicle`` with the Evoque tuning under a Shell: the pose after
                    each physics step, and the drawn pose blended between the last two steps.
-  * the helm    -- ``keys()`` (W S A D or the arrows, SPACE brakes: the C++ demo's
-                   speed-sensitive steering and its slew) and ``steer_for()`` (the steer
-                   command that holds a path curvature).
+  * the helm    -- ``keys()`` (W S A D or the arrows, SPACE brakes: a held key asks for
+                   the lock that turns the car at KEY_LAT m/s2 at the speed she has) and
+                   ``steer_for()`` (the steer command that holds a path curvature).
 
 The model is "2015 Land-Rover Range Rover Evoque Coupe" by Ddiaz Design (Sketchfab),
 CC BY-NC-SA 4.0, from threepp-data (``model_path()`` finds it; THREEPP_DATA_DIR wins).
@@ -46,6 +49,7 @@ TYPICAL USE
         world.step(DT)
         car.sync()
     car.draw(debt / DT)                 # the shell between the last two steps
+    shell.ride(camera)                  # the camera in the car, where that is the picture
 
 A car that is only shown (traffic) is a Shell alone: place ``shell.node`` on the road and
 ``shell.roll(distance)``.
@@ -61,6 +65,7 @@ from demo_common import standard_material
 EVOQUE = ("models", "gltf", "2015_land-rover_range_rover_evoque_coupe", "scene.gltf")
 TAGS = ("WheelFL", "WheelFR", "WheelBL", "WheelBR")      # the model's wheels in PhysX's order
 LENS = "glass_lights"                                    # the model's lamp glass (head and tail in one mesh)
+PANES = ("glass_windows", "glass_border")                # the model's window glass (all of it in one mesh) and its black border
 
 # tp.PhysxVehicle's defaults are the Evoque tuning of the C++ demo (examples/projects/Vehicle):
 # a 1.95 x 1.4 x 4.4 m chassis of 1500 kg, four driven wheels, 1500 N m of throttle torque.
@@ -72,6 +77,8 @@ TYRE_MU = 1.1
 # The chassis' middle over the wheel's hub at rest: the suspension's attachment 0.4 under the
 # middle, 0.3 of travel, less the rest jounce.
 HUB_TO_CHASSIS = 0.596
+# What a held steering key asks of the car sideways (m/s2), whatever her speed: see keys().
+KEY_LAT = 4.0
 
 
 def data_dir():
@@ -99,12 +106,29 @@ def ride_height(wheel_radius):
     return wheel_radius + HUB_TO_CHASSIS
 
 
-def keys(canvas, forward_speed, steer, dt, slew=2.5):
+def key_lock(forward_speed, lat=KEY_LAT):
+    """The steer command (0..1) a held key asks for at this speed (m/s): the lock that turns the
+    car at `lat` m/s2 sideways (the bicycle model on the wheelbase), full lock where that is
+    more than she has (under 14 km/h at KEY_LAT)."""
+    return min(1.0, math.atan(WHEELBASE * lat / max(forward_speed * forward_speed, 1e-6)) / MAX_STEER)
+
+
+def keys(canvas, forward_speed, steer, dt, slew=2.5, lat=KEY_LAT):
     """The keyboard: (steer, throttle, brake) from W S A D or the arrows, SPACE brakes too.
-    The steer is the C++ demo's: less lock the faster she goes, taken up at `slew` per second."""
+
+    A key is all or nothing and a steering wheel is not, so a held key asks for the lock that
+    turns the car at `lat` m/s2 sideways at the speed she has (key_lock()): held through a bend
+    it holds the bend, a tap is a nudge at any speed, and the tyres (TYRE_MU: 10.8 m/s2) are
+    never asked for what they have not got. The lock is taken up and given back at `slew` per
+    second, the C++ demo's.
+
+    The lock was the C++ demo's too, 1 / (1 + 0.015 km/h) of all of it: 0.63 at 40 km/h, a 7 m
+    circle. Measured on the flat at 40 km/h (2026-10-09, physics alone): a key held a tenth of
+    a second turned her 8.3 degrees and held a second took her to the tyres' limit, 11 m/s2;
+    now 2.0 degrees and 3.3 m/s2."""
     left = canvas.is_key_down("A") or canvas.is_key_down("LEFT")
     right = canvas.is_key_down("D") or canvas.is_key_down("RIGHT")
-    want = ((1.0 if left else 0.0) - (1.0 if right else 0.0)) / (1.0 + abs(forward_speed) * 3.6 * 0.015)
+    want = ((1.0 if left else 0.0) - (1.0 if right else 0.0)) * key_lock(forward_speed, lat)
     steer += (want - steer) * min(1.0, dt * slew)
     throttle = 1.0 if (canvas.is_key_down("W") or canvas.is_key_down("UP")) else 0.0
     brake = 1.0 if (canvas.is_key_down("S") or canvas.is_key_down("DOWN") or canvas.is_key_down("SPACE")) else 0.0
@@ -137,18 +161,34 @@ class Shell:
     node, hull    the node a scene places, and under it what hangs from a chassis (see hang())
     rigs, hubs    the four wheel rigs (PhysX's order) and where the model puts their hubs
     tail, reverse the lamps' materials (the model shares one between them): brake() and
-                  reversing() flare them, or a scene sets their look itself"""
+                  reversing() flare them, or a scene sets their look itself
+    glass, lamps, head, spots   the head lamps, once asked for (headlamps(), beams()): lit()
+                  turns them on, or a scene with a night of its own takes them from here
+    eye           the seat in the cabin, once asked for (seat()): ride() puts a camera in it
+    windows       the window glass and its border (glaze() shows and hides them: a riding
+                  camera looks out through none)"""
 
     LAMP_REST, LAMP_ON = 1.0, 6.0      # the lamps' emissive intensity, and flared
+    BEAM = (150.0, 85.0, 24.0)         # a dipped beam: the spot light's intensity, its reach (m), its half-angle (degrees)
+    BEAM_AIM = (0.0, -0.9, 14.0)       # where a beam is aimed, from its lamp (m: left, up, ahead)
+    GLOW = 14.0                        # the lit glass's radiance
+    # A camera's seat in the cabin, hull frame (m: left of the middle, over the road, ahead of the model's
+    # origin): on the middle line under the roof's edge, the bonnet and the whole road in its picture. The
+    # driver's own eyes are at about (0.37, 1.34, 0.0), where the pillar, the door's mirror, the roof's edge
+    # and the dash take half the picture.
+    SEAT = (0.0, 1.42, 0.27)
+    SEAT_DIP = 1.2                     # degrees under the car's level the seat looks
 
     def __init__(self, path=None, paint=None, radius=0.4):
         self.node, self.hull = tp.Group(), tp.Group()     # the hull: what hangs under a chassis that rides above the road
         self.node.add(self.hull)
         self.rigs, self.hubs = [], []
-        self.tail = self.reverse = self.glass = None
-        self.lamps, self.head = [], []
+        self.tail = self.reverse = self.glass = self.eye = None
+        self.lamps, self.head, self.spots, self.windows = [], [], [], []
         self._lens = []
         self._braking = self._reversing = False
+        self._glazed = True
+        self._lit = 0.0
         self.model = path is not None and os.path.isfile(path)
         if not self.model:
             self._box(radius)
@@ -208,6 +248,7 @@ class Shell:
             elif pm is not None and o.material.name == "carpaint_color":
                 o.set_material(pm)
         self.node.traverse(finish)
+        self.windows = [o for o in meshes if any(k in o.name for k in PANES)]
         # the head lamps' glass: the front of the model's lamp glass, kept for headlamps()
         for o in [o for o in meshes if LENS in o.name]:
             a = in_frame(o)
@@ -287,6 +328,96 @@ class Shell:
             for side in (v[v[:, 0] > 0.0], v[v[:, 0] < 0.0]):
                 c = side.mean(0)
                 self.head.append((float(c[0]), float(c[1]), float(side[:, 2].max()) + 0.05))      # a lamp's light leaves from before its glass
+
+    def beams(self, renderer=None, aim=BEAM_AIM):
+        """The head lamps' light: a spot light at each of self.head (headlamps() is called for
+        them), aimed `aim` metres from it in the hull's frame, a dipped beam (BEAM), and dark
+        until lit(). Make them while the scene is built: a light added to a scene that has
+        been drawn has the renderer build it again. With the renderer, the glass is kept from
+        being a light of its own (tp.VulkanRenderer samples whatever glows; the spots are the
+        lamps' light). Returns the spots (self.spots); built once."""
+        self.headlamps()
+        if self.spots or not self.head:
+            return self.spots
+        _, reach, half = self.BEAM
+        for p in self.head:
+            sp = tp.SpotLight(tp.Color(1.0, 0.96, 0.88), 0.0, reach, math.radians(half), 0.55, 2.0)
+            sp.position.set(*p)
+            to = tp.Group()
+            to.position.set(p[0] + aim[0], p[1] + aim[1], p[2] + aim[2])
+            self.hull.add(sp)
+            self.hull.add(to)
+            sp.set_target(to)
+            sp.visible = False
+            self.spots.append(sp)
+        if renderer is not None and not isinstance(renderer, tp.GLRenderer):
+            for m in self.lamps:
+                renderer.set_emissive_casts_light(m, False)
+        return self.spots
+
+    def lit(self, on=1.0):
+        """The head lamps on (1), off (0), or coming on as the dusk falls (between): the glass
+        shown and glowing (GLOW), and the beams() there are at that share of BEAM's intensity.
+        Touched only when the level changes: needs_update() re-uploads the material."""
+        on = min(max(float(on), 0.0), 1.0)
+        if on == self._lit:
+            return
+        self._lit = on
+        self.headlamps()
+        if self.glass is not None:
+            self.glass.emissive_intensity = self.GLOW * on
+            self.glass.needs_update()
+        for m in self.lamps:
+            m.visible = on > 0.02
+        for sp in self.spots:
+            sp.visible = on > 0.02
+            sp.intensity = self.BEAM[0] * on
+
+    def seat(self, at=None, dip=None):
+        """The seat: a node fixed in the hull at `at` (hull frame; SEAT) and turned as a camera
+        is, -z ahead and +y up, looking `dip` degrees under the car's level (SEAT_DIP). A
+        camera that takes this node's place and turn in the world every frame (ride()) turns,
+        pitches, rolls and heaves with the body: the car stands still in its picture and the
+        road moves. Built once; asked again with `at` or `dip`, the seat is moved. Returns
+        the node (self.eye)."""
+        if self.eye is None:
+            self.eye = tp.Group()
+            self.hull.add(self.eye)
+            at, dip = at or self.SEAT, self.SEAT_DIP if dip is None else dip
+        if at is not None:
+            self.eye.position.set(*map(float, at))
+        if dip is not None:
+            d = 0.5 * math.radians(dip)
+            self.eye.quaternion.set(0.0, math.cos(d), math.sin(d), 0.0)       # half a turn about the upright, then the dip
+        return self.eye
+
+    def glaze(self, on=True):
+        """The window glass and its border shown, or taken out (a camera in the cabin: see
+        ride()). Touched only when the state flips."""
+        if on != self._glazed:
+            self._glazed = on
+            for o in self.windows:
+                o.visible = on
+
+    def ride(self, camera):
+        """Put a camera in the seat (seat()), where the shell is drawn now: call it every
+        frame, after Car.draw(). The camera's place and turn are set outright (its `up` is
+        left alone, so a look_at() later is level again). Returns the eye, (x, y, z).
+
+        The camera looks out through no glass (glaze(False); Car.draw() puts it back, and a
+        scene that takes more than one picture of a frame calls glaze(True) before the
+        others). The model's windows are smoked, the pod in the windscreen's black border
+        hangs right before the seat, and tp.VulkanRenderer lights what is seen through a
+        pane by the level it measures at the pane on the viewer's side: from inside a cabin
+        that is next to nothing, and every hillside in shadow beyond the windscreen was
+        black."""
+        self.glaze(False)
+        eye = self.seat()
+        self.node.update_matrix_world(True)
+        p, q = eye.get_world_position(), eye.get_world_quaternion()
+        camera.position.set(p.x, p.y, p.z)
+        camera.quaternion.set(q.x, q.y, q.z, q.w)
+        return p.x, p.y, p.z
 
 
 class Car:
@@ -370,6 +501,8 @@ class Car:
         that is a whole number of steps (a film) draws the last step as it is."""
         if self.now is None:
             self.sync()
+        if self.shell is not None:
+            self.shell.glaze(True)                        # ride() takes it out again for a camera in the cabin
         if a >= 1.0:
             v = self.now
         else:
