@@ -1208,6 +1208,10 @@ namespace threepp {
         // moved emitter invalidates the cache (buildAndUploadEmissiveTris).
         std::vector<uint32_t> cachedEmissiveEntryBits_;
         uint32_t cachedEmissiveVersion_ = 0;
+        // The range gate's exposure term the cached header holds
+        // (emissiveGateK(); the emitter NEE skips a point no light reaches).
+        float cachedEmissiveGateK_ = 0.0f;
+        [[nodiscard]] float emissiveGateK() const;
         // Objects whose emissive glows but is not sampled as a light
         // (setEmissiveCastsLight), keyed by Object3D::id like classIds_. The
         // emitter walk skips them; GeometryDesc.flags bit 6 tells the ray hits
@@ -3594,9 +3598,10 @@ namespace threepp {
         //   v1.xyz = world pos1,    v1.w = running cumPower (CDF)
         //   v2.xyz = world pos2,    v2.w = per-tri power (lum * area)
         //   emission.xyz = emissive*intensity, emission.w = unused
-        // then a 64-byte header (v0.x = emissive-instance count) and, under
-        // kEmissiveCoverMaxLights, one 64-byte record per emissive instance
-        // for the shader's coverage mode (emissive_lights.glsl).
+        // then a 64-byte header (v0.x = emissive-instance count, v0.y = the
+        // range gate's exposure term) and, under kEmissiveGateMaxLights, one
+        // 64-byte record per emissive instance for the shader's range gate
+        // and coverage mode (emissive_lights.glsl).
         //
         // Uniform-by-area within each tri × power-weighted picking across tris
         // gives a constant area-weighted-luminance pdf for closest_hit's NEE.

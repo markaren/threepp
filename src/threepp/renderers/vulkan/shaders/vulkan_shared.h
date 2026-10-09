@@ -23,6 +23,11 @@
 // the global power-CDF pick. Host (buildAndUploadEmissiveTris) writes the
 // table only under this cap; the shaders read it only under this cap.
 #define kEmissiveCoverMaxLights 8
+// Emitter RANGE gate (emissive_lights.glsl, emGateBound): the per-light table is
+// written up to this many emissive instances, and a shaded point that no light
+// can reach with a visible amount of light skips the emitter NEE altogether.
+// Above it (Bistro's hundreds of lamps) there is no table and no gate.
+#define kEmissiveGateMaxLights 64
 
 // TLAS instance visibility groups (VkAccelerationStructureInstanceKHR.mask).
 // Opaque + alpha-CUTOUT instances carry kRayMaskOpaque; alpha-BLEND and

@@ -63,6 +63,11 @@ bool restirOccluded(vec3 shadowOrig, vec3 dir, float maxDist) {
 // the denoiser smooths the 1-sample RADIANCE (ReSTIR DI is always denoiser-paired).
 vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
     if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
+    if (emGateBound(P) < 1.0) {// out of every emitter's range: an empty reservoir, no candidates, no rays
+        imageStore(reservoirPosWrite, ivec2(gl_GlobalInvocationID.xy), vec4(0.0, 0.0, 0.0, -2.0));
+        imageStore(reservoirWWrite,   ivec2(gl_GlobalInvocationID.xy), vec4(0.0));
+        return vec3(0.0);
+    }
     const vec3 shadowOrig = P + N * SHADOW_EPS;
     const int  emIters    = findMSB(max(pc.emissiveCount - 1u, 1u)) + 1;
     // Per-(pixel,frame) seed → candidates vary each frame so Stage B's temporal
@@ -259,6 +264,7 @@ vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
 // emitter sample plan of emissiveNEE (emissive_lights.glsl).
 vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
     if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
+    if (emGateBound(P) < 1.0) return vec3(0.0);// out of every emitter's range
     // The pick (global strata, or per-light COVERAGE with point proxies for small
     // lights) is emissive_lights.glsl's; this loop owns the cosine term and the plain
     // opaque shadow ray. twoSided: a GI bounce accepts an emitter's back face.

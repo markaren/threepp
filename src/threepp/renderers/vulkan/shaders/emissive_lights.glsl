@@ -26,12 +26,14 @@
 //
 // BUFFER LAYOUT (host: buildAndUploadEmissiveTris):
 //   [0, N)        EmTri triangles, running power CDF in v1.w      (N = pc.emissiveCount)
-//   [N]           header: v0.x = light count L (float-int); rest 0
-//   [N+1, N+1+L)  EmLight records, written only when L ≤ kEmissiveCoverMaxLights:
+//   [N]           header: v0.x = light count L (float-int), v0.y = gateK (the range
+//                 gate's exposure term, 0 = gate off); rest 0
+//   [N+1, N+1+L)  EmLight records, written only when L ≤ kEmissiveGateMaxLights (the
+//                 coverage mode reads them only when L ≤ kEmissiveCoverMaxLights):
 //                   v0.xyz centre, v0.w bounding radius
 //                   v1.xyz Σ area·n̂ (world; ≈ 0 for a closed shell), v1.w CDF start
 //                   v2.x triBegin, v2.y triCount (float-ints), v2.z area, v2.w power
-//                   emission.rgb Le
+//                   emission.rgb Le, emission.w gate = max(Le)·area
 // Needs, from the including shader: EmTri emissiveTris[], pc.emissiveCount,
 // pc.emissiveTotalPower. Callers check pc.emissiveCount > 0 before planning.
 
@@ -61,6 +63,27 @@ struct EmSample {
 };
 
 uint emLightCount() { return uint(emissiveTris[pc.emissiveCount].v0.x + 0.5); }
+
+// RANGE gate. A lamp that is on costs the frame its sampling at EVERY shaded point,
+// lit by it or not: a fishing boat's lanterns and twelve cars' tail lamps were 3 ms
+// of a 19 ms daylight frame on a site they light nothing of. Light i can give a
+// surface at P at most the irradiance max(Le)·A/d² (d from its bounding sphere), and
+// the host knows the exposure: under gateK·gate_i/d² = 1 the light adds less than its
+// display threshold (buildAndUploadEmissiveTris) to a white surface that faces it.
+// Returns the largest such ratio over the lights; below 1 no emitter is worth a
+// sample at P and the caller returns black. No table or the gate off: always above 1.
+float emGateBound(vec3 P) {
+    const uint  L = emLightCount();
+    const float k = emissiveTris[pc.emissiveCount].v0.y;
+    if (k <= 0.0 || L == 0u || L > uint(kEmissiveGateMaxLights)) return 1e30;
+    float m = 0.0;
+    for (uint l = 0u; l < L; ++l) {
+        const vec4  cr = emissiveTris[pc.emissiveCount + 1u + l].v0;
+        const float d  = max(length(cr.xyz - P) - cr.w, 0.0);
+        m = max(m, emissiveTris[pc.emissiveCount + 1u + l].emission.w / max(d * d, 1e-6));
+    }
+    return m * k;
+}
 
 EmPlan emPlanBuild(vec3 P, int EM) {
     EmPlan pl;

@@ -284,6 +284,7 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
 // clamp is the fixed 6.0 the GI channel uses — no pc.fireflyClamp here) ─────
 vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
     if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
+    if (emGateBound(P) < 1.0) return vec3(0.0);// out of every emitter's range
     // The pick (global strata, or per-light COVERAGE with point proxies for small
     // lights) is emissive_lights.glsl's; this loop owns the cosine term and the plain
     // opaque shadow ray. twoSided: a GI bounce accepts an emitter's back face.

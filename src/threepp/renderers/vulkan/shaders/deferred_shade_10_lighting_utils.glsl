@@ -743,6 +743,7 @@ float sampleFoamBicubic(vec2 uv) {
 vec3 emissiveNEE(int EM_SAMPLES, vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, vec3 albedo,
                  float roughness, float metalness, float k, inout uint seed, bool doShadows) {
     if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
+    if (emGateBound(P) < 1.0) return vec3(0.0);// out of every emitter's range
     // EM_SAMPLES: 16 at primaries, small at reflection-bounce hits. The PICK (global
     // strata, or per-light COVERAGE with point proxies for small lights) lives in
     // emissive_lights.glsl; this loop owns the BRDF and the emitter-skipping shadow ray.
@@ -833,6 +834,13 @@ vec3 emissiveNEE(int EM_SAMPLES, vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, v
 vec3 emissiveSpecNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0,
                      float roughness, float k, bool doShadows) {
     if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
+    {
+        // The range gate, for a lobe: against the diffuse 1/π this term peaks at
+        // D·G·F/(4·NdotV) ≤ (1/(π·α²))/(4·k), so the lights reach 1/(4·k·α²) times
+        // further in d² (F taken as 1: grazing Fresnel).
+        const float a = roughness * roughness;
+        if (emGateBound(P) * max(1.0, 1.0 / max(4.0 * k * a * a, 1e-6)) < 1.0) return vec3(0.0);
+    }
     const int    EM_SAMPLES = 8;// was 16 — halves the per-glossy-pixel shadow rays;
                                  // still deterministic (zero temporal noise), slightly
                                  // coarser emitter coverage on wide-lobe metals.

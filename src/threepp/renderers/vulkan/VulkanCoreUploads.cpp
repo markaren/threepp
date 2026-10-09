@@ -301,18 +301,37 @@ namespace threepp {
                           meshMovedBits_.data(), std::min(bytes, cap));
     }
 
+    // The range gate's exposure term (the emitter buffer's header, v0.y). A
+    // light of radiance Le and area A gives a surface d away at most the
+    // irradiance Le·A/d²; a white surface shows that as Le·A/(π·d²) times the
+    // exposure. Below kTau of display white (linear, before the tone curve:
+    // 1/2048 is about one 8-bit step at black and nothing above it) the light
+    // is not worth a sample there, so its range is d² = Le·A·gateK with
+    // gateK = exposure/(π·kTau). The exposure is taken to the quarter stop
+    // above, so auto-exposure rewrites the header a few times a second at
+    // most and a range is never short. 0 = no gate (no usable exposure).
+    float VulkanRenderer::Impl::emissiveGateK() const {
+        constexpr float kTau = 1.0f / 2048.0f;
+        const float exposure = currentExposure();
+        if (!(exposure > 0.0f) || !std::isfinite(exposure)) return 0.0f;
+        const float quarterStops = std::ceil(std::log2(exposure) * 4.0f);
+        return std::exp2(quarterStops * 0.25f) / (3.14159265f * kTau);
+    }
+
     // Walk visible entries, gather emissive triangles in world space, and
     // upload to emissiveTriBuffers[frame]. Per-tri 64-byte record:
     //   v0.xyz = world pos0,    v0.w = triangle area
     //   v1.xyz = world pos1,    v1.w = running cumPower (CDF)
     //   v2.xyz = world pos2,    v2.w = per-tri power (lum * area)
     //   emission.xyz = emissive*intensity, emission.w = unused
-    // followed by a 64-byte HEADER (v0.x = emissive-instance count L) and,
-    // when L <= kEmissiveCoverMaxLights, one 64-byte record per emissive
-    // INSTANCE (centre/radius, area-weighted normal sum, CDF start, tri
-    // range, area, power, Le) — the shader's coverage mode, which samples
-    // every light instead of letting a few strata pick among them
-    // (emissive_lights.glsl). Capacity is sized on the whole record count.
+    // followed by a 64-byte HEADER (v0.x = emissive-instance count L, v0.y =
+    // the range gate's exposure term) and, when L <= kEmissiveGateMaxLights,
+    // one 64-byte record per emissive INSTANCE (centre/radius, area-weighted
+    // normal sum, CDF start, tri range, area, power, Le, gate): the shader's
+    // range gate (a point no light reaches skips the emitter NEE) and, up to
+    // kEmissiveCoverMaxLights, its coverage mode, which samples every light
+    // instead of letting a few strata pick among them (emissive_lights.glsl).
+    // Capacity is sized on the whole record count.
     //
     // Uniform-by-area within each tri × power-weighted picking across tris
     // gives a constant area-weighted-luminance pdf for closest_hit's NEE.
@@ -324,6 +343,7 @@ namespace threepp {
         THREEPP_CPUPROF("frame.E_emissiveTris");
         emissiveTriCountThisFrame_ = 0;
         emissiveTotalPowerThisFrame_ = 0.0f;
+        const float gateK = emissiveGateK();
 
         // Fast path: nothing that affects the world-space emissive CDF
         // has changed since the last rebuild. World-space tri positions
@@ -354,6 +374,12 @@ namespace threepp {
             if (cachedEmissiveTriCount_ == 0) {
                 return false;// no emissives → nothing to upload
             }
+            if (gateK != cachedEmissiveGateK_) {
+                // The exposure moved: the header alone changes (v0.y).
+                cachedEmissiveData_[static_cast<size_t>(cachedEmissiveTriCount_) * 16 + 1] = gateK;
+                cachedEmissiveGateK_ = gateK;
+                cachedEmissiveVersion_++;
+            }
             if (emissiveBufferVersion_[frame] == cachedEmissiveVersion_) {
                 // This frame's GPU buffer already holds the cached data.
                 return false;
@@ -373,7 +399,7 @@ namespace threepp {
         // Per-light records for the shader's COVERAGE mode (emissive_lights.glsl):
         // one per emissive INSTANCE, appended behind a header after the triangles.
         std::vector<float> lights;// 16 floats per light, kept only while under the cap
-        lights.reserve(kEmissiveCoverMaxLights * 16);
+        lights.reserve(kEmissiveGateMaxLights * 16);
         uint32_t lightCount = 0;// every emissive instance, capped or not
         // Which entries this walk read as emitters: the fast path's gate.
         std::vector<uint32_t> emitterBits((entries.size() + 31u) / 32u, 0u);
@@ -491,8 +517,8 @@ namespace threepp {
                                       nsx, nsy, nsz, cumStart,
                                       static_cast<float>(triBegin), static_cast<float>(triCnt),
                                       areaSum, cumPower - cumStart,
-                                      emR, emG, emB, 0.0f};
-                if (++lightCount <= kEmissiveCoverMaxLights) lights.insert(lights.end(), lf, lf + 16);
+                                      emR, emG, emB, std::max({emR, emG, emB}) * areaSum};
+                if (++lightCount <= kEmissiveGateMaxLights) lights.insert(lights.end(), lf, lf + 16);
             }
             }// per-entry (emissive spans only)
         }
@@ -500,14 +526,16 @@ namespace threepp {
         const uint32_t triCount = static_cast<uint32_t>(data.size() / 16);
         emissiveTriCountThisFrame_ = triCount;
         emissiveTotalPowerThisFrame_ = cumPower;
-        // Tail: the header (light count), then the per-light table — only under the
-        // cap the shader reads it at; bigger scenes use the global pick and skip the
-        // bytes. pc.emissiveCount stays the TRIANGLE count (the CDF search range).
+        // Tail: the header (light count, the range gate's exposure term), then the
+        // per-light table, only under the cap the shader reads it at; bigger scenes
+        // use the global pick, have no gate and skip the bytes. pc.emissiveCount stays
+        // the TRIANGLE count (the CDF search range).
         if (triCount > 0) {
-            const float hdr[16] = {static_cast<float>(lightCount)};// rest zero
+            const float hdr[16] = {static_cast<float>(lightCount), gateK};// rest zero
             data.insert(data.end(), hdr, hdr + 16);
-            if (lightCount <= kEmissiveCoverMaxLights) data.insert(data.end(), lights.begin(), lights.end());
+            if (lightCount <= kEmissiveGateMaxLights) data.insert(data.end(), lights.begin(), lights.end());
         }
+        cachedEmissiveGateK_ = gateK;
 
         // Update cache regardless — non-emissive scenes still want
         // entriesUnchanged + 0-tri to short-circuit out of the walk.
