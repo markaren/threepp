@@ -1,11 +1,13 @@
 // Soft body (PxDeformableVolume) demo. Requires a CUDA-capable GPU — soft
 // bodies run on PhysX's GPU dynamics solver. SPACE drops fresh soft bodies.
 //
-// When built with THREEPP_PHYSX_CUDA_VK_INTEROP (Vulkan backend + CUDA
-// toolkit, see CMakeLists.txt) and the Vulkan renderer is selected, each body
-// switches to GPU tet skinning with ZERO-COPY interop: PhysX's deformed tet
-// positions are copied device→device into the renderer's exported
-// tet-skinning buffer — the deformation never touches the CPU.
+// When built with the CUDA toolkit (see CMakeLists.txt), each body switches to
+// GPU tet skinning with ZERO-COPY interop, so the deformation never touches
+// the CPU. PhysX's deformed tet positions are copied device→device into
+//   - the Vulkan renderer's exported tet-skinning buffer
+//     (THREEPP_PHYSX_CUDA_VK_INTEROP, needs the Vulkan backend), or
+//   - the GL renderer's tet texture, registered with CUDA
+//     (THREEPP_PHYSX_CUDA_GL_INTEROP).
 
 #include "renderer_factory.hpp"
 
@@ -66,6 +68,9 @@ int main() {
 
 #ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
     auto* vkRenderer = dynamic_cast<VulkanRenderer*>(renderer.get());
+#endif
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+    auto* glRenderer = dynamic_cast<GLRenderer*>(renderer.get());
 #endif
 
     auto scene = Scene::create();
@@ -129,6 +134,13 @@ int main() {
         // then upgrades the tet feed to zero-copy once the renderer has built
         // the mesh's tet state (after its first rendered frame).
         if (vkRenderer) sb->enableGpuSkinning();
+#endif
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+        // GL renderer: GPU tet skinning in the vertex shader, fed from a small
+        // float texture of the collision tets. The registration below upgrades
+        // that texture to zero-copy once the renderer has uploaded it (after
+        // its first rendered frame).
+        if (glRenderer) sb->enableGpuSkinning();
 #endif
         return sb;
     };
@@ -210,6 +222,25 @@ int main() {
                 } else {
                     vkRenderer->disableSoftBodyInterop(*sb->mesh());
                     std::cout << "[softbody] CUDA import failed - staying on the CPU bridge" << std::endl;
+                }
+            }
+        }
+#endif
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+        // The GL counterpart, polled for the same reason: the tet texture has
+        // no GL id until the renderer has drawn the body once. One-shot per
+        // body: register the texture with CUDA, after which syncSoftBodies
+        // copies the tets device→device into it. A failed registration stays
+        // on the CPU bridge (needsInteropRegister goes false either way).
+        if (glRenderer) {
+            for (auto* sb : bodies) {
+                if (!sb->needsInteropRegister()) continue;
+                const auto texId = glRenderer->getGlTextureId(*sb->interopTexture());
+                if (!texId) continue;// not uploaded yet — retry next frame
+                if (sb->registerGlTexture(*texId)) {
+                    std::cout << "[softbody] CUDA->GL zero-copy tet interop active" << std::endl;
+                } else {
+                    std::cout << "[softbody] CUDA registration failed - staying on the CPU bridge" << std::endl;
                 }
             }
         }

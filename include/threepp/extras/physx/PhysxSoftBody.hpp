@@ -39,6 +39,10 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+// windows.h defines near/far as empty macros, which breaks every later header
+// that names a parameter so (the cameras do).
+#undef near
+#undef far
 #endif
 #include <cudaGL.h>// CUDA driver-API GL interop (pulls in cuda.h + GL/gl.h)
 #endif
@@ -524,8 +528,10 @@ namespace threepp {
         [[nodiscard]] bool needsInteropRegister() const { return gpuSkin_ && !interopRegistered_ && !interopTried_; }
         [[nodiscard]] Texture* interopTexture() const { return tetTex_.get(); }
 
-        void registerGlTexture(unsigned int glTexId) {
-            if (interopRegistered_ || interopTried_ || !gpuSkin_ || glTexId == 0) return;
+        // Returns true when the zero-copy path is live for this body.
+        bool registerGlTexture(unsigned int glTexId) {
+            if (interopRegistered_) return true;
+            if (interopTried_ || !gpuSkin_ || glTexId == 0) return false;
             interopTried_ = true;// attempt once; on failure stay on the CPU bridge (no per-frame retry)
             ::physx::PxScopedCudaLock _lock(*cuda_);
             const CUresult res = cuGraphicsGLRegisterImage(
@@ -533,9 +539,10 @@ namespace threepp {
                     CU_GRAPHICS_REGISTER_FLAGS_WRITE_DISCARD);
             if (res != CUDA_SUCCESS) {
                 cudaTexResource_ = nullptr;// stay on the CPU bridge
-                return;
+                return false;
             }
             interopRegistered_ = true;
+            return true;
         }
 #endif
 

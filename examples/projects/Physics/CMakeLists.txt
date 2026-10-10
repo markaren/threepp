@@ -26,16 +26,21 @@ if (TARGET physx_granular_conveyor AND THREEPP_WITH_VULKAN)
     endif ()
 endif ()
 
-# CUDA→Vulkan zero-copy interop for the soft-body tet positions (optional):
-# PhysX's deformed positions are copied device→device into the Vulkan
-# renderer's exported tet-skinning buffer — no host round-trip. Needs the
-# Vulkan backend + the CUDA toolkit (driver API) at build time; without
-# either, the example silently keeps the pinned-memory CPU bridge.
-if (TARGET physx_softbody AND THREEPP_WITH_VULKAN)
+# CUDA zero-copy interop for the soft-body tet positions (optional): PhysX's
+# deformed positions are copied device→device into the renderer's own storage,
+# with no host round-trip. On GL that is the tet texture, registered with CUDA;
+# on Vulkan the renderer's exported tet-skinning buffer (needs the Vulkan
+# backend). Both need the CUDA toolkit (driver API) at build time; without it
+# the example silently keeps the pinned-memory CPU bridge.
+if (TARGET physx_softbody)
     find_package(CUDAToolkit QUIET)
     if (CUDAToolkit_FOUND)
-        target_compile_definitions(physx_softbody PRIVATE THREEPP_PHYSX_CUDA_VK_INTEROP)
         target_link_libraries(physx_softbody PRIVATE CUDA::cuda_driver)
-        message(STATUS "physx_softbody: CUDA->Vulkan zero-copy interop enabled")
+        target_compile_definitions(physx_softbody PRIVATE THREEPP_PHYSX_CUDA_GL_INTEROP)
+        message(STATUS "physx_softbody: CUDA->GL zero-copy interop enabled")
+        if (THREEPP_WITH_VULKAN)
+            target_compile_definitions(physx_softbody PRIVATE THREEPP_PHYSX_CUDA_VK_INTEROP)
+            message(STATUS "physx_softbody: CUDA->Vulkan zero-copy interop enabled")
+        endif ()
     endif ()
 endif ()

@@ -60,6 +60,16 @@ if (TARGET unofficial::omniverse-physx-sdk::sdk)
         target_link_libraries(${name} PRIVATE unofficial::omniverse-physx-sdk::sdk)
     endforeach ()
 
+    # SoftBody_test also covers the CUDA->GL zero-copy feed of a GPU-skinned
+    # body, which needs the CUDA toolkit (driver API). Without it that case is
+    # compiled out. The macro is safe here: this binary has one translation
+    # unit, so PhysxSoftBody.hpp is compiled one way.
+    find_package(CUDAToolkit QUIET)
+    if (CUDAToolkit_FOUND)
+        target_compile_definitions(SoftBody_test PRIVATE THREEPP_PHYSX_CUDA_GL_INTEROP)
+        target_link_libraries(SoftBody_test PRIVATE CUDA::cuda_driver)
+    endif ()
+
     # The convex-collider tests need V-HACD. Linking threepp_convex_decomp
     # carries its INTERFACE THREEPP_EDITOR_WITH_VHACD, so the header's inline
     # methods compile with the decomposition paths on — no per-target macro to
