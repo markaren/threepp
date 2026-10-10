@@ -185,8 +185,6 @@ namespace threepp {
     private:
         UniformsCache cache_;
         ShadowUniformsCache shadowCache_;
-
-        unsigned int nextVersion = 0;
     };
 
 }// namespace threepp

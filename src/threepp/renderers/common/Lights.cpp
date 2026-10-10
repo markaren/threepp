@@ -7,12 +7,22 @@
 #include "threepp/lights/LightShadow.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <unordered_map>
 
 using namespace threepp;
 
 namespace {
+
+    // One counter for every Lights there is, as the module-level nextVersion
+    // of three.js's WebGLLights. A renderer keeps a Lights per scene and per
+    // nesting depth (a Reflector draws the scene again from inside the frame),
+    // and a material remembers the version of the one it was last wired to.
+    // Counted per instance, two of them both said "0": a material wired to the
+    // mirror pass's lights passed for up to date in the main pass, and went on
+    // being lit from the mirror camera's side until something else rebuilt it.
+    std::atomic<unsigned int> nextVersion{0};
 
     // What a receiver samples: the native depth texture the shadow pass wrote
     // (PCF and Basic, as three.js r186), or the colour target holding the
