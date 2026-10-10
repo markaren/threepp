@@ -976,12 +976,13 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
     // sky crisp and the sun reads as a real glint. Scene hits stay sharp.
     const float missLod = max(gr, 0.10) * maxLod;
 
-    // Sky visibility at the glass surface, consumed by the transmit legs'
-    // probeHitFill=false env hit fill (see gEnvFillVis). Without it the
+    // Sky visibility at the glass surface, consumed by the SOLID transmit
+    // leg's probeHitFill=false env hit fill (see gEnvFillVis). Without it the
     // enclosed-interior scene showed a sky-lit world through the glass while
     // probe GI darkened everything around it. The reflect leg passes
-    // probeHitFill=true and is unaffected.
-    gEnvFillVis = probeEnvFillVis(P, N, maxLod);
+    // probeHitFill=true and is unaffected; a thin pane's hits are lit where
+    // they are (gThinPaneHits) and do not read it.
+    if (pm.thinWalled == 0) gEnvFillVis = probeEnvFillVis(P, N, maxLod);
 
     vec3 sum = vec3(0.0);
     for (int s = 0; s < kGlassSamples; ++s) {
@@ -1021,10 +1022,12 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
             // "washed, detail-destroyed" look over e.g. a watch dial.
             const vec3 dT = -V;// straight-through (net-zero thin-shell bend)
             {
+                gThinPaneHits = true;// what the pane shows is lit as seen beside it
                 const vec3 behind = traceRadiance(P - N * SHADOW_EPS, dT, doShadows, maxLod, missLod, seed,
                                                   /*cheapHits=*/false,// refracted content is sharp
-                                                  /*probeHitFill=*/false,// content under glass: probes can't resolve the cavity
+                                                  /*probeHitFill=*/false,// transmitted content: the pane's own rule (gThinPaneHits)
                                                   /*envInt=*/1.0);// transmitted, not IBL
+                gThinPaneHits = false;
                 vec3 tint = albedo;
                 if (pm.attenuationDistance > 0.0 && pm.thickness > 0.0)
                     tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(pm.thickness / pm.attenuationDistance));

@@ -188,7 +188,8 @@ vec3 envLobeGGX(vec3 V, vec3 N, float roughness, float lod, vec2 rot) {
 // visibility measured at the transmitting surface — "seen through clear
 // glass" sees the sky the glass surface sees, which in an enclosed interior
 // is none of it (the raw fill lit everything behind glass sky-bright while
-// probe GI darkened the opaque surround).
+// probe GI darkened the opaque surround). A THIN pane's straight-through leg
+// is the exception: its hits are lit where they are (gThinPaneHits).
 // First-bounce hit distance of the last traceRadiance call, for the reflection
 // denoiser's gloss-blur footprint (carried in reflAux .w): -1 = no committed
 // hit (pure env miss — the radiance is ALREADY lobe-filtered via missLod, so
@@ -230,6 +231,101 @@ vec3 gTraceMissTput  = vec3(0.0);
 // behind-views) with probeEnvFillVis at the transmitting surface; 1.0 for
 // every other caller (reflection traces read the probe fill and ignore this).
 float gEnvFillVis = 1.0;
+
+// Set by shadeGlass around a THIN-WALLED pane's straight-through leg: what is
+// seen through the pane is lit as the same point seen beside it. The hits of
+// that trace take their diffuse fill by the primary shade's own rule (Phase B
+// in main(): the probes where they measured the point, a traced gather where
+// they did not) in place of the env fill x gEnvFillVis.
+//
+// gEnvFillVis is the sky level AT THE PANE on the viewer's side. That says
+// something about a point behind the pane while the two share a space (a dial
+// under its crystal). A pane between two spaces breaks it, either way:
+//   - Looking OUT of a car (the camera in the cabin, Trollstigen): the probes
+//     at the windscreen read the cabin, the ratio is near zero, and every
+//     hillside in shadow beyond the glass rendered black, beside the same
+//     hillside lit where it shows past the glass's edge.
+//   - The same view in the twin came out too LIGHT: the cabin's probe
+//     neighbourhood is unmeasured there, the ratio falls back to 1, and the
+//     railings' shadows on the road were filled with unoccluded sky.
+//   - A room brighter than its sky clamps the ratio to 1: what stood behind a
+//     pane in it was lit by the sky the room shuts out.
+// Measured in linear light through a clear pane at Trollstigen, what has no
+// sun on it through the pane over the same pixels seen directly: 0.47 before
+// and 1.01 now by the bridge (the dark case), 1.62 and 1.04 under the trees
+// at the car park (the light one). The pane itself passes 0.82 there, so the
+// fill at the hit reads high: 1.19 of the direct view's irradiance where the
+// gather supplies it (paneHitGather's four fixed rays; a converged gather
+// 0.97), 1.26 where the probes do (the direct view takes its near-field AO
+// off the probes; a traced hit has none to take).
+//
+// Solid glass, the blend behind-views and the water's bottom keep the env fill.
+bool gThinPaneHits = false;
+
+// The traced share of that fill: kPaneFillRays cosine-distributed giRadiance
+// rays from the hit (sky where they escape, the sunlit bounce and the probe
+// field where they land). `open` = the share that escaped.
+//
+// The directions are FIXED in the hit's tangent frame: the same for every
+// pixel and every frame, so the estimate carries no noise at all. What it
+// carries instead is a step of 1/kPaneFillRays of the fill wherever one ray
+// starts to clear an occluder. A pane has no history to average a random
+// direction over: clear glass is taken as its temporal pass leaves it (no
+// spatial filter), and reflReproject resets a near-mirror surface whenever the
+// camera moves, which a windscreen's camera always does. Measured on the fill
+// alone from the moving car (Trollstigen, render scale 0.6; grain after the
+// upscaler as a share of the mean fill, over the grain eight fixed rays
+// show, which is the scene's own structure): two rays turned by blue noise
+// each frame 11 %, four fixed rays 3 %, six fixed rays none. More fixed rays
+// do not buy a truer level either: against the direct view's irradiance four
+// read 1.19, six 0.90, eight 1.13 on the same ground (a fixed set leans one
+// way or the other with what stands about the hit).
+//
+// Cost, the windscreen on 27 % of a 1280x720 frame (RTX 4070): the glass's
+// 3.4 ms of shade become 3.8 to 3.9. Switched in one process: +0.34 ms for 4
+// rays, +0.66 for 6, +0.96 for 8, and +0.47 for two blue-noise rays, so the
+// fixed directions are the cheap ones as well. With the windscreen over 78 %
+// of the frame +1.0 ms. That is open road, where the probes carry most hits.
+// Under birches the same 27 % of the frame costs +3.3 ms (16.9 ms of shade
+// become 20.0), and over 78 % of it +2.6: the four rays are all of that but
+// 0.3 ms. Whether more hits gather there or each ray is dearer through
+// foliage was not separated.
+const int kPaneFillRays = 4;
+vec3 paneHitGather(vec3 hitP, vec3 hitN, bool doShadows, float maxLod, inout uint seed, out float open) {
+    // A tangent frame that turns smoothly with the normal (Frisvad 2012, its
+    // pole put at -y). With the directions fixed in it, a frame that flips
+    // where the ground tilts past some angle (the up/right pick of the other
+    // gathers) draws that line in the fill.
+    vec3 fT = vec3(1.0, 0.0, 0.0);
+    vec3 fB = vec3(0.0, 0.0, 1.0);
+    if (hitN.y > -0.9999) {
+        const float a = 1.0 / (1.0 + hitN.y);
+        const float b = -hitN.x * hitN.z * a;
+        fT = vec3(1.0 - hitN.x * hitN.x * a, -hitN.x, b);
+        fB = vec3(b, -hitN.z, 1.0 - hitN.z * hitN.z * a);
+    }
+    const vec3 fOrg = hitP + hitN * SHADOW_EPS;
+    vec3  sum   = vec3(0.0);
+    float missN = 0.0;
+    for (int s = 0; s < kPaneFillRays; ++s) {
+        // A Fibonacci spiral on the cosine-weighted disc, as gatherEnv's
+        // deterministic path lays its rays out.
+        const float u1  = (float(s) + 0.5) / float(kPaneFillRays);
+        const float phi = float(s) * 2.39996323;
+        const float r   = sqrt(u1);
+        const vec3  fd  = normalize(fT * (r * cos(phi)) + fB * (r * sin(phi))
+                                    + hitN * sqrt(max(0.0, 1.0 - u1)));
+        bool fMissed;
+        // envInt 1.0: transmitted light, not the pane's IBL.
+        vec3 gi = giRadiance(fOrg, fd, doShadows, maxLod, seed, fMissed, 1.0);
+        const float gl = max(max(gi.r, gi.g), gi.b);
+        if (gl > 6.0) gi *= 6.0 / gl;// the gather's firefly cap
+        sum += gi;
+        if (fMissed) missN += 1.0;
+    }
+    open = missN / float(kPaneFillRays);
+    return sum * (1.0 / float(kPaneFillRays));
+}
 
 // Weight of the traced fill at a FIRST-bounce reflection hit whose probe
 // neighbourhood is starved (see the probeHitFill branch in traceRadiance).
@@ -301,6 +397,11 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
 
     int b    = 0;// REFLECTIVE bounces only — incremented at the continuation below
     int step = 0;// every ray segment (bounces + pass-throughs); the loop guard
+    // Hits of this trace that gathered their own fill (gThinPaneHits): what the
+    // pane shows, and one blend layer in front of it. Layers past that take
+    // the probe fill.
+    const int kPaneGatherHits = 2;
+    int paneGathers = 0;
     for (; step < REFL_MAX_STEPS; ++step) {
         rayQueryEXT rq;
         rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskAll, o, 1e-3, d, 1e30);
@@ -429,7 +530,11 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // the point is dark — a hard switch rendered every glass-covered dial
         // near-black. Low confidence falls back to the legacy env fill.
         // Probes off keeps the original approximation.
-        vec3 hitDiffInd = sampleEnvLod(hitN, maxLod) + lights.ambient + hemiAmbient(hitN);
+        const vec3 hitEnvFill = sampleEnvLod(hitN, maxLod);
+        vec3  hitDiffInd = hitEnvFill + lights.ambient + hemiAmbient(hitN);
+        // Scale of the rough hit's split-sum env cap-off further down: on a
+        // transmission retrace, the sky level its diffuse fill was given.
+        float hitEnvVis  = probeHitFill ? 1.0 : gEnvFillVis;
         if (probesEnabled()) {
             if (probeHitFill) {
                 float probeConf;
@@ -475,6 +580,39 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                     hitDiffInd = mix(hitDiffInd, gSum * (1.0 / float(kStarvedRays)) + lights.ambient + hemiAmbient(hitN), starvedW);
                 }
                 hitDiffInd = mix(hitDiffInd, probeFill, probeTrust);
+            } else if (gThinPaneHits) {
+                // Seen through a thin pane: lit as seen beside it (gThinPaneHits).
+                const vec3 LUMW = vec3(0.2126, 0.7152, 0.0722);
+                float conf;
+                const vec3 probeFill = probeIrradianceConf(hitP + hitN * SHADOW_EPS, hitN, conf) * (1.0 / PI);
+                if (b == 0 && paneGathers < kPaneGatherHits) {
+                    // The primary shade's rule (Phase B in main()), its numbers:
+                    // the probes' estimate stands from conf 0.5, the hit's own
+                    // gather takes over under it, fully below 0.25.
+                    ++paneGathers;
+                    const float gatherW = 1.0 - smoothstep(0.25, 0.5, conf);
+                    // How much sky the hit has, for the scene ambient and the
+                    // env cap-off: the probe/env ratio where the probes
+                    // measured (the envSpecVis construction, 1 where they
+                    // did not), the gather's escaped share where it ran.
+                    float skyVis = mix(1.0, clamp(dot(probeFill, LUMW) / max(dot(hitEnvFill, LUMW), 1e-5), 0.0, 1.0),
+                                       smoothstep(0.0, 0.1, conf));
+                    vec3  fill   = probeFill;
+                    if (gatherW > 0.0) {
+                        float open;
+                        const vec3 gathered = paneHitGather(hitP, hitN, doShadows, maxLod, seed, open);
+                        fill   = mix(probeFill, gathered, gatherW);
+                        skyVis = mix(skyVis, open, gatherW);
+                    }
+                    hitDiffInd = mix(fill, probeFill, conf) + (lights.ambient + hemiAmbient(hitN)) * skyVis;
+                    hitEnvVis  = skyVis;
+                } else {
+                    // What the hit mirrors, and a blend layer past the ones
+                    // that gathered: the reflection callers' fill above, with
+                    // no rays (their starved share is the env fill).
+                    hitDiffInd = mix(hitDiffInd, probeFill, smoothstep(0.0, 0.25, conf));
+                    hitEnvVis  = 1.0;
+                }
             } else {
                 // Transmission retrace: env-fill shape (probes cannot resolve
                 // the cavity) at the sky level that actually reaches the
@@ -524,7 +662,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             // surface sky-visibility scale as the diffuse fill (a rough metal
             // behind glass has no diffuse — this term is its whole shade).
             radiance += tput * specW * murkAmbient(sampleEnvLod(hitR, hRough * maxLod), hitP, hitR)
-                      * (probeHitFill ? 1.0 : gEnvFillVis);
+                      * hitEnvVis;
             break;
         }
         // Continue the reflection one bounce deeper (GGX-jittered when glossy).
