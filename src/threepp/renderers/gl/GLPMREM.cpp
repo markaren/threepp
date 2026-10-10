@@ -60,12 +60,21 @@ namespace {
             6.0f / 6.0f,  // 1.000  (roughest — diffuse irradiance)
     };
 
+    // These three are raw shaders, so they name their own GLSL version, and a
+    // browser takes GLSL ES 3.00 and nothing else: under "#version 330 core"
+    // none of them compiled in the WebGL2 build, and every scene lit by an
+    // environment came out without it. Their bodies are valid as either.
+#ifdef __EMSCRIPTEN__
+#define GLSL_VERSION_LINE "#version 300 es\n"
+#else
+#define GLSL_VERSION_LINE "#version 330 core\n"
+#endif
+
     // Fullscreen quad. The render viewport restricts it to one strip; uv spans
     // [0,1]^2 over the strip, uv.y increasing upward (GL bottom-up) so uv.y=0 is
     // the south pole. getDirection() in the fragment shader maps (uv) -> world
     // direction; the material's eqUvFromDir() is its exact inverse.
-    const char* const VERTEX_SRC = R"(#version 330 core
-in vec3 position;
+    const char* const VERTEX_SRC = GLSL_VERSION_LINE R"(in vec3 position;
 in vec2 uv;
 out vec2 vUv;
 
@@ -79,8 +88,7 @@ void main() {
     // prefilter (prefilter_env.comp): integrate the
     // source equirect over a GGX lobe around the output direction (= N for the
     // prefilter), weighted by NdotL. roughness==0 collapses to a direct fetch.
-    const char* const FRAGMENT_SRC = R"(#version 330 core
-precision highp float;
+    const char* const FRAGMENT_SRC = GLSL_VERSION_LINE R"(precision highp float;
 precision highp int;
 
 in vec2 vUv;
@@ -204,8 +212,7 @@ void main() {
     // deterministic golden-angle spiral whose radii follow the Rayleigh
     // distribution, i.e. equal-weight importance samples of a 2D Gaussian in
     // the tangent plane.
-    const char* const CUBE_TO_EQUIRECT_SRC = R"(#version 330 core
-precision highp float;
+    const char* const CUBE_TO_EQUIRECT_SRC = GLSL_VERSION_LINE R"(precision highp float;
 
 in vec2 vUv;
 out vec4 fragColor;
