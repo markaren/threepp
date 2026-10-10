@@ -29,6 +29,66 @@ void fetchHit(int instIdx, int primId, vec2 bary, mat4x3 worldToObj,
     }
 }
 
+// The UV footprint of a ray at a hit, as the two gradients textureGrad takes:
+// what the fragment shader's derivatives are to the primary view. `width` is
+// how wide one pixel's cone has grown by the hit (the pixel's angle times the
+// length of the path from the eye). On the triangle that is an ellipse: `width`
+// across the plane of incidence and width / |n.d| along it, which is why a
+// level alone (a ray cone's LOD) will not do. A road seen along itself has the
+// second axis many times the first, and one level for both either keeps the
+// speckle or blurs the road the direct view shows sharp; the material
+// samplers are anisotropic and want the two axes.
+//
+// Zero gradients (the finest mip, what every hit had before) for a mesh with
+// no UVs and for a triangle with no area.
+void hitUvFootprint(int instIdx, int primId, mat4x3 objToWorld, vec3 dir, float width,
+                    out vec2 duvA, out vec2 duvB) {
+    duvA = vec2(0.0);
+    duvB = vec2(0.0);
+    const GeometryDesc g = geoms[instIdx];
+    if (g.uvAddress == 0ul) return;
+    const uvec3 idx = gfetchTri(g, primId);
+    PosBuf      pb  = PosBuf(g.vertexAddress);
+    const vec3 p0 = vec3(pb.p[idx.x * 3u + 0u], pb.p[idx.x * 3u + 1u], pb.p[idx.x * 3u + 2u]);
+    const vec3 p1 = vec3(pb.p[idx.y * 3u + 0u], pb.p[idx.y * 3u + 1u], pb.p[idx.y * 3u + 2u]);
+    const vec3 p2 = vec3(pb.p[idx.z * 3u + 0u], pb.p[idx.z * 3u + 1u], pb.p[idx.z * 3u + 2u]);
+    const vec3 e1 = mat3(objToWorld) * (p1 - p0);
+    const vec3 e2 = mat3(objToWorld) * (p2 - p0);
+    const float g11 = dot(e1, e1), g12 = dot(e1, e2), g22 = dot(e2, e2);
+    const float det = g11 * g22 - g12 * g12;
+    if (det <= 1e-24) return;
+    const vec3 n = normalize(cross(e1, e2));
+    // Across the plane of incidence, then along it. Head on there is no such
+    // plane and any pair of in-plane axes is the circle.
+    vec3 across = cross(n, dir);
+    const float al = length(across);
+    across = (al > 1e-4) ? across / al : e1 * inversesqrt(g11);
+    const vec3 along = cross(n, across);
+    // 1/16: the samplers' anisotropy. Past it the long axis is cut short, as
+    // the rasterizer's is.
+    const vec3 axA = across * width;
+    const vec3 axB = along * (width / max(abs(dot(n, dir)), 0.0625));
+    const vec2 u0 = gfetchUv(g, idx.x);
+    const vec2 d1 = gfetchUv(g, idx.y) - u0;
+    const vec2 d2 = gfetchUv(g, idx.z) - u0;
+    // A world vector in the triangle's plane is a e1 + b e2; its UV step is
+    // a d1 + b d2 (the edges' Gram system gives a and b).
+    const vec2 rA = vec2(dot(axA, e1), dot(axA, e2));
+    const vec2 rB = vec2(dot(axB, e1), dot(axB, e2));
+    duvA = ((rA.x * g22 - rA.y * g12) * d1 + (rA.y * g11 - rA.x * g12) * d2) / det;
+    duvB = ((rB.x * g22 - rB.y * g12) * d1 + (rB.y * g11 - rB.x * g12) * d2) / det;
+}
+
+// A material texture's colour at a hit, filtered over the ray's footprint
+// (hitUvFootprint). The alpha tests below stay on the finest mip: a cutout's
+// outline is not this function's to change.
+vec3 hitTex(int texIndex, mat3 uvXform, vec2 uv, vec3 fallback, vec2 duvA, vec2 duvB) {
+    if (texIndex < 0) return fallback;
+    const int  i = clamp(texIndex, 0, int(kMaxMaterialTextures) - 1);
+    const mat2 J = mat2(uvXform);
+    return fallback * textureGrad(albedoMaps[nonuniformEXT(i)], (uvXform * vec3(uv, 1.0)).xy, J * duvA, J * duvB).rgb;
+}
+
 // Sample a bindless material texture at a reflection-hit UV (compute has no
 // derivatives → explicit mip 0). texIndex < 0 → return `fallback` unchanged.
 vec3 hitTex(int texIndex, mat3 uvXform, vec2 uv, vec3 fallback) {
@@ -392,6 +452,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     // has `o` in the air by the time it misses; this stays under the water,
     // which is where murkAmbient has to measure the depth from.
     vec3  legOrigin  = origin;
+    // How far the eye is from legOrigin along the path: with the distance run
+    // on the leg, the length a pixel's cone has to widen over (hitUvFootprint).
+    float legEyeDist = length(origin - gPrimaryOrigin);
     float curMissLod = missLod;
     gTraceHitT = -1.0;
     gTraceHitMoved = false;
@@ -438,6 +501,22 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             continue;
         }
 
+        // The hit's textures are read over the pixel's footprint there. Every
+        // hit took the finest mip (no derivatives in a compute shader), which a
+        // reflection's blur and history hide and clear glass does not: granite
+        // guard stones stood as salt and pepper behind a windscreen, beside the
+        // same stones smooth where the glass ends.
+        const float hitEyeDist = legEyeDist + length(o + d * tHit - legOrigin);
+        vec2 hitDuvA = vec2(0.0), hitDuvB = vec2(0.0);
+        if (hm.albedoTexIndex >= 0 || hm.roughnessTexIndex >= 0 || hm.metalnessTexIndex >= 0 || hm.emissiveTexIndex >= 0) {
+            // One pixel across: an angle from the eye, or a width under a
+            // parallel projection (projInverse[1][1] is half the view's
+            // height either way, as a tangent or in metres).
+            const float pix = 2.0 * abs(cam.projInverse[1][1]) / float(max(pc.height, 1u));
+            hitUvFootprint(hitId, primId, rayQueryGetIntersectionObjectToWorldEXT(rq, true), d,
+                           (cam.camAux.x > 0.5) ? pix : pix * hitEyeDist, hitDuvA, hitDuvB);
+        }
+
         // Cutout (MASK): the query runs force-opaque, so alpha-test here —
         // sub-cutoff texels pass through (mirrors gbuffer.frag / shadow_anyhit).
         // Without this a masked plane behind glass shaded fully opaque,
@@ -481,7 +560,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             } else {
                 const float t    = clamp(hm.transmission, 0.0, 1.0);
                 const vec3  tint = isFlatAlphaBlend(hm.ior) ? vec3(1.0)
-                                                            : hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
+                                                            : hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo, hitDuvA, hitDuvB);
                 hitAlpha = cov * (1.0 - t);
                 hitPass  = vec3(1.0 - cov) + cov * t * tint;
             }
@@ -493,7 +572,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             }
         }
 
-        const vec3 hAlbedo = hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
+        const vec3 hAlbedo = hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo, hitDuvA, hitDuvB);
         if (hm.roughness < 0.0) {// unlit hit
             radiance += tput * hitAlpha * hAlbedo;
             if (!passThrough) break;
@@ -507,16 +586,17 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         if (dot(hitN, hitV) < 0.0) hitN = -hitN;
         float hRough = hm.roughness;
         float hMetal = hm.metalness;
+        const mat2 rmJ = mat2(hm.uvTransformRoughMetal);
         if (hm.roughnessTexIndex >= 0)
-            hRough *= textureLod(albedoMaps[nonuniformEXT(clamp(hm.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1))],
-                                 (hm.uvTransformRoughMetal * vec3(hitUv, 1.0)).xy, 0.0).g;
+            hRough *= textureGrad(albedoMaps[nonuniformEXT(clamp(hm.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1))],
+                                  (hm.uvTransformRoughMetal * vec3(hitUv, 1.0)).xy, rmJ * hitDuvA, rmJ * hitDuvB).g;
         if (hm.metalnessTexIndex >= 0)
-            hMetal *= textureLod(albedoMaps[nonuniformEXT(clamp(hm.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1))],
-                                 (hm.uvTransformRoughMetal * vec3(hitUv, 1.0)).xy, 0.0).b;
+            hMetal *= textureGrad(albedoMaps[nonuniformEXT(clamp(hm.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1))],
+                                  (hm.uvTransformRoughMetal * vec3(hitUv, 1.0)).xy, rmJ * hitDuvA, rmJ * hitDuvB).b;
         hRough = clamp(hRough, 0.04, 1.0);
         hMetal = clamp(hMetal, 0.0, 1.0);
         const vec3 hEmissive = hitTex(hm.emissiveTexIndex, hm.uvTransformEmissive, hitUv,
-                                      hm.emissive * hm.emissiveIntensity);
+                                      hm.emissive * hm.emissiveIntensity, hitDuvA, hitDuvB);
         const vec3 hitP = o + d * tHit;
         // First shaded (non-cutout, non-transparent) hit = the visible reflected
         // content; its distance sizes the denoiser's gloss-blur footprint, and its
@@ -685,6 +765,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         if (dot(d, hitN) <= 0.0) d = hitR;
         o          = hitP + hitN * SHADOW_EPS;
         legOrigin  = o;
+        legEyeDist = hitEyeDist;
         curMissLod = hRough * maxLod;
     }
     // STEP budget exhausted — the ray threaded REFL_MAX_STEPS surfaces without

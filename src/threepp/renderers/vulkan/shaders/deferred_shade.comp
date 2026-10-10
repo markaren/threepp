@@ -152,6 +152,7 @@ layout(buffer_reference, scalar) readonly buffer NormalBuf { float n[]; };
 layout(buffer_reference, scalar) readonly buffer IndexBuf  { uint  i[]; };
 layout(buffer_reference, scalar) readonly buffer UvBuf     { float u[]; };
 layout(buffer_reference, scalar) readonly buffer PackedAttrBuf { uint w[]; };
+layout(buffer_reference, scalar) readonly buffer PosBuf    { float p[]; };// GeometryDesc.vertexAddress: float xyz, the buffer the BLAS is built over
 struct GeometryDesc {
     uint64_t vertexAddress;
     uint64_t normalAddress;
