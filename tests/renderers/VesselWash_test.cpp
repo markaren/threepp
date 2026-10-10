@@ -214,4 +214,14 @@ TEST_CASE("VesselWash: a hull's weight from her footprint alone", "[marine]") {
     VesselWash::Hull cat = mono;
     cat.hullOffset = 3.f;
     for (const auto& s : VesselWash::footprintStrips(cat)) CHECK(std::abs(s.z) == Catch::Approx(3.f));
+
+    // A hull that sits deep is a wider load: her short waves go, her weight does not.
+    VesselWash::Hull deep = mono;
+    deep.draft = 2.5f;
+    const auto deepStrips = VesselWash::footprintStrips(deep);
+    REQUIRE(deepStrips.size() == strips.size());
+    for (size_t i = 0; i < strips.size(); ++i) {
+        CHECK(deepStrips[i].radius == Catch::Approx(std::hypot(strips[i].radius, 2.f)));
+        CHECK(deepStrips[i].share == Catch::Approx(strips[i].share));
+    }
 }

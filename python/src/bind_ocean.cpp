@@ -524,7 +524,7 @@ namespace threepp_py {
                                "(examples/rigs/usv_rig.py Wash). Clear the ocean's sources once a frame "
                                "(ocean.clear_wake_sources()), then update() every vessel's wash.")
                 .def(py::init([](DisplacedMesh& ocean, uint32_t patch, float length, float half_length,
-                                 float half_beam, float mass, float centre, float hull_offset,
+                                 float half_beam, float mass, float centre, float hull_offset, float draft,
                                  const std::vector<std::array<float, 5>>& strips, float size, float ripple_size) {
                          if (patch >= DisplacedMesh::kMaxWakePatches) throw py::index_error("wake patch index out of range");
                          VesselWash::Hull h;
@@ -534,19 +534,22 @@ namespace threepp_py {
                          h.mass       = mass;
                          h.centre     = centre;
                          h.hullOffset = hull_offset;
+                         h.draft      = draft;
                          for (const auto& s : strips) h.strips.push_back({s[0], s[1], s[2], s[3], s[4]});
                          return std::make_unique<VesselWash>(ocean, patch, std::move(h), size, ripple_size);
                      }),
                      py::arg("ocean"), py::arg("patch"), py::kw_only(), py::arg("length"), py::arg("half_length"),
                      py::arg("half_beam"), py::arg("mass"), py::arg("centre") = 0.0f, py::arg("hull_offset") = 0.0f,
-                     py::arg("strips") = std::vector<std::array<float, 5>>{}, py::arg("size") = 0.0f,
+                     py::arg("draft") = 0.0f, py::arg("strips") = std::vector<std::array<float, 5>>{},
+                     py::arg("size") = 0.0f,
                      py::arg("ripple_size") = 0.0f, py::keep_alive<1, 2>(),
                      "`patch` is the patch of the ocean's wake field that is hers. length: overall (m). "
                      "half_length, half_beam, centre: her footprint at the water and how far ahead of her "
                      "origin its centre lies. hull_offset: a catamaran's hulls lie this far to either side "
                      "(0 = one hull). mass (kg) is what makes her waves. strips: her weight along her hulls "
                      "as (x ahead, z to starboard, share, radius, half length); empty = laid out from the "
-                     "footprint. size: her patch's side (0 = 20 lengths, 30..120 m). ripple_size: the window "
+                     "footprint, as a load that reaches `draft` m down (0 = resting on the surface: a deep "
+                     "hull then throws short steep waves no ship makes). size: her patch's side (0 = 20 lengths, 30..120 m). ripple_size: the window "
                      "her waves are kept in (0 = 10 lengths, at least 16 m).")
                 .def_readwrite("air", &VesselWash::air, "Scales the air her propulsors take down (1 = as computed).")
                 .def_readwrite("height_mask", &VesselWash::heightMask,

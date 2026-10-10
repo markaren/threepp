@@ -94,6 +94,11 @@ namespace threepp::marine {
             // centreline; 0 = one hull.
             float hullOffset = 0.f;
             float mass       = 0.f;// kg: what makes her waves
+            // How deep she sits (m), for footprintStrips(): a hull's volume
+            // lies under the water, not on it, and makes little of the waves
+            // that are shorter than she is deep. 0 = her weight rests on the
+            // surface.
+            float draft      = 0.f;
             // Her weight along her hulls. Empty = laid out from the footprint
             // (footprintStrips()); a vessel that has her sectional areas
             // gives the real thing.
@@ -185,6 +190,13 @@ namespace threepp::marine {
         // to its breadth. ASSUMED: an even draft along her, and a half
         // section whose load sits 0.42 of its breadth off the centreline
         // (between a box's 0.5 and a wedge's 0.33).
+        // The field's waves are those of a load ON the surface. A hull
+        // displaces water down to her draft T, and the waves a source at depth
+        // z makes fall off as exp(-k z): averaged over her depth that is
+        // (1 - exp(-k T)) / (k T), a third at k T = 2.5. A wider load loses its
+        // short waves the same way, so each stretch's radius grows to
+        // sqrt(r^2 + (0.8 T)^2), which gives that third at k T = 2.5. Without
+        // it a deep hull throws a fan of short steep waves no ship makes.
         [[nodiscard]] static std::vector<WeightStrip> footprintStrips(const Hull& hull);
 
     private:

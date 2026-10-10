@@ -63,8 +63,9 @@ std::vector<VesselWash::WeightStrip> VesselWash::footprintStrips(const Hull& hul
         if (b[k] < 1e-4f * total) continue;
         const float x = hull.centre - hull.halfLength + (float(k) + 0.5f) * stretch;
         const float z = twin ? hull.hullOffset : 0.42f * b[k];
+        const float r = std::hypot(0.41f * b[k], 0.8f * hull.draft);
         for (const float side : {1.f, -1.f}) {
-            out.push_back({x, side * z, 0.5f * b[k] / total, 0.41f * b[k], 0.5f * stretch});
+            out.push_back({x, side * z, 0.5f * b[k] / total, r, 0.5f * stretch});
         }
     }
     return out;
