@@ -1022,12 +1022,14 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
             // "washed, detail-destroyed" look over e.g. a watch dial.
             const vec3 dT = -V;// straight-through (net-zero thin-shell bend)
             {
-                gThinPaneHits = true;// what the pane shows is lit as seen beside it
+                gThinPaneHits   = true;// what the pane shows is lit as seen beside it
+                gTraceAlongView = true;// ...and by the lamps of its own cluster cell
                 const vec3 behind = traceRadiance(P - N * SHADOW_EPS, dT, doShadows, maxLod, missLod, seed,
                                                   /*cheapHits=*/false,// refracted content is sharp
                                                   /*probeHitFill=*/false,// transmitted content: the pane's own rule (gThinPaneHits)
                                                   /*envInt=*/1.0);// transmitted, not IBL
-                gThinPaneHits = false;
+                gThinPaneHits   = false;
+                gTraceAlongView = false;
                 vec3 tint = albedo;
                 if (pm.attenuationDistance > 0.0 && pm.thickness > 0.0)
                     tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(pm.thickness / pm.attenuationDistance));

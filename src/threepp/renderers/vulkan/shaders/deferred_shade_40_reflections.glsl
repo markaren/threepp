@@ -262,6 +262,12 @@ float gEnvFillVis = 1.0;
 // Solid glass, the blend behind-views and the water's bottom keep the env fill.
 bool gThinPaneHits = false;
 
+// Set by the callers whose trace runs along this pixel's own view ray (a thin
+// pane's straight-through leg, the additive and alpha-blend behind-views):
+// its first-leg hits are lit by the lamps of their own cluster cell
+// (gHitClusterCell in deferred_shade_30_gi_gather.glsl says why).
+bool gTraceAlongView = false;
+
 // The traced share of that fill: kPaneFillRays cosine-distributed giRadiance
 // rays from the hit (sky where they escape, the sunlit bounce and the probe
 // field where they land). `open` = the share that escaped.
@@ -630,6 +636,12 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // a glow-only emissive (GeometryDesc bit 6) is in no emitter list, so it
         // keeps all of it here.
         const float hEmScale = ((geoms[hitId].flags & 64u) != 0u) ? 1.0 : gReflEmitterScale;
+        // Along the view ray and before any bounce the hit is in this pixel's
+        // column of cluster cells, at its own depth (a perspective view's: the
+        // grid's slices are view-space depth from the eye).
+        if (gTraceAlongView && b == 0 && cam.camAux.x < 0.5)
+            gHitClusterCell = clusterCellBase(ivec2(gl_GlobalInvocationID.xy),
+                                              max(dot(hitP - gPrimaryOrigin, cam.camAux.yzw), 0.0));
         radiance += tput * hitAlpha * shadeDiffuseDirect(hitP, hitN, hitV, hAlbedo, hRough, hMetal,
                                               hEmissive * hEmScale,
                                               doShadows, hitDiffInd,
@@ -638,6 +650,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                                               hm.iridescence, hm.iridescenceIOR, hm.iridescenceThicknessNm, seed,
                                               /*addEmissive=*/true,// reflected hit: no per-pixel reservoir → coherent emissiveNEE
                                               /*cheapHit=*/cheapHits);// caller decides (see header comment)
+        gHitClusterCell = kNoClusterCell;
 
         // Pass-through hit composited — carry the remainder on along the same
         // ray. No specular continuation for the layer itself (its weighted

@@ -2023,10 +2023,12 @@ void main() {
             // (transmission>1 is the additive marker).
             const float strength = clamp(pm.transmission - 1.0, 0.0, 1.0);
             gEnvFillVis = probeEnvFillVis(worldPos, N, maxLod);// surface sky visibility for the env hit fill
+            gTraceAlongView = true;// what is behind is lit by its own cluster cell's lamps
             const vec3  behind   = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed,
                                                  /*cheapHits=*/false,// straight into lit, unblurred
                                                  /*probeHitFill=*/false,// content behind a blend surface
                                                  /*envInt=*/1.0);// TRANSMITTED content, not this surface's IBL
+            gTraceAlongView = false;
             lit = behind + lit * strength;
         } else if (pm.transmission > 0.0) {
             if (isFlatAlphaBlend(pm.ior)) {
@@ -2037,10 +2039,12 @@ void main() {
                 // opaque geometry shaded as PBR; overlapping transparent isn't sorted.)
                 const float opacity = 1.0 - clamp(pm.transmission, 0.0, 1.0);
                 gEnvFillVis = probeEnvFillVis(worldPos, N, maxLod);// surface sky visibility for the env hit fill
+                gTraceAlongView = true;// what is behind is lit by its own cluster cell's lamps
                 const vec3  behind  = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed,
                                                     /*cheapHits=*/false,// straight into lit, unblurred
                                                     /*probeHitFill=*/false,// content behind a blend surface
                                                     /*envInt=*/1.0);// TRANSMITTED content, not this surface's IBL
+                gTraceAlongView = false;
                 lit = mix(behind, lit, opacity);
             } else {
                 // REAL glass (any real ior, 1.0 included). ONE sharp Fresnel reflect+refract

@@ -131,6 +131,27 @@ float rectFormFactor(vec3 N, vec3 P, vec3 c0, vec3 c1, vec3 c2, vec3 c3) {
 // denoise recombine adds U × R̃. Rect lights + emissive NEE stay inline.
 bool gSkipAnalyticDirect = false;
 
+// The cluster cell (clusterCellBase) of the point being shaded, or
+// kNoClusterCell. With a cell, the point and spot lights are the cell's list:
+// every lamp of the scene that reaches it, as the primary shade has them.
+// Without one they are the lights UBO's eight strongest of each type.
+//
+// Set by traceRadiance for the first-leg hits of a trace that runs ALONG THIS
+// PIXEL'S VIEW RAY (gTraceAlongView: a thin pane's straight-through leg, the
+// blend behind-views). Such a hit stands inside the frustum the grid is built
+// over, in this pixel's own column of cells, so the cell at its depth is as
+// right for it as the pane's cell is for the pane. A reflected hit can stand
+// anywhere and keeps the UBO's lists: cells for the ones that happen to be on
+// screen would light one half of a mirrored quay by all its lamps and the
+// half past the picture's edge by eight.
+//
+// The case: the twin at night from the driver's seat. The scene has far more
+// than eight spot lights and the car's own head lamps are not among the eight
+// strongest, so the pool they throw on the road was there with the windscreen
+// taken out and gone with it in.
+const uint kNoClusterCell = 0xFFFFFFFFu;
+uint gHitClusterCell = kNoClusterCell;
+
 vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
                         float metalness, vec3 emissive, bool doShadows, vec3 diffuseIndirect,
                         vec3 sheenColor, float sheenRoughness,
@@ -173,6 +194,9 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
     const uint nLights = lights.dirCount + lights.pointCount + lights.spotCount;
     const bool pickOne = cheapHit && (nLights > 8u);
     if (pickOne) pickIdx = pickAnalyticLight(P, seed, wPick);
+    // The cell's lights in place of the UBO's point and spot lists (see
+    // gHitClusterCell). Never with the one-light pick: that picks in the UBO.
+    const bool cellLights = gHitClusterCell != kNoClusterCell && !pickOne && !gSkipAnalyticDirect;
 
     for (uint i = 0u; !gSkipAnalyticDirect && i < lights.dirCount; ++i) {
         if (pickOne && i != pickIdx) continue;
@@ -196,7 +220,7 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         lit += evalLight(N, V, L, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
                * lights.dirLights[i].color * (vis * caus * leg);
     }
-    for (uint i = 0u; !gSkipAnalyticDirect && i < lights.pointCount; ++i) {
+    for (uint i = 0u; !gSkipAnalyticDirect && !cellLights && i < lights.pointCount; ++i) {
         if (pickOne && (lights.dirCount + i) != pickIdx) continue;
         vec3        toL  = lights.pointLights[i].position - P;
         const float dist = length(toL);
@@ -217,7 +241,7 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         lit += evalLight(N, V, toL, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
                * lights.pointLights[i].color * atten * vis;
     }
-    for (uint i = 0u; !gSkipAnalyticDirect && i < lights.spotCount; ++i) {
+    for (uint i = 0u; !gSkipAnalyticDirect && !cellLights && i < lights.spotCount; ++i) {
         if (pickOne && (lights.dirCount + lights.pointCount + i) != pickIdx) continue;
         vec3        toL  = lights.spotLights[i].position - P;
         const float dist = length(toL);
@@ -242,6 +266,35 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         atten *= spotAtten;
         lit += evalLight(N, V, toL, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
                * lights.spotLights[i].color * atten * vis;
+    }
+    // The same two loops over the cell's unified records (a point light carries
+    // the cone sentinel, its spotAtten is exactly 1). One shadow ray for a
+    // light that reaches the point, none for one that does not.
+    const uint cellCount = (cellLights && pc.clusterLightCount > 0u)
+                               ? min(clusterGrid[gHitClusterCell], kClusterMaxPerCell) : 0u;
+    for (uint ci = 0u; ci < cellCount; ++ci) {
+        const uint  li   = min(clusterGrid[gHitClusterCell + 1u + ci], pc.clusterLightCount - 1u);
+        vec3        toL  = clusterLights[li].position - P;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        if (dot(N, toL) <= 0.0) continue;
+        const float spotAtten = smoothstep(clusterLights[li].cosAngleOuter, clusterLights[li].cosAngleInner,
+                                           dot(-toL, clusterLights[li].direction));
+        if (spotAtten <= 0.0) continue;
+        float atten = spotAtten / max(distFalloff(dist, clusterLights[li].decay), 0.01);
+        const float range = clusterLights[li].range;
+        if (range > 0.0) {
+            const float t  = dist / range;
+            const float t4 = t * t * t * t;
+            const float wnd = max(1.0 - t4, 0.0);
+            atten *= wnd * wnd;
+        }
+        if (atten <= 0.0) continue;
+        const float vis = doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
+        if (vis <= 0.0) continue;
+        lit += evalLight(N, V, toL, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
+               * clusterLights[li].color * atten * vis;
     }
 
     // Rect area lights (analytic, representative-point — Karis 2013). RectAreaLights are
