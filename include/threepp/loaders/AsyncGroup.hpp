@@ -21,6 +21,11 @@ namespace threepp {
 
         [[nodiscard]] bool isLoading() const;
 
+        // True once the loader threw or returned nothing. The reason is printed
+        // when it happens; the group then stays empty, isLoaded() stays false,
+        // and pending onLoaded callbacks are dropped rather than left waiting.
+        [[nodiscard]] bool hasFailed() const;
+
         void onLoaded(LoadedCallback cb);
 
         void updateMatrixWorld(bool force = false) override;

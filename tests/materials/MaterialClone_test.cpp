@@ -292,7 +292,6 @@ namespace {
         m.clippingPlanes = {Plane(Vector3(0, 1, 0), 2.5f)};
         m.clipIntersection = true;
         m.clipShadows = true;
-        m.clipping = true;
 
         m.shadowSide = Side::Back;
         m.colorWrite = false;
@@ -357,7 +356,6 @@ namespace {
         }
         CHECK(a.clipIntersection == b.clipIntersection);
         CHECK(a.clipShadows == b.clipShadows);
-        CHECK(a.clipping == b.clipping);
 
         CHECK(a.shadowSide == b.shadowSide);
         CHECK(a.colorWrite == b.colorWrite);

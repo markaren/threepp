@@ -569,6 +569,7 @@ set(sources
         "threepp/loaders/SogLoader.cpp"
         "threepp/loaders/SplatLoader.cpp"
         "threepp/loaders/SVGLoader.cpp"
+        "threepp/loaders/CubeTextureLoader.cpp"
         "threepp/loaders/TextureLoader.cpp"
         "threepp/loaders/URDFLoader.cpp"
 

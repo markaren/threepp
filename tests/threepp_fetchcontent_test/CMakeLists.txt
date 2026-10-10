@@ -11,7 +11,7 @@ set(THREEPP_BUILD_EXAMPLES OFF)
 FetchContent_Declare(
         threepp
         GIT_REPOSITORY https://github.com/markaren/threepp.git
-        GIT_TAG 2026-06-03
+        GIT_TAG 2026-09-28
         GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(threepp)
@@ -26,7 +26,7 @@ if (DEFINED EMSCRIPTEN)
     set(LINK_FLAGS " --bind -sUSE_GLFW=3 -sGL_DEBUG=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 \
     -sFULL_ES3 -sASSERTIONS -sALLOW_MEMORY_GROWTH -sWASM=1")
 
-    set_target_properties("demo"
+    set_target_properties(threepp_demo
             PROPERTIES SUFFIX ".html"
             LINK_FLAGS "${LINK_FLAGS}"
     )

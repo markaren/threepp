@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "threepp/loaders/OBJLoader.hpp"
+#include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Mesh.hpp"
 
 #include <filesystem>
@@ -217,4 +218,69 @@ TEST_CASE("OBJLoader resolves negative face indices relative to the end") {
         return g->children.front()->as<Mesh>()->geometry()->getAttribute<float>("position")->array();
     };
     CHECK(posOf(relative) == posOf(absolute));
+}
+
+TEST_CASE("OBJLoader turns l records into line segments") {
+
+    // A four-vertex polyline is three segments; LineSegments wants both
+    // endpoints of each, so six positions. `l` records used to be skipped.
+    const std::string obj =
+            "v 0.0 0.0 0.0\n"
+            "v 1.0 0.0 0.0\n"
+            "v 1.0 1.0 0.0\n"
+            "v 0.0 1.0 0.0\n"
+            "l 1 2 3 4\n";
+
+    auto group = loadObj("threepp_obj_lines.obj", obj);
+    REQUIRE(group);
+    REQUIRE(group->children.size() == 1);
+    auto* lines = group->children.front()->as<LineSegments>();
+    REQUIRE(lines);
+    auto* position = lines->geometry()->getAttribute<float>("position");
+    REQUIRE(position);
+    REQUIRE(position->count() == 6);
+    // segment 0: v1 -> v2, segment 1: v2 -> v3, segment 2: v3 -> v4
+    CHECK(position->getX(1) == 1.f);
+    CHECK(position->getX(2) == 1.f);
+    CHECK(position->getY(3) == 1.f);
+    CHECK(position->getX(5) == 0.f);
+    CHECK(position->getY(5) == 1.f);
+    CHECK(lines->geometry()->getAttribute<float>("uv") == nullptr);
+}
+
+TEST_CASE("OBJLoader keeps the texture coordinates of an l record") {
+
+    const std::string obj =
+            "v 0.0 0.0 0.0\n"
+            "v 1.0 0.0 0.0\n"
+            "v 1.0 1.0 0.0\n"
+            "vt 0.0 0.0\n"
+            "vt 0.5 0.0\n"
+            "vt 1.0 0.0\n"
+            "l 1/1 2/2 3/3\n";
+
+    auto group = loadObj("threepp_obj_lines_uv.obj", obj);
+    REQUIRE(group);
+    REQUIRE(group->children.size() == 1);
+    auto* lines = group->children.front()->as<LineSegments>();
+    REQUIRE(lines);
+    auto* uv = lines->geometry()->getAttribute<float>("uv");
+    REQUIRE(uv);
+    REQUIRE(uv->count() == 4);
+    CHECK(uv->getX(1) == 0.5f);
+    CHECK(uv->getX(2) == 0.5f);
+    CHECK(uv->getX(3) == 1.f);
+}
+
+TEST_CASE("OBJLoader drops an l record with an out-of-range index") {
+
+    const std::string obj =
+            "v 0.0 0.0 0.0\n"
+            "v 1.0 0.0 0.0\n"
+            "l 1 2 9\n";
+
+    auto group = loadObj("threepp_obj_lines_bad.obj", obj);
+    REQUIRE(group);
+    // The whole record is dropped, and an object with no geometry is skipped.
+    CHECK(group->children.empty());
 }

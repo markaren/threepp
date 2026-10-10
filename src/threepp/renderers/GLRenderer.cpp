@@ -181,7 +181,7 @@ struct GLRenderer::Impl {
           _emptyScene(std::make_unique<Scene>()),
           onMaterialDispose(this),
           _size(size),
-          _currentDrawBuffers(GL_BACK),
+          _currentDrawBuffers{GL_BACK},
           bindingStates(attributes),
           geometries(attributes, _info, bindingStates),
           clipping(properties),
@@ -993,7 +993,12 @@ struct GLRenderer::Impl {
 
         auto& uniforms = *materialProperties->uniforms;
 
-        if ((!material->is<ShaderMaterial>() && !material->is<RawShaderMaterial>()) || material->clipping) {
+        // `clipping` lives on the MaterialWithClipping mixin (ShaderMaterial).
+        // The base Material used to carry a second, shadowed copy that only
+        // this test read, so a shader material asking for clipping never got
+        // its planes.
+        const auto* clipMat = material->as<MaterialWithClipping>();
+        if ((!material->is<ShaderMaterial>() && !material->is<RawShaderMaterial>()) || (clipMat && clipMat->clipping)) {
 
             uniforms["clippingPlanes"] = clipping.uniform;
         }

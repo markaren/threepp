@@ -2,6 +2,8 @@
 #include "threepp/loaders/AsyncGroup.hpp"
 
 #include <atomic>
+#include <exception>
+#include <iostream>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -23,7 +25,11 @@ namespace {
         std::shared_ptr<Group> result;
         try {
             result = ctx->fn();
-        } catch (...) {}
+        } catch (const std::exception& e) {
+            std::cerr << "[AsyncGroup] load failed: " << e.what() << std::endl;
+        } catch (...) {
+            std::cerr << "[AsyncGroup] load failed: unknown exception" << std::endl;
+        }
 
         if (auto ag = ctx->weak.lock()) {
             ag->deliverResult(std::move(result));
@@ -39,6 +45,7 @@ struct AsyncGroup::Impl {
     std::atomic<bool> hasPending{false};
     std::atomic<bool> loaded{false};
     std::atomic<bool> loading{false};
+    std::atomic<bool> failed{false};
 };
 
 AsyncGroup::AsyncGroup(): pimpl_(std::make_unique<Impl>()) {}
@@ -58,12 +65,22 @@ bool AsyncGroup::isLoading() const {
     return pimpl_->loading.load(std::memory_order_acquire);
 }
 
+bool AsyncGroup::hasFailed() const {
+    return pimpl_->failed.load(std::memory_order_acquire);
+}
+
 void AsyncGroup::deliverResult(std::shared_ptr<Group> result) {
     std::lock_guard lock(pimpl_->mutex);
     if (result) {
         pimpl_->pendingChildren.push_back(std::move(result));
-        pimpl_->hasPending.store(true, std::memory_order_release);
+    } else {
+        // The loader threw (printed by executeLoad) or returned nothing, which
+        // every synchronous loader does for a missing file, after printing why.
+        pimpl_->failed.store(true, std::memory_order_release);
     }
+    // Settled either way: updateMatrixWorld adopts the children, or drops the
+    // callbacks of a failed load, on the main thread.
+    pimpl_->hasPending.store(true, std::memory_order_release);
     pimpl_->loading = false;
 }
 
@@ -74,7 +91,7 @@ void AsyncGroup::setLoading(bool value) {
 void AsyncGroup::onLoaded(LoadedCallback cb) {
     if (pimpl_->loaded) {
         cb(*this);
-    } else {
+    } else if (!pimpl_->failed) {
         pimpl_->callbacks.push_back(std::move(cb));
     }
 }
@@ -89,13 +106,19 @@ void AsyncGroup::updateMatrixWorld(bool force) {
             this->add(child);
         }
         pimpl_->pendingChildren.clear();
-        pimpl_->loaded = true;
         pimpl_->hasPending.store(false, std::memory_order_release);
 
-        for (auto& cb : pimpl_->callbacks) {
-            cb(*this);
+        if (pimpl_->failed) {
+            // Nothing arrived. onLoaded promises a loaded group, so the
+            // callbacks are released, not fired; isLoaded() stays false.
+            pimpl_->callbacks.clear();
+        } else {
+            pimpl_->loaded = true;
+            for (auto& cb : pimpl_->callbacks) {
+                cb(*this);
+            }
+            pimpl_->callbacks.clear();
         }
-        pimpl_->callbacks.clear();
     }
     Group::updateMatrixWorld(force);
 }

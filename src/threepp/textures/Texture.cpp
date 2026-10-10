@@ -223,7 +223,6 @@ Texture& Texture::copy(const Texture& source) {
     this->matrix.copy(source.matrix);
 
     this->generateMipmaps = source.generateMipmaps;
-    this->premultiplyAlpha = source.premultiplyAlpha;
     this->unpackAlignment = source.unpackAlignment;
     this->colorSpace = source.colorSpace;
 

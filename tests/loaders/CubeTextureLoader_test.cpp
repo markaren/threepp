@@ -65,3 +65,37 @@ TEST_CASE("CubeTextureLoader loads six real faces") {
         CHECK(tex->unpackAlignment == 1);
     }
 }
+
+TEST_CASE("CubeTextureLoader decides the format for the whole set, not per face") {
+
+    const auto dir = cubeDir();
+    const auto png = std::filesystem::path(DATA_FOLDER) / "textures" / "checker.png";
+    if (!std::filesystem::exists(dir / "posx.jpg") || !std::filesystem::exists(png)) {
+        SUCCEED("cube asset not present; nothing to load");
+        return;
+    }
+
+    CubeTextureLoader loader;
+
+    // Five JPEG faces and one PNG. The format used to be whatever the LAST
+    // face was, while each face was decoded by its own extension, so a
+    // mixed set uploaded 3-channel data under an RGBA format (or the other
+    // way round). A set that is not all JPEG is RGBA throughout.
+    const auto tex = loader.load({dir / "posx.jpg", dir / "negx.jpg",
+                                  dir / "posy.jpg", dir / "negy.jpg",
+                                  dir / "posz.jpg", png});
+    REQUIRE(tex != nullptr);
+    CHECK(tex->format == Format::RGBA);
+    for (const auto& img : tex->images()) {
+        CHECK(img.data().size() == static_cast<size_t>(img.width()) * img.height() * 4u);
+    }
+
+    const auto tex2 = loader.load({png, dir / "negx.jpg",
+                                   dir / "posy.jpg", dir / "negy.jpg",
+                                   dir / "posz.jpg", dir / "negz.jpg"});
+    REQUIRE(tex2 != nullptr);
+    CHECK(tex2->format == Format::RGBA);
+    for (const auto& img : tex2->images()) {
+        CHECK(img.data().size() == static_cast<size_t>(img.width()) * img.height() * 4u);
+    }
+}

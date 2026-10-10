@@ -1,5 +1,5 @@
 
-#if defined(_MSVC_VER)
+#if defined(_MSC_VER)
 #pragma warning(disable : 4312)
 #endif
 

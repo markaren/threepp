@@ -3,6 +3,9 @@
 
 #include "threepp/core/AttributeView.hpp"
 #include "threepp/core/BufferAttribute.hpp"
+#include "threepp/core/BufferGeometry.hpp"
+#include "threepp/core/InterleavedBufferAttribute.hpp"
+#include "threepp/objects/Sprite.hpp"
 #include "threepp/math/Matrix4.hpp"
 
 #include <cstdint>
@@ -208,4 +211,55 @@ TEST_CASE("FloatAttributeView of a null attribute is empty") {
 
     CHECK_FALSE(static_cast<bool>(view));
     CHECK(view.size() == 0);
+}
+
+TEST_CASE("InterleavedBufferAttribute clones to a de-interleaved attribute with its data") {
+
+    // Two vertices of (x, y, z, u, v), stride 5.
+    auto buffer = InterleavedBuffer::create(std::vector<float>{0, 1, 2, 10, 11,
+                                                               3, 4, 5, 12, 13},
+                                            5);
+    InterleavedBufferAttribute position(buffer, 3, 0, false);
+    InterleavedBufferAttribute uv(buffer, 2, 3, false);
+
+    REQUIRE(position.count() == 2);
+
+    // The inherited clone copied the (empty) array_ and a count of 0.
+    auto p = position.clone();
+    REQUIRE(p->count() == 2);
+    CHECK(p->itemSize() == 3);
+    CHECK(p->getX(0) == 0);
+    CHECK(p->getZ(0) == 2);
+    CHECK(p->getX(1) == 3);
+    CHECK(p->getZ(1) == 5);
+
+    auto u = uv.cloneUntyped();
+    REQUIRE(u->count() == 2);
+    auto* uf = dynamic_cast<TypedBufferAttribute<float>*>(u.get());
+    REQUIRE(uf);
+    CHECK(uf->getX(0) == 10);
+    CHECK(uf->getY(1) == 13);
+
+    // The clone owns its data: writing to it leaves the shared buffer alone.
+    p->setX(0, 99.f);
+    CHECK(position.getX(0) == 0);
+}
+
+TEST_CASE("A cloned Sprite geometry keeps its corners") {
+
+    auto sprite = Sprite::create();
+    auto geometry = sprite->geometry()->clone();
+
+    auto* position = geometry->getAttribute<float>("position");
+    REQUIRE(position);
+    REQUIRE(position->count() == 4);
+    CHECK(position->getX(0) == -0.5f);
+    CHECK(position->getX(1) == 0.5f);
+    CHECK(position->getY(2) == 0.5f);
+
+    auto* uv = geometry->getAttribute<float>("uv");
+    REQUIRE(uv);
+    REQUIRE(uv->count() == 4);
+    CHECK(uv->getX(1) == 1.f);
+    CHECK(uv->getY(2) == 1.f);
 }

@@ -334,6 +334,53 @@ namespace {
                 }
             }
         }
+
+        // A polyline. The object becomes a LineSegments below, so every
+        // consecutive pair of vertices is emitted as one segment. (three.js
+        // pushes the bare vertex run, which LineSegments then pairs up wrongly
+        // for anything longer than two vertices.) Texture coordinates travel
+        // with the vertices only when every vertex of the record has one.
+        void addLineGeometry(const std::vector<std::string>& verts, const std::vector<std::string>& uvTokens) {
+
+            object->geometry.type = "Line";
+
+            const auto vLen = vertices.size();
+            const auto uvLen = uvs.size();
+
+            // Resolve everything first, so a record with one bad index is
+            // dropped whole instead of leaving half a segment behind.
+            std::vector<size_t> vi;
+            vi.reserve(verts.size());
+            for (const auto& v : verts) {
+                if (const auto i = parseVertexOrNormalIndex(v, vLen)) {
+                    vi.push_back(*i);
+                } else {
+                    ++badIndexCount;
+                    return;
+                }
+            }
+            std::vector<size_t> ti;
+            if (!uvTokens.empty() && uvTokens.size() == verts.size()) {
+                ti.reserve(uvTokens.size());
+                for (const auto& t : uvTokens) {
+                    if (const auto i = parseUvIndex(t, uvLen)) {
+                        ti.push_back(*i);
+                    } else {
+                        ++badIndexCount;
+                        return;
+                    }
+                }
+            }
+
+            for (size_t k = 0; k + 1 < vi.size(); ++k) {
+                addVertexPointOrLine(vi[k]);
+                addVertexPointOrLine(vi[k + 1]);
+                if (!ti.empty()) {
+                    addUvLine(ti[k]);
+                    addUvLine(ti[k + 1]);
+                }
+            }
+        }
     };
 
 }// namespace
@@ -450,7 +497,18 @@ struct OBJLoader::Impl {
 
             } else if (lineFirstChar == 'l') {
 
-                // TODO
+                // `l v1 v2 v3 ...` or `l v1/vt1 v2/vt2 ...`: a polyline.
+                auto lineData = utils::trim(line.substr(1));
+                auto tokens = utils::split(lineData, ' ');
+                std::vector<std::string> lineVertices;
+                std::vector<std::string> lineUvs;
+                for (const auto& token : tokens) {
+                    if (token.empty()) continue;
+                    const auto parts = utils::split(token, '/');
+                    if (!parts.empty() && !parts[0].empty()) lineVertices.push_back(parts[0]);
+                    if (parts.size() > 1 && !parts[1].empty()) lineUvs.push_back(parts[1]);
+                }
+                state.addLineGeometry(lineVertices, lineUvs);
 
             } else if (lineFirstChar == 'p') {
 
@@ -542,7 +600,14 @@ struct OBJLoader::Impl {
 
             if (!geometry.uvs.empty()) {
 
-                bufferGeometry->setAttribute("uv", FloatBufferAttribute::create(geometry.uvs, 2));
+                if (geometry.uvs.size() / 2 != geometry.vertices.size() / 3) {
+                    // Some records carried texture coordinates and some did not. A
+                    // uv attribute shorter than position reads past its buffer.
+                    std::cerr << "[OBJLoader] '" << object->name
+                              << "': uv count does not match vertex count, dropping uvs" << std::endl;
+                } else {
+                    bufferGeometry->setAttribute("uv", FloatBufferAttribute::create(geometry.uvs, 2));
+                }
             }
 
             std::vector<std::shared_ptr<Material>> createdMaterials;
@@ -556,11 +621,20 @@ struct OBJLoader::Impl {
 
                     if (isLine && material && !material->is<LineBasicMaterial>()) {
 
-                        // TODO
+                        // The .mtl described a surface; lines need a line material.
+                        auto lineMaterial = LineBasicMaterial::create();
+                        lineMaterial->name = material->name;
+                        if (const auto* c = material->as<MaterialWithColor>()) lineMaterial->color.copy(c->color);
+                        material = lineMaterial;
 
                     } else if (isPoints && material && !material->is<PointsMaterial>()) {
 
-                        // TODO
+                        auto pointsMaterial = PointsMaterial::create();
+                        pointsMaterial->name = material->name;
+                        pointsMaterial->size = 10;
+                        pointsMaterial->sizeAttenuation = false;
+                        if (const auto* c = material->as<MaterialWithColor>()) pointsMaterial->color.copy(c->color);
+                        material = pointsMaterial;
                     }
                 }
 

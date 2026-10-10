@@ -107,7 +107,6 @@ namespace threepp {
         Matrix3 matrix{};
 
         bool generateMipmaps = true;
-        bool premultiplyAlpha = false;
         int unpackAlignment = 4;// valid values: 1, 2, 4, 8 (see http://www.khronos.org/opengles/sdk/docs/man/xhtml/glPixelStorei.xml)
 
         // Color space tag for this texture's pixel data. Default is

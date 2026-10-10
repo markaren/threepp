@@ -872,7 +872,6 @@ namespace threepp::objectjson {
             if (entry.contains("magFilter")) texture->magFilter = static_cast<Filter>(entry["magFilter"].get<int>());
             texture->anisotropy = value(entry, "anisotropy", 1);
 
-            texture->premultiplyAlpha = value(entry, "premultiplyAlpha", false);
             texture->unpackAlignment = value(entry, "unpackAlignment", 4);
             texture->generateMipmaps = value(entry, "generateMipmaps", true);
 

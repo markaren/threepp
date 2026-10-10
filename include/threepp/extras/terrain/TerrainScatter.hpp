@@ -160,9 +160,12 @@ namespace threepp::terrain {
             return math::Rng::hash01(static_cast<std::uint64_t>(x));
         }
         [[nodiscard]] float cellHash(int cx, int cz, int i, int ch) const {
-            return hash01(static_cast<unsigned int>(cx * 73856093) ^
-                          static_cast<unsigned int>(cz * 19349663) ^
-                          static_cast<unsigned int>(i * 83492791) ^
+            // Multiply in unsigned: `cx * 73856093` overflows int for any |cx|
+            // past 29, which is undefined behaviour (VoxelGrid's hash documents
+            // the same trap). The low 32 bits, and so the layout, are unchanged.
+            return hash01((static_cast<unsigned int>(cx) * 73856093u) ^
+                          (static_cast<unsigned int>(cz) * 19349663u) ^
+                          (static_cast<unsigned int>(i) * 83492791u) ^
                           (o_.seed + static_cast<unsigned int>(ch) * 0x9e3779b9u));
         }
 

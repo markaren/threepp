@@ -306,8 +306,10 @@ struct GLMaterials::Impl {
             uniforms.at("displacementBias").value<float>() = material->displacementBias;
         }
 
-        auto envMap = properties.materialProperties.get(material);
-        if (envMap) {
+        // The properties record is never null; what r129 tests here is whether
+        // it holds an environment map.
+        const auto* materialProps = properties.materialProperties.get(material);
+        if (materialProps && materialProps->envMap) {
 
             uniforms["envMapIntensity"].value<float>() = material->envMapIntensity;
         }

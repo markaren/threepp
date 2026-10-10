@@ -622,7 +622,6 @@ namespace {
         // threepp has no flipY on Texture; loaders decide row order up-front.
         entry["flipY"] = false;
 
-        entry["premultiplyAlpha"] = texture.premultiplyAlpha;
         entry["unpackAlignment"] = texture.unpackAlignment;
 
         entry["generateMipmaps"] = texture.generateMipmaps;

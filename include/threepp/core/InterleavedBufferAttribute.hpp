@@ -18,7 +18,35 @@ namespace threepp {
         std::shared_ptr<InterleavedBuffer> data;
 
         InterleavedBufferAttribute(std::shared_ptr<InterleavedBuffer> data, int itemSize, unsigned int offset, bool normalized)
-            : data(std::move(data)), offset(offset), TypedBufferAttribute<float>({}, itemSize, normalized) {}
+            : TypedBufferAttribute<float>({}, itemSize, normalized), offset(offset), data(std::move(data)) {}
+
+        // A clone is a plain, de-interleaved attribute with its own copy of the
+        // data. TypedBufferAttribute::copy duplicates array_/count_, which this
+        // class never fills (its storage is the shared InterleavedBuffer), so
+        // the inherited clone was an attribute with no elements. BufferGeometry
+        // clones every attribute through cloneUntyped(), which is how a cloned
+        // Sprite lost its corners.
+        [[nodiscard]] std::unique_ptr<TypedBufferAttribute<float>> clone() const {
+
+            const auto n = static_cast<size_t>(count());
+            const auto stride = static_cast<size_t>(data->stride());
+            const auto size = static_cast<size_t>(itemSize());
+            const auto& src = data->array();
+
+            std::vector<float> out(n * size);
+            for (size_t i = 0; i < n; ++i) {
+                for (size_t k = 0; k < size; ++k) {
+                    out[i * size + k] = src[i * stride + offset + k];
+                }
+            }
+
+            return TypedBufferAttribute<float>::create(out, itemSize(), normalized());
+        }
+
+        [[nodiscard]] std::unique_ptr<BufferAttribute> cloneUntyped() const override {
+
+            return clone();
+        }
 
         [[nodiscard]] std::vector<float>& array() override {
 

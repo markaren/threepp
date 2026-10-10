@@ -311,7 +311,7 @@ gl::GLState::GLState(): maxTextures(glGetParameteri(GL_MAX_COMBINED_TEXTURE_IMAG
     };
 
     std::function<GLuint(GLenum, GLenum, int)> createTexture = [](GLenum type, GLenum target, int count) {
-        uint8_t data[4];// 4 is required to match default unpack alignment of 4.
+        uint8_t data[4]{};// zeros, as r129 uploads; 4 bytes to match the default unpack alignment of 4.
         GLuint texture;
         glGenTextures(1, &texture);
 

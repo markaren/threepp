@@ -99,9 +99,6 @@ void Material::copyInto(Material& m) const {
     m.clippingPlanes = dstPlanes;
     m.clipIntersection = clipIntersection;
     m.clipShadows = clipShadows;
-    // NOTE: subclasses deriving MaterialWithClipping shadow this member with
-    // their own; that one is round-tripped by their copyInto/copyCompatibleFrom.
-    m.clipping = clipping;
 
     m.shadowSide = shadowSide;
 
