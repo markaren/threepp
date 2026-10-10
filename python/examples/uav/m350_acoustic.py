@@ -13,8 +13,13 @@ for the figure.
     python m350_acoustic.py --flight B --snr 10       # the held-out flight, noisier microphones
     python m350_acoustic.py --flight B --ground-reflection
     python m350_acoustic.py --report                  # the four rows: A 20 dB, B 20 dB, B 10 dB, B 20 dB + ground
+    python m350_acoustic.py --flight B --snr 35 --ambient pink    # the film's run
+    python m350_acoustic.py --shot 18 --flight B      # one frame of the film (35 dB pink unless told)
+    python m350_acoustic.py --film --flight B         # the film, its stereo track and four frames
 
-Outputs go to out/acoustic/ beside this file (gitignored).
+Outputs go to out/acoustic/ beside this file (gitignored). The film is a headless GL view (the
+x8_flight.py recipe) beside a matplotlib panel, piped to ffmpeg (imageio_ffmpeg) with the ring's
+westmost and eastmost microphones as the left and right channels.
 
 WHAT IS WHOSE
 -------------
@@ -163,7 +168,17 @@ def sources(t_log, w_log, w_hover, blades, n, seed, broadband=BROADBAND):
     return out
 
 
-def propagate(t_log, src_pos, src, mics, snr_db, seed, reflection=False):
+def pink(x):
+    """The same white noise shaped by 1 / sqrt(f) (f >= 1 Hz, the DC bin zero), each row
+    rescaled to the RMS the white noise had: a quiet field's floor, low-frequency."""
+    f = np.fft.rfftfreq(x.shape[-1], 1.0 / FS)
+    g = 1.0 / np.sqrt(np.maximum(f, 1.0))
+    g[0] = 0.0
+    y = np.fft.irfft(np.fft.rfft(x, axis=-1) * g, x.shape[-1], axis=-1)
+    return y * (np.sqrt((x * x).mean(axis=-1)) / np.sqrt((y * y).mean(axis=-1)))[..., None]
+
+
+def propagate(t_log, src_pos, src, mics, snr_db, seed, reflection=False, ambient="white"):
     """Microphone signals (n_mics, n). src_pos (n_src, n_log, 3) NED, src (n_src, n) on the
     emission clock. Retarded time: an emission at t_e arrives at t_e + r(t_e) / c."""
     n = src.shape[1]
@@ -186,7 +201,8 @@ def propagate(t_log, src_pos, src, mics, snr_db, seed, reflection=False):
                 out[m] += y
     noise = 2.0 * 10.0 ** (-snr_db / 20.0)                          # four rotors at 50 m: RMS 2
     rng = np.random.default_rng(seed + 100)
-    out += noise * rng.standard_normal(out.shape)
+    white = rng.standard_normal(out.shape)
+    out += noise * (pink(white) if ambient == "pink" else white)
     return out
 
 
@@ -289,7 +305,7 @@ class Localizer:
 
 
 def run(name, snr=20.0, reflection=False, window=LOC["window"], hop=LOC["hop"], seed=None, broadband=BROADBAND,
-        cache=True, quiet=False, every=2.0, array=None):
+        cache=True, quiet=False, every=2.0, array=None, ambient="white"):
     """Fly (or load the flight), synthesise, localize; returns a dict of everything."""
     seed = FLIGHTS[name]["seed"] if seed is None else seed
     log = flight_log(name, cache=cache)
@@ -297,7 +313,7 @@ def run(name, snr=20.0, reflection=False, window=LOC["window"], hop=LOC["hop"], 
     t_log = log["t"]
     n = int(t_log[-1] * FS)
     src = sources(t_log, log["w"], float(log["w_hover"]), int(log["blades"]), n, seed, broadband)
-    sig = propagate(t_log, np.transpose(log["hubs"], (1, 0, 2)), src, mics, snr, seed, reflection)
+    sig = propagate(t_log, np.transpose(log["hubs"], (1, 0, 2)), src, mics, snr, seed, reflection, ambient)
     loc = Localizer(mics, window)
     centre = mics.mean(axis=0)
     truth_log = log["hubs"].mean(axis=1)                            # the hubs' centroid, NED
@@ -318,9 +334,10 @@ def run(name, snr=20.0, reflection=False, window=LOC["window"], hop=LOC["hop"], 
         i0 += nh
     R = np.array(rows)
     res = dict(name=name, snr=snr, reflection=reflection, window=window, hop=hop, seed=seed, broadband=broadband,
-               log=log, mics=mics, sig=sig, rows=R)
+               ambient=ambient, log=log, mics=mics, sig=sig, rows=R)
     if not quiet:
-        print(f"flight {name}: {t_log[-1]:.1f} s flown, {len(R)} windows of {window} s every {hop} s, SNR {snr:g} dB at "
+        print(f"flight {name}: {t_log[-1]:.1f} s flown, {len(R)} windows of {window} s every {hop} s, SNR {snr:g} dB "
+              f"{ambient} at "
               f"{REF:g} m{', ground reflection' if reflection else ''}, acoustic seed {seed} (timbre and units ASSUMED)")
         print("     t   estimate n, e, h (m)        truth n, e, h (m)         3D err  horiz height  conf   null1  null2")
         nxt = 0.0
@@ -340,8 +357,8 @@ def summary(res):
 
 
 def label(res):
-    return (f"{res['name']} {res['snr']:g} dB{' + ground' if res['reflection'] else ''}"
-            f"{' (tuning)' if res['name'] == 'A' else ''}")
+    return (f"{res['name']} {res['snr']:g} dB{' pink' if res['ambient'] == 'pink' else ''}"
+            f"{' + ground' if res['reflection'] else ''}{' (tuning)' if res['name'] == 'A' else ''}")
 
 
 def summary_line(res):
@@ -351,8 +368,8 @@ def summary_line(res):
 
 
 def tag(res):
-    return (f"snr{res['snr']:g}{'_gr' if res['reflection'] else ''}_w{res['window']:g}_h{res['hop']:g}"
-            f"_s{res['seed']}")
+    return (f"snr{res['snr']:g}{'_pink' if res['ambient'] == 'pink' else ''}{'_gr' if res['reflection'] else ''}"
+            f"_w{res['window']:g}_h{res['hop']:g}_s{res['seed']}")
 
 
 def versioned(stem, ext):
@@ -554,29 +571,434 @@ def report():
     return gate
 
 
+# --------------------------------------------------------------------------- #
+#  the film: a headless GL view of the field beside the localizer's panel, two ring
+#  microphones as the stereo track
+# --------------------------------------------------------------------------- #
+FPS, VIEW_W, PANEL_W, FILM_H = 30, 1280, 640, 1080
+INSET = (426, 360)          # the close-up, drawn at 1:1 scale, top-left of the 3D view (over the sky)
+INSET_AT = (12, 12)         # its frame's top-left corner, px
+CLOSE = 9.0                 # the close-up camera's distance from the aircraft, m
+TRAIL = 10                  # the last estimates shown
+
+
+def result(name, snr, ambient, reflection, window, hop, seed):
+    """A tag's run from its npz when one was saved, else run it and save it."""
+    seed = FLIGHTS[name]["seed"] if seed is None else seed
+    res = dict(name=name, snr=snr, ambient=ambient, reflection=reflection, window=window, hop=hop, seed=seed,
+               broadband=BROADBAND)
+    path = os.path.join(OUT, f"flight{name}_{tag(res)}.npz")
+    if not os.path.exists(path):
+        res = run(name, snr=snr, reflection=reflection, window=window, hop=hop, seed=seed, ambient=ambient)
+        save(res)
+        return res
+    z = np.load(path)
+    res.update(log=flight_log(name), mics=z["mics"], sig=z["signals"].astype(np.float64), rows=z["windows"])
+    print(summary_line(res))
+    return res
+
+
+def stereo(res, path):
+    """The ring microphones with the smallest (left) and the largest (right) east coordinate,
+    16 kHz, 16 bit, the pair normalised together to a -3 dBFS peak."""
+    import wave
+    mics, sig = res["mics"], res["sig"]
+    ring = np.arange(len(mics) - 1)
+    left, right = int(ring[np.argmin(mics[ring, 1])]), int(ring[np.argmax(mics[ring, 1])])
+    x = np.stack([sig[left], sig[right]], axis=1)
+    x = x * (10.0 ** (-3.0 / 20.0) / np.abs(x).max())
+    with wave.open(path, "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(FS)
+        w.writeframes(np.round(x * 32767.0).astype("<i2").tobytes())
+    return left, right
+
+
+class Panel:
+    """640 x 1080, matplotlib Agg: the SRP-PHAT slice at the estimated height above, the 3D
+    error against time below. Drawn once per window and reused between them."""
+
+    def __init__(self, res):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        self.res, mics = res, res["mics"]
+        self.loc = Localizer(mics, res["window"])
+        g = np.arange(-100.0, 100.0 + 1e-9, 2.0)
+        self.g = g
+        N, E = np.meshgrid(g, g, indexing="ij")
+        self.NE = np.stack([N.ravel(), E.ravel()], axis=1)
+        self.nh = int(round(res["hop"] * FS))
+        T = float(res["log"]["t"][-1])
+        bg, fg = "#12161b", "#e6e9ee"
+        plt.rcParams.update({"font.size": 12, "text.color": fg, "axes.labelcolor": fg, "xtick.color": fg,
+                             "ytick.color": fg, "axes.edgecolor": "#6b7380", "axes.facecolor": bg})
+        fig = self.fig = plt.figure(figsize=(PANEL_W / 100.0, FILM_H / 100.0), dpi=100, facecolor=bg)
+        self.head = fig.text(0.05, 0.975, "", fontsize=17, fontweight="bold", va="top")
+        self.sub = fig.text(0.05, 0.94, "", fontsize=12, va="top", color="#aab2bd")
+        a1 = self.a1 = fig.add_axes([0.13, 0.42, 0.8, 0.45])
+        self.img = a1.imshow(np.zeros((g.size, g.size)), origin="lower", extent=(-101, 101, -101, 101), cmap="magma",
+                             vmin=0.0, vmax=1.0, interpolation="bilinear")
+        tr = res["log"]["hubs"].mean(axis=1)
+        a1.plot(tr[:, 1], tr[:, 0], color="w", lw=0.8, alpha=0.35)
+        a1.scatter(mics[:, 1], mics[:, 0], marker="^", s=36, color="#7fe0ff", edgecolor="k", lw=0.5, zorder=3,
+                   label="microphones")
+        self.truth = a1.scatter([0], [0], marker="x", s=150, color="w", lw=2.5, zorder=4, label="truth")
+        self.est = a1.scatter([0], [0], marker="o", s=60, color="#2fffb0", edgecolor="k", lw=0.8, zorder=5,
+                              label="estimate")
+        a1.set_xlabel("east (m)")
+        a1.set_ylabel("north (m)")
+        a1.set_xlim(-100, 100)
+        a1.set_ylim(-100, 100)
+        self.t1 = a1.set_title("", fontsize=12)
+        a1.legend(loc="lower left", fontsize=10, framealpha=0.6, facecolor=bg, edgecolor="#6b7380")
+        a2 = self.a2 = fig.add_axes([0.13, 0.06, 0.8, 0.26])
+        a2.set_yscale("log")
+        self.l_est, = a2.plot([], [], ".", ms=3, color="#2fffb0", label="SRP-PHAT 3D error")
+        self.l_n1, = a2.plot([], [], "-", lw=1.2, color="#9aa3ad", label="Null 1: array centre, 30 m up")
+        self.l_n2, = a2.plot([], [], "-", lw=1.2, color="#ffa94d", label="Null 2: energy centroid, 30 m up")
+        a2.set_xlim(0.0, T)
+        a2.set_ylim(0.03, 3000.0)                                           # room for the legend above the nulls
+        a2.set_xlabel("time (s)")
+        a2.set_ylabel("3D error (m)")
+        a2.grid(alpha=0.25, which="major")
+        a2.legend(loc="upper right", fontsize=9, framealpha=0.6, facecolor=bg, edgecolor="#6b7380", ncol=1)
+        self.t2 = a2.set_title("", fontsize=12)
+        fig.text(0.05, 0.005, "rotor sound ASSUMED (harmonics + broadband); truth: hub centroid when the sound left",
+                 fontsize=8.5, color="#8a929c", va="bottom")
+        self.j = None
+        self.rgb = None
+
+    def slice(self, j):
+        """The SRP-PHAT over north and east on a 2 m grid at window j's estimated height, each
+        cell its upper bound (the GCCs max-filtered over the lags the cell spans), per pair."""
+        R, loc = self.res["rows"], self.loc
+        i0 = int(round(R[j, 0] * FS - 0.5 * loc.nw))
+        stacks = loc.gcc(self.res["sig"][:, i0:i0 + loc.nw])
+        P = np.column_stack([self.NE, np.full(len(self.NE), R[j, 4])])
+        s = loc.srp(stacks, loc._index(P, math.sqrt(2.0))) / len(loc.pairs)
+        return s.reshape(self.g.size, self.g.size)
+
+    def draw(self, j, t):
+        res, R = self.res, self.res["rows"]
+        self.head.set_text("Where is the drone? Listen.")
+        self.sub.set_text(f"nine microphones, GCC-PHAT + SRP-PHAT, {res['window']:g} s windows\n"
+                          f"every {res['hop']:g} s; flight {res['name']}, SNR {res['snr']:g} dB {res['ambient']} at 50 m")
+        if j < 0:
+            self.img.set_data(np.zeros((self.g.size, self.g.size)))
+            self.t1.set_text("SRP-PHAT: listening...")
+            for a in (self.truth, self.est):
+                a.set_offsets(np.empty((0, 2)))
+            self.t2.set_text(f"t {t:5.1f} s")
+            for ln in (self.l_est, self.l_n1, self.l_n2):
+                ln.set_data([], [])
+        else:
+            s = self.slice(j)
+            self.img.set_data(s)
+            self.img.set_clim(0.0, max(float(s.max()), 1e-6))
+            self.truth.set_offsets([[R[j, 6], R[j, 5]]])
+            self.est.set_offsets([[R[j, 3], R[j, 2]]])
+            self.t1.set_text(f"SRP-PHAT slice at the estimated height, {-R[j, 4]:.1f} m up")
+            k = slice(0, j + 1)
+            self.l_est.set_data(R[k, 0], R[k, 8])
+            self.l_n1.set_data(R[k, 0], R[k, 11])
+            self.l_n2.set_data(R[k, 0], R[k, 15])
+            self.t2.set_text(f"t {R[j, 0]:5.2f} s   error {R[j, 8]:.2f} m   median so far "
+                             f"{np.median(R[k, 8]):.2f} m")
+        self.fig.canvas.draw()
+        self.rgb = np.asarray(self.fig.canvas.buffer_rgba())[:, :, :3].copy()
+        self.j = j
+        return self.rgb
+
+
+class View:
+    """The field in a headless GL canvas (the Scene recipe of x8_flight.py): the nine
+    microphones, the M350 posed from the log, the truth track, the estimate, its trail and its
+    stalk, the line from the estimate to the truth. The camera is fixed, from the south-west and
+    above, fitted to the flight and the array."""
+
+    def __init__(self, tp, res):
+        from m350_rig import Visual, model_path, ned_to_world
+        self.tp, self.res, self.w2 = tp, res, ned_to_world
+        log, mics = res["log"], res["mics"]
+        self.canvas = tp.Canvas("threepp - M350 acoustic", width=VIEW_W, height=FILM_H, antialiasing=4, headless=True,
+                                vsync=False)
+        r = self.r = tp.GLRenderer(self.canvas)
+        r.tone_mapping = tp.ToneMapping.ACESFilmic
+        r.tone_mapping_exposure = 1.0
+        s = self.scene = tp.Scene()
+        s.background = 0x9eb8d6
+        s.set_fog(tp.Color(0x9eb8d6), 400.0, 2500.0)
+        s.add(tp.HemisphereLight(0xdce6f2, 0x4a5a38, 1.1))
+        sun = tp.DirectionalLight(0xfff4e0, 2.2)
+        sun.position.set(-300.0, 500.0, 200.0)
+        s.add(sun)
+        ground = tp.Mesh(tp.PlaneGeometry(5000.0, 5000.0), self.mat(0x646c50, 0.95))
+        ground.rotation.x = -math.pi / 2
+        s.add(ground)
+        reach = 20.0 * math.ceil(max(np.abs(log["pos"][:, :2]).max(), np.abs(mics[:, :2]).max()) / 20.0 + 0.5)
+        grid = tp.GridHelper(int(2 * reach), int(2 * reach / 10.0), tp.Color(0x7c836a), tp.Color(0x7c836a))
+        grid.position.y = 0.03                                              # a 10 m grid about the array
+        s.add(grid)
+        pole, knob = self.mat(0xf2f2f2, 0.6), self.mat(0xd8241c, 0.5, emissive=(0.6, 0.05, 0.03))
+        for m in mics:
+            h = -float(m[2])
+            p = tp.Mesh(tp.CylinderGeometry(0.12, 0.12, h, 8, 1), pole)
+            p.position.set(*ned_to_world(m[0], m[1], -0.5 * h))
+            s.add(p)
+            b = tp.Mesh(tp.SphereGeometry(0.45, 16, 10), knob)
+            b.position.set(*ned_to_world(m[0], m[1], -h))
+            s.add(b)
+        tr = log["hubs"].mean(axis=1)
+        self.track = np.array([ned_to_world(*p) for p in tr[::10]], np.float32)
+        line, _ = self.polyline(self.track, 0xffffff, opacity=0.45)
+        s.add(line)
+        hot = self.mat(0x2fffb0, 0.4, emissive=(0.2, 1.0, 0.65))
+        self.est = tp.Mesh(tp.SphereGeometry(1.0, 20, 12), hot)
+        s.add(self.est)
+        self.trail = [tp.Mesh(tp.SphereGeometry(1.0, 12, 8), hot) for _ in range(TRAIL)]
+        for b in self.trail:
+            s.add(b)
+        self.stalk, self.stalk_g = self.polyline([(0, 0, 0), (0, 0, 0)], 0x2fffb0)
+        s.add(self.stalk)
+        self.miss, self.miss_g = self.polyline([(0, 0, 0), (0, 0, 0)], 0xff3b30)
+        s.add(self.miss)
+        self.model = tp.GLTFLoader().load(model_path()).scene
+        s.add(self.model)
+        self.vis = Visual(self.model)
+        self.m = M350()
+        t, w = log["t"], log["w"]
+        self.angle = np.concatenate([np.zeros((1, 4)), np.cumsum(0.5 * (w[1:] + w[:-1]) * np.diff(t)[:, None], axis=0)])
+        self.cam = tp.PerspectiveCamera(54.0, VIEW_W / FILM_H, 0.5, 6000.0)
+        self.close = tp.PerspectiveCamera(30.0, VIEW_W / FILM_H, 0.05, 6000.0)
+        ground_track = self.track.copy()
+        ground_track[:, 1] = 0.0
+        self.fit(np.vstack([self.track, ground_track, [ned_to_world(*m) for m in mics]]))
+
+    def mat(self, color, roughness, emissive=None):
+        m = self.tp.MeshStandardMaterial()
+        m.color, m.roughness, m.metalness = color, roughness, 0.0
+        if emissive is not None:
+            m.emissive = self.tp.Color(*emissive)
+            m.emissive_intensity = 1.0
+        return m
+
+    def polyline(self, pts, color, opacity=1.0):
+        tp = self.tp
+        g = tp.BufferGeometry()
+        g.set_attribute("position", np.asarray(pts, np.float32))
+        m = tp.LineBasicMaterial()
+        m.color = color
+        if opacity < 1.0:
+            m.transparent, m.opacity = True, opacity
+        line = tp.Line(g, m)
+        line.frustum_culled = False
+        return line, g
+
+    def fit(self, pts, elevation=32.0, horizon=0.8, margin=0.92):
+        """The eye on the south-west diagonal of the box's centre, `elevation` degrees up from
+        it; the view looks north-east, pitched down just enough to put the horizon at `horizon`
+        of the frame's half-height above the middle; the distance is the shortest that keeps
+        every point inside `margin` of the frame and off the close-up and its caption."""
+        c = 0.5 * (pts.min(axis=0) + pts.max(axis=0))
+        el = math.radians(elevation)
+        d = np.array([-math.cos(el) / math.sqrt(2.0), math.sin(el), math.cos(el) / math.sqrt(2.0)])   # west, up, south
+        tv = math.tan(math.radians(0.5 * self.cam.fov))
+        th = tv * VIEW_W / FILM_H
+        pitch = math.atan(horizon * tv)
+        flat = np.array([1.0, 0.0, -1.0]) / math.sqrt(2.0)                  # north-east, level
+        f = math.cos(pitch) * flat - math.sin(pitch) * np.array([0.0, 1.0, 0.0])
+        right = np.cross(f, [0.0, 1.0, 0.0])
+        right /= np.linalg.norm(right)
+        up = np.cross(right, f)
+        x1 = 2.0 * (INSET_AT[0] + INSET[0] + 20) / VIEW_W - 1.0             # the close-up's corner in NDC
+        y1 = 1.0 - 2.0 * (INSET_AT[1] + INSET[1] + 50) / FILM_H
+
+        def inside(dist):
+            v = pts - (c + dist * d)
+            z = v @ f
+            x, y = v @ right / (z * th), v @ up / (z * tv)
+            return bool(np.all(z > 0) and np.all(np.abs(x) <= margin) and np.all(np.abs(y) <= margin)
+                        and not np.any((x < x1) & (y > y1)))
+
+        lo, hi = 1.0, 5000.0
+        for _ in range(60):
+            mid = 0.5 * (lo + hi)
+            lo, hi = (lo, mid) if inside(mid) else (mid, hi)
+        self.eye, self.dir = c + hi * d, d
+        self.cam.position.set(*map(float, self.eye))
+        self.cam.look_at(self.tp.Vector3(*map(float, self.eye + 100.0 * f)))
+        print(f"[view] camera {hi:.0f} m from the box's centre ({c[0]:.0f}, {c[1]:.0f}, {c[2]:.0f}) world, "
+              f"{elevation:g} deg up from the south-west, pitched {math.degrees(pitch):.1f} deg down")
+
+    def state(self, te):
+        """The logged state at te, into the M350 the Visual reads (position, quaternion, rotor angles)."""
+        log, m = self.res["log"], self.m
+        t = log["t"]
+        k = int(np.clip(np.searchsorted(t, te) - 1, 0, len(t) - 2))
+        a = float(np.clip((te - t[k]) / (t[k + 1] - t[k]), 0.0, 1.0))
+        q0, q1 = log["quat"][k], log["quat"][k + 1]
+        q = (1.0 - a) * q0 + a * (q1 if np.dot(q0, q1) >= 0 else -q1)
+        q /= np.linalg.norm(q)
+        p = (1.0 - a) * log["pos"][k] + a * log["pos"][k + 1]
+        m.x[0:3] = [float(v) for v in p]
+        m.x[6:10] = [float(v) for v in q]
+        m.rotor_angle = [float(v) % (2.0 * math.pi) for v in (1.0 - a) * self.angle[k] + a * self.angle[k + 1]]
+        return p
+
+    def update(self, t, j):
+        """Film time t is the time at the microphones: the aircraft is shown where it was when the
+        sound now arriving at the array's centre left it, which is what window j is scored against."""
+        res, R, w2 = self.res, self.res["rows"], self.w2
+        centre = res["mics"].mean(axis=0)
+        te = t
+        for _ in range(3):
+            te = t - np.linalg.norm(self.state(te) - centre) / C
+        self.p = np.array(w2(*self.state(te)))
+        self.vis.pose(self.m, None, h0=0.0)
+        show = j >= 0
+        for o in [self.est, self.stalk, self.miss, *self.trail]:
+            o.visible = show
+        if not show:
+            return
+        e, tru = np.array(w2(*R[j, 2:5])), np.array(w2(*R[j, 5:8]))
+        self.e = e
+        self.est.position.set(*map(float, e))
+        self.stalk_g.update_attribute("position", np.array([e, [e[0], 0.0, e[2]]], np.float32))
+        self.miss_g.update_attribute("position", np.array([e, tru], np.float32))
+        for i, b in enumerate(self.trail):
+            k = j - 1 - i
+            b.visible = k >= 0
+            if k >= 0:
+                b.position.set(*map(float, w2(*R[k, 2:5])))
+
+    def sizes(self, r_est, r_trail):
+        self.est.scale.set(r_est, r_est, r_est)
+        for i, b in enumerate(self.trail):
+            k = r_trail * (1.0 - 0.06 * i)
+            b.scale.set(k, k, k)
+
+    def render(self):
+        """The fixed view, with the close-up (1:1, the same south-west side, 9 m off) top-left."""
+        self.sizes(0.9, 0.45)
+        self.r.render(self.scene, self.cam)
+        rgb = np.ascontiguousarray(self.r.read_pixels())
+        self.sizes(0.1, 0.05)
+        self.close.position.set(*map(float, self.p + CLOSE * self.dir))
+        self.close.look_at(self.tp.Vector3(*map(float, self.p)))
+        self.r.render(self.scene, self.close)
+        cu = np.asarray(self.r.read_pixels())
+        w, h = INSET
+        y0, x0 = (FILM_H - 2 * h) // 2, (VIEW_W - 2 * w) // 2
+        cu = cu[y0:y0 + 2 * h, x0:x0 + 2 * w].reshape(h, 2, w, 2, 3).mean(axis=(1, 3)).astype(np.uint8)
+        b, (x0, y0) = 3, INSET_AT
+        rgb[y0:y0 + h + 2 * b, x0:x0 + w + 2 * b] = 245
+        rgb[y0 + b:y0 + b + h, x0 + b:x0 + b + w] = cu
+        return rgb
+
+
+def label_view(rgb, lines):
+    """Text onto the 3D view (PIL)."""
+    from PIL import Image, ImageDraw, ImageFont
+    im = Image.fromarray(rgb)
+    d = ImageDraw.Draw(im)
+    font = ImageFont.load_default(size=20)
+    for (x, y), text in lines:
+        d.text((x, y), text, fill=(255, 255, 255), font=font, stroke_width=2, stroke_fill=(20, 24, 30))
+    return np.asarray(im)
+
+
+def film(a):
+    """--shot t: one frame of the film as a png; --film: all of it, with the stereo track."""
+    import subprocess
+    import threepp as tp
+    from PIL import Image
+    res = result(a.flight, a.snr, a.ambient, a.ground_reflection, a.window, a.hop, a.seed)
+    R, T = res["rows"], float(res["log"]["t"][-1])
+    view, panel = View(tp, res), Panel(res)
+
+    def frame(t):
+        j = int(np.searchsorted(R[:, 0], t, side="right")) - 1
+        if panel.rgb is None or j != panel.j:
+            panel.draw(j, t)
+        view.update(t, j)
+        rgb = view.render()
+        x0, y0 = INSET_AT
+        txt = [((18, FILM_H - 40), f"t {t:.1f} s. The aircraft is drawn where it was when the sound now at the "
+                                   f"microphones left it."),
+               ((x0 + 6, y0 + INSET[1] + 14), f"close-up from {CLOSE:g} m: " + (
+                   f"estimate (green) {R[j, 8]:.2f} m from the truth" if j >= 0 else "no estimate yet"))]
+        return np.concatenate([label_view(rgb, txt), panel.rgb], axis=1)
+
+    if a.shot is not None:
+        path = a.out or versioned(os.path.join(OUT, f"shot_{a.shot:g}"), ".png")
+        Image.fromarray(frame(a.shot)).save(path)
+        print(f"written: {path}")
+        return 0
+    stem = os.path.join(OUT, f"flight{a.flight}_{tag(res)}_stereo.wav")
+    left, right = stereo(res, stem)
+    print(f"written: {stem} (left microphone {left}, right {right}: the ring's westmost and eastmost)")
+    import imageio_ffmpeg
+    dst = versioned(os.path.join(OUT, "m350_acoustic"), ".mp4")
+    tmp = dst[:-4] + ".part.mp4"
+    ff = subprocess.Popen([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-f", "rawvideo",
+                           "-pix_fmt", "rgb24", "-s", f"{VIEW_W + PANEL_W}x{FILM_H}", "-r", str(FPS), "-i", "-",
+                           "-i", stem, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", "-c:a", "aac",
+                           "-b:a", "160k", "-shortest", tmp], stdin=subprocess.PIPE)
+    n = int(T * FPS)
+    keep = {int(round(5.0 * FPS)): 5, int(round(18.0 * FPS)): 18, int(round(32.0 * FPS)): 32, n - 1: "end"}
+    t0 = time.time()
+    for i in range(n):
+        rgb = frame(i / FPS)
+        ff.stdin.write(rgb.tobytes())
+        if i in keep:
+            p = versioned(os.path.join(OUT, f"frame_{keep[i]}"), ".png")
+            Image.fromarray(rgb).save(p)
+            print(f"written: {p}")
+        if i % (10 * FPS) == 0:
+            print(f"[film] {i / FPS:5.1f} of {T:.1f} s ({time.time() - t0:.0f} s)", flush=True)
+    ff.stdin.close()
+    ff.wait()
+    os.replace(tmp, dst)
+    print(f"written: {dst} ({n} frames, {n / FPS:.1f} s, {os.path.getsize(dst) / 1e6:.1f} MB)")
+    return 0
+
+
 def parse(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--checks", action="store_true", help="the three checks")
     ap.add_argument("--flight", choices=("A", "B"), default=None)
-    ap.add_argument("--snr", type=float, default=20.0, help="dB, the microphones' noise against the four rotors at 50 m")
+    ap.add_argument("--snr", type=float, default=None,
+                    help="dB, the microphones' noise against the four rotors at 50 m (default 20; the film's 35)")
     ap.add_argument("--ground-reflection", action="store_true")
     ap.add_argument("--window", type=float, default=LOC["window"], help="s")
     ap.add_argument("--hop", type=float, default=LOC["hop"], help="s")
     ap.add_argument("--seed", type=int, default=None, help="the acoustic seed (default: the flight's)")
     ap.add_argument("--broadband", type=float, default=BROADBAND, help="broadband over tonal RMS at hover (tuning)")
     ap.add_argument("--report", action="store_true")
+    ap.add_argument("--ambient", choices=("white", "pink"), default=None,
+                    help="the microphones' noise: white (the default), or pink (1/sqrt(f), the same RMS; the film's)")
+    ap.add_argument("--shot", type=float, default=None, help="s: one still of the film at that time")
+    ap.add_argument("--out", default=None, help="the still's png (default out/acoustic/shot_<t>_vNN.png)")
+    ap.add_argument("--film", action="store_true", help="the film of the flight (default SNR 35 dB pink)")
     return ap.parse_args(argv)
 
 
 def main(argv=None):
     a = parse(argv)
+    pictures = a.film or a.shot is not None
+    a.snr = (35.0 if pictures else 20.0) if a.snr is None else a.snr
+    a.ambient = ("pink" if pictures else "white") if a.ambient is None else a.ambient
     if a.checks:
         return 0 if checks() else 1
     if a.report:
         return 0 if report() else 1
+    if a.flight and pictures:
+        return film(a)
     if a.flight:
         res = run(a.flight, snr=a.snr, reflection=a.ground_reflection, window=a.window, hop=a.hop, seed=a.seed,
-                  broadband=a.broadband)
+                  broadband=a.broadband, ambient=a.ambient)
         for p in save(res):
             print(f"written: {p}")
         return 0

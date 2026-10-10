@@ -342,6 +342,9 @@ python m350_acoustic.py --checks                  # the three checks below
 python m350_acoustic.py --flight A                # a flight: a table, .npz, .csv and a figure
 python m350_acoustic.py --flight B --snr 10 [--ground-reflection] [--window 0.5] [--hop 0.125] [--seed N]
 python m350_acoustic.py --report                  # the table below, also out/acoustic/report_vNN.txt
+python m350_acoustic.py --flight B --snr 35 --ambient pink    # the film's run: pink noise, 15 dB quieter
+python m350_acoustic.py --shot 18 --flight B [--out shot.png] # one frame of the film (35 dB pink by default)
+python m350_acoustic.py --film --flight B                     # the film: out/acoustic/m350_acoustic_vNN.mp4
 ```
 
 The array: eight microphones on a ring of 15 m radius about the origin, 1.5 m above the ground, every
@@ -406,6 +409,18 @@ mast: one rotor's blade-pass line 3 s before the overhead pass over 3 s after, e
 blade-pass at the emission, against (c + v_r) / (c - v_r) within 20 % of the shift. It is one rotor because
 the four together do not resolve: in forward flight the front pair turns near 248 rad/s and the rear pair
 near 270, lines 1.5 Hz apart, as far as the Doppler shift.
+
+The film (`--film`, headless, 1920 x 1080 at 30 fps, all of flight B): on the left a GL view of the field
+from the south-west, its camera fitted to the flight and the array, with a close-up from 9 m at 1:1 scale;
+the nine microphones, the truth track, the estimate with its stalk to the ground, a trail of the last ten
+and a line to the truth. The aircraft is drawn where it was when the sound now at the microphones left it.
+On the right, per window, the SRP-PHAT over north and east at the estimated height (a 2 m grid of cell
+upper bounds, for the picture only) and the 3D error so far against both nulls. The sound is stereo: the
+ring's westmost microphone left, its eastmost right, together to -3 dBFS (`flightB_<tag>_stereo.wav`).
+`--ambient pink` shapes the same seeded noise by 1/sqrt(f) at the same RMS; the film runs at 35 dB pink
+because at 20 dB white the listener hears a cheap microphone's hiss, while a quiet field's floor is
+low-frequency and 15 dB lower. The localizer does not care (B at 35 dB pink: median 0.45 m, p90 1.02 m,
+nulls 56.8 m and 54.2 m).
 
 # The Babyshark 260 VTOL
 
