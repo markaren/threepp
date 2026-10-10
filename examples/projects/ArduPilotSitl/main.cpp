@@ -1578,7 +1578,6 @@ int main(int argc, char** argv) {
         // it), and a camera that meters — and gets fooled inside the cloud —
         // is what a real landing video does. The scripted flight drives the
         // same frames every run, so the metered exposure reproduces too.
-        vk->setVolumetricFog(true);// aerial perspective + the sun's dust shafts
         // TAA, not DLSS: a vehicle descending THROUGH its own dust is the
         // exact emitter-fog silhouette case the upscalers still ghost on
         // (feedback_upscaler_emitter_fog_silhouettes) — under DLSS the drone

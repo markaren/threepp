@@ -465,7 +465,6 @@ namespace {
         renderer.setAutoExposure(false);
         renderer.setBloomIntensity(0.55f);
         renderer.setBloomThreshold(1.15f);
-        renderer.setVolumetricFog(true);
         VulkanRenderer::HeightFogSettings hf;
         hf.baseY = 0.0f;
         if (day) {

@@ -824,7 +824,6 @@ endif ()
 
 if (THREEPP_WITH_VULKAN)
     list(APPEND publicHeaders
-            "threepp/renderers/VulkanRendererCore.hpp"
             "threepp/renderers/VulkanRenderer.hpp"
             # Validation-layer counters. Public, and free of every Vulkan header,
             # so a test (or a consumer) can assert spec-cleanliness without the

@@ -20,7 +20,7 @@
 //   • A CPU port of the three.js Preetham sky is baked into an equirect float
 //     env map (ping-pong pair, throttled re-bakes) so the sky, IBL ambient and
 //     water reflections all track the sun continuously — dawn mist and god
-//     rays (setVolumetricFog), golden hour, night with a moon, procedural
+//     rays (scene.fog), golden hour, night with a moon, procedural
 //     stars (setDeferredStarfield) and warm window light on the water.
 //
 // Deferred features exercised: RT AO/GI + probe GI, RT soft sun shadows
@@ -930,7 +930,7 @@ int main(int argc, char** argv) {
     if (profNoGi) renderer.setProbeGI(false);
     // Phase 2 unified fog: scene.fog (set per-frame below) is the AIR medium —
     // the haze + god rays through the fjord walls, driven live by the "haze"
-    // slider. The volumetrics follow automatically (no setVolumetricFog opt-in).
+    // slider. The volumetrics follow automatically.
     if (mistOn) {// --mist: shape the air medium as a tall ground-mist PROFILE
         VulkanRenderer::HeightFogSettings hf;
         hf.density = mistDensity;// explicit density > 0 → OVERRIDES scene.fog's

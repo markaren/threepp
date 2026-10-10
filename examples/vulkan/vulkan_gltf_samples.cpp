@@ -95,7 +95,6 @@ int main(int argc, char** argv) {
     int optAo = -1;        // --ao 0|1: half-res RT ambient occlusion + bent normals
     float optLightRad = -1.f;// --lightrad r: physical source radius on loaded point/spot lights (soft-shadow triage)
     bool  fogOnCli = false; float fogDensityCli = 0.05f;// --fog d: FogExp2 at density d (volumetric-fog triage)
-    bool  volFogCli = false;// --volfog: enable the volumetric dir-light fog (sun shafts)
     float mblurCli = 0.f;  // --mblur s: post-TAA motion blur, shutter fraction (pair with --orbit)
     int churnN = 0;        // --churn N: add/remove a tiny cube every N frames (structural-rebuild stressor)
     std::string envPath;   // --env <hdr>: environment override (default citrus orchard)
@@ -131,7 +130,6 @@ int main(int argc, char** argv) {
         else if (a == "--ao" && i + 1 < argc) optAo = std::atoi(argv[++i]);
         else if (a == "--lightrad" && i + 1 < argc) optLightRad = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--fog" && i + 1 < argc) { fogOnCli = true; fogDensityCli = static_cast<float>(std::atof(argv[++i])); }
-        else if (a == "--volfog") volFogCli = true;
         else if (a == "--mblur" && i + 1 < argc) mblurCli = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--churn" && i + 1 < argc) churnN = std::atoi(argv[++i]);
         else if (a == "--env" && i + 1 < argc) envPath = argv[++i];
@@ -199,7 +197,6 @@ int main(int argc, char** argv) {
     if (vk) {
         if (optProbe >= 0) vk->setProbeGI(optProbe != 0);
         if (optSunExt >= 0) vk->setEnvSunExtraction(optSunExt != 0);
-        if (volFogCli) vk->setVolumetricFog(true);
         if (mblurCli > 0.f) vk->setMotionBlur(mblurCli);
         if (sunPolicy == "always") vk->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Always);
         else if (sunPolicy == "off") vk->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Off);
@@ -219,8 +216,8 @@ int main(int argc, char** argv) {
             vk->setDepthOfField(true);
         }
         vk->setHybridDebugView(cliDebugView);
-    } else if (cliDebugView != 0 || volFogCli || mblurCli > 0.f || dofFocus > 0.f) {
-        std::cerr << "note: --debug/--volfog/--mblur/--dof are Vulkan-only; ignored on --gl"
+    } else if (cliDebugView != 0 || mblurCli > 0.f || dofFocus > 0.f) {
+        std::cerr << "note: --debug/--mblur/--dof are Vulkan-only; ignored on --gl"
                   << std::endl;
     }
 

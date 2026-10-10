@@ -2163,11 +2163,10 @@ namespace threepp {
         // deferred_shade.comp). σ = 0 disables (the march is skipped entirely).
         float deferredVolDensity_ = 0.f;
         float deferredVolAniso_   = 0.55f;
-        // DEPRECATED (Phase 2 fog unification): the directional sun shafts / aerial
-        // glow are now ALWAYS on when the fog medium is present (froxels own the
-        // near field, volumetricDirScatter the > 512 m tail — no opt-in). Kept as a
-        // no-op toggle so setVolumetricFog() callers still compile; default true so
-        // the deprecated getter reads "on when fog is present".
+        // The directional sun shafts / aerial glow are ALWAYS on when the fog medium
+        // is present (froxels own the near field, volumetricDirScatter the > 512 m
+        // tail). There is no public toggle; this stays true and only feeds the
+        // shade/froxel volFog flag.
         bool  deferredVolFog_     = true;
         // Procedural direction-space star field on deferred sky pixels (0 = off).
         float deferredStarIntensity_ = 0.f;

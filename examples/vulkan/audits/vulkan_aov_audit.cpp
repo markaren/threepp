@@ -392,7 +392,6 @@ int main(int argc, char** argv) {
         // Water column: murk clipped to below the surface.
         if (!off("fog")) {
             scene.fog = FogExp2(Color(0.62f, 0.70f, 0.78f), 0.0025f);
-            renderer.setVolumetricFog(true);
             VulkanRenderer::HeightFogSettings hf;
             hf.density = 0.f;// profile-only: scene.fog supplies the density
             hf.baseY = seaLevel;

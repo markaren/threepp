@@ -337,7 +337,6 @@ namespace {
         renderer.setBloomIntensity(0.22f);
         renderer.setBloomThreshold(1.6f);
         renderer.setDeferredStarfield(0.f);
-        renderer.setVolumetricFog(true);
 
         const Color sky = rain ? Color(0.26f, 0.29f, 0.34f) : Color(0.50f, 0.53f, 0.58f);
         renderer.setClearColor(sky);

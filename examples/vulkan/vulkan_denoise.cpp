@@ -166,7 +166,6 @@ int main(int argc, char** argv) {
     if (fogDensity > 0.f) {// --fog: key-spot beam + ring-light glow through the medium
         scene.fog = FogExp2(Color(0.35f, 0.38f, 0.45f), fogDensity);
         renderer.setFogAnisotropy(0.4f);
-        renderer.setVolumetricFog(true);
     }
 
     scene.add(makeGround());

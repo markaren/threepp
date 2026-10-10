@@ -1145,7 +1145,7 @@ def main():
     if is_vulkan:
         # scene.set_fog_exp2 above IS the single volumetric knob now: the froxel
         # sun shafts + aerial glow follow automatically wherever the fog medium is
-        # present (the old set_volumetric_fog opt-in is a deprecated no-op). Only
+        # present. Only
         # the phase anisotropy is still worth setting — forward scatter gives the
         # sun-ward glow / god-ray shafts through the trees.
         rend.fog_anisotropy = 0.6

@@ -626,10 +626,6 @@ namespace threepp {
         void setDenoise(bool enabled);
         [[nodiscard]] bool denoise() const;
 
-        // Deprecated alias of setDenoise()/denoise().
-        void setDeferredDenoise(bool enabled);
-        [[nodiscard]] bool deferredDenoise() const;
-
         // Per-NEE-sample firefly clamp used by the deferred highlight suppress.
         // Default 30.0; 0 disables (1e30 sentinel).
         void setFireflyClamp(float cap);
@@ -1610,14 +1606,6 @@ namespace threepp {
         // {density, anisotropy} as last set.
         [[nodiscard]] std::pair<float, float> deferredVolumetrics() const;
 
-        // DEPRECATED (Phase 2 fog unification) — a no-op. The directional sun
-        // shafts + aerial glow are now ALWAYS on when the fog medium is present:
-        // set scene.fog (or setHeightFog) and the volumetrics follow automatically
-        // — the froxels own the near field [0, 512 m] and the per-pixel march owns
-        // the far tail [512 m, ∞]. Kept only so existing callers compile.
-        void setVolumetricFog(bool enabled);
-        [[nodiscard]] bool volumetricFog() const;
-
         // ── Volumetric clouds (Nubis/HZD-style far-field cloud layer) ────────
         // A raymarched, wind-driven, procedurally-shaped cloud deck occupying
         // the world-space shell [bottomY, topY], composited over the sky (and,
@@ -1884,12 +1872,6 @@ namespace threepp {
 
         [[nodiscard]] Impl* core() const { return pimpl_.get(); }
     };
-
-    // Back-compat alias: the renderer briefly had an abstract VulkanRendererCore
-    // base while a second Vulkan shading backend existed. There is one backend
-    // now, so the base is gone; the name still resolves for existing code
-    // (including dynamic_cast, which sees the same type).
-    using VulkanRendererCore = VulkanRenderer;
 
 }// namespace threepp
 

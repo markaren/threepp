@@ -2241,14 +2241,6 @@ namespace threepp {
         return core()->bloomIntensity_;
     }
 
-    void VulkanRenderer::setDeferredDenoise(bool enabled) {
-        core()->denoiseEnabled_ = enabled;
-    }
-
-    bool VulkanRenderer::deferredDenoise() const {
-        return core()->denoiseEnabled_;
-    }
-
     void VulkanRenderer::setDeferredAO(bool enabled) {
         pimpl_->deferredAO_ = enabled;
     }
@@ -2613,18 +2605,6 @@ namespace threepp {
 
     std::pair<float, float> VulkanRenderer::deferredVolumetrics() const {
         return {pimpl_->deferredVolDensity_, pimpl_->deferredVolAniso_};
-    }
-
-    // DEPRECATED (Phase 2 fog unification) — a no-op alias, kept so existing
-    // callers compile (house pattern, cf. setDeferredDenoise). The directional
-    // sun shafts + aerial glow are now ALWAYS on when the fog medium is present:
-    // the froxels own the near field and volumetricDirScatter marches the far
-    // tail. There is no separate "volumetric fog" opt-in any more — set scene.fog
-    // (or setHeightFog) and the volumetrics follow automatically.
-    void VulkanRenderer::setVolumetricFog(bool /*enabled*/) {}
-
-    bool VulkanRenderer::volumetricFog() const {
-        return pimpl_->deferredVolFog_;// always true — shafts follow the medium
     }
 
     void VulkanRenderer::setClouds(const std::optional<CloudSettings>& settings) {

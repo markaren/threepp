@@ -1936,15 +1936,6 @@ namespace threepp_py {
                 .def_property("fog_anisotropy",
                               [](PyVulkanRenderer& r) { return r.native().getFogAnisotropy(); },
                               [](PyVulkanRenderer& r, float g) { r.native().setFogAnisotropy(g); })
-                // DEPRECATED (Phase 2 fog unification) — a no-op. The directional
-                // sun shafts + aerial glow are now ALWAYS on when the fog medium is
-                // present: set scene.set_fog_exp2(...) (or set_height_fog) and the
-                // volumetrics follow automatically — the froxels own the near field
-                // [0, 512 m] and the per-pixel march the far tail. Kept only so
-                // existing callers keep working (the setter does nothing).
-                .def_property("volumetric_fog",
-                              [](PyVulkanRenderer& r) { return r.native().volumetricFog(); },
-                              [](PyVulkanRenderer& r, bool v) { r.native().setVolumetricFog(v); })
                 // World-Y of the water surface — the clip plane the underwater
                 // murk lives below, and (since the underwater shading pass) the
                 // plane the AIR medium is clipped ABOVE. Also the gate every

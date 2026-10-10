@@ -10421,7 +10421,6 @@ class VoxelGrid:
 class VulkanRenderer:
     shadow_map_enabled: bool
     tone_mapping: ToneMapping
-    volumetric_fog: bool
     def __init__(self, canvas: Canvas, flush_frames: typing.SupportsInt | typing.SupportsIndex = 3) -> None:
         """
         Deferred (RasterFirst) Vulkan renderer. Pass a headless Canvas created with vsync=False.
