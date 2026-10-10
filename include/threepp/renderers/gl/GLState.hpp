@@ -131,8 +131,11 @@ namespace threepp {
 
             const int maxTextures;
 
+            // glLineWidth is only called where the context allows widths above 1:
+            // within GL_ALIASED_LINE_WIDTH_RANGE, and never on a forward-compatible
+            // context, which removes wide lines (see the constructor).
             bool lineWidthAvailable = false;
-            unsigned int version = 0;
+            float maxLineWidth = 1.f;
 
             std::optional<int> currentTextureSlot;
             std::unordered_map<int, BoundTexture> currentBoundTextures;

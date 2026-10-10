@@ -524,10 +524,8 @@ struct GLShadowMap::Impl {
 
                     shadow->map = GLRenderTarget::create(static_cast<int>(_shadowMapSize.x), static_cast<int>(_shadowMapSize.y), pars);
                     shadow->map->texture->name = light->name + ".shadowMap";
-                    // Set on the texture rather than through Options, whose
-                    // generateMipmaps field the RenderTarget constructor never
-                    // reads. Only the map is mipmapped: mapPass is scratch that
-                    // only the horizontal blur samples, at level 0.
+                    // Only the map is mipmapped: mapPass is scratch that only the
+                    // horizontal blur samples, at level 0.
                     shadow->map->texture->generateMipmaps = true;
 
                     auto passPars = pars;

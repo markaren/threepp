@@ -30,6 +30,12 @@ RenderTarget::RenderTarget(unsigned int width, unsigned int height, const Option
     if (options.anisotropy) texture->anisotropy = *options.anisotropy;
     if (options.encoding) texture->colorSpace = *options.encoding;
 
+    // As in three.js, a render target generates mips only when asked. Texture
+    // defaults the flag to true for loaded images, so a target with a mipmap
+    // minFilter that never set this option regenerated its chain after every
+    // render, and one that set it false was ignored.
+    texture->generateMipmaps = options.generateMipmaps;
+
     if (options.depthTexture) depthTexture = options.depthTexture;
 
 }

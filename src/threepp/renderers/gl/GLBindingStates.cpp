@@ -10,6 +10,8 @@
 
 #ifdef __EMSCRIPTEN__
 #include <GLES3/gl32.h>
+
+#include <variant>
 #endif
 
 using namespace threepp;
@@ -338,11 +340,26 @@ struct GLBindingStates::Impl {
 
                 } else if (!materialDefaultAttributeValues.empty()) {
 
-                    if (materialDefaultAttributeValues.contains("name")) {
+                    // r129: an attribute the program wants but the geometry lacks
+                    // takes the material's default as a constant (the array stays
+                    // disabled, so glVertexAttrib*f supplies the value). The port
+                    // looked up the literal string "name" here, so ShaderMaterial's
+                    // color/uv defaults were never applied.
+                    if (const auto it = materialDefaultAttributeValues.find(name); it != materialDefaultAttributeValues.end()) {
 
-                        // UniformValue& value = materialDefaultAttributeValues.at("name");
-
-                        // TODO
+                        const auto index = static_cast<GLuint>(programAttribute);
+                        const auto& value = it->second;
+                        if (const auto* f = std::get_if<float>(&value)) {
+                            glVertexAttrib1f(index, *f);
+                        } else if (const auto* v2 = std::get_if<Vector2>(&value)) {
+                            glVertexAttrib2f(index, v2->x, v2->y);
+                        } else if (const auto* v3 = std::get_if<Vector3>(&value)) {
+                            glVertexAttrib3f(index, v3->x, v3->y, v3->z);
+                        } else if (const auto* c = std::get_if<Color>(&value)) {
+                            glVertexAttrib3f(index, c->r, c->g, c->b);
+                        } else if (const auto* v4 = std::get_if<Vector4>(&value)) {
+                            glVertexAttrib4f(index, v4->x, v4->y, v4->z, v4->w);
+                        }
                     }
                 }
             }

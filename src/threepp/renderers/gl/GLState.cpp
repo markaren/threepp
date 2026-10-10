@@ -8,6 +8,7 @@
 #include <GLES3/gl32.h>
 #endif
 
+#include <algorithm>
 #include <iostream>
 
 using namespace threepp;
@@ -301,6 +302,21 @@ gl::GLState::GLState(): maxTextures(glGetParameteri(GL_MAX_COMBINED_TEXTURE_IMAG
 
     currentScissor.set(static_cast<float>(scissorParam[0]), static_cast<float>(scissorParam[1]), static_cast<float>(scissorParam[2]), static_cast<float>(scissorParam[3]));
     currentViewport.set(static_cast<float>(viewportParam[0]), static_cast<float>(viewportParam[1]), static_cast<float>(viewportParam[2]), static_cast<float>(viewportParam[3]));
+
+    // r129 derived lineWidthAvailable from the WebGL version string; the port
+    // never set it. Two things decide it here: the driver's aliased width range,
+    // and whether the context is forward-compatible, where wide lines are
+    // removed (glLineWidth above 1 is an INVALID_VALUE and the line stays one
+    // pixel) even though the range still reports the hardware limit. Canvas
+    // asks for a forward-compatible core profile on every desktop platform, so
+    // Material::linewidth is, as in WebGL, a request the context may refuse.
+    GLfloat lineWidthRange[2]{1.f, 1.f};
+    glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, lineWidthRange);
+    maxLineWidth = lineWidthRange[1];
+    GLint contextFlags = 0;
+    glGetIntegerv(0x821E /* GL_CONTEXT_FLAGS */, &contextFlags);
+    const bool forwardCompatible = (contextFlags & 0x00000001 /* GL_CONTEXT_FLAG_FORWARD_COMPATIBLE_BIT */) != 0;
+    lineWidthAvailable = !forwardCompatible && maxLineWidth > 1.f;
 
     auto enableLambda = [&](int id) {
         enable(id);
@@ -641,7 +657,7 @@ void gl::GLState::setLineWidth(float width) {
 
     if (width != currentLineWidth) {
 
-        if (lineWidthAvailable) glLineWidth(width);
+        if (lineWidthAvailable) glLineWidth(std::clamp(width, 1.f, maxLineWidth));
 
         currentLineWidth = width;
     }

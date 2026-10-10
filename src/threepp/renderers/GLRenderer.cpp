@@ -1648,9 +1648,15 @@ struct GLRenderer::Impl {
         // incomplete and causes glReadPixels to fail silently (all zeros).
         state.unbindTexture();
 
+        // Through the state cache, and put back below. A raw bind left the
+        // cache naming the previous target, so the next setRenderTarget to
+        // it was skipped as redundant and drew into the default framebuffer.
+        const unsigned int prevFbo = state.currentBoundFramebuffers.contains(GL_FRAMEBUFFER)
+                                             ? state.currentBoundFramebuffers.at(GL_FRAMEBUFFER)
+                                             : 0u;
         GLuint fbo;
         glGenFramebuffers(1, &fbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        state.bindFramebuffer(GL_FRAMEBUFFER, fbo);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, *texId, 0);
 
         const int npixels = static_cast<int>(image.width()) * static_cast<int>(image.height());
@@ -1677,7 +1683,7 @@ struct GLRenderer::Impl {
             }
         }
 
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        state.bindFramebuffer(GL_FRAMEBUFFER, prevFbo);
         glDeleteFramebuffers(1, &fbo);
 #else
         // Same trap readPixels documents above, and worse here: `data` was just
