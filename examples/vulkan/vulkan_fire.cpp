@@ -307,7 +307,13 @@ namespace {
         // a low camera looking across the pond sees earth at the rim and not
         // out through the side of the world.
         auto bank = matteMat(Color(0.070f, 0.060f, 0.048f), 1.f);
-        const float bh = -kBedY;// bed to y = 0
+        // The walls stand UNDER the rim of the ground slabs, so their top must
+        // stop short of y = 0: a top face at exactly the ground's height is
+        // two coplanar surfaces in one depth buffer, the 30 cm strip around
+        // the pond z-fights, and under TAA's jitter the winner changes every
+        // frame. By day that is a flickering band; at night it hides in the dark.
+        constexpr float kBankDrop = 0.005f;
+        const float bh = -kBedY - kBankDrop;// bed to just under y = 0
         const auto wall = [&](float x, float z, float w, float d) {
             auto m = Mesh::create(BoxGeometry::create(w, bh, d), bank);
             m->position.set(x, kBedY + 0.5f * bh, z);
