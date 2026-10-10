@@ -422,6 +422,57 @@ because at 20 dB white the listener hears a cheap microphone's hiss, while a qui
 low-frequency and 15 dB lower. The localizer does not care (B at 35 dB pink: median 0.45 m, p90 1.02 m,
 nulls 56.8 m and 54.2 m).
 
+### Next step: other sound sources (TODO)
+
+As built, the demo localizes the loudest broadband thing in the field; nothing in it knows what a drone
+is. Measured on 2026-10-10 (a scratch script on flight B at 20 dB, the demo's own `propagate` and
+`Localizer`): one STATIC broadband source (the low-passed noise plus a 50 Hz hum with harmonics, a generator
+or a tractor) on the ground 50 m north-west of the array, at levels relative to the four rotors at the
+same 50 m. "On" means within 3 m.
+
+| interferer | on the drone | on the interferer | median error while on the drone | confidence (peak / mean) |
+|---|---|---|---|---|
+| none | 100 % | 0 % | 0.44 m | 5.1 |
+| broadband, 10 dB quieter | 85 % | 15 % | 0.45 m | 4.2 |
+| broadband, equal | 0 % | 100 % | - | 9.2 |
+| broadband, 10 dB louder | 0 % | 100 % | - | 16.8 |
+| 50 Hz hum, 10 dB louder | 100 % | 0 % | 0.44 m | 4.9 |
+
+Three readings. PHAT weighs every bin alike, so the map's peaks are as tall as the share of bins each
+source owns: a broadband source of equal level takes the argmax in every window, a loud hum owns a handful
+of bins and changes nothing. What counts is the level at the microphones, not at the source: the quieter
+generator wins the windows where the drone is farthest. And the confidence RISES when the generator
+captures the estimate (a static source on the ground is a cleaner peak than a moving drone), so it is not
+the flag; the estimate's own behaviour is (it stops moving and sits at 2 m).
+
+The plan, in order, each step with its gate; every knob still set on A and B run once with it frozen,
+every new number a row of `--report`, the timbre still ASSUMED until step 7:
+
+- [ ] **1. `--interferer`** (repeatable: `kind,n,e,h,level_db`): static sources through the same
+  `propagate`. Kinds: `broad` (the generator above), `hum` (narrowband), `diffuse` (wind, surf: coloured
+  noise independent per microphone, no arrival direction). `--report --interferers` reproduces the table
+  above from the script itself. Gate: the table above within a few percent.
+- [ ] **2. Peaks, not an argmax.** `Localizer.locate` returns the top K peaks of the map (non-maximum
+  suppression over about 5 m) with their heights; the panel of the film draws them. Gate: with the equal
+  broadband generator the drone's peak is among the top two in at least 90 % of windows.
+- [ ] **3. A tracker.** Constant-velocity Kalman (or alpha-beta) in NED over the peaks with gated
+  association; a track starts when a peak persists three windows; the drone is the track that MOVES (over
+  1 m/s across 2 s) and is off the ground (over 5 m up); a static track is labelled "ground source" and
+  shown as such. Gate: equal broadband generator, at least 90 % of windows on the drone, median error under
+  1 m; the nulls unchanged.
+- [ ] **4. A drone signature on the bins.** Weight each PHAT bin by how drone-like it is: the blade-pass
+  fundamental found per window on the mast microphone (a harmonic sum over 60 to 120 Hz) and its multiples
+  within a few Hz get weight 1, the rest 0.1. Gate: the 10 dB louder generator, at least 80 % on the drone
+  with the weighting alone (no tracker); both the weighted and the tracked rows in the table.
+- [ ] **5. Two drones.** Flight A's log, shifted, as a second moving source; two tracks. Gate: both within
+  1 m median, no identity swap across the flight.
+- [ ] **6. A building between.** Bind the C++ `AcousticScene.transmission` (BVH occlusion,
+  `threepp/audio/Acoustics.hpp`) and apply it per rotor-microphone path; measure the smearing. After 1 to 5.
+- [ ] **7. The real timbre.** A bench recording of the lab's own M350 replaces `sources()`; every row above
+  re-run. Until then every number here carries "timbre ASSUMED".
+- [ ] **8. Film v02.** The generator in the field as an object, its peak and the drone's both on the panel,
+  the tracks labelled, the generator audible in the stereo track.
+
 # The Babyshark 260 VTOL
 
 A hybrid for the examples: the Foxtech Babyshark 260 VTOL, a 2.5 m quadplane (four lift rotors on two
