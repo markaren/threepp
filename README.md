@@ -269,7 +269,8 @@ to a rendered image that can be captured headless and judged.
 <td align="center"><img src="doc/screenshots/gl_fr3_depth.jpg" width="400" alt="Franka FR3 with a depth camera"><br><em>OpenGL: a depth camera on a Franka FR3, placed by IK, scans a tray (lesson part 2, <a href="https://github.com/markaren/threepp-lessons/blob/main/films/depth_map.py">depth_map.py</a>)</em></td>
 </tr>
 <tr>
-<td align="center" colspan="2"><img src="doc/screenshots/tiger_svg.png" width="400" alt="SVG loader"><br><em>OpenGL and Vulkan: the SVG loader (<a href="examples/loaders/svg_loader.cpp">svg_loader</a>)</em></td>
+<td align="center"><img src="doc/screenshots/gl_sphero_rvr.jpg" width="400" alt="Sphero RVR following a ball"><br><em>OpenGL: a Sphero RVR follows a ball by what its own camera sees, driven through the real robot's two drive commands (<a href="examples/projects/SpheroControl">SpheroControl</a>)</em></td>
+<td align="center"><img src="doc/screenshots/tiger_svg.png" width="400" alt="SVG loader"><br><em>OpenGL and Vulkan: the SVG loader (<a href="examples/loaders/svg_loader.cpp">svg_loader</a>)</em></td>
 </tr>
 </table>
 
