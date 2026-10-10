@@ -16,9 +16,10 @@ namespace threepp::vulkan {
     /// Declare that the process is on its way out: every VulkanContext
     /// destroyed from now on leaves its device, surface and instance for the
     /// OS to reclaim instead of calling vkDestroyDevice. The Python binding
-    /// sets this at interpreter finalization; a C++ app can set it before its
-    /// renderer goes out of scope, or ask for the same per canvas with
-    /// Canvas::Parameters::fastExit(true).
+    /// sets this at interpreter finalization. A C++ canvas asks for the same
+    /// by default (Canvas::Parameters::fastExit, false to opt out), so this
+    /// switch is for the odd app that has to tear down a renderer created on
+    /// an opted-out canvas while exiting.
     void setProcessExiting(bool exiting);
 
     [[nodiscard]] bool processExiting();

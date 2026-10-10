@@ -280,6 +280,10 @@ namespace threepp_py {
                      py::arg("antialiasing") = 4, py::arg("vsync") = true,
                      py::arg("resizable") = true, py::arg("headless") = false,
                      py::arg("fullscreen") = false, py::arg("position") = py::none(),
+                     // False here where C++ defaults to true: a Python process
+                     // that dies with its renderer is covered by finalization
+                     // (~PyVulkanRenderer), and the ones that are not, the test
+                     // suite and notebooks, recreate renderers all process long.
                      py::arg("fast_exit") = false,
                      "A window (or a hidden surface when headless=True). width/height default to half "
                      "the primary monitor. fullscreen=True gives BORDERLESS windowed fullscreen: an "

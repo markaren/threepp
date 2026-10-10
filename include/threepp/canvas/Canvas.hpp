@@ -86,7 +86,7 @@ namespace threepp {
         /// display server at all.
         [[nodiscard]] bool headless() const;
 
-        /// True when the canvas was created with fastExit(true): a Vulkan
+        /// True unless the canvas was created with fastExit(false): a Vulkan
         /// renderer on it leaves its device to process exit instead of
         /// destroying it (see Parameters::fastExit).
         [[nodiscard]] bool fastExit() const;
@@ -157,14 +157,15 @@ namespace threepp {
 
             Parameters& headless(bool flag);
 
-            /// Leave the Vulkan device to process exit. For an app whose
-            /// renderer lives until main returns, so the OS reclaims the GPU
-            /// anyway. On Windows/NVIDIA vkDestroyDevice otherwise blocks for
-            /// ~20 s after any run that presented more than a few frames or
-            /// compiled a shader, waiting for a driver cache write it then
-            /// abandons (ExitPolicy.hpp has the measurements). Not for a
-            /// canvas whose renderer is torn down and rebuilt mid-process:
-            /// that device would leak until exit. GL canvases ignore it.
+            /// Leave the Vulkan device to process exit (the default). An app's
+            /// renderer normally lives until main returns, and the OS reclaims
+            /// the GPU then anyway; on Windows/NVIDIA vkDestroyDevice would
+            /// otherwise block for ~20 s after any run that presented more
+            /// than a few frames or compiled a shader, waiting for a driver
+            /// cache write it then abandons (ExitPolicy.hpp has the
+            /// measurements). Pass false for a canvas whose renderer is torn
+            /// down and rebuilt mid-process, where a leaked device would
+            /// otherwise sit until exit. GL canvases ignore it.
             Parameters& fastExit(bool flag);
 
             /// Borderless windowed fullscreen: an undecorated, non-resizable
@@ -186,7 +187,7 @@ namespace threepp {
             bool resizable_{true};
             bool exitOnKeyEscape_{true};
             bool headless_{false};
-            bool fastExit_{false};
+            bool fastExit_{true};
             bool fullscreen_{false};
             GraphicsAPI graphicsApi_{GraphicsAPI::OpenGL};
             std::optional<std::filesystem::path> favicon_;
