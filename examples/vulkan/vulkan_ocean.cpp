@@ -4,6 +4,7 @@
 #include "threepp/audio/WavFile.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/extras/imgui/RendererSettings.hpp"
+#include "threepp/extras/marine/VesselWash.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/helpers/LidarWaveform.hpp"
@@ -700,6 +701,7 @@ int main(int argc, char** argv) {
     bool shotClose  = false;// near-surface grazing view — surface-artifact hunting
     bool shotIsland = false;// low close-up of the −X archipelago island (terrain-detail capture)
     bool shotBow    = false;// ahead of the boat looking back at the stem (bow foam)
+    bool shotStern  = false;// above her quarter looking down her wake (what she leaves on the water)
     int  toggleNightAt = 0;// --toggle: start in day, flip to night mid-run (exercises the runtime toggle path)
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
@@ -709,6 +711,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--close") == 0) shotClose = true;
         else if (std::strcmp(argv[i], "--island") == 0) shotIsland = true;
         else if (std::strcmp(argv[i], "--bow") == 0) shotBow = true;
+        else if (std::strcmp(argv[i], "--stern") == 0) shotStern = true;
         else if (std::strcmp(argv[i], "--toggle") == 0) toggleNightAt = 60;
     }
     const bool capturing = !shotPath.empty();
@@ -779,6 +782,12 @@ int main(int argc, char** argv) {
     // calm glassy sea — the surface-artifact-hunting state.
     oceanOpts.windSpeed  = shotClose ? 3.5f : 10.0f;
     auto ocean = Ocean::create(oceanOpts);
+    // What the vessel leaves on the water (marine::VesselWash, below): one
+    // patch of the wake field, and the small linear sea her waves are made in.
+    // Both are latched at the first render.
+    ocean->wakeField.resolution       = 1024;
+    ocean->wakeField.patches          = 1;
+    ocean->wakeField.rippleResolution = 512;
     scene.add(ocean);
 
     // ── Lighthouse (scene centre) ───────────────────────────────────────────
@@ -1122,6 +1131,31 @@ int main(int argc, char** argv) {
     constexpr float kTurnHeel    = 0.08f; // rad outward heel per (m/s · rad/s)
     constexpr float kSpeedTrim   = 0.021f;// rad bow-up trim at full speed
     constexpr float kDraft       = 2.5f;  // m, grounding depth
+    // What she leaves on the water (marine::VesselWash: her propellers' races,
+    // her hull's lane, the waves her weight makes). The manoeuvring model above
+    // is kinematic, so her mass and her propellers are given here. ASSUMED: a
+    // block coefficient of 0.55 on the box above (355 t), and two propellers of
+    // 2 m (R/V Gunnerus's diameter) on shafts 1.7 m under the water, 12 m abaft
+    // amidships and 2.2 m off her centreline.
+    constexpr float kBoatMass   = 1025.f * kBoatLength * kBoatBeam * kDraft * 0.55f;
+    constexpr float kPropRadius = 1.0f;
+    constexpr float kPropDepth  = 1.7f;
+    constexpr float kPropAft    = 12.0f;
+    constexpr float kPropOff    = 2.2f;
+    // The speed handed to the ocean's analytic wake (its bow bump and its
+    // V-wedge's height): floor + gain |u|, capped. That wake gates a tiled
+    // foam trail on smoothstep(0.5, 1.5, speed) (foam_world.comp), so it is
+    // held just over the trail's threshold: her foam is the wake field's.
+    static constexpr float kWakeFloor = 0.56f, kWakeGain = 0.02f, kWakeCap = 0.62f;
+    const auto wakeSpeed = [](float u) {
+        return std::abs(u) > 0.2f ? std::copysign(std::min(kWakeFloor + kWakeGain * std::abs(u), kWakeCap), u) : 0.f;
+    };
+    marine::VesselWash::Hull washHull;
+    washHull.length     = kBoatLength;
+    washHull.halfLength = kBoatLength * 0.5f;
+    washHull.halfBeam   = kBoatBeam * 0.5f;
+    washHull.mass       = kBoatMass;
+    marine::VesselWash wash(*ocean, 0, washHull);
 
     GLTFLoader gltfLoader;
     auto boat = loadAsync([&gltfLoader]() -> std::shared_ptr<Group> {
@@ -2031,8 +2065,9 @@ int main(int argc, char** argv) {
         ocean->warp.halfRange = kPlaneEdge * 0.5f;
         ocean->warp.coefA     = 0.1f;
 
-        // Vessel wake — analytical foam trail + bow bump + Kelvin V-wake
-        // injected in water_displace.comp from the same pose plus speed.
+        // Vessel wake — bow bump + Kelvin V-wake injected in
+        // water_displace.comp from the same pose plus speed (wakeSpeed: its
+        // tiled foam trail stays off).
         // The Kelvin V-wake additionally uses a historical sample trail
         // so it traces the boat's actual sailed curve through turns,
         // instead of snapping to the current heading every frame. Trail
@@ -2040,7 +2075,7 @@ int main(int argc, char** argv) {
         // drop samples older than 6 s, cap at the renderer's
         // kMaxWakeSamples (64) — that's ~36 m of path at the 6 m/s cruise,
         // enough curved history to bend the V-wake through the boat's turns.
-        ocean->wake.forwardSpeed = bs.forwardSpeed;
+        ocean->wake.forwardSpeed = wakeSpeed(bs.forwardSpeed);
         {
             constexpr float kEmitInterval     = 0.10f;     // 10 Hz cadence
             constexpr float kEmitDistance     = 1.0f;      // also emit on > 1 m travel
@@ -2085,75 +2120,32 @@ int main(int argc, char** argv) {
                 s.worldZ = bs.position.z;
                 s.sinYaw = sinY;
                 s.cosYaw = cosY;
-                s.speed  = bs.forwardSpeed;
+                s.speed  = wakeSpeed(bs.forwardSpeed);
                 s.age    = 0.f;
                 trail.push_back(s);
             }
         }
 
-        // Hull-contact foam disturbances. Splats gaussian foam blobs along
-        // the port + starboard hull perimeter (where the hull pushes water
-        // aside at the waterline) and an extra one off the stern for prop
-        // wash when the boat is moving. Decays naturally via the existing
-        // foam decay (~1.4 s half-life), so a fast-moving boat leaves a
-        // visible trail of agitated water in addition to the analytical
-        // wake foam. Always-on perimeter base intensity even at zero speed
-        // — the hull still displaces water, just less dramatically.
-        ocean->clearFoamDisturbances();
+        // What she leaves ON the water: her propellers' races, her hull's
+        // lane and the waves her weight makes, as sources of the ocean's wake
+        // field (marine::VesselWash, the model of the Nørvasundet twin's
+        // boats). The thrust is the manoeuvring model's own, shared by her two
+        // propellers; a shaft's depth follows her heave and her trim.
+        ocean->clearWakeSources();
         {
-            const float L = kBoatLength * 0.5f;
-            const float B = kBoatBeam   * 0.5f;
-            const float spd = std::abs(bs.forwardSpeed);
-            const float speedNorm = std::clamp(spd / 4.0f, 0.0f, 1.0f);
-            const float baseI     = 0.4f + 0.55f * speedNorm;
-            // Analytical hull plan-form half-width at fraction t ∈ [0,1]
-            // along the length (0 = bow, 1 = stern). Bow is sharp (≈0 at
-            // tip) so foam pinches to the centreline at the prow rather
-            // than sitting on the bbox front corners; stern keeps ~75 %
-            // beam (Gunnerus has a roughly transom aft form). Without
-            // this taper the perimeter splats below sit on the corners
-            // of the 28×9 bounding box and read as a rectangular foam
-            // outline that doesn't match the hull silhouette.
-            auto hullHalfWidth = [B](float t) -> float {
-                const float u = 2.0f * t - 1.0f;          // -1 at bow, +1 at stern
-                if (u <= 0.0f) {
-                    // Elliptical bow with sharpening exponent < 1 — pinches
-                    // tighter toward the tip than a pure ellipse would.
-                    const float k = 1.0f - u * u;          // 0 at bow tip, 1 amidships
-                    return B * std::pow(k, 0.6f);
-                }
-                // Stern: stays near full beam, fading slightly toward the transom.
-                return B * (1.0f - 0.25f * u * u);
+            const Vector3 forward(sinY, 0.f, cosY);
+            const Vector3 velocity(sinY * bs.forwardSpeed + cosY * bs.swaySpeed, 0.f,
+                                   cosY * bs.forwardSpeed - sinY * bs.swaySpeed);
+            const float thrustAccel = kMaxAccel * (bs.throttle > 0.f ? bs.throttle : kAsternFrac * bs.throttle);
+            const Vector3 thrust = forward * (0.5f * kBoatMass * thrustAccel);
+            const float shaftY = bs.y - kPropAft * std::sin(bs.smoothPitch) - kPropDepth;
+            const auto shaft = [&](float off) {
+                return Vector3(bs.position.x - sinY * kPropAft + cosY * off, shaftY,
+                               bs.position.z - cosY * kPropAft - sinY * off);
             };
-            // 8 points each side, bow → stern. Splats are positioned just
-            // outside the tapered hull silhouette (+0.2 m offset) so their
-            // gaussian halos paint visible foam on the surrounding ocean
-            // rather than on the flat hull-excluded zone below the boat.
-            // Spacing ≈ 4 m at midship × radius 1.6 m gives partial overlap
-            // along the length so the foam reads as a continuous band.
-            constexpr int   kSamples = 8;
-            constexpr float kRadius  = 1.6f;
-            for (int side = -1; side <= 1; side += 2) {
-                for (int i = 0; i < kSamples; ++i) {
-                    const float t       = static_cast<float>(i) / static_cast<float>(kSamples - 1);
-                    const float localZ  = L - 2.0f * L * t;       // +L (bow) → -L (stern)
-                    const float localX  = static_cast<float>(side) * (hullHalfWidth(t) + 0.2f);
-                    const float worldX  = bs.position.x + cosY * localX + sinY * localZ;
-                    const float worldZ  = bs.position.z - sinY * localX + cosY * localZ;
-                    ocean->addFoamDisturbance(worldX, worldZ, kRadius, baseI);
-                }
-            }
-            // Prop wash: larger, brighter splat just behind the stern.
-            // Only active when actually moving — a docked boat shouldn't
-            // be churning. The +0.5m localZ offset puts it just aft of
-            // the hull rectangle so it doesn't fight hull exclusion.
-            if (speedNorm > 0.1f) {
-                const float localZ  = -L - 1.0f;
-                const float worldX  = bs.position.x + sinY * localZ;
-                const float worldZ  = bs.position.z + cosY * localZ;
-                const float propI   = std::min(0.7f + 0.4f * speedNorm, 1.0f);
-                ocean->addFoamDisturbance(worldX, worldZ, 3.0f, propI);
-            }
+            wash.update(dt, Vector3(bs.position.x, bs.y, bs.position.z), forward, velocity,
+                        {{"prop_a", shaft(kPropOff), thrust, kPropRadius, false},
+                         {"prop_b", shaft(-kPropOff), thrust, kPropRadius, false}});
         }
 
         // ── Buoy buoyancy ──────────────────────────────────────────────────
@@ -2420,6 +2412,19 @@ int main(int argc, char** argv) {
                 // the CLI with no rebuild — highest priority over the named shots.
                 camera.position.copy(*capArgs.camPos);
                 camera.lookAt(*capArgs.camTarget);
+            } else if (shotStern) {
+                // Above her quarter, looking down the water she has left: her
+                // propellers' races, her lane and the waves she makes. Ahead
+                // of --close, so the two together are this view on its calm sea.
+                const Vector3 side = Vector3(boatFwd.z, 0.f, -boatFwd.x);
+                camera.position.copy(boatPos)
+                        .addScaledVector(boatFwd, 26.f)
+                        .addScaledVector(side, 36.f)
+                        .add(Vector3(0.f, 30.f, 0.f));
+                Vector3 tgt = boatPos;
+                tgt.addScaledVector(boatFwd, -24.f);
+                tgt.y = 0.f;
+                camera.lookAt(tgt);
             } else if (shotClose) {
                 // Near-surface grazing view beside the boat, looking across
                 // its wake — the high-foam-coverage region where close-up
