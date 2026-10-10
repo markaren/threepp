@@ -28,8 +28,11 @@ namespace threepp::vulkan {
     class VulkanContext {
 
     public:
+        // leaveDeviceAtExit: Canvas::Parameters::fastExit — the destructor skips
+        // vkDestroyDevice and leaves device, surface and instance to process
+        // exit (see ExitPolicy.hpp for why, and for the process-wide switch).
         explicit VulkanContext(GLFWwindow* window, bool enableRayTracing, bool vsync = true,
-                               bool preferHeadlessSurface = false);
+                               bool preferHeadlessSurface = false, bool leaveDeviceAtExit = false);
         ~VulkanContext();
 
         VulkanContext(const VulkanContext&) = delete;
@@ -240,6 +243,7 @@ namespace threepp::vulkan {
         // save is skipped when the driver reports the same size back.
         size_t savedPipelineCacheBytes_ = 0;
         uint32_t pipelineCacheTick_ = 0;
+        bool leaveDeviceAtExit_ = false;
 
         void createInstance(bool enableValidation);
         void createDebugMessenger();

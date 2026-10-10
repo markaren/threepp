@@ -874,6 +874,11 @@ bool Canvas::headless() const {
     return pimpl_->params_.headless_;
 }
 
+bool Canvas::fastExit() const {
+
+    return pimpl_->params_.fastExit_;
+}
+
 void Canvas::setFrameEndCallback(std::function<void()> callback) {
     pimpl_->frameEndCallback_ = std::move(callback);
 }
@@ -1028,6 +1033,13 @@ Canvas::Parameters& Canvas::Parameters::exitOnKeyEscape(bool flag) {
 Canvas::Parameters& Canvas::Parameters::headless(bool flag) {
 
     headless_ = flag;
+
+    return *this;
+}
+
+Canvas::Parameters& Canvas::Parameters::fastExit(bool flag) {
+
+    fastExit_ = flag;
 
     return *this;
 }

@@ -9,6 +9,8 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include "threepp/renderers/vulkan/ExitPolicy.hpp"
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -226,9 +228,16 @@ namespace threepp::vulkan {
 
     }// namespace
 
+    namespace {
+        std::atomic<bool> g_processExiting{false};
+    }
+
+    void setProcessExiting(bool exiting) { g_processExiting.store(exiting); }
+    bool processExiting() { return g_processExiting.load(); }
+
     VulkanContext::VulkanContext(GLFWwindow* window, bool enableRayTracing, bool vsync,
-                                 bool preferHeadlessSurface)
-        : window_(window), vsync_(vsync) {
+                                 bool preferHeadlessSurface, bool leaveDeviceAtExit)
+        : window_(window), vsync_(vsync), leaveDeviceAtExit_(leaveDeviceAtExit) {
 
         // Surface mode. A headless canvas prefers VK_EXT_headless_surface: the
         // swapchain and frame loop run unmodified, but the surface has no
@@ -400,6 +409,22 @@ namespace threepp::vulkan {
             mark("pipeline cache save");
             vkDestroyPipelineCache(device_, pipelineCache_, nullptr);
             mark("pipeline cache destroy");
+        }
+        // A process on its way out leaves the device, surface and instance to
+        // the OS. On Windows/NVIDIA vkDestroyDevice blocks until the driver's
+        // deferred write of new shader binaries to its own cache would have
+        // fired (~25 s after they were produced), then abandons that write:
+        // measured 2026-10-10 on an RTX 4070, 20-22 s for a 2 s windowed run,
+        // 13.5 s after idling 10 s first, 77 ms after idling 25 s, and 1.5 s
+        // of total process wall with this skip on a dirty run that otherwise
+        // waited 21.7 s. The write never lands from a short run either way,
+        // so nothing is lost; mid-process teardown (the test suite, a second
+        // renderer in one script) still destroys properly. The whole wait is
+        // inside vkDestroyDevice: process teardown, DLL detach included, does
+        // not pay it. THREEPP_VK_EXIT_TIMING=1 shows it as "context: device".
+        if (leaveDeviceAtExit_ || processExiting()) {
+            if (exitTiming) std::cout << "[vk-exit] context: device left to process exit" << std::endl;
+            return;
         }
         if (device_ != VK_NULL_HANDLE) vkDestroyDevice(device_, nullptr);
         mark("device");

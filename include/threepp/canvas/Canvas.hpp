@@ -86,6 +86,11 @@ namespace threepp {
         /// display server at all.
         [[nodiscard]] bool headless() const;
 
+        /// True when the canvas was created with fastExit(true): a Vulkan
+        /// renderer on it leaves its device to process exit instead of
+        /// destroying it (see Parameters::fastExit).
+        [[nodiscard]] bool fastExit() const;
+
         /// Register a callback invoked at the end of each frame (after the user
         /// animate callback, before glfwPollEvents). Used by swapchain-based
         /// backends to present, analogous to glfwSwapBuffers for GL.
@@ -152,6 +157,16 @@ namespace threepp {
 
             Parameters& headless(bool flag);
 
+            /// Leave the Vulkan device to process exit. For an app whose
+            /// renderer lives until main returns, so the OS reclaims the GPU
+            /// anyway. On Windows/NVIDIA vkDestroyDevice otherwise blocks for
+            /// ~20 s after any run that presented more than a few frames or
+            /// compiled a shader, waiting for a driver cache write it then
+            /// abandons (ExitPolicy.hpp has the measurements). Not for a
+            /// canvas whose renderer is torn down and rebuilt mid-process:
+            /// that device would leak until exit. GL canvases ignore it.
+            Parameters& fastExit(bool flag);
+
             /// Borderless windowed fullscreen: an undecorated, non-resizable
             /// window the size of the primary monitor's current video mode,
             /// placed at that monitor's origin. Any requested size() or
@@ -171,6 +186,7 @@ namespace threepp {
             bool resizable_{true};
             bool exitOnKeyEscape_{true};
             bool headless_{false};
+            bool fastExit_{false};
             bool fullscreen_{false};
             GraphicsAPI graphicsApi_{GraphicsAPI::OpenGL};
             std::optional<std::filesystem::path> favicon_;

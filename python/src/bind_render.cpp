@@ -268,25 +268,28 @@ namespace threepp_py {
         py::class_<Canvas>(m, "Canvas")
                 .def(py::init([](const std::string& title, int width, int height, int antialiasing,
                                  bool vsync, bool resizable, bool headless, bool fullscreen,
-                                 std::optional<std::pair<int, int>> position) {
+                                 std::optional<std::pair<int, int>> position, bool fast_exit) {
                     Canvas::Parameters p;
                     p.title(title);
                     if (width > 0 && height > 0) p.size(width, height);
                     if (position) p.position(position->first, position->second);
-                    p.antialiasing(antialiasing).vsync(vsync).resizable(resizable).headless(headless).fullscreen(fullscreen);
+                    p.antialiasing(antialiasing).vsync(vsync).resizable(resizable).headless(headless).fullscreen(fullscreen).fastExit(fast_exit);
                     return std::make_unique<Canvas>(p);
                 }),
                      py::arg("title") = "threepp", py::arg("width") = -1, py::arg("height") = -1,
                      py::arg("antialiasing") = 4, py::arg("vsync") = true,
                      py::arg("resizable") = true, py::arg("headless") = false,
                      py::arg("fullscreen") = false, py::arg("position") = py::none(),
+                     py::arg("fast_exit") = false,
                      "A window (or a hidden surface when headless=True). width/height default to half "
                      "the primary monitor. fullscreen=True gives BORDERLESS windowed fullscreen: an "
                      "undecorated, non-resizable window covering the primary monitor, which ignores "
                      "width/height and resizable. It never changes the display mode, so alt-tab behaves "
                      "like any other window. headless=True wins over it (there is no window to show). "
                      "position=(x, y) places the window in screen coordinates instead of letting the OS "
-                     "choose (ignored with fullscreen=True; no-op on Wayland).")
+                     "choose (ignored with fullscreen=True; no-op on Wayland). fast_exit=True makes a "
+                     "VulkanRenderer on this canvas leave its device to process exit even when it is "
+                     "deleted mid-script; a renderer that dies with the interpreter does so anyway.")
                 .def("animate", &Canvas::animate, py::arg("callback"),
                      "Run the render loop, calling callback() every frame until the window closes.")
                 .def("animate_once", &Canvas::animateOnce, py::arg("callback"),

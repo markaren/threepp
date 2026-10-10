@@ -24,7 +24,8 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
                     static_cast<GLFWwindow*>(canvas.windowPtr()),
                     /*enableRayTracing*/ true,
                     /*vsync*/ canvas.vsync(),
-                    /*preferHeadlessSurface*/ canvas.headless());
+                    /*preferHeadlessSurface*/ canvas.headless(),
+                    /*leaveDeviceAtExit*/ canvas.fastExit());
 
             // Pin `size` to the extent the surface actually granted. The
             // canvas's size is what was asked for; the swapchain's is what

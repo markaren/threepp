@@ -44,6 +44,7 @@
 #include "threepp/helpers/PathTracedLidarSensor.hpp"
 #include "threepp/helpers/SonarSensor.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/renderers/vulkan/ExitPolicy.hpp"
 #include "threepp/renderers/vulkan/ValidationReport.hpp"
 
 #include <array>
@@ -644,6 +645,18 @@ namespace {
 
         // Underlying threepp renderer — used to attach the ImGui Vulkan overlay.
         VulkanRenderer& native() { return renderer_; }
+
+        // A renderer that dies with the interpreter leaves its device to the
+        // OS. vkDestroyDevice would otherwise block ~20 s on Windows/NVIDIA
+        // for a driver cache write it then abandons (ExitPolicy.hpp); nothing
+        // after interpreter finalization needs the device. The flag is
+        // process-wide, so once finalization has begun every context torn
+        // down after this one skips the destroy as well, which is what
+        // finalization order would do anyway. `del renderer` mid-script still
+        // destroys properly.
+        ~PyVulkanRenderer() {
+            if (Py_IsFinalizing()) vulkan::setProcessExiting(true);
+        }
 
     private:
         void drive_frames(Object3D& scene, Camera& camera) {
