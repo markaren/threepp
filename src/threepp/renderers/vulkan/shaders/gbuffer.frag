@@ -77,7 +77,7 @@ layout(location = 1) out vec4 outMotion;
 //        index — used internally (reproject/motionMat), NOT stable across frames.
 //   .y = STABLE per-object instance id (host-assigned, persists across frames
 //        and visible-set changes; 0 = sky). The recoverable label for
-//        instance segmentation — see VulkanRendererCore::setObjectInstanceId.
+//        instance segmentation — see VulkanRenderer::setObjectInstanceId.
 //   .z = per-instance flags in bits 0..7 | semantic CLASS id in bits 8..15
 //        (0 = unset). Canonical bit layout: vulkan_shared.h (kInstFlag*);
 //        shader consumers use the instance_flags.glsl accessors. Consumers

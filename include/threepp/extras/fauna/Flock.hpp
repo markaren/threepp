@@ -253,7 +253,7 @@ namespace threepp {
 
         // Two overloads, NOT a defaulted argument: GCC rejects a default
         // argument naming a nested class's defaults before the outer class is
-        // complete (cf. FireEffect.hpp:348-363).
+        // complete (cf. FireEffect::create in FireEffect.hpp).
         static std::shared_ptr<Flock> create(const Params& params) {
 
             return std::make_shared<Flock>(params);
@@ -696,11 +696,11 @@ namespace threepp {
 
         // ── Deterministic stateless hash ─────────────────────────────────
         //
-        // Copied from FireEffect.cpp:15-34. It lives here as private statics
-        // rather than in an anonymous namespace, which is what the spec's prose
-        // says: an anonymous namespace inside a HEADER gives every translation
-        // unit its own copy, and an inline member function that referenced one
-        // would be an ODR violation the linker is free not to diagnose.
+        // The same call shape as FireEffect.cpp's rnd01. A private static
+        // rather than a function in an anonymous namespace: an anonymous
+        // namespace inside a HEADER gives every translation unit its own copy,
+        // and an inline member function that referenced one would be an ODR
+        // violation the linker is free not to diagnose.
         //
         // A decision stream is a pure function of (seed, bird, sequence) and is
         // therefore independent of frame ordering, of how many frames a bake

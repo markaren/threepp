@@ -19,8 +19,8 @@ jobs:
   #   * 14 test executables — the four proprioceptive sensors, every play
   #     session (physics, articulation, joint, vehicle, sensor, conveyor),
   #     SoftBody, PhysxWorld, and (via v-hacd) the convex decomposition;
-  #   * 8 example directories — Physics, RobotCell, Vehicle, Drive, NorwayDrive,
-  #     Shooter, FPS, Spot.
+  #   * 7 example directories — Physics, RobotCell, Vehicle, Drive, FPS, Spot,
+  #     ArduPilotSitl.
   #
   # CPU only. PhysX GPU dynamics is opt-in (PhysxWorld::Settings::enableGpuDynamics)
   # and the runners have no CUDA device; SoftBody_test asks for a GPU world, gets

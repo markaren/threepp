@@ -105,7 +105,9 @@ KeyframeTrack& KeyframeTrack::trim(float startTime, float endTime) {
 
 KeyframeTrack& KeyframeTrack::optimize() {
 
-    // times or values may be shared with other tracks, so overwriting is unsafe
+    // three.js compacts copies because its typed arrays may be shared between
+    // tracks. These vectors belong to this track alone; the copies are kept
+    // only so the compaction below reads like the original.
     auto times = AnimationUtils::arraySlice(this->times_);
     auto values = AnimationUtils::arraySlice(this->values_);
     const auto stride = this->getValueSize();

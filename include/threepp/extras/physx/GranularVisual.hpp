@@ -162,9 +162,8 @@ namespace threepp {
             ParticleField::Config cfg;
             cfg.capacity = capacity;
             // The host ring, not Interop: the zero-copy device-to-device feed
-            // needs THREEPP_PHYSX_CUDA_VK_INTEROP, which the apps do not define
-            // (it is the stretch goal in plans/particle-authoring.md §8). What
-            // arrives here is a pull()ed host mirror, so submit() is the API.
+            // needs THREEPP_PHYSX_CUDA_VK_INTEROP, which the apps do not define.
+            // What arrives here is a pull()ed host mirror, so submit() is the API.
             cfg.ownership = ParticleField::Ownership::HostRing;
             // PhysX writes inverse mass into w, which says nothing about size,
             // so the proxy (authored at `radius`) draws at scale 1 and a

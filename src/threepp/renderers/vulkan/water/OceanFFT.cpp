@@ -27,9 +27,9 @@ namespace threepp::water {
 
     namespace {
 
-        // ── Tiny helpers (mirroring VulkanRenderer.cpp's createBuffer/createImage,
-        // but kept self-contained so this TU doesn't need access to the renderer's
-        // private helpers).
+        // ── Tiny helpers. The shared ones (vulkan::check, createBuffer) are in
+        // VulkanResources.hpp; these stay local for the "OceanFFT:" prefix on
+        // the error text and the storage + sampled image the cascades use.
 
         void check(VkResult r, const char* what) {
             if (r != VK_SUCCESS) {

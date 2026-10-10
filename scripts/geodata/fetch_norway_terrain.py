@@ -25,7 +25,7 @@ Data sources (verified live 2026-07-15, buildings 2026-07-17):
 Usage:
     python fetch_norway_terrain.py --preset trollstigen
     python fetch_norway_terrain.py --center 62.4482,7.6714 --size 8000 --res 2 --name myregion
-    python fetch_norway_terrain.py --preset alesund --preview --include-paths --buildings
+    python fetch_norway_terrain.py --preset aalesund --preview --include-paths --buildings
     python fetch_norway_terrain.py --preset trollstigen --texture topo
 """
 import argparse

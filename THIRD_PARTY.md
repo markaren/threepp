@@ -124,11 +124,10 @@ license text.
 | [threepp_data](https://github.com/markaren/threepp_data) | examples or tests | **per-directory** — fonts under the MAGENTA license above, models under their own terms (including CC-BY, CC-BY-**ND** and CC0 entries), and `urdf/spot/` under the **Boston Dynamics SDK License** (see the `LICENSE` and `NOTICE.md` in that directory; simulation use only, not MIT) |
 | [tinyusdz](https://github.com/lighttransport/tinyusdz) | `THREEPP_WITH_USD` | Apache-2.0, © Syoyo Fujita / Light Transport Entertainment Inc. Note: `install()` copies its headers and static lib alongside threepp, so an installed tree redistributes it |
 | [OpenFBX](https://github.com/nem0/OpenFBX) | FBX loader | MIT, © 2017 Mikulas Florek |
-| [glslang](https://github.com/KhronosGroup/glslang) | `THREEPP_WITH_VULKAN` (shader compilation) | mixed BSD-3/Apache-2.0/MIT — see its LICENSE |
 | [pybind11](https://github.com/pybind/pybind11) | `THREEPP_WITH_PYTHON` / editor scripting | BSD-3, © Wenzel Jakob |
 | [Catch2](https://github.com/catchorg/Catch2) | tests only | Boost Software License 1.0 |
 | [RLtools](https://github.com/rl-tools/rl-tools) | `THREEPP_WITH_RLTOOLS` (opt-in example) | MIT, © 2023 Jonas Eschmann |
-| AMD FidelityFX SDK (FSR) | `THREEPP_WITH_VULKAN` upscaler | MIT, © AMD — the fetch records the SDK's LICENSE.txt path |
+| AMD FidelityFX SDK (FSR) | `THREEPP_WITH_FSR` (opt-in upscaler; Windows, needs `THREEPP_WITH_VULKAN`) | MIT, © AMD — the fetch records the SDK's LICENSE.txt path; the build copies the prebuilt `amd_fidelityfx_vk.dll` beside the executable |
 | **NVIDIA DLSS SDK** | `THREEPP_WITH_DLSS` (opt-in) | **"NVIDIA RTX SDKs License" — proprietary, not open source.** The build fetches the SDK and copies `nvngx_dlss.dll` beside the executable; redistribution of that binary is governed by that license, not by anything in this repository |
 
 ## Resolved by vcpkg / the system (per feature)
@@ -138,6 +137,11 @@ for the `physx` feature; **Assimp** (BSD-3) for `assimp`; **Vulkan-Headers** (Ap
 MIT), **Vulkan-Loader** (Apache-2.0) and **Vulkan Memory Allocator** (MIT) for `vulkan`;
 optionally **GLFW** via vcpkg (zlib/libpng) instead of the vendored copy; **CPython** (PSF
 license) when Python or editor scripting is enabled.
+
+Build tool only, neither linked nor redistributed: **glslang**'s `glslangValidator` (mixed
+BSD-3/Apache-2.0/MIT, see its LICENSE) compiles the Vulkan shaders to SPIR-V when
+`THREEPP_WITH_VULKAN` is on. It is looked up with `find_program` (Vulkan SDK or a vcpkg
+`glslang`), never fetched.
 
 ---
 

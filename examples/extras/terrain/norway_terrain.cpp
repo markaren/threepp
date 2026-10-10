@@ -18,7 +18,7 @@
 // Usage:
 //   norway_terrain [<pack-dir>]          (or env THREEPP_REGION_PACK)
 //   norway_terrain --shot out.png [--frames N]   headless capture (forces Vulkan)
-//   default pack: <PROJECT_FOLDER>/geodata/trollstigen
+//   default pack: <PROJECT_FOLDER>/geodata/aalesund
 
 #include "capture_util.hpp"
 #include "renderer_factory.hpp"

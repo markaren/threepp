@@ -188,14 +188,15 @@ What the base gives you:
 - **Sim-less tasks** — a task whose world is not a GpuSim (e.g. a rendered pixel env with
   hand-rolled torch dynamics) passes `build_robot=None` and overrides `simulate(a)` instead of
   `act()`; everything else (timeout bookkeeping, terminal-obs capture, `env_state()` auto-reset,
-  reward-term logging) still applies. See `examples/turret/turret_env.py`.
+  reward-term logging) still applies. The `Counter` task in `tests/test_task_graph.py` is a
+  minimal one.
 
 Worked examples: `examples/cartpole/cartpole_env.py` (force control, timeout-only),
-`examples/spider/hexapod_gpu_env.py` (PD drive, free base, CPG clock, command resampling),
 `examples/spot/spot_terrain_env.py` / `spot_heightfield_env.py` / `spot_steps_env.py` (substeps,
 terrain scan, imitation anchor, adaptive curriculum via `on_done`),
 `examples/spot/scratch_distillation/scratch_env.py` (read_links foot contacts, iteration-driven
-schedules), and `examples/turret/turret_env.py` (sim-less pixel task).
+schedules), and `examples/tendon_hand/tendon_hand_env.py` (a `simulate()` override on a `GpuSim`
+world: tendon forces and a turning gravity applied per substep).
 
 ### Physics-based envs (`GpuSim`)
 
@@ -376,7 +377,7 @@ ac, norm, meta = load_policy("policy.pt", device="cpu")   # norm is None if norm
 To **warm-start / fine-tune** from a checkpoint, load it into a fresh `PPO`'s `ac`/`norm`
 (`ppo.ac.load_state_dict(...)`, `ppo.norm.load(src_norm.state())`); if the obs dimension changed,
 copy the overlapping input-layer columns and zero-init the new ones (see
-`examples/spot/train_spot_stairs.py:warmstart_scratch_to_terrain` for the expand-the-norm pattern).
+`warmstart_scratch_to_terrain` in `examples/spot/_common.py` for the expand-the-norm pattern).
 
 ---
 

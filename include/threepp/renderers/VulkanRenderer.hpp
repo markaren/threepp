@@ -429,7 +429,7 @@ namespace threepp {
         // post-composite product; BGRA8 at the render extent), `history` = the
         // history slot that frame wrote (RGBA16F at the output extent).
         // Splits "the shading diverged" from "the temporal resolve diverged"
-        // in the determinism audit (examples/vulkan/vulkan_aov_audit.cpp).
+        // in the determinism audit (examples/vulkan/audits/vulkan_aov_audit.cpp).
         // Full device sync per call — an audit instrument, not a capture path.
         // The TAA input is frame-local scratch whose memory later passes
         // reuse, so by the time a frame completes it holds their data; run
@@ -882,9 +882,8 @@ namespace threepp {
         // maps scene points inward, so filling the output corners needs
         // content from OUTSIDE the rendered field (measured: k1 = -0.1 on a
         // 384x256 frame wants pixel (398, 265) at the corner). Pincushion
-        // (k1 > 0) gathers inward and is unaffected. Until overscan exists,
-        // render with a wider FOV than the lens' nominal one and accept the
-        // reframing, or crop the smeared border, if the corners must be real.
+        // (k1 > 0) gathers inward and is unaffected. setLensOverscan() below
+        // renders the wider field that makes those corners real.
         //
         // OFF by default (LensModel::None) — zero cost, output unchanged.
         void setLensDistortion(const LensDistortion& distortion);

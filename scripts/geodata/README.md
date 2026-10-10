@@ -21,13 +21,13 @@ pip install pillow
 
 ```
 python fetch_norway_terrain.py --preset trollstigen
-python fetch_norway_terrain.py --preset alesund --preview --include-paths
+python fetch_norway_terrain.py --preset aalesund --preview --include-paths
 python fetch_norway_terrain.py --center 62.4482,7.6714 --size 8000 --res 2 --name myregion
 ```
 
 | flag | default | meaning |
 |------|---------|---------|
-| `--preset` | — | `trollstigen` or `alesund` |
+| `--preset` | — | `trollstigen`, `aalesund` or `geiranger` |
 | `--center lat,lon` | — | WGS84 center (alternative to `--preset`) |
 | `--size` | 8000 | region size in meters (square) |
 | `--res` | 2 | grid resolution, m/cell |
@@ -38,6 +38,10 @@ python fetch_norway_terrain.py --center 62.4482,7.6714 --size 8000 --res 2 --nam
 | `--buildings` | off | fetch OSM building footprints + DOM nDSM heights |
 | `--texture` | off | fetch a basemap texture from the open Kartverket raster WMS: `topo` (colour) or `topograatone` (greyscale) |
 | `--texture-res` | 2 | texture resolution, m/px |
+| `--canopy` | off | fetch the DOM over the whole region and write a canopy height model (`canopy.u8`, quarter-metres) |
+| `--roofs` | off | measure a per-building roof block (eave/ridge/axis, flat, gabled or hipped) from the 1 m DOM; implies `--buildings` |
+| `--landuse` | off | fetch OSM land-use polygons, paths and trees (writes `landuse.json`) |
+| `--cache` | — | directory to cache raw WCS tiles and Overpass responses in, so a re-run costs no network |
 | `--preview` | off | render `preview.png` (hillshade + roads + building outlines) |
 
 Output lands in `<out>/<name>/` as `region.json`, `heights.f32`, `roads.json`
@@ -54,7 +58,7 @@ spec; do not change it here.
   coordinate so the famous **Fv63 switchback wall** (the 11 hairpins) sits in
   the middle of an 8 km region. Surrounding peaks (>1400 m, e.g. Bispen/Kongen)
   fall inside. The Trollstigen road is NVDB `vegkategori = F` (fylkesvei).
-- **alesund** = `62.4722, 6.1495`. Coastal town — exercises the sea path
+- **aalesund** = `62.4722, 6.1495`. Coastal town — exercises the sea path
   (sea = 0 m). Contains the E136 European route (category `E`).
 
 ## Data sources

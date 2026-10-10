@@ -1,9 +1,10 @@
 # geodata — generated region packs (not tracked)
 
 This folder holds **region packs**: real-world terrain + road data that the
-Norway terrain/driving examples load at runtime. The packs are **not committed**
+Norway terrain viewer ([`norway_terrain`](../examples/extras/terrain/norway_terrain.cpp),
+through `terrain::GeoTerrainPack`) loads at runtime. The packs are **not committed**
 — each is ~64 MB of raw elevation data (`.gitignore` keeps only this README).
-Generate them locally before running the examples.
+Generate them locally before running the viewer.
 
 ## Generate
 
@@ -17,7 +18,7 @@ Kartverket DOM surface model). See
 pip install requests numpy tifffile pyproj      # matplotlib optional (PNG preview), pillow optional (--texture)
 
 cd scripts/geodata
-python fetch_norway_terrain.py --preset trollstigen --buildings   # the Fv63 hairpins (driving showcase)
+python fetch_norway_terrain.py --preset trollstigen --buildings   # the Fv63 hairpins
 python fetch_norway_terrain.py --preset aalesund --buildings      # coastal town (sea path, ~8k buildings)
 ```
 
@@ -37,9 +38,8 @@ world x = east, z = −north.
 
 ## Use
 
-The examples default to `geodata/trollstigen` (driving) / `geodata/aalesund`
-(terrain viewer). Point them elsewhere with a path argument or the
-`THREEPP_REGION_PACK` environment variable:
+The viewer defaults to `geodata/aalesund`. Point it elsewhere with a path
+argument or the `THREEPP_REGION_PACK` environment variable:
 
 ```
 norway_terrain [<pack-dir>]      # viewer  (or env THREEPP_REGION_PACK)
