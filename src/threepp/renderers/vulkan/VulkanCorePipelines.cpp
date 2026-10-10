@@ -921,7 +921,14 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
             VkCommandBuffer initCb = beginOneShot();
             std::vector<VkImageMemoryBarrier> inits;
             inits.reserve(view().rasterGbufs.size() * (gbufMsaaSamples_ > 1 ? 18 : 12));
-            auto pushInit = [&](VkImage image, VkImageAspectFlags aspect, VkImageLayout layout) {
+            // dstAccess: what the first use of the image after this barrier
+            // does. Default = a shader read. An image this command buffer goes
+            // on to clear with vkCmdClearColorImage is first written by the
+            // TRANSFER stage, and a transition that opened only SHADER_READ
+            // left that write unordered against the layout transition itself
+            // (sync validation: WRITE_AFTER_WRITE, 4 images x kFramesInFlight).
+            auto pushInit = [&](VkImage image, VkImageAspectFlags aspect, VkImageLayout layout,
+                                VkAccessFlags dstAccess = VK_ACCESS_SHADER_READ_BIT) {
                 // A pooled image shares memory with others and is discarded at
                 // its first use in every frame; nothing to initialise.
                 if (vulkan::TransientPool::pooled(image)) return;
@@ -940,9 +947,11 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 b.subresourceRange.levelCount = 1;
                 b.subresourceRange.layerCount = 1;
                 b.srcAccessMask = 0;
-                b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                b.dstAccessMask = dstAccess;
                 inits.push_back(b);
             };
+            // The four cleared below (cloud history, RTAO) take TRANSFER_WRITE too.
+            constexpr VkAccessFlags kReadAndClear = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
             for (auto& g : view().rasterGbufs) {
                 pushInit(g.normal.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 pushInit(g.motion.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -962,11 +971,11 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 pushInit(g.shadowAtrousB.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.froxelScatter.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.froxelLut.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
-                pushInit(g.cloudColor.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
-                pushInit(g.cloudAux.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.cloudColor.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, kReadAndClear);// storage (compute r/w) + cleared below
+                pushInit(g.cloudAux.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, kReadAndClear);// storage (compute r/w) + cleared below
                 pushInit(g.cloudShadow.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
-                pushInit(g.rtao.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
-                pushInit(g.rtaoAux.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.rtao.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, kReadAndClear);// storage (compute r/w) + cleared below
+                pushInit(g.rtaoAux.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, kReadAndClear);// storage (compute r/w) + cleared below
                 pushInit(g.splatDepth.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w) + transfer clear
                 pushInit(g.depth.image,  VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
                 // null-check, not just the msaa toggle: a SECONDARY view gets no
