@@ -42,41 +42,7 @@ layout(local_size_x = 64) in;
 
 #include "camera_ubo.glsl"
 
-struct DirLight   { vec3 direction; vec3 color; };
-struct PointLight { vec3 position; float range; vec3 color; float decay; float radius; };
-struct SpotLight  { vec3 position; float range; vec3 color; float decay;
-                    vec3 direction; float cosAngleOuter; float cosAngleInner; float radius; };
-struct RectLight  { vec3 position; vec3 halfU; vec3 halfV; vec3 normal; vec3 color; };
-layout(set = 0, binding = 1, scalar) uniform LightsUbo {
-    vec3       ambient;
-    uint       dirCount;
-    DirLight   dirLights[8];
-    uint       pointCount;
-    uint       spotCount;
-    uint       rectCount;
-    PointLight pointLights[8];
-    SpotLight  spotLights[8];
-    RectLight  rectLights[4];
-    // HemisphereLight zero-mean rows (unused here; declared so the env-knob
-    // tail below lands at its offset).
-    vec3       hemiDeltaR;
-    vec3       hemiDeltaG;
-    vec3       hemiDeltaB;
-    // scene.environmentRotation / environmentIntensity and the background
-    // knobs (GpuLightsUbo tail, VulkanGpuLayouts.hpp; SceneEnvKnobs.hpp).
-    // Rotations are world -> env mat3 columns; envKnobFlags bit 0 / bit 1 =
-    // env / background rotation active (identity skipped: defaults exact).
-    vec3       envRotC0;
-    vec3       envRotC1;
-    vec3       envRotC2;
-    float      envIntensity;
-    vec3       bgRotC0;
-    vec3       bgRotC1;
-    vec3       bgRotC2;
-    float      bgIntensity;
-    float      bgBlurriness;
-    uint       envKnobFlags;
-} lights;
+#include "lights_ubo.glsl"
 
 layout(set = 0, binding = 2) uniform sampler2D envTex;// prefiltered PMREM mip chain
 

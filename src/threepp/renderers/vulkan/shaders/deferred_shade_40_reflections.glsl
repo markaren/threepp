@@ -1,33 +1,8 @@
-// Split from deferred_shade.comp: reflection-hit geometry/UV fetch,
-// bindless material texture sampling helpers, GGX half-vector sampling
+// Split from deferred_shade.comp: the ray's UV footprint at a hit (the
+// fetch itself is hit_fetch.glsl), GGX half-vector sampling
 // (random + deterministic Hammersley/Fibonacci variants), and the
 // multi-bounce specular reflection + 1-bounce diffuse GI ray functions
 // (traceRadiance, giRadiance).
-
-// Interpolated world-space normal + UV at a reflection hit. Mirrors
-// closest_hit's GeometryDesc + barycentric interpolation + world transform.
-void fetchHit(int instIdx, int primId, vec2 bary, mat4x3 worldToObj,
-              out vec3 Nworld, out vec2 uvOut) {
-    const GeometryDesc g = geoms[instIdx];
-    const uvec3 idx = gfetchTri(g, primId);
-    const float w = 1.0 - bary.x - bary.y;
-
-    // gfetch* honour GeometryDesc.packedAttrs (oct-snorm16 normals / unorm16
-    // uvs on packed static geometry, tightly-packed float otherwise).
-    const vec3 n0 = gfetchNormal(g, idx.x);
-    const vec3 n1 = gfetchNormal(g, idx.y);
-    const vec3 n2 = gfetchNormal(g, idx.z);
-    const vec3 nObj = normalize(w * n0 + bary.x * n1 + bary.y * n2);
-    Nworld = normalize(transpose(mat3(worldToObj)) * nObj);
-
-    uvOut = vec2(0.0);
-    if (g.uvAddress != 0ul) {
-        const vec2 u0 = gfetchUv(g, idx.x);
-        const vec2 u1 = gfetchUv(g, idx.y);
-        const vec2 u2 = gfetchUv(g, idx.z);
-        uvOut = w * u0 + bary.x * u1 + bary.y * u2;
-    }
-}
 
 // The UV footprint of a ray at a hit, as the two gradients textureGrad takes:
 // what the fragment shader's derivatives are to the primary view. `width` is
@@ -79,23 +54,6 @@ void hitUvFootprint(int instIdx, int primId, mat4x3 objToWorld, vec3 dir, float 
     duvB = ((rB.x * g22 - rB.y * g12) * d1 + (rB.y * g11 - rB.x * g12) * d2) / det;
 }
 
-// A material texture's colour at a hit, filtered over the ray's footprint
-// (hitUvFootprint). The alpha tests below stay on the finest mip: a cutout's
-// outline is not this function's to change.
-vec3 hitTex(int texIndex, mat3 uvXform, vec2 uv, vec3 fallback, vec2 duvA, vec2 duvB) {
-    if (texIndex < 0) return fallback;
-    const int  i = clamp(texIndex, 0, int(kMaxMaterialTextures) - 1);
-    const mat2 J = mat2(uvXform);
-    return fallback * textureGrad(albedoMaps[nonuniformEXT(i)], (uvXform * vec3(uv, 1.0)).xy, J * duvA, J * duvB).rgb;
-}
-
-// Sample a bindless material texture at a reflection-hit UV (compute has no
-// derivatives → explicit mip 0). texIndex < 0 → return `fallback` unchanged.
-vec3 hitTex(int texIndex, mat3 uvXform, vec2 uv, vec3 fallback) {
-    if (texIndex < 0) return fallback;
-    const int i = clamp(texIndex, 0, int(kMaxMaterialTextures) - 1);
-    return fallback * textureLod(albedoMaps[nonuniformEXT(i)], (uvXform * vec3(uv, 1.0)).xy, 0.0).rgb;
-}
 
 // Albedo-texture ALPHA at a hit — for alpha-testing cutouts and weighting
 // blend surfaces along secondary rays (the queries run force-opaque, so no

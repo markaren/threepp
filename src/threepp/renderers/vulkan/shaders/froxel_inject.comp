@@ -34,22 +34,7 @@ layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 #include "camera_ubo.glsl"
 #include "camera_ray.glsl"// camViewPointAtDist / camRayOrigin — perspective AND ortho
 
-struct DirLight   { vec3 direction; vec3 color; };
-struct PointLight { vec3 position; float range; vec3 color; float decay; float radius; };
-struct SpotLight  { vec3 position; float range; vec3 color; float decay;
-                    vec3 direction; float cosAngleOuter; float cosAngleInner; float radius; };
-struct RectLight  { vec3 position; vec3 halfU; vec3 halfV; vec3 normal; vec3 color; };
-layout(set = 0, binding = 1, scalar) uniform LightsUbo {
-    vec3       ambient;
-    uint       dirCount;
-    DirLight   dirLights[8];
-    uint       pointCount;
-    uint       spotCount;
-    uint       rectCount;
-    PointLight pointLights[8];
-    SpotLight  spotLights[8];
-    RectLight  rectLights[4];
-} lights;
+#include "lights_ubo.glsl"
 
 layout(set = 0, binding = 8) uniform accelerationStructureEXT topAS;
 

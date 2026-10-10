@@ -67,48 +67,7 @@ layout(location = 8) flat out uint vStableId;// stable per-object id -> outIds.y
 // draws particles. Declared because gbuffer.frag is shared between the two.
 layout(location = 9) flat out uint vParticleId;
 
-vec3 fetchVec3(uint64_t addr, uint i) {
-    FloatBuf b = FloatBuf(addr);
-    return vec3(b.v[i * 3u + 0u], b.v[i * 3u + 1u], b.v[i * 3u + 2u]);
-}
-
-vec2 fetchVec2(uint64_t addr, uint i) {
-    FloatBuf b = FloatBuf(addr);
-    return vec2(b.v[i * 2u + 0u], b.v[i * 2u + 1u]);
-}
-
-// Octahedral decode — MUST mirror probe_common.glsl's octDecode (and the CPU
-// encoder in VulkanCoreGeometry.cpp) including the signNotZero convention.
-vec3 octDecodeN(vec2 e) {
-    vec3 v = vec3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
-    if (v.z < 0.0) {
-        const vec2 s = vec2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
-        v.xy = (1.0 - abs(v.yx)) * s;
-    }
-    return normalize(v);
-}
-
-// Packed-aware fetches (DrawInfo.packedAttrs bits, see BlasRecord::packedMask).
-vec3 fetchNormal(uint64_t addr, uint packedAttrs, uint i) {
-    if ((packedAttrs & 1u) != 0u) {
-        return octDecodeN(unpackSnorm2x16(UintBuf(addr).v[i]));
-    }
-    return fetchVec3(addr, i);
-}
-
-vec2 fetchUv(uint64_t addr, uint packedAttrs, uint i) {
-    if ((packedAttrs & 2u) != 0u) {
-        return unpackUnorm2x16(UintBuf(addr).v[i]);
-    }
-    return fetchVec2(addr, i);
-}
-
-vec3 fetchColor(uint64_t addr, uint packedAttrs, uint i) {
-    if ((packedAttrs & 4u) != 0u) {
-        return unpackUnorm4x8(UintBuf(addr).v[i]).rgb;
-    }
-    return fetchVec3(addr, i);
-}
+#include "vertex_fetch.glsl"// fetchNormal / fetchUv / fetchColor by device address
 
 void main() {
     const DrawInfo d = draws[gl_InstanceIndex];

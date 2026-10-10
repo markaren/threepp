@@ -287,7 +287,7 @@ layout(set = 0, binding = 19, scalar) uniform CloudUbo {
 // ARE declared must keep the exact order and types deferred_shade.comp and
 // particle_light.comp give them, or every offset after the first mismatch is
 // garbage.
-struct DirLight { vec3 direction; vec3 color; };
+#include "light_structs.glsl"
 layout(set = 0, binding = 20, scalar) uniform LightsUbo {
     vec3     ambient;
     uint     dirCount;

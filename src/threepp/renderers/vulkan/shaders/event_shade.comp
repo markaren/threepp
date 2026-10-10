@@ -56,48 +56,10 @@ layout(set = 0, binding = 2, scalar) readonly buffer MatBuf {
     MaterialDesc mats[];
 };
 
-struct DirLight {
-    vec3 direction;
-    vec3 color;
-};
-// Same layout as the main RT pipeline's LightsUbo — we read only the
-// ambient + directional block, but declare the full struct so scalar
-// block layout matches byte-for-byte against the host-side upload.
-struct PointLight {
-    vec3 position;
-    float range;
-    vec3 color;
-    float decay;
-    float radius;// physical source radius (soft shadows; layout parity with GpuPointLight)
-};
-struct SpotLight {
-    vec3 position;
-    float range;
-    vec3 color;
-    float decay;
-    vec3 direction;
-    float cosAngleOuter;
-    float cosAngleInner;
-    float radius;// physical source radius (soft shadows; layout parity with GpuSpotLight)
-};
-struct RectLight {
-    vec3 position;
-    vec3 halfU;
-    vec3 halfV;
-    vec3 normal;
-    vec3 color;
-};
-layout(set = 0, binding = 3, scalar) uniform LightsUbo {
-    vec3       ambient;
-    uint       dirCount;
-    DirLight   dirLights[8];
-    uint       pointCount;
-    uint       spotCount;
-    uint       rectCount;
-    PointLight pointLights[8];
-    SpotLight  spotLights[8];
-    RectLight  rectLights[4];
-} lights;
+// The scene lights, the same GpuLightsUbo buffer the deferred shade reads,
+// bound here at binding 3; only `ambient` and the sun list are used.
+#define LIGHTS_UBO_BINDING 3
+#include "lights_ubo.glsl"
 
 // Packed BGRA8 output — one uint per pixel, byte 0 = B, byte 1 = G,
 // byte 2 = R, byte 3 = 0xFF. Matches the swapchain format event_detect

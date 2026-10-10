@@ -515,19 +515,6 @@ vec3 evalIridescence(float outsideIOR, float eta2, float cosTheta1,
     return max(I, vec3(0.0));
 }
 
-// Interpolated UV at a hit (lean — UV only, for the alpha-tested shadow test).
-// Mirrors fetchHit's index + barycentric interpolation.
-vec2 fetchUvAt(int instIdx, int primId, vec2 bary) {
-    const GeometryDesc g = geoms[instIdx];
-    if (g.uvAddress == 0ul) return vec2(0.0);
-    const uvec3 idx = gfetchTri(g, primId);
-    // Packed-aware (unorm16x2 on packed static geometry — see packedAttrs).
-    const vec2 u0 = gfetchUv(g, idx.x);
-    const vec2 u1 = gfetchUv(g, idx.y);
-    const vec2 u2 = gfetchUv(g, idx.z);
-    return (1.0 - bary.x - bary.y) * u0 + bary.x * u1 + bary.y * u2;
-}
-
 // Does a shadow-ray candidate hit actually OCCLUDE? Policy mirrors the RT
 // shadow_anyhit.rahit so the deferred and ray-traced backends agree:
 //   transmission > 0 (glass / alpha-blend transparency / additive) → never blocks
@@ -654,18 +641,7 @@ vec3 evalLight(vec3 N, vec3 V, vec3 L, float NdotV, vec3 F0, vec3 albedo,
     return ((diff + spec) * baseShare + sheen) * NdotL;
 }
 
-// ── RNG + RT ambient occlusion / env GI ─────────────────────────────────────
-uint pcgHash(uint v) {
-    v = v * 747796405u + 2891336453u;
-    const uint s = ((v >> ((v >> 28) + 4u)) ^ v) * 277803737u;
-    return (s >> 22) ^ s;
-}
-float rnd(inout uint seed) {
-    seed = seed * 747796405u + 2891336453u;
-    uint r = ((seed >> ((seed >> 28) + 4u)) ^ seed) * 277803737u;
-    r = (r >> 22) ^ r;
-    return float(r) * (1.0 / 4294967296.0);
-}
+// ── RT ambient occlusion / env GI (the RNG is pcg_rng.glsl) ─────────────────────────────────────
 
 // (sunShadowVis lives after blueNoiseDef — it dithers off the blue-noise tile.)
 

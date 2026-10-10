@@ -1,4 +1,5 @@
 #version 460
+#extension GL_GOOGLE_include_directive : enable
 #extension GL_EXT_scalar_block_layout    : require
 #extension GL_EXT_buffer_reference       : require
 #extension GL_EXT_buffer_reference2      : require
@@ -49,19 +50,8 @@ layout(buffer_reference, scalar, buffer_reference_align = 4) buffer TransBuf { u
 // than by a descriptor for the reason everything else in this pass is: the ONE
 // thing that cannot ride an address is the acceleration structure. Only
 // foamAddress is read, but the whole struct is declared so the stride is stated
-// by the layout rather than assumed by an index. KEEP IN SYNC with
-// GeometryDesc in deferred_shade.comp / probe_update.comp.
-struct GeometryDesc {
-    uint64_t vertexAddress;
-    uint64_t normalAddress;
-    uint64_t indexAddress;
-    uint64_t uvAddress;
-    uint64_t foamAddress;
-    uint64_t prevVertexAddress;
-    uint64_t colorAddress;
-    uint     indexed;
-    uint     flags;
-};
+// by the layout rather than assumed by an index (geometry_desc.glsl).
+#include "geometry_desc.glsl"
 layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer GeomBuf {
     GeometryDesc g[];
 };
