@@ -718,7 +718,7 @@ void VulkanRenderer::Impl::destroyBlasCompactionResources() {
 // uv/color buffers (those are shared with LOD0 via the same vertexAddress-
 // keyed lookup the shaders already do). The build itself is DEFERRED into
 // `pending` — drainLodResults batches a whole frame's builds into one
-// one-shot submit via flushLodLevelBuilds.
+// one-shot submit via submitLodLevelBuilds.
 bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
                                                      const geometrylod::Level& level,
                                                      BlasRecord::LodLevel& out,
@@ -762,7 +762,7 @@ bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
 
             // Size query needs a fully-specified build info; a LOCAL struct is
             // fine here (only the final batched cmdBuildAccelerationStructures
-            // needs pointer-stable storage — flushLodLevelBuilds rebuilds it).
+            // needs pointer-stable storage — recordLodLevelBuilds rebuilds it).
             VkAccelerationStructureGeometryTrianglesDataKHR triData{};
             triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
             triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
@@ -788,7 +788,7 @@ bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
             // never refits in place — a geometry-version bump instead destroys
             // the whole chain, see the geomVersion-changed rebuild path in
             // VulkanCoreScene.cpp). Compacted like a static record, by
-            // flushLodLevelBuilds after the build.
+            // landLodBatches once the build's batch has landed.
             blasBuild.flags = staticBlasBuildFlags();
             blasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
             blasBuild.geometryCount = 1;
@@ -834,10 +834,8 @@ bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
             // buffer must not alias scratch memory (same rule as
             // refreshGeomBlasBatch's per-record persistent scratch).
             build.scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
-            // The caller appends `out` to rec.lodLevels (or, on the fenced
-            // path, rec.lodLanding) right after this returns, and sets `level`
-            // to its index there.
-            build.rec = &rec;
+            // The caller appends `out` to rec.lodLanding right after this
+            // returns, and sets `level` to its index there.
             pending.push_back(build);
 
             out.indexCount  = static_cast<uint32_t>(level.indices.size());
@@ -885,41 +883,6 @@ void VulkanRenderer::Impl::recordLodLevelBuilds(VkCommandBuffer cb, std::vector<
             ctx->rt().cmdBuildAccelerationStructures(cb, N, blasBuilds.data(), rangePtrs.data());
         }
 
-void VulkanRenderer::Impl::flushLodLevelBuilds(std::vector<LodPendingBuild>& pending) {
-            if (pending.empty()) return;
-            const uint32_t N = static_cast<uint32_t>(pending.size());
-            // Never inside a one-shot batch (drainLodResults runs before the
-            // admit loop opens one): the compaction below reads the query
-            // results, which needs this submit to have completed.
-            assert(!oneShotBatch_);
-            VkCommandBuffer cb = beginOneShot();
-            recordLodLevelBuilds(cb, pending);
-            if (blasCompact_) {
-                std::vector<VkAccelerationStructureKHR> ases(N);
-                for (uint32_t k = 0; k < N; ++k) ases[k] = pending[k].as;
-                recordCompactedSizeQueries(cb, ases);
-            }
-            endAndSubmitOneShot(cb, "auto-LOD level BLAS batch");
-
-            for (auto& b : pending) destroyBuffer(ctx->allocator(), b.scratch);
-
-            // Compact every level of the frame in one copy one-shot. Nothing has
-            // read a level's address yet: the chains were marked Ready inside
-            // this same drainLodResults call, and selection runs after it.
-            // lodBlasBytes_ counted each level at its build size; take off what
-            // compaction gave back.
-            if (blasCompact_) {
-                std::vector<BlasCompactJob> jobs(N);
-                for (uint32_t k = 0; k < N; ++k) {
-                    auto& lvl = pending[k].rec->lodLevels[pending[k].level];
-                    jobs[k] = {&lvl.as, &lvl.storage, &lvl.address, nullptr};
-                }
-                const auto freed = compactBlases(jobs, /*retire=*/false);
-                for (const VkDeviceSize f : freed) lodBlasBytes_ -= std::min<uint64_t>(lodBlasBytes_, f);
-            }
-            pending.clear();
-        }
-
 // Drains finished chains up to the per-frame budget (16 geometries OR 8 MiB
 // of new level resources, whichever hits first — see the declaration) and
 // turns them into GPU resources. All of the frame's level BLAS builds are
@@ -932,19 +895,15 @@ void VulkanRenderer::Impl::flushLodLevelBuilds(std::vector<LodPendingBuild>& pen
 // as eligible. Stale/failed results don't count against the budget — they
 // create no resources.
 void VulkanRenderer::Impl::drainLodResults() {
-            // Per-frame finalize budget. Deliberately small: every drain that
-            // builds anything ends in flushLodLevelBuilds, whose one-shot submit
-            // WAITS on the graphics queue — so the budget is not a throughput
-            // knob, it is the size of a stall landing inside render(). At 16
-            // geoms / 8 MiB a scene that brings a lot of geometry into view at
-            // once (spot_slam's 46 vegetation chains) paid ~40 ms hitches every
-            // time a batch landed. Two geometries / 1 MiB spreads the same total
-            // work over more frames, trading a few frames of latency before a
-            // chain becomes selectable for a stall small enough to stay inside
-            // a 60 Hz budget. That wait is now THREEPP_VK_LOD_DRAIN_WAIT=1
-            // only: by default the submit is fenced and lands drains later
-            // (landLodBatches), so the budget bounds the CPU work of a drain
-            // and the GPU build burst it queues, not a stall.
+            // Per-frame finalize budget. Deliberately small. It was sized when
+            // every drain that built anything ended in a one-shot submit that
+            // WAITED on the graphics queue, so the budget was the size of a
+            // stall landing inside render(): at 16 geoms / 8 MiB a scene that
+            // brings a lot of geometry into view at once (spot_slam's 46
+            // vegetation chains) paid ~40 ms hitches every time a batch landed.
+            // The submit is now fenced and lands drains later (landLodBatches),
+            // so the budget bounds the CPU work of a drain and the GPU build
+            // burst it queues, not a stall.
             constexpr uint32_t kMaxGeomsPerFrame = 2;
             constexpr uint64_t kMaxNewBytesPerFrame = 1ull * 1024ull * 1024ull;
 
@@ -969,7 +928,7 @@ void VulkanRenderer::Impl::drainLodResults() {
             // first (their levels become selectable this frame), then this
             // drain's builds go out unwaited. Both steps count drains, not
             // time, so the pinned-clock schedule above still replays.
-            if (!lodDrainWait_) landLodBatches();
+            landLodBatches();
 
             uint32_t finalizedGeoms = 0;
             uint64_t newBytes = 0;
@@ -1018,9 +977,8 @@ void VulkanRenderer::Impl::drainLodResults() {
                     continue;
                 }
 
-                // Where the levels go: straight into the chain (the waited
-                // path), or into lodLanding until their batch lands.
-                auto& dst = lodDrainWait_ ? rec.lodLevels : rec.lodLanding;
+                // The levels sit in lodLanding until their batch lands.
+                auto& dst = rec.lodLanding;
                 dst.reserve(result.levels.size());
                 for (const auto& lvl : result.levels) {
                     // HARD budget enforcement at allocation time. The enqueue
@@ -1052,10 +1010,6 @@ void VulkanRenderer::Impl::drainLodResults() {
                     // (not None) so selection doesn't spin re-enqueuing while
                     // the cap holds. Deliberately never retried this session.
                     rec.lodState = BlasRecord::LodState::Failed;
-                } else if (lodDrainWait_) {
-                    rec.lodState = BlasRecord::LodState::Ready;
-                    ++lodChainsReadyCount_;
-                    ++finalizedGeoms;
                 } else {
                     // Stays Queued (selection neither uses nor re-enqueues it)
                     // until landLodBatches moves lodLanding into lodLevels.
@@ -1064,12 +1018,8 @@ void VulkanRenderer::Impl::drainLodResults() {
                 }
             }
 
-            if (lodDrainWait_) {
-                flushLodLevelBuilds(pending);
-            } else {
-                submitLodLevelBuilds(pending, pendingGeoms, chainGeoms);
-                ++lodDrainSerial_;
-            }
+            submitLodLevelBuilds(pending, pendingGeoms, chainGeoms);
+            ++lodDrainSerial_;
         }
 
 void VulkanRenderer::Impl::submitLodBatch(LodLandingBatch&& b, VkCommandBuffer cb,

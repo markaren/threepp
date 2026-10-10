@@ -56,10 +56,6 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
                 blasCompact_ = !(c && *c == '0') &&
                                ctx->rt().cmdWriteAccelerationStructuresProperties != nullptr &&
                                ctx->rt().cmdCopyAccelerationStructure != nullptr;
-                // Auto-LOD landing: THREEPP_VK_LOD_DRAIN_WAIT=1 restores the
-                // submit + queue wait per drain (see lodDrainWait_).
-                const char* w = std::getenv("THREEPP_VK_LOD_DRAIN_WAIT");
-                lodDrainWait_ = w && *w && *w != '0';
             }
 
             // The scene-dependent AS build runs lazily on the first render()

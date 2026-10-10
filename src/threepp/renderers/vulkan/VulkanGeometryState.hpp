@@ -672,7 +672,7 @@ namespace threepp::vulkan::impl {
     };
 
     // One level's deferred BLAS build, produced by buildLodLevelFor and
-    // consumed by flushLodLevelBuilds — resources (AS handle, storage,
+    // consumed by submitLodLevelBuilds — resources (AS handle, storage,
     // index buffer, scratch) already exist; only the build execution is
     // deferred so a whole frame's worth records into one command buffer.
     struct LodPendingBuild {
@@ -683,14 +683,12 @@ namespace threepp::vulkan::impl {
         uint32_t primitiveCount = 0;
         bool packedIdx = false;// index buffer is uint16 (base record's bit 3)
         Buffer scratch{};// per-build scratch: concurrent builds in one cmdbuf must not alias
-        // Where the level lands: rec->lodLevels[level], swapped to its
-        // compacted pair after the build (flushLodLevelBuilds).
-        BlasRecord* rec = nullptr;
+        // Where the level lands: index into its record's lodLanding.
         uint32_t level = 0;
     };
 
-    // One fenced, unwaited submit of auto-LOD work (drainLodResults without
-    // THREEPP_VK_LOD_DRAIN_WAIT): the level builds of one drain (plus their
+    // One fenced, unwaited submit of auto-LOD work (drainLodResults): the
+    // level builds of one drain (plus their
     // compacted-size queries), or the compaction copies of one earlier build
     // batch. It lands on drain number `landAt`, a fixed count after the
     // submit, so the frame a chain becomes selectable is a function of the
