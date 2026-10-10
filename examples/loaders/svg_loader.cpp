@@ -71,6 +71,12 @@ namespace {
         svg->position.y = 70;
         svg->scale.y *= -1;
 
+        // The meshes share one plane and write no depth, so the document's
+        // paint order has to be stated: left to the renderer, transparent
+        // objects are sorted by the depth of their bounding spheres, which
+        // reshuffles the layers as soon as the camera leaves the head-on view.
+        int renderOrder = 0;
+
         for (const auto& data : svgData) {
 
             auto fillColor = data.style.fill;
@@ -89,6 +95,7 @@ namespace {
                 auto mesh = Mesh::create(geometry, material);
                 mesh->name = data.style.id;
                 mesh->visible = data.style.visibility;
+                mesh->renderOrder = renderOrder++;
                 svg->add(mesh);
             }
 
@@ -108,6 +115,7 @@ namespace {
                     if (strokeGeometry) {
 
                         auto strokeMesh = Mesh::create(strokeGeometry, strokeMaterial);
+                        strokeMesh->renderOrder = renderOrder++;
                         svg->add(strokeMesh);
                     }
                 }
@@ -136,31 +144,41 @@ namespace {
 int main(int argc, char** argv) {
 
     // Headless capture (dev): svg_loader --shot <name.png> [--svg tiger.svg]
-    // [--frames N] [--api gl|vulkan]. Renders N frames and saves via
-    // writeFramebuffer, then exits (layering/parity checks).
+    // [--frames N] [--api gl|vulkan] [--cam x y z]. Renders N frames and saves
+    // via writeFramebuffer, then exits (layering/parity checks). --cam places
+    // the camera, still looking at the origin: the layering has to hold from
+    // an angle too, and the default head-on view cannot show that it does.
     std::string shotPath;
     std::string shotSvg = "tiger.svg";
     int shotFrames = 60, shotFrame = 0;
+    std::optional<Vector3> shotCam;
     std::optional<GraphicsAPI> apiOverride;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
         else if (a == "--svg" && i + 1 < argc) shotSvg = argv[++i];
         else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
-        else if (a == "--api" && i + 1 < argc) {
+        else if (a == "--cam" && i + 3 < argc) {
+            shotCam = Vector3(std::stof(argv[i + 1]), std::stof(argv[i + 2]), std::stof(argv[i + 3]));
+            i += 3;
+        } else if (a == "--api" && i + 1 < argc) {
             const std::string v = argv[++i];
             if (v == "gl") apiOverride = GraphicsAPI::OpenGL;
             else if (v == "vulkan" || v == "vk") apiOverride = GraphicsAPI::Vulkan;
         }
     }
 
-    Canvas canvas("SVGLoader", {{"antialiasing", 4}});
+    Canvas canvas("SVGLoader", {{"antialiasing", 4}, {"headless", !shotPath.empty()}});
     auto renderer = createRenderer(canvas, apiOverride);
     renderer->setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.z = 100;
+    if (shotCam) {
+        camera->position.copy(*shotCam);
+        camera->lookAt({0, 0, 0});
+    }
 
     auto gridHelper = GridHelper::create(160, 10);
     gridHelper->rotation.x = math::PI / 2;
