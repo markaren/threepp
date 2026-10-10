@@ -839,6 +839,8 @@ if (THREEPP_WITH_VULKAN)
             # via dynamic_cast), so the object types live with it under Vulkan.
             "threepp/objects/DisplacedMesh.hpp"
             "threepp/objects/Ocean.hpp"
+            # What a vessel leaves on the ocean's wake field.
+            "threepp/extras/marine/VesselWash.hpp"
     )
     list(APPEND privateHeaders
             "threepp/renderers/vulkan/VulkanContext.hpp"
@@ -877,6 +879,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/splats/SplatSurface.cpp"
             "threepp/objects/DisplacedMesh.cpp"
             "threepp/objects/Ocean.cpp"
+            "threepp/extras/marine/VesselWash.cpp"
             "threepp/renderers/vulkan/VmaImpl.cpp"
             "threepp/renderers/vulkan/VulkanContext.cpp"
             "threepp/renderers/vulkan/VulkanResources.cpp"

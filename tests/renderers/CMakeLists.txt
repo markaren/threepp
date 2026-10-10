@@ -205,6 +205,9 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     # wave: the choppy-displacement inversion and the cascade-1 rotation.
     # No device needed; DisplacedMesh is only built with Vulkan.
     add_test_executable(DisplacedMeshSampleHeight_test)
+    # marine::VesselWash (what a vessel leaves on the ocean's wake field)
+    # against the numbers of the Python class it is a port of. No device needed.
+    add_test_executable(VesselWash_test)
 
     add_test_executable(RenderGraph_test)
     # TransientPool placement (AliasPacker); CPU only.
