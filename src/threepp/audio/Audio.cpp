@@ -193,6 +193,15 @@ struct AudioListener::Impl {
 
     Impl(): engineConfig(ma_engine_config_init()) {
 
+#ifdef __EMSCRIPTEN__
+        // In a browser the mixing runs on the page's own thread, between the
+        // frames it draws (a ScriptProcessorNode). The default period comes
+        // out as 256 frames, 5 ms, and a frame takes three times that to
+        // draw, so every frame left a hole in the sound. 2048 frames (43 ms
+        // at 48 kHz) rides over a frame or two, for that much more delay.
+        engineConfig.periodSizeInFrames = 2048;
+#endif
+
         ma_result result = ma_engine_init(&engineConfig, &engine);
         if (result != MA_SUCCESS) {
             throw std::runtime_error("[Audio] Failed to init engine");
