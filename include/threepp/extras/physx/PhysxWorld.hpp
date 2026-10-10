@@ -617,8 +617,7 @@ namespace threepp {
                     throw std::runtime_error(
                             "PxCreateFoundation failed: PhysX allows one foundation per process, "
                             "and another PhysxWorld is still alive. Destroy it before creating a "
-                            "new one (in Python: del the old world and gc.collect(), or restart "
-                            "the kernel).");
+                            "new one.");
                 }
                 throw std::runtime_error("PxCreateFoundation failed");
             }

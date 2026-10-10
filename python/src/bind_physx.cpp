@@ -797,6 +797,14 @@ namespace threepp_py {
                          s.enableDirectGpu = direct_gpu;
                          s.enableTgsPcm = tgs_pcm;
                          s.cudaContext = reinterpret_cast<CUcontext>(cuda_context);
+                         // PhysxWorld's own error says "destroy it"; from Python that
+                         // is the collector's doing, so say how.
+                         if (::PxIsFoundationValid()) {
+                             throw std::runtime_error(
+                                     "PhysX allows one foundation per process, and another PhysxWorld is "
+                                     "still alive. del the old world and gc.collect() before creating a new "
+                                     "one, or restart the kernel.");
+                         }
                          return std::make_unique<PhysxWorld>(s);
                      }),
                      py::arg("gravity") = Vector3(0, -9.81f, 0),
