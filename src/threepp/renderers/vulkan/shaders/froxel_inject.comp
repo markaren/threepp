@@ -47,16 +47,7 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
     vec3  worldUp;
 } fog;
 
-// KEEP IN SYNC with cluster_build.comp / deferred_shade.comp.
-struct ClusterLight {
-    vec3  position;   float range;
-    vec3  color;      float decay;
-    vec3  direction;  float cosAngleOuter;
-    float cosAngleInner;
-    float radius;
-    float cullRadius;
-    float type;
-};
+#include "cluster_lights.glsl"// ClusterLight, the grid shape, the Z ladder, clusterCellBase
 layout(set = 0, binding = 48, scalar) readonly buffer ClusterGridBuf { uint clusterGrid[]; };
 layout(set = 0, binding = 49, scalar) readonly buffer ClusterLightsBuf { ClusterLight clusterLights[]; };
 
@@ -104,22 +95,8 @@ const float PI = 3.14159265358979;
 // Grid + ladders — KEEP IN SYNC with froxel_integrate.comp + deferred_shade.comp.
 const uint  kFroxelX = 128u, kFroxelY = 72u, kFroxelZ = 64u;
 const float kFroxelZMin = 0.25, kFroxelZMax = 512.0;
-// Cluster grid constants — KEEP IN SYNC with cluster_build.comp.
-const uint  kClusterX = 16u, kClusterY = 8u, kClusterZ = 24u;
-const uint  kClusterMaxPerCell = 24u;
-const float kClusterZMin = 0.1, kClusterZMax = 1024.0;
-
 float froxelDist(float s) {// continuous slice coord [0,kFroxelZ] → view distance
     return kFroxelZMin * pow(kFroxelZMax / kFroxelZMin, s / float(kFroxelZ));
-}
-
-uint clusterCellBase(vec2 uv, float viewDist) {
-    const uint cx = min(uint(uv.x * float(kClusterX)), kClusterX - 1u);
-    const uint cy = min(uint(uv.y * float(kClusterY)), kClusterY - 1u);
-    const float t = log(max(viewDist, kClusterZMin) / kClusterZMin)
-                  / log(kClusterZMax / kClusterZMin);
-    const uint cz = min(uint(max(t, 0.0) * float(kClusterZ)), kClusterZ - 1u);
-    return (cx + cy * kClusterX + cz * kClusterX * kClusterY) * (kClusterMaxPerCell + 1u);
 }
 
 float hgPhase(float mu, float g) {

@@ -301,22 +301,9 @@ layout(set = 0, binding = 77, rgba16f) uniform writeonly image2D demodColorImage
 // arrays — the UBO's 8-per-type slots (the STRONGEST 8, same sort) remain the
 // source for every other consumer (reflection hits, GI rays, volumetric
 // beams, probes), where screen-space clusters can't apply.
-// KEEP IN SYNC with cluster_build.comp + GpuClusterLight (VulkanGpuLayouts.hpp).
-struct ClusterLight {
-    vec3  position;   float range;
-    vec3  color;      float decay;
-    vec3  direction;  float cosAngleOuter;// points carry -1.1/-1.05 → cone test = 1
-    float cosAngleInner;
-    float radius;                         // physical source radius (soft shadows)
-    float cullRadius;
-    float type;                           // 0 = point, 1 = spot
-};
+#include "cluster_lights.glsl"// ClusterLight, the grid shape, the Z ladder
 layout(set = 0, binding = 48, scalar) readonly buffer ClusterGridBuf { uint clusterGrid[]; };
 layout(set = 0, binding = 49, scalar) readonly buffer ClusterLightsBuf { ClusterLight clusterLights[]; };
-
-const uint  kClusterX = 16u, kClusterY = 8u, kClusterZ = 24u;
-const uint  kClusterMaxPerCell = 24u;
-const float kClusterZMin = 0.1, kClusterZMax = 1024.0;
 
 // ── Froxel volumetric lighting (binding 53, built by froxel_inject/integrate) ─
 // Front-to-back-integrated volumetric in-scatter LUT: sun shafts, spot beams

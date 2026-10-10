@@ -23,31 +23,13 @@ layout(local_size_x = 64) in;
 #include "camera_ubo.glsl"
 #include "camera_ray.glsl"// camViewPointAtDist — perspective AND ortho
 
-// KEEP IN SYNC with deferred_shade.comp's ClusterLight + the CPU
-// GpuClusterLight (VulkanGpuLayouts.hpp) — scalar layout, 64 bytes.
-struct ClusterLight {
-    vec3  position;   float range;         // range 0 = infinite (three.js)
-    vec3  color;      float decay;         // color premultiplied by intensity
-    vec3  direction;  float cosAngleOuter; // spot cone; points carry the -1.1/-1.05 sentinel (cone test → 1)
-    float cosAngleInner;
-    float radius;                          // physical source radius (soft shadows)
-    float cullRadius;                      // conservative influence radius (range, or the atten<eps solve)
-    float type;                            // 0 = point, 1 = spot
-};
+#include "cluster_lights.glsl"// ClusterLight, the grid shape, the Z ladder
 layout(set = 0, binding = 48, scalar) buffer ClusterGridBuf { uint clusterGrid[]; };
 layout(set = 0, binding = 49, scalar) readonly buffer ClusterLightsBuf { ClusterLight clusterLights[]; };
 
 // Shared ShadePush block (vulkan_shared.h) — this pass reads only the
 // fields it names; the host zero-fills the rest.
 layout(push_constant) uniform Pc { ShadePush pc; };
-
-// Grid + Z mapping — KEEP IN SYNC with deferred_shade.comp. The Z slices are
-// a FIXED exponential ladder over view-space distance [kClusterZMin,
-// kClusterZMax] (camera-independent — no near/far plumbing): slice 0 extends
-// to the camera, the last slice absorbs everything beyond kClusterZMax.
-const uint  kClusterX = 16u, kClusterY = 8u, kClusterZ = 24u;
-const uint  kClusterMaxPerCell = 24u;
-const float kClusterZMin = 0.1, kClusterZMax = 1024.0;
 
 float sliceZ(uint k) {// lower view-distance bound of slice k
     return kClusterZMin * pow(kClusterZMax / kClusterZMin, float(k) / float(kClusterZ));
