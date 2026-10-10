@@ -287,10 +287,8 @@ def seat_on_water():
 
 
 def sea_update(dt):
-    """The sea around her: displacement footprint, Kelvin wake, foam."""
-    u = wake.update(dt, hull_excl_on)
-    ocean.clear_foam_disturbances()
-    drive.foam(ocean, u)
+    """The sea around her: displacement footprint, Kelvin wake, and what she leaves on the water."""
+    wake.update(dt, hull_excl_on)
     ocean.clear_wake_sources()
     wash.update(dt, hull_excl_on)             # her propulsors' races and her hull's lane, in the wake field
     c = wake.centre

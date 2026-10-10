@@ -943,12 +943,14 @@ class Wake:
 
     target             the ocean (its vessel 0), or ocean.vessel(i) where several boats share it
     floor, gain, cap   the speed handed to the ocean's analytic wake: floor + gain |u|, capped.
-                       The wake gates its foam trail on smoothstep(0.5, 1.5, speed) and spreads
-                       it over 1.5 x the footprint's half-beam (foam_world.comp), so fed a
-                       boat's true speed it is a white carpet three beams wide from 3 kn up.
+                       The wake gates a tiled foam trail on smoothstep(0.5, 1.5, speed)
+                       (foam_world.comp), so fed a boat's true speed it lays a white carpet
+                       astern from 3 kn up. The defaults hold it just over the trail's
+                       threshold: the wake's height without that foam. What she leaves on the
+                       water is her Wash's.
     max_age, max_samples   the trail: seconds a sample lives, and how many are kept"""
 
-    def __init__(self, hull, target, floor=0.6, gain=0.10, cap=1.2, max_age=8.0, max_samples=64):
+    def __init__(self, hull, target, floor=0.56, gain=0.02, cap=0.62, max_age=8.0, max_samples=64):
         self.hull, self.target = hull, target
         self.floor, self.gain, self.cap = floor, gain, cap
         self.max_age, self.max_samples = max_age, max_samples
