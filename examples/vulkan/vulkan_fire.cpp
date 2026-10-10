@@ -42,8 +42,6 @@
 //            vulkan_fire --snow             start with the snowfall running
 //            vulkan_fire --no-pond          the pre-pond campsite, for an A/B
 //                                           of the reflection in one binary
-//            vulkan_fire --legacy-embers   the pre-F3 ParticleSystem sparks,
-//                                          for an A/B in one binary at one seed
 //            vulkan_fire --no-glow         embers without F4's billboard bloom chain
 //            vulkan_fire --bench            interleaved A/B of the effect's GPU cost
 //            vulkan_fire --seq DIR          consecutive frames along a SCRIPTED orbit
@@ -65,7 +63,6 @@
 #include "threepp/geometries/IcosahedronGeometry.hpp"
 #include "threepp/geometries/OctahedronGeometry.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
-#include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Ocean.hpp"
 #include "threepp/objects/ParticleField.hpp"
@@ -531,10 +528,8 @@ int main(int argc, char** argv) {
     // (F1 as-built amendment, point 4). Since F3 they are a third
     // ParticleField, device-emitted from a closed form, and the WHOLE scene is
     // reproducible with them on — so the flag is now a look/perf switch, not a
-    // determinism requirement. --legacy-embers brings the old path back for an
-    // A/B, and brings its non-determinism back with it.
+    // determinism requirement.
     bool  noEmbers     = false;
-    bool  legacyEmbers = false;
     // F4: the ember field's own bloom pyramid. --no-glow is the A/B leg for its
     // cost, and the leg the 0.5 ms budget is re-checked against both ways.
     bool  noGlow       = false;
@@ -566,7 +561,6 @@ int main(int argc, char** argv) {
         else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (a == "--t" && i + 1 < argc) shotTime = float(std::atof(argv[++i]));
         else if (a == "--no-embers") noEmbers = true;
-        else if (a == "--legacy-embers") legacyEmbers = true;
         else if (a == "--no-glow") noGlow = true;
         else if (a == "--no-pond") noPond = true;
         else if (a == "--snow") snowOn = true;
@@ -617,17 +611,10 @@ int main(int argc, char** argv) {
     // read one vector, and this demo says its own out loud for the same reason.
     // Unchanged numbers, so the campfire is the campfire F1 shipped.
     fp.wind.set(0.22f, 0.f, 0.09f);
+    // The ember field needs no asset at all (the billboard fragment shader
+    // draws a procedural spark).
     fp.embers = !noEmbers;
-    // --legacy-embers loads the old sprite; the F3 ember field needs no asset
-    // at all (the billboard fragment shader draws a procedural spark).
-    fp.legacyEmbers = legacyEmbers;
     if (noGlow) fp.emberGlow = 0.f;
-    if (fp.embers && legacyEmbers) {
-        TextureLoader tl;
-        fp.emberTexture = tl.load(std::string(DATA_FOLDER) + "/textures/smokeparticle.png",
-                                  ColorSpace::sRGB);
-        fp.embers = fp.emberTexture != nullptr;
-    }
     // ── The weather ─────────────────────────────────────────────────────────
     // Created here, from the SAME wind the fire was just given, and added to
     // the scene parked. NO DensityRepr on it, and that is a decision with a
@@ -769,9 +756,7 @@ int main(int argc, char** argv) {
         // parked field records no dispatch and contributes no overlay content),
         // so the delta IS the cost. The overlay row also carries the unjittered
         // depth prepass, which that pass needs and which nothing else in this
-        // scene was asking for — under --legacy-embers the same row instead
-        // carries the ParticleSystem's own billboard draw, which is what makes
-        // the two runs directly comparable.
+        // scene was asking for.
         row("particle emit", offA.emit, onA.emit);
         row("overlay (embers)", offA.overlay, onA.overlay);
         row("whole frame", offA.gpu, onA.gpu);
@@ -826,7 +811,7 @@ int main(int argc, char** argv) {
             // The emitter is closed-form in t, so a capture can either run the
             // clock or freeze it. --t freezes: identical geometry every frame,
             // which is what lets TAA fully converge and makes two runs of this
-            // command comparable byte for byte (bar the legacy embers).
+            // command comparable byte for byte.
             tick(shotTime >= 0.f ? shotTime : float(i) * kDt, shotTime >= 0.f ? 0.f : kDt);
             canvas.animateOnce([&] { renderer.render(scene, camera); });
         }

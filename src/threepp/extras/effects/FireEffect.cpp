@@ -2,7 +2,6 @@
 #include "threepp/extras/effects/FireEffect.hpp"
 
 #include "threepp/math/Rng.hpp"
-#include "threepp/objects/ParticleSystem.hpp"
 #include "threepp/textures/Texture.hpp"
 
 #include <algorithm>
@@ -171,13 +170,13 @@ void FireEffect::setWind(const Vector3& worldWind) {
 FireEffect::FireEffect(const Params& params): p_(params) {
 
     // ── SMOKE ONLY ──────────────────────────────────────────────────────────
-    // Normalised once, here, so every `if (p_.embers ...)` below reads the same
-    // truth and no later code has to remember to test two flags. The three
+    // Normalised once, here, so every `if (p_.embers)` below reads the same
+    // truth and no later code has to remember to test a second flag. The three
     // things suppressed are exactly the three that cost something to exist
     // rather than to be lit: a density volume holds a slot out of
     // kMaxDensityFields whether or not any particle is alive in it, and a
     // PointLight sits in the cluster list at intensity 0.
-    if (p_.smokeOnly) p_.embers = p_.legacyEmbers = false;
+    if (p_.smokeOnly) p_.embers = false;
 
     // ── The boxes ───────────────────────────────────────────────────────────
     // FIXED, not fitted per frame to the particles' actual bounds. A box that
@@ -265,7 +264,7 @@ FireEffect::FireEffect(const Params& params): p_(params) {
     // The age all three of the last ones need is re-derived in the shader from
     // this emitter's own closed form — there is no age buffer and no per-frame
     // CPU work of any kind here.
-    if (p_.embers && !p_.legacyEmbers) {
+    if (p_.embers) {
         ParticleField::Config cfg;
         cfg.capacity  = std::max(p_.emberParticles, 1u);
         cfg.ownership = ParticleField::Ownership::Renderer;
@@ -311,38 +310,6 @@ FireEffect::FireEffect(const Params& params): p_(params) {
         // and is set at construction, so parking is the explicit act here.
         embers_->setLiveCount(0);
         add(embers_);
-    }
-
-    // ── Embers, legacy path: the pre-F3 ParticleSystem, verbatim ────────────
-    if (p_.embers && p_.legacyEmbers && p_.emberTexture) {
-        legacyEmbers_ = std::make_shared<ParticleSystem>();
-        auto& s = legacyEmbers_->settings();
-        s.makeDefault();
-        s.positionStyle  = ParticleSystem::Type::BOX;
-        s.positionBase   = Vector3(0.f, p_.height * 0.25f, 0.f);
-        s.positionSpread = Vector3(p_.radius * 0.6f, p_.height * 0.15f, p_.radius * 0.6f);
-        s.velocityStyle  = ParticleSystem::Type::BOX;
-        // Buoyant, with the same wind the smoke column feels so the sparks and
-        // the smoke lean the same way.
-        s.velocityBase   = Vector3(p_.wind.x, 1.35f, p_.wind.z);
-        s.velocitySpread = Vector3(0.45f, 0.75f, 0.45f);
-        s.accelerationBase = Vector3(0.f, 0.35f, 0.f);
-        s.particlesPerSecond = p_.emberRate;
-        s.particleDeathAge   = p_.emberLife;
-        s.emitterDeathAge    = 1e9f;
-        s.blendStyle         = Blending::Additive;
-        s.colorBase          = Vector3(0.06f, 1.0f, 0.62f);// HSL: ember orange
-        s.colorSpread        = Vector3(0.02f, 0.f, 0.10f);
-        s.texture            = p_.emberTexture;
-        // Sparks brighten as they leave the flame, then burn out. Size shrinks
-        // — a cooling ember gets smaller, not bigger like smoke.
-        // Sizes are WORLD units: an ember is a few pixels at conversational
-        // distance, not a glowing pill. The first pass of this shipped at 0.11
-        // and rendered 30-px blobs that hid the flame behind them.
-        s.setOpacityTween({0.f, 0.25f, p_.emberLife}, {0.f, 0.9f, 0.f})
-                .setSizeTween({0.f, p_.emberLife}, {0.030f, 0.008f});
-        legacyEmbers_->initialize();
-        add(legacyEmbers_);
     }
 }
 
@@ -576,11 +543,10 @@ void FireEffect::emitSmoke(float t) {
 
 void FireEffect::update(float timeSec) {
 
-    // The delta. The LEGACY ember path needs it because it integrates; the
-    // ember FIELD needs it only as the motion-vector interval its emit dispatch
-    // evaluates f(t - dt) at. Clamped either way, so a hitch, a pause or a seek
-    // neither integrates a hundred sparks into one frame nor asks the emitter
-    // for a previous position half a second in the past.
+    // The delta. The ember field needs it only as the motion-vector interval
+    // its emit dispatch evaluates f(t - dt) at. Clamped, so a hitch, a pause or
+    // a seek does not ask the emitter for a previous position half a second in
+    // the past.
     //
     // A repeated update(t) at the same t therefore gives dt == 0, which freezes
     // the ember field EXACTLY (both evaluations are the same expression, so
@@ -590,10 +556,7 @@ void FireEffect::update(float timeSec) {
     lastTime_ = timeSec;
     haveTime_ = true;
 
-    if (!lit_) {
-        if (legacyEmbers_) legacyEmbers_->update(dt);// let live sparks burn out
-        return;
-    }
+    if (!lit_) return;
 
     if (flame_) emitFlame(timeSec);
     emitSmoke(timeSec);
@@ -614,8 +577,8 @@ void FireEffect::update(float timeSec) {
     if (flame_) flame_->densityRepr().center = flameBoxLocal_ + origin;
     smoke_->densityRepr().center = smokeBoxLocal_ + origin;
 
-    // smokeOnly: no light, and no embers of either kind (the ctor forces both
-    // flags off), so the plume above is the whole effect and this is the end.
+    // smokeOnly: no light and no embers (the ctor forces the flag off), so the
+    // plume above is the whole effect and this is the end.
     if (!light_) return;
 
     // ── The light ───────────────────────────────────────────────────────────
@@ -635,6 +598,4 @@ void FireEffect::update(float timeSec) {
     light_->position.set(0.28f * p_.radius * std::sin(2.7f * timeSec + px),
                          p_.lightHeight + 0.10f * p_.height * (f - 1.f),
                          0.28f * p_.radius * std::cos(3.3f * timeSec + pz));
-
-    if (legacyEmbers_) legacyEmbers_->update(dt);
 }

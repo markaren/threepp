@@ -842,7 +842,7 @@ int main(int argc, char** argv) {
     // --legacy-smoke: the pre-2026-08-11 chimney — ~156 alpha-blended sprites on
     // the legacy ParticleSystem path, CPU-integrated with their own RNG. The A/B
     // leg for the density plume that replaced it, in ONE binary (the precedent
-    // is FireEffect's --legacy-embers). It brings back the old properties with
+    // was FireEffect's --legacy-embers). It brings back the old properties with
     // it: a plume that is drawn OVER the fog rather than composited into it, no
     // sunlight scattering through it, and a scene that is not reproducible
     // run-to-run — the sprite RNG was one of the reasons two fjord captures of

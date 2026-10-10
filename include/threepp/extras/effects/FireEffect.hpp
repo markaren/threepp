@@ -3,8 +3,8 @@
 // plans/particle-atmosphere.md F-B. Nothing here is a new renderer feature:
 // the flame is a ParticleField whose DensityRepr carries F0's blackbody
 // emission ramp, the smoke is a SECOND field with its own albedo (the reason
-// F0 made the medium params per field), the embers are the legacy
-// ParticleSystem billboard path untouched, and the light the fire casts on the
+// F0 made the medium params per field), the embers are a third field drawn by
+// the billboard representation, and the light the fire casts on the
 // world is one ordinary PointLight. That last piece is the important one: a
 // volume that emits does not, by itself, light anything. The PointLight is
 // what puts the fire into the cluster list, the froxel glow, the deferred
@@ -16,7 +16,6 @@
 // smoke and (since F3) the EMBERS all render nothing — the whole effect is now
 // three fields plus a light. The PointLight still works, so a GL scene gets a
 // flickering fire-coloured light and no fire. Use the Vulkan backend.
-// Params::legacyEmbers is the one piece that still draws on GL.
 //
 // ── THE EMITTER IS STATELESS AND SEEDED ─────────────────────────────────────
 // Every slot's position is a CLOSED FORM f(seed_i, t): a hashed birth phase, a
@@ -43,8 +42,7 @@
 // them off to get a comparable image. They are now a THIRD ParticleField,
 // Ownership::Renderer, drawn by the billboard representation: the same stateless
 // closed form as the flame, evaluated on the device, with the whole effect
-// therefore reproducible with the embers ON. Params::legacyEmbers brings the old
-// path back for an A/B, and brings its properties back with it.
+// therefore reproducible with the embers ON.
 //
 // ── CHURN ───────────────────────────────────────────────────────────────────
 // Both fields are created ONCE, in the constructor, at their final capacity,
@@ -93,7 +91,6 @@
 
 namespace threepp {
 
-    class ParticleSystem;
     class Texture;
 
     class FireEffect: public Object3D {
@@ -333,15 +330,6 @@ namespace threepp {
             // pulls in no data folder at all. A texture MODULATES that shape.
             std::shared_ptr<Texture> emberTexture;
 
-            // ── Escape hatch: the pre-F3 legacy ParticleSystem embers ────────
-            // Kept so the migration can be A/B'd in ONE binary at ONE seed, and
-            // for a caller who wants the old look. It brings back the old
-            // properties with it: its own RNG, per-frame integration, no
-            // seeking, and a scene that is not bit-reproducible. Requires
-            // emberTexture (that path has no procedural sprite).
-            bool legacyEmbers = false;
-            int  emberRate    = 26;// legacy path only: particles per second
-
             std::uint32_t seed = 20260811u;
         };
 
@@ -403,8 +391,7 @@ namespace threepp {
         [[nodiscard]] const std::shared_ptr<ParticleField>& flameField() const { return flame_; }
         // The one field that always exists.
         [[nodiscard]] const std::shared_ptr<ParticleField>& smokeField() const { return smoke_; }
-        // Null when Params::embers is off, Params::legacyEmbers is on, or
-        // Params::smokeOnly is set.
+        // Null when Params::embers is off or Params::smokeOnly is set.
         [[nodiscard]] const std::shared_ptr<ParticleField>& emberField() const { return embers_; }
         // Null under Params::smokeOnly.
         [[nodiscard]] const std::shared_ptr<PointLight>&    light() const { return light_; }
@@ -436,17 +423,15 @@ namespace threepp {
     private:
         Params p_;
         bool   lit_      = false;
-        float  lastTime_ = 0.f;// ONLY for the legacy embers' dt; see update()
+        float  lastTime_ = 0.f;// ONLY for the ember field's dt; see update()
         bool   haveTime_ = false;
 
         std::shared_ptr<ParticleField> flame_;
         std::shared_ptr<ParticleField> smoke_;
-        // The ember field (Ownership::Renderer, billboards). Null when the
-        // legacy escape hatch is on or embers are off.
+        // The ember field (Ownership::Renderer, billboards). Null when
+        // embers are off.
         std::shared_ptr<ParticleField> embers_;
         std::shared_ptr<PointLight>    light_;
-        // The pre-F3 path, alive only under Params::legacyEmbers.
-        std::shared_ptr<ParticleSystem> legacyEmbers_;
 
         // Staging for the two submits. Sized once, never grown — the memcpy
         // into the field is the only per-particle cost in the design and it
