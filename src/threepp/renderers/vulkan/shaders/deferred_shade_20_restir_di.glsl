@@ -360,11 +360,72 @@ float radicalInverse2(uint bits) {
 // Reflection/denoised hits (cheapHit) instead take ONE per-frame-ANIMATED
 // jittered ray — they ride the reflection SVGF temporal, which integrates it
 // (the rect-light SIDE=1 policy, verbatim).
+//
+// gSunFixedPattern (set by traceRadiance for the hits of a trace along the
+// view ray: what a THIN pane and a blend sheet show) takes the per-pixel turn
+// out of the adaptive estimate: the same probes and the same sixteen
+// directions for every pixel, fixed about the sun's direction. Solid glass
+// has the same trouble and keeps the turned pattern all the same: with it
+// included, tests/renderers/VulkanGolden_test.cpp's glass scene (a solid
+// sphere over a floor, its own penumbra seen through it) left its baseline
+// (46.0 dB and maxD 33 where 32 is allowed; 55.9 dB and 16 without), and a
+// baseline is not moved to make room for a fix. The turned pattern is right for a
+// primary, whose pixels the TAA resolves where they stand. Behind clear glass
+// nothing resolves it (no spatial filter, and reflReproject drops the history
+// of a near-mirror surface whenever the camera moves), and the turn does two
+// things there. The three probes, on a diameter that differs from pixel to
+// pixel, agree here and disagree next door, so a pixel that returns an exact
+// 0 or 1 stands among neighbours that return eleven sixteenths: black and
+// white dots through every penumbra. And sixteen rays turned differently per
+// pixel through anything fine (a canopy) are a different sixteen samples per
+// pixel: a stipple over everything under a tree.
+//
+// Measured from the car at Trollstigen through a clear pane. A sun of 3
+// degrees, the pixels of the penumbra on the road (where the direct view's
+// own sun term is 15 to 85 % of its lit level): 15.1 % of them at or under
+// zero with the turned pattern, 0.1 % with the fixed one; mean visibility
+// 0.611 and 0.616, the direct view's 0.618. The scene's own sun (0.6
+// degrees), fine grain as a share of the mean: asphalt in full sun 9.7 % ->
+// 4.2 % (seen directly 3.8 %), the shadow's edge 13.2 % -> 8.3 % (7.3 %), a
+// concrete barrier under birches 79 % -> 29 % (19 %). Under the birches the
+// level against the direct view's was 0.74 and is 0.79 (the pane passes
+// about 0.82): what is left there is the sixteen directions' own pattern,
+// flat patches with straight edges where the direct view's denoiser has a
+// soft dapple.
+//
+// The probes are five where the turned estimate has three: the centre and
+// four points on the rim, on two fixed axes. With no turn to move the
+// diameter about, two rim points would miss every edge that runs along it.
+// They only DECIDE: where they disagree the even spiral is the whole
+// estimate (the five are not an even sample of the disc). Against sixteen
+// rays at every hit the five-probe rule gave the same picture in each of the
+// measures above (the bins of the penumbra's histogram within 0.2 points).
+//
+// Cost (RTX 4070, 1280x720, switched in one process), five rays where the
+// turned estimate has three and sixteen more wherever the five disagree: the
+// windscreen on 27 % of the frame +0.7 ms on open road and +1.8 ms under
+// birches, over 78 % of it +2.9 ms in both places.
+bool gSunFixedPattern = false;
 float sunShadowVis(vec3 orig, vec3 L, float tanR, bool cheapHit) {
     if (tanR <= 0.0) return shadowVis(orig, L, 1e30);
     const vec3 up = abs(L.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     const vec3 t  = normalize(cross(up, L));
     const vec3 b  = cross(L, t);
+    if (gSunFixedPattern && !cheapHit) {
+        const float c = shadowVis(orig, L, 1e30);
+        if (c == shadowVis(orig, normalize(L + t * tanR), 1e30) &&
+            c == shadowVis(orig, normalize(L - t * tanR), 1e30) &&
+            c == shadowVis(orig, normalize(L + b * tanR), 1e30) &&
+            c == shadowVis(orig, normalize(L - b * tanR), 1e30))
+            return c;// binary 0/1 (TerminateOnFirstHit) -> exact
+        float sum = 0.0;
+        for (int i = 0; i < 16; ++i) {
+            const float a = (float(i) + 0.5) * 2.39996323;
+            const float r = sqrt((float(i) + 0.5) / 16.0) * tanR;
+            sum += shadowVis(orig, normalize(L + (t * cos(a) + b * sin(a)) * r), 1e30);
+        }
+        return sum * (1.0 / 16.0);
+    }
     const uvec2 px = uvec2(gl_GlobalInvocationID.xy);
     const uint  fr = cheapHit ? pc.frame : 0u;// static at primaries, animated at cheapHit
     const float bnRot = blueNoiseDef(px, fr, 0u);

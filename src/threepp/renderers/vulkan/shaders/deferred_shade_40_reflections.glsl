@@ -722,6 +722,10 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         if (gTraceAlongView && b == 0 && cam.camAux.x < 0.5)
             gHitClusterCell = clusterCellBase(ivec2(gl_GlobalInvocationID.xy),
                                               max(dot(hitP - gPrimaryOrigin, cam.camAux.yzw), 0.0));
+        // What a thin pane or a blend sheet shows takes the sun's soft shadow
+        // in one pattern for every pixel (sunShadowVis says why, and why solid
+        // glass does not yet).
+        gSunFixedPattern = gTraceAlongView && !cheapHits;
         radiance += tput * hitAlpha * shadeDiffuseDirect(hitP, hitN, hitV, hAlbedo, hRough, hMetal,
                                               hEmissive * hEmScale,
                                               doShadows, hitDiffInd,
@@ -730,7 +734,8 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                                               hm.iridescence, hm.iridescenceIOR, hm.iridescenceThicknessNm, seed,
                                               /*addEmissive=*/true,// reflected hit: no per-pixel reservoir → coherent emissiveNEE
                                               /*cheapHit=*/cheapHits);// caller decides (see header comment)
-        gHitClusterCell = kNoClusterCell;
+        gHitClusterCell  = kNoClusterCell;
+        gSunFixedPattern = false;
 
         // Pass-through hit composited — carry the remainder on along the same
         // ray. No specular continuation for the layer itself (its weighted
