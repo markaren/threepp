@@ -508,6 +508,22 @@ namespace threepp::vulkan {
                      std::memcmp(initial.data() + 16, props.pipelineCacheUUID, VK_UUID_SIZE) == 0;
         }
 
+        // A pipeline cache only ever merges: there is no API to drop an entry,
+        // so every shader edit appends the binary the driver compiled and the
+        // one it replaced stays in the blob for good. Left alone the file had
+        // reached 475 MB (2026-10-10) of which a run's live set was 7.5 MB,
+        // and it cost ~0.5 s to load and as much again to write back, every
+        // launch. Above the cap the blob is dropped and this run starts
+        // empty, so what it saves is only what it actually used. That is
+        // cheap: the driver keeps its own on-disk cache of compiled shaders
+        // (NVIDIA's GLCache), and a run with no blob at all compiled the same
+        // scene in ~1 s against it. The blob is the backstop for when the
+        // driver cache has lost an entry, and it is worth keeping only for
+        // the shaders this build still has.
+        constexpr size_t kPipelineCacheCapBytes = size_t{64} << 20;
+        const bool compact = usable && initial.size() > kPipelineCacheCapBytes;
+        if (compact) usable = false;
+
         VkPipelineCacheCreateInfo ci{};
         ci.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
         if (usable) {
@@ -522,15 +538,23 @@ namespace threepp::vulkan {
         // file does not exist yet, and the first check should write it.
         savedPipelineCacheBytes_ = (usable && source == path) ? initial.size() : 0;
         std::cout << "[VulkanContext] pipeline cache: "
-                  << (usable ? "WARM - loaded " : "COLD - ignoring ")
+                  << (usable ? "WARM - loaded " : compact ? "COMPACT - dropping " : "COLD - ignoring ")
                   << initial.size() << " bytes from " << source.string()
-                  << (usable ? " (pipelines reused)" : " (recompiling all pipelines)") << std::endl;
+                  << (usable    ? " (pipelines reused)"
+                      : compact ? " (over the cap; rewriting only what this run uses)"
+                                : " (recompiling all pipelines)")
+                  << std::endl;
     }
 
     void VulkanContext::savePipelineCache() {
         if (pipelineCache_ == VK_NULL_HANDLE) return;
         size_t sz = 0;
         if (vkGetPipelineCacheData(device_, pipelineCache_, &sz, nullptr) != VK_SUCCESS || sz == 0) return;
+        // Nothing compiled since the last write: the blob on disk is this one.
+        // The gate lives here rather than only in savePipelineCacheIfChanged
+        // because the destructor calls this directly, and without it every
+        // clean exit rewrote the whole blob for a run that added nothing.
+        if (sz == savedPipelineCacheBytes_) return;
         std::vector<char> data(sz);
         if (vkGetPipelineCacheData(device_, pipelineCache_, &sz, data.data()) != VK_SUCCESS) return;
 
