@@ -12,7 +12,7 @@
 
 #include <vector>
 
-#if defined(THREEPP_WITH_AUDIO) && !defined(__EMSCRIPTEN__)
+#if defined(THREEPP_WITH_AUDIO)
 
 #include "threepp/audio/Audio.hpp"
 #include "threepp/audio/WavFile.hpp"
