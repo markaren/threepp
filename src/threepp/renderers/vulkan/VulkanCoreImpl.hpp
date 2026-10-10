@@ -2846,16 +2846,11 @@ namespace threepp {
         // pair is freed. Deformer and interop records are refit in place and
         // keep the updatable lineage, uncompacted.
         //
-        // Two knobs, read once at construction, exist to separate the two
-        // effects of this in an A/B on the same binary:
-        //   THREEPP_VK_BLAS_COMPACT=0    no compaction (static builds then stay
-        //                                at their build size)
-        //   THREEPP_VK_BLAS_UPDATABLE=1  static builds carry ALLOW_UPDATE again
-        // With both set, static BLASes are built exactly as before compaction
-        // existed. blasCompact_ is also false when the device does not resolve
-        // the two compaction entry points.
+        // THREEPP_VK_BLAS_COMPACT=0, read once at construction, turns the
+        // compaction off (static builds then stay at their build size).
+        // blasCompact_ is also false when the device does not resolve the two
+        // compaction entry points.
         bool blasCompact_ = false;
-        bool blasStaticUpdatable_ = false;
         // Compacted-size queries, kBlasCompactPoolQueries per pool; pools are
         // appended as a larger batch needs them and live until teardown.
         // Slot k of one compaction round is query k % N of pool k / N.
@@ -2878,15 +2873,8 @@ namespace threepp {
         };
         std::vector<RetiredBlas> blasCompactRetired_;
 
-        // The flags a static record is built with.
+        // The flags a static record, and an auto-LOD level, is built with.
         VkBuildAccelerationStructureFlagsKHR staticBlasBuildFlags() const {
-            VkBuildAccelerationStructureFlagsKHR f = lodLevelBuildFlags();
-            if (blasStaticUpdatable_) f |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
-            return f;
-        }
-        // The flags an auto-LOD level is built with. Never ALLOW_UPDATE, not
-        // even under THREEPP_VK_BLAS_UPDATABLE: levels were never built with it.
-        VkBuildAccelerationStructureFlagsKHR lodLevelBuildFlags() const {
             VkBuildAccelerationStructureFlagsKHR f = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
             if (blasCompact_) f |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR;
             return f;

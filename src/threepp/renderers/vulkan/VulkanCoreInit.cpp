@@ -49,16 +49,13 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
                                                                          "gbufferMs");
             }
 
-            // Static BLAS compaction and its two A/B knobs (see blasCompact_):
-            // THREEPP_VK_BLAS_COMPACT=0 leaves static BLASes at their build
-            // size, THREEPP_VK_BLAS_UPDATABLE=1 builds them ALLOW_UPDATE again.
+            // Static BLAS compaction (see blasCompact_): THREEPP_VK_BLAS_COMPACT=0
+            // leaves static BLASes at their build size.
             {
                 const char* c = std::getenv("THREEPP_VK_BLAS_COMPACT");
-                const char* u = std::getenv("THREEPP_VK_BLAS_UPDATABLE");
                 blasCompact_ = !(c && *c == '0') &&
                                ctx->rt().cmdWriteAccelerationStructuresProperties != nullptr &&
                                ctx->rt().cmdCopyAccelerationStructure != nullptr;
-                blasStaticUpdatable_ = u && *u && *u != '0';
                 // Auto-LOD landing: THREEPP_VK_LOD_DRAIN_WAIT=1 restores the
                 // submit + queue wait per drain (see lodDrainWait_).
                 const char* w = std::getenv("THREEPP_VK_LOD_DRAIN_WAIT");

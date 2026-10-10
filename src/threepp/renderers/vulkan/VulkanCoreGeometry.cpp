@@ -789,7 +789,7 @@ bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
             // the whole chain, see the geomVersion-changed rebuild path in
             // VulkanCoreScene.cpp). Compacted like a static record, by
             // flushLodLevelBuilds after the build.
-            blasBuild.flags = lodLevelBuildFlags();
+            blasBuild.flags = staticBlasBuildFlags();
             blasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
             blasBuild.geometryCount = 1;
             blasBuild.pGeometries = &blasGeom;
@@ -872,7 +872,7 @@ void VulkanRenderer::Impl::recordLodLevelBuilds(VkCommandBuffer cb, std::vector<
 
                 blasBuilds[k].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
                 blasBuilds[k].type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-                blasBuilds[k].flags = lodLevelBuildFlags();// = buildLodLevelFor's size query
+                blasBuilds[k].flags = staticBlasBuildFlags();// = buildLodLevelFor's size query
                 blasBuilds[k].mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
                 blasBuilds[k].geometryCount = 1;
                 blasBuilds[k].pGeometries = &blasGeoms[k];
