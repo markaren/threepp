@@ -331,6 +331,82 @@ airframe, any sensor.
 `python/examples/trollstigen/trollstigen_inspect.py` (a site project outside this repository) flies it on
 a bridge inspection in a terrain-shaped wind.
 
+## Acoustic localization (`m350_acoustic.py`)
+
+Audio as a SENSOR: nine microphones in a field record the M350's four rotors, and from those recordings
+alone a standard localizer says where the drone is, every eighth of a second. numpy only (`np.fft`), no
+window; matplotlib (Agg) for the figure; outputs under `out/acoustic/` (not committed).
+
+```
+python m350_acoustic.py --checks                  # the three checks below
+python m350_acoustic.py --flight A                # a flight: a table, .npz, .csv and a figure
+python m350_acoustic.py --flight B --snr 10 [--ground-reflection] [--window 0.5] [--hop 0.125] [--seed N]
+python m350_acoustic.py --report                  # the table below, also out/acoustic/report_vNN.txt
+```
+
+The array: eight microphones on a ring of 15 m radius about the origin, 1.5 m above the ground, every
+45 deg with a seeded +-1 m jitter, and one on a 6 m mast at the centre. 16 kHz, c = 343 m/s. Two flights
+from a hover, logged every step (the four rotor speeds and the four hubs from `M350.rotor_hubs_ned()`):
+A, the TUNING flight, 25 m up from the south-west straight over the array at 5 m/s, 2 s hold, back and up to
+35 m, in 4 m/s of Dryden wind; B, the HELD-OUT flight, 40 m up passing BESIDE the array (never over it) at
+6 m/s, then down to 30 m, in 8 m/s. Every knob was set on A and B was run once with them frozen.
+
+The pipeline: per rotor a source signal on the 300 Hz log of its speed; to every microphone with retarded
+time (an emission at t_e arrives at t_e + r(t_e) / c, which is where the Doppler comes from) and 1/r; the
+microphones' own seeded noise at an SNR relative to the four rotors at 50 m; then per window (0.5 s, every 0.125 s) GCC-PHAT on
+the 36 pairs (Hann window, 100 to 4000 Hz, upsampled x4) and SRP-PHAT over north and east -100..100 m and
+2..80 m up on a 2 m grid. A cell's max-filtered GCC (over the lags the cell spans) bounds its SRP from
+above and the sharp SRP at its centre bounds the maximum from below: branch and bound down to 3 cm. (A
+single refine box about the coarse grid's argmax does not work: the coarse map is a plateau many metres
+long along the range.) The truth a window is scored against is the centroid of the four hubs at the time
+the sound left it: the window's centre less the estimate's distance to the array over c.
+
+Two nulls, scored on the same windows against the same truth: Null 1 knows nothing (the array's centre,
+30 m up); Null 2 knows the levels and not the timing (the microphones' centroid weighted by each one's
+energy in the window, 30 m up).
+
+What is real, what is standard, what is ASSUMED:
+
+- REAL (the rig's): the flight dynamics, the four rotor speeds at every step, the hub positions, the
+  wind, the autopilot.
+- STANDARD (textbook): spherical spreading 1/r, retarded time, GCC-PHAT, SRP-PHAT.
+- ASSUMED, every number of it: the rotor's sound. A harmonic series at the blade-pass frequency (2 blades:
+  83 Hz at the 260 rad/s hover) with 12 harmonics falling as 1/k, a broadband part (white noise through a
+  one-pole low-pass at 3 kHz) whose level rises as the rotor speed to the 2.5, at half the tonal RMS at
+  hover (`BROADBAND` 0.5), and the microphones' noise. No recording of an M350 was used. Units are
+  arbitrary: the SNR at the 50 m reference distance is the only level that means anything. The demo is
+  about GEOMETRY and TIMING; the timbre is a placeholder.
+- Not modelled: air absorption (ranges stay under 150 m), rotor directivity, wind noise on the
+  microphones, occlusion. The ground reflection (an image source per rotor, coefficient 0.6, ASSUMED) is a
+  flag and one row of the table.
+
+`--report` (the timbre and the units ASSUMED, see above; 0.5 s windows every 0.125 s; B scored once):
+
+| flight | N windows | median 3D (m) | p90 3D (m) | horizontal median (m) | Null 1 median (m) | Null 2 median (m) |
+|---|---|---|---|---|---|---|
+| A 20 dB (tuning) | 470 | 0.36 | 0.80 | 0.36 | 51.2 | 48.1 |
+| B 20 dB | 392 | 0.44 | 0.95 | 0.41 | 56.8 | 54.2 |
+| B 10 dB | 392 | 0.45 | 1.04 | 0.43 | 56.8 | 54.5 |
+| B 20 dB + ground reflection | 392 | 0.45 | 1.00 | 0.43 | 56.8 | 54.2 |
+
+On the held-out flight at 20 dB the median 3D error is 0.44 m, and the nulls are 130 and 124 times worse:
+the timing does the work, not the levels (Null 2 is hardly better than knowing nothing, because a 15 m ring
+hears a drone 50 m away at nearly the same level everywhere).
+
+The floor under the median is the source's size, not the array: the estimate lands on a rotor (0.16 m from
+the nearest hub at the median on A) and the truth is the four hubs' centroid, 0.45 m from each hub. On A
+the height is off by 0.07 m at the median; a non-planar array (every other ring microphone 8 m up, a 12 m
+mast) and a 25 m ring gave the same 0.45 m and 0.49 m on A, so the plan's array stayed. The window was
+the one knob that moved on A: 0.125 s gave 0.47 m (p90 1.15 m), 0.25 s 0.45 m (p90 0.80 m), 0.5 s 0.36 m
+(p90 0.80 m); no estimate jumped by the ~4 m of path one blade-pass period is, so `BROADBAND` stayed 0.5.
+
+The checks: (1) a static source at (20, -10, 25 up) m, one window at 30 dB, found within 0.3 m (Null 1 is
+23 m off); (2) two runs of flight A are bit-identical in the signals and the estimates; (3) Doppler at the
+mast: one rotor's blade-pass line 3 s before the overhead pass over 3 s after, each over the rotor's own
+blade-pass at the emission, against (c + v_r) / (c - v_r) within 20 % of the shift. It is one rotor because
+the four together do not resolve: in forward flight the front pair turns near 248 rad/s and the rear pair
+near 270, lines 1.5 Hz apart, as far as the Doppler shift.
+
 # The Babyshark 260 VTOL
 
 A hybrid for the examples: the Foxtech Babyshark 260 VTOL, a 2.5 m quadplane (four lift rotors on two

@@ -847,6 +847,12 @@ class M350:
         r = np.array(body_of(layout_point)) - self.cg_body
         return np.array(self.x[:3]) + self.rotation() @ r
 
+    def rotor_hubs_ned(self):
+        """The four hubs (fr, fl, rl, rr) in NED from the current state, a 4 x 3 array, m."""
+        x = self.x
+        r = np.array([h[:3] for h in self._rot])
+        return np.array(x[:3]) + r @ rot_of_quat(x[6], x[7], x[8], x[9]).T
+
     def energy(self):
         """Kinetic (translation and rotation of the airframe) plus potential energy per the NED
         origin, J. The rotors' own spin is not in it."""
