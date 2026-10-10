@@ -788,6 +788,10 @@ int main(int argc, char** argv) {
     ocean->wakeField.resolution       = 1024;
     ocean->wakeField.patches          = 1;
     ocean->wakeField.rippleResolution = 512;
+    // Half the slope linear theory gives her waves. She runs near her hull
+    // speed, where that theory piles a ridge on her centreline steep enough to
+    // mirror her own stern; a real stern wave that steep breaks. ASSUMED, by eye.
+    ocean->wakeField.rippleGain = 0.5f;
     scene.add(ocean);
 
     // ── Lighthouse (scene centre) ───────────────────────────────────────────
@@ -1135,13 +1139,20 @@ int main(int argc, char** argv) {
     // her hull's lane, the waves her weight makes). The manoeuvring model above
     // is kinematic, so her mass and her propellers are given here. ASSUMED: a
     // block coefficient of 0.55 on the box above (355 t), and two propellers of
-    // 2 m (R/V Gunnerus's diameter) on shafts 1.7 m under the water, 12 m abaft
-    // amidships and 2.2 m off her centreline.
+    // 2 m (R/V Gunnerus's diameter) 12 m abaft amidships and 2.2 m off her
+    // centreline, their tips a tenth of a metre above her keel line (so 0.4 m
+    // of water over them). kPropAir is the model's own scale on the air a
+    // propeller draws: the model takes it from the race and the water over it
+    // alone, and has nothing for an open propeller working under a broad
+    // counter in the trough of her stern wave. ASSUMED 4, set by eye: two
+    // white boils off her stern at her cruise that pale and close astern,
+    // none at harbour speeds.
     constexpr float kBoatMass   = 1025.f * kBoatLength * kBoatBeam * kDraft * 0.55f;
     constexpr float kPropRadius = 1.0f;
-    constexpr float kPropDepth  = 1.7f;
+    constexpr float kPropDepth  = kDraft - kPropRadius - 0.1f;
     constexpr float kPropAft    = 12.0f;
     constexpr float kPropOff    = 2.2f;
+    constexpr float kPropAir    = 4.0f;
     // The speed handed to the ocean's analytic wake (its bow bump and its
     // V-wedge's height): floor + gain |u|, capped. That wake gates a tiled
     // foam trail on smoothstep(0.5, 1.5, speed) (foam_world.comp), so it is
@@ -1155,7 +1166,9 @@ int main(int argc, char** argv) {
     washHull.halfLength = kBoatLength * 0.5f;
     washHull.halfBeam   = kBoatBeam * 0.5f;
     washHull.mass       = kBoatMass;
+    washHull.draft      = kDraft;
     marine::VesselWash wash(*ocean, 0, washHull);
+    wash.air = kPropAir;
 
     GLTFLoader gltfLoader;
     auto boat = loadAsync([&gltfLoader]() -> std::shared_ptr<Group> {
@@ -2509,6 +2522,14 @@ int main(int argc, char** argv) {
         if (capturing && toggleNightAt > 0 && shotFrame == toggleNightAt) {
             night = true;// runtime day→night flip — the path the UI checkbox takes
             applyMode();
+        }
+        if (capturing && shotStern && shotFrame + 1 >= shotFrames) {
+            // What her propellers were doing in the frame that is kept.
+            for (const auto& [name, r] : wash.report()) {
+                std::printf("[wash] %s: thrust %.0f N, race %.2f m/s (%.2f at the surface), froude %.2f, "
+                            "aeration %.2f, foam %.2f\n",
+                            name.c_str(), r.thrust, r.race, r.atSurface, r.froude, r.aeration, r.foam);
+            }
         }
         if (capturing && ++shotFrame >= shotFrames) {
             const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
