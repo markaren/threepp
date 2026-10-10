@@ -112,14 +112,11 @@ namespace threepp::vulkan {
         // acceptance on both axes. Same seam as the motion vectors, which
         // already y-flip via motionScaleY = -0.5H.
         // Debug overrides: THREEPP_DLSS_JITTER_SIGN_X / _Y = "neg"/"pos"
-        // force an axis; legacy THREEPP_DLSS_JITTER_SIGN=neg flips BOTH
-        // defaults.
+        // force an axis.
         float axisSign(const char* env, float dflt) {
             const char* v = std::getenv(env);
             if (v && std::strcmp(v, "neg") == 0) return -1.f;
             if (v && std::strcmp(v, "pos") == 0) return 1.f;
-            const char* legacy = std::getenv("THREEPP_DLSS_JITTER_SIGN");
-            if (legacy && std::strcmp(legacy, "neg") == 0) return -dflt;
             return dflt;
         }
         float jitterSignX() {
