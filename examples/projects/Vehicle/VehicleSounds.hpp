@@ -3,7 +3,7 @@
 #define THREEPP_VEHICLE_SOUNDS_HPP
 
 // Procedural audio rig for the PhysX vehicle demo. Same approach as the
-// Shooter / Ocean examples: every loop and one-shot is synthesised once at
+// FPS / Ocean examples: every loop and one-shot is synthesised once at
 // startup, written to a temp WAV (the Audio API loads files), then driven
 // each frame from PhysX telemetry:
 //   • road    — low rumble ∝ ground speed while any wheel touches.

@@ -2,6 +2,7 @@
 
 #include "threepp/audio/Audio.hpp"
 #include "threepp/audio/WavFile.hpp"
+#include "threepp/extras/audio/SynthUtil.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
@@ -477,36 +478,12 @@ namespace island {
 // Seamless loops: periodic terms wrap naturally; a tail crossfade blends filter state at the seam.
 namespace {
 
-    struct OnePole {
-        float y = 0.f;
-        float operator()(float x, float a) {
-            y += a * (x - y);
-            return y;
-        }
-    };
-    float lpAlpha(float cutoffHz, int sr) {
-        return 1.f - std::exp(-2.f * math::PI * cutoffHz / static_cast<float>(sr));
-    }
-
-    std::vector<float> normalized(std::vector<float> s, float peak) {
-        float m = 0.f;
-        for (float x : s) m = std::max(m, std::abs(x));
-        if (m > 1e-6f)
-            for (float& x : s) x *= peak / m;
-        return s;
-    }
-
-    // Fold the `extra`-sample overhang back onto the head (linear crossfade).
-    // out[0] == s[n] so the n-1 → 0 junction is the continuation of the tail;
-    // by i == extra the signal is back on the head verbatim.
-    std::vector<float> loopable(const std::vector<float>& s, int n, int extra) {
-        std::vector<float> out(s.begin(), s.begin() + n);
-        for (int i = 0; i < extra; ++i) {
-            const float w = static_cast<float>(i) / static_cast<float>(extra);
-            out[i] = s[n + i] * (1.f - w) + s[i] * w;
-        }
-        return out;
-    }
+    // The filters, the normaliser and the loop-seam crossfade (out[0] == s[n],
+    // so the n-1 → 0 junction is the continuation of the tail).
+    using audio::synth::loopable;
+    using audio::synth::lpAlpha;
+    using audio::synth::normalized;
+    using audio::synth::OnePole;
 
 
     // Marine diesel at mid RPM, 2 s loop. Firing rate f0 = 27 Hz (54 exact

@@ -1,7 +1,8 @@
 // ============================================================================
-//  FPS demo — procedural audio (trimmed from projects/Shooter/shooter_audio.hpp)
+//  FPS demo — procedural audio
 //  Included inside namespace {} in main.cpp — not a standalone header.
-//  Requires: fps_constants.hpp (frand, math::PI)
+//  Requires: fps_constants.hpp (frand, math::PI),
+//            threepp/extras/audio/SynthUtil.hpp (the filters and the normaliser)
 // ============================================================================
 
 std::vector<float> synthShot(int sr = 44100) {
@@ -44,23 +45,9 @@ std::vector<float> synthReload(int sr = 44100) {
 }
 
 // ---- DSP helpers (band-limited noise beats raw hiss for physical sounds) ---
-struct OnePole {
-    float y = 0.f;
-    float operator()(float x, float a) {
-        y += a * (x - y);
-        return y;
-    }
-};
-float lpAlpha(float cutoffHz, int sr) {
-    return 1.f - std::exp(-2.f * math::PI * cutoffHz / static_cast<float>(sr));
-}
-std::vector<float> normalized(std::vector<float> s, float peak) {
-    float m = 0.f;
-    for (float x : s) m = std::max(m, std::abs(x));
-    if (m > 1e-6f)
-        for (float& x : s) x *= peak / m;
-    return s;
-}
+using audio::synth::lpAlpha;
+using audio::synth::normalized;
+using audio::synth::OnePole;
 
 // Bullet-into-body thwack (also the hit-marker audio cue).
 std::vector<float> synthHit(uint32_t seed, int sr = 44100) {

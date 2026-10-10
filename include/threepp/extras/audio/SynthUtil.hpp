@@ -1,11 +1,12 @@
 // The DSP primitives every procedural-audio recipe in this repo is built from.
 //
 // Extracted from the PhysX vehicle demo's sound rig (examples/projects/Vehicle/
-// VehicleSounds.hpp), which had grown the same four helpers the Shooter, FPS
-// and Ocean demos had each copy-pasted for themselves. The recipes stay where
-// they are — they are demo material — but the filters, the normaliser and the
-// loop-seam crossfade are general, and the editor's generated sounds needed
-// exactly them.
+// VehicleSounds.hpp). The FPS demo (examples/projects/FPS/fps_audio.hpp) and
+// the ocean demo (examples/vulkan/vulkan_ocean.cpp) had each grown their own
+// copy of the same helpers and take them from here as well. The recipes stay
+// where they are — they are demo material — but the filters, the normaliser
+// and the loop-seam crossfade are general, and the editor's generated sounds
+// needed exactly them.
 //
 // Header-only, like threepp/audio/WavFile.hpp next door, and free of the audio
 // module: this synthesises float samples, it does not play them. Pair it with

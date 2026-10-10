@@ -63,7 +63,7 @@
 #include "threepp/objects/Points.hpp"
 #include "threepp/objects/TextSprite.hpp"
 
-#ifdef ROBOT_CELL_WITH_VULKAN
+#ifdef THREEPP_WITH_VULKAN
 #include "threepp/helpers/PathTracedLidarSensor.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #endif
@@ -845,7 +845,7 @@ namespace {
         sensor.rotation.x = -math::PI / 2;// look straight down
         scene.addRef(sensor);
 
-#ifdef ROBOT_CELL_WITH_VULKAN
+#ifdef THREEPP_WITH_VULKAN
         auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get());
         PathTracedLidarSensor ptProbe(60.f, 64, 48, 3.f);
         std::vector<LidarReturn> returns;
@@ -894,7 +894,7 @@ namespace {
             renderer->clearDepth();
             renderer->render(*uiScene, *uiCam);
 
-#ifdef ROBOT_CELL_WITH_VULKAN
+#ifdef THREEPP_WITH_VULKAN
             if (vk) {
                 ptProbe.position.copy(sensor.position);
                 ptProbe.scan(*vk, returns);
@@ -943,7 +943,7 @@ int main(int argc, char** argv) {
         const std::string backend = argc > 2 ? argv[2] : "gl";
         GraphicsAPI api = GraphicsAPI::OpenGL;
         if (backend == "vulkan") {
-#ifdef ROBOT_CELL_WITH_VULKAN
+#ifdef THREEPP_WITH_VULKAN
             api = GraphicsAPI::Vulkan;
 #else
             std::cerr << "built without Vulkan support" << std::endl;
@@ -1022,7 +1022,7 @@ int main(int argc, char** argv) {
     Canvas canvas(Canvas::Parameters().title("threepp - Franka Robot Cell").size(winW, winH).antialiasing(4));
     auto renderer = createRenderer(canvas);
 
-#ifdef ROBOT_CELL_WITH_VULKAN
+#ifdef THREEPP_WITH_VULKAN
     // On Vulkan the perception sensor is ray-traced through the renderer's
     // TLAS instead of rasterised into a render target.
     auto* vkRenderer = dynamic_cast<VulkanRenderer*>(renderer.get());
@@ -1222,7 +1222,7 @@ int main(int argc, char** argv) {
     sensor.rotation.x = math::PI;// camera looks -Z; flip to look along tool +Z (down)
 
     std::shared_ptr<CameraHelper> frustum;// raster only — the PT sensor has no Camera
-#ifdef ROBOT_CELL_WITH_VULKAN
+#ifdef THREEPP_WITH_VULKAN
     PathTracedLidarSensor ptSensor(kSensFov, kSensW, kSensH, kSensFar);
     std::vector<LidarReturn> lidarReturns;
     if (vkRenderer) {
@@ -1783,7 +1783,7 @@ int main(int argc, char** argv) {
         bool scanned = false;
         Vector3 sensorWorld;
         if (sensorOn) {
-#ifdef ROBOT_CELL_WITH_VULKAN
+#ifdef THREEPP_WITH_VULKAN
             if (vkRenderer) {
                 // Ray-traced path: the scan walks the TLAS from the previous
                 // render (hence the first-frame guard). The point cloud, the

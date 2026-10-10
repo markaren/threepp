@@ -1,6 +1,5 @@
 // ============================================================================
-//  FPS demo — SVG HUD toolkit (same toolkit as projects/Shooter/shooter_hud.hpp,
-//  condensed from examples/loaders/svg_ui.cpp)
+//  FPS demo — SVG HUD toolkit
 //  Included inside namespace {} in main.cpp — not a standalone header.
 //  Requires: fps_constants.hpp (uiScale)
 // ============================================================================

@@ -37,6 +37,7 @@
 #include "threepp/audio/WavFile.hpp"
 #include "threepp/canvas/Monitor.hpp"
 #include "threepp/extras/SpriteInteractor.hpp"
+#include "threepp/extras/audio/SynthUtil.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/geometries/CapsuleGeometry.hpp"
 #include "threepp/geometries/CylinderGeometry.hpp"
@@ -48,7 +49,7 @@
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/TextSprite.hpp"
 
-#ifdef FPS_DEMO_WITH_VULKAN
+#ifdef THREEPP_WITH_VULKAN
 #include "threepp/renderers/VulkanRenderer.hpp"
 #endif
 
@@ -148,7 +149,7 @@ int main(int argc, char** argv) {
     renderer->toneMapping = ToneMapping::ACESFilmic;
     renderer->toneMappingExposure = 0.9f;
 
-#ifdef FPS_DEMO_WITH_VULKAN
+#ifdef THREEPP_WITH_VULKAN
     if (auto vk = dynamic_cast<VulkanRenderer*>(renderer.get())) {
         vk->setMotionBlur(0.35f);
     }
@@ -199,7 +200,7 @@ int main(int argc, char** argv) {
     scene->add(sun);
     // ONE-SUN: the Vulkan deferred resolves the HDR env's sun itself; the
     // raster stand-in would override the measured one (see tps_shooter).
-#ifdef FPS_DEMO_WITH_VULKAN
+#ifdef THREEPP_WITH_VULKAN
     if (dynamic_cast<VulkanRenderer*>(renderer.get())) sun->visible = false;
 #endif
 
@@ -918,7 +919,7 @@ int main(int argc, char** argv) {
                       << " ammo=" << ammo << (reloading ? " RELOAD" : "")
                       << " casings=" << casings.size()
                       << " decals=" << std::count_if(decalSlots.begin(), decalSlots.end(), [](const auto& d) { return d.target != nullptr; });
-#ifdef FPS_DEMO_WITH_VULKAN
+#ifdef THREEPP_WITH_VULKAN
             if (auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get()))
                 std::cout << " overlayMs=" << vk->lastFrameTimings().overlayMs;
 #endif
