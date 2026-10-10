@@ -1,6 +1,7 @@
 
 add_subdirectory(MotorControl)
 add_subdirectory(SpheroControl)
+add_subdirectory(MarbleRun)
 add_subdirectory(Optimization)
 add_subdirectory(Youbot)
 
