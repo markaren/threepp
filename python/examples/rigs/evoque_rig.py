@@ -407,10 +407,9 @@ class Shell:
         The camera looks out through no glass (glaze(False); Car.draw() puts it back, and a
         scene that takes more than one picture of a frame calls glaze(True) before the
         others). The model's windows are smoked, the pod in the windscreen's black border
-        hangs right before the seat, and tp.VulkanRenderer lights what is seen through a
-        pane by the level it measures at the pane on the viewer's side: from inside a cabin
-        that is next to nothing, and every hillside in shadow beyond the windscreen was
-        black."""
+        hangs right before the seat, and what tp.VulkanRenderer shows through a clear pane
+        is not denoised: its history is dropped whenever the camera moves, so from a moving
+        car everything beyond the windscreen crawls with grain."""
         self.glaze(False)
         eye = self.seat()
         self.node.update_matrix_world(True)
