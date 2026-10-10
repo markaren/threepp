@@ -1040,7 +1040,9 @@ class CatmullRomCurve3(Curve3):
         ...
     @property
     def points(self) -> list[Vector3]:
-        ...
+        """
+        A list COPY in both directions: assign the property to change it; appending to, or indexing into, what the getter returned changes nothing.
+        """
     @points.setter
     def points(self, arg0: collections.abc.Sequence[Vector3]) -> None:
         ...
@@ -3558,7 +3560,7 @@ class IkOptions:
     @property
     def rest_pose(self) -> list[float]:
         """
-        Rest posture, indexed by GLOBAL dof like every other joint vector.
+        Rest posture, indexed by GLOBAL dof like every other joint vector. A list COPY in both directions: assign the property to change it; appending to, or indexing into, what the getter returned changes nothing.
         """
     @rest_pose.setter
     def rest_pose(self, arg0: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex]) -> None:
@@ -4407,7 +4409,9 @@ class LidarModel:
         ...
     @property
     def elevation_angles(self) -> list[float]:
-        ...
+        """
+        Beam elevations in degrees. A list COPY in both directions: assign the property to change it; appending to, or indexing into, what the getter returned changes nothing.
+        """
     @elevation_angles.setter
     def elevation_angles(self, arg0: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex]) -> None:
         ...
@@ -8801,7 +8805,9 @@ class SplineCurve(Curve2):
         ...
     @property
     def points(self) -> list[Vector2]:
-        ...
+        """
+        A list COPY in both directions: assign the property to change it; appending to, or indexing into, what the getter returned changes nothing.
+        """
     @points.setter
     def points(self, arg0: collections.abc.Sequence[Vector2]) -> None:
         ...

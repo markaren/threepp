@@ -169,7 +169,8 @@ namespace threepp_py {
                                "Null-space rest-posture pull per iteration; zero disables it. "
                                "Only does anything on a redundant arm.")
                 .def_readwrite("rest_pose", &IkOptions::restPose,
-                               "Rest posture, indexed by GLOBAL dof like every other joint vector.")
+                               "Rest posture, indexed by GLOBAL dof like every other joint vector. "
+                               "A list COPY in both directions: assign the property to change it; appending to, or indexing into, what the getter returned changes nothing.")
                 .def_readwrite("null_space_damping", &IkOptions::nullSpaceDamping,
                                "Damping for the null-space PROJECTION — much smaller than `damping`, "
                                "or the posture bias leaks into the tool pose and the arm never "

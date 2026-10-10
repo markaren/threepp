@@ -70,7 +70,7 @@ namespace threepp_py {
                 .def_readwrite("layers", &T::layers)
                 .def_property_readonly("id", [](const T& o) { return o.id; })
                 .def_property_readonly("uuid", [](const T& o) { return o.uuid; })
-                .def_property_readonly("parent", [](T& o) { return o.parent; }, py::return_value_policy::reference)
+                .def_property_readonly("parent", py::cpp_function([](T& o) { return o.parent; }, py::return_value_policy::reference, py::keep_alive<0, 1>()))
                 .def_property_readonly("children", [](T& o) { return o.children; }, py::return_value_policy::reference)
                 .def("add", [](T& self, const py::args& children) {
                     for (const auto& ch : children) self.add(as_object3d(ch));
@@ -97,7 +97,7 @@ namespace threepp_py {
                 .def_property_readonly("matrix_world", [](T& o) { o.updateWorldMatrix(true, false); return *o.matrixWorld; })
                 .def("local_to_world", [](T& o, Vector3 v) { o.localToWorld(v); return v; }, py::arg("vector"))
                 .def("world_to_local", [](T& o, Vector3 v) { o.worldToLocal(v); return v; }, py::arg("vector"))
-                .def("get_object_by_name", [](T& o, const std::string& n) { return o.getObjectByName(n); }, py::arg("name"), py::return_value_policy::reference)
+                .def("get_object_by_name", [](T& o, const std::string& n) { return o.getObjectByName(n); }, py::arg("name"), py::return_value_policy::reference, py::keep_alive<0, 1>())
                 // The lambda takes T& so pybind extracts a correct self pointer;
                 // the T& -> Object3D& upcast inside is plain C++ and safe.
                 .def("get_user_data", [](const T& o, const std::string& key) { return user_data_string(o, key); }, py::arg("key"))

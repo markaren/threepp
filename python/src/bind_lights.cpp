@@ -54,9 +54,9 @@ namespace threepp_py {
                 .def("set_target", [](DirectionalLight& l, Object3D& target) { l.setTarget(target); }, py::arg("target"))
                 // Non-owning view of the aim target. target() may return the light's
                 // internal defaultTarget (not shared_ptr-owned), so use the reference
-                // policy (cf. Object3D.parent) — the returned target must not outlive
-                // the light.
-                .def("get_target", [](DirectionalLight& l) -> const Object3D& { return l.target(); }, py::return_value_policy::reference)
+                // policy (cf. Object3D.parent); keep_alive<0, 1> keeps the light alive
+                // for as long as the returned target proxy is held.
+                .def("get_target", [](DirectionalLight& l) -> const Object3D& { return l.target(); }, py::return_value_policy::reference, py::keep_alive<0, 1>())
                 // Shadow-camera ortho frustum. Call after constructing the light to
                 // widen the shadow coverage area; default is ±1 (very tight).
                 .def("set_shadow_frustum",
@@ -114,7 +114,7 @@ namespace threepp_py {
                                "traces soft shadows with penumbras that widen with distance; 0 "
                                "(default) keeps hard shadows. GL ignores it.")
                 .def("set_target", [](SpotLight& l, Object3D& target) { l.setTarget(target); }, py::arg("target"))
-                .def("get_target", [](SpotLight& l) -> const Object3D& { return l.target(); }, py::return_value_policy::reference);
+                .def("get_target", [](SpotLight& l) -> const Object3D& { return l.target(); }, py::return_value_policy::reference, py::keep_alive<0, 1>());
 
         // ---- HemisphereLight -------------------------------------------------
         py::class_<HemisphereLight, Light, std::shared_ptr<HemisphereLight>>(m, "HemisphereLight")

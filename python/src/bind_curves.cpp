@@ -219,7 +219,7 @@ namespace threepp_py {
                 // A list copy in both directions (pybind11's stl caster): assign
                 // the property to change the points, mutating what the getter
                 // returned changes nothing.
-                .def_readwrite("points", &CatmullRomCurve3::points)
+                .def_readwrite("points", &CatmullRomCurve3::points, "A list COPY in both directions: assign the property to change it; appending to, or indexing into, what the getter returned changes nothing.")
                 .def_readwrite("closed", &CatmullRomCurve3::closed)
                 .def_readwrite("curve_type", &CatmullRomCurve3::curveType)
                 // Applies to curve_type == catmullrom only, as in three.js.
@@ -273,7 +273,7 @@ namespace threepp_py {
                             return std::make_shared<SplineCurve>(arrayToPoints<Vector2>(points, "SplineCurve.from_array"));
                         },
                         py::arg("points"), "The constructor with `points` as an (N, 2) float array instead of a list of Vector2.")
-                .def_readwrite("points", &SplineCurve::points)
+                .def_readwrite("points", &SplineCurve::points, "A list COPY in both directions: assign the property to change it; appending to, or indexing into, what the getter returned changes nothing.")
                 .def("__repr__", [](const SplineCurve& c) {
                     return "SplineCurve(points=" + std::to_string(c.points.size()) + ")";
                 });

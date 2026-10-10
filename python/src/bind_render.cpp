@@ -117,7 +117,8 @@ namespace threepp_py {
 
         py::class_<LidarModel>(m, "LidarModel")
                 .def(py::init<>())
-                .def_readwrite("elevation_angles", &LidarModel::elevationAngles)
+                .def_readwrite("elevation_angles", &LidarModel::elevationAngles,
+                               "Beam elevations in degrees. A list COPY in both directions: assign the property to change it; appending to, or indexing into, what the getter returned changes nothing.")
                 .def_readwrite("azimuth_resolution", &LidarModel::azimuthResolution)
                 .def_readwrite("azimuth_min", &LidarModel::azimuthMin)
                 .def_readwrite("azimuth_max", &LidarModel::azimuthMax)
