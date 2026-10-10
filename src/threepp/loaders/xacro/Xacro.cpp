@@ -3,6 +3,7 @@
 
 #include "threepp/core/Object3D.hpp"
 #include "threepp/loaders/xacro/Expand.hpp"
+#include "threepp/loaders/xacro/Strings.hpp"
 
 #include "pugixml.hpp"
 
@@ -21,16 +22,6 @@ namespace {
         std::ostringstream out;
         doc.save(out, "  ", pugi::format_indent);
         return out.str();
-    }
-
-    std::string trim(std::string_view s) {
-
-        std::size_t b = 0;
-        std::size_t e = s.size();
-        const auto space = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
-        while (b < e && space(s[b])) ++b;
-        while (e > b && space(s[e - 1])) --e;
-        return std::string(s.substr(b, e - b));
     }
 
     std::vector<ArgDecl> scan(const pugi::xml_document& doc) {

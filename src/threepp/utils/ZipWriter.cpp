@@ -1,6 +1,8 @@
 
 #include "threepp/utils/ZipWriter.hpp"
 
+#include "threepp/utils/ZipName.hpp"
+
 #include <algorithm>
 #include <array>
 #include <fstream>
@@ -48,13 +50,6 @@ namespace {
     std::string named(const std::string& s) {
 
         return "\"" + s + "\"";
-    }
-
-    std::string normalizeName(std::string name) {
-
-        std::replace(name.begin(), name.end(), '\\', '/');
-        while (name.rfind("./", 0) == 0) name.erase(0, 2);
-        return name;
     }
 
     // CRC-32/ISO-HDLC, the one ZIP uses: reflected input and output, so the
@@ -134,7 +129,7 @@ namespace {
 
 void ZipWriter::add(std::string name, std::vector<unsigned char> data) {
 
-    name = normalizeName(std::move(name));
+    name = utils::normalizeZipName(std::move(name));
 
     if (name.empty()) fail("an entry cannot have an empty name");
     if (name.back() == '/') {

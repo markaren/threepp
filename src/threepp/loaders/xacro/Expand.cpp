@@ -3,6 +3,7 @@
 
 #include "threepp/loaders/xacro/Expr.hpp"
 #include "threepp/loaders/xacro/Scope.hpp"
+#include "threepp/loaders/xacro/Strings.hpp"
 #include "threepp/loaders/xacro/Substitution.hpp"
 
 #include "pugixml.hpp"
@@ -21,17 +22,6 @@ using namespace threepp;
 using namespace threepp::xacro;
 
 namespace {
-
-    bool isSpace(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
-
-    std::string trim(std::string_view s) {
-
-        std::size_t b = 0;
-        std::size_t e = s.size();
-        while (b < e && isSpace(s[b])) ++b;
-        while (e > b && isSpace(s[e - 1])) --e;
-        return std::string(s.substr(b, e - b));
-    }
 
     std::string lower(std::string s) {
 

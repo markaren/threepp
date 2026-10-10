@@ -1,6 +1,8 @@
 
 #include "threepp/utils/ZipReader.hpp"
 
+#include "threepp/utils/ZipName.hpp"
+
 #include <algorithm>
 #include <fstream>
 #include <limits>
@@ -85,17 +87,6 @@ namespace {
             case 98: return "ppmd";
             default: return "";
         }
-    }
-
-    // Entry names are stored with forward slashes by every writer that follows
-    // the spec, but not by every writer, and a caller should not have to care.
-    // Applied to both sides of the lookup, so has("0_0\\meta.json"),
-    // has("./0_0/meta.json") and has("0_0/meta.json") are one question.
-    std::string normalizeName(std::string name) {
-
-        std::replace(name.begin(), name.end(), '\\', '/');
-        while (name.rfind("./", 0) == 0) name.erase(0, 2);
-        return name;
     }
 
     // The whole file, in one allocation. These archives are ~180 MB and a caller
@@ -313,7 +304,7 @@ void ZipReader::parse() {
         // ASCII names — and guessing a code page for the rest would only invent
         // a second spelling of a name the caller already has. Lookup is
         // byte-exact after normalisation.
-        const std::string name = normalizeName(
+        const std::string name = utils::normalizeZipName(
                 std::string(reinterpret_cast<const char*>(c + CENTRAL_FIXED), nameLen));
 
         pos = recordEnd;
@@ -395,12 +386,12 @@ void ZipReader::parse() {
 
 bool ZipReader::has(const std::string& name) const {
 
-    return entries_.find(normalizeName(name)) != entries_.end();
+    return entries_.find(utils::normalizeZipName(name)) != entries_.end();
 }
 
 std::vector<unsigned char> ZipReader::read(const std::string& name) const {
 
-    const auto it = entries_.find(normalizeName(name));
+    const auto it = entries_.find(utils::normalizeZipName(name));
     if (it == entries_.end()) {
 
         fail("no entry named " + quoted(name) + " in the archive (" +

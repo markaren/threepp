@@ -334,6 +334,7 @@ set(privateHeaders
         "threepp/utils/Base64.hpp"
         "threepp/utils/RegexUtil.hpp"
         "threepp/utils/TriangleIntersect.hpp"
+        "threepp/utils/ZipName.hpp"
 
         "threepp/loaders/HdrTexture.hpp"
         "threepp/loaders/ObjectJsonConstants.hpp"
@@ -347,6 +348,7 @@ set(privateHeaders
         "threepp/loaders/xacro/Expr.hpp"
         "threepp/loaders/xacro/PackageResolver.hpp"
         "threepp/loaders/xacro/Scope.hpp"
+        "threepp/loaders/xacro/Strings.hpp"
         "threepp/loaders/xacro/Substitution.hpp"
         "threepp/loaders/xacro/Value.hpp"
         "threepp/loaders/xacro/YamlLite.hpp"

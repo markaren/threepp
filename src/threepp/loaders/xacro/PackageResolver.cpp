@@ -1,6 +1,8 @@
 
 #include "threepp/loaders/xacro/PackageResolver.hpp"
 
+#include "threepp/loaders/xacro/Strings.hpp"
+
 #include "pugixml.hpp"
 
 #include <cstdlib>
@@ -10,16 +12,6 @@ using namespace threepp;
 using namespace threepp::xacro;
 
 namespace {
-
-    std::string trim(std::string s) {
-
-        const auto isSpace = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
-        std::size_t b = 0;
-        std::size_t e = s.size();
-        while (b < e && isSpace(s[b])) ++b;
-        while (e > b && isSpace(s[e - 1])) --e;
-        return s.substr(b, e - b);
-    }
 
     bool isDirectory(const std::filesystem::path& p) {
 
