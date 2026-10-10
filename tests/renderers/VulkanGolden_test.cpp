@@ -30,7 +30,7 @@
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 
-#include "capture_util.hpp"// examples/vulkan (shared via target include dir)
+#include "capture_util.hpp"// examples/libs (shared via target include dir)
 
 #include <cstdio>
 #include <cstring>

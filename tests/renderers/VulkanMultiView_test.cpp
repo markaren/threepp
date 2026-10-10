@@ -38,7 +38,7 @@
 #include "threepp/objects/SplatCloud.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 
-#include "capture_util.hpp"// examples/vulkan (shared via target include dir)
+#include "capture_util.hpp"// examples/libs (shared via target include dir)
 
 #include <chrono>
 #include <cmath>

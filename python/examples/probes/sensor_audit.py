@@ -1,6 +1,6 @@
 """Sensor replay audit, in Python, for any machine that can `pip install threepp`.
 
-The C++ harnesses (examples/vulkan/vulkan_aov_audit, vulkan_lidar_audit --sonar,
+The C++ harnesses (examples/vulkan/audits/vulkan_aov_audit, vulkan_lidar_audit --sonar,
 examples/extras/sensors/replay_audit) are the paper's instruments on the
 development machine. This is the same experiment written against the Python
 package so it can run where the wheel runs: a Colab T4, a CI box, a laptop
@@ -97,7 +97,7 @@ def arr_bytes(a) -> bytes:
 
 
 # --------------------------------------------------------------------------
-# scene (mirrors examples/vulkan/vulkan_aov_audit.cpp)
+# scene (mirrors examples/vulkan/audits/vulkan_aov_audit.cpp)
 # --------------------------------------------------------------------------
 def build_scene(tp, renderer, aspect):
     scene = tp.Scene()

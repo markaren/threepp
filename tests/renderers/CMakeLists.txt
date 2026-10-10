@@ -33,7 +33,7 @@ endif ()
 
 # Vulkan deferred golden-image regression net. Plain exit-code program (not
 # Catch2): renders fixed deterministic scenes and compares to committed PPM
-# references via examples/vulkan/capture_util.hpp. Needs an RT-capable GPU at
+# references via examples/libs/capture_util.hpp. Needs an RT-capable GPU at
 # runtime → exits 42 (CTest "Skipped") where there isn't one. References are
 # GPU-specific, so this is a local pre-push check, not a hard cross-hardware gate.
 if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
@@ -41,7 +41,7 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     target_link_libraries(VulkanGolden_test PRIVATE threepp)
     target_include_directories(VulkanGolden_test PRIVATE
             "${PROJECT_SOURCE_DIR}/src"
-            "${PROJECT_SOURCE_DIR}/examples/vulkan")# capture_util.hpp
+            "${PROJECT_SOURCE_DIR}/examples/libs")# capture_util.hpp
     target_compile_definitions(VulkanGolden_test PRIVATE
             DATA_FOLDER="${THREEPP_DATA_DIR}"
             PROJECT_FOLDER="${PROJECT_SOURCE_DIR}")
@@ -78,7 +78,7 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     target_link_libraries(VulkanMultiView_test PRIVATE threepp)
     target_include_directories(VulkanMultiView_test PRIVATE
             "${PROJECT_SOURCE_DIR}/src"
-            "${PROJECT_SOURCE_DIR}/examples/vulkan")# capture_util.hpp
+            "${PROJECT_SOURCE_DIR}/examples/libs")# capture_util.hpp
     add_test(NAME VulkanMultiView_test COMMAND VulkanMultiView_test)
     set_tests_properties(VulkanMultiView_test PROPERTIES SKIP_RETURN_CODE 42)
 
@@ -125,7 +125,7 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     target_link_libraries(VulkanSplatVolume_test PRIVATE threepp)
     target_include_directories(VulkanSplatVolume_test PRIVATE
             "${PROJECT_SOURCE_DIR}/src"
-            "${PROJECT_SOURCE_DIR}/examples/vulkan")# capture_util.hpp
+            "${PROJECT_SOURCE_DIR}/examples/libs")# capture_util.hpp
     target_compile_definitions(VulkanSplatVolume_test PRIVATE
             DATA_FOLDER="${THREEPP_DATA_DIR}"
             PROJECT_FOLDER="${PROJECT_SOURCE_DIR}")
@@ -176,11 +176,6 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
             SKIP_RETURN_CODE 42
             TIMEOUT 2400)
 
-    # Camera-model geometry: film gauge / focal length round-trip and the
-    # reported cameraIntrinsics() checked against the renderer's own
-    # projection. Numeric (not pixel) claims, so unlike the goldens this is
-    # hardware-independent — but it still needs a device to construct the
-    # renderer, hence the same skip code.
     # GPU per-instance world matrices vs the CPU's, bit for bit. The gate on
     # stage 1 of plans/gpu-driven-instances.md: instance_expand.comp produces
     # what MeshEntry::worldMatrix holds, no consumer reads it yet, and the only
@@ -200,7 +195,6 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanInstanceColor_test COMMAND VulkanInstanceColor_test)
     set_tests_properties(VulkanInstanceColor_test PROPERTIES SKIP_RETURN_CODE 42)
 
-    # RenderGraph barrier planning; CPU only (no device needed).
     # CPU wave-height query of the FFT ocean against an analytic Gerstner
     # wave: the choppy-displacement inversion and the cascade-1 rotation.
     # No device needed; DisplacedMesh is only built with Vulkan.
@@ -209,10 +203,11 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     # against the numbers of the Python class it is a port of. No device needed.
     add_test_executable(VesselWash_test)
 
+    # RenderGraph barrier planning; CPU only (no device needed).
     add_test_executable(RenderGraph_test)
     # TransientPool placement (AliasPacker); CPU only.
     add_test_executable(TransientPool_test)
-    # The render-graph A/B harness (examples/vulkan/rg_ab.cpp) in --selfcheck
+    # The render-graph A/B harness (examples/vulkan/audits/rg_ab.cpp) in --selfcheck
     # mode, one test per scene: renders the scene and fails (exit 3) on any
     # render-graph diagnostic. Four scenes, about 20 s each, cover the MSAA
     # G-buffer pool, secondary views, splats and fields; the harness's other
@@ -294,17 +289,17 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanDielectricIor_test COMMAND VulkanDielectricIor_test)
     set_tests_properties(VulkanDielectricIor_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # Camera-model geometry: film gauge / focal length round-trip and the
+    # reported cameraIntrinsics() checked against the renderer's own
+    # projection. Numeric (not pixel) claims, so unlike the goldens this is
+    # hardware-independent — but it still needs a device to construct the
+    # renderer, hence the same skip code.
     add_executable(VulkanCameraModel_test VulkanCameraModel_test.cpp)
     target_link_libraries(VulkanCameraModel_test PRIVATE threepp)
     target_include_directories(VulkanCameraModel_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
     add_test(NAME VulkanCameraModel_test COMMAND VulkanCameraModel_test)
     set_tests_properties(VulkanCameraModel_test PROPERTIES SKIP_RETURN_CODE 42)
 
-    # Both backends in ONE process: GLFW window hints are sticky, so a Vulkan
-    # canvas used to leave GLFW_CLIENT_API=GLFW_NO_API set and any GL canvas
-    # created afterwards got a context-less window (hard exit, no traceback).
-    # Needs its own executable — every other test uses a single backend, and the
-    # hazard is invisible unless the Vulkan canvas comes first.
     # A vision sensor's near/far must bound the same quantity on both backends.
     # Same both-backends-in-one-process shape as CanvasApiOrder_test below (and
     # the same Vulkan-canvas-first ordering), because that is what it takes to
@@ -317,6 +312,11 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
             SKIP_RETURN_CODE 42
             SKIP_REGULAR_EXPRESSION "WGL: The driver does not appear to support OpenGL")
 
+    # Both backends in ONE process: GLFW window hints are sticky, so a Vulkan
+    # canvas used to leave GLFW_CLIENT_API=GLFW_NO_API set and any GL canvas
+    # created afterwards got a context-less window (hard exit, no traceback).
+    # Needs its own executable — every other test uses a single backend, and the
+    # hazard is invisible unless the Vulkan canvas comes first.
     add_executable(CanvasApiOrder_test CanvasApiOrder_test.cpp)
     target_link_libraries(CanvasApiOrder_test PRIVATE threepp)
     target_include_directories(CanvasApiOrder_test PRIVATE "${PROJECT_SOURCE_DIR}/src")

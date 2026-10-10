@@ -14,16 +14,20 @@ add_example(NAME "vulkan_denoise" LINK_IMGUI)
 add_example(NAME "vulkan_animation" LINK_IMGUI)
 add_example(NAME "vulkan_gallery" LINK_IMGUI)
 add_example(NAME "vulkan_restir_test" LINK_IMGUI)
-add_example(NAME "vulkan_furnace_test" LINK_IMGUI)
 add_example(NAME "vulkan_lidar" LINK_IMGUI)
 add_example(NAME "vulkan_sonar" LINK_IMGUI)
 add_example(NAME "vulkan_event_camera" LINK_IMGUI)
-add_example(NAME "vulkan_aov_audit")
-add_example(NAME "vulkan_lidar_audit")
+
+# audits/: harnesses that measure the renderer rather than show it. Same
+# targets as any example; kept apart so the files beside this one read as
+# the examples.
+add_example(NAME "vulkan_furnace_test" SOURCES "audits/vulkan_furnace_test.cpp" LINK_IMGUI)
+add_example(NAME "vulkan_aov_audit" SOURCES "audits/vulkan_aov_audit.cpp")
+add_example(NAME "vulkan_lidar_audit" SOURCES "audits/vulkan_lidar_audit.cpp")
 # Render-graph A/B capture harness (see the file comment and
 # plans/render-graph.md, "Verification method"). Also registered as the
 # per-scene ctests rg_ab_<scene> in tests/renderers.
-add_example(NAME "rg_ab")
+add_example(NAME "rg_ab" SOURCES "audits/rg_ab.cpp")
 
 # Local scratch harnesses (capture / repro / profiling tools) are not tracked —
 # see scratch/README.md and .gitignore. Auto-register every scratch/*.cpp as its
