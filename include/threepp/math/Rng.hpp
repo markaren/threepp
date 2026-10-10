@@ -199,6 +199,22 @@ namespace threepp::math {
         }
     };
 
+    // The classic large-prime spatial hash of an integer cell (Teschner et
+    // al.), for hash-table buckets and for per-cell seeds.
+    //
+    // The multiplies are done in an UNSIGNED type on purpose. In int,
+    // `x * 73856093` overflows for any |x| past 29 (2^31 / 73856093), which is
+    // undefined behaviour and which UBSan rightly rejects; unsigned wraparound
+    // is well defined and is exactly what the hash wants. The bits are the
+    // ones the int form produced on two's-complement hardware, so nothing
+    // seeded from it moves.
+    [[nodiscard]] constexpr std::uint32_t spatialHash(int x, int y, int z = 0) {
+
+        return (static_cast<std::uint32_t>(x) * 73856093u) ^
+               (static_cast<std::uint32_t>(y) * 19349663u) ^
+               (static_cast<std::uint32_t>(z) * 83492791u);
+    }
+
 }// namespace threepp::math
 
 #endif// THREEPP_RNG_HPP

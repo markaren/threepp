@@ -42,6 +42,7 @@
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/math/Rng.hpp"
 // Vulkan-only: Ocean (FFT-displaced water) and the VulkanRenderer/Core deferred
 // tuning knobs live behind THREEPP_WITH_VULKAN. The demo itself runs on the
 // forward GL backend too — those references are all guarded below.
@@ -1530,9 +1531,7 @@ int main(int argc, char** argv) {
                 // Per-cell seed: the yaw stream restarts inside every build, so
                 // a shared seed would give every cell the same rotation
                 // sequence — a rhythm the eye finds on a hillside.
-                co.seed = lo.seed ^ (static_cast<unsigned int>(cx) * 73856093u) ^
-                          (static_cast<unsigned int>(cz) * 19349663u) ^
-                          (static_cast<unsigned int>(level) * 83492791u);
+                co.seed = lo.seed ^ math::spatialHash(cx, cz, level);
                 vegetation::buildCanopyForestLod(*g, sub, *speciesPtr, canopyMat, pack.canopy,
                                                  pack.grid, heightFn, co);
                 return g;
@@ -1703,8 +1702,7 @@ int main(int argc, char** argv) {
                             auto g = Group::create();
                             g->name = "bush_cell_root";
                             vegetation::BushOptions co = bopt;
-                            co.seed = bopt.seed ^ (static_cast<unsigned int>(cx) * 73856093u) ^
-                                      (static_cast<unsigned int>(cz) * 19349663u);
+                            co.seed = bopt.seed ^ math::spatialHash(cx, cz);
                             vegetation::buildBushField(*g, it->second, *bvars, bHeight, co);
                             return g;
                         },

@@ -69,6 +69,7 @@
 #include "threepp/extras/vegetation/CanopyForest.hpp"
 #include "threepp/extras/vegetation/TreeTextures.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/math/Rng.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
 
@@ -846,9 +847,7 @@ namespace threepp::terrain {
                 // Per-cell seed: the yaw stream restarts inside every build, so
                 // a shared seed gives every cell the same rotation sequence — a
                 // rhythm the eye finds on a hillside.
-                co.seed = lo.seed ^ (static_cast<unsigned int>(cx) * 73856093u) ^
-                          (static_cast<unsigned int>(cz) * 19349663u) ^
-                          (static_cast<unsigned int>(level) * 83492791u);
+                co.seed = lo.seed ^ math::spatialHash(cx, cz, level);
                 vegetation::buildCanopyForestLod(*g, sub, *speciesPtr, canopyMat, pack_.canopy,
                                                  pack_.grid, heightFn, co);
                 return g;
