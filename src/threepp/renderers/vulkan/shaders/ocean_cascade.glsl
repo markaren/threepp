@@ -24,13 +24,12 @@ vec2 oceanC1World(vec2 v) {
 
 // Width (m) of the band outside a hull's footprint over which the sea blends from
 // the vessel's waterline plane back to the wave field, and inside which the wake
-// ridges fade in. It was a fixed 2 m, sized for the 28 m Gunnerus; on a 6 m USV
-// that flattened a glassy apron a third of her length ahead of the bow. Now it
-// scales with the hull, 0.6 x half-beam clamped to [0.3, 2] m, so Gunnerus
-// (4.5 m half-beam) keeps exactly 2 m. `scaled` false = the old fixed 2 m (the
-// THREEPP_OCEAN_HULL_MARGIN=0 A/B). DisplacedMesh::sampleWakeHeight mirrors this.
-float oceanHullMargin(float halfBeam, bool scaled) {
-    return scaled ? clamp(0.6 * halfBeam, 0.3, 2.0) : 2.0;
+// ridges fade in. It scales with the hull, 0.6 x half-beam clamped to [0.3, 2] m:
+// a fixed 2 m, sized for the 28 m Gunnerus (4.5 m half-beam, which keeps exactly
+// 2 m), flattened a glassy apron a third of a 6 m USV's length ahead of her bow.
+// DisplacedMesh::sampleWakeHeight mirrors this.
+float oceanHullMargin(float halfBeam) {
+    return clamp(0.6 * halfBeam, 0.3, 2.0);
 }
 
 // One vessel as the ocean passes read it: DisplacedMesh::HullExclusion, the

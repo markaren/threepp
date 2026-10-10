@@ -7,11 +7,6 @@
 
 #include "ocean_cascade.glsl"// cascade-1 domain rotation (repeat-lattice break)
 
-// Hull-exclusion margin scales with the hull (see oceanHullMargin). A
-// specialization constant, not a push constant: it went in when one hull's
-// fields still filled the push block. Set from THREEPP_OCEAN_HULL_MARGIN.
-layout(constant_id = 0) const bool kScaledHullMargin = true;
-
 // Writes displaced positions and normals for an FFT-driven ocean surface
 // directly into the BLAS vertex/normal buffers (host-mapped, same memory
 // the AS build reads). The BLAS-rebuild-in-place mechanism
@@ -115,7 +110,7 @@ vec3 hullLocal(OceanHull hu, vec2 p) {
     const float edgeX    = abs(lX) - halfBeamAtLZ;
     const float edgeZ    = abs(lZ) - hu.halfLength;
     const float edgeDist = max(edgeX, edgeZ);
-    return vec3(lX, lZ, smoothstep(0.0, oceanHullMargin(hu.halfBeam, kScaledHullMargin), edgeDist));
+    return vec3(lX, lZ, smoothstep(0.0, oceanHullMargin(hu.halfBeam), edgeDist));
 }
 
 // Bicubic B-spline single-channel fetch (4 bilinear taps, Sigg & Hadwiger).
@@ -407,7 +402,7 @@ void main() {
                 }
                 const float sHullEdgeX = abs(sLX) - sHalfBeamAtLZ;
                 const float sHullEdgeZ = abs(sLZ) - hu.halfLength;
-                const float sHullFade  = smoothstep(0.0, oceanHullMargin(hu.halfBeam, kScaledHullMargin),
+                const float sHullFade  = smoothstep(0.0, oceanHullMargin(hu.halfBeam),
                                                     max(sHullEdgeX, sHullEdgeZ));
                 if (sHullFade <= 0.0) continue;
                 const float tanAV     = 0.36;

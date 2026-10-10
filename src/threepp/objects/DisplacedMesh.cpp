@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 #include <limits>
 
 namespace threepp {
@@ -135,14 +134,8 @@ namespace threepp {
             };
 
             // Hull margin: mirrors ocean_cascade.glsl oceanHullMargin (0.6 x half-beam
-            // in [0.3, 2] m; THREEPP_OCEAN_HULL_MARGIN=0 = the old fixed 2 m).
-            static const bool kScaledHullMargin = [] {
-                const char* e = std::getenv("THREEPP_OCEAN_HULL_MARGIN");
-                return !(e && e[0] == '0');
-            }();
-            const float hullMargin = kScaledHullMargin
-                                             ? std::clamp(0.6f * hullExclusion.halfBeam, 0.3f, 2.f)
-                                             : 2.f;
+            // in [0.3, 2] m).
+            const float hullMargin = std::clamp(0.6f * hullExclusion.halfBeam, 0.3f, 2.f);
 
             auto vWedgeAtPose = [&](float cx, float cz, float sinYaw, float cosYaw,
                                     float speed, float ageFade) -> float {

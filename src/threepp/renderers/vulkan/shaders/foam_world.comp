@@ -67,7 +67,7 @@ struct WakeSample {
 layout(buffer_reference, scalar) buffer WakeTrailBuf { WakeSample s[]; };
 layout(buffer_reference, scalar) buffer OceanHullBuf { OceanHull h[]; };
 
-// 80 bytes, mirrored field-for-field by FoamWorldPipeline::PushConstants. The
+// 72 bytes, mirrored field-for-field by FoamWorldPipeline::PushConstants. The
 // vessels are the same per-frame buffer water_displace.comp reads.
 layout(push_constant, scalar) uniform Pc {
     uint64_t disturbAddr;   // 0 = no disturbance buffer
@@ -84,9 +84,7 @@ layout(push_constant, scalar) uniform Pc {
     uint   disturbCount;
     float  decay;
     float  natFoamScale;    // scales NATURAL Jacobian whitecaps; wake/splats unaffected
-    uint   vesselFoamFlags; // bit 2: hull margin scales with the hull (oceanHullMargin)
     uint   hullCount;       // active vessels; 0 = no vessel foam
-    float  _pad0;
 } pc;
 
 // The analytic trail's peak deposit, lateral spread (x half-beam) and bow
@@ -282,7 +280,7 @@ void main() {
     OceanHullBuf hulls = OceanHullBuf(pc.hullAddr);
     for (uint k = 0u; k < pc.hullCount; ++k) {
         const OceanHull hu = hulls.h[k];
-        const float hullMargin = oceanHullMargin(hu.halfBeam, (pc.vesselFoamFlags & 4u) != 0u);
+        const float hullMargin = oceanHullMargin(hu.halfBeam);
         float vesselFoam = 0.0;
         if (hu.trailCount > 0u) {
             WakeTrailBuf wt = WakeTrailBuf(pc.wakeTrailAddr);

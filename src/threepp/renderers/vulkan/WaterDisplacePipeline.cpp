@@ -6,7 +6,6 @@
 #include "threepp/renderers/vulkan/shaders/water_displace.comp.spv.h"
 
 #include <array>
-#include <cstdlib>
 
 namespace threepp::vulkan {
 
@@ -71,16 +70,6 @@ namespace threepp::vulkan {
         stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
         stage.module = mod;
         stage.pName  = "main";
-
-        // constant_id 0: the hull-exclusion margin scales with the hull
-        // (ocean_cascade.glsl oceanHullMargin) unless THREEPP_OCEAN_HULL_MARGIN=0.
-        const VkBool32 scaledHullMargin = [] {
-            const char* e = std::getenv("THREEPP_OCEAN_HULL_MARGIN");
-            return (e && e[0] == '0') ? VK_FALSE : VK_TRUE;
-        }();
-        VkSpecializationMapEntry specEntry{0, 0, sizeof(VkBool32)};
-        VkSpecializationInfo spec{1, &specEntry, sizeof(VkBool32), &scaledHullMargin};
-        stage.pSpecializationInfo = &spec;
 
         VkComputePipelineCreateInfo cpci{};
         cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;

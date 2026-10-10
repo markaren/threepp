@@ -3103,14 +3103,6 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 fpc.hullAddr       = hullAddr;
                 fpc.hullCount      = hullCount;
                 fpc.natFoamScale   = std::clamp(dm.params.foamAmount, 0.0f, 1.0f);
-                // THREEPP_OCEAN_HULL_MARGIN scales the hull margin with the hull
-                // (ocean_cascade.glsl), ON unless the env var is "0" (the A/B
-                // against the old fixed margin). See foam_world.comp.
-                static const uint32_t kVesselFoamFlags = [] {
-                    const char* e = std::getenv("THREEPP_OCEAN_HULL_MARGIN");
-                    return (e && e[0] == '0') ? 0u : 4u;
-                }();
-                fpc.vesselFoamFlags = kVesselFoamFlags;
                 if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanFoam, currentFrame);
                 foamWorld_->recordDispatch(cb, st.foamWorldDS, fpc);
                 if (timed) gpuTimings_->end(cb, vulkan::TP_OceanFoam, currentFrame);
