@@ -1,0 +1,267 @@
+{
+  "schema": "threepp.uav_spec/1",
+  "name": "HobbyKing Bixler 3",
+  "description": "The HobbyKing Bixler 3 (the thesis's 'Bix3') for the threepp examples. One file holds every number: the flight model identified from flight tests at Virginia Tech (bixler3_rig.py runs it), the airframe for the Blender generator (build_bixler3_blender.py -> bixler3.glb), and what the thesis does not give, marked as such.",
+  "reference": {
+    "thesis": {
+      "author": "Benjamin M. Simmons",
+      "title": "System Identification of a Nonlinear Flight Dynamics Model for a Small, Fixed-Wing UAV",
+      "type": "Master's thesis, Virginia Polytechnic Institute and State University, 2018",
+      "url": "http://hdl.handle.net/10919/95324",
+      "read": "2026-10-10, from the repository's own text extraction of the thesis",
+      "licence": "The repository page states none. Equations and numbers are cited; no text, figure or code is copied.",
+      "use": "The flight model in bixler3_rig.py is the thesis's rigid body (its eqs. 2.7-2.13) with the aerodynamic model its section 4.5 selects as final: the structure of eqs. (4.2)-(4.7), the longitudinal estimates of Table 4.5 and the lateral-directional ones of Table 4.7, copied unchanged into `aero`; mass, geometry and inertia from its Tables 3.2 and 3.4 in `physical`. Its modal analysis (Tables 4.2, 4.8) and its vortex-lattice derivatives (Table 3.7) are in `thesis_modes` and `thesis_vlm` for the comparison.",
+      "identified_at": "Flights at the Kentland Experimental Aerial Systems Laboratory in negligible wind (gusts under 0.9 m/s), piloted doublets and 1-2-1 inputs about a reference airspeed of 12 m/s; angle of attack and sideslip were not measured (body velocities from GPS and attitude, the air taken as still). Output-error method in the time domain; three longitudinal parameters fixed at their vortex-lattice (XFLR5) values."
+    },
+    "article": {
+      "authors": "Benjamin M. Simmons, Hunter G. McClelland, Craig A. Woolsey",
+      "title": "Nonlinear Model Identification Methodology for Small, Fixed-Wing, Unmanned Aircraft",
+      "journal": "Journal of Aircraft 56(3), 1056-1067 (2019)",
+      "doi": "https://doi.org/10.2514/1.C035160",
+      "note": "The journal article of the same work, on the same aircraft. Not open access: the numbers here were read from the thesis, which is."
+    },
+    "airframe": {
+      "page": "HobbyKing's listing of the Bixler 3 (hobbyking.com), as quoted by air-rc.com/aircraft/HobbyKing_Bixler-3_903",
+      "read": "2026-10-10",
+      "figures": "Wingspan 1550 mm, length 948 mm, flying weight 890 g, 2620-1400KV brushless outrunner, 20 A ESC, 7x5 propeller, 1800-2200 mAh 3S battery; EPO foam, a pusher propeller on a pylon behind the wing, ailerons, elevator, rudder, optional flaps.",
+      "note": "The thesis's aircraft weighed 1.202 kg with its autopilot and instruments, and it is that aircraft the model is of.",
+      "review": {
+        "page": "flitetest.com/articles/bix3-community-review (a builder's review with photographs)",
+        "read": "2026-10-10",
+        "figures": "Repeats the vendor's wingspan 1550 mm, length 948 mm and flying weight 890 g; lists the propeller as 8x5 where the vendor's figures say 7x5 (the model has the 7x5). Removable landing gear in a pocket in the belly, a canopy that slides off for an FPV tray, servos inside the fuselage. It gives no chord, tail span, fuselage width, fin height or dihedral, and neither does any other page found (a search on 2026-10-10 turned up the two overall dimensions only).",
+        "use": "For the 3D model's layout only (`geometry`): what the aircraft looks like. No dimension is read off its photographs."
+      }
+    }
+  },
+  "units": "SI: metres, kilograms, seconds, radians, newtons. Keys ending in _deg are degrees.",
+  "frames": {
+    "ned": "The inertial frame: x north, y east, z down. Position (N, E, D).",
+    "body": "The thesis's body frame (its section 2.2): x out of the nose, y out of the right wing, z out of the belly, origin at the centre of gravity.",
+    "model": "The .glb's frame: X forward, Y up, Z right (starboard), metres, origin at the CG. A body vector (x, y, z) is (x, -z, y) in it. The same axes as the X8's and the boats' specs.",
+    "world": "threepp's world as the rigs use it: x east, y up, z south (-north). A NED position (N, E, D) is (E, h0 - D, -N), h0 the height of the NED origin. Heading psi (from north toward east) points the nose along (sin psi, 0, -cos psi)."
+  },
+  "physical": {
+    "source": "Thesis Table 3.2 (mass and geometry; the mass to four figures from its Table 3.6) and Table 3.4 (moments of inertia, each good to about 0.005 kg m^2 by the thesis's own bound).",
+    "mass": 1.202,
+    "Ix": 0.095,
+    "Iy": 0.045,
+    "Iz": 0.12,
+    "Ixz": 0.0,
+    "inertia_note": "The thesis takes Ixz as negligible.",
+    "cbar": 0.188,
+    "b": 1.54,
+    "S": 0.285,
+    "geometry_note": "cbar the mean aerodynamic chord, b the projected wingspan, S the projected wing area, as the thesis names them."
+  },
+  "aero": {
+    "source": "Thesis eqs. (4.2)-(4.7) with Table 4.5 (longitudinal: CXw, CZw and CZq fixed at the vortex-lattice values of Table 3.7, the rest from flight data) and Table 4.7 (lateral-directional, from flight data alone), the set its section 4.5 selects. Body-axis force coefficients: X = qbar S CX, Y = qbar S CY, Z = qbar S CZ, L = qbar S b Cl, M = qbar S cbar Cm, N = qbar S b Cn, qbar = rho Va^2 / 2 (eq. 2.13).",
+    "structure": {
+      "CX": "CXu uh + CXw wh + CXw2 wh^2 + CXo",
+      "CZ": "CZw wh + CZq qh + CZde de + CZw2 wh^2 + CZo",
+      "Cm": "Cmw wh + Cmq qh + Cmde de + Cmo",
+      "CY": "CYv vh + CYp ph + CYr rh + CYda da + CYdr dr + CYo",
+      "Cl": "Clv vh + Clp ph + Clr rh + Clda da + Cldr dr + Clo",
+      "Cn": "Cnv vh + Cnp ph + Cnr rh + Cnda da + Cndr dr + Cnv2 vh^2 + Cno"
+    },
+    "nondimensional": "uh = u / Vo, vh = v / Vo, wh = w / Vo, ph = p b / (2 Vo), qh = q cbar / (2 Vo), rh = r b / (2 Vo) (thesis eqs. 3.16, 4.1): the body velocities and rates over a FIXED reference airspeed, not over the airspeed of the moment. Deflections in radians.",
+    "Vo": 12.0,
+    "thrust_note": "The thesis did not separate the propeller's thrust from the airframe's drag: CX is the two together, at whatever throttle the flights held (not recorded in the thesis). There is no throttle in its model.",
+    "CXu": -0.156, "CXw": 0.297, "CXw2": 0.960, "CXo": 0.197,
+    "CZw": -5.32, "CZq": -8.20, "CZde": -0.308, "CZw2": 7.02, "CZo": -0.179,
+    "Cmw": -0.240, "Cmq": -4.49, "Cmde": -0.364, "Cmo": 0.0134,
+    "CYv": -0.251, "CYp": 0.170, "CYr": 0.350, "CYda": 0.103, "CYdr": 0.0157, "CYo": 0.0286,
+    "Clv": -0.0756, "Clp": -0.319, "Clr": 0.183, "Clda": -0.170, "Cldr": -0.0117, "Clo": -3e-5,
+    "Cnv": 0.0408, "Cnp": -0.242, "Cnr": -0.166, "Cnda": -0.0416, "Cndr": -0.0618, "Cnv2": 0.0126, "Cno": -9e-5,
+    "fixed_at_vlm": ["CXw", "CZw", "CZq"],
+    "uncertainty": {
+      "note": "The thesis's +- beside each estimate (95 % bounds from repeated manoeuvres). Several are as large as the estimate.",
+      "CXu": 0.157, "CXw2": 1.90, "CXo": 0.195,
+      "CZde": 0.351, "CZw2": 4.05, "CZo": 0.152,
+      "Cmw": 0.195, "Cmq": 2.13, "Cmde": 0.119, "Cmo": 0.0149,
+      "CYv": 0.119, "CYp": 0.199, "CYr": 0.377, "CYda": 0.0603, "CYdr": 0.0482, "CYo": 0.0382,
+      "Clv": 0.0459, "Clp": 0.0933, "Clr": 0.126, "Clda": 0.0325, "Cldr": 0.0220, "Clo": 0.00832,
+      "Cnv": 0.0158, "Cnp": 0.150, "Cnr": 0.0998, "Cnda": 0.023, "Cndr": 0.0177, "Cnv2": 0.0269, "Cno": 0.0048
+    }
+  },
+  "propulsion": {
+    "source": "ASSUMED, all of it: nothing about the propulsion is the thesis's. Its CX holds the thrust of its flights together with the drag, and its model has no throttle. bixler3_rig adds one as a difference: X = qbar S CX + [T(Omega_p, Va) - T(Omega_ref, Va)], so that at throttle_ref the model is the thesis's exactly. T is a generic propeller law sized from the vendor's parts list (reference.airframe: 2620-1400KV outrunner, 7x5 propeller, 3S pack, 20 A ESC), none of it measured.",
+    "D": 0.1778,
+    "pitch": 0.127,
+    "propeller_note": "The vendor's 7x5 propeller: 7 in across, 5 in of pitch.",
+    "CT0": 0.11,
+    "J0": 0.80,
+    "thrust_note": "ASSUMED: T = rho D^4 CT0 n^2 (1 - J / J0), n in rev/s, J = Va / (n D): a static thrust coefficient falling in a straight line to zero at the advance ratio J0, the form the Babyshark's pusher has here. CT0 = 0.11 and J0 = 0.80 (a little above the pitch ratio 0.71) are round figures of the size small fixed-pitch sport propellers of this pitch ratio show on a test stand; they are not read from a measurement of this propeller. Past J0 the thrust is held at zero (no windmilling drag). No torque, no current, no battery: the power is not modelled.",
+    "n_max": 207.0,
+    "n_max_note": "ASSUMED: the propeller's speed at full throttle, rev/s: 0.8 of the motor's no-load speed on a nominal 3S pack (1400 rev/min per volt x 11.1 V = 259 rev/s). Static thrust 5.8 N by the law above. The throttle (0..1) commands the propeller's speed as a share of this, as if the ESC held a speed.",
+    "motor_tau": 0.1,
+    "motor_tau_note": "ASSUMED: the propeller's speed follows the throttle as a first-order lag of 0.1 s.",
+    "lift_to_drag": 8.0,
+    "lift_to_drag_note": "ASSUMED: the lift-to-drag ratio of the airframe, propeller thrust taken out, at the speed where the thesis's model flies level hands-off (15.29 m/s at the sea). A foam motor glider of aspect ratio 8 with a pylon-mounted motor, an open cockpit's worth of instruments and no fairings: 8 is a guess between a trainer's 6 and a clean glider's 12.",
+    "throttle_ref": 0.8279,
+    "throttle_ref_note": "ASSUMED, and derived from the line above: the throttle the thesis's flights are TAKEN to have held, the one at which the propeller law gives m g / lift_to_drag = 1.47 N at 15.29 m/s (Bixler3.reference_throttle(); bixler3_flight.py --checks 1 recomputes it). The thesis says only that each manoeuvre held a constant throttle. What follows from the split and is not to be trusted: the glide angle, the climb rate, the throttle any speed needs, the fastest and slowest level speeds. What does not depend on it: everything at throttle_ref."
+  },
+  "actuators": {
+    "source": "ASSUMED: the thesis models no actuator (it maps the recorded servo signals straight to deflections). Second-order servos of the 9 g class and round throws.",
+    "servo_wn": 60.0,
+    "servo_zeta": 0.8,
+    "servo_note": "ASSUMED: about 10 Hz of bandwidth, a little under critical damping, no delay and no rate limit.",
+    "elevator_limit_deg": 20.0,
+    "aileron_limit_deg": 20.0,
+    "rudder_limit_deg": 25.0,
+    "limit_note": "ASSUMED: commands are clipped to these before the servos. The thesis gives no throws and no amplitudes for its manoeuvres.",
+    "signs": "The thesis states no sign convention for the deflections; these follow from its coefficients and are the NASA (Klein and Morelli) ones. Elevator: positive trailing edge down (Cmde < 0). Aileron: positive rolls LEFT (Clda < 0: right aileron trailing edge down, left one up). Rudder: positive trailing edge to port, nose left (Cndr < 0). Radians."
+  },
+  "environment": {
+    "rho": "isa",
+    "rho_sea_level": 1.225,
+    "rho_note": "ASSUMED: the thesis quotes no air density. The International Standard Atmosphere's troposphere at the height above mean sea level, 1.225 kg/m^3 at the sea; a number here in place of 'isa' fixes rho. For the comparison with the thesis's modes the density is read off its own tables: linearised the same way, its vortex-lattice derivatives (Table 3.7) give the modes XFLR5 printed for them (Table 3.8) at 1.18 kg/m^3 and are 4 % off at 1.225 (README, the thesis's modes).",
+    "g": 9.81,
+    "g_note": "ASSUMED: the thesis has g as a symbol only."
+  },
+  "envelope": {
+    "source": "OURS, not the thesis's: guards that hold what enters its coefficients inside a range. They act on the inputs of eqs. (4.2)-(4.7), never on the equations. The model was identified in gentle manoeuvres about 12 m/s with stalls left out, and the thesis prints no range of w, v or airspeed for them.",
+    "wh": [-0.15, 0.25],
+    "wh_note": "wh = w / Vo enters CX, CZ and Cm held to this range (w from -1.8 to +3.0 m/s; at 12 m/s an angle of attack of -8.6 to +14.5 deg). The identified CZw2 bends the lift over: its slope reaches zero at wh = CZw / (-2 CZw2) = 0.379 and CZ changes sign near 0.79, where a wing would have stalled long before. 0.25 is short of the vertex, about where a Clark Y wing of this aspect ratio stops lifting more (ASSUMED). Past it the coefficients hold their edge values: a lift plateau, not a stall. Because wh is w over the FIXED 12 m/s, a given wh is a larger angle of attack at a lower airspeed (0.25 is 22 deg at 8 m/s): the slow end is not to be believed.",
+    "vh": [-0.25, 0.25],
+    "vh_note": "vh = v / Vo enters CY, Cl and Cn held to this range (3 m/s of side velocity; 14.5 deg of sideslip at 12 m/s), more than a rudder doublet reaches (ASSUMED).",
+    "airspeed_note": "No floor or ceiling on the airspeed: the thesis divides by the fixed Vo, never by the airspeed of the moment, and the forces vanish with qbar. Believe it from about 10 to 15 m/s (the trim speeds its vortex-lattice sensitivity study spans, Table 3.6).",
+    "j_note": "Counted with the guards: steps on which the propeller law gives no thrust (J past J0, the propeller nearly stopped)."
+  },
+  "autopilot": {
+    "source": "OURS, not the thesis's (its manoeuvres were flown by hand). Successive loop closure (Beard and McLain, Small Unmanned Aircraft, ch. 6): roll on the ailerons, course (or heading) on roll, pitch on the elevator, altitude on pitch, airspeed on throttle, and the rudder holding the sideslip at zero. The inner gains are computed in bixler3_rig.Autopilot from the thesis's coefficients at the operating point; what is chosen here is each loop's natural frequency, its damping, its integral and its limits. Fed the exact state: no estimator, no sensor noise.",
+    "airspeed": 12.0,
+    "roll":     {"wn": 6.0, "zeta": 0.9, "ki": 0.2, "integral_deg": 5.0, "limit_deg": 30.0},
+    "course":   {"bandwidth_ratio": 14.0, "zeta": 1.0},
+    "pitch":    {"wn": 8.0, "zeta": 0.8, "wi": 1.0, "integral_deg": 6.0, "limit_deg": 10.0},
+    "altitude": {"wn": 0.4, "zeta": 1.0, "zone": 10.0},
+    "speed":    {"wn": 0.6, "zeta": 1.0, "throttle": [0.0, 1.0]},
+    "sideslip": {"stiffness": 1.5, "wi": 0.5, "integral_deg": 8.0},
+    "note": "roll: kp = wn^2 / a_phi2 (negative: positive aileron rolls left), rate feedback for what the airframe's own roll damping (8.3 /s at 12 m/s) lacks of 2 zeta wn, ki = ki x kp, the integral limited to integral_deg of aileron. course: wn = roll wn / bandwidth_ratio, on top of the bank the trim flies straight with. pitch: kp = (wn^2 - a_th2) / a_th3, kd = (2 zeta wn - a_th1) / a_th3, the integral (wi rad/s, at most integral_deg of elevator) removes the steady error; the pitch command stops at +-10 deg, a climb the ASSUMED propeller holds at 12 m/s. altitude: wn and zeta of h' = V_a theta; outside +-zone metres of the commanded height the pitch command saturates. speed: wn and zeta of the airspeed loop on the throttle, from the model's d(u')/du and d(u')/d(throttle) at the trim. sideslip: the rudder's side force (CYdr) is too small and too uncertain for the textbook's sideslip hold, so the loop works through the yawing moment: kp adds `stiffness` times the airframe's own weathercock stiffness (kp = stiffness Cnv V_a / (Vo Cndr)), ki = wi (1 + stiffness) Cnv V_a / (Vo Cndr), at most integral_deg of rudder. It is a sideslip hold and not a yaw damper because the thesis's dutch roll is damped well enough (0.32) and its CYo leaves a standing sideslip otherwise."
+  },
+  "guidance": {
+    "source": "OURS: x8_rig's line-of-sight law on a polyline of waypoints, sized for 12 m/s. Course command chi_d = path angle + atan(-e / delta) (e the cross-track error, positive to the right of the path; delta the look-ahead distance).",
+    "lookahead": 40.0,
+    "accept": "turn",
+    "turn_bank": 0.75,
+    "note": "lookahead: the X8's 60 m at 18 m/s, the same 3.3 s ahead at 12 m/s. accept 'turn': a leg is handed over R tan(|dchi| / 2) before its corner, R = V_g^2 / (g tan(turn_bank x the roll limit)) (35 m at 12 m/s), at most half the leg."
+  },
+  "thesis_modes": {
+    "source": "Thesis Tables 4.2 and 4.8: modes it prints at Va = 12 m/s, theta = 0. Eigenvalues in 1/s. Table 4.8 (Dutch roll, roll, spiral) is of the lateral-directional set the model carries (Table 4.7). Table 4.2 (short period) stands with the thesis's first longitudinal estimates (Table 4.1, flight data alone), not with the set it selects (Table 4.5), for which it prints no modes.",
+    "short_period": [-12.5, 4.61],
+    "dutch_roll": [-1.89, 5.57],
+    "roll": -7.77,
+    "spiral": -0.118
+  },
+  "thesis_vlm": {
+    "source": "Thesis Table 3.7: stability derivatives from XFLR5 (vortex lattice) at 12 m/s, alpha 2.2 deg, and Table 3.8: that model's modes. For the comparison only; three of them are in `aero` (fixed_at_vlm).",
+    "CXu": -0.0182, "CXw": 0.297, "CZu": -1.4e-5, "CZw": -5.32, "CZq": -8.20, "Cmu": 1.9e-6, "Cmw": -0.972, "Cmq": -12.2,
+    "CYv": -0.225, "CYp": -0.120, "CYr": 0.173, "Clv": -0.0729, "Clp": -0.526, "Clr": 0.132, "Cnv": 0.0535, "Cnp": -0.0692, "Cnr": -0.0442,
+    "modes": {"short_period": [-9.31, 9.43], "phugoid": [0.00181, 0.860], "dutch_roll": [-0.651, 4.63], "roll": -13.3, "spiral": 0.0839},
+    "geometry": {
+      "source": "Thesis Table 3.5, the vortex-lattice model's set-up.",
+      "cg_x_aft_of_wing_root_leading_edge": 0.078,
+      "cg_z_below_wing_underside": 0.028,
+      "wing_incidence_deg": 0.5,
+      "tail_incidence_deg": -3.0,
+      "wing_airfoil": "Clark Y"
+    }
+  },
+  "geometry": {
+    "note": "The 3D model (build_bixler3_blender.py), model frame: X forward, Y up, Z starboard, metres, origin at the centre of gravity. Published and met by the generator's gates: the thesis's projected span, wing area and mean aerodynamic chord (`physical`), where it puts the centre of gravity under the wing and its two incidences (`thesis_vlm.geometry`), the vendor's length and span over the tips, the propeller's diameter. Everything else is ASSUMED: fitted by eye to what the aircraft looks like (a builder's photographs, reference.airframe.review, and memory of the type), no drawing, 3D model or measured airframe behind it. No landing gear: the kit's wheels are optional and the model is a belly lander, as most autopilot conversions fly. No flaps: they are optional on the kit and are not drawn. No logos or lettering.",
+    "length": 0.948,
+    "length_note": "Published: the vendor's 948 mm, taken from the nose to the rudder's trailing edge (the pitot tube is ours and not counted).",
+    "span_over_tips": 1.55,
+    "span_note": "Published: the vendor's 1550 mm, taken as the span measured along the wing from tip to tip (the panels laid flat), against the thesis's b = 1.54 m, the span projected onto the horizontal. The dihedral line reconciles them: wing.dihedral_deg from the root and the tips turned up to wing.tip_angle_deg make the developed length 1.550 m over a projected 1.540 m. The dihedral itself is ASSUMED (the two spans fix one number between the dihedral and the tips' upsweep, not both).",
+    "wing": {
+      "note": "Planform: a constant-chord centre part out to centre_half_span, then a straight taper to tip_chord at the tip station (the half span, physical.b / 2), the tip rounded over tip_round (the chord times tip_floor + (1 - tip_floor) (1 - u^e)^(1/e), u the fraction into the tip, e tip_round_exponent). root_chord and tip_chord are SOLVED, with the other numbers here fixed, so that the planform's area and mean aerodynamic chord are the thesis's S and cbar (0.2850 and 0.1880): they are not measurements of the airframe. ASSUMED: centre_half_span, the tip's rounding, and how the taper and the rounding are shared between the edges (taper_leading_edge_share of the taper and tip_leading_edge_share of the rounding sweep the leading edge back, the rest brings the trailing edge forward). dihedral_deg ASSUMED, tip_angle_deg solved for the span over the tips (see span_note); the dihedral line's slope goes from the one to the other as u^2 over the rounded tip. The section is set at the thesis's incidence (thesis_vlm.geometry.wing_incidence_deg, taken as the chord line's from leading to trailing edge, as XFLR5 takes it; the flat underside then lies 1.47 deg nose down) and placed so that the root's leading edge is the thesis's 0.078 m ahead of the origin and the underside is its 0.028 m above the origin, at the origin's own station. No twist (ASSUMED).",
+      "centre_half_span": 0.28,
+      "root_chord": 0.2042,
+      "tip_chord": 0.1497,
+      "taper_leading_edge_share": 0.65,
+      "tip_round": 0.07, "tip_round_exponent": 2.5, "tip_floor": 0.15, "tip_leading_edge_share": 0.8,
+      "dihedral_deg": 5.0, "tip_angle_deg": 27.9,
+      "section": {
+        "note": "Clark Y (published: the thesis names it), as its classic table of ordinates in per cent of the chord above the flat underside, typed from memory of the NACA table and not checked against a file: ASSUMED to that extent. The generator interpolates over sqrt(x), which rounds the nose.",
+        "x": [0.0, 1.25, 2.5, 5.0, 7.5, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 95.0, 100.0],
+        "upper": [3.50, 5.45, 6.50, 7.90, 8.85, 9.60, 10.68, 11.36, 11.70, 11.40, 10.52, 9.15, 7.35, 5.22, 2.80, 1.49, 0.12],
+        "lower": [3.50, 1.93, 1.47, 0.93, 0.63, 0.42, 0.15, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      },
+      "aileron": {
+        "note": "ASSUMED: on the outer panel from z[0] to z[1], the hinge line at hinge_chord_fraction of the local chord (straight, the panel's edges being straight there), gap between its ends and the wing. The node sits on the hinge line at the section's middle height.",
+        "z": [0.42, 0.69], "hinge_chord_fraction": 0.76, "gap": 0.003
+      },
+      "trim": {"note": "ASSUMED: a blue band from blue_from, orange from orange_from out to the tip (distances from the centreline), on both faces.", "blue_from": 0.60, "orange_from": 0.64}
+    },
+    "fuselage": {
+      "note": "ASSUMED, all of it but the length: a pod and boom of moulded foam. The nose at nose_x on the height nose_y (nose_x puts the wing root's leading edge 0.265 m behind the nose, by eye), the boom's end at end_x, rounded over end_length, just ahead of the elevator's hinge line so that the elevator turns behind it. half_width, top, bottom: tables over X, tail to nose, before the nose's rounding (an ellipse of nose_length in each). A section is two superellipse halves (exponent above, below) meeting at the widest point, widest_at of the height down from the top. The pod is 0.085 wide and 0.128 high, the boom about 0.024 by 0.026 at the tail; the top drops behind the wing so that the propeller's disc clears it.",
+      "nose_x": 0.343, "nose_y": -0.012, "end_x": -0.540, "end_length": 0.012,
+      "nose_length": {"width": 0.11, "top": 0.13, "bottom": 0.10},
+      "half_width": [[-0.575, 0.0090], [-0.450, 0.0120], [-0.300, 0.0160], [-0.220, 0.0210], [-0.150, 0.0310], [-0.080, 0.0390], [0.000, 0.0425], [0.120, 0.0425], [0.220, 0.0400], [0.343, 0.0310]],
+      "top": [[-0.575, 0.0000], [-0.300, 0.0000], [-0.245, 0.0020], [-0.205, 0.0080], [-0.165, 0.0240], [-0.130, 0.0350], [-0.080, 0.0390], [0.050, 0.0410], [0.100, 0.0480], [0.160, 0.0510], [0.240, 0.0470], [0.343, 0.0340]],
+      "bottom": [[-0.575, -0.0210], [-0.450, -0.0260], [-0.300, -0.0340], [-0.220, -0.0440], [-0.150, -0.0580], [-0.080, -0.0690], [0.000, -0.0750], [0.150, -0.0770], [0.250, -0.0710], [0.343, -0.0520]],
+      "widest_at": 0.5, "exponent": [2.5, 2.3]
+    },
+    "canopy": {
+      "note": "ASSUMED: the black hatch on the pod's top ahead of the wing, flush: a patch of the pod's own surface from x[1] back to x[0], arc_deg of the section's angle wide about the top, cut straight across at both ends (it narrows forward with the nose).",
+      "x": [0.095, 0.300], "arc_deg": 99.0
+    },
+    "pylon": {
+      "note": "ASSUMED: the motor's pod, a body of revolution about the thrust axis at the height axis_y from pod_x[0] (its round nose, pod_nose long) back to pod_x[1] (its flat end, where the motor stands), on a streamlined strut out of the fuselage's top behind the wing: strut.y from its foot inside the fuselage to the axis, x_front and x_back at the foot and at the axis, a symmetric section of thickness_ratio. The axis is parallel to body x (the kit's motor is said to be angled; not modelled). Its height is what a 7 in disc needs to clear the boom.",
+      "axis_y": 0.108, "pod_x": [-0.100, -0.192], "pod_radius": 0.019, "pod_aft_radius": 0.0165, "pod_nose": 0.04,
+      "strut": {"y": [0.0, 0.108], "x_front": [-0.055, -0.112], "x_back": [-0.200, -0.188], "thickness_ratio": 0.16}
+    },
+    "motor": {
+      "note": "The vendor's 2620 outrunner (26 mm class): a plain can behind the pod, radius and length ASSUMED from the size's name.",
+      "can_radius": 0.014, "can_x": [-0.192, -0.216], "shaft_radius": 0.0025
+    },
+    "propeller": {
+      "note": "Published: two blades, 7x5 in (the vendor's figures; the builder's review lists 8x5), so diameter 0.1778 m and pitch 0.127 m. ASSUMED: the disc's station disc_x, the blades' chord and thickness along the blade (f = 0 at root_r, 1 at the tip), the hub (hub_x: its ends from the disc centre) and the spinner behind it. Node 'propeller' sits at the disc centre and spins about its local +X.",
+      "diameter": 0.1778, "pitch_m": 0.127, "disc_x": -0.228, "root_r": 0.008, "hub_radius": 0.011, "hub_x": [-0.006, 0.006], "spinner_length": 0.02,
+      "chord": [[0.0, 0.012], [0.20, 0.017], [0.45, 0.019], [0.75, 0.016], [0.92, 0.011], [1.0, 0.005]],
+      "thickness": [0.0050, 0.0012], "max_twist_deg": 40.0
+    },
+    "tailplane": {
+      "note": "ASSUMED but the incidence: on the boom's top, half_span either side, the leading edge swept from x_leading_edge_root to x_leading_edge_tip, the elevator's hinge line straight at x_hinge and hinge_y from tip to tip, the trailing edge at x_trailing_edge; the tips rounded over tip_round (both chords times tip_floor + (1 - tip_floor) sqrt(1 - u^2)). A thin symmetric section (the NACA four-digit thickness form, thickness_ratio) set at thesis_vlm.geometry.tail_incidence_deg about the hinge line. The elevator is one piece over the whole span, so it has no end gaps.",
+      "half_span": 0.23, "x_leading_edge_root": -0.455, "x_leading_edge_tip": -0.492, "x_hinge": -0.537, "x_trailing_edge": -0.582, "hinge_y": 0.0045,
+      "thickness_ratio": 0.06, "tip_round": 0.035, "tip_floor": 0.2,
+      "trim": {"note": "ASSUMED, as the wing's.", "blue_from": 0.165, "orange_from": 0.185}
+    },
+    "fin": {
+      "note": "ASSUMED but the trailing edge's station (the length): sections stacked from y[0] (inside the boom) to y[1], the leading edge, the rudder's hinge line and the trailing edge each straight between their X at y[0] and at y[1] (the trailing edge upright at x_trailing_edge = nose_x - length), the top rounded over top_round as the tailplane's tips (top_floor). The rudder starts at rudder_bottom_y; its lower edge rises toward the trailing edge at rudder_bottom_slope, fading out over rudder_bottom_blend, to clear the elevator. The rudder's hinge is not aft of the elevator's, so the elevator turns under it.",
+      "y": [-0.003, 0.200], "x_leading_edge": [-0.410, -0.528], "x_hinge": [-0.537, -0.564], "x_trailing_edge": -0.605,
+      "thickness_ratio": 0.06, "top_round": 0.03, "top_floor": 0.25,
+      "rudder_bottom_y": 0.012, "rudder_bottom_slope": 0.35, "rudder_bottom_blend": 0.05,
+      "trim": {"note": "ASSUMED: by height, as the wing's by span.", "blue_from": 0.135, "orange_from": 0.150}
+    },
+    "pitot": {"note": "ASSUMED: the thesis's aircraft measured airspeed; a tube out of the nose, which a pusher leaves in clean air.", "radius": 0.003, "x": [0.330, 0.400]},
+    "gnss": {"note": "ASSUMED: a puck on the wing's centre.", "radius": 0.022, "height": 0.008},
+    "sensors": {
+      "note": "The empties: position (and what a camera looks along). ASSUMED, all of them. Cameras look down local -Z with local +Y up.",
+      "imu": {"position": [0.020, -0.020, 0.0], "note": "the autopilot, in the pod near the centre of gravity"},
+      "gnss": {"position": [0.0, 0.059, 0.0], "note": "the puck's top"},
+      "pitot_tip": {"position": [0.400, -0.012, 0.0]},
+      "camera_nadir": {"position": [0.100, -0.0765, 0.0], "look": [0.0, -1.0, 0.0], "up": [1.0, 0.0, 0.0], "note": "a downward camera in the belly; the image's top toward the nose"},
+      "camera_fpv": {"position": [0.300, -0.053, 0.0], "look": [1.0, -0.15, 0.0], "up": [0.0, 1.0, 0.0], "note": "a forward camera under the nose"}
+    },
+    "gates": {
+      "note": "What --check fails the build on. Lengths in m. span: the projected span of the wing's mesh from physical.b; span_over_tips: the length of the wing's leading-edge line seen from ahead, from geometry.span_over_tips; area and mac: the wing's mesh seen from above on a grid of planform_cell, from physical.S and physical.cbar (0.5 % each); datum: the wing root's leading edge and the underside above the origin from thesis_vlm.geometry; incidence_deg: the wing's chord line and the tailplane's from the thesis's; length: nose to the rudder's trailing edge from geometry.length; tip_circle: the propeller's from its diameter; clearance: the least the propeller's disc keeps to the wing's trailing edge and the pylon (ahead of the blades) and to the tail boom (below the tips); triangles_max: the budget. throw_deg: the elevator's and the rudder's largest turn (the actuators' limits when this was written); under_rudder: the least height the rudder's lower edge, turned either way or not at all, keeps over the elevator turned fully up.",
+      "throw_deg": [20.0, 25.0], "under_rudder": 0.001,
+      "span": 0.002, "span_over_tips": 0.002, "area": 0.0015, "mac": 0.001, "planform_cell": 0.001, "datum": 0.0005, "incidence_deg": 0.05,
+      "length": 0.001, "tip_circle": 0.001, "clearance": 0.008, "triangles_max": 40000
+    },
+    "unverified": "Not measured and not read off a drawing: every chord, the centre part's extent and the taper (only S, cbar and b are the thesis's), the dihedral and the tips' upsweep, any twist; the fuselage's width, depth and outline, the boom's section; the tail's span, chords, sweep and the fin's height; the surfaces' sizes and hinge lines; the pylon's height and shape and the thrust line's angle; the motor's and the propeller's shapes; where the canopy's edges run; the trim colours' shapes. Flaps, wheels, the belly skid, servos, horns, pushrods, hinge gaps and the wing's joint are not drawn."
+  },
+  "materials": {
+    "note": "name: linear base colour, metallic, roughness. ASSUMED from photographs of the type: white EPO foam, a black canopy, orange and blue trim as plain patches, a grey propeller, a bare motor can. No vendor marks.",
+    "foam_white":   {"color": [0.80, 0.80, 0.78], "metallic": 0.0, "roughness": 0.62},
+    "canopy_black": {"color": [0.016, 0.016, 0.018], "metallic": 0.0, "roughness": 0.30},
+    "trim_orange":  {"color": [0.90, 0.30, 0.02], "metallic": 0.0, "roughness": 0.55},
+    "trim_blue":    {"color": [0.02, 0.11, 0.50], "metallic": 0.0, "roughness": 0.55},
+    "trim_black":   {"color": [0.018, 0.018, 0.020], "metallic": 0.0, "roughness": 0.50},
+    "prop_grey":    {"color": [0.16, 0.16, 0.17], "metallic": 0.0, "roughness": 0.42},
+    "motor_grey":   {"color": [0.30, 0.30, 0.32], "metallic": 0.9, "roughness": 0.35},
+    "motor_steel":  {"color": [0.35, 0.35, 0.36], "metallic": 1.0, "roughness": 0.34},
+    "pitot_steel":  {"color": [0.60, 0.60, 0.62], "metallic": 1.0, "roughness": 0.30},
+    "lens_glass":   {"color": [0.010, 0.012, 0.020], "metallic": 0.0, "roughness": 0.10}
+  }
+}

@@ -571,3 +571,440 @@ Without a mission or a pilot: `ap.command(position=(n, e, h), yaw=...)` in a hov
 then `ap.command(course=..., altitude=..., airspeed=...)` on the wing, `ap.transition("mc")` to come back.
 `a.out` holds the last evaluated air data, coefficients, thrusts and powers; `a.guards` the steps outside
 the identified range; `a.world_position(h0)` and `a.world_rotation()` the aircraft in the world.
+
+# The Bixler 3
+
+A small conventional aircraft for the examples: the HobbyKing Bixler 3, a 1.55 m foam motor glider with
+ailerons, elevator and rudder and a pusher propeller on a pylon behind the wing, on the flight model that
+B. M. Simmons identified from flight tests of one (his "Bix3", 1.2 kg with its instruments): "System
+Identification of a Nonlinear Flight Dynamics Model for a Small, Fixed-Wing UAV", Master's thesis,
+Virginia Tech, 2018, <http://hdl.handle.net/10919/95324> (the journal version: Simmons, McClelland and
+Woolsey, Journal of Aircraft 56(3), 2019, <https://doi.org/10.2514/1.C035160>, not open access). Where the
+X8 above is a flying wing at 18 m/s with a propeller model of its own, this one has three surfaces, flies
+at 12 m/s, and has no propeller in its model at all.
+
+The repository page of the thesis states no licence. Its equations and numbers are cited; no text, figure
+or code is copied.
+
+| file | what it is |
+|---|---|
+| `bixler3_spec.json` | every number with its source: the thesis's Tables 3.2, 3.4, 4.5 and 4.7 unchanged, each estimate's printed uncertainty, its modes and its vortex-lattice derivatives for the comparison, the vendor's parts list, and what is ASSUMED or OURS with the reason (the propulsion, the servos, the air, the guards, the autopilot, the guidance) |
+| `../rigs/bixler3_rig.py` | the aircraft for any scene: `Bixler3` (the thesis's model, and a throttle that is ours), `Autopilot` and `LOS` (ours), `Visual` (the `.glb` posed from the model); it uses `m350_rig.Wind` and `x8_rig.LOS` as they are; no threepp import |
+| `build_bixler3_blender.py` | builds the geometry (numpy) with `../build_common.py` and exports `bixler3.glb` through Blender |
+| `bixler3_flight.py` | the checks, a flight's telemetry, and stills or a window of that flight |
+| `bixler3.glb` | generated, not committed |
+
+```
+blender --background --factory-startup --python build_bixler3_blender.py -- --spec bixler3_spec.json --out bixler3.glb
+python build_bixler3_blender.py --check            # the geometry's gates, without Blender
+python bixler3_flight.py --checks                  # the ten checks below
+python bixler3_flight.py --telemetry [--csv b3.csv] # numpy only: a line a second, a summary
+python bixler3_flight.py --wind 5 --from 315 --turbulence 1 --telemetry
+python bixler3_flight.py                           # a window; C cycles the camera (chase, high, ground)
+python bixler3_flight.py --stills 8,28,38 --out-dir out --cam high
+```
+
+The route is 300 m north, a right turn, 250 m east, 60 m up at 12 m/s, by default in 3 m/s from the
+west. `--turbulence k` makes the wind an `m350_rig.Wind`: `--wind` is then its speed 10 m up, with a
+logarithmic profile and Dryden gusts at k times the standard's intensities.
+
+## The 3D model
+
+`bixler3.glb`: X forward, Y up, Z right, metres, origin at the centre of gravity (the thesis's body
+origin). Met and gated: the thesis's projected span 1.540 m, wing area and mean aerodynamic chord
+(0.2841 m^2 and 0.1876 m on the mesh against S = 0.285 and cbar = 0.188, each within 0.5 %; the
+ailerons' end gaps and the faceted tips are the difference), the centre of gravity 0.078 m aft of the
+wing root's leading edge and 0.028 m below the wing's underside, the wing's incidence +0.5 deg and the
+tailplane's -3 deg (thesis Table 3.5), the vendor's length 0.948 m (nose to the rudder's trailing edge)
+and its 1550 mm span, taken as the span along the wing from tip to tip: 5 deg of dihedral and tips
+turned up to 27.9 deg make 1.550 m along the wing over 1.540 m projected. The wing's section is the
+Clark Y the thesis names. Everything else is fitted by eye and marked ASSUMED in the spec's `geometry`:
+no drawing, CAD model or measured airframe is behind it, only the vendor's two overall dimensions and a
+builder's photographs (the spec's `reference.airframe`). The wing's root and tip chord (0.2042 and
+0.1497 m) are solved for S and cbar, not measured. 21 240 triangles. `--check` also fails the build
+unless the propeller's tip circle is 0.1778 m (7 in), its disc is behind the wing's trailing edge and
+the pylon and 12 mm above the tail boom, the raised elevator passes under the rudder at any rudder
+angle, and every part is closed and wound outward. It prints: height 0.277 m, tailplane span 0.460 m
+(0.049 m^2 with the elevator), pod 0.085 m wide and 0.128 m high.
+
+- `airframe`: fuselage (with the canopy), wing, tailplane, fin, pylon, motor, fittings.
+- `aileron_left`, `aileron_right`, `elevator` (one piece): on their hinge lines, local +Z along the
+  hinge toward starboard; a positive turn about local +Z puts the trailing edge down.
+- `rudder`: on its hinge line, local +Z down the hinge; a positive turn moves the trailing edge to port.
+- `propeller`: at the disc centre, spun about local +X (clockwise seen from behind for thrust).
+- Empties: `imu`, `gnss`, `pitot_tip`, `camera_nadir`, `camera_fpv` (cameras look down local -Z, +Y up).
+
+A hinge node's rest rotation has no turn about its own +Z, so a scene sets `rotation.z` alone. Checked
+on the model as threepp loads it, each node turned by hand: +20 deg lowers both ailerons' and the
+elevator's trailing edges and moves the rudder's to port, -20 deg the opposite; the propeller turns
+about its own axis; at the actuators' limits (elevator 20 deg up, rudder 25 deg either way) the
+rudder's lower edge stays 3 mm over the elevator. `bixler3_rig.Visual` gives the right aileron +da and
+the left one -da, the elevator de and the rudder dr: the thesis's signs.
+
+No landing gear: the kit's wheels are optional and the model is a belly lander, as most autopilot
+conversions fly. Plain or not drawn (the spec's `geometry.unverified`): flaps (optional on the kit),
+the belly skid, servos, horns and pushrods, the wing's joint and any fillet where it meets the pod, the
+canopy's real outline, the motor's and propeller's shapes, the thrust line's angle (parallel to body x
+here), the trim colours' shapes. It has the Bixler's layout and its published dimensions; it is not a
+likeness. No logos or lettering.
+
+## What is the thesis's, what is assumed, what is ours
+
+The thesis's, as written (`Bixler3.rigid_rates` numbers each step): the rigid body (2.7)-(2.12) in body
+axes x nose, y right wing, z belly, with Ixz zero; the forces and moments (2.13), X = qbar S CX and the
+rest, qbar at the airspeed of the moment; the coefficients (4.2)-(4.7) in the non-dimensional states of
+(4.1), which are the TOTAL body velocities and rates over a FIXED 12 m/s (u / Vo, w / Vo, p b / (2 Vo)),
+not perturbations and not over the airspeed; the estimates of Table 4.5 (longitudinal, three of them fixed
+at vortex-lattice values) and Table 4.7 (lateral-directional). It was identified from hand-flown doublets
+about 12 m/s in near-still air, stalls left out, angle of attack and sideslip not measured.
+
+Those estimates are loose, and the thesis prints how loose (`aero.uncertainty` in the spec, 95 % bounds):
+several are as large as the estimate. CXu is -0.156 +- 0.157, CXo 0.197 +- 0.195, CZde -0.308 +- 0.351,
+CYo 0.0286 +- 0.0382, CXw2 0.960 +- 1.90. Two things the model does follow from such numbers: the one
+speed it flies level at on its own (CXu and CXo), and the 3.5 deg of bank it needs to fly straight at
+12 m/s (CYo).
+
+The thesis has NO thrust model and no throttle. It did not separate the propeller's thrust from the
+airframe's drag: its CX is the two together, at whatever constant throttle each manoeuvre held (it does
+not say which). So what makes this an aircraft one can fly is ours, and an assumption:
+
+- The throttle. X = qbar S CX + [T(now) - T(reference)], T a generic propeller law for the vendor's 7x5
+  propeller (a static thrust coefficient of 0.11 falling in a straight line to zero at an advance ratio of
+  0.80, 207 rev/s at full throttle, a 0.1 s lag: round figures, none measured), and the reference the
+  throttle the thesis's flights are TAKEN to have held: 0.83, chosen so that the propeller gives the drag
+  of an ASSUMED lift-to-drag ratio of 8 at the speed where the thesis's model flies level hands-off. At
+  that throttle the bracket is zero and the model is the thesis's exactly (check 2). The split of CX into
+  thrust and drag is an assumption. Nothing about the propulsion is the thesis's, and what follows from it
+  is not to be trusted: the glide, the climb rate, the throttle a speed needs, the slowest and fastest
+  level speeds. There is no torque, current or battery in it.
+- The signs of the deflections. The thesis states none; they are inferred from its coefficients and are
+  the NASA (Klein and Morelli) ones: positive elevator is trailing edge down (Cmde < 0), positive aileron
+  rolls LEFT (Clda < 0), positive rudder is trailing edge to port and yaws the nose left (Cndr < 0).
+- Servos (second order, 60 rad/s, 0.8) and throws (20, 20 and 25 deg); gravity 9.81; the air density
+  (ISA at the height; the thesis quotes none, and its own tables point at 1.18 kg/m^3, below).
+- Wind: the thesis took the air as still, so its body velocity is the air-relative one; with wind the
+  air-relative body velocity stands where it has u, v, w.
+- Guards (`envelope`): w / Vo enters the coefficients held to -0.15..+0.25 and v / Vo to +-0.25. The
+  model has no stall. Its lift is a quadratic in w / Vo whose slope reaches zero at 0.379 and which
+  changes sign near 0.79; the guard stops short of that and holds the lift at its edge value, a plateau.
+  Because w is divided by the fixed 12 m/s, the same w / Vo is a larger angle of attack at a lower
+  airspeed: at its slow end the model flies level at 8 m/s and 20 deg, which is its arithmetic and not an
+  aircraft's. There is no division by the airspeed, so no floor on it. `Bixler3.guards` counts the steps
+  on a guard (and those on which the propeller law gives no thrust): none on the flights below.
+- `Autopilot`: successive loop closure (Beard and McLain, ch. 6), the X8's with a rudder: roll on the
+  ailerons, course or heading on roll, pitch on the elevator, altitude on pitch, airspeed on throttle,
+  gains computed from the thesis's coefficients at 12 m/s. The rudder holds the sideslip at zero, through
+  the yawing moment, since the rudder's side force (CYdr 0.0157 +- 0.0482) is too small and too uncertain
+  for the textbook's loop. It is fed the EXACT state: no estimator, no sensor noise.
+- `LOS`: the X8's, with a 40 m look-ahead.
+
+To fly the thesis's model untouched, leave the throttle where `set_state` and `level_speed` put it:
+`b = Bixler3(); b.level_speed(apply=True, h=60.0); b.run(10.0)`.
+
+## Against the thesis's modes
+
+The thesis prints the modes of its model at 12 m/s, theta = 0 (Tables 4.2 and 4.8) and no linear matrices.
+The implementation is linearised numerically at that point (12 m/s along the nose, everything else zero;
+not an equilibrium). The thesis quotes no air density, so the method is first tried on a case with a known
+answer: the thesis's vortex-lattice derivatives (Table 3.7) put through the same code must give the modes
+XFLR5 printed for them (Table 3.8).
+
+| mode | Table 3.8 (XFLR5) | Table 3.7 here, rho 1.18 | rho 1.225 |
+|---|---|---|---|
+| short period | -9.31 +- 9.43i | -9.317 +- 9.380i | -9.670 +- 9.535i |
+| phugoid | 0.00181 +- 0.860i | +0.002 +- 0.867i | -0.000 +- 0.860i |
+| dutch roll | -0.651 +- 4.63i | -0.644 +- 4.609i | -0.676 +- 4.689i |
+| roll | -13.3 | -13.30 | -13.79 |
+| spiral | 0.0839 | +0.0853 | +0.0855 |
+
+Within 1.6 % at 1.18 kg/m^3 and 3.7 % at 1.225: the non-dimensional states and the linearisation are the
+thesis's, and its density was near 1.18. The identified model at that density:
+
+| mode | thesis | this model, rho 1.18 | rho 1.225 |
+|---|---|---|---|
+| dutch roll (Table 4.8) | -1.89 +- 5.57i | -1.917 +- 5.599i (0.7 % off) | -2.048 +- 5.711i |
+| roll (Table 4.8) | -7.77 | -7.814 (0.6 %) | -8.000 |
+| spiral (Table 4.8) | -0.118 | -0.1188 (0.7 %) | -0.1190 |
+| short period (Table 4.2) | -12.5 +- 4.61i | -6.294 +- 3.844i | -6.532 +- 3.869i |
+
+The lateral-directional modes agree. The short period does NOT, and it is reported as a failed check.
+Table 4.2 belongs to the thesis's first longitudinal estimates (Table 4.1, flight data alone, with CZq
++16.7 +- 43.7), not to the set it selects (Table 4.5, the one the model carries); it prints no modes for
+Table 4.5. But Table 4.1's numbers give -6.054 +- 5.185i here, no nearer. The printed real part is twice
+ours and the imaginary part is not; the cause is not known. The same code reproduces Tables 3.8 and 4.8,
+so the short period of this model is taken to be what its coefficients give: 7.4 rad/s, damping 0.85.
+The phugoid, which the thesis leaves out, is -0.013 +- 0.764i: barely damped, since the model's x force
+hardly changes with speed.
+
+## The checks (`bixler3_flight.py --checks`)
+
+1. The thesis's model untouched flies level at 15.29 m/s: alpha 0.89 deg, bank -5.64 deg, elevator
+   +1.36 deg. Hands-off for 30 s it stays there, the thrust difference exactly zero and no guard touched.
+   That speed is the difference of two estimates each uncertain by as much as itself.
+2. At the reference throttle the six forces and moments are eqs. (4.1)-(4.7) and (2.13), written out a
+   second time, to 1e-14 on 500 random states; at full throttle only the x force differs.
+3. No air: a thrown, turning body keeps its energy to 3e-11 and its angular momentum to 2e-9 over 20 s.
+4. The modes above: the control and the lateral-directional modes pass, the short period fails.
+5. Level at 12 m/s with our throttle: alpha 3.41 deg, bank -3.48 deg with no sideslip, elevator -0.14 deg,
+   throttle 0.694, 1.14 N of thrust (a lift-to-drag ratio of 10.4 by our split; 6.1 at 10 m/s, 11.2 at
+   13, 8.6 at 15).
+6. The autopilot, from that trim: +10 m of height in 6.1 s (10 to 90 %), 0.26 m over; a 90 deg course
+   change in 1.8 s, 6.2 deg over, bank to 36 deg, the height within -1.4 / +0.6 m; +2 m/s of airspeed in
+   1.1 s, 0.17 m/s over. In the roll into that turn the sideslip reaches 10 deg: the model's yaw from roll
+   rate (Cnp -0.242) is large, and the rudder loop does not anticipate it.
+7. The route in 4 m/s from the west, course hold: on the first leg the cross-track error is 0.00 m and the
+   air velocity points 19.47 deg off the track, asin(4 / 12) to 0.01 deg, at 11.31 m/s over the ground; the
+   turn ends 0.0 m past the corner; 0.62 m rms on the second leg. Heading hold is 14 m off after 20 s.
+8. The same route in an `m350_rig.Wind` (4 m/s 10 m up, 5.6 m/s at 60 m, gusts at the standard's
+   intensities): 0.19 m rms on the first leg (0.38 m at the most) with the bank moving 0.9 deg and the
+   pitch 1.7 deg (standard deviations), the height within -1.0 / +0.7 m, the throttle between 0.54 and
+   0.94. The same seed gives the same flight.
+9. No step on a guard on either flight. With the elevator held at its stop and the throttle shut, 1427 of
+   1799 steps are on the w / Vo guard: it counts.
+10. The slowest steady level flight is 8.04 m/s at alpha 19.6 deg and full throttle, the fastest 17.10 m/s:
+    both are where the ASSUMED propeller ends, neither is a stall or the thesis's.
+
+Believe it from about 10 to 15 m/s in gentle manoeuvres, and believe the lateral-directional side more
+than the longitudinal. In stronger gusts (`--wind 5 --from 315 --turbulence 2`) the airspeed loop works
+the throttle from stop to stop.
+
+## In another scene
+
+```python
+from bixler3_rig import Bixler3, Autopilot, LOS, Visual, Wind, model_path
+
+b = Bixler3(wind=(0.0, 4.0, 0.0), h0=0.0)        # NED wind (here 4 m/s from the west), or Wind(4.0, from_deg=270.0, seed=3)
+b.trim(12.0, n=0.0, e=0.0, h=60.0, course=0.0)   # level at 12 m/s, crabbed onto a course north
+ap = Autopilot(b)
+los = LOS([(0.0, 0.0), (300.0, 0.0), (300.0, 250.0)])
+visual = Visual(tp.GLTFLoader().load(model_path()).scene)
+# each step (b.dt = 1/300 s):
+vg = b.ground_velocity()
+ap.command(course=los.update(b.n, b.e, math.hypot(vg[0], vg[1])), altitude=60.0, airspeed=12.0)
+ap.update()
+b.step()
+# each frame:
+visual.pose(b, h0=0.0)
+```
+
+`b.cmd` is (elevator, aileron, rudder, throttle) for a controller of your own; `b.throttle_ref` the
+throttle at which the model is the thesis's; `b.out` the last evaluated air data, coefficients and thrust;
+`b.guards` the steps on a guard; `b.world_position(h0)` and `b.world_rotation()` the aircraft in the world.
+
+# The Aerosonde
+
+The textbook's aircraft for the examples: the Aerosonde UAV as R. W. Beard and T. W. McLain model it in
+*Small Unmanned Aircraft: Theory and Practice* (Princeton University Press, 2012), with the parameters the
+authors give for it in the book's repository, <https://github.com/byu-magicc/mavsim_public>
+(`mavsim_python/parameters/aerosonde_parameters.py`). The X8 above flies a model identified from one
+aircraft's flight tests; this one flies the model a course is taught on, the book's chapters 3 and 4 and
+the propeller and motor model its authors later added to chapter 4. It is the textbook's Aerosonde:
+nothing here is validated against the real aircraft, which the authors' page says weighs about 25 kg where
+the parameter set has 11.
+
+The repository is GPL-3.0. Its numbers are cited as the facts they are and its equations are the book's,
+written out here from the book and from the authors' chapter 4 slides; none of its code is copied. The
+printed book's Appendix E lists an older parameter set for the same aircraft, with another mass, other
+coefficients and the book's first propeller model: the set that flies here is the repository's, and the
+printed table differs from it.
+
+| file | what it is |
+|---|---|
+| `aerosonde_spec.json` | every number with its source: the authors' parameter file unchanged (`physical`, `aero`, `propeller`, `propulsion`), and what is ASSUMED or OURS with the reason (`actuators`, `environment`, `envelope`, `autopilot`, `guidance`); the 3D model's parts |
+| `../rigs/aerosonde_rig.py` | the aircraft for any scene: `Aerosonde` (the book's model), `Autopilot` (ours), `LOS` (the X8's, reading this spec), `Visual` (the `.glb` posed from the model); it uses `m350_rig.Wind` as it is; no threepp import |
+| `build_aerosonde_blender.py` | builds the geometry and exports `aerosonde.glb` through Blender |
+| `aerosonde_flight.py` | the checks, a flight's telemetry, and stills or a window of that flight |
+| `aerosonde.glb` | generated, not committed |
+
+```
+blender --background --factory-startup --python build_aerosonde_blender.py -- --spec aerosonde_spec.json --out aerosonde.glb
+python build_aerosonde_blender.py --check          # the geometry's gates, without Blender
+python aerosonde_flight.py --checks                # the ten checks below (numpy only)
+python aerosonde_flight.py --checks 1,3            # some of them
+python aerosonde_flight.py --telemetry [--csv aerosonde.csv]     # numpy only: a line a second, a summary
+python aerosonde_flight.py --telemetry --wind 8 --from 315 --turbulence 1
+python aerosonde_flight.py                         # a window; C cycles the camera (chase, high, ground)
+python aerosonde_flight.py --hold heading          # hold the nose, not the track: the wind carries it off
+python aerosonde_flight.py --shot 30 --out aerosonde.png         # headless still at t = 30 s
+python aerosonde_flight.py --stills 10,45,60 --out-dir out --cam high
+```
+
+The route is 1000 m north, a right turn, 1000 m east, 100 m up at 25 m/s, in 8 m/s from the west unless
+told otherwise. `--turbulence` above 0 makes the wind `m350_rig.Wind`: `--wind` is then the mean 10 m above
+the ground on a logarithmic profile (half as much again at the route's height) with Dryden gusts on it.
+Drawn: the route at the commanded height, the waypoint poles, the aim point the guidance steers at and
+the line of sight to it, the flown track, and the wind as an arrow on the ground.
+
+## The 3D model
+
+`aerosonde.glb`: X forward, Y up, Z right, metres, origin at the centre of gravity. The textbook gives no
+drawing and no centre of gravity, so only four numbers are met exactly: the wing's span, planform area and
+mean chord (the book's b = 2.8956 m, S = 0.55 m^2, c = 0.18994 m) and the propeller's diameter (0.508 m).
+The book's wing is the rectangle b by c; the model keeps the span and the area with a mild taper (constant
+chord between the booms, then tapering to the tip about a straight quarter-chord line, 2 deg of dihedral
+outboard of the booms). Everything else is ASSUMED and marked so in the spec: fitted to one photograph
+(an Aerosonde on its car-roof launch cradle, NOAA Photo Library, on Wikimedia Commons) as described in
+words, and to a length of 1.70 m and a height of 0.60 m that are quoted next to the 2.9 m span but are on
+no page read. No drawing and nobody's 3D model was used. The origin is ASSUMED on the wing's quarter-chord
+line and on the propeller's axis (the book's thrust acts along body x through the centre of mass).
+22 160 triangles.
+
+`--check` fails the build unless: the span is 2.8956 m within 2 mm; the wing's area seen from above
+(with its ailerons, on a 1 mm grid) is 0.55 m^2 within 0.003 and that area over the span is 0.18994 m
+within 1 mm (it measures 0.5493 m^2 and 0.1897 m: the ailerons' end gaps); the blades' tip circle is
+0.508 m; the disc clears the booms and the tail by at least 20 mm seen along its axis (75 and 52 mm) and
+the blades clear the pod, the wing and the engine ahead of them; the length is 1.70 m and the height
+0.60 m within 10 mm; a positive turn of each control node moves its trailing edge the contracted way; and
+every part is closed and wound outward. It prints the triangle count, the aspect ratio (15.3), the
+length (1.700 m, 1.780 with the pitot tube) and the height (0.600 m from the belly to the tail's top,
+0.754 m with a blade straight down).
+
+- `airframe`: fuselage (the pod, orange ahead and white behind, and the pylon the wing stands on), wing,
+  tail, booms, engine, fittings.
+- `aileron_left`, `aileron_right`, `ruddervator_left`, `ruddervator_right`: on their hinge lines, local +Z
+  along the hinge toward starboard; a positive turn puts an aileron's trailing edge down and a
+  ruddervator's toward its panel's lower, inner face. The fixed section stops at the hinge, with 3 mm gaps
+  at a surface's ends.
+- `propeller`: at the disc centre, spun about local +X, the blades pitched for a positive turn (clockwise
+  seen from behind); two blades and the spinner.
+- Empties: `imu`, `gnss`, `pitot_tip`, `camera_nadir`, `camera_fpv` (cameras look down local -Z, local +Y up).
+
+Checked on the model as threepp loads it, each node turned by hand: +20 deg lowers either aileron's
+trailing edge 15 mm; +20 deg on either ruddervator moves its trailing edge down and toward the centreline;
+a positive turn of the propeller moves the upper blade to starboard; the empties are where the spec puts
+them and the cameras look where it says. `aerosonde_rig.Visual` gives the left aileron +da and the right
+one -da (the book's sign), and the ruddervators (de - dr) / 2 on the left and (de + dr) / 2 on the right:
+the book's elevator lowers both trailing edges, its rudder moves both to port.
+
+One photograph, described in words, is all the shapes rest on (the spec's `geometry.unverified`): the
+pod's length and diameter and where the wing stands on it, the taper, dihedral and section, the ailerons'
+extent, the booms' spacing, the tail's angle and chord, the engine (a plain single-cylinder model engine,
+its cylinder upright), the propeller's blades and spinner, the pitot tube, the GNSS puck and both cameras
+are guesses. The tail is the proportion to trust least: its height follows from the unconfirmed 0.60 m.
+The real aircraft burns petrol; the flight model's motor is the textbook's electric one, and the model
+shows the engine. Kept plain: no hatches, seams, servo horns, antennas or wing joints. No logos or
+lettering.
+
+## What is the book's, what is assumed, what is ours
+
+The book's, as written (`Aerosonde.rigid_rates` names each step's chapter and section):
+
+- Chapter 3: the rigid body, twelve states (position north, east and down, body velocity, the Euler
+  angles, the body rates), the inertia's x-z product through the eight Gamma constants.
+- Chapter 4: gravity; the air-relative velocity against a wind vector, and from it the airspeed, alpha
+  and beta; the lift, C_L(alpha) the linear wing blended into a flat plate past alpha0 = 0.47 rad (the
+  book's stall); the drag, a parasitic part plus the induced drag of the linear lift; the pitching moment;
+  the side force and the rolling and yawing moments, linear in beta, the rates and the surfaces; lift and
+  drag turned from the stability frame to the body by alpha.
+- The authors' addendum to chapter 4: the motor's voltage is 44.4 V times the throttle, the propeller's
+  speed is the positive root of the quadratic that balances the motor's torque against the propeller's,
+  and the thrust and torque are rho n^2 D^4 C_T(J) and rho n^2 D^5 C_Q(J). It is quasi-steady: the rotor
+  has no state and no inertia. The thrust acts along body x through the centre of mass; the propeller
+  turns clockwise seen from behind and its torque reacts on the airframe as -Q about body x.
+- The signs: a positive elevator is trailing edge down and pitches the nose down, a positive aileron rolls
+  the right wing down, a positive rudder yaws the nose to port. The model flies the book's three virtual
+  surfaces; the real aircraft's inverted V-tail appears only where the 3D model is posed.
+
+`CD0`, `CDalpha` and `S_prop` in the spec belong to the book's linear models and its first propeller
+model; they are kept and not used. Integration is fourth-order Runge-Kutta at 1/300 s. The air density is
+the parameter file's constant, 1.2682 kg/m^3 at every height, unless `Aerosonde(rho="isa")` or a number
+says otherwise.
+
+ASSUMED (`actuators` in the spec): the book's Aerosonde has no actuator dynamics, so a second-order servo
+on each surface (50 rad/s, damping 0.707), a throw of +-25 deg on each and a first-order throttle lag of
+0.2 s are added, sized for an aircraft of this class and measured on none.
+
+OURS, kept out of the book's equations:
+
+- Guards (`envelope`): the airspeed is floored at 1 m/s where the equations divide by it, and a propeller
+  the motor cannot turn (throttle near zero under about 6 m/s) stands still. `Aerosonde.guards` counts
+  the steps on each: none on any flight below. There is no clamp on alpha: the book's blend keeps the
+  lift finite at every angle. The rest stays the book's and is no stall model (the pitching moment linear
+  in alpha, the induced drag growing with the linear lift), so believe it at small angles.
+- The wind: a NED vector, a function of time and place, or `m350_rig.Wind` (a mean profile and Dryden
+  gusts), sampled once a step and held across the Runge-Kutta stages.
+- `Autopilot`: successive loop closure as the book's chapter 6 lays it out (roll on aileron, course or
+  heading on roll, pitch on elevator, altitude on pitch, airspeed on throttle), each gain computed from
+  the spec's coefficients at the commanded airspeed and the spec's choice of frequency, damping and
+  limits. The pitch loop's natural frequency is set as a multiple of the airframe's own (10 rad/s at
+  25 m/s), so its proportional gain is -Cmalpha / Cmde at every speed, and it has an integral. The rudder
+  is a yaw damper, not a sideslip hold: without any rudder the model's steady sideslip in a 30 deg banked
+  turn is under a degree, while its dutch roll has a damping of 0.24, which a rudder proportional to beta
+  would stiffen and not damp; the washed-out yaw rate brings the linearised mode to 0.67. It is fed the
+  EXACT state: no estimator, no sensor noise.
+- `LOS`: the X8's line of sight on a polyline, with a look-ahead of 85 m for 25 m/s.
+
+Not in the model: the propeller's inertia and gyroscopic moment, the battery's sag, the ground, any
+sensor.
+
+## The checks (`aerosonde_flight.py --checks`)
+
+1. Level at 25 m/s in still air: residual 3e-15; alpha 2.85 deg, elevator -7.10 deg, throttle 0.774, the
+   propeller at 514 rad/s (4912 rev/min, J 0.60); 10.33 N of thrust against 10.32 N of drag, L/D 10.4; the
+   propeller's 0.63 N m of torque held by 0.34 deg of aileron, 0.05 of rudder and 0.03 deg of bank; the
+   motor at 34.3 V and 11.1 A, 382 W. At 18 m/s: alpha 7.8 deg, elevator -20.8, throttle 0.58, L/D 15.5,
+   194 W; at 30 m/s: 1.2 deg, -2.6, 0.93, 7.6, 611 W.
+2. Thrown and tumbling where there is no air (no aerodynamics, no thrust), 10 s: the energy is kept to
+   5e-13 and the angular momentum to 2e-13, and it falls the 425.7748 m that v t + g t^2 / 2 gives.
+3. The linearised modes at that trim (`Aerosonde.jacobian`): short period 11.0 rad/s, damping 0.44;
+   phugoid 0.50 rad/s, 0.29; roll 0.045 s; dutch roll 4.79 rad/s, 0.24; and a spiral mode that is
+   UNSTABLE, doubling in 7.8 s. That is the parameter set's (Clbeta Cnr - Cnbeta Clr is negative), not the
+   implementation's, and the autopilot's roll loop holds it.
+4. Open loop from the trim, 60 s and 1500 m with the commands held: the airspeed, the height, the heading
+   and the bank stay to 1e-10 or better. Started half a degree of bank off the trim it is banked 7 deg and
+   has turned 27 deg after 30 s (the spiral).
+5. The autopilot's steps from the trim: +10 m of height in 2.2 s (10 to 90 %), 0.46 m over, the airspeed
+   within 24.0 to 25.6 m/s; a 90 deg course change in 5.8 s, 1.2 deg over, bank to 31 deg, sideslip to
+   2.2 deg, the height within 1.0 m; +3 m/s of airspeed in 1.4 s, 0.20 m/s over, the throttle at its stop
+   on the way.
+6. The route in a steady 8 m/s from the west, course hold, 78.8 s. Leg north: on the line to a centimetre,
+   the air velocity 18.66 deg off the track, which is the wind triangle's asin(8 / 25), 23.7 m/s over the
+   ground. Leg east, downwind at 33.0 m/s: 0.28 m rms off the line over its last 500 m. The turn cuts the
+   corner by 39 m and goes 19.7 m past the new leg (the hand-over is computed at the ground speed before
+   the turn, and the tailwind adds 9 m/s through it). `--hold heading` flies the first leg 28.7 m downwind
+   of the line, the look-ahead times the tangent of the crab angle.
+7. The guards on that flight: none. Height 99.0 to 100.7 m, airspeed 24.8 to 25.2 m/s, alpha 2.4 to
+   4.1 deg, sideslip within 2.3 deg, throttle 0.76 to 0.79, aileron within 23.7 deg of its 25.
+8. The glide with the throttle closed: 3.1 m/s of sink and a glide ratio of 5.8 at 18 m/s, 7.6 m/s and
+   3.1 at 25 m/s, 13.0 m/s and 2.1 at 30 m/s, where the airframe's own L/D is 15.6, 10.1 and 6.9. This is
+   the propeller model and not a measured glide: with no voltage the motor is a short across its winding
+   and holds the propeller near standstill (16 rad/s at 25 m/s), and the thrust polynomial, fitted where a
+   propeller drives, makes of that 22.6 N of drag, twice the airframe's.
+9. The slowest steady level flight is 16.8 m/s (alpha 9.3 deg, C_L 1.09), where the elevator's ASSUMED
+   25 deg ends; the fastest is 32.5 m/s, at full throttle. The stall blend does nothing at the slow end
+   (sigma is 2e-7 there). The book's lift curve peaks at C_L 2.42, alpha 23.6 deg, which would carry the
+   weight at 11.3 m/s, and trimming there would take 65 deg of elevator: no steady flight of this model
+   reaches its stall, and a C_L of 2.4 is no real wing's.
+10. The route in `m350_rig.Wind`, 8 m/s from the west 10 m up (12.0 m/s at the route's height) with gusts
+    at the standard's intensities: done in 80.4 s, 0.24 m rms off the first leg and 1.4 m off the second,
+    height 97.9 to 101.1 m, airspeed 23.9 to 26.2 m/s, sideslip within 5.1 deg, no guard; two runs are
+    bit-identical; 11 times real time with the gusts on a busy machine (24 without them), autopilot
+    included.
+
+Believe it for what a textbook model is: gentle flight between about 18 and 30 m/s. The stall, the glide
+and anything near the ends of the speed range are the formulas' and the assumed actuators', not an
+Aerosonde's.
+
+## In another scene
+
+```python
+from aerosonde_rig import Aerosonde, Autopilot, LOS, Visual, Wind, model_path
+
+a = Aerosonde(wind=(0.0, 8.0, 0.0), h0=0.0)      # NED wind (here 8 m/s from the west), or Wind(8.0, from_deg=270.0, seed=3)
+a.trim(25.0, n=0.0, e=0.0, h=100.0, course=0.0)  # level at 25 m/s, crabbed onto a course north
+ap = Autopilot(a)
+los = LOS([(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)])
+visual = Visual(tp.GLTFLoader().load(model_path()).scene)
+# each step (a.dt = 1/300 s):
+vg = a.ground_velocity()
+ap.command(course=los.update(a.n, a.e, math.hypot(vg[0], vg[1])), altitude=100.0, airspeed=25.0)
+ap.update()
+a.step()
+# each frame:
+visual.pose(a, h0=0.0)
+```
+
+`a.cmd` is (elevator, aileron, rudder, throttle) for a controller of your own; `a.out` holds the last
+evaluated air data, coefficients, the propeller's speed, thrust and torque and the motor's current;
+`a.guards` the steps on a guard; `a.trim(V, throttle=0.0)` the glide; `a.world_position(h0)` and
+`a.world_rotation()` the aircraft in the world.

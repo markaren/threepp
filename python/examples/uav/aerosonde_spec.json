@@ -1,0 +1,217 @@
+{
+  "schema": "threepp.uav_spec/1",
+  "name": "Aerosonde",
+  "description": "The Aerosonde UAV as Beard and McLain's textbook models it, for the threepp examples. One file holds every number: the textbook's flight model with the parameters its authors give for the Aerosonde (aerosonde_rig.py runs it), the airframe for the Blender generator (build_aerosonde_blender.py -> aerosonde.glb), and what the textbook does not give, marked as such.",
+  "reference": {
+    "book": {
+      "authors": "Randal W. Beard, Timothy W. McLain",
+      "title": "Small Unmanned Aircraft: Theory and Practice",
+      "publisher": "Princeton University Press, 2012",
+      "use": "The flight model in aerosonde_rig.py is the book's: the rigid body of its chapter 3, the forces and moments of its chapter 4 (lift with the blended flat-plate stall, the induced-drag polar, the linear lateral coefficients, stability-to-body rotation), and the propeller and motor model of the authors' addendum to chapter 4. Its Appendix E gives the Aerosonde's parameters."
+    },
+    "parameters": {
+      "page": "https://github.com/byu-magicc/mavsim_public (the book's own repository)",
+      "file": "mavsim_python/parameters/aerosonde_parameters.py",
+      "read": "2026-10-10",
+      "licence": "The repository is GPL-3.0. The numbers are cited as the facts they are; none of its code is copied.",
+      "note": "The book's page recommends this set for the Aerosonde and calls it slightly modified from the printed Appendix E; it is the authors' current one and the one used here, unchanged, in `physical`, `aero`, `propeller` and `propulsion`. The same page notes that a real Aerosonde weighs about 25 kg; the parameter file's mass is 11 kg."
+    },
+    "airframe": {
+      "page": "https://en.wikipedia.org/wiki/AAI_Aerosonde",
+      "read": "2026-10-10",
+      "figures": "Wikipedia's specification list, Aerosonde Mk 1: wingspan 2.9 m (9 ft 6 in), empty weight 8 kg, gross weight 13 kg, a 20 cc gasoline engine (the article's text: a modified Enya R120 model engine), cruise 72 km/h, endurance 30 h, a single-engined pusher. Its text: the Atlantic aircraft 'Laima' was launched from the roof rack of a moving car because it has no undercarriage. The page as read gives no length, no height, no wing area and no propeller.",
+      "other_pages": [
+        {"page": "https://tomw.net.au/travel/ara/index.html", "read": "2026-10-10", "figures": "T. Worthington's account of the Mark 2: 13 to 14 kg, wingspan 2.9 m, a 26 cc engine of 1 kW on Avgas, take-off from a car roof rack, landing on the belly, a fuselage of carbon fibre and glass, a 'twin tail assembly'. No length or height."},
+        {"page": "https://siliconchip.com.au/Issue/1999/May/Model+Plane+Flies+The+Atlantic", "read": "2026-10-10", "figures": "Silicon Chip, May 1999: wingspan 3 m, 15 kg, a one-cylinder 20 cc petrol engine, launched from a cradle on a car's roof rack. No length or height."}
+      ],
+      "quoted_elsewhere": "Length 1.7 m, height 0.60 m and wing area 0.57 m^2 stand next to the 2.9 m span in specification lists that copy an earlier state of the Wikipedia article (a web search's summary, read the same day; the article as it stands no longer has them). NOT confirmed on any page read: the model takes the length and the height as its targets and says so (geometry.gates); the wing area is the textbook's 0.55.",
+      "geometry_source": "No drawings are public and none is used, nor anybody's 3D model. The layout and the colours are from one photograph (an Aerosonde on its car-roof launch cradle, NOAA Photo Library, on Wikimedia Commons) as described in words: a bullet-shaped pod, its nose half orange and its rear half white, a bare engine at its rear end with a two-blade pusher propeller, a long straight wing on top of the pod, two thin black booms from the wing past the propeller's disc to a black inverted V-tail. Every dimension but the span is therefore an estimate (geometry)."
+    }
+  },
+  "units": "SI: metres, kilograms, seconds, radians, newtons, volts, ohms, amperes. Keys ending in _deg are degrees.",
+  "frames": {
+    "ned": "The book's inertial frame: x north, y east, z down. Position (N, E, D).",
+    "body": "The book's body frame: x out of the nose, y out of the right wing, z out of the belly, origin at the centre of mass.",
+    "model": "The .glb's frame: X forward, Y up, Z right (starboard), metres, origin at the CG. A body vector (x, y, z) is (x, -z, y) in it. The same axes as the X8's and the boats' specs.",
+    "world": "threepp's world as the rigs use it: x east, y up, z south (-north). A NED position (N, E, D) is (E, h0 - D, -N), h0 the height of the NED origin. Heading psi (from north toward east) points the nose along (sin psi, 0, -cos psi)."
+  },
+  "physical": {
+    "source": "aerosonde_parameters.py, 'Physical Parameters'.",
+    "mass": 11.0,
+    "Jx": 0.8244,
+    "Jy": 1.135,
+    "Jz": 1.759,
+    "Jxz": 0.1204,
+    "S": 0.55,
+    "b": 2.8956,
+    "c": 0.18994,
+    "e": 0.9,
+    "S_prop": 0.2027,
+    "rho": 1.2682,
+    "gravity": 9.81,
+    "note": "AR = b^2 / S. S_prop belongs to the printed book's first propeller model and is not used by the addendum's. rho is the file's constant air density."
+  },
+  "aero": {
+    "source": "aerosonde_parameters.py, 'Longitudinal Coefficients' and 'Lateral Coefficients'. Angles in radians; the rates made non-dimensional by c / (2 Va) and b / (2 Va) with the airspeed of the moment.",
+    "CL0": 0.23, "CD0": 0.0424, "Cm0": 0.0135,
+    "CLalpha": 5.61, "CDalpha": 0.132, "Cmalpha": -2.74,
+    "CLq": 7.95, "CDq": 0.0, "Cmq": -38.21,
+    "CLde": 0.13, "CDde": 0.0135, "Cmde": -0.99,
+    "M": 50.0, "alpha0": 0.47, "epsilon": 0.16, "CDp": 0.043,
+    "CY0": 0.0, "Cl0": 0.0, "Cn0": 0.0,
+    "CYbeta": -0.98, "Clbeta": -0.13, "Cnbeta": 0.073,
+    "CYp": 0.0, "Clp": -0.51, "Cnp": 0.069,
+    "CYr": 0.0, "Clr": 0.25, "Cnr": -0.095,
+    "CYda": 0.075, "Clda": 0.17, "Cnda": -0.011,
+    "CYdr": 0.19, "Cldr": 0.0024, "Cndr": -0.069
+  },
+  "propeller": {
+    "source": "aerosonde_parameters.py, 'Propeller thrust / torque parameters' (the authors' addendum): a 20 inch propeller, C_T(J) = CT2 J^2 + CT1 J + CT0 and C_Q(J) = CQ2 J^2 + CQ1 J + CQ0.",
+    "D": 0.508,
+    "CT0": 0.09357, "CT1": -0.06044, "CT2": -0.1079,
+    "CQ0": 0.005230, "CQ1": 0.004970, "CQ2": -0.01664
+  },
+  "propulsion": {
+    "source": "aerosonde_parameters.py, the same block: an electric motor and a 12-cell battery.",
+    "KV_rpm_per_volt": 145.0,
+    "KV_note": "The back-emf constant is 60 / (2 pi KV_rpm_per_volt) V s/rad, and the torque constant KQ (N m/A) is taken equal to it.",
+    "R_motor": 0.042,
+    "i0": 1.5,
+    "ncells": 12,
+    "V_max": 44.4,
+    "V_max_note": "3.7 V a cell; the motor's voltage is V_max times the throttle."
+  },
+  "actuators": {
+    "source": "ASSUMED: the book's Aerosonde set has no servo and no throttle dynamics (its simulation moves the surfaces and the motor's voltage at once). A second-order servo on each of the three surfaces and a first-order lag on the throttle are added so that a command is not a deflection, with numbers of the size an aircraft of this class has; none is measured.",
+    "servo_wn": 50.0,
+    "servo_zeta": 0.707,
+    "servo_note": "ASSUMED: about 8 Hz of bandwidth, a standard-size servo under load, damped so that a step overshoots 4 %. The X8's identified servo is 100 rad/s behind a 0.07 s delay; this one is slower and has no delay.",
+    "throttle_tau": 0.2,
+    "throttle_note": "ASSUMED: the motor model is quasi-steady (the propeller's speed is the root of a quadratic at every instant, the rotor has no inertia), so this lag stands for the speed controller and the spin-up of a 20 inch propeller together.",
+    "elevator_limit_deg": 25.0,
+    "aileron_limit_deg": 25.0,
+    "rudder_limit_deg": 25.0,
+    "limit_note": "ASSUMED: commands to each surface are clipped to +-25 deg and the throttle to 0..1 before the servo. The elevator's throw is what sets the slowest steady flight of this model (README, the checks): the book's stall sits far beyond what 25 deg of elevator can trim.",
+    "signs": "The book's: positive elevator is trailing edge down and pitches the nose down (Cmde < 0); positive aileron is the left aileron's trailing edge down and the right one's up and rolls the right wing down (Clda > 0); positive rudder is trailing edge to port and yaws the nose to port (Cndr < 0).",
+    "mixing": "The flight model flies the book's three virtual surfaces. The real Aerosonde has an inverted V-tail: aerosonde_rig.Visual turns the two ruddervators by (d_e - d_r) / 2 (left) and (d_e + d_r) / 2 (right), each positive toward its panel's lower face, the book's V-tail mixing (chapter 4, control surfaces) with the rudder's sense reversed for the inverted V."
+  },
+  "environment": {
+    "source": "The source's two constants, and how the rig uses them.",
+    "rho": "source",
+    "rho_note": "'source': the parameter file's constant, physical.rho = 1.2682 kg/m^3, at every height; that is what flies unless told otherwise. It is denser than the standard atmosphere's 1.225 at the sea (it is air of about 5 deg C there). 'isa' makes the density follow the height above mean sea level, rho_sea_level (1 - 0.0065 h / 288.15)^4.2559; a number fixes it. Aerosonde(rho=...) overrides this key.",
+    "rho_sea_level": 1.225,
+    "g": 9.81,
+    "g_note": "physical.gravity, repeated here because x8_rig.LOS, which this aircraft's guidance is, reads it from this key. The flight model reads physical.gravity."
+  },
+  "envelope": {
+    "source": "OURS, not the book's: guards that keep the model finite where its formulas divide or have no root. They act on what enters the book's equations, never on the equations.",
+    "va_min": 1.0,
+    "va_min_note": "The normalised rates p b / (2 Va), q c / (2 Va), r b / (2 Va) and the sideslip asin(v_r / Va) divide by the airspeed; below 1 m/s they use 1 m/s. The forces scale with Va^2 and vanish anyway.",
+    "omega_min": 0.0,
+    "omega_note": "The propeller's speed is the positive root of the motor's quadratic. With the throttle near zero below about 6 m/s that root is negative (the motor's no-load current outweighs what the air gives the propeller); the propeller then stands still, and its thrust and torque are the polynomials' values there.",
+    "alpha_note": "No clamp on alpha or beta. The book's lift blends into a flat plate's past alpha0 = 0.47 rad, so the lift is finite and falls at every angle. The rest is the book's as written and not a stall model: the pitching moment stays linear in alpha, the induced drag keeps growing with the linear lift (C_D = 1.9 at 90 deg), and the lateral coefficients stay linear in beta. Believe it at small angles.",
+    "propeller_note": "No guard on the advance ratio either. C_T(J) crosses zero at J = 0.69 and C_Q at J = 0.73; past that the polynomials are extrapolated. With the throttle closed the motor model is a short across the winding, the propeller nearly stops, and the thrust polynomial makes of it a drag of 0.108 rho D^2 Va^2 (22 N at 25 m/s, twice the airframe's): the glide is that, not a measured one."
+  },
+  "autopilot": {
+    "source": "OURS, not the book's numbers: successive loop closure as the book's chapter 6 lays it out (roll on aileron, course or heading on roll, pitch on elevator, altitude on pitch, airspeed on throttle) and a yaw damper on the rudder. The gains are computed in aerosonde_rig.Autopilot from the coefficients above at the commanded airspeed; what is chosen here is each loop's natural frequency or stiffness, its damping, its integral and its limits. Fed the exact state: no estimator, no sensor noise.",
+    "airspeed": 25.0,
+    "airspeed_note": "The design airspeed, the parameter file's initial condition (u0 = 25 m/s). The book's page suggests 35 m/s for the Aerosonde's cruise.",
+    "roll":       {"wn": 10.0, "zeta": 0.9, "ki": 0.2, "integral_deg": 5.0, "limit_deg": 30.0},
+    "course":     {"bandwidth_ratio": 12.0, "zeta": 1.0},
+    "pitch":      {"stiffness": 1.0, "zeta": 0.8, "wi": 1.0, "integral_deg": 6.0, "limit_deg": 12.0},
+    "altitude":   {"wn": 0.4, "zeta": 1.0, "zone": 15.0},
+    "speed":      {"wn": 0.6, "zeta": 1.0, "throttle": [0.0, 1.0]},
+    "yaw_damper": {"zeta": 0.7, "washout": 0.5},
+    "note": "roll: kp = wn^2 / a_phi2, rate feedback only if the airframe's roll damping falls short of 2 zeta wn (at 25 m/s a_phi1 = 22.6 /s and it does not), ki = ki x kp, the integral limited to integral_deg of aileron. course: wn = roll wn / bandwidth_ratio. pitch: the closed loop's natural frequency is sqrt((1 + stiffness) a_th2), a multiple of the airframe's own pitch stiffness (10 rad/s at 25 m/s), so kp = -stiffness Cmalpha / Cmde at every speed and never changes sign; kd from zeta by the book's formula; an integral (wi rad/s, at most integral_deg of elevator) removes the steady error. altitude: wn and zeta of h' = V_a theta. zone: outside +-15 m of the commanded height the pitch command saturates at limit_deg, as in the book's altitude state machine without its take-off states. speed: wn and zeta of the airspeed loop on the throttle, from the model's d(u')/du and d(u')/d(throttle) at the trim. yaw_damper: the gain adds to the dutch roll of the linearised model what it lacks to zeta, through d(r')/d(d_r); washout (rad/s) is the high-pass that keeps the rudder out of a steady turn."
+  },
+  "guidance": {
+    "source": "OURS: x8_rig.LOS, a line-of-sight law on a polyline of waypoints, sized for 25 m/s. Course command chi_d = path angle + atan(-e / delta) (e the cross-track error, positive to the right of the path; delta the look-ahead distance).",
+    "lookahead": 85.0,
+    "accept": "turn",
+    "turn_bank": 0.75,
+    "note": "lookahead: 3.4 s of flight at 25 m/s (the X8's 60 m at 18 m/s is 3.3 s). accept 'turn': a leg is handed over R tan(|dchi| / 2) before its corner, R = V_g^2 / (g tan(turn_bank x the roll limit)), 154 m at 25 m/s (at most half the leg)."
+  },
+  "geometry": {
+    "note": "The 3D model (build_aerosonde_blender.py), model frame: X forward, Y up, Z right (starboard), metres, origin at the centre of gravity. Met exactly: the wing's span, planform area and mean chord (physical.b, S, c) and the propeller's diameter (propeller.D). Everything else is ASSUMED: fitted to the photograph as described (reference.airframe.geometry_source) and to the quoted length and height, each key saying so. No lettering or logos.",
+    "cg": {
+      "note": "ASSUMED: the textbook gives no position. The model's origin is on the wing's quarter-chord line (a tailed aircraft with the engine behind the wing and the payload ahead of it balances near there) and on the propeller's axis (the book's model puts the thrust on body x through the centre of mass: no pitching moment from it). The pod's axis is the propeller's.",
+      "wing_chord_fraction": 0.25
+    },
+    "wing": {
+      "note": "Half wing, mirrored: [X of the leading edge, Z, chord] per section, joined by straight lines; the chord line's leading edge at Y = y on the centreline. Span b = 2.8956 exactly (the tip at Z = b / 2). The book's wing is the rectangle b x c; here the same span and area with a mild taper, ASSUMED: constant chord between the booms, then tapering to the tip about a straight quarter-chord line, the tip chord chosen so that the sections' area is S (2 (0.215 x 0.33 + (0.215 + 0.15009) / 2 x 1.1178) = 0.5500). The gate measures the mesh, not this sum.",
+      "y": 0.105,
+      "sections": [[0.05375, 0.0, 0.215], [0.05375, 0.33, 0.215], [0.03752, 1.4478, 0.15009]],
+      "dihedral_deg": 2.0, "dihedral_from_z": 0.33,
+      "dihedral_note": "ASSUMED: a little dihedral outboard of the booms, none between them.",
+      "thickness_ratio": 0.11, "camber": 0.03, "camber_at": 0.40,
+      "section_note": "ASSUMED: the NACA four-digit thickness form on a four-digit camber line, a stand-in for a slender low-speed section; the real section is not known to me. No twist, no incidence.",
+      "tip_round": 0.020,
+      "tip_note": "The span over which the section thins to the tip's edge; the planform stays square.",
+      "aileron": {"z": [0.87, 1.39], "hinge_chord_fraction": 0.74, "gap": 0.003, "note": "ASSUMED: outboard, the rear 26 % of the chord, 3 mm gaps at the ends. Each on its own node on the hinge line (on the camber line), local +Z along the hinge toward starboard: a positive turn puts the trailing edge down on either side."}
+    },
+    "pod": {
+      "note": "ASSUMED: a body of revolution about the propeller's axis (Y = axis_y, Z = 0), about 0.2 m in diameter and 0.735 m long. radius: a table over X, end to nose, before the nose's rounding (an ellipse over nose_length). Ahead of split_x it is orange, behind it white. The wing stands on a short pylon (half_width at its middle, a superellipse section of the exponent given, a point at each end) that fills the gap between the pod's back and the wing's underside and runs on from the trailing edge down to the pod's end, end_margin ahead of it.",
+      "axis_y": 0.0, "nose_x": 0.520, "end_x": -0.215, "nose_length": 0.26,
+      "radius": [[-0.215, 0.050], [-0.190, 0.058], [-0.120, 0.080], [-0.040, 0.094], [0.060, 0.100], [0.300, 0.100], [0.520, 0.096]],
+      "split_x": 0.160,
+      "pylon": {"half_width": 0.045, "exponent": 2.4, "end_margin": 0.012}
+    },
+    "engine": {
+      "note": "ASSUMED shapes for a single-cylinder model engine of the Enya R120's class (20 cc, four-stroke) on the pod's end: a mount plate, a crankcase about the propeller's axis with its bearing housing aft, the shaft to the propeller, an upright finned cylinder (upright because the aircraft lands on its belly) with a rocker box, an intake stub to port and an exhaust pipe with a silencer to starboard. Sizes by eye for an engine of that displacement; nothing is measured.",
+      "mount": {"radius": 0.044, "thickness": 0.006},
+      "crankcase_x": [-0.221, -0.296], "crankcase_radius": 0.033, "housing_x": -0.322, "housing_radius": 0.017, "shaft_radius": 0.007,
+      "cylinder": {"x": -0.258, "y": [0.024, 0.090], "barrel_radius": 0.021, "fin_radius": 0.031, "fins": 7, "fin_thickness": 0.003, "head_y": 0.104, "head_radius": 0.027,
+                   "rocker_box": [0.050, 0.014, 0.036]},
+      "intake": {"from": [-0.258, 0.080, -0.020], "to": [-0.258, 0.074, -0.066], "radius": 0.011},
+      "exhaust": {"pipe": [[-0.258, 0.084, 0.020], [-0.262, 0.052, 0.072]], "pipe_radius": 0.007, "silencer": [[-0.218, 0.046, 0.074], [-0.300, 0.046, 0.074]], "silencer_radius": 0.016}
+    },
+    "propeller": {
+      "note": "Two blades, the diameter is propeller.D (20 in, the book's). ASSUMED: the disc's station disc_x, just behind the engine and the wing's trailing edge; a pitch of 8 in; chord and thickness along the blade by eye (f = 0 at root_r, 1 at the tip); a spinner over the hub, pointing aft (spinner_x: its ends from the disc centre). Node 'propeller' is at the disc centre and spins about its local +X; the blades are pitched for a positive turn (the spin vector along body +x, clockwise seen from behind), the sense in which the book's propeller torque acts.",
+      "disc_x": -0.352, "pitch_m": 0.2032, "root_r": 0.016, "spinner_radius": 0.026, "spinner_x": [0.016, -0.060],
+      "chord": [[0.0, 0.026], [0.18, 0.036], [0.42, 0.042], [0.72, 0.036], [0.92, 0.024], [1.0, 0.010]],
+      "thickness": [0.0120, 0.0026], "max_twist_deg": 42.0
+    },
+    "boom": {
+      "note": "ASSUMED: two round tubes at Z = +-z, outside the propeller's disc, from under the wing (x: front end, aft end) to the tail, their axis at Y = y just under the wing's lower surface; a thin saddle between each tube and the wing. The tail panels stand on their aft ends.",
+      "z": 0.330, "y": 0.082, "radius": 0.011, "x": [0.035, -1.180], "saddle_half_width": 0.010
+    },
+    "tail": {
+      "note": "ASSUMED: an inverted V standing on the two booms. Each panel runs from its foot on the boom's axis (panel_foot: [Y, Z] of the starboard one, mirrored to port) up and inward to the apex on the centreline, where the two leading edges would meet at Y = apex_y; the apex is rounded with apex_radius. Constant chord, a symmetric NACA four-digit section, no incidence. apex_y is chosen so that the tail's top stands 0.60 m above the pod's belly, and x_leading_edge so that the aircraft is 1.70 m from the nose to the booms' ends (reference.airframe.quoted_elsewhere). The ruddervators are the panels' rear part behind hinge_chord_fraction, over ruddervator_span (fractions of the panel from its foot), each on its own node on the hinge line, local +Z along the hinge toward starboard (down the starboard panel, up the port one): a positive turn moves the trailing edge toward the panel's lower, inner face.",
+      "x_leading_edge": -1.040, "chord": 0.135, "incidence_deg": 0.0, "thickness_ratio": 0.09,
+      "panel_foot": [0.082, 0.330], "apex_y": 0.512, "apex_radius": 0.030,
+      "hinge_chord_fraction": 0.62, "ruddervator_span": [0.14, 0.84], "gap": 0.003, "foot_extension": 0.008
+    },
+    "pitot": {"note": "ASSUMED: a pitot tube out of the nose, on the pod's axis", "radius": 0.003, "x": [0.505, 0.600]},
+    "gnss": {"note": "ASSUMED: an antenna puck on the pod's back ahead of the wing", "x": 0.250, "radius": 0.028, "height": 0.012},
+    "sensors": {
+      "note": "The empties: position (and what a camera looks along, its image's up). ASSUMED, all of them. Cameras look down local -Z with local +Y up (threepp camera convention).",
+      "imu": {"position": [0.060, -0.020, 0.0], "note": "the autopilot, in the pod just ahead of the centre of gravity"},
+      "gnss": {"position": [0.250, 0.112, 0.0], "note": "the puck's top"},
+      "pitot_tip": {"position": [0.600, 0.0, 0.0]},
+      "camera_nadir": {"position": [0.200, -0.100, 0.0], "look": [0.0, -1.0, 0.0], "up": [1.0, 0.0, 0.0], "note": "a downward camera in the belly; the image's top toward the nose"},
+      "camera_fpv": {"position": [0.440, -0.070, 0.0], "look": [1.0, -0.15, 0.0], "up": [0.0, 1.0, 0.0], "note": "a forward camera in the nose's underside"}
+    },
+    "gates": {
+      "note": "What --check fails the build on. Lengths in m, areas in m^2. span, area, mean_chord: the tolerance on the wing's mesh (with its ailerons) against physical.b, S and c, the area seen from above on a 1 mm grid, the mean chord that area over the span. tip_circle: the tolerance on the blades' tip circle against propeller.D. clearance: the least gap the propeller's disc keeps to the booms and the tail, seen along its axis; axial: the least gap ahead of the blades to the pod, the wing and the engine outside the spinner's radius. length, height: [target, tolerance], nose to the booms' ends without the pitot tube, the pod's belly to the tail's top: the quoted figures, not published ones.",
+      "span": 0.002, "area": 0.003, "mean_chord": 0.001, "tip_circle": 0.002, "clearance": 0.020, "axial": 0.005,
+      "length": [1.70, 0.01], "height": [0.60, 0.01]
+    },
+    "unverified": "One photograph, described in words, is all the model rests on, so every proportion is a guess that a second view could overturn: the pod's length and diameter and where the wing stands on it; the taper, the dihedral, the section and the ailerons' extent; the booms' spacing and height; the tail's angle, chord and ruddervators (its height follows from the unconfirmed 0.60 m); the engine's shape and which way its cylinder points; the propeller's blades and spinner; the pitot tube, the GNSS puck and both cameras (ours). Kept plain: no hatches, seams, servo horns or hinge gaps along the chord, no antennas, no wing joints, no launch-cradle fittings."
+  },
+  "materials": {
+    "note": "name: linear base colour, metallic, roughness. ASSUMED from the photograph as described: the pod's nose half orange and its rear half white, a light wing, black booms and tail, a bare-metal engine. The propeller's and the spinner's colours are guesses. No vendor marks.",
+    "pod_orange":   {"color": [0.90, 0.20, 0.015], "metallic": 0.0, "roughness": 0.40},
+    "pod_white":    {"color": [0.80, 0.80, 0.78], "metallic": 0.0, "roughness": 0.35},
+    "wing_white":   {"color": [0.74, 0.75, 0.73], "metallic": 0.0, "roughness": 0.45},
+    "tail_black":   {"color": [0.020, 0.020, 0.022], "metallic": 0.0, "roughness": 0.42},
+    "carbon":       {"color": [0.022, 0.022, 0.025], "metallic": 0.0, "roughness": 0.32},
+    "engine_alu":   {"color": [0.60, 0.60, 0.61], "metallic": 0.8, "roughness": 0.45},
+    "engine_steel": {"color": [0.33, 0.33, 0.34], "metallic": 1.0, "roughness": 0.35},
+    "engine_dark":  {"color": [0.10, 0.095, 0.09], "metallic": 0.7, "roughness": 0.55},
+    "prop_black":   {"color": [0.020, 0.020, 0.022], "metallic": 0.0, "roughness": 0.35},
+    "spinner_alu":  {"color": [0.62, 0.62, 0.64], "metallic": 0.9, "roughness": 0.30},
+    "trim_black":   {"color": [0.018, 0.018, 0.020], "metallic": 0.0, "roughness": 0.50},
+    "pitot_steel":  {"color": [0.60, 0.60, 0.62], "metallic": 1.0, "roughness": 0.30},
+    "lens_glass":   {"color": [0.010, 0.012, 0.020], "metallic": 0.0, "roughness": 0.10}
+  }
+}

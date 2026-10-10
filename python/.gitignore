@@ -33,6 +33,10 @@ examples/uav/m350.glb
 examples/uav/out/
 # Generated from babyshark_spec.json by examples/uav/build_babyshark_blender.py (headless Blender)
 examples/uav/babyshark.glb
+# Generated from aerosonde_spec.json by examples/uav/build_aerosonde_blender.py (headless Blender)
+examples/uav/aerosonde.glb
+# Generated from bixler3_spec.json by examples/uav/build_bixler3_blender.py (headless Blender)
+examples/uav/bixler3.glb
 # Generated from remus100_spec.json by examples/auv/build_remus_blender.py (headless Blender)
 examples/auv/remus100.glb
 # Generated from turbine_spec.json by examples/turbine/build_turbine_blender.py (headless Blender)
