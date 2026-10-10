@@ -1,4 +1,5 @@
 #version 460
+#extension GL_GOOGLE_include_directive : enable
 #extension GL_EXT_scalar_block_layout    : require
 #extension GL_EXT_buffer_reference       : require
 #extension GL_EXT_buffer_reference2      : require
@@ -21,13 +22,7 @@
 // from the bindless index buffer manually so the pipeline can declare
 // zero vertex input bindings.
 
-layout(set = 0, binding = 0) uniform CameraUbo {
-    mat4 currVPjittered;
-    mat4 currVPunjittered;
-    mat4 prevVP;
-    vec4 jitter;
-    vec4 prevJitter;
-} cam;
+#include "raster_camera_ubo.glsl"
 
 layout(set = 0, binding = 1, scalar) readonly buffer MotionMatBuf {
     mat4 motionMat[];

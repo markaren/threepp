@@ -264,8 +264,8 @@ namespace threepp::vulkan::impl {
 
         // Group 2 — per-frame-in-flight description of this camera.
         //
-        // Camera UBO (viewInverse + projInverse), 2 mat4 back-to-back,
-        // std140.
+        // Camera UBO (viewInverse + projInverse + jitter + camAux), std140;
+        // the GLSL block is shaders/camera_ubo.glsl.
         std::array<Buffer, kFramesInFlight> cameraUbos{};
         // Raster camera UBO (RasterCameraData: jittered/unjittered VP,
         // prev VP, jitter).
@@ -417,6 +417,7 @@ namespace threepp::vulkan::impl {
     // currVPunjittered + prevVP drive the motion-vector computation
     // (which must be jitter-free or motion vectors include the jitter
     // and pollute reproject).
+    // The GLSL block is shaders/raster_camera_ubo.glsl.
     struct RasterCameraData {
         float currVPjittered[16];
         float currVPunjittered[16];

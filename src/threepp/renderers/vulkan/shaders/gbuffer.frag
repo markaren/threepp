@@ -31,14 +31,7 @@
 // attachment because those bounce rays have no fragment-shader derivatives,
 // but here plain texture() is correct.
 
-layout(set = 0, binding = 0) uniform CameraUbo {
-    mat4 currVPjittered;
-    mat4 currVPunjittered;
-    mat4 prevVP;
-    vec4 jitter;          // .xy = curr clip-space sub-pixel jitter
-    vec4 prevJitter;      // .xy = prev clip-space sub-pixel jitter; .z = Toksvig
-                          // toggle; .w = frame counter (alphaHash decorrelation)
-} cam;
+#include "raster_camera_ubo.glsl"
 
 layout(set = 0, binding = 2, scalar) readonly buffer GbufMatBuf {
     MaterialDesc gbufMats[];

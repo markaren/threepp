@@ -21,8 +21,8 @@ namespace threepp {
                     // viewInverse + projInverse + jitter (.xy = clip-space
                     // sub-pixel offset matching raster's Halton, .zw = 1/res)
                     // + camAux (.x = parallel projection, .yzw = world forward).
-                    // Shaders that don't need camAux declare the block without
-                    // it — a trailing member only the readers have to know about.
+                    // The GLSL side is shaders/camera_ubo.glsl, the one
+                    // declaration every reader includes.
                     VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                     VMA_MEMORY_USAGE_AUTO,
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |

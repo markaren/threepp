@@ -1,4 +1,5 @@
 #version 460
+#extension GL_GOOGLE_include_directive : enable
 
 // Hybrid raster overlay's UNJITTERED depth prepass. Same scene-geometry
 // submit as gbuffer.vert but writes only depth, using cam.currVPunjittered
@@ -14,13 +15,7 @@
 // Vertex input is just position at location 0. Push constants share the
 // raster pipeline's PC layout; only `model` is consumed.
 
-layout(set = 0, binding = 0) uniform CameraUbo {
-    mat4 currVPjittered;
-    mat4 currVPunjittered;
-    mat4 prevVP;
-    vec4 jitter;
-    vec4 prevJitter;
-} cam;
+#include "raster_camera_ubo.glsl"
 
 layout(push_constant) uniform PC {
     mat4 model;

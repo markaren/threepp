@@ -11,12 +11,7 @@
 // (GL_EXT_scalar_block_layout for the scalar FogUbo, GL_GOOGLE_include_directive
 // for the include), exactly like the deferred_shade_NN_*.glsl split.
 
-layout(set = 0, binding = 0) uniform CameraUbo {
-    mat4 viewInverse;
-    mat4 projInverse;
-    vec4 jitter;
-    vec4 camAux;// .x = parallel projection, .yzw = camera world forward
-} cam;
+#include "camera_ubo.glsl"
 #include "camera_ray.glsl"// camRayOrigin — perspective AND ortho
 layout(set = 0, binding = 3) uniform sampler2D  gbufNormalTex; // xyz=n*0.5+0.5, w=roughness (<0 unlit)
 layout(set = 0, binding = 4) uniform sampler2D  gbufDepthTex;  // x = NDC z [0,1]

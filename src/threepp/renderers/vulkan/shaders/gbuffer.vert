@@ -1,4 +1,5 @@
 #version 460
+#extension GL_GOOGLE_include_directive : enable
 #extension GL_EXT_scalar_block_layout : require
 
 // Raster G-buffer prepass. Produces depth, world-space normal,
@@ -13,17 +14,7 @@
 // No upload duplication; the raster prepass and ray-query shadow/reflection
 // rays warm the same cache lines.
 
-layout(set = 0, binding = 0) uniform CameraUbo {
-    mat4 currVPjittered;  // for gl_Position; primary AA jitter applied here
-    mat4 currVPunjittered;// for motion-vec; must match prev's projection family
-    mat4 prevVP;          // previous-frame view-proj, unjittered
-    vec4 jitter;          // .xy = jitter offset in clip-space (sub-texel), .zw = 1/resolution
-    vec4 prevJitter;      // .xy = previous frame's jitter offset. NOTE: the motion vec
-                          // stays JITTER-FREE (gbuffer.frag writes clean prevNDC−currNDC;
-                          // a (prev−curr) delta was tested there and rejected). Kept for
-                          // the deferred shade's hybrid reproject tap correction; .z
-                          // smuggles the normal-map Toksvig toggle.
-} cam;
+#include "raster_camera_ubo.glsl"
 
 // motionMat[i] = prev_world_i * inverse(current_world_i). Apply to a
 // current-frame world-space point to get its previous-frame world position.

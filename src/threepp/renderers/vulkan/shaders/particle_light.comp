@@ -40,12 +40,7 @@
 
 layout(local_size_x = 64) in;
 
-layout(set = 0, binding = 0) uniform CameraUbo {
-    mat4 viewInverse;
-    mat4 projInverse;
-    vec4 jitter;
-    vec4 camAux;// .x = parallel projection, .yzw = camera world forward
-} cam;
+#include "camera_ubo.glsl"
 
 struct DirLight   { vec3 direction; vec3 color; };
 struct PointLight { vec3 position; float range; vec3 color; float decay; float radius; };

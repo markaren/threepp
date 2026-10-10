@@ -31,12 +31,7 @@
 
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 
-layout(set = 0, binding = 0) uniform CameraUbo {
-    mat4 viewInverse;
-    mat4 projInverse;
-    vec4 jitter;
-    vec4 camAux;// .x = parallel projection, .yzw = camera world forward
-} cam;
+#include "camera_ubo.glsl"
 #include "camera_ray.glsl"// camViewPointAtDist / camRayOrigin — perspective AND ortho
 
 struct DirLight   { vec3 direction; vec3 color; };

@@ -66,12 +66,7 @@ const float kTransAmbient       = 0.4; // back-face env fill strength
 // that no single 1-2 ray (binary) sample dominates → no salt-and-pepper dust.
 const float kShadowStepFloor    = 5.0;
 
-layout(set = 0, binding = 0) uniform CameraUbo {
-    mat4 viewInverse;
-    mat4 projInverse;
-    vec4 jitter;
-    vec4 camAux;// .x = parallel projection, .yzw = camera world forward
-} cam;
+#include "camera_ubo.glsl"
 #include "camera_ray.glsl"// camRayOrigin / camRayDir — perspective AND ortho
 
 // This pixel's primary ray, set once at the top of main() and read by the

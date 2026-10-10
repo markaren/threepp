@@ -1,4 +1,5 @@
 #version 460
+#extension GL_GOOGLE_include_directive : enable
 
 // Two-phase GPU occlusion culling — both compute stages (OcclusionCull).
 //
@@ -41,16 +42,12 @@ layout(set = 0, binding = 1, std430) writeonly buffer DstCmds { DrawCmd dstCmds[
 layout(set = 0, binding = 2, std430) readonly  buffer Meta    { CullMeta meta[]; };
 layout(set = 0, binding = 3, std430) buffer VisBits           { uint visBits[]; };// 1 bit per instance (cullBit)
 layout(set = 0, binding = 4) uniform sampler2D hizTex;// FARTHEST (min-reduce) pyramid
-// The raster camera UBO — layout matches gbuffer.vert's CameraUbo. Only
-// the JITTERED current VP is read: the phase-1 depth was rasterized with
-// it, so the AABB projection compares apples to apples.
-layout(set = 0, binding = 5) uniform RasterCamUbo {
-    mat4 currVPjittered;
-    mat4 currVPunjittered;
-    mat4 prevVP;
-    vec4 jitter;
-    vec4 prevJitter;
-} rcam;
+// The raster camera UBO (raster_camera_ubo.glsl, the block gbuffer.vert
+// reads). Only the JITTERED current VP is read: the phase-1 depth was
+// rasterized with it, so the AABB projection compares apples to apples.
+#define RASTER_CAM_BINDING 5
+#define RASTER_CAM_NAME rcam
+#include "raster_camera_ubo.glsl"
 
 layout(push_constant) uniform Pc {
     uint  drawCount;

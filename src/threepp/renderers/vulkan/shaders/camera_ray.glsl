@@ -1,6 +1,5 @@
-// Primary-ray geometry for the camera in the CameraUbo at set 0, binding 0.
-// Include AFTER that block is declared, and declare the block WITH its trailing
-// `vec4 camAux` member — these helpers read it.
+// Primary-ray geometry for the camera in the CameraUbo at set 0, binding 0
+// (camera_ubo.glsl, included here; these helpers read its camAux).
 //
 // camAux.x is 1 for an ORTHOGRAPHIC camera. What differs there is not the
 // projection matrix alone: a perspective camera has ONE ray origin (the eye)
@@ -16,6 +15,8 @@
 
 #ifndef CAMERA_RAY_GLSL
 #define CAMERA_RAY_GLSL
+
+#include "camera_ubo.glsl"
 
 // This pixel's own point on the camera's NEAR PLANE, in world space. Reverse-Z,
 // so NDC z = 1 IS the near plane, and unprojecting there is the near-plane point
