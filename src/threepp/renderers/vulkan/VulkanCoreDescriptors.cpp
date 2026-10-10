@@ -578,7 +578,7 @@ void VulkanRenderer::Impl::ensureHybridResources() {
                         VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
                 void* mapped = nullptr;
-                vmaMapMemory(ctx->allocator(), dummyUvBuffer_.alloc, &mapped);
+                check(vmaMapMemory(ctx->allocator(), dummyUvBuffer_.alloc, &mapped), "vmaMapMemory(dummy uv)");
                 std::memset(mapped, 0, kDummyUvBytes);
                 flushHostWrites(ctx->allocator(), dummyUvBuffer_.alloc);
                 vmaUnmapMemory(ctx->allocator(), dummyUvBuffer_.alloc);

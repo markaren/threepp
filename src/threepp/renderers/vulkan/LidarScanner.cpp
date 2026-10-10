@@ -277,7 +277,7 @@ namespace threepp::vulkan {
                         VMA_ALLOCATION_CREATE_MAPPED_BIT);
 
         void* mapped = nullptr;
-        vmaMapMemory(ctx_.allocator(), sbtBuf_.alloc, &mapped);
+        check(vmaMapMemory(ctx_.allocator(), sbtBuf_.alloc, &mapped), "vmaMapMemory(lidar sbt)");
         std::memset(mapped, 0, sbtSize);
         uint8_t* dst = static_cast<uint8_t*>(mapped);
         std::memcpy(dst,                         handles.data() + 0 * handleSize, handleSize);

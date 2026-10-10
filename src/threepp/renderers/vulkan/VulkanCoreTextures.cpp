@@ -986,7 +986,7 @@ Image2D VulkanRenderer::Impl::buildSampledImageLevels(VkCommandBuffer cb,
                             VMA_ALLOCATION_CREATE_MAPPED_BIT);
             {
                 void* mapped = nullptr;
-                vmaMapMemory(ctx->allocator(), stagingOut.alloc, &mapped);
+                check(vmaMapMemory(ctx->allocator(), stagingOut.alloc, &mapped), "vmaMapMemory(texture staging)");
                 auto* dst = static_cast<std::uint8_t*>(mapped);
                 for (const auto& l : levels) {
                     std::memcpy(dst, l.data(), l.size());

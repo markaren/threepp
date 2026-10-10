@@ -498,9 +498,9 @@ namespace threepp {
         }
 
         void* mappedDraws = nullptr;
-        vmaMapMemory(ctx->allocator(), view().drawInfoBuffers[frame].alloc, &mappedDraws);
+        check(vmaMapMemory(ctx->allocator(), view().drawInfoBuffers[frame].alloc, &mappedDraws), "vmaMapMemory(drawInfo)");
         void* mappedCmds = nullptr;
-        vmaMapMemory(ctx->allocator(), view().indirectCmdBuffers[frame].alloc, &mappedCmds);
+        check(vmaMapMemory(ctx->allocator(), view().indirectCmdBuffers[frame].alloc, &mappedCmds), "vmaMapMemory(indirectCmds)");
 
         uint8_t* dDst = static_cast<uint8_t*>(mappedDraws);
         uint8_t* cDst = static_cast<uint8_t*>(mappedCmds);

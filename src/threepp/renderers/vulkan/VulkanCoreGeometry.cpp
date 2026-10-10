@@ -297,7 +297,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                             VMA_MEMORY_USAGE_AUTO,
                             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
                     void* mapped = nullptr;
-                    vmaMapMemory(ctx->allocator(), rec->color.alloc, &mapped);
+                    check(vmaMapMemory(ctx->allocator(), rec->color.alloc, &mapped), "vmaMapMemory(color)");
                     if (itemSize == 3) {
                         std::memcpy(mapped, cols.data(), cbBytes);
                     } else {
@@ -1293,7 +1293,7 @@ void VulkanRenderer::Impl::refreshSkinnedBlas(SkinnedMesh& sm, SkinnedMeshState&
             st.boneSlot = (st.boneSlot + 1u) % SkinnedMeshState::kBoneSlots;
             auto& slot = st.boneMatrices[st.boneSlot];
             void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), slot.alloc, &mapped);
+            check(vmaMapMemory(ctx->allocator(), slot.alloc, &mapped), "vmaMapMemory(skin matrices)");
             // mats[1] = bindMatrixInverse is NOT constant in attached bind mode:
             // SkinnedMesh::updateMatrixWorld recomputes it to matrixWorld^-1 every
             // frame so that (TLAS instance transform · bindMatrixInverse) collapses
@@ -3266,7 +3266,7 @@ void VulkanRenderer::Impl::mirrorDisplacedHeightfields(DisplacedMesh& dm, Displa
                     if (cf.disp.size() != cells * 2)
                         cf.disp.assign(cells * 2, 0.f);
                     void* mapped = nullptr;
-                    vmaMapMemory(ctx->allocator(), buf.alloc, &mapped);
+                    check(vmaMapMemory(ctx->allocator(), buf.alloc, &mapped), "vmaMapMemory(displaced readback)");
                     invalidateHostReads(ctx->allocator(), buf.alloc, 0, 2 * fieldBytes);
                     std::memcpy(cf.data.data(), mapped, fieldBytes);
                     std::memcpy(cf.disp.data(), static_cast<const char*>(mapped) + fieldBytes, fieldBytes);
@@ -3767,7 +3767,7 @@ VulkanRenderer::Impl::SkinnedMeshState* VulkanRenderer::Impl::ensureSkinnedBlas(
                         VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
                 void* mapped = nullptr;
-                vmaMapMemory(ctx->allocator(), slot.alloc, &mapped);
+                check(vmaMapMemory(ctx->allocator(), slot.alloc, &mapped), "vmaMapMemory(dynamic staging)");
                 std::memcpy(static_cast<char*>(mapped),
                             sm.bindMatrix.elements.data(),
                             16 * sizeof(float));

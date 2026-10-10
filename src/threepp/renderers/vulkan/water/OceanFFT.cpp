@@ -288,7 +288,7 @@ namespace threepp::water {
         VkCommandBufferBeginInfo bbi{};
         bbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cb, &bbi);
+        check(vkBeginCommandBuffer(cb, &bbi), "vkBeginCommandBuffer(noise upload)");
 
         // Transition noise to TRANSFER_DST.
         VkImageMemoryBarrier br{};
@@ -323,14 +323,14 @@ namespace threepp::water {
             0, 0, nullptr, 0, nullptr, 1, &br);
         noise_.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-        vkEndCommandBuffer(cb);
+        check(vkEndCommandBuffer(cb), "vkEndCommandBuffer(noise upload)");
 
         VkSubmitInfo si{};
         si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         si.commandBufferCount = 1;
         si.pCommandBuffers    = &cb;
-        vkQueueSubmit(ctx_.graphicsQueue(), 1, &si, VK_NULL_HANDLE);
-        vkQueueWaitIdle(ctx_.graphicsQueue());
+        check(vkQueueSubmit(ctx_.graphicsQueue(), 1, &si, VK_NULL_HANDLE), "vkQueueSubmit(noise upload)");
+        check(vkQueueWaitIdle(ctx_.graphicsQueue()), "vkQueueWaitIdle(noise upload)");
 
         vkDestroyCommandPool(ctx_.device(), pool, nullptr);
         vmaDestroyBuffer(ctx_.allocator(), sb, sa);

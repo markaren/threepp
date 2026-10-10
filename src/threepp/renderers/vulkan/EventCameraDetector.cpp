@@ -267,7 +267,7 @@ namespace threepp::vulkan {
         VkCommandBufferBeginInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cb, &bi);
+        check(vkBeginCommandBuffer(cb, &bi), "vkBeginCommandBuffer(event_detect transition)");
 
         std::array<VkImageMemoryBarrier, 2> initBs{
                 fullColorBarrier(logHistoryImg_.image, VK_IMAGE_LAYOUT_UNDEFINED,
@@ -280,7 +280,7 @@ namespace threepp::vulkan {
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              0, 0, nullptr, 0, nullptr,
                              static_cast<uint32_t>(initBs.size()), initBs.data());
-        vkEndCommandBuffer(cb);
+        check(vkEndCommandBuffer(cb), "vkEndCommandBuffer(event_detect transition)");
 
         VkSubmitInfo si{};
         si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -289,9 +289,11 @@ namespace threepp::vulkan {
         VkFenceCreateInfo fci{};
         fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         VkFence f = VK_NULL_HANDLE;
-        vkCreateFence(ctx_.device(), &fci, nullptr, &f);
-        vkQueueSubmit(ctx_.graphicsQueue(), 1, &si, f);
-        vkWaitForFences(ctx_.device(), 1, &f, VK_TRUE, UINT64_MAX);
+        check(vkCreateFence(ctx_.device(), &fci, nullptr, &f), "vkCreateFence(event_detect transition)");
+        // A failed submit used to fall through to a wait on a fence that never
+        // signals, or to a readback of images that were never transitioned.
+        check(vkQueueSubmit(ctx_.graphicsQueue(), 1, &si, f), "vkQueueSubmit(event_detect transition)");
+        check(vkWaitForFences(ctx_.device(), 1, &f, VK_TRUE, UINT64_MAX), "vkWaitForFences(event_detect transition)");
         vkDestroyFence(ctx_.device(), f, nullptr);
         vkDestroyCommandPool(ctx_.device(), cp, nullptr);
 
