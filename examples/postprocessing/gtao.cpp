@@ -8,11 +8,15 @@
 //
 //   G        AO on / off
 //   M        cycle the output: Default, Diffuse, AO, Denoise, Depth, Normal
-//   1 / 2    AO radius down / up
-//   3 / 4    blend intensity down / up
-//   5 / 6    samples down / up (the main cost knob)
+//
+// Every knob of the pass and of its denoiser is in the panel. The ones worth
+// trying first, with the output on Denoise: radius (how large a crease
+// darkens) and thickness (how far behind a silhouette still gets darkened by
+// it - raise it and every outline grows a halo, lower it and only the contacts
+// are left). The AO output is the same image before the denoiser.
 
 #include "threepp/extras/environments/RoomEnvironment.hpp"
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/input/KeyListener.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
@@ -44,6 +48,15 @@ namespace {
         return mesh;
     }
 
+    // Moves the object straight up or down until its lowest point is at
+    // `height`: resting on a surface, neither sunk into it nor hovering.
+    void restOn(Object3D& object, float height) {
+
+        Box3 box;
+        box.setFromObject(object, true);
+        object.position.y += height - box.min().y;
+    }
+
     const std::array<std::pair<GTAOPass::Output, const char*>, 6> outputs{{
             {GTAOPass::Output::Default, "Default"},
             {GTAOPass::Output::Diffuse, "Diffuse"},
@@ -60,10 +73,10 @@ int main(int argc, char** argv) {
 
     // Headless capture (dev):
     //   gtao --shot <name.png> [--mode default|diffuse|ao|denoise|depth|normal]
-    //        [--off] [--ortho] [--intensity X] [--size WxH]
+    //        [--off] [--ortho] [--intensity X] [--size WxH] [--ui]
     std::string shotPath;
     int modeIndex = 0;
-    bool startOff = false, ortho = false;
+    bool startOff = false, ortho = false, shotWithUi = false;
     float intensity = 1.f;
     int width = 1280, height = 720;
     for (int i = 1; i < argc; ++i) {
@@ -71,6 +84,7 @@ int main(int argc, char** argv) {
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
         else if (a == "--off") startOff = true;
         else if (a == "--ortho") ortho = true;
+        else if (a == "--ui") shotWithUi = true;
         else if (a == "--intensity" && i + 1 < argc) intensity = std::stof(argv[++i]);
         else if (a == "--size" && i + 1 < argc) std::sscanf(argv[++i], "%dx%d", &width, &height);
         else if (a == "--mode" && i + 1 < argc) {
@@ -100,17 +114,20 @@ int main(int argc, char** argv) {
         scene->environment = pmrem.fromScene(room, 0.04f);
     }
 
+    // A far plane just past the room: the Depth output spreads near..far over
+    // black..white, and a distant far plane leaves the whole room near white.
     std::shared_ptr<Camera> camera;
     if (ortho) {
         const float h = 4.f, w = h * canvas.aspect();
-        camera = OrthographicCamera::create(-w, w, h, -h, 0.1f, 50.f);
+        camera = OrthographicCamera::create(-w, w, h, -h, 0.1f, 20.f);
     } else {
-        camera = PerspectiveCamera::create(40, canvas.aspect(), 0.1f, 50.f);
+        camera = PerspectiveCamera::create(40, canvas.aspect(), 0.1f, 20.f);
     }
     camera->position.set(3.4f, 2.7f, 5.0f);
 
     OrbitControls controls{*camera, canvas};
     controls.target.set(-0.8f, 0.6f, -0.8f);
+    controls.maxDistance = 11.f;// keeps the room inside the far plane
     controls.update();
 
     auto key = DirectionalLight::create(0xffffff, 0.6f);
@@ -134,7 +151,8 @@ int main(int argc, char** argv) {
     scene->add(solid(sphere, Color(0x50a060), {1.5f, 0.5f, -0.6f}, 0.4f));
     scene->add(solid(SphereGeometry::create(0.35f, 48, 24), Color(0xa050c0), {-1.5f, 0.35f, -1.5f}, 0.4f));
 
-    auto knot = solid(TorusKnotGeometry::create(0.38f, 0.13f, 200, 24), Color(0xd08040), {1.9f, 0.52f, 1.3f}, 0.3f);
+    auto knot = solid(TorusKnotGeometry::create(0.38f, 0.13f, 200, 24), Color(0xd08040), {1.9f, 0.f, 1.3f}, 0.3f);
+    restOn(*knot, 0.f);// standing on the floor
     scene->add(knot);
 
     const std::string suzannePath = std::string(DATA_FOLDER) + "/models/gltf/Suzanne/glTF/Suzanne.gltf";
@@ -143,8 +161,9 @@ int main(int argc, char** argv) {
         if (auto gltf = loader.load(suzannePath)) {
             auto model = gltf->scene;
             model->scale.setScalar(0.45f);
-            model->position.set(-1.2f, 0.95f, -2.4f);// sitting on the yellow box
+            model->position.set(-1.2f, 0.f, -2.4f);
             model->rotation.y = 0.5f;
+            restOn(*model, 0.6f);// sitting on the yellow box
             // A plain clay material: the point here is the shape.
             auto clay = MeshStandardMaterial::create();
             clay->color = Color(0xb0a898);
@@ -183,35 +202,65 @@ int main(int argc, char** argv) {
     gtao->enabled = !startOff;
     composer.addPass(gtao);
 
-    float radius = *aoParameters.radius;
-    int samples = *aoParameters.samples;
-
     canvas.onKeyPressed([&](KeyEvent evt) {
-        switch (evt.key) {
-            case Key::G: gtao->enabled = !gtao->enabled; break;
-            case Key::M:
-                modeIndex = (modeIndex + 1) % static_cast<int>(outputs.size());
-                gtao->output = outputs[modeIndex].first;
-                break;
-            case Key::NUM_1: radius = std::max(0.05f, radius - 0.05f); break;
-            case Key::NUM_2: radius = std::min(2.f, radius + 0.05f); break;
-            case Key::NUM_3: gtao->blendIntensity = std::max(0.f, gtao->blendIntensity - 0.1f); break;
-            case Key::NUM_4: gtao->blendIntensity = std::min(1.f, gtao->blendIntensity + 0.1f); break;
-            case Key::NUM_5: samples = std::max(2, samples - 2); break;
-            case Key::NUM_6: samples = std::min(32, samples + 2); break;
-            default: return;
-        }
-        GTAOParameters update;
-        update.radius = radius;
-        update.samples = samples;
-        gtao->updateGtaoMaterial(update);
-
-        std::cout << (gtao->enabled ? "AO on" : "AO off")
-                  << "  output " << outputs[modeIndex].second
-                  << "  radius " << radius
-                  << "  samples " << samples
-                  << "  intensity " << gtao->blendIntensity << std::endl;
+        if (evt.key == Key::G) gtao->enabled = !gtao->enabled;
+        if (evt.key == Key::M) modeIndex = (modeIndex + 1) % static_cast<int>(outputs.size());
     });
+
+    bool spin = true;
+
+    // Every field of the two parameter structs is set above, so the sliders
+    // edit them in place (&*field) and a change pushes the whole struct.
+    ImguiFunctionalContext ui(canvas, [&] {
+        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
+        ImGui::SetNextWindowSize({0, 0}, 0);
+        ImGui::Begin("GTAO");
+
+        ImGui::Checkbox("AO (G)", &gtao->enabled);
+        if (ImGui::BeginCombo("output (M)", outputs[modeIndex].second)) {
+            for (int k = 0; k < static_cast<int>(outputs.size()); k++) {
+                if (ImGui::Selectable(outputs[k].second, k == modeIndex)) modeIndex = k;
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SliderFloat("blend intensity", &gtao->blendIntensity, 0.f, 1.f);
+        ImGui::Checkbox("spin the knot", &spin);
+
+        ImGui::SeparatorText("AO");
+        bool ao = false;
+        ao |= ImGui::SliderFloat("radius", &*aoParameters.radius, 0.01f, 1.f);
+        ao |= ImGui::SliderFloat("distance exponent", &*aoParameters.distanceExponent, 1.f, 4.f);
+        ao |= ImGui::SliderFloat("thickness", &*aoParameters.thickness, 0.01f, 10.f, "%.2f", ImGuiSliderFlags_Logarithmic);
+        ao |= ImGui::SliderFloat("distance falloff", &*aoParameters.distanceFallOff, 0.f, 1.f);
+        ao |= ImGui::SliderFloat("scale", &*aoParameters.scale, 0.01f, 2.f);
+        ao |= ImGui::SliderInt("samples", &*aoParameters.samples, 2, 32);
+        ao |= ImGui::Checkbox("radius in screen space", &*aoParameters.screenSpaceRadius);
+        if (ao) gtao->updateGtaoMaterial(aoParameters);
+
+        // What `samples` costs: it is rounded up to whole steps per slice
+        // direction, and every step reads the depth buffer on both sides.
+        const int directions = *aoParameters.samples < 30 ? 3 : 5;
+        const int steps = (*aoParameters.samples + directions - 1) / directions;
+        ImGui::Text("%d directions x %d steps = %d depth reads", directions, steps, 2 * directions * steps);
+
+        ImGui::SeparatorText("Denoise");
+        bool pd = false;
+        pd |= ImGui::SliderFloat("luma phi", &*pdParameters.lumaPhi, 0.01f, 20.f);
+        pd |= ImGui::SliderFloat("depth phi", &*pdParameters.depthPhi, 0.01f, 20.f);
+        pd |= ImGui::SliderFloat("normal phi", &*pdParameters.normalPhi, 0.01f, 20.f);
+        pd |= ImGui::SliderFloat("radius##pd", &*pdParameters.radius, 0.f, 32.f, "%.0f px");
+        pd |= ImGui::SliderFloat("radius exponent", &*pdParameters.radiusExponent, 0.1f, 4.f);
+        pd |= ImGui::SliderFloat("rings", &*pdParameters.rings, 1.f, 16.f);
+        pd |= ImGui::SliderInt("samples##pd", &*pdParameters.samples, 2, 32);
+        if (pd) gtao->updatePdMaterial(pdParameters);
+
+        ImGui::End();
+    });
+
+    IOCapture ioCapture{};
+    ioCapture.preventMouseEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
+    ioCapture.preventScrollEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
+    canvas.setIOCapture(&ioCapture);
 
     canvas.onWindowResize([&](WindowSize size) {
         if (auto* p = dynamic_cast<PerspectiveCamera*>(camera.get())) {
@@ -229,11 +278,19 @@ int main(int argc, char** argv) {
     Clock clock;
     canvas.animate([&] {
         const auto dt = clock.getDelta();
-        if (!capture) knot->rotation.y += 0.3f * dt;
+        if (!capture && spin) knot->rotation.y += 0.3f * dt;
+
+        // The AO, depth and normal outputs are data, not light, so they are
+        // shown without the tone curve: an unoccluded 1 is white.
+        gtao->output = outputs[modeIndex].first;
+        const bool image = !gtao->enabled || gtao->output == GTAOPass::Output::Default || gtao->output == GTAOPass::Output::Diffuse;
+        renderer.toneMapping = image ? ToneMapping::ACESFilmic : ToneMapping::None;
 
         composer.render(dt);
+        if (!capture || shotWithUi) ui.render();
 
-        if (capture && ++frame >= 3) {
+        // (the panel takes a few frames to settle on its size)
+        if (capture && ++frame >= (shotWithUi ? 8 : 3)) {
             renderer.writeFramebuffer(shotPath);
             std::cout << "wrote " << shotPath << std::endl;
             std::exit(0);
