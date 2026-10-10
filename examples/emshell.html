@@ -85,6 +85,7 @@
         /* ── Canvas area ── */
         #canvas-container {
             flex: 1;
+            min-height: 0;
             position: relative;
             overflow: hidden;
             display: flex;
@@ -92,9 +93,28 @@
             justify-content: center;
         }
 
+        /* Never larger than the room there is. The canvas keeps the resolution it
+           asked for and is scaled down to fit; it used to be shown at full size
+           and clipped on every side, so that in a window smaller than the canvas
+           whatever an example draws in its corners was cut off. Emscripten's
+           mouse coordinates already allow for a canvas shown at another size. */
         canvas {
             display: block;
             outline: none;
+            max-width: 100%;
+            max-height: 100%;
+        }
+
+        /* Asked for fullscreen, Emscripten puts the canvas in a div of its own
+           and leaves it there afterwards. That div has to pass the container's
+           size on, or the canvas has no height to fit itself to. */
+        #canvas-container div:has(canvas) {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+            min-height: 0;
         }
 
         /* ── Loading overlay ── */
