@@ -49,6 +49,7 @@
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/renderers/vulkan/ValidationReport.hpp"
+#include "vulkan_test_util.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -60,6 +61,7 @@
 #include <vector>
 
 using namespace threepp;
+using vktest::kSkipCode;
 
 namespace {
 
@@ -68,7 +70,6 @@ namespace {
     // not how many pixels they cover, so resolution buys nothing and costs
     // linearly.
     constexpr int kW = 256, kH = 160;
-    constexpr int kSkipCode = 42;
 
     // Enough frames to get past the first-frame allocation path and have a
     // temporal history for a reconfiguration to invalidate — the interesting
@@ -215,18 +216,10 @@ int main() {
     setenv("THREEPP_VULKAN_VALIDATION", "1", /*overwrite*/ 1);
 #endif
 
-    std::unique_ptr<Canvas> canvasPtr;
-    std::unique_ptr<VulkanRenderer> rendererPtr;
-    try {
-        canvasPtr = std::make_unique<Canvas>(
-                Canvas::Parameters().title("VulkanValidation_test").size(kW, kH).vsync(false).headless(true));
-        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
-    } catch (const std::exception& e) {
-        std::printf("[skip] Vulkan/RT GPU unavailable: %s\n", e.what());
-        return kSkipCode;
-    }
-    Canvas& canvas = *canvasPtr;
-    VulkanRenderer& renderer = *rendererPtr;
+    auto gpu = vktest::openHeadlessVulkan("VulkanValidation_test", kW, kH);
+    if (!gpu) return kSkipCode;
+    Canvas& canvas = *gpu.canvas;
+    VulkanRenderer& renderer = *gpu.renderer;
     gateRenderer = &renderer;
 
     // Without the layer every assertion below is vacuously true, so this is a

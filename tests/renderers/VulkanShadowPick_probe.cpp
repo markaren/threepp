@@ -25,6 +25,7 @@
 #include "threepp/renderers/VulkanRenderer.hpp"
 
 #include "capture_util.hpp"
+#include "vulkan_test_util.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -37,6 +38,7 @@
 #include <vector>
 
 using namespace threepp;
+using vktest::kSkipCode;
 
 namespace {
 
@@ -48,7 +50,6 @@ namespace {
         return (v && *v) ? std::atoi(v) : dflt;
     }
     const int kW = envInt("PROBE_W", 480), kH = envInt("PROBE_H", 320);
-    constexpr int kSkipCode = 42;
     constexpr int kWarmFrames = 96;// let the temporal accumulators converge
 
     void writePPM(const std::string& path, const std::vector<unsigned char>& px, int w, int h) {
@@ -135,18 +136,10 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    std::unique_ptr<Canvas> canvasPtr;
-    std::unique_ptr<VulkanRenderer> rendererPtr;
-    try {
-        canvasPtr = std::make_unique<Canvas>(
-                Canvas::Parameters().title("VulkanShadowPick_probe").size(kW, kH).vsync(false).headless(true));
-        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
-    } catch (const std::exception& e) {
-        std::printf("[skip] Vulkan/RT GPU unavailable: %s\n", e.what());
-        return kSkipCode;
-    }
-    Canvas& canvas = *canvasPtr;
-    VulkanRenderer& renderer = *rendererPtr;
+    auto gpu = vktest::openHeadlessVulkan("VulkanShadowPick_probe", kW, kH);
+    if (!gpu) return kSkipCode;
+    Canvas& canvas = *gpu.canvas;
+    VulkanRenderer& renderer = *gpu.renderer;
 
     // Same pinning as the goldens: plain TAA resolve, no upscaler variance.
     renderer.setDenoise(true);

@@ -71,6 +71,7 @@
 #include "threepp/renderers/VulkanRenderer.hpp"
 
 #include "capture_util.hpp"// examples/libs (shared via target include dir)
+#include "vulkan_test_util.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -91,12 +92,12 @@
 #endif
 
 using namespace threepp;
+using vktest::kSkipCode;
 namespace fs = std::filesystem;
 
 namespace {
 
     constexpr int kW = 512, kH = 384;
-    constexpr int kSkipCode = 42;
 
     int selfPid() {
 #ifdef _WIN32
@@ -281,17 +282,9 @@ int main(int argc, char** argv) {
     }();
     const char* sigmaEnv = std::getenv("THREEPP_VK_SPLATVOL_SIGMA");
 
-    std::unique_ptr<Canvas> canvasPtr;
-    std::unique_ptr<VulkanRenderer> rendererPtr;
-    try {
-        canvasPtr = std::make_unique<Canvas>(
-                Canvas::Parameters().title("VulkanSplatVolume_test").size(kW, kH).vsync(false).headless(true));
-        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
-    } catch (const std::exception& e) {
-        std::printf("[skip] Vulkan/RT GPU unavailable: %s\n", e.what());
-        return kSkipCode;
-    }
-    VulkanRenderer& renderer = *rendererPtr;
+    auto gpu = vktest::openHeadlessVulkan("VulkanSplatVolume_test", kW, kH);
+    if (!gpu) return kSkipCode;
+    VulkanRenderer& renderer = *gpu.renderer;
 
     std::printf("mode: THREEPP_VK_SPLATVOL_OFF=%s  THREEPP_VK_SPLATVOL_SIGMA=%s\n",
                 volOff ? "1" : "(unset)", sigmaEnv && *sigmaEnv ? sigmaEnv : "(unset)");

@@ -20,6 +20,7 @@
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "vulkan_test_util.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -28,12 +29,12 @@
 #include <vector>
 
 using namespace threepp;
+using vktest::kSkipCode;
 
 namespace {
 
     constexpr int kW = 384, kH = 256;// 1.5 aspect — deliberately NOT 1:1, so a
                                      // width/height mix-up cannot pass
-    constexpr int kSkipCode = 42;
 
     int failures = 0;
 
@@ -80,17 +81,9 @@ int main() {
     // far it got.
     std::setvbuf(stdout, nullptr, _IONBF, 0);
 
-    std::unique_ptr<Canvas> canvasPtr;
-    std::unique_ptr<VulkanRenderer> rendererPtr;
-    try {
-        canvasPtr = std::make_unique<Canvas>(
-                Canvas::Parameters().title("VulkanCameraModel_test").size(kW, kH).vsync(false).headless(true));
-        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
-    } catch (const std::exception& e) {
-        std::printf("[skip] Vulkan/RT GPU unavailable: %s\n", e.what());
-        return kSkipCode;
-    }
-    VulkanRenderer& renderer = *rendererPtr;
+    auto gpu = vktest::openHeadlessVulkan("VulkanCameraModel_test", kW, kH);
+    if (!gpu) return kSkipCode;
+    VulkanRenderer& renderer = *gpu.renderer;
     renderer.setRenderScale(1.0f);// intrinsics are reported in RENDER-extent
                                   // pixels; keep that equal to the framebuffer
                                   // so the expected values stay hand-checkable

@@ -41,6 +41,7 @@
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/scenes/Scene.hpp"
 #include "threepp/textures/Texture.hpp"
+#include "vulkan_test_util.hpp"
 
 #include <algorithm>
 #include <array>
@@ -52,12 +53,12 @@
 #include <vector>
 
 using namespace threepp;
+using vktest::kSkipCode;
 
 namespace {
 
     constexpr int kW = 384, kH = 192;
     constexpr int kSettleFrames = 60;
-    constexpr int kSkipCode = 42;
 
     std::shared_ptr<Texture> constantEnv(float le) {
         constexpr int W = 64, H = 32;
@@ -110,18 +111,10 @@ int main() {
 
     std::setvbuf(stdout, nullptr, _IONBF, 0);
 
-    std::unique_ptr<Canvas> canvasPtr;
-    std::unique_ptr<VulkanRenderer> rendererPtr;
-    try {
-        canvasPtr = std::make_unique<Canvas>(
-                Canvas::Parameters().title("VulkanEmissiveCastsLight_test").size(kW, kH).vsync(false).headless(true));
-        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
-    } catch (const std::exception& e) {
-        std::printf("[skip] Vulkan/RT GPU unavailable: %s\n", e.what());
-        return kSkipCode;
-    }
-    Canvas& canvas = *canvasPtr;
-    VulkanRenderer& renderer = *rendererPtr;
+    auto gpu = vktest::openHeadlessVulkan("VulkanEmissiveCastsLight_test", kW, kH);
+    if (!gpu) return kSkipCode;
+    Canvas& canvas = *gpu.canvas;
+    VulkanRenderer& renderer = *gpu.renderer;
 
     renderer.setDenoise(true);
     renderer.setRenderScale(1.0f);

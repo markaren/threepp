@@ -21,6 +21,7 @@
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/scenes/Scene.hpp"
+#include "vulkan_test_util.hpp"
 
 #include <array>
 #include <cstdint>
@@ -31,12 +32,12 @@
 #include <vector>
 
 using namespace threepp;
+using vktest::kSkipCode;
 
 namespace {
 
     constexpr int kW = 384, kH = 256;
     constexpr int kFrames = 30;
-    constexpr int kSkipCode = 42;
 
     constexpr int kCols = 300, kRows = 220;// 66,000 instances
     constexpr float kHalfW = 6.5f, kHalfH = 4.3f;
@@ -59,18 +60,10 @@ namespace {
 
 int main() {
 
-    std::unique_ptr<Canvas> canvasPtr;
-    std::unique_ptr<VulkanRenderer> rendererPtr;
-    try {
-        canvasPtr = std::make_unique<Canvas>(
-                Canvas::Parameters().title("VulkanInstanceIdRange_test").size(kW, kH).vsync(false).headless(true));
-        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
-    } catch (const std::exception& e) {
-        std::printf("[skip] Vulkan/RT GPU unavailable: %s\n", e.what());
-        return kSkipCode;
-    }
-    Canvas& canvas = *canvasPtr;
-    VulkanRenderer& renderer = *rendererPtr;
+    auto gpu = vktest::openHeadlessVulkan("VulkanInstanceIdRange_test", kW, kH);
+    if (!gpu) return kSkipCode;
+    Canvas& canvas = *gpu.canvas;
+    VulkanRenderer& renderer = *gpu.renderer;
 
     renderer.setRenderScale(1.0f);
     renderer.setDlss(false);

@@ -17,6 +17,7 @@
 
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "vulkan_test_util.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -28,12 +29,12 @@
 #include <vector>
 
 using namespace threepp;
+using vktest::kSkipCode;
 
 namespace {
 
     constexpr int kSize = 160;
     constexpr int kFrames = 90;
-    constexpr int kSkipCode = 42;
 
     // Grey 0.2 everywhere, red 4.0 within 25 deg of +X (u = 0.5, v = 0.5 in
     // the renderers' equirect convention: u = 0.5 + atan(z, x) / 2pi).
@@ -109,18 +110,10 @@ namespace {
 }// namespace
 
 int main() {
-    std::unique_ptr<Canvas> canvasPtr;
-    std::unique_ptr<VulkanRenderer> rendererPtr;
-    try {
-        canvasPtr = std::make_unique<Canvas>(
-                Canvas::Parameters().title("VulkanEnvKnobs_test").size(kSize, kSize).vsync(false).headless(true));
-        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
-    } catch (const std::exception& e) {
-        std::printf("[skip] Vulkan/RT GPU unavailable: %s\n", e.what());
-        return kSkipCode;
-    }
-    Canvas& canvas = *canvasPtr;
-    VulkanRenderer& renderer = *rendererPtr;
+    auto gpu = vktest::openHeadlessVulkan("VulkanEnvKnobs_test", kSize, kSize);
+    if (!gpu) return kSkipCode;
+    Canvas& canvas = *gpu.canvas;
+    VulkanRenderer& renderer = *gpu.renderer;
 
     renderer.setRenderScale(1.0f);
     renderer.setDlss(false);

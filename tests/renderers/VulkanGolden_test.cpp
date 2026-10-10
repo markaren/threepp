@@ -31,6 +31,7 @@
 #include "threepp/renderers/VulkanRenderer.hpp"
 
 #include "capture_util.hpp"// examples/libs (shared via target include dir)
+#include "vulkan_test_util.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -43,6 +44,7 @@
 #include <vector>
 
 using namespace threepp;
+using vktest::kSkipCode;
 namespace fs = std::filesystem;
 
 namespace {
@@ -57,7 +59,6 @@ namespace {
                                      // measured run-to-run per-channel floor of ~70 on a few pixels
                                      // (hot% ~0.03), so a tight maxD flakes there. Its aggregate
                                      // PSNR stays ~51 dB and is the real regression signal.
-    constexpr int kSkipCode = 42;    // CTest SKIP_RETURN_CODE (no Vulkan/RT GPU)
 
     // Raw-RGB PPM I/O — what readRGBPixels gives us, byte-exact both ways.
     void writePPM(const fs::path& p, const std::vector<unsigned char>& rgb, int w, int h) {
@@ -97,18 +98,10 @@ int main(int argc, char** argv) {
 
     // Construction throws without a Vulkan/RT GPU (or a display) — treat that as
     // a CTest skip rather than a failure.
-    std::unique_ptr<Canvas> canvasPtr;
-    std::unique_ptr<VulkanRenderer> rendererPtr;
-    try {
-        canvasPtr = std::make_unique<Canvas>(
-                Canvas::Parameters().title("VulkanGolden_test").size(kW, kH).vsync(false).headless(true));
-        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
-    } catch (const std::exception& e) {
-        std::printf("[skip] Vulkan/RT GPU unavailable: %s\n", e.what());
-        return kSkipCode;
-    }
-    Canvas& canvas = *canvasPtr;
-    VulkanRenderer& renderer = *rendererPtr;
+    auto gpu = vktest::openHeadlessVulkan("VulkanGolden_test", kW, kH);
+    if (!gpu) return kSkipCode;
+    Canvas& canvas = *gpu.canvas;
+    VulkanRenderer& renderer = *gpu.renderer;
 
     renderer.setDenoise(true);
     renderer.setRestirDIEnabled(true);
