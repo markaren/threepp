@@ -47,14 +47,6 @@ namespace threepp::water {
         VkImageLayout currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     };
 
-    struct OceanBuffer {
-        VkBuffer        handle  = VK_NULL_HANDLE;
-        VmaAllocation   alloc   = VK_NULL_HANDLE;
-        VkDeviceAddress address = 0;
-        VkDeviceSize    size    = 0;
-        void*           mapped  = nullptr;
-    };
-
     // ─── PhillipsSpectrum ──────────────────────────────────────────────
     class PhillipsSpectrum {
     public:
@@ -210,7 +202,6 @@ namespace threepp::water {
         uint32_t logSize_;
 
         OceanImage twiddle_;
-        OceanBuffer paramsUbo_;     // unused (step index passed via push constant)
         VkSampler   sampler_ = VK_NULL_HANDLE;
 
         VkDescriptorPool      pool_       = VK_NULL_HANDLE;

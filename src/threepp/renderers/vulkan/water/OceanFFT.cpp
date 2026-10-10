@@ -38,34 +38,6 @@ namespace threepp::water {
             }
         }
 
-        OceanBuffer makeUbo(vulkan::VulkanContext& ctx, VkDeviceSize size) {
-            OceanBuffer b{};
-            b.size = size;
-            VkBufferCreateInfo bci{};
-            bci.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-            bci.size        = size;
-            bci.usage       = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
-                              VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-            bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-            VmaAllocationCreateInfo aci{};
-            aci.usage         = VMA_MEMORY_USAGE_AUTO;
-            aci.flags         = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                                VMA_ALLOCATION_CREATE_MAPPED_BIT;
-            VmaAllocationInfo info{};
-            check(vmaCreateBuffer(ctx.allocator(), &bci, &aci, &b.handle, &b.alloc, &info),
-                  "vmaCreateBuffer(ubo)");
-            b.mapped = info.pMappedData;
-            return b;
-        }
-
-        void destroyBuffer(vulkan::VulkanContext& ctx, OceanBuffer& b) {
-            if (b.handle != VK_NULL_HANDLE) {
-                vmaDestroyBuffer(ctx.allocator(), b.handle, b.alloc);
-                b = {};
-            }
-        }
-
         OceanImage makeStorageSampledImage(vulkan::VulkanContext& ctx,
                                            uint32_t w, uint32_t h, VkFormat fmt,
                                            const char* debugName = nullptr) {
@@ -915,7 +887,6 @@ namespace threepp::water {
         if (dslPermute_   != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(ctx_.device(), dslPermute_, nullptr);
         if (pool_ != VK_NULL_HANDLE) vkDestroyDescriptorPool(ctx_.device(), pool_, nullptr);
         if (sampler_ != VK_NULL_HANDLE) vkDestroySampler(ctx_.device(), sampler_, nullptr);
-        destroyBuffer(ctx_, paramsUbo_);
         destroyImage(ctx_, twiddle_);
     }
 
