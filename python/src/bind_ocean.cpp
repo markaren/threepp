@@ -22,9 +22,14 @@
 #include <pybind11/stl.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <string>
+#include <tuple>
+#include <vector>
 
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/extras/marine/VesselWash.hpp"
 #include "threepp/materials/Material.hpp"
 #include "threepp/objects/DisplacedMesh.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -502,6 +507,101 @@ namespace threepp_py {
                      "Set wind speed (m/s) and direction (radians). Live: the renderer "
                      "regenerates the spectra next frame and the sea morphs smoothly into "
                      "the new state.");
+
+        // ---- VesselWash ------------------------------------------------------
+        // What a vessel leaves on the wake field, for a boat that is not a
+        // usv_rig.StripHull (that module's Wash is the same model). Points and
+        // vectors are (x, y, z) in world space.
+        using marine::VesselWash;
+        using Vec3 = std::array<float, 3>;
+        using PropulsorTuple = std::tuple<std::string, Vec3, Vec3, float, bool>;
+        const auto v3 = [](const Vec3& a) { return Vector3(a[0], a[1], a[2]); };
+        py::class_<VesselWash>(m, "VesselWash",
+                               "What a vessel leaves ON the water behind her: one patch of an ocean's wake field "
+                               "(ocean.wake_field, on before the first render) and her sources in it. Her "
+                               "propulsors' races, the lane her hulls drag, and, where the field has ripples, the "
+                               "waves her weight makes. The model of the Norvasundet twin's boats "
+                               "(examples/rigs/usv_rig.py Wash). Clear the ocean's sources once a frame "
+                               "(ocean.clear_wake_sources()), then update() every vessel's wash.")
+                .def(py::init([](DisplacedMesh& ocean, uint32_t patch, float length, float half_length,
+                                 float half_beam, float mass, float centre, float hull_offset,
+                                 const std::vector<std::array<float, 5>>& strips, float size, float ripple_size) {
+                         if (patch >= DisplacedMesh::kMaxWakePatches) throw py::index_error("wake patch index out of range");
+                         VesselWash::Hull h;
+                         h.length     = length;
+                         h.halfLength = half_length;
+                         h.halfBeam   = half_beam;
+                         h.mass       = mass;
+                         h.centre     = centre;
+                         h.hullOffset = hull_offset;
+                         for (const auto& s : strips) h.strips.push_back({s[0], s[1], s[2], s[3], s[4]});
+                         return std::make_unique<VesselWash>(ocean, patch, std::move(h), size, ripple_size);
+                     }),
+                     py::arg("ocean"), py::arg("patch"), py::kw_only(), py::arg("length"), py::arg("half_length"),
+                     py::arg("half_beam"), py::arg("mass"), py::arg("centre") = 0.0f, py::arg("hull_offset") = 0.0f,
+                     py::arg("strips") = std::vector<std::array<float, 5>>{}, py::arg("size") = 0.0f,
+                     py::arg("ripple_size") = 0.0f, py::keep_alive<1, 2>(),
+                     "`patch` is the patch of the ocean's wake field that is hers. length: overall (m). "
+                     "half_length, half_beam, centre: her footprint at the water and how far ahead of her "
+                     "origin its centre lies. hull_offset: a catamaran's hulls lie this far to either side "
+                     "(0 = one hull). mass (kg) is what makes her waves. strips: her weight along her hulls "
+                     "as (x ahead, z to starboard, share, radius, half length); empty = laid out from the "
+                     "footprint. size: her patch's side (0 = 20 lengths, 30..120 m). ripple_size: the window "
+                     "her waves are kept in (0 = 10 lengths, at least 16 m).")
+                .def_readwrite("air", &VesselWash::air, "Scales the air her propulsors take down (1 = as computed).")
+                .def_readwrite("height_mask", &VesselWash::heightMask,
+                               "The ocean cascades a propulsor's depth is read against (default 0b011).")
+                .def_property_readonly("size", &VesselWash::size)
+                .def_property_readonly("ripple_size", &VesselWash::rippleSize)
+                .def("update",
+                     [v3](VesselWash& w, float dt, const Vec3& origin, const Vec3& forward, const Vec3& velocity,
+                          const std::vector<PropulsorTuple>& propulsors) {
+                         std::vector<VesselWash::Propulsor> ps;
+                         ps.reserve(propulsors.size());
+                         for (const auto& [name, at, force, radius, jet] : propulsors) {
+                             ps.push_back({name, v3(at), v3(force), radius, jet});
+                         }
+                         w.update(dt, v3(origin), v3(forward), v3(velocity), ps);
+                     },
+                     py::arg("dt"), py::arg("origin"), py::arg("forward"), py::arg("velocity"),
+                     py::arg("propulsors") = std::vector<PropulsorTuple>{},
+                     "After the vessel has moved: place her patch and add this frame's sources. origin: her "
+                     "origin at the water; forward: her bow's way; velocity: hers over the ground (m/s). "
+                     "propulsors: (name, position of its disc or nozzle, the force it puts on her in N, its "
+                     "radius, is it a jet) for each one at work.")
+                .def("put",
+                     [v3](VesselWash& w, const std::string& name, const Vec3& at, const Vec3& velocity, float radius,
+                          float foam, float aeration, float turbulence, float lane, float push) {
+                         w.put(name, v3(at), v3(velocity), radius, foam, aeration, turbulence, lane, push);
+                     },
+                     py::arg("name"), py::arg("at"), py::arg("velocity"), py::arg("radius"), py::arg("foam") = 0.0f,
+                     py::arg("aeration") = 0.0f, py::arg("turbulence") = 0.0f, py::arg("lane") = 0.0f,
+                     py::arg("push") = 0.0f,
+                     "A source of any other producer of hers (a paddle's blade): after update(), every frame "
+                     "it is at work.")
+                .def("clear", &VesselWash::clear,
+                     "Empty her patch and forget where her producers were (after she is placed elsewhere).")
+                .def_property_readonly(
+                        "report",
+                        [](const VesselWash& w) {
+                            py::dict out;
+                            for (const auto& [name, r] : w.report()) {
+                                py::dict d;
+                                d["thrust"]     = r.thrust;
+                                d["race"]       = r.race;
+                                d["at_surface"] = r.atSurface;
+                                d["run"]        = r.run;
+                                d["froude"]     = r.froude;
+                                d["aeration"]   = r.aeration;
+                                d["foam"]       = r.foam;
+                                out[py::str(name)] = d;
+                            }
+                            return out;
+                        },
+                        "Each propulsor's figures at the last update.")
+                .def_static("race", &VesselWash::race, py::arg("thrust"), py::arg("advance"), py::arg("area"),
+                            py::arg("jet") = false, py::arg("rho") = 1025.0f,
+                            "The speed of a propulsor's race through the water (m/s), from momentum theory.");
     }
 
 }// namespace threepp_py

@@ -930,6 +930,35 @@ def test_ocean_wake_field_knobs_patches_and_sources():
     ocean.clear_wake_sources()
 
 
+def test_vessel_wash_places_her_patch_and_reports_her_races():
+    """tp.VesselWash: the twin's wake model for a boat that is not a usv_rig.StripHull. The numbers of the
+    model are held by the C++ VesselWash_test; this is the binding."""
+    ocean = tp.Ocean(size=500.0)
+    ocean.wake_field.resolution, ocean.wake_field.ripple_resolution = 1024, 512
+    wash = tp.VesselWash(ocean, 1, length=28.0, half_length=14.0, half_beam=4.5, mass=355000.0)
+    assert (wash.size, wash.ripple_size) == pytest.approx((120.0, 120.0))        # 20 and 10 lengths, capped
+    assert tp.VesselWash(ocean, 2, length=2.0, half_length=1.0, half_beam=0.5, mass=60.0,
+                         size=30.0).ripple_size == pytest.approx(20.0)
+    with pytest.raises(IndexError):
+        tp.VesselWash(ocean, tp.DisplacedMesh.MAX_WAKE_PATCHES, length=2.0, half_length=1.0, half_beam=0.5, mass=60.0)
+    patch = ocean.wake_patch(1)
+    assert patch.size == 0.0
+    ocean.clear_wake_sources()
+    fwd, vel = (0.0, 0.0, 1.0), (0.0, 0.0, 6.0)
+    wash.update(1.0 / 60.0, (10.0, 0.0, 20.0), fwd, vel,
+                [("prop", (10.0, -1.9, 8.0), (0.0, 0.0, 60000.0), 1.0, False)])
+    # she sits a length inside her patch's leading edge: its centre lies 0.42 x 120 - 28 m astern
+    assert (patch.center_x, patch.center_z, patch.size) == pytest.approx((10.0, 20.0 - 22.4, 120.0))
+    assert (patch.ripple_center_z, patch.ripple_size) == pytest.approx((20.0 - 36.0, 120.0))
+    r = wash.report["prop"]
+    assert r["thrust"] == pytest.approx(60000.0)
+    assert r["race"] == pytest.approx(tp.VesselWash.race(60000.0, 6.0, math.pi)) == pytest.approx(2.5595, abs=1e-3)
+    assert r["run"] == pytest.approx(3.0, abs=1e-4) and 0.0 < r["aeration"] < 0.2 and r["foam"] == 0.0
+    wash.put("blade", (11.0, 0.0, 19.0), (0.0, 0.0, -0.5), 0.2, aeration=0.3)
+    wash.clear()
+    assert patch.size == 0.0
+
+
 def test_wake_field_marks_the_water_where_it_was_made(vk_renderer):
     """A source of foam whitens the water under it and not the water beside it,
     the mark stays in the world when its patch moves on, a frame at the same
