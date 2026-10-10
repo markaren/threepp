@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -238,6 +239,7 @@ namespace threepp::vulkan {
         // Khronos loader; when an ICD lacks it, fall back to the hidden-window
         // surface where a window system exists (today's headless behaviour),
         // and fail with a direct message where none does (GLFW Null platform).
+        bool hiddenWindowFallback = false;
         if (preferHeadlessSurface) {
 #ifdef GLFW_PLATFORM// 3.4+
             const bool haveWindowSystem = glfwGetPlatform() != GLFW_PLATFORM_NULL;
@@ -249,6 +251,7 @@ namespace threepp::vulkan {
             if (hasInstanceExtension(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME)) {
                 headlessSurface_ = true;
             } else if (haveWindowSystem) {
+                hiddenWindowFallback = true;
                 std::cerr << "[VulkanContext] VK_EXT_headless_surface not available; "
                              "headless canvas falls back to a hidden-window surface.\n";
             } else {
@@ -259,7 +262,8 @@ namespace threepp::vulkan {
             }
         }
 
-        // ── THREEPP_VULKAN_SUPPRESS_PRESENT: opt-in, and it stays opt-in ─────
+        // ── THREEPP_VULKAN_SUPPRESS_PRESENT: on by default for the hidden-window
+        // fallback, opt-in for a real headless surface ──────────────────────
         // A headless canvas displays nothing, so it has nothing to present: its
         // swapchain is only an image ring for the frame loop and the capture
         // paths. Presenting anyway is NOT free. On Windows/NVIDIA,
@@ -292,12 +296,26 @@ namespace threepp::vulkan {
         // groups' samples. So this is a real capability with a real cost, and
         // which it is depends on the caller's GPU tenancy — hence a flag rather
         // than a default either way.
+        //
+        // That held until the exit was measured (2026-10-10). A present to a
+        // window the compositor never shows does not complete; the driver
+        // holds it for a deadline of ~23 s and vkDestroyDevice waits that out
+        // (22-35 s on an RTX 4070 after 20 frames at 640x360 or 4 at
+        // 1280x720; 31 ms with presents suppressed; sleeping 10 s before exit
+        // took 10 s off the wait, so it is a deadline, not work). Every
+        // headless run on Windows/NVIDIA — every capture batch and film —
+        // paid it. So for the hidden-window fallback, where there is provably
+        // nothing to present to, presents are suppressed unless the variable
+        // says "0"; a real headless surface keeps the opt-in, since its
+        // presents complete and the tenancy argument above still applies.
         presentSuppressed_ = false;
-        if (const char* sp = std::getenv("THREEPP_VULKAN_SUPPRESS_PRESENT");
-            sp && *sp == '1' && preferHeadlessSurface) {
-            presentSuppressed_ = true;
-            std::cout << "[VulkanContext] presents suppressed (headless canvas): the frame "
-                         "loop pins one swapchain image per in-flight slot\n";
+        if (preferHeadlessSurface) {
+            const char* sp = std::getenv("THREEPP_VULKAN_SUPPRESS_PRESENT");
+            presentSuppressed_ = (sp && *sp) ? (*sp == '1') : hiddenWindowFallback;
+            if (presentSuppressed_) {
+                std::cout << "[VulkanContext] presents suppressed (headless canvas): the frame "
+                             "loop pins one swapchain image per in-flight slot\n";
+            }
         }
 
         // Validation defaults on in debug builds and off elsewhere, but
@@ -360,12 +378,31 @@ namespace threepp::vulkan {
 
         destroySwapchainResources();
 
+        // THREEPP_VK_EXIT_TIMING=1: the same per-section timing the renderer's
+        // destructor prints, for the device and instance teardown.
+        const bool exitTiming = [] {
+            const char* e = std::getenv("THREEPP_VK_EXIT_TIMING");
+            return e && *e && *e != '0';
+        }();
+        auto last = std::chrono::steady_clock::now();
+        auto mark = [&](const char* what) {
+            if (!exitTiming) return;
+            const auto now = std::chrono::steady_clock::now();
+            std::cout << "[vk-exit] context: " << what << " "
+                      << std::chrono::duration<double, std::milli>(now - last).count()
+                      << " ms" << std::endl;
+            last = now;
+        };
         if (allocator_ != VK_NULL_HANDLE) vmaDestroyAllocator(allocator_);
+        mark("allocator");
         if (pipelineCache_ != VK_NULL_HANDLE) {
             savePipelineCache();
+            mark("pipeline cache save");
             vkDestroyPipelineCache(device_, pipelineCache_, nullptr);
+            mark("pipeline cache destroy");
         }
         if (device_ != VK_NULL_HANDLE) vkDestroyDevice(device_, nullptr);
+        mark("device");
         if (surface_ != VK_NULL_HANDLE) vkDestroySurfaceKHR(instance_, surface_, nullptr);
 
         if (debugMessenger_ != VK_NULL_HANDLE) {

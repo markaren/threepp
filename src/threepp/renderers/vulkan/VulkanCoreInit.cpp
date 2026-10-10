@@ -218,7 +218,29 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
             }
         }
 
+namespace {
+    // THREEPP_VK_EXIT_TIMING=1: one line per section of the renderer's
+    // teardown with the time it took, for finding where a slow exit goes.
+    struct ExitTimer {
+        bool on;
+        std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+        ExitTimer() {
+            const char* e = std::getenv("THREEPP_VK_EXIT_TIMING");
+            on = e && *e && *e != '0';
+        }
+        void mark(const char* what) {
+            if (!on) return;
+            const auto now = std::chrono::steady_clock::now();
+            std::cout << "[vk-exit] renderer: " << what << " "
+                      << std::chrono::duration<double, std::milli>(now - last).count()
+                      << " ms" << std::endl;
+            last = now;
+        }
+    };
+}// namespace
+
 VulkanRenderer::Impl::~Impl() {
+            ExitTimer et;
             // Stop the auto-LOD background worker first — it's pure CPU (no
             // Vulkan handles touched), so this is safe even when ctx is
             // null. Must happen before the blasCache teardown below, which
@@ -234,6 +256,7 @@ VulkanRenderer::Impl::~Impl() {
             }
             lodJobCv_.notify_all();
             if (lodWorker_.joinable()) lodWorker_.join();
+            et.mark("lod worker join");
 
             if (!ctx) return;
             VkDevice d = ctx->device();
@@ -249,11 +272,13 @@ VulkanRenderer::Impl::~Impl() {
                 frameState_ = FrameState::Idle;
             }
             vkDeviceWaitIdle(d);
+            et.mark("device wait idle");
             if (asyncPilot_) destroyAsyncPilotResources();
             // Device idle ⇒ nothing references retired resources. Destroy them
             // now or they leak at device destroy (VUID-vkDestroyDevice-device-
             // 05137 — the class of bug that bit lineGeomCache_ below).
             flushRetireQueue();
+            et.mark("retire queue");
 
             // Secondary views that were never removeView()'d. Their resources
             // (rasterGbuf images, colorTarget, readbackBuf, post chain) are
@@ -300,6 +325,7 @@ VulkanRenderer::Impl::~Impl() {
             // handles here is why teardown must come after the consumer has
             // released its CUDA imports — the documented order.
             destroyFrameInterops();
+            et.mark("views, sync, particles, tlas, interop");
             destroyBuffer(ctx->allocator(), eventLumaBuf_);
             if (eventShadePipeline_)       vkDestroyPipeline(d, eventShadePipeline_, nullptr);
             if (eventShadePipelineLayout_) vkDestroyPipelineLayout(d, eventShadePipelineLayout_, nullptr);
@@ -317,6 +343,7 @@ VulkanRenderer::Impl::~Impl() {
             blasCache.clear();
             destroyBlasCompactionResources();
             destroyLodLandingBatches();
+            et.mark("blas cache");
 
             for (auto& [_, st] : skinnedMeshStates) {
                 // Destroy the GPU-skinning input buffers + scratch first;
@@ -404,7 +431,9 @@ VulkanRenderer::Impl::~Impl() {
             destroyImage2D(ctx->allocator(), d, oceanFoamDummy);
             destroyImage2D(ctx->allocator(), d, foamDetailImage);
             for (auto& img : materialTextures) destroyImage2D(ctx->allocator(), d, img);
+            et.mark("skinned, water, views, ubos, images");
             materialTextures.clear();
+            et.mark("material textures");
             if (textureSampler_) vkDestroySampler(d, textureSampler_, nullptr);
             if (textureSamplerIso_) vkDestroySampler(d, textureSamplerIso_, nullptr);
             if (textureSamplerClamp_) vkDestroySampler(d, textureSamplerClamp_, nullptr);
@@ -437,11 +466,13 @@ VulkanRenderer::Impl::~Impl() {
             // blasCache/state teardown above has already destroyed, so the pool
             // goes down with no live set left in it.
             vertexSanitize_.reset();
+            et.mark("samplers, compute passes");
 
             // Hybrid raster G-buffer cleanup. Resources are lazy-created on
             // first render(); if render() was never called, all handles stay
             // VK_NULL_HANDLE and these calls become no-ops.
             destroyRasterGbufImages();
+            et.mark("raster gbuf images");
             // (rasterCameraUbos / drawInfoBuffers / indirectCmdBuffers are
             //  freed in the per-view loop above, alongside the camera UBOs.)
             if (rasterGbufPipeline)         vkDestroyPipeline(d, rasterGbufPipeline, nullptr);
@@ -519,6 +550,7 @@ VulkanRenderer::Impl::~Impl() {
             if (fieldGlowCompositeLayout_)
                 vkDestroyPipelineLayout(d, fieldGlowCompositeLayout_, nullptr);
             billboardGlow_.reset();
+            et.mark("raster, overlay, particle pipelines");
             if (particleDescSetLayout_)     vkDestroyDescriptorSetLayout(d, particleDescSetLayout_, nullptr);
             for (auto& pool : particleDescPools_) {
                 if (pool) vkDestroyDescriptorPool(d, pool, nullptr);
@@ -556,6 +588,7 @@ VulkanRenderer::Impl::~Impl() {
             }
             lineGeomCache_.clear();
             overlayPass_.reset();// destroy sprite/line pipelines + caches while device is alive
+            et.mark("particle and line caches, overlay pass");
             if (gbufSampler_)           vkDestroySampler(d, gbufSampler_, nullptr);
             destroyBuffer(ctx->allocator(), dummyUvBuffer_);
 
@@ -578,5 +611,6 @@ VulkanRenderer::Impl::~Impl() {
                 vp->bloom_.reset();
                 vp->deferredShade_.reset();
             }
+            et.mark("upscalers, taa, post, bloom, shade");
         }
 }// namespace threepp
