@@ -3103,21 +3103,12 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
                 fpc.hullAddr       = hullAddr;
                 fpc.hullCount      = hullCount;
                 fpc.natFoamScale   = std::clamp(dm.params.foamAmount, 0.0f, 1.0f);
-                // Vessel foam look, each switch ON unless its env var is "0" (the
-                // A/B against the old look): THREEPP_OCEAN_BOW_CLEAR fades new wake
-                // and splat foam out across the stem line (gaussian bow splats used
-                // to paint foam metres ahead of the bow); THREEPP_OCEAN_THIN_WAKE
-                // lowers and narrows the analytic trail so it stops reading as a
-                // solid white carpet; THREEPP_OCEAN_HULL_MARGIN scales the hull
-                // margin with the hull (ocean_cascade.glsl). See foam_world.comp.
+                // THREEPP_OCEAN_HULL_MARGIN scales the hull margin with the hull
+                // (ocean_cascade.glsl), ON unless the env var is "0" (the A/B
+                // against the old fixed margin). See foam_world.comp.
                 static const uint32_t kVesselFoamFlags = [] {
-                    const auto on = [](const char* name) {
-                        const char* e = std::getenv(name);
-                        return !(e && e[0] == '0');
-                    };
-                    return (on("THREEPP_OCEAN_BOW_CLEAR") ? 1u : 0u) |
-                           (on("THREEPP_OCEAN_THIN_WAKE") ? 2u : 0u) |
-                           (on("THREEPP_OCEAN_HULL_MARGIN") ? 4u : 0u);
+                    const char* e = std::getenv("THREEPP_OCEAN_HULL_MARGIN");
+                    return (e && e[0] == '0') ? 0u : 4u;
                 }();
                 fpc.vesselFoamFlags = kVesselFoamFlags;
                 if (timed) gpuTimings_->begin(cb, vulkan::TP_OceanFoam, currentFrame);

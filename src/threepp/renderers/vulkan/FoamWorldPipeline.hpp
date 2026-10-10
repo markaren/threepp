@@ -46,8 +46,7 @@ namespace threepp::vulkan {
             uint32_t        disturbCount;
             float           decay;
             float           natFoamScale;  // scales NATURAL Jacobian whitecaps (wake/splats unaffected)
-            uint32_t        vesselFoamFlags;// bit 0: clear ahead of the stem, bit 1: thin wake trail,
-                                            // bit 2: hull margin scales with the hull
+            uint32_t        vesselFoamFlags;// bit 2: hull margin scales with the hull
             uint32_t        hullCount;     // active vessels (0 = no vessel foam)
             float           _pad0;
         };

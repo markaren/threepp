@@ -84,20 +84,19 @@ layout(push_constant, scalar) uniform Pc {
     uint   disturbCount;
     float  decay;
     float  natFoamScale;    // scales NATURAL Jacobian whitecaps; wake/splats unaffected
-    uint   vesselFoamFlags; // bit 0: clear ahead of the stem, bit 1: thin wake trail,
-                            // bit 2: hull margin scales with the hull (oceanHullMargin)
+    uint   vesselFoamFlags; // bit 2: hull margin scales with the hull (oceanHullMargin)
     uint   hullCount;       // active vessels; 0 = no vessel foam
     float  _pad0;
 } pc;
 
 // The analytic trail's peak deposit, lateral spread (x half-beam) and bow
-// ridge strength. The old 0.95 over 1.5 half-beams sits far above the
-// shading's solid-sheet knee (coverage 0.55 after its x1.3), so every vessel
-// dragged a white carpet two to three beams wide; the thin set leaves the
-// centre solid and lets the edges break into lace.
-const float kTrailPeak[2]   = float[2](0.95, 0.55);
-const float kTrailSpread[2] = float[2](1.5, 1.0);
-const float kRidgePeak[2]   = float[2](0.6, 0.4);
+// ridge strength. A peak of 0.95 over 1.5 half-beams sits far above the
+// shading's solid-sheet knee (coverage 0.55 after its x1.3), and every vessel
+// dragged a white carpet two to three beams wide; these leave the centre
+// solid and let the edges break into lace.
+const float kTrailPeak   = 0.55;
+const float kTrailSpread = 1.0;
+const float kRidgePeak   = 0.4;
 
 // Toroidal world-XZ delta: a − b, wrapped into (−tileSize/2, +tileSize/2].
 // The foam texture covers one cascade-0 tile and REPEAT-samples beyond,
@@ -280,7 +279,6 @@ void main() {
     // are untouched, so a boat backing into its own wash still meets it.
     float wakeFoam  = 0.0;
     float splatKeep = 1.0;
-    const int thin = (pc.vesselFoamFlags & 2u) != 0u ? 1 : 0;
     OceanHullBuf hulls = OceanHullBuf(pc.hullAddr);
     for (uint k = 0u; k < pc.hullCount; ++k) {
         const OceanHull hu = hulls.h[k];
@@ -303,12 +301,12 @@ void main() {
                 const float sDistBehind = -sLZ - hu.halfLength;
                 if (sDistBehind > 0.0) {
                     const float lenDecay   = 30.0;
-                    const float beamSpread = hu.halfBeam * kTrailSpread[thin];
+                    const float beamSpread = hu.halfBeam * kTrailSpread;
                     const float lateral    = exp(-(sLX * sLX) /
                                                  (beamSpread * beamSpread));
                     const float along      = exp(-sDistBehind / lenDecay);
                     vesselFoam = max(vesselFoam,
-                                     sGate * kTrailPeak[thin] * along * lateral * sAgeFade);
+                                     sGate * kTrailPeak * along * lateral * sAgeFade);
                 }
                 // D — bow V-wedge ridge foam, gated by per-sample
                 // hullFade so foam doesn't appear under the boat's
@@ -335,7 +333,7 @@ void main() {
                     const float ridgeFoam = exp(-(dRidge * dRidge) / (0.5 * 0.5));
                     const float alongDec  = exp(-sDistAft / (hu.halfLength * 3.0));
                     vesselFoam = max(vesselFoam,
-                                     sGate * kRidgePeak[thin] * ridgeFoam * alongDec * sAgeFade * sHullFade);
+                                     sGate * kRidgePeak * ridgeFoam * alongDec * sAgeFade * sHullFade);
                 }
             }
         } else {
@@ -350,10 +348,10 @@ void main() {
                 const float distBehind = -lZ - hu.halfLength;
                 if (distBehind > 0.0) {
                     const float lenDecay   = 30.0;
-                    const float beamSpread = hu.halfBeam * kTrailSpread[thin];
+                    const float beamSpread = hu.halfBeam * kTrailSpread;
                     const float lateral    = exp(-(lX * lX) / (beamSpread * beamSpread));
                     const float along      = exp(-distBehind / lenDecay);
-                    vesselFoam = max(vesselFoam, wakeGate * kTrailPeak[thin] * along * lateral);
+                    vesselFoam = max(vesselFoam, wakeGate * kTrailPeak * along * lateral);
                 }
                 const float distAft = hu.halfLength - lZ;
                 if (distAft > 0.0 && distAft < hu.halfLength * 5.0) {
@@ -375,23 +373,22 @@ void main() {
                     const float ridgeFoam = exp(-(dRidge * dRidge) / (0.5 * 0.5));
                     const float alongDec  = exp(-distAft / (hu.halfLength * 3.0));
                     vesselFoam = max(vesselFoam,
-                                     wakeGate * kRidgePeak[thin] * ridgeFoam * alongDec * curHullFade);
+                                     wakeGate * kRidgePeak * ridgeFoam * alongDec * curHullFade);
                 }
             }
         }
 
-        if ((pc.vesselFoamFlags & 1u) != 0u) {
-            const vec2 d = toroidalDelta(worldXZ, vec2(hu.centerX, hu.centerZ),
-                                         pc.foamTileSize);
-            const float lX = hu.cosYaw * d.x - hu.sinYaw * d.y;
-            const float lZ = hu.sinYaw * d.x + hu.cosYaw * d.y;
-            const float ahead = smoothstep(hu.halfLength - 0.3, hu.halfLength + 0.3, lZ);
-            const float band  = 1.0 - smoothstep(hu.halfBeam + 2.0, hu.halfBeam + 4.0, abs(lX));
-            const float near  = 1.0 - smoothstep(hu.halfLength + 6.0, hu.halfLength + 9.0, lZ);
-            const float keep  = 1.0 - ahead * band * near;
-            vesselFoam *= keep;
-            splatKeep  *= keep;
-        }
+        // The fade across the stem line.
+        const vec2 d = toroidalDelta(worldXZ, vec2(hu.centerX, hu.centerZ),
+                                     pc.foamTileSize);
+        const float lX = hu.cosYaw * d.x - hu.sinYaw * d.y;
+        const float lZ = hu.sinYaw * d.x + hu.cosYaw * d.y;
+        const float ahead = smoothstep(hu.halfLength - 0.3, hu.halfLength + 0.3, lZ);
+        const float band  = 1.0 - smoothstep(hu.halfBeam + 2.0, hu.halfBeam + 4.0, abs(lX));
+        const float near  = 1.0 - smoothstep(hu.halfLength + 6.0, hu.halfLength + 9.0, lZ);
+        const float keep  = 1.0 - ahead * band * near;
+        vesselFoam *= keep;
+        splatKeep  *= keep;
         wakeFoam = max(wakeFoam, vesselFoam);
     }
 
