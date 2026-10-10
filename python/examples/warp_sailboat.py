@@ -1531,6 +1531,10 @@ scene.add(moon)
 SEA = 1400.0
 ocean = tp.Ocean(size=SEA, resolution=640, wind_speed=weather["wind"], wind_theta=0.6,
                  choppiness=weather["choppy"], fft_size=1024, fetch=FETCH)
+# What she leaves on the water (tp.VesselWash, below): one patch of the wake
+# field, and the small linear sea her waves are made in. Latched at the first render.
+ocean.wake_field.resolution, ocean.wake_field.patches = 1024, 1
+ocean.wake_field.ripple_resolution = 512
 scene.add(ocean)
 
 # Dark water below the surface so refraction has something to read against.
@@ -2407,7 +2411,6 @@ knob = {
     "fetch": FETCH,            # m of open water upwind; 0 = fully developed sea
     "wave_scale": weather["wave_scale"],
     "choppy": weather["choppy"],
-    "foam": 1.0,
     "fog": weather["fog"],     # sigma_t of the air medium, 1/m
     "fog_h": weather["fog_h"],  # height falloff of the mist, m
     "fog_g": 0.72,             # Henyey-Greenstein: + = forward god rays
@@ -2957,17 +2960,19 @@ hull_excl_on = True
 _wake_accum = 0.0
 _wake_last = None
 
-# She is a displacement yacht, not a planing launch, and fed her true speed the
-# ocean's analytical wake reads as a motor-boat river: the wake shaders gate
-# every effect on a speed ramp and saturate the foam trail above it, with no
-# per-trail amplitude knob. So the one lever from Python is the SPEED the
-# shaders are handed. Compressing her speed into the low end of that ramp
-# keeps the trail broken into streaks and the V-wedge ridges thin and
-# feathered. Nothing here touches the boat: the height sampler ignores the
-# wake, so the hydrostatics read the same sea either way.
-WAKE_SPEED_FLOOR = 0.60      # m/s handed to the wake at bare steerage way
-WAKE_SPEED_GAIN = 0.10       # ... plus this per m/s of her own speed
-WAKE_SPEED_CAP = cli_arg("--wake-cap", 0.98, float)
+# The speed handed to the ocean's analytical wake (its bow bump and its V-wedge's
+# height): floor + gain |u|, capped. That wake gates a tiled foam trail on a
+# speed ramp, smoothstep(0.5, 1.5, speed), so it is held just over the trail's
+# threshold (the Norvasundet twin's figures): the wake's height without that
+# foam. Nothing here touches the boat: the height sampler ignores the wake, so
+# the hydrostatics read the same sea either way.
+WAKE_SPEED_FLOOR, WAKE_SPEED_GAIN, WAKE_SPEED_CAP = 0.56, 0.02, 0.62
+
+# What she leaves ON the water: the lane her hull drags and the waves her weight
+# makes, as sources of the ocean's wake field (the model of the twin's boats;
+# under sail she has no propulsor, so no race). Her weight is laid out from her
+# footprint (she has no sectional areas here).
+wash = tp.VesselWash(ocean, 0, length=LOA, half_length=HULL_HALF_L, half_beam=HULL_HALF_B, mass=MASS)
 
 
 def wake_speed(u):
@@ -2987,8 +2992,12 @@ def _wake_update(dt, cy, sy, pitch, roll):
                half_beam=HULL_HALF_B)
     ws = wake_speed(bs["u"])                 # NOT bs["u"] -- see wake_speed()
     ocean.wake.forward_speed = ws
+    ocean.clear_wake_sources()
     if not hull_excl_on:
+        wash.clear()
         return
+    wash.update(dt, (bs["x"], bs["y"], bs["z"]), (sy, 0.0, cy),
+                (sy * bs["u"] + cy * bs["sway"], 0.0, cy * bs["u"] - sy * bs["sway"]))
     ocean.age_wake(dt, WAKE_MAX_AGE, WAKE_MAX_SAMPLES)
     _wake_accum += dt
     moved = 1e9 if _wake_last is None else math.hypot(bs["x"] - _wake_last[0],
@@ -3006,6 +3015,7 @@ def wake_teleport():
     Kelvin V stretches across the whole sea from where she used to be."""
     global _wake_last, _wake_accum
     ocean.clear_wake()
+    wash.clear()
     _wake_last, _wake_accum = None, 0.0
     boat_state["floating"] = False   # re-seat her on the new patch of sea
 
@@ -3181,22 +3191,6 @@ def step_boat(dt):
     # the excluded patch by the sail heel would lift the sea to the weather deck
     # and drop it clear of the leeward bilge.
     _wake_update(dt, cy, sy, pitch, bs["wave_roll"])
-
-    ocean.clear_foam_disturbances()
-    spd = abs(bs["u"])
-    norm = min(spd / 3.0, 1.0)
-    base = (0.14 + 0.52 * norm) * knob["foam"]
-    if base > 0.02:
-        # The analytical wake's own foam (trail + bow V-wedge ridges) draws the
-        # hull's waterline contact; only the bow crest and the transom
-        # quarter-wave are hand-placed, where the analytic wake is weakest.
-        ocean.add_foam_disturbance(bs["x"] + sy * (LOA * 0.5 + 0.4),
-                                   bs["z"] + cy * (LOA * 0.5 + 0.4),
-                                   1.5, min(base * 1.3, 1.0))
-        if norm > 0.15:
-            lz = -LOA * 0.5 - 1.1
-            ocean.add_foam_disturbance(bs["x"] + sy * lz, bs["z"] + cy * lz,
-                                       2.4, min(0.35 + 0.5 * norm, 1.0))
 
     # The vertex-density warp centre relocates the whole grid in world space,
     # so pointing it at the boat is what makes the ocean effectively endless.
@@ -3598,7 +3592,6 @@ def draw_ui():
     if ch:
         weather["choppy"] = wtarget["choppy"] = knob["choppy"]
         ocean.params.choppiness = knob["choppy"]
-    _, knob["foam"] = tp.imgui.slider_float("wake foam", knob["foam"], 0.0, 2.0)
     tp.imgui.separator()
     ch, knob["fog"] = tp.imgui.slider_float("fog density", knob["fog"], 0.0, 0.016)
     if ch:
