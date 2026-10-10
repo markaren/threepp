@@ -119,6 +119,7 @@ void VulkanRenderer::Impl::addDeformAndTlasPasses(rg::RenderGraph& g) {
                                             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                                     VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT |
                                             VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                            VK_ACCESS_2_SHADER_READ_BIT |
                                             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
                                             VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
                                             VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
@@ -313,7 +314,11 @@ void VulkanRenderer::Impl::recordSkinnedDeforms(VkCommandBuffer cb) {
                 mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
                                    VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
                                    VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                // An AS build reads its vertex input as SHADER_READ at the build
+                // stage (not AS_READ, which is the structure and scratch); without
+                // it sync validation reports the build racing the write.
                 mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                   VK_ACCESS_2_SHADER_READ_BIT |
                                    VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
                                    VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
                 VkDependencyInfo dep{};
@@ -414,7 +419,11 @@ void VulkanRenderer::Impl::recordTetDeforms(VkCommandBuffer cb) {
                 mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
                                    VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
                                    VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                // An AS build reads its vertex input as SHADER_READ at the build
+                // stage (not AS_READ, which is the structure and scratch); without
+                // it sync validation reports the build racing the write.
                 mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                   VK_ACCESS_2_SHADER_READ_BIT |
                                    VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
                                    VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
                 VkDependencyInfo dep{};

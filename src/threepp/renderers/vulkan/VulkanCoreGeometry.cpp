@@ -2404,7 +2404,11 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                                    VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
                                    VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
                                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                // An AS build reads its vertex input as SHADER_READ at the build
+                // stage (not AS_READ, which is the structure and scratch); without
+                // it sync validation reports the build racing the write.
                 mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                   VK_ACCESS_2_SHADER_READ_BIT |
                                    VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
                                    VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
                 VkDependencyInfo dep{};
@@ -3135,7 +3139,12 @@ void VulkanRenderer::Impl::recordDisplacedBlasRebuild(VkCommandBuffer cb, Displa
             VkBufferMemoryBarrier bbs[2]{};
             bbs[0].sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
             bbs[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            bbs[0].dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+            // The build READS these buffers as its vertex input: the spec files
+            // that under SHADER_READ at the AS-build stage (AS_READ covers the
+            // structure and scratch). AS_WRITE here left the read unordered,
+            // which is the read-after-write hazard sync validation reports on
+            // the ocean; the skinned path's publish barrier has it right.
+            bbs[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
             bbs[0].buffer        = st.blas->vertex.handle;
             bbs[0].size          = VK_WHOLE_SIZE;
             bbs[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -3307,7 +3316,11 @@ void VulkanRenderer::Impl::recordGrassDeform(VkCommandBuffer cb, GrassMesh& gm, 
                 mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
                                    VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
                                    VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                // An AS build reads its vertex input as SHADER_READ at the build
+                // stage (not AS_READ, which is the structure and scratch); without
+                // it sync validation reports the build racing the write.
                 mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                   VK_ACCESS_2_SHADER_READ_BIT |
                                    VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
                                    VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
                 VkDependencyInfo dep{};
