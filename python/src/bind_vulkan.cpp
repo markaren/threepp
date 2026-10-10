@@ -85,6 +85,17 @@ namespace {
 #endif
     }
 
+    // Is the interpreter shutting down? CPython made Py_IsFinalizing public in
+    // 3.13; 3.10 to 3.12 export the same function as _Py_IsFinalizing, and the
+    // wheels are built for all five.
+    bool interpreter_finalizing() {
+#if PY_VERSION_HEX >= 0x030D0000
+        return Py_IsFinalizing() != 0;
+#else
+        return _Py_IsFinalizing() != 0;
+#endif
+    }
+
     // IEEE-754 half (binary16) -> float32. The G-buffer normal/motion attachments
     // are R16G16B16A16_SFLOAT; the native AOV readback returns their raw bytes, so
     // we decode the halves host-side (numpy has no lossless half decode we can rely
@@ -655,7 +666,7 @@ namespace {
         // finalization order would do anyway. `del renderer` mid-script still
         // destroys properly.
         ~PyVulkanRenderer() {
-            if (Py_IsFinalizing()) vulkan::setProcessExiting(true);
+            if (interpreter_finalizing()) vulkan::setProcessExiting(true);
         }
 
     private:
