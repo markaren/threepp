@@ -287,6 +287,9 @@ jobs:
   linux-vulkan-lavapipe:
 
     runs-on: ubuntu-24.04
+    # CTest gives VulkanValidation_test 40 minutes and the other test its
+    # default. This is for a run that never gets as far as those.
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v6
@@ -406,6 +409,32 @@ jobs:
       # of this gate — is identical with Basic materials, so the gate runs
       # unlit here and fully lit on real GPUs. Retest against a newer Mesa
       # before assuming this is still needed.
+      #
+      # Memory. lavapipe compiles the deferred shade kernel to machine code on
+      # the CPU, and that is what this job costs. Measured under WSL with this
+      # Mesa (25.2.8, LLVM 20.1.2, 256-bit) on 2026-10-11: either test holds
+      # 5.7 GB once the kernel is compiled and is past 7 GB before its first
+      # frames are done, with the validation layer on or off. What a whole run
+      # needs was not measured: that machine has 7 GB. Two runs here ended with
+      # the gate step killed after 65 and 69 minutes (exit 143, the steps after
+      # it skipped), which is a runner going down under its job and not CTest's
+      # timeout, and the gate has taken anything from 4 to 39 minutes when it
+      # passed. So the step below adds swap, for a run that needs more than the
+      # runner's RAM to end slow and with a verdict, and the report step says
+      # what the run used, as annotations, which are public where the log is
+      # not.
+      - name: Add swap for the shader compiles
+        run: |
+          for f in /mnt/swapfile-gate /swapfile-gate; do
+            if sudo fallocate -l 12G "$f" && sudo chmod 600 "$f" \
+                && sudo mkswap "$f" && sudo swapon "$f"; then
+              break
+            fi
+            sudo rm -f "$f" || true
+          done
+          swapon --show || true
+          free -m
+
       - name: Run the Vulkan runtime gate
         env:
           THREEPP_VULKAN_VALIDATION: '1'
@@ -413,8 +442,37 @@ jobs:
           THREEPP_GATE_UNLIT: '1'
         run: |
           set -euo pipefail
+          # Memory in use and swap in use, in MB, every five seconds.
+          ( while sleep 5; do
+              awk '/^MemTotal/ {t=$2} /^MemAvailable/ {a=$2} /^SwapTotal/ {st=$2} /^SwapFree/ {sf=$2}
+                   END {print int((t - a) / 1024), int((st - sf) / 1024)}' /proc/meminfo >> memory.log
+            done ) &
+          sampler=$!
+          trap 'kill "$sampler" 2>/dev/null || true' EXIT
           xvfb-run -a -s "-screen 0 1280x1024x24" \
             ctest --preset ci-linux-vulkan-lavapipe 2>&1 | tee ctest.log
+
+      # Runs whatever the gate did, short of the runner going down: the machine
+      # the job landed on, the most memory and swap in use while the gate ran,
+      # and each test's time.
+      - name: Report what the gate cost
+        if: always()
+        run: |
+          cpu=$(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //')
+          ram=$(awk '/^MemTotal/ {printf "%.1f", $2 / 1048576}' /proc/meminfo)
+          swap=$(awk '/^SwapTotal/ {printf "%.1f", $2 / 1048576}' /proc/meminfo)
+          device=$(grep -m1 deviceName vulkaninfo.txt 2>/dev/null | sed 's/.*= //' || true)
+          echo "::notice::runner: $(nproc) x ${cpu}, ${ram} GB RAM, ${swap} GB swap, ${device:-no device line}"
+          if [ -f memory.log ]; then
+            used=$(awk '$1 > m {m = $1} END {print m + 0}' memory.log)
+            swapped=$(awk '$2 > m {m = $2} END {print m + 0}' memory.log)
+            echo "::notice::gate memory: at most ${used} MB in use and ${swapped} MB of swap, over $(wc -l < memory.log) samples 5 s apart"
+          fi
+          if [ -f ctest.log ]; then
+            grep -E 'Test +#[0-9]+:' ctest.log | sed -E 's/ +/ /g; s/\.{4,}/ /' | while IFS= read -r line; do
+              echo "::notice::ctest:${line}"
+            done
+          fi
 
       # Reading this job's logs requires being signed in, but annotations are
       # public — so on failure, the verdict itself (which tests failed, the
