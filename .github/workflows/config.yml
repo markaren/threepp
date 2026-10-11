@@ -269,15 +269,16 @@ jobs:
   # and which the layer reports precisely and deterministically. One instance of
   # it shipped in a published wheel as a crash.
   #
-  # ubuntu-24.04 for its newer Mesa. The renderer runs without ray tracing too
-  # (every ray misses; VulkanValidation_nort_test forces that mode with
-  # THREEPP_VULKAN_NO_RT=1), but the RT lane is only real if lavapipe exposes the
-  # RT extensions: without them both tests would run the no-RT mode and the RT
-  # path would go ungated. The probe step below asserts the extensions BEFORE the
-  # tests run, and the post-test check fails the job on any skip; otherwise this
-  # job's most likely failure mode is going green having rendered nothing, which
-  # is exactly the trap the PhysX assertion in the `linux` job above guards
-  # against.
+  # ubuntu-24.04 for its newer Mesa. The job runs the renderer's no-ray-tracing
+  # mode (THREEPP_VULKAN_NO_RT=1: no acceleration structures, the no-ray-query
+  # shader variants, every ray misses), because lavapipe cannot compile the
+  # ray-query shade kernel in a runner's memory: the figures are at the gate
+  # step. So the ray-traced path is NOT gated here. VulkanValidation_test
+  # without the knob is that gate, and it needs a real GPU. The probe step below
+  # asserts the device BEFORE the tests run, and the post-test check fails the
+  # job on any skip; otherwise this job's most likely failure mode is going
+  # green having rendered nothing, which is exactly the trap the PhysX assertion
+  # in the `linux` job above guards against.
   #
   # Under xvfb, not display-free. A headless canvas with no DISPLAY selects GLFW's
   # Null platform and then REQUIRES VK_EXT_headless_surface; with a display it
@@ -367,12 +368,9 @@ jobs:
             echo "::error::vulkaninfo enumerated no Vulkan device at all — the probe environment is broken (ICD manifest, loader, or display), not lavapipe's capabilities. First lines: $(head -c 400 vulkaninfo.txt | tr '\n' ' ')"
             exit 1
           fi
+          # The swapchain is all the no-ray-tracing mode requires of the device.
           missing=""
-          for ext in VK_KHR_ray_tracing_pipeline \
-                     VK_KHR_acceleration_structure \
-                     VK_KHR_deferred_host_operations \
-                     VK_KHR_buffer_device_address \
-                     VK_KHR_swapchain; do
+          for ext in VK_KHR_swapchain; do
             if ! grep -q "$ext" vulkaninfo.txt; then
               missing="$missing $ext"
             fi
@@ -385,7 +383,7 @@ jobs:
             echo "note: VK_EXT_headless_surface absent — the hidden-window fallback carries this job"
           fi
           if [ -n "$missing" ]; then
-            echo "::error::lavapipe ($(grep -m1 driverInfo vulkaninfo.txt | sed 's/.*= //' || echo unknown)) lacks required extension(s):$missing. Without the ray tracing ones the renderer runs its no-RT mode in both tests and the ray-traced path goes ungated. Needs a newer Mesa."
+            echo "::error::lavapipe ($(grep -m1 driverInfo vulkaninfo.txt | sed 's/.*= //' || echo unknown)) lacks required extension(s):$missing, so every Vulkan test would skip itself."
             exit 1
           fi
           echo "lavapipe exposes every extension the renderer requires."
@@ -412,19 +410,29 @@ jobs:
       # unlit here and fully lit on real GPUs. Retest against a newer Mesa
       # before assuming this is still needed.
       #
-      # Memory. lavapipe compiles the deferred shade kernel to machine code on
-      # the CPU, and that is what this job costs. Measured under WSL with this
-      # Mesa (25.2.8, LLVM 20.1.2, 256-bit) on 2026-10-11: either test holds
-      # 5.7 GB once the kernel is compiled and is past 7 GB before its first
-      # frames are done, with the validation layer on or off. What a whole run
-      # needs was not measured: that machine has 7 GB. Two runs here ended with
-      # the gate step killed after 65 and 69 minutes (exit 143, the steps after
-      # it skipped), which is a runner going down under its job and not CTest's
-      # timeout, and the gate has taken anything from 4 to 39 minutes when it
-      # passed. So the step below adds swap, for a run that needs more than the
-      # runner's RAM to end slow and with a verdict, and the report step says
-      # what the run used, as annotations, which are public where the log is
-      # not.
+      # THREEPP_VULKAN_NO_RT: the gate runs the no-ray-tracing mode, because
+      # lavapipe compiles every shader to machine code on the CPU and the
+      # ray-query shade kernel does not fit a runner. Measured 2026-10-11 with
+      # this Mesa (25.2.8, LLVM 20.1.2, 256-bit). On a runner with 15.6 GB the
+      # ray-traced gate had 15.8 GB in use and 2.2 GB in swap and took 18
+      # minutes when it passed; when it did not, the runner went down under it
+      # (exit 143 after 65 and 69 minutes, the steps after it skipped) or the
+      # job ran into its timeout. Under WSL one test holds 5.7 GB once the
+      # kernel is compiled and is past 7 GB before its first frames are done,
+      # validation layer on or off, and the figure follows the renderer: it was
+      # 3.1 GB at the 2026-09-28 release. With the knob, on that machine,
+      # VulkanValidation_test passes its nine phases in 25 s at 0.7 GB and
+      # VulkanCameraModel_test in 25 s at 0.6 GB.
+      #
+      # What the knob costs: nothing that traces is exercised, so acceleration
+      # structure builds, RT AO and probe GI are not validated here. The
+      # ray-traced lane is VulkanValidation_test without the knob, on a real
+      # GPU. The test preset selects VulkanValidation_nort_test, so that the
+      # notices name the mode that ran.
+      #
+      # The swap step and the report step come from the ray-traced gate. They
+      # stay as its tripwire: the notices say what a run used, and annotations
+      # are public where the log is not.
       - name: Add swap for the shader compiles
         run: |
           for f in /mnt/swapfile-gate /swapfile-gate; do
@@ -442,6 +450,7 @@ jobs:
           THREEPP_VULKAN_VALIDATION: '1'
           THREEPP_VULKAN_STRICT_VALIDATION: '1'
           THREEPP_GATE_UNLIT: '1'
+          THREEPP_VULKAN_NO_RT: '1'
         run: |
           set -euo pipefail
           # Memory in use and swap in use, in MB, every five seconds.
