@@ -49,6 +49,64 @@ namespace threepp {
         return Key::UNKNOWN;
     }
 
+    // The inverse of keyFromName: the name a key EVENT reports to scripts (the
+    // Python wheel's Canvas.on_key_pressed & co). Contract: for every key
+    // keyFromName knows, keyFromName(keyName(k)) == k, so the name a callback
+    // receives is one is_key_down accepts. Those keys get keyFromName's canonical
+    // spelling ('A', '7', 'KP7', 'SPACE', 'ESCAPE', 'SHIFT' for LEFT_SHIFT, 'CTRL'
+    // for LEFT_CONTROL); every other key gets its enum identifier ('F1',
+    // 'BACKSPACE', 'PAGE_UP', 'LEFT_ALT', 'UNKNOWN').
+    inline std::string keyName(Key key) {
+
+        const int k = static_cast<int>(key);
+        if (k >= static_cast<int>(Key::A) && k <= static_cast<int>(Key::Z))
+            return std::string(1, static_cast<char>('A' + (k - static_cast<int>(Key::A))));
+        if (k >= static_cast<int>(Key::NUM_0) && k <= static_cast<int>(Key::NUM_9))
+            return std::string(1, static_cast<char>('0' + (k - static_cast<int>(Key::NUM_0))));
+        if (k >= static_cast<int>(Key::KP_0) && k <= static_cast<int>(Key::KP_9))
+            return "KP" + std::to_string(k - static_cast<int>(Key::KP_0));
+        if (k >= static_cast<int>(Key::F1) && k <= static_cast<int>(Key::F25))
+            return "F" + std::to_string(k - static_cast<int>(Key::F1) + 1);
+
+        switch (key) {
+            case Key::SPACE: return "SPACE";
+            case Key::APOSTROPHE: return "APOSTROPHE";
+            case Key::COMMA: return "COMMA";
+            case Key::MINUS: return "MINUS";
+            case Key::PERIOD: return "PERIOD";
+            case Key::SLASH: return "SLASH";
+            case Key::SEMICOLON: return "SEMICOLON";
+            case Key::EQUAL: return "EQUAL";
+            case Key::LEFT_BRACKET: return "LEFT_BRACKET";
+            case Key::BACKSLASH: return "BACKSLASH";
+            case Key::RIGHT_BRACKET: return "RIGHT_BRACKET";
+            case Key::GRAVE_ACCENT: return "GRAVE_ACCENT";
+            case Key::ESCAPE: return "ESCAPE";
+            case Key::ENTER: return "ENTER";
+            case Key::TAB: return "TAB";
+            case Key::BACKSPACE: return "BACKSPACE";
+            case Key::INSERT: return "INSERT";
+            case Key::DEL: return "DEL";
+            case Key::RIGHT: return "RIGHT";
+            case Key::LEFT: return "LEFT";
+            case Key::DOWN: return "DOWN";
+            case Key::UP: return "UP";
+            case Key::PAGE_UP: return "PAGE_UP";
+            case Key::PAGE_DOWN: return "PAGE_DOWN";
+            case Key::HOME: return "HOME";
+            case Key::END: return "END";
+            case Key::CAPS_LOCK: return "CAPS_LOCK";
+            case Key::SCROLL_LOCK: return "SCROLL_LOCK";
+            case Key::NUM_LOCK: return "NUM_LOCK";
+            case Key::PRINT_SCREEN: return "PRINT_SCREEN";
+            case Key::PAUSE: return "PAUSE";
+            case Key::LEFT_SHIFT: return "SHIFT";
+            case Key::LEFT_CONTROL: return "CTRL";
+            case Key::LEFT_ALT: return "LEFT_ALT";
+            default: return "UNKNOWN";
+        }
+    }
+
 }// namespace threepp
 
 #endif//THREEPP_KEYFROMNAME_HPP

@@ -147,3 +147,22 @@ def test_groups_nest():
     count = [0]
     root.traverse(lambda o: count.__setitem__(0, count[0] + 1))
     assert count[0] == 3  # root, child, leaf
+
+
+def test_instanced_mesh_set_matrices():
+    np = pytest.importorskip("numpy")
+    n = 5
+    flat = np.stack([tp.Matrix4().make_translation(i, 0, 0).elements() for i in range(n)])
+    rows = np.stack([np.eye(4) for _ in range(n)])
+    rows[:, 0, 3] = np.arange(n)  # row-major translation column
+
+    for arr in (flat.astype(np.float32), rows):  # (N, 16) float32, (N, 4, 4) float64
+        inst = tp.InstancedMesh(tp.BoxGeometry(), tp.MeshBasicMaterial(), n)
+        inst.set_matrices(arr)
+        got = np.array([inst.get_matrix_at(i).elements() for i in range(n)])
+        assert np.allclose(got, flat)
+
+    with pytest.raises(ValueError):
+        inst.set_matrices(np.zeros((3, 5), np.float32))
+    with pytest.raises(ValueError):
+        inst.set_matrices(flat, offset=1)  # 1 + 5 > 5

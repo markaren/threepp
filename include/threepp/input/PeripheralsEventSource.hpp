@@ -43,6 +43,20 @@ namespace threepp {
 
         bool removeMouseListener(const MouseListener& listener);
 
+        // Owning mouse callbacks, the counterpart of onKeyPressed & co. Positions are
+        // window pixels, origin top-left; the wheel callback gets the scroll offset.
+        // Returns an id for optional removal via removeMouseListener(int).
+        int onMouseDown(std::function<void(int button, Vector2 pos)> callback);
+        int onMouseUp(std::function<void(int button, Vector2 pos)> callback);
+        int onMouseMove(std::function<void(Vector2 pos)> callback);
+        int onMouseWheel(std::function<void(Vector2 delta)> callback);
+        void removeMouseListener(int id);
+
+        // Last cursor position reported over the window (window pixels, origin
+        // top-left); (0, 0) before the cursor first moves over it. Tracked even while
+        // IOCapture suppresses mouse event dispatch.
+        [[nodiscard]] Vector2 mousePosition() const;
+
         void onDrop(std::function<void(std::vector<std::string>)> paths);
 
         virtual ~PeripheralsEventSource() = default;
@@ -76,12 +90,30 @@ namespace threepp {
             std::function<void(KeyEvent)> cb;
         };
 
+        enum class MouseCallbackKind {
+            DOWN,
+            UP,
+            MOVE,
+            WHEEL
+        };
+
+        struct OwnedMouseListener {
+            int id;
+            MouseCallbackKind kind;
+            std::function<void(int, Vector2)> buttonCb;// DOWN / UP
+            std::function<void(Vector2)> vecCb;        // MOVE / WHEEL
+        };
+
+        int addOwnedMouseListener(OwnedMouseListener listener);
+
         IOCapture* ioCapture_ = nullptr;
         std::vector<KeyListener*> keyListeners_;
         std::vector<OwnedKeyListener> ownedKeyListeners_;
-        int nextKeyListenerId_ = 1;
+        int nextListenerId_ = 1;// shared by the owned key and mouse callbacks
         std::unordered_set<Key> keysDown_;// currently-held keys, for isKeyDown()
         std::vector<MouseListener*> mouseListeners_;
+        std::vector<OwnedMouseListener> ownedMouseListeners_;
+        Vector2 mousePosition_;
         std::function<void(std::vector<std::string>)> dropListener_;
     };
 

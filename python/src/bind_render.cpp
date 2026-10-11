@@ -318,7 +318,13 @@ namespace threepp_py {
                     return py::make_tuple(p.first, p.second);
                 })
                 .def("on_window_resize", [](Canvas& c, const std::function<void(int, int)>& cb) {
-                    c.onWindowResize([cb](WindowSize s) { cb(s.width(), s.height()); });
+                    c.onWindowResize([cb](WindowSize s) {
+                        try {
+                            cb(s.width(), s.height());
+                        } catch (py::error_already_set& e) {
+                            e.discard_as_unraisable("Canvas.on_window_resize callback");
+                        }
+                    });
                 }, py::arg("callback"),
                    "Register callback(width, height), called when the window is resized. Use it to "
                    "update the camera aspect (+ update_projection_matrix) and the renderer size.")
@@ -326,6 +332,104 @@ namespace threepp_py {
                      py::arg("key"),
                      "Poll whether a key is currently held — e.g. 'W','A','S','D','SPACE','UP','LEFT'. "
                      "Query per-frame for continuous controls (WASD driving); never sticks.")
+                // ---- input events --------------------------------------------
+                // Callbacks run inside animate/animate_once (GIL held). An exception
+                // raised in one is reported as unraisable and dispatch continues: it
+                // must never unwind through GLFW's C callback stack.
+                .def("on_key_pressed", [](Canvas& c, const std::function<void(std::string, int)>& cb) {
+                    return c.onKeyPressed([cb](KeyEvent e) {
+                        try {
+                            cb(keyName(e.key), e.mods);
+                        } catch (py::error_already_set& err) {
+                            err.discard_as_unraisable("Canvas.on_key_pressed callback");
+                        }
+                    });
+                }, py::arg("callback"),
+                   "Register callback(key, mods), called once when a key goes down. key is the name "
+                   "is_key_down takes ('W', 'SPACE', 'UP', 'KP8', 'SHIFT', 'F1', ...); mods is the "
+                   "modifier bitmask (1 shift, 2 ctrl, 4 alt, 8 super). Returns an id for "
+                   "remove_key_listener.")
+                .def("on_key_released", [](Canvas& c, const std::function<void(std::string, int)>& cb) {
+                    return c.onKeyReleased([cb](KeyEvent e) {
+                        try {
+                            cb(keyName(e.key), e.mods);
+                        } catch (py::error_already_set& err) {
+                            err.discard_as_unraisable("Canvas.on_key_released callback");
+                        }
+                    });
+                }, py::arg("callback"),
+                   "Register callback(key, mods), called when a key is released. Same key names and "
+                   "mods bitmask as on_key_pressed. Returns an id for remove_key_listener.")
+                .def("on_key_repeat", [](Canvas& c, const std::function<void(std::string, int)>& cb) {
+                    return c.onKeyRepeat([cb](KeyEvent e) {
+                        try {
+                            cb(keyName(e.key), e.mods);
+                        } catch (py::error_already_set& err) {
+                            err.discard_as_unraisable("Canvas.on_key_repeat callback");
+                        }
+                    });
+                }, py::arg("callback"),
+                   "Register callback(key, mods), called on the OS key auto-repeat while a key is held. "
+                   "Same key names and mods bitmask as on_key_pressed. Returns an id for "
+                   "remove_key_listener.")
+                .def("remove_key_listener", [](Canvas& c, int id) { c.removeKeyListener(id); }, py::arg("id"),
+                     "Remove a key callback by the id its on_key_* call returned; an unknown id is ignored.")
+                .def("on_mouse_down", [](Canvas& c, const std::function<void(int, float, float)>& cb) {
+                    return c.onMouseDown([cb](int button, Vector2 p) {
+                        try {
+                            cb(button, p.x, p.y);
+                        } catch (py::error_already_set& err) {
+                            err.discard_as_unraisable("Canvas.on_mouse_down callback");
+                        }
+                    });
+                }, py::arg("callback"),
+                   "Register callback(button, x, y), called when a mouse button goes down (0 left, "
+                   "1 right, 2 middle). x, y are window pixels, origin top-left, matching size(); "
+                   "NDC for Raycaster.set_from_camera is nx = 2*x/w - 1, ny = 1 - 2*y/h. Returns an "
+                   "id for remove_mouse_listener.")
+                .def("on_mouse_up", [](Canvas& c, const std::function<void(int, float, float)>& cb) {
+                    return c.onMouseUp([cb](int button, Vector2 p) {
+                        try {
+                            cb(button, p.x, p.y);
+                        } catch (py::error_already_set& err) {
+                            err.discard_as_unraisable("Canvas.on_mouse_up callback");
+                        }
+                    });
+                }, py::arg("callback"),
+                   "Register callback(button, x, y), called when a mouse button is released. Same "
+                   "buttons and window-pixel coordinates as on_mouse_down. Returns an id for "
+                   "remove_mouse_listener.")
+                .def("on_mouse_move", [](Canvas& c, const std::function<void(float, float)>& cb) {
+                    return c.onMouseMove([cb](Vector2 p) {
+                        try {
+                            cb(p.x, p.y);
+                        } catch (py::error_already_set& err) {
+                            err.discard_as_unraisable("Canvas.on_mouse_move callback");
+                        }
+                    });
+                }, py::arg("callback"),
+                   "Register callback(x, y), called when the cursor moves over the window. x, y are "
+                   "window pixels, origin top-left; NDC is nx = 2*x/w - 1, ny = 1 - 2*y/h. Returns "
+                   "an id for remove_mouse_listener.")
+                .def("on_mouse_wheel", [](Canvas& c, const std::function<void(float, float)>& cb) {
+                    return c.onMouseWheel([cb](Vector2 d) {
+                        try {
+                            cb(d.x, d.y);
+                        } catch (py::error_already_set& err) {
+                            err.discard_as_unraisable("Canvas.on_mouse_wheel callback");
+                        }
+                    });
+                }, py::arg("callback"),
+                   "Register callback(dx, dy), called on scroll; dy > 0 scrolls up/away, in wheel "
+                   "notches (fractional on touchpads). Returns an id for remove_mouse_listener.")
+                .def("remove_mouse_listener", [](Canvas& c, int id) { c.removeMouseListener(id); }, py::arg("id"),
+                     "Remove a mouse callback by the id its on_mouse_* call returned; an unknown id is ignored.")
+                .def("mouse_position", [](const Canvas& c) {
+                    const auto p = c.mousePosition();
+                    return py::make_tuple(p.x, p.y);
+                }, "The last cursor position over the window as (x, y) window pixels, origin top-left; "
+                   "(0.0, 0.0) until the cursor first moves over the window. Tracked even while a UI "
+                   "captures the mouse.")
                 .def("is_open", &Canvas::isOpen)
                 .def("close", &Canvas::close);
 

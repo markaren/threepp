@@ -8,7 +8,7 @@ import numpy.typing
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'FBXLoader', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_EGL', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'Ray', 'RayHit', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'SkeletonHelper', 'SoftBody', 'SogLoader', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'StencilFunc', 'StencilOp', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextBox', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VesselWash', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
+__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'FBXLoader', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_EGL', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'Intersection', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'Ray', 'RayHit', 'Raycaster', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'SkeletonHelper', 'SoftBody', 'SogLoader', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'StencilFunc', 'StencilOp', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextBox', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VesselWash', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
 class AmbientLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
@@ -935,9 +935,9 @@ class CameraHelper(LineSegments):
     def update(self) -> None:
         ...
 class Canvas:
-    def __init__(self, title: str = 'threepp', width: typing.SupportsInt | typing.SupportsIndex = -1, height: typing.SupportsInt | typing.SupportsIndex = -1, antialiasing: typing.SupportsInt | typing.SupportsIndex = 4, vsync: bool = True, resizable: bool = True, headless: bool = False, fullscreen: bool = False, position: tuple[typing.SupportsInt | typing.SupportsIndex, typing.SupportsInt | typing.SupportsIndex] | None = None) -> None:
+    def __init__(self, title: str = 'threepp', width: typing.SupportsInt | typing.SupportsIndex = -1, height: typing.SupportsInt | typing.SupportsIndex = -1, antialiasing: typing.SupportsInt | typing.SupportsIndex = 4, vsync: bool = True, resizable: bool = True, headless: bool = False, fullscreen: bool = False, position: tuple[typing.SupportsInt | typing.SupportsIndex, typing.SupportsInt | typing.SupportsIndex] | None = None, fast_exit: bool = False) -> None:
         """
-        A window (or a hidden surface when headless=True). width/height default to half the primary monitor. fullscreen=True gives BORDERLESS windowed fullscreen: an undecorated, non-resizable window covering the primary monitor, which ignores width/height and resizable. It never changes the display mode, so alt-tab behaves like any other window. headless=True wins over it (there is no window to show). position=(x, y) places the window in screen coordinates instead of letting the OS choose (ignored with fullscreen=True; no-op on Wayland).
+        A window (or a hidden surface when headless=True). width/height default to half the primary monitor. fullscreen=True gives BORDERLESS windowed fullscreen: an undecorated, non-resizable window covering the primary monitor, which ignores width/height and resizable. It never changes the display mode, so alt-tab behaves like any other window. headless=True wins over it (there is no window to show). position=(x, y) places the window in screen coordinates instead of letting the OS choose (ignored with fullscreen=True; no-op on Wayland). fast_exit=True makes a VulkanRenderer on this canvas leave its device to process exit even when it is deleted mid-script; a renderer that dies with the interpreter does so anyway.
         """
     def animate(self, callback: collections.abc.Callable[[], None]) -> None:
         """
@@ -957,12 +957,52 @@ class Canvas:
         """
     def is_open(self) -> bool:
         ...
+    def mouse_position(self) -> tuple[float, float]:
+        """
+        The last cursor position over the window as (x, y) window pixels, origin top-left; (0.0, 0.0) until the cursor first moves over the window. Tracked even while a UI captures the mouse.
+        """
+    def on_key_pressed(self, callback: collections.abc.Callable[[str, typing.SupportsInt | typing.SupportsIndex], None]) -> int:
+        """
+        Register callback(key, mods), called once when a key goes down. key is the name is_key_down takes ('W', 'SPACE', 'UP', 'KP8', 'SHIFT', 'F1', ...); mods is the modifier bitmask (1 shift, 2 ctrl, 4 alt, 8 super). Returns an id for remove_key_listener.
+        """
+    def on_key_released(self, callback: collections.abc.Callable[[str, typing.SupportsInt | typing.SupportsIndex], None]) -> int:
+        """
+        Register callback(key, mods), called when a key is released. Same key names and mods bitmask as on_key_pressed. Returns an id for remove_key_listener.
+        """
+    def on_key_repeat(self, callback: collections.abc.Callable[[str, typing.SupportsInt | typing.SupportsIndex], None]) -> int:
+        """
+        Register callback(key, mods), called on the OS key auto-repeat while a key is held. Same key names and mods bitmask as on_key_pressed. Returns an id for remove_key_listener.
+        """
+    def on_mouse_down(self, callback: collections.abc.Callable[[typing.SupportsInt | typing.SupportsIndex, typing.SupportsFloat | typing.SupportsIndex, typing.SupportsFloat | typing.SupportsIndex], None]) -> int:
+        """
+        Register callback(button, x, y), called when a mouse button goes down (0 left, 1 right, 2 middle). x, y are window pixels, origin top-left, matching size(); NDC for Raycaster.set_from_camera is nx = 2*x/w - 1, ny = 1 - 2*y/h. Returns an id for remove_mouse_listener.
+        """
+    def on_mouse_move(self, callback: collections.abc.Callable[[typing.SupportsFloat | typing.SupportsIndex, typing.SupportsFloat | typing.SupportsIndex], None]) -> int:
+        """
+        Register callback(x, y), called when the cursor moves over the window. x, y are window pixels, origin top-left; NDC is nx = 2*x/w - 1, ny = 1 - 2*y/h. Returns an id for remove_mouse_listener.
+        """
+    def on_mouse_up(self, callback: collections.abc.Callable[[typing.SupportsInt | typing.SupportsIndex, typing.SupportsFloat | typing.SupportsIndex, typing.SupportsFloat | typing.SupportsIndex], None]) -> int:
+        """
+        Register callback(button, x, y), called when a mouse button is released. Same buttons and window-pixel coordinates as on_mouse_down. Returns an id for remove_mouse_listener.
+        """
+    def on_mouse_wheel(self, callback: collections.abc.Callable[[typing.SupportsFloat | typing.SupportsIndex, typing.SupportsFloat | typing.SupportsIndex], None]) -> int:
+        """
+        Register callback(dx, dy), called on scroll; dy > 0 scrolls up/away, in wheel notches (fractional on touchpads). Returns an id for remove_mouse_listener.
+        """
     def on_window_resize(self, callback: collections.abc.Callable[[typing.SupportsInt | typing.SupportsIndex, typing.SupportsInt | typing.SupportsIndex], None]) -> None:
         """
         Register callback(width, height), called when the window is resized. Use it to update the camera aspect (+ update_projection_matrix) and the renderer size.
         """
     def position(self) -> tuple[int, int]:
         ...
+    def remove_key_listener(self, id: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Remove a key callback by the id its on_key_* call returned; an unknown id is ignored.
+        """
+    def remove_mouse_listener(self, id: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Remove a mouse callback by the id its on_mouse_* call returned; an unknown id is ignored.
+        """
     def set_position(self, x: typing.SupportsInt | typing.SupportsIndex, y: typing.SupportsInt | typing.SupportsIndex) -> None:
         """
         Move the window's outer top-left corner (title bar included) to (x, y) in screen coordinates — (0, 0) keeps the whole window on screen. No-op on Wayland.
@@ -3829,6 +3869,10 @@ class InstancedMesh(Mesh):
         ...
     def set_count(self, count: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
+    def set_matrices(self, matrices: numpy.ndarray, offset: typing.SupportsInt | typing.SupportsIndex = 0) -> None:
+        """
+        Write N instance matrices in one call: instances offset .. offset+N-1. matrices is a float32/float64 numpy array, shape (N, 16) in Matrix4.elements order (column-major, what get_matrix_at(i).elements() holds) or (N, 4, 4) conventional row-major M[row, col] (transposed on copy). Marks the instance matrix for re-upload, which set_matrix_at does not. Raises ValueError on a bad shape/dtype or offset + N past the instance capacity.
+        """
     def set_matrix_at(self, index: typing.SupportsInt | typing.SupportsIndex, matrix: Matrix4) -> None:
         ...
     @property
@@ -3876,6 +3920,52 @@ class Interpolation:
     @property
     def value(self) -> int:
         ...
+class Intersection:
+    """
+    One ray hit, as returned by Raycaster.intersect_object(s).
+    """
+    def __repr__(self) -> str:
+        ...
+    @property
+    def distance(self) -> float:
+        """
+        Distance from the ray origin to the hit (world units).
+        """
+    @property
+    def distance_to_ray(self) -> float | None:
+        """
+        For Points hits: the point's distance to the ray, else None.
+        """
+    @property
+    def face_index(self) -> int | None:
+        """
+        Triangle index for a mesh hit, else None.
+        """
+    @property
+    def index(self) -> int | None:
+        """
+        Vertex/segment index for a Points or Line hit, else None.
+        """
+    @property
+    def instance_id(self) -> int | None:
+        """
+        Instance index for an InstancedMesh hit, else None.
+        """
+    @property
+    def object(self) -> Object3D:
+        """
+        The intersected object: the same Python object you added to the scene. It must still be alive when this is read.
+        """
+    @property
+    def point(self) -> Vector3:
+        """
+        The hit point in world space.
+        """
+    @property
+    def uv(self) -> Vector2 | None:
+        """
+        Interpolated uv at the hit when the geometry has uvs, else None.
+        """
 class IsoMesh:
     def __init__(self) -> None:
         ...
@@ -7830,6 +7920,84 @@ class RayHit:
         ...
     @property
     def triangle_index(self) -> int:
+        ...
+class Raycaster:
+    """
+    Ray picking (three.js Raycaster). Intersections are sorted nearest first. World matrices are read as they are: after moving objects or the camera, rendering a frame or calling update_matrix_world() on them brings them up to date.
+    """
+    def __init__(self, origin: Vector3 = ..., direction: Vector3 = ..., near: typing.SupportsFloat | typing.SupportsIndex = 0.0, far: typing.SupportsFloat | typing.SupportsIndex = ...) -> None:
+        """
+        A ray from origin along direction (normalized), reporting hits between near and far.
+        """
+    def intersect_object(self, object: typing.Any, recursive: bool = False) -> list[Intersection]:
+        """
+        Hits on object (and its descendants when recursive), nearest first; [] for a miss.
+        """
+    def intersect_objects(self, objects: collections.abc.Sequence, recursive: bool = False) -> list[Intersection]:
+        """
+        Hits on any of objects (and their descendants when recursive), nearest first.
+        """
+    def set(self, origin: Vector3, direction: Vector3) -> None:
+        """
+        Re-aim the ray: origin and a normalized direction.
+        """
+    @typing.overload
+    def set_from_camera(self, coords: Vector2, camera: Camera) -> None:
+        """
+        Aim the ray from the camera through coords in NDC [-1, 1] (x right, y up). From a window pixel (x, y): nx = 2*x/w - 1, ny = 1 - 2*y/h.
+        """
+    @typing.overload
+    def set_from_camera(self, coords: tuple[typing.SupportsFloat | typing.SupportsIndex, typing.SupportsFloat | typing.SupportsIndex], camera: Camera) -> None:
+        """
+        Same, with coords as an (x, y) pair in NDC.
+        """
+    @property
+    def far(self) -> float:
+        """
+        Hits farther than this are ignored.
+        """
+    @far.setter
+    def far(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def layers(self) -> Layers:
+        """
+        Only objects sharing a layer channel with this are tested.
+        """
+    @layers.setter
+    def layers(self, arg0: Layers) -> None:
+        ...
+    @property
+    def line_threshold(self) -> float:
+        """
+        Hit tolerance for Line objects (world units).
+        """
+    @line_threshold.setter
+    def line_threshold(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def near(self) -> float:
+        """
+        Hits closer than this are ignored.
+        """
+    @near.setter
+    def near(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def points_threshold(self) -> float:
+        """
+        Hit tolerance for Points objects (world units).
+        """
+    @points_threshold.setter
+    def points_threshold(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def ray(self) -> Ray:
+        """
+        The ray itself (a live view: edits re-aim the raycaster).
+        """
+    @ray.setter
+    def ray(self, arg0: Ray) -> None:
         ...
 class RectAreaLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0, width: typing.SupportsFloat | typing.SupportsIndex = 1.0, height: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:

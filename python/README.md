@@ -131,6 +131,7 @@ module docstring.
 | --- | --- |
 | [`examples/animation.py`](https://github.com/markaren/threepp/blob/master/python/examples/animation.py) | Keyframe animation driven by an `AnimationMixer`. |
 | [`examples/transform_controls.py`](https://github.com/markaren/threepp/blob/master/python/examples/transform_controls.py) | `TransformControls` — grab the gizmo to translate, rotate or scale a mesh. |
+| [`examples/mouse_picking.py`](https://github.com/markaren/threepp/blob/master/python/examples/mouse_picking.py) | Mouse picking on an `InstancedMesh`: input callbacks, `Raycaster.set_from_camera`, and `set_matrices` from one numpy array per frame. `--headless` writes a still. |
 | [`examples/terrain_demo.py`](https://github.com/markaren/threepp/blob/master/python/examples/terrain_demo.py) | The procedural terrain generator, with its parameters on sliders. |
 | [`examples/tree_demo.py`](https://github.com/markaren/threepp/blob/master/python/examples/tree_demo.py) | The procedural tree generator, likewise. |
 
@@ -265,6 +266,12 @@ writes) the answer. They live in [`examples/probes/`](https://github.com/markare
 - **Rendering**: `Canvas` (window / headless), `GLRenderer`
   (`render`, `set_clear_color`, `read_pixels` → numpy, `save_frame`, shadows,
   `tone_mapping` / `tone_mapping_exposure`), `OrbitControls`, `Clock`.
+- **Input and picking**: `Canvas.is_key_down` polling, `on_key_pressed` /
+  `on_key_released` / `on_key_repeat` and `on_mouse_down` / `on_mouse_up` /
+  `on_mouse_move` / `on_mouse_wheel` callbacks, `mouse_position()`, and a
+  `Raycaster` (`set_from_camera`, `intersect_object(s)` → `Intersection` with
+  `instance_id`). `InstancedMesh.set_matrices` writes an `(N, 4, 4)` or `(N, 16)`
+  numpy array in one call.
 - **HDR image-based lighting**: `RGBELoader().load("env.hdr")` (or
   `EXRLoader` for `.exr`) → an equirect
   `Texture`; assign it to `scene.environment` (IBL on standard/physical

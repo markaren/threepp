@@ -2,8 +2,12 @@
 #include "bindings.hpp"
 
 #include <pybind11/functional.h>
+#include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 #include <pybind11/typing.h>
+
+#include <algorithm>
+#include <string>
 
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/materials/Material.hpp"
@@ -140,6 +144,44 @@ namespace threepp_py {
                 .def_property_readonly("count", &InstancedMesh::count)
                 .def("set_count", &InstancedMesh::setCount, py::arg("count"))
                 .def("set_matrix_at", &InstancedMesh::setMatrixAt, py::arg("index"), py::arg("matrix"))
+                .def("set_matrices", [](InstancedMesh& im, const py::array& matrices, size_t offset) {
+                    const auto dt = matrices.dtype();
+                    if (dt.kind() != 'f' || (dt.itemsize() != 4 && dt.itemsize() != 8)) {
+                        throw py::value_error("set_matrices: matrices must be float32 or float64");
+                    }
+                    const bool flat = matrices.ndim() == 2 && matrices.shape(1) == 16;
+                    const bool square = matrices.ndim() == 3 && matrices.shape(1) == 4 && matrices.shape(2) == 4;
+                    if (!flat && !square) {
+                        throw py::value_error("set_matrices: matrices must have shape (N, 16) or (N, 4, 4)");
+                    }
+                    const auto n = static_cast<size_t>(matrices.shape(0));
+                    auto& dst = im.instanceMatrix()->array();
+                    const size_t capacity = dst.size() / 16;
+                    if (offset + n > capacity) {
+                        throw py::value_error("set_matrices: offset + N = " + std::to_string(offset + n) +
+                                              " exceeds the instance capacity " + std::to_string(capacity));
+                    }
+                    // One contiguous float32 view (a no-op for a C-contiguous float32 input).
+                    const auto src = py::array_t<float, py::array::c_style | py::array::forcecast>::ensure(matrices);
+                    const float* s = src.data();
+                    float* d = dst.data() + offset * 16;
+                    if (flat) {
+                        std::copy_n(s, n * 16, d);
+                    } else {
+                        // M[row, col] row-major -> Matrix4.elements column-major.
+                        for (size_t i = 0; i < n; ++i, s += 16, d += 16) {
+                            for (int r = 0; r < 4; ++r) {
+                                for (int c = 0; c < 4; ++c) d[c * 4 + r] = s[r * 4 + c];
+                            }
+                        }
+                    }
+                    im.instanceMatrix()->needsUpdate();
+                }, py::arg("matrices"), py::arg("offset") = 0,
+                   "Write N instance matrices in one call: instances offset .. offset+N-1. matrices is a "
+                   "float32/float64 numpy array, shape (N, 16) in Matrix4.elements order (column-major, "
+                   "what get_matrix_at(i).elements() holds) or (N, 4, 4) conventional row-major M[row, col] "
+                   "(transposed on copy). Marks the instance matrix for re-upload, which set_matrix_at "
+                   "does not. Raises ValueError on a bad shape/dtype or offset + N past the instance capacity.")
                 .def("get_matrix_at", [](InstancedMesh& im, size_t i) {
                     Matrix4 mtx;
                     im.getMatrixAt(i, mtx);
