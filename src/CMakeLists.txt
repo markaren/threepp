@@ -1317,6 +1317,15 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_shade.comp"
         kDeferredShadeCompSpv
         _deferred_shade_spv_h)
+    # No-ray-query variants (THREEPP_NO_RAY_QUERY, ray_query_stub.glsl): every
+    # ray misses, for a device without VK_KHR_ray_query. DeferredShade picks
+    # the set from VulkanContext::rayQuerySupported().
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_shade.comp"
+        kDeferredShadeNoRtCompSpv
+        _deferred_shade_nort_spv_h
+        VARIANT_SUFFIX nort
+        DEFINES THREEPP_NO_RAY_QUERY)
     # Demodulated-lighting filter + composite stages (formerly the two channels
     # of deferred_denoise.comp; shared pieces in deferred_filter_common.glsl,
     # picked up automatically by compile_vulkan_shader's *.glsl DEPENDS glob):
@@ -1343,6 +1352,12 @@ if (THREEPP_WITH_VULKAN)
         kFroxelInjectCompSpv
         _froxel_inject_spv_h)
     compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/froxel_inject.comp"
+        kFroxelInjectNoRtCompSpv
+        _froxel_inject_nort_spv_h
+        VARIANT_SUFFIX nort
+        DEFINES THREEPP_NO_RAY_QUERY)
+    compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/froxel_integrate.comp"
         kFroxelIntegrateCompSpv
         _froxel_integrate_spv_h)
@@ -1353,6 +1368,12 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle_light.comp"
         kParticleLightCompSpv
         _particle_light_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle_light.comp"
+        kParticleLightNoRtCompSpv
+        _particle_light_nort_spv_h
+        VARIANT_SUFFIX nort
+        DEFINES THREEPP_NO_RAY_QUERY)
     # Half-res volumetric cloud march (deferred): far-field raymarched cloud
     # deck + temporal reprojection. See DeferredShade::recordCloudMarch.
     compile_vulkan_shader(threepp

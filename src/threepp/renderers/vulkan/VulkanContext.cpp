@@ -791,7 +791,17 @@ namespace threepp::vulkan {
         std::vector<VkPhysicalDevice> devs(n);
         vkEnumeratePhysicalDevices(instance_, &n, devs.data());
 
-        // Prefer discrete GPU with required extensions.
+        // THREEPP_VULKAN_NO_RT=1 runs the no-ray-tracing mode on any device, so
+        // that mode can be exercised (and validated) on RT hardware.
+        bool forcedOff = false;
+        if (const char* env = std::getenv("THREEPP_VULKAN_NO_RT"); env && *env && *env != '0') {
+            forcedOff = rayTracingEnabled_;
+            rayTracingEnabled_ = false;
+        }
+
+        // Prefer a discrete GPU, then one with the ray tracing extensions. A
+        // device without them is accepted: the renderer then runs without
+        // acceleration structures and every traced ray misses.
         auto deviceScore = [&](VkPhysicalDevice d) -> int {
             VkPhysicalDeviceProperties props{};
             vkGetPhysicalDeviceProperties(d, &props);
@@ -807,8 +817,7 @@ namespace threepp::vulkan {
                 for (const auto* rt : kRayTracingExtensions) {
                     if (!hasExtension(exts, rt)) { allRT = false; break; }
                 }
-                if (!allRT) return -1;
-                score += 100;
+                if (allRT) score += 100;
             }
             return score;
         };
@@ -822,19 +831,7 @@ namespace threepp::vulkan {
             }
         }
         if (physicalDevice_ == VK_NULL_HANDLE) {
-            if (!rayTracingEnabled_) {
-                throw std::runtime_error("[VulkanContext] no GPU with swapchain support found");
-            }
-            // Name the requirement rather than just the symptom. This renderer
-            // shades through ray query — deferred_shade.comp traces for
-            // shadows, reflections and GI, and probe/froxel/particle passes do
-            // the same — so a device without KHR ray tracing cannot run it at
-            // all. There is no raster fallback to degrade to.
-            std::string msg =
-                    "[VulkanContext] no GPU with ray-tracing extensions found. The Vulkan "
-                    "backend requires VK_KHR_ray_tracing_pipeline, VK_KHR_acceleration_structure, "
-                    "VK_KHR_deferred_host_operations and VK_KHR_buffer_device_address; its shading "
-                    "path traces rays for shadows, reflections and GI and has no raster fallback.";
+            std::string msg = "[VulkanContext] no GPU with swapchain support found";
             msg += "\n[VulkanContext] devices seen:";
             for (auto d : devs) {
                 VkPhysicalDeviceProperties props{};
@@ -842,16 +839,22 @@ namespace threepp::vulkan {
                 msg += "\n  - ";
                 msg += props.deviceName;
             }
-#ifdef __APPLE__
-            msg += "\n[VulkanContext] MoltenVK implements none of the KHR ray-tracing extensions, "
-                   "so the Vulkan backend cannot run on macOS. Use GLRenderer there.";
-#endif
             throw std::runtime_error(msg);
         }
 
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(physicalDevice_, &props);
         std::cerr << "[VulkanContext] picked GPU: " << props.deviceName << "\n";
+
+        if (rayTracingEnabled_) {
+            const auto pickedExts = deviceExtensions(physicalDevice_);
+            for (const auto* rt : kRayTracingExtensions) {
+                if (!hasExtension(pickedExts, rt)) {
+                    rayTracingEnabled_ = false;
+                    break;
+                }
+            }
+        }
 
         if (rayTracingEnabled_) {
             rtPipelineProperties_.sType =
@@ -861,18 +864,14 @@ namespace threepp::vulkan {
             props2.pNext = &rtPipelineProperties_;
             vkGetPhysicalDeviceProperties2(physicalDevice_, &props2);
 
-            // Probe for VK_KHR_ray_query — lets compute shaders trace inline
-            // rays (rayQueryEXT). Every scene shading pass goes through it:
+            // Probe for VK_KHR_ray_query: lets compute shaders trace inline
+            // rays (rayQueryEXT). Every traced effect goes through it:
             // deferred_shade.comp and its GI / reflection / water stages, the
-            // probe and froxel updates, RTAO, particle lighting. It used to be
-            // optional because ReferencePT could take over on a device with
-            // the RT pipeline but no ray query; that path tracer was deleted
-            // in June 2026, so such a device now has no pass that can light a
-            // frame — DeferredShade stays null and rewriteDeferredDescriptors
-            // dereferences it. Refuse here, with the reason. The device is
-            // real: NVIDIA's 575 driver on an H100 (IDUN, 2026-09-08) exposes
-            // all four KHR ray tracing extensions but not ray query. Datacenter
-            // parts have no RT cores.
+            // probe and froxel updates, RTAO, particle lighting. A device with
+            // the RT pipeline but no ray query runs in the no-ray-tracing mode
+            // like a device with no RT at all (one mode, not two). The device
+            // is real: NVIDIA's 575 driver on an H100 (IDUN, 2026-09-08)
+            // exposes all four KHR ray tracing extensions but not ray query.
             const auto pickedExtsRq = deviceExtensions(physicalDevice_);
             if (hasExtension(pickedExtsRq, VK_KHR_RAY_QUERY_EXTENSION_NAME)) {
                 VkPhysicalDeviceRayQueryFeaturesKHR rqFeat{};
@@ -885,15 +884,17 @@ namespace threepp::vulkan {
             }
             std::cerr << "[VulkanContext] ray query (VK_KHR_ray_query): "
                       << (rayQuerySupported_ ? "enabled" : "unavailable") << "\n";
-            if (!rayQuerySupported_) {
-                VkPhysicalDeviceProperties props{};
-                vkGetPhysicalDeviceProperties(physicalDevice_, &props);
-                throw std::runtime_error(
-                        std::string("[VulkanContext] ") + props.deviceName +
-                        " exposes the KHR ray tracing pipeline but not VK_KHR_ray_query. "
-                        "The Vulkan backend shades through inline ray queries and has no "
-                        "other lighting path, so it cannot render on this device.");
-            }
+            if (!rayQuerySupported_) rayTracingEnabled_ = false;
+        }
+        if (forcedOff) {
+            std::cerr << "[VulkanContext] ray tracing: forced off (THREEPP_VULKAN_NO_RT)\n";
+        } else if (!rayTracingEnabled_) {
+            std::cerr << "[VulkanContext] ray tracing: unavailable on " << props.deviceName
+                      << "; shadows, traced GI and reflections are off\n";
+#ifdef __APPLE__
+            std::cerr << "[VulkanContext] MoltenVK implements none of the KHR ray-tracing "
+                         "extensions, so the Vulkan backend runs without them on macOS.\n";
+#endif
         }
 
         // Probe for exportable external memory (the platform handle extension;
@@ -1394,9 +1395,10 @@ namespace threepp::vulkan {
         ci.device = device_;
         ci.instance = instance_;
         ci.vulkanApiVersion = VK_API_VERSION_1_3;
-        if (rayTracingEnabled_) {
-            ci.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
-        }
+        // Unconditional: buffers are created with device-address usage in both
+        // modes (geometry buffer references), and bufferDeviceAddress is core
+        // in Vulkan 1.3.
+        ci.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
         check(vmaCreateAllocator(&ci, &allocator_), "vmaCreateAllocator");
     }
 

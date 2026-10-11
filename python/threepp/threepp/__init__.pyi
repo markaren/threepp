@@ -11076,6 +11076,11 @@ class VulkanRenderer:
     def probe_gi(self, arg1: bool) -> None:
         ...
     @property
+    def ray_tracing(self) -> bool:
+        """
+        True when the device traces rays (ray query + acceleration structures) and THREEPP_VULKAN_NO_RT=1 did not turn them off. False: a raster-only frame where every ray misses (no shadows, sky/env-only GI and reflections, no lidar).
+        """
+    @property
     def render_scale(self) -> float:
         ...
     @render_scale.setter

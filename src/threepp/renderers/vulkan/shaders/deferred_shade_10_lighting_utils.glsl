@@ -574,6 +574,7 @@ bool shadowOccludes(int instIdx, int primId, vec2 bary) {
 // blocked further on anyway. Rays that cross fewer cards (a crown's lit top, a
 // lone branch's shadow) are exact as before. The candidates come in traversal
 // order, not by distance, which a count does not mind.
+#ifndef THREEPP_NO_RAY_QUERY
 float shadowVis(vec3 origin, vec3 dir, float tMax) {
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT,
@@ -610,6 +611,49 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
         gShadowMovingOccluder = true;
     return 0.0;
 }
+#else
+// No ray query: the sun's shadow rays (the directional ones, tMax 1e30) are
+// marched through the depth buffer in screen space instead; every other
+// shadow ray misses, as all rays do in this variant. Sixteen steps over a
+// view-space length that grows with the distance to the eye, an occluder being
+// a depth-buffer surface in front of the ray point by less than a thickness,
+// and the shadow faded out towards the screen edge where the march leaves the
+// frame. It sees only what the camera sees: casters off screen or hidden
+// behind others cast nothing.
+float shadowVis(vec3 origin, vec3 dir, float tMax) {
+    if (tMax < 1e29) return 1.0;
+    const mat4  view  = inverse(cam.viewInverse);
+    const mat4  proj  = inverse(cam.projInverse);
+    const vec3  vo    = (view * vec4(origin, 1.0)).xyz;
+    const vec3  vd    = mat3(view) * dir;
+    const float dist  = max(-vo.z, 0.05);
+    const float len   = clamp(0.35 * dist, 0.5, 25.0);
+    const float thick = 0.5 + 0.1 * dist;
+    const float bias  = 0.01 + 0.002 * dist;
+    const vec2  size  = vec2(float(pc.width), float(pc.height));
+    // Per-pixel, per-frame step offset (interleaved gradient noise): the TAA
+    // turns the 16-step banding into a smooth edge.
+    const vec2  ign   = vec2(gPixelCoord) + 5.588238 * float(pc.frame & 63u);
+    const float jit   = fract(52.9829189 * fract(dot(ign, vec2(0.06711056, 0.00583715))));
+    for (int i = 0; i < 16; ++i) {
+        const vec3 p    = vo + vd * (len * (float(i) + jit) / 16.0);
+        const vec4 clip = proj * vec4(p, 1.0);
+        if (clip.w <= 1e-6) break;
+        const vec2 ndc  = clip.xy / clip.w;
+        const vec2 uv   = vec2((ndc.x - cam.jitter.x) * 0.5 + 0.5, 0.5 - (ndc.y - cam.jitter.y) * 0.5);
+        if (any(lessThan(uv, vec2(0.0))) || any(greaterThanEqual(uv, vec2(1.0)))) break;
+        const float d   = texelFetch(gbufDepthTex, ivec2(uv * size), 0).x;
+        if (d <= 0.0) continue;// sky: nothing there
+        const vec4  sv  = cam.projInverse * vec4(ndc, d, 1.0);
+        const float delta = sv.z / sv.w - p.z;// > 0: the surface there is nearer the eye
+        if (delta > bias && delta < thick) {
+            const vec2 edge = abs(uv * 2.0 - 1.0);
+            return smoothstep(0.85, 1.0, max(edge.x, edge.y));
+        }
+    }
+    return 1.0;
+}
+#endif
 
 // distFalloff (point/spot d^decay): gi_bounce.glsl, included by _30.
 

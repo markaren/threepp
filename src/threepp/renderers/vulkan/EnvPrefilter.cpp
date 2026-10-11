@@ -396,7 +396,7 @@ namespace threepp::vulkan {
             br.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
             vkCmdPipelineBarrier(cb,
                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                 VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                                 ctx_.rtShaderStage(),
                                  0, 0, nullptr, 0, nullptr, 1, &br);
         }
 
@@ -456,7 +456,7 @@ namespace threepp::vulkan {
             const uint32_t finCount = (out.mipLevels > 1) ? 2u : 1u;
             vkCmdPipelineBarrier(cb2,
                                  VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                                 ctx_.rtShaderStage(),
                                  0, 0, nullptr, 0, nullptr, finCount, fin.data());
 
             check(vkEndCommandBuffer(cb2), "end one-shot cb2(prefilter sun)");

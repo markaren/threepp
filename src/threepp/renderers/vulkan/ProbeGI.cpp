@@ -70,8 +70,12 @@ namespace threepp::vulkan {
             gridUboHandles_[f] = gridUbos_[f].handle;
             updateGridUbo(f, false);// valid (disabled) contents before first use
         }
-        createPipeline();
-        createDescriptorPool();
+        // The update traces rays: without ray query there is no pipeline and
+        // no descriptor set, only the buffers the deferred set binds (36/37).
+        if (ctx_.rayQuerySupported()) {
+            createPipeline();
+            createDescriptorPool();
+        }
     }
 
     ProbeGI::~ProbeGI() {
@@ -185,6 +189,7 @@ namespace threepp::vulkan {
     }
 
     void ProbeGI::rewriteDescriptors(const DescriptorWriteInputs& in, int onlyFrame) {
+        if (sets_.empty()) return;// no ray query: no update pass, no set
         for (uint32_t f = 0; f < framesInFlight_; ++f) {
             if (onlyFrame >= 0 && f != static_cast<uint32_t>(onlyFrame)) continue;
             VkDescriptorBufferInfo gridInfo{};
@@ -259,6 +264,7 @@ namespace threepp::vulkan {
     }
 
     void ProbeGI::rewriteEmissive(uint32_t frame, VkBuffer emissiveTriBuf) {
+        if (sets_.empty()) return;
         VkDescriptorBufferInfo info{};
         info.buffer = emissiveTriBuf;
         info.range  = VK_WHOLE_SIZE;

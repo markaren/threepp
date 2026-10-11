@@ -164,16 +164,16 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
             // it must exist after bloom_; its descriptors reference the camera /
             // lights UBOs, the env image, the raster gbuffer and sceneHdr — all
             // created above by this point.
-            // The deferred base traces ray-query shadow rays, so only stand it
-            // up when the device supports VK_KHR_ray_query. Without it,
-            // deferredShade_ stays null if ray query is unavailable.
-            if (ctx->rayQuerySupported()) {
-                view().deferredShade_ = std::make_unique<vulkan::DeferredShade>(*ctx, kFramesInFlight);
-                // Probe grid backs the deferred set's bindings 36/37 (dummy-
-                // free: real buffers from construction, sampling gated by the
-                // grid UBO's enable flag until setProbeGI(true)).
-                probeGI_ = std::make_unique<vulkan::ProbeGI>(*ctx, kFramesInFlight);
-            }
+            // Without ray query it runs its no-ray-query shader variants, where
+            // every traced ray misses.
+            view().deferredShade_ = std::make_unique<vulkan::DeferredShade>(*ctx, kFramesInFlight);
+            // Probe grid backs the deferred set's bindings 36/37 (dummy-
+            // free: real buffers from construction, sampling gated by the
+            // grid UBO's enable flag until setProbeGI(true)). Without ray
+            // query it holds the buffers only: its update traces, so the
+            // probes stay off.
+            probeGI_ = std::make_unique<vulkan::ProbeGI>(*ctx, kFramesInFlight);
+            if (!ctx->rayQuerySupported()) probeGIEnabled_ = false;
             createBlueNoiseImage_();// must run before descriptor writes (binding 27)
             createOceanFineDummy_();// must run before descriptor writes (binding 32)
             createOceanFoamDummy_();// must run before descriptor writes (binding 33)

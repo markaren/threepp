@@ -266,6 +266,10 @@ void VulkanRenderer::Impl::scanLidar(const std::vector<LidarBeam>& beams,
 int VulkanRenderer::Impl::scanLidarBegin(const std::vector<LidarBeam>& beams,
                        const LidarParams& params) {
             if (beams.empty()) return vulkan::LidarScanner::kNoSlot;
+            if (!ctx->rayTracingEnabled()) {
+                throw std::runtime_error("[VulkanRenderer] the lidar sensor needs the ray tracing "
+                                         "pipeline, which this device does not expose");
+            }
 
             // Lazy-construct the LIDAR pipeline. Idempotent; if the user
             // never calls scanLidar, the pipeline + SBT cost is never paid.
@@ -1637,9 +1641,7 @@ void VulkanRenderer::Impl::createSecondaryViewResources(ViewContext& v) {
             v.bloom_->setTransientPool(transientPool_.get(), v.id);
             v.bloom_->createImages(v.renderExt.width, v.renderExt.height);
             v.post_ = std::make_unique<vulkan::PostComposite>(*ctx, cmdPool, kFramesInFlight);
-            if (ctx->rayQuerySupported()) {
-                v.deferredShade_ = std::make_unique<vulkan::DeferredShade>(*ctx, kFramesInFlight);
-            }
+            v.deferredShade_ = std::make_unique<vulkan::DeferredShade>(*ctx, kFramesInFlight);
 
             // Descriptor sets. Per-view objects, so these writes cannot touch
             // anything the primary might have in flight.
