@@ -325,7 +325,7 @@ void VulkanRenderer::Impl::createRasterGbufRenderPass() {
             VkSubpassDependency deps[2]{};
             deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
             deps[0].dstSubpass    = 0;
-            deps[0].srcStageMask  = VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR |
+            deps[0].srcStageMask  = ctx->rtShaderStage() |
                                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
             deps[0].dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                                     VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
@@ -414,7 +414,7 @@ void VulkanRenderer::Impl::createOcclRenderPasses(VkSampleCountFlagBits samples,
                 deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
                 deps[0].dstSubpass    = 0;
                 deps[0].srcStageMask  = (samples == VK_SAMPLE_COUNT_1_BIT
-                                                 ? VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR
+                                                 ? ctx->rtShaderStage()
                                                  : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) |
                                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
                 deps[0].dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |

@@ -448,8 +448,8 @@ void VulkanRenderer::Impl::createOceanFineDummy_() {
                 imb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 imb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 vkCmdPipelineBarrier(cb,
-                        VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-                        VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                        ctx->rtShaderStage(),
+                        ctx->rtShaderStage(),
                         0, 0, nullptr, 0, nullptr, 1, &imb);
                 endAndSubmitOneShot(cb);
             }
@@ -483,8 +483,8 @@ void VulkanRenderer::Impl::createOceanFoamDummy_() {
                 imb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 imb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 vkCmdPipelineBarrier(cb,
-                        VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-                        VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                        ctx->rtShaderStage(),
+                        ctx->rtShaderStage(),
                         0, 0, nullptr, 0, nullptr, 1, &imb);
                 endAndSubmitOneShot(cb);
             }
@@ -1036,7 +1036,7 @@ Image2D VulkanRenderer::Impl::buildSampledImageLevels(VkCommandBuffer cb,
             vkCmdPipelineBarrier(cb,
                                  VK_PIPELINE_STAGE_TRANSFER_BIT,
                                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                                         ctx->rtShaderStage(),
                                  0, 0, nullptr, 0, nullptr, 1, &toRead);
 
             VkImageViewCreateInfo vci{};
@@ -1251,7 +1251,7 @@ Image2D VulkanRenderer::Impl::buildSampledImage2D(VkCommandBuffer cb,
                 vkCmdPipelineBarrier(cb,
                                      VK_PIPELINE_STAGE_TRANSFER_BIT,
                                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                                             VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                                             ctx->rtShaderStage(),
                                      0, 0, nullptr, 0, nullptr, 2, brs);
             } else {
                 VkImageMemoryBarrier toRead = toDst;
@@ -1262,7 +1262,7 @@ Image2D VulkanRenderer::Impl::buildSampledImage2D(VkCommandBuffer cb,
                 vkCmdPipelineBarrier(cb,
                                      VK_PIPELINE_STAGE_TRANSFER_BIT,
                                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                                             VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                                             ctx->rtShaderStage(),
                                      0, 0, nullptr, 0, nullptr, 1, &toRead);
             }
 
@@ -1361,7 +1361,7 @@ Image2D VulkanRenderer::Impl::createStorageImage2D(uint32_t w, uint32_t h, VkFor
             b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
             vkCmdPipelineBarrier(cb,
                                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                                 VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                                 ctx->rtShaderStage(),
                                  0, 0, nullptr, 0, nullptr, 1, &b);
             endAndSubmitOneShot(cb);
 

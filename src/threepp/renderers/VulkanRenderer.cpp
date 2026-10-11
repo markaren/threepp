@@ -209,7 +209,9 @@ namespace threepp {
         // its bent-normal probe+env diffuse indirect. The shade samples rtao
         // (binding 74, sampler2D) and loads rtaoAux (binding 75, readonly
         // image2D) — both come out of the reflected bindings.
-        if (deferredAO_) {
+        // RTAO traces; without ray query it is off and the shade's AO is 1.
+        const bool rtaoOn = deferredAO_ && ctx->rayQuerySupported();
+        if (rtaoOn) {
             auto pass = g.addPass("rtao", [this, f](VkCommandBuffer c) {
                 gpuTimings_->begin(c, TP_Rtao, f);
                 view().deferredShade_->recordRtao(c, f, regionRenderExt_.width, regionRenderExt_.height,
@@ -223,7 +225,7 @@ namespace threepp {
         shadeParams.height             = regionRenderExt_.height;
         shadeParams.envMipCount        = envImage.mipLevels;
         shadeParams.shadows            = true;
-        shadeParams.ao                 = deferredAO_;
+        shadeParams.ao                 = rtaoOn;
         shadeParams.frameCounter       = sampleIndex;
         shadeParams.emissiveCount      = emissiveTriCountThisFrame_;
         shadeParams.emissiveTotalPower = emissiveTotalPowerThisFrame_;
@@ -2250,6 +2252,11 @@ namespace threepp {
     }
 
     void VulkanRenderer::setProbeGI(bool enabled) {
+        if (enabled && !pimpl_->ctx->rayQuerySupported()) {
+            std::cerr << "[VulkanRenderer] setProbeGI(true) ignored: the probe update traces rays, "
+                         "and this device has no ray query\n";
+            return;
+        }
         if (pimpl_->probeGIEnabled_ == enabled) return;
         pimpl_->probeGIEnabled_ = enabled;
         // Force a re-fit + SH clear on (re-)enable so a scene swap while the

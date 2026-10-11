@@ -192,7 +192,12 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             // before the first deferred dispatch. (Don't clear the dirty flag on
             // this early-out: the pending refresh still owes a write once the
             // scene builds — the all-slots rewrite there will satisfy it.)
-            if (!view().deferredShade_ || tlas == VK_NULL_HANDLE) return;
+            // Without ray query there is no TLAS; the material buffer, which
+            // the same scene build creates, says the scene is bound instead.
+            const bool sceneBound = ctx->rayQuerySupported()
+                    ? tlas != VK_NULL_HANDLE
+                    : materialDescsBuffers[0].handle != VK_NULL_HANDLE;
+            if (!view().deferredShade_ || !sceneBound) return;
             // Satisfied slots are no longer dirty.
             if (onlyFrame < 0) deferredDescDirty_.fill(false);
             else               deferredDescDirty_[onlyFrame] = false;

@@ -130,11 +130,40 @@ namespace threepp::vulkan {
         // for what replaces the acquire/present cycle when it is on.
         bool presentSuppressed() const { return presentSuppressed_; }
 
-        // VK_KHR_ray_query — inline ray tracing from any stage (compute). Used
-        // by the raster-first deferred shading pass for hard shadow rays.
-        // Optional; ReferencePT works without it.
+        // VK_KHR_ray_query plus acceleration structures: inline rays from
+        // compute for shadows, GI, reflections, refraction and fog. False on a
+        // device without them (or with THREEPP_VULKAN_NO_RT=1); the renderer
+        // then builds no acceleration structures and shades with the
+        // no-ray-query shader variants, where every ray misses. Always equal
+        // to rayTracingEnabled(): the context runs one mode, not two.
         bool rayQuerySupported() const {
             return rayQuerySupported_;
+        }
+
+        // Pipeline stage and access bits that name ray tracing, for barriers.
+        // A barrier may name them only on a device with ray tracing enabled.
+        // Without it the ray-tracing shader stage becomes the compute stage
+        // (the traced effects run as compute shaders there) and the
+        // acceleration-structure build stage and accesses become none. With ray
+        // tracing they are the plain constants, so the recorded barriers do not
+        // change.
+        VkPipelineStageFlagBits rtShaderStage() const {
+            return rayTracingEnabled_ ? VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR
+                                      : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        }
+        VkPipelineStageFlags2 rtShaderStage2() const {
+            return rayTracingEnabled_ ? VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR
+                                      : VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        }
+        VkPipelineStageFlags2 asBuildStage2() const {
+            return rayTracingEnabled_ ? VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
+                                      : VK_PIPELINE_STAGE_2_NONE;
+        }
+        VkAccessFlags2 asReadAccess2() const {
+            return rayTracingEnabled_ ? VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR : VK_ACCESS_2_NONE;
+        }
+        VkAccessFlags2 asWriteAccess2() const {
+            return rayTracingEnabled_ ? VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR : VK_ACCESS_2_NONE;
         }
 
         // Exportable external memory (VK_KHR_external_memory_win32 / _fd) —

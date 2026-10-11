@@ -171,8 +171,11 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             // TRANSFER_DST_BIT for graduated per-frame dynamic records whose
             // new positions arrive by GPU copy from staging instead of a
             // host memcpy (recordDynamicGeomRefits).
+            // Without ray query there is no BLAS: no build-input usage (it is
+            // invalid without the acceleration-structure extension).
+            const bool rt = ctx->rayQuerySupported();
             const VkBufferUsageFlags geomUsage =
-                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                    (rt ? VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR : 0u) |
                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
@@ -371,6 +374,37 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                 uploadHostVisible(ctx->allocator(), rec->rtIndex, rtIndices->data(), ibBytes);
                 rec->rtIndexCount = static_cast<uint32_t>(rtIndices->size() - rtIndices->size() % 3u);
             }
+            // No ray query: the record is its buffers. The raster draws and the
+            // shaders' buffer fetches need nothing else; as stays null and
+            // address 0, and no instance of it is ever traced.
+            if (!rt) {
+                rec->prevVertex = createBuffer(
+                        ctx->allocator(), ctx->device(), vbBytes,
+                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                                VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                        VMA_MEMORY_USAGE_AUTO);
+                VkCommandBuffer cb = beginOneShot();
+                VkBufferCopy seedCopy{};
+                seedCopy.size = vbBytes;
+                vkCmdCopyBuffer(cb, rec->vertex.handle, rec->prevVertex.handle, 1, &seedCopy);
+                endAndSubmitOneShot(cb, "buildBlasFor");
+                const DrawSpan span = drawSpanOf(
+                        geom, indexed ? static_cast<uint32_t>(idxAttr->count()) : vertexCount);
+                rec->geomVersion    = geomVersionOf(geom);
+                rec->vertexCount    = vertexCount;
+                rec->indexCount     = indexed ? static_cast<uint32_t>(idxAttr->count()) : 0u;
+                rec->vbBytes        = vbBytes;
+                rec->blasBuiltPrims = (span.first + span.elems) / 3u;
+                rec->lastDrawStart  = geom.drawRange.start;
+                rec->lastDrawCount  = geom.drawRange.count;
+                if (worldStaticGeoms_.count(&geom) != 0) rec->interopWorldStatic = true;
+                // No BLAS storage that could be too small for the interop
+                // lineage (enableVertexInterop would otherwise rebuild forever).
+                rec->storageFitsFastBuild = interopTarget;
+                return rec;
+            }
+
             // What the AS is built over: the proxy's triangles, else the
             // geometry's (the draw-range span below only applies to the latter).
             const uint32_t buildPrims = rec->rtIndexCount ? rec->rtIndexCount / 3u : primitiveCount;
@@ -1911,6 +1945,12 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
                 }
             }
 
+            if (!ctx->rayQuerySupported()) {
+                // No BLAS to refit: the uploads above are the whole refresh.
+                for (const size_t k : liveOps) ops[k].rec->geomVersion = geomVersionOf(*ops[k].geom);
+                return;
+            }
+
             // Phase D — refit each BLAS. The build-info structs need to outlive
             // the cmdBuildAccelerationStructures call until the GPU executes
             // them, so we hold them in vectors that live until after the submit-
@@ -2350,14 +2390,14 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                 mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
                 mb.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
                 mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                mb.dstStageMask  = ctx->asBuildStage2() |
                                    VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
-                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                                   ctx->rtShaderStage2() |
                                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                 // An AS build reads its vertex input as SHADER_READ at the build
                 // stage (not AS_READ, which is the structure and scratch); without
                 // it sync validation reports the build racing the write.
-                mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                mb.dstAccessMask = ctx->asReadAccess2() |
                                    VK_ACCESS_2_SHADER_READ_BIT |
                                    VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
                                    VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
@@ -2368,7 +2408,7 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                 vkCmdPipelineBarrier2(cb, &dep);
             }
 
-            if (anyRefit) {
+            if (anyRefit && ctx->rayQuerySupported()) {
                 // Phase 6 — batched BLAS refit, the recorded twin of
                 // refreshGeomBlasBatch's Phase D. The build-info structs are
                 // consumed by the record below and never outlive it, so the
@@ -2593,15 +2633,19 @@ void VulkanRenderer::Impl::refreshMorphedBlas(Mesh& mesh, MorphedMeshState& st) 
             blasBuild.pGeometries = &blasGeom;
             blasBuild.dstAccelerationStructure = st.blas->as;
 
-            VkAccelerationStructureBuildSizesInfoKHR blasSizes{};
-            blasSizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
-            ctx->rt().getAccelerationStructureBuildSizes(
-                    ctx->device(),
-                    VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                    &blasBuild, &primitiveCount, &blasSizes);
+            const bool rt = ctx->rayQuerySupported();
+            Buffer scratch{};
+            if (rt) {
+                VkAccelerationStructureBuildSizesInfoKHR blasSizes{};
+                blasSizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+                ctx->rt().getAccelerationStructureBuildSizes(
+                        ctx->device(),
+                        VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                        &blasBuild, &primitiveCount, &blasSizes);
 
-            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
-            blasBuild.scratchData.deviceAddress = scratch.address;
+                scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
+                blasBuild.scratchData.deviceAddress = scratch.address;
+            }
 
             VkAccelerationStructureBuildRangeInfoKHR range{};
             range.primitiveCount = primitiveCount;
@@ -2623,9 +2667,9 @@ void VulkanRenderer::Impl::refreshMorphedBlas(Mesh& mesh, MorphedMeshState& st) 
                 vkCmdCopyBuffer(cb, st.blas->vertex.handle,
                                 st.blas->prevVertex.handle, 1, &region);
             }
-            ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
+            if (rt) ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
             endAndSubmitOneShot(cb);
-            destroyBuffer(ctx->allocator(), scratch);
+            if (rt) destroyBuffer(ctx->allocator(), scratch);
 
             auto* morphObj = mesh.as<ObjectWithMorphTargetInfluences>();
             if (morphObj) st.prevInfluences = morphObj->morphTargetInfluences();
@@ -3066,6 +3110,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
         }
 
 void VulkanRenderer::Impl::recordDisplacedBlasRebuild(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, bool timed) {
+            if (!ctx->rayQuerySupported()) return;// no BLAS to rebuild
             // Buffer barrier: compute write → AS-build read on the vertex/normal buffers.
             // (Under the async-compute pilot the write was on the graphics queue
             // and S1 is what orders it; the barrier then orders nothing.)
@@ -3246,13 +3291,13 @@ void VulkanRenderer::Impl::recordGrassDeform(VkCommandBuffer cb, GrassMesh& gm, 
                 mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
                 mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                 mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                mb.dstStageMask  = ctx->asBuildStage2() |
                                    VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
-                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                                   ctx->rtShaderStage2();
                 // An AS build reads its vertex input as SHADER_READ at the build
                 // stage (not AS_READ, which is the structure and scratch); without
                 // it sync validation reports the build racing the write.
-                mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                mb.dstAccessMask = ctx->asReadAccess2() |
                                    VK_ACCESS_2_SHADER_READ_BIT |
                                    VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
                                    VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
@@ -3262,6 +3307,8 @@ void VulkanRenderer::Impl::recordGrassDeform(VkCommandBuffer cb, GrassMesh& gm, 
                 dep.pMemoryBarriers    = &mb;
                 vkCmdPipelineBarrier2(cb, &dep);
             }
+
+            if (!ctx->rayQuerySupported()) return;// no BLAS to refit
 
             // Refit the BLAS in place (periodic full rebuild keeps it balanced).
             auto* posAttr = gm.geometry()->getAttribute<float>("position");
@@ -3337,6 +3384,9 @@ void VulkanRenderer::Impl::refreshGrassBlas(GrassMesh& gm, GrassMeshState& st, f
         }
 
 void VulkanRenderer::Impl::buildTlas(const std::vector<VkAccelerationStructureInstanceKHR>& instances) {
+            // No ray query: no TLAS. tlas stays null, which also turns the
+            // per-frame refit (recordTlasRefit) into a no-op.
+            if (!ctx->rayQuerySupported()) return;
             const uint32_t instanceCount = static_cast<uint32_t>(instances.size());
             const VkDeviceSize instBytes = std::max<VkDeviceSize>(
                     instanceCount * sizeof(VkAccelerationStructureInstanceKHR),
@@ -3762,6 +3812,8 @@ VulkanRenderer::Impl::SkinnedMeshState* VulkanRenderer::Impl::ensureSkinnedBlas(
             }
 
             // BLAS rebuild scratch buffer (persistent — sized once, reused).
+            // None without ray query: the deform still runs, no BLAS follows it.
+            if (ctx->rayQuerySupported()) {
             VkAccelerationStructureGeometryTrianglesDataKHR triData{};
             triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
             triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
@@ -3797,6 +3849,7 @@ VulkanRenderer::Impl::SkinnedMeshState* VulkanRenderer::Impl::ensureSkinnedBlas(
             state->blasScratchSize = blasSizes.buildScratchSize;
             state->blasScratch = createAsScratchBuffer(
                     ctx->allocator(), ctx->device(), state->blasScratchSize);
+            }
 
             auto* raw = state.get();
             skinnedMeshStates.emplace(&sm, std::move(state));
@@ -3903,6 +3956,8 @@ VulkanRenderer::Impl::TetMeshState* VulkanRenderer::Impl::ensureTetBlas(Mesh& m)
             }
 
             // Persistent BLAS-rebuild scratch (sized once, reused every frame).
+            // None without ray query: the deform still runs, no BLAS follows it.
+            if (ctx->rayQuerySupported()) {
             VkAccelerationStructureGeometryTrianglesDataKHR triData{};
             triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
             triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
@@ -3938,6 +3993,7 @@ VulkanRenderer::Impl::TetMeshState* VulkanRenderer::Impl::ensureTetBlas(Mesh& m)
             state->blasScratchSize = blasSizes.buildScratchSize;
             state->blasScratch = createAsScratchBuffer(
                     ctx->allocator(), ctx->device(), state->blasScratchSize);
+            }
 
             auto* raw = state.get();
             tetMeshStates.emplace(&m, std::move(state));
@@ -4326,7 +4382,7 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
                     vkCmdPipelineBarrier(cb,
                             VK_PIPELINE_STAGE_TRANSFER_BIT,
                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                                    VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                                    ctx->rtShaderStage(),
                             0, 0, nullptr, 0, nullptr, 1, &imb);
                 }
                 endAndSubmitOneShot(cb);
@@ -4492,6 +4548,9 @@ VulkanRenderer::Impl::GrassMeshState* VulkanRenderer::Impl::ensureGrassState(Gra
 
 bool VulkanRenderer::Impl::enqueueLodJob(const BufferGeometry* geomPtr, unsigned int geomVersion, BufferGeometry& geom,
                            float normalWeight) {
+            // Every level is a BLAS build; without ray query there is no chain
+            // (the record is marked Failed and draws its full geometry).
+            if (!ctx->rayQuerySupported()) return false;
             auto* posAttr = geom.getAttribute<float>("position");
             if (!posAttr) return false;
             LodJob job;

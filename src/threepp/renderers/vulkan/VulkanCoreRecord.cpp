@@ -116,13 +116,13 @@ void VulkanRenderer::Impl::addDeformAndTlasPasses(rg::RenderGraph& g) {
             // after it read it.
             const rg::BufferHandle geom = g.importMemory(kSceneGeometry);
             const rg::Access deform{VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                            ctx->asBuildStage2(),
                                     VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT |
                                             VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
                                             VK_ACCESS_2_SHADER_READ_BIT |
                                             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
-                                            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
-                                            VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                                            ctx->asReadAccess2() |
+                                            ctx->asWriteAccess2(),
                                     VK_IMAGE_LAYOUT_UNDEFINED, true};
 
             // ── Graduated per-frame dynamic plain meshes ───────────────────
@@ -234,6 +234,7 @@ void VulkanRenderer::Impl::addDeformAndTlasPasses(rg::RenderGraph& g) {
             // previous frame's path trace). Its readers — every ray query in a
             // compute shader (shade, rtao, probes, froxels, particle lighting)
             // — declare the TLAS through their descriptor sets.
+            if (!ctx->rayQuerySupported()) pendingTlasRefit_ = false;// no TLAS
             if (pendingTlasRefit_) {
                 // On the compute queue under the async-compute pilot (=1 only).
                 rg::RenderGraph& tg = asyncFrame_ && asyncMoveAs_ ? computeGraph_ : g;
@@ -244,13 +245,13 @@ void VulkanRenderer::Impl::addDeformAndTlasPasses(rg::RenderGraph& g) {
                     pendingTlasRefit_ = false;
                 });
                 pass.use(tg.importMemory(kSceneGeometry),
-                         rg::Access{VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                                    VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR,
+                         rg::Access{ctx->asBuildStage2(),
+                                    ctx->asReadAccess2(),
                                     VK_IMAGE_LAYOUT_UNDEFINED, false});
                 pass.use(tg.importBuffer("tlas", tlasBuffer.handle),
-                         rg::Access{VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                                    VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
-                                            VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                         rg::Access{ctx->asBuildStage2(),
+                                    ctx->asReadAccess2() |
+                                            ctx->asWriteAccess2(),
                                     VK_IMAGE_LAYOUT_UNDEFINED, true});
             }
 }
@@ -286,7 +287,7 @@ void VulkanRenderer::Impl::recordSkinnedDeforms(VkCommandBuffer cb) {
                 mb.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
                 mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
                 mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                                   ctx->rtShaderStage2();
                 mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
                                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
                 VkDependencyInfo dep{};
@@ -311,13 +312,13 @@ void VulkanRenderer::Impl::recordSkinnedDeforms(VkCommandBuffer cb) {
                 mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
                 mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                 mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                mb.dstStageMask  = ctx->asBuildStage2() |
                                    VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
-                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                                   ctx->rtShaderStage2();
                 // An AS build reads its vertex input as SHADER_READ at the build
                 // stage (not AS_READ, which is the structure and scratch); without
                 // it sync validation reports the build racing the write.
-                mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                mb.dstAccessMask = ctx->asReadAccess2() |
                                    VK_ACCESS_2_SHADER_READ_BIT |
                                    VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
                                    VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
@@ -373,7 +374,7 @@ void VulkanRenderer::Impl::recordSkinnedDeforms(VkCommandBuffer cb) {
                 VkAccelerationStructureBuildRangeInfoKHR range{};
                 range.primitiveCount = st->primitiveCount;
                 const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
-                ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
+                if (ctx->rayQuerySupported()) ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
             }
 
             pendingSkinnedRebuilds_.clear();
@@ -396,7 +397,7 @@ void VulkanRenderer::Impl::recordTetDeforms(VkCommandBuffer cb) {
                 mb.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
                 mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
                 mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                                   ctx->rtShaderStage2();
                 mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
                                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
                 VkDependencyInfo dep{};
@@ -416,13 +417,13 @@ void VulkanRenderer::Impl::recordTetDeforms(VkCommandBuffer cb) {
                 mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
                 mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                 mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                mb.dstStageMask  = ctx->asBuildStage2() |
                                    VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
-                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                                   ctx->rtShaderStage2();
                 // An AS build reads its vertex input as SHADER_READ at the build
                 // stage (not AS_READ, which is the structure and scratch); without
                 // it sync validation reports the build racing the write.
-                mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                mb.dstAccessMask = ctx->asReadAccess2() |
                                    VK_ACCESS_2_SHADER_READ_BIT |
                                    VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
                                    VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
@@ -471,7 +472,7 @@ void VulkanRenderer::Impl::recordTetDeforms(VkCommandBuffer cb) {
                 VkAccelerationStructureBuildRangeInfoKHR range{};
                 range.primitiveCount = st->primitiveCount;
                 const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
-                ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
+                if (ctx->rayQuerySupported()) ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
             }
 
             pendingTetRebuilds_.clear();
@@ -583,7 +584,7 @@ void VulkanRenderer::Impl::recordGbufferMsaaResolve(VkCommandBuffer cb) {
                         toGeneral[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
                         toGeneral[i].srcStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
                                                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                                     VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                                                     ctx->rtShaderStage2();
                         toGeneral[i].srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
                         toGeneral[i].dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                         toGeneral[i].dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
@@ -625,7 +626,7 @@ void VulkanRenderer::Impl::recordGbufferMsaaResolve(VkCommandBuffer cb) {
                         toRead[i].srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
                         toRead[i].dstStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
                                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                                  VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                                                  ctx->rtShaderStage2();
                         toRead[i].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
                         toRead[i].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
                         toRead[i].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -650,7 +651,7 @@ void VulkanRenderer::Impl::recordGbufferMsaaResolve(VkCommandBuffer cb) {
                 toDepthAtt.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
                 toDepthAtt.srcStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
                                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                           VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                                           ctx->rtShaderStage2();
                 toDepthAtt.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
                 toDepthAtt.dstStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
                                            VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
@@ -684,7 +685,7 @@ void VulkanRenderer::Impl::recordGbufferMsaaResolve(VkCommandBuffer cb) {
                 toRead.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
                 toRead.dstStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
                                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                                       ctx->rtShaderStage2() |
                                        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
                 toRead.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT |
                                        VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
