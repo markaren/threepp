@@ -1,8 +1,9 @@
 
 #include <memory>
+#include <unordered_map>
 #include <utility>
 
-#include "threepp/cameras/PerspectiveCamera.hpp"
+#include "threepp/cameras/Camera.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Reflector.hpp"
@@ -116,29 +117,34 @@ struct Reflector::Impl {
             target.subVectors(reflectorWorldPosition, lookAtPosition);
             target.reflect(normal).negate();
             target.add(reflectorWorldPosition);
-            virtualCamera.position.copy(view);
-            virtualCamera.up.set(0, 1, 0);
-            virtualCamera.up.applyMatrix4(rotationMatrix);
-            virtualCamera.up.reflect(normal);
-            virtualCamera.lookAt(target);
-            virtualCamera.farPlane = camera->farPlane;// Used in WebGLBackground
+            auto& reflectionCamera = this->reflectionCamera(*camera);
+            reflectionCamera.position.copy(view);
+            reflectionCamera.up.set(0, 1, 0);
+            reflectionCamera.up.applyMatrix4(rotationMatrix);
+            reflectionCamera.up.reflect(normal);
+            reflectionCamera.lookAt(target);
+            reflectionCamera.farPlane = camera->farPlane;// Used in WebGLBackground
 
-            virtualCamera.updateMatrixWorld();
-            virtualCamera.projectionMatrix.copy(camera->projectionMatrix);// Update the texture matrix
+            reflectionCamera.updateMatrixWorld();
+            reflectionCamera.projectionMatrix.copy(camera->projectionMatrix);
+            // The reflection is mirrored horizontally, so the view offset must be mirrored as well.
+            reflectionCamera.projectionMatrix.elements[8] *= -1;
+            reflectionCamera.projectionMatrix.elements[12] *= -1;
 
+            // Update the texture matrix
             textureMatrix.set(0.5f, 0.f, 0.f, 0.5f,
                               0.f, 0.5f, 0.f, 0.5f,
                               0.f, 0.f, 0.5f, 0.5f,
                               0.f, 0.f, 0.f, 1.f);
-            textureMatrix.multiply(virtualCamera.projectionMatrix);
-            textureMatrix.multiply(virtualCamera.matrixWorldInverse);
+            textureMatrix.multiply(reflectionCamera.projectionMatrix);
+            textureMatrix.multiply(reflectionCamera.matrixWorldInverse);
             textureMatrix.multiply(*reflector_.matrixWorld);// Now update projection matrix with new clip plane, implementing code from: http://www.terathon.com/code/oblique.html
             // Paper explaining this technique: http://www.terathon.com/lengyel/Lengyel-Oblique.pdf
 
             reflectorPlane.setFromNormalAndCoplanarPoint(normal, reflectorWorldPosition);
-            reflectorPlane.applyMatrix4(virtualCamera.matrixWorldInverse);
+            reflectorPlane.applyMatrix4(reflectionCamera.matrixWorldInverse);
             clipPlane.set(reflectorPlane.normal.x, reflectorPlane.normal.y, reflectorPlane.normal.z, reflectorPlane.constant);
-            auto& projectionMatrix = virtualCamera.projectionMatrix;
+            auto& projectionMatrix = reflectionCamera.projectionMatrix;
             q.x = (static_cast<float>(math::sgn(clipPlane.x)) + projectionMatrix.elements[8]) / projectionMatrix.elements[0];
             q.y = (static_cast<float>(math::sgn(clipPlane.y)) + projectionMatrix.elements[9]) / projectionMatrix.elements[5];
             q.z = -1.f;
@@ -175,7 +181,7 @@ struct Reflector::Impl {
             _renderer->setDepthMask(true);// make sure the depth buffer is writable so it can be properly cleared, see #18897
 
             if (!_renderer->autoClear) _renderer->clear();
-            _renderer->render(*scene, virtualCamera);
+            _renderer->render(*scene, reflectionCamera);
             _renderer->shadowMapAutoUpdate = currentShadowAutoUpdate;
             _renderer->setRenderTarget(currentRenderTarget);// Restore viewport
 
@@ -186,6 +192,19 @@ struct Reflector::Impl {
     }
 
     ~Impl() = default;
+
+    // One reflection camera per viewing camera, cloned from it on first sight,
+    // like three.js' WeakMap. Keyed by the camera's id, which no other Object3D
+    // ever gets, so a camera that dies and a new one at its address are kept
+    // apart; the dead camera's clone lingers, which is a camera's worth of bytes.
+    Camera& reflectionCamera(Camera& camera) {
+
+        auto& slot = reflectionCameras[camera.id];
+        if (!slot) {
+            slot = camera.clone<Camera>(false);
+        }
+        return *slot;
+    }
 
 private:
     Reflector& reflector_;
@@ -204,13 +223,18 @@ private:
     Vector4 q;
     Matrix4 textureMatrix;
 
-    PerspectiveCamera virtualCamera;
+    std::unordered_map<unsigned int, std::shared_ptr<Camera>> reflectionCameras;
     std::unique_ptr<RenderTarget> renderTarget;
 };
 
 Reflector::Reflector(const std::shared_ptr<BufferGeometry>& geometry, Reflector::Options options)
     : Mesh(geometry, nullptr), pimpl_(std::make_unique<Impl>(*this, std::move(options))) {}
 
+
+Camera& Reflector::getReflectionCamera(Camera& camera) {
+
+    return pimpl_->reflectionCamera(camera);
+}
 
 const std::string& threepp::Reflector::type() const {
 
