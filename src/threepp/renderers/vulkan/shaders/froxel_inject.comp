@@ -1,6 +1,8 @@
 #version 460
 #extension GL_EXT_scalar_block_layout : require
+#ifndef THREEPP_NO_RAY_QUERY
 #extension GL_EXT_ray_query : require
+#endif
 #extension GL_GOOGLE_include_directive : enable
 
 #include "vulkan_shared.h"// ShadePush
@@ -36,7 +38,11 @@ layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 
 #include "lights_ubo.glsl"
 
+#ifndef THREEPP_NO_RAY_QUERY
 layout(set = 0, binding = 8) uniform accelerationStructureEXT topAS;
+#else
+#include "ray_query_stub.glsl"
+#endif
 
 layout(set = 0, binding = 33, scalar) uniform FogUbo {
     vec3  sigmaT;

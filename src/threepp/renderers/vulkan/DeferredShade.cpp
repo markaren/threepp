@@ -17,6 +17,10 @@
 #include "threepp/renderers/vulkan/shaders/cloud_shadow.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/particle_light.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/rtao.comp.spv.h"
+// No-ray-query variants (ray_query_stub.glsl): every ray misses.
+#include "threepp/renderers/vulkan/shaders/deferred_shade.comp.nort.spv.h"
+#include "threepp/renderers/vulkan/shaders/froxel_inject.comp.nort.spv.h"
+#include "threepp/renderers/vulkan/shaders/particle_light.comp.nort.spv.h"
 
 #include <algorithm>
 #include <array>
@@ -108,6 +112,11 @@ namespace threepp::vulkan {
         lci.minFilter  = VK_FILTER_LINEAR;
         check(vkCreateSampler(d, &lci, nullptr, &lutSampler_), "vkCreateSampler(froxel LUT)");
 
+        // Without ray query the shade, froxel inject and particle lighting run
+        // their no-ray-query variants, RTAO does not exist, and the set has no
+        // TLAS binding (8).
+        const bool rt = ctx_.rayQuerySupported();
+
         std::array<VkDescriptorSetLayoutBinding, kDeferredBindingCount> b{};
         // Dense cursor: array index and binding number diverge past the
         // retired 56 slot (55 is live — the prev-ids history; binding numbers
@@ -130,7 +139,7 @@ namespace threepp::vulkan {
         set(5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);  // gbuf ids
         set(6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);  // gbuf albedo+metal
         set(7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);           // out sceneHdr
-        set(8, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);// TLAS (shadow + reflection rays)
+        if (rt) set(8, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);// TLAS (shadow + reflection rays)
         set(9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);          // MaterialDesc[] (emissive + reflected material)
         set(10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // GeometryDesc[] (reflection-hit normals/UVs)
         set(11, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // bindless material textures...
@@ -253,7 +262,7 @@ namespace threepp::vulkan {
         // kDeferredBindingCount, and rewriteDescriptors must gain the matching
         // write. Under-filling would leave a zero-initialised (invalid) binding
         // in the layout, so this is checked in both directions.
-        if (nb != b.size()) {
+        if (nb != (rt ? b.size() : b.size() - 1)) {
             throw std::runtime_error("[VulkanRenderer] deferred shade binding table "
                                      "does not match kDeferredBindingCount");
         }
@@ -294,6 +303,17 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(d, &plci, nullptr, &pipeLayout_),
               "vkCreatePipelineLayout(deferred)");
 
+        // The three traced stages' SPIR-V: the ray-query blobs, or their
+        // no-ray-query variants.
+        struct Spv {
+            const uint32_t* words;
+            size_t count;
+        };
+        const auto spv = [](const auto& blob) { return Spv{blob, std::size(blob)}; };
+        const Spv shadeSpv    = rt ? spv(kDeferredShadeCompSpv) : spv(kDeferredShadeNoRtCompSpv);
+        const Spv froxelSpv   = rt ? spv(kFroxelInjectCompSpv) : spv(kFroxelInjectNoRtCompSpv);
+        const Spv particleSpv = rt ? spv(kParticleLightCompSpv) : spv(kParticleLightNoRtCompSpv);
+
         VkShaderModuleCreateInfo smci{};
         smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
         // Render-graph declarations (see declare): one reflection per Stage.
@@ -312,19 +332,19 @@ namespace threepp::vulkan {
                 }
                 return a;
             };
-            refl_[static_cast<int>(Stage::Shade)]           = reflectSpirvBindings(kDeferredShadeCompSpv);
+            refl_[static_cast<int>(Stage::Shade)]           = reflectSpirvBindings(shadeSpv.words, shadeSpv.count);
             refl_[static_cast<int>(Stage::FilterComposite)] = merge(reflectSpirvBindings(kDeferredGiFilterCompSpv),
                                                                     reflectSpirvBindings(kDeferredReflFilterCompSpv));
             refl_[static_cast<int>(Stage::ClusterBuild)]    = reflectSpirvBindings(kClusterBuildCompSpv);
-            refl_[static_cast<int>(Stage::Froxels)]         = merge(reflectSpirvBindings(kFroxelInjectCompSpv),
+            refl_[static_cast<int>(Stage::Froxels)]         = merge(reflectSpirvBindings(froxelSpv.words, froxelSpv.count),
                                                                     reflectSpirvBindings(kFroxelIntegrateCompSpv));
             refl_[static_cast<int>(Stage::CloudMarch)]      = reflectSpirvBindings(kCloudMarchCompSpv);
             refl_[static_cast<int>(Stage::CloudShadow)]     = reflectSpirvBindings(kCloudShadowCompSpv);
-            refl_[static_cast<int>(Stage::Rtao)]            = reflectSpirvBindings(kRtaoCompSpv);
-            refl_[static_cast<int>(Stage::ParticleLight)]   = reflectSpirvBindings(kParticleLightCompSpv);
+            if (rt) refl_[static_cast<int>(Stage::Rtao)] = reflectSpirvBindings(kRtaoCompSpv);
+            refl_[static_cast<int>(Stage::ParticleLight)]   = reflectSpirvBindings(particleSpv.words, particleSpv.count);
         }
-        smci.codeSize = sizeof(kDeferredShadeCompSpv);
-        smci.pCode    = kDeferredShadeCompSpv;
+        smci.codeSize = shadeSpv.count * sizeof(uint32_t);
+        smci.pCode    = shadeSpv.words;
         VkShaderModule mod = VK_NULL_HANDLE;
         check(vkCreateShaderModule(d, &smci, nullptr, &mod), "vkCreateShaderModule(deferred_shade)");
 
@@ -406,8 +426,8 @@ namespace threepp::vulkan {
         // Froxel volumetrics — inject + integrate, same layout.
         VkShaderModuleCreateInfo smciF{};
         smciF.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smciF.codeSize = sizeof(kFroxelInjectCompSpv);
-        smciF.pCode    = kFroxelInjectCompSpv;
+        smciF.codeSize = froxelSpv.count * sizeof(uint32_t);
+        smciF.pCode    = froxelSpv.words;
         VkShaderModule modF = VK_NULL_HANDLE;
         check(vkCreateShaderModule(d, &smciF, nullptr, &modF), "vkCreateShaderModule(froxel_inject)");
         VkComputePipelineCreateInfo cpciF = cpci;
@@ -451,15 +471,19 @@ namespace threepp::vulkan {
 
         // Half-res ray-traced AO + bent normals (rtao.comp) — same shared set 0
         // and 80-byte ShadePush range as the shade itself.
-        VkShaderModuleCreateInfo smciAo = smciS;
-        smciAo.codeSize = sizeof(kRtaoCompSpv);
-        smciAo.pCode    = kRtaoCompSpv;
+        // Not without ray query: rtaoPipe_ stays null and the stage is never
+        // recorded (the shade's AO term is then 1).
         VkShaderModule modAo = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(d, &smciAo, nullptr, &modAo), "vkCreateShaderModule(rtao)");
-        VkComputePipelineCreateInfo cpciAo = cpci;
-        cpciAo.stage.module = modAo;
-        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciAo, nullptr, &rtaoPipe_),
-              "vkCreateComputePipelines(rtao)");
+        if (rt) {
+            VkShaderModuleCreateInfo smciAo = smciS;
+            smciAo.codeSize = sizeof(kRtaoCompSpv);
+            smciAo.pCode    = kRtaoCompSpv;
+            check(vkCreateShaderModule(d, &smciAo, nullptr, &modAo), "vkCreateShaderModule(rtao)");
+            VkComputePipelineCreateInfo cpciAo = cpci;
+            cpciAo.stage.module = modAo;
+            check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciAo, nullptr, &rtaoPipe_),
+                  "vkCreateComputePipelines(rtao)");
+        }
 
         // Particle billboard lighting — set 0 is the shared deferred set; set 1
         // is the caller-owned particle IO pair (centers in, light/fog out), so
@@ -495,8 +519,8 @@ namespace threepp::vulkan {
 
             VkShaderModuleCreateInfo smciP{};
             smciP.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            smciP.codeSize = sizeof(kParticleLightCompSpv);
-            smciP.pCode    = kParticleLightCompSpv;
+            smciP.codeSize = particleSpv.count * sizeof(uint32_t);
+            smciP.pCode    = particleSpv.words;
             VkShaderModule modP = VK_NULL_HANDLE;
             check(vkCreateShaderModule(d, &smciP, nullptr, &modP), "vkCreateShaderModule(particle_light)");
             VkComputePipelineCreateInfo cpciP = cpci;
@@ -514,7 +538,7 @@ namespace threepp::vulkan {
         vkDestroyShaderModule(d, modI, nullptr);
         vkDestroyShaderModule(d, modM, nullptr);
         vkDestroyShaderModule(d, modS, nullptr);
-        vkDestroyShaderModule(d, modAo, nullptr);
+        if (modAo) vkDestroyShaderModule(d, modAo, nullptr);
     }
 
     void DeferredShade::createDescriptorPool() {
@@ -1033,7 +1057,13 @@ namespace threepp::vulkan {
             oceanRippleInfo.imageView   = in.oceanRippleView;
             oceanRippleInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
             setw(78, 79, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanRippleInfo,    nullptr);
-            vulkan::updateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
+            // Without ray query the layout has no binding 8: drop its write.
+            uint32_t writeCount = static_cast<uint32_t>(w.size());
+            if (!ctx_.rayQuerySupported()) {
+                std::rotate(w.begin() + 8, w.begin() + 9, w.end());
+                --writeCount;
+            }
+            vulkan::updateDescriptorSets(ctx_.device(), writeCount, w.data(), 0, nullptr);
         }
     }
 
