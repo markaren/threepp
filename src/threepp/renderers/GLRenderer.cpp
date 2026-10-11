@@ -1,6 +1,9 @@
 
 #include "threepp/renderers/GLRenderer.hpp"
 
+#include <array>
+#include <cstring>
+
 #include "threepp/renderers/RenderTarget.hpp"
 
 #include "threepp/renderers/gl/GLAttributes.hpp"
@@ -115,6 +118,16 @@ struct GLRenderer::Impl {
     //
 
     WindowSize _size;
+
+    // Deferred readback (readRGBPixelsDeferred): a ring of two pixel pack
+    // buffers. A call queues this frame's read into one and maps the other,
+    // which holds the frame queued the call before, so the GPU is still
+    // drawing while the caller works on the previous frame.
+    std::array<GLuint, 2> _readbackPbo{0, 0};
+    std::array<size_t, 2> _readbackPboBytes{0, 0};
+    std::array<bool, 2> _readbackPending{false, false};
+    std::array<std::pair<int, int>, 2> _readbackDims{};
+    int _readbackIndex = 0;
 
     float _pixelRatio = 1;
 
@@ -867,15 +880,17 @@ struct GLRenderer::Impl {
 
         // three.js r130 (#21967) / r149 (#25239): a transparent double-sided
         // material draws its back faces first, then its front faces, so the
-        // far side of a glass shell shows through the near side.
+        // far side of a glass shell shows through the near side. three.js marks
+        // the material needsUpdate for each side; here setProgram notices the
+        // side change itself and swaps in the program it already resolved for
+        // that side (MaterialProperties::sidePrograms), so neither pass pays a
+        // program resolve.
         if (material->transparent && material->side == Side::Double && !material->forceSinglePass) {
 
             material->side = Side::Back;
-            material->needsUpdate();
             renderBufferDirect(camera, scene, geometry, material, object, group);
 
             material->side = Side::Front;
-            material->needsUpdate();
             renderBufferDirect(camera, scene, geometry, material, object, group);
 
             material->side = Side::Double;
@@ -1217,11 +1232,38 @@ struct GLRenderer::Impl {
         //
 
         gl::GLProgram* program = materialProperties->currentProgram;
+        const auto sideIndex = static_cast<size_t>(material->side);
+
+        if (needsProgramChange) {
+
+            // whatever changed, changed the program of every side
+            materialProperties->sidePrograms = {};
+
+        } else if (materialProperties->currentSide != material->side) {
+
+            // only the side changed (the two-pass draw of a transparent double-sided
+            // material changes it twice an object): the program and uniform list
+            // already resolved for this side, or a resolve if there is none yet
+            auto& cached = materialProperties->sidePrograms[sideIndex];
+            if (cached.program) {
+
+                program = cached.program;
+                materialProperties->currentProgram = program;
+                materialProperties->uniformsList = cached.uniformsList;
+
+            } else {
+
+                needsProgramChange = true;
+            }
+        }
 
         if (needsProgramChange) {
 
             program = getProgram(material, scene, object);
+            materialProperties->sidePrograms[sideIndex] = {program, materialProperties->uniformsList};
         }
+
+        materialProperties->currentSide = material->side;
 
         bool refreshProgram = false;
         bool refreshMaterial = false;
@@ -1588,6 +1630,65 @@ struct GLRenderer::Impl {
         return data;
     }
 
+    // The frame queued into pack buffer j, if one is; empty otherwise.
+    Pixels takeDeferredRGBPixels(int j) {
+
+        Pixels out;
+        if (!_readbackPending[j]) return out;
+        _readbackPending[j] = false;
+        out.width = _readbackDims[j].first;
+        out.height = _readbackDims[j].second;
+        out.rgb.resize(_readbackPboBytes[j]);
+#ifndef __EMSCRIPTEN__
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, _readbackPbo[j]);
+        if (auto* mapped = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(out.rgb.size()), GL_MAP_READ_BIT)) {
+            std::memcpy(out.rgb.data(), mapped, out.rgb.size());
+            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+        }
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+#endif
+        return out;
+    }
+
+    Pixels readRGBPixelsDeferred() {
+
+#ifdef __EMSCRIPTEN__
+        // WebGL has no glMapBufferRange: read synchronously, as the frame before
+        // never queued, and the caller's bookkeeping still holds.
+        Pixels now;
+        now.rgb = readRGBPixels();
+        now.width = _currentRenderTarget ? static_cast<int>(_currentRenderTarget->width) : _size.width();
+        now.height = _currentRenderTarget ? static_cast<int>(_currentRenderTarget->height) : _size.height();
+        return now;
+#else
+        const int width  = _currentRenderTarget ? static_cast<int>(_currentRenderTarget->width) : _size.width();
+        const int height = _currentRenderTarget ? static_cast<int>(_currentRenderTarget->height) : _size.height();
+        const auto bytes = static_cast<size_t>(width) * height * 3;
+
+        const int i = _readbackIndex, j = 1 - i;
+        if (!_readbackPbo[i]) glGenBuffers(1, &_readbackPbo[i]);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, _readbackPbo[i]);
+        if (_readbackPboBytes[i] != bytes) {
+            glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(bytes), nullptr, GL_STREAM_READ);
+            _readbackPboBytes[i] = bytes;
+        }
+        // With a pack buffer bound, glReadPixels takes an offset into it and
+        // returns at once; the alignment and multisample handling are readPixels'.
+        readPixels({0, 0}, {width, height}, Format::RGB, nullptr);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        _readbackPending[i] = true;
+        _readbackDims[i] = {width, height};
+        _readbackIndex = j;
+
+        return takeDeferredRGBPixels(j);
+#endif
+    }
+
+    Pixels flushDeferredRGBPixels() {
+
+        return takeDeferredRGBPixels(1 - _readbackIndex);
+    }
+
     void readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, unsigned char* data) {
 
         const auto glFormat = gl::toGLFormat(format);
@@ -1752,6 +1853,13 @@ struct GLRenderer::Impl {
     }
 
     void dispose() {
+
+        for (int k = 0; k < 2; ++k) {
+            if (_readbackPbo[k]) glDeleteBuffers(1, &_readbackPbo[k]);
+            _readbackPbo[k] = 0;
+            _readbackPboBytes[k] = 0;
+            _readbackPending[k] = false;
+        }
 
         renderLists.dispose();
         renderStates.dispose();
@@ -2021,6 +2129,16 @@ void GLRenderer::setRenderTarget(RenderTarget* renderTarget, int activeCubeFace,
 void GLRenderer::copyFramebufferToTexture(const Vector2& position, Texture& texture, int level) {
 
     pimpl_->copyFramebufferToTexture(position, texture, level);
+}
+
+GLRenderer::Pixels GLRenderer::readRGBPixelsDeferred() {
+
+    return pimpl_->readRGBPixelsDeferred();
+}
+
+GLRenderer::Pixels GLRenderer::flushDeferredRGBPixels() {
+
+    return pimpl_->flushDeferredRGBPixels();
 }
 
 std::vector<unsigned char> GLRenderer::readRGBPixels() {

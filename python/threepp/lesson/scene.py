@@ -2,8 +2,10 @@
 rings, markers, tube trails, point clouds and line fans that fade and ride on any object."""
 from __future__ import annotations
 
+import contextlib
 import math
 import os
+import weakref
 
 import numpy as np
 
@@ -113,6 +115,8 @@ class Stage:
 
         self.camera = tp.PerspectiveCamera(32, self.W / self.H, 0.03, far)
         self._look = np.zeros(3)
+        self._deferred = False
+        _STAGES.add(self)
 
     def follow(self, p, height=None):
         """Centre the key light and its shadow area on world point p (Y-up). The light
@@ -151,14 +155,15 @@ class Stage:
     # frame -----------------------------------------------------------------
     def frame(self, t=None, hud=None):
         """Render the scene (and the Hud over it) and return (H, W, 3) uint8. `t` is the
-        film time; the GL renderer does not need it."""
+        film time; the GL renderer does not need it. Inside `deferred_readback()` the
+        frame returned is the one rendered the call before (None the first time)."""
         self.r.render(self.scene, self.camera)
         if hud is not None:
             auto_clear = self.r.auto_clear
             self.r.auto_clear = False
             self.r.render(hud.scene, hud.camera)
             self.r.auto_clear = auto_clear
-        return self.r.read_pixels()
+        return self.r.read_pixels(deferred=self._deferred)
 
     # projection --------------------------------------------------------------
     def _vp(self):
@@ -559,3 +564,26 @@ class Segments:
         self.geom.set_draw_range(0, 2 * n)
         self.mat.opacity = opacity
         self.lines.visible = True
+
+# Every live Stage, for deferred_readback(); weak so a film's stages die with it.
+_STAGES = weakref.WeakSet()
+
+
+@contextlib.contextmanager
+def deferred_readback():
+    """A film loop's frames one behind: inside the block, Stage.frame() queues its readback
+    and returns the frame rendered the call before (None the first time), so the GPU draws
+    one frame while Python builds the next; the renderer no longer waits for every frame.
+    Yields a callable that returns the frame still queued once the loop is done (or None).
+    With more than one live Stage the frames could come from either, so nothing is
+    deferred then and the callable returns None."""
+    stages = [s for s in _STAGES if isinstance(s.r, tp.GLRenderer)]
+    if len(stages) != 1 or len(_STAGES) != 1:
+        yield lambda: None
+        return
+    st = stages[0]
+    st._deferred = True
+    try:
+        yield lambda: st.r.flush_pixels()
+    finally:
+        st._deferred = False

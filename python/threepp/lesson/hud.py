@@ -373,12 +373,23 @@ class Hud:
         return pos, np.asarray(idx, np.uint32)
 
     def _dyn_mesh(self, pos, idx, color, alpha):
-        m = self._acquire(("dyn",), lambda: tp.Mesh(tp.BufferGeometry(), self._material()))
-        g = tp.BufferGeometry()
-        g.set_attribute("position", pos)
-        g.set_index(idx)
-        m.set_geometry(g)
-        m.frustum_culled = False
+        """A mesh for this frame's triangles: `pos` (N, 3), `idx` a flat triangle list into it.
+        Pooled by vertex capacity (the next power of two, 256 up) and updated in place, as an
+        unindexed triangle list with a draw range. A new geometry a frame cost the renderer a
+        vertex array and its buffers each time, and a strip chart drew dozens a frame."""
+        tri = np.ascontiguousarray(np.asarray(pos, np.float32)[np.asarray(idx, np.int64)])
+        n = len(tri)
+        cap = 1 << max(8, (n - 1).bit_length())
+
+        def make():
+            g = tp.BufferGeometry()
+            g.set_attribute("position", np.zeros((cap, 3), np.float32))
+            m = tp.Mesh(g, self._material())
+            m.frustum_culled = False
+            return m
+        m = self._acquire(("dyn", cap), make)
+        m.geometry.update_attribute("position", tri)
+        m.geometry.set_draw_range(0, n)
         m.position.set(0, 0, 0)
         self._paint(m, color, alpha)
         return m

@@ -95,6 +95,24 @@ namespace threepp {
 
         [[nodiscard]] std::vector<unsigned char> readRGBPixels() override;
 
+        // A frame read back: tightly packed RGB, bottom row first, as readRGBPixels.
+        struct Pixels {
+            std::vector<unsigned char> rgb;
+            int width = 0;
+            int height = 0;
+        };
+
+        // Readback one frame behind. A call queues a read of the current
+        // framebuffer into a pixel pack buffer and returns the frame the previous
+        // call queued (empty rgb the first time), so the GPU goes on drawing
+        // while the caller works on the frame before: a film loop overlaps its
+        // encoder and scene work with the render instead of waiting for it.
+        // flushDeferredRGBPixels() returns the frame still queued, after the last
+        // render. Reading with readRGBPixels() in between is fine; it is not
+        // part of the ring.
+        [[nodiscard]] Pixels readRGBPixelsDeferred();
+        [[nodiscard]] Pixels flushDeferredRGBPixels();
+
         void dispose() override;
 
         // --- HDRI sun (one-sun policy; see Renderer::EnvSunPolicy) ---

@@ -73,7 +73,7 @@ class FramePipe:
         self.n = 0
 
     def write(self, rgb):
-        self.p.stdin.write(np.ascontiguousarray(rgb, np.uint8).tobytes())
+        self.p.stdin.write(np.ascontiguousarray(rgb, np.uint8))   # the array's own buffer, no copy
         self.n += 1
 
     def close(self):

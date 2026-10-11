@@ -13,6 +13,7 @@ import time
 import numpy as np
 
 from .media import Film, shrink, write_png, write_srt, write_wav
+from .scene import deferred_readback
 from .speech import VOICE_LEAD, Narration, overruns, spoken
 from .timing import TimeMap
 
@@ -194,12 +195,18 @@ def run(name, duration, setup, fps=60, speech=None, warn=None, argv=None):
     out = args.out or os.path.join(args.outdir, f"{name}.mp4")
     nfr = int(round((t_to - args.t_from) * fps))
     t_start = time.time()
-    with Film(out, W, H, fps=fps, crf=16 if not args.preview else 22,
-              preset="slow" if not args.preview else "veryfast", audio=audio, audio_offset=args.t_from) as film:
+    with (Film(out, W, H, fps=fps, crf=16 if not args.preview else 22,
+               preset="slow" if not args.preview else "veryfast", audio=audio, audio_offset=args.t_from) as film,
+          deferred_readback() as flush):
         for f in range(nfr):
             t = args.t_from + f / fps
-            film.write(frame(t))
+            img = frame(t)           # one frame behind inside deferred_readback: None at first
+            if img is not None:
+                film.write(img)
             if f % (fps * 5) == 0:
                 el = time.time() - t_start
                 print(f"[film] {t:6.1f}s  frame {f}/{nfr}  {el / max(f, 1) * 1000:.0f} ms/frame", flush=True)
+        last = flush()
+        if last is not None:
+            film.write(last)
     print(f"[film] wrote {film.path} ({nfr} frames, {time.time() - t_start:.0f}s)")

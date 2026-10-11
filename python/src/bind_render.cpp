@@ -37,6 +37,27 @@ using namespace threepp;
 
 namespace threepp_py {
 
+    // Tightly packed bottom-up RGB (what the renderer reads back) as an (H, W, 3)
+    // numpy array; flip=True puts the top row first, the usual image orientation.
+    static py::array_t<uint8_t> rgb_to_array(const std::vector<unsigned char>& buf, int w, int h, bool flip) {
+        py::array_t<uint8_t> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w), static_cast<py::ssize_t>(3)});
+        const size_t rowBytes = static_cast<size_t>(w) * 3;
+        auto* dst = arr.mutable_data();
+        if (buf.size() >= rowBytes * static_cast<size_t>(h)) {
+            for (int row = 0; row < h; ++row) {
+                const auto srcRow = static_cast<size_t>(flip ? (h - 1 - row) : row);
+                std::memcpy(dst + static_cast<size_t>(row) * rowBytes, buf.data() + srcRow * rowBytes, rowBytes);
+            }
+        } else {
+            std::memset(dst, 0, rowBytes * static_cast<size_t>(h));
+        }
+        return arr;
+    }
+
+    // read_pixels()/flush_pixels(): an (H, W, 3) uint8 array, or None when a deferred
+    // read has nothing queued yet.
+    using PyPixels = py::typing::Optional<py::array_t<uint8_t>>;
+
     // Resolve a Python renderer object to the backend-neutral threepp::Renderer&.
     // Accepts the GLRenderer binding or the Vulkan facade (whose underlying native
     // renderer is recovered via py_vulkan_native_renderer); raises a clear TypeError
@@ -528,7 +549,16 @@ namespace threepp_py {
                 // Read the current framebuffer as a (H, W, 3) uint8 numpy array.
                 // OpenGL reads bottom-up; flip=True (default) returns the usual
                 // top-down image orientation.
-                .def("read_pixels", [](GLRenderer& r, bool flip) {
+                .def("read_pixels", [](GLRenderer& r, bool flip, bool deferred) {
+                    if (deferred) {
+                        GLRenderer::Pixels px;
+                        {
+                            py::gil_scoped_release release;
+                            px = r.readRGBPixelsDeferred();
+                        }
+                        if (px.rgb.empty()) return PyPixels(py::none());
+                        return PyPixels(rgb_to_array(px.rgb, px.width, px.height, flip));
+                    }
                     auto s = r.size();
                     const int w = s.width(), h = s.height();
                     std::vector<unsigned char> buf;
@@ -538,20 +568,22 @@ namespace threepp_py {
                         py::gil_scoped_release release;
                         buf = r.readRGBPixels();
                     }
-                    py::array_t<uint8_t> arr({static_cast<py::ssize_t>(h),
-                                              static_cast<py::ssize_t>(w),
-                                              static_cast<py::ssize_t>(3)});
-                    const size_t rowBytes = static_cast<size_t>(w) * 3;
-                    auto* dst = arr.mutable_data();
-                    if (buf.size() >= rowBytes * static_cast<size_t>(h)) {
-                        for (int row = 0; row < h; ++row) {
-                            const auto srcRow = static_cast<size_t>(flip ? (h - 1 - row) : row);
-                            std::memcpy(dst + static_cast<size_t>(row) * rowBytes,
-                                        buf.data() + srcRow * rowBytes, rowBytes);
-                        }
+                    return PyPixels(rgb_to_array(buf, w, h, flip));
+                }, py::arg("flip") = true, py::arg("deferred") = false,
+                   "The current framebuffer as an (H, W, 3) uint8 array. deferred=True queues the "
+                   "read and returns the frame the previous deferred call queued (None the first "
+                   "time), so the GPU keeps drawing while Python works on the frame before; "
+                   "flush_pixels() returns the one still queued after the last render.")
+                .def("flush_pixels", [](GLRenderer& r, bool flip) {
+                    GLRenderer::Pixels px;
+                    {
+                        py::gil_scoped_release release;
+                        px = r.flushDeferredRGBPixels();
                     }
-                    return arr;
-                }, py::arg("flip") = true)
+                    if (px.rgb.empty()) return PyPixels(py::none());
+                    return PyPixels(rgb_to_array(px.rgb, px.width, px.height, flip));
+                }, py::arg("flip") = true,
+                   "The frame a deferred read_pixels() still has queued, or None.")
                 .def("save_frame", [](GLRenderer& r, const std::string& path) { r.writeFramebuffer(path); }, py::arg("path"))
                 // GL buffer object id (GLuint) backing a geometry attribute, or None
                 // until the first render uploads it. Exists for zero-copy CUDA/GL

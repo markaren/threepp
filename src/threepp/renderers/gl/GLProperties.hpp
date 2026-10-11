@@ -85,6 +85,20 @@ namespace threepp::gl {
         std::vector<UniformObject*> uniformsList;
         UniformMap* uniforms;
 
+        // A transparent double-sided material draws every object twice, back faces
+        // then front (GLRenderer::renderObject), and FLIP_SIDED / DOUBLE_SIDED are
+        // shader defines, so each side has a program and a uniform list of its own.
+        // They are kept here per side so the second pass, and every later frame,
+        // swaps sides without resolving the program again: a resolve builds the
+        // parameters and the cache key, about 30 us, and paying it twice an object
+        // made a 70-mesh HUD cost 9 ms a frame.
+        struct SideProgram {
+            GLProgram* program = nullptr;
+            std::vector<UniformObject*> uniformsList;
+        };
+        std::array<SideProgram, 3> sidePrograms{};
+        std::optional<Side> currentSide;
+
         unsigned int version{};
     };
 

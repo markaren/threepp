@@ -3151,10 +3151,16 @@ class GLRenderer:
         """
     def clear(self, color: bool = True, depth: bool = True, stencil: bool = True) -> None:
         ...
+    def flush_pixels(self, flip: bool = True) -> numpy.typing.NDArray[numpy.uint8] | None:
+        """
+        The frame a deferred read_pixels() still has queued, or None.
+        """
     def gl_buffer_id(self, geometry: BufferGeometry, attribute: str) -> typing.Any:
         ...
-    def read_pixels(self, flip: bool = True) -> numpy.typing.NDArray[numpy.uint8]:
-        ...
+    def read_pixels(self, flip: bool = True, deferred: bool = False) -> numpy.typing.NDArray[numpy.uint8] | None:
+        """
+        The current framebuffer as an (H, W, 3) uint8 array. deferred=True queues the read and returns the frame the previous deferred call queued (None the first time), so the GPU keeps drawing while Python works on the frame before; flush_pixels() returns the one still queued after the last render.
+        """
     def render(self, scene: Object3D, camera: Camera) -> None:
         ...
     def save_frame(self, path: str) -> None:
