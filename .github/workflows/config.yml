@@ -269,13 +269,15 @@ jobs:
   # and which the layer reports precisely and deterministically. One instance of
   # it shipped in a published wheel as a crash.
   #
-  # ubuntu-24.04 for its newer Mesa: the renderer requests ray tracing
-  # unconditionally (VulkanCoreImpl's ctor passes enableRayTracing=true), so
-  # lavapipe must expose the RT extensions or VulkanContext throws and every test
-  # skips itself. The probe step below asserts that BEFORE the tests run, and the
-  # post-test check fails the job on any skip — otherwise this job's most likely
-  # failure mode is going green having rendered nothing, which is exactly the trap
-  # the PhysX assertion in the `linux` job above guards against.
+  # ubuntu-24.04 for its newer Mesa. The renderer runs without ray tracing too
+  # (every ray misses; VulkanValidation_nort_test forces that mode with
+  # THREEPP_VULKAN_NO_RT=1), but the RT lane is only real if lavapipe exposes the
+  # RT extensions: without them both tests would run the no-RT mode and the RT
+  # path would go ungated. The probe step below asserts the extensions BEFORE the
+  # tests run, and the post-test check fails the job on any skip; otherwise this
+  # job's most likely failure mode is going green having rendered nothing, which
+  # is exactly the trap the PhysX assertion in the `linux` job above guards
+  # against.
   #
   # Under xvfb, not display-free. A headless canvas with no DISPLAY selects GLFW's
   # Null platform and then REQUIRES VK_EXT_headless_surface; with a display it
@@ -380,7 +382,7 @@ jobs:
             echo "note: VK_EXT_headless_surface absent — the hidden-window fallback carries this job"
           fi
           if [ -n "$missing" ]; then
-            echo "::error::lavapipe ($(grep -m1 driverInfo vulkaninfo.txt | sed 's/.*= //' || echo unknown)) lacks required extension(s):$missing — the renderer requests ray tracing unconditionally, so every Vulkan test would skip itself. Needs a newer Mesa."
+            echo "::error::lavapipe ($(grep -m1 driverInfo vulkaninfo.txt | sed 's/.*= //' || echo unknown)) lacks required extension(s):$missing. Without the ray tracing ones the renderer runs its no-RT mode in both tests and the ray-traced path goes ungated. Needs a newer Mesa."
             exit 1
           fi
           echo "lavapipe exposes every extension the renderer requires."

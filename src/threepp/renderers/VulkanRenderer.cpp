@@ -1676,6 +1676,10 @@ namespace threepp {
         return core()->fsrAvailable();
     }
 
+    bool VulkanRenderer::rayTracingSupported() const {
+        return core()->ctx->rayQuerySupported();
+    }
+
     void VulkanRenderer::setDlss(bool enabled) {
         core()->setDlss(enabled);
     }

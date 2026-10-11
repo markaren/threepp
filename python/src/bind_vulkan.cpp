@@ -1030,6 +1030,11 @@ namespace threepp_py {
                 .def_property_readonly("dlss_available",
                               [](PyVulkanRenderer& r) { return r.native().dlssAvailable(); },
                               "True when DLSS was compiled in and NGX created its feature on this GPU.")
+                .def_property_readonly("ray_tracing",
+                              [](PyVulkanRenderer& r) { return r.native().rayTracingSupported(); },
+                              "True when the device traces rays (ray query + acceleration structures) and "
+                              "THREEPP_VULKAN_NO_RT=1 did not turn them off. False: a raster-only frame where "
+                              "every ray misses (no shadows, sky/env-only GI and reflections, no lidar).")
                 // HDR bloom (added in linear HDR before the tone-map curve).
                 .def_property("bloom_intensity",
                               [](PyVulkanRenderer& r) { return r.native().bloomIntensity(); },

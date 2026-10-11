@@ -32,6 +32,14 @@ def vk_renderer(vk_canvas):
     return tp.VulkanRenderer(vk_canvas)
 
 
+def skip_without_ray_tracing(renderer):
+    """For a test of something that traces rays (lidar, depth sensor, BLAS,
+    auto-LOD levels): skipped on a device without ray tracing, or under
+    THREEPP_VULKAN_NO_RT=1, so the file also runs in that mode."""
+    if not renderer.ray_tracing:
+        pytest.skip("needs ray tracing (ray query + acceleration structures)")
+
+
 def make_scene():
     scene = tp.Scene()
     scene.background = 0x202830
@@ -53,6 +61,33 @@ def test_rgb_render(vk_renderer):
     img = vk_renderer.render_aov(scene, cam, "rgb")
     assert img.shape == (H, W, 3) and str(img.dtype) == "uint8"
     assert int(img.max()) > int(img.min()), "shaded render is flat"
+
+
+def test_no_ray_tracing_fallback_renders():
+    """THREEPP_VULKAN_NO_RT=1 runs the renderer as on a device without ray
+    query: no acceleration structures, every ray misses. It still draws a lit
+    frame: the box is there and brighter than the background."""
+    prev = os.environ.get("THREEPP_VULKAN_NO_RT")
+    os.environ["THREEPP_VULKAN_NO_RT"] = "1"
+    try:
+        canvas = tp.Canvas("vk-test-nort", width=W, height=H, headless=True, vsync=False)
+        renderer = tp.VulkanRenderer(canvas)
+        assert renderer.ray_tracing is False
+        scene, cam = make_scene()
+        for _ in range(3):
+            renderer.render(scene, cam)
+        img = renderer.read_pixels()[..., :3]
+        assert img.shape == (H, W, 3)
+        assert len(np.unique(img.reshape(-1, 3), axis=0)) > 1
+        luma = img.astype(np.float64).mean(axis=2)
+        box = luma[H // 2 - 10:H // 2 + 10, W // 2 - 10:W // 2 + 10].mean()
+        background = luma[:12, :12].mean()                 # top-left corner: sky colour
+        assert box > background + 10, f"box {box:.1f} vs background {background:.1f}"
+    finally:
+        if prev is None:
+            os.environ.pop("THREEPP_VULKAN_NO_RT", None)
+        else:
+            os.environ["THREEPP_VULKAN_NO_RT"] = prev
 
 
 def test_frame_timings_name_every_timed_pass(vk_renderer):
@@ -522,6 +557,7 @@ def test_auto_lod_chain_lands_on_a_fixed_frame_under_a_pinned_clock():
     without the wait chains_queued read 1 for all of them."""
     canvas = tp.Canvas("vk-test-lod-pinned", width=W, height=H, headless=True, vsync=False)
     renderer = tp.VulkanRenderer(canvas, flush_frames=1)
+    skip_without_ray_tracing(renderer)                    # its levels are BLAS builds
     scene, cam = make_scene()
     ball = tp.Mesh(tp.SphereGeometry(0.5, 384, 384), tp.MeshStandardMaterial())
     ball.position.set(-1.2, 0.0, 0.0)
@@ -1081,6 +1117,7 @@ def test_underwater_murk_takes_the_hue_of_what_is_under_it(vk_renderer):
     surface. A per-channel murk takes its red first, and the ambient falloff
     takes the sky's fill off it; neither touches the open water beside it, and
     the scalar call renders what it rendered before either existed."""
+    skip_without_ray_tracing(vk_renderer)                 # the slab is seen through a refraction ray
     scene = tp.Scene()
     scene.background = 0x9db4d0
     scene.add(tp.HemisphereLight(0xffffff, 0x808080, 1.0))
@@ -1147,6 +1184,7 @@ def test_underwater_murk_takes_the_hue_of_what_is_under_it(vk_renderer):
 
 
 def test_depthsensor_pathtraced(vk_renderer):
+    skip_without_ray_tracing(vk_renderer)
     # The backend-neutral tp.DepthSensor.scan must work on Vulkan (path-traced
     # through the renderer's TLAS) and reconstruct world-space heights — the same
     # call signature as on GL. Z-up scene: ground top at z=0, a 0.30 m cube on it.
@@ -1179,6 +1217,7 @@ def test_depthsensor_pathtraced(vk_renderer):
 
 
 def test_depthsensor_scan_is_reproducible(vk_renderer):
+    skip_without_ray_tracing(vk_renderer)
     # A generated dataset is only worth recording if it can be replayed. On
     # Vulkan the range noise is drawn by the path-traced back-end the sensor
     # delegates to, so this covers the seam a GL-only test cannot: a reset that
@@ -1367,6 +1406,7 @@ def test_vertex_interop_blas_sizing_validates_clean(vk_renderer):
     errors", so the test skips (rather than passing vacuously) when the
     layer is not active.
     """
+    skip_without_ray_tracing(vk_renderer)
     if not tp.vulkan_validation_active():
         pytest.skip("validation layer not active - run with THREEPP_VULKAN_VALIDATION=1")
 
@@ -1408,6 +1448,7 @@ def test_vertex_interop_blas_sizing_validates_clean(vk_renderer):
 def test_pathtraced_lidar_sensor(vk_renderer):
     """The renderer's own lidar tracer, finally reachable from Python: full
     radiometric returns, live LidarParams, and deterministic replay."""
+    skip_without_ray_tracing(vk_renderer)
     scene, cam = make_scene()                             # unit box at origin
     vk_renderer.render(scene, cam)                        # build the TLAS
 
@@ -1457,6 +1498,7 @@ def test_lidar_intensity_monotone_at_grazing(vk_renderer):
     handing every closed body a bright silhouette rim no shaping can remove.
     Post-fix the curve decays monotonically; the residual grazing intensity is
     the physical Fresnel sheen, so the gate is strictly-below, not zero."""
+    skip_without_ray_tracing(vk_renderer)
     scene = tp.Scene()
     scene.background = 0x000000
     mat = tp.MeshStandardMaterial()

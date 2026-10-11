@@ -366,7 +366,7 @@
       "configuration": "Release",
       "filter": {
         "include": {
-          "name": "^(VulkanValidation|VulkanCameraModel)_test$"
+          "name": "^(VulkanValidation|VulkanValidation_nort|VulkanCameraModel)_test$"
         }
       }
     },

@@ -175,6 +175,14 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     set_tests_properties(VulkanValidation_test PROPERTIES
             SKIP_RETURN_CODE 42
             TIMEOUT 2400)
+    # The same sequence in the no-ray-tracing mode (THREEPP_VULKAN_NO_RT=1): no
+    # acceleration structures, the no-ray-query shader variants. Forced by the
+    # knob so RT hardware and RT-capable lavapipe cover it too.
+    add_test(NAME VulkanValidation_nort_test COMMAND VulkanValidation_test)
+    set_tests_properties(VulkanValidation_nort_test PROPERTIES
+            ENVIRONMENT "THREEPP_VULKAN_NO_RT=1"
+            SKIP_RETURN_CODE 42
+            TIMEOUT 2400)
 
     # GPU per-instance world matrices vs the CPU's, bit for bit. The gate on
     # stage 1 of plans/gpu-driven-instances.md: instance_expand.comp produces

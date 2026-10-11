@@ -596,6 +596,17 @@ namespace threepp {
         [[nodiscard]] bool dlss() const;          // DLSS is the active upscaler now
         [[nodiscard]] bool dlssAvailable() const; // compiled in + feature created
 
+        // ── Ray tracing ──────────────────────────────────────────────────
+        // True when the device has inline ray queries and acceleration
+        // structures (VK_KHR_ray_query + VK_KHR_acceleration_structure), and
+        // THREEPP_VULKAN_NO_RT=1 did not force them off. When false the
+        // renderer still draws every frame, as a raster renderer: every ray the
+        // shading would trace misses, so there are no sun or lamp shadows, GI is
+        // sky and environment light only (no traced bounce, no probe grid),
+        // reflections and refraction show the environment only, RTAO and
+        // traced fog shadowing are off, and the lidar sensor throws.
+        [[nodiscard]] bool rayTracingSupported() const;
+
         // Material-texture anisotropic filtering. Default AUTO (0), which is
         // 16× in EVERY mode — jittered or not. Pass 1..16 to force a fixed
         // level (1 = isotropic trilinear); 0 restores AUTO. Runtime-safe, and
