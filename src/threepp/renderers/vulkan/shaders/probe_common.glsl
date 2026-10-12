@@ -284,9 +284,16 @@ vec3 probeIrradianceConf(vec3 P, vec3 N, out float conf) {
         conf = confF * edge;
         return eF;
     }
+    // The parent cascade only matters where the fine one is not fully trusted:
+    // inside the fine window (edge == 1) with a confident sample (confF >= 0.5)
+    // the mix below returns eF exactly, so the parent's 8-probe fetch is skipped.
+    const float wF = edge * smoothstep(0.0, 0.5, confF);
+    if (wF >= 1.0) {
+        conf = confF;
+        return eF;
+    }
     float confP, edgeP;
     const vec3  eP = probeIrradianceCascadeConf(c + 1, P, N, confP, edgeP);
-    const float wF = edge * smoothstep(0.0, 0.5, confF);
     conf = mix(confP * edgeP, confF, wF);
     return mix(eP, eF, wF);
 }

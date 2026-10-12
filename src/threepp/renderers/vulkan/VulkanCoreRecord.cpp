@@ -1176,10 +1176,10 @@ void VulkanRenderer::Impl::addSplatPasses(rg::RenderGraph& g) {
             // splatFog actually evaluates; with neither, the fog branch is
             // skipped outright and the frame is bit-identical to a fogless one.
             p.fog = (heightFogEnabled_ && heightFogDensity_ > 0.f) || murkDensity_ > 0.f;
-            if (const char* e = std::getenv("THREEPP_VK_SPLAT_NOMOTION"); e && *e && *e != '0')
-                p.motionVectors = false;
-            if (const char* e = std::getenv("THREEPP_VK_SPLAT_NOFOG"); e && *e && *e != '0')
-                p.fog = false;
+            static const bool noMotionEnv = [] { const char* e = std::getenv("THREEPP_VK_SPLAT_NOMOTION"); return e && *e && *e != '0'; }();
+            static const bool noFogEnv    = [] { const char* e = std::getenv("THREEPP_VK_SPLAT_NOFOG");    return e && *e && *e != '0'; }();
+            if (noMotionEnv) p.motionVectors = false;
+            if (noFogEnv)    p.fog = false;
             // The factor the shade already baked into every sceneHdr store.
             // Getting this wrong is invisible until the physical camera is on,
             // and then the splats are wrong by the whole exposure gain.
@@ -1385,10 +1385,10 @@ void VulkanRenderer::Impl::addSecondaryViewSplatPasses(rg::RenderGraph& g) {
             }
 
             p.fog = (heightFogEnabled_ && heightFogDensity_ > 0.f) || murkDensity_ > 0.f;
-            if (const char* e = std::getenv("THREEPP_VK_SPLAT_NOMOTION"); e && *e && *e != '0')
-                p.motionVectors = false;
-            if (const char* e = std::getenv("THREEPP_VK_SPLAT_NOFOG"); e && *e && *e != '0')
-                p.fog = false;
+            static const bool noMotionEnv = [] { const char* e = std::getenv("THREEPP_VK_SPLAT_NOMOTION"); return e && *e && *e != '0'; }();
+            static const bool noFogEnv    = [] { const char* e = std::getenv("THREEPP_VK_SPLAT_NOFOG");    return e && *e && *e != '0'; }();
+            if (noMotionEnv) p.motionVectors = false;
+            if (noFogEnv)    p.fog = false;
             p.preExposure    = preExposure();
             p.bgIsSolidColor = envIsBgColor;
 
