@@ -2458,11 +2458,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // A class flip rebuilds rather than updates: whether an
                         // update may change instance flags is not worth betting a
                         // traversal on, and it only happens on the flip frame.
-                        // A deformer refit (bones, displaced, grass, tet, morph) keeps
-                        // every BLAS handle, so the TLAS is UPDATED; a geometry or LOD
-                        // change re-references BLASes and rebuilds.
-                        pendingTlasFullBuild_ = geomDirtyAny || lodChangedThisFrame_ || instClassChanged;
-                        (void)blasDeformed;
+                        pendingTlasFullBuild_ = blasDeformed || instClassChanged;
                         pendingTlasRefit_ = true;
                     }
                     // Anything that reached one of the change branches above
