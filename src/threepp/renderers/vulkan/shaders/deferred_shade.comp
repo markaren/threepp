@@ -1307,10 +1307,22 @@ void main() {
     float rtSkyVis = 1.0;// far-field sky visibility (enclosure): env/ambient gate
     vec3  bentN = N;
     if (aoOn && pc.shadeMode != 1u) rtaoGather(px, viewH.z / viewH.w, N, rtAo, rtAoNear, rtSkyVis, bentN);
-    // Checkerboard only pays off on the stochastic RT gather (Phase A). With a
-    // probe field (Phase B) the diffuse indirect is a cheap smooth probe/env
-    // tap — never skip it — and with AO off there is no gather to skip.
-    if (!aoOn || probesOn) giSkip = false;
+    // Phase B's probe tap, taken here so the checkerboard below knows whether
+    // this pixel runs the gather; the Phase B branch reuses it (one tap).
+    float probeConf = 0.0;
+    vec3  probeE    = vec3(0.0);
+    if (aoOn && probesOn && pc.shadeMode != 1u)
+        probeE = probeIrradianceConf(worldPos + N * SHADOW_EPS, N, probeConf) * (1.0 / PI);
+    // The share of the probe path's fill that its stochastic gather supplies
+    // (see the UNMEASURED SHARE note in Phase B). Flags bit 14
+    // (THREEPP_VK_DIAG_NOGATHER): diagnostic, never gather.
+    const float probeGatherW = flagOn(16384u) ? 0.0 : 1.0 - smoothstep(0.25, 0.5, probeConf);
+    // Checkerboard only pays off on the stochastic RT gather: always on the
+    // no-probe path (Phase A), and on the probe path (Phase B) where the probes
+    // measured too little and the gather fills that share (beyond the coarsest
+    // cascade window, starved probes). A pixel the probes cover is a cheap
+    // smooth tap, never skipped; with AO off there is no gather to skip.
+    if (!aoOn || (probesOn && !(demodIndirect && probeGatherW > 0.0))) giSkip = false;
     vec3 diffInd;
     if (pc.shadeMode == 1u) {
         // Dispatch B: cheap deterministic fill only — no RT gather, no
@@ -1400,13 +1412,13 @@ void main() {
         // the Sponza corridors); a 0.99 threshold ran the gather across all of
         // them. The inline path (glass) keeps the env fill, since its gather is
         // the deterministic sky-only variant.
-        float conf;
-        const vec3 probeE = probeIrradianceConf(worldPos + N * SHADOW_EPS, N, conf) * (1.0 / PI);
-        const vec3 probeT = probeE * gtaoMultiBounce(rtAoNear, albedo);
+        // probeE / probeConf: the tap taken before the checkerboard decision.
+        const float conf   = probeConf;
+        const vec3  probeT = probeE * gtaoMultiBounce(rtAoNear, albedo);
         vec3 fillE;
         if (demodIndirect) {
             fillE = probeT;
-            const float gatherW = 1.0 - smoothstep(0.25, 0.5, conf);
+            const float gatherW = probeGatherW;
             if (gatherW > 0.0) {
                 float openness;
                 gGiMovFrac = 0.0;
