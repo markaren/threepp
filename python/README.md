@@ -353,8 +353,13 @@ writes) the answer. They live in [`examples/probes/`](https://github.com/markare
   in Warp) and `threepp.granular_mpm` (MLS-MPM granular soil with two-way rigid
   wheel and plate colliders, in Warp); `threepp.urdf` (a URDF straight into a
   PhysX articulation) and `threepp.rl`. The Warp modules import Warp only on
-  first use, so `import threepp` never needs it. `threepp.lesson` is the
-  experimental explainer-video toolkit (see below).
+  first use, so `import threepp` never needs it. `threepp.capture` renders a
+  scene headless on either backend and returns the picture with the frame's
+  GPU pass timings (`capture.render(scene, camera, backend="vulkan", frames=60,
+  path="out.png").report()`), compares two pictures with the golden test's
+  metric and gate (`capture.compare(a, b).passes()`: PSNR and per-channel max
+  delta), and reads and writes PNGs with the standard library alone.
+  `threepp.lesson` is the experimental explainer-video toolkit (see below).
 
 Naming follows Python conventions (`snake_case` methods/properties), e.g.
 `camera.update_projection_matrix()`, `renderer.set_clear_color(...)`.
