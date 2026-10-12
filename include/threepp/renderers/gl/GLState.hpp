@@ -153,6 +153,8 @@ namespace threepp {
 
             bool bindFramebuffer(int target, unsigned int framebuffer);
 
+            void purgeFramebuffer(unsigned int framebuffer);
+
             bool useProgram(unsigned int program);
 
             void purgeProgram(unsigned int program);

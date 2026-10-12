@@ -392,14 +392,20 @@ void gl::GLTextures::deallocateRenderTarget(GLRenderTarget* renderTarget) {
         renderTarget->depthTexture->dispose();
     }
 
+    // As for the texture above: a deleted framebuffer's name leaves the bind cache.
     if (renderTargetProperties->glCubeFramebuffers) {
         glDeleteFramebuffers(6, renderTargetProperties->glCubeFramebuffers->data());
+        for (const auto framebuffer : *renderTargetProperties->glCubeFramebuffers) state->purgeFramebuffer(framebuffer);
     } else if (renderTargetProperties->glFramebuffer) {
         glDeleteFramebuffers(1, &renderTargetProperties->glFramebuffer.value());
+        state->purgeFramebuffer(*renderTargetProperties->glFramebuffer);
     }
     if (renderTargetProperties->glDepthbuffer) glDeleteRenderbuffers(1, &renderTargetProperties->glDepthbuffer.value());
 
-    if (renderTargetProperties->glMultisampledFramebuffer) glDeleteFramebuffers(1, &renderTargetProperties->glMultisampledFramebuffer.value());
+    if (renderTargetProperties->glMultisampledFramebuffer) {
+        glDeleteFramebuffers(1, &renderTargetProperties->glMultisampledFramebuffer.value());
+        state->purgeFramebuffer(*renderTargetProperties->glMultisampledFramebuffer);
+    }
     if (renderTargetProperties->glColorRenderbuffer) glDeleteRenderbuffers(1, &renderTargetProperties->glColorRenderbuffer.value());
     if (renderTargetProperties->glDepthRenderbuffer) glDeleteRenderbuffers(1, &renderTargetProperties->glDepthRenderbuffer.value());
 

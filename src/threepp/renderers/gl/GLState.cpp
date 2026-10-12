@@ -404,6 +404,18 @@ bool gl::GLState::bindFramebuffer(int target, unsigned int framebuffer) {
     return false;
 }
 
+void gl::GLState::purgeFramebuffer(unsigned int framebuffer) {
+
+    // Call this whenever a framebuffer name is deleted. As with textures (see
+    // purgeTexture), GL reverts the binding to 0 wherever the name was bound
+    // and hands the name back out of glGenFramebuffers, so a cache entry left
+    // behind here would make the next render target to inherit the name skip
+    // its bind: its attachments would be made on the default framebuffer.
+    std::erase_if(currentBoundFramebuffers, [framebuffer](const auto& bound) {
+        return bound.second == framebuffer;
+    });
+}
+
 bool gl::GLState::useProgram(unsigned int program) {
 
     if (currentProgram != program) {
