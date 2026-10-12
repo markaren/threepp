@@ -41,6 +41,16 @@ examples/uav/bixler3.glb
 examples/auv/remus100.glb
 # Generated from turbine_spec.json by examples/turbine/build_turbine_blender.py (headless Blender)
 examples/turbine/turbine.glb
+# Generated from sjark_spec.json / buoys_spec.json / trollfjord_spec.json by examples/harbour/build_*_blender.py (headless Blender)
+examples/harbour/sjark.glb
+examples/harbour/sjark_hydro.json
+examples/harbour/buoys.glb
+examples/harbour/buoys_hydro.json
+examples/harbour/trollfjord.glb
+examples/harbour/trollfjord_hydro.json
+examples/harbour/out/
+# The Alesund harbour scene (harbour_scene.py and its quay, weather, float and label modules) lives in this folder but is not tracked
+examples/harbour/harbour_*.py
 # Renders, clips and survey data the turbine demo writes (TURBINE_OUT overrides the folder)
 examples/turbine/out/
 # Default output folders of the soft-body films, the snake net-pen and the rover demos (--out overrides)
