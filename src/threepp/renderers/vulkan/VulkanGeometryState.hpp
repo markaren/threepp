@@ -675,6 +675,10 @@ namespace threepp::vulkan::impl {
         uint32_t primitiveCount = 0;
         bool packedIdx = false;// index buffer is uint16 (base record's bit 3)
         Buffer scratch{};// per-build scratch: concurrent builds in one cmdbuf must not alias
+        // The level's index bytes, copied into its device-local index buffer
+        // ahead of the build in the same command buffer.
+        Buffer   indexStaging{};
+        VkBuffer indexBuffer = VK_NULL_HANDLE;
         // Where the level lands: index into its record's lodLanding.
         uint32_t level = 0;
     };

@@ -2910,6 +2910,48 @@ namespace threepp {
             }
         }
 
+        // ── Static geometry placement ────────────────────────────────────────
+        // A static record's vertex / normal / uv / color / index / rtIndex
+        // buffers (and its auto-LOD level index buffers) are device-local and
+        // filled through a staging copy: allocated host-visible, they took the
+        // 256 MiB BAR window first and spilled the rest to system memory on a
+        // desktop without resizable BAR, and every G-buffer vertex pull, ray
+        // hit fetch and BLAS input read then crossed PCIe each frame.
+        // Deformer and interop records keep host-visible memory (their host
+        // writes are per frame). Every host write into a geometry buffer goes
+        // through stageUpload, which memcpys into a host-mappable allocation
+        // as before and queues the bytes for a staging copy otherwise, so no
+        // writer depends on where the buffer landed.
+        struct StagedUploads {
+            struct Copy {
+                VkBuffer     dst       = VK_NULL_HANDLE;
+                VkDeviceSize dstOffset = 0;
+                VkDeviceSize srcOffset = 0;
+                VkDeviceSize bytes     = 0;
+            };
+            std::vector<uint8_t> data;
+            std::vector<Copy>    copies;
+        };
+        bool hostMappable(const Buffer& b) const;
+        // deviceLocal: AUTO_PREFER_DEVICE, no host access (TRANSFER_DST is
+        // added for the staging copy); otherwise AUTO + sequential host writes.
+        Buffer createGeomBuffer(VkDeviceSize bytes, VkBufferUsageFlags usage, bool deviceLocal);
+        // Writes `bytes` from `src` at `dstOffset` of `dst`: at once when dst
+        // is host-mappable, else queued in `up` for recordStagedUploads.
+        void stageUpload(StagedUploads& up, const Buffer& dst, const void* src,
+                         VkDeviceSize bytes, VkDeviceSize dstOffset = 0);
+        // Records `up`'s queued copies into `cb` from one staging buffer, then
+        // a barrier that makes them visible to every later command (this cb's
+        // BLAS build and prevVertex seed, and later frames). `dstUntouched`:
+        // the destinations are fresh, so no barrier is needed before the
+        // copies. Returns the staging buffer (empty when nothing was queued);
+        // the caller frees it once cb has executed (destroyBufferMaybeBatched
+        // right after endAndSubmitOneShot). Clears `up`.
+        Buffer recordStagedUploads(StagedUploads& up, VkCommandBuffer cb, bool dstUntouched);
+        // The one-shot form: begin, record, submit (or join the open batch),
+        // release the staging buffer.
+        void submitStagedUploads(StagedUploads& up, const char* label);
+
         static unsigned int geomVersionOf(const BufferGeometry& g) {
             // Untyped lookups: only `version` is read, and the typed getter
             // returns null for narrowed (compressAttributes) attributes, which
