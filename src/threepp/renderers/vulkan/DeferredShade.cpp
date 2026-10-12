@@ -1182,6 +1182,12 @@ namespace threepp::vulkan {
             const char* e = std::getenv("THREEPP_VK_DIAG_NOGATHER");
             return e && e[0] && e[0] != '0';
         }();
+        // THREEPP_VK_PROBE_FAR=1: beyond the coarsest probe cascade window the
+        // probe path fills with the ray-free sky term instead of its gather.
+        static const bool probeFar = [] {
+            const char* e = std::getenv("THREEPP_VK_PROBE_FAR");
+            return e && e[0] && e[0] != '0';
+        }();
         ShadePush push{};
         push.envMipCount        = p.envMipCount;
         push.width              = p.width;
@@ -1196,6 +1202,7 @@ namespace threepp::vulkan {
                    | (p.splatVolume ? 4096u : 0u)     // bit 12: splat reflection volume live
                    | (p.historyStale ? 8192u : 0u)    // bit 13: histories cleared, prev G-buffer stale
                    | (diagNoGather ? 16384u : 0u)     // bit 14: diagnostic, the probe path never gathers
+                   | (probeFar ? 32768u : 0u)         // bit 15: far field beyond the probe windows
                    | (std::min(p.cutoutRayCap, 15u) << 16u)// bits 16-19: cutout ray cap (0 = off)
                    | (std::min(static_cast<uint32_t>(std::max(p.cutoutRayCapFrom, 0.f) / 4.f + 0.5f), 255u)
                       << 20u);                       // bits 20-27: ...from this distance, in 4 m steps

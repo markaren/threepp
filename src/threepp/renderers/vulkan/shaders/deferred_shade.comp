@@ -1317,12 +1317,16 @@ void main() {
     // (see the UNMEASURED SHARE note in Phase B). Flags bit 14
     // (THREEPP_VK_DIAG_NOGATHER): diagnostic, never gather.
     const float probeGatherW = flagOn(16384u) ? 0.0 : 1.0 - smoothstep(0.25, 0.5, probeConf);
+    // Flags bit 15 (THREEPP_VK_PROBE_FAR): 1 beyond the coarsest cascade window,
+    // where the probe path's fill is the ray-free sky term instead of the gather.
+    const float probeFarW = (flagOn(32768u) && aoOn && probesOn && pc.shadeMode != 1u)
+                          ? probeBeyondWindows(worldPos + N * SHADOW_EPS, N) : 0.0;
     // Checkerboard only pays off on the stochastic RT gather: always on the
     // no-probe path (Phase A), and on the probe path (Phase B) where the probes
     // measured too little and the gather fills that share (beyond the coarsest
     // cascade window, starved probes). A pixel the probes cover is a cheap
     // smooth tap, never skipped; with AO off there is no gather to skip.
-    if (!aoOn || (probesOn && !(demodIndirect && probeGatherW > 0.0))) giSkip = false;
+    if (!aoOn || (probesOn && !(demodIndirect && probeGatherW > 0.0 && probeFarW < 1.0))) giSkip = false;
     vec3 diffInd;
     if (pc.shadeMode == 1u) {
         // Dispatch B: cheap deterministic fill only — no RT gather, no
@@ -1420,13 +1424,24 @@ void main() {
             fillE = probeT;
             const float gatherW = probeGatherW;
             if (gatherW > 0.0) {
-                float openness;
-                gGiMovFrac = 0.0;
-                const vec3 gatherE = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, true, giSpp,
-                                               pm.envMapIntensity, openness);
-                fillE = mix(fillE, gatherE, gatherW);
-                // The moving-hit dwell cut applies to the share the gather supplies.
-                gGiMovFrac *= (1.0 - conf) * gatherW;
+                vec3 fallE = vec3(0.0);
+                if (probeFarW < 1.0) {
+                    float openness;
+                    gGiMovFrac = 0.0;
+                    fallE = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, true, giSpp,
+                                      pm.envMapIntensity, openness);
+                    // The moving-hit dwell cut applies to the share the gather supplies.
+                    gGiMovFrac *= (1.0 - conf) * gatherW;
+                }
+                // FAR FIELD (THREEPP_VK_PROBE_FAR, flags bit 15; probeFarW = 0
+                // without it): beyond the coarsest window the fill is the
+                // ray-free sky term the inline branch below uses, faded in over
+                // that window's last cell, where conf fades out.
+                if (probeFarW > 0.0) {
+                    fallE = mix(fallE, sampleEnvLod(bentN, maxLod) * gtaoMultiBounce(rtSkyVis, albedo), probeFarW);
+                    gGiMovFrac *= 1.0 - probeFarW;
+                }
+                fillE = mix(fillE, fallE, gatherW);
             }
         } else {
             fillE = sampleEnvLod(bentN, maxLod) * gtaoMultiBounce(rtSkyVis, albedo);
