@@ -93,6 +93,90 @@ namespace {
 
 namespace threepp {
 
+bool VulkanRenderer::Impl::hostMappable(const Buffer& b) const {
+            if (b.alloc == VK_NULL_HANDLE) return false;
+            VkMemoryPropertyFlags f = 0;
+            vmaGetAllocationMemoryProperties(ctx->allocator(), b.alloc, &f);
+            return (f & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+        }
+
+Buffer VulkanRenderer::Impl::createGeomBuffer(VkDeviceSize bytes, VkBufferUsageFlags usage, bool deviceLocal) {
+            if (deviceLocal) {
+                return createBuffer(ctx->allocator(), ctx->device(), bytes,
+                                    usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                    VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
+            }
+            return createBuffer(ctx->allocator(), ctx->device(), bytes, usage,
+                                VMA_MEMORY_USAGE_AUTO,
+                                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+        }
+
+void VulkanRenderer::Impl::stageUpload(StagedUploads& up, const Buffer& dst, const void* src,
+                                       VkDeviceSize bytes, VkDeviceSize dstOffset) {
+            if (bytes == 0 || dst.handle == VK_NULL_HANDLE) return;
+            if (hostMappable(dst)) {
+                uploadHostVisible(ctx->allocator(), dst, src, bytes, dstOffset);
+                return;
+            }
+            // 16-byte aligned source offsets: vkCmdCopyBuffer has no alignment
+            // rule, this only keeps every copy's source on a clean boundary.
+            const VkDeviceSize srcOffset = (static_cast<VkDeviceSize>(up.data.size()) + 15u) & ~VkDeviceSize(15u);
+            up.data.resize(static_cast<size_t>(srcOffset + bytes));
+            std::memcpy(up.data.data() + srcOffset, src, static_cast<size_t>(bytes));
+            up.copies.push_back({dst.handle, dstOffset, srcOffset, bytes});
+        }
+
+Buffer VulkanRenderer::Impl::recordStagedUploads(StagedUploads& up, VkCommandBuffer cb, bool dstUntouched) {
+            Buffer staging;
+            if (up.copies.empty()) {
+                up.data.clear();
+                return staging;
+            }
+            staging = createBuffer(ctx->allocator(), ctx->device(), up.data.size(),
+                                   VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO,
+                                   VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            uploadHostVisible(ctx->allocator(), staging, up.data.data(), up.data.size());
+            if (!dstUntouched) {
+                // Earlier commands (a prevVertex snapshot copy, earlier frames'
+                // reads and writes) finish before the copies overwrite.
+                VkMemoryBarrier pre{};
+                pre.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+                pre.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+                pre.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     0, 1, &pre, 0, nullptr, 0, nullptr);
+            }
+            for (const auto& c : up.copies) {
+                VkBufferCopy region{};
+                region.srcOffset = c.srcOffset;
+                region.dstOffset = c.dstOffset;
+                region.size = c.bytes;
+                vkCmdCopyBuffer(cb, staging.handle, c.dst, 1, &region);
+            }
+            // Only TRANSFER is in the source scope: BLAS builds recorded
+            // earlier in a shared batch keep overlapping each other.
+            VkMemoryBarrier post{};
+            post.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            post.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            post.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                 0, 1, &post, 0, nullptr, 0, nullptr);
+            up.copies.clear();
+            up.data.clear();
+            return staging;
+        }
+
+void VulkanRenderer::Impl::submitStagedUploads(StagedUploads& up, const char* label) {
+            if (up.copies.empty()) {
+                up.data.clear();
+                return;
+            }
+            VkCommandBuffer cb = beginOneShot();
+            Buffer staging = recordStagedUploads(up, cb, /*dstUntouched=*/false);
+            endAndSubmitOneShot(cb, label);
+            destroyBufferMaybeBatched(staging);
+        }
+
 std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBlasFor(const BufferGeometry& geom, bool allowPacked, bool updatable,
                                                                                      const std::vector<uint32_t>* rtIndices) {
             // Escape hatch for A/B triage: THREEPP_NO_PACK=1 forces every
@@ -115,6 +199,11 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             // Interop records are rebuilt every frame (recordDynamicGeomRefits)
             // into the storage sized below for both lineages: never compacted.
             updatable = updatable || interopTarget;
+            // A static record's buffers are device-local, filled by staging
+            // copies recorded ahead of its BLAS build (see StagedUploads). A
+            // deformer's or interop record's stay host-visible.
+            const bool deviceLocal = !updatable;
+            StagedUploads up;
 
             auto* posAttr = geom.getAttribute<float>("position");
             if (!posAttr) return nullptr;
@@ -186,11 +275,8 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             auto rec = std::make_unique<BlasRecord>();
 
             const VkDeviceSize vbBytes = positions.size() * sizeof(float);
-            rec->vertex = createBuffer(
-                    ctx->allocator(), ctx->device(), vbBytes,
-                    geomUsage, VMA_MEMORY_USAGE_AUTO,
-                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            uploadHostVisible(ctx->allocator(), rec->vertex, positions.data(), vbBytes);
+            rec->vertex = createGeomBuffer(vbBytes, geomUsage, deviceLocal);
+            stageUpload(up, rec->vertex, positions.data(), vbBytes);
 
             // Normals: octahedral snorm16x2, ONE uint per vertex (12 → 4 bytes)
             // when packing is allowed. Every consumer of normalAddress is a
@@ -213,15 +299,14 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                 nbBytes = packedNrm.size() * sizeof(uint32_t);
                 rec->packedMask |= kPackedNormal;
             }
-            rec->normal = createBuffer(
-                    ctx->allocator(), ctx->device(), nbBytes,
+            rec->normal = createGeomBuffer(
+                    nbBytes,
                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
                             VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    VMA_MEMORY_USAGE_AUTO,
-                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            uploadHostVisible(ctx->allocator(), rec->normal, nrmSrc, nbBytes);
+                    deviceLocal);
+            stageUpload(up, rec->normal, nrmSrc, nbBytes);
 
             // Optional UV attribute (TEXCOORD_0). closest_hit interpolates and
             // samples albedo with these; absent → bindless texture is ignored.
@@ -245,14 +330,13 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                         uvBytes = packedUv.size() * sizeof(uint32_t);
                         rec->packedMask |= kPackedUv;
                     }
-                    rec->uv = createBuffer(
-                            ctx->allocator(), ctx->device(), uvBytes,
+                    rec->uv = createGeomBuffer(
+                            uvBytes,
                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                            VMA_MEMORY_USAGE_AUTO,
-                            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                    uploadHostVisible(ctx->allocator(), rec->uv, uvSrc, uvBytes);
+                            deviceLocal);
+                    stageUpload(up, rec->uv, uvSrc, uvBytes);
                 }
             }
 
@@ -281,38 +365,33 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                                                         cols[v * itemSize + 2], 1.f);
                         }
                         const VkDeviceSize cbBytes = packedCol.size() * sizeof(uint32_t);
-                        rec->color = createBuffer(
-                                ctx->allocator(), ctx->device(), cbBytes,
+                        rec->color = createGeomBuffer(
+                                cbBytes,
                                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                                VMA_MEMORY_USAGE_AUTO,
-                                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                        uploadHostVisible(ctx->allocator(), rec->color, packedCol.data(), cbBytes);
+                                deviceLocal);
+                        stageUpload(up, rec->color, packedCol.data(), cbBytes);
                         rec->packedMask |= kPackedColor;
                     } else {
                     const VkDeviceSize cbBytes = static_cast<VkDeviceSize>(vertexCount) * 3 * sizeof(float);
-                    rec->color = createBuffer(
-                            ctx->allocator(), ctx->device(), cbBytes,
+                    rec->color = createGeomBuffer(
+                            cbBytes,
                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                            VMA_MEMORY_USAGE_AUTO,
-                            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                    void* mapped = nullptr;
-                    check(vmaMapMemory(ctx->allocator(), rec->color.alloc, &mapped), "vmaMapMemory(color)");
+                            deviceLocal);
                     if (itemSize == 3) {
-                        std::memcpy(mapped, cols.data(), cbBytes);
+                        stageUpload(up, rec->color, cols.data(), cbBytes);
                     } else {
-                        auto* dst = static_cast<float*>(mapped);
+                        std::vector<float> rgb(static_cast<size_t>(vertexCount) * 3u);
                         for (uint32_t v = 0; v < vertexCount; ++v) {
-                            dst[v * 3 + 0] = cols[v * 4 + 0];
-                            dst[v * 3 + 1] = cols[v * 4 + 1];
-                            dst[v * 3 + 2] = cols[v * 4 + 2];
+                            rgb[v * 3 + 0] = cols[v * 4 + 0];
+                            rgb[v * 3 + 1] = cols[v * 4 + 1];
+                            rgb[v * 3 + 2] = cols[v * 4 + 2];
                         }
+                        stageUpload(up, rec->color, rgb.data(), cbBytes);
                     }
-                    flushHostWrites(ctx->allocator(), rec->color.alloc, 0, cbBytes);
-                    vmaUnmapMemory(ctx->allocator(), rec->color.alloc);
                     }
                 }
             }
@@ -335,18 +414,12 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                         idx16[k] = static_cast<uint16_t>(indices[k]);
                     }
                     const VkDeviceSize ibBytes = idx16.size() * sizeof(uint16_t);
-                    rec->index = createBuffer(
-                            ctx->allocator(), ctx->device(), ibBytes,
-                            geomUsage, VMA_MEMORY_USAGE_AUTO,
-                            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                    uploadHostVisible(ctx->allocator(), rec->index, idx16.data(), ibBytes);
+                    rec->index = createGeomBuffer(ibBytes, geomUsage, deviceLocal);
+                    stageUpload(up, rec->index, idx16.data(), ibBytes);
                 } else {
                     const VkDeviceSize ibBytes = indices.size() * sizeof(unsigned int);
-                    rec->index = createBuffer(
-                            ctx->allocator(), ctx->device(), ibBytes,
-                            geomUsage, VMA_MEMORY_USAGE_AUTO,
-                            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                    uploadHostVisible(ctx->allocator(), rec->index, indices.data(), ibBytes);
+                    rec->index = createGeomBuffer(ibBytes, geomUsage, deviceLocal);
+                    stageUpload(up, rec->index, indices.data(), ibBytes);
                 }
             }
 
@@ -367,11 +440,8 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             }
             if (rtIndices) {
                 const VkDeviceSize ibBytes = rtIndices->size() * sizeof(uint32_t);
-                rec->rtIndex = createBuffer(
-                        ctx->allocator(), ctx->device(), ibBytes,
-                        geomUsage, VMA_MEMORY_USAGE_AUTO,
-                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                uploadHostVisible(ctx->allocator(), rec->rtIndex, rtIndices->data(), ibBytes);
+                rec->rtIndex = createGeomBuffer(ibBytes, geomUsage, deviceLocal);
+                stageUpload(up, rec->rtIndex, rtIndices->data(), ibBytes);
                 rec->rtIndexCount = static_cast<uint32_t>(rtIndices->size() - rtIndices->size() % 3u);
             }
             // No ray query: the record is its buffers. The raster draws and the
@@ -385,10 +455,12 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                         VMA_MEMORY_USAGE_AUTO);
                 VkCommandBuffer cb = beginOneShot();
+                Buffer staging = recordStagedUploads(up, cb, /*dstUntouched=*/true);
                 VkBufferCopy seedCopy{};
                 seedCopy.size = vbBytes;
                 vkCmdCopyBuffer(cb, rec->vertex.handle, rec->prevVertex.handle, 1, &seedCopy);
                 endAndSubmitOneShot(cb, "buildBlasFor");
+                if (staging.handle != VK_NULL_HANDLE) destroyBufferMaybeBatched(staging);
                 const DrawSpan span = drawSpanOf(
                         geom, indexed ? static_cast<uint32_t>(idxAttr->count()) : vertexCount);
                 rec->geomVersion    = geomVersionOf(geom);
@@ -547,6 +619,9 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                     VMA_MEMORY_USAGE_AUTO);
 
             VkCommandBuffer cb = beginOneShot();
+            // A static record's buffers fill first, from staging, in the same
+            // one-shot (or the open batch) as the build that reads them.
+            Buffer staging = recordStagedUploads(up, cb, /*dstUntouched=*/true);
             // Seed prevVertex with the initial (current) vertex data — first
             // refresh would otherwise copy garbage into prev. Fold into the
             // same one-shot as the BLAS build to avoid an extra submit.
@@ -562,6 +637,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             // Deferred when a batch is open (the shared submit hasn't run yet, so
             // the scratch is still in use); freed immediately otherwise.
             destroyBufferMaybeBatched(scratch);
+            if (staging.handle != VK_NULL_HANDLE) destroyBufferMaybeBatched(staging);
 
             VkAccelerationStructureDeviceAddressInfoKHR addrInfo{};
             addrInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
@@ -773,25 +849,31 @@ bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
             // every level index refers into rec->vertex, so base-fits implies
             // level-fits. GeometryDesc/DrawInfo carry the same bit per record,
             // and a LOD switch only repoints indexAddress — the flag holds.
+            // The level's index buffer is device-local (written once, read by
+            // every draw and hit of the level); its bytes go to a staging
+            // buffer that submitLodLevelBuilds copies ahead of the build and
+            // the batch frees once its fence has signalled.
             const bool packIdx = (rec.packedMask & kPackedIndex16) != 0u;
+            std::vector<uint16_t> idx16;
+            const void* ibSrc = level.indices.data();
+            VkDeviceSize ibBytes = level.indices.size() * sizeof(uint32_t);
             if (packIdx) {
-                std::vector<uint16_t> idx16(level.indices.size() + (level.indices.size() & 1u), 0);
+                idx16.assign(level.indices.size() + (level.indices.size() & 1u), 0);
                 for (size_t k = 0; k < level.indices.size(); ++k) {
                     idx16[k] = static_cast<uint16_t>(level.indices[k]);
                 }
-                const VkDeviceSize ibBytes = idx16.size() * sizeof(uint16_t);
-                out.index = createBuffer(
-                        ctx->allocator(), ctx->device(), ibBytes,
-                        idxUsage, VMA_MEMORY_USAGE_AUTO,
-                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                uploadHostVisible(ctx->allocator(), out.index, idx16.data(), ibBytes);
+                ibSrc = idx16.data();
+                ibBytes = idx16.size() * sizeof(uint16_t);
+            }
+            out.index = createGeomBuffer(ibBytes, idxUsage, /*deviceLocal=*/true);
+            Buffer ibStaging;
+            if (hostMappable(out.index)) {
+                uploadHostVisible(ctx->allocator(), out.index, ibSrc, ibBytes);
             } else {
-                const VkDeviceSize ibBytes = level.indices.size() * sizeof(uint32_t);
-                out.index = createBuffer(
-                        ctx->allocator(), ctx->device(), ibBytes,
-                        idxUsage, VMA_MEMORY_USAGE_AUTO,
-                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                uploadHostVisible(ctx->allocator(), out.index, level.indices.data(), ibBytes);
+                ibStaging = createBuffer(ctx->allocator(), ctx->device(), ibBytes,
+                                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO,
+                                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                uploadHostVisible(ctx->allocator(), ibStaging, ibSrc, ibBytes);
             }
 
             // Size query needs a fully-specified build info; a LOCAL struct is
@@ -868,6 +950,8 @@ bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
             // buffer must not alias scratch memory (same rule as
             // refreshGeomBlasBatch's per-record persistent scratch).
             build.scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
+            build.indexStaging = ibStaging;
+            build.indexBuffer = out.index.handle;
             // The caller appends `out` to rec.lodLanding right after this
             // returns, and sets `level` to its index there.
             pending.push_back(build);
@@ -1084,6 +1168,24 @@ void VulkanRenderer::Impl::submitLodLevelBuilds(std::vector<LodPendingBuild>& pe
 
             assert(!oneShotBatch_);
             VkCommandBuffer cb = beginOneShot();
+            // The levels' index bytes into their device-local buffers first,
+            // visible to the builds below and to every later frame.
+            bool anyIndexCopy = false;
+            for (const auto& p : pending) {
+                if (p.indexStaging.handle == VK_NULL_HANDLE) continue;
+                VkBufferCopy region{};
+                region.size = p.indexStaging.size;
+                vkCmdCopyBuffer(cb, p.indexStaging.handle, p.indexBuffer, 1, &region);
+                anyIndexCopy = true;
+            }
+            if (anyIndexCopy) {
+                VkMemoryBarrier mb{};
+                mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+                mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                mb.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+                vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                     0, 1, &mb, 0, nullptr, 0, nullptr);
+            }
             recordLodLevelBuilds(cb, pending);
             if (blasCompact_) {
                 // A pool of the batch's own: its results are read drains later,
@@ -1113,7 +1215,10 @@ void VulkanRenderer::Impl::submitLodLevelBuilds(std::vector<LodPendingBuild>& pe
                         cb, N, ases.data(), VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
                         b.queries, 0);
             }
-            for (auto& p : pending) b.garbage.push_back(p.scratch);
+            for (auto& p : pending) {
+                b.garbage.push_back(p.scratch);
+                if (p.indexStaging.handle != VK_NULL_HANDLE) b.garbage.push_back(p.indexStaging);
+            }
             pending.clear();
             submitLodBatch(std::move(b), cb, lodLanding_);
         }
@@ -1859,6 +1964,7 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
                 return {first, std::min(last, total) - first};
             };
 
+            StagedUploads up;
             for (size_t k : liveOps) {
                 const auto& geom = *ops[k].geom;
                 auto& rec = *ops[k].rec;
@@ -1867,10 +1973,10 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
 
                 const auto [pFirst, pCount] = vertexRangeOf(*posAttr, 3u);
                 if (pCount > 0) {
-                    uploadHostVisible(ctx->allocator(), rec.vertex,
-                                      posAttr->array().data() + static_cast<size_t>(pFirst) * 3u,
-                                      static_cast<VkDeviceSize>(pCount) * 3u * sizeof(float),
-                                      static_cast<VkDeviceSize>(pFirst) * 3u * sizeof(float));
+                    stageUpload(up, rec.vertex,
+                                posAttr->array().data() + static_cast<size_t>(pFirst) * 3u,
+                                static_cast<VkDeviceSize>(pCount) * 3u * sizeof(float),
+                                static_cast<VkDeviceSize>(pFirst) * 3u * sizeof(float));
                 }
                 // Consume the range, exactly as GLAttributes::updateBuffer does:
                 // a later needsUpdate() that sets no range must mean "all of
@@ -1895,15 +2001,15 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
                             const auto [ox, oy] = octEncode(nrm[s + 0], nrm[s + 1], nrm[s + 2]);
                             packed[v] = packSnorm2x16(ox, oy);
                         }
-                        uploadHostVisible(ctx->allocator(), rec.normal, packed.data(),
-                                          packed.size() * sizeof(uint32_t),
-                                          static_cast<VkDeviceSize>(nFirst) * sizeof(uint32_t));
+                        stageUpload(up, rec.normal, packed.data(),
+                                    packed.size() * sizeof(uint32_t),
+                                    static_cast<VkDeviceSize>(nFirst) * sizeof(uint32_t));
                     }
                 } else if (nCount > 0) {
-                    uploadHostVisible(ctx->allocator(), rec.normal,
-                                      nrmAttr->array().data() + static_cast<size_t>(nFirst) * 3u,
-                                      static_cast<VkDeviceSize>(nCount) * 3u * sizeof(float),
-                                      static_cast<VkDeviceSize>(nFirst) * 3u * sizeof(float));
+                    stageUpload(up, rec.normal,
+                                nrmAttr->array().data() + static_cast<size_t>(nFirst) * 3u,
+                                static_cast<VkDeviceSize>(nCount) * 3u * sizeof(float),
+                                static_cast<VkDeviceSize>(nFirst) * 3u * sizeof(float));
                 }
                 const_cast<FloatBufferAttribute*>(nrmAttr)->updateRange.count = -1;
 
@@ -1920,11 +2026,11 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
                         for (uint32_t v = 0; v < vtxCount; ++v) {
                             packed[v] = packUnorm2x16(uv[v * 2 + 0], uv[v * 2 + 1]);
                         }
-                        uploadHostVisible(ctx->allocator(), rec.uv, packed.data(),
-                                          packed.size() * sizeof(uint32_t));
+                        stageUpload(up, rec.uv, packed.data(),
+                                    packed.size() * sizeof(uint32_t));
                     } else {
-                        uploadHostVisible(ctx->allocator(), rec.uv, uvAttr->array().data(),
-                                          uvAttr->array().size() * sizeof(float));
+                        stageUpload(up, rec.uv, uvAttr->array().data(),
+                                    uvAttr->array().size() * sizeof(float));
                     }
                 }
 
@@ -1936,14 +2042,18 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
                         for (size_t k2 = 0; k2 < src.size(); ++k2) {
                             idx16[k2] = static_cast<uint16_t>(src[k2]);
                         }
-                        uploadHostVisible(ctx->allocator(), rec.index, idx16.data(),
-                                          idx16.size() * sizeof(uint16_t));
+                        stageUpload(up, rec.index, idx16.data(),
+                                    idx16.size() * sizeof(uint16_t));
                     } else {
-                        uploadHostVisible(ctx->allocator(), rec.index, idxAttr->array().data(),
-                                          idxAttr->array().size() * sizeof(unsigned int));
+                        stageUpload(up, rec.index, idxAttr->array().data(),
+                                    idxAttr->array().size() * sizeof(unsigned int));
                     }
                 }
             }
+            // A static record's buffers are device-local: their writes above
+            // were queued, and land here in one copy submit, after Phase B's
+            // snapshot and before the refits below read them.
+            submitStagedUploads(up, "refreshGeomBlasBatch (uploads)");
 
             if (!ctx->rayQuerySupported()) {
                 // No BLAS to refit: the uploads above are the whole refresh.
