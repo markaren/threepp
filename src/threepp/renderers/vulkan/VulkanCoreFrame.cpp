@@ -111,7 +111,8 @@ VkResult VulkanRenderer::Impl::acquireOrReuseSwapchainImage(uint32_t& imageIndex
             // timing, i.e. wall clock — if any shading input ever depends on
             // imageIndex, this trace is how the leak shows itself (two runs
             // print different sequences at the frame the pixels diverge).
-            if (const char* e = std::getenv("THREEPP_VK_TRACE_ACQUIRE"); e && *e && *e != '0') {
+            static const bool traceAcquire = [] { const char* e = std::getenv("THREEPP_VK_TRACE_ACQUIRE"); return e && *e && *e != '0'; }();
+            if (traceAcquire) {
                 std::cout << "acquire frame=" << frameSerial_ << " img=" << imageIndex << "\n";
             }
             return r;
