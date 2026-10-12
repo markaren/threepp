@@ -16,11 +16,7 @@ struct GeometryDesc {
     uint64_t prevVertexAddress;
     uint64_t colorAddress;// unused here, kept for layout match with GeometryDesc (VulkanGeometryState.hpp)
     uint     indexed;
-    uint     flags;// bit 0: sticky moved flag (history gates), bit 1: normal is
-                   // oct-snorm16x2, bit 2: uv is unorm16x2, bit 3: color is unorm8x4,
-                   // bit 4: the index buffer is uint16 (gfetchTri),
-                   // bit 5: the rays see a coarser proxy of this mesh (shadeWater),
-                   // bit 6: emissive glows but is not a light (not in the emitter list)
+    uint     flags;// the kGeomFlag* bits of vulkan_shared.h, which the shaders that read this word include
 };
 
 #endif// GEOMETRY_DESC_GLSL

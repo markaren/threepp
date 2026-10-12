@@ -215,7 +215,7 @@ vec3 envLobeGGX(vec3 V, vec3 N, float roughness, float lod, vec2 rot) {
 // shaded geometry hit (the mirror ray returns it sharp; the spatial blur IS
 // the gloss there, sized by this distance's projected footprint).
 float gTraceHitT = -1.0;
-// True when the first shaded reflected hit is a MOVING mesh (GeometryDesc.flags bit 0,
+// True when the first shaded reflected hit is a MOVING mesh (kGeomFlagMoved,
 // stamped from meshMovedBits each frame). The reflection/GI temporal accumulator
 // resets on it: a moving reflected object can't be temporally integrated (the
 // surface reproject tracks the surface, not the moving content → ghost trail).
@@ -561,7 +561,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // MOVED flag tells the temporal accumulator to reset (moving reflection).
         if (gTraceHitT < 0.0) {
             gTraceHitT = length(hitP - origin);
-            gTraceHitMoved = (geoms[hitId].flags & 1u) != 0u;
+            gTraceHitMoved = (geoms[hitId].flags & kGeomFlagMoved) != 0u;
         }
         // Reflected-hit diffuse fill. PROBE-GI mode: the probe field IS the
         // occlusion-correct local irradiance (÷π for the diffInd convention) —
@@ -671,9 +671,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // as the air has it and know nothing of the water.
         hitDiffInd = murkAmbient(hitDiffInd, hitP, hitN);
         // gReflEmitterScale hands an emitter's reflected glow to emissiveSpecNEE;
-        // a glow-only emissive (GeometryDesc bit 6) is in no emitter list, so it
+        // a glow-only emissive (kGeomFlagGlowOnly) is in no emitter list, so it
         // keeps all of it here.
-        const float hEmScale = ((geoms[hitId].flags & 64u) != 0u) ? 1.0 : gReflEmitterScale;
+        const float hEmScale = ((geoms[hitId].flags & kGeomFlagGlowOnly) != 0u) ? 1.0 : gReflEmitterScale;
         // Along the view ray and before any bounce the hit is in this pixel's
         // column of cluster cells, at its own depth (a perspective view's: the
         // grid's slices are view-space depth from the eye).
@@ -804,7 +804,7 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
     fetchHit(hitId, primId, bary, w2o, hitN, hitUv);
 
     const vec3 hAlbedo = hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
-    gGiRayHitMoved = (geoms[hitId].flags & 1u) != 0u;// moving 1-bounce hit (before the unlit early-out — those count too)
+    gGiRayHitMoved = (geoms[hitId].flags & kGeomFlagMoved) != 0u;// moving 1-bounce hit (before the unlit early-out — those count too)
     if (hm.roughness < 0.0) return hAlbedo;// unlit hit (e.g. a pure-emissive proxy)
 
     if (dot(hitN, -dir) < 0.0) hitN = -hitN;
@@ -839,11 +839,11 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
     // analytic direct at the hit nor emitter emission, so nothing double-
     // counts (see probe_common.glsl). vec3(0) when probeGrid.enabled == 0.
     lit += diff * probeIrradiance(hitP, hitN);
-    // A glow-only emissive (setEmissiveCastsLight, GeometryDesc bit 6) is in no
+    // A glow-only emissive (setEmissiveCastsLight, kGeomFlagGlowOnly) is in no
     // emitter list, so neither ReSTIR DI nor any NEE above carries its light:
     // a GI ray that lands on it is the one path its glow has to what is near
     // it. Keep its emission here, where every other emitter's is suppressed.
-    if ((geoms[hitId].flags & 64u) != 0u)
+    if ((geoms[hitId].flags & kGeomFlagGlowOnly) != 0u)
         lit += hitTex(hm.emissiveTexIndex, hm.uvTransformEmissive, hitUv, hm.emissive * hm.emissiveIntensity);
     return lit;
 }

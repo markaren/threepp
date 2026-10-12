@@ -211,7 +211,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                 }
                 nrmSrc = packedNrm.data();
                 nbBytes = packedNrm.size() * sizeof(uint32_t);
-                rec->packedMask |= 1u;
+                rec->packedMask |= kPackedNormal;
             }
             rec->normal = createBuffer(
                     ctx->allocator(), ctx->device(), nbBytes,
@@ -243,7 +243,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                         }
                         uvSrc = packedUv.data();
                         uvBytes = packedUv.size() * sizeof(uint32_t);
-                        rec->packedMask |= 2u;
+                        rec->packedMask |= kPackedUv;
                     }
                     rec->uv = createBuffer(
                             ctx->allocator(), ctx->device(), uvBytes,
@@ -289,7 +289,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                                 VMA_MEMORY_USAGE_AUTO,
                                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
                         uploadHostVisible(ctx->allocator(), rec->color, packedCol.data(), cbBytes);
-                        rec->packedMask |= 4u;
+                        rec->packedMask |= kPackedColor;
                     } else {
                     const VkDeviceSize cbBytes = static_cast<VkDeviceSize>(vertexCount) * 3 * sizeof(float);
                     rec->color = createBuffer(
@@ -319,11 +319,11 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
 
             // Indices: uint16 (half the bytes, half the fetch bandwidth) when
             // every index fits — LOSSLESS, unlike the attribute packing above.
-            // bit3 is set by vertex count alone so LOD levels of a non-indexed
+            // kPackedIndex16 is set by vertex count alone so LOD levels of a non-indexed
             // soup record (which ARE indexed) can pack against the same rule;
             // any level's max index is bounded by the record's vertex count.
             const bool packIdx = allowPacked && vertexCount <= 65536u;
-            if (packIdx) rec->packedMask |= 8u;
+            if (packIdx) rec->packedMask |= kPackedIndex16;
 
             if (indexed) {
                 const auto& indices = idxAttr->array();
@@ -773,7 +773,7 @@ bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
             // every level index refers into rec->vertex, so base-fits implies
             // level-fits. GeometryDesc/DrawInfo carry the same bit per record,
             // and a LOD switch only repoints indexAddress — the flag holds.
-            const bool packIdx = (rec.packedMask & 8u) != 0u;
+            const bool packIdx = (rec.packedMask & kPackedIndex16) != 0u;
             if (packIdx) {
                 std::vector<uint16_t> idx16(level.indices.size() + (level.indices.size() & 1u), 0);
                 for (size_t k = 0; k < level.indices.size(); ++k) {
@@ -1448,7 +1448,7 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
                 recPtr->normal.handle == VK_NULL_HANDLE || recPtr->vertexCount == 0u) return {};
             // ── The packed → unpacked handoff ────────────────────────────────
             // A packed record's normal buffer is oct-snorm16x2, not float xyz
-            // (packedMask bit 0), and uv/color are narrowed likewise. No foreign
+            // (kPackedNormal), and uv/color are narrowed likewise. No foreign
             // producer can be expected to write that encoding, so interop needs
             // an UNPACKED record. And this is the COMMON case, not a corner one:
             // every ordinary mesh reaches blasCache through
@@ -1561,11 +1561,11 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
                                               ? recPtr->color.address
                                               : 0ull;
                     gd.indexed = lodSel0.indexed ? 1u : 0u;
-                    // Only the packed bits (1..4, the fourth being the uint16
-                    // index buffer) change: the fresh record is unpacked, so
-                    // they clear. Bit 0 (moved-sticky), bit 5 (ray-tracing
-                    // proxy) and bit 6 (glow-only, setEmissiveCastsLight) stay.
-                    gd.flags = (gd.flags & ~30u) | (recPtr->packedMask << 1);
+                    // Only the packed bits change: the fresh record is unpacked,
+                    // so they clear. kGeomFlagMoved, kGeomFlagRtProxy and
+                    // kGeomFlagGlowOnly stay.
+                    gd.flags = (gd.flags & ~kGeomFlagPackedAll) |
+                               (recPtr->packedMask << kGeomFlagPackedShift);
                     markGeomDescsDirty(static_cast<uint32_t>(i));
                 }
                 // The DrawInfo skip signature cannot see this swap either — on
@@ -1886,7 +1886,7 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
                 // re-upload must match the buffer's format or it overflows the
                 // smaller packed allocation.
                 const auto [nFirst, nCount] = vertexRangeOf(*nrmAttr, 3u);
-                if (rec.packedMask & 1u) {
+                if (rec.packedMask & kPackedNormal) {
                     if (nCount > 0) {
                         const auto& nrm = nrmAttr->array();
                         std::vector<uint32_t> packed(nCount);
@@ -1914,7 +1914,7 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
                 const uint32_t vtxCount = static_cast<uint32_t>(posAttr->count());
                 if (auto* uvAttr = geom.getAttribute<float>("uv");
                     uvAttr && rec.uv.handle != VK_NULL_HANDLE) {
-                    if (rec.packedMask & 2u) {
+                    if (rec.packedMask & kPackedUv) {
                         const auto& uv = uvAttr->array();
                         std::vector<uint32_t> packed(vtxCount);
                         for (uint32_t v = 0; v < vtxCount; ++v) {
@@ -1930,7 +1930,7 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
 
                 if (auto* idxAttr = geom.getIndex();
                     idxAttr && rec.index.handle != VK_NULL_HANDLE) {
-                    if (rec.packedMask & 8u) {
+                    if (rec.packedMask & kPackedIndex16) {
                         const auto& src = idxAttr->array();
                         std::vector<uint16_t> idx16(src.size() + (src.size() & 1u), 0);
                         for (size_t k2 = 0; k2 < src.size(); ++k2) {
@@ -1983,7 +1983,7 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
                 triDatas[kk].vertexStride = 3 * sizeof(float);
                 triDatas[kk].maxVertex = vertexCount - 1;
                 if (indexed) {
-                    triDatas[kk].indexType = (rec.packedMask & 8u) ? VK_INDEX_TYPE_UINT16
+                    triDatas[kk].indexType = (rec.packedMask & kPackedIndex16) ? VK_INDEX_TYPE_UINT16
                                                                    : VK_INDEX_TYPE_UINT32;
                     triDatas[kk].indexData.deviceAddress = rec.index.address;
                 } else {
@@ -2210,7 +2210,7 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                 const VkDeviceSize posBytes = rec.vbBytes;
                 uploadHostVisible(ctx->allocator(), rec.dynStaging,
                                   posAttr->array().data(), posBytes, slotOff);
-                if (rec.packedMask & 1u) {
+                if (rec.packedMask & kPackedNormal) {
                     const auto& nrm = nrmAttr->array();
                     // Bare resize, not clear() + resize(): the loop assigns
                     // every element of [0, vertexCount), so the zero-fill a
@@ -2448,7 +2448,7 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                     triDatas[kk].vertexStride = 3 * sizeof(float);
                     triDatas[kk].maxVertex = rec.vertexCount - 1;
                     if (indexed) {
-                        triDatas[kk].indexType = (rec.packedMask & 8u) ? VK_INDEX_TYPE_UINT16
+                        triDatas[kk].indexType = (rec.packedMask & kPackedIndex16) ? VK_INDEX_TYPE_UINT16
                                                                        : VK_INDEX_TYPE_UINT32;
                         triDatas[kk].indexData.deviceAddress = rec.index.address;
                     } else {

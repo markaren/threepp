@@ -817,11 +817,11 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                         const bool movedNow = w < meshMovedBits_.size() && (meshMovedBits_[w] & bit);
                         if (movedNow) meshMovedSticky_[i] = kMovedStickyFrames;
                         else if (meshMovedSticky_[i] > 0u) --meshMovedSticky_[i];
-                        const uint32_t moved = meshMovedSticky_[i] > 0u ? 1u : 0u;
+                        const uint32_t moved = meshMovedSticky_[i] > 0u ? kGeomFlagMoved : 0u;
                         if (moved) ++active;
-                        // Bit 0 only — bits 1..3 carry the packed-attribute mask
-                        // (GeometryDesc::flags) and must survive the stamp.
-                        const uint32_t nf = (geomDescsCached_[i].flags & ~1u) | moved;
+                        // kGeomFlagMoved only: the other bits of GeometryDesc::flags
+                        // must survive the stamp.
+                        const uint32_t nf = (geomDescsCached_[i].flags & ~kGeomFlagMoved) | moved;
                         if (geomDescsCached_[i].flags != nf) {
                             geomDescsCached_[i].flags = nf;
                             // Range marked at the write, ascending, so a cohort of

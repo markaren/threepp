@@ -96,7 +96,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 bool doShadows, float maxLod, uint frame, inout uint seed,
                 float slopeVarSq, vec3 Nmacro, ivec2 px, float clusterDist) {
     // The surface the rays see may be the mesh's ray-tracing proxy
-    // (DisplacedMesh::rtProxyCells, GeometryDesc flags bit 5): a coarser grid
+    // (DisplacedMesh::rtProxyCells, kGeomFlagRtProxy): a coarser grid
     // than the one the raster drew P from, above or below it by the proxy's
     // interpolation error. Every ray below starts a SHADOW_EPS off P, so
     // against the proxy it met the water at once: a crest's refraction ray
@@ -104,7 +104,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // Put P on the proxy: a short vertical probe through the surface (the
     // water is single-valued in y), kept only when what it finds is this
     // water; under a hull or a quay P stays where the raster put it.
-    if ((geoms[instIdx].flags & 32u) != 0u) {
+    if ((geoms[instIdx].flags & kGeomFlagRtProxy) != 0u) {
         const float h = 0.5;
         rayQueryEXT pq;
         rayQueryInitializeEXT(pq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskOpaque,

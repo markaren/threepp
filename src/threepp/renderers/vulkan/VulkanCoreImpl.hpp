@@ -358,7 +358,7 @@ namespace threepp {
         // Populated by enableVertexInterop when it finds an already-built packed
         // record: a zero-copy producer writes tightly-packed float xyz normals,
         // but a record built with allowPacked=true carries snorm16x4 ones
-        // (packedMask bit 0). Rebuilding inline inside enable would tear down
+        // (kPackedNormal). Rebuilding inline inside enable would tear down
         // buffers in-flight frames still read, so enable marks the geometry
         // here, requests a structural rebuild, and returns a null handle; the
         // rebuild (buildBlasFor consults this set) then produces an unpacked

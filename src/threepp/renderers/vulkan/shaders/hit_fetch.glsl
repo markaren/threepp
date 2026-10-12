@@ -32,7 +32,7 @@ void fetchHit(int instIdx, int primId, vec2 bary, mat4x3 worldToObj,
     const uvec3 idx = gfetchTri(g, primId);
     const float w = 1.0 - bary.x - bary.y;
 
-    // gfetch* honour GeometryDesc.packedAttrs (oct-snorm16 normals / unorm16
+    // gfetch* honour GeometryDesc.flags' packed bits (oct-snorm16 normals / unorm16
     // uvs on packed static geometry, tightly-packed float otherwise).
     const vec3 n0 = gfetchNormal(g, idx.x);
     const vec3 n1 = gfetchNormal(g, idx.y);

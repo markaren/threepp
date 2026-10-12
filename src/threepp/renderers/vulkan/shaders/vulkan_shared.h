@@ -78,11 +78,55 @@
 #define kInstFlagDoubleSided 0x10u// Side::Double material (±N = same surface)
 #define kInstFlagDeformer    0x20u// persistent per-frame deformer (tet soft body)
 #define kInstFlagTexAnim     0x40u// per-frame texture animation (Material::textureAnimatedHint)
-#define kInstFlagMoving      0x80u// moved-sticky (mirrors GeometryDesc.flags bit 0 at draw
+#define kInstFlagMoving      0x80u// moved-sticky (mirrors kGeomFlagMoved at draw
                                   // time). Makes the PREV ids texel self-describing for the
                                   // moving-mesh trailing-edge guards: prev ids .x indexes the
                                   // prev frame's draw list, so geoms[pid-1] reads the WRONG
                                   // entry after any topology renumber (tile streaming).
+
+// Packed vertex data — BlasRecord::packedMask. Static geometry narrows its
+// attribute and index buffers when its BLAS is built, and this word says
+// which. It reaches the shaders twice: as DrawInfo.packedAttrs (the raster's
+// fetches, vertex_fetch.glsl) and, shifted up by kGeomFlagPackedShift, inside
+// GeometryDesc.flags (the ray hits' fetches, geometry_fetch.glsl and
+// lidar.rchit).
+#define kPackedNormal  0x1u// normals are oct-snorm16x2, one word a vertex
+#define kPackedUv      0x2u// uvs are unorm16x2, one word a vertex
+#define kPackedColor   0x4u// colours are unorm8x4, one word a vertex
+#define kPackedIndex16 0x8u// the index buffer is uint16, two indices to a word
+#define kPackedAll     0xFu
+
+// GeometryDesc.flags — one word per BLAS entry, written host-side (the scene
+// build in VulkanCoreScene.cpp and the in-place republishes) and read by the
+// ray-hit shaders. THE canonical bit layout: neither side writes a literal.
+// A new bit is named here and added to the static_assert below, which fails
+// the build when two names share a bit. Until 2026-10-09 "glow only" sat on
+// the uint16-index bit, and the hits fetched vertices far out of bounds (a
+// device loss, with no validation message).
+#define kGeomFlagMoved         0x01u// sticky "recently moved", stamped per frame (the history
+                                    // gates read it; a bare `!= 0` test on the word is wrong)
+#define kGeomFlagPackedShift   1u   // bits 1..4 are packedMask, moved up past the bit above
+#define kGeomFlagPackedNormal  (kPackedNormal  << kGeomFlagPackedShift)
+#define kGeomFlagPackedUv      (kPackedUv      << kGeomFlagPackedShift)
+#define kGeomFlagPackedColor   (kPackedColor   << kGeomFlagPackedShift)
+#define kGeomFlagPackedIndex16 (kPackedIndex16 << kGeomFlagPackedShift)
+#define kGeomFlagPackedAll     (kPackedAll     << kGeomFlagPackedShift)
+#define kGeomFlagRtProxy       0x20u// the rays see a coarser proxy of this mesh (BlasRecord::
+                                    // rtIndex, DisplacedMesh::rtProxyCells); shadeWater moves
+                                    // its surface point onto the proxy before launching rays
+#define kGeomFlagGlowOnly      0x40u// the emissive glows but is not a light
+                                    // (setEmissiveCastsLight): it is not in the emitter list,
+                                    // so a ray hit on it keeps its own emission
+
+#ifdef __cplusplus
+// Disjoint names sum to their union; a shared bit makes the sum larger.
+static_assert((kPackedNormal + kPackedUv + kPackedColor + kPackedIndex16) == kPackedAll &&
+              (kPackedNormal | kPackedUv | kPackedColor | kPackedIndex16) == kPackedAll,
+              "kPacked*: two names share a bit, or kPackedAll does not cover them.");
+static_assert((kGeomFlagMoved + kGeomFlagPackedAll + kGeomFlagRtProxy + kGeomFlagGlowOnly) ==
+              (kGeomFlagMoved | kGeomFlagPackedAll | kGeomFlagRtProxy | kGeomFlagGlowOnly),
+              "GeometryDesc.flags: two kGeomFlag* names share a bit.");
+#endif
 
 // Ocean cascade-1 sample-domain rotation. The mid cascade carries only ~a
 // dozen Fourier modes per axis (band-passed to λ ∈ [tileSize2, tileSize1]),

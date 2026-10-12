@@ -98,14 +98,14 @@ void main() {
 
     const uint primId = uint(gl_PrimitiveID);
 
-    // Resolve the three vertex indices of the hit triangle. flags bit 4:
+    // Resolve the three vertex indices of the hit triangle. kGeomFlagPackedIndex16:
     // packed static geometry stores uint16 indices, two per word.
     uint i0, i1, i2;
     if (geom.indexed == 0u) {
         i0 = primId * 3 + 0;
         i1 = primId * 3 + 1;
         i2 = primId * 3 + 2;
-    } else if ((geom.flags & 16u) != 0u) {
+    } else if ((geom.flags & kGeomFlagPackedIndex16) != 0u) {
         IndexBuf ib = IndexBuf(geom.indexAddress);
         const uint base = primId * 3;
         i0 = (ib.i[(base + 0) >> 1] >> (((base + 0) & 1) << 4)) & 0xFFFFu;

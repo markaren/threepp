@@ -602,12 +602,12 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
     if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT)
         return 1.0;
     // MOVING OCCLUDER flag for the denoised shadow channel: this shadow lands on
-    // the receiver from a mesh that is currently moving (GeometryDesc.flags bit 0),
+    // the receiver from a mesh that is currently moving (kGeomFlagMoved),
     // so the shadow SWEEPS the receiver and its history must stay short — the
     // trend/σ-step antilags key off history statistics that the sweep itself
     // degrades (the à-trous feedback rewrites the mean but not E[R²], inflating σ
     // over the swept band), while this is a direct, statistics-free signal.
-    if ((geoms[rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true)].flags & 1u) != 0u)
+    if ((geoms[rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true)].flags & kGeomFlagMoved) != 0u)
         gShadowMovingOccluder = true;
     return 0.0;
 }

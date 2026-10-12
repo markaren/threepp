@@ -567,7 +567,7 @@ namespace threepp {
                                         : glowOnlyObjects_.insert(obj.id).second;
         if (!changed) return;
         ++glowOnlyVersion_;// the emitter list is rebuilt on the next frame
-        // The scene build stamps GeometryDesc.flags bit 6 from the set, but the
+        // The scene build stamps kGeomFlagGlowOnly from the set, but the
         // entries-indexed GeometryDesc mirror is only rewritten on a structural
         // rebuild, so republish the bit in place for an object already drawn
         // (the way setStableCorrespondence republishes prevVertexAddress).
@@ -576,7 +576,7 @@ namespace threepp {
             const MeshEntry& en = lastVisibleEntries_[i];
             if (en.isOverlay || !en.mesh || en.mesh->id != obj.id) continue;
             const uint32_t f  = geomDescsCached_[i].flags;
-            const uint32_t nf = castsLight ? (f & ~64u) : (f | 64u);
+            const uint32_t nf = castsLight ? (f & ~kGeomFlagGlowOnly) : (f | kGeomFlagGlowOnly);
             if (nf == f) continue;
             geomDescsCached_[i].flags = nf;
             markGeomDescsDirty(static_cast<uint32_t>(i));

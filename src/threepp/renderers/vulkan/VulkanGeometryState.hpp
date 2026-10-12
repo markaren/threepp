@@ -60,12 +60,13 @@ namespace threepp::vulkan::impl {
         // colorAddr, gated on the material's vertexColors flag at fill time.
         Buffer color;
         // Which of the optional attribute buffers hold PACKED data instead
-        // of tightly-packed float (bit 0: normal snorm16x4 — 8 B/vertex,
-        // bit 1: uv unorm16x2 — 4 B/vertex, bit 2: color unorm8x4 —
-        // 4 B/vertex). Set by buildBlasFor for static geometry only;
-        // deforming records (skinned / tet / displaced / grass / morphed)
-        // stay float because their compute passes rewrite these buffers
-        // every frame. Mirrored to GeometryDesc::packedAttrs and
+        // of tightly-packed float, and whether the index buffer is uint16:
+        // kPacked* (shaders/vulkan_shared.h; normal oct-snorm16x2, uv
+        // unorm16x2, color unorm8x4, each 4 B/vertex). Set by buildBlasFor
+        // for static geometry only; deforming records (skinned / tet /
+        // displaced / grass / morphed) stay float because their compute
+        // passes rewrite these buffers every frame. Mirrored to
+        // GeometryDesc::flags (shifted, see kGeomFlagPackedShift) and
         // DrawInfoGpu::packedAttrs; shaders branch per fetch.
         uint32_t packedMask = 0;
         // True for FFT-displaced ocean meshes — gates world-space foam +
@@ -619,24 +620,15 @@ namespace threepp::vulkan::impl {
         // chit then skips the vertex-color multiply. Set per-instance below.
         VkDeviceAddress colorAddress;
         uint32_t indexed;
-        // Bit 0: sticky "recently moved" flag, stamped per frame by the
-        // loop in VulkanCoreFrame.cpp (reflection/GI history gates read it).
-        // Bits 1..3: BlasRecord::packedMask << 1 — attribute buffers hold
-        // packed data (bit1 nrm oct-snorm16x2 / bit2 uv unorm16x2 / bit3
-        // col unorm8x4). Shaders mask accordingly; a bare `!= 0` test on
-        // this word is WRONG for the moved gate.
-        // Bit 4: packedMask's fourth bit (8 << 1): the index buffer is
-        // uint16, two indices to a word. The ray hits read their triangles
-        // through it (gfetchTri, lidar.rchit), so a bit that is wrong here
-        // is vertices fetched at fused or halved indices, far out of bounds
-        // in the first case (a device loss, and no validation message).
-        // Bit 5: the rays see a coarser proxy of this mesh (BlasRecord::
-        // rtIndex, DisplacedMesh::rtProxyCells); shadeWater moves its surface
-        // point onto the proxy before launching rays.
-        // Bit 6: the instance's emissive glows but is not a light
-        // (setEmissiveCastsLight): it is not in the emitter list, so a ray
-        // hit on it keeps its own emission. It was bit 4 until 2026-10-09,
-        // on top of the uint16 one (VulkanEmissiveCastsLight_test).
+        // kGeomFlag* (shaders/vulkan_shared.h, where both languages take the
+        // bits from): the sticky moved flag stamped per frame by the loop in
+        // VulkanCoreFrame.cpp, BlasRecord::packedMask shifted up past it, the
+        // ray-tracing proxy flag and the glow-only flag. The ray hits read
+        // their triangles through kGeomFlagPackedIndex16 (gfetchTri,
+        // lidar.rchit), so a bit that is wrong there is vertices fetched at
+        // fused or halved indices, far out of bounds in the first case (a
+        // device loss, and no validation message). Glow-only sat on that bit
+        // until 2026-10-09 (VulkanEmissiveCastsLight_test).
         uint32_t flags;
     };
 

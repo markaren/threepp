@@ -95,7 +95,7 @@ layout(location = 8) flat out uint vStableId;
 // (the channel was reserved); this is the only producer.
 layout(location = 9) flat out uint vParticleId;
 
-#include "vertex_fetch.glsl"// fetchNormal / fetchUv / fetchColor by device address
+#include "vertex_fetch.glsl"// fetchNormal / fetchUv / fetchColor by device address, kPacked*
 
 mat3 quatToMat3(vec4 q) {
     const float x = q.x, y = q.y, z = q.z, w = q.w;
@@ -179,7 +179,7 @@ void main() {
     uint vid;
     if (d.indexed == 0u) {
         vid = uint(gl_VertexIndex);
-    } else if ((d.packedAttrs & 8u) != 0u) {
+    } else if ((d.packedAttrs & kPackedIndex16) != 0u) {
         const uint k = uint(gl_VertexIndex);
         vid = (UintBuf(d.indexAddr).v[k >> 1u] >> ((k & 1u) << 4u)) & 0xFFFFu;
     } else {

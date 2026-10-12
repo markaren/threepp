@@ -1991,7 +1991,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                     // slot per frame in flight, each holding
                                     // positions then normals in the buffers'
                                     // own (possibly packed) formats.
-                                    const VkDeviceSize nrmBytes = (rec.packedMask & 1u)
+                                    const VkDeviceSize nrmBytes = (rec.packedMask & kPackedNormal)
                                             ? VkDeviceSize(rec.vertexCount) * sizeof(uint32_t)
                                             : VkDeviceSize(nrmAttr->array().size()) * sizeof(float);
                                     rec.dynStagingSlotBytes = rec.vbBytes + nrmBytes;
@@ -3066,16 +3066,16 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                              mat && mat->vertexColors;
                     gdesc.colorAddress = useVtxColor ? recPtr->color.address : 0;
                 }
-                // Bit 0 (moved-sticky) is stamped per frame in VulkanCoreFrame;
-                // seed it 0 here and carry the packed bits above it (1..4; the
-                // fourth says the index buffer is uint16).
-                // Bit 5: the record traces a ray-tracing proxy (rtIndex), a
-                // coarser grid than the raster drew; the water shade moves its
-                // surface point onto it before it launches rays.
-                // Bit 6: an emissive that glows but is not a light
+                // kGeomFlagMoved is stamped per frame in VulkanCoreFrame; it is
+                // seeded 0 here, with the packed bits above it.
+                // kGeomFlagRtProxy: the record traces a ray-tracing proxy
+                // (rtIndex), a coarser grid than the raster drew; the water
+                // shade moves its surface point onto it before it launches rays.
+                // kGeomFlagGlowOnly: an emissive that glows but is not a light
                 // (setEmissiveCastsLight): its ray hits keep their emission.
-                gdesc.flags = (recPtr->packedMask << 1) | (recPtr->rtIndexCount ? 32u : 0u) |
-                              (isGlowOnly(*en.mesh) ? 64u : 0u);
+                gdesc.flags = (recPtr->packedMask << kGeomFlagPackedShift) |
+                              (recPtr->rtIndexCount ? kGeomFlagRtProxy : 0u) |
+                              (isGlowOnly(*en.mesh) ? kGeomFlagGlowOnly : 0u);
                 geomDescs[i] = gdesc;
                 // Read-only: assignment of auto ids stays in the indirect draw
                 // builder so this cannot renumber what the Ids AOV reports.

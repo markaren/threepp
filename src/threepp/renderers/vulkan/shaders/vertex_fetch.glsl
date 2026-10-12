@@ -1,13 +1,15 @@
 // Vertex attributes pulled by device address for the bindless G-buffer
 // vertex stages (gbuffer_indirect.vert, particlefield_gbuf.vert), honouring
-// DrawInfo.packedAttrs: bit 0 oct-snorm16 normals, bit 1 unorm16 uvs, bit 2
-// unorm8 colours. Until 2026-10-10 both stages carried their own copies.
+// DrawInfo.packedAttrs (kPacked*, vulkan_shared.h): oct-snorm16 normals, unorm16
+// uvs, unorm8 colours. Until 2026-10-10 both stages carried their own copies.
 //
 // Needs from the includer: the FloatBuf / UintBuf buffer references and
 // the 64-bit integer types.
 
 #ifndef VERTEX_FETCH_GLSL
 #define VERTEX_FETCH_GLSL
+
+#include "vulkan_shared.h"// kPacked*, the DrawInfo.packedAttrs bits
 
 vec3 fetchVec3(uint64_t addr, uint i) {
     FloatBuf b = FloatBuf(addr);
@@ -31,23 +33,23 @@ vec3 octDecodeN(vec2 e) {
     return normalize(v);
 }
 
-// Packed-aware fetches (DrawInfo.packedAttrs bits, see BlasRecord::packedMask).
+// Packed-aware fetches (DrawInfo.packedAttrs, which is BlasRecord::packedMask).
 vec3 fetchNormal(uint64_t addr, uint packedAttrs, uint i) {
-    if ((packedAttrs & 1u) != 0u) {
+    if ((packedAttrs & kPackedNormal) != 0u) {
         return octDecodeN(unpackSnorm2x16(UintBuf(addr).v[i]));
     }
     return fetchVec3(addr, i);
 }
 
 vec2 fetchUv(uint64_t addr, uint packedAttrs, uint i) {
-    if ((packedAttrs & 2u) != 0u) {
+    if ((packedAttrs & kPackedUv) != 0u) {
         return unpackUnorm2x16(UintBuf(addr).v[i]);
     }
     return fetchVec2(addr, i);
 }
 
 vec3 fetchColor(uint64_t addr, uint packedAttrs, uint i) {
-    if ((packedAttrs & 4u) != 0u) {
+    if ((packedAttrs & kPackedColor) != 0u) {
         return unpackUnorm4x8(UintBuf(addr).v[i]).rgb;
     }
     return fetchVec3(addr, i);

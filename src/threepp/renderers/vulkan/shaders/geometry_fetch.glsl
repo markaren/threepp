@@ -11,6 +11,7 @@
 #define GEOMETRY_FETCH_GLSL
 
 #include "geometry_desc.glsl"
+#include "vulkan_shared.h"// kGeomFlag*, the GeometryDesc.flags bits
 
 layout(buffer_reference, scalar) readonly buffer NormalBuf { float n[]; };
 layout(buffer_reference, scalar) readonly buffer IndexBuf  { uint  i[]; };
@@ -29,9 +30,9 @@ vec3 gfetchOctDecode(vec2 e) {
     return normalize(v);
 }
 
-// Per-vertex fetches that honour GeometryDesc.flags bits 1..3.
+// Per-vertex fetches that honour the packed bits of GeometryDesc.flags.
 vec3 gfetchNormal(in GeometryDesc g, uint vid) {
-    if ((g.flags & 2u) != 0u) {
+    if ((g.flags & kGeomFlagPackedNormal) != 0u) {
         return gfetchOctDecode(unpackSnorm2x16(PackedAttrBuf(g.normalAddress).w[vid]));
     }
     NormalBuf nb = NormalBuf(g.normalAddress);
@@ -39,19 +40,19 @@ vec3 gfetchNormal(in GeometryDesc g, uint vid) {
 }
 
 vec2 gfetchUv(in GeometryDesc g, uint vid) {
-    if ((g.flags & 4u) != 0u) {
+    if ((g.flags & kGeomFlagPackedUv) != 0u) {
         return unpackUnorm2x16(PackedAttrBuf(g.uvAddress).w[vid]);
     }
     UvBuf ub = UvBuf(g.uvAddress);
     return vec2(ub.u[vid * 2 + 0], ub.u[vid * 2 + 1]);
 }
 
-// Triangle indices, honouring flags bit 4 (uint16 indices, two per word).
+// Triangle indices, honouring kGeomFlagPackedIndex16 (uint16 indices, two per word).
 uvec3 gfetchTri(in GeometryDesc g, int primId) {
     if (g.indexed == 0u)
         return uvec3(primId * 3 + 0, primId * 3 + 1, primId * 3 + 2);
     const uint base = uint(primId) * 3u;
-    if ((g.flags & 16u) != 0u) {
+    if ((g.flags & kGeomFlagPackedIndex16) != 0u) {
         PackedAttrBuf ib = PackedAttrBuf(g.indexAddress);
         return uvec3((ib.w[(base + 0u) >> 1u] >> (((base + 0u) & 1u) << 4u)) & 0xFFFFu,
                      (ib.w[(base + 1u) >> 1u] >> (((base + 1u) & 1u) << 4u)) & 0xFFFFu,

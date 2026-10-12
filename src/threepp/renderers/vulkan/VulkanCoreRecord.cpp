@@ -890,7 +890,7 @@ void VulkanRenderer::Impl::recordOverlayDepthPrepass(VkCommandBuffer cb) {
                     // entry, which is the whole point at instance counts.
                     if (rec->index.handle != VK_NULL_HANDLE) {
                         // Packed static records store uint16 indices (bit 3).
-                        const VkIndexType itype = (rec->packedMask & 8u) ? VK_INDEX_TYPE_UINT16
+                        const VkIndexType itype = (rec->packedMask & kPackedIndex16) ? VK_INDEX_TYPE_UINT16
                                                                          : VK_INDEX_TYPE_UINT32;
                         if (rec->index.handle != boundIdx || itype != boundIdxType) {
                             vkCmdBindIndexBuffer(cb, rec->index.handle, 0, itype);
@@ -2581,7 +2581,7 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                         if (rec->index.handle != VK_NULL_HANDLE) {
                             // Packed static records store uint16 indices (bit 3).
                             vkCmdBindIndexBuffer(cb, rec->index.handle, 0,
-                                                 (rec->packedMask & 8u) ? VK_INDEX_TYPE_UINT16
+                                                 (rec->packedMask & kPackedIndex16) ? VK_INDEX_TYPE_UINT16
                                                                         : VK_INDEX_TYPE_UINT32);
                             auto* idxAttr = en.mesh->geometry()->getIndex();
                             if (idxAttr) {

@@ -67,19 +67,19 @@ layout(location = 8) flat out uint vStableId;// stable per-object id -> outIds.y
 // draws particles. Declared because gbuffer.frag is shared between the two.
 layout(location = 9) flat out uint vParticleId;
 
-#include "vertex_fetch.glsl"// fetchNormal / fetchUv / fetchColor by device address
+#include "vertex_fetch.glsl"// fetchNormal / fetchUv / fetchColor by device address, kPacked*
 
 void main() {
     const DrawInfo d = draws[gl_InstanceIndex];
 
     // Indexed meshes: gl_VertexIndex is the index-buffer cursor (0..indexCount-1);
     // resolve to the real vertex ID by reading from the bindless index buffer.
-    // Non-indexed: gl_VertexIndex IS the vertex ID directly. packedAttrs bit 3:
+    // Non-indexed: gl_VertexIndex IS the vertex ID directly. kPackedIndex16:
     // the index buffer is uint16, two indices per word.
     uint vid;
     if (d.indexed == 0u) {
         vid = uint(gl_VertexIndex);
-    } else if ((d.packedAttrs & 8u) != 0u) {
+    } else if ((d.packedAttrs & kPackedIndex16) != 0u) {
         const uint k = uint(gl_VertexIndex);
         vid = (UintBuf(d.indexAddr).v[k >> 1u] >> ((k & 1u) << 4u)) & 0xFFFFu;
     } else {
