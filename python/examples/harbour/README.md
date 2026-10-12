@@ -60,7 +60,9 @@ displaces 12.5 t and floats at 1.15 m maximum draft, 0.5 deg by the stern, GM_T 
 Same frame and hydrostatics schema as the sjark. LOA 135.75 m, beam 21.5 m, published
 draught 5.1 m (Wikipedia) and 4.90 m (Deltamarin); twin azimuth thrusters and no rudders,
 per the designer's "pram-type hull form ... azimuth thruster propulsion". At departure she
-displaces 10,070 t at 5.05 m maximum draft, level trim, GM_T 1.96 m. Hull lines and the mass
+displaces 10,070 t at 5.07 m maximum draft, level trim, GM_T 1.77 m. The stern is one shell,
+rounded in plan and raked forward from the waterline to the top rail (`hull.stern`), with the
+hull and decks 4-5 on it and open terraces on decks 6-7. Hull lines and the mass
 budget are ASSUMED; the build fails if the draft leaves 5.1 m by more than 0.25 m, the trim
 passes 1 deg or GM_T leaves 0.8 to 3.0 m.
 

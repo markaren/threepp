@@ -22,10 +22,13 @@ The level of detail is for 60 m to 2 km: silhouette, paint bands, window rows as
 Node hierarchy (all names exact):
     trollfjord                   root, identity, origin = centreline x baseline x mid-LOA
       hull                       lofted hull (antifouling / black / red band split at exact paint
-                                 edges, deck), bulbous bow, forecastle and aft bulwarks, hull
-                                 windows, anchor pockets, thruster tunnel mouths, side and stern
-                                 doors, rescue-boat recess (starboard), TROLLFJORD on both bows and the stern
-      superstructure             white tiers deck4..deck8, lifeboat bays, bridge wings, roof rails,
+                                 edges, deck) closed by a raked, plan-rounded stern, bulbous bow,
+                                 forecastle bulwark, hull
+                                 windows, anchor pockets, thruster tunnel mouths, side doors, the
+                                 stern's window row, rescue-boat recess (starboard), TROLLFJORD on both
+                                 bows and TROLLFJORD / TROMSØ on the raked stern
+      superstructure             white tiers deck4..deck8 (decks 4-5 on the stern shell, 6-7 with open
+                                 terraces aft), lifeboat bays, bridge wings, roof rails,
                                  funnel casing, name board
       windows                    window rows, glass bands and the bridge front (own dark-glass material)
       funnel                     black funnel and exhaust pipes
@@ -59,7 +62,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))          # examples/ (build_common)
-from build_common import (Hydro, Part, T, Z_TO_X, Z_TO_Y, box_between, check_gates, clip_slab, cylinder,  # noqa: E402
+from build_common import (Hydro, Part, T, Z_TO_X, Z_TO_Y, box_between, check_gates, cylinder,  # noqa: E402
                           export, frustum, hydrostatics, loft, make_materials, mass_check, mass_condition,
                           new_object, revolve, sensor_frame, strut, table)
 
@@ -81,6 +84,15 @@ class Lines:
         self.af = P["antifouling_top_y"]
         self.x0, self.x1 = H["transom_x"], H["stem_x"]
         self.nl, self.nh = H["chain"]["low"], H["chain"]["high"]
+        St = H["stern"]
+        self.stern_x = table(St["x"])                     # the stern's aft-most x as a function of height
+        self.round_len, self.round_power = St["round_len"], St["round_power"]
+
+    def stern_round(self, d):
+        """Plan rounding of the stern: the fraction of the full half-breadth at d metres forward
+        of the stern line (a superellipse quadrant of length round_len)."""
+        u = min(1.0, max(0.0, 1.0 - d / self.round_len))
+        return (1.0 - u ** self.round_power) ** (1.0 / self.round_power)
 
     def yref(self, x):
         return max(self.af, self.keel(x) + 1e-3)
@@ -143,41 +155,84 @@ class Lines:
         port_kinds = [Sk[i - 1] for i in range(len(S) - 1, 0, -1)]
         return stb + port, Sk[:-1] + port_kinds
 
+    def stern_ring(self, g, xj, bent):
+        """A ring of the stern zone, bent along the raked stern: each chain point of height y
+        sits g metres forward of the stern line, x = stern_x(y) + g, for g <= bent; from there
+        the rings straighten until g = xj - transom_x is the plane x = xj. Half-breadths are
+        narrowed by stern_round. g = 0 is the stern line itself (a flat ring on the centreline)."""
+        n = len(self.section_half(self.x0))
+        b = min(1.0, max(0.0, (g - bent) / (xj - self.x0 - bent)))
+
+        def xof(y):
+            xa = self.stern_x(y)
+            return xa + g + (self.x0 - xa) * b
+        xs = [self.x0 + g] * n
+        S = [None] * n
+        for _ in range(3):
+            for i in range(n):
+                S[i] = self.section_half(xs[i])[i]
+                xs[i] = xof(S[i][1])
+        half = []
+        for i, (z, y, kind) in enumerate(S):
+            xa = self.stern_x(y)
+            half.append((xs[i], y, z * self.stern_round(xs[i] - xa), kind))
+        stb = [(x, y, z) for (x, y, z, _) in half]
+        port = [(x, y, -z) for (x, y, z, _) in reversed(half[1:-1])]
+        Sk = [k for (_, _, _, k) in half]
+        port_kinds = [Sk[i - 1] for i in range(len(half) - 1, 0, -1)]
+        return stb + port, Sk[:-1] + port_kinds
+
+    def stern_point(self, y, d, zfull):
+        """A point of the stern surface at height y, d metres forward of the stern line, on a
+        side of full half-breadth zfull (the shell's or a tier's): (x, |z|)."""
+        return self.stern_x(y) + d, zfull * self.stern_round(d)
+
+
+def stern_gs(spec, L):
+    """Ring parameters g of the bent stern zone (metres forward of the stern line): the round
+    sampled densely at the tip (n_round, cosine spaced), and every dx up to the join plane."""
+    St = spec["hull"]["stern"]
+    span = St["x_join"] - L.x0
+    gs = [L.round_len * (1.0 - math.cos(0.5 * math.pi * k / St["n_round"])) for k in range(St["n_round"] + 1)]
+    gs += np.arange(St["dx"], span, St["dx"]).tolist() + [span]
+    out = []
+    for g in sorted(gs):
+        if not out or g - out[-1] > 0.05:
+            out.append(g)
+    out[-1] = span
+    return out
+
 
 def stations(spec):
     H = spec["hull"]
     S = H["stations"]
-    x0, x1 = H["transom_x"], H["stem_x"]
+    x0, xj, x1 = H["transom_x"], H["stern"]["x_join"], H["stem_x"]
     xs = set(np.round(np.arange(x0, x1, S["dx"]), 6).tolist())
     for (a, b) in S["fine_ranges"]:
         xs |= set(np.round(np.arange(a, b, S["dx_fine"]), 6).tolist())
-    xs |= {x0, x1}
-    return sorted(set(round(x, 6) for x in xs if x0 <= x <= x1))
+    xs |= {x1}
+    return sorted(set(round(x, 6) for x in xs if xj < x <= x1))     # aft of x_join: the bent stern rings
 
 
 KIND_MAT = {"low": "antifouling", "black": "hull_black", "red": "hull_red", "deck": "deck_grey"}
 
 
 def build_hull(spec, L, part):
+    """The shell lofted from the stern line to the stem. Aft of hull.stern.x_join the rings are
+    bent along the raked, plan-rounded stern (Lines.stern_ring), so the stern closes on its
+    own centreline ring (no transom) and the paint bands run round it."""
+    St = spec["hull"]["stern"]
     xs = stations(spec)
     rings, kinds = [], None
+    for g in stern_gs(spec, L):
+        r, kinds = L.stern_ring(g, St["x_join"], St["bent_len"])
+        rings.append(r)
     for x in xs:
         r, kinds = L.ring(x)
         rings.append(r)
     v, f = loft(rings, caps=False)
     N = len(rings[0])
     mats = [KIND_MAT[kinds[q % N]] for q in range(len(f))]
-    # transom: the aft ring as horizontal paint bands
-    ring0 = [(p[1], p[2]) for p in rings[0]]
-    yb = L.black_at(xs[0])
-    for (a, b, mat) in ((-9.0, L.af, "antifouling"), (L.af, yb, "hull_black"), (yb, 99.0, "hull_red")):
-        piece = clip_slab(ring0, a, b)
-        if len(piece) < 3:
-            continue
-        base = len(v)
-        v += [(xs[0], y, z) for (y, z) in piece]
-        f.append(tuple(base + k for k in range(len(piece) - 1, -1, -1)))
-        mats.append(mat)
     base = len(v)
     v += [tuple(p) for p in rings[-1]]
     f.append(tuple(base + k for k in range(N)))
@@ -256,14 +311,8 @@ def build_hull_details(spec, L, part):
     rr = HD["rescue_recess"]
     s = -1 if rr["side"] == "port" else 1
     hull_decal(L, part, rr["x0"], rr["x1"], rr["y0"], rr["y1"], "door_dark", s, off=0.02)
-    # stern door outline on the transom
-    st = HD["stern_door"]
-    x0 = L.x0 - 0.02
-    for (a, b, c, d, m) in ((st["z0"], st["z1"], st["y0"], st["y1"], "door_dark"),
-                            (st["z0"] + 0.18, st["z1"] - 0.18, st["y0"] + 0.18, st["y1"] - 0.18, "hull_black")):
-        xo = x0 - (0.0 if m == "door_dark" else 0.01)
-        q = [(xo, c, a), (xo, c, b), (xo, d, b), (xo, d, a)]
-        part.add(q, [(0, 1, 2, 3)], m, closed=False, outward=(-1.0, 0.0, 0.0))
+    sw = HD["stern_windows"]
+    shell_windows(part, L, L.stern_x, hull_plan(L), sw, sw["offset"])
     H = spec["hull"]
     fb = H["forecastle_bulwark"]
     wall_along_deck(L, part, fb["x0"], L.x1 - 0.05, fb["height"], fb["thickness"], "super_white")
@@ -271,19 +320,92 @@ def build_hull_details(spec, L, part):
     v, f, M = box_between((xe - 0.6, L.yd(xe) - 0.05, -L.hd(xe) - 0.01), (L.x1 + 0.02, L.yd(xe) + fb["height"], L.hd(xe) + 0.01))
     part.add(v, f, "super_white", M)
     ab = H["aft_bulwark"]
-    wall_along_deck(L, part, L.x0, ab["x1"], ab["height"], ab["thickness"], "hull_red", n=12)
-    zs = L.hd(L.x0)
-    v, f, M = box_between((L.x0, L.yd(L.x0) - 0.05, -zs), (L.x0 + ab["thickness"], L.yd(L.x0) + ab["height"], zs))
-    part.add(v, f, "hull_red", M)
+    if ab["height"] > 0.0:
+        wall_along_deck(L, part, L.x0, ab["x1"], ab["height"], ab["thickness"], "hull_red", n=12)
+        zs = L.hd(L.x0)
+        v, f, M = box_between((L.x0, L.yd(L.x0) - 0.05, -zs), (L.x0 + ab["thickness"], L.yd(L.x0) + ab["height"], zs))
+        part.add(v, f, "hull_red", M)
+
+
+class ShellArc:
+    """The stern surface (a raked, plan-rounded end) addressed by signed arc length s round its
+    plan at a reference height ym (s > 0 to starboard, 0 on the centreline) and by height y.
+    The arc length to depth d forward of the stern line is taken at ym and kept at every height,
+    so a column of constant s runs up the rake. xa_fn(y) is the stern line, zplan(x, y, d) the
+    half-breadth at x, height y, d forward of the stern line (the plan rounding included)."""
+
+    def __init__(self, L, xa_fn, zplan, ym, reach=20.0):
+        self.L, self.xa, self.zp = L, xa_fn, zplan
+        R = L.round_len
+        # d ~ k^power: the round's half-breadth grows about linearly in k at the tip, so the
+        # arc length interpolates well there
+        self.D = np.concatenate([R * (np.arange(401) / 400.0) ** L.round_power, R + np.arange(1, int(reach / 0.25) + 1) * 0.25])
+        P = np.array([self.plan(ym, d) for d in self.D])
+        self.S = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=1))])
+
+    def plan(self, y, d):
+        x = self.xa(y) + d
+        return x, self.zp(x, y, d)
+
+    def at(self, s, y, off):
+        """Point at (s, y) moved off along the outward plan normal, and that normal."""
+        d = float(np.interp(abs(s), self.S, self.D))
+        x, z = self.plan(y, d)
+        x2, z2 = self.plan(y, d + 0.01)
+        n = np.array([-(z2 - z), x2 - x])
+        n /= max(np.linalg.norm(n), 1e-12)
+        sg = 1.0 if s >= 0.0 else -1.0
+        return np.array([x + off * n[0], y, sg * (z + off * n[1])]), np.array([n[0], 0.0, sg * n[1]])
+
+
+def hull_plan(L):
+    return lambda x, y, d: L.high_z(x, y) * L.stern_round(d)
+
+
+def shell_windows(part, L, xa_fn, zplan, W, off):
+    """Windows on a stern surface (ShellArc): `count` per side, centres at s0 + k pitch of arc
+    (s0 = 0 puts one on the centreline), `width` of arc each, from y0 to y1, corner radius
+    `corner`. Each is a strip of columns of constant s, so it follows the round and the rake."""
+    arc = ShellArc(L, xa_fn, zplan, 0.5 * (W["y0"] + W["y1"]))
+    r = W.get("corner", 0.0)
+    for sg in (1.0, -1.0):
+        for k in range(W["count"]):
+            c = sg * (W["s0"] + k * W["pitch"])
+            if W["s0"] == 0.0 and k == 0 and sg < 0.0:
+                continue
+            a, b = c - 0.5 * W["width"], c + 0.5 * W["width"]
+            ss = set(np.linspace(a, b, max(2, int((b - a) / 0.25) + 1)).tolist())
+            for j in range(1, 4):
+                q = r * (1.0 - math.cos(0.5 * math.pi * j / 4))
+                ss |= {a + q, b - q}
+            if a < 0.0 < b:
+                ss.add(0.0)
+            V, F, nsum = [], [], np.zeros(3)
+            for s in sorted(ss):
+                e = min(s - a, b - s)
+                ins = r - math.sqrt(max(0.0, r * r - (r - e) ** 2)) if e < r else 0.0
+                p0, n0 = arc.at(s, W["y0"] + ins, off)
+                p1, _ = arc.at(s, W["y1"] - ins, off)
+                V += [tuple(p0), tuple(p1)]
+                nsum += n0
+            for i in range(len(V) // 2 - 1):
+                F.append((2 * i, 2 * i + 2, 2 * i + 3, 2 * i + 1))
+            part.add(V, F, W["material"], closed=False, outward=tuple(nsum))
 
 
 # ---------------------------------------------------------------- superstructure
-def tier_outline(t, L):
+def tier_outline(t, L, aft=None):
     """Plan outline [(x, z)] of a tier: starboard run from the aft end forward round the front,
     then the port run back (Part orients closed prisms). With aft_len the aft end is a
-    superellipse (aft_power) of that length, else a square end with small chamfers."""
-    w, xa, xf, fl, p = t["half_width"], t["x_aft"], t["x_fwd"], t["front_len"], t["front_power"]
-    al, pa = t.get("aft_len", 0.0), t.get("aft_power", 2.0)
+    superellipse (aft_power) of that length, else a square end with small chamfers.
+    aft = (xa, side_from) puts the aft end on the stern round (Lines.stern_round) with its tip
+    at xa and the straight side sampled from side_from + 0.5: outlines of one tier at several
+    heights then have the same points, so they loft into the raked stern shell."""
+    w, xf, fl, p = t["half_width"], t["x_fwd"], t["front_len"], t["front_power"]
+    if aft is not None:
+        xa, al, pa = aft[0], L.round_len, L.round_power
+    else:
+        xa, al, pa = t["x_aft"], t.get("aft_len", 0.0), t.get("aft_power", 2.0)
     ch = 0.4
 
     def zf(x):
@@ -298,7 +420,10 @@ def tier_outline(t, L):
             z = min(z, L.hd(x) + t.get("clip_margin", 0.0))
         return z
     rc = t.get("recess")
-    if al > 0.0:
+    if aft is not None:
+        side = list(np.linspace(aft[1] + 0.5, xf - fl, 14))
+        aft = [xa + al * (1 - math.cos(0.5 * math.pi * k / 24)) for k in range(0, 25)]
+    elif al > 0.0:
         aft = [xa + al * (1 - math.cos(0.5 * math.pi * k / 24)) for k in range(0, 24)]
         side = list(np.linspace(xa + al, xf - fl, 14))
     else:
@@ -381,18 +506,61 @@ def build_superstructure(spec, L, part, glass):
     off = S["window_offset"]
     outlines = {}
     for t in S["tiers"]:
-        ol, zf = tier_outline(t, L)
-        outlines[t["name"]] = (ol, t)
-        v, f = prism(ol, t["y0"], t["y1"])
+        mode = t.get("aft")
+        if mode is None:
+            ol, zf = tier_outline(t, L)
+            xa_t = xs_t = t["x_aft"]
+            v, f = prism(ol, t["y0"], t["y1"])
+            outlines[t["name"]] = (ol, ol, t)
+        else:
+            # the aft end on the stern shell: "shell" = the whole tier is a slice of the raked
+            # shell; "terrace" = an open deck: the room ends terrace.depth forward of the shell
+            # (vertical), and only the top slab (the deck above) reaches out to the shell line
+            ytop = t["y1"]
+            xs_top = L.stern_x(ytop)
+            side_from = xs_top + L.round_len
+            ys = t["y0"] if mode == "shell" else ytop - t["terrace"]["slab"]
+            s0, _ = tier_outline(t, L, aft=(L.stern_x(ys), side_from))
+            s1, zf = tier_outline(t, L, aft=(xs_top, side_from))
+            v, f = loft([[(x, ys, z) for (x, z) in s0], [(x, ytop, z) for (x, z) in s1]])
+            ol, xa_t, xs_t = s1, xs_top, side_from
+            outlines[t["name"]] = (s1, s0, t)
+            if mode == "terrace":
+                part.add_multi(v, f, ["super_white"] * len(s1) + ["roof_grey", "roof_grey"])
+                xa_t = xs_top + t["terrace"]["depth"]
+                xs_t = xa_t + L.round_len
+                room, zf = tier_outline(t, L, aft=(xa_t, xs_t))
+                v, f = prism(room, t["y0"], ys)
+                outlines[t["name"]] = (s1, room, t)
+                ol = room
+                # the terrace's side screens: walls on the shell line from wall_d forward of the
+                # stern line (a raked aft edge) to where the room reaches full width
+                Tw = t["terrace"]
+                for sg in (1.0, -1.0):
+                    rings = []
+                    for y in (t["y0"], ys):
+                        xa = L.stern_x(y)
+                        outer = []
+                        for d in np.linspace(Tw["wall_d"], xs_t - xa, 14):
+                            outer.append((xa + d, min(t["half_width"] * L.stern_round(d), zf(xa + d) if xa + d > xs_t else t["half_width"])))
+                        ring = [(x, y, sg * z) for (x, z) in outer] + [(x, y, sg * (z - Tw["wall_thickness"])) for (x, z) in reversed(outer)]
+                        rings.append(ring)
+                    part.add(*loft(rings), "super_white")
+            def zplan(x, y, d, t=t):              # as tier_outline's zf on the aft round
+                z = t["half_width"] * L.stern_round(d)
+                return min(z, L.hd(x) + t["clip_margin"]) if t["clip_to_deck"] else z
+            for aw in t["aft_windows"]:
+                xa_fn = L.stern_x if mode == "shell" else (lambda y, xa_t=xa_t: xa_t)
+                shell_windows(glass if aw["material"] == "window_glass" else part, L, xa_fn, zplan, aw, off)
         n = len(ol)
         part.add_multi(v, f, ["super_white"] * n + ["roof_grey", "roof_grey"])
         rc = t.get("recess")
-        w = zf(0.5 * (t["x_aft"] + t["x_fwd"] - t["front_len"]))     # the straight side (clipped to the deck edge)
+        w = zf(0.5 * (xa_t + t["x_fwd"] - t["front_len"]))     # the straight side (clipped to the deck edge)
 
         def straight(x):
             if rc and rc["x0"] - 0.2 < x < rc["x1"] + 0.2:
                 return False
-            return abs(zf(x) - w) < 1e-3 and t["x_aft"] + 0.5 < x
+            return abs(zf(x) - w) < 1e-3 and xs_t + 0.5 < x
         for wr in t["windows"]:
             if wr["kind"] in ("rect", "port"):
                 for xc in np.arange(wr["x0"], wr["x1"] + 1e-6, wr["pitch"]):
@@ -483,8 +651,8 @@ def build_superstructure(spec, L, part, glass):
     # roof rails where no tier stands on the roof
     RR = S["roof_rail"]
     for name in RR["tiers"]:
-        ol, t = outlines[name]
-        above = [o for (o, tt) in outlines.values() if abs(tt["y0"] - t["y1"]) < 1e-6]
+        ol, _, t = outlines[name]
+        above = [o for (_, o, tt) in outlines.values() if abs(tt["y0"] - t["y1"]) < 1e-6]
         y = t["y1"]
         ins = RR["inset"]
         pts = []
@@ -641,7 +809,7 @@ def build_fittings(spec, L, part):
         x, zc = Mo[key]["x"], Mo[key]["z"]
         for s, side in ((-1, "port"), (1, "stbd")):
             z = s * zc
-            y = L.deck(x, z)
+            y = Mo[key]["deck_y"] if "deck_y" in Mo[key] else L.deck(x, z)
             v, f, M = box_between((x - 0.9, y - 0.1, z - 0.4), (x + 0.9, y + 0.08, z + 0.4))
             part.add(v, f, "steel_galv", M)
             for dx in (-0.5 * Mo["spacing"], 0.5 * Mo["spacing"]):
@@ -744,9 +912,17 @@ def name_part(spec, L):
             x, y = xc + s * u, yc + v
             V.append((x, y, s * (L.shell_z(x, y) + N["offset"] + w)))
         part.add(V, faces, "name_white", closed=False)
-    uvw, faces = text_mesh(N["text"], N["stern"]["cap_height"], N["extrude"])
-    V = [(L.x0 - N["offset"] - w, N["stern"]["y_centre"] + v, u) for (u, v, w) in uvw]
-    part.add(V, faces, "name_white", closed=False)
+    # the name and the port of registry on the raked stern: reading port to starboard seen from
+    # astern, the letters laid up the rake (their height measured along the shell)
+    St = N["stern"]
+    for (text, cap, yc) in ((N["text"], St["cap_height"], St["y_centre"]),
+                            (St["home_port"], St["home_port_cap_height"], St["home_port_y_centre"])):
+        uvw, faces = text_mesh(text, cap, N["extrude"])
+        arc = ShellArc(L, L.stern_x, hull_plan(L), yc)
+        slope = L.stern_x(yc + 0.5) - L.stern_x(yc - 0.5)
+        cos_r = 1.0 / math.sqrt(1.0 + slope * slope)
+        V = [tuple(arc.at(u, yc + v * cos_r, N["offset"] + w)[0]) for (u, v, w) in uvw]
+        part.add(V, faces, "name_white", closed=False)
     return part
 
 

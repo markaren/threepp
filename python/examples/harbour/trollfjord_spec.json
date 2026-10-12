@@ -41,7 +41,7 @@
   "deck_camber": 0.2,
   "stations": {
    "dx": 0.6,
-   "fine_ranges": [[50.0, 67.875], [-67.875, -60.0]],
+   "fine_ranges": [[50.0, 67.875]],
    "dx_fine": 0.3
   },
   "chain": {"low": 14, "high": 12},
@@ -56,7 +56,17 @@
    "tail_power": 1.2
   },
   "forecastle_bulwark": {"x0": 57.0, "height": 1.6, "thickness": 0.25, "note": "white bulwark round the open forecastle mooring deck, from x0 to the stem"},
-  "aft_bulwark": {"x1": -63.0, "height": 1.3, "thickness": 0.25}
+  "aft_bulwark": {"x1": -63.0, "height": 0.0, "thickness": 0.25, "note": "no open aft deck since the raked stern (2026-10-09): the shell closes it and no bulwark is drawn (height 0.0); the key stays for harbour_scene.py, which reads hull.aft_bulwark.height"},
+  "stern": {
+   "note": "ASSUMED after the stern-quarter photos ('MS Trollfjord legger til', Wikimedia Commons; the Bergen broadside): one shell, rounded in plan and raked forward from the waterline to the top rail, the hull and the superstructure tiers on the same surface. x = the stern's aft-most x as a function of height [[y, x]] (pchip, flat outside): at transom_x up to the waterline, 3.9 m forward at the main deck, 12.3 m at the top deck. Its plan is a superellipse quadrant of length round_len (exponent round_power) times the local half-breadth. Aft of x_join the hull rings are bent along the stern line (a ring keeps its distance forward of it up to bent_len, then straightens to the plane x_join): n_round of them sample the round, the rest every dx.",
+   "x": [[5.1, -67.875], [5.45, -67.69], [10.35, -65.08], [12.3, -63.97], [15.84, -61.79], [18.81, -59.84], [21.89, -57.77], [25.2, -55.58]],
+   "round_len": 9.0,
+   "round_power": 2.3,
+   "x_join": -45.0,
+   "bent_len": 12.0,
+   "n_round": 24,
+   "dx": 0.6
+  }
  },
  "paint": {
   "note": "SOURCED colours (photos): red antifouling showing at the waterline, black hull, a red band at the top of the hull that dips in a V at the stem. ASSUMED levels. The antifouling top and the black top are hull vertices, so the paint lines are exact edges.",
@@ -64,7 +74,7 @@
   "black_top_y": [[-67.875, 10.35], [54.0, 10.35], [60.0, 10.2], [64.0, 9.9], [67.875, 9.6]]
  },
  "hull_details": {
-  "note": "ASSUMED positions (photos): a row of small square windows in the black hull under the red band, anchor pockets, bow-thruster tunnel mouths, a side car door on both sides aft, a stern door, the rescue-boat recess on the starboard side amidships.",
+  "note": "ASSUMED positions (photos): a row of small square windows in the black hull under the red band, anchor pockets, bow-thruster tunnel mouths, a side car door on both sides aft, rounded windows in the red band round the stern, the rescue-boat recess on the starboard side amidships.",
   "hull_windows": {
    "y0": 8.9,
    "y1": 9.7,
@@ -76,18 +86,17 @@
   },
   "anchor_pocket": {"x": 60.5, "y": 8.5, "rx": 0.9, "ry": 0.7},
   "side_door": {"x0": -36.0, "x1": -29.0, "y0": 6.2, "y1": 9.2},
-  "stern_door": {"z0": -3.5, "z1": 3.5, "y0": 6.4, "y1": 9.6},
+  "stern_windows": {"y0": 10.5, "y1": 11.65, "s0": 1.7, "pitch": 3.4, "width": 2.6, "count": 5, "corner": 0.3, "offset": 0.03, "material": "door_dark", "note": "a row of rounded windows in the red band round the stern (ShellArc layout: count per side, centres s0 + k pitch of arc from the centreline)"},
   "rescue_recess": {"x0": -2.5, "x1": 6.0, "y0": 6.4, "y1": 9.2, "side": "stbd"}
  },
  "superstructure": {
-  "note": "ASSUMED from the photos. Tiers are vertical prisms of a plan outline: straight sides at half_width, a rounded front of length front_len (superellipse front_power), the aft end (aft_len > 0) a superellipse of length aft_len (aft_power) so decks 4-7 form one block whose aft face curves round the stern (stern-quarter photo 'MS Trollfjord legger til', Wikimedia Commons), each deck ending 0.4 m forward of the one below (a gentle rake), window panes wrapping the curve (aft_windows); tiers without aft_len have a square aft end with corner chamfers. clip_to_deck keeps a tier inside the hull deck edge (plus clip_margin) near the bow. Recesses cut the side in plan (lifeboat bays). Each tier's window rows are decals (own dark-glass material) offset window_offset outward.",
+  "note": "ASSUMED from the photos. Tiers are vertical prisms of a plan outline: straight sides at half_width, a rounded front of length front_len (superellipse front_power), the aft end either on the stern shell (aft: 'shell', decks 4-5: the tier is a slice of the raked, plan-rounded stern of hull.stern, so hull and tiers make one surface with no steps) or an open terrace (aft: 'terrace', decks 6-7: the room ends terrace.depth forward of the shell, vertical and rounded alike, and only the top slab of thickness terrace.slab, the deck above, reaches out to the shell line; the roof rails ring it; side screens of wall_thickness stand on the shell line from wall_d forward of the stern line, so the terrace's sides keep the raked edge), with windows laid round and up the shell (aft_windows, ShellArc layout); otherwise a superellipse of length aft_len (aft_power), or a square end with corner chamfers. Shell and terrace tiers have no x_aft (the shell sets it). clip_to_deck keeps a tier inside the hull deck edge (plus clip_margin) near the bow. Recesses cut the side in plan (lifeboat bays). Each tier's window rows are decals (own dark-glass material) offset window_offset outward.",
   "window_offset": 0.04,
   "tiers": [
    {
     "name": "deck4",
     "y0": 12.3,
     "y1": 15.84,
-    "x_aft": -64.6,
     "x_fwd": 57.5,
     "half_width": 10.72,
     "front_len": 12.0,
@@ -97,17 +106,15 @@
     "windows": [
      {"kind": "rect", "y0": 13.213, "y1": 15.155, "x0": -60.0, "x1": 52.0, "width": 1.25, "pitch": 2.8}
     ],
-    "aft_len": 8.0,
-    "aft_power": 2.6,
+    "aft": "shell",
     "aft_windows": [
-     {"kind": "panes", "y0": 13.213, "y1": 15.155, "pitch": 2.8, "width": 1.25}
+     {"y0": 12.6, "y1": 14.7, "s0": 0.725, "pitch": 1.45, "width": 1.15, "count": 10, "material": "window_glass", "note": "slanted panes up the raked shell"}
     ]
    },
    {
     "name": "deck5",
     "y0": 15.84,
     "y1": 18.809,
-    "x_aft": -64.2,
     "x_fwd": 61.5,
     "half_width": 10.72,
     "front_len": 12.0,
@@ -118,17 +125,15 @@
      {"kind": "port", "y0": 16.753, "y1": 17.781, "x0": -60.0, "x1": 50.0, "width": 0.9, "pitch": 2.4},
      {"kind": "band", "y0": 16.525, "y1": 18.123, "x0": 25.0, "x1": 34.0}
     ],
-    "aft_len": 8.0,
-    "aft_power": 2.6,
+    "aft": "shell",
     "aft_windows": [
-     {"kind": "panes", "y0": 16.753, "y1": 17.781, "pitch": 2.4, "width": 1.5}
+     {"y0": 17.0, "y1": 18.35, "s0": 0.0, "pitch": 3.2, "width": 2.6, "count": 5, "corner": 0.35, "material": "door_dark", "note": "rounded windows on the raked shell"}
     ]
    },
    {
     "name": "deck6",
     "y0": 18.809,
     "y1": 21.891,
-    "x_aft": -63.8,
     "x_fwd": 59.0,
     "half_width": 10.5,
     "front_len": 9.0,
@@ -141,17 +146,16 @@
      {"kind": "band", "y0": 18.694, "y1": 22.577, "x0": 25.0, "x1": 34.0},
      {"kind": "front", "y0": 19.608, "y1": 21.549, "arc_from": 52.0}
     ],
-    "aft_len": 8.0,
-    "aft_power": 2.6,
+    "aft": "terrace",
+    "terrace": {"depth": 3.0, "slab": 0.6, "wall_d": 6.75, "wall_thickness": 0.35},
     "aft_windows": [
-     {"kind": "panes", "y0": 19.722, "y1": 20.75, "pitch": 2.4, "width": 1.5}
+     {"y0": 19.2, "y1": 21.0, "s0": 1.3, "pitch": 2.6, "width": 1.9, "count": 5, "material": "window_glass"}
     ]
    },
    {
     "name": "deck7",
     "y0": 21.891,
     "y1": 25.203,
-    "x_aft": -63.4,
     "x_fwd": 54.0,
     "half_width": 10.3,
     "front_len": 9.0,
@@ -162,10 +166,10 @@
      {"kind": "rect", "y0": 22.577, "y1": 24.518, "x0": -60.0, "x1": -16.0, "width": 2.4, "pitch": 3.6},
      {"kind": "front", "y0": 22.577, "y1": 24.632, "arc_from": 46.0}
     ],
-    "aft_len": 8.0,
-    "aft_power": 2.6,
+    "aft": "terrace",
+    "terrace": {"depth": 3.0, "slab": 0.6, "wall_d": 6.75, "wall_thickness": 0.35},
     "aft_windows": [
-     {"kind": "panes", "y0": 22.577, "y1": 24.518, "pitch": 2.8, "width": 2.2}
+     {"y0": 22.3, "y1": 24.3, "s0": 1.3, "pitch": 2.6, "width": 1.9, "count": 4, "material": "window_glass"}
     ]
    },
    {
@@ -314,12 +318,12 @@
   "nav_light_stbd": {"x": 56.2, "y": 22.348, "colour": "green", "sector_deg": 112.5},
   "masthead_fwd": {"colour": "white", "sector_deg": 225.0},
   "masthead_aft": {"colour": "white", "sector_deg": 225.0},
-  "stern_light": {"x": -67.9, "y": 13.9, "colour": "white", "sector_deg": 135.0}
+  "stern_light": {"x": -62.42, "y": 15.4, "colour": "white", "sector_deg": 135.0}
  },
  "mooring": {
-  "note": "ASSUMED bollard positions on the forecastle and the aft mooring deck.",
+  "note": "ASSUMED bollard positions on the forecastle and the aft mooring station.",
   "fwd": {"x": 62.5, "z": 3.4},
-  "aft": {"x": -65.8, "z": 7.4},
+  "aft": {"x": -54.0, "z": 7.4, "deck_y": 10.3, "note": "inside the hull at the mooring station under the main deck (no open aft deck)"},
   "radius": 0.32,
   "height": 0.75,
   "spacing": 0.9
@@ -330,13 +334,13 @@
   "note": "conning position at the centre of the bridge front, eye height 1.6 m over the deck 6 floor"
  },
  "ship_name": {
-  "note": "The ship's name in white on both bows just under the red band (head-on photo) and on the stern. Text geometry, not a logo.",
+  "note": "The ship's name in white on both bows just under the red band (head-on photo) and on the stern with the port of registry. Text geometry, not a logo.",
   "text": "TROLLFJORD",
   "cap_height": 1.1,
   "extrude": 0.03,
   "offset": 0.04,
   "bow": {"x_centre": 56.0, "y_centre": 9.4},
-  "stern": {"y_centre": 9.1, "cap_height": 0.9}
+  "stern": {"y_centre": 8.05, "cap_height": 0.8, "home_port": "TROMSØ", "home_port_y_centre": 7.03, "home_port_cap_height": 0.45, "note": "on the raked black band of the stern, the port of registry under the name; cap heights measured along the shell"}
  },
  "mass": {
   "note": "ASSUMED component budget, sized so the departure condition floats at the sourced draught with a block coefficient near 0.6 and a KG about 10.3 m (passenger ship). Deadweight SOURCED 1,186 t (Deltamarin): full_load = lightship + 1,186 t; departure = lightship + 850 t.",
