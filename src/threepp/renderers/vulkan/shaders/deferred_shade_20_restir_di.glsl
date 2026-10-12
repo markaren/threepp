@@ -308,6 +308,10 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
 // dielectrics: F0≈0.04 → the full-radiance hit was a "probe speckle"). Blended
 // in between so nothing is double-counted at the crossover.
 float gReflEmitterScale = 1.0;
+// Per light, the share of its specular that the ray keeps on top of that scale
+// (emissive_lights.glsl, kEmRaySpacing0): a hit on light l is scaled by
+// mix(gReflEmitterScale, 1, share of l). 0 = no light has one.
+uvec2 gReflEmitterRayShare = uvec2(0u);
 
 // Diffuse indirect. TWO paths, selected by the denoiser flag (pc.flags bit 2):
 //  • DENOISER ON → REAL stochastic 1-bounce GI: a few cosine rays via traceRadiance

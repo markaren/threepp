@@ -1683,11 +1683,45 @@ void main() {
     // ray's emitter self-emission is scaled out via gReflEmitterScale so nothing
     // double-counts). The NEE add is faded by reflBlend so emitter spec follows
     // the same ≥0.7-roughness specular cutoff as the rest of the spec model.
+    // PER LIGHT on top of that: a light whose strata are too far apart for this
+    // lobe goes back to the ray, which draws its mirrored image where the strata
+    // drew separate highlights (emissive_lights.glsl, kEmRaySpacing0). The NEE
+    // keeps 1 - share of each light and the hit scales the emitter it hit by
+    // mix(1 - specNEET, 1, share), so the two still add to one. Only where
+    // the ray's image is one it can hold: the DETERMINISTIC band (roughness <
+    // kReflStochastic, the trace below), where it is one mirror ray, the same
+    // image every frame — in the stochastic band a 1-spp GGX sample misses a
+    // light 1 time in 4 at y = 12 and drew it as grain on a gold sphere at
+    // rest; and a mesh that is NOT MOVING (kInstFlagMoving, its own ids texel)
+    // — a turning metal knot reprojects a history of other normals, and the
+    // panel over it came out as a jagged patch where the strata draw a smooth
+    // band. A floor under that knot still hands off: it is the knot that
+    // moves, not the floor. And FLAT (specAaKernelSq, the 4-neighbour normal
+    // variance, exactly 0 on a plane): on a thin curved tube the mirror
+    // direction turns from pixel to pixel, and one ray through the gloss blur
+    // drew the panel on the same knot at rest as scattered patches where the
+    // strata draw a smooth band; on a plane the image is coherent and the
+    // blur is its gloss. Elsewhere the strata keep every light, the split
+    // before the hand-off.
     const float specNEET = smoothstep(0.10, 0.25, roughness);
+    // Where the reflection trace GGX-samples the lobe instead of the one mirror
+    // ray; the rationale is at the trace. Aligned with specNEET's upper edge.
+    const float kReflStochastic = 0.25;
+    uvec2 emRayShare = uvec2(0u);
     if (opaqueRefl && reflBlend > 0.0 && specNEET > 0.0 && pc.emissiveCount > 0u) {
         const float kS = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+        const uint  selfFlagsZ = (msSampleIdx >= 0) ? texelFetch(gbufIdsMS, px, msSampleIdx).z
+                                                    : texelFetch(gbufIdsTex, px, 0).z;
+        // Flat below a normal step of 0.003 rad per pixel (a curvature radius
+        // over ~450 px), none from 0.006. The band edge stays the trace's own
+        // cut: a ramp from 0.20 gave a roughness-0.22 floor a third of its
+        // light back as strata blobs, and the flat gate is what keeps the cut
+        // off curved tubes, where single pixels the specular AA pushed over
+        // 0.25 fell back to the strata inside the ray's image, as holes.
+        const float flatT = 1.0 - smoothstep(1e-5, 4e-5, specAaKernelSq);
+        const float rayShareScale = (roughness < kReflStochastic && !ifMoving(selfFlagsZ)) ? flatT : 0.0;
         lit += (specNEET * reflBlend)
-             * emissiveSpecNEE(worldPos, N, V, NdotV, F0, roughness, kS, shadowsOn);
+             * emissiveSpecNEE(worldPos, N, V, NdotV, F0, roughness, kS, shadowsOn, rayShareScale, emRayShare);
     }
     vec3 reflOut = vec3(0.0);
     float reflHitT = -1.0;// reflected-content distance (see the trace below)
@@ -1728,6 +1762,7 @@ void main() {
         // same floor at roughness 0.3 showed it — the Fresnel composite
         // already keeps the dielectric's reflected lamp appropriately faint.
         gReflEmitterScale = 1.0 - specNEET;
+        gReflEmitterRayShare = emRayShare;
         // GGX-importance-sample the reflection LOBE — but ONLY where it's WIDE
         // (roughness ≥ kReflStochastic). A NARROW lobe at 1 spp is a spike train
         // on any high-contrast reflected content (a lamp, a tight highlight: hit
@@ -1740,7 +1775,7 @@ void main() {
         // parallax + roughening, low-contrast per sample, wide blur, the SVGF
         // temporal converges it — and emissiveSpecNEE owns emitter spec (the
         // threshold aligns with specNEET's upper edge so the handoff is exact).
-        const float kReflStochastic = 0.25;
+        // kReflStochastic is defined above the emitter NEE, which keys on it too.
         uint reflSeed = pcgHash(uint(px.x) + pcgHash(uint(px.y) + pcgHash(pc.frame * 2654435761u + 7u)));
         // MOTION proxy (mirrors reflReproject's mvLen: screen-space surface
         // motion OR camera world motion) — drives the miss-LOD floor and the
@@ -1839,6 +1874,7 @@ void main() {
         // geometry hit → its distance.
         reflHitT = max(gTraceHitT, 0.0);
         gReflEmitterScale = 1.0;
+        gReflEmitterRayShare = uvec2(0u);
         // Roughness-aware reflection clamp (moving path only). A glossy surface
         // integrates a bright point source — the sun, a sky-gap between trees —
         // over its WHOLE BRDF lobe, so the peak is spread thin and dim. A SETTLED

@@ -325,7 +325,10 @@ namespace threepp {
     //   v2.xyz = world pos2,    v2.w = per-tri power (lum * area)
     //   emission.xyz = emissive*intensity, emission.w = unused
     // followed by a 64-byte HEADER (v0.x = emissive-instance count L, v0.y =
-    // the range gate's exposure term) and, when L <= kEmissiveGateMaxLights,
+    // the range gate's exposure term, v1 and v2 = the entry index of lights
+    // 0..7 when L <= kEmissiveCoverMaxLights, which is the instanceCustomIndex
+    // a reflection hit reads, so the hit knows which light it is on) and, when
+    // L <= kEmissiveGateMaxLights,
     // one 64-byte record per emissive INSTANCE (centre/radius, area-weighted
     // normal sum, CDF start, tri range, area, power, Le, gate): the shader's
     // range gate (a point no light reaches skips the emitter NEE) and, up to
@@ -401,6 +404,10 @@ namespace threepp {
         std::vector<float> lights;// 16 floats per light, kept only while under the cap
         lights.reserve(kEmissiveGateMaxLights * 16);
         uint32_t lightCount = 0;// every emissive instance, capped or not
+        // The entry each of the first kEmissiveCoverMaxLights lights is (the
+        // header's v1, v2). -1 = none, or an index a float does not hold.
+        static_assert(kEmissiveCoverMaxLights <= 8, "the emitter header has eight light slots");
+        float lightEntry[8] = {-1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f};
         // Which entries this walk read as emitters: the fast path's gate.
         std::vector<uint32_t> emitterBits((entries.size() + 31u) / 32u, 0u);
 
@@ -519,6 +526,8 @@ namespace threepp {
                                       areaSum, cumPower - cumStart,
                                       emR, emG, emB, std::max({emR, emG, emB}) * areaSum};
                 if (++lightCount <= kEmissiveGateMaxLights) lights.insert(lights.end(), lf, lf + 16);
+                if (lightCount <= kEmissiveCoverMaxLights && sp.first + sj < (1u << 24u))
+                    lightEntry[lightCount - 1] = static_cast<float>(sp.first + sj);
             }
             }// per-entry (emissive spans only)
         }
@@ -531,7 +540,8 @@ namespace threepp {
         // use the global pick, have no gate and skip the bytes. pc.emissiveCount stays
         // the TRIANGLE count (the CDF search range).
         if (triCount > 0) {
-            const float hdr[16] = {static_cast<float>(lightCount), gateK};// rest zero
+            float hdr[16] = {static_cast<float>(lightCount), gateK};// rest zero
+            if (lightCount <= kEmissiveCoverMaxLights) std::copy(lightEntry, lightEntry + 8, hdr + 4);
             data.insert(data.end(), hdr, hdr + 16);
             if (lightCount <= kEmissiveGateMaxLights) data.insert(data.end(), lights.begin(), lights.end());
         }

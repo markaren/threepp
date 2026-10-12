@@ -280,6 +280,17 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanEmissiveCastsLight_test COMMAND VulkanEmissiveCastsLight_test)
     set_tests_properties(VulkanEmissiveCastsLight_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # The specular light of an emissive mesh on a glossy floor: a light whose
+    # NEE strata are too sparse for the lobe is drawn by the reflection ray (its
+    # mirrored image, where the strata drew one highlight each), and a moving
+    # light keeps its strata count (floor(extra * P / P) was extra or extra - 1
+    # by the bit pattern of its power, which changes every frame).
+    add_executable(VulkanEmitterSpecular_test VulkanEmitterSpecular_test.cpp)
+    target_link_libraries(VulkanEmitterSpecular_test PRIVATE threepp)
+    target_include_directories(VulkanEmitterSpecular_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME VulkanEmitterSpecular_test COMMAND VulkanEmitterSpecular_test)
+    set_tests_properties(VulkanEmitterSpecular_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # Glass with ior exactly 1.0 (glTF sample SunglassesKhronos, lens front) was
     # taken for a flat alpha blend at opacity 0, whose marker WAS ior = 1, and not
     # drawn. Also gates the thin film on glass, which the glass Fresnel ignored.

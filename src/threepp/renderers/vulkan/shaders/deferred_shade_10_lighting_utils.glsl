@@ -851,8 +851,16 @@ vec3 emissiveNEE(int EM_SAMPLES, vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, v
 // BRDF ray — a tight lobe either hits the emitter every frame (no variance) or
 // never, and NEE of a peaked lobe is the probe-speckle regime that made
 // emissiveNEE diffuse-only in the first place.
+// `rayShare`: the share of each light's specular left to the reflection ray
+// (emSpecRayShares: a light whose strata are too sparse for this lobe); the
+// caller hands it to the trace (gReflEmitterRayShare). `rayShareScale` in
+// [0, 1] scales every share; 0 keeps every light here (the caller's stochastic
+// band, where the ray is a 1-spp lobe sample and a light it misses arrives as
+// grain; a moving mesh, whose reflection history is of other normals; a
+// curved surface, where one ray's image breaks into patches).
 vec3 emissiveSpecNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0,
-                     float roughness, float k, bool doShadows) {
+                     float roughness, float k, bool doShadows, float rayShareScale, out uvec2 rayShare) {
+    rayShare = uvec2(0u);
     if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
     {
         // The range gate, for a lobe: against the diffuse 1/π this term peaks at
@@ -866,10 +874,15 @@ vec3 emissiveSpecNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0,
                                  // coarser emitter coverage on wide-lobe metals.
     const vec3   shadowOrig = P + N * SHADOW_EPS;
     const EmPlan plan = emPlanBuild(P, EM_SAMPLES);// same pick as emissiveNEE (emissive_lights.glsl)
+    if (rayShareScale > 0.0) rayShare = emSpecRayShares(plan, P, roughness, rayShareScale);
     vec3 sum = vec3(0.0);
     for (int s = 0; s < plan.count; ++s) {
         EmSample es;
         if (!emPlanSample(plan, s, P, /*twoSided=*/false, es)) continue;
+        // What the reflection ray does not draw of this sample's light. A light
+        // the ray draws whole costs no BRDF and no shadow ray here.
+        const float keep = es.light != kEmNoLight ? 1.0 - emRayShareOf(rayShare, es.light) : 1.0;
+        if (keep <= 0.0) continue;
         const vec3  L     = es.L;
         const float NdotL = dot(N, L);
         if (NdotL <= 0.01) continue;
@@ -907,7 +920,7 @@ vec3 emissiveSpecNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0,
                     continue;
             }
         }
-        sum += c * es.w;
+        sum += c * (es.w * keep);
     }
     return sum;
 }

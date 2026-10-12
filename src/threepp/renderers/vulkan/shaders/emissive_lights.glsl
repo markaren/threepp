@@ -27,7 +27,9 @@
 // BUFFER LAYOUT (host: buildAndUploadEmissiveTris):
 //   [0, N)        EmTri triangles, running power CDF in v1.w      (N = pc.emissiveCount)
 //   [N]           header: v0.x = light count L (float-int), v0.y = gateK (the range
-//                 gate's exposure term, 0 = gate off); rest 0
+//                 gate's exposure term, 0 = gate off); v1.xyzw, v2.xyzw = the TLAS
+//                 instanceCustomIndex of lights 0..7 (float-ints, -1 = none), written
+//                 when L <= kEmissiveCoverMaxLights (emLightOfInstance); rest 0
 //   [N+1, N+1+L)  EmLight records, written only when L ≤ kEmissiveGateMaxLights (the
 //                 coverage mode reads them only when L ≤ kEmissiveCoverMaxLights):
 //                   v0.xyz centre, v0.w bounding radius
@@ -43,6 +45,57 @@
 // to 50 % off face-on for a box), so a coarse box-like emitter keeps its area strata
 // instead: a lone 12-tri emissive cube renders bit-identically to the global pick.
 #define kEmProxyMinTris 32u
+// A light's share of the spare strata, extra * power / areaPower, is an integer
+// for a lone area light (extra * P / P) and for lights of equal power (extra / k),
+// and the float quotient is that integer or one ulp under it depending on the
+// bit pattern of the power. The host sums a moving emitter's power from its
+// world-space triangle areas every frame, so the pattern changes with the pose:
+// a plain floor() gave a lone rotating torus knot 7 strata instead of 8 on 17
+// of 240 frames (the frames where float32 7 * P / P < 7), and every lighting
+// point moved for that frame. A share within kEmShareSnap below an integer
+// counts as that integer. The shares still sum to at most `extra`:
+// kEmissiveCoverMaxLights * kEmShareSnap < 1.
+#define kEmShareSnap 0.015625
+
+// WHO DRAWS A LIGHT'S SPECULAR: the strata here, or the reflection ray.
+// The coherent strata stand in for a light with n points. Through a lobe that is
+// wide against the gaps between them that is a noise-free quadrature; through a
+// lobe that is narrow against them it is n separate highlights where the light's
+// mirrored image belongs (an emissive torus knot 1.1 m over a roughness-0.22
+// floor: three or four blobs). The reflection ray draws that image, and it hits a
+// light that fills its lobe on most samples, so it has none of the spike train
+// that made the strata the owner of a SMALL lamp's specular (emissiveSpecNEE).
+// Per light, from the shaded point, with y = (the light's solid angle) /
+// (pi a2), the lobe's solid angle taken as 1 / D(n):
+//   spacing  y / n   the solid angle one stratum stands for, against the lobe
+//   hit      y       a GGX lobe sample hits the light with chance about y / (4 + y)
+//                    (the half-vector cone of a light of half-angle t is t / 2, and
+//                    GGX's cdf in it is tan2 / (a2 + tan2))
+// The ray's share of light l is smoothstep(spacing) * smoothstep(hit): the strata
+// must be too sparse AND the ray must hit. A stochastic lobe draws a bright light
+// it misses on 1 sample in 3 as grain the filter does not take out (rg_ab's room:
+// its 3 m panel of Le 18 on the roughness-0.25 gold sphere, y = 7.7, when the
+// ramp ended at y = 3), so the ramp runs from 75 % of samples hitting to 89 %;
+// below it the strata keep the light. (The floor of VulkanEmitterSpecular_test
+// is clean from y = 40 up, 8 % misses; a ramp to y = 96 brought its strata
+// blobs back on the near floor.) The strata keep the rest
+// (emissiveSpecNEE), and the reflection hit scales the emitter it hit by the
+// same number (emLightOfInstance, gReflEmitterRayShare), so the two add to one.
+// Coverage mode only (L <= kEmissiveCoverMaxLights); elsewhere the share is 0,
+// and so is it where the ray cannot hold the image (deferred_shade.comp,
+// rayShareScale): in the STOCHASTIC band (roughness 0.25 and up,
+// kReflStochastic) the ray is a 1-spp lobe sample; on a MOVING mesh
+// (kInstFlagMoving) the reflection history is of other normals; and on a
+// CURVED surface (specAaKernelSq) the mirror direction turns from pixel to
+// pixel and one ray through the gloss blur is patches. A 3 m panel mirrored
+// in a roughness-0.15 metal knot: turning, a jagged patch; at rest, scattered
+// patches; the strata draw a smooth band in both. The hand-off is for the
+// flat glossy floor under a light, where the strata drew their blobs.
+#define kEmRaySpacing0 0.1
+#define kEmRaySpacing1 0.5
+#define kEmRayHit0     12.0
+#define kEmRayHit1     32.0
+#define kEmNoLight     0xFFFFFFFFu
 
 struct EmPlan {
     int  count;                        // samples to take (loop bound)
@@ -60,6 +113,7 @@ struct EmSample {
     vec3  Le;      // emission radiance
     float gw;      // geometry ÷ pdf: (area·cosLight)/(pickPdf·dist²), or A_proj/dist² for a proxy
     float w;       // plan weight: 1/strata-of-this-light, or 1/EM in global mode
+    uint  light;   // index in the light table (coverage mode), else kEmNoLight
 };
 
 uint emLightCount() { return uint(emissiveTris[pc.emissiveCount].v0.x + 0.5); }
@@ -106,7 +160,7 @@ EmPlan emPlanBuild(vec3 P, int EM) {
     if (extra > 0 && areaPow > 0.0) {
         for (uint l = 0u; l < L; ++l) {
             if ((pl.proxyBits & (1u << l)) != 0u) continue;// a point needs no more strata
-            pl.n[l] += uint(floor(float(extra) * pw[l] / areaPow));
+            pl.n[l] += uint(floor(float(extra) * pw[l] / areaPow + kEmShareSnap));
         }
     }
     int cnt = 0;
@@ -122,6 +176,7 @@ bool emPlanSample(in EmPlan pl, int s, vec3 P, bool twoSided, out EmSample es) {
     uint lo, hi;
     float xi, pickDen;// CDF search range, stratum position, pick-pdf normaliser
     es.w = 1.0;
+    es.light = kEmNoLight;
     if (!pl.cover) {
         lo = 0u; hi = pc.emissiveCount - 1u;
         xi = (float(s) + 0.5) / float(pl.count) * pc.emissiveTotalPower;
@@ -134,6 +189,7 @@ bool emPlanSample(in EmPlan pl, int s, vec3 P, bool twoSided, out EmSample es) {
             base += int(pl.n[l]);
         }
         if (l >= pl.L) return false;
+        es.light = l;
         const EmTri r = emissiveTris[pc.emissiveCount + 1u + l];
         if ((pl.proxyBits & (1u << l)) != 0u) {
             // POINT PROXY: the whole light from its centre, projected area by shape.
@@ -188,4 +244,55 @@ bool emPlanSample(in EmPlan pl, int s, vec3 P, bool twoSided, out EmSample es) {
     if (p_omega <= 1e-20) return false;
     es.gw = 1.0 / p_omega;
     return true;
+}
+
+// The reflection ray's share of light l's specular at P (see kEmRaySpacing0).
+// The solid angle is the point proxy's projected area over d^2: a one-sided
+// light by its facing, a closed shell by A/4.
+float emSpecRayShare(in EmPlan pl, uint l, vec3 P, float roughness) {
+#ifdef THREEPP_NO_RAY_QUERY
+    return 0.0;// no ray hits anything: the strata are the light's only specular
+#else
+    if (!pl.cover) return 0.0;
+    const EmTri r = emissiveTris[pc.emissiveCount + 1u + l];
+    const vec3  toC = r.v0.xyz - P;
+    const float d2  = max(dot(toC, toC), 1e-8);
+    const float nLen    = length(r.v1.xyz);
+    const float flatCos = nLen > 1e-12 ? dot(r.v1.xyz / nLen, -toC * inversesqrt(d2)) : 0.0;
+    const float aProj   = nLen * max(flatCos, 0.0) + 0.25 * max(r.v2.z - nLen, 0.0);
+    const float omega   = min(aProj / d2, 6.2831853);
+    const float a       = roughness * roughness;
+    const float y       = omega / (3.14159265 * max(a * a, 1e-8));
+    return smoothstep(kEmRaySpacing0, kEmRaySpacing1, y / float(max(pl.n[l], 1u)))
+         * smoothstep(kEmRayHit0, kEmRayHit1, y);
+#endif
+}
+
+// Every light's share in 8 bits, lights 0..3 in .x and 4..7 in .y: the strata
+// and the reflection hit read the same quantised number.
+uvec2 emSpecRayShares(in EmPlan pl, vec3 P, float roughness, float scale) {
+    uvec2 bits = uvec2(0u);
+    if (!pl.cover) return bits;
+    for (uint l = 0u; l < pl.L; ++l) {
+        const uint q = uint(emSpecRayShare(pl, l, P, roughness) * scale * 255.0 + 0.5);
+        bits[l >> 2u] |= q << (8u * (l & 3u));
+    }
+    return bits;
+}
+
+float emRayShareOf(uvec2 bits, uint l) {
+    return float((bits[l >> 2u] >> (8u * (l & 3u))) & 255u) * (1.0 / 255.0);
+}
+
+// The light a TLAS instance is, or kEmNoLight (the header's slots).
+uint emLightOfInstance(int instanceId) {
+    const uint L = emLightCount();
+    if (L == 0u || L > uint(kEmissiveCoverMaxLights)) return kEmNoLight;
+    const vec4 lo = emissiveTris[pc.emissiveCount].v1;
+    const vec4 hi = emissiveTris[pc.emissiveCount].v2;
+    for (uint l = 0u; l < L; ++l) {
+        const float e = l < 4u ? lo[l] : hi[l - 4u];
+        if (e >= 0.0 && int(e + 0.5) == instanceId) return l;
+    }
+    return kEmNoLight;
 }

@@ -672,8 +672,15 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         hitDiffInd = murkAmbient(hitDiffInd, hitP, hitN);
         // gReflEmitterScale hands an emitter's reflected glow to emissiveSpecNEE;
         // a glow-only emissive (kGeomFlagGlowOnly) is in no emitter list, so it
-        // keeps all of it here.
-        const float hEmScale = ((geoms[hitId].flags & kGeomFlagGlowOnly) != 0u) ? 1.0 : gReflEmitterScale;
+        // keeps all of it here. A light the strata are too sparse for keeps its
+        // share (gReflEmitterRayShare), read for the light this instance is.
+        float hEmScale = gReflEmitterScale;
+        if ((geoms[hitId].flags & kGeomFlagGlowOnly) != 0u) {
+            hEmScale = 1.0;
+        } else if (any(notEqual(gReflEmitterRayShare, uvec2(0u))) && any(greaterThan(hEmissive, vec3(0.0)))) {
+            const uint hitLight = emLightOfInstance(hitId);
+            if (hitLight != kEmNoLight) hEmScale = mix(hEmScale, 1.0, emRayShareOf(gReflEmitterRayShare, hitLight));
+        }
         // Along the view ray and before any bounce the hit is in this pixel's
         // column of cluster cells, at its own depth (a perspective view's: the
         // grid's slices are view-space depth from the eye).
