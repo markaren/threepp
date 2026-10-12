@@ -328,7 +328,7 @@ a real aircraft holds. `Mission` flies straight legs on jerk-limited profiles, t
 Not in the model: ground effect, vortex ring state in a descent, blade flapping, the rotors' wash on the
 airframe, any sensor.
 
-`python/examples/trollstigen/trollstigen_inspect.py` (a site project outside this repository) flies it on
+`python/examples/twins/trollstigen/trollstigen_inspect.py` (a site project outside this repository) flies it on
 a bridge inspection in a terrain-shaped wind.
 
 ## Acoustic localization (`m350_acoustic.py`)
