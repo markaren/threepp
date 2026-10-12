@@ -49,6 +49,19 @@ def renderer():
     yield r
 
 
+def pytest_collection_modifyitems(items):
+    """Run test_imgui.py before everything else.
+
+    It is the one module that builds a second GL renderer, on a canvas of its own. A GL
+    canvas makes its context current when its window is created and nothing makes the
+    session renderer's context current again, so every test that draws with `renderer`
+    after that module would draw into the wrong context (flat frames, failed links, a
+    segfault under llvmpipe). Run first, its context is gone before `renderer` exists,
+    whichever test file asks for the session renderer first.
+    """
+    items.sort(key=lambda item: item.path.name != "test_imgui.py")
+
+
 @pytest.fixture
 def lit_scene():
     """A scene with hemisphere + directional lighting, ready for content."""

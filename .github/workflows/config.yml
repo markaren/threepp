@@ -713,6 +713,9 @@ jobs:
 
       - name: Run binding tests (headless GL under Xvfb)
         working-directory: python
+        # The suite takes about ten seconds. A test that draws into the wrong GL context
+        # can hang at exit instead of failing, and the job default is six hours.
+        timeout-minutes: 10
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
         run: xvfb-run -a -s "-screen 0 1280x1024x24" python -m pytest -ra
