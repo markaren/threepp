@@ -418,6 +418,26 @@ bool gl::GLState::useProgram(unsigned int program) {
     return false;
 }
 
+void gl::GLState::purgeProgram(unsigned int program) {
+
+    // Call this whenever a program is deleted. A deleted program that is still
+    // current only lingers, flagged, and its name stays taken; but as soon as
+    // anything else changes the binding (Dear ImGui's GL backend draws with its
+    // own program and will not restore a deleted one) the name is freed, and
+    // the next program linked may be handed it. A cache entry left behind here
+    // would then make that program skip its glUseProgram and draw with whatever
+    // the other code left current. So let go of it now, on both sides.
+    //
+    // As with purgeTexture, three.js needs no equivalent: a WebGLProgram is an
+    // object identity that is never reused after deletion.
+    if (currentProgram == program) {
+
+        glUseProgram(0);
+
+        currentProgram = std::nullopt;
+    }
+}
+
 void gl::GLState::setBlending(
         Blending blending,
         std::optional<BlendEquation> blendEquation,

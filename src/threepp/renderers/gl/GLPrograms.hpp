@@ -21,6 +21,8 @@ namespace threepp {
 
     namespace gl {
 
+        struct GLState;
+
         struct GLPrograms {
 
             std::vector<std::unique_ptr<GLProgram>> programs;
@@ -31,11 +33,12 @@ namespace threepp {
             bool vertexTextures;
 
         private:
+            GLState& state;
             GLClipping& clipping;
             GLBindingStates& bindingStates;
 
         public:
-            GLPrograms(GLBindingStates& bindingStates, GLClipping& clipping);
+            GLPrograms(GLState& state, GLBindingStates& bindingStates, GLClipping& clipping);
 
             static ProgramParameters getParameters(
                     const GLRenderer& renderer,

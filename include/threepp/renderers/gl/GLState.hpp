@@ -155,6 +155,8 @@ namespace threepp {
 
             bool useProgram(unsigned int program);
 
+            void purgeProgram(unsigned int program);
+
             void setBlending(
                     Blending blending,
                     std::optional<BlendEquation> blendEquation = std::nullopt,

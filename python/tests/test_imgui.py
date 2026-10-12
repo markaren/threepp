@@ -1,4 +1,6 @@
 """Dear ImGui UI binding (GL backend). Skips on a build without imgui."""
+import gc
+
 import threepp as tp
 import pytest
 
@@ -53,6 +55,45 @@ def test_want_capture_flags(gl):
     # no UI is hovered in a headless one-shot, but the properties resolve
     assert ui.want_capture_mouse in (True, False)
     assert ui.want_capture_keyboard in (True, False)
+
+
+def test_material_after_disposed_program_and_imgui_frame_draws(gl):
+    """A material built after another was disposed and an ImGui frame was drawn still draws.
+
+    Disposing a material deletes its GL program, but the program is current, so it only
+    lingers. ImGui's backend then binds its own program and does not restore a deleted
+    one, which frees the name; the next program the renderer links is handed that name.
+    The renderer's program cache has to have let go of it, or the new material is taken
+    for already current and its mesh is drawn with ImGui's program: nothing on screen.
+    """
+    _, renderer, ui = gl
+    cam = tp.PerspectiveCamera(60, W / H, 0.1, 100)
+    cam.position.z = 3
+
+    first = tp.Scene()
+    lit = tp.MeshStandardMaterial()
+    lit.color = 0x00ff00
+    first.add(tp.Mesh(tp.BoxGeometry(), lit))
+    first.add(tp.HemisphereLight(0xffffff, 0x404040, 1.0))
+    renderer.render(first, cam)
+    del first, lit
+    gc.collect()  # the material dies here, and its program with it
+
+    def draw():
+        tp.imgui.begin("P")
+        tp.imgui.text("x")
+        tp.imgui.end()
+
+    renderer.render(tp.Scene(), cam)
+    ui.render(draw)
+
+    second = tp.Scene()
+    flat = tp.MeshBasicMaterial()
+    flat.color = 0xff0000
+    second.add(tp.Mesh(tp.BoxGeometry(2, 2, 2), flat))
+    renderer.render(second, cam)
+
+    assert tuple(int(v) for v in renderer.read_pixels()[H // 2, W // 2]) == (255, 0, 0)
 
 # NOTE: the Vulkan ImGui tests live in test_vulkan.py — a GL and a Vulkan ImGui
 # context must not be alive at the same time (two live ImGui contexts crash), and

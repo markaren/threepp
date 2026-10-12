@@ -201,7 +201,7 @@ struct GLRenderer::Impl {
           textures(state, properties, _info),
           materials(properties),
           objects(geometries, attributes, _info),
-          programCache(bindingStates, clipping),
+          programCache(state, bindingStates, clipping),
           cubemaps(scope),
           background(scope, cubemaps, state, objects, parameters.premultipliedAlpha),
           bufferRenderer(std::make_unique<gl::GLBufferRenderer>(_info)),

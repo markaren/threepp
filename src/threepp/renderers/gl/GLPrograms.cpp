@@ -5,6 +5,7 @@
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/utils/StringUtils.hpp"
 #include "threepp/renderers/gl/GLCapabilities.hpp"
+#include "threepp/renderers/gl/GLState.hpp"
 
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 
@@ -35,11 +36,12 @@ namespace {
 }// namespace
 
 
-GLPrograms::GLPrograms(GLBindingStates& bindingStates, GLClipping& clipping)
+GLPrograms::GLPrograms(GLState& state, GLBindingStates& bindingStates, GLClipping& clipping)
     : logarithmicDepthBuffer(GLCapabilities::instance().logarithmicDepthBuffer),
       floatVertexTextures(GLCapabilities::instance().floatVertexTextures),
       maxVertexUniforms(GLCapabilities::instance().maxVertexUniforms),
       vertexTextures(GLCapabilities::instance().vertexTextures),
+      state(state),
       bindingStates(bindingStates),
       clipping(clipping) {}
 
@@ -152,7 +154,15 @@ void GLPrograms::releaseProgram(GLProgram* program) {
             });
             it != programs.end()) {
 
+            const auto glProgram = program->program;
+
             program->destroy();
+
+            // The name is free for reuse once nothing has it current: drop it
+            // from the program cache or the next program to be handed the same
+            // name skips its glUseProgram.
+            state.purgeProgram(glProgram);
+
             programs.erase(it);// Remove the element from the vector
         }
     }
