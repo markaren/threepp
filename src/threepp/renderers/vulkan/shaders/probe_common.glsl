@@ -1,8 +1,9 @@
 // World-space irradiance probe grid — shared sampling logic.
 //
-// Included by deferred_shade.comp (taps the grid at GI-ray hit points) and
-// probe_update.comp (the self-feedback tap that makes the cache multi-bounce).
-// Both must declare, BEFORE including this file, with matching layouts:
+// Included by deferred_shade.comp (taps the grid at primary surfaces and at
+// GI-ray hit points), particle_light.comp and probe_update.comp (the
+// self-feedback tap that makes the cache multi-bounce). Each must declare,
+// BEFORE including this file, with matching layouts:
 //
 //   probeSh[]  — vec4[] storage buffer, 4 vec4 per probe (SH-L1 irradiance):
 //                  [0] = L00.rgb,  .a = validity (0 = probe inside geometry)
@@ -14,13 +15,14 @@
 //                        mean ray luminance (same test; no consumer reads it)
 //   probeDepth[] — uint[] storage buffer, kProbeDepthTexels per probe: an 8×8
 //                octahedral map of packHalf2x16(mean, mean²) ray-hit distance,
-//                NORMALIZED by probeMaxDist() (half-safe at any scene scale).
+//                NORMALIZED by probeMaxDistC() (half-safe at any scene scale).
 //                0u = texel never updated (fresh grid) → treated as "all
 //                clear" so bootstrap can't reject every probe.
-//   probeGrid  — the ProbeGridUbo uniform block:
-//                  vec3 origin; float enabled; vec3 spacing; ivec3 dims;
-//                origin = the FIRST probe's world position (cell centers:
-//                aabbMin + 0.5·spacing), probes at origin + coord·spacing.
+//   probeGrid  — the ProbeGridUbo block (probe_grid_ubo.glsl): one scene-fit
+//                grid, or camera-centred cascades (finest first). Probe
+//                indices below are ABSOLUTE: cascade c's probes occupy
+//                [cBase[c].w, cBase[c].w + dims.x·dims.y·dims.z) and a world
+//                cell lands in the slot given by probeSlotIndex().
 //
 // An includer may define PROBE_GRID_OFF to replace the `enabled` test below
 // (deferred_shade.comp does, for its specialization probe); without it the
@@ -53,6 +55,31 @@ vec3 probeShIrradiance(uint pIdx, vec3 n) {
                vec3(0.0));
 }
 
+// ── Toroidal addressing ──────────────────────────────────────────────────────
+// A cascade's window covers world cells cBase .. cBase + dims - 1 per axis,
+// and world cell w is stored at slot (w mod dims): the slots a scrolling window
+// keeps hold the same world cells before and after the scroll, so their
+// history survives. The scene-fit grid is the same thing with cBase = 0, where
+// every expression below reduces to the plain index it always was.
+ivec3 probePosMod(ivec3 a, ivec3 m) {// a mod m, non-negative (GLSL % is undefined for negative operands)
+    return a - m * ivec3(floor(vec3(a) / vec3(m)));
+}
+ivec3 probeSlotCoord(uint slot) {// linear slot → (x, y, z) in 0..dims-1
+    const ivec3 d = probeGrid.dims;
+    return ivec3(int(slot) % d.x, (int(slot) / d.x) % d.y, int(slot) / (d.x * d.y));
+}
+// The world cell stored at slot s of a window whose first probe is world cell
+// `base`: the one cell in base .. base + dims - 1 that is ≡ s (mod dims).
+ivec3 probeWorldCellOfSlot(int c, ivec3 s, ivec3 base) {
+    return base + probePosMod(s - base, probeGrid.dims);
+}
+// Absolute probe index of world cell w in cascade c.
+uint probeSlotIndex(int c, ivec3 w) {
+    const ivec3 d = probeGrid.dims;
+    const ivec3 s = probePosMod(w, d);
+    return uint(probeGrid.cBase[c].w) + uint(s.x + d.x * (s.y + d.y * s.z));
+}
+
 // ── Probe depth (visibility) — DDGI Chebyshev test (Majercik et al. 2019) ───
 // Each probe carries an 8×8 octahedral map of (mean, mean²) ray-hit distance.
 // At sample time the point-to-probe distance is tested against the moments in
@@ -66,7 +93,8 @@ const float kProbeDepthSharpness = 50.0;// power-cosine blend kernel (paper valu
 
 // Depth rays saturate here; probes never test points beyond one cell diagonal
 // (+ the lookup bias), so 1.5× keeps every real query inside the linear range.
-float probeMaxDist() { return 1.5 * length(probeGrid.spacing); }
+// Per cascade: a coarser cascade's probes see proportionally farther.
+float probeMaxDistC(int c) { return 1.5 * length(probeGrid.cSpacing[c].xyz); }
 
 vec2 octEncode(vec3 v) {// unit dir → [-1,1]² octahedral
     v /= (abs(v.x) + abs(v.y) + abs(v.z));
@@ -101,7 +129,7 @@ ivec2 octWrapTexel(ivec2 c) {
 }
 
 // (mean, mean²) of probe pIdx's ray-hit distance around dirFromProbe, still
-// NORMALIZED by probeMaxDist(). Manual 4-tap bilinear with octahedral wrap.
+// NORMALIZED by probeMaxDistC(). Manual 4-tap bilinear with octahedral wrap.
 vec2 probeDepthMoments(uint pIdx, vec3 dirFromProbe) {
     const vec2  p    = (octEncode(dirFromProbe) * 0.5 + 0.5) * float(kProbeDepthRes) - 0.5;
     const ivec2 base = ivec2(floor(p));
@@ -121,12 +149,12 @@ vec2 probeDepthMoments(uint pIdx, vec3 dirFromProbe) {
 // Chebyshev visibility weight of probe pIdx for the (biased) point Pb.
 // 1 = the probe saw past the point in this direction; → 0 when everything it
 // saw stopped well short (a wall in between). Cubed like the paper to crush
-// the estimator's long leaky tail.
-float probeChebyshev(uint pIdx, vec3 pPos, vec3 Pb) {
+// the estimator's long leaky tail. maxDist = probeMaxDistC() of the probe's
+// cascade (the stored moments are normalized by it).
+float probeChebyshev(uint pIdx, vec3 pPos, vec3 Pb, float maxDist) {
     const vec3  fromProbe = Pb - pPos;
     const float rLen      = length(fromProbe);
     if (rLen <= 1e-4) return 1.0;
-    const float maxDist = probeMaxDist();
     const vec2  mm = probeDepthMoments(pIdx, fromProbe / rLen) * vec2(maxDist, maxDist * maxDist);
     // The stored distances saturate at maxDist — clamp the test distance just
     // under it so an unoccluded probe (mean ≈ maxDist) never self-shadows.
@@ -138,8 +166,8 @@ float probeChebyshev(uint pIdx, vec3 pPos, vec3 Pb) {
     return cheb * cheb * cheb;
 }
 
-// Trilinear-interpolated indirect irradiance at surface point P with normal N.
-// Leak handling:
+// Trilinear-interpolated indirect irradiance at surface point P with normal N
+// from ONE cascade's window. Leak handling:
 //   • normal-offset bias: the lookup point moves 0.25·min(spacing) off the
 //     surface so a wall pixel doesn't straddle the cell boundary into probes
 //     behind the wall,
@@ -162,26 +190,34 @@ float probeChebyshev(uint pIdx, vec3 pPos, vec3 Pb) {
 // and the interpolation would be black not because the point is dark but
 // because nothing measured it. Callers that have a cheaper fallback fill (env /
 // ambient) should blend by conf instead of trusting a starved neighbourhood.
-vec3 probeIrradianceConf(vec3 P, vec3 N, out float conf) {
+//
+// `edge` (out) = how far inside the window the lookup point sits, in cells,
+// clamped to 0..1: 1 a full cell inside the outermost probes, 0 at or beyond
+// them (the lookup then clamps to the border probes). The cascade blend uses
+// it to hand over to the parent before a window's edge shows.
+vec3 probeIrradianceCascadeConf(int c, vec3 P, vec3 N, out float conf, out float edge) {
     conf = 0.0;
-    if (PROBE_GRID_OFF) return vec3(0.0);
-    const float minSp = min(probeGrid.spacing.x,
-                            min(probeGrid.spacing.y, probeGrid.spacing.z));
+    const vec3  sp    = probeGrid.cSpacing[c].xyz;
+    const float minSp = min(sp.x, min(sp.y, sp.z));
     const vec3 Pb = P + N * (0.25 * minSp);
-    vec3 g = (Pb - probeGrid.origin) / probeGrid.spacing;
-    g = clamp(g, vec3(0.0), vec3(probeGrid.dims) - 1.0);
+    vec3 g = (Pb - probeGrid.cOrigin[c].xyz) / sp;
+    const vec3 dm1 = vec3(probeGrid.dims) - 1.0;
+    const vec3 ein = min(g, dm1 - g);
+    edge = clamp(min(ein.x, min(ein.y, ein.z)), 0.0, 1.0);
+    g = clamp(g, vec3(0.0), dm1);
     const ivec3 base = min(ivec3(g), probeGrid.dims - 2);
     const vec3  t    = clamp(g - vec3(base), 0.0, 1.0);
+    const float maxDist = probeMaxDistC(c);
 
     vec3  sum  = vec3(0.0);
     float wSum = 0.0;
     float wGeo = 0.0;// geometric weight ignoring validity — the conf denominator
-    for (int c = 0; c < 8; ++c) {
-        const ivec3 o    = ivec3(c & 1, (c >> 1) & 1, (c >> 2) & 1);
-        const ivec3 pi   = base + o;
+    for (int i = 0; i < 8; ++i) {
+        const ivec3 o    = ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
+        const ivec3 pi   = base + o;// window coordinate
         const vec3  w3   = mix(1.0 - t, t, vec3(o));
-        const uint  pIdx = uint(pi.x + probeGrid.dims.x * (pi.y + probeGrid.dims.y * pi.z));
-        const vec3  pPos = probeGrid.origin + vec3(pi) * probeGrid.spacing;
+        const uint  pIdx = probeSlotIndex(c, probeGrid.cBase[c].xyz + pi);
+        const vec3  pPos = probeGrid.cOrigin[c].xyz + vec3(pi) * sp;
         vec3 toP = pPos - P;
         const float dLen = length(toP);
         toP = (dLen > 1e-4) ? toP / dLen : N;
@@ -189,7 +225,7 @@ vec3 probeIrradianceConf(vec3 P, vec3 N, out float conf) {
         // Shading weight = backface × Chebyshev visibility, floored (the
         // least-occluded probe should win over pure black) and crushed below
         // 0.2 (RTXGI curve: w²/0.2² — continuous fade instead of a hard cut).
-        float ws = (ndp * ndp) * probeChebyshev(pIdx, pPos, Pb);
+        float ws = (ndp * ndp) * probeChebyshev(pIdx, pPos, Pb, maxDist);
         ws = max(ws, 1e-4);
         if (ws < 0.2) ws *= ws * ws * (1.0 / (0.2 * 0.2));
         const float wg   = w3.x * w3.y * w3.z * ws;// position × shading weight
@@ -219,6 +255,40 @@ vec3 probeIrradianceConf(vec3 P, vec3 N, out float conf) {
     // few healthy spots along the rounded edges. The ramp sits between the two.
     conf *= smoothstep(0.03, 0.1, wGeo);
     return (wSum > 1e-3) ? sum / wSum : vec3(0.0);
+}
+
+// Indirect irradiance at P, N from the probe field.
+//   scene-fit grid (cascadeCount 1): the one window, exactly as before.
+//   cascades: the FINEST window that holds P with a cell to spare, blended
+//     with its parent as the point nears that window's edge (edge → 0) and
+//     where the fine probes measured nothing (conf → 0: inside a hull, under a
+//     deck, a cavity smaller than a fine cell). The parent carries the same
+//     light at coarser resolution, so the handover is a resolution change,
+//     not a lighting change. Beyond the coarsest window conf → 0 and the
+//     caller's fallback (gather / env) stands, as it did outside the scene-fit
+//     grid.
+vec3 probeIrradianceConf(vec3 P, vec3 N, out float conf) {
+    conf = 0.0;
+    if (PROBE_GRID_OFF) return vec3(0.0);
+    float edge;
+    if (probeGrid.cascadeCount <= 1) return probeIrradianceCascadeConf(0, P, N, conf, edge);
+    int c = 0;
+    for (; c < probeGrid.cascadeCount - 1; ++c) {
+        const vec3 g   = (P - probeGrid.cOrigin[c].xyz) / probeGrid.cSpacing[c].xyz;
+        const vec3 ein = min(g, vec3(probeGrid.dims) - 1.0 - g);
+        if (min(ein.x, min(ein.y, ein.z)) > 0.0) break;
+    }
+    float confF;
+    const vec3 eF = probeIrradianceCascadeConf(c, P, N, confF, edge);
+    if (c + 1 >= probeGrid.cascadeCount) {
+        conf = confF * edge;
+        return eF;
+    }
+    float confP, edgeP;
+    const vec3  eP = probeIrradianceCascadeConf(c + 1, P, N, confP, edgeP);
+    const float wF = edge * smoothstep(0.0, 0.5, confF);
+    conf = mix(confP * edgeP, confF, wF);
+    return mix(eP, eF, wF);
 }
 
 vec3 probeIrradiance(vec3 P, vec3 N) {

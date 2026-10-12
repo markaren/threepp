@@ -766,6 +766,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             {
                 THREEPP_CPUPROF("frame.1_uboUpdates");
                 updateCameraUbo(currentFrame, camera);
+                std::memcpy(probeCamPos_, camera.matrixWorld->elements.data() + 12, sizeof(probeCamPos_));
                 updateLightsUbo(currentFrame, scene);
                 updateFogUbo(currentFrame, scene, camera);
                 updateCloudUbo(currentFrame);

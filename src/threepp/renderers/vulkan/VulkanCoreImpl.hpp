@@ -2188,6 +2188,11 @@ namespace threepp {
         std::unique_ptr<vulkan::ProbeGI> probeGI_;
         bool probeGIEnabled_  = true;
         bool probeGridDirty_  = true;
+        // The primary camera's world position this frame: the centre the
+        // probe cascades follow (ProbeGI::recentre) when the scene is too
+        // large for one scene-fit grid. Taken from the primary's camera UBO
+        // upload, never a secondary view's.
+        float probeCamPos_[3] = {0.f, 0.f, 0.f};
         // Lighting-step detector for the probe update. The probes blend 1/32
         // of each update, one update per probe every 8 frames, so a switched
         // light lingered in the grid for thousands of frames; a step in any

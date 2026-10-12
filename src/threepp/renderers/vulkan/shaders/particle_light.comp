@@ -69,11 +69,8 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
 } fog;
 
 layout(set = 0, binding = 36, scalar) readonly buffer ProbeShBuf { vec4 probeSh[]; };
-layout(set = 0, binding = 37, scalar) uniform ProbeGridUbo {
-    vec3  origin;  float enabled;
-    vec3  spacing; float _pad0;
-    ivec3 dims;    int   _pad1;
-} probeGrid;
+#define PROBE_GRID_UBO_BINDING 37
+#include "probe_grid_ubo.glsl"// probeGrid: the scene-fit grid or the camera-centred cascades
 layout(set = 0, binding = 54, scalar) readonly buffer ProbeDepthBuf { uint probeDepth[]; };
 
 #include "cluster_lights.glsl"// ClusterLight, the grid shape, the Z ladder, clusterCellBase

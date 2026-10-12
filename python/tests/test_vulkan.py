@@ -1860,3 +1860,68 @@ def test_frame_interop_rejects_a_stale_view(vk_frames):
         FrameTensors(renderer, 9999, ("depth",))
     with pytest.raises(ValueError):
         FrameTensors(renderer, 0, ("not_a_channel",))
+
+
+def test_probe_cascades_follow_the_camera_and_keep_their_slots(vk_renderer):
+    """A scene too large for one scene-fit probe grid gets camera-centred cascades
+    (ProbeGI::Layout::Cascades): the finest window is 1 m probes around the camera,
+    it moves by whole cells once the camera leaves its middle cell, and the move is
+    toroidal: the slots the window keeps hold the same world cells and the same
+    history byte for byte, only the entering slots are reset (probe_update.comp's
+    scroll mode). probe_grid reports the finest window."""
+    skip_without_ray_tracing(vk_renderer)
+    r = vk_renderer
+    scene = tp.Scene()
+    ground = tp.Mesh(tp.PlaneGeometry(2000.0, 2000.0), tp.MeshStandardMaterial())
+    ground.rotation.x = -math.pi / 2
+    scene.add(ground)
+    for i in range(6):
+        box = tp.Mesh(tp.BoxGeometry(3.0, 3.0, 3.0), tp.MeshStandardMaterial())
+        box.position.set(i * 7.0 - 15.0, 1.5, -6.0)
+        scene.add(box)
+    sun = tp.DirectionalLight(tp.Color(1.0, 1.0, 1.0), 3.0)
+    sun.position.set(30.0, 80.0, 20.0)
+    scene.add(sun)
+    camera = tp.PerspectiveCamera(50.0, W / H, 0.1, 500.0)
+    camera.position.set(0.0, 2.0, 12.0)
+    camera.look_at(0.0, 1.0, 0.0)
+    r.probe_gi = True
+    for _ in range(40):  # five full sweeps of the finest window
+        r.render(scene, camera)
+    g0 = r.probe_grid()
+    assert g0 is not None
+    sp, dims = np.array(g0["spacing"]), np.array(g0["dims"])
+    assert np.allclose(sp, 1.0), f"a 2 km ground is far beyond the scene fit; finest cascade spacing {sp}"
+    origin0, sh0 = np.array(g0["origin"]), np.array(g0["sh"])
+    hist0 = sh0[:, 1, 3]
+    assert (hist0 > 0).all(), "every slot of the finest window updated at least once in 40 frames"
+
+    # A step inside the middle cell does not move the window.
+    camera.position.x += 0.3
+    r.render(scene, camera)
+    assert np.allclose(r.probe_grid()["origin"], origin0)
+
+    # Ten cells in +x: the window follows, kept slots keep their data, the ten
+    # entering columns are reset (history 0, or 1 where this frame's update
+    # window already refreshed them: at most 2048 probes per cascade per frame).
+    camera.position.x += 10.0
+    r.render(scene, camera)
+    g2 = r.probe_grid()
+    origin2, sh2 = np.array(g2["origin"]), np.array(g2["sh"])
+    assert np.allclose(origin2 - origin0, [10.0, 0.0, 0.0], atol=1e-4), origin2 - origin0
+    base0 = np.rint(origin0 / sp - 0.5).astype(int)
+    base2 = np.rint(origin2 / sp - 0.5).astype(int)
+    idx = np.arange(int(dims.prod()))
+    slot = np.stack([idx % dims[0], (idx // dims[0]) % dims[1], idx // (dims[0] * dims[1])], 1)
+    cell = base2 + np.mod(slot - base2, dims)  # the world cell each slot holds now
+    entered = cell[:, 0] >= base0[0] + dims[0]
+    assert entered.sum() == 10 * dims[1] * dims[2]
+    hist2 = sh2[:, 1, 3]
+    fresh = hist2[entered]
+    assert (fresh <= 1.0).all(), "an entering slot still carries history from its old world cell"
+    assert (fresh == 0.0).sum() >= entered.sum() - 2048
+    kept = ~entered
+    assert (hist2[kept] >= hist0[kept]).all() and (hist2[kept] <= hist0[kept] + 2).all()
+    untouched = kept & (hist2 == hist0)
+    assert untouched.sum() > 0
+    assert np.array_equal(sh2[untouched], sh0[untouched]), "a kept slot's store changed without an update"

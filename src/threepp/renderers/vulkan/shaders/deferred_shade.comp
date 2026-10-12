@@ -232,11 +232,8 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
 // grid UBO's `enabled` gates all sampling; buffers are dummies when off.
 // See probe_common.glsl for the storage layout + energy accounting.
 layout(set = 0, binding = 36, scalar) readonly buffer ProbeShBuf { vec4 probeSh[]; };
-layout(set = 0, binding = 37, scalar) uniform ProbeGridUbo {
-    vec3  origin;  float enabled;
-    vec3  spacing; float _pad0;
-    ivec3 dims;    int   _pad1;
-} probeGrid;
+#define PROBE_GRID_UBO_BINDING 37
+#include "probe_grid_ubo.glsl"// probeGrid: the scene-fit grid or the camera-centred cascades
 // Octahedral depth store (Chebyshev visibility — see probe_common.glsl).
 layout(set = 0, binding = 54, scalar) readonly buffer ProbeDepthBuf { uint probeDepth[]; };
 

@@ -85,9 +85,12 @@ namespace threepp {
                 if (probeGridDirty_) {
                     fitProbeGridToScene();
                     probeGridDirty_ = false;
-                    // Grid moved → the UBO written above is stale; rewrite.
-                    probeGI_->updateGridUbo(f, true);
                 }
+                // Camera-centred cascades follow the primary camera (a no-op
+                // for the scene-fit grid). Grid moved or re-fitted → the UBO
+                // written above is stale; rewrite.
+                probeGI_->recentre(probeCamPos_);
+                probeGI_->updateGridUbo(f, true);
                 // A step in the lighting (a light switched, the emissive power
                 // jumped) runs the next kProbeFastBlendFrames updates at the
                 // fast blend; see probeLightingStepped.

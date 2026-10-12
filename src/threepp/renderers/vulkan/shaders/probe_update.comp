@@ -77,7 +77,7 @@ layout(set = 0, binding = 7, scalar) readonly buffer EmissiveTriBuf { EmTri emis
 // tap read depended on workgroup scheduling order).
 layout(set = 0, binding = 8, scalar) writeonly buffer ProbeShOutBuf { vec4 probeShOut[]; };
 // Octahedral depth store, WRITE side (kProbeDepthTexels ×
-// packHalf2x16(mean, mean²) per probe, normalized by probeMaxDist()).
+// packHalf2x16(mean, mean²) per probe, normalized by probeMaxDistC()).
 layout(set = 0, binding = 9, scalar) writeonly buffer ProbeDepthOutBuf { uint probeDepthOut[]; };
 // READ side: the start-of-dispatch snapshot the host copied from the canonical
 // stores (ProbeGI::recordDispatch). Declared under the names probe_common.glsl
@@ -85,12 +85,8 @@ layout(set = 0, binding = 9, scalar) writeonly buffer ProbeDepthOutBuf { uint pr
 // semantics without touching any consumer's bindings.
 layout(set = 0, binding = 10, scalar) readonly buffer ProbeShBuf { vec4 probeSh[]; };
 layout(set = 0, binding = 11, scalar) readonly buffer ProbeDepthBuf { uint probeDepth[]; };
-layout(set = 0, binding = 0, scalar) uniform ProbeGridUbo {
-    vec3  origin;  float enabled;// enabled gates SAMPLING (deferred_shade); the
-                                 // update dispatch is simply skipped when off
-    vec3  spacing; float _pad0;
-    ivec3 dims;    int   _pad1;
-} probeGrid;
+#define PROBE_GRID_UBO_BINDING 0
+#include "probe_grid_ubo.glsl"// probeGrid: the scene-fit grid or the camera-centred cascades
 
 #include "probe_common.glsl"// probeIrradiance() — the multi-bounce feedback tap
 
@@ -98,7 +94,7 @@ layout(push_constant) uniform Pc {
     uint  probeOffset;       // round-robin window start (probe index)
     uint  probeCount;        // probes this dispatch (== workgroup count)
     uint  frame;             // update counter — rotates the ray sphere
-    uint  flags;             // bit 0 = shadows, bit 1 = lighting stepped (fast blend)
+    uint  flags;             // bit 0 = shadows, bit 1 = lighting stepped (fast blend), bit 2 = scroll (see main)
     uint  emissiveCount;     // # emissive triangles (0 = none)
     float emissiveTotalPower;// power-CDF total (denominator)
     uint  envMipCount;       // PMREM mip levels (>=1)
@@ -198,7 +194,7 @@ vec3 giSunLeg(vec3 P, inout vec3 L) { return vec3(1.0); }
 // backface = 1 when the ray landed on geometry's interior side — the caller
 // counts these to decide the probe sits inside a wall (validity).
 // hitDist = ray-hit distance for the Chebyshev depth map (1e30 on miss — the
-// depth blend saturates it at probeMaxDist()); backface hits report 0.2× the
+// depth blend saturates it at probeMaxDistC()); backface hits report 0.2× the
 // true distance (DDGI convention: an in-wall probe's depth then shadows
 // everything, belt-and-braces with validity).
 //
@@ -289,14 +285,45 @@ shared float sHist;       // EMA history snapshot — read once BEFORE thread 0
                           // same α as the SH
 
 void main() {
-    if (gl_WorkGroupID.x >= pc.probeCount) return;
-    const uint total = uint(probeGrid.dims.x * probeGrid.dims.y * probeGrid.dims.z);
-    const uint pIdx  = (pc.probeOffset + gl_WorkGroupID.x) % max(total, 1u);
-    ivec3 pcoord;
-    pcoord.x = int(pIdx) % probeGrid.dims.x;
-    pcoord.y = (int(pIdx) / probeGrid.dims.x) % probeGrid.dims.y;
-    pcoord.z = int(pIdx) / (probeGrid.dims.x * probeGrid.dims.y);
-    const vec3 probePos = probeGrid.origin + vec3(pcoord) * probeGrid.spacing;
+    const uint total = uint(probeGrid.dims.x * probeGrid.dims.y * probeGrid.dims.z);// probes per cascade
+    const uint nCasc = uint(max(probeGrid.cascadeCount, 1));
+
+    // ── Scroll (flags bit 2): a cascade window moved. One workgroup per probe
+    // of EVERY cascade; a slot whose world cell is not the one it held before
+    // the move is reset to the fresh-grid state (SH 0, validity 0, history 0,
+    // depth sentinel 0u), so its next update bootstraps with α = 1 instead of
+    // blending into light measured kilometres away. The slots the window kept
+    // are untouched: same world cell, same history. No probe rays.
+    if ((pc.flags & 4u) != 0u) {
+        const uint wg = gl_WorkGroupID.x;
+        if (wg >= total * nCasc) return;
+        const int   sc   = int(wg / total);
+        const uint  slot = wg % total;
+        const ivec3 s    = probeSlotCoord(slot);
+        if (all(equal(probeWorldCellOfSlot(sc, s, probeGrid.cBase[sc].xyz),
+                      probeWorldCellOfSlot(sc, s, probeGrid.cPrevBase[sc].xyz)))) return;
+        const uint p = uint(probeGrid.cBase[sc].w) + slot;
+        probeDepthOut[p * uint(kProbeDepthTexels) + gl_LocalInvocationID.x] = 0u;
+        if (gl_LocalInvocationID.x == 0u) {
+            probeShOut[p * 4u + 0u] = vec4(0.0);
+            probeShOut[p * 4u + 1u] = vec4(0.0);
+            probeShOut[p * 4u + 2u] = vec4(0.0);
+            probeShOut[p * 4u + 3u] = vec4(0.0);
+        }
+        return;
+    }
+
+    // One window of pc.probeCount probes per cascade, cascades back to back.
+    // The index is ABSOLUTE (cascade range + slot); the probe's position comes
+    // from the world cell its slot holds. With one scene-fit grid (cBase 0)
+    // this is the plain index and position it always was.
+    if (gl_WorkGroupID.x >= pc.probeCount * nCasc) return;
+    const int   c      = int(gl_WorkGroupID.x / pc.probeCount);
+    const uint  local  = (pc.probeOffset + gl_WorkGroupID.x % pc.probeCount) % max(total, 1u);
+    const uint  pIdx   = uint(probeGrid.cBase[c].w) + local;
+    const ivec3 pcoord = probeWorldCellOfSlot(c, probeSlotCoord(local), probeGrid.cBase[c].xyz)
+                       - probeGrid.cBase[c].xyz;// window coordinate
+    const vec3 probePos = probeGrid.cOrigin[c].xyz + vec3(pcoord) * probeGrid.cSpacing[c].xyz;
 
     // Fibonacci sphere, Cranley-Patterson-rotated per (probe, update) so
     // successive updates integrate fresh directions (the EMA averages them).
@@ -338,7 +365,7 @@ void main() {
     // like the SH. Texels the fan barely grazed keep their old value — with
     // Cranley-Patterson rotation the next updates cover them.
     {
-        const float maxDist = probeMaxDist();
+        const float maxDist = probeMaxDistC(c);
         const ivec2 tc      = ivec2(int(ri) % kProbeDepthRes, int(ri) / kProbeDepthRes);
         const vec3  tDir    = octDecode((vec2(tc) + 0.5) * (2.0 / float(kProbeDepthRes)) - 1.0);
         float wSum = 0.0, dSum = 0.0, d2Sum = 0.0;

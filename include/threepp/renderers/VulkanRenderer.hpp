@@ -1416,7 +1416,13 @@ namespace threepp {
         // The probe-GI grid (ProbeGI): probe (i, j, k) sits at
         // origin + (i, j, k) · spacing, and its SH-L1 coefficients are at index
         // i + dims[0] · (j + dims[1] · k) of readProbeShDebug's store. False
-        // before the grid has been fitted to a scene.
+        // before the grid has been fitted to a scene. A scene too large for
+        // one grid (probes more than 2 m apart on some axis) gets three
+        // camera-centred cascades instead, 1 / 4 / 16 m apart; this reports
+        // the finest one, whose window follows the camera and whose slots are
+        // toroidally addressed (ProbeGI.hpp), so the index above is then the
+        // window coordinate modulo dims. THREEPP_VK_PROBE_CASCADES=0 keeps
+        // the scene fit for every scene.
         bool probeGrid(float origin[3], float spacing[3], int dims[3]) const;
 
         // ── Path-traced LIDAR scanner ─────────────────────────────────────
