@@ -2,6 +2,10 @@
 
 #include "VulkanCpuPhaseProf.hpp"
 
+#include <algorithm>
+#include <string>
+#include <vector>
+
 namespace threepp {
 
     namespace rg = vulkan::rg;
@@ -2480,6 +2484,103 @@ void VulkanRenderer::Impl::dumpMemoryStats(const char* tag) const {
                              "[threepp][vk-mem]   heap %u%s: usage %.1f MB / budget %.1f MB\n",
                              i, devLocal ? " (device-local)" : "",
                              budgets[i].usage / MB, budgets[i].budget / MB);
+            }
+
+            // Where the geometry records' buffers landed, per buffer class:
+            // device-local only, device-local + host-visible (the BAR window,
+            // 256 MiB without resizable BAR), or system memory, which every
+            // vertex pull, hit fetch and BLAS input read crosses PCIe for.
+            // Groups: static (cached, not deforming), dynamic (graduated to the
+            // per-frame refit), interop, deform (the deformer states' records
+            // and their inputs). Bytes are the buffers' requested sizes.
+            struct PlacementRow {
+                std::string name;
+                double bytes[3] = {};
+                uint32_t count[3] = {};
+            };
+            std::vector<PlacementRow> rows;
+            auto add = [&](const std::string& name, const Buffer& b) {
+                if (b.alloc == VK_NULL_HANDLE) return;
+                VkMemoryPropertyFlags f = 0;
+                vmaGetAllocationMemoryProperties(ctx->allocator(), b.alloc, &f);
+                const int k = (f & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) == 0      ? 2
+                              : (f & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0 ? 1
+                                                                                 : 0;
+                auto it = std::find_if(rows.begin(), rows.end(),
+                                       [&](const PlacementRow& r) { return r.name == name; });
+                if (it == rows.end()) {
+                    rows.push_back({name});
+                    it = rows.end() - 1;
+                }
+                it->bytes[k] += static_cast<double>(b.size);
+                ++it->count[k];
+            };
+            auto addRecord = [&](const std::string& g, const BlasRecord& r) {
+                add(g + ".vertex", r.vertex);
+                add(g + ".normal", r.normal);
+                add(g + ".uv", r.uv);
+                add(g + ".color", r.color);
+                add(g + ".index", r.index);
+                add(g + ".rtIndex", r.rtIndex);
+                add(g + ".prevVertex", r.prevVertex);
+                add(g + ".blas", r.storage);
+                add(g + ".blasScratch", r.blasScratch);
+                add(g + ".dynStaging", r.dynStaging);
+                for (const auto* levels : {&r.lodLevels, &r.lodLanding}) {
+                    for (const auto& l : *levels) {
+                        add(g + ".lodIndex", l.index);
+                        add(g + ".lodBlas", l.storage);
+                    }
+                }
+            };
+            for (const auto& [geom, rec] : blasCache) {
+                if (!rec) continue;
+                addRecord(rec->interop ? "interop" : rec->perFrameDynamic ? "dynamic" : "static", *rec);
+            }
+            for (const auto& [m, st] : skinnedMeshStates) {
+                if (!st) continue;
+                if (st->blas) addRecord("deform", *st->blas);
+                add("deform.inputs", st->baseVertex);
+                add("deform.inputs", st->baseNormal);
+                add("deform.inputs", st->skinIndex);
+                add("deform.inputs", st->skinWeight);
+            }
+            for (const auto& [m, st] : tetMeshStates) {
+                if (st && st->blas) addRecord("deform", *st->blas);
+            }
+            for (const auto& [m, st] : morphedMeshStates) {
+                if (st && st->blas) addRecord("deform", *st->blas);
+            }
+            for (const auto& [m, st] : displacedStates) {
+                if (st && st->blas) addRecord("deform", *st->blas);
+            }
+            for (const auto& [m, st] : grassStates) {
+                if (!st) continue;
+                if (st->blas) addRecord("deform", *st->blas);
+                add("deform.inputs", st->restPos);
+                add("deform.inputs", st->heightFrac);
+            }
+            if (!rows.empty()) {
+                std::fprintf(stderr,
+                             "[threepp][vk-mem]   geometry placement, MB / buffers: %-18s %-18s %-18s\n",
+                             "device-local", "BAR (DL+HV)", "host");
+                PlacementRow total{"total"};
+                for (const auto& r : rows) {
+                    std::fprintf(stderr,
+                                 "[threepp][vk-mem]     %-30s %9.1f / %-6u %9.1f / %-6u %9.1f / %-6u\n",
+                                 r.name.c_str(),
+                                 r.bytes[0] / MB, r.count[0], r.bytes[1] / MB, r.count[1],
+                                 r.bytes[2] / MB, r.count[2]);
+                    for (int k = 0; k < 3; ++k) {
+                        total.bytes[k] += r.bytes[k];
+                        total.count[k] += r.count[k];
+                    }
+                }
+                std::fprintf(stderr,
+                             "[threepp][vk-mem]     %-30s %9.1f / %-6u %9.1f / %-6u %9.1f / %-6u\n",
+                             total.name.c_str(),
+                             total.bytes[0] / MB, total.count[0], total.bytes[1] / MB, total.count[1],
+                             total.bytes[2] / MB, total.count[2]);
             }
             std::fflush(stderr);
         }
