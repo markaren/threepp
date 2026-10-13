@@ -160,8 +160,9 @@ def read_radiance_hdr(path):
     """Read a Radiance .hdr (flat or new-style RLE) as an (H, W, 3) float32 array.
 
     Row 0 is the top of the file, which for an equirect is the zenith. For
-    editing a downloaded HDRI in numpy before it becomes a float_texture;
-    RGBELoader alone is enough when the pixels go straight to the renderer."""
+    editing a downloaded HDRI in numpy before it becomes a float_texture, whose
+    row 0 is the NADIR: pass it [::-1] (warp_jelly_wreck does). RGBELoader alone
+    is enough when the pixels go straight to the renderer."""
     with open(path, "rb") as f:
         data = f.read()
     pos = 0

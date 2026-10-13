@@ -247,8 +247,12 @@ namespace threepp_py {
               py::arg("data"),
               "Build a float (HDR) Texture from a (height, width, 3|4) float32 numpy array: "
               "RGBA, linear, equirectangular. This is the sky/IBL texture type — assign it to "
-              "scene.environment and scene.background. Row 0 is v = 0 (the zenith end of an "
-              "equirect). Use Texture.update_float to re-bake one in place.");
+              "scene.environment and scene.background. Row 0 is the NADIR (elevation -90 deg) "
+              "and the last row the zenith, so row i sits at elevation "
+              "((i + 0.5) / height - 0.5) * 180 deg; column 0 is u = 0. This is the reverse "
+              "of a Radiance .hdr file, whose first row is the zenith: an array read from "
+              "one (demo_common.read_radiance_hdr) needs [::-1] before it comes here. Use "
+              "Texture.update_float to re-bake one in place.");
     }
 
 }// namespace threepp_py
