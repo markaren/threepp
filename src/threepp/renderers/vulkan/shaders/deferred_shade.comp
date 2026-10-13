@@ -2630,7 +2630,11 @@ void main() {
     } else {
         imageStore(indirectImage, px, vec4(0.0));// histLen=0 → next frame cold-starts
         imageStore(momentsImage, px, vec4(0.0));
-        imageStore(shadowVisImage, px, vec4(0.0));// glass/inline: no shadow channel
+        // The no-ratio marker (-1, histLen 0), not 0: a 0 here is a "fully
+        // shadowed" vote in every neighbour's a-trous ratio filter (the taps
+        // skip only sky, unlit and the marker), which blacked out a thin stem
+        // standing in front of a glass pane.
+        imageStore(shadowVisImage, px, vec4(-1.0, 0.0, 0.0, 0.0));// glass/inline: no shadow channel
     }
     // Unshadowed analytic direct for the recombine (U × R̃). UNWEIGHTED like
     // indirect/reflect — the denoise applies recombineCoverage at consumption.
