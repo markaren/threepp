@@ -298,6 +298,20 @@ vec3 probeIrradianceConf(vec3 P, vec3 N, out float conf) {
     return mix(eP, eF, wF);
 }
 
+// How far P lies beyond the coarsest window: 0 a full cell inside its outermost
+// probes, 1 at or beyond them, the same lookup point and ramp as that window's
+// `edge` above (conf fades out over the same cell). Each window holds the finer
+// ones, so 1 = outside every window: no probe measured anything there.
+float probeBeyondWindows(vec3 P, vec3 N) {
+    if (PROBE_GRID_OFF) return 1.0;
+    const int   c     = max(probeGrid.cascadeCount, 1) - 1;
+    const vec3  sp    = probeGrid.cSpacing[c].xyz;
+    const float minSp = min(sp.x, min(sp.y, sp.z));
+    const vec3  g     = (P + N * (0.25 * minSp) - probeGrid.cOrigin[c].xyz) / sp;
+    const vec3  ein   = min(g, vec3(probeGrid.dims) - 1.0 - g);
+    return 1.0 - clamp(min(ein.x, min(ein.y, ein.z)), 0.0, 1.0);
+}
+
 vec3 probeIrradiance(vec3 P, vec3 N) {
     float conf;
     return probeIrradianceConf(P, N, conf);
