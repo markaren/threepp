@@ -2917,8 +2917,9 @@ namespace threepp {
         // 256 MiB BAR window first and spilled the rest to system memory on a
         // desktop without resizable BAR, and every G-buffer vertex pull, ray
         // hit fetch and BLAS input read then crossed PCIe each frame.
-        // Deformer and interop records keep host-visible memory (their host
-        // writes are per frame). Every host write into a geometry buffer goes
+        // Deformer and interop records keep host-visible vertex and normal
+        // buffers (rewritten per frame); their uv, color, index and rtIndex
+        // are device-local too. Every host write into a geometry buffer goes
         // through stageUpload, which memcpys into a host-mappable allocation
         // as before and queues the bytes for a staging copy otherwise, so no
         // writer depends on where the buffer landed.
