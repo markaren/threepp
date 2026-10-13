@@ -1812,6 +1812,17 @@ namespace threepp_py {
                               "denoise on. Interiors read physically dark — pair with "
                               "auto_exposure or a raised tone_mapping_exposure. False restores "
                               "the legacy cosmetic ambient.")
+                .def_property("probe_cascades",
+                              [](PyVulkanRenderer& r) { return r.native().probeCascades(); },
+                              [](PyVulkanRenderer& r, uint32_t v) { r.native().setProbeCascades(v); },
+                              "Camera-centred probe cascades for a scene too large for one probe "
+                              "grid (a harbour, a fjord). 0 (default): one grid fitted to the "
+                              "scene's bounds, whatever its size. 1..4: a scene whose fit would "
+                              "space probes more than 2 m apart gets that many windows around the "
+                              "primary camera, 1, 4, 16 and 64 m apart. Every window is updated "
+                              "every frame, so it costs frame time (about 1.7 ms for 3 on an RTX "
+                              "4060 Laptop). Set it before the first frame. The env var "
+                              "THREEPP_VK_PROBE_CASCADES, when set, takes precedence.")
                 // One lighting term in place of the lit frame (VulkanRenderer::
                 // setLightingView), by name, for teaching and debugging.
                 .def_property(

@@ -1863,14 +1863,25 @@ def test_frame_interop_rejects_a_stale_view(vk_frames):
 
 
 def test_probe_cascades_follow_the_camera_and_keep_their_slots(vk_renderer):
-    """A scene too large for one scene-fit probe grid gets camera-centred cascades
-    (ProbeGI::Layout::Cascades): the finest window is 1 m probes around the camera,
-    it moves by whole cells once the camera leaves its middle cell, and the move is
-    toroidal: the slots the window keeps hold the same world cells and the same
-    history byte for byte, only the entering slots are reset (probe_update.comp's
-    scroll mode). probe_grid reports the finest window."""
+    """Cascades are opt-in (probe_cascades): without them a scene too large for one
+    probe grid keeps the scene fit, however coarse. With them it gets camera-centred
+    cascades (ProbeGI::Layout::Cascades): the finest window is 1 m probes around the
+    camera, it moves by whole cells once the camera leaves its middle cell, and the
+    move is toroidal: the slots the window keeps hold the same world cells and the
+    same history byte for byte, only the entering slots are reset
+    (probe_update.comp's scroll mode). probe_grid reports the finest window."""
     skip_without_ray_tracing(vk_renderer)
+    if os.environ.get("THREEPP_VK_PROBE_CASCADES"):
+        pytest.skip("THREEPP_VK_PROBE_CASCADES pins the cascade count")
     r = vk_renderer
+    assert r.probe_cascades == 0, "cascades are off unless asked for"
+    try:
+        _probe_cascades_follow_the_camera(r)
+    finally:
+        r.probe_cascades = 0  # the session's renderer goes back to the scene fit
+
+
+def _probe_cascades_follow_the_camera(r):
     scene = tp.Scene()
     ground = tp.Mesh(tp.PlaneGeometry(2000.0, 2000.0), tp.MeshStandardMaterial())
     ground.rotation.x = -math.pi / 2
@@ -1886,6 +1897,13 @@ def test_probe_cascades_follow_the_camera_and_keep_their_slots(vk_renderer):
     camera.position.set(0.0, 2.0, 12.0)
     camera.look_at(0.0, 1.0, 0.0)
     r.probe_gi = True
+    for _ in range(3):
+        r.render(scene, camera)
+    fit = r.probe_grid()
+    assert fit is not None
+    assert max(fit["spacing"]) > 10.0, f"without cascades a 2 km ground is one scene-fit grid; spacing {fit['spacing']}"
+    r.probe_cascades = 3
+    assert r.probe_cascades == 3
     for _ in range(40):  # five full sweeps of the finest window
         r.render(scene, camera)
     g0 = r.probe_grid()

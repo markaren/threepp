@@ -2279,6 +2279,14 @@ namespace threepp {
         return pimpl_->probeGIEnabled_;
     }
 
+    void VulkanRenderer::setProbeCascades(uint32_t count) {
+        pimpl_->setProbeCascades(count);
+    }
+
+    uint32_t VulkanRenderer::probeCascades() const {
+        return pimpl_->probeGI_ ? pimpl_->probeGI_->cascadesWanted() : 0u;
+    }
+
     void VulkanRenderer::setGbufferMsaa(uint32_t samples) {
         pimpl_->setGbufferMsaa(samples);
     }

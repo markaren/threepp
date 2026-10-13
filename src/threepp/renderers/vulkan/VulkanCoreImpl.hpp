@@ -2760,6 +2760,7 @@ namespace threepp {
         // called when Idle apply immediately as before.
         bool pendingRenderScaleRealloc_ = false;
         bool pendingAccumulationReset_  = false;
+        int  pendingProbeCascades_      = -1;// setProbeCascades asked mid-frame; -1 = nothing pending
         // resetTemporalHistory: every dynamic BLAS takes the BUILD path on the
         // next frame and its refit counter restarts. A refit chain and the
         // periodic full rebuild it counts toward are temporal state like any
@@ -4651,6 +4652,12 @@ namespace threepp {
         void setGbufferMsaa(uint32_t samples);
 
         [[nodiscard]] uint32_t gbufferMsaa() const { return gbufMsaaSamples_; }
+
+        // VulkanRenderer::setProbeCascades. Growing the probe stores rewrites
+        // the deferred sets of every view, so it shares setRenderScale's idle
+        // gate: mid-frame the request waits for the next beginDeferredFrame.
+        void setProbeCascades(uint32_t count);
+        void applyProbeCascades(uint32_t count);// device idle
 
         // Whether the DEVICE can rasterize + sample the G-buffer at this
         // count. The MS G-buffer spans color, depth AND integer (ids) formats,

@@ -634,6 +634,34 @@ void VulkanRenderer::Impl::setGbufferMsaa(uint32_t samples) {
             reallocateRenderExtentResources();
         }
 
+void VulkanRenderer::Impl::setProbeCascades(uint32_t count) {
+            // Without ray query the probes are off (VulkanCoreInit): nothing
+            // would sample the windows this would allocate. With
+            // THREEPP_VK_PROBE_CASCADES set, the environment has the say.
+            if (!probeGI_ || !ctx->rayQuerySupported() || probeGI_->cascadesPinned()) return;
+            count = std::min(count, vulkan::ProbeGI::kCascadesMax);
+            pendingProbeCascades_ = -1;// the last call wins
+            if (count == probeGI_->cascadesWanted()) return;
+            if (frameState_ != FrameState::Idle) {
+                pendingProbeCascades_ = static_cast<int>(count);
+                return;
+            }
+            vkDeviceWaitIdle(ctx->device());
+            applyProbeCascades(count);
+        }
+
+void VulkanRenderer::Impl::applyProbeCascades(uint32_t count) {
+            if (count == probeGI_->cascadesWanted()) return;
+            // New stores: the deferred set (36/54) and the probe update's own
+            // set are both written by rewriteDeferredDescriptors, per view.
+            if (probeGI_->setCascades(count)) forEachLiveView([&] { rewriteDeferredDescriptors(); });
+            // The grid is unfitted again; the next probe update re-fits it and
+            // picks the layout. The probe term feeds the accumulated GI
+            // channel, so its history restarts as it does for setProbeGI.
+            probeGridDirty_ = true;
+            if (sceneBuilt_) resetAccumulation();
+        }
+
 void VulkanRenderer::Impl::setSplatDepthAov(SplatDepthMode mode) {
             if (mode == splatDepthMode_) return;
             const bool wasOn = splatDepthAovAllocated();
@@ -731,11 +759,19 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // THIS frame's refit sites (VulkanCoreImpl::blasRebuildThisFrame_).
             blasRebuildThisFrame_ = forceBlasRebuild_;
             forceBlasRebuild_     = false;
-            if (pendingRenderScaleRealloc_ || pendingAccumulationReset_ || pendingViewChanges_) {
+            if (pendingRenderScaleRealloc_ || pendingAccumulationReset_ || pendingViewChanges_ ||
+                pendingProbeCascades_ >= 0) {
                 vkDeviceWaitIdle(d);
                 if (pendingRenderScaleRealloc_) {
                     reallocateRenderExtentResources();// also rewrites deferred descriptors
                     pendingRenderScaleRealloc_ = false;
+                }
+                if (pendingProbeCascades_ >= 0) {
+                    // Ahead of the accumulation reset it asks for, so that
+                    // reset is taken here too.
+                    const uint32_t count = static_cast<uint32_t>(pendingProbeCascades_);
+                    pendingProbeCascades_ = -1;
+                    applyProbeCascades(count);
                 }
                 if (pendingAccumulationReset_) {
                     // Every live view: the reset is a per-view act (each view

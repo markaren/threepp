@@ -1416,13 +1416,11 @@ namespace threepp {
         // The probe-GI grid (ProbeGI): probe (i, j, k) sits at
         // origin + (i, j, k) · spacing, and its SH-L1 coefficients are at index
         // i + dims[0] · (j + dims[1] · k) of readProbeShDebug's store. False
-        // before the grid has been fitted to a scene. A scene too large for
-        // one grid (probes more than 2 m apart on some axis) gets three
-        // camera-centred cascades instead, 1 / 4 / 16 m apart; this reports
-        // the finest one, whose window follows the camera and whose slots are
-        // toroidally addressed (ProbeGI.hpp), so the index above is then the
-        // window coordinate modulo dims. THREEPP_VK_PROBE_CASCADES=0 keeps
-        // the scene fit for every scene.
+        // before the grid has been fitted to a scene. With setProbeCascades,
+        // a scene too large for one grid gets camera-centred cascades
+        // instead; this reports the finest one, whose window follows the
+        // camera and whose slots are toroidally addressed (ProbeGI.hpp), so
+        // the index above is then the window coordinate modulo dims.
         bool probeGrid(float origin[3], float spacing[3], int dims[3]) const;
 
         // ── Path-traced LIDAR scanner ─────────────────────────────────────
@@ -1615,6 +1613,25 @@ namespace threepp {
         // ambient (ungated env/ambient fill, no multi-bounce).
         void setProbeGI(bool enabled);
         [[nodiscard]] bool probeGI() const;
+
+        // Camera-centred probe cascades for a scene too large for one grid.
+        // The probe grid is one 32×16×32 box fitted to the scene's bounds; in
+        // a harbour or a fjord that puts probes hundreds of metres apart, and
+        // quays, hulls and everything under a roof get sky times occlusion
+        // and no bounce. With count >= 1, a scene whose fit would space
+        // probes more than 2 m apart gets that many windows around the
+        // primary camera instead, 1, 4, 16 and 64 m apart (3 covers
+        // 512×256×512 m); a scene one grid covers keeps the scene fit.
+        // OFF by default (0): every window is updated every frame and the
+        // shade taps two of them, about 1.7 ms a frame for three on an
+        // RTX 4060 Laptop at 1600×900 in vulkan_ocean. count is clamped to
+        // 4. The first call that raises the count reallocates the probe
+        // stores (about 10 MB a window); call it before the first frame, or
+        // accept one device drain. The env var THREEPP_VK_PROBE_CASCADES
+        // (0..4), when set, takes precedence over this call.
+        void setProbeCascades(uint32_t count);
+        // The count in effect: the last setProbeCascades, or the env var's.
+        [[nodiscard]] uint32_t probeCascades() const;
 
         // Volumetric SPOT-light beams: ray-marched single scattering through a
         // uniform thin haze. `density` is the scattering coefficient σ (1/m; 0 =

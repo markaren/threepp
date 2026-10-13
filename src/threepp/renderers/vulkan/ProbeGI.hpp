@@ -2,12 +2,12 @@
 // renderer's multi-bounce GI.
 //
 // Owns 32×16×32 grids of SH-L1 irradiance probes — ONE fitted to the scene
-// AABB (cell-centered) while that keeps probes within kSceneFitMaxSpacing of
-// each other, or kCascades camera-centred, toroidally addressed cascades at
-// kCascadeBaseSpacing·4^c for a scene too large for one grid (a harbour, a
-// fjord: the scene fit put one probe every 2.5 km there, and the deferred
-// shade's indirect term had nothing to tap) — and the probe_update.comp
-// compute pass that refreshes
+// AABB (cell-centered), or, where the app asked for them (setCascades) and
+// the fit would space probes more than kSceneFitMaxSpacing apart, camera-
+// centred, toroidally addressed cascades at kCascadeBaseSpacing·4^c (a
+// harbour, a fjord: the scene fit put one probe every 2.5 km there, and the
+// deferred shade's indirect term had nothing to tap) — and the
+// probe_update.comp compute pass that refreshes
 // a round-robin window of probes each frame: 64 rays per probe via ray query,
 // hits shaded with deferred_shade.comp's giRadiance logic (direct analytic
 // lights + emissive NEE) plus a probe-grid feedback tap — the tap makes the
@@ -66,14 +66,18 @@ namespace threepp::vulkan {
         // and 16 m by default: 32×16×32 m around the camera at 1 m, then
         // 128×64×128 m, then 512×256×512 m. A fourth cascade (64 m, a
         // 2048×1024×2048 m window) is there on request. The scene-fit grid is
-        // cascade 0 alone. Env overrides (read once at construction):
-        //   THREEPP_VK_PROBE_CASCADES       cascade count 1..4, default 3; 0 = scene fit always
+        // cascade 0 alone, and it is the default for every scene: cascades are
+        // opt-in (setCascades), because every window is updated every frame
+        // and the shade taps a parent window and gathers beyond the coarsest
+        // one (vulkan_ocean, RTX 4060 Laptop, 1600×900, three cascades: probe
+        // update 0.36 -> 0.94 ms, shade 6.6 -> 7.8 ms). Env overrides (read
+        // once at construction):
+        //   THREEPP_VK_PROBE_CASCADES       cascade count 0..4, 0 = scene fit always; when set it wins over setCascades
         //   THREEPP_VK_PROBE_CASCADE_BASE   finest spacing, metres
         //   THREEPP_VK_PROBE_SCENE_FIT_MAX  the scene fit's largest allowed spacing, metres
-        // The SH and depth stores hold the requested count only, so the
-        // default allocates three cascades, as before the fourth existed.
+        // The SH and depth stores hold one window until more are asked for.
         static constexpr uint32_t kCascadesMax         = 4;
-        static constexpr uint32_t kCascadesDefault     = 3;
+        static constexpr uint32_t kCascadesDefault     = 0;
         static constexpr float    kCascadeBaseSpacing  = 1.f;
         static constexpr float    kSceneFitMaxSpacing  = 2.f;
         enum class Layout { SceneFit, Cascades };
@@ -116,6 +120,17 @@ namespace threepp::vulkan {
         void setGridBounds(const float aabbMin[3], const float aabbMax[3]);
         [[nodiscard]] Layout   layout() const { return layout_; }
         [[nodiscard]] uint32_t cascadeCount() const { return cascadeCount_; }
+        // How many cascades a scene too large for one grid gets: 0 keeps the
+        // scene fit for every scene, 1..kCascadesMax asks for that many
+        // windows. The grid goes back to unfitted, so the caller re-fits
+        // (setGridBounds), which picks the layout for the new count. Returns
+        // true when the SH and depth stores were reallocated to hold the
+        // count: the device must be idle for the call, and every set that
+        // binds shBuffer() / depthBuffer() has to be rewritten after it. The
+        // stores never shrink. No-op while THREEPP_VK_PROBE_CASCADES is set.
+        bool setCascades(uint32_t count);
+        [[nodiscard]] uint32_t cascadesWanted() const { return cascadesWanted_; }
+        [[nodiscard]] bool     cascadesPinned() const { return cascadesPinned_; }
         // Cascades follow the primary camera: once per frame, BEFORE
         // updateGridUbo, with the primary camera's world position. A window
         // moves by whole cells when the camera leaves its middle cell; the
@@ -222,7 +237,9 @@ namespace threepp::vulkan {
         int32_t  cPrevBase_[kCascadesMax][3]{};
         bool     cascadesPlaced_ = false;// recentre has placed the windows since the layout was chosen
         bool     scrollPending_  = false;// a window moved: the next recordDispatch resets the entering slots
-        uint32_t cascadesWanted_ = kCascadesDefault;// env THREEPP_VK_PROBE_CASCADES
+        uint32_t cascadesWanted_ = kCascadesDefault;// setCascades, or env THREEPP_VK_PROBE_CASCADES
+        bool     cascadesPinned_ = false;// the env var set the count: setCascades is a no-op
+        uint32_t storeCascades_  = 0;    // windows the SH and depth stores hold
         float    cascadeBase_    = kCascadeBaseSpacing;// env THREEPP_VK_PROBE_CASCADE_BASE
         float    sceneFitMax_    = kSceneFitMaxSpacing;// env THREEPP_VK_PROBE_SCENE_FIT_MAX
         bool     needsClear_     = true;// zero the SH store on first dispatch
@@ -238,6 +255,8 @@ namespace threepp::vulkan {
 
         void createPipeline();
         void createDescriptorPool();
+        void createStores(uint32_t cascades);
+        void destroyStores();
     };
 
 }// namespace threepp::vulkan

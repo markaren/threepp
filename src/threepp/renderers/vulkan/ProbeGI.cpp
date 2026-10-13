@@ -45,14 +45,38 @@ namespace threepp::vulkan {
         if (const char* e = std::getenv("THREEPP_VK_PROBE_CASCADES"); e && *e) {
             const long n = std::strtol(e, nullptr, 10);
             cascadesWanted_ = static_cast<uint32_t>(std::clamp<long>(n, 0, kCascadesMax));
+            cascadesPinned_ = true;
         }
         cascadeBase_ = envFloat("THREEPP_VK_PROBE_CASCADE_BASE", kCascadeBaseSpacing);
         sceneFitMax_ = envFloat("THREEPP_VK_PROBE_SCENE_FIT_MAX", kSceneFitMaxSpacing);
         for (uint32_t c = 0; c < kCascadesMax; ++c)
             for (int a = 0; a < 3; ++a) cSpacing_[c][a] = 1.f;
         // The stores hold the cascades asked for (cascadeCount_ never exceeds
-        // max(cascadesWanted_, 1)): the default three allocate as before.
-        const VkDeviceSize storeProbes = static_cast<VkDeviceSize>(std::max(cascadesWanted_, 1u)) * kProbeCount;
+        // max(cascadesWanted_, 1)): one window by default, and setCascades
+        // grows them.
+        createStores(std::max(cascadesWanted_, 1u));
+        gridUbos_.resize(framesInFlight_);
+        gridUboHandles_.resize(framesInFlight_);
+        for (uint32_t f = 0; f < framesInFlight_; ++f) {
+            gridUbos_[f] = createBuffer(ctx_.allocator(), ctx_.device(),
+                                        sizeof(GridUboData),
+                                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                        VMA_MEMORY_USAGE_AUTO,
+                                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            gridUboHandles_[f] = gridUbos_[f].handle;
+            updateGridUbo(f, false);// valid (disabled) contents before first use
+        }
+        // The update traces rays: without ray query there is no pipeline and
+        // no descriptor set, only the buffers the deferred set binds (36/37).
+        if (ctx_.rayQuerySupported()) {
+            createPipeline();
+            createDescriptorPool();
+        }
+    }
+
+    void ProbeGI::createStores(uint32_t cascades) {
+        storeCascades_ = cascades;
+        const VkDeviceSize storeProbes = static_cast<VkDeviceSize>(cascades) * kProbeCount;
         // SH-L1 store: 4 vec4 per probe. TRANSFER_DST for the zero-fill on
         // (re)fit; STORAGE for the update pass + deferred_shade's reads.
         // TRANSFER_SRC: the determinism audit hashes this buffer per frame
@@ -83,23 +107,39 @@ namespace threepp::vulkan {
                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                              VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                      VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
-        gridUbos_.resize(framesInFlight_);
-        gridUboHandles_.resize(framesInFlight_);
-        for (uint32_t f = 0; f < framesInFlight_; ++f) {
-            gridUbos_[f] = createBuffer(ctx_.allocator(), ctx_.device(),
-                                        sizeof(GridUboData),
-                                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                                        VMA_MEMORY_USAGE_AUTO,
-                                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            gridUboHandles_[f] = gridUbos_[f].handle;
-            updateGridUbo(f, false);// valid (disabled) contents before first use
-        }
-        // The update traces rays: without ray query there is no pipeline and
-        // no descriptor set, only the buffers the deferred set binds (36/37).
-        if (ctx_.rayQuerySupported()) {
-            createPipeline();
-            createDescriptorPool();
-        }
+    }
+
+    void ProbeGI::destroyStores() {
+        destroyBuffer(ctx_.allocator(), shBuf_);
+        destroyBuffer(ctx_.allocator(), depthBuf_);
+        destroyBuffer(ctx_.allocator(), prevShBuf_);
+        destroyBuffer(ctx_.allocator(), prevDepthBuf_);
+    }
+
+    bool ProbeGI::setCascades(uint32_t count) {
+        count = std::min(count, kCascadesMax);
+        if (cascadesPinned_ || count == cascadesWanted_) return false;
+        cascadesWanted_ = count;
+        // Back to an unfitted scene fit, as constructed: the next
+        // setGridBounds takes the full fit and picks the layout, and the
+        // first dispatch after it zeroes the stores.
+        layout_         = Layout::SceneFit;
+        cascadeCount_   = 1;
+        gridFitted_     = false;
+        cascadesPlaced_ = false;
+        scrollPending_  = false;
+        needsClear_     = true;
+        probeOffset_    = 0;
+        updateCounter_  = 0;
+        haveWindow_     = false;
+        std::memcpy(cOrigin_[0],  gridOrigin_,  sizeof(gridOrigin_));
+        std::memcpy(cSpacing_[0], gridSpacing_, sizeof(gridSpacing_));
+        for (int a = 0; a < 3; ++a) { cBase_[0][a] = 0; cPrevBase_[0][a] = 0; }
+        const uint32_t need = std::max(count, 1u);
+        if (need <= storeCascades_) return false;
+        destroyStores();
+        createStores(need);
+        return true;
     }
 
     ProbeGI::~ProbeGI() {
@@ -109,10 +149,7 @@ namespace threepp::vulkan {
         if (dsLayout_)   vkDestroyDescriptorSetLayout(d, dsLayout_, nullptr);
         if (descPool_)   vkDestroyDescriptorPool(d, descPool_, nullptr);
         for (auto& b : gridUbos_) destroyBuffer(ctx_.allocator(), b);
-        destroyBuffer(ctx_.allocator(), shBuf_);
-        destroyBuffer(ctx_.allocator(), depthBuf_);
-        destroyBuffer(ctx_.allocator(), prevShBuf_);
-        destroyBuffer(ctx_.allocator(), prevDepthBuf_);
+        destroyStores();
     }
 
     void ProbeGI::createPipeline() {
