@@ -67,3 +67,38 @@ def test_loaded_model_can_be_retinted(stl_cube):
     found = []
     model.traverse(lambda o: found.append(o.material) if isinstance(o, tp.Mesh) else None)
     assert all(type(m).__name__ == "MeshStandardMaterial" for m in found)
+
+
+def test_gltf_emissive_strength_on_plain_material(tmp_path):
+    """KHR_materials_emissive_strength reaches a material that needs no
+    physical extension (it used to be read only for MeshPhysicalMaterial)."""
+    import json
+    import struct
+
+    (tmp_path / "tri.bin").write_bytes(struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0))
+    gltf = {
+        "asset": {"version": "2.0"},
+        "extensionsUsed": ["KHR_materials_emissive_strength"],
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "material": 0}]}],
+        "materials": [{
+            "name": "glow",
+            "emissiveFactor": [1.0, 0.5, 0.0],
+            "extensions": {"KHR_materials_emissive_strength": {"emissiveStrength": 5.0}},
+        }],
+        "buffers": [{"uri": "tri.bin", "byteLength": 36}],
+        "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36, "target": 34962}],
+        "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+                       "min": [0, 0, 0], "max": [1, 1, 0]}],
+    }
+    path = tmp_path / "glow.gltf"
+    path.write_text(json.dumps(gltf))
+
+    result = tp.GLTFLoader().load(str(path))
+    mats = []
+    result.scene.traverse(lambda o: mats.append(o.material) if isinstance(o, tp.Mesh) else None)
+    assert len(mats) == 1
+    assert type(mats[0]).__name__ == "MeshStandardMaterial"
+    assert abs(mats[0].emissive_intensity - 5.0) < 1e-6

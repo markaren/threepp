@@ -48,6 +48,19 @@ namespace threepp {
 
         [[nodiscard]] bool getClampWhenFinished() const;
 
+        // The action's state, which three.js exposes as plain properties.
+        // paused: true -> zero effective time scale. enabled: false -> zero
+        // effective weight. time: local time in seconds, clamped or wrapped
+        // to the clip's duration by the loop mode. timeScale: playback speed.
+        [[nodiscard]] bool isPaused() const { return paused; }
+        AnimationAction& setPaused(bool p) { paused = p; return *this; }
+        [[nodiscard]] bool isEnabled() const { return enabled; }
+        AnimationAction& setEnabled(bool e) { enabled = e; return *this; }
+        [[nodiscard]] float getTime() const { return time; }
+        AnimationAction& setTime(float t) { time = t; return *this; }
+        [[nodiscard]] float getTimeScale() const { return timeScale; }
+        AnimationAction& setTimeScale(float s) { timeScale = s; return *this; }
+
         // Weight
 
         // set the weight stopping any scheduled fading

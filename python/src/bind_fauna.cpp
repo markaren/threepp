@@ -172,8 +172,35 @@ namespace threepp_py {
                 .def("add_perch", &Flock::addPerch,
                      py::arg("world_pos"), py::arg("world_normal"), py::arg("walkable"),
                      "Add one perch by hand, instead of (or as well as) baking.")
-                .def("set_perch_filter", &Flock::setPerchFilter, py::arg("predicate"),
-                     "predicate(mesh) -> bool, deciding which meshes may be landed on.")
+                // Wrapped: bound directly, std::function<bool(const Mesh&)> made
+                // pybind11 pass the Mesh BY VALUE, a copy of a non-copyable type,
+                // and the bake raised "return_value_policy = copy". The mesh goes
+                // to Python as a reference instead; the predicate runs inside the
+                // bake (begin / bake_blocking), on the calling thread.
+                .def("set_perch_filter",
+                     [](Flock& f, const py::object& predicate) {
+                         if (predicate.is_none()) {
+                             f.setPerchFilter(nullptr);
+                             return;
+                         }
+                         // The deleter takes the GIL: the Flock may drop the
+                         // predicate from a thread that does not hold it.
+                         std::shared_ptr<py::function> fn(
+                                 new py::function(predicate.cast<py::function>()),
+                                 [](py::function* p) {
+                                     py::gil_scoped_acquire gil;
+                                     delete p;
+                                 });
+                         f.setPerchFilter([fn](const Mesh& mesh) -> bool {
+                             py::gil_scoped_acquire gil;
+                             return (*fn)(py::cast(const_cast<Mesh*>(&mesh),
+                                                   py::return_value_policy::reference))
+                                     .cast<bool>();
+                         });
+                     },
+                     py::arg("predicate"),
+                     "predicate(mesh) -> bool, deciding which meshes may be landed on "
+                     "(None clears it). Applied by the next bake_perches / bake_perches_blocking.")
                 // Disturbance
                 .def("startle", &Flock::startle,
                      py::arg("epicentre"), py::arg("radius") = 1e9f, py::arg("strength") = 1.0f,

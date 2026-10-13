@@ -1844,6 +1844,12 @@ namespace threepp {
         // THREEPP_VK_NO_ALIAS=1, which gives each its own allocation.
         [[nodiscard]] std::uint64_t gpuAllocatedBytes() const;
         void transientImageBytes(std::uint64_t& shared, std::uint64_t& unshared) const;
+        // Prints the allocator's memory report to stderr, prefixed with `tag`:
+        // the heaps' usage against budget, then where the geometry buffers
+        // landed per class (device-local, the BAR window, or system memory),
+        // the same report THREEPP_VK_MEMDUMP=1 prints after init, after each
+        // structural scene build and at frame 8.
+        void dumpMemoryStats(const std::string& tag = "app") const;
 
         // Render-graph diagnostics counted since this renderer was created, in
         // the manner of vulkan::validationErrorCount(): a pass that declared one

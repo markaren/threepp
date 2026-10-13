@@ -358,6 +358,14 @@ namespace threepp::vulkan::impl {
                       "bone-matrix ring must cover all in-flight frames plus the one being recorded");
         std::array<Buffer, kBoneSlots> boneMatrices {};
         uint32_t boneSlot = 0;// slot written this frame (advanced by refreshSkinnedBlas)
+        // Set by refreshSkinnedBlas. recordSkinnedDeforms snapshots
+        // vertex -> prevVertex only on frames the pose changed, so on the
+        // first still frame prevVertex still holds the pose before the last
+        // step and the per-vertex motion of that step would persist until the
+        // next move. The deformer scan queues one vertex -> prevVertex copy
+        // (pendingDynamicPrevResyncs_) on that first clean frame and clears
+        // this.
+        bool prevResyncPending = false;
         uint32_t vertexCount    = 0;
         uint32_t boneCount      = 0;
         uint32_t primitiveCount = 0;// for per-frame BLAS rebuild

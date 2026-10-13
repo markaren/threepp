@@ -2338,6 +2338,10 @@ namespace threepp {
         return core()->ctx ? core()->vmaAllocatedBytes() : 0;
     }
 
+    void VulkanRenderer::dumpMemoryStats(const std::string& tag) const {
+        core()->dumpMemoryStats(tag.c_str());
+    }
+
     void VulkanRenderer::transientImageBytes(std::uint64_t& shared, std::uint64_t& unshared) const {
         shared = unshared = 0;
         for (const auto* pool : {core()->transientPool_.get(), core()->gbufMsPool_.get()}) {

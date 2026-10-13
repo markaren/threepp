@@ -2788,6 +2788,9 @@ namespace threepp {
         // all VMA allocations — G-buffer, history, denoiser scratch, upscalers,
         // and any scene AS/geometry live at the call site.
         void dumpMemoryStats(const char* tag = "") const;
+        // Prints the one "deforming geometry landed in system memory" line
+        // when noteDeformPlacement counted any bytes since the last call.
+        void reportDeformPlacement();
 
         ~Impl();
 
@@ -2954,6 +2957,22 @@ namespace threepp {
         // release the staging buffer.
         void submitStagedUploads(StagedUploads& up, const char* label);
 
+        // Who rewrites an updatable record's vertex and normal after its
+        // build. Host: a per-frame host path writes them (morph blend, the
+        // displaced ocean's existing placement), so they stay host-visible.
+        // Gpu: only compute shaders write them (skinning, tet skinning, grass
+        // wind), so they are device-local like a static record's: a
+        // host-visible deformer buffer that spills out of the 256 MiB BAR
+        // window lands in system memory and its deform pass crosses PCIe
+        // every frame.
+        enum class VertexWriter : uint8_t { Host, Gpu };
+        // Adds `b`'s bytes to deformHostBytes_ when it landed outside device
+        // memory (the dumpMemoryStats "host" bucket). Called once per deformer
+        // record or input buffer at creation; ensureSceneBuilt prints one line
+        // per structural build when the sum is non-zero, then clears it.
+        void noteDeformPlacement(const Buffer& b);
+        VkDeviceSize deformHostBytes_ = 0;
+
         static unsigned int geomVersionOf(const BufferGeometry& g) {
             // Untyped lookups: only `version` is read, and the typed getter
             // returns null for narrowed (compressAttributes) attributes, which
@@ -2982,8 +3001,12 @@ namespace threepp {
         // `rtIndices`: when given, the AS is built over these uint32 indices
         // instead of the geometry's own (BlasRecord::rtIndex); the record's
         // `index` still carries the geometry's for the raster.
+        // `writer`: for an updatable record, VertexWriter::Gpu places vertex
+        // and normal device-local (see VertexWriter); ignored for static and
+        // interop records.
         std::unique_ptr<BlasRecord> buildBlasFor(const BufferGeometry& geom, bool allowPacked, bool updatable,
-                                                 const std::vector<uint32_t>* rtIndices = nullptr);
+                                                 const std::vector<uint32_t>* rtIndices = nullptr,
+                                                 VertexWriter writer = VertexWriter::Host);
 
         // Allocate or look up the per-SkinnedMesh BLAS state. Builds the BLAS
         // once with the current pose; subsequent dirty frames go through

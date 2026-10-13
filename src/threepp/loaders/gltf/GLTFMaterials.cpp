@@ -320,6 +320,15 @@ namespace threepp::gltf {
             mat->side = Side::Double;
         }
 
+        // KHR_materials_emissive_strength applies to every material, not only
+        // the physical ones (needsPhysical does not ask for it): a plain
+        // material with this extension otherwise loaded at intensity 1.
+        if (matDef.contains("extensions") &&
+            matDef["extensions"].contains("KHR_materials_emissive_strength")) {
+            mat->emissiveIntensity =
+                    matDef["extensions"]["KHR_materials_emissive_strength"].value("emissiveStrength", 1.0f);
+        }
+
         // Extensions (MeshPhysicalMaterial properties)
         if (physMat && matDef.contains("extensions")) {
             const auto& ext = matDef["extensions"];
@@ -351,12 +360,6 @@ namespace threepp::gltf {
             if (ext.contains("KHR_materials_dispersion")) {
                 const auto& dispExt = ext["KHR_materials_dispersion"];
                 physMat->dispersion = dispExt.value("dispersion", 0.0f);
-            }
-
-            // KHR_materials_emissive_strength
-            if (ext.contains("KHR_materials_emissive_strength")) {
-                float strength = ext["KHR_materials_emissive_strength"].value("emissiveStrength", 1.0f);
-                mat->emissiveIntensity = strength;
             }
 
             // KHR_materials_sheen

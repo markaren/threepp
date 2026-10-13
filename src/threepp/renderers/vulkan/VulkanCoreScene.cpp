@@ -2061,6 +2061,26 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         }
                     }
 
+                    // A rig that stopped this frame: recordSkinnedDeforms
+                    // snapshots vertex -> prevVertex only for pending states,
+                    // so prevVertex still holds the pose before the last step.
+                    // One vertex -> prevVertex copy (recordDynamicGeomRefits,
+                    // the deform.dynGeom pass, which the graph orders before
+                    // deform.skin; a resyncing state is not pending this frame)
+                    // collapses its motion to zero, as for a graduated record.
+                    for (const auto& sp : entrySpans_) {
+                        if (!entries[sp.first].isSkinned) continue;
+                        for (size_t i = sp.first; i < size_t(sp.first) + sp.count; ++i) {
+                            if (entryBonesDirty[i]) continue;
+                            auto stIt = skinnedMeshStates.find(static_cast<SkinnedMesh*>(entries[i].mesh));
+                            if (stIt == skinnedMeshStates.end()) continue;
+                            SkinnedMeshState& st = *stIt->second;
+                            if (!st.prevResyncPending || !st.blas) continue;
+                            st.prevResyncPending = false;
+                            pendingDynamicPrevResyncs_.push_back(st.blas.get());
+                        }
+                    }
+
                     // ── prevVertex re-sync ──────────────────────────────────
                     // A plain mesh updated in place (e.g. a re-rolled terrain)
                     // keeps prevVertex frozen at its PRE-update positions once it
@@ -3366,6 +3386,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             if (const char* e = std::getenv("THREEPP_VK_MEMDUMP"); e && *e && *e != '0') {
                 dumpMemoryStats("scene-built");
             }
+            // Always on: one line when a deformer created by this build landed
+            // in system memory (its deform pass then crosses PCIe every frame).
+            reportDeformPlacement();
         }
 
 bool VulkanRenderer::Impl::classifyCutoutFar(const float camPos[3]) {

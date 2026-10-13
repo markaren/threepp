@@ -111,6 +111,23 @@ Buffer VulkanRenderer::Impl::createGeomBuffer(VkDeviceSize bytes, VkBufferUsageF
                                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
         }
 
+void VulkanRenderer::Impl::noteDeformPlacement(const Buffer& b) {
+            if (b.alloc == VK_NULL_HANDLE) return;
+            // The dumpMemoryStats buckets: no DEVICE_LOCAL bit = system memory.
+            VkMemoryPropertyFlags f = 0;
+            vmaGetAllocationMemoryProperties(ctx->allocator(), b.alloc, &f);
+            if ((f & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) == 0) deformHostBytes_ += b.size;
+        }
+
+void VulkanRenderer::Impl::reportDeformPlacement() {
+            if (deformHostBytes_ == 0) return;
+            std::fprintf(stderr,
+                         "[VulkanRenderer] %.1f MB of deforming geometry landed in system memory "
+                         "(device memory or the BAR window is full); deform passes cross PCIe\n",
+                         static_cast<double>(deformHostBytes_) / (1024.0 * 1024.0));
+            deformHostBytes_ = 0;
+        }
+
 void VulkanRenderer::Impl::stageUpload(StagedUploads& up, const Buffer& dst, const void* src,
                                        VkDeviceSize bytes, VkDeviceSize dstOffset) {
             if (bytes == 0 || dst.handle == VK_NULL_HANDLE) return;
@@ -178,7 +195,8 @@ void VulkanRenderer::Impl::submitStagedUploads(StagedUploads& up, const char* la
         }
 
 std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBlasFor(const BufferGeometry& geom, bool allowPacked, bool updatable,
-                                                                                     const std::vector<uint32_t>* rtIndices) {
+                                                                                     const std::vector<uint32_t>* rtIndices,
+                                                                                     VertexWriter writer) {
             // Escape hatch for A/B triage: THREEPP_NO_PACK=1 forces every
             // attribute buffer back to tightly-packed float, same binary.
             static const bool noPack = std::getenv("THREEPP_NO_PACK") != nullptr;
@@ -201,14 +219,17 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             updatable = updatable || interopTarget;
             // A static record's buffers are device-local, filled by staging
             // copies recorded ahead of its BLAS build (see StagedUploads). A
-            // deformer's or interop record's vertex and normal stay
+            // deformer whose vertex and normal only compute shaders rewrite
+            // (skinning, tet skinning, grass wind: VertexWriter::Gpu) gets
+            // them device-local too. A host-rewritten deformer's (morph, the
+            // displaced ocean) or an interop record's vertex and normal stay
             // host-visible: those are what its per-frame paths rewrite. Its
             // uv, color, index and rtIndex are device-local like a static
             // record's: no deformer (skinning, tet, morph, grass, the
             // displaced ocean) and no interop producer writes them after this
             // build, and a host edit of them goes through stageUpload or a
             // fresh record.
-            const bool deviceLocal = !updatable;
+            const bool deviceLocal = !updatable || (writer == VertexWriter::Gpu && !interopTarget);
             constexpr bool sideDeviceLocal = true;
             StagedUploads up;
 
@@ -1443,6 +1464,8 @@ void VulkanRenderer::Impl::refreshSkinnedBlas(SkinnedMesh& sm, SkinnedMeshState&
             // GPU work is recorded into the main command buffer at the start
             // of recordCommandBuffer — no blocking submit here.
             pendingSkinnedRebuilds_.push_back(&st);
+            // The first frame the pose stops changing settles prevVertex.
+            st.prevResyncPending = true;
         }
 
 void VulkanRenderer::Impl::refreshTetBlas(Mesh& m, TetMeshState& st) {
@@ -3814,7 +3837,8 @@ VulkanRenderer::Impl::SkinnedMeshState* VulkanRenderer::Impl::ensureSkinnedBlas(
             // Build BLAS with the bind-pose positions/normals first. The
             // BLAS buffers are then re-written each frame by the skinning
             // compute shader (binding 5/6) and rebuilt in-place.
-            auto rec = buildBlasFor(*sm.geometry(), /*allowPacked=*/false, /*updatable=*/true);
+            auto rec = buildBlasFor(*sm.geometry(), /*allowPacked=*/false, /*updatable=*/true,
+                                    /*rtIndices=*/nullptr, VertexWriter::Gpu);
             if (!rec) return nullptr;
             rec->liveCheck = sm.geometry();
 
@@ -3845,15 +3869,17 @@ VulkanRenderer::Impl::SkinnedMeshState* VulkanRenderer::Impl::ensureSkinnedBlas(
                     ? static_cast<uint32_t>(idxAttr->count() / 3)
                     : vertexCount / 3;
 
-            // ── GPU-skinning input buffers. Uploaded once, reused every frame.
+            // ── GPU-skinning input buffers. Uploaded once, read by
+            // skinning.comp every frame (56 bytes per vertex): device-local,
+            // filled from staging like a static record's uv/color. Host-visible
+            // they spilled into system memory once the 256 MiB BAR window was
+            // full, and the dispatch then read them across PCIe every frame.
+            StagedUploads inputs;
             auto allocAndUpload = [&](Buffer& dst, const void* src,
                                       VkDeviceSize bytes) {
-                dst = createBuffer(
-                        ctx->allocator(), ctx->device(), bytes,
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                        VMA_MEMORY_USAGE_AUTO,
-                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                uploadHostVisible(ctx->allocator(), dst, src, bytes);
+                dst = createGeomBuffer(bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, /*deviceLocal=*/true);
+                stageUpload(inputs, dst, src, bytes);
+                noteDeformPlacement(dst);
             };
             allocAndUpload(state->baseVertex, posAttr->array().data(),
                            vertexCount * 3 * sizeof(float));
@@ -3863,6 +3889,10 @@ VulkanRenderer::Impl::SkinnedMeshState* VulkanRenderer::Impl::ensureSkinnedBlas(
                            vertexCount * 4 * sizeof(float));
             allocAndUpload(state->skinWeight, skinWAttr->array().data(),
                            vertexCount * 4 * sizeof(float));
+            submitStagedUploads(inputs, "ensureSkinnedBlas (inputs)");
+            noteDeformPlacement(state->blas->vertex);
+            noteDeformPlacement(state->blas->normal);
+            noteDeformPlacement(state->blas->prevVertex);
 
             // Bone matrices buffer: [bindMatrix, bindMatrixInverse, bones...].
             // bindMatrix is constant. bindMatrixInverse is NOT (attached bind mode
@@ -3996,7 +4026,8 @@ VulkanRenderer::Impl::TetMeshState* VulkanRenderer::Impl::ensureTetBlas(Mesh& m)
 
             // BLAS built from the rest positions; the tet_skinning compute then
             // rewrites the vertex/normal buffers each frame and the BLAS is refit.
-            auto rec = buildBlasFor(*geom, /*allowPacked=*/false, /*updatable=*/true);
+            auto rec = buildBlasFor(*geom, /*allowPacked=*/false, /*updatable=*/true,
+                                    /*rtIndices=*/nullptr, VertexWriter::Gpu);
             if (!rec) return nullptr;
             rec->liveCheck = geom;
 
@@ -4016,13 +4047,13 @@ VulkanRenderer::Impl::TetMeshState* VulkanRenderer::Impl::ensureTetBlas(Mesh& m)
                     ? static_cast<uint32_t>(idxAttr->count() / 3)
                     : vertexCount / 3;
 
+            // Written once, read by tet_skinning.comp every frame: device-local
+            // from staging, as the skinned inputs (ensureSkinnedBlas).
+            StagedUploads inputs;
             auto allocAndUpload = [&](Buffer& dst, const void* src, VkDeviceSize bytes) {
-                dst = createBuffer(
-                        ctx->allocator(), ctx->device(), bytes,
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                        VMA_MEMORY_USAGE_AUTO,
-                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                uploadHostVisible(ctx->allocator(), dst, src, bytes);
+                dst = createGeomBuffer(bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, /*deviceLocal=*/true);
+                stageUpload(inputs, dst, src, bytes);
+                noteDeformPlacement(dst);
             };
             allocAndUpload(state->tetIndex,   tiAttr->array().data(),  vertexCount * 4 * sizeof(float));
             allocAndUpload(state->tetWeight,  twAttr->array().data(),  vertexCount * 4 * sizeof(float));
@@ -4030,6 +4061,10 @@ VulkanRenderer::Impl::TetMeshState* VulkanRenderer::Impl::ensureTetBlas(Mesh& m)
             allocAndUpload(state->restInv0,   r0Attr->array().data(),  vertexCount * 3 * sizeof(float));
             allocAndUpload(state->restInv1,   r1Attr->array().data(),  vertexCount * 3 * sizeof(float));
             allocAndUpload(state->restInv2,   r2Attr->array().data(),  vertexCount * 3 * sizeof(float));
+            submitStagedUploads(inputs, "ensureTetBlas (inputs)");
+            noteDeformPlacement(state->blas->vertex);
+            noteDeformPlacement(state->blas->normal);
+            noteDeformPlacement(state->blas->prevVertex);
 
             // Per-frame tet positions ring, sized to the tet texture image (one
             // RGBA32F texel per collision-tet vertex). Filled by refreshTetBlas,
@@ -4629,7 +4664,8 @@ VulkanRenderer::Impl::GrassMeshState* VulkanRenderer::Impl::ensureGrassState(Gra
             const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
             if (vertexCount == 0 || static_cast<uint32_t>(hfAttr->count()) != vertexCount) return nullptr;
 
-            auto blas = buildBlasFor(*gm.geometry(), /*allowPacked=*/false, /*updatable=*/true);
+            auto blas = buildBlasFor(*gm.geometry(), /*allowPacked=*/false, /*updatable=*/true,
+                                     /*rtIndices=*/nullptr, VertexWriter::Gpu);
             if (!blas) return nullptr;
             blas->liveCheck = gm.geometry();
 
@@ -4638,24 +4674,27 @@ VulkanRenderer::Impl::GrassMeshState* VulkanRenderer::Impl::ensureGrassState(Gra
             state->liveCheck = gm.geometry();
 
             // Immutable rest positions — the shader reads these and writes the
-            // displaced result into the (separate) BLAS vertex buffer.
+            // displaced result into the (separate) BLAS vertex buffer. Both
+            // inputs are device-local, filled from staging: host-visible, a
+            // field allocated while another was still alive (a GrassMesh
+            // replacement) spilled out of the BAR window into system memory
+            // and its deform pass crossed PCIe every frame.
+            StagedUploads inputs;
+            const VkBufferUsageFlags inputUsage =
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
             const VkDeviceSize posBytes = VkDeviceSize(vertexCount) * 3u * sizeof(float);
-            state->restPos = createBuffer(
-                    ctx->allocator(), ctx->device(), posBytes,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    VMA_MEMORY_USAGE_AUTO,
-                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            uploadHostVisible(ctx->allocator(), state->restPos, posAttr->array().data(), posBytes);
+            state->restPos = createGeomBuffer(posBytes, inputUsage, /*deviceLocal=*/true);
+            stageUpload(inputs, state->restPos, posAttr->array().data(), posBytes);
 
             const VkDeviceSize hfBytes = VkDeviceSize(vertexCount) * sizeof(float);
-            state->heightFrac = createBuffer(
-                    ctx->allocator(), ctx->device(), hfBytes,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    VMA_MEMORY_USAGE_AUTO,
-                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            uploadHostVisible(ctx->allocator(), state->heightFrac, hfAttr->array().data(), hfBytes);
+            state->heightFrac = createGeomBuffer(hfBytes, inputUsage, /*deviceLocal=*/true);
+            stageUpload(inputs, state->heightFrac, hfAttr->array().data(), hfBytes);
+            submitStagedUploads(inputs, "ensureGrassState (inputs)");
+            noteDeformPlacement(state->restPos);
+            noteDeformPlacement(state->heightFrac);
+            noteDeformPlacement(blas->vertex);
+            noteDeformPlacement(blas->normal);
+            noteDeformPlacement(blas->prevVertex);
 
             state->blas = std::move(blas);
             auto* raw = state.get();

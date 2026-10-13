@@ -107,3 +107,63 @@ def test_mixer_outlives_root_reference():
     gc.collect()
     mixer.update(1.0)  # must not crash on a freed root
     assert action.is_running()
+
+
+def _rise_action():
+    """A cube whose .position.y is keyed 0 -> 5 over 1 second, played once."""
+    cube = tp.Mesh(tp.BoxGeometry(), tp.MeshStandardMaterial())
+    track = tp.VectorKeyframeTrack(".position", [0.0, 1.0], [0, 0, 0, 0, 5, 0])
+    clip = tp.AnimationClip("rise", 1.0, [track])
+    mixer = tp.AnimationMixer(cube)
+    action = mixer.clip_action(clip).set_loop(tp.Loop.ONCE, 1)
+    return cube, mixer, action
+
+
+def test_clamp_when_finished_keeps_feeding_last_frame():
+    cube, mixer, action = _rise_action()
+    assert action.clamp_when_finished is False
+    action.clamp_when_finished = True
+    assert action.clamp_when_finished is True
+    action.play()
+    mixer.update(0.0)
+    mixer.update(1.5)  # past the clip's end
+    assert action.paused
+    assert action.enabled
+    assert abs(action.time - 1.0) < 1e-5
+    assert abs(cube.position.y - 5.0) < 1e-3
+    # Still feeding: full weight on the last frame, frame after frame.
+    for _ in range(3):
+        mixer.update(0.1)
+        assert abs(cube.position.y - 5.0) < 1e-3
+    assert action.get_effective_weight() == 1.0
+
+
+def test_once_without_clamp_ends_disabled():
+    cube, mixer, action = _rise_action()
+    action.play()
+    mixer.update(0.0)
+    mixer.update(1.5)
+    assert not action.enabled
+    assert not action.paused
+    # Weight 0: the pose snaps back to the original value.
+    assert action.get_effective_weight() == 0.0
+    mixer.update(0.1)
+    assert abs(cube.position.y) < 1e-3
+
+
+def test_action_state_fields_round_trip():
+    cube, mixer, action = _rise_action()
+    action.play()
+    action.time_scale = 0.5
+    assert action.time_scale == 0.5
+    mixer.update(0.0)
+    mixer.update(1.0)  # half speed: clip time 0.5 -> y = 2.5
+    assert abs(action.time - 0.5) < 1e-5
+    assert 2.0 < cube.position.y < 3.0
+    action.paused = True
+    mixer.update(1.0)
+    assert abs(action.time - 0.5) < 1e-5
+    action.paused = False
+    action.time = 0.0
+    action.enabled = False
+    assert not action.enabled

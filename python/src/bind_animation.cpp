@@ -111,6 +111,24 @@ namespace threepp_py {
         // resolves to that same instance via shared_from_this.
         py::class_<AnimationAction, std::shared_ptr<AnimationAction>>(m, "AnimationAction")
                 .def_readwrite("blend_mode", &AnimationAction::blendMode)
+                .def_property("clamp_when_finished", &AnimationAction::getClampWhenFinished,
+                              [](AnimationAction& a, bool clamp) { a.setClampWhenFinished(clamp); },
+                              "A Loop.ONCE action (or one whose repetitions ran out) normally ends "
+                              "disabled, weight 0, which snaps the pose back. True pauses it on its "
+                              "last frame and keeps feeding that frame (three.js clampWhenFinished).")
+                .def_property("paused", &AnimationAction::isPaused,
+                              [](AnimationAction& a, bool v) { a.setPaused(v); },
+                              "True freezes the action's time (zero effective time scale).")
+                .def_property("enabled", &AnimationAction::isEnabled,
+                              [](AnimationAction& a, bool v) { a.setEnabled(v); },
+                              "False zeroes the action's effective weight.")
+                .def_property("time", &AnimationAction::getTime,
+                              [](AnimationAction& a, float v) { a.setTime(v); },
+                              "The action's local time in seconds, clamped or wrapped to the clip's "
+                              "duration by the loop mode.")
+                .def_property("time_scale", &AnimationAction::getTimeScale,
+                              [](AnimationAction& a, float v) { a.setTimeScale(v); },
+                              "Playback speed multiplier (1 = normal, 0 = frozen, negative = reverse).")
                 .def("play", &AnimationAction::play, py::return_value_policy::reference)
                 .def("stop", &AnimationAction::stop, py::return_value_policy::reference)
                 .def("reset", &AnimationAction::reset, py::return_value_policy::reference)

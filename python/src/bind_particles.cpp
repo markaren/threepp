@@ -135,7 +135,10 @@ namespace threepp_py {
                 .def_readwrite("bright_jitter", &ParticleField::BillboardRepr::brightJitter,
                                "Per-particle brightness spread, hashed.")
                 .def_readwrite("size_taper", &ParticleField::BillboardRepr::sizeTaper,
-                               "Radius over life: r *= (1 - size_taper * age_frac).")
+                               "Radius over life: r *= (1 - size_taper * age_frac). Default 0.55. The Vulkan "
+                               "renderer clamps it to [0, 1]: 0 keeps the size, 1 shrinks the sprite to "
+                               "nothing at the end of its life. A negative value acts as 0; it does not "
+                               "make the puff grow.")
                 .def_readwrite("stretch_seconds", &ParticleField::BillboardRepr::stretchSeconds,
                                "Seconds of travel to smear the quad over, along the particle's own "
                                "analytic velocity. 0 = a round sprite; rain without this reads as HAIL.")

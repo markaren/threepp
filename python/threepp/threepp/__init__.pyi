@@ -14,6 +14,18 @@ class AmbientLight(Light):
         ...
 class AnimationAction:
     blend_mode: AnimationBlendMode
+    enabled: bool
+    paused: bool
+    time: float
+    time_scale: float
+    @property
+    def clamp_when_finished(self) -> bool:
+        """
+        A Loop.ONCE action (or one whose repetitions ran out) normally ends disabled, weight 0, which snaps the pose back. True pauses it on its last frame and keeps feeding that frame (three.js clampWhenFinished).
+        """
+    @clamp_when_finished.setter
+    def clamp_when_finished(self, arg1: bool) -> None:
+        ...
     def cross_fade_to(self, other: AnimationAction, duration: typing.SupportsFloat | typing.SupportsIndex, warp: bool = False) -> AnimationAction:
         ...
     def fade_in(self, duration: typing.SupportsFloat | typing.SupportsIndex) -> AnimationAction:
@@ -2625,9 +2637,9 @@ class Flock(Mesh):
         """
         Soft repulsion from the camera, so birds do not fly through the lens.
         """
-    def set_perch_filter(self, predicate: collections.abc.Callable[[Mesh], bool]) -> None:
+    def set_perch_filter(self, predicate: collections.abc.Callable[[Mesh], bool] | None) -> None:
         """
-        predicate(mesh) -> bool, deciding which meshes may be landed on.
+        predicate(mesh) -> bool, deciding which meshes may be landed on (None clears it). Applied by the next bake_perches / bake_perches_blocking.
         """
     def set_wind(self, x: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> None:
         """
@@ -6342,7 +6354,7 @@ class ParticleField(Mesh):
         @property
         def size_taper(self) -> float:
             """
-            Radius over life: r *= (1 - size_taper * age_frac).
+            Radius over life: r *= (1 - size_taper * age_frac). Default 0.55. The Vulkan renderer clamps it to [0, 1]: 0 keeps the size, 1 shrinks the sprite to nothing at the end of its life. A negative value acts as 0; it does not make the puff grow.
             """
         @size_taper.setter
         def size_taper(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
@@ -10613,6 +10625,10 @@ class VulkanRenderer:
         """
         Turn the volumetric cloud layer off (default).
         """
+    def dump_memory_stats(self, tag: str = 'python') -> None:
+        """
+        Print the renderer's GPU memory report to stderr, prefixed with `tag`: each heap's usage against its budget, then where the geometry buffers landed per class (device-local, the BAR window, or system memory). Deforming geometry (skinned, tet, grass) in the system-memory column means its deform pass crosses PCIe every frame. THREEPP_VK_MEMDUMP=1 prints the same report after init, after each structural scene build and at frame 8.
+        """
     def disable_frame_interop(self, view: typing.SupportsInt | typing.SupportsIndex = 0) -> None:
         """
         Release this view's frame-interop exports. Close the importing tensors FIRST (FrameTensors.close() does both in the right order) — freeing the Vulkan allocation under a live CUDA mapping reports as nothing at all.
@@ -11346,7 +11362,7 @@ class VulkanRenderer:
     @property
     def sun_angular_radius(self) -> float:
         """
-        Directional-light angular radius in degrees for soft sun shadows (default 0.5; 0 = hard shadow).
+        Directional-light angular radius in degrees for soft sun shadows (default 0 = hard shadow; the real sun is about 0.27).
         """
     @sun_angular_radius.setter
     def sun_angular_radius(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:

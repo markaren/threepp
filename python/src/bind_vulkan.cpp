@@ -1939,7 +1939,7 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r) { return r.native().sunAngularRadius(); },
                               [](PyVulkanRenderer& r, float d) { r.native().setSunAngularRadius(d); },
                               "Directional-light angular radius in degrees for soft sun "
-                              "shadows (default 0.5; 0 = hard shadow).")
+                              "shadows (default 0 = hard shadow; the real sun is about 0.27).")
                 .def("set_flush_frames", &PyVulkanRenderer::set_flush_frames, py::arg("n"),
                      "Frames driven per render() to flush the MAILBOX swapchain (default 3; "
                      "raise to 4+ for fast-moving dynamic scenes).")
@@ -2056,6 +2056,15 @@ namespace threepp_py {
                      "wind m/s xz drift; evolve_speed shape churn rate.")
                 .def("disable_clouds", [](PyVulkanRenderer& r) { r.native().setClouds(std::nullopt); },
                      "Turn the volumetric cloud layer off (default).")
+                .def("dump_memory_stats",
+                     [](PyVulkanRenderer& r, const std::string& tag) { r.native().dumpMemoryStats(tag); },
+                     py::arg("tag") = "python",
+                     "Print the renderer's GPU memory report to stderr, prefixed with `tag`: each "
+                     "heap's usage against its budget, then where the geometry buffers landed per "
+                     "class (device-local, the BAR window, or system memory). Deforming geometry "
+                     "(skinned, tet, grass) in the system-memory column means its deform pass "
+                     "crosses PCIe every frame. THREEPP_VK_MEMDUMP=1 prints the same report after "
+                     "init, after each structural scene build and at frame 8.")
                 // Fog medium PROFILE control (advanced). Phase 2: there is ONE air
                 // medium. scene.set_fog_exp2(...) is the primary knob (density +
                 // colour); set_height_fog is the ADVANCED control of that medium's
