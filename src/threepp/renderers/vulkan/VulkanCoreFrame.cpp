@@ -1487,6 +1487,17 @@ void VulkanRenderer::Impl::endFrame() {
             frameState_   = FrameState::Idle;
         }
 
+void VulkanRenderer::Impl::advanceHeadlessClock() {
+            if (simTimeSec_ >= 0.0 || !ctx || !ctx->presentSuppressed()) return;
+            if (headlessClockSec_ < 0.0) {
+                headlessClockSec_ = 0.0;
+                std::fprintf(stderr, "[VulkanRenderer] headless: no sim_time set, stepping the "
+                                     "renderer clock 1/60 s per frame\n");
+            } else {
+                headlessClockSec_ += 1.0 / 60.0;
+            }
+        }
+
 void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
             // "Ortho" here means "route to the 2D overlay path", not "the camera
             // is an OrthographicCamera". With setOrthographicSceneRendering on,

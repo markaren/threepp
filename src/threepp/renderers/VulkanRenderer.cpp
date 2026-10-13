@@ -514,6 +514,8 @@ namespace threepp {
             // ortho pass and the split-screen secondary pane both skip this
             // block and must keep extending the open frame, not end it.
             if (core()->frameState_ != Impl::FrameState::Idle) core()->endFrame();
+            // Once per frame: the scene-building render() is the frame's one.
+            core()->advanceHeadlessClock();
             const auto sceneStart = std::chrono::high_resolution_clock::now();
             core()->ensureSceneBuilt(scene, camera);
             // World-space Sprites (screenSpace == false) are drawn by the overlay

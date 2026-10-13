@@ -1672,8 +1672,8 @@ namespace threepp {
         // Sim-time override first (setSimTime starts at whatever the app's
         // clock says, typically 0 — small floats, no epoch needed). The wall
         // fallback keeps the process-start epoch so the float stays small.
-        if (simTimeSec_ >= 0.0) {
-            ubo.timeSec = static_cast<float>(simTimeSec_);
+        if (pinnedClockSec() >= 0.0) {
+            ubo.timeSec = static_cast<float>(pinnedClockSec());
         } else {
             static const auto cloudEpoch = std::chrono::steady_clock::now();
             ubo.timeSec     = std::chrono::duration<float>(

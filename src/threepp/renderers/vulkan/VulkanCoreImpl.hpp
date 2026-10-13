@@ -2385,8 +2385,22 @@ namespace threepp {
         // pixels (wall time in the TAA blend alpha alone is enough to make
         // every run diverge from the first history frame onward).
         double simTimeSec_ = -1.0;
+        // A headless canvas (ctx->presentSuppressed()) with no setSimTime has
+        // no wall clock worth reading: a stepped loop renders as fast as the
+        // GPU allows, so the TAA blend and the FSR/DLSS dt would think it runs
+        // at hundreds of fps and ghost. advanceHeadlessClock steps this clock
+        // 1/60 s per scene-building render() instead (0 on the first), and
+        // says so once. Negative = not in use. setSimTime always wins.
+        double headlessClockSec_ = -1.0;
+        void advanceHeadlessClock();
         [[nodiscard]] double frameNowSec() const {
-            return simTimeSec_ >= 0.0 ? simTimeSec_ : glfwGetTime();
+            if (simTimeSec_ >= 0.0) return simTimeSec_;
+            if (headlessClockSec_ >= 0.0) return headlessClockSec_;
+            return glfwGetTime();
+        }
+        // The app's or the headless clock, or negative on the wall clock.
+        [[nodiscard]] double pinnedClockSec() const {
+            return simTimeSec_ >= 0.0 ? simTimeSec_ : headlessClockSec_;
         }
 
         // (rasterMatTexValid_ — the binding-3 texture-table gate — lives on

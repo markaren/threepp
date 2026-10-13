@@ -11341,6 +11341,10 @@ class VulkanRenderer:
         ~5x faster than the dt the app integrates its own physics with (the
         hull can no longer follow the waves). None or a negative value
         returns to the wall clock, which is what a live window wants.
+        A headless canvas with sim_time never set does not read the wall
+        clock: the renderer steps its own clock 1/60 s per frame and says so
+        once on stderr, so a stepped loop renders as a 60 fps one. Set
+        sim_time for any other rate; the getter stays None meanwhile.
         """
     @sim_time.setter
     def sim_time(self, arg1: typing.SupportsFloat | typing.SupportsIndex | None) -> None:

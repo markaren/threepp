@@ -1101,7 +1101,11 @@ namespace threepp_py {
                               "offline render whose frames take 80 ms of wall time animates the sea\n"
                               "~5x faster than the dt the app integrates its own physics with (the\n"
                               "hull can no longer follow the waves). None or a negative value\n"
-                              "returns to the wall clock, which is what a live window wants.")
+                              "returns to the wall clock, which is what a live window wants.\n"
+                              "A headless canvas with sim_time never set does not read the wall\n"
+                              "clock: the renderer steps its own clock 1/60 s per frame and says so\n"
+                              "once on stderr, so a stepped loop renders as a 60 fps one. Set\n"
+                              "sim_time for any other rate; the getter stays None meanwhile.")
                 // ── GPU event camera (DVS) ───────────────────────────────
                 // A per-pixel log-intensity crossing detector (the ESIM model)
                 // running as a compute pass on either the renderer's own
