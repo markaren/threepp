@@ -10748,9 +10748,13 @@ class VulkanRenderer:
         """
         Stable per-pixel instance ids as (H, W) uint32. 0 = sky / no hit; otherwise a per-object id that persists across frames and visible-set changes (no hashing, no collisions). Auto-assigned; override with set_instance_id().
         """
+    def last_motion(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        The motion vectors of the last rendered frame, as read_motion returns them, without rendering again: (H, W, 2) float32 in pixels.
+        """
     def read_motion(self, scene: Object3D, camera: Camera) -> numpy.typing.NDArray[numpy.float32]:
         """
-        Screen-space motion vectors as (H, W, 2) float32, in pixels (previous - current surface position; +x rightward, y down-positive).
+        Screen-space motion vectors as (H, W, 2) float32, in pixels (previous - current surface position; +x rightward, y down-positive). RENDERS the scene first (flush_frames frames) and returns the motion of that render, so anything that moved before the call and not during it reads 0. To measure the frame a step loop just rendered, call last_motion() after its render().
         """
     def read_normals(self, scene: Object3D, camera: Camera) -> numpy.typing.NDArray[numpy.uint8]:
         ...

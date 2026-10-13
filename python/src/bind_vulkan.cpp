@@ -964,7 +964,14 @@ namespace threepp_py {
                 .def("read_motion", &PyVulkanRenderer::read_motion,
                      py::arg("scene"), py::arg("camera"),
                      "Screen-space motion vectors as (H, W, 2) float32, in pixels "
-                     "(previous - current surface position; +x rightward, y down-positive).")
+                     "(previous - current surface position; +x rightward, y down-positive). "
+                     "RENDERS the scene first (flush_frames frames) and returns the motion of "
+                     "that render, so anything that moved before the call and not during it "
+                     "reads 0. To measure the frame a step loop just rendered, call "
+                     "last_motion() after its render().")
+                .def("last_motion", &PyVulkanRenderer::motion_last,
+                     "The motion vectors of the last rendered frame, as read_motion returns "
+                     "them, without rendering again: (H, W, 2) float32 in pixels.")
                 .def("read_aovs_typed", &PyVulkanRenderer::read_aovs_typed,
                      py::arg("scene"), py::arg("camera"),
                      py::arg("aovs") = std::vector<std::string>{"rgb", "depth", "normals", "instance_ids"},
