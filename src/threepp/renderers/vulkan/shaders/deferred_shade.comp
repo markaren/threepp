@@ -1261,6 +1261,45 @@ void main() {
                 // they converge with samples instead of blur.
                 const vec4 sPrev = texture(shadowVisPrevTex, paneToPhys(shadowVisPrevTex, pUv));
                 if (sPrev.z >= 8.0 && (sPrev.y - sPrev.x * sPrev.x) < 0.005) nSRays = 1;
+            } else {
+                // The GI accumulation below KEEPS its history when this surface
+                // (normal within 90°, either side when double-sided, and its own
+                // prev view-Z) is anywhere in the 3×3 at the reproject. The
+                // single-tap test above fails frame after frame on sub-pixel
+                // foliage and detail-normal terrain under the jitter, so those
+                // pixels drew the fresh tier's 6 rays into a history the
+                // accumulation was keeping all along. The ray tier now takes
+                // the accumulation's verdict: same history, fewer rays.
+                const uvec4 tIds = (msSampleIdx >= 0) ? texelFetch(gbufIdsMS, px, msSampleIdx)
+                                                      : texelFetch(gbufIdsTex, px, 0);
+                const bool  tDs  = ifDoubleSided(tIds.z);
+                const ivec2 ip   = ivec2(pUv * vec2(float(pc.width), float(pc.height)));
+                const ivec2 mx   = ivec2(int(pc.width), int(pc.height)) - 1;
+                bool found = false;
+                for (int dy = -1; dy <= 1 && !found; ++dy) {
+                    for (int dx = -1; dx <= 1 && !found; ++dx) {
+                        const ivec2 tp = clamp(ip + ivec2(dx, dy), ivec2(0), mx);
+                        float nd = dot(N, normalize(texelFetch(gbufNormalPrevTex, tp, 0).xyz * 2.0 - 1.0));
+                        if (tDs) nd = abs(nd);
+                        if (nd <= 0.0) continue;
+                        const vec4 tb = cam.projInverse * vec4(pNdc, texelFetch(gbufDepthPrevTex, tp, 0).x, 1.0);
+                        if (abs(svz - tb.z / tb.w) <= 0.1 * max(abs(svz), 1e-3)) found = true;
+                    }
+                }
+                // ...and its trailing-edge id guard over the history read's
+                // 2×2 footprint, so a pixel the accumulation restarts behind a
+                // mover or under camera translation keeps the fresh tier.
+                if (found) {
+                    const ivec2 fb = ivec2(floor(pUv * vec2(float(pc.width), float(pc.height)) - 0.5));
+                    const bool camMoved = pc.camDelta > 0.001;
+                    for (int dy = 0; dy <= 1 && found; ++dy)
+                        for (int dx = 0; dx <= 1 && found; ++dx) {
+                            const uvec4 pids = texelFetch(gbufIdsPrevTex, clamp(fb + ivec2(dx, dy), ivec2(0), mx), 0);
+                            if ((pids.x == 0u && camMoved) ||
+                                (pids.x > 0u && pids.y != tIds.y && (ifMoving(pids.z) || camMoved))) found = false;
+                        }
+                }
+                if (found) ph = texture(giPrevTex, paneToPhys(giPrevTex, pUv)).a;
             }
         }
         // EFFECTIVE history = min(prev history, the motion-scaled cap this pixel will
