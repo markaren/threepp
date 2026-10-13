@@ -17,6 +17,13 @@ layout(set = 0, binding = 3) uniform sampler2D  gbufNormalTex; // xyz=n*0.5+0.5,
 layout(set = 0, binding = 4) uniform sampler2D  gbufDepthTex;  // x = NDC z [0,1]
 layout(set = 0, binding = 5) uniform usampler2D gbufIdsTex;    // x = instanceId+1 (0 = sky)
 layout(set = 0, binding = 6) uniform sampler2D  gbufAlbedoTex; // rgb=albedo, a=metalness
+// The per-sample G-buffer and the material table, for recombineCoverage's
+// mirror of the shade's minority fold-back (bindings of the shared set; read
+// only at MSAA complex pixels).
+#include "vulkan_shared.h"// MaterialDesc
+layout(set = 0, binding = 9, scalar) readonly buffer MatBuf { MaterialDesc mats[]; };
+layout(set = 0, binding = 38) uniform sampler2DMS  gbufNormalMS;
+layout(set = 0, binding = 40) uniform usampler2DMS gbufIdsMS;
 layout(set = 0, binding = 7,  rgba16f) uniform image2D outImage;            // sceneHdr (recombine: read+write)
 
 // Scene fog — same UBO the shade pass consumes (binding 33 of the shared set).
@@ -141,18 +148,42 @@ vec3 fogTransmittance(vec3 a, vec3 b) {
 // dominant GI/reflection at weight 1 therefore over-added (1-domWeight)·(GI+refl)
 // at every edge pixel — a one-pixel bright rim hugging every silhouette (the
 // "glowing outline", loudest in fog where the recombined GI rides on bright haze).
-//   dispatch B active  → weight = dominant-cluster coverage (ids.w bits 0..3).
+//   dispatch B active  → weight = dominant-cluster coverage (ids.w bits 0..3),
+//                        UNLESS B bails on the minority representative (unlit or
+//                        transmissive: ocean water, glass, blends): the shade
+//                        pass then folds that weight back into the dominant
+//                        surface, and so must this, or the dominant surface's
+//                        GI + reflection come in at half weight (a thin stem
+//                        in front of a glass pane at MSAA 2 went black-dotted).
+//                        The selection mirrors deferred_shade.comp's geoMinW
+//                        block sample for sample.
 //   dispatch B off     → the geometry minority folded INTO the dominant surface,
 //                        so only the sky fraction (ids.w bits 6..8) is excluded.
-// (Known approximation: when B bails on an unlit/water minority rep the shade
-// pass folds that weight back, while this uses the dominant coverage — the rare
-// affected edge under-adds GI by the minority fraction instead of glowing.)
 float recombineCoverage(ivec2 q) {
     const uint K = pc.msaaInfo & 0x7u;
     if (K <= 1u) return 1.0;
     const uint w = texelFetch(gbufIdsTex, q, 0).w;
     if ((w & 0x8000u) == 0u) return 1.0;// not a complex pixel
-    if ((pc.msaaInfo & 0x10u) != 0u)
-        return float(bitCount(w & 0xFu)) / float(K);
-    return 1.0 - float((w >> 6u) & 0x7u) / float(K);
+    const float skyOnly = 1.0 - float((w >> 6u) & 0x7u) / float(K);
+    if ((pc.msaaInfo & 0x10u) == 0u) return skyOnly;
+    const uint domMask = w & 0xFu;
+    const int  domIdx  = int((w >> 4u) & 0x3u);
+    int repIdx = -1, repCount = 0;
+    for (int i = 0; i < int(K); ++i) {
+        if (i == domIdx || (domMask & (1u << uint(i))) != 0u) continue;
+        const uint idI = texelFetch(gbufIdsMS, q, i).x;
+        if (idI == 0u) continue;
+        int count = 1;
+        for (int j = i + 1; j < int(K); ++j) {
+            if (j == domIdx || (domMask & (1u << uint(j))) != 0u) continue;
+            if (texelFetch(gbufIdsMS, q, j).x == idI) ++count;
+        }
+        if (count > repCount) { repCount = count; repIdx = i; }
+    }
+    if (repIdx >= 0) {
+        const uint repId = texelFetch(gbufIdsMS, q, repIdx).x;
+        const bool repUnlit = texelFetch(gbufNormalMS, q, repIdx).w < 0.0;
+        if (repUnlit || mats[repId - 1u].transmission > 0.0) return skyOnly;
+    }
+    return float(bitCount(domMask)) / float(K);
 }

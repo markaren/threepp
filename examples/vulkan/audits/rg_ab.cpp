@@ -40,6 +40,12 @@
 //                    distortion, sensor noise, a secondary view
 //   fields_views     fields scene with two secondary views: one with splats (a
 //                    second sort), one composited into the frame
+//   pane_stems       a thin-walled glass pane (transmission 1) before a
+//                    coloured wall, with stems 4 to 16 mm thick, a sill and an
+//                    alpha-tested card in front of it; sun + point light;
+//                    G-buffer MSAA 2 unless --msaa is given (--msaa 1 = off).
+//                    The edges in front of the pane are the MSAA complex
+//                    pixels whose dominant sample is glass
 // Unless noted, DLSS and FSR are off. Assets: DATA_FOLDER/textures/three.png,
 // models/gltf/Soldier.glb, models/gltf/AnimatedMorphSphere.
 //
@@ -421,6 +427,55 @@ namespace {
         scene.add(splats);
     }
 
+    void buildPaneStems(Scene& scene) {
+        scene.background = Color(0.55f, 0.68f, 0.86f);
+        auto sun = DirectionalLight::create(Color(1.f, 0.95f, 0.85f), 3.f);
+        sun->position.set(-4.f, 6.f, 5.f);
+        scene.add(sun);
+        auto point = PointLight::create(Color(1.f, 0.7f, 0.4f), 6.f, 8.f);
+        point->position.set(0.6f, 1.6f, 1.2f);
+        scene.add(point);
+
+        auto ground = Mesh::create(PlaneGeometry::create(20.f, 20.f), stdMat(Color(0.35f, 0.33f, 0.3f), 0.9f));
+        ground->rotation.x = -math::PI / 2.f;
+        scene.add(ground);
+        // A wall behind the pane, so what the glass shows is not just sky.
+        auto wall = Mesh::create(PlaneGeometry::create(6.f, 3.f), stdMat(Color(0.25f, 0.45f, 0.3f), 0.8f));
+        wall->position.set(0.f, 1.5f, -1.5f);
+        scene.add(wall);
+
+        auto glass = MeshPhysicalMaterial::create(
+                MeshPhysicalMaterial::Params{}.color(Color::white).transmission(1.f).roughness(0.f).metalness(0.f));
+        glass->setIor(1.5f);
+        glass->thinWalled = true;
+        auto pane = Mesh::create(PlaneGeometry::create(1.6f, 1.1f), glass);
+        pane->position.set(0.f, 1.25f, 0.f);
+        scene.add(pane);
+        auto sill = Mesh::create(BoxGeometry::create(1.8f, 0.04f, 0.18f), stdMat(Color(0.82f, 0.8f, 0.76f), 0.6f));
+        sill->position.set(0.f, 0.68f, 0.09f);
+        scene.add(sill);
+
+        // Stems 4 to 16 mm thick, standing on the sill in front of the pane.
+        auto stemMat = stdMat(Color(0.2f, 0.5f, 0.12f), 0.7f);
+        const float radii[] = {0.002f, 0.003f, 0.004f, 0.006f, 0.008f, 0.005f};
+        for (int i = 0; i < 6; ++i) {
+            auto stem = Mesh::create(CylinderGeometry::create(radii[i], radii[i], 0.7f, 12), stemMat);
+            stem->position.set(-0.55f + 0.22f * static_cast<float>(i), 1.05f, 0.08f);
+            stem->rotation.z = 0.12f * static_cast<float>(i - 3);
+            scene.add(stem);
+        }
+
+        TextureLoader tl;
+        auto tex = tl.load(std::string(DATA_FOLDER) + "/textures/three.png", SRGBColorSpace);
+        auto cutMat = stdMat(Color::white, 0.6f);
+        cutMat->map = tex;
+        cutMat->alphaTest = 0.5f;
+        cutMat->side = Side::Double;
+        auto card = Mesh::create(PlaneGeometry::create(0.35f, 0.35f), cutMat);
+        card->position.set(0.45f, 1.05f, 0.12f);
+        scene.add(card);
+    }
+
     void buildOverlays(Scene& scene) {
         buildRoom(scene);
         // Lines, points, wireframe and a transparent unlit mesh: the overlay pass.
@@ -547,6 +602,12 @@ int main(int argc, char** argv) {
         buildFields(scene);
         camera.position.set(0.f, 2.f, 6.f);
         camera.lookAt(Vector3{0.f, 1.2f, 0.f});
+    }
+    else if (sceneName == "pane_stems") {
+        buildPaneStems(scene);
+        camera.position.set(0.1f, 1.15f, 1.5f);
+        camera.lookAt(Vector3{0.f, 1.1f, 0.f});
+        if (msaa == 0) msaa = 2;
     }
     else { std::printf("unknown scene %s\n", sceneName.c_str()); return 2; }
 

@@ -692,19 +692,21 @@ void main() {
         }
         skyEdgeW = float(skyCount) / float(K);
         // Reserve the geometry-minority weight ONLY if dispatch B will actually
-        // pay it back. B bails without accumulating on UNLIT and OCEAN-WATER
-        // minority representatives (their shade paths own dispatch-A-only
-        // temporal state) — reserving weight B never pays is a dark rim on
-        // exactly those edges, so mirror B's rep selection + early-outs and
-        // fold the weight back into the dominant surface in those cases.
+        // pay it back. B bails without accumulating on UNLIT and TRANSMISSIVE
+        // minority representatives (ocean water, glass, alpha and additive
+        // blends: their shade paths re-trace what is behind them and own
+        // dispatch-A-only temporal state) — reserving weight B never pays is a
+        // dark rim on exactly those edges, so mirror B's rep selection +
+        // early-outs and fold the weight back into the dominant surface in
+        // those cases. (Glass used to be reserved for and then paid with its
+        // OPAQUE shade, the transmission skipped: a thin stem in front of a
+        // pane at MSAA 2/4 turned into a white dotted line.)
         float geoMinW = 0.0;
         if (flagOn(128u) && repIdx >= 0) {
             const uint repId    = texelFetch(gbufIdsMS, px, repIdx).x;
             const bool repUnlit = texelFetch(gbufNormalMS, px, repIdx).w < 0.0;
-            const bool repWater = mats[repId - 1u].thinWalled != 0
-                                && mats[repId - 1u].transmission > 0.0
-                                && geoms[repId - 1u].foamAddress != 0ul;
-            if (!repUnlit && !repWater) geoMinW = float(geoMinCount) / float(K);
+            const bool repTransmissive = mats[repId - 1u].transmission > 0.0;
+            if (!repUnlit && !repTransmissive) geoMinW = float(geoMinCount) / float(K);
         }
         domWeight = 1.0 - skyEdgeW - geoMinW;
     }
@@ -2005,6 +2007,10 @@ void main() {
     // transmissive geometry at an edge keeps dispatch A's dominant-sample
     // result — same as the pre-Phase-2 (msaa=1) behaviour for that pixel,
     // not a regression, just an untreated edge on (rare) glass/blend props.
+    // Dispatch B on a transmissive representative adds nothing: dispatch A
+    // reserved no weight for it (see geoMinW), so the dominant sample keeps
+    // the whole pixel.
+    if (pc.shadeMode == 1u && pm.transmission > 0.0) return;
     if (pc.shadeMode != 1u) {
         if (pm.transmission > 1.0) {
             // ADDITIVE blend (muzzle flashes, sparks, energy glows). The surface
