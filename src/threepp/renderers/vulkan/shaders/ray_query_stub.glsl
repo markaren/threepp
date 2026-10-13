@@ -26,6 +26,7 @@
 #define rayQueryGetIntersectionWorldToObjectEXT(q, committed) mat4x3(1.0)
 #define rayQueryGetIntersectionObjectToWorldEXT(q, committed) mat4x3(1.0)
 
+#define gl_RayFlagsNoneEXT 0u
 #define gl_RayFlagsOpaqueEXT 1u
 #define gl_RayFlagsTerminateOnFirstHitEXT 4u
 #define gl_RayQueryCommittedIntersectionNoneEXT 0u
