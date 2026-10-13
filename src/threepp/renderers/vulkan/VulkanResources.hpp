@@ -15,6 +15,8 @@
 
 #include <cstdint>
 #include <cstring>
+#include <functional>
+#include <source_location>
 
 namespace threepp::vulkan {
 
@@ -38,15 +40,31 @@ namespace threepp::vulkan {
     };
 
     // Allocate a buffer. If usage includes SHADER_DEVICE_ADDRESS_BIT,
-    // populates the .address field via vkGetBufferDeviceAddress.
+    // populates the .address field via vkGetBufferDeviceAddress. `where` is
+    // the caller's source line, kept for the memory dump (see
+    // forEachLiveBuffer); callers never pass it.
     Buffer createBuffer(VmaAllocator alloc, VkDevice device,
                         VkDeviceSize size, VkBufferUsageFlags usage,
                         VmaMemoryUsage memoryUsage,
-                        VmaAllocationCreateFlags flags = 0);
+                        VmaAllocationCreateFlags flags = 0,
+                        std::source_location where = std::source_location::current());
 
     // Free a buffer (idempotent — safe to call on a zero-initialized Buffer).
     // Zeroes the struct on exit so subsequent calls are no-ops.
     void destroyBuffer(VmaAllocator alloc, Buffer& b);
+
+    // THREEPP_VK_MEMDUMP=1 (read once) keeps a registry of every live buffer
+    // createBuffer and createAsScratchBuffer made: its creating source line,
+    // usage and size. Without the variable nothing is recorded and the walk
+    // below visits nothing. Lets the memory dump say WHICH buffers sit in
+    // the BAR window or in system memory.
+    struct LiveBufferSite {
+        const char*        file  = nullptr;// the creating call's source file
+        uint32_t           line  = 0;
+        VkBufferUsageFlags usage = 0;
+        VkDeviceSize       size  = 0;
+    };
+    void forEachLiveBuffer(const std::function<void(VmaAllocation, const LiveBufferSite&)>& fn);
 
     // The async-compute pilot (THREEPP_VK_ASYNC_PILOT=1, VulkanContext): once
     // the two families are set, createBuffer, createAsScratchBuffer and the
@@ -162,7 +180,8 @@ namespace threepp::vulkan {
     // VkMemoryRequirements), which on AMD/Intel produces a misaligned address
     // and the build faults with VK_ERROR_DEVICE_LOST. 256B is conservative for
     // desktop GPUs; if a future device demands more, upgrade to a property-query.
-    Buffer createAsScratchBuffer(VmaAllocator alloc, VkDevice device, VkDeviceSize size);
+    Buffer createAsScratchBuffer(VmaAllocator alloc, VkDevice device, VkDeviceSize size,
+                                 std::source_location where = std::source_location::current());
 
     // Minimal sampled-image record. Used both for textures (env, materials,
     // blue-noise tile) and for storage images (accumulator, gbuf, ReSTIR DI

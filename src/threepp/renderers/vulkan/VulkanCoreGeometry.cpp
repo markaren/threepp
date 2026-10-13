@@ -201,8 +201,15 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             updatable = updatable || interopTarget;
             // A static record's buffers are device-local, filled by staging
             // copies recorded ahead of its BLAS build (see StagedUploads). A
-            // deformer's or interop record's stay host-visible.
+            // deformer's or interop record's vertex and normal stay
+            // host-visible: those are what its per-frame paths rewrite. Its
+            // uv, color, index and rtIndex are device-local like a static
+            // record's: no deformer (skinning, tet, morph, grass, the
+            // displaced ocean) and no interop producer writes them after this
+            // build, and a host edit of them goes through stageUpload or a
+            // fresh record.
             const bool deviceLocal = !updatable;
+            constexpr bool sideDeviceLocal = true;
             StagedUploads up;
 
             auto* posAttr = geom.getAttribute<float>("position");
@@ -335,7 +342,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                            deviceLocal);
+                            sideDeviceLocal);
                     stageUpload(up, rec->uv, uvSrc, uvBytes);
                 }
             }
@@ -370,7 +377,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                                deviceLocal);
+                                sideDeviceLocal);
                         stageUpload(up, rec->color, packedCol.data(), cbBytes);
                         rec->packedMask |= kPackedColor;
                     } else {
@@ -380,7 +387,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                            deviceLocal);
+                            sideDeviceLocal);
                     if (itemSize == 3) {
                         stageUpload(up, rec->color, cols.data(), cbBytes);
                     } else {
@@ -414,11 +421,11 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                         idx16[k] = static_cast<uint16_t>(indices[k]);
                     }
                     const VkDeviceSize ibBytes = idx16.size() * sizeof(uint16_t);
-                    rec->index = createGeomBuffer(ibBytes, geomUsage, deviceLocal);
+                    rec->index = createGeomBuffer(ibBytes, geomUsage, sideDeviceLocal);
                     stageUpload(up, rec->index, idx16.data(), ibBytes);
                 } else {
                     const VkDeviceSize ibBytes = indices.size() * sizeof(unsigned int);
-                    rec->index = createGeomBuffer(ibBytes, geomUsage, deviceLocal);
+                    rec->index = createGeomBuffer(ibBytes, geomUsage, sideDeviceLocal);
                     stageUpload(up, rec->index, indices.data(), ibBytes);
                 }
             }
@@ -440,7 +447,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             }
             if (rtIndices) {
                 const VkDeviceSize ibBytes = rtIndices->size() * sizeof(uint32_t);
-                rec->rtIndex = createGeomBuffer(ibBytes, geomUsage, deviceLocal);
+                rec->rtIndex = createGeomBuffer(ibBytes, geomUsage, sideDeviceLocal);
                 stageUpload(up, rec->rtIndex, rtIndices->data(), ibBytes);
                 rec->rtIndexCount = static_cast<uint32_t>(rtIndices->size() - rtIndices->size() % 3u);
             }

@@ -2,8 +2,11 @@
 #include "threepp/renderers/vulkan/TransientPool.hpp"
 #include "threepp/renderers/vulkan/DescriptorShadow.hpp"
 
+#include <cstdlib>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -31,7 +34,36 @@ namespace threepp::vulkan {
         // async-compute pilot, before any resource exists.
         uint32_t gConcurrentFamilies[2] = {0, 0};
         bool     gConcurrent = false;
+
+        // The live-buffer registry behind forEachLiveBuffer (memory dump only).
+        bool registryOn() {
+            static const bool on = [] {
+                const char* e = std::getenv("THREEPP_VK_MEMDUMP");
+                return e && *e && *e != '0';
+            }();
+            return on;
+        }
+        std::mutex& registryMutex() {
+            static std::mutex m;
+            return m;
+        }
+        std::unordered_map<VmaAllocation, LiveBufferSite>& registry() {
+            static std::unordered_map<VmaAllocation, LiveBufferSite> r;
+            return r;
+        }
+        void registerBuffer(VmaAllocation a, const std::source_location& where,
+                            VkBufferUsageFlags usage, VkDeviceSize size) {
+            if (!registryOn() || a == VK_NULL_HANDLE) return;
+            std::lock_guard<std::mutex> lk(registryMutex());
+            registry()[a] = {where.file_name(), static_cast<uint32_t>(where.line()), usage, size};
+        }
     }// namespace
+
+    void forEachLiveBuffer(const std::function<void(VmaAllocation, const LiveBufferSite&)>& fn) {
+        if (!registryOn()) return;
+        std::lock_guard<std::mutex> lk(registryMutex());
+        for (const auto& [a, site] : registry()) fn(a, site);
+    }
 
     void setConcurrentSharingFamilies(uint32_t a, uint32_t b) {
         gConcurrentFamilies[0] = a;
@@ -61,7 +93,8 @@ namespace threepp::vulkan {
     Buffer createBuffer(VmaAllocator alloc, VkDevice device,
                         VkDeviceSize size, VkBufferUsageFlags usage,
                         VmaMemoryUsage memoryUsage,
-                        VmaAllocationCreateFlags flags) {
+                        VmaAllocationCreateFlags flags,
+                        std::source_location where) {
         Buffer b{};
         b.size = size;
 
@@ -78,6 +111,7 @@ namespace threepp::vulkan {
 
         check(vmaCreateBuffer(alloc, &bci, &aci, &b.handle, &b.alloc, nullptr),
               "vmaCreateBuffer");
+        registerBuffer(b.alloc, where, usage, size);
 
         if (usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) {
             VkBufferDeviceAddressInfo dai{};
@@ -89,11 +123,16 @@ namespace threepp::vulkan {
     }
 
     void destroyBuffer(VmaAllocator alloc, Buffer& b) {
+        if (b.alloc && registryOn()) {
+            std::lock_guard<std::mutex> lk(registryMutex());
+            registry().erase(b.alloc);
+        }
         if (b.handle) vmaDestroyBuffer(alloc, b.handle, b.alloc);
         b = {};
     }
 
-    Buffer createAsScratchBuffer(VmaAllocator alloc, VkDevice device, VkDeviceSize size) {
+    Buffer createAsScratchBuffer(VmaAllocator alloc, VkDevice device, VkDeviceSize size,
+                                 std::source_location where) {
         Buffer b{};
         b.size = size;
         VkBufferCreateInfo bci{};
@@ -109,6 +148,7 @@ namespace threepp::vulkan {
                                             /*minAlignment*/ 256,
                                             &b.handle, &b.alloc, nullptr),
               "vmaCreateBufferWithAlignment(scratch)");
+        registerBuffer(b.alloc, where, bci.usage, size);
         VkBufferDeviceAddressInfo dai{};
         dai.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
         dai.buffer = b.handle;

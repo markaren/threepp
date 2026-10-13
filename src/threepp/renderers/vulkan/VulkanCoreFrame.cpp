@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace threepp {
@@ -1430,6 +1431,16 @@ void VulkanRenderer::Impl::endFrame() {
             // ahead of slot — keeping the retire queue's serial↔slot fence
             // invariant exact (VulkanRetireQueue.hpp).
             ++frameSerial_;
+            // The scene-built dump runs before the first frame records, so the
+            // per-frame tables (draw info, indirect commands, motion matrices)
+            // do not exist yet: dump once more after a few frames.
+            if (frameSerial_ == 8) {
+                static const bool memDump = [] {
+                    const char* e = std::getenv("THREEPP_VK_MEMDUMP");
+                    return e && *e && *e != '0';
+                }();
+                if (memDump) dumpMemoryStats("frame-8");
+            }
             // Same cadence for the 3D-overlay line cache's lastTouch clock, so
             // its stale sweep has a monotonic reference. It previously sat at 0
             // forever, which made every entry look freshly touched and meant the
@@ -2499,13 +2510,16 @@ void VulkanRenderer::Impl::dumpMemoryStats(const char* tag) const {
                 uint32_t count[3] = {};
             };
             std::vector<PlacementRow> rows;
+            auto bucketOf = [&](VmaAllocation a) {
+                VkMemoryPropertyFlags f = 0;
+                vmaGetAllocationMemoryProperties(ctx->allocator(), a, &f);
+                return (f & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) == 0      ? 2
+                       : (f & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0 ? 1
+                                                                          : 0;
+            };
             auto add = [&](const std::string& name, const Buffer& b) {
                 if (b.alloc == VK_NULL_HANDLE) return;
-                VkMemoryPropertyFlags f = 0;
-                vmaGetAllocationMemoryProperties(ctx->allocator(), b.alloc, &f);
-                const int k = (f & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) == 0      ? 2
-                              : (f & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0 ? 1
-                                                                                 : 0;
+                const int k = bucketOf(b.alloc);
                 auto it = std::find_if(rows.begin(), rows.end(),
                                        [&](const PlacementRow& r) { return r.name == name; });
                 if (it == rows.end()) {
@@ -2581,6 +2595,66 @@ void VulkanRenderer::Impl::dumpMemoryStats(const char* tag) const {
                              total.name.c_str(),
                              total.bytes[0] / MB, total.count[0], total.bytes[1] / MB, total.count[1],
                              total.bytes[2] / MB, total.count[2]);
+            }
+
+            // Every live buffer (the registry createBuffer keeps under
+            // THREEPP_VK_MEMDUMP), grouped by the source line that created it:
+            // the rows holding any BAR or system-memory bytes, largest first,
+            // then the device-local-only remainder and VMA's own per-heap
+            // totals (the difference is images and buffers made elsewhere).
+            struct SiteRow {
+                std::string        site;
+                double             bytes[3] = {};
+                uint32_t           count[3] = {};
+                VkBufferUsageFlags usage = 0;
+            };
+            std::unordered_map<std::string, SiteRow> sites;
+            double siteTotal[3] = {};
+            uint32_t siteCount[3] = {};
+            vulkan::forEachLiveBuffer([&](VmaAllocation a, const vulkan::LiveBufferSite& s) {
+                const int k = bucketOf(a);
+                std::string file = s.file ? s.file : "?";
+                const auto slash = file.find_last_of("/\\");
+                if (slash != std::string::npos) file = file.substr(slash + 1);
+                const std::string key = file + ":" + std::to_string(s.line);
+                auto& r = sites[key];
+                r.site = key;
+                r.bytes[k] += static_cast<double>(s.size);
+                ++r.count[k];
+                r.usage |= s.usage;
+                siteTotal[k] += static_cast<double>(s.size);
+                ++siteCount[k];
+            });
+            if (!sites.empty()) {
+                std::vector<const SiteRow*> hv;
+                for (const auto& [key, r] : sites) {
+                    if (r.count[1] + r.count[2] > 0) hv.push_back(&r);
+                }
+                std::sort(hv.begin(), hv.end(), [](const SiteRow* a, const SiteRow* b) {
+                    return a->bytes[1] + a->bytes[2] > b->bytes[1] + b->bytes[2];
+                });
+                std::fprintf(stderr,
+                             "[threepp][vk-mem]   host-visible buffers by creating line, MB / buffers: "
+                             "%-18s %-18s %-18s usage\n",
+                             "device-local", "BAR (DL+HV)", "host");
+                for (const SiteRow* r : hv) {
+                    std::fprintf(stderr,
+                                 "[threepp][vk-mem]     %-36s %9.2f / %-6u %9.2f / %-6u %9.2f / %-6u 0x%x\n",
+                                 r->site.c_str(),
+                                 r->bytes[0] / MB, r->count[0], r->bytes[1] / MB, r->count[1],
+                                 r->bytes[2] / MB, r->count[2], r->usage);
+                }
+                std::fprintf(stderr,
+                             "[threepp][vk-mem]     %-36s %9.2f / %-6u %9.2f / %-6u %9.2f / %-6u\n",
+                             "all registered buffers",
+                             siteTotal[0] / MB, siteCount[0], siteTotal[1] / MB, siteCount[1],
+                             siteTotal[2] / MB, siteCount[2]);
+                for (uint32_t i = 0; i < heaps; ++i) {
+                    std::fprintf(stderr,
+                                 "[threepp][vk-mem]     VMA heap %u: %.1f MB live in %u allocations\n",
+                                 i, stats.memoryHeap[i].statistics.allocationBytes / MB,
+                                 stats.memoryHeap[i].statistics.allocationCount);
+                }
             }
             std::fflush(stderr);
         }
