@@ -23,8 +23,12 @@
 # GPU physics is NOT in the wheel — PhysXGpu_64.dll is 76 MB zipped against
 # PyPI's 100 MiB/file cap — so soft bodies / GpuSim / direct-GPU RL need a
 # source build (the DLL is dlopen'd, so dropping it next to the module also
-# works). FSR/DLSS are likewise absent (signed vendor DLLs; DLSS alone is
-# 56-66 MB). macOS has no wheel on purpose — see the matrix.
+# works). The WINDOWS wheels also carry the FSR 3.1 upscaler: AMD's prebuilt
+# amd_fidelityfx_vk.dll (9 MB, MIT) rides next to the module, where the renderer
+# loads it by name, and wheel_smoke.py asserts it is there. Linux has no FSR
+# (the runtime is a Windows binary) and uses the built-in TAA upsampler. DLSS is
+# absent everywhere: nvngx_dlss.dll is 56-66 MB and under NVIDIA's own license.
+# macOS has no wheel on purpose — see the matrix.
 #
 # The EDITOR ships as its own package from build_editor_wheels: threepp-editor,
 # per-interpreter Windows wheels (the exe embeds CPython). Same version, same
@@ -142,9 +146,67 @@ jobs:
           # find_path see vk_mem_alloc.h; GLSLANG_VALIDATOR points straight at
           # the tool so the shader-embed step never depends on PATH. Wrong paths
           # fail the CONFIGURE loudly — never a silently degraded wheel.
+          #
+          # THREEPP_WITH_FSR builds the FSR upscaler in; the SDK it needs is the
+          # slim copy the FidelityFX steps below prepare (ffx-sdk/), handed over
+          # as FETCHCONTENT_SOURCE_DIR so the configure downloads nothing.
           $root = $pwd.Path -replace '\\', '/'
           $vi = "$root/vcpkg_installed/x64-windows"
-          "CMAKE_ARGS=-DTHREEPP_WITH_VULKAN=ON -DCMAKE_PREFIX_PATH=$vi -DGLSLANG_VALIDATOR=$vi/tools/glslang/glslangValidator.exe -Dunofficial-omniverse-physx-sdk_DIR=$vi/share/unofficial-omniverse-physx-sdk" >> $env:GITHUB_ENV
+          "CMAKE_ARGS=-DTHREEPP_WITH_VULKAN=ON -DTHREEPP_WITH_FSR=ON -DFETCHCONTENT_SOURCE_DIR_FIDELITYFX_SDK=$root/ffx-sdk -DCMAKE_PREFIX_PATH=$vi -DGLSLANG_VALIDATOR=$vi/tools/glslang/glslangValidator.exe -Dunofficial-omniverse-physx-sdk_DIR=$vi/share/unofficial-omniverse-physx-sdk" >> $env:GITHUB_ENV
+
+      # The FidelityFX SDK for FSR (Windows wheels only). The release archive is
+      # 470 MB and unpacks to 1.1 GB of samples and media; the build reads 15
+      # files of it: the ffx-api headers, the prebuilt Vulkan runtime (DLL +
+      # import lib) and the license. Those are what gets cached, about 10 MB,
+      # under a key that follows cmake/FetchFidelityFX.cmake, where the version
+      # and the archive's hash live.
+      #
+      # A cache is scoped to the ref that saved it: a tag run restores only what
+      # a run on the default branch saved, so a release may well miss and
+      # download. That costs a minute, not a failure.
+      - name: Restore the FidelityFX SDK (FSR)
+        if: runner.os == 'Windows'
+        id: ffx
+        uses: actions/cache@v4
+        with:
+          path: ffx-sdk
+          key: ffx-sdk-${{ hashFiles('cmake/FetchFidelityFX.cmake') }}
+
+      # FETCHCONTENT_SOURCE_DIR bypasses the URL_HASH check in
+      # FetchFidelityFX.cmake, so the hash is verified HERE, against the value
+      # read out of that file: the DLL goes into every Windows wheel. A version
+      # bumped there without its hash fails this step.
+      - name: Fetch the FidelityFX SDK (FSR)
+        if: runner.os == 'Windows' && steps.ffx.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $cmake = Get-Content cmake/FetchFidelityFX.cmake -Raw
+          if ($cmake -notmatch 'set\(FIDELITYFX_SDK_VERSION "([^"]+)"') { throw "FIDELITYFX_SDK_VERSION not found in cmake/FetchFidelityFX.cmake" }
+          $ver = $Matches[1]
+          if ($cmake -notmatch 'SHA256=([0-9a-fA-F]{64})') { throw "archive SHA256 not found in cmake/FetchFidelityFX.cmake" }
+          $want = $Matches[1].ToLower()
+          $zip = "$env:RUNNER_TEMP\ffx-sdk.zip"
+          curl.exe -L --fail --retry 3 -o $zip "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/download/$ver/FidelityFX-SDK-$ver.zip"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $want) { throw "FidelityFX SDK $ver : SHA256 $got, expected $want" }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $keep = 'PrebuiltSignedDLL/amd_fidelityfx_vk.dll', 'PrebuiltSignedDLL/amd_fidelityfx_vk.lib', 'sdk/LICENSE.txt'
+          $archive = [IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            foreach ($e in $archive.Entries) {
+              if (-not $e.Name) { continue }   # a directory entry
+              if ($e.FullName -notlike 'ffx-api/include/*' -and $e.FullName -notin $keep) { continue }
+              $dest = Join-Path "$pwd\ffx-sdk" $e.FullName
+              New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null
+              [IO.Compression.ZipFileExtensions]::ExtractToFile($e, $dest, $true)
+            }
+          } finally { $archive.Dispose() }
+          Remove-Item $zip
+          # Fail here, not in the configure, if the archive layout moved.
+          foreach ($f in $keep + 'ffx-api/include/ffx_api/ffx_api.h') {
+            if (-not (Test-Path "ffx-sdk/$f")) { throw "FidelityFX SDK $ver : $f not in the archive" }
+          }
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v4.1.1

@@ -91,12 +91,22 @@ endif ()
 # a .pyd can't rely on the default DLL search finding a sibling — so stage the DLL
 # next to the module. FFX_DLL is set by cmake/FetchFidelityFX.cmake when the threepp
 # lib was configured with -DTHREEPP_WITH_FSR=ON. The setFsr/fsr_available bindings
-# are unconditional (they're no-ops when the lib was built without FSR), so no extra
-# define is needed here. (A Vulkan+FSR WHEEL would also need an install() rule to
-# pack the DLL + its MIT LICENSE; the distributed wheel is GL-only today.)
+# are unconditional (they're no-ops when the lib was built without FSR);
+# THREEPP_PY_HAS_FSR only feeds threepp.HAS_FSR, so Python (and wheel_smoke.py) can
+# tell a build with the upscaler from one without, with no renderer and no GPU.
 if (THREEPP_WITH_FSR AND WIN32 AND FFX_DLL)
+    target_compile_definitions(threepp_py PRIVATE THREEPP_PY_HAS_FSR)
     add_custom_command(TARGET threepp_py POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFX_DLL}" $<TARGET_FILE_DIR:threepp_py>)
+    # WHEEL: the POST_BUILD copy above only reaches the build tree. The DLL is
+    # loaded by name from the module's own directory when a renderer starts
+    # (never linked), so a wheel without it still imports and silently runs the
+    # built-in TAA: ship it. The FidelityFX SDK is MIT; its notice rides along.
+    # Not OPTIONAL, like the PhysX DLLs: a missing file fails the install.
+    install(FILES "${FFX_DLL}"
+            DESTINATION threepp COMPONENT python_module)
+    install(FILES "${FFX_LICENSE}"
+            DESTINATION threepp COMPONENT python_module RENAME "FIDELITYFX_LICENSE.txt")
     message(STATUS "threepp_py: FSR runtime DLL staged next to the module")
 endif ()
 

@@ -9,6 +9,7 @@ No GL context is created here — CI runners have no display, and physics is
 deliberately CPU-only headless, which is exactly why it CAN be tested here.
 """
 import pathlib
+import sys
 
 import threepp as tp
 
@@ -39,6 +40,19 @@ assert tp.HAS_PHYSX, "wheel built without PhysX — the vcpkg provisioning step 
 # graceful-degradation path working; the crash mode this guards against is
 # `import threepp` itself failing on machines without a Vulkan runtime.
 assert tp.HAS_VULKAN, "wheel built without Vulkan — the SDK/vcpkg feature did not reach the configure"
+
+# FSR ships in the Windows wheels only (AMD's prebuilt runtime is a Windows
+# DLL). The DLL is loaded by name from the module's directory when a renderer
+# starts and a miss falls back to TAA with one line on stderr, so its absence would
+# never fail anything on a user's machine: assert the file, and the notice that
+# must ride along with it, here.
+print("HAS_FSR   :", tp.HAS_FSR)
+if sys.platform == "win32":
+    assert tp.HAS_FSR, "Windows wheel built without FSR — THREEPP_WITH_FSR did not reach the configure"
+    for name in ("amd_fidelityfx_vk.dll", "FIDELITYFX_LICENSE.txt"):
+        assert (installed_pkg / name).is_file(), f"{name} missing from the wheel"
+else:
+    assert not tp.HAS_FSR, "FSR is Windows-only; a Linux wheel should not claim it"
 
 # A box must fall. One second of CPU simulation, no renderer, no GPU DLLs —
 # the wheel ships only the four CPU PhysX DLLs, and this proves they load and

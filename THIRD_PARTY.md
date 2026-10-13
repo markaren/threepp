@@ -127,7 +127,7 @@ license text.
 | [pybind11](https://github.com/pybind/pybind11) | `THREEPP_WITH_PYTHON` / editor scripting | BSD-3, © Wenzel Jakob |
 | [Catch2](https://github.com/catchorg/Catch2) | tests only | Boost Software License 1.0 |
 | [RLtools](https://github.com/rl-tools/rl-tools) | `THREEPP_WITH_RLTOOLS` (opt-in example) | MIT, © 2023 Jonas Eschmann |
-| AMD FidelityFX SDK (FSR) | `THREEPP_WITH_FSR` (opt-in upscaler; Windows, needs `THREEPP_WITH_VULKAN`) | MIT, © AMD — the fetch records the SDK's LICENSE.txt path; the build copies the prebuilt `amd_fidelityfx_vk.dll` beside the executable |
+| AMD FidelityFX SDK (FSR) | `THREEPP_WITH_FSR` (opt-in upscaler; Windows, needs `THREEPP_WITH_VULKAN`) | MIT, © AMD — the fetch records the SDK's LICENSE.txt path; the build copies the prebuilt `amd_fidelityfx_vk.dll` beside the executable. The Windows Python wheels redistribute that DLL, with the SDK's LICENSE.txt beside it as `FIDELITYFX_LICENSE.txt` |
 | **NVIDIA DLSS SDK** | `THREEPP_WITH_DLSS` (opt-in) | **"NVIDIA RTX SDKs License" — proprietary, not open source.** The build fetches the SDK and copies `nvngx_dlss.dll` beside the executable; redistribution of that binary is governed by that license, not by anything in this repository |
 
 ## Resolved by vcpkg / the system (per feature)

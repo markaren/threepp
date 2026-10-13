@@ -17,6 +17,10 @@
 # no Vulkan runtime and threepp.vulkan_available() reports the truth;
 # VulkanRenderer raises a clean RuntimeError there.
 #
+# The Windows wheels also carry the FSR 3.1 upscaler (threepp.HAS_FSR): CI adds
+# -DTHREEPP_WITH_FSR=ON, and python/CMakeLists.txt installs AMD's runtime DLL
+# next to the module. A source build gets it with the same flag.
+#
 # NOT in the wheel, by design: GPU physics runtime (PhysXGpu_64.dll is 76 MB
 # zipped against PyPI's 100 MiB/file cap). It is dlopen'd, never linked — drop
 # PhysXGpu_64.dll + PhysXDevice64.dll next to the installed module and

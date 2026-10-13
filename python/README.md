@@ -43,7 +43,12 @@ They ship the GL renderer, **CPU PhysX physics**
 **and the Vulkan deferred renderer** with its G-buffer AOVs
 (`tp.HAS_VULKAN == True`). Vulkan needs a Vulkan-capable GPU driver at runtime —
 on machines without one the wheel still imports and renders GL, and
-`tp.vulkan_available()` tells you which world you're in. macOS has no prebuilt
+`tp.vulkan_available()` tells you which world you're in. The Windows wheels
+also carry the **FSR 3.1 upscaler** (`tp.HAS_FSR == True`), which the Vulkan
+renderer uses by default where the GPU supports it (`renderer.fsr_available`;
+`renderer.fsr = False` hands back to the built-in TAA). Linux has no FSR
+(AMD's runtime is a Windows binary), and no wheel has DLSS, which needs a
+source build on Windows. macOS has no prebuilt
 wheel — `pip install` builds it from source there (GL-only; a C++ compiler and
 CMake are all it needs).
 

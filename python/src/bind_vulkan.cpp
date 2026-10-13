@@ -2342,6 +2342,14 @@ namespace threepp_py {
               "True when the Vulkan loader is present at runtime. HAS_VULKAN=True + "
               "vulkan_available()=False means the wheel carries the backend but this "
               "machine has no Vulkan runtime — use GLRenderer.");
+        // HAS_FSR says the FSR upscaler was COMPILED IN (the Windows wheels, or a
+        // source build with -DTHREEPP_WITH_FSR=ON). Whether it runs is decided
+        // per renderer on the machine's GPU: VulkanRenderer.fsr_available.
+#ifdef THREEPP_PY_HAS_FSR
+        m.attr("HAS_FSR") = true;
+#else
+        m.attr("HAS_FSR") = false;
+#endif
         // The validation-layer tally behind the C++ CI gate
         // (threepp/renderers/vulkan/ValidationReport.hpp), so a pytest run
         // under THREEPP_VULKAN_VALIDATION=1 can assert a frame sequence
@@ -2375,6 +2383,7 @@ namespace threepp_py {
     void init_vulkan(py::module_& m) {
         // Marker so Python can check availability:  threepp.HAS_VULKAN
         m.attr("HAS_VULKAN") = false;
+        m.attr("HAS_FSR") = false;
         m.def("vulkan_available", [] { return false; },
               "Always False in a GL-only build (HAS_VULKAN is False too).");
         m.def("vulkan_validation_error_count", [] { return 0u; },

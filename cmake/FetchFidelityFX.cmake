@@ -22,9 +22,20 @@ set(_ffx_url
 message(STATUS "FidelityFX SDK: fetching ${FIDELITYFX_SDK_VERSION} (large ~470 MB archive; "
                "override with -DFETCHCONTENT_SOURCE_DIR_FIDELITYFX_SDK=<dir>)")
 
+# The Windows wheels redistribute amd_fidelityfx_vk.dll out of this archive
+# (python/CMakeLists.txt), so the archive is pinned by hash, not just by tag:
+# a release asset can be replaced under the same tag. Bumping
+# FIDELITYFX_SDK_VERSION means updating the hash with it; a version set from
+# the command line skips the check rather than fail on a hash that cannot match.
+set(_ffx_hash_arg "")
+if (FIDELITYFX_SDK_VERSION STREQUAL "v1.1.4")
+    set(_ffx_hash_arg URL_HASH SHA256=0216556bfb0e243cec30004a2a98d38f4e3f7406cb7938e3c1b85c758e95d952)
+endif ()
+
 FetchContent_Declare(
     fidelityfx_sdk
     URL "${_ffx_url}"
+    ${_ffx_hash_arg}
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 # Populate the source only — do NOT add_subdirectory(). The SDK ships a root

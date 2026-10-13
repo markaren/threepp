@@ -152,7 +152,8 @@ pip install threepp
 ```
 
 Wheels for CPython 3.10 to 3.14 on Windows x64 and manylinux x86_64 carry the OpenGL and Vulkan
-renderers and CPU PhysX. macOS builds from source (OpenGL only). Releases are named by date; pin
+renderers and CPU PhysX; the Windows wheels also carry the FSR 3.1 upscaler. macOS builds from
+source (OpenGL only). Releases are named by date; pin
 the one you tested.
 
 ```python
