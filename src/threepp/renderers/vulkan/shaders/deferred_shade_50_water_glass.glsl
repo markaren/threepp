@@ -92,9 +92,17 @@ float waterGlint(vec3 N, vec3 V, vec3 L, float NdotV, float ndl, float r0,
 // into the specular roughness broadens every glint into a coherent glitter sheen
 // instead — the missing half of the water spec-AA (the fade alone left the glint
 // razor-sharp). σ_slope² adds to α² (≈roughness²) for a GGX lobe.
+// The sun's shadow visibility at the water surface point, traced by the first
+// of the in-scatter and glint loops to need it and reused by the second: both
+// trace from P + N * SHADOW_EPS along the same L, so the ray is the same ray.
+// -1 = not traced yet. Only the first directional light is cached (the one-sun
+// policy); any further light traces as before.
+float gWaterSunVis0 = -1.0;
+
 vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 bool doShadows, float maxLod, uint frame, inout uint seed,
                 float slopeVarSq, vec3 Nmacro, ivec2 px, float clusterDist) {
+    gWaterSunVis0 = -1.0;// per surface point: a second call must not reuse the first's ray
     // The surface the rays see may be the mesh's ray-tracing proxy
     // (DisplacedMesh::rtProxyCells, kGeomFlagRtProxy): a coarser grid
     // than the one the raster drew P from, above or below it by the proxy's
@@ -537,7 +545,11 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             const vec3  L   = normalize(lights.dirLights[i].direction);
             const float ndl = dot(N, L);
             if (ndl <= 0.0) continue;// sun below the surface plane: no transmitted beam
-            const float vis = doShadows ? shadowVis(sunOrigIn, L, 1e30) : 1.0;
+            float vis = 1.0;
+            if (doShadows) {
+                vis = (i == 0u && gWaterSunVis0 >= 0.0) ? gWaterSunVis0 : shadowVis(sunOrigIn, L, 1e30);
+                if (i == 0u) gWaterSunVis0 = vis;
+            }
             if (vis <= 0.0) continue;
             vec3 sunRefr = refract(-L, N, 1.0 / ior);
             if (dot(sunRefr, sunRefr) < 1e-6) continue;
@@ -628,7 +640,11 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             const vec3  L   = normalize(lights.dirLights[i].direction);
             const float ndl = dot(N, L);
             if (ndl <= 0.0) continue;
-            const float vis = doShadows ? shadowVis(sunOrig, L, 1e30) : 1.0;
+            float vis = 1.0;
+            if (doShadows) {
+                vis = (i == 0u && gWaterSunVis0 >= 0.0) ? gWaterSunVis0 : shadowVis(sunOrig, L, 1e30);
+                if (i == 0u) gWaterSunVis0 = vis;
+            }
             if (vis <= 0.0) continue;
             const float spec = waterGlint(N, V, L, NdotV, ndl, r0, specRough, kG, pm.clearcoat, ccRough);
             vec3 c = spec * ndl * lights.dirLights[i].color * (vis * cloudShadowSample(P));
