@@ -429,10 +429,38 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     // the probe fill.
     const int kPaneGatherHits = 2;
     int paneGathers = 0;
+    // A pure cutout's transparent texel is passed INSIDE the traversal, the way
+    // shadowVis passes it: every triangle candidate is confirmed except such a
+    // texel, so the committed hit is the closest surface that is not one, and
+    // a ray into a card tree's crown costs one traversal instead of one per
+    // card it threads. Bounded by the same budget the restarts had: past
+    // REFL_MAX_STEPS transparent texels the next one is confirmed, and the
+    // cutout branch below shades it as the card the ray is buried in. The
+    // shadow ray's cutout cap (effFlags bits 16-19) is deliberately NOT
+    // applied: it would stop these rays in the first cards they meet and
+    // darken what a canopy reflects. A FORCE_OPAQUE instance never reaches the
+    // candidate loop: its transparent texels still commit and take the
+    // branch's pass-through.
+    const int cutoutCapN = REFL_MAX_STEPS;
+    int cutoutPassed = 0;// transparent texels passed in the traversals so far
     for (; step < REFL_MAX_STEPS; ++step) {
+        bool cutoutCapped = false;// this traversal's budget confirmed a transparent texel
         rayQueryEXT rq;
-        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskAll, o, 1e-3, d, 1e30);
-        while (rayQueryProceedEXT(rq)) {}
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoneEXT, kRayMaskAll, o, 1e-3, d, 1e30);
+        while (rayQueryProceedEXT(rq)) {
+            if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
+            const int ci = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
+            const MaterialDesc cm = mats[ci];
+            if (cm.alphaCutoff > 0.0 && cm.albedoTexIndex >= 0) {
+                const vec2 cuv = fetchUvAt(ci, rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                                           rayQueryGetIntersectionBarycentricsEXT(rq, false));
+                if (hitTexAlpha(cm.albedoTexIndex, cm.uvTransform, cuv) < cm.alphaCutoff) {
+                    if (++cutoutPassed < cutoutCapN) continue;
+                    cutoutCapped = true;
+                }
+            }
+            rayQueryConfirmIntersectionEXT(rq);
+        }
         if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
             if (b == 0 && gTraceDeferMiss) gTraceMissTput = tput;// the caller shades it
             // A bounce off a SUBMERGED surface that escapes sees the sky through
@@ -475,10 +503,12 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                            (cam.camAux.x > 0.5) ? pix : pix * hitEyeDist, hitDuvA, hitDuvB);
         }
 
-        // Cutout (MASK): the query runs force-opaque, so alpha-test here —
-        // sub-cutoff texels pass through (mirrors gbuffer.frag / shadow_anyhit).
-        // Without this a masked plane behind glass shaded fully opaque,
-        // painting its transparent regions as a solid wall.
+        // Cutout (MASK) transparent texel committed: the budget confirmed it
+        // (the ray is buried in a canopy), or a FORCE_OPAQUE instance skipped
+        // the candidate test — sub-cutoff texels pass through (mirrors
+        // gbuffer.frag / shadow_anyhit). Without this a masked plane behind
+        // glass shaded fully opaque, painting its transparent regions as a
+        // solid wall.
         if (hm.alphaCutoff > 0.0 &&
             hitTexAlpha(hm.albedoTexIndex, hm.uvTransform, hitUv) < hm.alphaCutoff) {
             // Remember what this cutout is made of (its RGB is dilated across
@@ -486,6 +516,12 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             // leaf colour): if the ray never escapes the canopy, THIS is what
             // it is looking at, not the sky.
             lastCutout = hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
+            if (cutoutCapped) {
+                // Past the budget: shade this card, as the exhausted step budget
+                // does (the branch after the loop), and do not pass it again.
+                step = REFL_MAX_STEPS;
+                break;
+            }
             o = o + d * (tHit + 1e-3);
             continue;
         }
