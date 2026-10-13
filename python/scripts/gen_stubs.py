@@ -360,6 +360,29 @@ def _check_no_regression(before: dict[str, set[str]], stub_dir: Path, allow_remo
         print(f"  ({added} symbol(s) added)")
 
 
+_FEATURE_FLAG = re.compile(r"^(HAS_[A-Z_]+): bool = (True|False)$")
+
+
+def _unbake_feature_flags(path: Path) -> int:
+    """Turn `HAS_X: bool = True` into `HAS_X: bool`.
+
+    stubgen writes the value of the build it ran against, but the flags differ
+    per build: the wheels have no audio, the Linux wheels no FSR. A baked value
+    lets a type checker call a `if not HAS_AUDIO:` branch unreachable.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    fixed = 0
+    for i, line in enumerate(lines):
+        body = line.rstrip("\r\n")
+        m = _FEATURE_FLAG.match(body)
+        if m:
+            lines[i] = f"{m.group(1)}: bool" + line[len(body):]
+            fixed += 1
+    if fixed:
+        path.write_text("".join(lines), encoding="utf-8")
+    return fixed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -407,12 +430,15 @@ def main() -> int:
             continue
         repaired = _repair_keyword_names(path)
         unqualified = _strip_self_qualification(path)
+        unbaked = _unbake_feature_flags(path)
         _validate(path)
         notes = []
         if repaired:
             notes.append(f"{repaired} keyword-named binding(s) repaired")
         if unqualified:
             notes.append(f"{unqualified} self-qualified name(s) unqualified")
+        if unbaked:
+            notes.append(f"{unbaked} HAS_* flag value(s) left to the build")
         note = f" ({', '.join(notes)})" if notes else ""
         print(f"  {path.relative_to(pkg_dir)}: {len(path.read_text(encoding='utf-8').splitlines())} lines{note}")
 

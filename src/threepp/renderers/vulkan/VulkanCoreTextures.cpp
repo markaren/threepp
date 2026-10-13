@@ -152,6 +152,16 @@ int32_t VulkanRenderer::Impl::ensureMaterialTexture(const std::shared_ptr<Textur
                 retiredTextureSlots_.push_back(it->second.slot);
                 textureCache.erase(it);
             }
+            if (tex->channel != 0) {
+                // The G-buffer carries one UV set; Texture.channel (glTF
+                // TEXCOORD_1, a lightMap on uv2) is not honoured here.
+                static bool warned = false;
+                if (!warned) {
+                    warned = true;
+                    std::cerr << "[VulkanRenderer] a material map has Texture.channel = " << tex->channel
+                              << ": the Vulkan renderer samples every map with UV set 0.\n";
+                }
+            }
             if (freeTextureSlots.empty() && materialTextures.size() >= kMaxMaterialTextures) {
                 std::cerr << "[VulkanRenderer] material texture slots exhausted ("
                           << kMaxMaterialTextures << "); using -1 fallback\n";

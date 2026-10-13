@@ -8,7 +8,7 @@ import numpy.typing
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'FBXLoader', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_EGL', 'HAS_FSR', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'Intersection', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'Ray', 'RayHit', 'Raycaster', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'SkeletonHelper', 'SoftBody', 'SogLoader', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'StencilFunc', 'StencilOp', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextBox', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VesselWash', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
+__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Approach', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'BVH', 'Background', 'BakePose', 'BarkStyle', 'BirdPlumage', 'BirdRole', 'BirdShape', 'BirdState', 'Blending', 'Blob', 'BokehPass', 'Bone', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cruise', 'Curve2', 'Curve3', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'EXRLoader', 'EffectComposer', 'EglContext', 'Ellipsoid', 'ErosionType', 'Euler', 'Evade', 'ExtrudeGeometry', 'FBXLoader', 'Filter', 'FixedTendon', 'Flare', 'Flock', 'FlockParams', 'Fog', 'FogExp2', 'Follower', 'Font', 'FontLoader', 'ForceTorqueSensor', 'FrameChannel', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GTAOPass', 'Gait', 'GeoScene', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_DLSS', 'HAS_EGL', 'HAS_FSR', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'Hop', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'IkOptions', 'IkResult', 'IkSolver', 'IkTask', 'ImguiContext', 'Imu', 'ImuModel', 'ImuSample', 'InstancedMesh', 'Interpolation', 'Intersection', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'Launch', 'Layers', 'Leader', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'LightShadow', 'Line', 'LineBasicMaterial', 'LineCurve', 'LineCurve3', 'LineSegments', 'Lobed', 'Loner', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'OutlinePass', 'OutputPass', 'Ovate', 'PMREMGenerator', 'Papery', 'ParticleField', 'Pass', 'Path', 'PathTracedLidarSensor', 'Perched', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxSoftBodyMaterial', 'PhysxVehicle', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'Ray', 'RayHit', 'Raycaster', 'RectAreaLight', 'RenderPass', 'RigidBody', 'RingGeometry', 'Robot', 'RoomEnvironment', 'RotationOrder', 'SENSOR_ONLY_LAYER', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Shape', 'ShapeGeometry', 'Side', 'Skeleton', 'SkeletonHelper', 'SkinnedMesh', 'SkinnedMeshBindMode', 'SoftBody', 'SogLoader', 'SonarImage', 'SonarModel', 'SonarReflectivity', 'SonarSensor', 'SpatialAttachment', 'SpatialTendon', 'Sphere', 'SphereGeometry', 'SplatCloud', 'SplatData', 'SplatLoader', 'SplatPoseSet', 'SplineCurve', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'StencilFunc', 'StencilOp', 'SurfaceMesh', 'TendonCable', 'TendonJoint', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextBox', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'TubeGeometry', 'URDFLoader', 'UnrealBloomPass', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VesselWash', 'VoxelGrid', 'VulkanRenderer', 'Walk', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'bake_surface', 'clamp', 'damp', 'data_texture', 'deg_to_rad', 'editor', 'egl_available', 'euclidean_modulo', 'float_texture', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'make_sensor_mesh', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'select_lod', 'simplify_geometry', 'sonar_ray_directions', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'vulkan_available', 'vulkan_validation_active', 'vulkan_validation_error_count', 'write_wav']
 class AmbientLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
@@ -762,6 +762,9 @@ class BokehPass(Pass):
         """
     @maxblur.setter
     def maxblur(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class Bone(Object3D):
+    def __init__(self) -> None:
         ...
 class Box3:
     @typing.overload
@@ -5623,6 +5626,22 @@ class MeshPhysicalMaterial(MeshStandardMaterial):
     def scatter_distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
+    def sheen_color(self) -> Color:
+        """
+        Sheen tint (KHR_materials_sheen), default black.
+        """
+    @sheen_color.setter
+    def sheen_color(self, arg0: Color) -> None:
+        ...
+    @property
+    def sheen_roughness(self) -> float:
+        """
+        Sheen roughness in [0, 1] (default 0).
+        """
+    @sheen_roughness.setter
+    def sheen_roughness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
     def specular_color(self) -> Color:
         """
         Tints dielectric F0; applied together with specular_intensity.
@@ -8443,8 +8462,119 @@ class Side:
     @property
     def value(self) -> int:
         ...
+class Skeleton:
+    def __init__(self, bones: collections.abc.Sequence[Bone], bone_inverses: collections.abc.Sequence[Matrix4] = []) -> None:
+        """
+        A skeleton over `bones`. Without `bone_inverses` they are computed from the bones' current world matrices (the bind pose).
+        """
+    def calculate_inverses(self) -> None:
+        """
+        Recompute bone_inverses from the bones' current world matrices.
+        """
+    def get_bone_by_name(self, name: str) -> Bone:
+        """
+        The first bone named `name`, or None.
+        """
+    def pose(self) -> None:
+        """
+        Move every bone back to its bind pose.
+        """
+    def update(self) -> None:
+        """
+        Recompute the bone matrices the skinning reads.
+        """
+    @property
+    def bone_inverses(self) -> list[Matrix4]:
+        """
+        Inverse bind matrices, one per bone (a copy).
+        """
+    @property
+    def bones(self) -> list[Bone]:
+        """
+        The bones, in skin-joint order (a copy of the list; the Bone objects are shared).
+        """
+    @property
+    def uuid(self) -> str:
+        ...
 class SkeletonHelper(LineSegments):
     def __init__(self, skeleton: typing.Any) -> None:
+        ...
+class SkinnedMesh(Mesh):
+    def __init__(self, geometry: BufferGeometry, material: typing.Any) -> None:
+        """
+        A mesh deformed by a Skeleton. The geometry needs skinIndex and skinWeight (4 per vertex); call bind() with a skeleton before rendering.
+        """
+    def bind(self, skeleton: Skeleton, bind_matrix: Matrix4 | None = None) -> None:
+        """
+        Bind `skeleton`. Without `bind_matrix` the mesh's current world matrix is used and the skeleton's inverses are recomputed.
+        """
+    def normalize_skin_weights(self) -> None:
+        """
+        Scale each vertex's four skin weights to sum to 1.
+        """
+    def pose(self) -> None:
+        """
+        Move the skeleton back to its bind pose.
+        """
+    @property
+    def bind_matrix(self) -> Matrix4:
+        """
+        The mesh's world matrix at bind time (a copy; set it through bind()).
+        """
+    @property
+    def bind_matrix_inverse(self) -> Matrix4:
+        """
+        Inverse of bind_matrix (a copy).
+        """
+    @property
+    def bind_mode(self) -> SkinnedMeshBindMode:
+        """
+        ATTACHED (default): the skin follows the mesh's own transform; DETACHED: the bind matrix is held fixed.
+        """
+    @bind_mode.setter
+    def bind_mode(self, arg0: SkinnedMeshBindMode) -> None:
+        ...
+    @property
+    def skeleton(self) -> Skeleton:
+        """
+        The bound Skeleton, or None before bind().
+        """
+class SkinnedMeshBindMode:
+    """
+    Members:
+
+      ATTACHED
+
+      DETACHED
+    """
+    ATTACHED: typing.ClassVar[SkinnedMeshBindMode]  # value = <SkinnedMeshBindMode.ATTACHED: 0>
+    DETACHED: typing.ClassVar[SkinnedMeshBindMode]  # value = <SkinnedMeshBindMode.DETACHED: 1>
+    __members__: typing.ClassVar[dict[str, SkinnedMeshBindMode]]  # value = {'ATTACHED': <SkinnedMeshBindMode.ATTACHED: 0>, 'DETACHED': <SkinnedMeshBindMode.DETACHED: 1>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
         ...
 class SoftBody:
     """
@@ -11057,7 +11187,7 @@ class VulkanRenderer:
     @property
     def dlss(self) -> bool:
         """
-        NVIDIA DLSS upscaler on/off (no-op / False if unavailable — see dlss_available).
+        NVIDIA DLSS upscaler on/off (no-op / False if unavailable — see dlss_available). Setting True while unavailable prints the reason to stderr once per process.
         """
     @dlss.setter
     def dlss(self, arg1: bool) -> None:
@@ -11177,7 +11307,7 @@ class VulkanRenderer:
     @property
     def fsr(self) -> bool:
         """
-        AMD FSR 3.1 upscaler on/off (no-op / False if unavailable — see fsr_available).
+        AMD FSR 3.1 upscaler on/off (no-op / False if unavailable — see fsr_available). Setting True while unavailable prints the reason to stderr once per process.
         """
     @fsr.setter
     def fsr(self, arg1: bool) -> None:
@@ -11284,7 +11414,9 @@ class VulkanRenderer:
         """
     @property
     def render_scale(self) -> float:
-        ...
+        """
+        Internal render scale in [0.25, 1.0]: the G-buffer and ray-traced passes run at extent * scale and the temporal upscaler restores full resolution. 1.0 = none. Raises ValueError outside the range (supersampling above 1 is not supported).
+        """
     @render_scale.setter
     def render_scale(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
@@ -11591,12 +11723,13 @@ Flare: BirdState  # value = <BirdState.Flare: 2>
 Follower: BirdRole  # value = <BirdRole.Follower: 0>
 Frond: LeafStyle  # value = <LeafStyle.Frond: 4>
 Furrowed: BarkStyle  # value = <BarkStyle.Furrowed: 0>
-HAS_AUDIO: bool = True
-HAS_EGL: bool = False
-HAS_FSR: bool = True
-HAS_IMGUI: bool = True
-HAS_PHYSX: bool = True
-HAS_VULKAN: bool = True
+HAS_AUDIO: bool
+HAS_DLSS: bool
+HAS_EGL: bool
+HAS_FSR: bool
+HAS_IMGUI: bool
+HAS_PHYSX: bool
+HAS_VULKAN: bool
 Hemisphere: CrownShape  # value = <CrownShape.Hemisphere: 3>
 Hop: Gait  # value = <Gait.Hop: 0>
 INVERSE: AudioDistanceModel  # value = <AudioDistanceModel.INVERSE: 1>

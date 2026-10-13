@@ -1528,6 +1528,16 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             {
             THREEPP_CPUPROF("scene.6_deformerScans");
             for (const auto& sp : entrySpans_) {
+                if (entries[sp.first].isMorphed && entries[sp.first].isSkinned) {
+                    // skinning.comp reads no morph deltas, so the bone path
+                    // drops the targets: say so rather than render bind shape.
+                    static bool warned = false;
+                    if (!warned) {
+                        warned = true;
+                        std::cerr << "[VulkanRenderer] morph targets on a skinned mesh are not applied "
+                                     "by the Vulkan renderer (skinning only).\n";
+                    }
+                }
                 if (!entries[sp.first].isMorphed || entries[sp.first].isSkinned) continue;
                 for (size_t i = sp.first; i < size_t(sp.first) + sp.count; ++i) {
                 Mesh* m = entries[i].mesh;

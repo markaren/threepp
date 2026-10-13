@@ -166,3 +166,37 @@ def test_instanced_mesh_set_matrices():
         inst.set_matrices(np.zeros((3, 5), np.float32))
     with pytest.raises(ValueError):
         inst.set_matrices(flat, offset=1)  # 1 + 5 > 5
+
+
+def test_skinned_mesh_is_a_mesh_with_a_skeleton():
+    """SkinnedMesh/Bone/Skeleton are registered: a skinned mesh is a tp.Mesh
+    (material/geometry work) and comes back as SkinnedMesh from children."""
+    import numpy as np
+
+    geom = tp.BoxGeometry(1, 1, 1)
+    n = geom.get_attribute("position").shape[0]
+    geom.set_attribute("skinIndex", np.zeros((n, 4), np.float32))
+    weights = np.zeros((n, 4), np.float32)
+    weights[:, 0] = 2.0
+    geom.set_attribute("skinWeight", weights)
+
+    bone = tp.Bone()
+    bone.name = "root"
+    mesh = tp.SkinnedMesh(geom, tp.MeshStandardMaterial())
+    mesh.add(bone)
+    mesh.bind(tp.Skeleton([bone]))
+
+    assert isinstance(mesh, tp.Mesh)
+    assert type(mesh.material).__name__ == "MeshStandardMaterial"
+    assert isinstance(mesh.skeleton.bones[0], tp.Bone)
+    assert mesh.skeleton.get_bone_by_name("root").name == "root"
+    assert mesh.skeleton.get_bone_by_name("missing") is None
+    assert len(mesh.skeleton.bone_inverses) == 1
+    assert mesh.bind_mode == tp.SkinnedMeshBindMode.ATTACHED
+
+    mesh.normalize_skin_weights()
+    assert np.allclose(geom.get_attribute("skinWeight")[:, 0], 1.0)
+
+    group = tp.Group()
+    group.add(mesh)
+    assert isinstance(group.children[0], tp.SkinnedMesh)

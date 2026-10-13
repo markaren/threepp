@@ -49,6 +49,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <optional>
 #include <stdexcept>
@@ -63,6 +64,43 @@ namespace py = pybind11;// the threepp_py::py alias isn't visible in the anon na
 using namespace threepp;
 
 namespace {
+
+#ifdef THREEPP_PY_HAS_FSR
+    constexpr bool kHasFsr = true;
+#else
+    constexpr bool kHasFsr = false;
+#endif
+#ifdef THREEPP_PY_HAS_DLSS
+    constexpr bool kHasDlss = true;
+#else
+    constexpr bool kHasDlss = false;
+#endif
+
+    // `renderer.fsr = True` / `renderer.dlss = True` while the upscaler is not
+    // available stays a no-op (scripts set them opportunistically), but says
+    // why once per property per process instead of silently running the TAA.
+    void warn_upscaler_unavailable(const char* prop, bool compiledIn) {
+        static bool warnedFsr = false;
+        static bool warnedDlss = false;
+        const bool isFsr = std::strcmp(prop, "fsr") == 0;
+        bool& warned = isFsr ? warnedFsr : warnedDlss;
+        if (warned) return;
+        warned = true;
+        if (!compiledIn) {
+            std::fprintf(stderr, "[threepp] renderer.%s = True ignored: not compiled into this build "
+                                 "(threepp.%s is False); the built-in TAA upscaler runs.\n",
+                         prop, isFsr ? "HAS_FSR" : "HAS_DLSS");
+        } else if (isFsr) {
+            std::fprintf(stderr, "[threepp] renderer.fsr = True ignored: compiled in, but this renderer has no FSR "
+                                 "context (amd_fidelityfx_vk.dll missing, the GPU/driver refused it, or it was "
+                                 "skipped at init while DLSS held the upscaler); fsr_available is False.\n");
+        } else {
+            std::fprintf(stderr, "[threepp] renderer.dlss = True ignored: compiled in, but NGX created no DLSS "
+                                 "feature (nvngx_dlss.dll missing, or a non-RTX GPU / driver refused it); "
+                                 "dlss_available is False.\n");
+        }
+        std::fflush(stderr);
+    }
 
     // Is the Vulkan LOADER present at runtime? The two platforms differ:
     //
@@ -1000,11 +1038,21 @@ namespace threepp_py {
                 // Internal render scale: the deferred G-buffer + ray-traced channels
                 // run at (extent * scale) and TAA upsamples to full resolution. 1.0 =
                 // none; 0.5 quarters the shaded pixel count (quadratic perf lever).
-                // Clamped to [0.25, 1.0]. Reallocates + resets accumulation, so don't
-                // set it from inside a render().
+                // Valid range [0.25, 1.0]: the C++ setter clamps, the Python setter
+                // raises instead so a typo (2.0, 0.1) is not silently a different
+                // resolution. Reallocates + resets accumulation, so don't set it
+                // from inside a render().
                 .def_property("render_scale",
                               [](PyVulkanRenderer& r) { return r.native().renderScale(); },
-                              [](PyVulkanRenderer& r, float s) { r.native().setRenderScale(s); })
+                              [](PyVulkanRenderer& r, float s) {
+                                  if (!(s >= 0.25f && s <= 1.0f)) {
+                                      throw py::value_error("render_scale must be in [0.25, 1.0], got " + std::to_string(s));
+                                  }
+                                  r.native().setRenderScale(s);
+                              },
+                              "Internal render scale in [0.25, 1.0]: the G-buffer and ray-traced passes run at "
+                              "extent * scale and the temporal upscaler restores full resolution. 1.0 = none. "
+                              "Raises ValueError outside the range (supersampling above 1 is not supported).")
                 .def_property("orthographic_scene_rendering",
                               [](PyVulkanRenderer& r) { return r.native().orthographicSceneRendering(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setOrthographicSceneRendering(v); },
@@ -1022,8 +1070,16 @@ namespace threepp_py {
                 // upscaler. Frame-to-frame switchable (resets temporal history).
                 .def_property("fsr",
                               [](PyVulkanRenderer& r) { return r.native().fsr(); },
-                              [](PyVulkanRenderer& r, bool v) { r.native().setFsr(v); },
-                              "AMD FSR 3.1 upscaler on/off (no-op / False if unavailable — see fsr_available).")
+                              [](PyVulkanRenderer& r, bool v) {
+                                  // While DLSS runs, FSR's context is created only once DLSS is
+                                  // turned off: the request is kept, not ignored, so no line.
+                                  if (v && !r.native().fsrAvailable() && !r.native().dlss()) {
+                                      warn_upscaler_unavailable("fsr", kHasFsr);
+                                  }
+                                  r.native().setFsr(v);
+                              },
+                              "AMD FSR 3.1 upscaler on/off (no-op / False if unavailable — see fsr_available). "
+                              "Setting True while unavailable prints the reason to stderr once per process.")
                 .def_property_readonly("fsr_available",
                               [](PyVulkanRenderer& r) { return r.native().fsrAvailable(); },
                               "True when FSR was compiled in and its context created on this GPU.")
@@ -1032,8 +1088,12 @@ namespace threepp_py {
                 // box no bit-exact claim can cover) and pins the in-house TAA.
                 .def_property("dlss",
                               [](PyVulkanRenderer& r) { return r.native().dlss(); },
-                              [](PyVulkanRenderer& r, bool v) { r.native().setDlss(v); },
-                              "NVIDIA DLSS upscaler on/off (no-op / False if unavailable — see dlss_available).")
+                              [](PyVulkanRenderer& r, bool v) {
+                                  if (v && !r.native().dlssAvailable()) warn_upscaler_unavailable("dlss", kHasDlss);
+                                  r.native().setDlss(v);
+                              },
+                              "NVIDIA DLSS upscaler on/off (no-op / False if unavailable — see dlss_available). "
+                              "Setting True while unavailable prints the reason to stderr once per process.")
                 .def_property_readonly("dlss_available",
                               [](PyVulkanRenderer& r) { return r.native().dlssAvailable(); },
                               "True when DLSS was compiled in and NGX created its feature on this GPU.")
@@ -2365,11 +2425,10 @@ namespace threepp_py {
         // HAS_FSR says the FSR upscaler was COMPILED IN (the Windows wheels, or a
         // source build with -DTHREEPP_WITH_FSR=ON). Whether it runs is decided
         // per renderer on the machine's GPU: VulkanRenderer.fsr_available.
-#ifdef THREEPP_PY_HAS_FSR
-        m.attr("HAS_FSR") = true;
-#else
-        m.attr("HAS_FSR") = false;
-#endif
+        m.attr("HAS_FSR") = kHasFsr;
+        // Same for DLSS (-DTHREEPP_WITH_DLSS=ON); VulkanRenderer.dlss_available
+        // says whether NGX came up on this GPU.
+        m.attr("HAS_DLSS") = kHasDlss;
         // The validation-layer tally behind the C++ CI gate
         // (threepp/renderers/vulkan/ValidationReport.hpp), so a pytest run
         // under THREEPP_VULKAN_VALIDATION=1 can assert a frame sequence
@@ -2404,6 +2463,7 @@ namespace threepp_py {
         // Marker so Python can check availability:  threepp.HAS_VULKAN
         m.attr("HAS_VULKAN") = false;
         m.attr("HAS_FSR") = false;
+        m.attr("HAS_DLSS") = false;
         m.def("vulkan_available", [] { return false; },
               "Always False in a GL-only build (HAS_VULKAN is False too).");
         m.def("vulkan_validation_error_count", [] { return 0u; },

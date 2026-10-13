@@ -110,6 +110,12 @@ if (THREEPP_WITH_FSR AND WIN32 AND FFX_DLL)
     message(STATUS "threepp_py: FSR runtime DLL staged next to the module")
 endif ()
 
+# Feeds threepp.HAS_DLSS only (same role as THREEPP_PY_HAS_FSR): the renderer
+# says "not compiled in" vs "the DLL or GPU refused" when dlss = True is a no-op.
+if (THREEPP_WITH_DLSS)
+    target_compile_definitions(threepp_py PRIVATE THREEPP_PY_HAS_DLSS)
+endif ()
+
 if (THREEPP_WITH_AUDIO)
     target_compile_definitions(threepp_py PRIVATE THREEPP_PY_HAS_AUDIO)
 endif ()

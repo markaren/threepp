@@ -294,6 +294,19 @@ namespace threepp::gltf {
         }
     }
 
+    void GLTFParser::applyExtras(Object3D& obj, const json& def) {
+        if (!def.is_object()) return;
+        const auto it = def.find("extras");
+        if (it == def.end() || it->is_null()) return;
+        const json& extras = *it;
+        if (extras.is_object()) {
+            for (const auto& [key, value] : extras.items()) {
+                obj.userData[key] = value.is_string() ? value.get<std::string>() : value.dump();
+            }
+        }
+        obj.userData["extras"] = extras.dump();
+    }
+
     // Pre-create all nodes so Bone objects exist before skin binding
     void GLTFParser::preCreateNodes() {
         if (!gltf.contains("nodes")) return;
@@ -312,6 +325,7 @@ namespace threepp::gltf {
             // root and silently losing the animation.
             obj->name = nodeDef.value("name", "node_" + std::to_string(i));
             applyNodeTransform(obj, nodeDef);
+            applyExtras(*obj, nodeDef);
             nodeObjects[i] = obj;
         }
     }
@@ -408,6 +422,7 @@ namespace threepp::gltf {
             }
         }
 
+        reportUnhandledMaterialExtensions();
         gatherJoints();
         preCreateNodes();
 

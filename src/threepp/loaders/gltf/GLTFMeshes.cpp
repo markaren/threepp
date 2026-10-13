@@ -255,6 +255,10 @@ namespace threepp::gltf {
         // old path cloned only because it built the Group first). Skinned
         // meshes stay wrapped in a Group so buildMeshObjForNode can bind
         // each SkinnedMesh child to the skeleton.
+        // Mesh-level glTF extras land on every primitive (and on the Group
+        // below); a node's own extras are layered on top of these.
+        for (auto& m : meshes) applyExtras(*m, meshDef);
+
         if (meshes.size() == 1 && !hasSkin) {
             meshes[0]->name = meshName;
             return meshes[0];
@@ -262,6 +266,7 @@ namespace threepp::gltf {
 
         auto group = Group::create();
         group->name = meshName;
+        applyExtras(*group, meshDef);
         for (auto& m : meshes) group->add(m);
         return group;
     }
@@ -405,6 +410,8 @@ namespace threepp::gltf {
         // glTF name or the synthetic "node_N" fallback). Animation
         // tracks reference nodes by this name — see loadAnimations.
         meshObj->name = wrapper->name;
+        // The wrapper carried the node's extras; the node wins over the mesh.
+        applyExtras(*meshObj, nodeDef);
 
         // Multi-primitive meshes (Group containing several Meshes):
         // propagate the node's name to inner primitives so traversal

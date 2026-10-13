@@ -102,3 +102,58 @@ def test_gltf_emissive_strength_on_plain_material(tmp_path):
     assert len(mats) == 1
     assert type(mats[0]).__name__ == "MeshStandardMaterial"
     assert abs(mats[0].emissive_intensity - 5.0) < 1e-6
+
+
+def _write_tri_gltf(tmp_path, name, **extra):
+    """A one-triangle .gltf with `extra` merged into the top-level JSON."""
+    import json
+    import struct
+
+    (tmp_path / "tri.bin").write_bytes(struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0))
+    gltf = {
+        "asset": {"version": "2.0"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+        "buffers": [{"uri": "tri.bin", "byteLength": 36}],
+        "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36, "target": 34962}],
+        "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+                       "min": [0, 0, 0], "max": [1, 1, 0]}],
+    }
+    gltf.update(extra)
+    path = tmp_path / name
+    path.write_text(json.dumps(gltf))
+    return path
+
+
+def test_gltf_node_extras_become_user_data(tmp_path):
+    import json
+
+    path = _write_tri_gltf(
+        tmp_path, "extras.gltf",
+        nodes=[{"mesh": 0, "name": "handle", "extras": {"role": "grip", "mass": 2.5}}],
+        meshes=[{"primitives": [{"attributes": {"POSITION": 0}}], "extras": {"lod": 0, "role": "mesh"}}],
+    )
+    result = tp.GLTFLoader().load(str(path))
+    meshes = []
+    result.scene.traverse(lambda o: meshes.append(o) if isinstance(o, tp.Mesh) else None)
+    assert len(meshes) == 1
+    m = meshes[0]
+    assert m.get_user_data("role") == "grip"  # the node's extras win over the mesh's
+    assert m.get_user_data("mass") == "2.5"
+    assert m.get_user_data("lod") == "0"  # mesh-level extras land too
+    assert json.loads(m.get_user_data("extras")) == {"role": "grip", "mass": 2.5}
+
+
+def test_gltf_unhandled_material_extension_is_named(tmp_path, capfd):
+    path = _write_tri_gltf(
+        tmp_path, "aniso.gltf",
+        extensionsUsed=["KHR_materials_anisotropy"],
+        meshes=[{"primitives": [{"attributes": {"POSITION": 0}, "material": 0}]}],
+        materials=[{"extensions": {"KHR_materials_anisotropy": {"anisotropyStrength": 0.5}}}],
+    )
+    result = tp.GLTFLoader().load(str(path))
+    assert result.scene is not None
+    err = capfd.readouterr().err
+    assert "KHR_materials_anisotropy" in err

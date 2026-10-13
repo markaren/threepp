@@ -335,7 +335,13 @@ namespace threepp_py {
                 .def_readwrite("dispersion", &MeshPhysicalMaterial::dispersion)
                 .def_readwrite("iridescence", &MeshPhysicalMaterial::iridescence)
                 .def_readwrite("iridescence_ior", &MeshPhysicalMaterial::iridescenceIOR)
-                .def_readwrite("iridescence_thickness_nm", &MeshPhysicalMaterial::iridescenceThicknessNm);
+                .def_readwrite("iridescence_thickness_nm", &MeshPhysicalMaterial::iridescenceThicknessNm)
+                // KHR_materials_sheen. The C++ material has no separate `sheen`
+                // scalar: sheen_color (default black) is the amount.
+                .def_readwrite("sheen_color", &MeshPhysicalMaterial::sheenColor,
+                               "Sheen tint (KHR_materials_sheen), default black.")
+                .def_readwrite("sheen_roughness", &MeshPhysicalMaterial::sheenRoughness,
+                               "Sheen roughness in [0, 1] (default 0).");
 
         // ---- MeshPhongMaterial ----------------------------------------------
         auto phong = py::class_<MeshPhongMaterial, Material, std::shared_ptr<MeshPhongMaterial>>(m, "MeshPhongMaterial");

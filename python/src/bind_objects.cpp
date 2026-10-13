@@ -7,7 +7,9 @@
 #include <pybind11/typing.h>
 
 #include <algorithm>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/materials/Material.hpp"
@@ -19,7 +21,10 @@
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/Bone.hpp"
 #include "threepp/objects/Points.hpp"
+#include "threepp/objects/Skeleton.hpp"
+#include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/objects/Sprite.hpp"
 #include "threepp/scenes/Fog.hpp"
 #include "threepp/scenes/FogExp2.hpp"
@@ -128,6 +133,80 @@ namespace threepp_py {
                 .def_property_readonly("material", [](Mesh& self) { return PyMaterial(material_to_py(self.material())); })
                 .def("set_geometry", &Mesh::setGeometry, py::arg("geometry"))
                 .def("set_material", [](Mesh& self, const py::object& mat) { self.setMaterial(as_material(mat)); }, py::arg("material"));
+
+        // ---- Bone / Skeleton / SkinnedMesh -----------------------------------
+        // Registering these lets pybind11's RTTI downcast hand back a glTF
+        // character's meshes as SkinnedMesh (an isinstance of Mesh, so
+        // .material/.geometry work) and its joints as Bone. Bone is a plain
+        // non-virtual Object3D subclass (like Group): the base bindings apply.
+        py::class_<Bone, Object3D, std::shared_ptr<Bone>>(m, "Bone")
+                .def(py::init(&Bone::create));
+
+        py::class_<Skeleton, std::shared_ptr<Skeleton>>(m, "Skeleton")
+                .def(py::init([](const std::vector<std::shared_ptr<Bone>>& bones, const std::vector<Matrix4>& boneInverses) {
+                         return Skeleton::create(bones, boneInverses);
+                     }),
+                     py::arg("bones"), py::arg("bone_inverses") = std::vector<Matrix4>{},
+                     "A skeleton over `bones`. Without `bone_inverses` they are computed from the "
+                     "bones' current world matrices (the bind pose).")
+                // Copies: mutating the returned lists does not touch the skeleton.
+                .def_property_readonly("bones", [](const Skeleton& s) { return s.bones; },
+                                       "The bones, in skin-joint order (a copy of the list; the Bone objects are shared).")
+                .def_property_readonly("bone_inverses", [](const Skeleton& s) { return s.boneInverses; },
+                                       "Inverse bind matrices, one per bone (a copy).")
+                .def_property_readonly("uuid", &Skeleton::uuid)
+                .def("get_bone_by_name", [](Skeleton& s, const std::string& name) -> std::shared_ptr<Bone> {
+                    for (const auto& b : s.bones) {
+                        if (b && b->name == name) return b;
+                    }
+                    return nullptr;
+                }, py::arg("name"), "The first bone named `name`, or None.")
+                .def("calculate_inverses", &Skeleton::calculateInverses,
+                     "Recompute bone_inverses from the bones' current world matrices.")
+                .def("pose", &Skeleton::pose, "Move every bone back to its bind pose.")
+                .def("update", &Skeleton::update, "Recompute the bone matrices the skinning reads.");
+
+        py::enum_<SkinnedMesh::BindMode>(m, "SkinnedMeshBindMode")
+                .value("ATTACHED", SkinnedMesh::BindMode::Attached)
+                .value("DETACHED", SkinnedMesh::BindMode::Detached);
+
+        // SkinnedMesh inherits Mesh's concrete Object3D API via its non-virtual
+        // Mesh parent (same as InstancedMesh).
+        auto skinned = py::class_<SkinnedMesh, Mesh, std::shared_ptr<SkinnedMesh>>(m, "SkinnedMesh");
+        skinned.def(py::init([](std::shared_ptr<BufferGeometry> g, const py::object& mat) {
+                        return SkinnedMesh::create(std::move(g), as_material(mat));
+                    }),
+                    py::arg("geometry"), py::arg("material"),
+                    "A mesh deformed by a Skeleton. The geometry needs skinIndex and skinWeight "
+                    "(4 per vertex); call bind() with a skeleton before rendering.")
+                .def_property_readonly("skeleton", [](const SkinnedMesh& s) { return s.skeleton; },
+                                       "The bound Skeleton, or None before bind().")
+                .def_property_readonly("bind_matrix", [](const SkinnedMesh& s) { return s.bindMatrix; },
+                                       "The mesh's world matrix at bind time (a copy; set it through bind()).")
+                .def_property_readonly("bind_matrix_inverse", [](const SkinnedMesh& s) { return s.bindMatrixInverse; },
+                                       "Inverse of bind_matrix (a copy).")
+                .def_readwrite("bind_mode", &SkinnedMesh::bindMode,
+                               "ATTACHED (default): the skin follows the mesh's own transform; "
+                               "DETACHED: the bind matrix is held fixed.")
+                // The C++ methods dereference the skeleton / skinWeight
+                // attribute unchecked; raise instead of crashing the interpreter.
+                .def("bind", [](SkinnedMesh& s, const std::shared_ptr<Skeleton>& skeleton, const std::optional<Matrix4>& bindMatrix) {
+                    if (!skeleton) throw py::value_error("SkinnedMesh.bind: skeleton is None");
+                    s.bind(skeleton, bindMatrix);
+                }, py::arg("skeleton"), py::arg("bind_matrix") = py::none(),
+                   "Bind `skeleton`. Without `bind_matrix` the mesh's current world matrix is used and "
+                   "the skeleton's inverses are recomputed.")
+                .def("pose", [](SkinnedMesh& s) {
+                    if (!s.skeleton) throw py::value_error("SkinnedMesh.pose: no skeleton bound");
+                    s.pose();
+                }, "Move the skeleton back to its bind pose.")
+                .def("normalize_skin_weights", [](SkinnedMesh& s) {
+                    const auto g = s.geometry();
+                    if (!g || !g->getAttribute<float>("skinWeight")) {
+                        throw py::value_error("SkinnedMesh.normalize_skin_weights: the geometry has no float skinWeight attribute");
+                    }
+                    s.normalizeSkinWeights();
+                }, "Scale each vertex's four skin weights to sum to 1.");
 
         // ---- Group -----------------------------------------------------------
         py::class_<Group, Object3D, std::shared_ptr<Group>>(m, "Group")

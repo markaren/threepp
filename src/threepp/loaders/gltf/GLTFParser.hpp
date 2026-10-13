@@ -418,6 +418,11 @@ namespace threepp::gltf {
 
         void applyNodeTransform(const std::shared_ptr<Object3D>& obj, const json& nodeDef);
 
+        // glTF `extras` -> userData: each key becomes a std::string entry
+        // (strings as-is, anything else as its JSON text), and the whole
+        // object is kept under "extras" as JSON text. No-op without extras.
+        static void applyExtras(Object3D& obj, const json& def);
+
         void preCreateNodes();
 
         std::vector<int> collectReachable(const json& sceneDef);
@@ -442,6 +447,10 @@ namespace threepp::gltf {
         // -----------------------------------------------------------------------
 
         std::shared_ptr<Material> loadMaterial(int matIdx);
+
+        // One stderr line per file naming the material extensions
+        // loadMaterial does not read (they load as if absent).
+        void reportUnhandledMaterialExtensions() const;
 
         // -----------------------------------------------------------------------
         //  Mesh

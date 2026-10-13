@@ -190,6 +190,38 @@ namespace threepp::gltf {
         return clone;
     }
 
+    void GLTFParser::reportUnhandledMaterialExtensions() const {
+        if (!gltf.contains("materials") || !gltf["materials"].is_array()) return;
+        // Keep in step with loadMaterial: every extension name it reads.
+        static const std::set<std::string> handled{
+                "KHR_materials_unlit",
+                "KHR_materials_transmission",
+                "KHR_materials_clearcoat",
+                "KHR_materials_ior",
+                "KHR_materials_dispersion",
+                "KHR_materials_specular",
+                "KHR_materials_sheen",
+                "KHR_materials_volume",
+                "KHR_materials_iridescence",
+                "KHR_materials_emissive_strength",
+                "KHR_texture_transform",
+        };
+        std::set<std::string> unhandled;
+        for (const auto& matDef : gltf["materials"]) {
+            if (!matDef.is_object() || !matDef.contains("extensions") || !matDef["extensions"].is_object()) continue;
+            for (const auto& [name, _] : matDef["extensions"].items()) {
+                if (!handled.count(name)) unhandled.insert(name);
+            }
+        }
+        if (unhandled.empty()) return;
+        std::string list;
+        for (const auto& name : unhandled) {
+            if (!list.empty()) list += ", ";
+            list += name;
+        }
+        std::cerr << "[threepp] GLTFLoader: material extensions not handled (loaded as if absent): " << list << std::endl;
+    }
+
     std::shared_ptr<Material> GLTFParser::loadMaterial(int matIdx) {
         auto it = materialCache.find(matIdx);
         if (it != materialCache.end()) return it->second;

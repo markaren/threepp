@@ -81,3 +81,11 @@ def test_texture_slot_assignable():
     tex = tp.Texture()
     m.map = tex
     assert m.map is not None
+
+
+def test_physical_sheen_fields():
+    m = tp.MeshPhysicalMaterial()
+    m.sheen_color = tp.Color(1.0, 0.5, 0.25)
+    m.sheen_roughness = 0.4
+    assert m.sheen_color == tp.Color(1.0, 0.5, 0.25)
+    assert abs(m.sheen_roughness - 0.4) < 1e-6
