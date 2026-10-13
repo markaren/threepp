@@ -22,6 +22,7 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -425,6 +426,14 @@ namespace threepp::vulkan {
         std::vector<std::pair<uint64_t, VkPipeline>> shadePerms_;// key -> permutation
         VkPipeline shadePipeline(uint32_t flags, bool probeGi);
         VkPipeline createShadePipeline(uint64_t key);
+        // What the pipeline-cache blob holds of the shade, kept in a text file
+        // beside it (<blob stem>.shade_keys.txt): one "<SPIR-V hash> <key>"
+        // line per permutation this machine compiled into the cache. A create
+        // whose line is absent is the ~two-minute cold compile, and says so
+        // before it starts. Read once, on the first create.
+        uint64_t shadeSpvHash_ = 0;// FNV-1a of the shade's SPIR-V words
+        bool     shadeKeysLoaded_ = false;
+        std::vector<std::pair<uint64_t, uint64_t>> shadeKeysCached_;// (spv hash, key)
         VkPipeline            giFilterPipe_ = VK_NULL_HANDLE;// SVGF GI + shadow-ratio filter + recombine
         VkPipeline            reflFilterPipe_ = VK_NULL_HANDLE;// reflection gloss reconstruction + recombine
         VkPipeline            clusterPipe_  = VK_NULL_HANDLE;// clustered light culling (cluster_build.comp)

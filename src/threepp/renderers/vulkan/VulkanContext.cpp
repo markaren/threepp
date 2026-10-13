@@ -531,6 +531,12 @@ namespace threepp::vulkan {
 
     }// namespace
 
+    std::string VulkanContext::pipelineCacheFile() const {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(physicalDevice_, &props);
+        return pipelineCachePath(pipelineCacheKey(props.pipelineCacheUUID)).string();
+    }
+
     void VulkanContext::createPipelineCache() {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(physicalDevice_, &props);
@@ -599,6 +605,7 @@ namespace threepp::vulkan {
         // compare against. A legacy-sourced load counts as zero: the keyed
         // file does not exist yet, and the first check should write it.
         savedPipelineCacheBytes_ = (usable && source == path) ? initial.size() : 0;
+        pipelineCacheWarm_ = usable && pipelineCache_ != VK_NULL_HANDLE;
         std::cout << "[VulkanContext] pipeline cache: "
                   << (usable ? "WARM - loaded " : compact ? "COMPACT - dropping " : "COLD - ignoring ")
                   << initial.size() << " bytes from " << source.string()

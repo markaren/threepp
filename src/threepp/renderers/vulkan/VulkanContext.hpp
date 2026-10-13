@@ -13,6 +13,7 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 struct GLFWwindow;
@@ -55,6 +56,12 @@ namespace threepp::vulkan {
         // the driver validates the on-disk blob against the device and it is
         // discarded if incompatible, so it can never affect correctness.
         VkPipelineCache pipelineCache() const { return pipelineCache_; }
+        // The keyed blob file the cache loads from and saves to (empty when
+        // there is no temp directory), and whether this run started from it
+        // (WARM). A COLD or COMPACT start begins with an empty cache, so a
+        // record of what the blob holds is stale then.
+        std::string pipelineCacheFile() const;
+        bool pipelineCacheWarm() const { return pipelineCacheWarm_; }
 
         // Persist the cache during the run, not only at destruction. The
         // destructor save is the one a kill by PID never reaches, and killing
@@ -271,6 +278,7 @@ namespace threepp::vulkan {
         // Bytes on disk after the last successful save (or keyed load), so a
         // save is skipped when the driver reports the same size back.
         size_t savedPipelineCacheBytes_ = 0;
+        bool pipelineCacheWarm_ = false;
         uint32_t pipelineCacheTick_ = 0;
         bool leaveDeviceAtExit_ = false;
 
