@@ -22,7 +22,7 @@
 #ifndef PROBE_GRID_UBO_BINDING
 #define PROBE_GRID_UBO_BINDING 37
 #endif
-const int kProbeCascadesMax = 3;// must match ProbeGI::kCascadesMax
+const int kProbeCascadesMax = 4;// must match ProbeGI::kCascadesMax
 layout(set = 0, binding = PROBE_GRID_UBO_BINDING, scalar) uniform ProbeGridUbo {
     vec3  origin;  float enabled;      // cascade 0 (enabled gates all SAMPLING)
     vec3  spacing; float _pad0;

@@ -64,13 +64,16 @@ namespace threepp::vulkan {
         // windows of kProbeCount probes each, finest first, back to back in
         // the SH and depth stores. Spacing kCascadeBaseSpacing·4^c, so 1, 4
         // and 16 m by default: 32×16×32 m around the camera at 1 m, then
-        // 128×64×128 m, then 512×256×512 m. The scene-fit grid is cascade 0
-        // alone. Env overrides (read once at construction):
-        //   THREEPP_VK_PROBE_CASCADES       cascade count 1..3; 0 = scene fit always
+        // 128×64×128 m, then 512×256×512 m. A fourth cascade (64 m, a
+        // 2048×1024×2048 m window) is there on request. The scene-fit grid is
+        // cascade 0 alone. Env overrides (read once at construction):
+        //   THREEPP_VK_PROBE_CASCADES       cascade count 1..4, default 3; 0 = scene fit always
         //   THREEPP_VK_PROBE_CASCADE_BASE   finest spacing, metres
         //   THREEPP_VK_PROBE_SCENE_FIT_MAX  the scene fit's largest allowed spacing, metres
-        static constexpr uint32_t kCascadesMax         = 3;
-        static constexpr uint32_t kProbeCountAll       = kCascadesMax * kProbeCount;
+        // The SH and depth stores hold the requested count only, so the
+        // default allocates three cascades, as before the fourth existed.
+        static constexpr uint32_t kCascadesMax         = 4;
+        static constexpr uint32_t kCascadesDefault     = 3;
         static constexpr float    kCascadeBaseSpacing  = 1.f;
         static constexpr float    kSceneFitMaxSpacing  = 2.f;
         enum class Layout { SceneFit, Cascades };
@@ -219,7 +222,7 @@ namespace threepp::vulkan {
         int32_t  cPrevBase_[kCascadesMax][3]{};
         bool     cascadesPlaced_ = false;// recentre has placed the windows since the layout was chosen
         bool     scrollPending_  = false;// a window moved: the next recordDispatch resets the entering slots
-        uint32_t cascadesWanted_ = kCascadesMax;// env THREEPP_VK_PROBE_CASCADES
+        uint32_t cascadesWanted_ = kCascadesDefault;// env THREEPP_VK_PROBE_CASCADES
         float    cascadeBase_    = kCascadeBaseSpacing;// env THREEPP_VK_PROBE_CASCADE_BASE
         float    sceneFitMax_    = kSceneFitMaxSpacing;// env THREEPP_VK_PROBE_SCENE_FIT_MAX
         bool     needsClear_     = true;// zero the SH store on first dispatch

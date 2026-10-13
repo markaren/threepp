@@ -50,12 +50,15 @@ namespace threepp::vulkan {
         sceneFitMax_ = envFloat("THREEPP_VK_PROBE_SCENE_FIT_MAX", kSceneFitMaxSpacing);
         for (uint32_t c = 0; c < kCascadesMax; ++c)
             for (int a = 0; a < 3; ++a) cSpacing_[c][a] = 1.f;
+        // The stores hold the cascades asked for (cascadeCount_ never exceeds
+        // max(cascadesWanted_, 1)): the default three allocate as before.
+        const VkDeviceSize storeProbes = static_cast<VkDeviceSize>(std::max(cascadesWanted_, 1u)) * kProbeCount;
         // SH-L1 store: 4 vec4 per probe. TRANSFER_DST for the zero-fill on
         // (re)fit; STORAGE for the update pass + deferred_shade's reads.
         // TRANSFER_SRC: the determinism audit hashes this buffer per frame
         // (debugHashShadeImages' probeSh row) — pure capability bit.
         shBuf_ = createBuffer(ctx_.allocator(), ctx_.device(),
-                              static_cast<VkDeviceSize>(kProbeCountAll) * 4 * 16,
+                              storeProbes * 4 * 16,
                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                       VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -64,19 +67,19 @@ namespace threepp::vulkan {
         // probe = 4 MB. Cleared alongside the SH on every grid (re)fit — 0u is
         // the "no data yet" sentinel the sampler treats as fully visible.
         depthBuf_ = createBuffer(ctx_.allocator(), ctx_.device(),
-                                 static_cast<VkDeviceSize>(kProbeCountAll) * kDepthTexels * 4,
+                                 storeProbes * kDepthTexels * 4,
                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                          VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT,// audit readback
                                  VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
         // Snapshot twins (see the header comment): copy targets, shader reads.
         prevShBuf_ = createBuffer(ctx_.allocator(), ctx_.device(),
-                                  static_cast<VkDeviceSize>(kProbeCountAll) * 4 * 16,
+                                  storeProbes * 4 * 16,
                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                           VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                   VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
         prevDepthBuf_ = createBuffer(ctx_.allocator(), ctx_.device(),
-                                     static_cast<VkDeviceSize>(kProbeCountAll) * kDepthTexels * 4,
+                                     storeProbes * kDepthTexels * 4,
                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                              VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                      VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
