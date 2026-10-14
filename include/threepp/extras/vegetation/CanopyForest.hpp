@@ -1220,6 +1220,18 @@ namespace threepp::vegetation {
         return geo;
     }
 
+    // One tree of a cell's far tier, as ForestLodOptions::farImpostors gets it:
+    // its position relative to the cell's LOD node, its yaw, its species slot,
+    // the far (lite) variant the cell draws for that species, and the scale that
+    // variant is drawn at (so a far card matches the tree it replaces).
+    struct FarTree {
+        Vector3 position;
+        float yaw = 0.f;
+        int species = 0;
+        int variant = 0;
+        float scale = 1.f;
+    };
+
     struct ForestLodOptions {
         float cellSize = 128.f;// world metres per LOD cell
         float l0Distance = 300.f;
@@ -1250,6 +1262,10 @@ namespace threepp::vegetation {
         // no tree. Shared with ForestOptions.
         float scrubMaxHeight = 6.f, birchMaxHeight = 14.f, birchMaxElevation = 350.f;
         float spruceMinElevation = 0.f, spruceMinStandHeight = 0.f;// see pickTreeSpecies
+        // A scene whose sites do not come from a lidar CHM (a procedural valley,
+        // say) knows each tree's species when it places it; this replaces the
+        // CHM rule above. Returns the slot 0..2 in `species`; ground = heightFn.
+        std::function<int(const TreeSite& site, float ground)> speciesFn;
         float minScale = 0.35f, maxScale = 2.2f;
         float sink = 0.4f;
         int cap = 40000;
@@ -1280,6 +1296,16 @@ namespace threepp::vegetation {
         // against 65 at a 2 km fly-out).
         int l2Keep = 4;          // keep 1 instance in l2Keep; 1 = no L2 level
         float l2ScaleBoost = 1.4f;// survivors widen to close the gaps
+        // ── far tier as ONE object per cell ───────────────────────────────
+        // The renderer pays per INSTANCE on the CPU (draw list, cull, ray
+        // tracing descriptor), so instances cannot carry a forest to the
+        // horizon, and thinning them (l2Keep) or cutting them off makes trees
+        // visibly vanish. When this is set, every tree of a cell beyond
+        // l1Distance (all of them: no thinning, no cut-off) is handed to the
+        // callback, which returns what the cell draws there: typically ONE
+        // merged mesh of crossed impostor cards, so the far forest costs one
+        // object per cell however many trees it holds. Supersedes l2Keep.
+        std::function<std::shared_ptr<Object3D>(const std::vector<FarTree>& trees)> farImpostors;
         bool buildCanopyMesh = false;
         CanopyMeshOptions mesh;
     };
@@ -1339,9 +1365,11 @@ namespace threepp::vegetation {
         for (int idx : order) {
             const TreeSite& p = sites[static_cast<size_t>(idx)];
             const float y = heightFn(p.x, p.z);
-            const int s = pickTreeSpecies(p.canopyHeight, y, p.standHeight, o.scrubMaxHeight,
-                                          o.birchMaxHeight, o.birchMaxElevation,
-                                          o.spruceMinElevation, o.spruceMinStandHeight);
+            const int s = o.speciesFn
+                                  ? std::clamp(o.speciesFn(p, y), 0, 2)
+                                  : pickTreeSpecies(p.canopyHeight, y, p.standHeight, o.scrubMaxHeight,
+                                                    o.birchMaxHeight, o.birchMaxElevation,
+                                                    o.spruceMinElevation, o.spruceMinStandHeight);
             // The scale divisor is the L0 prototype's height; L1/L0 prototypes are
             // measured separately below and re-scaled per level, so a tree keeps
             // its metre height across the handoff.
@@ -1451,7 +1479,34 @@ namespace threepp::vegetation {
             lod->addLevel(g0, 0.f);
             lod->addLevel(g1, o.l0Distance);
 
-            if (!o.buildCanopyMesh && o.l2Keep > 1) {
+            if (o.farImpostors) {
+                std::vector<FarTree> far;
+                for (int s = 0; s < 3; ++s) {
+                    const auto& xf = cell.xf[static_cast<size_t>(s)];
+                    const auto& vars = species[s].far;
+                    if (xf.empty() || vars.empty()) continue;
+                    // The variant the far instanced level draws, so the hand-off
+                    // from it to the impostor keeps the same tree.
+                    const size_t vi = static_cast<size_t>(
+                            (cell.cx * 31 + cell.cz * 17 + s * 7) & 0x7fffffff) % vars.size();
+                    for (const auto& m : xf) {
+                        Vector3 p, sc;
+                        Quaternion rq;
+                        m.decompose(p, rq, sc);
+                        FarTree ft;
+                        ft.position.set(p.x - origin.x, p.y - origin.y, p.z - origin.z);
+                        ft.yaw = 2.f * std::atan2(rq.y, rq.w);
+                        ft.species = s;
+                        ft.variant = static_cast<int>(vi);
+                        ft.scale = std::clamp(sc.x / vars[vi].height, o.minScale, o.maxScale);
+                        far.push_back(ft);
+                    }
+                }
+                if (auto obj = far.empty() ? nullptr : o.farImpostors(far)) {
+                    lod->addLevel(obj, o.l1Distance);
+                    ++st.l2Meshes;
+                }
+            } else if (!o.buildCanopyMesh && o.l2Keep > 1) {
                 auto [g2, m2] = levelGroup(false, o.l2Keep, o.l2ScaleBoost);
                 st.l2Meshes += m2;
                 lod->addLevel(g2, o.l1Distance);
