@@ -515,14 +515,22 @@ namespace threepp {
                 whole = true;
                 ranges.clear();// subsumed
             }
-            // Callers mark in increasing entry order (every producer walks
-            // entries forward), so coalescing against the last range collapses
-            // a contiguous instanced span into one range. Out-of-order marks
-            // stay correct, just less coalesced.
+            // The scene walk marks in increasing entry order, so coalescing
+            // against the last range collapses a contiguous instanced span into
+            // one range. Marks also arrive out of order: a slot not flushed last
+            // frame still holds that frame's ranges when the next walk starts
+            // again from entry 0. A mark that overlaps or touches the last range
+            // widens it at either end; any other is a range of its own (the
+            // upload copies each range, so an overlap with an older one is
+            // harmless). Until 2026-10-15 a mark below the last range only
+            // raised its end and was lost: an edit to an earlier entry the frame
+            // after an edit to a later one never showed (VulkanInstanceColor_test,
+            // phase 3).
             void mark(uint32_t first, uint32_t count = 1) {
                 if (whole || count == 0) return;
                 const uint32_t last = first + count;
-                if (!ranges.empty() && first <= ranges.back().second) {
+                if (!ranges.empty() && first <= ranges.back().second && last >= ranges.back().first) {
+                    ranges.back().first  = std::min(ranges.back().first, first);
                     ranges.back().second = std::max(ranges.back().second, last);
                     return;
                 }

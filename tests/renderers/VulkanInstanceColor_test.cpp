@@ -11,6 +11,11 @@
 //            attribute is created lazily by setColorAt: change detection path).
 // After the first check the top row's first instance is recolored green
 // (instanceColor()->needsUpdate() on an existing attribute: the patch path).
+// Then bottom[2] is recolored red, and on the NEXT frame top[2] (an earlier
+// entry) too: the desc upload of the frame-in-flight slot that did not flush
+// the first edit still holds its range when the second is marked, and until
+// 2026-10-15 a mark below that range was lost there, and top[2] stayed
+// blue.
 //
 // Plain exit-code program, not Catch2 — same shape as the other Vulkan tests
 // here. Exits 42 (CTest "Skipped") when no Vulkan GPU is available.
@@ -196,6 +201,24 @@ int main() {
             check("bottom[0] is red", dominant(sample(px, 1, 0)) == 0);
             check("bottom[1] is green", dominant(sample(px, 1, 1)) == 1);
             check("bottom[2] is blue", dominant(sample(px, 1, 2)) == 2);
+
+            bottom->setColorAt(2, Color(1, 0, 0));// a later entry first...
+            bottom->instanceColor()->needsUpdate();
+            return;
+        }
+
+        if (frame == 2 * kFramesPerPhase + 1) {
+            top->setColorAt(2, Color(1, 0, 0));// ...then an earlier one, a frame later
+            top->instanceColor()->needsUpdate();
+            return;
+        }
+
+        if (frame == 3 * kFramesPerPhase) {
+            const auto px = renderer.readRGBPixels();
+            report(px, "phase 3 (bottom[2], then a frame later top[2], recolored red):");
+            check("bottom[2] recolored red", dominant(sample(px, 1, 2)) == 0);
+            check("top[2] recolored red in every frame", dominant(sample(px, 0, 2)) == 0);
+            check("top[0] still green", dominant(sample(px, 0, 0)) == 1);
 
             std::printf("instance color: %d failure(s)\n", failures);
             std::exit(failures == 0 ? 0 : 1);
