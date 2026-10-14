@@ -611,6 +611,23 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
         gShadowMovingOccluder = true;
     return 0.0;
 }
+// FOG-ONLY shadow ray (setFogShadowOpaqueCutouts, pc.flags bit 29): the same
+// ray with every candidate taken as a blocker, so an alpha-tested crown is an
+// opaque blob to the volumetric march. The march is low-frequency and
+// jittered over 16 steps, so the cards' holes buy it nothing a gap between
+// crowns does not already give, while each hole costs the full material read,
+// UV fetch and texture sample above, for every step of every pixel that
+// looks through foliage. One traversal, no shader round trips: the hardware
+// commits the first hit. Blend and transmissive instances are still culled by
+// the mask, as above. Not for surface shadows: a leaf's shadow on the ground
+// keeps its shape through shadowVis.
+float shadowVisOpaque(vec3 origin, vec3 dir, float tMax) {
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
+                          kRayMaskOpaque, origin, 0.0, dir, tMax);
+    while (rayQueryProceedEXT(rq)) {}
+    return (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
+}
 #else
 // No ray query: the sun's shadow rays (the directional ones, tMax 1e30) are
 // marched through the depth buffer in screen space instead; every other
@@ -653,6 +670,8 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
     }
     return 1.0;
 }
+// The screen-space march has no cutout texels to skip: the two are the same.
+float shadowVisOpaque(vec3 origin, vec3 dir, float tMax) { return shadowVis(origin, dir, tMax); }
 #endif
 
 // distFalloff (point/spot d^decay): gi_bounce.glsl, included by _30.

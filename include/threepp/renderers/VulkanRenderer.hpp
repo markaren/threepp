@@ -1594,6 +1594,16 @@ namespace threepp {
         void setUnlitFogScatter(bool enabled);
         [[nodiscard]] bool unlitFogScatter() const;
 
+        // The volumetric sun march (shafts, aerial glow) traces a shadow ray at
+        // each of its 16 steps. OFF by default, those rays alpha-test every
+        // cutout card they cross, exactly as the surface shadows do: through a
+        // forest of card trees that is most of what the fog costs, and more the
+        // lower the sun. On, a fog shadow ray commits on its first hit, so a
+        // crown is an opaque blob to the fog; gaps between crowns still make the
+        // shafts, and surface shadows keep their exact leaf shapes.
+        void setFogShadowOpaqueCutouts(bool enabled);
+        [[nodiscard]] bool fogShadowOpaqueCutouts() const;
+
         // Ray-traced env ambient-occlusion / GI. ON by default — soft RT AO/GI
         // (costs occlusion rays; paired with setDenoise, also on by default, to keep
         // the 1-spp gather noise-free). Turn OFF to drop the per-pixel ray cost, or

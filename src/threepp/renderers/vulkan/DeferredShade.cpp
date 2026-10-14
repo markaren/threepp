@@ -1259,6 +1259,7 @@ namespace threepp::vulkan {
                    | (diagNoGather ? 16384u : 0u)     // bit 14: diagnostic, the probe path never gathers
                    | (probeFar ? 32768u : 0u)         // bit 15: far field beyond the probe windows
                    | (p.unlitScatter ? 268435456u : 0u)// bit 28: unlit surfaces take the in-scatter
+                   | (p.fogShadowOpaqueCutouts ? 536870912u : 0u)// bit 29: fog shadow rays take cutouts as opaque
                    | (std::min(p.cutoutRayCap, 15u) << 16u)// bits 16-19: cutout ray cap (0 = off)
                    | (std::min(static_cast<uint32_t>(std::max(p.cutoutRayCapFrom, 0.f) / 4.f + 0.5f), 255u)
                       << 20u);                       // bits 20-27: ...from this distance, in 4 m steps

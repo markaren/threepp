@@ -1164,7 +1164,11 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
         vec3 stepSum = vec3(0.0);
         for (uint i = 0u; i < lights.dirCount; ++i) {
             const vec3  L   = normalize(lights.dirLights[i].direction);
-            const float vis = shadowVis(x, L, 1e30);// tree/terrain shaft occlusion
+            // setFogShadowOpaqueCutouts (flags bit 29): crowns are opaque blobs to
+            // this march; see shadowVisOpaque. Off = every step alpha-tests every
+            // card it crosses, as the surface shadows do.
+            const float vis = flagOn(536870912u) ? shadowVisOpaque(x, L, 1e30)
+                                                 : shadowVis(x, L, 1e30);// tree/terrain shaft occlusion
             if (vis <= 0.0) continue;
             const float phase = hgPhase(dot(L, rd), hgG);// forward glow toward the sun
             stepSum += lights.dirLights[i].color * (phase * vis);

@@ -260,6 +260,10 @@ namespace threepp::vulkan {
             // (cloud layer, froxel glow, spot beams, sun shafts). Off, an
             // unlit pixel gets the medium's extinction and ambient only.
             bool unlitScatter = false;
+            // setFogShadowOpaqueCutouts (flags bit 29): the volumetric sun march's
+            // shadow rays commit on the first hit instead of alpha-testing every
+            // cutout card they cross. Off = exact, as the surface shadows.
+            bool fogShadowOpaqueCutouts = false;
             // setCutoutRayCap (flags bits 16-19): a shadow ray counts as
             // blocked after this many transparent cutout texels; 0 = off.
             uint32_t cutoutRayCap = 0u;

@@ -2171,6 +2171,7 @@ namespace threepp {
         // setUnlitFogScatter: the unlit branch of the shade takes the volumetric
         // in-scatter too (shade flags bit 28). Off = extinction and ambient only.
         bool  unlitFogScatter_    = false;
+        bool  fogShadowOpaqueCutouts_ = false;// setFogShadowOpaqueCutouts (shade flags bit 29)
         // Procedural direction-space star field on deferred sky pixels (0 = off).
         float deferredStarIntensity_ = 0.f;
 
