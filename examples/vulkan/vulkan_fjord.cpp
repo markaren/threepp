@@ -1,22 +1,27 @@
-// FJORD — a procedural Norwegian fjord through a full day (Vulkan deferred showcase).
+// FJORD — a Norwegian fjord through a full day (Vulkan deferred showcase).
 //
-// Everything is generated in-engine — no asset downloads:
 //   • terrain::TerrainGenerator — ridged multifractal + hydraulic/thermal erosion,
 //     then a fjord channel is carved along an S-curve (deep water, a green shore
 //     bench, steep walls) and a slope/altitude splat albedo is baked from the
-//     carved heights (wet shore rock → heath → scree → rock → snow).
+//     carved heights (wet shore rock → heath → scree → rock → snow), with the
+//     forest's canopy and the footpath's worn margin painted in. Rock, scree
+//     and grass structure are scanned bands (Poly Haven drone captures,
+//     threepp_data/models/fjord/terrain).
+//   • The forest is the Nørvasundet twin's card trees (Poly Haven spruce, pine
+//     and a broadleaf, threepp_data/models/fjord/trees) planted by slope,
+//     altitude and clearing rules and drawn through CanopyForest's
+//     camera-following LOD; the meadow is tufts of painted blades on GrassMesh
+//     wind (fjord_trees/forest/grass.hpp beside this file).
 //   • Ocean — the FFT water (three Phillips cascades, foam) fills the channel
 //     at sea level y=0 as a static channel-fitting rectangle.
-//   • vegetation::TreeGenerator — pine + birch prototypes instanced along the
-//     shore bench (detailed cross-quad leaf cards near the cabin, cheap blob
-//     canopies for the far bank), plus boulders and a GrassMesh meadow
-//     (GPU wind compute + BLAS refit).
-//   • A red cabin ("hytte") with white trim, glowing windows after sundown,
-//     a chimney plume that is a PARTICIPATING MEDIUM (a smoke-only FireEffect —
-//     one ParticleField with a DensityRepr, so the sun scatters through it and
-//     it composites with the fjord's fog instead of over it; --legacy-smoke
-//     brings back the old sprite plume for an A/B), a wooden dock with a
-//     lantern, and a moored rowing boat.
+//   • FJ_OLD_TREES=1 / FJ_OLD_GRASS=1 bring back the TreeGenerator trees and
+//     the single-blade meadow this demo had before, for the A/B.
+//   • A red cabin ("hytte") with white trim and a fenced yard (skigard,
+//     woodpile, flagpole with its vimpel, a path worn down to the dock),
+//     glowing windows after sundown, a thread of chimney smoke and a camp fire
+//     in a stone ring on the bank (sprites, the cabin film's recipe:
+//     fjord_fire.hpp; --legacy-smoke brings back the old sprite plume), a
+//     wooden dock with a lantern, and a moored rowing boat.
 //   • A CPU port of the three.js Preetham sky is baked into an equirect float
 //     env map (ping-pong pair, throttled re-bakes) so the sky, IBL ambient and
 //     water reflections all track the sun continuously — dawn mist and god
@@ -49,11 +54,14 @@
 // Headless:  vulkan_fjord --shot out.png [--frames N] [--time H] [--view 0..6] [--cycle H_per_s]
 
 #include "capture_util.hpp"
+#include "fjord_fire.hpp"
+#include "fjord_forest.hpp"
+#include "fjord_grass.hpp"
+#include "fjord_yard.hpp"
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
 
 #include "threepp/extras/architecture/LogCabin.hpp"
-#include "threepp/extras/effects/FireEffect.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
 #include "threepp/extras/terrain/RockGeometry.hpp"
@@ -774,6 +782,17 @@ int main(int argc, char** argv) {
     // ── args ────────────────────────────────────────────────────────────────
     std::string shotPath;
     int shotFrames = 220, shotFrame = 0, shotCam = 0;
+    // --scale S: render scale. 0.6 is the scale the frame budget is set for
+    // (60 fps on an RTX 4070 at 1920x1080); the panel slider still moves it.
+    float renderScale = 0.6f;
+    // --bench N: the shot also reports the MEDIAN and p95 of the last N frames
+    // (wall clock and GPU total) instead of only the last frame's timings, which
+    // a single hitch or a late tile swap can make meaningless.
+    int benchFrames = 0;
+    // --simdt S: step the clock by S seconds a frame and pin the renderer's
+    // sim time to it, so two shots of the same build are the same picture
+    // (wind, water and the temporal blends otherwise follow the wall clock).
+    float simDt = 0.f;
     float startTime = 17.6f;// golden hour (sunset ~18:45)
     float startCycle = 0.f; // hours per second (0 = paused)
     bool startFly = false;// begin on the cinematic flight path
@@ -892,6 +911,9 @@ int main(int argc, char** argv) {
             winW = std::atoi(argv[++i]);
             winH = std::atoi(argv[++i]);
         }
+        else if (std::strcmp(argv[i], "--scale") == 0 && i + 1 < argc) renderScale = static_cast<float>(std::atof(argv[++i]));
+        else if (std::strcmp(argv[i], "--bench") == 0 && i + 1 < argc) benchFrames = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--simdt") == 0 && i + 1 < argc) simDt = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--debugview") == 0 && i + 1 < argc) debugView = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--lod") == 0 && i + 1 < argc) optLod = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--tile2") == 0 && i + 1 < argc) tile2Override = static_cast<float>(std::atof(argv[++i]));
@@ -909,7 +931,9 @@ int main(int argc, char** argv) {
     // than a 1920×1129 session at the same view. Repro at the reported size.
     Canvas canvas("threepp - FJORD (Vulkan deferred)",
                   {{"vsync", false},
-                   {"size", WindowSize{winW > 0 ? winW : 960, winH > 0 ? winH : 600}}});
+                   {"size", WindowSize{winW > 0 ? winW : 960, winH > 0 ? winH : 600}},
+                   // Captures (--shot / --seq) never open a window on the desktop.
+                   {"headless", !shotPath.empty() || !seqDir.empty()}});
     VulkanRenderer renderer(canvas);
     if (optProbe >= 0) renderer.setProbeGI(optProbe != 0);
     renderer.toneMapping = ToneMapping::ACESFilmic;
@@ -924,8 +948,14 @@ int main(int argc, char** argv) {
     const bool headlessish = !shotPath.empty() || !seqDir.empty();
     renderer.setAutoExposureSpeed(headlessish ? 12.0f : 2.0f);
     // renderer.setGbufferMsaa(2);// leaf canopies + grass edges
-    renderer.setRenderScale(0.85f);
+    renderer.setRenderScale(renderScale);
     renderer.setSunAngularRadius(profHardShadow ? 0.f : 0.6f);// soft RT sun shadows
+    // A sun shadow ray through a forest alpha-tests every card it crosses; past
+    // two transparent texels it is taken as blocked. Exact within 15 m, where a
+    // capped shadow would show the cards' outlines (the twin keeps 40 m; here
+    // the meadow's tufts fill the near field, and 40 -> 15 m bought 1.15 ms in
+    // the meadow view at 1080p x 0.6 with no difference by eye).
+    renderer.setCutoutRayCap(2, 15.f);
     if (profNoAo) renderer.setDeferredAO(false);
     if (profNoGi) renderer.setProbeGI(false);
     // Phase 2 unified fog: scene.fog (set per-frame below) is the AIR medium —
@@ -951,6 +981,18 @@ int main(int argc, char** argv) {
     renderer.setBloomIntensity(0.05f);
 
     Scene scene;
+
+    // FJ_OLD_TREES=1 brings back the generator's spruce/birch band and the far
+    // blob canopies, for the A/B against the kit forest built below the meadow.
+    // (Also the fallback when threepp_data predates the kit trees.)
+    const bool oldTrees = [] {
+        const char* v = std::getenv("FJ_OLD_TREES");
+        if (v && v[0] == '1') return true;
+        const auto kit = std::filesystem::path(DATA_FOLDER) / "models" / "fjord" / "trees" / "spruce.tree";
+        if (std::filesystem::exists(kit)) return false;
+        std::cerr << "[fjord] " << kit.string() << " missing (old threepp_data?): generator trees" << std::endl;
+        return true;
+    }();
 
     // ── terrain ─────────────────────────────────────────────────────────────
     const auto t0 = std::chrono::high_resolution_clock::now();
@@ -1025,6 +1067,37 @@ int main(int argc, char** argv) {
             tileOpts.bandStrength = 0.85f;
             tileOpts.bandNormalScale = 1.4f;
             tileOpts.bandRoughStrength = 0.5f;
+
+            // The trough's grass, rock and scree are SCANS (Poly Haven drone
+            // captures, threepp_data/models/fjord/terrain): real moss on real
+            // slabs, structure at the metres-to-tens-of-metres scale a fjord
+            // wall is seen at, where the procedural bands' centimetre cracks
+            // were long gone into the mip chain. Same 0.5-neutral overlay +
+            // height and normal + roughness packing as makeBandMaps; snow stays
+            // procedural. Repeats at half the scans' footprint (25-45 m).
+            // (threepp_data older than these files keeps the procedural set.)
+            const auto bandDir = std::filesystem::path(DATA_FOLDER) / "models" / "fjord" / "terrain";
+            if (std::filesystem::exists(bandDir / "rock_albedo.webp")) {
+                TextureLoader tl;
+                const auto loadBand = [&](const std::string& file) {
+                    auto tex = tl.load(bandDir / file, ColorSpace::Linear, true);
+                    if (tex) {
+                        tex->wrapS = tex->wrapT = TextureWrapping::Repeat;
+                        tex->magFilter = Filter::Linear;
+                        tex->minFilter = Filter::LinearMipmapLinear;
+                        tex->generateMipmaps = true;
+                    }
+                    return tex;
+                };
+                const std::array<const char*, 3> names{"grass", "rock", "scree"};
+                for (size_t i = 0; i < 3; ++i) {
+                    tileOpts.bandAlbedo[i] = loadBand(std::string(names[i]) + "_albedo.webp");
+                    tileOpts.bandNormalRough[i] = loadBand(std::string(names[i]) + "_nr.webp");
+                }
+                tileOpts.bandRepeat = {1.f / 45.f, 1.f / 25.f, 1.f / 40.f, bands.repeat[3]};
+                tileOpts.bandStrength = 1.f;
+                tileOpts.bandNormalScale = 1.2f;
+            }
         }
         // Legacy cm-scale detail layer — the band-less fallback (env override
         // above; also what the tiles use if bands are ever cleared).
@@ -1043,6 +1116,299 @@ int main(int argc, char** argv) {
         tileOpts.detailNormalScale = 0.9f;
         tileOpts.detailRoughStrength = 0.5f;
     }
+    // Placement queries before the tiles exist read the provider directly —
+    // the same surface the tiles bake (tiles->heightAt samples it too).
+    const auto groundH = [&prov](float x, float z) { return prov.height(x, z); };
+
+    // ── waterline + footpath spine ──────────────────────────────────────────
+    //
+    // Hoisted ABOVE the meadow because the grass scatter has to reject blades
+    // inside the path corridor: a gravel ribbon laid under a full-density
+    // meadow is simply invisible from anywhere but straight overhead, which is
+    // exactly how it behaved before this.
+    float xWater = padX;
+    for (float x = padX; x > padX - 300.f; x -= 1.f) {
+        if (field.sampleBilinear(x, kPadZ) < 0.f) {
+            xWater = x;
+            break;
+        }
+    }
+
+    const auto fjordCabinMetrics = architecture::cabinMetrics(fjordCabinParams());
+
+    // ── the yard's layout ───────────────────────────────────────────────────
+    // The house's footprint in world XZ (porch and steps included; the cabin
+    // is turned so its local +x runs along world +z and its porch faces -x),
+    // and where the yard's things stand. The meadow, the ground colour and the
+    // props below all read these, so they cannot disagree.
+    const float yardX0 = padX - (fjordCabinMetrics.porchOuterZ + 1.35f);
+    const float yardX1 = padX + fjordCabinMetrics.halfDepth + 0.45f;
+    const float yardZ0 = kPadZ - fjordCabinMetrics.halfLength - 0.45f;
+    const float yardZ1 = kPadZ + fjordCabinMetrics.halfLength + 0.45f;
+    const auto houseDistance = [=](float x, float z) {
+        const float dx = std::max({yardX0 - x, 0.f, x - yardX1});
+        const float dz = std::max({yardZ0 - z, 0.f, z - yardZ1});
+        return std::sqrt(dx * dx + dz * dz);
+    };
+    // Woodpile against the south gable (the side the hero view sees), the
+    // chopping block in front of it, the flagpole down toward the water beside
+    // the path, the fire ring on the bank north of the landing.
+    const Vector3 woodpilePos(padX + 0.6f, kPadHeight - 0.03f, kPadZ + fjordCabinMetrics.halfLength + 0.30f);
+    const Vector3 blockPos(padX - 2.6f, kPadHeight - 0.03f, woodpilePos.z + 2.6f);
+    const Vector3 polePos(padX - fjordCabinMetrics.porchOuterZ - 9.f, 0.f, kPadZ + 6.8f);
+    const Vector3 firePos(xWater + 13.f, 0.f, kPadZ - 15.f);
+    struct Keepout {
+        float x, z, r;
+    };
+    const std::vector<Keepout> keepouts{{woodpilePos.x, woodpilePos.z + 0.3f, 2.2f},
+                                        {blockPos.x, blockPos.z, 1.2f},
+                                        {polePos.x, polePos.z, 0.7f},
+                                        {firePos.x, firePos.z, 2.7f}};
+    const auto propDistance = [=](float x, float z) {
+        float best = 1e9f;
+        for (const auto& k : keepouts) best = std::min(best, std::sqrt((x - k.x) * (x - k.x) + (z - k.z) * (z - k.z)) - k.r);
+        return best;
+    };
+    std::vector<Vector3> pathPts;// sampled centreline, world space
+    float pathMinX = 0.f, pathMaxX = 0.f, pathMinZ = 0.f, pathMaxZ = 0.f;
+    {
+        // Foot of the porch steps. The cabin is turned so its local +Z (the
+        // porch side) points down -X, and the steps sit on the door
+        // centreline, so the landing is straight out along -X at kPadZ.
+        const float xStart = padX - (fjordCabinMetrics.porchOuterZ + 0.16f + 0.29f * 3.f + 0.6f);
+        // Runs onto the dock's first plank (the dock starts at xWater + 5 and
+        // reaches out over the water): a path that stops short of the pier on
+        // the grass reads as two unrelated props.
+        const float xEnd = xWater + 4.6f;
+        auto ground = [&](float x, float z) { return Vector3(x, groundH(x, z), z); };
+        auto lerpX = [&](float t) { return xStart + (xEnd - xStart) * t; };
+
+        // A lazy S, not a straight run: a path worn by feet never takes the
+        // shortest line, and a ruler-straight strip reads as CG immediately.
+        CatmullRomCurve3 spine({
+                ground(xStart + 1.2f, kPadZ + 0.1f),
+                ground(lerpX(0.00f), kPadZ + 0.5f),
+                ground(lerpX(0.20f), kPadZ + 4.2f),
+                ground(lerpX(0.45f), kPadZ + 2.4f),
+                ground(lerpX(0.70f), kPadZ - 3.0f),
+                ground(lerpX(0.90f), kPadZ - 1.0f),
+                ground(xEnd, kPadZ + 0.3f),
+        });
+        constexpr int kSteps = 220;
+        pathPts.reserve(kSteps + 1);
+        for (int i = 0; i <= kSteps; ++i) {
+            Vector3 c;
+            spine.getPoint(static_cast<float>(i) / static_cast<float>(kSteps), c);
+            pathPts.push_back(c);
+        }
+        pathMinX = pathMaxX = pathPts[0].x;
+        pathMinZ = pathMaxZ = pathPts[0].z;
+        for (const auto& p : pathPts) {
+            pathMinX = std::min(pathMinX, p.x);
+            pathMaxX = std::max(pathMaxX, p.x);
+            pathMinZ = std::min(pathMinZ, p.z);
+            pathMaxZ = std::max(pathMaxZ, p.z);
+        }
+    }
+
+    // Distance from a world XZ to the path centreline. The bounding-box reject
+    // comes first so the 2 M-attempt grass loop pays only a few compares for
+    // the ~99% of samples nowhere near the corridor.
+    constexpr float kPathClear = 1.25f;// bare gravel out to here
+    constexpr float kPathFeather = 2.30f;// grass returns to full density here
+    auto pathDistance = [&](float x, float z) {
+        if (x < pathMinX - kPathFeather || x > pathMaxX + kPathFeather ||
+            z < pathMinZ - kPathFeather || z > pathMaxZ + kPathFeather)
+            return 1e9f;
+        float best = 1e9f;
+        for (size_t i = 1; i < pathPts.size(); ++i) {
+            const Vector3& a = pathPts[i - 1];
+            const Vector3& b = pathPts[i];
+            const float ex = b.x - a.x, ez = b.z - a.z;
+            const float len2 = ex * ex + ez * ez;
+            float t = 0.f;
+            if (len2 > 1e-8f) t = std::clamp(((x - a.x) * ex + (z - a.z) * ez) / len2, 0.f, 1.f);
+            const float dx = x - (a.x + ex * t), dz = z - (a.z + ez * t);
+            best = std::min(best, dx * dx + dz * dz);
+        }
+        return std::sqrt(best);
+    };
+
+    // ── where the forest stands ─────────────────────────────────────────────
+    // The rules the reference photographs show (Nærøyfjord, Aurlandsfjord):
+    // forest closes over every slope that holds soil, thins to scattered pines
+    // on the ledges of the walls, gives up on sheer rock, stops at a ragged
+    // treeline, and leaves open the clearings people keep: the cabin's meadow,
+    // its path and the landing. One density for the trees AND the meadow, so
+    // grass thins where the canopy closes instead of carpeting the forest floor.
+    constexpr float kTreeline = 235.f;
+    const auto forestDensity = [&](float x, float z) -> float {
+        const float h = field.sampleBilinear(x, z);
+        if (h < 1.4f) return 0.f;
+        const float treeline = kTreeline + 55.f * (fbm2(x * 0.004f + 3.f, z * 0.004f) - 0.5f) * 2.f;
+        const float alt = 1.f - math::smoothstep(treeline - 70.f, treeline, h);
+        if (alt <= 0.f) return 0.f;
+        const float ny = field.slopeNy(x, z);
+        // Closed on slopes to ~33°, gone by ~41°: a tree on a cliff face reads
+        // as a mistake from any distance.
+        const float slope = math::smoothstep(0.755f, 0.84f, ny);
+        if (slope <= 0.f) return 0.f;
+        const float clearing = math::smoothstep(0.30f, 0.46f, fbm2(x * 0.0035f + 11.f, z * 0.0035f - 7.f));
+        const float stand = 0.55f + 0.45f * math::smoothstep(0.30f, 0.60f, fbm2(x * 0.021f, z * 0.021f + 5.f));
+        const float shore = math::smoothstep(1.4f, 3.2f, h);
+        // The meadow: open to ~70 m from the cabin with a ragged edge, then
+        // the forest returns over another ~50 m.
+        const float dPad = std::sqrt((x - padX) * (x - padX) + (z - kPadZ) * (z - kPadZ));
+        const float edge = 70.f + 28.f * (fbm2(x * 0.02f + 2.f, z * 0.02f) - 0.5f) * 2.f;
+        const float meadow = 0.06f + 0.94f * math::smoothstep(edge, edge + 50.f, dPad);
+        const float path = math::smoothstep(3.f, 7.f, pathDistance(x, z));
+        return alt * slope * clearing * stand * shore * meadow * path;
+    };
+
+    // Species by ground: spruce stands on the deep soil low down, pine takes
+    // the steep and rocky ground, birch the high slopes toward the treeline.
+    const auto speciesAt = [&](float x, float z, float ground) {
+        const float ny = field.slopeNy(x, z);
+        const float hi = math::smoothstep(80.f, kTreeline - 20.f, ground);
+        const float steep = 1.f - math::smoothstep(0.70f, 0.82f, ny);
+        const float pPine = std::min(0.85f, 0.10f + 0.55f * steep + 0.15f * hi);
+        const float pBirch = (1.f - pPine) * (0.22f + 0.70f * hi);
+        const float r = hash01(static_cast<int>(std::floor(x * 4.f)), static_cast<int>(std::floor(z * 4.f)) + 7919);
+        return r < pPine ? 0 : (r < pPine + pBirch ? 1 : 2);
+    };
+    const auto heightAt = [&](float x, float z, float r) {
+        const float ground = field.sampleBilinear(x, z);
+        const float hi = math::smoothstep(60.f, kTreeline, ground);
+        const float shrink = 1.f - 0.40f * hi;// stunted toward the treeline
+        switch (speciesAt(x, z, ground)) {
+            case 0: return (9.f + 7.f * r) * shrink;  // pine
+            case 1: return (6.f + 5.f * r) * shrink;  // birch (the kit tree is 4.6 m)
+            default: return (13.f + 9.f * r) * shrink;// spruce
+        }
+    };
+    const float half = kWorldSize * 0.5f * 0.97f;
+    const auto sites = fjord::scatterSites(-half, half, -half, half, 7.0f, 41u, forestDensity, heightAt);
+
+    // ── the ground of the trough: what the tiles bake ───────────────────────
+    // The canopy is PAINTED into the ground colour from the very sites the trees
+    // stand on: under a near tree it is the shade of its own crown, and past
+    // the distance where the forest stops drawing instances it IS the forest,
+    // the way the twins' orthophotos are. One crown per site, its radius from
+    // the tree's height, its colour from its species.
+    struct Crown {
+        float x, z, r;
+        int species;
+    };
+    constexpr float kCrownCell = 8.f;
+    const int crownGrid = static_cast<int>(std::ceil(kWorldSize / kCrownCell)) + 1;
+    std::vector<uint32_t> crownStart(static_cast<size_t>(crownGrid) * crownGrid + 1, 0u);
+    std::vector<Crown> crowns;
+    {
+        const auto cellOf = [&](float x, float z) {
+            const int cx = std::clamp(static_cast<int>((x + kWorldSize * 0.5f) / kCrownCell), 0, crownGrid - 1);
+            const int cz = std::clamp(static_cast<int>((z + kWorldSize * 0.5f) / kCrownCell), 0, crownGrid - 1);
+            return static_cast<size_t>(cz) * crownGrid + cx;
+        };
+        std::vector<Crown> tmp;
+        tmp.reserve(sites.size());
+        for (const auto& s : sites) {
+            const int sp = speciesAt(s.x, s.z, field.sampleBilinear(s.x, s.z));
+            const float rf = sp == 2 ? 0.20f : (sp == 0 ? 0.24f : 0.30f);// spruce narrow, birch round
+            tmp.push_back({s.x, s.z, std::max(1.6f, rf * s.canopyHeight), sp});
+            ++crownStart[cellOf(s.x, s.z) + 1];
+        }
+        for (size_t i = 1; i < crownStart.size(); ++i) crownStart[i] += crownStart[i - 1];
+        crowns.resize(tmp.size());
+        std::vector<uint32_t> fill(crownStart.begin(), crownStart.end() - 1);
+        for (const auto& c : tmp) crowns[fill[cellOf(c.x, c.z)]++] = c;
+    }
+    // Crown cover at (x, z): 0 = open ground, 1 = the middle of a crown; the
+    // species of the crown that wins and how central the sample sits on it.
+    const auto canopyAt = [&](float x, float z, int& species, float& centre) {
+        float best = 0.f;
+        const int cx = static_cast<int>((x + kWorldSize * 0.5f) / kCrownCell);
+        const int cz = static_cast<int>((z + kWorldSize * 0.5f) / kCrownCell);
+        for (int dz = -1; dz <= 1; ++dz)
+            for (int dx = -1; dx <= 1; ++dx) {
+                const int gx = cx + dx, gz = cz + dz;
+                if (gx < 0 || gz < 0 || gx >= crownGrid || gz >= crownGrid) continue;
+                const size_t cell = static_cast<size_t>(gz) * crownGrid + gx;
+                for (uint32_t i = crownStart[cell]; i < crownStart[cell + 1]; ++i) {
+                    const Crown& c = crowns[i];
+                    const float d2 = ((x - c.x) * (x - c.x) + (z - c.z) * (z - c.z)) / (c.r * c.r);
+                    if (d2 >= 1.f) continue;
+                    const float cov = 1.f - d2;
+                    if (cov > best) {
+                        best = cov;
+                        species = c.species;
+                    }
+                }
+            }
+        centre = best;
+        return std::min(1.f, best * 2.2f);
+    };
+
+    // ── the footpath, worn INTO the ground ──────────────────────────────────
+    // Not a ribbon laid on the meadow (that read as a paved road with kerbs):
+    // the recipe the cabin-in-the-woods scene proved. Along the path the tiles
+    // bake the scree band (scanned gravel and moss) into the weights, packed
+    // dirt into the colour, and the height drops a few centimetres; the meadow
+    // already leaves the corridor bare. The edge wanders with a little noise.
+    const auto pathCore = [&](float x, float z) {
+        const float wobble = 0.30f * (vnoise(x * 0.9f + 3.f, z * 0.9f) - 0.5f);
+        return 1.f - math::smoothstep(0.50f, 1.35f, pathDistance(x, z) + wobble);
+    };
+    {
+        auto baseHeight = prov.height;
+        prov.height = [baseHeight, pathCore](float x, float z) { return baseHeight(x, z) - 0.05f * pathCore(x, z); };
+    }
+    prov.weights = [pathCore](float x, float z, float hC, float slope, float* w4) {
+        fjordWeights(x, z, hC, slope, w4);
+        if (const float c = pathCore(x, z); c > 0.f) {
+            for (int i = 0; i < 4; ++i) w4[i] *= 1.f - c;
+            w4[2] += c;
+        }
+    };
+
+    // The ground the tiles bake: the valley's own bands (fjordAlbedo) with the
+    // forest written into them. The floor goes dark under a closed canopy and
+    // a crown is painted where every tree stands, so past the distance where
+    // the forest stops drawing instances (1.1 km) the ground still carries
+    // it, the way the twins' orthophotos do; and the footpath gets a trampled
+    // margin of bare earth either side of its gravel.
+    prov.albedo = [&](float x, float z, float hC, float slope, float* rgb) {
+        fjordAlbedo(x, z, hC, slope, rgb);
+        Vector3 col(rgb[0], rgb[1], rgb[2]);
+        if (const float dP = pathDistance(x, z); dP < 3.6f)
+            col.lerp(Vector3(0.068f, 0.060f, 0.040f), 0.70f * (1.f - math::smoothstep(0.9f, 3.6f, dP)));
+        if (const float c = pathCore(x, z); c > 0.f) col.lerp(Vector3(0.100f, 0.086f, 0.063f), c);
+        // The yard is worn where people stand: a patch at the foot of the porch
+        // steps, round the woodpile and the block, the fire ring's trodden
+        // circle, and the drip line along the walls.
+        {
+            const float dSteps = std::sqrt((x - pathPts.front().x) * (x - pathPts.front().x) +
+                                           (z - pathPts.front().z) * (z - pathPts.front().z));
+            const float wear = std::max({1.f - math::smoothstep(1.5f, 5.0f, dSteps),
+                                         1.f - math::smoothstep(0.f, 1.6f, propDistance(x, z)),
+                                         0.6f * (1.f - math::smoothstep(0.3f, 1.4f, houseDistance(x, z)))});
+            if (wear > 0.f) col.lerp(Vector3(0.075f, 0.064f, 0.045f), 0.75f * wear);
+        }
+        if (!oldTrees) {
+            col.lerp(Vector3(0.030f, 0.036f, 0.022f), 0.75f * std::min(1.f, forestDensity(x, z) * 1.6f));
+            int sp = 2;
+            float centre = 0.f;
+            if (const float cover = canopyAt(x, z, sp, centre); cover > 0.f) {
+                Vector3 crown = sp == 1 ? Vector3(0.060f, 0.085f, 0.028f)
+                                        : (sp == 0 ? Vector3(0.040f, 0.052f, 0.026f) : Vector3(0.026f, 0.042f, 0.022f));
+                crown.multiplyScalar(0.70f + 0.55f * centre);// lit top, shaded rim
+                col.lerp(crown, cover);
+            }
+        }
+        rgb[0] = col.x;
+        rgb[1] = col.y;
+        rgb[2] = col.z;
+    };
+
     auto tiles = terrain::TileTerrain::create(prov, tileOpts);
     tiles->name = "fjord_terrain";
     scene.add(tiles);
@@ -1121,8 +1487,9 @@ int main(int argc, char** argv) {
     }
     scene.add(ocean);
 
-    // ── forest ──────────────────────────────────────────────────────────────
-    {
+    // ── forest (legacy: procedural TreeGenerator trees on the bench) ────────
+
+    if (oldTrees) {
         const auto tf0 = std::chrono::high_resolution_clock::now();
         // More seeds per species → no two neighbouring trunks share a curve.
         std::vector<TreeVariant> nearVars{
@@ -1209,7 +1576,10 @@ int main(int argc, char** argv) {
     // ── boulders along the shore ────────────────────────────────────────────
     {
         auto rockMat = MeshStandardMaterial::create(
-                MeshStandardMaterial::Params{}.color(Color(0.30f, 0.29f, 0.27f)).roughness(1.f).metalness(0.f));
+                MeshStandardMaterial::Params{}.color(Color::white).roughness(1.f).metalness(0.f));
+        // Lichen-grey field stone, a shade lighter than the meadow it sits in
+        // (0.2 reads white against this scene's dark grass in a low sun).
+        rockMat->map = fjord::makeLichenRockTexture(128, 13u, Color(0.075f, 0.075f, 0.07f));
         rockMat->flatShading = true;
         rockMat->envMapIntensity = 0.35f;
         std::vector<std::shared_ptr<BufferGeometry>> rgeos{terrain::makeRockGeometry(1u),
@@ -1228,6 +1598,7 @@ int main(int argc, char** argv) {
             const float x = channelCenterX(z) + side * d;
             const float h = terrainH(x, z);
             if (h < -1.5f || h > 12.f) continue;
+            if (std::sqrt((x - padX) * (x - padX) + (z - kPadZ) * (z - kPadZ)) < 50.f) continue;// not in the yard
             const float sc = 0.5f + u01(rng) * 1.6f;
             axis.set(u01(rng) - 0.5f, u01(rng) - 0.5f, u01(rng) - 0.5f).normalize();
             q.setFromAxisAngle(axis, u01(rng) * kTau);
@@ -1253,87 +1624,20 @@ int main(int argc, char** argv) {
     // --single-grass flag rebuilds the identical blades as ONE merged mesh: its
     // single valley-spanning AABB is ~always on screen and near, so it is never
     // culled and never freezes — the "no culling" baseline for A/B measurement.
-    // ── waterline + footpath spine ──────────────────────────────────────────
-    //
-    // Hoisted ABOVE the meadow because the grass scatter has to reject blades
-    // inside the path corridor: a gravel ribbon laid under a full-density
-    // meadow is simply invisible from anywhere but straight overhead, which is
-    // exactly how it behaved before this.
-    float xWater = padX;
-    for (float x = padX; x > padX - 300.f; x -= 1.f) {
-        if (field.sampleBilinear(x, kPadZ) < 0.f) {
-            xWater = x;
-            break;
-        }
-    }
-
-    const auto fjordCabinMetrics = architecture::cabinMetrics(fjordCabinParams());
-    std::vector<Vector3> pathPts;// sampled centreline, world space
-    float pathMinX = 0.f, pathMaxX = 0.f, pathMinZ = 0.f, pathMaxZ = 0.f;
-    {
-        // Foot of the porch steps. The cabin is turned so its local +Z (the
-        // porch side) points down -X, and the steps sit on the door
-        // centreline, so the landing is straight out along -X at kPadZ.
-        const float xStart = padX - (fjordCabinMetrics.porchOuterZ + 0.16f + 0.29f * 3.f + 0.6f);
-        const float xEnd = xWater + 6.5f;// meets the dock's landward end
-        auto ground = [&](float x, float z) { return Vector3(x, terrainH(x, z), z); };
-        auto lerpX = [&](float t) { return xStart + (xEnd - xStart) * t; };
-
-        // A lazy S, not a straight run: a path worn by feet never takes the
-        // shortest line, and a ruler-straight strip reads as CG immediately.
-        CatmullRomCurve3 spine({
-                ground(xStart + 1.2f, kPadZ + 0.1f),
-                ground(lerpX(0.00f), kPadZ + 0.5f),
-                ground(lerpX(0.20f), kPadZ + 4.2f),
-                ground(lerpX(0.45f), kPadZ + 2.4f),
-                ground(lerpX(0.70f), kPadZ - 3.0f),
-                ground(lerpX(0.90f), kPadZ - 1.0f),
-                ground(xEnd, kPadZ + 0.3f),
-        });
-        constexpr int kSteps = 220;
-        pathPts.reserve(kSteps + 1);
-        for (int i = 0; i <= kSteps; ++i) {
-            Vector3 c;
-            spine.getPoint(static_cast<float>(i) / static_cast<float>(kSteps), c);
-            pathPts.push_back(c);
-        }
-        pathMinX = pathMaxX = pathPts[0].x;
-        pathMinZ = pathMaxZ = pathPts[0].z;
-        for (const auto& p : pathPts) {
-            pathMinX = std::min(pathMinX, p.x);
-            pathMaxX = std::max(pathMaxX, p.x);
-            pathMinZ = std::min(pathMinZ, p.z);
-            pathMaxZ = std::max(pathMaxZ, p.z);
-        }
-    }
-
-    // Distance from a world XZ to the path centreline. The bounding-box reject
-    // comes first so the 2 M-attempt grass loop pays only a few compares for
-    // the ~99% of samples nowhere near the corridor.
-    constexpr float kPathClear = 1.25f;// bare gravel out to here
-    constexpr float kPathFeather = 2.30f;// grass returns to full density here
-    auto pathDistance = [&](float x, float z) {
-        if (x < pathMinX - kPathFeather || x > pathMaxX + kPathFeather ||
-            z < pathMinZ - kPathFeather || z > pathMaxZ + kPathFeather)
-            return 1e9f;
-        float best = 1e9f;
-        for (size_t i = 1; i < pathPts.size(); ++i) {
-            const Vector3& a = pathPts[i - 1];
-            const Vector3& b = pathPts[i];
-            const float ex = b.x - a.x, ez = b.z - a.z;
-            const float len2 = ex * ex + ez * ez;
-            float t = 0.f;
-            if (len2 > 1e-8f) t = std::clamp(((x - a.x) * ex + (z - a.z) * ez) / len2, 0.f, 1.f);
-            const float dx = x - (a.x + ex * t), dz = z - (a.z + ez * t);
-            best = std::min(best, dx * dx + dz * dz);
-        }
-        return std::sqrt(best);
-    };
-
     std::vector<std::shared_ptr<GrassMesh>> grassTiles;
-    {
+    // FJ_OLD_GRASS=1: the single-blade meadow (below) instead of the tufts.
+    const bool oldGrass = oldTrees || [] {
+        const char* v = std::getenv("FJ_OLD_GRASS");
+        return v && v[0] == '1';
+    }();
+    if (oldGrass) {
         constexpr float kMeadowRadius = 190.f;   // valley-floor coverage (was 46)
-        constexpr size_t kBladeTarget = 300000;  // ~17x the AREA at the original density
+        // ~17x the AREA at the original density; FJ_GRASS=<n> overrides (0 = no
+        // meadow), the knob for pricing the grass against the forest.
+        const size_t kBladeTarget = [] {
+            const char* v = std::getenv("FJ_GRASS");
+            return v ? static_cast<size_t>(std::max(0, std::atoi(v))) : size_t{300000};
+        }();
         std::vector<vegetation::GrassBlade> blades;
         blades.reserve(kBladeTarget);
         std::mt19937 rng(7u);
@@ -1360,6 +1664,8 @@ int main(int argc, char** argv) {
                 if (dPath < kPathClear) continue;
                 if (u01(rng) > math::smoothstep(kPathClear, kPathFeather, dPath)) continue;
             }
+            // Under a closed canopy the floor is needles and moss, not lawn.
+            if (!oldTrees && u01(rng) < 0.85f * forestDensity(x, z)) continue;
             vegetation::GrassBlade bl;
             bl.position.set(x, h - 0.04f, z);
             const float s = 0.5f + u01(rng) * 0.5f;
@@ -1401,6 +1707,126 @@ int main(int argc, char** argv) {
         std::cout << "meadow: " << blades.size() << " blades in "
                   << grassTiles.size() << (singleGrass ? " merged mesh" : " tiles")
                   << std::endl;
+    } else {
+        // The meadow as tufts (fjord_grass.hpp): crossed cards of painted fine
+        // blades, dense round the cabin and thinning out over the bench, gone
+        // under the canopy and off the path. FJ_GRASS=0 leaves it out.
+        const bool none = [] {
+            const char* v = std::getenv("FJ_GRASS");
+            return v && std::atoi(v) == 0;
+        }();
+        std::vector<fjord::Tuft> tufts;
+        if (!none) {
+            constexpr float kMeadowRadius = 190.f, kCell = 0.42f;
+            std::mt19937 rng(7u);
+            std::uniform_real_distribution<float> u01(0.f, 1.f);
+            const int n = static_cast<int>(2.f * kMeadowRadius / kCell);
+            for (int iz = 0; iz < n; ++iz) {
+                for (int ix = 0; ix < n; ++ix) {
+                    const float x = padX - kMeadowRadius + (static_cast<float>(ix) + u01(rng)) * kCell;
+                    const float z = kPadZ - kMeadowRadius + (static_cast<float>(iz) + u01(rng)) * kCell;
+                    const float keep = u01(rng);
+                    const float r = std::sqrt((x - padX) * (x - padX) + (z - kPadZ) * (z - kPadZ));
+                    if (r > kMeadowRadius) continue;
+                    // Tufts per m²: ~4.3 round the cabin (they knit into one
+                    // sward), ~1 at the meadow's rim where the camera never stands.
+                    float perM2 = 1.0f + 3.25f * (1.f - math::smoothstep(45.f, 120.f, r));
+                    perM2 *= 1.f - 0.92f * std::min(1.f, forestDensity(x, z) * 1.5f);
+                    if (keep >= perM2 * kCell * kCell) continue;
+                    const float h = terrainH(x, z);
+                    if (h < 0.7f || h > 52.f) continue;
+                    if (h > 34.f && u01(rng) < math::smoothstep(34.f, 52.f, h)) continue;
+                    // A tuft is ~0.5 m across: clear the path by that much more,
+                    // or the meadow closes over it.
+                    const float dPath = pathDistance(x, z) - 0.45f;
+                    if (dPath < kPathClear) continue;
+                    if (dPath < kPathFeather && u01(rng) > math::smoothstep(kPathClear, kPathFeather, dPath)) continue;
+                    // Not against the walls or over the yard's things.
+                    const float dHouse = houseDistance(x, z);
+                    if (dHouse < 0.9f || propDistance(x, z) < 0.f) continue;
+                    fjord::Tuft tf;
+                    tf.position.set(x, h - 0.05f, z);
+                    tf.yaw = u01(rng) * kTau;
+                    const float s = 0.8f + 0.5f * u01(rng);
+                    tf.width = 0.80f * s;
+                    tf.height = (0.34f + 0.24f * u01(rng)) * s;
+                    // Kept short round the house, long out in the meadow.
+                    tf.height *= 0.42f + 0.58f * math::smoothstep(0.9f, 11.f, dHouse);
+                    tf.variant = static_cast<int>(u01(rng) * fjord::kTuftVariants) % fjord::kTuftVariants;
+                    // Patches: lusher where it is damp, yellower where it is dry.
+                    const float patch = fbm2(x * 0.06f + 4.f, z * 0.06f);
+                    tf.tint.set(0.90f + 0.30f * patch, 0.95f + 0.12f * patch, 0.85f);
+                    tufts.push_back(tf);
+                }
+            }
+        }
+        if (!tufts.empty()) {
+            auto tuftMat = MeshStandardMaterial::create(
+                    MeshStandardMaterial::Params{}.color(Color::white).roughness(0.95f).metalness(0.f));
+            tuftMat->map = fjord::makeTuftAtlas();
+            tuftMat->alphaTest = 0.3f;
+            tuftMat->side = Side::Double;
+            tuftMat->vertexColors = true;
+            tuftMat->translucency = 0.45f;
+            tuftMat->translucencyColor = Color(0.75f, 1.0f, 0.30f);
+            tuftMat->envMapIntensity = 0.35f;
+            GrassMesh::Params mp;
+            mp.windDir = Vector2(windDir.x, windDir.z);
+            mp.windStrength = 0.16f;
+            mp.maxAnimDistance = 95.f;
+            grassTiles = fjord::buildTuftTiles(tufts, 40.f, tuftMat, mp);
+            for (auto& tl : grassTiles) scene.add(tl);
+        }
+        std::cout << "meadow: " << tufts.size() << " tufts in " << grassTiles.size() << " tiles" << std::endl;
+    }
+
+    // ── forest: the twin's card trees over the whole valley ─────────────────
+    // Poly Haven's scanned spruce, pine and broadleaf, rebuilt as card trees
+    // for the Nørvasundet twin (fjord_trees.hpp), planted by forestDensity and
+    // drawn through CanopyForest's camera-following LOD: one LOD node per
+    // 128 m cell, card trees near, the lite rebuild of the same tree beyond,
+    // a thinned lite tier past that.
+    if (!oldTrees) {
+        const auto tf0 = std::chrono::high_resolution_clock::now();
+        const auto treeDir = std::filesystem::path(DATA_FOLDER) / "models" / "fjord" / "trees";
+        // CanopyForest's three slots: 0 pine, 1 birch, 2 spruce.
+        std::array<vegetation::SpeciesVariants, 3> species{
+                fjord::loadKitSpecies(treeDir, fjord::KitLook{"pine", {1.2f, 0.1f}}),
+                fjord::loadKitSpecies(treeDir, fjord::KitLook{"birch", {1.f, 1.f}}),
+                fjord::loadKitSpecies(treeDir, fjord::KitLook{"spruce", {1.2f, 0.1f}}),
+        };
+
+
+        vegetation::ForestLodOptions lo;
+        // Instance budget: every instance on screen costs the renderer CPU time
+        // (draw list, cull, ray-tracing descriptor; ~0.3 us each measured here),
+        // so instances stop at 450 m: cards to 160 m, the lite trees to 450 m.
+        // Beyond that EVERY tree is still there, as crossed impostor cards baked
+        // from the same lite trees, merged into one mesh per cell: one object
+        // however many trees it holds, nothing thinned, nothing cut off.
+        lo.cellSize = 192.f;
+        lo.l0Distance = 160.f;
+        lo.l1Distance = 450.f;
+        lo.l2Keep = 2;// only without the impostor atlases (older threepp_data)
+        lo.l2ScaleBoost = 1.18f;
+        if (std::filesystem::exists(treeDir / "impostor_albedo.webp"))
+            lo.farImpostors = fjord::makeImpostorTier(treeDir, species);
+        lo.minScale = 0.3f;
+        lo.maxScale = 2.6f;
+        lo.sink = 0.35f;
+        lo.cap = 250000;
+        lo.speciesFn = [&](const vegetation::TreeSite& s, float ground) { return speciesAt(s.x, s.z, ground); };
+        auto forest = Group::create();
+        forest->name = "forest";
+        const terrain::HeightGrid none;
+        const auto st = vegetation::buildCanopyForestLod(
+                *forest, sites, species, nullptr, none, none,
+                [&](float x, float z) { return prov.height(x, z); }, lo);
+        scene.add(forest);
+        const auto tf1 = std::chrono::high_resolution_clock::now();
+        std::cout << "[fjord] forest: " << st.planted << " trees in " << st.cells << " cells ("
+                  << st.l0Meshes << "/" << st.l1Meshes << "/" << st.l2Meshes << " meshes per level), "
+                  << std::chrono::duration<float>(tf1 - tf0).count() << " s" << std::endl;
     }
 
     // ── cabin, dock, lantern, boat ──────────────────────────────────────────
@@ -1412,6 +1838,118 @@ int main(int argc, char** argv) {
     // (-X), so the veranda looks down the dock and out over the fjord.
     cabin.group->rotation.y = -kPi * 0.5f;
     scene.add(cabin.group);
+
+    // ── the yard: woodpile, chopping block, skigard, fire ring, flagpole ────
+    std::unique_ptr<fjord::Pennant> pennant;
+    {
+        auto& cm = fjordCabinMaterials();
+        auto birch = vegetation::makeBarkTextures(256, 23u, {0.70f, 0.69f, 0.65f}, vegetation::BarkStyle::Papery);
+        birch.first->repeat.set(1.f, 2.f);
+        birch.second->repeat.set(1.f, 2.f);
+        auto barkMat = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(Color::white).roughness(0.9f).metalness(0.f));
+        barkMat->map = birch.first;
+        barkMat->normalMap = birch.second;
+        const auto addMesh = [&](const std::shared_ptr<BufferGeometry>& g, const std::shared_ptr<Material>& m,
+                                 const Vector3& at, float yaw, const char* name) {
+            if (!g) return;
+            auto mesh = Mesh::create(g, m);
+            mesh->position.copy(at);
+            mesh->rotation.y = yaw;
+            mesh->name = name;
+            scene.add(mesh);
+        };
+
+        // Rounds against the gable, under the rake: mostly spruce, some birch,
+        // sawn ends still pale and warm (the cabin's own log ends are stained).
+        auto spruceBark = vegetation::makeBarkTextures(256, 29u, {0.30f, 0.22f, 0.15f}, vegetation::BarkStyle::Plated);
+        spruceBark.first->repeat.set(1.f, 2.f);
+        spruceBark.second->repeat.set(1.f, 2.f);
+        auto spruceMat = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(Color::white).roughness(0.92f).metalness(0.f));
+        spruceMat->map = spruceBark.first;
+        spruceMat->normalMap = spruceBark.second;
+        auto endTex = architecture::makeLogEndTextures(256, 37u, {0.70f, 0.55f, 0.34f});
+        auto endMat = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(Color::white).roughness(0.85f).metalness(0.f));
+        endMat->map = endTex.first;
+        endMat->normalMap = endTex.second;
+        const auto pile = fjord::makeWoodpile(3.0f, 1.45f, 0.42f, 31u);
+        addMesh(pile.bark, spruceMat, woodpilePos, 0.f, "woodpile");
+        addMesh(pile.ends, endMat, woodpilePos, 0.f, "woodpile_ends");
+
+        // The block, with the axe left in it.
+        const auto block = fjord::makeChoppingBlock();
+        auto handleMat = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(Color(0.42f, 0.30f, 0.18f)).roughness(0.7f).metalness(0.f));
+        auto steelMat = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(Color(0.16f, 0.16f, 0.17f)).roughness(0.45f).metalness(0.7f));
+        addMesh(block.bark, spruceMat, blockPos, 0.7f, "chopping_block");
+        addMesh(block.top, endMat, blockPos, 0.7f, "chopping_block_top");
+        addMesh(block.handle, handleMat, blockPos, 0.7f, "axe_handle");
+        addMesh(block.head, steelMat, blockPos, 0.7f, "axe_head");
+
+        // Skigard round the yard, open where the path leaves for the pier.
+        // Split spruce left out for decades: silver-grey, grain standing up.
+        auto fenceTex = architecture::makeSawnWoodTextures(256, 43u, {0.34f, 0.335f, 0.325f});
+        auto fenceMat = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(Color::white).roughness(0.95f).metalness(0.f));
+        fenceMat->map = fenceTex.first;
+        fenceMat->normalMap = fenceTex.second;
+        {
+            // A loop round the house with chamfered corners: the porch side
+            // (toward the water, -x) leaves room for the flagpole, the south
+            // side for the woodpile and the block.
+            const float fx0 = yardX0 - 9.5f, fx1 = yardX1 + 6.f;
+            const float fz0 = yardZ0 - 6.f, fz1 = yardZ1 + 7.5f;
+            constexpr float ch = 3.5f;
+            std::vector<Vector3> loop{{fx0 + ch, 0, fz0}, {fx1 - ch, 0, fz0}, {fx1, 0, fz0 + ch}, {fx1, 0, fz1 - ch},
+                                      {fx1 - ch, 0, fz1}, {fx0 + ch, 0, fz1}, {fx0, 0, fz1 - ch}, {fx0, 0, fz0 + ch},
+                                      {fx0 + ch, 0, fz0}};
+            // The gate: no post or rail within reach of the path.
+            const auto open = [&](float x, float z) { return pathDistance(x, z) < 1.9f; };
+            addMesh(fjord::makeSkigard(loop, terrainH, 41u, open), fenceMat, Vector3(), 0.f, "skigard");
+        }
+
+        // The fire ring on the bank.
+        const auto fire = fjord::makeFireRing(53u);
+        // Fire-blackened field stone. Dark on purpose: this scene's ground is dark
+        // (grass ~0.04, ash ~0.02 linear albedo) and the low sun lights the
+        // stones' sides full on, so a 0.09 stone already reads as white paper.
+        auto stoneMat = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(Color::white).roughness(0.95f).metalness(0.f));
+        stoneMat->map = fjord::makeLichenRockTexture(128, 71u, Color(0.036f, 0.034f, 0.032f));
+        auto ashMat = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(Color(0.025f, 0.024f, 0.022f)).roughness(1.f).metalness(0.f));
+        const Vector3 fireAt(firePos.x, terrainH(firePos.x, firePos.z) - 0.02f, firePos.z);
+        addMesh(fire.stones, stoneMat, fireAt, 0.4f, "fire_ring");
+        addMesh(fire.ash, ashMat, fireAt, 0.4f, "fire_ash");
+        addMesh(fire.seats, spruceMat, fireAt, 0.4f, "fire_seats");
+
+        // The flagpole and its vimpel.
+        const float poleH = 7.6f;
+        const Vector3 poleAt(polePos.x, terrainH(polePos.x, polePos.z) - 0.1f, polePos.z);
+        auto poleMat = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(Color(0.86f, 0.86f, 0.84f)).roughness(0.45f).metalness(0.f));
+        auto knobMat = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(Color(0.80f, 0.60f, 0.22f)).roughness(0.35f).metalness(0.8f));
+        auto pole = Mesh::create(CylinderGeometry::create(0.035f, 0.055f, poleH, 10), poleMat);
+        pole->position.set(poleAt.x, poleAt.y + poleH * 0.5f, poleAt.z);
+        pole->name = "flagpole";
+        scene.add(pole);
+        auto knob = Mesh::create(SphereGeometry::create(0.07f, 12, 8), knobMat);
+        knob->position.set(poleAt.x, poleAt.y + poleH + 0.05f, poleAt.z);
+        scene.add(knob);
+        pennant = std::make_unique<fjord::Pennant>();
+        auto pennantMat = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(Color(0.48f, 0.015f, 0.02f)).roughness(0.8f).metalness(0.f));
+        pennantMat->side = Side::Double;
+        auto streamer = Mesh::create(pennant->geometry, pennantMat);
+        streamer->position.set(poleAt.x, poleAt.y + poleH - 0.12f, poleAt.z);
+        streamer->name = "vimpel";
+        streamer->frustumCulled = false;
+        scene.add(streamer);
+    }
 
     // A second, distant cabin across the fjord — its lit windows carry across
     // the water at night.
@@ -1460,87 +1998,42 @@ int main(int argc, char** argv) {
         scene.add(dock);
     }
 
-    // ── footpath: cabin steps down to the pier ──────────────────────────────
-    //
-    // A gravel ribbon laid on the terrain. Two things keep it from reading as
-    // a decal painted on a hillside:
-    //
-    //   * It WANDERS. A path worn by feet never takes the shortest line, and a
-    //     ruler-straight strip across a meadow is the first thing the eye
-    //     rejects. The centreline is a Catmull-Rom through offset waypoints and
-    //     the half-width breathes along it.
-    //   * It has a SKIRT. The ribbon samples the same tile heightfield the
-    //     terrain renders from, but sub-metre relief still slips between
-    //     samples; edges dropped a third of a metre bury those crossings
-    //     instead of leaving the path hovering over its own shadow.
+    // ── slabs at the porch steps (the path itself is in the ground) ─────────
     {
-        auto pathTex = architecture::makeStoneTextures(256, 5u, {0.315f, 0.278f, 0.226f});
-        auto pathMat = MeshStandardMaterial::create(
-                MeshStandardMaterial::Params{}.color(Color::white).roughness(0.98f).metalness(0.f));
-        pathMat->map = pathTex.first;
-        pathMat->normalMap = pathTex.second;
-        pathMat->normalScale.set(0.8f, 0.8f);
-
-        // Ribbon built from the SAME sampled centreline the grass scatter
-        // rejected against, so the bare corridor and the gravel cannot drift
-        // apart if either is retuned.
-        const int kSteps = static_cast<int>(pathPts.size()) - 1;
-        constexpr float kSkirt = 0.34f;
-        std::vector<float> pos, nrm, uv;
-        std::vector<unsigned int> idx;
-        float arc = 0.f;
-        Vector3 prev;
-        for (int i = 0; i <= kSteps; ++i) {
-            const float t = static_cast<float>(i) / static_cast<float>(kSteps);
-            const Vector3& c = pathPts[static_cast<size_t>(i)];
-            // Tangent from the neighbouring samples in the XZ plane.
-            const Vector3& a = pathPts[static_cast<size_t>(std::max(0, i - 1))];
-            const Vector3& b = pathPts[static_cast<size_t>(std::min(kSteps, i + 1))];
-            float tx = b.x - a.x, tz = b.z - a.z;
-            const float tl = std::sqrt(tx * tx + tz * tz);
-            if (tl > 1e-5f) { tx /= tl; tz /= tl; }
-            else { tx = 1.f; tz = 0.f; }
-            const float px = -tz, pz = tx;// left normal in XZ
-
-            if (i > 0) arc += c.distanceTo(prev);
-            prev = c;
-
-            // Worn wider where it is walked most, narrower on the pinch points.
-            const float half = 0.62f + 0.30f * noise::valueNoise(t * 9.f, 0.5f, 9, 17u);
-            for (int e = 0; e < 4; ++e) {
-                // 0,3 = skirt edges (dropped); 1,2 = the walked surface.
-                const float s = (e == 0 || e == 1) ? 1.f : -1.f;
-                const float w = (e == 0 || e == 3) ? half + 0.22f : half;
-                const float drop = (e == 0 || e == 3) ? kSkirt : 0.f;
-                const float x = c.x + px * w * s;
-                const float z = c.z + pz * w * s;
-                pos.insert(pos.end(), {x, terrainH(x, z) + 0.035f - drop, z});
-                nrm.insert(nrm.end(), {0.f, 1.f, 0.f});
-                uv.insert(uv.end(), {(0.5f + 0.5f * s * (w / 0.9f)), arc / 0.9f});
+        // Flagstones for the first few strides below the porch steps: dark
+        // slabs set flush into the dirt, then plain path on down to the pier.
+        {
+            auto slabMat = MeshStandardMaterial::create(
+                    MeshStandardMaterial::Params{}.color(Color::white).roughness(0.85f).metalness(0.f));
+            slabMat->map = fjord::makeLichenRockTexture(128, 29u, Color(0.065f, 0.065f, 0.06f));
+            std::mt19937 rng(23u);
+            std::uniform_real_distribution<float> u01(0.f, 1.f);
+            std::vector<Matrix4> xf;
+            float along = 0.f, lastSlab = -1.f;
+            for (size_t i = 1; i < pathPts.size() && along < 6.5f; ++i) {
+                along += pathPts[i].distanceTo(pathPts[i - 1]);
+                if (along - lastSlab < 0.95f + 0.25f * u01(rng)) continue;
+                lastSlab = along;
+                const Vector3& c = pathPts[i];
+                const Vector3& pr = pathPts[i - 1];
+                float tx = c.x - pr.x, tz = c.z - pr.z;
+                const float tl = std::sqrt(tx * tx + tz * tz);
+                if (tl > 1e-5f) { tx /= tl; tz /= tl; }
+                const float side = (u01(rng) - 0.5f) * 0.35f;
+                const float x = c.x - tz * side, z = c.z + tx * side;
+                const float s = 0.40f + 0.10f * u01(rng);
+                Quaternion q;
+                q.setFromAxisAngle(Vector3(0.f, 1.f, 0.f), u01(rng) * kTau);
+                Matrix4 m;
+                m.compose(Vector3(x, terrainH(x, z) + 0.02f, z), q, Vector3(s * 1.2f, 0.06f, s));
+                xf.push_back(m);
             }
-            if (i > 0) {
-                const auto b0 = static_cast<unsigned int>((i - 1) * 4);
-                const auto b1 = static_cast<unsigned int>(i * 4);
-                for (int e = 0; e < 3; ++e) {
-                    const auto q0 = b0 + static_cast<unsigned int>(e);
-                    const auto q1 = b1 + static_cast<unsigned int>(e);
-                    idx.insert(idx.end(), {q0, q1, q0 + 1, q0 + 1, q1, q1 + 1});
-                }
-            }
+            auto slabs = InstancedMesh::create(terrain::makeRockGeometry(77u), slabMat, xf.size());
+            for (size_t i = 0; i < xf.size(); ++i) slabs->setMatrixAt(i, xf[i]);
+            slabs->instanceMatrix()->needsUpdate();
+            slabs->name = "flagstones";
+            scene.add(slabs);
         }
-        auto pathGeo = BufferGeometry::create();
-        pathGeo->setIndex(idx);
-        pathGeo->setAttribute("position", FloatBufferAttribute::create(pos, 3));
-        pathGeo->setAttribute("normal", FloatBufferAttribute::create(nrm, 3));
-        pathGeo->setAttribute("uv", FloatBufferAttribute::create(uv, 2));
-        pathGeo->computeVertexNormals();
-        pathGeo->computeBoundingSphere();
-
-        auto path = Mesh::create(pathGeo, pathMat);
-        path->name = "footpath";
-        path->receiveShadow = true;
-        path->castShadow = false;
-        scene.add(path);
     }
 
     // Lantern on the dock end.
@@ -1578,101 +2071,27 @@ int main(int argc, char** argv) {
         scene.add(boat);
     }
 
-    // ── chimney smoke ───────────────────────────────────────────────────────
-    // A PARTICIPATING MEDIUM, not a stack of sprites. The plume is one
-    // ParticleField with a DensityRepr — the fjord's only density volume, 1 of
-    // the 4 slots — so it is marched by the same `applyParticleFog` the rest of
-    // the atmosphere is: Beer-Lambert extinction, sun in-scatter through an HG
-    // phase function WITH a shadow ray (which is why the plume goes bright where
-    // the sun rakes through it and grey where the roof shades it), ambient
-    // in-scatter, and correct compositing against the height fog and the sky
-    // rather than an alpha-blended quad drawn on top of them.
+    // ── chimney smoke and the camp fire ─────────────────────────────────────
+    // Sprites, the recipe the cabin-in-the-woods film proved (fjord_fire.hpp):
+    // a thin grey-blue thread that leaves the pot narrow, meanders more as it
+    // climbs and bends into the breeze, and a camp fire burning in the ring on
+    // the bank. The density-volume plume this demo had could not leave the flue
+    // narrower than its voxels ("way too broad at the beginning") and held a
+    // volume slot. --legacy-smoke brings back the old sprite ParticleSystem.
     //
-    // WHAT IT REPLACES, and why the swap is worth a comment: ~156 live textured
-    // puffs on the legacy ParticleSystem path, integrated on the CPU, drawn as
-    // camera-facing sprites in the overlay pass. Those sprites are OPAQUE to the
-    // idea of fog — they occlude what is behind them and are lit by nothing —
-    // so the plume read as crisper than the trees 30 m behind it, and its own
-    // RNG made two captures of the same pose differ. --legacy-smoke keeps that
-    // path in this binary for the A/B; the library's ParticleSystem is untouched
-    // either way.
-    //
-    // THE PLUME MODEL IS NOT WRITTEN HERE. It is FireEffect's, in smoke-only
-    // mode: the three clocks (buoyancy s^0.62, advection LINEAR in age,
-    // turbulent dispersion s^0.55 — see plans/particle-atmosphere.md, F4 defect
-    // 3.1 for why one clock makes a collimated jet), the per-parcel taper that
-    // keeps the downwind end from stopping on a plane, and recomputeSmokeBox(),
-    // which derives the volume's DOMAIN from the wind because the splat DROPS a
-    // particle outside it. A chimney is a fire whose flame you cannot see, so
-    // smokeOnly gives us the plume with no flame volume, no embers and no
-    // PointLight — one field, one slot.
-    //
-    // Local -> world through the group's matrix, NOT position + scale: the cabin
-    // is rotated to face the water, so a naive offset would put the smoke column
-    // out in the meadow beside the roof. The effect is then parented to the
-    // SCENE and not to the cabin: FireEffect composes its world box as
-    // boxLocal + worldPosition, which is only the truth under an unrotated
-    // parent chain.
+    // Local -> world through the group's matrix: the cabin is rotated to face
+    // the water, so a naive offset would put the smoke out in the meadow.
     cabin.group->updateMatrixWorld(true);
     Vector3 chimneyTip = cabin.chimneyTipLocal;
     chimneyTip.applyMatrix4(*cabin.group->matrixWorld);
 
-    std::shared_ptr<FireEffect> plume;
+    std::unique_ptr<fjord::FjordFire> fire;
     if (!legacySmoke) {
-        FireEffect::Params fp;
-        fp.smokeOnly = true;// one field: no flame, no embers, no light
-        // Source geometry, not a flame: the flue's mouth. `height` only sets
-        // where the column starts above the effect's origin (0.55 × it), which
-        // for a chimney should be ~nothing — the smoke leaves AT the tip.
-        fp.height = 0.30f;
-        fp.radius = 0.22f;// the flue bore, so the column emerges thin
-        // 7 m of climb before the buoyancy gives out. The old sprite plume rose
-        // ~7.5 m over its 6.5 s life, so this is the same column height the
-        // scene was authored around — what changes is that it now BENDS.
-        fp.smokeHeight = 7.0f;
-        fp.smokeSpread = 1.90f;
-        // The plume STREAMS: a parcel is followed 3× its own 3.2-5.6 s period,
-        // so at the fjord's 0.63 m/s surface wind it travels ~9-11 m downwind
-        // while it climbs. The taper frays the far end (F1 note 2's per-parcel
-        // ceiling, applied downwind) so it disperses instead of ending on a
-        // plane, and it is the reason 30% of the slots are dead at any instant.
-        fp.smokeLifeScale = 3.0f;
-        fp.smokeTaper     = 0.50f;
-        // ── sigma is per-PARTICLE; the quantity to reason with is N × sigma ──
-        // A few thousand slots is right for a chimney (the shoreline campfire
-        // this demo used to carry ran 18k over a box twice as long). At 5k over
-        // a ~10 × 7 × 14 m box at 32³ the mean occupancy is ~1 particle per
-        // voxel, which the trilinear splat spreads to ~8 taps — above the grain
-        // threshold, and the reason the resolution is 32 and not 48: the finer
-        // grid would put 0.4 particles in a voxel and the plume would speckle.
-        fp.smokeParticles  = 5'000;
-        fp.smokeResolution = 32;
-        fp.smokeSigma      = 0.20f;
-        // Wood smoke off a stove is pale — condensed water and light ash, not
-        // the soot of an open flame — so it scatters far more of what it
-        // extinguishes than FireEffect's default 0.25 campfire smoke. This is
-        // the number that decides whether the sun makes the plume GLOW or just
-        // makes it a grey silhouette.
-        fp.smokeAlbedo     = Color(0.50f, 0.50f, 0.51f);
-        fp.smokeAnisotropy = 0.35f;// forward-scattering: bright with the sun behind it
-        // ── ONE WIND, LATCHED AT INIT ────────────────────────────────────────
-        // The same vector the waves, the clouds, the grass and (before it) the
-        // sprite plume derive from. LATCHED, exactly as the legacy path latched
-        // it at initialize(), and the reason is stronger here than it was there:
-        // this emitter is a CLOSED FORM in age, so setWind() does not steer the
-        // parcels that are already flying, it re-evaluates where they have
-        // ALWAYS been — the whole plume re-aims retroactively, in one frame, as
-        // a visible snap. Wind-at-init is the honest v1. Driving the slider live
-        // needs the wind to enter the closed form as a history (an integral of
-        // past wind over the parcel's age), which is a real feature and not a
-        // parameter change; it is written up in the plan as an open issue.
-        fp.wind.copy(groundWind0);
-        fp.seed = 4711u;
-        plume = FireEffect::create(fp);
-        plume->name = "chimney_plume";
-        plume->position.copy(chimneyTip);
-        scene.add(plume);
-        plume->ignite();
+        // ONE WIND: the thread and the fire smoke lean with the scene's surface wind.
+        const Vector3 pit(firePos.x, terrainH(firePos.x, firePos.z) - 0.02f, firePos.z);
+        fire = std::make_unique<fjord::FjordFire>(scene, renderer, chimneyTip, pit, groundWind0);
+        std::printf("[fjord] chimney %.1f %.1f %.1f, fire ring %.1f %.1f %.1f\n", double(chimneyTip.x),
+                    double(chimneyTip.y), double(chimneyTip.z), double(pit.x), double(pit.y), double(pit.z));
     }
 
     // ── the legacy sprite plume (--legacy-smoke), verbatim ──────────────────
@@ -1842,6 +2261,7 @@ int main(int argc, char** argv) {
     bool  appliedCloudsOn    = false;
     float appliedCloudCover  = -1.f;
     float appliedWindSpeed   = -1.f;
+    std::vector<float> benchWall, benchGpu;// --bench samples
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
@@ -1911,8 +2331,10 @@ int main(int argc, char** argv) {
     Clock clock;
     float tElapsed = 0.f;
     canvas.animate([&] {
-        const float dt = clock.getDelta();
+        const float wallDt = clock.getDelta();
+        const float dt = simDt > 0.f ? simDt : wallDt;
         tElapsed += dt;
+        if (simDt > 0.f) renderer.setSimTime(tElapsed);
         sinceBake += dt;
         fpsAccum += dt;
         ++fpsFrames;
@@ -2048,11 +2470,16 @@ int main(int argc, char** argv) {
         // headless capture of frame 600 does not depend on frames 1..599); the
         // legacy sprite path integrates and takes the delta. The wind slider
         // does NOT reach either of them — see the latch note at construction.
-        if (plume) plume->update(tElapsed);
+        if (fire) {
+            fire->darkness = 1.f - math::smoothstep(-0.10f, 0.06f, cs.sunElev);// as the windows
+            fire->update(tElapsed, dt);
+        }
         else smoke.update(dt);
         boat->position.y = -0.14f + 0.05f * std::sin(tElapsed * 0.9f) + 0.02f * std::sin(tElapsed * 1.7f + 1.f);
         boat->rotation.z = 0.030f * std::sin(tElapsed * 0.7f);
         boat->rotation.x = 0.020f * std::sin(tElapsed * 1.1f + 1.f);
+        // The vimpel streams down the same wind as the waves and the smoke.
+        if (pennant) pennant->update(tElapsed, Vector2(windDir.x, windDir.z), windSpeed);
 
         // Camera.
         if (cinematic) {
@@ -2154,11 +2581,25 @@ int main(int argc, char** argv) {
             camera.lookAt(controls.target);
         } else if (shotPath.empty()) {
             ui->render();
-        } else if (++shotFrame >= shotFrames) {
+        } else if (++shotFrame, benchFrames > 0 && shotFrame > shotFrames - benchFrames) {
+            benchWall.push_back(dt * 1000.f);
+            benchGpu.push_back(renderer.lastFrameTimings().gpuTotalMs);
+        }
+        if (!shotPath.empty() && shotFrame >= shotFrames) {
             const auto path = capture::shotOutputPath(shotPath);
             renderer.writeFramebuffer(path);
             const auto t = renderer.lastFrameTimings();
             const auto ls = renderer.autoLodStats();
+            if (!benchWall.empty()) {
+                auto pct = [](std::vector<float> v, float q) {
+                    std::sort(v.begin(), v.end());
+                    return v[std::min(v.size() - 1, static_cast<size_t>(q * static_cast<float>(v.size())))];
+                };
+                std::printf("bench %zu frames: wall median %.2f ms (p95 %.2f) = %.1f fps, gpuTotal median %.2f ms (p95 %.2f)\n",
+                            benchWall.size(), double(pct(benchWall, 0.5f)), double(pct(benchWall, 0.95f)),
+                            double(1000.f / pct(benchWall, 0.5f)), double(pct(benchGpu, 0.5f)),
+                            double(pct(benchGpu, 0.95f)));
+            }
             std::cout << "wrote " << path.string() << " (" << fps << " fps)\n"
                       << "  gbuf " << t.rasterGbufMs << "  shade " << t.pathTraceMs
                       << "  denoise " << t.denoiseMs << "  taa " << t.taaMs
