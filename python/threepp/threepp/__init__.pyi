@@ -11179,7 +11179,7 @@ class VulkanRenderer:
     @property
     def fog_shadow_opaque_cutouts(self) -> bool:
         """
-        The volumetric sun march (shafts, aerial glow) traces a shadow ray at each of its 16 steps. Off by default, those rays alpha-test every cutout card they cross, as the surface shadows do; through a forest of card trees that is most of what the fog costs. True makes a fog shadow ray commit on its first hit, so a crown is an opaque blob to the fog: gaps between crowns still make the shafts, surface shadows keep their shapes.
+        The volumetric sun march (shafts, aerial glow) traces a shadow ray at each of its 16 steps. True (the default) makes a fog shadow ray commit on its first hit, so an alpha-tested crown is an opaque blob to the fog: gaps between crowns still make the shafts, surface shadows keep their shapes, and a forest of card trees costs half the frame it did. False alpha-tests every cutout card the ray crosses, as the surface shadows do: exact, for a scene whose cutouts are sparse and large (a chain-link fence, a net, a railing) and would otherwise wall off the fog.
         """
     @fog_shadow_opaque_cutouts.setter
     def fog_shadow_opaque_cutouts(self, arg1: bool) -> None:

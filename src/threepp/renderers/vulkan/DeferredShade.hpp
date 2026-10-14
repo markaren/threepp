@@ -262,7 +262,8 @@ namespace threepp::vulkan {
             bool unlitScatter = false;
             // setFogShadowOpaqueCutouts (flags bit 29): the volumetric sun march's
             // shadow rays commit on the first hit instead of alpha-testing every
-            // cutout card they cross. Off = exact, as the surface shadows.
+            // cutout card they cross. Off = exact, as the surface shadows. The
+            // renderer's default is on; this field is filled every frame.
             bool fogShadowOpaqueCutouts = false;
             // setCutoutRayCap (flags bits 16-19): a shadow ray counts as
             // blocked after this many transparent cutout texels; 0 = off.

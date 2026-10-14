@@ -1595,12 +1595,14 @@ namespace threepp {
         [[nodiscard]] bool unlitFogScatter() const;
 
         // The volumetric sun march (shafts, aerial glow) traces a shadow ray at
-        // each of its 16 steps. OFF by default, those rays alpha-test every
-        // cutout card they cross, exactly as the surface shadows do: through a
-        // forest of card trees that is most of what the fog costs, and more the
-        // lower the sun. On, a fog shadow ray commits on its first hit, so a
-        // crown is an opaque blob to the fog; gaps between crowns still make the
-        // shafts, and surface shadows keep their exact leaf shapes.
+        // each of its 16 steps. ON by default, a fog shadow ray commits on its
+        // first hit, so an alpha-tested crown is an opaque blob to the fog; gaps
+        // between crowns still make the shafts, and surface shadows keep their
+        // exact leaf shapes (80 card spruces in fog: 23.8 -> 11.8 ms per frame).
+        // Off, those rays alpha-test every cutout card they cross, as the surface
+        // shadows do: exact, and what a scene wants when its cutouts are sparse
+        // and large (a chain-link fence, a net, a railing), which on would turn
+        // into a solid wall for the fog.
         void setFogShadowOpaqueCutouts(bool enabled);
         [[nodiscard]] bool fogShadowOpaqueCutouts() const;
 
