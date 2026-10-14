@@ -146,6 +146,7 @@ namespace threepp::architecture {
         float railHeight = 0.98f;
         float balusterSize = 0.055f;
         float balusterSpacing = 0.135f;
+        bool porchSideRails = true;// fence the deck's two ends like its front
         float deckPlankWidth = 0.140f;
         float deckPlankGap = 0.018f;
         float stepsCenterX = 1.60f;
@@ -1792,6 +1793,35 @@ namespace threepp::architecture {
                     bTimber.box({a + (b - a) * t, (yRailTop + yRailBot) * 0.5f, zPost},
                                 {p.balusterSize * 0.5f, (yRailTop - yRailBot) * 0.5f - 0.04f, p.balusterSize * 0.5f},
                                 timberTex);
+                }
+            }
+
+            // ── Side railings ──
+            //
+            // The two ends of the deck, from the corner post back to the logs,
+            // get the same rail-and-baluster fence as the front: a raised deck
+            // open at its ends reads as unfinished (and nobody builds one a
+            // child can walk off). A half-post against the wall takes the rails.
+            if (p.porchSideRails) {
+                for (const float x : {px0, px1}) {
+                    const float a = zWall + 0.05f + hp;// wall-side post centre
+                    const float b = zPost - hp;
+                    if (b - a < 0.3f) continue;
+                    bTimber.box({x, (deckY + yRailTop + 0.04f) * 0.5f, a},
+                                {hp, (yRailTop + 0.04f - deckY) * 0.5f, hp}, timberTex);
+                    const float a2 = a + hp;
+                    const float mid = (a2 + b) * 0.5f;
+                    const float halfRun = (b - a2) * 0.5f;
+                    bTimber.box({x, yRailTop, mid}, {0.075f, 0.038f, halfRun}, timberTex);
+                    bTimber.box({x, yRailTop - 0.075f, mid}, {0.048f, 0.035f, halfRun}, timberTex);
+                    bTimber.box({x, yRailBot, mid}, {0.048f, 0.035f, halfRun}, timberTex);
+                    const int nb = std::max(1, static_cast<int>((b - a2) / std::max(0.05f, p.balusterSpacing)));
+                    for (int k = 0; k < nb; ++k) {
+                        const float t = (static_cast<float>(k) + 0.5f) / static_cast<float>(nb);
+                        bTimber.box({x, (yRailTop + yRailBot) * 0.5f, a2 + (b - a2) * t},
+                                    {p.balusterSize * 0.5f, (yRailTop - yRailBot) * 0.5f - 0.04f, p.balusterSize * 0.5f},
+                                    timberTex);
+                    }
                 }
             }
 
