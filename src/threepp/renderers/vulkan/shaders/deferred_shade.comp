@@ -871,6 +871,19 @@ void main() {
                                       : applySceneFog(albedo, camPos, wpU), camPos, wpU),
                             camPos, (wpU - camPos) / max(distU, 1e-6), distU) * domWeight;
         if (skyEdgeW > 0.0) outU += skyEdgeW * skyBackground(ndc, camPos);
+        // setUnlitFogScatter (flags bit 28): the per-pixel view-ray integrals
+        // the lit and water branches add after their coverage scale: the cloud
+        // layer in front, the clustered point-light glow, the spot beams and
+        // the sun shafts / aerial glow. Off, an unlit surface behind sunlit
+        // haze is a cut-out: extinction and ambient only, nothing scattered in
+        // front of it (the cabin project's "ghost trees").
+        if (flagOn(268435456u)) {
+            const vec3 dirU = (wpU - camPos) / max(distU, 1e-6);
+            outU = compositeClouds(outU, px, distU);
+            outU += froxelInscatter(uv, max(-(vhU.z / vhU.w), 0.0))
+                  + volumetricSpotScatter(camPos, dirU, distU, px)
+                  + volumetricDirScatter(camPos, dirU, distU, px);
+        }
         // Murk sun shafts over the submerged part of this leg — a per-pixel
         // view-ray integral, so full weight, after the coverage scale. (This
         // path carries no other volumetric term; the murk march is added

@@ -1809,6 +1809,13 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r) { return r.native().deferredAO(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setDeferredAO(v); },
                               "Toggle ray-traced ambient occlusion / diffuse GI. Default on.")
+                .def_property("unlit_fog_scatter",
+                              [](PyVulkanRenderer& r) { return r.native().unlitFogScatter(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setUnlitFogScatter(v); },
+                              "Volumetric in-scatter on unlit surfaces (MeshBasicMaterial). Off by default: an "
+                              "unlit pixel gets the fog's extinction and ambient scatter only, so a basic-material "
+                              "tree behind sunlit haze reads as a cut-out. True adds the cloud layer, point-light "
+                              "glow, spot beams and sun shafts in front of it, as lit surfaces get them.")
                 // World-space irradiance probe grid (DDGI-lite): multi-bounce GI, and
                 // the switch from cosmetic to MEASURED ambient — enclosed interiors
                 // stop being "lit with no light" (ungated ambient/env-specular) and

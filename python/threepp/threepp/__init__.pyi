@@ -11169,6 +11169,14 @@ class VulkanRenderer:
     def deferred_ao(self, arg1: bool) -> None:
         ...
     @property
+    def unlit_fog_scatter(self) -> bool:
+        """
+        Volumetric in-scatter on unlit surfaces (MeshBasicMaterial). Off by default: an unlit pixel gets the fog's extinction and ambient scatter only, so a basic-material tree behind sunlit haze reads as a cut-out. True adds the cloud layer, point-light glow, spot beams and sun shafts in front of it, as lit surfaces get them.
+        """
+    @unlit_fog_scatter.setter
+    def unlit_fog_scatter(self, arg1: bool) -> None:
+        ...
+    @property
     def denoise(self) -> bool:
         """
         Toggle the deferred denoiser (SVGF + temporal). Default on. Off uses the deterministic 64-ray AO (noise-free, no GI colour).

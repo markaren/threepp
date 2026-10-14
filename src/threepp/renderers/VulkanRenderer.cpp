@@ -238,6 +238,7 @@ namespace threepp {
         shadeParams.denoise            = denoiseEnabled_;
         shadeParams.restirDI           = restirDIEnabled_;
         shadeParams.volFog             = deferredVolFog_;
+        shadeParams.unlitScatter       = unlitFogScatter_;
         shadeParams.volDensity         = deferredVolDensity_;
         shadeParams.volAniso           = deferredVolAniso_;
         shadeParams.starIntensity      = deferredStarIntensity_;
@@ -2250,6 +2251,14 @@ namespace threepp {
 
     float VulkanRenderer::bloomIntensity() const {
         return core()->bloomIntensity_;
+    }
+
+    void VulkanRenderer::setUnlitFogScatter(bool enabled) {
+        pimpl_->unlitFogScatter_ = enabled;
+    }
+
+    bool VulkanRenderer::unlitFogScatter() const {
+        return pimpl_->unlitFogScatter_;
     }
 
     void VulkanRenderer::setDeferredAO(bool enabled) {

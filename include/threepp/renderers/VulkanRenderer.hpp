@@ -1585,6 +1585,15 @@ namespace threepp {
 
         // ── Deferred shading knobs ────────────────────────────────────────────
 
+        // Volumetric in-scatter on unlit surfaces (MeshBasicMaterial). OFF by
+        // default: an unlit pixel gets the medium's extinction and ambient
+        // scatter only, so a basic-material tree behind sunlit haze reads as a
+        // cut-out. On, the unlit branch adds the same per-pixel terms the lit
+        // and water branches do (cloud layer, clustered point-light glow, spot
+        // beams, sun shafts), and pays their marches on those pixels.
+        void setUnlitFogScatter(bool enabled);
+        [[nodiscard]] bool unlitFogScatter() const;
+
         // Ray-traced env ambient-occlusion / GI. ON by default — soft RT AO/GI
         // (costs occlusion rays; paired with setDenoise, also on by default, to keep
         // the 1-spp gather noise-free). Turn OFF to drop the per-pixel ray cost, or

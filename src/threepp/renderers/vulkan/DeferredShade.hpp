@@ -255,6 +255,11 @@ namespace threepp::vulkan {
             // so the previous G-buffer slot must not be reprojected against
             // (flags bit 13): every temporal path starts fresh this frame.
             bool historyStale = false;
+            // setUnlitFogScatter (flags bit 28): the unlit branch adds the
+            // same per-pixel volumetric terms the lit and water branches do
+            // (cloud layer, froxel glow, spot beams, sun shafts). Off, an
+            // unlit pixel gets the medium's extinction and ambient only.
+            bool unlitScatter = false;
             // setCutoutRayCap (flags bits 16-19): a shadow ray counts as
             // blocked after this many transparent cutout texels; 0 = off.
             uint32_t cutoutRayCap = 0u;

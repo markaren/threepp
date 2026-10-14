@@ -2168,6 +2168,9 @@ namespace threepp {
         // tail). There is no public toggle; this stays true and only feeds the
         // shade/froxel volFog flag.
         bool  deferredVolFog_     = true;
+        // setUnlitFogScatter: the unlit branch of the shade takes the volumetric
+        // in-scatter too (shade flags bit 28). Off = extinction and ambient only.
+        bool  unlitFogScatter_    = false;
         // Procedural direction-space star field on deferred sky pixels (0 = off).
         float deferredStarIntensity_ = 0.f;
 

@@ -364,6 +364,7 @@ struct MaterialDesc {
 // (PRIMARY view only — see DeferredShade::DispatchParams::splatVolume),
 // 13 = histories cleared, 16-19 = cutout ray cap (0 = off; see shadowVis),
 // 20-27 = the distance from the eye it holds from, in 4 m steps.
+// 28 = unlit surfaces take the volumetric in-scatter (setUnlitFogScatter).
 //
 // NO default member initializers on the C++ side: `ShadePush p{};` must
 // zero-fill, exactly like the positional `uint32_t pc[19] = {}` blocks it
