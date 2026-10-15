@@ -1,0 +1,93 @@
+#version 460
+#extension GL_EXT_scalar_block_layout    : require
+#extension GL_EXT_buffer_reference       : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// ParticleField SOFT DEPTH — the scene's linear view depth, for
+// BillboardRepr::softDistance.
+//
+// A billboard is a flat quad, so where a big one passes through the ground the
+// depth test cuts it along a straight line: the sprite is fully there on one
+// side of the intersection and gone on the other. The soft fade replaces that
+// step with a ramp, coverage *= smoothstep over (scene depth - sprite depth) /
+// softDistance, and it needs the scene's depth in METRES at every pixel the
+// sprite covers. This pass writes exactly that, one float per pixel, into a
+// buffer the billboard fragment stage reaches by device address.
+//
+// ── WHY A BUFFER, AND WHY A PASS AT ALL ─────────────────────────────────────
+// The billboard pipeline has no descriptor of its own beyond the sprite
+// texture, on purpose (every per-view input rides a buffer_reference, which is
+// what keeps it out of the VUID-03047 zone), and an image cannot be reached by
+// address. The depth it tests against is also the wrong thing to sample from
+// inside that pass: it is MULTISAMPLED whenever the Canvas asked for
+// antialiasing, it is a live attachment of the very render-pass instance the
+// sprites draw in, and the splat stamp makes it WRITABLE there. One small
+// dispatch before the pass, reading it as a plain sampled image, turns all
+// three problems into a linear array.
+//
+// ── WHICH DEPTH ─────────────────────────────────────────────────────────────
+// The PRIMARY's source is the overlay depth prepass: unjittered, at the DISPLAY
+// extent, i.e. the buffer the sprites are depth-tested against, so the ramp
+// ends exactly where the hard line used to be, whatever the render scale and
+// whatever the upscaler. A SECONDARY's source is its own G-buffer depth, the
+// one its billboard pass tests against (jittered; a sub-pixel disagreement on a
+// soft ramp). Splats stamped INTO the overlay depth during the overlay pass are
+// not in it: a sprite fades against meshes, not against a splat cloud.
+//
+// ── MULTISAMPLED ────────────────────────────────────────────────────────────
+// The FARTHEST sample (min under reverse-Z), the permissive choice for the
+// same reason billboard_glow_depth.frag makes it: at a silhouette pixel the
+// samples that see the near object fail the sprite's own per-sample depth test
+// anyway, and the ones that see past it must not fade the sprite there.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#ifdef DEPTH_MS
+layout(set = 0, binding = 0) uniform sampler2DMS sceneDepth;
+#else
+layout(set = 0, binding = 0) uniform sampler2D sceneDepth;
+#endif
+
+// One float per pixel, row-major at the source's own extent: positive metres
+// along the view axis, the same quantity the billboard vertex stage hands its
+// fragments as -viewPos.z.
+layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer SoftOut { float v[]; };
+
+layout(push_constant, scalar) uniform Pc {
+    uint64_t outAddr;//  0
+    uint     width;  //  8
+    uint     height; // 12
+    // The z and w rows of the inverse projection, evaluated at NDC depth d:
+    //   viewZ = (lin.x * d + lin.y) / (lin.z * d + lin.w)
+    // — the dof_coc.comp linearisation, exact for perspective and
+    // orthographic alike, reverse-Z included (only the matrix knows which).
+    vec4     lin;    // 16
+} pc;                // 32
+
+// "Nothing here": the sky, and anything the arithmetic cannot place. Finite,
+// so (scene - sprite) / softDistance stays a number the clamp can saturate.
+const float kFar = 3.0e38;
+
+void main() {
+    const uvec2 p = gl_GlobalInvocationID.xy;
+    if (p.x >= pc.width || p.y >= pc.height) return;
+
+#ifdef DEPTH_MS
+    float d = 1.0;// reverse-Z: 1 is the near plane, so start above every stored value
+    const int n = textureSamples(sceneDepth);
+    for (int s = 0; s < n; ++s) d = min(d, texelFetch(sceneDepth, ivec2(p), s).x);
+#else
+    const float d = texelFetch(sceneDepth, ivec2(p), 0).x;
+#endif
+
+    float z = kFar;
+    // d == 0 is the clear value (reverse-Z far): nothing was drawn there. With a
+    // finite far plane it would linearise to `far`, and a sprite against the
+    // sky near that distance would fade for no reason.
+    if (d > 0.0) {
+        const float vz = -(pc.lin.x * d + pc.lin.y) / (pc.lin.z * d + pc.lin.w);
+        // NaN and inf both fail one of these.
+        if (vz > 0.0 && vz < kFar) z = vz;
+    }
+    SoftOut(pc.outAddr).v[p.y * pc.width + p.x] = z;
+}

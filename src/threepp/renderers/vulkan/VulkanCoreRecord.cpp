@@ -1961,6 +1961,14 @@ void VulkanRenderer::Impl::addSecondaryFieldBillboardPasses(rg::RenderGraph& g) 
                 useParticleFields(g, pass, false);
             }
 
+            // BillboardRepr::softDistance, from the depth these quads are tested
+            // against below: this view's own G-buffer depth (one sample, jittered
+            // by a sub-pixel on a soft ramp), in the layout the G-buffer pass
+            // left it.
+            const Image2D& gbDepth  = v.rasterGbufs[f].depth;
+            const VkBuffer softDepth = addFieldSoftDepthPass(g, gbDepth.image, gbDepth.view, false,
+                                                             {v.rasterGbufs[f].width, v.rasterGbufs[f].height});
+
             auto pass = g.addPass("fieldBillboards", [this](VkCommandBuffer c) {
                 const ViewContext& vc = view();
                 const VkExtent2D ext  = vc.outExt;
@@ -2019,6 +2027,11 @@ void VulkanRenderer::Impl::addSecondaryFieldBillboardPasses(rg::RenderGraph& g) 
                          rg::Access{VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
                                     VK_IMAGE_LAYOUT_UNDEFINED, false});
             }
+            if (softDepth != VK_NULL_HANDLE) {
+                pass.use(g.importBuffer("billboard.softDepth", softDepth),
+                         rg::Access{VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                                    VK_IMAGE_LAYOUT_UNDEFINED, false});
+            }
             useParticleFields(g, pass, true);
 }
 
@@ -2047,6 +2060,45 @@ void VulkanRenderer::Impl::recordFieldTransmittance(VkCommandBuffer cb) {
                                        static_cast<float>(viewInv.elements[13]),
                                        static_cast<float>(viewInv.elements[14])};
             particleFieldPass_->recordTransmittance(cb, camWorld, bbSunDirWorld_);
+        }
+
+// ── BillboardRepr::softDistance: the scene's linear depth, for the view about
+// to draw ──────────────────────────────────────────────────────────────────────
+// One compute pass ahead of the view's billboard passes (a dispatch cannot be
+// recorded inside their render-pass instance), turning the depth they are
+// tested against into metres. Everything the dispatch needs is frozen here, at
+// graph-build time, from THIS view's camera: the linearisation comes from the
+// inverse of the unjittered projection the quads are projected with, whose z
+// and w rows the G-buffer's xy jitter never reaches, so it serves the
+// primary's unjittered prepass and a secondary's jittered G-buffer alike.
+//
+// Nothing at all — not the object, not a buffer, not a pass — until a visible
+// field asks for a soft edge.
+VkBuffer VulkanRenderer::Impl::addFieldSoftDepthPass(rg::RenderGraph& g, VkImage depth,
+                                                     VkImageView depthView, bool multisampled,
+                                                     VkExtent2D ext) {
+            if (!particleFieldPass_ || !particleFieldPass_->softActive()) return VK_NULL_HANDLE;
+            if (depth == VK_NULL_HANDLE || depthView == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+            if (!billboardSoftDepth_) {
+                billboardSoftDepth_ = std::make_unique<vulkan::BillboardSoftDepth>(
+                        *ctx, kFramesInFlight, [this](Buffer&& b) { retire(std::move(b)); });
+            }
+            Matrix4 projInv;
+            std::memcpy(projInv.elements.data(), view().currProjUnjit_.data(), 64);
+            projInv.invert();
+            float inv[16];
+            for (int i = 0; i < 16; ++i) inv[i] = static_cast<float>(projInv.elements[i]);
+
+            vulkan::BillboardSoftDepth::Dispatch d;
+            if (!billboardSoftDepth_->prepare(view().id, currentFrame, frameSerial_, ext, depthView,
+                                              multisampled, inv, d)) {
+                return VK_NULL_HANDLE;
+            }
+            auto pass = g.addPass("fieldSoftDepth", [this, d](VkCommandBuffer c) {
+                billboardSoftDepth_->record(c, d);
+            });
+            billboardSoftDepth_->declare(g, pass, depth, d);
+            return d.target.buffer;
         }
 
 // ── F4: the per-VIEW billboard record ───────────────────────────────────────
@@ -2145,6 +2197,22 @@ VkDeviceAddress VulkanRenderer::Impl::pushBillboardViewRecord(const Matrix4& vie
                 rec.camWorld[0] = static_cast<float>(vinv.elements[12]);
                 rec.camWorld[1] = static_cast<float>(vinv.elements[13]);
                 rec.camWorld[2] = static_cast<float>(vinv.elements[14]);
+            }
+
+            // ── BillboardRepr::softDistance ─────────────────────────────────
+            // This view's linear depth, if addFieldSoftDepthPass built one this
+            // frame. The glow leg draws the same quads into a target of half the
+            // display extent (BillboardGlowPass: width / 2, rounded down), so
+            // its fragments read every second texel of the same buffer and the
+            // halo fades exactly where the sprite does.
+            if (billboardSoftDepth_) {
+                const auto t = billboardSoftDepth_->target(view().id, currentFrame, frameSerial_);
+                if (t.address != 0) {
+                    rec.softDepthAddr   = t.address;
+                    rec.softDepthWidth  = t.width;
+                    rec.softDepthHeight = t.height;
+                    rec.softDepthScale  = linearOut ? 2.f : 1.f;
+                }
             }
             return particleFieldPass_->pushViewRecord(currentFrame, rec);
         }
@@ -3221,6 +3289,21 @@ void VulkanRenderer::Impl::addTailPasses(rg::RenderGraph& g, uint32_t imageIndex
                 useParticleFields(g, pass, false);
             }
 
+            // ── BillboardRepr::softDistance: the occluders, in metres ───────
+            // From the overlay depth prepass — the buffer the sprites are
+            // depth-tested against, at the DISPLAY extent and unjittered — so
+            // the fade ends exactly where the hard line was at any render scale
+            // and behind any upscaler. Ahead of both billboard legs, which read
+            // it in their fragment stage. No pass unless a field asks.
+            VkBuffer softDepth = VK_NULL_HANDLE;
+            if (overlayDepthPrepassActive()) {
+                const Image2D& od = overlayDepthImage();
+                softDepth = addFieldSoftDepthPass(g, od.image, od.view, overlaySamples() > 1, viewOutExtent());
+            }
+            const rg::Access fragmentStorageRead{VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                                                 VK_IMAGE_LAYOUT_UNDEFINED, false};
+
             // ── F4: the billboard-only bloom pyramid ────────────────────────
             // AFTER the upscaler (so the composite point that keeps field
             // billboards clear of TAA/DLSS/FSR is untouched) and BEFORE the
@@ -3232,6 +3315,8 @@ void VulkanRenderer::Impl::addTailPasses(rg::RenderGraph& g, uint32_t imageIndex
                 billboardGlow_->declare(g, pass, f,
                                         overlayDepthPrepassActive() ? overlayDepthImage().image : VK_NULL_HANDLE);
                 pass.use(trans, vertexStorageRead);
+                if (softDepth != VK_NULL_HANDLE)
+                    pass.use(g.importBuffer("billboard.softDepth", softDepth), fragmentStorageRead);
                 useParticleFields(g, pass, true);
             }
 
@@ -3286,6 +3371,8 @@ void VulkanRenderer::Impl::addTailPasses(rg::RenderGraph& g, uint32_t imageIndex
                                             VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
                                     VK_IMAGE_LAYOUT_UNDEFINED, false});
                 pass.use(trans, vertexStorageRead);
+                if (softDepth != VK_NULL_HANDLE)
+                    pass.use(g.importBuffer("billboard.softDepth", softDepth), fragmentStorageRead);
                 useParticleFields(g, pass, true);
                 pass.use(g.importBuffer("particle.light", particleLightBufs_[f].handle),
                          rg::Access{VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,

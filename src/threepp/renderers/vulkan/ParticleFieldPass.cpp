@@ -1201,6 +1201,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
     bbViewNext_    = 0;
     glowActive_    = false;
     glowThreshold_ = 0.f;
+    softActive_    = false;// the same, for the soft depth pass
     // The bound-volume list is rebuilt from scratch every frame and compared
     // against the previous one at the end: only a genuine change bumps the
     // generation, so a steady-state dust scene never triggers a descriptor
@@ -1761,7 +1762,9 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             bp.intensity     = std::max(bb.intensity, 0.f);
             bp.softness      = std::max(0.f, std::min(1.f, bb.softness));
             bp.coreWeight    = std::max(bb.coreWeight, 0.f);
-            bp.pad0          = 0.f;
+            // The depth fade. A NaN fails the comparison and stays off.
+            bp.softDistance  = (bb.softDistance > 0.f) ? bb.softDistance : 0.f;
+            if (bp.softDistance > 0.f) softActive_ = true;
             bp.fadePower     = std::max(bb.fadePower, 0.f);
             bp.brightJitter  = std::max(0.f, std::min(1.f, bb.brightJitter));
             bp.sizeTaper     = std::max(0.f, std::min(1.f, bb.sizeTaper));

@@ -6421,6 +6421,14 @@ class ParticleField(Mesh):
         def size_taper(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
+        def soft_distance(self) -> float:
+            """
+            Soft particles: fade the sprite toward the scene behind it over this many metres of view depth, so a quad through the ground meets it as a gradient instead of a hard line. 0 = off (the default). Vulkan only.
+            """
+        @soft_distance.setter
+        def soft_distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
         def softness(self) -> float:
             """
             0 = a tight spark, 1 = a broad glow.

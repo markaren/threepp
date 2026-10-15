@@ -322,6 +322,25 @@ namespace threepp {
             // camera stands inside is the brightest thing on screen by a wide
             // margin, whatever the authored intensity is. 0 = off.
             float nearFade = 0.f;
+            // ── Soft particles: the depth fade ──────────────────────────────
+            // A quad that passes through the scene is cut by the depth test
+            // along a straight line, and a big soft sprite (a dust puff, a
+            // smoke parcel) shows it as a ruler edge where it meets the
+            // ground. With this > 0 the sprite's coverage ramps to zero as it
+            // approaches what is behind it, over this many metres of VIEW-SPACE
+            // depth: coverage *= smoothstep(0, 1, (scene - sprite) /
+            // softDistance), so the intersection is a gradient and the host no
+            // longer has to lift its sprites clear of the surface. Both
+            // compositing modes, and the glow leg too, so a halo never lights
+            // the part of a sprite the fade removed.
+            //
+            // The scene depth is the one the quads are tested against (the
+            // overlay prepass at the display extent; a secondary view's own
+            // G-buffer depth), so render scale and upscaling do not move the
+            // ramp. Gaussian splats are not in it: a sprite fades against
+            // meshes only. 0 (the default) is off and the exact pre-knob
+            // output: no depth pass runs and the fragment branch is not taken.
+            float softDistance = 0.f;
             // ── F4: distance LOD, the NEAR half of the split ────────────────
             // Quads CLOSER than this many metres collapse to zero area, on the
             // understanding that MeshRepr is drawing that particle as a solid

@@ -551,6 +551,7 @@ VulkanRenderer::Impl::~Impl() {
             if (fieldGlowCompositeLayout_)
                 vkDestroyPipelineLayout(d, fieldGlowCompositeLayout_, nullptr);
             billboardGlow_.reset();
+            billboardSoftDepth_.reset();// its pipelines, sets and per-view buffers
             et.mark("raster, overlay, particle pipelines");
             if (particleDescSetLayout_)     vkDestroyDescriptorSetLayout(d, particleDescSetLayout_, nullptr);
             for (auto& pool : particleDescPools_) {

@@ -117,7 +117,7 @@ layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Bb
     // field marches nothing, which is exactly when kBbVolume is clear.
     uint64_t transAddr;
     float    coreWeight;    // weight of the falloff's t^9 core; 0.85 = the old constant
-    float    pad0;
+    float    softDistance;  // metres of view depth the sprite fades over; 0 = hard edge
 };
 // BbParams::flags bits.
 const uint kBbRadiusInW = 1u;
@@ -241,6 +241,14 @@ layout(location = 7) flat out float vCover;
 // 4c: rotation of the sprite's texture lookup, hashed per slot. Two floats
 // rather than an angle so the fragment stage does no trig.
 layout(location = 8) flat out vec2  vRot;
+// BillboardRepr::softDistance as its reciprocal (0 = no fade, and the fragment
+// stage's branch around the whole fade is uniform over the draw), and this
+// fragment's own depth in the same units the scene's soft depth buffer holds:
+// positive metres along the view axis. Smooth, not flat: a splash ring lies in
+// the ground plane, so its depth varies across the quad, and a planar
+// attribute interpolates exactly.
+layout(location = 9)  flat out float vSoftInv;
+layout(location = 10) out float      vViewDepth;
 const uint kModeAlphaOver = 1u;
 
 // ── The hash ────────────────────────────────────────────────────────────────
@@ -752,6 +760,11 @@ void main() {
     vRot = alphaOver ? vec2(cos(ra), sin(ra)) : vec2(1.0, 0.0);
     vLocal = c;
     vSoft  = vec2(clamp(P.softness, 0.0, 1.0), max(P.coreWeight, 0.0));
+    // The depth fade compares against the position the quad is DRAWN at (vpos:
+    // after the waterline bend and the streak), which is what the depth test
+    // that cut the hard line compared.
+    vSoftInv   = (P.softDistance > 0.0) ? 1.0 / P.softDistance : 0.0;
+    vViewDepth = -vpos.z;
     // The display transform. In the glow pass the fragment stage must NOT apply
     // it: that target is linear HDR, which is the domain the bright pass and the
     // 13-tap downsample are defined in. Signalled by a negative exposure rather

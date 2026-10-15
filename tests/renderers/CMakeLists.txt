@@ -263,6 +263,16 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanParticleField_test COMMAND VulkanParticleField_test)
     set_tests_properties(VulkanParticleField_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # BillboardRepr::softDistance: a sprite through the ground fades into it
+    # instead of being cut along a line, off is unchanged, and a sprite with
+    # only sky behind it is byte-identical. Twice: the multisampled overlay (the
+    # Canvas default, a sampler2DMS depth source) and one sample.
+    add_executable(VulkanBillboardSoft_test VulkanBillboardSoft_test.cpp)
+    target_link_libraries(VulkanBillboardSoft_test PRIVATE threepp)
+    add_test(NAME VulkanBillboardSoft_test COMMAND VulkanBillboardSoft_test)
+    add_test(NAME VulkanBillboardSoft_test_aa1 COMMAND VulkanBillboardSoft_test --aa 1)
+    set_tests_properties(VulkanBillboardSoft_test VulkanBillboardSoft_test_aa1 PROPERTIES SKIP_RETURN_CODE 42)
+
     # The screenshot path's sizing. writeFramebuffer used to take w/h from the
     # canvas's requested window size while the pixels came from the swapchain;
     # a window the platform clamped (Windows work-area clamp) then over-read

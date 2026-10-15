@@ -149,6 +149,10 @@ namespace threepp_py {
                                "stops the nearest drop painting a bar across the frame.")
                 .def_readwrite("near_fade", &ParticleField::BillboardRepr::nearFade,
                                "Fade the sprite out below this camera distance (m). 0 = off.")
+                .def_readwrite("soft_distance", &ParticleField::BillboardRepr::softDistance,
+                               "Soft particles: fade the sprite toward the scene behind it over this "
+                               "many metres of view depth, so a quad through the ground meets it as a "
+                               "gradient instead of a hard line. 0 = off (the default). Vulkan only.")
                 .def_readwrite("lod_near", &ParticleField::BillboardRepr::lodNear,
                                "Quads CLOSER than this collapse — MeshRepr.lod_far is the complementary "
                                "gate on the same field. 0 = off.")

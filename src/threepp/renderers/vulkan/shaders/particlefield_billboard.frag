@@ -53,6 +53,10 @@ layout(location = 6) flat in uint  vMode;
 layout(location = 7) flat in float vCover;
 // 4c: per-particle rotation of the texture lookup, as (cos, sin).
 layout(location = 8) flat in vec2  vRot;
+// BillboardRepr::softDistance: 1 / softDistance (0 = off), and this fragment's
+// view depth in metres. See softFade().
+layout(location = 9)  flat in float vSoftInv;
+layout(location = 10) in float      vViewDepth;
 const uint kModeAlphaOver = 1u;
 
 layout(push_constant, scalar) uniform Pc {
@@ -76,6 +80,37 @@ vec3 display(vec3 hdr) {
     const OverlayGrade g = BbGrade(pc.viewAddr + kBbViewGradeOffset).g;
     return g.flags == 0u ? odDisplay(hdr, vToneMap, vExposure)
                          : odDisplayGraded(hdr, vToneMap, vExposure, g);
+}
+
+// ── Soft particles (BillboardRepr::softDistance) ────────────────────────────
+// The tail of the BbView record, at vulkan::kBbViewSoftOffset: this view's
+// linear scene depth, written by particlefield_soft_depth.comp from the depth
+// these quads are tested against. A zero address means the view has none this
+// frame (the field asked, the view could not provide), and the sprite keeps
+// its hard edge.
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer BbSoft {
+    uint64_t addr;  // row-major floats, positive view-depth metres
+    uint     width;
+    uint     height;
+    float    scale; // fragment pixel -> buffer pixel (2 on the half-extent glow target)
+};
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer SoftDepth { float v[]; };
+const uint64_t kBbViewSoftOffset = 240ul;
+
+// The coverage factor: 0 where the sprite meets the scene behind it, 1 from
+// softDistance in front of it on. smoothstep rather than a linear ramp because
+// the eye finds the KINK at the top of a linear ramp on a big flat sprite — a
+// faint second line, parallel to the one this removes. 1.0 exactly once the
+// gap is a full softDistance, and a multiply by 1.0 is exact, so a sprite with
+// nothing near it renders the bits it did with the knob off.
+float softFade() {
+    BbSoft s = BbSoft(pc.viewAddr + kBbViewSoftOffset);// a reference cannot be `const`
+    if (s.addr == 0ul) return 1.0;
+    const ivec2 lim = ivec2(int(s.width) - 1, int(s.height) - 1);
+    const ivec2 p   = clamp(ivec2(gl_FragCoord.xy * s.scale), ivec2(0), lim);
+    const float scene = SoftDepth(s.addr).v[uint(p.y) * s.width + uint(p.x)];
+    const float k = clamp((scene - vViewDepth) * vSoftInv, 0.0, 1.0);
+    return k * k * (3.0 - 2.0 * k);
 }
 
 void main() {
@@ -128,7 +163,10 @@ void main() {
         // alpha field (the 1x1 white default) from drawing hard squares, and
         // costs a textured one nothing it does not already have.
         const float e  = max(abs(luv.x), abs(luv.y));
-        const float cv = tx.a * vCover * (1.0 - smoothstep(0.82, 1.0, e));
+        float cv = tx.a * vCover * (1.0 - smoothstep(0.82, 1.0, e));
+        // The depth fade thins the sprite, like every other dimming factor in
+        // this mode. A uniform branch: a field that did not ask never reads.
+        if (vSoftInv > 0.0) cv *= softFade();
         if (cv <= 0.0) discard;
         // PREMULTIPLIED. The pass composites onto a swapchain the post stack
         // already tone-mapped and sRGB-encoded, so the alpha-over has to happen
@@ -142,6 +180,7 @@ void main() {
     }
 
     a *= tx.a;
+    if (vSoftInv > 0.0) a *= softFade();
     if (a <= 0.0) discard;
 
     const vec3 hdr = vColor.rgb * tx.rgb * a;

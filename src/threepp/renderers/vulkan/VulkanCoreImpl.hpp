@@ -36,6 +36,7 @@
 #include "AutoExposure.hpp"
 #include "GbufResolve.hpp"
 #include "BillboardGlowPass.hpp"
+#include "BillboardSoftDepth.hpp"
 #include "BloomPass.hpp"
 #include "PostComposite.hpp"
 #include "DofPass.hpp"
@@ -1810,6 +1811,11 @@ namespace threepp {
         // compiles no pipeline and records no pass.
         std::unique_ptr<vulkan::BillboardGlowPass> billboardGlow_;
         bool billboardGlowReadyThisFrame_ = false;
+        // BillboardRepr::softDistance: the linear scene depth the soft fade
+        // reads, one buffer per (view, frame in flight). Created on the first
+        // frame a visible field asks for a soft edge; until then nothing of it
+        // exists and no pass is recorded.
+        std::unique_ptr<vulkan::BillboardSoftDepth> billboardSoftDepth_;
         // Host mirror of particlefield_billboard.{vert,frag}'s push block
         // (scalar layout). Exactly 128 B — the range every Vulkan
         // implementation guarantees — so anything per-field lives in the
@@ -4456,6 +4462,14 @@ namespace threepp {
         // R8/R9: (T_cam, T_sun) once per particle for the view whose draws come
         // next. Outside any render-pass instance; no-op when nothing marches.
         void recordFieldTransmittance(VkCommandBuffer cb);
+        // BillboardRepr::softDistance: when a visible field asks for a soft
+        // edge, add the pass that turns `depth` (the depth this view's sprites
+        // are tested against, in DEPTH_STENCIL_READ_ONLY_OPTIMAL) into this
+        // view's linear depth buffer, and return that buffer so the billboard
+        // passes after it can declare their read. VK_NULL_HANDLE (and no pass)
+        // when no field asks or the view cannot provide one.
+        VkBuffer addFieldSoftDepthPass(vulkan::rg::RenderGraph& g, VkImage depth, VkImageView depthView,
+                                       bool multisampled, VkExtent2D ext);
         // Lazily create the glow pass + its two graphics pipelines + its images.
         // Called from the PREPARE window (never mid-recording), so the pipeline
         // compile lands where every other lazy creation in this renderer does.

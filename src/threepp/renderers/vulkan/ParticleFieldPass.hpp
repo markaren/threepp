@@ -295,7 +295,10 @@ namespace threepp::vulkan {
         // keeps those bytes); big soft smoke parcels set it toward 0 so every
         // sprite stops planting a 1-2 px hard dot the skirt cannot soften.
         float coreWeight;             // 248
-        float pad0;                   // 252  keeps sizeof at the 8-aligned 256
+        // BillboardRepr::softDistance, metres of view depth over which the
+        // sprite fades into the scene behind it. Took the record's last pad, so
+        // the record did not grow; 0 = off, the value the pad always held.
+        float softDistance;           // 252
     };                                // 256
     static_assert(sizeof(BillboardParamsGpu) == 256,
                   "BillboardParamsGpu drifted from particlefield_billboard.vert");
@@ -346,8 +349,9 @@ namespace threepp::vulkan {
     inline constexpr std::uint32_t kOverlayGradeLut = 2u;
 
     // MUST mirror the BbView block in shaders/particlefield_billboard.vert
-    // (the first 144 bytes; the vertex stage reads no further) and BbGrade in
-    // shaders/particlefield_billboard.frag (the grade block at 144).
+    // (the first 144 bytes; the vertex stage reads no further), and BbGrade
+    // (the grade block at 144) and BbSoft (the soft depth at 240) in
+    // shaders/particlefield_billboard.frag.
     struct BillboardViewGpu {
         float         exposure;      //  0
         std::uint32_t toneMapMode;   //  4
@@ -393,12 +397,27 @@ namespace threepp::vulkan {
         // The display grade (setOverlayColorGrade), read by the FRAGMENT
         // stage at kBbViewGradeOffset; zero flags when the switch is off.
         OverlayGradeGpu grade;       // 144
-    };                               // 240
-    static_assert(sizeof(BillboardViewGpu) == 240,
+        // BillboardRepr::softDistance: this view's linear scene depth
+        // (BillboardSoftDepth), read by the FRAGMENT stage at kBbViewSoftOffset
+        // and only by a field that asked for the fade. Row-major floats,
+        // positive metres along the view axis. Address 0 = no soft depth this
+        // frame, and the sprites keep their hard edge. softDepthScale maps a
+        // fragment's pixel to the buffer's: 1 on the display, 2 on the
+        // half-extent glow target.
+        VkDeviceAddress softDepthAddr;  // 240
+        std::uint32_t   softDepthWidth; // 248
+        std::uint32_t   softDepthHeight;// 252
+        float           softDepthScale; // 256
+        float           _pad6[3];       // 260
+    };                                  // 272
+    static_assert(sizeof(BillboardViewGpu) == 272,
                   "BillboardViewGpu drifted from particlefield_billboard.vert / .frag");
     inline constexpr std::uint32_t kBbViewGradeOffset = 144u;
     static_assert(offsetof(BillboardViewGpu, grade) == kBbViewGradeOffset,
                   "the billboard fragment stage reads the grade at this offset");
+    inline constexpr std::uint32_t kBbViewSoftOffset = 240u;
+    static_assert(offsetof(BillboardViewGpu, softDepthAddr) == kBbViewSoftOffset,
+                  "the billboard fragment stage reads the soft depth at this offset");
     // Flag bits, mirrored in the shader.
     inline constexpr std::uint32_t kBbViewFogActive = 1u;
     inline constexpr std::uint32_t kBbViewLinearOut = 2u;
@@ -705,6 +724,12 @@ namespace threepp::vulkan {
         // chains), and the threshold is therefore a scene-level number.
         [[nodiscard]] float glowThreshold() const { return glowThreshold_; }
 
+        // Any visible field asked for a soft edge (BillboardRepr::softDistance
+        // > 0) this frame. The renderer builds the linear scene depth only
+        // then: with no soft field there is no depth pass, no buffer and no
+        // pipeline, and the frame is the one it was before the knob existed.
+        [[nodiscard]] bool softActive() const { return softActive_; }
+
         // ── F4: publish one per-VIEW billboard record and get its address ────
         // Called during recording, once per (view, output mode). Returns 0 when
         // the block could not be allocated, which the caller must treat as "do
@@ -994,6 +1019,7 @@ namespace threepp::vulkan {
         std::uint32_t bbViewNext_ = 0;
         bool          glowActive_    = false;
         float         glowThreshold_ = 0.f;
+        bool          softActive_    = false;// a drawn field has softDistance > 0
 
         // Device emitter (F-C). Created lazily, on the first Renderer-owned
         // field, so a scene of HostRing fields allocates nothing. NO descriptor

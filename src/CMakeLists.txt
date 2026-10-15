@@ -910,6 +910,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/GbufResolve.cpp"
             "threepp/renderers/vulkan/BloomPass.cpp"
             "threepp/renderers/vulkan/BillboardGlowPass.cpp"
+            "threepp/renderers/vulkan/BillboardSoftDepth.cpp"
             "threepp/renderers/vulkan/PostComposite.cpp"
             "threepp/renderers/vulkan/DofPass.cpp"
             "threepp/renderers/vulkan/SensorPass.cpp"
@@ -1604,6 +1605,21 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/billboard_glow_depth.frag"
         kBillboardGlowDepthMsFragSpv
         _billboard_glow_depth_ms_frag_spv_h
+        VARIANT_SUFFIX ms
+        DEFINES DEPTH_MS)
+    # BillboardRepr::softDistance: the scene's linear view depth, one float per
+    # pixel in a buffer the billboard fragment stage reads by address, so a quad
+    # through the ground fades into it instead of being cut along a line. Built
+    # from the depth the sprites are tested against, which is multisampled
+    # exactly when the overlay is, hence the same two variants as above.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_soft_depth.comp"
+        kParticleFieldSoftDepthCompSpv
+        _particlefield_soft_depth_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particlefield_soft_depth.comp"
+        kParticleFieldSoftDepthMsCompSpv
+        _particlefield_soft_depth_ms_spv_h
         VARIANT_SUFFIX ms
         DEFINES DEPTH_MS)
     # MSAA G-buffer dominant-sample resolve (VulkanRenderer::setGbufferMsaa,
