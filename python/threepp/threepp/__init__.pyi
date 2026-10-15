@@ -11370,6 +11370,14 @@ class VulkanRenderer:
     def gbuffer_msaa(self, arg1: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
     @property
+    def hidden_meshes_resident(self) -> bool:
+        """
+        A mesh hidden before it was ever rendered (its visible or its material's visible False) gets its entries at once, hidden, so its first show costs what any later toggle costs instead of a structural scene rebuild (a brake light, a muzzle flash, a pooled object). The price moves up front: geometry upload, BLAS and a TLAS instance for every hidden mesh, shown later or not. Off by default. Overlays, particle billboards, ParticleFields and LOD levels are not covered.
+        """
+    @hidden_meshes_resident.setter
+    def hidden_meshes_resident(self, arg1: bool) -> None:
+        ...
+    @property
     def lens_distortion(self) -> dict:
         """
         Current lens distortion as a dict (see set_lens_distortion).

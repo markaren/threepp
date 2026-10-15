@@ -98,7 +98,8 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
                 // Its effective visibility flipped. Only a mesh with entries
                 // flips in place (below); any other node re-expands: a group's
                 // own flip, a line, a mesh hidden before it was ever shown (no
-                // entries yet), anything under a LOD.
+                // entries yet, unless setHiddenMeshesResident), anything under
+                // a LOD.
                 const bool visFlip = ((sn.flags & kSnapHidden) != 0u) == vis;
                 if (kind == kSnapKindOther) {
                     if (visFlip) {
@@ -204,6 +205,10 @@ void VulkanRenderer::Impl::setSpanHidden(size_t spanIndex, bool hidden) {
                 meshMovedBits_[i >> 5] |= (1u << (i & 31u));
             }
             hiddenFlippedThisFrame_ = true;
+            // Shown: the probe grid was fitted without it (the fit skips hidden
+            // entries), so re-fit, as a structural show did. The grid's
+            // hysteresis keeps it when the bounds barely move.
+            if (!hidden) probeGridDirty_ = true;
         }
 
 // One mapping, then only the ranges the host actually patched. Shared by both
@@ -688,6 +693,12 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 const auto it = shownBefore.find(&mesh);
                 return it != shownBefore.end() && it->second == mesh.id;
             };
+            // A hidden mesh has entries, hidden, when it had them before or
+            // setHiddenMeshesResident asks for them up front (so its first show
+            // is the same in-place flip as any later one). Never under a LOD.
+            const auto entriesWhileHidden = [&](const Mesh& mesh, bool underLod) {
+                return !underLod && (hiddenMeshesResident_ || hadEntries(mesh));
+            };
             // An invisible parent hides its whole subtree: no entry under it
             // except a mesh that keeps its own hidden ones (walkSceneGraph),
             // matching three.js / GLRenderer. Plain `traverse` would leak
@@ -772,9 +783,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     return;
                 }
                 auto* m = dynamic_cast<Mesh*>(&o);
-                // Hidden: kind Other, pointer identity only, unless it keeps
-                // the entries it had (see shownBefore above).
-                if (!m || (!vis && (underLod || !hadEntries(*m)))) {
+                // Hidden: kind Other, pointer identity only, unless it has
+                // entries while hidden (see entriesWhileHidden above).
+                if (!m || (!vis && !entriesWhileHidden(*m, underLod))) {
                     sceneSnapshot_.push_back(sn);// kind Other: pointer identity only
                     return;
                 }
@@ -803,15 +814,16 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // material()->visible == false: record the full mesh node (so a
                 // re-show is caught by the replay walk) but build no entries, so
                 // the TLAS / raster G-buffer / overlay / emissive NEE never see it.
-                // Unless the mesh had entries before: hidden either way, it
-                // keeps them, hidden (MeshEntry::hidden). [[#mat-visible]]
+                // Unless it has entries while hidden (entriesWhileHidden):
+                // hidden either way, it has them, hidden (MeshEntry::hidden).
+                // [[#mat-visible]]
                 const bool matHidden = m->material() && !m->material()->visible;
                 if (matHidden) sn.flags |= kSnapMatHidden;
                 if (sn.geomB) sn.attrVer = sn.geomB->attributesVersion();
                 sceneSnapshot_.push_back(sn);
                 const size_t snIdx = sceneSnapshot_.size() - 1;
                 const bool hidden = !vis || matHidden;
-                if (hidden && (underLod || !hadEntries(*m))) return;
+                if (hidden && !entriesWhileHidden(*m, underLod)) return;
                 // SplatClouds are composited by the compute tile rasterizer
                 // (SplatPass), not by the G-buffer. The unit quad they carry is
                 // a GL-backend implementation detail — it has no normals and
@@ -1041,6 +1053,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
                     meshMovedBits_[w] |= (1u << (i & 31u));
                     hiddenFlippedThisFrame_ = true;
+                    if (!built[i].hidden) probeGridDirty_ = true;// shown: see setSpanHidden
                 }
             }
             lastVisibleEntries_ = std::move(built);

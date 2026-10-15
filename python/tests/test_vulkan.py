@@ -440,6 +440,18 @@ def test_sim_time_round_trips(vk_renderer):
         vk_renderer.sim_time = None  # back to the wall clock
 
 
+def test_hidden_meshes_resident_round_trips(vk_renderer):
+    """Off by default; on, a mesh hidden before it was ever rendered gets its
+    entries at once, so its first show is no structural rebuild
+    (VulkanVisibilityToggle_test covers what it does)."""
+    try:
+        assert vk_renderer.hidden_meshes_resident is False
+        vk_renderer.hidden_meshes_resident = True
+        assert vk_renderer.hidden_meshes_resident is True
+    finally:
+        vk_renderer.hidden_meshes_resident = False
+
+
 _OCEAN_PROBES = [(0.0, 0.0), (13.5, -7.25), (-41.0, 30.5)]
 
 

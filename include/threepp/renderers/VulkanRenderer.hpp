@@ -818,6 +818,26 @@ namespace threepp {
         };
         [[nodiscard]] TlasStats tlasStats() const;
 
+        // ── Hidden meshes kept ready ─────────────────────────────────────
+        // Hiding a mesh and showing it again (Object3D::visible or
+        // material()->visible) costs nothing: the mesh keeps its entries while
+        // hidden (no ray hits it, no view draws it, it lights nothing). A mesh
+        // hidden before it was ever rendered has no entries yet, so its FIRST
+        // show is a structural rebuild of the scene, milliseconds on a
+        // game-sized one. On, such a mesh gets its entries, hidden, the first
+        // time the renderer sees it, and its first show costs what any later
+        // toggle costs: a brake light, a muzzle flash, a pooled object waiting
+        // hidden. The price moves up front: geometry upload, BLAS and a TLAS
+        // instance for every hidden mesh, shown later or not. OFF by default,
+        // so a scene that never asks keeps its entry list (TLAS instances,
+        // entry indices, the Ids AOV's .x) as before. Overlays, particle
+        // billboards, ParticleFields and the levels under a LOD are not
+        // covered: their first show stays structural. A change applies on the
+        // next render (structural when it changes which meshes have entries);
+        // turning it off keeps the entries the hidden meshes already have.
+        void setHiddenMeshesResident(bool enabled);
+        [[nodiscard]] bool hiddenMeshesResident() const;
+
         // HDR bloom, added in linear HDR before the tone-map curve. 0 disables.
         void setBloomIntensity(float intensity);
         [[nodiscard]] float bloomIntensity() const;

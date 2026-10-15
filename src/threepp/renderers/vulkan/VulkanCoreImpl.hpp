@@ -910,6 +910,10 @@ namespace threepp {
         // walk re-read the flags. Set by the snapshot replay or the expansion,
         // consumed in ensureSceneBuilt.
         bool hiddenFlippedThisFrame_ = false;
+        // setHiddenMeshesResident: the expansion gives a mesh hidden before it
+        // was ever shown its entries at once, hidden, as if it had been shown
+        // and hidden again. Off: such a mesh gets none until its first show.
+        bool hiddenMeshesResident_ = false;
 
         // Classification-routing flags for a mesh — shared by the snapshot
         // build and the replay walk so the two can't drift.

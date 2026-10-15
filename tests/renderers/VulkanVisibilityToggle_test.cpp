@@ -13,8 +13,17 @@
 //   red    sphere, left   toggled through Object3D::visible, then its material;
 //   green  sphere, right  inside a group, hidden through the group;
 //   yellow sphere, centre hidden from the start, shown late: its first show is
-//                         the one structural rebuild the test allows;
+//                         the one structural rebuild the default allows;
 //   blue   quad, top      toggled with the red sphere.
+//
+// Then setHiddenMeshesResident(true), and five more are added hidden before
+// they were ever rendered; their first show is in place, no structural rebuild:
+//   magenta sphere, lower left   emissive (a lit brake lens), Object3D::visible;
+//   cyan    sphere, lower right  material()->visible;
+//   orange  sphere, lower centre inside a group hidden from the start;
+//   red     quad, top right      Object3D::visible, seen only by the raster;
+//   grey    sphere, far behind   beyond the probe grid: its first show re-fits it.
+// Lidar beams check the spheres' TLAS masks directly.
 //
 // Plain exit-code program, not Catch2, like the other Vulkan tests here.
 // Exits 42 (CTest "Skipped") when no Vulkan GPU is available.
@@ -23,6 +32,7 @@
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"
+#include "threepp/helpers/LidarTypes.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Group.hpp"
@@ -34,6 +44,7 @@
 #include "vulkan_test_util.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -83,6 +94,13 @@ namespace {
 
     bool yellow(const std::array<double, 3>& p) {
         return p[0] > 2.0 * p[2] + 4.0 && p[1] > 2.0 * p[2] + 4.0;
+    }
+
+    // Channels c and the next one both lead the third by 2x (c = 1: cyan,
+    // c = 2: magenta).
+    bool pairLeads(const std::array<double, 3>& p, int c) {
+        const int d = (c + 1) % 3, o = (c + 2) % 3;
+        return p[c] > 2.0 * p[o] + 4.0 && p[d] > 2.0 * p[o] + 4.0;
     }
 
     std::shared_ptr<MeshStandardMaterial> paint(const Color& c) {
@@ -239,7 +257,7 @@ int main() {
         // Only on its way to yellow: a first show is a structural rebuild, and
         // the mirror's history of the empty spot is not rejected there, so the
         // reflection converges over hundreds of frames (as it did before for
-        // every toggle). Hiding it again below is in place and immediate.
+        // every toggle). Hiding it again below is in place.
         const auto y1 = at(im, pYel, 8);
         check("yellow appears (its blue drops from the empty mirror's)", y1[2] < y0[2] - 10.0);
         check("green still there", leads(at(im, pGreen, 8), 1));
@@ -250,6 +268,124 @@ int main() {
         report(im, "yellow hidden again:");
         check("yellow gone", !yellow(at(im, pYel, 8)));
         check("no further structural rebuild", structural() == s0 + 1);
+
+        // setHiddenMeshesResident: a mesh hidden before it was ever rendered
+        // has its entries, hidden, from the start. Adding these is structural;
+        // showing them for the first time is not.
+        renderer.setHiddenMeshesResident(true);
+        auto lensMat = paint(Color(0.9f, 0.05f, 0.9f));
+        lensMat->emissive = Color(0.9f, 0.05f, 0.9f);
+        lensMat->emissiveIntensity = 1.5f;
+        auto lens = Mesh::create(SphereGeometry::create(0.5f, 32, 16), lensMat);
+        lens->position.set(-2.f, -1.6f, 6.f);
+        lens->visible = false;
+        scene.add(lens);
+        auto cyan = Mesh::create(SphereGeometry::create(0.5f, 32, 16), paint(Color(0.05f, 0.8f, 0.9f)));
+        cyan->position.set(2.f, -1.6f, 6.f);
+        cyan->material()->visible = false;
+        scene.add(cyan);
+        auto hiddenGroup = Group::create();
+        hiddenGroup->visible = false;
+        scene.add(hiddenGroup);
+        auto orange = Mesh::create(SphereGeometry::create(0.5f, 32, 16), paint(Color(0.9f, 0.6f, 0.05f)));
+        orange->position.set(0.f, -1.6f, 6.f);
+        hiddenGroup->add(orange);
+        auto quad2 = Mesh::create(PlaneGeometry::create(0.25f, 0.25f), paint(Color(0.9f, 0.05f, 0.05f)));
+        quad2->position.set(0.6f, 0.32f, 1.5f);
+        quad2->visible = false;
+        scene.add(quad2);
+        // Beyond the probe grid fitted so far (z up to 6.8): shown in place, it
+        // must still get the grid re-fitted around it, as a structural show did.
+        auto farBall = Mesh::create(SphereGeometry::create(0.5f, 16, 8), paint(Color(0.5f, 0.5f, 0.5f)));
+        farBall->position.set(0.f, 0.f, 12.f);
+        farBall->visible = false;
+        scene.add(farBall);
+        const auto pLens = px(-2.f, -1.6f, -6.f), pCyan = px(2.f, -1.6f, -6.f), pOrange = px(0.f, -1.6f, -6.f);
+        const auto pQuad2 = px(0.6f, 0.32f, 1.5f);
+        const auto reportLower = [&](const std::vector<unsigned char>& im, const char* label) {
+            const auto l = at(im, pLens, 6), c = at(im, pCyan, 6), o = at(im, pOrange, 6), q = at(im, pQuad2, 2);
+            std::printf("%s\n  lens (%3.0f %3.0f %3.0f) cyan (%3.0f %3.0f %3.0f) orange (%3.0f %3.0f %3.0f) "
+                        "quad2 (%3.0f %3.0f %3.0f), structural rebuilds %llu\n",
+                        label, l[0], l[1], l[2], c[0], c[1], c[2], o[0], o[1], o[2], q[0], q[1], q[2],
+                        static_cast<unsigned long long>(renderer.tlasStats().structuralRebuilds));
+        };
+        const auto lensLit = [&](const std::vector<unsigned char>& im) { return pairLeads(at(im, pLens, 6), 2); };
+        const auto cyanSeen = [&](const std::vector<unsigned char>& im) { return pairLeads(at(im, pCyan, 6), 1); };
+        const auto orangeSeen = [&](const std::vector<unsigned char>& im) { return yellow(at(im, pOrange, 6)); };
+        const auto quad2Seen = [&](const std::vector<unsigned char>& im) { return leads(at(im, pQuad2, 2), 0); };
+        // Lidar beams from the camera to the lens, cyan and orange: they read
+        // the TLAS masks directly. A hidden mesh's reflection fades out of the
+        // mirror through the reflection history (only a ray that hits a mesh
+        // just shown or moved resets it), which a mirror patch cannot tell
+        // from a mesh still in the TLAS.
+        const Vector3 eye(0.f, 0.f, 3.f);
+        const std::array<Vector3, 3> lowerCentres{Vector3(-2.f, -1.6f, 6.f), Vector3(2.f, -1.6f, 6.f),
+                                                  Vector3(0.f, -1.6f, 6.f)};
+        std::vector<LidarBeam> beams;
+        for (const auto& c : lowerCentres) beams.push_back({eye, (c - eye).normalize()});
+        const auto lidarHits = [&] {
+            std::vector<LidarReturn> rets;
+            renderer.scanLidar(beams, rets);
+            std::array<bool, 3> hit{};
+            for (size_t i = 0; i < hit.size() && i < rets.size(); ++i) {
+                const float d = (lowerCentres[i] - eye).length() - 0.5f;
+                hit[i] = rets[i].returnNo > 0 && std::abs(rets[i].distance - d) < 0.05f;
+            }
+            std::printf("  lidar: lens %d cyan %d orange %d\n", hit[0], hit[1], hit[2]);
+            return hit;
+        };
+        const auto probeZMax = [&] {
+            float o[3], s[3];
+            int d[3];
+            if (!renderer.probeGrid(o, s, d)) return -1.f;
+            return o[2] + (static_cast<float>(d[2]) - 0.5f) * s[2];
+        };
+
+        im = settle();
+        reportLower(im, "resident: lens, cyan, orange, quad2 and a far sphere added hidden:");
+        const auto s1 = structural();
+        const float zMax0 = probeZMax();
+        check("none of the four seen", !lensLit(im) && !cyanSeen(im) && !orangeSeen(im) && !quad2Seen(im));
+        check("red, green and quad unchanged",
+              leads(at(im, pRed, 8), 0) && leads(at(im, pGreen, 8), 1) && leads(at(im, pQuad, 2), 2));
+        auto h = lidarHits();
+        check("no lidar return from the hidden spheres (TLAS mask 0)", !h[0] && !h[1] && !h[2]);
+
+        lens->visible = true;
+        quad2->visible = true;
+        farBall->visible = true;
+        im = settle();
+        reportLower(im, "lens, quad2 and the far sphere shown for the first time (Object3D::visible):");
+        const float zMax1 = probeZMax();
+        std::printf("  probe grid z max %.2f -> %.2f\n", zMax0, zMax1);
+        check("lens lit in the mirror (TLAS)", lensLit(im));
+        check("quad2 drawn (raster)", quad2Seen(im));
+        h = lidarHits();
+        check("lidar returns from the lens only", h[0] && !h[1] && !h[2]);
+        check("probe grid re-fitted around the far sphere", zMax0 < 11.5f && zMax1 >= 12.4f);
+        check("no structural rebuild", structural() == s1);
+
+        cyan->material()->visible = true;
+        hiddenGroup->visible = true;
+        im = settle();
+        reportLower(im, "cyan (material) and orange (group) shown for the first time:");
+        check("cyan and orange in the mirror", cyanSeen(im) && orangeSeen(im));
+        check("lens and quad2 still there", lensLit(im) && quad2Seen(im));
+        h = lidarHits();
+        check("lidar returns from all three", h[0] && h[1] && h[2]);
+        check("no structural rebuild", structural() == s1);
+
+        lens->visible = false;
+        cyan->material()->visible = false;
+        hiddenGroup->visible = false;
+        quad2->visible = false;
+        farBall->visible = false;
+        im = settle();
+        reportLower(im, "all hidden again:");
+        h = lidarHits();
+        check("no lidar return from the three (TLAS mask 0)", !h[0] && !h[1] && !h[2]);
+        check("quad2 gone from the raster", !quad2Seen(im));
+        check("no structural rebuild", structural() == s1);
         if (vulkan::validationActive()) {
             check("no validation errors", vulkan::validationErrorCount() == 0u);
         }
