@@ -85,6 +85,18 @@ def test_on_window_resize_registers():
     canvas.on_window_resize(lambda w, h: None)
 
 
+def test_canvas_fullscreen_is_a_runtime_property():
+    # Run-time borderless fullscreen. A headless canvas records the request and
+    # keeps its size (there is no window to cover a monitor with).
+    canvas = tp.Canvas("fullscreen", width=64, height=48, headless=True)
+    assert canvas.fullscreen is False
+    canvas.fullscreen = True
+    assert canvas.fullscreen is True
+    assert canvas.size() == (64, 48)
+    canvas.fullscreen = False
+    assert canvas.fullscreen is False
+
+
 def test_resize_handler_operations(renderer):
     # The work an on_window_resize handler does: resize the renderer + fix the
     # camera aspect. Restores the session renderer's size afterwards.

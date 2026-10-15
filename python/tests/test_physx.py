@@ -229,3 +229,23 @@ def test_remove_soft_body_invalidates_handle(gpu_world):
     world.remove_soft_body(sb)
     with pytest.raises(RuntimeError):
         sb.sim_positions()
+
+
+def test_heightfield_up_axis_y_holds_a_ball_and_z_is_the_default():
+    """up_axis='y' lays the field in the Y-up world a PhysxVehicle lives in: rows run
+    along z, heights along +y. The default stays Z-up (a wall in this world)."""
+    def rest_y(**kw):
+        world = tp.PhysxWorld()
+        heights = np.zeros((21, 21), np.float32)  # 10 m x 10 m, flat at y = 0
+        world.add_static_heightfield(heights, 0.5, tp.Vector3(-5, 0, -5), **kw)
+        ball = tp.Mesh(tp.SphereGeometry(0.25), tp.MeshStandardMaterial())
+        ball.position.set(0.3, 2.0, 0.7)
+        world.add(ball, density=100)
+        for _ in range(180):
+            world.step(1 / 60)
+        return ball.position.y
+
+    assert rest_y(up_axis="y") == pytest.approx(0.25, abs=0.05)
+    assert rest_y() < -5.0  # Z-up: nothing under it
+    with pytest.raises(ValueError):
+        tp.PhysxWorld().add_static_heightfield(np.zeros((2, 2), np.float32), 1.0, tp.Vector3(), up_axis="x")
