@@ -1027,6 +1027,14 @@ class Canvas:
     def size(self) -> tuple[int, int]:
         ...
     @property
+    def fullscreen(self) -> bool:
+        """
+        Borderless windowed fullscreen, switchable at run time: True drops the decorations and covers the monitor under the window; False brings back the decorations, size and position it had. The display mode never changes, and on_window_resize callbacks fire as for any resize. On a headless canvas the request is recorded and nothing is shown.
+        """
+    @fullscreen.setter
+    def fullscreen(self, arg1: bool) -> None:
+        ...
+    @property
     def graphics_api(self) -> str:
         ...
 class CapsuleGeometry(BufferGeometry):

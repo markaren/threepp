@@ -60,3 +60,26 @@ TEST_CASE("setPosition before the window exists updates the request") {
     canvas.setPosition({30, 40});
     CHECK(canvas.position() == std::pair<int, int>{30, 40});
 }
+
+// Run-time fullscreen, the same pre-window half: the request is recorded and
+// reported, and a headless canvas (which never shows a window) keeps the size
+// it asked for. Covering a real monitor depends on the window manager.
+
+TEST_CASE("setFullscreen before the window exists records the request") {
+    if (!canvasCanExist()) SKIP(kNoPlatform);
+    Canvas canvas(Canvas::Parameters().title("CanvasPosition").size(64, 48).headless(true));
+    CHECK_FALSE(canvas.isFullscreen());
+    canvas.setFullscreen(true);
+    CHECK(canvas.isFullscreen());
+    CHECK(canvas.size() == WindowSize{64, 48});
+    canvas.setFullscreen(false);
+    CHECK_FALSE(canvas.isFullscreen());
+    CHECK(canvas.size() == WindowSize{64, 48});
+}
+
+TEST_CASE("a canvas created fullscreen reports it, and headless keeps its size") {
+    if (!canvasCanExist()) SKIP(kNoPlatform);
+    Canvas canvas(Canvas::Parameters().title("CanvasPosition").size(64, 48).headless(true).fullscreen(true));
+    CHECK(canvas.isFullscreen());
+    CHECK(canvas.size() == WindowSize{64, 48});
+}

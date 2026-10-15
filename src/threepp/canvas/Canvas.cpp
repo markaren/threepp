@@ -15,6 +15,7 @@
 
 #include <GLFW/glfw3.h>
 
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
@@ -311,6 +312,27 @@ namespace {
 #endif
     }
 
+#ifndef __EMSCRIPTEN__
+    // The monitor under the window's centre, else the primary one (also when
+    // the centre is between screens).
+    GLFWmonitor* monitorUnder(GLFWwindow* window) {
+        int x = 0, y = 0, w = 0, h = 0;
+        glfwGetWindowPos(window, &x, &y);
+        glfwGetWindowSize(window, &w, &h);
+        const int cx = x + w / 2, cy = y + h / 2;
+        int count = 0;
+        GLFWmonitor** monitors = glfwGetMonitors(&count);
+        for (int i = 0; i < count; ++i) {
+            const GLFWvidmode* mode = glfwGetVideoMode(monitors[i]);
+            if (!mode) continue;
+            int mx = 0, my = 0;
+            glfwGetMonitorPos(monitors[i], &mx, &my);
+            if (cx >= mx && cx < mx + mode->width && cy >= my && cy < my + mode->height) return monitors[i];
+        }
+        return glfwGetPrimaryMonitor();
+    }
+#endif
+
 }// namespace
 
 struct Canvas::Impl {
@@ -330,6 +352,9 @@ struct Canvas::Impl {
     std::vector<std::function<void(int monitor)>> monitorChangesListener;
     std::function<void()> frameEndCallback_;
     bool insideAnimateLoop_{false};
+    // Content-area position and size (x, y, w, h) when setFullscreen(true)
+    // left the windowed state, restored by setFullscreen(false).
+    std::optional<std::array<int, 4>> windowedRect_;
 
     explicit Impl(Canvas& scope, const Parameters& params)
         : scope(scope),
@@ -590,6 +615,51 @@ struct Canvas::Impl {
 #endif
     }
 
+    void setFullscreen(bool flag) {
+
+        if (flag == params_.fullscreen_) return;
+        params_.fullscreen_ = flag;
+#ifndef __EMSCRIPTEN__
+        // Before the window exists initWindow applies the request; headless
+        // has no window to change (see Parameters::fullscreen).
+        if (!window || params_.headless_) return;
+        GLFWmonitor* monitor = monitorUnder(window);
+        const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+        int mx = 0, my = 0;
+        if (monitor) glfwGetMonitorPos(monitor, &mx, &my);
+        if (flag) {
+            if (!mode) {
+                params_.fullscreen_ = false;// nothing to cover
+                return;
+            }
+            int x = 0, y = 0, w = 0, h = 0;
+            glfwGetWindowPos(window, &x, &y);
+            glfwGetWindowSize(window, &w, &h);
+            windowedRect_ = std::array<int, 4>{x, y, w, h};
+            // The same recipe as a fullscreen canvas at creation: undecorated,
+            // fixed size, at the monitor's own origin.
+            glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
+            glfwSetWindowAttrib(window, GLFW_RESIZABLE, GLFW_FALSE);
+            glfwSetWindowPos(window, mx, my);
+            glfwSetWindowSize(window, mode->width, mode->height);
+        } else {
+            glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_TRUE);
+            glfwSetWindowAttrib(window, GLFW_RESIZABLE, params_.resizable_ ? GLFW_TRUE : GLFW_FALSE);
+            if (windowedRect_) {
+                const auto& r = *windowedRect_;
+                glfwSetWindowSize(window, r[2], r[3]);
+                glfwSetWindowPos(window, r[0], r[1]);
+                windowedRect_.reset();
+            } else {
+                const int mw = mode ? mode->width : 1280, mh = mode ? mode->height : 720;
+                const WindowSize s = params_.size_ ? *params_.size_ : WindowSize{mw / 2, mh / 2};
+                glfwSetWindowSize(window, s.width(), s.height());
+                moveFrameTo(mx + (mw - s.width()) / 2, my + (mh - s.height()) / 2);
+            }
+        }
+#endif
+    }
+
     [[nodiscard]] std::pair<int, int> getPosition() const {
 
 #ifndef __EMSCRIPTEN__
@@ -827,6 +897,16 @@ void Canvas::setPosition(std::pair<int, int> position) {
 std::pair<int, int> Canvas::position() const {
 
     return pimpl_->getPosition();
+}
+
+void Canvas::setFullscreen(bool flag) {
+
+    pimpl_->setFullscreen(flag);
+}
+
+bool Canvas::isFullscreen() const {
+
+    return pimpl_->params_.fullscreen_;
 }
 
 void Canvas::onWindowResize(std::function<void(WindowSize)> f) {

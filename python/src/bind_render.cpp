@@ -338,6 +338,12 @@ namespace threepp_py {
                     auto p = c.position();
                     return py::make_tuple(p.first, p.second);
                 })
+                .def_property("fullscreen", &Canvas::isFullscreen, &Canvas::setFullscreen,
+                              "Borderless windowed fullscreen, switchable at run time: True drops the "
+                              "decorations and covers the monitor under the window; False brings back the "
+                              "decorations, size and position it had. The display mode never changes, and "
+                              "on_window_resize callbacks fire as for any resize. On a headless canvas the "
+                              "request is recorded and nothing is shown.")
                 .def("on_window_resize", [](Canvas& c, const std::function<void(int, int)>& cb) {
                     c.onWindowResize([cb](WindowSize s) {
                         try {

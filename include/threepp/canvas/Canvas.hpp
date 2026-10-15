@@ -59,6 +59,21 @@ namespace threepp {
         /// requested.
         [[nodiscard]] std::pair<int, int> position() const;
 
+        /// Switch borderless windowed fullscreen (Parameters::fullscreen) on or
+        /// off at run time. On: the window drops its decorations and covers the
+        /// monitor under its centre at that monitor's video-mode size. Off: the
+        /// decorations, resizability, size and position it had before come
+        /// back (a canvas created fullscreen gets its requested size, or half
+        /// the monitor, centred on it). The display mode never changes, and
+        /// resize listeners fire as for any other resize. Before the window
+        /// exists this records the request; a headless canvas records it and
+        /// shows nothing. No-op in the browser.
+        void setFullscreen(bool flag);
+
+        /// Whether borderless fullscreen is on, or requested (before the
+        /// window exists, or on a headless canvas).
+        [[nodiscard]] bool isFullscreen() const;
+
         void onWindowResize(std::function<void(WindowSize)> f);
 
         void onMonitorChange(std::function<void(int)> f) const;
