@@ -19,7 +19,7 @@ layout(local_size_x = 8, local_size_y = 8) in;
 #include "camera_ubo.glsl"
 layout(set = 0, binding = 1) uniform sampler2D depthTex;// full res, reversed-Z
 layout(set = 0, binding = 2) uniform sampler2D farTex;  // half res, bilinear
-layout(set = 0, binding = 3) uniform sampler2D nearTex; // half res, bilinear (rgb + coverage)
+layout(set = 0, binding = 3) uniform sampler2D nearTex; // half res, bilinear (premultiplied rgb + coverage)
 layout(set = 0, binding = 4, rgba16f) uniform image2D sceneImg;// RMW
 
 layout(push_constant) uniform Pc {
@@ -52,8 +52,10 @@ void main() {
     const float fb = smoothstep(0.5, 2.0, max(coc, 0.0));
     if (fb > 0.0) outC = mix(outC, texture(farTex, uv).rgb, fb);
     // Near field on top — coverage is nonzero wherever a defocused
-    // foreground's skirt reaches, including over in-focus background.
-    outC = mix(outC, nearC.rgb, nearC.a);
+    // foreground's skirt reaches, including over in-focus background. The
+    // field is premultiplied (dof_gather), so the bilinear upsample across a
+    // passthrough border (vec4(0)) blends the composite, never darkens it.
+    outC = outC * (1.0 - nearC.a) + nearC.rgb;
 
     imageStore(sceneImg, px, vec4(outC, 1.0));
 }

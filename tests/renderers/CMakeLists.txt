@@ -273,6 +273,14 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanBillboardSoft_test_aa1 COMMAND VulkanBillboardSoft_test --aa 1)
     set_tests_properties(VulkanBillboardSoft_test VulkanBillboardSoft_test_aa1 PROPERTIES SKIP_RETURN_CODE 42)
 
+    # The depth of field composites without seams: no thin dark lines along
+    # the gather's tile borders around the focus band, none across a bright
+    # emissive just in front of the focus plane; a flat ground stays flat.
+    add_executable(VulkanDofSeam_test VulkanDofSeam_test.cpp)
+    target_link_libraries(VulkanDofSeam_test PRIVATE threepp)
+    add_test(NAME VulkanDofSeam_test COMMAND VulkanDofSeam_test)
+    set_tests_properties(VulkanDofSeam_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # The screenshot path's sizing. writeFramebuffer used to take w/h from the
     # canvas's requested window size while the pixels came from the swapchain;
     # a window the platform clamped (Windows work-area clamp) then over-read

@@ -24,7 +24,7 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0) uniform sampler2D halfTex;// rgb + signed coc (half-res px)
 layout(set = 0, binding = 1) uniform sampler2D tileTex;// dilated (maxNear, maxFar) per 8×8 tile
 layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D farImg; // rgb + unused
-layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D nearImg;// rgb + coverage
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D nearImg;// premultiplied rgb + coverage
 
 layout(push_constant) uniform Pc {
     uint halfW, halfH, tilesW, tilesH;
@@ -101,5 +101,15 @@ void main() {
     const vec3  nearC    = nearAcc / max(nearW, 1e-4);
     const float coverage = clamp(nearW * (2.0 / kTapCount), 0.0, 1.0);
     imageStore(farImg, hp, vec4(farC, 0.0));
-    imageStore(nearImg, hp, vec4(nearC, coverage));
+    // PREMULTIPLIED by the coverage. The combine upsamples this field
+    // bilinearly, and its neighbours include the passthrough texels above
+    // (vec4(0): no near field). Straight colour filtered against them halves
+    // the colour AND the alpha, so the composite midway is
+    // scene·(1 − a/2) + near·a/4. Around the focus band the coverage is 1
+    // (every tap within a pixel of the centre counts) and near ≈ scene, so
+    // that is a quarter darker than both sides: the thin dark lines that
+    // traced every passthrough border (rectangle outlines on the ground
+    // around the focus band, a box across a bright emissive). Premultiplied,
+    // the filter interpolates what is composited.
+    imageStore(nearImg, hp, vec4(nearC * coverage, coverage));
 }

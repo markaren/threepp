@@ -374,13 +374,19 @@ namespace threepp::vulkan {
         // Global compute→compute barrier between the dispatches. The scratch
         // images are shared, not per-frame-in-flight; the render graph orders
         // this frame's first scratch write after the previous frame's reads.
+        // Every consumer reads the previous dispatch's output through a
+        // SAMPLER (texelFetch / texture on a sampler2D), which synchronization2
+        // counts as SHADER_SAMPLED_READ, not SHADER_STORAGE_READ: both are in
+        // the destination scope, or the writes are not made visible to the
+        // reads that need them.
         auto barrier = [&]() {
             VkMemoryBarrier2 mb{};
             mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
             mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
             mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
             mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+            mb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
+                               VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
                                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
             VkDependencyInfo di{};
             di.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
