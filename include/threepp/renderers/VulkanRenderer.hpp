@@ -770,6 +770,10 @@ namespace threepp {
             uint32_t graduated = 0;     // records promoted to the per-frame path
             uint64_t refitsRecorded = 0;// BLAS ops recorded into frame command buffers
             uint64_t fullRebuilds = 0;  // of those, periodic MODE_BUILD rebalances
+            // Device-wide waits the in-place refresh took: only an edit of a
+            // record with an auto-LOD chain (and its prevVertex settle) still
+            // drains; every other edit records into the frame command buffer.
+            uint64_t drains = 0;
         };
         [[nodiscard]] DynamicGeomStats dynamicGeomStats() const;
 

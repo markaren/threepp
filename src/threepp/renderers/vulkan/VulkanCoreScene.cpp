@@ -1931,14 +1931,16 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // everything device-wide before mutating shared BLAS
                         // buffers — skinned / displaced / morphed paths above
                         // submit on the same queue, so this one wait covers
-                        // them too. Graduated per-frame dynamic records
-                        // (BlasRecord::perFrameDynamic) never take that drain:
-                        // their upload + refit records into the frame cb via
-                        // recordDynamicGeomRefits, behind the fence that
-                        // guarantees their staging slot is idle. So the wait
-                        // only fires when an OCCASIONAL edit needs the
-                        // host-write path — build the op lists first, decide
-                        // after.
+                        // them too. Only a record with an auto-LOD chain still
+                        // takes that drain (its level BLASes are freed past it).
+                        // Every other edit, the first included, records its
+                        // upload + refit into the frame cb via
+                        // recordDynamicGeomRefits, ordered behind the in-flight
+                        // frames on the queue: an edit every few frames (a rut
+                        // ribbon written every third frame) used to drain on
+                        // every write, 10 to 17 ms each, because it never made
+                        // three frames in a row. Build the op lists first,
+                        // decide after.
                         bool topologyChanged = false;
                         std::unordered_set<const BufferGeometry*> refreshedGeoms;
                         std::vector<GeomRefreshOp> refreshOps;
@@ -1979,28 +1981,27 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             // kDynamicGraduationStreak frames in a row is a
                             // per-frame CPU deformer (Flock's merged birds, a
                             // rewritten trail), not an occasional edit, and
-                            // moves to the frame-cb path for the rest of its
-                            // life.
+                            // keeps a staging ring for the rest of its life
+                            // instead of a staging buffer per edit.
                             rec.dirtyStreak = (frameSerial_ - rec.lastDirtyFrame <= 1)
                                     ? rec.dirtyStreak + 1u
                                     : 1u;
                             rec.lastDirtyFrame = frameSerial_;
 
                             auto* nrmAttr = entries[i].mesh->geometry()->getAttribute<float>("normal");
-                            // The dynamic route needs normals (the same
+                            // The frame-cb route needs normals (the same
                             // requirement refreshGeomBlasBatch enforces) and a
                             // record with no LOD chain. The quiet-window gate
                             // in the selection pass stops re-enqueues while a
-                            // mesh deforms, so by graduation time the chain is
-                            // gone — if one exists anyway, the drained branch
-                            // below is the only place it can be destroyed
-                            // safely, so the record stays there this frame.
-                            const bool dynamicRoute =
-                                    nrmAttr && rec.lodState == BlasRecord::LodState::None &&
-                                    (rec.perFrameDynamic ||
-                                     rec.dirtyStreak >= BlasRecord::kDynamicGraduationStreak);
-                            if (dynamicRoute) {
-                                if (!rec.perFrameDynamic) {
+                            // mesh deforms; a static mesh's first edit can still
+                            // find a chain, and the drained branch below is the
+                            // only place it can be destroyed safely, so that
+                            // record stays there this frame.
+                            const bool frameRoute =
+                                    nrmAttr && rec.lodState == BlasRecord::LodState::None;
+                            if (frameRoute) {
+                                if (!rec.perFrameDynamic &&
+                                    rec.dirtyStreak >= BlasRecord::kDynamicGraduationStreak) {
                                     // Graduate: allocate the staging ring, one
                                     // slot per frame in flight, each holding
                                     // positions then normals in the buffers'
@@ -2025,9 +2026,24 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                               << rec.vertexCount << " verts) dirty "
                                               << rec.dirtyStreak
                                               << " frames in a row - graduated to the "
-                                                 "per-frame dynamic path (frame-cb refit, "
-                                                 "no drains)\n";
+                                                 "per-frame dynamic path (staging ring, "
+                                                 "frame-cb refit)\n";
                                 }
+                                // A record still in its static storage (built
+                                // without ALLOW_UPDATE, or compacted) moves to
+                                // updatable storage now, before this frame's TLAS
+                                // fill reads its address. The old pair is retired:
+                                // earlier frames in flight still trace it.
+                                if (ctx->rayQuerySupported() &&
+                                    (rec.compacted ||
+                                     (rec.blasBuiltFlags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR) == 0u) &&
+                                    moveToUpdatableBlasStorage(rec, updatableBlasSize(rec, *entries[i].mesh->geometry()),
+                                                               /*retireOld=*/true)) {
+                                    rec.blasBuiltFlags = 0;// the next build is a MODE_BUILD
+                                }
+                                // Settles through the frame cb (dynPrevResyncPending);
+                                // the draining host-side resync pass stays out.
+                                rec.prevVertexResyncPending = false;
                                 rec.dynPrevResyncPending = true;
                                 pendingDynamicGeomRefits_.push_back({geomKey, &rec});
                             } else {
@@ -2059,6 +2075,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         }
                         if (!refreshOps.empty()) {
                             check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (pre-BLAS-refresh)");
+                            ++dynGeomStats_.drains;
                             for (BlasRecord* doomed : lodChainDoomed) {
                                 // lodChangedThisFrame_ must be forced: selection
                                 // already ran this frame and may have left
@@ -2118,7 +2135,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             // vertex→prevVertex copy in recordDynamicGeomRefits
                             // and motion collapses to zero, same contract as
                             // the host-side pass below.
-                            if (rec->perFrameDynamic) {
+                            if (rec->perFrameDynamic || rec->dynPrevResyncPending) {
                                 if (rec->dynPrevResyncPending &&
                                     rec->lastDirtyFrame != frameSerial_) {
                                     pendingDynamicPrevResyncs_.push_back(rec);
@@ -2138,6 +2155,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             // so drain device-wide before overwriting it.
                             check(vkDeviceWaitIdle(ctx->device()),
                                   "vkDeviceWaitIdle (pre-prevVertex-resync)");
+                            ++dynGeomStats_.drains;
                             VkCommandBuffer cb = beginOneShot();
                             for (BlasRecord* rec : resyncRecs) {
                                 if (rec->prevVertex.handle != VK_NULL_HANDLE && rec->vbBytes > 0) {

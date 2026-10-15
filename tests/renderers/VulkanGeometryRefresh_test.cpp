@@ -15,6 +15,12 @@
 //       unorm16 at build), edited once to u in [1.05, 1.2], the red half one
 //       repeat on: the packed format cannot hold it, so the record must be
 //       rebuilt rather than clamped to the u = 1 seam (half red, half blue).
+// And one more below them:
+//   [4] vertex colors green, its positions shifted 8 cm along x on every third
+//       frame, ten times. An edit that misses three frames in a row used to
+//       drain the device and rebuild the BLAS on every write (10 to 17 ms in
+//       the dune-buggy); it now records into the frame command buffer: no
+//       drain at all, no graduation, and the quad ends up 80 cm along.
 //
 // Plain exit-code program, not Catch2, like the other Vulkan tests here.
 // Exits 42 (CTest "Skipped") when no Vulkan GPU is available.
@@ -27,6 +33,7 @@
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/scenes/Scene.hpp"
+#include "threepp/renderers/vulkan/ValidationReport.hpp"
 #include "threepp/textures/Texture.hpp"
 #include "vulkan_test_util.hpp"
 
@@ -43,7 +50,11 @@ namespace {
 
     constexpr int kW = 384, kH = 256;
     constexpr int kFramesPerPhase = 60;
-    constexpr int kQuads = 4;
+    constexpr int kQuads = 5;
+    constexpr float kRowY = 0.5f;
+    constexpr float kMoverX = -1.2f, kMoverY = -0.9f;
+    constexpr int kMoverEdits = 10;
+    constexpr float kMoverStep = 0.08f;
 
     std::shared_ptr<Texture> constantEnv(float le) {
         constexpr int W = 64, H = 32;
@@ -101,6 +112,12 @@ namespace {
             if (c[i] > 2.0 * o1 + 4.0 && c[i] > 2.0 * o2 + 4.0) return i;
         }
         return -1;
+    }
+
+    void shiftX(BufferGeometry& g, float dx) {
+        auto* pos = g.getAttribute<float>("position");
+        for (int i = 0; i < pos->count(); ++i) pos->setX(i, pos->getX(i) + dx);
+        pos->needsUpdate();
     }
 
     void setColors(BufferGeometry& g, float r, float gr, float b) {
@@ -165,11 +182,15 @@ int main() {
     camera.updateMatrixWorld();
 
     std::array<std::shared_ptr<Mesh>, kQuads> quads;
-    for (int i = 0; i < kQuads; ++i) {
-        const float x = (static_cast<float>(i) - 1.5f) * 1.2f;
-        quads[i] = makeQuad(x, i < 2);
+    for (int i = 0; i < 4; ++i) {
+        quads[i] = makeQuad((static_cast<float>(i) - 1.5f) * 1.2f, i < 2);
+        quads[i]->position.y = kRowY;
         scene.add(quads[i]);
     }
+    quads[4] = makeQuad(kMoverX, true);
+    quads[4]->position.y = kMoverY;
+    scene.add(quads[4]);
+    setColors(*quads[4]->geometry(), 0, 1, 0);
     setColors(*quads[0]->geometry(), 1, 0, 0);
     setColors(*quads[1]->geometry(), 1, 0, 0);
     for (int i = 2; i < 4; ++i) {
@@ -184,12 +205,15 @@ int main() {
         std::printf("  %-60s %s\n", what, ok ? "ok" : "FAIL");
         if (!ok) ++failures;
     };
-    const auto sample = [&](const std::vector<unsigned char>& px, int i) {
-        Vector3 p = quads[i]->position;
+    const auto samplePoint = [&](const std::vector<unsigned char>& px, float wx, float wy) {
+        Vector3 p(wx, wy, 0.f);
         p.project(camera);
         const int x = static_cast<int>((p.x * 0.5f + 0.5f) * kW);
         const int y = static_cast<int>((1.f - (p.y * 0.5f + 0.5f)) * kH);
         return patch(px, x, y, 4);
+    };
+    const auto sample = [&](const std::vector<unsigned char>& px, int i) {
+        return samplePoint(px, quads[i]->position.x, quads[i]->position.y);
     };
     const auto report = [&](const std::vector<unsigned char>& px, const char* label) {
         std::printf("%s\n", label);
@@ -215,6 +239,11 @@ int main() {
             const bool last = frame == kFramesPerPhase + 7;
             setColors(*quads[1]->geometry(), last ? 0.f : 1.f, 0.f, last ? 1.f : 0.f);
         }
+        // Quad 4 moves on every third frame.
+        if (frame >= kFramesPerPhase && frame < kFramesPerPhase + 3 * kMoverEdits &&
+            (frame - kFramesPerPhase) % 3 == 0) {
+            shiftX(*quads[4]->geometry(), kMoverStep);
+        }
         renderer.render(scene, camera);
         ++frame;
 
@@ -225,6 +254,7 @@ int main() {
             check("quad[1] vertex colors red", dominant(sample(px, 1)) == 0);
             check("quad[2] uv on the red half", dominant(sample(px, 2)) == 0);
             check("quad[3] uv on the blue half", dominant(sample(px, 3)) == 2);
+            check("quad[4] green where it starts", dominant(sample(px, 4)) == 1);
             setColors(*quads[0]->geometry(), 0, 1, 0);
             setUvRange(*quads[2]->geometry(), 0.8f, 0.95f);
             setUvRange(*quads[3]->geometry(), 1.05f, 1.2f);
@@ -238,11 +268,20 @@ int main() {
             check("quad[1] recolored blue by per-frame edits", dominant(sample(px, 1)) == 2);
             check("quad[2] uv moved to the blue half", dominant(sample(px, 2)) == 2);
             check("quad[3] uv past 1 not clamped by the packed format", dominant(sample(px, 3)) == 0);
+            const float moved = kMoverX + kMoverEdits * kMoverStep;
+            check("quad[4] moved 80 cm by edits on every third frame",
+                  dominant(samplePoint(px, moved + 0.3f, kMoverY)) == 1 &&
+                          dominant(samplePoint(px, kMoverX - 0.35f, kMoverY)) == -1);
 
             const auto st = renderer.dynamicGeomStats();
-            std::printf("  dynamic geometry: graduated %u, refits recorded %llu\n", st.graduated,
-                        static_cast<unsigned long long>(st.refitsRecorded));
-            check("quad[1] graduated to the per-frame path", st.graduated >= 1u);
+            std::printf("  dynamic geometry: graduated %u, refits recorded %llu, drains %llu\n", st.graduated,
+                        static_cast<unsigned long long>(st.refitsRecorded),
+                        static_cast<unsigned long long>(st.drains));
+            check("quad[1] graduated, quad[4] (every third frame) did not", st.graduated == 1u);
+            check("no in-place edit drained the device", st.drains == 0u);
+            if (vulkan::validationActive()) {
+                check("no validation errors", vulkan::validationErrorCount() == 0u);
+            }
 
             std::printf("geometry refresh: %d failure(s)\n", failures);
             std::exit(failures == 0 ? 0 : 1);

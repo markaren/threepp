@@ -3197,14 +3197,34 @@ namespace threepp {
         // closest_hit reads of rec.vertex otherwise.
         void refreshGeomBlasBatch(const std::vector<GeomRefreshOp>& ops);
 
-        // Frame-cb twin of refreshGeomBlasBatch for graduated records
-        // (BlasRecord::perFrameDynamic): CPU-packs new positions/normals into
-        // this frame's staging slot, then records vertex→prevVertex snapshot,
-        // staging→vertex/normal copies and the batched BLAS refit into `cb`
-        // with barriers — zero extra submits, zero waits. Also records the
-        // one-frame prevVertex re-sync for pendingDynamicPrevResyncs_.
+        // Frame-cb twin of refreshGeomBlasBatch, for every in-place edit of a
+        // record with no auto-LOD chain: graduated records
+        // (BlasRecord::perFrameDynamic) CPU-pack new positions/normals into
+        // this frame's slot of their staging ring, the others (an occasional
+        // edit) into one staging buffer retired with the frame, honouring
+        // updateRange. Then records vertex→prevVertex snapshot, staging→vertex/
+        // normal copies and the batched BLAS refit into `cb` with barriers:
+        // zero extra submits, zero waits. Also records the one-frame
+        // prevVertex re-sync for pendingDynamicPrevResyncs_.
         // Consumes (clears) both pending lists.
         void recordDynamicGeomRefits(VkCommandBuffer cb);
+
+        // Size of `rec`'s structure in the updatable lineage (PREFER_FAST_TRACE
+        // | ALLOW_UPDATE) over `geom`'s live span.
+        // An occasional edit's positions and normals (the updateRange part) as
+        // copies in `up`, in the record's formats; consumes both ranges.
+        void stageEditedVertexRange(StagedUploads& up, const BlasRecord& rec,
+                                    const FloatBufferAttribute& posAttr,
+                                    const FloatBufferAttribute& nrmAttr);
+        VkDeviceSize updatableBlasSize(const BlasRecord& rec, const BufferGeometry& geom) const;
+        // A static record turning dynamic lives in storage sized for its static
+        // build or its compacted copy: too small for the updatable lineage.
+        // Moves it to new storage of `asSize` (no-op, false, when it already
+        // fits) and flags the TLAS instance refill (lodChangedThisFrame_). The
+        // old pair is retired (`retireOld`: an earlier frame still in flight
+        // may trace it) or freed at once (the caller drained the device). The
+        // new structure is empty: the caller's next build must be MODE_BUILD.
+        bool moveToUpdatableBlasStorage(BlasRecord& rec, VkDeviceSize asSize, bool retireOld);
 
         // ── Morph-target helpers ─────────────────────────────────────────
 

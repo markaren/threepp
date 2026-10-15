@@ -45,6 +45,27 @@ namespace {
         return true;
     }
 
+    // Vertex-range of an attribute's pending edit, honouring
+    // BufferAttribute::updateRange (offset/count in SCALAR elements,
+    // count == -1 ⇒ whole array: the same contract GLAttributes has
+    // always implemented). Without this a geometry preallocated at
+    // capacity and updated in place (a growing reconstruction surface,
+    // a dynamic trail) re-uploaded the ENTIRE allocation and, for
+    // packed normals, re-encoded every vertex, so the cost tracked the
+    // capacity instead of the edit (measured: a 600k-vertex capacity
+    // holding ~150k live vertices spent ~15 ms in the frame that
+    // touched it). Snapped to whole vertices so the packed encoders
+    // never see a partial vertex. Shared by both in-place refresh paths.
+    std::pair<uint32_t, uint32_t> vertexRangeOf(const threepp::FloatBufferAttribute& a, uint32_t itemSize) {
+        const auto total = static_cast<uint32_t>(a.array().size() / itemSize);
+        const auto& r = a.updateRange;
+        if (r.count < 0) return {0u, total};
+        const uint32_t first = static_cast<uint32_t>(r.offset) / itemSize;
+        const uint32_t last  = (static_cast<uint32_t>(r.offset + r.count) + itemSize - 1u) / itemSize;
+        if (first >= total) return {0u, 0u};
+        return {first, std::min(last, total) - first};
+    }
+
     // Octahedral encode, matching probe_common.glsl's octEncode/octDecode pair
     // exactly (including the signNotZero convention) — the attribute decoders
     // in gbuffer_indirect.vert / deferred_shade / probe_update use the same
@@ -2002,6 +2023,77 @@ void VulkanRenderer::Impl::setStableCorrespondence(const Mesh& mesh, bool stable
             ++drawInputsVersion_;
         }
 
+VkDeviceSize VulkanRenderer::Impl::updatableBlasSize(const BlasRecord& rec, const BufferGeometry& geom) const {
+            const bool indexed = rec.indexCount != 0u;
+            const DrawSpan span = drawSpanOf(geom, indexed ? rec.indexCount : rec.vertexCount);
+            const uint32_t primitiveCount = (span.first + span.elems) / 3u;
+
+            VkAccelerationStructureGeometryTrianglesDataKHR tri{};
+            tri.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+            tri.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+            tri.vertexData.deviceAddress = rec.vertex.address;
+            tri.vertexStride = 3 * sizeof(float);
+            tri.maxVertex = rec.vertexCount - 1;
+            if (indexed) {
+                tri.indexType = (rec.packedMask & kPackedIndex16) ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
+                tri.indexData.deviceAddress = rec.index.address;
+            } else {
+                tri.indexType = VK_INDEX_TYPE_NONE_KHR;
+            }
+            VkAccelerationStructureGeometryKHR g{};
+            g.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+            g.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+            g.geometry.triangles = tri;
+
+            VkAccelerationStructureBuildGeometryInfoKHR q{};
+            q.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+            q.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+            q.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                      VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+            q.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+            q.geometryCount = 1;
+            q.pGeometries = &g;
+            VkAccelerationStructureBuildSizesInfoKHR sizes{};
+            sizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+            ctx->rt().getAccelerationStructureBuildSizes(
+                    ctx->device(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &q, &primitiveCount, &sizes);
+            return sizes.accelerationStructureSize;
+        }
+
+bool VulkanRenderer::Impl::moveToUpdatableBlasStorage(BlasRecord& rec, VkDeviceSize asSize, bool retireOld) {
+            if (!rec.compacted && rec.storage.size >= asSize) return false;
+            if (retireOld) {
+                retireAS(rec.as);
+                retire(std::move(rec.storage));
+            } else {
+                ctx->rt().destroyAccelerationStructure(ctx->device(), rec.as, nullptr);
+                destroyBuffer(ctx->allocator(), rec.storage);
+            }
+            rec.as = VK_NULL_HANDLE;
+            rec.storage = createBuffer(
+                    ctx->allocator(), ctx->device(), asSize,
+                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    VMA_MEMORY_USAGE_AUTO);
+            VkAccelerationStructureCreateInfoKHR ci{};
+            ci.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+            ci.buffer = rec.storage.handle;
+            ci.size = asSize;
+            ci.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+            check(ctx->rt().createAccelerationStructure(ctx->device(), &ci, nullptr, &rec.as),
+                  "vkCreateAccelerationStructureKHR(BLAS turned dynamic)");
+            vulkan::registerAccelerationStructure(rec.as, ci.buffer);
+            VkAccelerationStructureDeviceAddressInfoKHR ai{};
+            ai.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+            ai.accelerationStructure = rec.as;
+            rec.address = ctx->rt().getAccelerationStructureDeviceAddress(ctx->device(), &ai);
+            rec.compacted = false;
+            // The instances of this frame's TLAS must carry the new address.
+            lodChangedThisFrame_ = true;
+            rec.blasRefitCounter = 0;
+            return true;
+        }
+
 void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer::Impl::GeomRefreshOp>& ops) {
             if (ops.empty()) return;
 
@@ -2067,27 +2159,6 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
             // index buffers (flushed for non-coherent portability); the
             // implicit submit barrier on the next phase makes these visible
             // to the BLAS build.
-            // Vertex-range of an attribute's pending edit, honouring
-            // BufferAttribute::updateRange (offset/count in SCALAR elements,
-            // count == -1 ⇒ whole array — the same contract GLAttributes has
-            // always implemented). Without this a geometry preallocated at
-            // capacity and updated in place — a growing reconstruction surface,
-            // a dynamic trail — re-uploaded the ENTIRE allocation and, for
-            // packed normals, re-encoded every vertex, so the cost tracked the
-            // capacity instead of the edit (measured: a 600k-vertex capacity
-            // holding ~150k live vertices spent ~15 ms in the frame that
-            // touched it). Snapped to whole vertices so the packed encoders
-            // never see a partial vertex.
-            auto vertexRangeOf = [](const FloatBufferAttribute& a, uint32_t itemSize)
-                    -> std::pair<uint32_t, uint32_t> {
-                const auto total = static_cast<uint32_t>(a.array().size() / itemSize);
-                const auto& r = a.updateRange;
-                if (r.count < 0) return {0u, total};
-                const uint32_t first = static_cast<uint32_t>(r.offset) / itemSize;
-                const uint32_t last  = (static_cast<uint32_t>(r.offset + r.count) + itemSize - 1u) / itemSize;
-                if (first >= total) return {0u, 0u};
-                return {first, std::min(last, total) - first};
-            };
 
             StagedUploads up;
             std::vector<bool> indexChanged(ops.size(), false);
@@ -2245,30 +2316,8 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
                 // before this batch, and the old structure is referenced only by
                 // the previous TLAS, whose instances this frame refills from
                 // rec.address (lodChangedThisFrame_ forces that refill).
-                if (rec.compacted || rec.storage.size < blasSizes.accelerationStructureSize) {
-                    ctx->rt().destroyAccelerationStructure(ctx->device(), rec.as, nullptr);
-                    destroyBuffer(ctx->allocator(), rec.storage);
-                    rec.storage = createBuffer(
-                            ctx->allocator(), ctx->device(), blasSizes.accelerationStructureSize,
-                            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-                                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                            VMA_MEMORY_USAGE_AUTO);
-                    VkAccelerationStructureCreateInfoKHR ci{};
-                    ci.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
-                    ci.buffer = rec.storage.handle;
-                    ci.size = blasSizes.accelerationStructureSize;
-                    ci.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-                    check(ctx->rt().createAccelerationStructure(ctx->device(), &ci, nullptr, &rec.as),
-                          "vkCreateAccelerationStructureKHR(BLAS turned dynamic)");
-                    vulkan::registerAccelerationStructure(rec.as, ci.buffer);
-                    VkAccelerationStructureDeviceAddressInfoKHR ai{};
-                    ai.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
-                    ai.accelerationStructure = rec.as;
-                    rec.address = ctx->rt().getAccelerationStructureDeviceAddress(ctx->device(), &ai);
-                    rec.compacted = false;
-                    lodChangedThisFrame_ = true;
+                if (moveToUpdatableBlasStorage(rec, blasSizes.accelerationStructureSize, /*retireOld=*/false)) {
                     // A fresh structure has nothing to update from.
-                    rec.blasRefitCounter = 0;
                     blasBuilds[kk].mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
                     blasBuilds[kk].srcAccelerationStructure = VK_NULL_HANDLE;
                     blasBuilds[kk].dstAccelerationStructure = rec.as;
@@ -2299,6 +2348,38 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
             endAndSubmitOneShot(cb, "refreshGeomBlasBatch (BLAS)");
         }
 
+void VulkanRenderer::Impl::stageEditedVertexRange(StagedUploads& up, const BlasRecord& rec,
+                                                  const FloatBufferAttribute& posAttr,
+                                                  const FloatBufferAttribute& nrmAttr) {
+            const auto [pFirst, pCount] = vertexRangeOf(posAttr, 3u);
+            if (pCount > 0) {
+                stageCopy(up, rec.vertex, posAttr.array().data() + static_cast<size_t>(pFirst) * 3u,
+                          static_cast<VkDeviceSize>(pCount) * 3u * sizeof(float),
+                          static_cast<VkDeviceSize>(pFirst) * 3u * sizeof(float));
+            }
+            const auto [nFirst, nCount] = vertexRangeOf(nrmAttr, 3u);
+            if (nCount > 0) {
+                if (rec.packedMask & kPackedNormal) {
+                    const auto& nrm = nrmAttr.array();
+                    std::vector<uint32_t> packed(nCount);
+                    for (uint32_t v = 0; v < nCount; ++v) {
+                        const size_t i = (static_cast<size_t>(nFirst) + v) * 3u;
+                        const auto [ox, oy] = octEncode(nrm[i + 0], nrm[i + 1], nrm[i + 2]);
+                        packed[v] = packSnorm2x16(ox, oy);
+                    }
+                    stageCopy(up, rec.normal, packed.data(), packed.size() * sizeof(uint32_t),
+                              static_cast<VkDeviceSize>(nFirst) * sizeof(uint32_t));
+                } else {
+                    stageCopy(up, rec.normal, nrmAttr.array().data() + static_cast<size_t>(nFirst) * 3u,
+                              static_cast<VkDeviceSize>(nCount) * 3u * sizeof(float),
+                              static_cast<VkDeviceSize>(nFirst) * 3u * sizeof(float));
+                }
+            }
+            // Consumed, as on every other upload path.
+            const_cast<FloatBufferAttribute&>(posAttr).updateRange.count = -1;
+            const_cast<FloatBufferAttribute&>(nrmAttr).updateRange.count = -1;
+        }
+
 void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
             if (pendingDynamicGeomRefits_.empty() && pendingDynamicPrevResyncs_.empty()) return;
             THREEPP_CPUPROF("frame.dynGeomRefit");
@@ -2325,9 +2406,11 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
             static thread_local std::vector<VkAccelerationStructureBuildGeometryInfoKHR>     blasBuilds;
             static thread_local std::vector<VkAccelerationStructureBuildRangeInfoKHR>        ranges;
             static thread_local std::vector<const VkAccelerationStructureBuildRangeInfoKHR*> rangePtrs;
-            // uv / color / index edits of this frame's records, and which records
-            // rewrote their index (no refit from a different index).
-            static thread_local StagedUploads sideUp;
+            // This frame's copies that do not come from a staging ring: an
+            // occasional edit's positions and normals, and every record's uv /
+            // color / index edits. Plus which records rewrote their index (no
+            // refit from a different index).
+            static thread_local StagedUploads copyUp;
             static thread_local std::vector<uint8_t> indexChanged;
 
             // Phase 0 — same finite-position contract as refreshGeomBlasBatch's
@@ -2370,7 +2453,8 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
             }
 
             // Phase 1 — host: pack this frame's positions/normals into slot
-            // `currentFrame` of each record's staging ring. We are RECORDING,
+            // `currentFrame` of each graduated record's staging ring (an
+            // occasional edit's go into copyUp instead, see below). We are RECORDING,
             // i.e. past the inFlight[currentFrame] fence wait, so this slot's
             // previous consumer (frame currentFrame − kFramesInFlight) has
             // fully executed its copies — the memcpy cannot race the GPU.
@@ -2413,12 +2497,20 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                     // no-op instead of a teardown. The CPU still owns uv, color
                     // and index: an edit of one is uploaded here, so the stamp
                     // never hides it.
-                    indexChanged[k] = stageChangedSideAttributes(sideUp, rec, geom, /*viaCopy=*/true);
+                    indexChanged[k] = stageChangedSideAttributes(copyUp, rec, geom, /*viaCopy=*/true);
                     stampVersions(rec, geom);
                     continue;
                 }
                 auto* posAttr = geom.getAttribute<float>("position");
                 auto* nrmAttr = geom.getAttribute<float>("normal");
+                if (!rec.perFrameDynamic) {
+                    // An occasional edit: no ring, so the written range only,
+                    // queued as copies from this frame's staging buffer.
+                    stageEditedVertexRange(copyUp, rec, *posAttr, *nrmAttr);
+                    indexChanged[k] = stageChangedSideAttributes(copyUp, rec, geom, /*viaCopy=*/true);
+                    stampVersions(rec, geom);
+                    continue;
+                }
                 const VkDeviceSize slotOff = rec.dynStagingSlotBytes * currentFrame;
                 const VkDeviceSize posBytes = rec.vbBytes;
                 uploadHostVisible(ctx->allocator(), rec.dynStaging,
@@ -2451,7 +2543,7 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                 // geometry from its current CPU data instead of trusting a
                 // buffer the cleared pending list never filled. uv / color /
                 // index travel only when their version moved.
-                indexChanged[k] = stageChangedSideAttributes(sideUp, rec, geom, /*viaCopy=*/true);
+                indexChanged[k] = stageChangedSideAttributes(copyUp, rec, geom, /*viaCopy=*/true);
                 stampVersions(rec, geom);
             }
 
@@ -2585,6 +2677,7 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                         vkCmdCopyBuffer(cb, rec.nrmExt.handle, rec.normal.handle, 1, &nr);
                         continue;
                     }
+                    if (!rec.perFrameDynamic) continue;// its copies are in copyUp
                     const VkDeviceSize slotOff = rec.dynStagingSlotBytes * currentFrame;
                     VkBufferCopy pr{};
                     pr.srcOffset = slotOff;
@@ -2595,13 +2688,12 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                     nr.size      = rec.dynStagingSlotBytes - rec.vbBytes;
                     vkCmdCopyBuffer(cb, rec.dynStaging.handle, rec.normal.handle, 1, &nr);
                 }
-                // The side attributes from one staging buffer, retired with
-                // this frame. Past the Phase 4 fence and the graph's entry
-                // barrier like the copies above, so no barrier of its own
-                // before; its closing barrier publishes them to the build and
-                // every later read.
-                if (!sideUp.copies.empty()) {
-                    retire(recordStagedUploads(sideUp, cb, /*dstUntouched=*/true));
+                // The rest from one staging buffer, retired with this frame.
+                // Past the Phase 4 fence and the graph's entry barrier like the
+                // copies above, so no barrier of its own before; its closing
+                // barrier publishes them to the build and every later read.
+                if (!copyUp.copies.empty()) {
+                    retire(recordStagedUploads(copyUp, cb, /*dstUntouched=*/true));
                 }
             }
 
@@ -2652,10 +2744,10 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                 rangePtrs.resize(N);
                 for (uint32_t kk = 0; kk < N; ++kk) {
                     auto& rec = *pendingDynamicGeomRefits_[liveOps[kk]].rec;
-                    // Never a compacted record: graduation takes
-                    // kDynamicGraduationStreak dirty frames, the first of which
-                    // ran refreshGeomBlasBatch, which moves a compacted record
-                    // to updatable storage; interop records are never compacted.
+                    // Never a compacted record: ensureSceneBuilt moves a record
+                    // to updatable storage when it enqueues its first edit
+                    // (moveToUpdatableBlasStorage); interop records are never
+                    // compacted.
                     assert(!rec.compacted);
                     const bool indexed = rec.indexCount != 0u;
                     // Only [0, drawRange start+count) is built — same clamp
@@ -2786,8 +2878,7 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                             &blasBuilds[kk], &primitiveCount, &blasSizes);
                     // Scratch grows via retire(), never destroyBuffer: a still-
                     // in-flight frame's refit may be reading the old one. Cold
-                    // path — graduation follows ≥3 drained refreshes, which
-                    // already sized it.
+                    // path: a record's first edit sizes it for good.
                     if (rec.blasScratch.handle == VK_NULL_HANDLE ||
                         rec.blasScratchSize < blasSizes.buildScratchSize) {
                         retire(std::move(rec.blasScratch));
