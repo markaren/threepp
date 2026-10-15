@@ -440,16 +440,35 @@ def test_sim_time_round_trips(vk_renderer):
         vk_renderer.sim_time = None  # back to the wall clock
 
 
-def test_hidden_meshes_resident_round_trips(vk_renderer):
-    """Off by default; on, a mesh hidden before it was ever rendered gets its
-    entries at once, so its first show is no structural rebuild
-    (VulkanVisibilityToggle_test covers what it does)."""
-    try:
-        assert vk_renderer.hidden_meshes_resident is False
-        vk_renderer.hidden_meshes_resident = True
-        assert vk_renderer.hidden_meshes_resident is True
-    finally:
-        vk_renderer.hidden_meshes_resident = False
+def test_resident_mesh_first_show_is_no_structural_rebuild(vk_renderer):
+    """Object3D.resident: a mesh hidden before it was ever rendered gets its
+    entries at once, so its first show is no structural rebuild; a hidden mesh
+    beside it without the hint still pays one (VulkanVisibilityToggle_test
+    covers the pixels and the ray masks)."""
+    scene, cam = make_scene()
+    lens = tp.Mesh(tp.SphereGeometry(0.2), tp.MeshStandardMaterial())
+    lens.position.set(-0.6, 0.9, 0.0)
+    lens.visible = False
+    lens.resident = True
+    plain = tp.Mesh(tp.SphereGeometry(0.2), tp.MeshStandardMaterial())
+    plain.position.set(0.6, 0.9, 0.0)
+    plain.visible = False
+    scene.add(lens, plain)
+
+    def structural_after(frames=3):
+        for _ in range(frames):
+            vk_renderer.render(scene, cam)
+        return vk_renderer.tlas_stats["structural_rebuilds"]
+
+    s0 = structural_after()
+    lens.visible = True
+    assert structural_after() == s0, "a resident mesh's first show rebuilt the scene"
+    lens.visible = False
+    assert structural_after() == s0
+    plain.visible = True
+    assert structural_after() == s0 + 1, "a mesh without the hint: its first show is the one structural rebuild"
+    stats = vk_renderer.tlas_stats
+    assert set(stats) == {"full_rebuilds", "updates", "instances", "structural_rebuilds"}
 
 
 _OCEAN_PROBES = [(0.0, 0.0), (13.5, -7.25), (-41.0, 30.5)]

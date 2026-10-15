@@ -56,6 +56,19 @@ namespace threepp_py {
     // tripping pybind11's broken pointer adjustment. Defined in bind_core.cpp.
     std::shared_ptr<threepp::Object3D> as_object3d(const py::handle& h);
 
+    // Docstring of Object3D.resident, bound at both Object3D binding sites
+    // (bind_core.cpp, and bind_objects.cpp for the virtual-base leaves).
+    inline constexpr const char* kResidentDoc =
+            "Vulkan renderer hint for a mesh that waits hidden to be shown (a brake light, a muzzle flash): "
+            "it gets its renderer entries (geometry upload, BLAS, TLAS instance), hidden, from the first "
+            "render that sees it, so its first show (visible or material.visible True) costs what any later "
+            "toggle costs instead of a structural scene rebuild. A mesh that has been drawn keeps its "
+            "entries while hidden anyway; this is for one hidden before it was ever drawn. The price is "
+            "paid up front, so set it only on meshes that will be shown. Set on a hidden mesh after it was "
+            "rendered, the next render builds its entries; clearing it keeps the entries a mesh has. False "
+            "by default; checked on the mesh itself, not inherited; no effect on overlays, particle "
+            "billboards, ParticleFields or LOD levels.";
+
     // The string userData entry for `key` as a Python str, or None when the key
     // is absent or the value is not a string. Read access for scripts to the
     // editor's flat `key=value;...` configs (spline, physics, script), which

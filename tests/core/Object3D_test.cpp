@@ -783,3 +783,15 @@ TEST_CASE("copy carries userData onto the clone") {
     clone->userData["tag"] = 9;
     CHECK(std::any_cast<int>(source->userData.at("tag")) == 7);
 }
+
+TEST_CASE("copy and move carry the resident hint") {
+
+    auto source = Object3D::create();
+    CHECK_FALSE(source->resident);
+    source->resident = true;
+
+    CHECK(source->clone()->resident);
+
+    Object3D moved(std::move(*source));
+    CHECK(moved.resident);
+}

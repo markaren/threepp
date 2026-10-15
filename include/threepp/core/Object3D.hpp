@@ -133,6 +133,20 @@ namespace threepp {
         // other levels for little performance return. Default is true
         // (checked on the mesh itself, not inherited).
         bool autoLod = true;
+        // Renderer hint (Vulkan) for a mesh that waits hidden to be shown: a
+        // brake light, a muzzle flash. A mesh that has been drawn keeps its
+        // renderer entries while hidden, so hiding and showing it again costs
+        // nothing; one hidden (visible or material()->visible false) before it
+        // was ever drawn has none, so its first show is a structural rebuild of
+        // the scene, milliseconds on a game-sized one. Set true, the mesh gets
+        // its entries (geometry upload, BLAS, TLAS instance), hidden, from the
+        // first render that sees it, and its first show is as cheap as any
+        // later one. The price is paid up front, so set it only on meshes that
+        // will be shown. Set on a hidden mesh after it was rendered, the next
+        // render builds its entries. Clearing it keeps the entries a mesh has.
+        // Default false (checked on the mesh itself, not inherited; no effect
+        // on overlays, particle billboards, ParticleFields or LOD levels).
+        bool resident = false;
         // This value allows the default rendering order of scene graph objects to be overridden although opaque and transparent objects remain sorted independently.
         // When this property is set for an instance of Group, all descendants objects will be sorted and rendered together. Sorting is from lowest to highest renderOrder. Default value is 0.
         // Signed, as in three.js: a negative value pushes an object behind the

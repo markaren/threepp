@@ -904,16 +904,15 @@ namespace threepp {
         // The node sits under a LOD node: its visibility is the LOD's level
         // selection, so a flip takes the full re-expansion as before.
         static constexpr uint32_t kSnapUnderLod   = 8192u;
+        // Object3D::resident when recorded. The expansion decides which hidden
+        // meshes have entries, so a change re-expands.
+        static constexpr uint32_t kSnapResident   = 16384u;
         std::vector<SnapNode> sceneSnapshot_;
         // A mesh with entries was hidden or shown this frame (MeshEntry::hidden):
         // the TLAS fill, the frustum culls, the draw records and the emitter
         // walk re-read the flags. Set by the snapshot replay or the expansion,
         // consumed in ensureSceneBuilt.
         bool hiddenFlippedThisFrame_ = false;
-        // setHiddenMeshesResident: the expansion gives a mesh hidden before it
-        // was ever shown its entries at once, hidden, as if it had been shown
-        // and hidden again. Off: such a mesh gets none until its first show.
-        bool hiddenMeshesResident_ = false;
 
         // Classification-routing flags for a mesh — shared by the snapshot
         // build and the replay walk so the two can't drift.

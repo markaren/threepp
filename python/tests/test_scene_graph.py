@@ -42,6 +42,25 @@ def test_virtual_base_field_writes(name):
         assert o.visible is False
 
 
+@pytest.mark.parametrize("name", list(VIRTUAL_OBJECTS) + ["Object3D", "Group"])
+def test_resident_hint_round_trips(name):
+    # Object3D.resident (a Vulkan renderer hint, see test_vulkan.py): False by
+    # default, writable at both binding sites and read back through traverse's
+    # downcast. (Object3D_test covers that copy and move carry it.)
+    make = VIRTUAL_OBJECTS.get(name) or getattr(tp, name)
+    o = make()
+    assert o.resident is False
+    o.resident = True
+    assert o.resident is True
+    scene = tp.Scene()
+    scene.add(o)
+    seen = []
+    scene.traverse(lambda n: seen.append(n.resident))
+    assert seen == [False, True]
+    o.resident = False
+    assert o.resident is False
+
+
 @pytest.mark.parametrize("name", list(VIRTUAL_OBJECTS))
 def test_virtual_base_methods(name):
     o = VIRTUAL_OBJECTS[name]()

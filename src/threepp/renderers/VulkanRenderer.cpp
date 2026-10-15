@@ -2899,18 +2899,6 @@ namespace threepp {
         return core()->tlasStats_;
     }
 
-    void VulkanRenderer::setHiddenMeshesResident(bool enabled) {
-        if (core()->hiddenMeshesResident_ == enabled) return;
-        core()->hiddenMeshesResident_ = enabled;
-        // Which meshes have entries is decided by the full expansion; the
-        // snapshot fast path would keep the old answer.
-        core()->sceneBuilt_ = false;
-    }
-
-    bool VulkanRenderer::hiddenMeshesResident() const {
-        return core()->hiddenMeshesResident_;
-    }
-
     VulkanRenderer::FrameTimings VulkanRenderer::lastFrameTimings() const {
         return core()->gpuTimings_->timings();
     }

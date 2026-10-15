@@ -554,6 +554,7 @@ void Object3D::copy(const Object3D& source, bool recursive) {
     this->receiveShadow = source.receiveShadow;
 
     this->frustumCulled = source.frustumCulled;
+    this->resident = source.resident;
     this->renderOrder = source.renderOrder;
 
     // three.js copies userData too (Object3D.copy deep-clones it). Without this
@@ -634,6 +635,7 @@ Object3D::Object3D(Object3D&& source) noexcept: Object3D() {
     this->receiveShadow = source.receiveShadow;
 
     this->frustumCulled = source.frustumCulled;
+    this->resident = source.resident;
     this->renderOrder = source.renderOrder;
 
     this->onAfterRender = std::move(source.onAfterRender);

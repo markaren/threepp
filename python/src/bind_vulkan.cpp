@@ -1820,15 +1820,21 @@ namespace threepp_py {
                               "the texture then steps along that lattice edge (hard straight lines at 0, 60 and "
                               "120 degrees). On removes the lines and redraws every offset, so the texture "
                               "placement of such a scene changes. Off by default.")
-                .def_property("hidden_meshes_resident",
-                              [](PyVulkanRenderer& r) { return r.native().hiddenMeshesResident(); },
-                              [](PyVulkanRenderer& r, bool v) { r.native().setHiddenMeshesResident(v); },
-                              "A mesh hidden before it was ever rendered (its visible or its material's visible "
-                              "False) gets its entries at once, hidden, so its first show costs what any later "
-                              "toggle costs instead of a structural scene rebuild (a brake light, a muzzle flash, "
-                              "a pooled object). The price moves up front: geometry upload, BLAS and a TLAS "
-                              "instance for every hidden mesh, shown later or not. Off by default. Overlays, "
-                              "particle billboards, ParticleFields and LOD levels are not covered.")
+                .def_property_readonly("tlas_stats",
+                                       [](PyVulkanRenderer& r) {
+                                           const auto s = r.native().tlasStats();
+                                           py::dict d;
+                                           d["full_rebuilds"]       = s.fullRebuilds;
+                                           d["updates"]             = s.updates;
+                                           d["instances"]           = s.instances;
+                                           d["structural_rebuilds"] = s.structuralRebuilds;
+                                           return d;
+                                       },
+                                       "Scene build counters since the renderer was made: TLAS full builds and "
+                                       "refits, the instance count of the latest one, and structural_rebuilds "
+                                       "(the entry list re-derived: an object added or removed, a texture "
+                                       "swapped, a mesh shown for the first time unless it is resident; a hide "
+                                       "or a re-show is none).")
                 .def_property("deferred_ao",
                               [](PyVulkanRenderer& r) { return r.native().deferredAO(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setDeferredAO(v); },

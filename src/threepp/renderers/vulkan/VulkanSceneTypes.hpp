@@ -70,9 +70,9 @@ namespace threepp::vulkan::impl {
         // index stay put, and showing it again is just as cheap. Ray mask 0
         // (no ray hits it), culled from every raster view, no emitter. A mesh
         // hidden before it was ever shown has no entry at all, as before,
-        // unless setHiddenMeshesResident is on: then it has its entries,
-        // hidden, from its first expansion. Mirrors EntrySpan::hidden (a
-        // per-mesh fact).
+        // unless it is Object3D::resident: then it has its entries, hidden,
+        // from its first expansion. Mirrors EntrySpan::hidden (a per-mesh
+        // fact).
         bool     hidden = false;
         // Geometry rigidly parented UNDER a Camera — a first-person
         // viewmodel (hands, weapon, cockpit). Rasterized and shaded like

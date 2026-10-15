@@ -16,13 +16,19 @@
 //                         the one structural rebuild the default allows;
 //   blue   quad, top      toggled with the red sphere.
 //
-// Then setHiddenMeshesResident(true), and five more are added hidden before
-// they were ever rendered; their first show is in place, no structural rebuild:
+// Then five more are added hidden before they were ever rendered, each with
+// Object3D::resident set; their first show is in place, no structural rebuild:
 //   magenta sphere, lower left   emissive (a lit brake lens), Object3D::visible;
 //   cyan    sphere, lower right  material()->visible;
 //   orange  sphere, lower centre inside a group hidden from the start;
 //   red     quad, top right      Object3D::visible, seen only by the raster;
 //   grey    sphere, far behind   beyond the probe grid: its first show re-fits it.
+// Beside them, two more spheres, hidden from the start, without the hint:
+//   plain   sphere, upper left   never gets it: its first show is still the one
+//                                structural rebuild, as yellow's was;
+//   late    sphere, upper right  gets it after it was rendered hidden: setting
+//                                it builds the entries (that render is the
+//                                structural one), its first show is in place.
 // Lidar beams check the spheres' TLAS masks directly.
 //
 // Plain exit-code program, not Catch2, like the other Vulkan tests here.
@@ -48,6 +54,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <initializer_list>
 #include <memory>
 #include <vector>
 
@@ -269,37 +276,51 @@ int main() {
         check("yellow gone", !yellow(at(im, pYel, 8)));
         check("no further structural rebuild", structural() == s0 + 1);
 
-        // setHiddenMeshesResident: a mesh hidden before it was ever rendered
-        // has its entries, hidden, from the start. Adding these is structural;
+        // Object3D::resident: a mesh hidden before it was ever rendered has
+        // its entries, hidden, from the start. Adding these is structural;
         // showing them for the first time is not.
-        renderer.setHiddenMeshesResident(true);
         auto lensMat = paint(Color(0.9f, 0.05f, 0.9f));
         lensMat->emissive = Color(0.9f, 0.05f, 0.9f);
         lensMat->emissiveIntensity = 1.5f;
         auto lens = Mesh::create(SphereGeometry::create(0.5f, 32, 16), lensMat);
         lens->position.set(-2.f, -1.6f, 6.f);
         lens->visible = false;
+        lens->resident = true;
         scene.add(lens);
         auto cyan = Mesh::create(SphereGeometry::create(0.5f, 32, 16), paint(Color(0.05f, 0.8f, 0.9f)));
         cyan->position.set(2.f, -1.6f, 6.f);
         cyan->material()->visible = false;
+        cyan->resident = true;
         scene.add(cyan);
         auto hiddenGroup = Group::create();
         hiddenGroup->visible = false;
         scene.add(hiddenGroup);
         auto orange = Mesh::create(SphereGeometry::create(0.5f, 32, 16), paint(Color(0.9f, 0.6f, 0.05f)));
         orange->position.set(0.f, -1.6f, 6.f);
+        orange->resident = true;// on the mesh itself: a group's flag is not inherited
         hiddenGroup->add(orange);
         auto quad2 = Mesh::create(PlaneGeometry::create(0.25f, 0.25f), paint(Color(0.9f, 0.05f, 0.05f)));
         quad2->position.set(0.6f, 0.32f, 1.5f);
         quad2->visible = false;
+        quad2->resident = true;
         scene.add(quad2);
         // Beyond the probe grid fitted so far (z up to 6.8): shown in place, it
         // must still get the grid re-fitted around it, as a structural show did.
         auto farBall = Mesh::create(SphereGeometry::create(0.5f, 16, 8), paint(Color(0.5f, 0.5f, 0.5f)));
         farBall->position.set(0.f, 0.f, 12.f);
         farBall->visible = false;
+        farBall->resident = true;
         scene.add(farBall);
+        // Without the hint, beside them: plain never gets it, late gets it once
+        // it has been rendered hidden.
+        auto plain = Mesh::create(SphereGeometry::create(0.5f, 32, 16), paint(Color(0.05f, 0.1f, 0.9f)));
+        plain->position.set(-2.f, 1.6f, 6.f);
+        plain->visible = false;
+        scene.add(plain);
+        auto late = Mesh::create(SphereGeometry::create(0.5f, 32, 16), paint(Color(0.9f, 0.9f, 0.9f)));
+        late->position.set(2.f, 1.6f, 6.f);
+        late->visible = false;
+        scene.add(late);
         const auto pLens = px(-2.f, -1.6f, -6.f), pCyan = px(2.f, -1.6f, -6.f), pOrange = px(0.f, -1.6f, -6.f);
         const auto pQuad2 = px(0.6f, 0.32f, 1.5f);
         const auto reportLower = [&](const std::vector<unsigned char>& im, const char* label) {
@@ -313,26 +334,35 @@ int main() {
         const auto cyanSeen = [&](const std::vector<unsigned char>& im) { return pairLeads(at(im, pCyan, 6), 1); };
         const auto orangeSeen = [&](const std::vector<unsigned char>& im) { return yellow(at(im, pOrange, 6)); };
         const auto quad2Seen = [&](const std::vector<unsigned char>& im) { return leads(at(im, pQuad2, 2), 0); };
-        // Lidar beams from the camera to the lens, cyan and orange: they read
-        // the TLAS masks directly. A hidden mesh's reflection fades out of the
-        // mirror through the reflection history (only a ray that hits a mesh
-        // just shown or moved resets it), which a mirror patch cannot tell
-        // from a mesh still in the TLAS.
+        // Lidar beams from the camera to the lens, cyan, orange, plain and
+        // late: they read the TLAS masks directly. A hidden mesh's reflection
+        // fades out of the mirror through the reflection history (only a ray
+        // that hits a mesh just shown or moved resets it), which a mirror
+        // patch cannot tell from a mesh still in the TLAS.
         const Vector3 eye(0.f, 0.f, 3.f);
-        const std::array<Vector3, 3> lowerCentres{Vector3(-2.f, -1.6f, 6.f), Vector3(2.f, -1.6f, 6.f),
-                                                  Vector3(0.f, -1.6f, 6.f)};
+        const std::array<Vector3, 5> centres{Vector3(-2.f, -1.6f, 6.f), Vector3(2.f, -1.6f, 6.f),
+                                             Vector3(0.f, -1.6f, 6.f), Vector3(-2.f, 1.6f, 6.f),
+                                             Vector3(2.f, 1.6f, 6.f)};
+        enum { kLens, kCyan, kOrange, kPlain, kLate };
         std::vector<LidarBeam> beams;
-        for (const auto& c : lowerCentres) beams.push_back({eye, (c - eye).normalize()});
+        for (const auto& c : centres) beams.push_back({eye, (c - eye).normalize()});
         const auto lidarHits = [&] {
             std::vector<LidarReturn> rets;
             renderer.scanLidar(beams, rets);
-            std::array<bool, 3> hit{};
+            std::array<bool, 5> hit{};
             for (size_t i = 0; i < hit.size() && i < rets.size(); ++i) {
-                const float d = (lowerCentres[i] - eye).length() - 0.5f;
+                const float d = (centres[i] - eye).length() - 0.5f;
                 hit[i] = rets[i].returnNo > 0 && std::abs(rets[i].distance - d) < 0.05f;
             }
-            std::printf("  lidar: lens %d cyan %d orange %d\n", hit[0], hit[1], hit[2]);
+            std::printf("  lidar: lens %d cyan %d orange %d plain %d late %d\n", hit[kLens], hit[kCyan],
+                        hit[kOrange], hit[kPlain], hit[kLate]);
             return hit;
+        };
+        // Exactly the spheres in `want` return a beam.
+        const auto lidarIs = [&](const std::array<bool, 5>& h, std::initializer_list<int> want) {
+            std::array<bool, 5> w{};
+            for (int i : want) w[i] = true;
+            return h == w;
         };
         const auto probeZMax = [&] {
             float o[3], s[3];
@@ -342,14 +372,14 @@ int main() {
         };
 
         im = settle();
-        reportLower(im, "resident: lens, cyan, orange, quad2 and a far sphere added hidden:");
+        reportLower(im, "lens, cyan, orange, quad2 and a far sphere added hidden and resident, plain and late without:");
         const auto s1 = structural();
         const float zMax0 = probeZMax();
         check("none of the four seen", !lensLit(im) && !cyanSeen(im) && !orangeSeen(im) && !quad2Seen(im));
         check("red, green and quad unchanged",
               leads(at(im, pRed, 8), 0) && leads(at(im, pGreen, 8), 1) && leads(at(im, pQuad, 2), 2));
         auto h = lidarHits();
-        check("no lidar return from the hidden spheres (TLAS mask 0)", !h[0] && !h[1] && !h[2]);
+        check("no lidar return from the hidden spheres (TLAS mask 0)", lidarIs(h, {}));
 
         lens->visible = true;
         quad2->visible = true;
@@ -361,7 +391,7 @@ int main() {
         check("lens lit in the mirror (TLAS)", lensLit(im));
         check("quad2 drawn (raster)", quad2Seen(im));
         h = lidarHits();
-        check("lidar returns from the lens only", h[0] && !h[1] && !h[2]);
+        check("lidar returns from the lens only", lidarIs(h, {kLens}));
         check("probe grid re-fitted around the far sphere", zMax0 < 11.5f && zMax1 >= 12.4f);
         check("no structural rebuild", structural() == s1);
 
@@ -372,20 +402,57 @@ int main() {
         check("cyan and orange in the mirror", cyanSeen(im) && orangeSeen(im));
         check("lens and quad2 still there", lensLit(im) && quad2Seen(im));
         h = lidarHits();
-        check("lidar returns from all three", h[0] && h[1] && h[2]);
+        check("lidar returns from lens, cyan and orange", lidarIs(h, {kLens, kCyan, kOrange}));
         check("no structural rebuild", structural() == s1);
+
+        // The hint set on a mesh already rendered hidden: the next render
+        // builds its entries, hidden (the structural rebuild its first show
+        // would have been), and the show after that is in place.
+        late->resident = true;
+        im = settle();
+        reportLower(im, "late: resident set while it is hidden:");
+        h = lidarHits();
+        check("late still hidden (TLAS mask 0)", !h[kLate]);
+        check("one structural rebuild (late's entries)", structural() == s1 + 1);
+        late->visible = true;
+        im = settle();
+        reportLower(im, "late shown for the first time:");
+        h = lidarHits();
+        check("lidar returns from late", h[kLate]);
+        check("no further structural rebuild", structural() == s1 + 1);
+
+        // Without the hint a first show is still the structural rebuild.
+        plain->visible = true;
+        im = settle();
+        reportLower(im, "plain (never resident) shown for the first time:");
+        h = lidarHits();
+        check("lidar returns from plain", h[kPlain]);
+        check("one structural rebuild (plain's first show)", structural() == s1 + 2);
 
         lens->visible = false;
         cyan->material()->visible = false;
         hiddenGroup->visible = false;
         quad2->visible = false;
         farBall->visible = false;
+        plain->visible = false;
+        late->visible = false;
         im = settle();
         reportLower(im, "all hidden again:");
         h = lidarHits();
-        check("no lidar return from the three (TLAS mask 0)", !h[0] && !h[1] && !h[2]);
+        check("no lidar return from the five (TLAS mask 0)", lidarIs(h, {}));
         check("quad2 gone from the raster", !quad2Seen(im));
-        check("no structural rebuild", structural() == s1);
+        check("no structural rebuild", structural() == s1 + 2);
+
+        // Clearing the hint keeps the entries a hidden mesh has, as for any
+        // mesh that was shown: the re-show stays in place.
+        lens->resident = false;
+        im = settle();
+        lens->visible = true;
+        im = settle();
+        reportLower(im, "lens: resident cleared while hidden, then shown:");
+        h = lidarHits();
+        check("lidar returns from the lens only", lidarIs(h, {kLens}));
+        check("no structural rebuild", structural() == s1 + 2);
         if (vulkan::validationActive()) {
             check("no validation errors", vulkan::validationErrorCount() == 0u);
         }

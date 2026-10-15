@@ -4813,6 +4813,14 @@ class Line(Object3D):
     def render_order(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
     @property
+    def resident(self) -> bool:
+        """
+        Vulkan renderer hint for a mesh that waits hidden to be shown (a brake light, a muzzle flash): it gets its renderer entries (geometry upload, BLAS, TLAS instance), hidden, from the first render that sees it, so its first show (visible or material.visible True) costs what any later toggle costs instead of a structural scene rebuild. A mesh that has been drawn keeps its entries while hidden anyway; this is for one hidden before it was ever drawn. The price is paid up front, so set it only on meshes that will be shown. Set on a hidden mesh after it was rendered, the next render builds its entries; clearing it keeps the entries a mesh has. False by default; checked on the mesh itself, not inherited; no effect on overlays, particle billboards, ParticleFields or LOD levels.
+        """
+    @resident.setter
+    def resident(self, arg0: bool) -> None:
+        ...
+    @property
     def uuid(self) -> str:
         ...
 class LineBasicMaterial(Material):
@@ -5165,6 +5173,14 @@ class Mesh(Object3D):
         ...
     @render_order.setter
     def render_order(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def resident(self) -> bool:
+        """
+        Vulkan renderer hint for a mesh that waits hidden to be shown (a brake light, a muzzle flash): it gets its renderer entries (geometry upload, BLAS, TLAS instance), hidden, from the first render that sees it, so its first show (visible or material.visible True) costs what any later toggle costs instead of a structural scene rebuild. A mesh that has been drawn keeps its entries while hidden anyway; this is for one hidden before it was ever drawn. The price is paid up front, so set it only on meshes that will be shown. Set on a hidden mesh after it was rendered, the next render builds its entries; clearing it keeps the entries a mesh has. False by default; checked on the mesh itself, not inherited; no effect on overlays, particle billboards, ParticleFields or LOD levels.
+        """
+    @resident.setter
+    def resident(self, arg0: bool) -> None:
         ...
     @property
     def uuid(self) -> str:
@@ -6077,6 +6093,14 @@ class Object3D:
         ...
     @render_order.setter
     def render_order(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def resident(self) -> bool:
+        """
+        Vulkan renderer hint for a mesh that waits hidden to be shown (a brake light, a muzzle flash): it gets its renderer entries (geometry upload, BLAS, TLAS instance), hidden, from the first render that sees it, so its first show (visible or material.visible True) costs what any later toggle costs instead of a structural scene rebuild. A mesh that has been drawn keeps its entries while hidden anyway; this is for one hidden before it was ever drawn. The price is paid up front, so set it only on meshes that will be shown. Set on a hidden mesh after it was rendered, the next render builds its entries; clearing it keeps the entries a mesh has. False by default; checked on the mesh itself, not inherited; no effect on overlays, particle billboards, ParticleFields or LOD levels.
+        """
+    @resident.setter
+    def resident(self, arg0: bool) -> None:
         ...
     @property
     def uuid(self) -> str:
@@ -7746,6 +7770,14 @@ class Points(Object3D):
         ...
     @render_order.setter
     def render_order(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def resident(self) -> bool:
+        """
+        Vulkan renderer hint for a mesh that waits hidden to be shown (a brake light, a muzzle flash): it gets its renderer entries (geometry upload, BLAS, TLAS instance), hidden, from the first render that sees it, so its first show (visible or material.visible True) costs what any later toggle costs instead of a structural scene rebuild. A mesh that has been drawn keeps its entries while hidden anyway; this is for one hidden before it was ever drawn. The price is paid up front, so set it only on meshes that will be shown. Set on a hidden mesh after it was rendered, the next render builds its entries; clearing it keeps the entries a mesh has. False by default; checked on the mesh itself, not inherited; no effect on overlays, particle billboards, ParticleFields or LOD levels.
+        """
+    @resident.setter
+    def resident(self, arg0: bool) -> None:
         ...
     @property
     def uuid(self) -> str:
@@ -11370,14 +11402,6 @@ class VulkanRenderer:
     def gbuffer_msaa(self, arg1: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
     @property
-    def hidden_meshes_resident(self) -> bool:
-        """
-        A mesh hidden before it was ever rendered (its visible or its material's visible False) gets its entries at once, hidden, so its first show costs what any later toggle costs instead of a structural scene rebuild (a brake light, a muzzle flash, a pooled object). The price moves up front: geometry upload, BLAS and a TLAS instance for every hidden mesh, shown later or not. Off by default. Overlays, particle billboards, ParticleFields and LOD levels are not covered.
-        """
-    @hidden_meshes_resident.setter
-    def hidden_meshes_resident(self, arg1: bool) -> None:
-        ...
-    @property
     def lens_distortion(self) -> dict:
         """
         Current lens distortion as a dict (see set_lens_distortion).
@@ -11575,6 +11599,11 @@ class VulkanRenderer:
     @sun_angular_radius.setter
     def sun_angular_radius(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
+    @property
+    def tlas_stats(self) -> dict:
+        """
+        Scene build counters since the renderer was made: TLAS full builds and refits, the instance count of the latest one, and structural_rebuilds (the entry list re-derived: an object added or removed, a texture swapped, a mesh shown for the first time unless it is resident; a hide or a re-show is none).
+        """
     @property
     def tone_mapping_exposure(self) -> float:
         ...

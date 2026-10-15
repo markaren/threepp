@@ -812,31 +812,11 @@ namespace threepp {
             uint32_t instances = 0;   // instance count of the most recent build/update
             // Structural scene rebuilds (the entry list re-derived, every
             // descriptor and draw record new): an object added or removed, a
-            // texture swapped, a mesh shown for the first time. Hiding or
-            // re-showing a mesh is not one.
+            // texture swapped, a mesh shown for the first time (unless it is
+            // Object3D::resident). Hiding or re-showing a mesh is not one.
             uint64_t structuralRebuilds = 0;
         };
         [[nodiscard]] TlasStats tlasStats() const;
-
-        // ── Hidden meshes kept ready ─────────────────────────────────────
-        // Hiding a mesh and showing it again (Object3D::visible or
-        // material()->visible) costs nothing: the mesh keeps its entries while
-        // hidden (no ray hits it, no view draws it, it lights nothing). A mesh
-        // hidden before it was ever rendered has no entries yet, so its FIRST
-        // show is a structural rebuild of the scene, milliseconds on a
-        // game-sized one. On, such a mesh gets its entries, hidden, the first
-        // time the renderer sees it, and its first show costs what any later
-        // toggle costs: a brake light, a muzzle flash, a pooled object waiting
-        // hidden. The price moves up front: geometry upload, BLAS and a TLAS
-        // instance for every hidden mesh, shown later or not. OFF by default,
-        // so a scene that never asks keeps its entry list (TLAS instances,
-        // entry indices, the Ids AOV's .x) as before. Overlays, particle
-        // billboards, ParticleFields and the levels under a LOD are not
-        // covered: their first show stays structural. A change applies on the
-        // next render (structural when it changes which meshes have entries);
-        // turning it off keeps the entries the hidden meshes already have.
-        void setHiddenMeshesResident(bool enabled);
-        [[nodiscard]] bool hiddenMeshesResident() const;
 
         // HDR bloom, added in linear HDR before the tone-map curve. 0 disables.
         void setBloomIntensity(float intensity);

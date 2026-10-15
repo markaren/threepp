@@ -91,15 +91,18 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
                 const uint32_t kind = sn.flags & kSnapKindMask;
                 const bool isLod = (sn.flags & kSnapLod) != 0u;
                 // Recorded under a LOD or not: the walk enters the same subtrees.
-                if (((sn.flags & kSnapUnderLod) != 0u) != underLod) {
+                // Object3D::resident changed: the expansion decides which
+                // hidden meshes have entries.
+                if (((sn.flags & kSnapUnderLod) != 0u) != underLod ||
+                    ((sn.flags & kSnapResident) != 0u) != o.resident) {
                     ok = false;
                     return false;
                 }
                 // Its effective visibility flipped. Only a mesh with entries
                 // flips in place (below); any other node re-expands: a group's
                 // own flip, a line, a mesh hidden before it was ever shown (no
-                // entries yet, unless setHiddenMeshesResident), anything under
-                // a LOD.
+                // entries yet, unless Object3D::resident), anything under a
+                // LOD.
                 const bool visFlip = ((sn.flags & kSnapHidden) != 0u) == vis;
                 if (kind == kSnapKindOther) {
                     if (visFlip) {
@@ -694,10 +697,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 return it != shownBefore.end() && it->second == mesh.id;
             };
             // A hidden mesh has entries, hidden, when it had them before or
-            // setHiddenMeshesResident asks for them up front (so its first show
-            // is the same in-place flip as any later one). Never under a LOD.
+            // Object3D::resident asks for them up front (so its first show is
+            // the same in-place flip as any later one). Never under a LOD.
             const auto entriesWhileHidden = [&](const Mesh& mesh, bool underLod) {
-                return !underLod && (hiddenMeshesResident_ || hadEntries(mesh));
+                return !underLod && (mesh.resident || hadEntries(mesh));
             };
             // An invisible parent hides its whole subtree: no entry under it
             // except a mesh that keeps its own hidden ones (walkSceneGraph),
@@ -1040,6 +1043,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 SnapNode& rec = sceneSnapshot_.back();
                 if (!vis) rec.flags |= kSnapHidden;
                 if (underLod) rec.flags |= kSnapUnderLod;
+                if (o.resident) rec.flags |= kSnapResident;
                 return (rec.flags & kSnapLod) != 0u;
             };
             walkSceneGraph(scene, true, false, visitRecord);
