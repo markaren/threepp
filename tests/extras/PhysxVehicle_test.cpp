@@ -99,6 +99,40 @@ namespace {
 
 }// namespace
 
+TEST_CASE("A vehicle stands on a Y-up height field and falls through a Z-up one", "[physx][vehicle]") {
+
+    // 60 m x 60 m of gentle swell (+-10 cm) at 0.5 m, the car spawned over the
+    // middle. PhysxVehicle is Y-up; a Z-up field is a vertical wall in its world,
+    // so the car falls past it. The dune-buggy met exactly that (2026-10-15) and
+    // built its ground from trimesh tiles instead.
+    constexpr int kN = 121;
+    constexpr float kCell = 0.5f, kX0 = -30.f;
+    std::vector<float> h(static_cast<std::size_t>(kN) * kN);
+    for (int iz = 0; iz < kN; ++iz) {
+        for (int ix = 0; ix < kN; ++ix) {
+            const float x = kX0 + ix * kCell, z = kX0 + iz * kCell;
+            h[static_cast<std::size_t>(iz) * kN + ix] = 0.1f * std::sin(0.3f * x) * std::cos(0.2f * z);
+        }
+    }
+
+    auto restY = [&](PhysxWorld::HeightFieldUp up) {
+        PhysxWorld world;
+        REQUIRE(world.addStaticHeightField(h, kN, kN, kCell, Vector3(kX0, 0.f, kX0), 0.5f, nullptr, up));
+        auto s = evoque();
+        s.spawnPosition = Vector3(0, kRide + 0.3f, 0);
+        PhysxVehicle car(world, s);
+        car.setBrake(1.f);
+        for (int i = 0; i < static_cast<int>(std::lround(3.f / kDt)); ++i) world.step(kDt);
+        return car.chassisPose().p.y;
+    };
+
+    const float onY = restY(PhysxWorld::HeightFieldUp::Y);
+    const float onZ = restY(PhysxWorld::HeightFieldUp::Z);
+    INFO("chassis y after 3 s: Y-up field " << onY << ", Z-up field " << onZ);
+    CHECK(std::abs(onY - kRide) < 0.25f);// resting on the field, at ride height
+    CHECK(onZ < -10.f);                  // nothing under it
+}
+
 
 TEST_CASE("A fully braked vehicle stands still on a grade", "[physx][vehicle]") {
 

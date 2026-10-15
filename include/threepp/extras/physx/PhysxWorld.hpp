@@ -1285,7 +1285,13 @@ namespace threepp {
             return out;
         }
 
-        // Add a 2.5D height field as a static collider, in a Z-UP world.
+        // Which world axis a height field's heights run along (addStaticHeightField).
+        // Z: the Spot / calico convention (gravity -z). Y: threepp's own scene
+        // convention, and PhysxVehicle's (gravity -y).
+        enum class HeightFieldUp { Z, Y };
+
+        // Add a 2.5D height field as a static collider, in a Z-UP world (or a
+        // Y-up one with HeightFieldUp::Y, see the end of this comment).
         //
         // Why this exists next to addStaticTrimesh: a height field is watertight by
         // construction — one height per cell means a HOLE is not representable, and
@@ -1335,12 +1341,23 @@ namespace threepp {
         // here, the fix is CCD or a smaller substep, and it is the same fix for a
         // trimesh. What the height field buys over the bake is holes and spikes.
         //
+        // HeightFieldUp::Y lays the same grid in a Y-UP world: the ROW index runs
+        // along WORLD Z and the heights along +y,
+        //
+        //     heights[iz * nx + ix]  is the surface y at
+        //     (origin.x + ix*cell, origin.y + heights[...], origin.z + iz*cell)
+        //
+        // (`ny` is then the number of rows along z). That is PhysX's own local
+        // frame with rows and columns swapped, so the shape needs no rotation and
+        // no reversed columns. A Y-up PhysxVehicle falls straight through a Z-up
+        // field, which is vertical in its world.
+        //
         // Returns nullptr on a degenerate field (nx or ny < 2, cell <= 0, no finite
         // sample) or a cook failure.
         ::physx::PxRigidStatic* addStaticHeightField(
                 const float* heights, int nx, int ny, float cell,
                 const Vector3& origin, float thickness,
-                ::physx::PxMaterial* mat) {
+                ::physx::PxMaterial* mat, HeightFieldUp up = HeightFieldUp::Z) {
             using namespace ::physx;
             if (!heights || nx < 2 || ny < 2 || !(cell > 0.f) || !(thickness > 0.f)) return nullptr;
 
@@ -1362,10 +1379,13 @@ namespace threepp {
             const float heightScale = std::max((zMax - zMin) / 32000.f, 1e-4f);
             const float invScale = 1.f / heightScale;
 
+            const bool yUp = up == HeightFieldUp::Y;
             std::vector<PxHeightFieldSample> samples(n);
             for (int ix = 0; ix < nx; ++ix) {
                 for (int c = 0; c < ny; ++c) {
-                    const int iy = ny - 1 - c;// columns reversed: see the quarter turn above
+                    // Z-up: columns reversed, see the quarter turn above. Y-up:
+                    // column c is row iz = c as it stands.
+                    const int iy = yUp ? c : ny - 1 - c;
                     const float h = heights[static_cast<std::size_t>(iy) * nx + ix];
                     const float q = (std::isfinite(h) ? h : zMin) - zMin;
                     auto& s = samples[static_cast<std::size_t>(ix) * ny + c];
@@ -1390,9 +1410,13 @@ namespace threepp {
 
             PxRigidStatic* body = physics_->createRigidStatic(PxTransform(PxIdentity));
             PxShape* shape = physics_->createShape(geom, *mat, true);
-            shape->setLocalPose(PxTransform(
-                    PxVec3(origin.x, origin.y + static_cast<float>(ny - 1) * cell, origin.z + zMin),
-                    PxQuat(PxPiDivTwo, PxVec3(1.f, 0.f, 0.f))));
+            if (yUp) {
+                shape->setLocalPose(PxTransform(PxVec3(origin.x, origin.y + zMin, origin.z)));
+            } else {
+                shape->setLocalPose(PxTransform(
+                        PxVec3(origin.x, origin.y + static_cast<float>(ny - 1) * cell, origin.z + zMin),
+                        PxQuat(PxPiDivTwo, PxVec3(1.f, 0.f, 0.f))));
+            }
             body->attachShape(*shape);
             shape->release();
             hf->release();// the shape holds its own reference
@@ -1407,7 +1431,7 @@ namespace threepp {
         ::physx::PxRigidStatic* addStaticHeightField(
                 const std::vector<float>& heights, int nx, int ny, float cell,
                 const Vector3& origin, float thickness = 0.5f,
-                ::physx::PxMaterial* mat = nullptr) {
+                ::physx::PxMaterial* mat = nullptr, HeightFieldUp up = HeightFieldUp::Z) {
             if (nx < 2 || ny < 2) return nullptr;
             if (heights.size() != static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny)) {
                 throw std::runtime_error(
@@ -1415,7 +1439,7 @@ namespace threepp {
                         std::to_string(heights.size()) + " samples, expected nx*ny = " +
                         std::to_string(static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny)));
             }
-            return addStaticHeightField(heights.data(), nx, ny, cell, origin, thickness, mat);
+            return addStaticHeightField(heights.data(), nx, ny, cell, origin, thickness, mat, up);
         }
 
         // Cook a convex hull from raw positions (tightly packed x,y,z floats).

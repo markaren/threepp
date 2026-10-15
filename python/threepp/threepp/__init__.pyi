@@ -7515,11 +7515,11 @@ class PhysxWorld:
         """
         Add a static collider inferred from the mesh's Box/Sphere/Capsule geometry. `material` (from create_material) sets its friction/restitution — e.g. a grippy floor.
         """
-    def add_static_heightfield(self, heights: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], cell: typing.SupportsFloat | typing.SupportsIndex, origin: Vector3, thickness: typing.SupportsFloat | typing.SupportsIndex = 0.5) -> RigidBody:
+    def add_static_heightfield(self, heights: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], cell: typing.SupportsFloat | typing.SupportsIndex, origin: Vector3, thickness: typing.SupportsFloat | typing.SupportsIndex = 0.5, up_axis: str = 'z') -> RigidBody:
         """
-        Add a 2.5D height field as a static collider, in a Z-UP world.
+        Add a 2.5D height field as a static collider, in a Z-UP world, or a Y-UP one with up_axis='y'.
         
-        `heights` is a 2-D float32/float64 array of shape (ny, nx): ROWS ARE Y. heights[iy, ix] is the surface z at world (origin.x + ix*cell, origin.y + iy*cell), with `cell` the sample spacing in metres, the same in x and y. A (nx, ny) grid indexed the other way round must be passed transposed. Heights are quantised to int16 against the field's own z range (0.6 mm for a 20 m range), and a non-finite sample is pinned to the field's floor rather than poisoning the whole grid.
+        `heights` is a 2-D float32/float64 array of shape (ny, nx): ROWS ARE Y. heights[iy, ix] is the surface z at world (origin.x + ix*cell, origin.y + iy*cell), with `cell` the sample spacing in metres, the same in x and y. A (nx, ny) grid indexed the other way round must be passed transposed. With up_axis='y' (threepp's scene convention, and PhysxVehicle's: a Y-up vehicle falls straight through a Z-up field) ROWS ARE Z instead: heights[iz, ix] is the surface y at world (origin.x + ix*cell, origin.z + iz*cell). Heights are quantised to int16 against the field's own z range (0.6 mm for a 20 m range), and a non-finite sample is pinned to the field's floor rather than poisoning the whole grid.
         
         Use this instead of add_static_trimesh wherever the collider is terrain: a height field cannot represent a HOLE or a near-vertical SPIKE, which is what a marching-cubes bake of a scan is full of, and it costs ~4 bytes a sample against ~100 for the same surface as triangles.
         

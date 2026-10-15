@@ -941,7 +941,16 @@ namespace threepp_py {
                 .def("add_static_heightfield",
                      [](PhysxWorld& w,
                         py::array_t<float, py::array::c_style | py::array::forcecast> heights,
-                        float cell, const Vector3& origin, float thickness) {
+                        float cell, const Vector3& origin, float thickness, const std::string& up_axis) {
+                         PhysxWorld::HeightFieldUp up;
+                         if (up_axis == "z" || up_axis == "Z") {
+                             up = PhysxWorld::HeightFieldUp::Z;
+                         } else if (up_axis == "y" || up_axis == "Y") {
+                             up = PhysxWorld::HeightFieldUp::Y;
+                         } else {
+                             throw py::value_error("add_static_heightfield: up_axis must be 'z' or 'y', got '" +
+                                                   up_axis + "'");
+                         }
                          if (heights.ndim() != 2) {
                              throw std::runtime_error(
                                      "add_static_heightfield: heights must be a 2-D (ny, nx) array, got " +
@@ -955,7 +964,7 @@ namespace threepp_py {
                                      std::to_string(ny) + ", " + std::to_string(nx) + ")");
                          }
                          auto* a = w.addStaticHeightField(heights.data(), nx, ny, cell,
-                                                          origin, thickness, nullptr);
+                                                          origin, thickness, nullptr, up);
                          if (!a) {
                              throw std::runtime_error(
                                      "add_static_heightfield: degenerate field (cell and thickness must "
@@ -964,13 +973,17 @@ namespace threepp_py {
                          return RigidBody(a);
                      },
                      py::arg("heights"), py::arg("cell"), py::arg("origin"),
-                     py::arg("thickness") = 0.5f, py::keep_alive<0, 1>(),
-                     "Add a 2.5D height field as a static collider, in a Z-UP world.\n\n"
+                     py::arg("thickness") = 0.5f, py::arg("up_axis") = "z", py::keep_alive<0, 1>(),
+                     "Add a 2.5D height field as a static collider, in a Z-UP world, or a Y-UP one "
+                     "with up_axis='y'.\n\n"
                      "`heights` is a 2-D float32/float64 array of shape (ny, nx): ROWS ARE Y. "
                      "heights[iy, ix] is the surface z at world "
                      "(origin.x + ix*cell, origin.y + iy*cell), with `cell` the sample spacing in "
                      "metres, the same in x and y. A (nx, ny) grid indexed the other way round must "
-                     "be passed transposed. Heights are quantised to int16 against the field's own "
+                     "be passed transposed. With up_axis='y' (threepp's scene convention, and "
+                     "PhysxVehicle's: a Y-up vehicle falls straight through a Z-up field) ROWS ARE Z "
+                     "instead: heights[iz, ix] is the surface y at world (origin.x + ix*cell, "
+                     "origin.z + iz*cell). Heights are quantised to int16 against the field's own "
                      "z range (0.6 mm for a 20 m range), and a non-finite sample is pinned to the "
                      "field's floor rather than poisoning the whole grid.\n\n"
                      "Use this instead of add_static_trimesh wherever the collider is terrain: a "

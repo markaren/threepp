@@ -384,3 +384,69 @@ TEST_CASE("addStaticHeightField rejects a degenerate field", "[physx]") {
     // scale falls back to its floor rather than dividing by it.
     CHECK(world.addStaticHeightField(flat, 2, 2, 0.1f, Vector3(), 0.5f) != nullptr);
 }
+
+// -- HeightFieldUp::Y -------------------------------------------------------
+//
+// The same asymmetric ramp laid in a Y-UP world (the default PhysxWorld, and
+// PhysxVehicle's convention): rows run along world z, heights along +y,
+//
+//     y = 0.1*x + 0.3*sin(z)   over x in [-2, 2], z in [-1, 1] at 10 cm
+//
+// so a transposed grid, a mirrored row order or a swapped axis again moves at
+// least one probe by far more than the tolerance.
+
+namespace {
+
+    // The Y-up plumb bob: free along y only.
+    ::physx::PxRigidDynamic* dropProbeYUp(PhysxWorld& w, float x, float y, float z,
+                                          float radius, ::physx::PxMaterial* mat) {
+        using namespace ::physx;
+        auto* body = w.addDynamic(PxSphereGeometry(radius), PxTransform(PxVec3(x, y, z)), 500.f, mat);
+        body->setRigidDynamicLockFlags(
+                PxRigidDynamicLockFlag::eLOCK_LINEAR_X | PxRigidDynamicLockFlag::eLOCK_LINEAR_Z |
+                PxRigidDynamicLockFlag::eLOCK_ANGULAR_X | PxRigidDynamicLockFlag::eLOCK_ANGULAR_Y |
+                PxRigidDynamicLockFlag::eLOCK_ANGULAR_Z);
+        return body;
+    }
+
+}// namespace
+
+TEST_CASE("addStaticHeightField(HeightFieldUp::Y) puts H[iz][ix] at world (x0+ix*c, z0+iz*c)", "[physx]") {
+
+    // rampField() fills h[row * nx + ix] = rampZ(x, row coordinate): here the row
+    // coordinate is z and the value is the surface y.
+    const auto field = rampField();
+
+    PhysxWorld world;// gravity -y
+    auto* mat = world.physics().createMaterial(0.8f, 0.8f, 0.f);
+
+    auto* body = world.addStaticHeightField(field, kHfNx, kHfNy, kHfCell,
+                                            Vector3(kHfX0, 0.f, kHfY0), 0.5f, nullptr,
+                                            PhysxWorld::HeightFieldUp::Y);
+    REQUIRE(body);
+
+    // 4 m of x, 2 m of z, and only the ramp's own rise in y.
+    const auto size = sizeOf(body->getWorldBounds());
+    CHECK_THAT(size.x, WithinAbs(4.f, 0.05f));
+    CHECK_THAT(size.z, WithinAbs(2.f, 0.05f));
+    CHECK(size.y < 1.f);
+
+    constexpr float kR = 0.05f;
+    std::vector<::physx::PxRigidDynamic*> probes;
+    for (const auto& p : kProbes) {
+        probes.push_back(dropProbeYUp(world, p.x, rampZ(p.x, p.y) + 0.5f, p.y, kR, mat));
+    }
+
+    for (int i = 0; i < 240; ++i) world.step(1.f / 60.f);
+
+    std::printf("\n  Y-up height-field probes (rest y - radius vs analytic 0.1x + 0.3 sin z)\n");
+    for (std::size_t i = 0; i < probes.size(); ++i) {
+        const auto& p = kProbes[i];
+        const float want = rampZ(p.x, p.y);
+        const float got = probes[i]->getGlobalPose().p.y - kR;
+        std::printf("   (%+5.2f,%+5.2f) %-18s want %+7.4f  got %+7.4f  err %+7.4f\n",
+                    p.x, p.y, p.what, want, got, got - want);
+        INFO("probe " << p.what << " at (x " << p.x << ", z " << p.y << ")");
+        CHECK_THAT(got, WithinAbs(want, 0.02f));
+    }
+}
