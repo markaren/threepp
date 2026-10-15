@@ -1325,7 +1325,8 @@ namespace threepp_py {
                                 float suspension_travel, float suspension_stiffness, float suspension_damping,
                                 float suspension_attachment_y, float wheel_damping_rate,
                                 float engine_brake_torque, float engine_brake_idle_speed,
-                                const Vector3& position, const Quaternion& rotation) {
+                                const Vector3& position, const Quaternion& rotation,
+                                bool wheels_hit_other_vehicles) {
                         PhysxVehicle::Settings s;
                         s.chassisWidth = chassis_width;
                         s.chassisHeight = chassis_height;
@@ -1352,6 +1353,7 @@ namespace threepp_py {
                         s.engineBrakeIdleSpeed = engine_brake_idle_speed;
                         s.spawnPosition = position;
                         s.spawnRotation = rotation;
+                        s.wheelsHitOtherVehicles = wheels_hit_other_vehicles;
                         return std::make_unique<PhysxVehicle>(world, s);
                     }),
                     py::arg("world"),
@@ -1370,13 +1372,17 @@ namespace threepp_py {
                     py::arg("wheel_damping_rate") = 1.5f,
                     py::arg("engine_brake_torque") = 0.f, py::arg("engine_brake_idle_speed") = 1.5f,
                     py::arg("position") = Vector3(0, 1.2f, 0), py::arg("rotation") = Quaternion(),
+                    py::arg("wheels_hit_other_vehicles") = false,
                     py::keep_alive<1, 2>(),// the world outlives the vehicle (it steps it)
                     "Spawn a vehicle in `world`. Defaults are the Range Rover Evoque tuning of the "
                     "C++ demo: 4WD direct drive, tire_friction 2.0 (dry asphalt). Dimensions are the "
                     "chassis box PhysX simulates — match them to whatever body you draw on top. "
                     "driven_wheels selects which wheels take throttle torque, in wheel-index order. "
                     "engine_brake_torque (N m on each driven wheel, 0 = none) is the engine's drag with "
-                    "the throttle released: see the engine_brake_torque property.")
+                    "the throttle released: see the engine_brake_torque property. The wheels find road "
+                    "through every vehicle's chassis (chassis still collide with chassis): "
+                    "wheels_hit_other_vehicles=True lets them stand on another car's roof, which throws "
+                    "a car whose wheel comes over one.")
                 // -- Inputs --
                 .def("set_throttle", &PhysxVehicle::setThrottle, py::arg("value"),
                      "Throttle, 0..1. Direct drive: torque straight to the driven wheels.")
@@ -1393,6 +1399,10 @@ namespace threepp_py {
                               "the brake. None of it below engine_brake_idle_speed (an engine at idle does not "
                               "brake, and a car let go on a grade still rolls away), all of it from twice that. "
                               "0 = none (the default). May be set under way: a lower gear is more of it.")
+                .def_property_readonly("wheels_hit_other_vehicles",
+                                       [](const PhysxVehicle& v) { return v.settings().wheelsHitOtherVehicles; },
+                                       "Whether this vehicle's wheels take another vehicle's chassis for road "
+                                       "(the constructor's argument; False by default).")
                 .def("respawn",
                      [](PhysxVehicle& v, const Vector3& position, const Quaternion& rotation) {
                          auto* actor = v.chassisActor();

@@ -12,7 +12,11 @@
 // Coasting, direct drive has no engine to hold the car back: the engine brake
 // (PhysxVehicleSettings::engineBrakeTorque) is that, and off unless asked for.
 //
-// Physics alone on a tilted slab, a fixed 1/60 s clock, no renderer.
+// Two vehicles: a wheel finds the ground through another vehicle's chassis,
+// as through its own, rather than standing on its roof and throwing the car.
+//
+// Physics alone on a tilted slab, a fixed 1/60 s clock (the game's 1/120 s
+// for the two-vehicle cases), no renderer.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -24,6 +28,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <utility>
 
 using namespace threepp;
 
@@ -309,5 +314,154 @@ TEST_CASE("Engine braking holds a coasting vehicle back", "[physx][vehicle]") {
         geared.run(20.f, 0.f, 0.f);
         CHECK(geared.car->forwardSpeed() > 1.5f);// the idle speed: under it the engine lets go
         CHECK(geared.car->forwardSpeed() < 3.5f);
+    }
+}
+
+namespace {
+
+    // The dune-buggy's car: the wheels stand just outside a slim chassis box
+    // (track 1.80, box 1.70 wide) and are mounted above the box's middle, so a
+    // wheel's road query starts just above the roof of a car alongside.
+    constexpr float kBuggyRide = 0.55f;// the chassis' middle over the road at rest
+
+    PhysxVehicle::Settings buggy(bool wheelsHitOtherVehicles) {
+
+        PhysxVehicle::Settings s;
+        s.chassisWidth = 1.70f;
+        s.chassisHeight = 0.30f;
+        s.chassisLength = 3.2f;
+        s.chassisMass = 850.f;
+        s.wheelbase = 2.64f;
+        s.trackWidth = 1.80f;
+        s.wheelMass = 28.f;
+        s.suspensionTravelDist = 0.55f;
+        s.suspensionAttachmentY = 0.205f;
+        s.suspensionStiffness = 10'690.f;// a quarter of the weight over 0.195 m of static jounce
+        s.suspensionDamping = 1266.f;    // 0.42 of critical
+        s.drivenWheels = {true, true, true, true};
+        s.maxThrottleTorque = 600.f;
+        s.maxBrakeTorque = 590.f;
+        s.tireFriction = 1.18f;
+        s.longitudinalStiffness = 60'000.f;
+        s.lateralStiffness = 52'000.f;
+        s.wheelDampingRate = 0.6f;
+        s.wheelsHitOtherVehicles = wheelsHitOtherVehicles;
+        return s;
+    }
+
+    // The game's clock: PhysX at 1/120 s, one step per call.
+    constexpr float kBuggyDt = 1.f / 120.f;
+
+    PhysxWorld::Settings buggyClock() {
+        PhysxWorld::Settings s;
+        s.fixedTimestep = kBuggyDt;
+        s.maxSubSteps = 1;
+        return s;
+    }
+
+    // Two buggies on a flat slab, and the worst either did: how far its
+    // chassis rose over the ride height, and how fast it spun.
+    struct Pair {
+        PhysxWorld world{buggyClock()};
+        bool seeEachOther;
+        std::unique_ptr<PhysxVehicle> a, b;
+        float rise = 0.f, spin = 0.f;
+
+        explicit Pair(bool see): seeEachOther(see) {
+            world.addStatic(::physx::PxBoxGeometry(100.f, 0.5f, 100.f),
+                            ::physx::PxTransform(::physx::PxVec3(0, -0.5f, 0)));
+        }
+
+        std::unique_ptr<PhysxVehicle> spawn(const Vector3& at) {
+            auto s = buggy(seeEachOther);
+            s.spawnPosition = at;
+            return std::make_unique<PhysxVehicle>(world, s);
+        }
+
+        void run(float seconds, float throttle, float brake) {
+            for (auto* car : {a.get(), b.get()}) {
+                if (!car) continue;
+                car->setThrottle(throttle);
+                car->setBrake(brake);
+            }
+            const int n = static_cast<int>(std::lround(seconds / kBuggyDt));
+            for (int i = 0; i < n; ++i) {
+                world.step(kBuggyDt);
+                for (auto* car : {a.get(), b.get()}) {
+                    if (!car) continue;
+                    rise = std::max(rise, car->chassisPose().p.y - kBuggyRide);
+                    spin = std::max(spin, car->chassisActor()->getAngularVelocity().magnitude());
+                }
+            }
+        }
+    };
+
+}// namespace
+
+TEST_CASE("Two vehicles side by side do not stand on each other's roof", "[physx][vehicle]") {
+
+    // 1.72 m apart: the boxes 2 cm clear of each other, each car's inner
+    // wheels over the other's roof. Parked, then driven off together.
+    const auto sideBySide = [](bool seeEachOther) {
+        Pair p(seeEachOther);
+        p.a = p.spawn({0, kBuggyRide, 0});
+        p.b = p.spawn({1.72f, kBuggyRide, 0});
+        p.run(2.f, 0.f, 1.f);
+        p.run(3.f, 0.5f, 0.f);
+        return std::pair{p.rise, p.spin};
+    };
+
+    SECTION("the wheels find the ground through the other car") {
+        const auto [rise, spin] = sideBySide(false);
+        INFO("rise " << rise << " m, spin " << spin << " rad/s");
+        CHECK(rise < 0.05f);// 0 m, 0.04 rad/s, measured
+        CHECK(spin < 0.5f);
+    }
+
+    SECTION("a wheel that takes the other car's roof for road throws its own") {
+        // 0.13 m and 3.2 rad/s here, measured. The dune-buggy game, with its
+        // own tyre forces on top, threw a car 1.1 m up at 34 rad/s.
+        const auto [rise, spin] = sideBySide(true);
+        INFO("rise " << rise << " m, spin " << spin << " rad/s");
+        CHECK(rise > 0.05f);
+        CHECK(spin > 1.f);
+    }
+}
+
+TEST_CASE("A vehicle landing next to another does not launch it", "[physx][vehicle]") {
+
+    // Dropped 1.5 m alongside a parked car, 2 cm clear of it, its inner wheels
+    // over the parked car's roof and the parked car's wheels under its box.
+    // The drop is the only height either may have.
+    const auto landing = [](bool seeEachOther, float x) {
+        auto p = std::make_unique<Pair>(seeEachOther);
+        p->a = p->spawn({0, kBuggyRide, 0});
+        p->run(1.f, 0.f, 1.f);
+        p->b = p->spawn({x, kBuggyRide + 1.5f, 0});
+        p->run(4.f, 0.f, 1.f);
+        return p;
+    };
+
+    SECTION("the wheels find the ground through the other car") {
+        const auto p = landing(false, 1.72f);
+        INFO("rise " << p->rise << " m, spin " << p->spin << " rad/s");
+        CHECK(p->rise < 1.55f);
+        CHECK(p->spin < 0.5f);// 0 rad/s, measured
+    }
+
+    SECTION("on top of the other, its chassis rests on the other's") {
+        const auto p = landing(false, 0.f);
+        INFO("rise " << p->rise << " m, spin " << p->spin << " rad/s");
+        CHECK(p->rise < 1.55f);
+        CHECK(p->spin < 0.5f);// 0.007 rad/s, measured
+        CHECK(std::abs(p->b->chassisPose().p.y - (p->a->chassisPose().p.y + 0.30f)) < 0.05f);// box on box
+    }
+
+    SECTION("a wheel that takes the other car's roof for road throws the cars") {
+        // 5.0 rad/s here, measured. In the dune-buggy game the parked car
+        // went 22 m up, spinning at 59 rad/s.
+        const auto p = landing(true, 1.72f);
+        INFO("rise " << p->rise << " m, spin " << p->spin << " rad/s");
+        CHECK(p->spin > 1.f);
     }
 }

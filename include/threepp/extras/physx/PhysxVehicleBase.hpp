@@ -15,6 +15,16 @@
 
 namespace threepp {
 
+    // Bit set in the QUERY filter data (word3) of every PhysxVehicle chassis
+    // shape. The wheels' road queries reject the shapes that carry it (see
+    // PhysxVehicleBaseSettings::wheelsHitOtherVehicles). Query filter data is
+    // separate from the simulation filter data kContactReportFilterBit lives
+    // in, so chassis-vs-chassis contacts are untouched; and PhysX compares a
+    // shape's query filter data only for queries whose own filter data is
+    // non-zero, which no threepp query is (the vehicles' included), so a
+    // scene query that does not ask for this bit sees a chassis as before.
+    inline constexpr ::physx::PxU32 kVehicleChassisQueryBit = 1u << 31;
+
     // Drive-agnostic tuning shared by PhysxVehicle (direct drive) and
     // PhysxVehicleEngineDrive. The defaults are the direct-drive tuning;
     // PhysxVehicleEngineDrive::Settings overrides several of them in its
@@ -150,6 +160,24 @@ namespace threepp {
         float minLongSlipDenominatorActive = 2.0f; // PhysX default 0.1
         float minLongSlipDenominatorPassive = 4.0f;// PhysX default 4.0
         float minLatSlipDenominator = 1.0f;        // PhysX default 1.0
+
+        // Whether this vehicle's wheels find road on ANOTHER vehicle's chassis.
+        // Off: the wheel queries pass through every vehicle's chassis box, as
+        // they always did through the car's own, and find the ground beneath.
+        //
+        // On, a wheel standing over a neighbour's chassis (two cars side by
+        // side, one landing next to another) takes the roof for road. The
+        // query starts at the wheel's mount, inside or just above that box, so
+        // the suspension goes from droop to full compression in one step and
+        // throws the car: the dune-buggy saw 40 m up and 58 rad/s of spin.
+        // The other car does not feel any of it (PhysX puts no reaction on
+        // what a wheel query hits), so it is not a car resting on a car
+        // either. Chassis boxes still collide with chassis boxes either way:
+        // that is what keeps two cars apart, and what a car landing on top of
+        // another sits on. A single vehicle runs the same whichever way this
+        // is set. Wheels are not collision shapes, so they still pass through
+        // other wheels.
+        bool wheelsHitOtherVehicles = false;
     };
 
     // Drive-agnostic core of a 4-wheel vehicle built on PxVehicle2 components —
@@ -676,6 +704,8 @@ namespace threepp {
                     settings_.chassisHeight * 0.5f,
                     settings_.chassisLength * 0.5f);
             PxShape* chassisShape = physics.createShape(chassisGeom, world_->defaultMaterial(), true);
+            // Marks it for every vehicle's wheel queries: see kVehicleChassisQueryBit.
+            chassisShape->setQueryFilterData(PxFilterData(0, 0, 0, kVehicleChassisQueryBit));
             chassisActor_->attachShape(*chassisShape);
             chassisShape->release();
 
@@ -708,6 +738,7 @@ namespace threepp {
             world_->scene().addActor(*chassisActor_);
 
             queryFilter_.ignored = chassisActor_;
+            queryFilter_.ignoreVehicles = !settings_.wheelsHitOtherVehicles;
         }
 
         void createPhysxConstraints() {
@@ -1031,15 +1062,22 @@ namespace threepp {
             }
         };
 
+        // The wheel queries' pre-filter: never the vehicle's own chassis, and
+        // no other vehicle's either unless Settings::wheelsHitOtherVehicles.
         struct ChassisQueryFilter : public ::physx::PxQueryFilterCallback {
             ::physx::PxRigidActor const* ignored = nullptr;
+            bool ignoreVehicles = true;
 
             ::physx::PxQueryHitType::Enum preFilter(
                     const ::physx::PxFilterData&,
-                    const ::physx::PxShape*,
+                    const ::physx::PxShape* shape,
                     const ::physx::PxRigidActor* actor,
                     ::physx::PxHitFlags&) override {
-                return actor == ignored ? ::physx::PxQueryHitType::eNONE : ::physx::PxQueryHitType::eBLOCK;
+                if (actor == ignored) return ::physx::PxQueryHitType::eNONE;
+                if (ignoreVehicles && shape && (shape->getQueryFilterData().word3 & kVehicleChassisQueryBit)) {
+                    return ::physx::PxQueryHitType::eNONE;
+                }
+                return ::physx::PxQueryHitType::eBLOCK;
             }
 
             ::physx::PxQueryHitType::Enum postFilter(

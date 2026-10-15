@@ -169,6 +169,30 @@ def test_vehicle_engine_brake_holds_it_back():
     assert 1.5 < geared < 0.8 * free, "the engine holds it back, and lets it roll under the idle speed"
 
 
+def test_vehicle_wheels_find_the_ground_through_another_car():
+    # Two buggies parked 1.72 m apart: the chassis boxes (1.70 wide) 2 cm clear, each car's
+    # inner wheels (track 1.80) over the other's roof.
+    def rise(**kw):  # one world at a time: each is gone when this returns
+        world = tp.PhysxWorld()
+        slab = tp.Mesh(tp.BoxGeometry(60, 1, 60), tp.MeshStandardMaterial())
+        slab.position.set(0, -0.5, 0)
+        world.add_static(slab)
+        buggy = dict(chassis_width=1.70, chassis_height=0.30, chassis_length=3.2, chassis_mass=850.0,
+                     wheelbase=2.64, track_width=1.80, wheel_mass=28.0, suspension_travel=0.55,
+                     suspension_attachment_y=0.205, suspension_stiffness=10690.0, suspension_damping=1266.0)
+        cars = [tp.PhysxVehicle(world, position=tp.Vector3(x, 0.55, 0), **buggy, **kw) for x in (0.0, 1.72)]
+        assert all(c.wheels_hit_other_vehicles == kw.get("wheels_hit_other_vehicles", False) for c in cars)
+        for c in cars:
+            c.set_brake(1.0)
+        top = 0.0
+        for _ in range(120):
+            world.step(1 / 60)
+            top = max(top, max(c.position.y for c in cars) - 0.55)
+        return top
+    assert rise() < 0.02, "the wheels find the ground beneath the other car, as through their own"
+    assert rise(wheels_hit_other_vehicles=True) > 0.05, "a wheel on the other car's roof throws its car"
+
+
 # --- Soft bodies (deformable volumes). GPU-only: PhysX cooks and solves these on
 # CUDA, so the world needs gpu_dynamics and the box gets skipped on a CPU-only
 # machine rather than failing there.
