@@ -1181,6 +1181,11 @@ namespace threepp {
         // eviction prune, geomVersion-changed rebuild) so a record's LOD
         // resources never outlive the record itself.
         void destroyBlasLodLevels(BlasRecord& rec);
+        // The same for a record with no chain still landing (lodLanding
+        // empty), without a device wait: the level BLASes and index buffers
+        // go to the retire queue, since only earlier frames still in flight
+        // reference them. The in-place refresh's frame-cb route uses it.
+        void retireBlasLodLevels(BlasRecord& rec);
 
         // Free every GPU resource a BlasRecord owns. One shared helper for all
         // six BlasRecord holders (blasCache, skinned / tet / displaced / grass

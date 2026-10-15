@@ -3983,6 +3983,22 @@ void VulkanRenderer::Impl::destroyBlasLodLevels(BlasRecord& rec) {
             rec.lodState = BlasRecord::LodState::None;
         }
 
+void VulkanRenderer::Impl::retireBlasLodLevels(BlasRecord& rec) {
+            for (auto& lvl : rec.lodLevels) {
+                lodBlasBytes_  -= std::min<uint64_t>(lodBlasBytes_,  lvl.storage.size);
+                lodIndexBytes_ -= std::min<uint64_t>(lodIndexBytes_, lvl.index.size);
+                retireAS(lvl.as);
+                lvl.as = VK_NULL_HANDLE;
+                retire(std::move(lvl.storage));
+                retire(std::move(lvl.index));
+            }
+            if (rec.lodState == BlasRecord::LodState::Ready && !rec.lodLevels.empty()) {
+                lodChainsReadyCount_ = lodChainsReadyCount_ > 0 ? lodChainsReadyCount_ - 1 : 0;
+            }
+            rec.lodLevels.clear();
+            rec.lodState = BlasRecord::LodState::None;
+        }
+
 VulkanRenderer::Impl::SkinnedMeshState* VulkanRenderer::Impl::ensureSkinnedBlas(SkinnedMesh& sm) {
             auto it = skinnedMeshStates.find(&sm);
             if (it != skinnedMeshStates.end()) return it->second.get();

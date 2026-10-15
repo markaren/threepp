@@ -21,6 +21,10 @@
 //       drain the device and rebuild the BLAS on every write (10 to 17 ms in
 //       the dune-buggy); it now records into the frame command buffer: no
 //       drain at all, no graduation, and the quad ends up 80 cm along.
+//   ball  a blue 4096-triangle sphere that sits still until its auto-LOD chain
+//       has landed, then is moved up once: an edit of a record with a chain
+//       used to drain to free the chain (a rut chunk reused from a pool);
+//       the chain is retired instead.
 //
 // Plain exit-code program, not Catch2, like the other Vulkan tests here.
 // Exits 42 (CTest "Skipped") when no Vulkan GPU is available.
@@ -29,6 +33,7 @@
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/core/BufferAttribute.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
+#include "threepp/geometries/SphereGeometry.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
@@ -55,6 +60,8 @@ namespace {
     constexpr float kMoverX = -1.2f, kMoverY = -0.9f;
     constexpr int kMoverEdits = 10;
     constexpr float kMoverStep = 0.08f;
+    constexpr float kBallX = 1.3f, kBallY = -0.9f, kBallLift = 0.3f;
+    constexpr int kBallEditFrame = kFramesPerPhase + 40;
 
     std::shared_ptr<Texture> constantEnv(float le) {
         constexpr int W = 64, H = 32;
@@ -191,6 +198,12 @@ int main() {
     quads[4]->position.y = kMoverY;
     scene.add(quads[4]);
     setColors(*quads[4]->geometry(), 0, 1, 0);
+    auto ballMat = MeshStandardMaterial::create();
+    ballMat->color = Color(0.05f, 0.1f, 0.9f);
+    ballMat->roughness = 1.f;
+    auto ball = Mesh::create(SphereGeometry::create(0.4f, 64, 32), ballMat);// 4096 triangles
+    ball->position.set(kBallX, kBallY, 0.f);
+    scene.add(ball);
     setColors(*quads[0]->geometry(), 1, 0, 0);
     setColors(*quads[1]->geometry(), 1, 0, 0);
     for (int i = 2; i < 4; ++i) {
@@ -239,6 +252,18 @@ int main() {
             const bool last = frame == kFramesPerPhase + 7;
             setColors(*quads[1]->geometry(), last ? 0.f : 1.f, 0.f, last ? 1.f : 0.f);
         }
+        // The ball moves once, alone in its frame: quad[3]'s edit at phase 1
+        // re-admits every dirty record through a structural rebuild, which
+        // would hide the case. By now its chain has landed again.
+        if (frame == kBallEditFrame) {
+            const auto lod = renderer.autoLodStats();
+            std::printf("  auto-LOD before the ball's edit: %u chain(s) ready, %u queued\n",
+                        lod.chainsReady, lod.chainsQueued);
+            check("the ball's auto-LOD chain landed (the case under test)", lod.chainsReady >= 1u);
+            auto* pos = ball->geometry()->getAttribute<float>("position");
+            for (int k = 0; k < pos->count(); ++k) pos->setY(k, pos->getY(k) + kBallLift);
+            pos->needsUpdate();
+        }
         // Quad 4 moves on every third frame.
         if (frame >= kFramesPerPhase && frame < kFramesPerPhase + 3 * kMoverEdits &&
             (frame - kFramesPerPhase) % 3 == 0) {
@@ -255,6 +280,8 @@ int main() {
             check("quad[2] uv on the red half", dominant(sample(px, 2)) == 0);
             check("quad[3] uv on the blue half", dominant(sample(px, 3)) == 2);
             check("quad[4] green where it starts", dominant(sample(px, 4)) == 1);
+            check("ball not yet at its lifted spot", dominant(samplePoint(px, kBallX, kBallY + 0.55f)) == -1);
+
             setColors(*quads[0]->geometry(), 0, 1, 0);
             setUvRange(*quads[2]->geometry(), 0.8f, 0.95f);
             setUvRange(*quads[3]->geometry(), 1.05f, 1.2f);
@@ -278,7 +305,8 @@ int main() {
                         static_cast<unsigned long long>(st.refitsRecorded),
                         static_cast<unsigned long long>(st.drains));
             check("quad[1] graduated, quad[4] (every third frame) did not", st.graduated == 1u);
-            check("no in-place edit drained the device", st.drains == 0u);
+            check("no in-place edit drained the device (the ball's chain included)", st.drains == 0u);
+            check("ball moved up by one edit", dominant(samplePoint(px, kBallX, kBallY + 0.55f)) == 2);
             if (vulkan::validationActive()) {
                 check("no validation errors", vulkan::validationErrorCount() == 0u);
             }

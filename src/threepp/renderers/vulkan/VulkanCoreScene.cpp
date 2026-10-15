@@ -2126,16 +2126,31 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
 
                             auto* nrmAttr = entries[i].mesh->geometry()->getAttribute<float>("normal");
                             // The frame-cb route needs normals (the same
-                            // requirement refreshGeomBlasBatch enforces) and a
-                            // record with no LOD chain. The quiet-window gate
-                            // in the selection pass stops re-enqueues while a
-                            // mesh deforms; a static mesh's first edit can still
-                            // find a chain, and the drained branch below is the
-                            // only place it can be destroyed safely, so that
-                            // record stays there this frame.
-                            const bool frameRoute =
-                                    nrmAttr && rec.lodState == BlasRecord::LodState::None;
+                            // requirement refreshGeomBlasBatch enforces) and no
+                            // auto-LOD chain still landing (its build batch in
+                            // flight on the GPU): the drained branch below is the
+                            // only place that one can be freed safely, so that
+                            // record stays there this frame. A landed chain is
+                            // retired below instead. The quiet-window gate in the
+                            // selection pass stops re-enqueues while a mesh
+                            // deforms, but a mesh edited every so often (a rut
+                            // chunk reused from a pool) gets a chain while it
+                            // sits still, and its next edit used to drain.
+                            const bool frameRoute = nrmAttr && rec.lodLanding.empty();
                             if (frameRoute) {
+                                // An in-place vertex rewrite invalidates the chain:
+                                // its level BLASes BAKE positions and its error
+                                // bounds measured the old surface. Retired, not
+                                // destroyed: earlier frames' TLASes may still
+                                // reference a level. Selection already ran this
+                                // frame and may have left en.lodLevel > 0, so the
+                                // TLAS fill must re-read the effective level
+                                // (LOD0 from here, see destroyBlasLodLevels' caller
+                                // below).
+                                if (rec.lodState != BlasRecord::LodState::None) {
+                                    retireBlasLodLevels(rec);
+                                    lodChangedThisFrame_ = true;
+                                }
                                 if (!rec.perFrameDynamic &&
                                     rec.dirtyStreak >= BlasRecord::kDynamicGraduationStreak) {
                                     // Graduate: allocate the staging ring, one
