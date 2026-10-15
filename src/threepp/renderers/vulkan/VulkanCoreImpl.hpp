@@ -972,6 +972,7 @@ namespace threepp {
         // mip 0 (nLen ~= 1), and strictly reduces normal-map minification
         // shimmer otherwise.
         bool     normalMapToksvig_ = true;
+        bool     stochasticTilingIntegerHash_ = false;// setStochasticTilingIntegerHash
 
         // ── Automatic mesh LOD (setAutoLod; ON by default) ──────────────────
         // Measured: Bistro (per-pixel-bound worst case) neutral, fjord flight

@@ -2834,6 +2834,14 @@ namespace threepp {
         return core()->normalMapToksvig_;
     }
 
+    void VulkanRenderer::setStochasticTilingIntegerHash(bool enabled) {
+        core()->stochasticTilingIntegerHash_ = enabled;
+    }
+
+    bool VulkanRenderer::stochasticTilingIntegerHash() const {
+        return core()->stochasticTilingIntegerHash_;
+    }
+
     void VulkanRenderer::setAutoLod(bool enabled) {
         core()->autoLod_ = enabled;
     }

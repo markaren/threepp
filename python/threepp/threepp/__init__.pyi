@@ -11544,6 +11544,14 @@ class VulkanRenderer:
     def starfield(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
+    def stochastic_tiling_integer_hash(self) -> bool:
+        """
+        Stochastic tiling of the detail and terrain-band layers: an exact integer hash per lattice vertex. The default float hash can give one vertex two offsets, and the texture then steps along that lattice edge (hard straight lines at 0, 60 and 120 degrees). On removes the lines and redraws every offset, so the texture placement of such a scene changes. Off by default.
+        """
+    @stochastic_tiling_integer_hash.setter
+    def stochastic_tiling_integer_hash(self, arg1: bool) -> None:
+        ...
+    @property
     def sun_angular_radius(self) -> float:
         """
         Directional-light angular radius in degrees for soft sun shadows (default 0 = hard shadow; the real sun is about 0.27).

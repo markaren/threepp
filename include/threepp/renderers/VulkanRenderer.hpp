@@ -674,6 +674,18 @@ namespace threepp {
         void setNormalMapToksvig(bool enabled);
         [[nodiscard]] bool normalMapToksvig() const;
 
+        // Stochastic tiling of the detail and terrain-band layers
+        // (MaterialWithDetailMap, MaterialWithTerrainMaps): give each lattice
+        // vertex its random offset from an exact integer hash. The default float
+        // hash can hand one vertex two different offsets in the two triangles
+        // that share it, and the texture then steps along that lattice edge:
+        // hard straight lines at 0, 60 and 120 degrees in world xz. On, the lines
+        // are gone and every offset is a different random draw, so a scene with
+        // these layers changes its texture placement. OFF by default until the
+        // look is judged; affects nothing without those layers.
+        void setStochasticTilingIntegerHash(bool enabled);
+        [[nodiscard]] bool stochasticTilingIntegerHash() const;
+
         // ── Automatic mesh LOD (ON by default) ────────────────────────────
         // Per-geometry chains of simplified INDEX buffers (vertex positions/
         // normals/UVs untouched — index-only), generated in the background

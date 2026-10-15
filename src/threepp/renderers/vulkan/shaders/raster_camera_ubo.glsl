@@ -34,7 +34,9 @@ layout(set = RASTER_CAM_SET, binding = RASTER_CAM_BINDING) uniform RasterCameraU
                           // JITTER-FREE (gbuffer.frag writes a clean prevNDC - currNDC;
                           // a (prev - curr) delta was tested there and rejected); .xy is
                           // kept for the deferred shade's hybrid reproject tap correction.
-                          // .z = the normal-map Toksvig toggle, .w = frame counter
+                          // .z = G-buffer switches as a small whole number: bit 0
+                          // the normal-map Toksvig toggle, bit 1 the stochastic
+                          // tiling's exact lattice hash. .w = frame counter
                           // (alpha-hash decorrelation).
 } RASTER_CAM_NAME;
 

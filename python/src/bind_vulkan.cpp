@@ -1805,6 +1805,14 @@ namespace threepp_py {
                               "Off uses the deterministic 64-ray AO (noise-free, no GI colour).")
                 // Ray-traced env ambient-occlusion / 1-bounce diffuse GI. ON by
                 // default. Off drops the per-pixel occlusion rays (flat ambient IBL).
+                .def_property("stochastic_tiling_integer_hash",
+                              [](PyVulkanRenderer& r) { return r.native().stochasticTilingIntegerHash(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setStochasticTilingIntegerHash(v); },
+                              "Stochastic tiling of the detail and terrain-band layers: an exact integer hash "
+                              "per lattice vertex. The default float hash can give one vertex two offsets, and "
+                              "the texture then steps along that lattice edge (hard straight lines at 0, 60 and "
+                              "120 degrees). On removes the lines and redraws every offset, so the texture "
+                              "placement of such a scene changes. Off by default.")
                 .def_property("deferred_ao",
                               [](PyVulkanRenderer& r) { return r.native().deferredAO(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setDeferredAO(v); },

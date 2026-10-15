@@ -1049,7 +1049,9 @@ namespace threepp {
         // exactly the msaa>1 non-upscaler case — the dither froze bit-identical
         // every frame and the screen-door never converged under TAA. Wrapped at
         // 1024 so the float is always exact.
-        ubo.prevJitter[2] = normalMapToksvig_ ? 1.f : 0.f;
+        // Bit 1: the stochastic tiling's exact lattice hash (gbuffer.frag,
+        // setStochasticTilingIntegerHash); off leaves .z exactly as before.
+        ubo.prevJitter[2] = (normalMapToksvig_ ? 1.f : 0.f) + (stochasticTilingIntegerHash_ ? 2.f : 0.f);
         ubo.prevJitter[3] = static_cast<float>(view().haltonFrame_ & 1023u);
 
         uploadHostVisible(ctx->allocator(), view().rasterCameraUbos[frame], &ubo, sizeof(ubo));

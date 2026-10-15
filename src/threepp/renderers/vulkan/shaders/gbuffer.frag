@@ -158,15 +158,48 @@ DetailLattice detailLatticeSetup(vec2 duv, vec2 g1, vec2 g2) {
 // only need to decorrelate the three taps).
 #define DETAIL_HASH(p) fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)))) * 43758.5453)
 
+// The same offset from an exact integer hash of the integer lattice id
+// (VulkanRenderer::setStochasticTilingIntegerHash, cam.prevJitter.z bit 1).
+// DETAIL_HASH flips to an unrelated value on a one-ulp change of its argument,
+// and the compiler is free to round one vertex's argument differently in the
+// two triangles that share it (it may fold the + (1, 0) of `baseId + vec2(1,
+// 0)` into the dot product), so a vertex could carry two offsets and the
+// texture stepped along that lattice edge: hard straight lines at 0, 60 and
+// 120 degrees, anywhere in the world (the dune-buggy's band textures,
+// 2026-10-15). The ids are whole numbers, so ivec2(p) is exact on every path.
+vec2 detailHashExact(vec2 p) {
+    const uvec2 q = uvec2(ivec2(p));
+    uint h = q.x * 0x8da6b343u + q.y * 0xd8163841u + 0x9e3779b9u;
+    h ^= h >> 16; h *= 0x7feb352du;
+    h ^= h >> 15; h *= 0x846ca68bu;
+    h ^= h >> 16;
+    return vec2(float(h & 0xffffu), float(h >> 16)) * (1.0 / 65536.0);
+}
+
+// The G-buffer switches packed into cam.prevJitter.z (uploadRasterCameraUbo).
+uint gbufCamFlags() {
+    return uint(cam.prevJitter.z + 0.5);
+}
+
 // Variance-preserving 3-tap blend around the 0.5 neutral (dividing the summed
 // deviations by sqrt(Σw²) keeps contrast exact — the texture is 0.5-centered by
 // construction). textureGrad with the un-offset uv derivatives keeps mip
 // selection continuous across lattice borders. Returns rgba: callers use .rgb
 // (albedo), or .xy + .a (normal deviation + roughness modulation).
 vec4 detailStochastic(int idx, vec2 duv, DetailLattice lt) {
-    const vec4 d1 = textureGrad(gbufAlbedoMaps[nonuniformEXT(idx)], duv + DETAIL_HASH(lt.v1), lt.g1, lt.g2);
-    const vec4 d2 = textureGrad(gbufAlbedoMaps[nonuniformEXT(idx)], duv + DETAIL_HASH(lt.v2), lt.g1, lt.g2);
-    const vec4 d3 = textureGrad(gbufAlbedoMaps[nonuniformEXT(idx)], duv + DETAIL_HASH(lt.v3), lt.g1, lt.g2);
+    vec2 o1, o2, o3;
+    if ((gbufCamFlags() & 2u) != 0u) {
+        o1 = detailHashExact(lt.v1);
+        o2 = detailHashExact(lt.v2);
+        o3 = detailHashExact(lt.v3);
+    } else {
+        o1 = DETAIL_HASH(lt.v1);
+        o2 = DETAIL_HASH(lt.v2);
+        o3 = DETAIL_HASH(lt.v3);
+    }
+    const vec4 d1 = textureGrad(gbufAlbedoMaps[nonuniformEXT(idx)], duv + o1, lt.g1, lt.g2);
+    const vec4 d2 = textureGrad(gbufAlbedoMaps[nonuniformEXT(idx)], duv + o2, lt.g1, lt.g2);
+    const vec4 d3 = textureGrad(gbufAlbedoMaps[nonuniformEXT(idx)], duv + o3, lt.g1, lt.g2);
     return vec4(0.5) + ((d1 - 0.5) * lt.w.x + (d2 - 0.5) * lt.w.y + (d3 - 0.5) * lt.w.z)
                        * inversesqrt(max(dot(lt.w, lt.w), 1e-6));
 }
@@ -351,7 +384,7 @@ void main() {
     // target; both terms are driven by the same measured nLen/sigma2 so a
     // single physical quantity (vMF concentration) still gates everything,
     // and both are no-ops at mip 0 (nLen ~= 1) by construction.
-    const bool toksvigOn = cam.prevJitter.z > 0.5;
+    const bool toksvigOn = (gbufCamFlags() & 1u) != 0u;
     float toksvigSigma2 = 0.0;
     if (m.normalTexIndex >= 0 && !isWater) {
         const vec3 dpx = dFdx(vWorldPos);
