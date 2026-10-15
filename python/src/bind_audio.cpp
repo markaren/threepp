@@ -26,7 +26,11 @@ namespace threepp_py {
                 .def(py::init([]() { return std::make_shared<AudioListener>(); }))
                 .def_property("master_volume",
                               &AudioListener::getMasterVolume,
-                              &AudioListener::setMasterVolume);
+                              &AudioListener::setMasterVolume)
+                .def("set_reverb", &AudioListener::setReverb, py::arg("rt60"), py::arg("wet"),
+                     "Retune the shared reverb bus every sound sends to: rt60 is the decay time in "
+                     "seconds, wet the bus output gain [0, 1]. Each sound sets its own share with "
+                     "set_reverb_send.");
 
         // ---- Audio -----------------------------------------------------------
         // Non-copyable, non-movable: uses unique_ptr holder (pybind11 default).
@@ -40,7 +44,13 @@ namespace threepp_py {
                 .def("play", &Audio::play)
                 .def("stop", &Audio::stop)
                 .def("set_volume", &Audio::setVolume, py::arg("volume"))
-                .def("set_playback_rate", &Audio::setPlaybackRate, py::arg("rate"))
+                .def("set_playback_rate", &Audio::setPlaybackRate, py::arg("rate"),
+                     "Playback rate / pitch multiplier (1 = as recorded). Applies from the next audio "
+                     "period, a few ms, playing or not: ramp it to bend a loop's pitch, or re-roll it per "
+                     "trigger. A rate <= 0 is ignored.")
+                .def("set_reverb_send", &Audio::setReverbSend, py::arg("send"),
+                     "How much of this sound goes to the listener's reverb bus [0, 1] "
+                     "(AudioListener.set_reverb). A send: the dry signal keeps its own path.")
                 .def("toggle_play", &Audio::togglePlay)
                 .def("seek_to_start", &Audio::seekToStart)
                 .def("set_looping", &Audio::setLooping, py::arg("loop"));
@@ -65,7 +75,11 @@ namespace threepp_py {
                 .def("play", [](PositionalAudio& self) { self.play(); })
                 .def("stop", [](PositionalAudio& self) { self.stop(); })
                 .def("set_volume", [](PositionalAudio& self, float v) { self.setVolume(v); }, py::arg("volume"))
-                .def("set_playback_rate", [](PositionalAudio& self, float r) { self.setPlaybackRate(r); }, py::arg("rate"))
+                .def("set_playback_rate", [](PositionalAudio& self, float r) { self.setPlaybackRate(r); }, py::arg("rate"),
+                     "Playback rate / pitch multiplier (1 = as recorded). Applies from the next audio "
+                     "period, a few ms, playing or not. A rate <= 0 is ignored.")
+                .def("set_reverb_send", [](PositionalAudio& self, float s) { self.setReverbSend(s); }, py::arg("send"),
+                     "How much of this sound goes to the listener's reverb bus [0, 1].")
                 .def("toggle_play", [](PositionalAudio& self) { self.togglePlay(); })
                 .def("seek_to_start", [](PositionalAudio& self) { self.seekToStart(); })
                 .def("set_looping", [](PositionalAudio& self, bool loop) { self.setLooping(loop); }, py::arg("loop"))
@@ -73,7 +87,10 @@ namespace threepp_py {
                 .def("set_min_distance", &PositionalAudio::setMinDistance, py::arg("distance"))
                 .def("set_max_distance", &PositionalAudio::setMaxDistance, py::arg("distance"))
                 .def("set_rolloff_factor", &PositionalAudio::setRolloffFactor, py::arg("rolloff"))
-                .def("set_distance_model", &PositionalAudio::setDistanceModel, py::arg("model"));
+                .def("set_distance_model", &PositionalAudio::setDistanceModel, py::arg("model"))
+                .def("set_occlusion", &PositionalAudio::setOcclusion, py::arg("occlusion"),
+                     "0 = unobstructed, 1 = fully occluded: a low-pass filter and a gain dip on this "
+                     "sound. Call at most once per frame with a smoothed value.");
 
         // ---- write_wav -------------------------------------------------------
         m.def("write_wav", [](const std::string& path, const std::vector<float>& samples, int sample_rate) {

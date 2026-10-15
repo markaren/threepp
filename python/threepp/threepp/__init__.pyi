@@ -293,7 +293,13 @@ class Audio:
     def set_looping(self, loop: bool) -> None:
         ...
     def set_playback_rate(self, rate: typing.SupportsFloat | typing.SupportsIndex) -> None:
-        ...
+        """
+        Playback rate / pitch multiplier (1 = as recorded). Applies from the next audio period, a few ms, playing or not: ramp it to bend a loop's pitch, or re-roll it per trigger. A rate <= 0 is ignored.
+        """
+    def set_reverb_send(self, send: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        How much of this sound goes to the listener's reverb bus [0, 1] (AudioListener.set_reverb). A send: the dry signal keeps its own path.
+        """
     def set_volume(self, volume: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     def stop(self) -> None:
@@ -349,6 +355,10 @@ class AudioDistanceModel:
 class AudioListener(Object3D):
     def __init__(self) -> None:
         ...
+    def set_reverb(self, rt60: typing.SupportsFloat | typing.SupportsIndex, wet: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Retune the shared reverb bus every sound sends to: rt60 is the decay time in seconds, wet the bus output gain [0, 1]. Each sound sets its own share with set_reverb_send.
+        """
     @property
     def master_volume(self) -> float:
         ...
@@ -7824,10 +7834,20 @@ class PositionalAudio(Object3D):
         ...
     def set_max_distance(self, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
+    def set_occlusion(self, occlusion: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        0 = unobstructed, 1 = fully occluded: a low-pass filter and a gain dip on this sound. Call at most once per frame with a smoothed value.
+        """
     def set_min_distance(self, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     def set_playback_rate(self, rate: typing.SupportsFloat | typing.SupportsIndex) -> None:
-        ...
+        """
+        Playback rate / pitch multiplier (1 = as recorded). Applies from the next audio period, a few ms, playing or not. A rate <= 0 is ignored.
+        """
+    def set_reverb_send(self, send: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        How much of this sound goes to the listener's reverb bus [0, 1].
+        """
     def set_rolloff_factor(self, rolloff: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     def set_volume(self, volume: typing.SupportsFloat | typing.SupportsIndex) -> None:

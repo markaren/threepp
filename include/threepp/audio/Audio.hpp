@@ -58,9 +58,11 @@ namespace threepp {
         // a send, not a mix. Occluded sounds send their muffled selves.
         void setReverbSend(float send);
 
-        // Playback rate / pitch multiplier (1 = as recorded). Takes effect on
-        // the next play(); re-rolling it per trigger keeps short one-shots
-        // (footsteps, impacts) from sounding machine-gunned.
+        // Playback rate / pitch multiplier (1 = as recorded). Applies from the
+        // next audio period, a few ms, whether or not the sound is playing:
+        // ramp it while a loop plays to bend its pitch (an engine note), or
+        // re-roll it per trigger so short one-shots (footsteps, impacts) do
+        // not sound machine-gunned. A rate <= 0 is ignored.
         void setPlaybackRate(float rate);
 
         void togglePlay();
