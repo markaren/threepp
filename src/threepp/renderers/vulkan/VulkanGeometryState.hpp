@@ -34,6 +34,18 @@
 
 namespace threepp::vulkan::impl {
 
+    // The version of each attribute a BlasRecord holds a buffer for, as of
+    // its last upload. BlasRecord::geomVersion (their sum) says THAT
+    // something changed; this says WHICH buffers an in-place refresh must
+    // re-upload. Filled by VulkanRenderer::Impl::attrVersionsOf.
+    struct AttrVersions {
+        unsigned int position = 0;
+        unsigned int normal = 0;
+        unsigned int uv = 0;
+        unsigned int color = 0;
+        unsigned int index = 0;
+    };
+
     // Per-geometry BLAS + the buffers that back its build inputs. Vertex /
     // index / normal / uv buffers are kept alive past the build so the
     // closest-hit shader can sample them via buffer-reference pointers.
@@ -98,6 +110,12 @@ namespace threepp::vulkan::impl {
         // version changes and the BLAS is refreshed (in-place rebuild if
         // counts match, full evict+rebuild if topology changed).
         unsigned int geomVersion = 0;
+        // Per-attribute versions behind geomVersion, stamped wherever it is.
+        // Every upload compares against these: positions and normals feed the
+        // BLAS, but a refresh that left uv, color or index out (they froze at
+        // the first upload) also left the raster and ray hits reading the old
+        // values while geomVersion said the record was current.
+        AttrVersions attrVersions{};
         uint32_t vertexCount = 0;
         uint32_t indexCount  = 0;
         // BufferGeometry::drawRange snapshot, compared every frame by the

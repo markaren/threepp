@@ -1406,6 +1406,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     fp.normAttr = fp.geomTyped->getAttribute("normal");
                     fp.uvAttr   = fp.geomTyped->getAttribute("uv");
                     fp.idxAttr  = fp.geomTyped->getIndex();
+                    // Without it the lean diff summed no color version, so a
+                    // color-only edit went unseen on every lean frame.
+                    fp.colAttr  = fp.geomTyped->getAttribute("color");
                     const Material* matKey = matPtr;
                     auto memoIt = fpMemo.find(matKey);
                     if (memoIt == fpMemo.end()) {
@@ -1966,7 +1969,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
 
                             const uint32_t curVtx = static_cast<uint32_t>(posAttr->count());
                             const uint32_t curIdx = idxAttr ? static_cast<uint32_t>(idxAttr->count()) : 0u;
-                            if (curVtx != rec.vertexCount || curIdx != rec.indexCount) {
+                            if (curVtx != rec.vertexCount || curIdx != rec.indexCount ||
+                                !refreshFitsPacking(rec, *entries[i].mesh->geometry())) {
                                 topologyChanged = true;
                                 break;
                             }

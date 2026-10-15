@@ -274,6 +274,7 @@ namespace threepp {
         // Per-mesh GPU state + the auto-LOD job types moved to
         // VulkanGeometryState.hpp (their doc comments travel with them).
         using BlasRecord = vulkan::impl::BlasRecord;
+        using AttrVersions = vulkan::impl::AttrVersions;
         std::unordered_map<const BufferGeometry*, std::unique_ptr<BlasRecord>> blasCache;
 
         // Definition moved to VulkanGeometryState.hpp.
@@ -2971,6 +2972,20 @@ namespace threepp {
         // is host-mappable, else queued in `up` for recordStagedUploads.
         void stageUpload(StagedUploads& up, const Buffer& dst, const void* src,
                          VkDeviceSize bytes, VkDeviceSize dstOffset = 0);
+        // stageUpload without the host-write shortcut: always queued for the
+        // staging copy. For writes recorded into a FRAME command buffer, where
+        // an earlier frame still in flight may read `dst` (a host-mappable
+        // device-local buffer in the BAR is no exception): the copy is ordered
+        // behind those reads on the queue, a host memcpy is not.
+        void stageCopy(StagedUploads& up, const Buffer& dst, const void* src,
+                       VkDeviceSize bytes, VkDeviceSize dstOffset = 0);
+        // Queues the uv, color and index buffers of `rec` whose attribute
+        // version moved since rec.attrVersions, whole, in the record's own
+        // (possibly packed) formats: through stageCopy when `viaCopy` (frame
+        // command buffer), stageUpload otherwise. Returns true when the index
+        // was among them, which rules out a BLAS refit. Stamps nothing.
+        bool stageChangedSideAttributes(StagedUploads& up, const BlasRecord& rec,
+                                        const BufferGeometry& geom, bool viaCopy);
         // Records `up`'s queued copies into `cb` from one staging buffer, then
         // a barrier that makes them visible to every later command (this cb's
         // BLAS build and prevVertex seed, and later frames). `dstUntouched`:
@@ -3011,6 +3026,32 @@ namespace threepp {
             if (auto* a = g.getAttribute("color"))     v += a->version;
             return v;
         }
+
+        // The parts of geomVersionOf, kept apart (same untyped lookups).
+        static AttrVersions attrVersionsOf(const BufferGeometry& g) {
+            AttrVersions v;
+            if (auto* a = g.getAttribute("position")) v.position = a->version;
+            if (auto* a = g.getAttribute("normal"))   v.normal = a->version;
+            if (auto* a = g.getAttribute("uv"))       v.uv = a->version;
+            if (auto* a = g.getAttribute("color"))    v.color = a->version;
+            if (auto* idx = g.getIndex())             v.index = idx->version;
+            return v;
+        }
+
+        // Stamp both version snapshots after the record's buffers were filled
+        // from `g` (a build or a refresh).
+        static void stampVersions(BlasRecord& rec, const BufferGeometry& g) {
+            rec.geomVersion = geomVersionOf(g);
+            rec.attrVersions = attrVersionsOf(g);
+        }
+
+        // An in-place refresh writes uv and color in the format the record
+        // was BUILT with. A packed format was picked because every value then
+        // fit it (uv in [0,1] for unorm16, LDR color for unorm8); an edit that
+        // leaves that range would be clamped. False when a CHANGED uv or
+        // color attribute no longer fits, so the caller re-admits the record
+        // through the structural rebuild, which picks the format afresh.
+        static bool refreshFitsPacking(const BlasRecord& rec, const BufferGeometry& g);
 
         // Build a single BLAS for the given geometry. Vertex / index buffers
         // are uploaded host-mapped, then the AS is built into freshly allocated

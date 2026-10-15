@@ -143,6 +143,101 @@ void VulkanRenderer::Impl::stageUpload(StagedUploads& up, const Buffer& dst, con
             up.copies.push_back({dst.handle, dstOffset, srcOffset, bytes});
         }
 
+void VulkanRenderer::Impl::stageCopy(StagedUploads& up, const Buffer& dst, const void* src,
+                                     VkDeviceSize bytes, VkDeviceSize dstOffset) {
+            if (bytes == 0 || dst.handle == VK_NULL_HANDLE) return;
+            const VkDeviceSize srcOffset = (static_cast<VkDeviceSize>(up.data.size()) + 15u) & ~VkDeviceSize(15u);
+            up.data.resize(static_cast<size_t>(srcOffset + bytes));
+            std::memcpy(up.data.data() + srcOffset, src, static_cast<size_t>(bytes));
+            up.copies.push_back({dst.handle, dstOffset, srcOffset, bytes});
+        }
+
+bool VulkanRenderer::Impl::refreshFitsPacking(const BlasRecord& rec, const BufferGeometry& g) {
+            const AttrVersions now = attrVersionsOf(g);
+            if ((rec.packedMask & kPackedUv) && now.uv != rec.attrVersions.uv) {
+                FloatAttributeView uvs{g.getAttribute("uv")};
+                if (uvs && !allWithin(uvs.data(), uvs.size(), 0.f, 1.f)) return false;
+            }
+            if ((rec.packedMask & kPackedColor) && now.color != rec.attrVersions.color) {
+                FloatAttributeView cols{g.getAttribute("color")};
+                if (cols && !allWithin(cols.data(), cols.size(), 0.f, 1.f)) return false;
+            }
+            return true;
+        }
+
+bool VulkanRenderer::Impl::stageChangedSideAttributes(StagedUploads& up, const BlasRecord& rec,
+                                                      const BufferGeometry& geom, bool viaCopy) {
+            const AttrVersions now = attrVersionsOf(geom);
+            const auto put = [&](const Buffer& dst, const void* src, VkDeviceSize bytes) {
+                if (viaCopy) {
+                    stageCopy(up, dst, src, bytes);
+                } else {
+                    stageUpload(up, dst, src, bytes);
+                }
+            };
+            const uint32_t vtxCount = rec.vertexCount;
+
+            // Formats as buildBlasFor chose them; refreshFitsPacking has already
+            // sent a record whose new values no longer fit a packed format to the
+            // structural rebuild, so packing here never clamps.
+            if (now.uv != rec.attrVersions.uv && rec.uv.handle != VK_NULL_HANDLE) {
+                FloatAttributeView uvs{geom.getAttribute("uv")};
+                if (uvs && uvs.count() == static_cast<int>(vtxCount) && uvs.size() == size_t(vtxCount) * 2u) {
+                    if (rec.packedMask & kPackedUv) {
+                        std::vector<uint32_t> packed(vtxCount);
+                        for (uint32_t v = 0; v < vtxCount; ++v) {
+                            packed[v] = packUnorm2x16(uvs[v * 2 + 0], uvs[v * 2 + 1]);
+                        }
+                        put(rec.uv, packed.data(), packed.size() * sizeof(uint32_t));
+                    } else {
+                        put(rec.uv, uvs.data(), uvs.size() * sizeof(float));
+                    }
+                }
+            }
+
+            if (now.color != rec.attrVersions.color && rec.color.handle != VK_NULL_HANDLE) {
+                FloatAttributeView cols{geom.getAttribute("color")};
+                const int itemSize = cols ? cols.itemSize() : 0;
+                if (cols && cols.count() == static_cast<int>(vtxCount) && (itemSize == 3 || itemSize == 4)) {
+                    if (rec.packedMask & kPackedColor) {
+                        std::vector<uint32_t> packed(vtxCount);
+                        for (uint32_t v = 0; v < vtxCount; ++v) {
+                            packed[v] = packUnorm4x8(cols[v * itemSize + 0], cols[v * itemSize + 1],
+                                                     cols[v * itemSize + 2], 1.f);
+                        }
+                        put(rec.color, packed.data(), packed.size() * sizeof(uint32_t));
+                    } else if (itemSize == 3) {
+                        put(rec.color, cols.data(), static_cast<VkDeviceSize>(vtxCount) * 3u * sizeof(float));
+                    } else {
+                        std::vector<float> rgb(static_cast<size_t>(vtxCount) * 3u);
+                        for (uint32_t v = 0; v < vtxCount; ++v) {
+                            rgb[v * 3 + 0] = cols[v * 4 + 0];
+                            rgb[v * 3 + 1] = cols[v * 4 + 1];
+                            rgb[v * 3 + 2] = cols[v * 4 + 2];
+                        }
+                        put(rec.color, rgb.data(), rgb.size() * sizeof(float));
+                    }
+                }
+            }
+
+            bool indexChanged = false;
+            if (auto* idxAttr = geom.getIndex();
+                idxAttr && now.index != rec.attrVersions.index && rec.index.handle != VK_NULL_HANDLE) {
+                indexChanged = true;
+                const auto& src = idxAttr->array();
+                if (rec.packedMask & kPackedIndex16) {
+                    std::vector<uint16_t> idx16(src.size() + (src.size() & 1u), 0);
+                    for (size_t k = 0; k < src.size(); ++k) {
+                        idx16[k] = static_cast<uint16_t>(src[k]);
+                    }
+                    put(rec.index, idx16.data(), idx16.size() * sizeof(uint16_t));
+                } else {
+                    put(rec.index, src.data(), src.size() * sizeof(unsigned int));
+                }
+            }
+            return indexChanged;
+        }
+
 Buffer VulkanRenderer::Impl::recordStagedUploads(StagedUploads& up, VkCommandBuffer cb, bool dstUntouched) {
             Buffer staging;
             if (up.copies.empty()) {
@@ -491,7 +586,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                 if (staging.handle != VK_NULL_HANDLE) destroyBufferMaybeBatched(staging);
                 const DrawSpan span = drawSpanOf(
                         geom, indexed ? static_cast<uint32_t>(idxAttr->count()) : vertexCount);
-                rec->geomVersion    = geomVersionOf(geom);
+                stampVersions(*rec, geom);
                 rec->vertexCount    = vertexCount;
                 rec->indexCount     = indexed ? static_cast<uint32_t>(idxAttr->count()) : 0u;
                 rec->vbBytes        = vbBytes;
@@ -685,7 +780,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                 }
             }
 
-            rec->geomVersion = geomVersionOf(geom);
+            stampVersions(*rec, geom);
             rec->vertexCount = vertexCount;
             rec->indexCount  = indexed ? static_cast<uint32_t>(idxAttr->count()) : 0u;
             rec->vbBytes     = vbBytes;// for the prevVertex re-sync copy
@@ -1995,6 +2090,7 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
             };
 
             StagedUploads up;
+            std::vector<bool> indexChanged(ops.size(), false);
             for (size_t k : liveOps) {
                 const auto& geom = *ops[k].geom;
                 auto& rec = *ops[k].rec;
@@ -2043,42 +2139,10 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
                 }
                 const_cast<FloatBufferAttribute*>(nrmAttr)->updateRange.count = -1;
 
-                // uv/index keep the whole-array re-upload: they are static for
-                // every in-place-edited geometry threepp ships (positions and
-                // normals are what a dynamic surface rewrites), so there is no
-                // measured win to justify the extra range plumbing here.
-                const uint32_t vtxCount = static_cast<uint32_t>(posAttr->count());
-                if (auto* uvAttr = geom.getAttribute<float>("uv");
-                    uvAttr && rec.uv.handle != VK_NULL_HANDLE) {
-                    if (rec.packedMask & kPackedUv) {
-                        const auto& uv = uvAttr->array();
-                        std::vector<uint32_t> packed(vtxCount);
-                        for (uint32_t v = 0; v < vtxCount; ++v) {
-                            packed[v] = packUnorm2x16(uv[v * 2 + 0], uv[v * 2 + 1]);
-                        }
-                        stageUpload(up, rec.uv, packed.data(),
-                                    packed.size() * sizeof(uint32_t));
-                    } else {
-                        stageUpload(up, rec.uv, uvAttr->array().data(),
-                                    uvAttr->array().size() * sizeof(float));
-                    }
-                }
-
-                if (auto* idxAttr = geom.getIndex();
-                    idxAttr && rec.index.handle != VK_NULL_HANDLE) {
-                    if (rec.packedMask & kPackedIndex16) {
-                        const auto& src = idxAttr->array();
-                        std::vector<uint16_t> idx16(src.size() + (src.size() & 1u), 0);
-                        for (size_t k2 = 0; k2 < src.size(); ++k2) {
-                            idx16[k2] = static_cast<uint16_t>(src[k2]);
-                        }
-                        stageUpload(up, rec.index, idx16.data(),
-                                    idx16.size() * sizeof(uint16_t));
-                    } else {
-                        stageUpload(up, rec.index, idxAttr->array().data(),
-                                    idxAttr->array().size() * sizeof(unsigned int));
-                    }
-                }
+                // uv, color and index: whole, and only those whose version moved.
+                // An index rewrite (same count) also rules out the refit below:
+                // MODE_UPDATE requires the source build's index data.
+                indexChanged[k] = stageChangedSideAttributes(up, rec, geom, /*viaCopy=*/false);
             }
             // A static record's buffers are device-local: their writes above
             // were queued, and land here in one copy submit, after Phase B's
@@ -2087,7 +2151,7 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
 
             if (!ctx->rayQuerySupported()) {
                 // No BLAS to refit: the uploads above are the whole refresh.
-                for (const size_t k : liveOps) ops[k].rec->geomVersion = geomVersionOf(*ops[k].geom);
+                for (const size_t k : liveOps) stampVersions(*ops[k].rec, *ops[k].geom);
                 return;
             }
 
@@ -2149,6 +2213,7 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
                         VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
                 const bool fullRebuild = primitiveCount != rec.blasBuiltPrims ||
                         wantFlags != rec.blasBuiltFlags || blasRebuildThisFrame_ ||
+                        indexChanged[k] ||
                         rec.blasRefitCounter >= BlasRecord::kBlasFullRebuildInterval;
                 rec.blasRefitCounter = fullRebuild ? 0u : (rec.blasRefitCounter + 1u);
                 rec.blasBuiltPrims = primitiveCount;
@@ -2226,7 +2291,7 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
                 ranges[kk].primitiveCount = primitiveCount;
                 rangePtrs[kk] = &ranges[kk];
 
-                rec.geomVersion = geomVersionOf(geom);
+                stampVersions(rec, geom);
             }
 
             VkCommandBuffer cb = beginOneShot();
@@ -2260,6 +2325,10 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
             static thread_local std::vector<VkAccelerationStructureBuildGeometryInfoKHR>     blasBuilds;
             static thread_local std::vector<VkAccelerationStructureBuildRangeInfoKHR>        ranges;
             static thread_local std::vector<const VkAccelerationStructureBuildRangeInfoKHR*> rangePtrs;
+            // uv / color / index edits of this frame's records, and which records
+            // rewrote their index (no refit from a different index).
+            static thread_local StagedUploads sideUp;
+            static thread_local std::vector<uint8_t> indexChanged;
 
             // Phase 0 — same finite-position contract as refreshGeomBlasBatch's
             // Phase A: a NaN reaching the BLAS build is VK_ERROR_DEVICE_LOST on
@@ -2278,6 +2347,7 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
             // a producer-owned geometry need not carry host arrays at all.)
             liveOps.clear();
             liveOps.reserve(pendingDynamicGeomRefits_.size());
+            indexChanged.assign(pendingDynamicGeomRefits_.size(), 0u);
             for (size_t k = 0; k < pendingDynamicGeomRefits_.size(); ++k) {
                 const auto& geom = *pendingDynamicGeomRefits_[k].geom;
                 if (pendingDynamicGeomRefits_[k].rec->interop) {
@@ -2340,8 +2410,11 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                     // the exported allocation — which a foreign API has already
                     // imported — with it. Keeping the stamp current means a
                     // caller who also calls needsUpdate() out of habit gets a
-                    // no-op instead of a teardown.
-                    rec.geomVersion = geomVersionOf(geom);
+                    // no-op instead of a teardown. The CPU still owns uv, color
+                    // and index: an edit of one is uploaded here, so the stamp
+                    // never hides it.
+                    indexChanged[k] = stageChangedSideAttributes(sideUp, rec, geom, /*viaCopy=*/true);
+                    stampVersions(rec, geom);
                     continue;
                 }
                 auto* posAttr = geom.getAttribute<float>("position");
@@ -2376,8 +2449,10 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                 // change elsewhere aborts to the structural rebuild after the
                 // enqueue, the stale version makes that rebuild re-admit this
                 // geometry from its current CPU data instead of trusting a
-                // buffer the cleared pending list never filled.
-                rec.geomVersion = geomVersionOf(geom);
+                // buffer the cleared pending list never filled. uv / color /
+                // index travel only when their version moved.
+                indexChanged[k] = stageChangedSideAttributes(sideUp, rec, geom, /*viaCopy=*/true);
+                stampVersions(rec, geom);
             }
 
             const bool anyRefit = !liveOps.empty();
@@ -2519,6 +2594,14 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                     nr.srcOffset = slotOff + rec.vbBytes;
                     nr.size      = rec.dynStagingSlotBytes - rec.vbBytes;
                     vkCmdCopyBuffer(cb, rec.dynStaging.handle, rec.normal.handle, 1, &nr);
+                }
+                // The side attributes from one staging buffer, retired with
+                // this frame. Past the Phase 4 fence and the graph's entry
+                // barrier like the copies above, so no barrier of its own
+                // before; its closing barrier publishes them to the build and
+                // every later read.
+                if (!sideUp.copies.empty()) {
+                    retire(recordStagedUploads(sideUp, cb, /*dstUntouched=*/true));
                 }
             }
 
@@ -2676,6 +2759,7 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                     // update-must-match-its-source reason.
                     const bool fullRebuild = primitiveCount != rec.blasBuiltPrims ||
                             wantFlags != rec.blasBuiltFlags || blasRebuildThisFrame_ ||
+                            indexChanged[liveOps[kk]] != 0u ||
                             rec.blasRefitCounter >= BlasRecord::kBlasFullRebuildInterval;
                     rec.blasRefitCounter = fullRebuild ? 0u : (rec.blasRefitCounter + 1u);
                     rec.blasBuiltPrims = primitiveCount;

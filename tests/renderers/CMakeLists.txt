@@ -203,6 +203,14 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanInstanceColor_test COMMAND VulkanInstanceColor_test)
     set_tests_properties(VulkanInstanceColor_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # In-place geometry edits: every edited attribute (vertex color, uv)
+    # reaches the GPU on the occasional and the per-frame refresh paths, and a
+    # packed attribute edited out of its packed range is rebuilt, not clamped.
+    add_executable(VulkanGeometryRefresh_test VulkanGeometryRefresh_test.cpp)
+    target_link_libraries(VulkanGeometryRefresh_test PRIVATE threepp)
+    add_test(NAME VulkanGeometryRefresh_test COMMAND VulkanGeometryRefresh_test)
+    set_tests_properties(VulkanGeometryRefresh_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # CPU wave-height query of the FFT ocean against an analytic Gerstner
     # wave: the choppy-displacement inversion and the cascade-1 rotation.
     # No device needed; DisplacedMesh is only built with Vulkan.
