@@ -786,6 +786,11 @@ namespace threepp {
             uint64_t fullRebuilds = 0;// MODE_BUILD (structural + promoted refits)
             uint64_t updates = 0;     // MODE_UPDATE refits
             uint32_t instances = 0;   // instance count of the most recent build/update
+            // Structural scene rebuilds (the entry list re-derived, every
+            // descriptor and draw record new): an object added or removed, a
+            // texture swapped, a mesh shown for the first time. Hiding or
+            // re-showing a mesh is not one.
+            uint64_t structuralRebuilds = 0;
         };
         [[nodiscard]] TlasStats tlasStats() const;
 

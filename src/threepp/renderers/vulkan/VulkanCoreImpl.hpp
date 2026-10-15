@@ -897,7 +897,19 @@ namespace threepp {
         // disabling the layer on a live mesh forces the re-expansion that
         // moves it in or out of the sensor group.
         static constexpr uint32_t kSnapSensorOnly = 2048u;
+        // The node was effectively hidden when recorded (its own or an
+        // ancestor's Object3D::visible was false). The walks enter a hidden
+        // node's subtree unless it is, or sits under, a LOD.
+        static constexpr uint32_t kSnapHidden     = 4096u;
+        // The node sits under a LOD node: its visibility is the LOD's level
+        // selection, so a flip takes the full re-expansion as before.
+        static constexpr uint32_t kSnapUnderLod   = 8192u;
         std::vector<SnapNode> sceneSnapshot_;
+        // A mesh with entries was hidden or shown this frame (MeshEntry::hidden):
+        // the TLAS fill, the frustum culls, the draw records and the emitter
+        // walk re-read the flags. Set by the snapshot replay or the expansion,
+        // consumed in ensureSceneBuilt.
+        bool hiddenFlippedThisFrame_ = false;
 
         // Classification-routing flags for a mesh — shared by the snapshot
         // build and the replay walk so the two can't drift.
@@ -908,8 +920,13 @@ namespace threepp {
         // pointers are unchanged since the last full expansion. Also re-runs
         // LOD level selection (camera-driven visibility mutation) on kSnapLod
         // nodes — a level switch makes the walk diverge from the snapshot ⇒
-        // false ⇒ the full pass re-expands with the new level.
+        // false ⇒ the full pass re-expands with the new level. A mesh with
+        // entries that was hidden or shown (Object3D::visible, material
+        // visible) is no divergence: its span flips MeshEntry::hidden in place.
         bool sceneSnapshotMatches(Object3D& scene, Camera& camera);
+        // Hide or show span `spanIndex`'s entries in place (MeshEntry::hidden),
+        // flag their pixels' history and set hiddenFlippedThisFrame_.
+        void setSpanHidden(size_t spanIndex, bool hidden);
 
         // Previous-frame camera (proj_prev * view_prev) for primary-hit
         // reprojection. One UBO per frame-in-flight so updates don't race the

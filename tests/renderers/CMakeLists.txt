@@ -211,6 +211,13 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanGeometryRefresh_test COMMAND VulkanGeometryRefresh_test)
     set_tests_properties(VulkanGeometryRefresh_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # Object3D::visible / material visible toggles at run time: no structural
+    # rebuild, and the hidden mesh is gone from the raster and the ray hits.
+    add_executable(VulkanVisibilityToggle_test VulkanVisibilityToggle_test.cpp)
+    target_link_libraries(VulkanVisibilityToggle_test PRIVATE threepp)
+    add_test(NAME VulkanVisibilityToggle_test COMMAND VulkanVisibilityToggle_test)
+    set_tests_properties(VulkanVisibilityToggle_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # CPU wave-height query of the FFT ocean against an analytic Gerstner
     # wave: the choppy-displacement inversion and the cascade-1 rotation.
     # No device needed; DisplacedMesh is only built with Vulkan.

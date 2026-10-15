@@ -9,6 +9,24 @@
 
 namespace threepp {
 
+namespace {
+
+    // Pre-order walk over the scene graph, as Object3D::traverseVisible, but a
+    // hidden node's subtree is entered too, unless the node is or sits under a
+    // LOD (the LOD's level selection owns those children's visibility). A mesh
+    // hidden at run time keeps its entries (MeshEntry::hidden), and the walk
+    // must reach it, under a hidden group too. f(node, effectivelyVisible,
+    // underLod) returns whether the node is a LOD.
+    template<class F>
+    void walkSceneGraph(Object3D& o, bool parentVisible, bool underLod, F& f) {
+        const bool vis = parentVisible && o.visible;
+        const bool isLod = f(o, vis, underLod);
+        if (!vis && (underLod || isLod)) return;
+        for (Object3D* c : o.children) walkSceneGraph(*c, vis, underLod || isLod, f);
+    }
+
+}// namespace
+
 uint32_t VulkanRenderer::Impl::snapMeshFlags(Mesh& m, const MaterialWithWireframe* wf) const {
             uint32_t fl = kSnapKindMesh;
             // geometry()/material() are virtual and hand back the shared_ptr by
@@ -49,26 +67,51 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
             if (prevSceneFingerprint.size() != lastVisibleEntries_.size()) return false;
             size_t cur = 0;
             bool ok = true;
-            scene.traverseVisible([&](Object3D& o) {
-                if (!ok) return;
+            // Visibility flips of meshes that have entries, applied in place once
+            // the WHOLE walk matched: a mismatch further on takes the full
+            // re-expansion, which must see the entries as they were.
+            struct VisFlip {
+                size_t snIdx;
+                bool hidden;   // Object3D-hidden (own flag or an ancestor's)
+                bool matHidden;// material()->visible == false
+            };
+            static thread_local std::vector<VisFlip> flips;
+            flips.clear();
+            auto visit = [&](Object3D& o, bool vis, bool underLod) -> bool {
+                if (!ok) return false;
                 // Address AND id: see SnapNode. `o` is live, so reading its id is
                 // safe whatever used to be at this address.
                 if (cur >= sceneSnapshot_.size() || sceneSnapshot_[cur].obj != &o ||
                     sceneSnapshot_[cur].objId != o.id) {
                     ok = false;
-                    return;
+                    return false;
                 }
+                const size_t snIdx = cur;
                 const SnapNode& sn = sceneSnapshot_[cur++];
                 const uint32_t kind = sn.flags & kSnapKindMask;
+                const bool isLod = (sn.flags & kSnapLod) != 0u;
+                // Recorded under a LOD or not: the walk enters the same subtrees.
+                if (((sn.flags & kSnapUnderLod) != 0u) != underLod) {
+                    ok = false;
+                    return false;
+                }
+                // Its effective visibility flipped. Only a mesh with entries
+                // flips in place (below); any other node re-expands: a group's
+                // own flip, a line, a mesh hidden before it was ever shown (no
+                // entries yet), anything under a LOD.
+                const bool visFlip = ((sn.flags & kSnapHidden) != 0u) == vis;
                 if (kind == kSnapKindOther) {
+                    if (visFlip) {
+                        ok = false;
+                        return false;
+                    }
                     // LOD parity (see the full pass): re-run level selection
                     // every frame. Pre-order walk ⇒ the mutation lands before
-                    // this LOD's children are visited, so a level switch makes
-                    // the node sequence diverge from the snapshot at the
-                    // swapped subtree ⇒ ok=false ⇒ full re-expansion picks up
-                    // the new level's meshes.
-                    if ((sn.flags & kSnapLod) != 0u && sn.lod->autoUpdate) sn.lod->update(camera);
-                    return;// otherwise pointer identity is all we need
+                    // this LOD's children are visited, so a level switch flips
+                    // a child's visibility under the LOD ⇒ ok=false ⇒ full
+                    // re-expansion picks up the new level's meshes.
+                    if (isLod && vis && sn.lod->autoUpdate) sn.lod->update(camera);
+                    return isLod;// otherwise pointer identity is all we need
                 }
                 // Same object at the same address ⇒ same dynamic type — the
                 // typed pointers recorded by the full pass are still valid, so
@@ -79,10 +122,10 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
                     auto geom = sn.line ? sn.line->geometry() : sn.pts->geometry();
                     auto matL = sn.line ? sn.line->material() : sn.pts->material();
                     const bool matHidden = matL && !matL->visible;
-                    if (geom.get() != sn.geom || (geom && geom->id != sn.geomId) ||
+                    if (visFlip || geom.get() != sn.geom || (geom && geom->id != sn.geomId) ||
                         (sn.geomB && sn.geomB->attributesVersion() != sn.attrVer) ||
                         matHidden != ((sn.flags & kSnapMatHidden) != 0u)) ok = false;
-                    return;
+                    return false;
                 }
                 Mesh* m = sn.mesh;
                 {
@@ -92,12 +135,12 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
                         (geomNow && geomNow->id != sn.geomId) ||
                         (matNow && matNow->id != sn.matId)) {
                         ok = false;
-                        return;
+                        return false;
                     }
                 }
                 if (sn.geomB && sn.geomB->attributesVersion() != sn.attrVer) {
                     ok = false;// attribute added/replaced/removed → full pass re-derives
-                    return;
+                    return false;
                 }
                 // Dynamic routing bits — plain bool reads, no lookups. The
                 // pointed-to material is alive (the mesh holding it just
@@ -110,25 +153,57 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
                 const bool particle = sn.mat && sn.mat->name == kParticleMaterialName;
                 const bool uiBlend = !wire && sn.basic && sn.basic->transparent &&
                                      !sn.basic->map;
-                // sn.mat compared equal above, so it's alive and dereferenceable
-                // (nullptr ⇒ no material ⇒ treated as visible). [[#mat-visible]]
-                const bool matHidden = sn.mat && !sn.mat->visible;
                 if (wire != ((sn.flags & kSnapWire) != 0u) ||
                     over != ((sn.flags & kSnapOverlay) != 0u) ||
                     sensor != ((sn.flags & kSnapSensorOnly) != 0u) ||
                     tet != ((sn.flags & kSnapTet) != 0u) ||
                     particle != ((sn.flags & kSnapParticle) != 0u) ||
-                    uiBlend != ((sn.flags & kSnapUiBlend) != 0u) ||
-                    matHidden != ((sn.flags & kSnapMatHidden) != 0u)) {
+                    uiBlend != ((sn.flags & kSnapUiBlend) != 0u)) {
                     ok = false;
-                    return;
+                    return false;
                 }
                 if (sn.instCount >= 0 &&
                     sn.inst->count() != static_cast<size_t>(sn.instCount)) {
                     ok = false;
+                    return false;
                 }
-            });
-            return ok && cur == sceneSnapshot_.size();
+                // sn.mat compared equal above, so it's alive and dereferenceable
+                // (nullptr ⇒ no material ⇒ treated as visible). [[#mat-visible]]
+                const bool matHidden = sn.mat && !sn.mat->visible;
+                if (visFlip || matHidden != ((sn.flags & kSnapMatHidden) != 0u)) {
+                    if (sn.spanIndex < 0) {
+                        ok = false;
+                        return false;
+                    }
+                    flips.push_back({snIdx, !vis, matHidden});
+                }
+                return false;
+            };
+            walkSceneGraph(scene, true, false, visit);
+            ok = ok && cur == sceneSnapshot_.size();
+            if (ok) {
+                for (const VisFlip& f : flips) {
+                    SnapNode& sn = sceneSnapshot_[f.snIdx];
+                    sn.flags = (sn.flags & ~(kSnapHidden | kSnapMatHidden)) |
+                               (f.hidden ? kSnapHidden : 0u) | (f.matHidden ? kSnapMatHidden : 0u);
+                    setSpanHidden(static_cast<size_t>(sn.spanIndex), f.hidden || f.matHidden);
+                }
+            }
+            return ok;
+        }
+
+void VulkanRenderer::Impl::setSpanHidden(size_t spanIndex, bool hidden) {
+            EntrySpan& sp = entrySpans_[spanIndex];
+            if (sp.hidden == hidden) return;
+            sp.hidden = hidden;
+            const size_t lastW = (size_t(sp.first) + sp.count - 1) >> 5;
+            if (lastW >= meshMovedBits_.size()) meshMovedBits_.resize(lastW + 1, 0u);
+            for (uint32_t i = sp.first; i < sp.first + sp.count; ++i) {
+                lastVisibleEntries_[i].hidden = hidden;
+                // Its pixels' history is the other state's: reproject + reject.
+                meshMovedBits_[i >> 5] |= (1u << (i & 31u));
+            }
+            hiddenFlippedThisFrame_ = true;
         }
 
 // One mapping, then only the ranges the host actually patched. Shared by both
@@ -257,6 +332,11 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
             // more, never cull more).
             for (auto& sp : entrySpans_) {
                 MeshEntry& e0 = entries[sp.first];
+                // Hidden at run time (MeshEntry::hidden): drawn in no view.
+                if (sp.hidden) {
+                    std::fill_n(cull.begin() + sp.first, sp.count, uint8_t{0});
+                    continue;
+                }
                 // Default-include conservative cases — they always draw (the
                 // assign(1) above already covers them). Deformers (skinned/
                 // displaced/morphed/tet) because their cached local AABB
@@ -478,6 +558,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             refreshDirtyMaterialTextures();
 
             std::fill(meshMovedBits_.begin(), meshMovedBits_.end(), 0u);
+            hiddenFlippedThisFrame_ = false;
 
             // SNAPSHOT FAST PATH: replay the last expansion's traversal against
             // cheap invariants. On a match (the overwhelmingly common frame —
@@ -589,11 +670,29 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // mesh entry whose parent chain hits one of these is exempt from
             // auto-LOD (see the selection pass just after this expansion).
             manualLodLevelRoots_.clear();
-            // traverseVisible (not traverse) so an invisible parent hides its
-            // whole subtree — matches three.js / GLRenderer convention. Plain
-            // `traverse` walks every node regardless of visibility, leaking
+            // Meshes that had entries before this expansion, by address and id
+            // (eligible spans only, see MeshEntry::hidden): hidden now, they
+            // keep their entries, hidden, so a visibility toggle is no
+            // structural change. Built when the walk meets the first hidden mesh.
+            std::unordered_map<const Mesh*, unsigned int> shownBefore;
+            bool shownBeforeBuilt = false;
+            const auto hadEntries = [&](const Mesh& mesh) {
+                if (!shownBeforeBuilt) {
+                    shownBeforeBuilt = true;
+                    for (const auto& s : entrySpans_) {
+                        const MeshEntry& e0 = lastVisibleEntries_[s.first];
+                        if (e0.isOverlay || e0.isParticleField) continue;
+                        shownBefore.emplace(s.mesh, s.meshId);
+                    }
+                }
+                const auto it = shownBefore.find(&mesh);
+                return it != shownBefore.end() && it->second == mesh.id;
+            };
+            // An invisible parent hides its whole subtree: no entry under it
+            // except a mesh that keeps its own hidden ones (walkSceneGraph),
+            // matching three.js / GLRenderer. Plain `traverse` would leak
             // children of hidden groups into the scene/overlay passes.
-            scene.traverseVisible([&](Object3D& o) {
+            auto recordNode = [&](Object3D& o, bool vis, bool underLod) {
                 SnapNode sn{};
                 sn.obj = &o;
                 sn.objId = o.id;
@@ -606,7 +705,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // re-runs the selection cast-free (Object3D is a virtual
                 // base — the replay cannot static_cast down).
                 if (auto* lod = dynamic_cast<LOD*>(&o)) {
-                    if (lod->autoUpdate) lod->update(camera);
+                    if (lod->autoUpdate && vis) lod->update(camera);
                     sn.lod   = lod;
                     sn.flags = kSnapKindOther | kSnapLod;
                     sceneSnapshot_.push_back(sn);
@@ -620,7 +719,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // scene, always overlay.
                 // Collected before the Mesh dispatch so subclasses don't
                 // accidentally route through the Mesh path.
-                if (auto* line = dynamic_cast<Line*>(&o); line && line->visible) {
+                if (auto* line = dynamic_cast<Line*>(&o); line && vis) {
                     auto geom = line->geometry();
                     sn.flags = kSnapKindLine;
                     sn.line  = line;
@@ -648,7 +747,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // scene, always rasterise as POINT_LIST in the overlay pass.
                 // Shares the same geometry cache as Line via the
                 // BufferGeometry* key.
-                if (auto* pts = dynamic_cast<Points*>(&o); pts && pts->visible) {
+                if (auto* pts = dynamic_cast<Points*>(&o); pts && vis) {
                     auto geom = pts->geometry();
                     sn.flags = kSnapKindPoints;
                     sn.pts   = pts;
@@ -673,7 +772,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     return;
                 }
                 auto* m = dynamic_cast<Mesh*>(&o);
-                if (!m || !m->visible) {
+                // Hidden: kind Other, pointer identity only, unless it keeps
+                // the entries it had (see shownBefore above).
+                if (!m || (!vis && (underLod || !hadEntries(*m)))) {
                     sceneSnapshot_.push_back(sn);// kind Other: pointer identity only
                     return;
                 }
@@ -702,12 +803,15 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // material()->visible == false: record the full mesh node (so a
                 // re-show is caught by the replay walk) but build no entries, so
                 // the TLAS / raster G-buffer / overlay / emissive NEE never see it.
-                // [[#mat-visible]]
+                // Unless the mesh had entries before: hidden either way, it
+                // keeps them, hidden (MeshEntry::hidden). [[#mat-visible]]
                 const bool matHidden = m->material() && !m->material()->visible;
                 if (matHidden) sn.flags |= kSnapMatHidden;
                 if (sn.geomB) sn.attrVer = sn.geomB->attributesVersion();
                 sceneSnapshot_.push_back(sn);
-                if (matHidden) return;
+                const size_t snIdx = sceneSnapshot_.size() - 1;
+                const bool hidden = !vis || matHidden;
+                if (hidden && (underLod || !hadEntries(*m))) return;
                 // SplatClouds are composited by the compute tile rasterizer
                 // (SplatPass), not by the G-buffer. The unit quad they carry is
                 // a GL-backend implementation detail — it has no normals and
@@ -754,6 +858,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // field draws no pixels until a representation is switched on.
                 ParticleField* particleField = dynamic_cast<ParticleField*>(m);
                 const bool isParticleField = (particleField != nullptr);
+                // Their passes read no MeshEntry::hidden: hidden, they have no
+                // entries, as before.
+                if (hidden && (isOverlay || isParticleField)) return;
                 const bool isMorphed   = isMorphedMesh(*m);
                 // Tet-skinned PhysX soft body — detected via the material flag set by
                 // SoftBody::enableGpuSkinning() (which also carries the per-frame tet
@@ -820,6 +927,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 EntrySpan sp{};
                 sp.mesh  = m;
                 sp.first = static_cast<uint32_t>(built.size());
+                sp.meshId = m->id;
+                sp.hidden = hidden;
                 // Expansion frames hand every span fresh matrices; leaving the
                 // flag set keeps the motion-matrix build computing real deltas
                 // (vs the remapped prev worlds) on rebuild frames — a spawn
@@ -871,6 +980,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         e.isInstanced  = true;
                         e.camAttached  = camAttached;
                         e.sensorOnly   = sensorOnly;
+                        e.hidden       = hidden;
                         setLodCaches(e);
                         std::memcpy(e.worldMatrix.data(), world.elements.data(), 64);
                         built.push_back(e);
@@ -890,6 +1000,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     e.isParticleField = isParticleField;
                     e.camAttached  = camAttached;
                     e.sensorOnly   = sensorOnly;
+                    e.hidden       = hidden;
                     setLodCaches(e);
                     std::memcpy(e.worldMatrix.data(), m->matrixWorld->elements.data(), 64);
                     built.push_back(e);
@@ -905,8 +1016,33 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     sp.aabbValid        = false;
                     builtFields.emplace_back(particleField, sp.first);
                 }
+                // A visibility flip of this mesh is applied in place by the
+                // replay walk (setSpanHidden); overlays and fields re-expand.
+                if (!isOverlay && !isParticleField) {
+                    sceneSnapshot_[snIdx].spanIndex = static_cast<int32_t>(builtSpans.size());
+                }
                 builtSpans.push_back(sp);
-            });
+            };
+            auto visitRecord = [&](Object3D& o, bool vis, bool underLod) -> bool {
+                recordNode(o, vis, underLod);// pushes exactly one SnapNode
+                SnapNode& rec = sceneSnapshot_.back();
+                if (!vis) rec.flags |= kSnapHidden;
+                if (underLod) rec.flags |= kSnapUnderLod;
+                return (rec.flags & kSnapLod) != 0u;
+            };
+            walkSceneGraph(scene, true, false, visitRecord);
+            // The same entries as before with some hidden or shown is no
+            // structural change (the fingerprints match), but the TLAS masks,
+            // culls, draw records and emitters must re-read the flags.
+            if (built.size() == lastVisibleEntries_.size()) {
+                for (size_t i = 0; i < built.size(); ++i) {
+                    if (built[i].hidden == lastVisibleEntries_[i].hidden) continue;
+                    const size_t w = i >> 5;
+                    if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
+                    meshMovedBits_[w] |= (1u << (i & 31u));
+                    hiddenFlippedThisFrame_ = true;
+                }
+            }
             lastVisibleEntries_ = std::move(built);
             lastVisibleLines_   = std::move(builtLines);
             entrySpans_         = std::move(builtSpans);
@@ -2177,6 +2313,14 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     // opacity dropping below 1) sets instClassChanged, which forces the
                     // fill even on a frame with no motion, and a full build.
                     bool instClassChanged = false;
+                    if (hiddenFlippedThisFrame_) {
+                        // Hidden or shown in place: new ray masks (a full TLAS
+                        // build, like any class change), every view's cull and
+                        // draw records, and the emitter walk.
+                        instClassChanged = true;
+                        ++drawInputsVersion_;
+                        cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
+                    }
                     if (!materialValuesSame) {
                         THREEPP_CPUPROF("scene.8_matDescPatch");
                         // Material-values-only update: rebuild MaterialDescs into
@@ -2392,6 +2536,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             if (e0.camAttached) spanMask = kRayMaskNoShadow;
                             if (e0.sensorOnly)
                                 spanMask = sensorOnlySurfaces_ ? kRayMaskSensorOnly : 0u;
+                            if (sp.hidden) spanMask = 0u;// MeshEntry::hidden: no ray hits it
                             const bool isDeformer = e0.isSkinned || e0.isDisplaced ||
                                                     e0.isGrass || e0.isTet || e0.isMorphed;
                             BlasRecord* rec = nullptr;
@@ -3220,7 +3365,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // is handled by its volumetrics, not pass-through.
                 if (!instances.empty()) {
                     instances.back().mask =
-                            en.sensorOnly
+                            en.hidden ? 0u// MeshEntry::hidden: no ray hits it
+                            : en.sensorOnly
                                     // Sensors only, and only once opted in: mask 0
                                     // is hit by no ray at all.
                                     ? (sensorOnlySurfaces_ ? kRayMaskSensorOnly : 0u)
@@ -3409,6 +3555,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             prevSceneFingerprint = std::move(currFp);
             sceneBuilt_ = true;
             ++drawInputsVersion_;// structural rebuild — every draw record is new
+            ++tlasStats_.structuralRebuilds;
 
             // Companion to the post-init dump: with the scene's BLASes +
             // geometry buffers now resident, allocationBytes − the post-init

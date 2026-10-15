@@ -64,6 +64,14 @@ namespace threepp::vulkan::impl {
         // basic overlay-mesh loop, which would render its un-expanded quads as
         // zero-area triangles. The overlay-mesh loop skips on this flag.
         bool     isParticle = false;
+        // The mesh was hidden at run time (Object3D::visible or
+        // material()->visible false) after it had entries: the entry keeps
+        // its slot, so the TLAS instance set, the descriptor rings and every
+        // index stay put, and showing it again is just as cheap. Ray mask 0
+        // (no ray hits it), culled from every raster view, no emitter. A mesh
+        // hidden before it was ever shown has no entry at all, as before.
+        // Mirrors EntrySpan::hidden (a per-mesh fact).
+        bool     hidden = false;
         // Geometry rigidly parented UNDER a Camera — a first-person
         // viewmodel (hands, weapon, cockpit). Rasterized and shaded like
         // any other mesh, and still visible to primary/radiance traces
@@ -216,6 +224,9 @@ namespace threepp::vulkan::impl {
         const MaterialWithWireframe* wf = nullptr;// cached cast of mat (same object ⇒ still valid)
         const MeshBasicMaterial* basic = nullptr; // cached cast of mat (kSnapUiBlend replay reads)
         int32_t instCount = -1;                   // InstancedMesh count; -1 = plain Mesh
+        // The EntrySpan this mesh node produced (-1: none). A visibility flip
+        // of such a node toggles EntrySpan::hidden in place.
+        int32_t spanIndex = -1;
         uint32_t flags = 0;                       // kind(2b) | attr/wire/overlay/tet bits
         // BufferGeometry::attributesVersion() at record time. Unchanged ⇒
         // no attribute was added/replaced/removed ⇒ the hasPos/hasNorm
@@ -242,6 +253,8 @@ namespace threepp::vulkan::impl {
         InstancedMesh* inst = nullptr;// typed view resolved at expansion; null = plain mesh
         uint32_t first = 0;           // first entry index in lastVisibleEntries_
         uint32_t count = 0;
+        unsigned int meshId = 0;      // mesh->id at expansion (dangling-pointer guard)
+        bool hidden = false;          // see MeshEntry::hidden
         // Matrix change detection. A span's entry world matrices are a pure
         // function of (mesh->matrixWorld, instanceMatrix contents); the lean
         // path refreshes them ONLY when one of these moved. instanceMatrix

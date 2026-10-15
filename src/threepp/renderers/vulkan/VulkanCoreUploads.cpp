@@ -421,6 +421,7 @@ namespace threepp {
             const auto& e0 = entries[sp.first];
             if (e0.isOverlay) continue;// raster-overlay only — no emissive contribution to the traced scene
             if (e0.sensorOnly) continue;// sensor target — lights nothing
+            if (sp.hidden) continue;// hidden at run time (MeshEntry::hidden)
             if (!e0.mesh) continue;
             if (isGlowOnly(*e0.mesh)) continue;// glows, is not a light (setEmissiveCastsLight)
             const MaterialWithEmissive* em = e0.lodEmissive;
