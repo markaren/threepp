@@ -6405,6 +6405,14 @@ class ParticleField(Mesh):
         def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
             ...
         @property
+        def attribute_coverage(self) -> bool:
+            """
+            In alpha_over mode, multiply each sprite's coverage by its own attribute alpha (clamped to 0..1), so a simulation can thin a parcel out as it ages. Off by default. Needs Config.attributes.
+            """
+        @attribute_coverage.setter
+        def attribute_coverage(self, arg0: bool) -> None:
+            ...
+        @property
         def size_scale(self) -> float:
             """
             Multiplies the particle radius.

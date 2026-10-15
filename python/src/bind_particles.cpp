@@ -187,6 +187,10 @@ namespace threepp_py {
                 .def_readwrite("opacity", &ParticleField::BillboardRepr::opacity,
                                "Coverage scale in alpha_over mode, before the texture/procedural "
                                "falloff. Ignored when additive.")
+                .def_readwrite("attribute_coverage", &ParticleField::BillboardRepr::attributeCoverage,
+                               "In alpha_over mode, multiply each sprite's coverage by its own "
+                               "attribute alpha (clamped to 0..1), so a simulation can thin a parcel "
+                               "out as it ages. Off by default. Needs Config.attributes.")
                 // ── Volumetric transport (plans/particle-volumetric-sprites) ─
                 .def_readwrite("volume_extinction",
                                &ParticleField::BillboardRepr::volumeExtinction,

@@ -1785,6 +1785,9 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
             // by this bit; no blend of the two exists to get wrong.
             bp.attrAddr = attrAddr;
             if (attrAddr != 0) bp.flags |= 8u;
+            // attribute.a as per-sprite coverage: alpha-over only (additive has
+            // no coverage channel to scale).
+            if (attrAddr != 0 && bb.alphaOver && bb.attributeCoverage) bp.flags |= 32u;
 
             // ── The volumetric marches (R4/R5, prepassed by R8) ─────────────
             // Both knobs at 0 is the EXACT no-op: nothing below is published,

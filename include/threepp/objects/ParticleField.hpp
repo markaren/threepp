@@ -435,6 +435,13 @@ namespace threepp {
             // (there `intensity` is the only knob and coverage is folded into
             // the radiance).
             float opacity = 1.0f;
+            // Read the attribute buffer's ALPHA as each sprite's own coverage,
+            // multiplying opacity, in alphaOver mode: the use the attribute
+            // layout reserved its a for. A simulation can then thin a parcel
+            // out as it ages or spreads without one field per age band. OFF by
+            // default, so a field whose a carries only a medium weight keeps the
+            // coverage it had. Needs Config::attributes; ignored when additive.
+            bool attributeCoverage = false;
 
             // ── VOLUMETRIC TRANSPORT (plans/particle-volumetric-sprites R4/R5) ─
             // The sprite carries the IMAGE; the field's own DensityRepr volume

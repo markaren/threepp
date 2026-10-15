@@ -125,6 +125,7 @@ const uint kBbAlphaOver = 2u;
 const uint kBbLit       = 4u;
 const uint kBbAttrs     = 8u; // rgb comes from the attribute buffer, not the ramp
 const uint kBbVolume    = 16u;// at least one of the two marches is live
+const uint kBbAttrCover = 32u;// alpha-over coverage *= attribute.a (BillboardRepr::attributeCoverage)
 
 // Per-particle appearance, Config::attributes. rgb = linear HDR radiance in the
 // same domain colorHot is authored in; a is reserved for the phase-2 alpha-over
@@ -743,7 +744,9 @@ void main() {
         vColor = vec4(tint * lit * volume *
                               (P.intensity * bj * outScale),
                       cull ? 0.0 : 1.0);
-        vCover = cull ? 0.0 : (P.opacity * fade * distFade);
+        float cover = P.opacity * fade * distFade;
+        if ((P.flags & kBbAttrCover) != 0u) cover *= clamp(AttrBuf(P.attrAddr).v[pi].a, 0.0, 1.0);
+        vCover = cull ? 0.0 : cover;
         vMode  = kModeAlphaOver;
     } else {
         vColor = vec4(tint * lit * volume *
