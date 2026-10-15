@@ -315,10 +315,12 @@ namespace threepp::vulkan {
                 near1(g.saturation) && near1(g.contrast);
         if (identity) {
             lutActive_ = false;
+            grade_ = ColorGrade{};
             return;
         }
         uploadLut(g);
         lutActive_ = true;
+        grade_ = g;
     }
 
     void PostComposite::uploadLut(const ColorGrade& g) {

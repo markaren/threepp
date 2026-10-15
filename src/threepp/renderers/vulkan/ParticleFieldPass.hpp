@@ -65,6 +65,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -318,7 +319,35 @@ namespace threepp::vulkan {
     // fence was waited on before recording began, so no in-flight frame can be
     // reading it.
     //
-    // MUST mirror the BbView block in shaders/particlefield_billboard.vert.
+    // The post stack's white balance and colour grade, handed to overlay
+    // content that composites after it (VulkanRenderer::setOverlayColorGrade)
+    // so it lands where a graded surface colour would. flags bit0: apply the
+    // white balance (rows of a linear 3x3) before the tone map; bit1: apply
+    // the grade (PostComposite::ColorGrade, evaluated analytically, the
+    // function its LUT bakes) after the sRGB encode. flags 0 = the overlay's
+    // old exposure + tone map only.
+    // MUST mirror OverlayGrade in shaders/overlay_display.glsl.
+    struct OverlayGradeGpu {
+        float         wbRow0[3];   //  0
+        std::uint32_t flags;       // 12
+        float         wbRow1[3];   // 16
+        float         saturation;  // 28
+        float         wbRow2[3];   // 32
+        float         contrast;    // 44
+        float         lift[3];     // 48
+        float         _pad0;       // 60
+        float         gamma[3];    // 64
+        float         _pad1;       // 76
+        float         gain[3];     // 80
+        float         _pad2;       // 92
+    };                             // 96
+    static_assert(sizeof(OverlayGradeGpu) == 96, "OverlayGradeGpu drifted from overlay_display.glsl");
+    inline constexpr std::uint32_t kOverlayGradeWhiteBalance = 1u;
+    inline constexpr std::uint32_t kOverlayGradeLut = 2u;
+
+    // MUST mirror the BbView block in shaders/particlefield_billboard.vert
+    // (the first 144 bytes; the vertex stage reads no further) and BbGrade in
+    // shaders/particlefield_billboard.frag (the grade block at 144).
     struct BillboardViewGpu {
         float         exposure;      //  0
         std::uint32_t toneMapMode;   //  4
@@ -361,9 +390,15 @@ namespace threepp::vulkan {
         // setUnderwaterMurk) leave the sprite as it was.
         float         murkSigma[3];  // 128
         float         _pad5;         // 140
-    };                               // 144
-    static_assert(sizeof(BillboardViewGpu) == 144,
-                  "BillboardViewGpu drifted from particlefield_billboard.vert");
+        // The display grade (setOverlayColorGrade), read by the FRAGMENT
+        // stage at kBbViewGradeOffset; zero flags when the switch is off.
+        OverlayGradeGpu grade;       // 144
+    };                               // 240
+    static_assert(sizeof(BillboardViewGpu) == 240,
+                  "BillboardViewGpu drifted from particlefield_billboard.vert / .frag");
+    inline constexpr std::uint32_t kBbViewGradeOffset = 144u;
+    static_assert(offsetof(BillboardViewGpu, grade) == kBbViewGradeOffset,
+                  "the billboard fragment stage reads the grade at this offset");
     // Flag bits, mirrored in the shader.
     inline constexpr std::uint32_t kBbViewFogActive = 1u;
     inline constexpr std::uint32_t kBbViewLinearOut = 2u;

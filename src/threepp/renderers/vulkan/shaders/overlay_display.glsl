@@ -17,9 +17,11 @@
 // recompile it. Fold them together the next time that path is opened for its
 // own reasons.
 //
-// White balance and the grading LUT are intentionally omitted — the accepted
+// White balance and the grading LUT are omitted by odDisplay: the old
 // approximation for small translucent/additive overlay content, same as
-// particle.frag's lit path.
+// particle.frag's lit path. Under a strong grade it leaves sprites flatter
+// and greyer than the surfaces behind them, so odDisplayGraded below applies
+// both when VulkanRenderer::setOverlayColorGrade is on (OverlayGrade.flags).
 
 vec3 odLinearToSRGB(vec3 x) {
     const vec3 cutoff = vec3(lessThan(x, vec3(0.0031308)));
@@ -123,6 +125,47 @@ vec3 odToneMap(vec3 c, uint mode, float exposure) {
 // Linear HDR radiance -> the swapchain's display-referred, sRGB-encoded domain.
 vec3 odDisplay(vec3 hdr, uint mode, float exposure) {
     return odLinearToSRGB(odToneMap(hdr, mode, exposure));
+}
+
+// The post stack's white balance and colour grade, as post_composite.comp
+// applies them. MUST mirror vulkan::OverlayGradeGpu (ParticleFieldPass.hpp).
+// flags bit0 = white balance, bit1 = grade; 0 = neither.
+struct OverlayGrade {
+    vec3  wbRow0;
+    uint  flags;
+    vec3  wbRow1;
+    float saturation;
+    vec3  wbRow2;
+    float contrast;
+    vec3  lift;
+    float _pad0;
+    vec3  gamma;
+    float _pad1;
+    vec3  gain;
+    float _pad2;
+};
+
+// The function PostComposite::uploadLut bakes into the 33^3 LUT, evaluated
+// directly on the sRGB-encoded value (the LUT is its trilinear sample):
+// lift/gain toe and shoulder, gamma power, luma-preserving saturation,
+// pivot-0.5 contrast.
+vec3 odGrade(vec3 s, OverlayGrade g) {
+    s = clamp(s, 0.0, 1.0);
+    vec3 v = s * g.gain + g.lift * (1.0 - s);
+    v = pow(max(v, vec3(0.0)), 1.0 / max(g.gamma, vec3(1e-3)));
+    const float luma = dot(v, vec3(0.2126, 0.7152, 0.0722));
+    v = luma + (v - luma) * g.saturation;
+    v = (v - 0.5) * g.contrast + 0.5;
+    return clamp(v, 0.0, 1.0);
+}
+
+// odDisplay plus the post stack's white balance (linear, before the tone map)
+// and grade (encoded, after it), in post_composite.comp's order.
+vec3 odDisplayGraded(vec3 hdr, uint mode, float exposure, OverlayGrade g) {
+    if ((g.flags & 1u) != 0u) hdr = vec3(dot(g.wbRow0, hdr), dot(g.wbRow1, hdr), dot(g.wbRow2, hdr));
+    vec3 s = odLinearToSRGB(odToneMap(hdr, mode, exposure));
+    if ((g.flags & 2u) != 0u) s = odGrade(s, g);
+    return s;
 }
 
 #endif// OVERLAY_DISPLAY_GLSL

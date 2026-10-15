@@ -2,6 +2,7 @@
 #extension GL_GOOGLE_include_directive : enable
 #extension GL_EXT_scalar_block_layout  : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_buffer_reference : require
 
 // ParticleField BILLBOARD fragment stage — the soft procedural sprite.
 //
@@ -63,6 +64,20 @@ layout(push_constant, scalar) uniform Pc {
 
 layout(location = 0) out vec4 outColor;
 
+// The display grade of this view (setOverlayColorGrade): the tail of the BbView
+// record, at vulkan::kBbViewGradeOffset. Zero flags = the plain odDisplay.
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer BbGrade {
+    OverlayGrade g;
+};
+const uint64_t kBbViewGradeOffset = 144ul;
+
+vec3 display(vec3 hdr) {
+    if (vExposure < 0.0) return hdr;// the glow pass's linear target
+    const OverlayGrade g = BbGrade(pc.viewAddr + kBbViewGradeOffset).g;
+    return g.flags == 0u ? odDisplay(hdr, vToneMap, vExposure)
+                         : odDisplayGraded(hdr, vToneMap, vExposure, g);
+}
+
 void main() {
     const bool alphaOver = (vMode & kModeAlphaOver) != 0u;
     const float r = length(vLocal);
@@ -122,8 +137,7 @@ void main() {
         // result) is not available to a blend unit, and tone-mapping colour x
         // coverage would darken a thin sprite's HUE as well as its opacity.
         const vec3 disp = vColor.rgb * tx.rgb;
-        outColor = vec4((vExposure < 0.0 ? disp : odDisplay(disp, vToneMap, vExposure)) * cv,
-                        cv);
+        outColor = vec4(display(disp) * cv, cv);
         return;
     }
 
@@ -134,5 +148,5 @@ void main() {
     // Alpha is masked out of the write (see the pipeline's colorWriteMask): the
     // swapchain's alpha channel is not part of the composite and an additive
     // pass has no business accumulating into it.
-    outColor = vec4(vExposure < 0.0 ? hdr : odDisplay(hdr, vToneMap, vExposure), 0.0);
+    outColor = vec4(display(hdr), 0.0);
 }

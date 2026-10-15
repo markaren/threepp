@@ -686,6 +686,18 @@ namespace threepp {
         void setStochasticTilingIntegerHash(bool enabled);
         [[nodiscard]] bool stochasticTilingIntegerHash() const;
 
+        // ParticleField billboards and their glow composite AFTER the post
+        // stack, so they take exposure and the tone map by hand; the white
+        // balance and the colour grade (setWhiteBalance, setColorGrade) never
+        // reached them, and under a strong grade a sprite reads flatter and
+        // greyer than the same colour on a surface. On: they get both, in the
+        // post stack's order, so a sprite lands where a graded surface colour
+        // would. Changes nothing without a white balance or grade; the legacy
+        // ParticleSystem and world sprites are not covered. OFF by default
+        // until the look is judged.
+        void setOverlayColorGrade(bool enabled);
+        [[nodiscard]] bool overlayColorGrade() const;
+
         // ── Automatic mesh LOD (ON by default) ────────────────────────────
         // Per-geometry chains of simplified INDEX buffers (vertex positions/
         // normals/UVs untouched — index-only), generated in the background

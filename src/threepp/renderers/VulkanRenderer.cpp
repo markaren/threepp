@@ -2842,6 +2842,14 @@ namespace threepp {
         return core()->stochasticTilingIntegerHash_;
     }
 
+    void VulkanRenderer::setOverlayColorGrade(bool enabled) {
+        core()->overlayColorGrade_ = enabled;
+    }
+
+    bool VulkanRenderer::overlayColorGrade() const {
+        return core()->overlayColorGrade_;
+    }
+
     void VulkanRenderer::setAutoLod(bool enabled) {
         core()->autoLod_ = enabled;
     }

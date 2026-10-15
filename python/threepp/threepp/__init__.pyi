@@ -11415,6 +11415,14 @@ class VulkanRenderer:
     def orthographic_scene_rendering(self, arg1: bool) -> None:
         ...
     @property
+    def overlay_color_grade(self) -> bool:
+        """
+        ParticleField billboards and their glow take the white balance and colour grade (set_white_balance, set_color_grade) as the frame does, so a sprite lands where a graded surface colour would instead of flatter and greyer. Off by default; changes nothing without a white balance or grade.
+        """
+    @overlay_color_grade.setter
+    def overlay_color_grade(self, arg1: bool) -> None:
+        ...
+    @property
     def pass_timings(self) -> list:
         """
         Per-pass GPU times of the last completed frame: a list of (name, view, gpu_ms) tuples in render-graph execution order, every view included (view 0 is the primary, otherwise the add_view handle). A row spans the pass and the barriers before it; rows meet rather than overlap, so their sum is the render graph's span and gpu_total_ms minus that sum is the work outside the graph (HUD passes, sprites, ImGui, present). The first and last rows, graph.entry and graph.exit, are the graph's boundary barriers. Empty when the device has no timestamps.

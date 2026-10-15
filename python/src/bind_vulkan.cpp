@@ -1805,6 +1805,13 @@ namespace threepp_py {
                               "Off uses the deterministic 64-ray AO (noise-free, no GI colour).")
                 // Ray-traced env ambient-occlusion / 1-bounce diffuse GI. ON by
                 // default. Off drops the per-pixel occlusion rays (flat ambient IBL).
+                .def_property("overlay_color_grade",
+                              [](PyVulkanRenderer& r) { return r.native().overlayColorGrade(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setOverlayColorGrade(v); },
+                              "ParticleField billboards and their glow take the white balance and colour grade "
+                              "(set_white_balance, set_color_grade) as the frame does, so a sprite lands where a "
+                              "graded surface colour would instead of flatter and greyer. Off by default; "
+                              "changes nothing without a white balance or grade.")
                 .def_property("stochastic_tiling_integer_hash",
                               [](PyVulkanRenderer& r) { return r.native().stochasticTilingIntegerHash(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setStochasticTilingIntegerHash(v); },

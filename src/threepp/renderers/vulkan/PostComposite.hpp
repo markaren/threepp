@@ -115,6 +115,14 @@ namespace threepp::vulkan {
         // (one-shot submit + queue wait — call between frames, not per frame).
         void setColorGrade(const ColorGrade& grade);
 
+        // What this composite applies, for overlay passes that must match it
+        // (VulkanRenderer::setOverlayColorGrade): the white balance as a
+        // row-major linear 3x3, and the grade parameters its LUT was baked from.
+        [[nodiscard]] bool whiteBalanceActive() const { return wbActive_; }
+        [[nodiscard]] const float* whiteBalanceMatrix() const { return wbMat_; }
+        [[nodiscard]] bool colorGradeActive() const { return lutActive_; }
+        [[nodiscard]] const ColorGrade& colorGrade() const { return grade_; }
+
         // Records the composite dispatch (leading sceneHdr write→read
         // barrier included). effBloomIntensity is the level-normalized
         // intensity (<= 0 skips the bloom add); exposureBits = the FULL
@@ -167,6 +175,7 @@ namespace threepp::vulkan {
         bool  wbActive_ = false;
         float wbMat_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
         bool  lutActive_ = false;
+        ColorGrade grade_{};// the parameters the LUT holds (identity when inactive)
 
         static constexpr uint32_t kLutSize = 33;
 

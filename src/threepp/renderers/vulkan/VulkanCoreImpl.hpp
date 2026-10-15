@@ -973,6 +973,11 @@ namespace threepp {
         // shimmer otherwise.
         bool     normalMapToksvig_ = true;
         bool     stochasticTilingIntegerHash_ = false;// setStochasticTilingIntegerHash
+        bool     overlayColorGrade_ = false;          // setOverlayColorGrade
+        // This view's white balance and colour grade for the overlay passes
+        // (OverlayGradeGpu), from its PostComposite; zero flags when the
+        // switch is off or the view grades nothing.
+        vulkan::OverlayGradeGpu overlayGrade() const;
 
         // ── Automatic mesh LOD (setAutoLod; ON by default) ──────────────────
         // Measured: Bistro (per-pixel-bound worst case) neutral, fjord flight
@@ -1830,8 +1835,9 @@ namespace threepp {
             uint32_t toneMapMode;
             uint32_t _pad;
             float    invDisplay[2];
+            vulkan::OverlayGradeGpu grade;// setOverlayColorGrade; zero flags when off
         };
-        static_assert(sizeof(FieldGlowPC) == 24,
+        static_assert(sizeof(FieldGlowPC) == 120,
                       "FieldGlowPC drifted from particlefield_glow.frag");
         // Per-frame combined-image-sampler pool, reset at the top of the draw
         // loop (mirrors OverlayPass::spriteDescPools_).

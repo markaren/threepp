@@ -2078,6 +2078,9 @@ VkDeviceAddress VulkanRenderer::Impl::pushBillboardViewRecord(const Matrix4& vie
             rec.exposure    = currentExposure();
             rec.toneMapMode = static_cast<uint32_t>(toneMapping_);
             rec.flags       = linearOut ? vulkan::kBbViewLinearOut : 0u;
+            // A linear-out record feeds the glow pyramid, whose composite
+            // grades the sum; only the display record grades the sprite.
+            if (!linearOut) rec.grade = overlayGrade();
 
             const bool medium = mediumActiveThisFrame_ || murkDensity_ > 0.f;
             if (medium) {
@@ -2144,6 +2147,33 @@ VkDeviceAddress VulkanRenderer::Impl::pushBillboardViewRecord(const Matrix4& vie
                 rec.camWorld[2] = static_cast<float>(vinv.elements[14]);
             }
             return particleFieldPass_->pushViewRecord(currentFrame, rec);
+        }
+
+vulkan::OverlayGradeGpu VulkanRenderer::Impl::overlayGrade() const {
+            vulkan::OverlayGradeGpu g{};
+            if (!overlayColorGrade_ || !view().post_) return g;
+            const vulkan::PostComposite& post = *view().post_;
+            if (post.whiteBalanceActive()) {
+                const float* m = post.whiteBalanceMatrix();
+                for (int c = 0; c < 3; ++c) {
+                    g.wbRow0[c] = m[c];
+                    g.wbRow1[c] = m[3 + c];
+                    g.wbRow2[c] = m[6 + c];
+                }
+                g.flags |= vulkan::kOverlayGradeWhiteBalance;
+            }
+            if (post.colorGradeActive()) {
+                const auto& cg = post.colorGrade();
+                for (int c = 0; c < 3; ++c) {
+                    g.lift[c]  = cg.lift[c];
+                    g.gamma[c] = cg.gamma[c];
+                    g.gain[c]  = cg.gain[c];
+                }
+                g.saturation = cg.saturation;
+                g.contrast   = cg.contrast;
+                g.flags |= vulkan::kOverlayGradeLut;
+            }
+            return g;
         }
 
 // ── F4: the billboard glow source + pyramid ─────────────────────────────────
@@ -3133,6 +3163,7 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                         gpc.toneMapMode = static_cast<uint32_t>(toneMapping_);
                         gpc.invDisplay[0] = ext.width  ? 1.f / float(ext.width)  : 0.f;
                         gpc.invDisplay[1] = ext.height ? 1.f / float(ext.height) : 0.f;
+                        gpc.grade = overlayGrade();
                         vkCmdPushConstants(cb, fieldGlowCompositeLayout_,
                                            VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(gpc), &gpc);
                         vkCmdDraw(cb, 3, 1, 0, 0);

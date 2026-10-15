@@ -49,6 +49,7 @@ layout(push_constant, scalar) uniform Pc {
                       // textureSize(): the chain halves twice with integer
                       // truncation, so a 1281-wide frame's quarter level is 320
                       // and 4 * 320 is not 1281.
+    OverlayGrade grade;// setOverlayColorGrade; zero flags = the plain odDisplay
 } pc;
 
 layout(location = 0) out vec4 outColor;
@@ -59,5 +60,7 @@ void main() {
     // Additive (ONE, ONE) with alpha masked out of the write, exactly as the
     // sharp quads blend — so the order of the two draws inside the pass cannot
     // matter, and the sum is the same either way.
-    outColor = vec4(odDisplay(hdr, pc.toneMapMode, pc.exposure), 0.0);
+    outColor = vec4(pc.grade.flags == 0u ? odDisplay(hdr, pc.toneMapMode, pc.exposure)
+                                         : odDisplayGraded(hdr, pc.toneMapMode, pc.exposure, pc.grade),
+                    0.0);
 }
