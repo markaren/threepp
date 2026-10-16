@@ -960,9 +960,9 @@ class CameraHelper(LineSegments):
     def update(self) -> None:
         ...
 class Canvas:
-    def __init__(self, title: str = 'threepp', width: typing.SupportsInt | typing.SupportsIndex = -1, height: typing.SupportsInt | typing.SupportsIndex = -1, antialiasing: typing.SupportsInt | typing.SupportsIndex = 4, vsync: bool = True, resizable: bool = True, headless: bool = False, fullscreen: bool = False, position: tuple[typing.SupportsInt | typing.SupportsIndex, typing.SupportsInt | typing.SupportsIndex] | None = None, fast_exit: bool = False) -> None:
+    def __init__(self, title: str = 'threepp', width: typing.SupportsInt | typing.SupportsIndex = -1, height: typing.SupportsInt | typing.SupportsIndex = -1, antialiasing: typing.SupportsInt | typing.SupportsIndex = 4, vsync: bool = True, resizable: bool = True, headless: bool = False, fullscreen: bool = False, position: tuple[typing.SupportsInt | typing.SupportsIndex, typing.SupportsInt | typing.SupportsIndex] | None = None, fast_exit: bool = False, exit_on_escape: bool = True) -> None:
         """
-        A window (or a hidden surface when headless=True). width/height default to half the primary monitor. fullscreen=True gives BORDERLESS windowed fullscreen: an undecorated, non-resizable window covering the primary monitor, which ignores width/height and resizable. It never changes the display mode, so alt-tab behaves like any other window. headless=True wins over it (there is no window to show). position=(x, y) places the window in screen coordinates instead of letting the OS choose (ignored with fullscreen=True; no-op on Wayland). fast_exit=True makes a VulkanRenderer on this canvas leave its device to process exit even when it is deleted mid-script; a renderer that dies with the interpreter does so anyway.
+        A window (or a hidden surface when headless=True). width/height default to half the primary monitor. fullscreen=True gives BORDERLESS windowed fullscreen: an undecorated, non-resizable window covering the primary monitor, which ignores width/height and resizable. It never changes the display mode, so alt-tab behaves like any other window. headless=True wins over it (there is no window to show). position=(x, y) places the window in screen coordinates instead of letting the OS choose (ignored with fullscreen=True; no-op on Wayland). fast_exit=True makes a VulkanRenderer on this canvas leave its device to process exit even when it is deleted mid-script; a renderer that dies with the interpreter does so anyway. exit_on_escape=False stops ESC from closing the window, for apps that use ESC themselves (a game's back / pause key); the key still reaches on_key_pressed.
         """
     def animate(self, callback: collections.abc.Callable[[], None]) -> None:
         """
@@ -1027,6 +1027,10 @@ class Canvas:
     def remove_mouse_listener(self, id: typing.SupportsInt | typing.SupportsIndex) -> None:
         """
         Remove a mouse callback by the id its on_mouse_* call returned; an unknown id is ignored.
+        """
+    def set_exit_on_escape(self, value: bool) -> None:
+        """
+        Switch whether ESC closes the window (default True; see the exit_on_escape argument).
         """
     def set_position(self, x: typing.SupportsInt | typing.SupportsIndex, y: typing.SupportsInt | typing.SupportsIndex) -> None:
         """

@@ -289,12 +289,13 @@ namespace threepp_py {
         py::class_<Canvas>(m, "Canvas")
                 .def(py::init([](const std::string& title, int width, int height, int antialiasing,
                                  bool vsync, bool resizable, bool headless, bool fullscreen,
-                                 std::optional<std::pair<int, int>> position, bool fast_exit) {
+                                 std::optional<std::pair<int, int>> position, bool fast_exit, bool exit_on_escape) {
                     Canvas::Parameters p;
                     p.title(title);
                     if (width > 0 && height > 0) p.size(width, height);
                     if (position) p.position(position->first, position->second);
                     p.antialiasing(antialiasing).vsync(vsync).resizable(resizable).headless(headless).fullscreen(fullscreen).fastExit(fast_exit);
+                    p.exitOnKeyEscape(exit_on_escape);
                     return std::make_unique<Canvas>(p);
                 }),
                      py::arg("title") = "threepp", py::arg("width") = -1, py::arg("height") = -1,
@@ -306,6 +307,7 @@ namespace threepp_py {
                      // (~PyVulkanRenderer), and the ones that are not, the test
                      // suite and notebooks, recreate renderers all process long.
                      py::arg("fast_exit") = false,
+                     py::arg("exit_on_escape") = true,
                      "A window (or a hidden surface when headless=True). width/height default to half "
                      "the primary monitor. fullscreen=True gives BORDERLESS windowed fullscreen: an "
                      "undecorated, non-resizable window covering the primary monitor, which ignores "
@@ -314,7 +316,11 @@ namespace threepp_py {
                      "position=(x, y) places the window in screen coordinates instead of letting the OS "
                      "choose (ignored with fullscreen=True; no-op on Wayland). fast_exit=True makes a "
                      "VulkanRenderer on this canvas leave its device to process exit even when it is "
-                     "deleted mid-script; a renderer that dies with the interpreter does so anyway.")
+                     "deleted mid-script; a renderer that dies with the interpreter does so anyway. "
+                     "exit_on_escape=False stops ESC from closing the window, for apps that use ESC "
+                     "themselves (a game's back / pause key); the key still reaches on_key_pressed.")
+                .def("set_exit_on_escape", &Canvas::exitOnKeyEscape, py::arg("value"),
+                     "Switch whether ESC closes the window (default True; see the exit_on_escape argument).")
                 .def("animate", &Canvas::animate, py::arg("callback"),
                      "Run the render loop, calling callback() every frame until the window closes.")
                 .def("animate_once", &Canvas::animateOnce, py::arg("callback"),
