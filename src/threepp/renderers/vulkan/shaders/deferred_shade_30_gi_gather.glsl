@@ -227,8 +227,9 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         if (dist < 1e-4) continue;
         toL /= dist;
         if (dot(N, toL) <= 0.0) continue;
-        const float vis = (doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0) * wPick;
-        if (vis <= 0.0) continue;
+        // Attenuation and the range window BEFORE the shadow ray, as the
+        // cell-list loop below and giHitDirect do it: a lamp past its range
+        // contributes exactly zero, so its ray is never traced.
         const float decay = lights.pointLights[i].decay;
         float atten = 1.0 / max(distFalloff(dist, decay), 0.01);
         const float range = lights.pointLights[i].range;
@@ -238,6 +239,9 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
             const float wnd = max(1.0 - t4, 0.0);
             atten *= wnd * wnd;
         }
+        if (atten <= 0.0) continue;
+        const float vis = (doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0) * wPick;
+        if (vis <= 0.0) continue;
         lit += evalLight(N, V, toL, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
                * lights.pointLights[i].color * atten * vis;
     }
@@ -252,8 +256,6 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter,
                                            lights.spotLights[i].cosAngleInner, spotCos);
         if (spotAtten <= 0.0) continue;
-        const float vis = (doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0) * wPick;
-        if (vis <= 0.0) continue;
         const float decay = lights.spotLights[i].decay;
         float atten = 1.0 / max(distFalloff(dist, decay), 0.01);
         const float range = lights.spotLights[i].range;
@@ -264,6 +266,9 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
             atten *= wnd * wnd;
         }
         atten *= spotAtten;
+        if (atten <= 0.0) continue;// past the range window: no ray for a zero term
+        const float vis = (doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0) * wPick;
+        if (vis <= 0.0) continue;
         lit += evalLight(N, V, toL, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
                * lights.spotLights[i].color * atten * vis;
     }
