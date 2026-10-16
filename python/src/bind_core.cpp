@@ -39,6 +39,22 @@ namespace threepp_py {
         return h.cast<std::shared_ptr<Object3D>>();
     }
 
+    NamedObject<Object3D> node_to_py(Object3D* node, Object3D& self) {
+        if (!node) return py::none();
+        // Through the raw pointer, like every other node getter: pybind11
+        // resolves the concrete type and, for a shared-owned node, builds the
+        // holder from shared_from_this() (the safe path across the virtual
+        // Object3D base), so the proxy owns the node.
+        py::object out = py::cast(node, py::return_value_policy::reference);
+        // Nothing shares the node: the proxy borrows it, and it lives inside
+        // `self` (a light's default target). Never `self` itself: a proxy that
+        // keeps itself alive is never freed.
+        if (node != &self && node->weak_from_this().expired()) {
+            py::detail::keep_alive_impl(out, py::cast(&self, py::return_value_policy::reference));
+        }
+        return out;
+    }
+
     // String entries only: userData holds std::any, and the editor's configs
     // (spline, physics, script) are all flat `key=value;...` strings — the one
     // shape a script has a documented reason to read. Non-string scalars return
@@ -112,10 +128,10 @@ namespace threepp_py {
                 .def_readwrite("matrix_auto_update", &Object3D::matrixAutoUpdate)
                 // Mutable in place: `obj.layers.set(1)` moves the object to channel 1.
                 .def_readwrite("layers", &Object3D::layers)
-                // Non-owning views into the tree. keep_alive<0, 1> keeps `self` (and so the
-                // subtree that owns the returned node) alive while the proxy is held; without
-                // it a node from a loader-built subtree dangled after `del` of the root.
-                .def_property_readonly("parent", py::cpp_function([](Object3D& o) { return o.parent; }, py::return_value_policy::reference, py::keep_alive<0, 1>()))
+                // Views into the tree. A shared-owned node comes back owning itself
+                // (pybind11 adopts its control block, see node_to_py); keeping `self`
+                // alive would not keep a parent alive anyway, a child does not own it.
+                .def_property_readonly("parent", [](Object3D& o) { return o.parent; }, py::return_value_policy::reference)
                 .def_property_readonly("children", [](Object3D& o) { return o.children; }, py::return_value_policy::reference)
                 // add(child) / add(a, b, c) — takes shared ownership of each child.
                 .def("add", [](Object3D& self, const py::args& children) {
@@ -168,7 +184,7 @@ namespace threepp_py {
                 })
                 .def("local_to_world", [](Object3D& o, Vector3 v) { o.localToWorld(v); return v; }, py::arg("vector"))
                 .def("world_to_local", [](Object3D& o, Vector3 v) { o.worldToLocal(v); return v; }, py::arg("vector"))
-                .def("get_object_by_name", [](Object3D& o, const std::string& name) { return o.getObjectByName(name); }, py::arg("name"), py::return_value_policy::reference, py::keep_alive<0, 1>())
+                .def("get_object_by_name", [](Object3D& o, const std::string& name) { return node_to_py(o.getObjectByName(name), o); }, py::arg("name"))
                 .def("get_user_data", [](const Object3D& o, const std::string& key) { return user_data_string(o, key); }, py::arg("key"),
                      "String userData entry for `key`, or None when absent or not a string. "
                      "The editor's spline/physics/script configs live here as flat 'key=value;...' strings.")

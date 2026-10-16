@@ -52,11 +52,10 @@ namespace threepp_py {
                 }),
                      py::arg("color") = Color(0xffffff), py::arg("intensity") = 1.f)
                 .def("set_target", [](DirectionalLight& l, Object3D& target) { l.setTarget(target); }, py::arg("target"))
-                // Non-owning view of the aim target. target() may return the light's
-                // internal defaultTarget (not shared_ptr-owned), so use the reference
-                // policy (cf. Object3D.parent); keep_alive<0, 1> keeps the light alive
-                // for as long as the returned target proxy is held.
-                .def("get_target", [](DirectionalLight& l) -> const Object3D& { return l.target(); }, py::return_value_policy::reference, py::keep_alive<0, 1>())
+                // The aim target. A target set with set_target comes back owning
+                // itself; the light's internal defaultTarget (not shared_ptr-owned)
+                // keeps the light alive for as long as its proxy is held (node_to_py).
+                .def("get_target", [](DirectionalLight& l) { return node_to_py(const_cast<Object3D*>(&l.target()), l); })
                 // Shadow-camera ortho frustum. Call after constructing the light to
                 // widen the shadow coverage area; default is ±1 (very tight).
                 .def("set_shadow_frustum",
@@ -114,7 +113,7 @@ namespace threepp_py {
                                "traces soft shadows with penumbras that widen with distance; 0 "
                                "(default) keeps hard shadows. GL ignores it.")
                 .def("set_target", [](SpotLight& l, Object3D& target) { l.setTarget(target); }, py::arg("target"))
-                .def("get_target", [](SpotLight& l) -> const Object3D& { return l.target(); }, py::return_value_policy::reference, py::keep_alive<0, 1>());
+                .def("get_target", [](SpotLight& l) { return node_to_py(const_cast<Object3D*>(&l.target()), l); });
 
         // ---- HemisphereLight -------------------------------------------------
         py::class_<HemisphereLight, Light, std::shared_ptr<HemisphereLight>>(m, "HemisphereLight")

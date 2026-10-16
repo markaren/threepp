@@ -56,6 +56,31 @@ namespace threepp_py {
     // tripping pybind11's broken pointer adjustment. Defined in bind_core.cpp.
     std::shared_ptr<threepp::Object3D> as_object3d(const py::handle& h);
 
+    // A py::object the type stubs name `T`, for a def that builds its return
+    // value by hand and should still read like one that returned a T*
+    // (pybind11 names a bare py::object `object`). Never an argument type.
+    template<class T>
+    class NamedObject : public py::object {
+        static int anyObject(PyObject*) { return 1; }
+
+    public:
+        PYBIND11_OBJECT_DEFAULT(NamedObject, py::object, anyObject)
+    };
+
+    // A node of the scene graph handed back by a lookup on `self`
+    // (get_object_by_name, a light's get_target), or None. These used to carry
+    // py::keep_alive<0, 1>, so the node kept `self` alive through pybind11's
+    // patient table, which the garbage collector cannot see: a lookup that
+    // returned `self` made it immortal, and a clone's root and its nodes,
+    // fetched from each other, kept each other alive in a cycle (the dune
+    // buggy leaked every opponent's car). Not needed for a shared-owned node,
+    // which is everything add() put in a tree and every object Python made:
+    // pybind11 adopts its control block (Object3D derives
+    // enable_shared_from_this), so the proxy owns it. Only a node nothing
+    // shares, a light's built-in default target, still ties its proxy to
+    // `self`, which owns it. Defined in bind_core.cpp.
+    NamedObject<threepp::Object3D> node_to_py(threepp::Object3D* node, threepp::Object3D& self);
+
     // Docstring of Object3D.resident, bound at both Object3D binding sites
     // (bind_core.cpp, and bind_objects.cpp for the virtual-base leaves).
     inline constexpr const char* kResidentDoc =
@@ -147,5 +172,14 @@ namespace threepp_py {
     threepp::Renderer* py_vulkan_native_renderer(const py::handle& h);
 
 }// namespace threepp_py
+
+namespace pybind11::detail {
+
+    template<class T>
+    struct handle_type_name<threepp_py::NamedObject<T>> {
+        static constexpr auto name = make_caster<T>::name;
+    };
+
+}// namespace pybind11::detail
 
 #endif// THREEPP_PY_BINDINGS_HPP
