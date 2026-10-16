@@ -281,6 +281,14 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanDofSeam_test COMMAND VulkanDofSeam_test)
     set_tests_properties(VulkanDofSeam_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # A strong spot light's beam in fog: smooth per frame, as bright settled as
+    # the frames carry, and no grainier than the clear sky beside it (the march
+    # is clipped to the cone and sampled equi-angularly about the lamp).
+    add_executable(VulkanSpotBeamFog_test VulkanSpotBeamFog_test.cpp)
+    target_link_libraries(VulkanSpotBeamFog_test PRIVATE threepp)
+    add_test(NAME VulkanSpotBeamFog_test COMMAND VulkanSpotBeamFog_test)
+    set_tests_properties(VulkanSpotBeamFog_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # The screenshot path's sizing. writeFramebuffer used to take w/h from the
     # canvas's requested window size while the pixels came from the swapchain;
     # a window the platform clamped (Windows work-area clamp) then over-read
