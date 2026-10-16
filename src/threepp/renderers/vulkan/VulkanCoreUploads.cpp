@@ -582,15 +582,20 @@ namespace threepp {
         // entries-indexed GeometryDesc mirror is only rewritten on a structural
         // rebuild, so republish the bit in place for an object already drawn
         // (the way setStableCorrespondence republishes prevVertexAddress).
+        // Matched by the span's meshId, never through the entry's Mesh*: this
+        // runs between frames, when the entries may name a mesh that has been
+        // freed since (see lastVisibleEntries_).
         const size_t n = std::min(lastVisibleEntries_.size(), geomDescsCached_.size());
-        for (size_t i = 0; i < n; ++i) {
-            const MeshEntry& en = lastVisibleEntries_[i];
-            if (en.isOverlay || !en.mesh || en.mesh->id != obj.id) continue;
-            const uint32_t f  = geomDescsCached_[i].flags;
-            const uint32_t nf = castsLight ? (f & ~kGeomFlagGlowOnly) : (f | kGeomFlagGlowOnly);
-            if (nf == f) continue;
-            geomDescsCached_[i].flags = nf;
-            markGeomDescsDirty(static_cast<uint32_t>(i));
+        for (const EntrySpan& sp : entrySpans_) {
+            if (sp.meshId != obj.id) continue;
+            for (size_t i = sp.first; i < size_t(sp.first) + sp.count && i < n; ++i) {
+                if (lastVisibleEntries_[i].isOverlay) continue;
+                const uint32_t f  = geomDescsCached_[i].flags;
+                const uint32_t nf = castsLight ? (f & ~kGeomFlagGlowOnly) : (f | kGeomFlagGlowOnly);
+                if (nf == f) continue;
+                geomDescsCached_[i].flags = nf;
+                markGeomDescsDirty(static_cast<uint32_t>(i));
+            }
         }
     }
 

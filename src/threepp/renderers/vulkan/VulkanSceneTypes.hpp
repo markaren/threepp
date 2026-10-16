@@ -164,7 +164,9 @@ namespace threepp::vulkan::impl {
         //     each frame, so an emissive that turns on later (dusk-driven
         //     lantern intensity) exempts immediately, cast-free.
         //   lodGeomKey — blasCache key (geometry pointer swaps force a
-        //     full expansion).
+        //     full expansion). Also the key the between-frame calls match a
+        //     geometry's entries by, without following `mesh` (see
+        //     VulkanRenderer::Impl::lastVisibleEntries_).
         //   lodCenter/lodRadius — object-space bounding sphere; radius 0 ⇒
         //     unknown ⇒ entry stays LOD0. lodSphereDirty re-derives it
         //     after an in-place geometry edit (set by the geom-dirty

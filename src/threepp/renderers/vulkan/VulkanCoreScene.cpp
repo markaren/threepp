@@ -545,6 +545,18 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
         }
 
 void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
+            // Deform work is queued here and recorded by the same frame. A frame
+            // that never recorded (beginDeferredFrame gave up on an out-of-date
+            // swapchain, a resize or a minimised window) leaves its queue behind,
+            // and those Displaced/GrassMesh pointers may be freed by now and
+            // their states pruned by this build: drop it. A skinned pose that
+            // was never skinned is marked changed (its states are still alive,
+            // only a structural rebuild below frees one), so it is redone.
+            for (auto* st : pendingSkinnedRebuilds_) st->prevBoneMats.clear();
+            pendingSkinnedRebuilds_.clear();
+            pendingTetRebuilds_.clear();// re-queued every frame
+            pendingDisplacedDeforms_.clear();// dirty every frame
+            pendingGrassDeforms_.clear();
             // force=false (matching GLRenderer): with
             // updateMatrix()'s change-detection early-out, only subtrees whose
             // transforms actually moved pay the world-matrix multiplies — a
@@ -2781,8 +2793,12 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         ++it;
                     }
                 }
+                // The per-mesh deform states go with their geometry OR their
+                // mesh (MeshOwner): a freed clone's state, keyed by an address
+                // the allocator may hand the next mesh, while the template
+                // keeps the shared geometry alive.
                 for (auto it = skinnedMeshStates.begin(); it != skinnedMeshStates.end(); ) {
-                    if (it->second->liveCheck.expired()) {
+                    if (it->second->liveCheck.expired() || it->second->owner.gone()) {
                         destroyBuffer(ctx->allocator(), it->second->baseVertex);
                         destroyBuffer(ctx->allocator(), it->second->baseNormal);
                         destroyBuffer(ctx->allocator(), it->second->skinIndex);
@@ -2809,7 +2825,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     }
                 }
                 for (auto it = tetMeshStates.begin(); it != tetMeshStates.end(); ) {
-                    if (it->second->liveCheck.expired()) {
+                    if (it->second->liveCheck.expired() || it->second->owner.gone()) {
                         destroyBuffer(ctx->allocator(), it->second->tetIndex);
                         destroyBuffer(ctx->allocator(), it->second->tetWeight);
                         destroyBuffer(ctx->allocator(), it->second->baseNormal);
@@ -2833,7 +2849,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     }
                 }
                 for (auto it = displacedStates.begin(); it != displacedStates.end(); ) {
-                    if (it->second->liveCheck.expired()) {
+                    if (it->second->liveCheck.expired() || it->second->owner.gone()) {
                         auto& st = it->second;
                         // The deferred-shade inputs (bindings 13/14) cache this
                         // state's fine-cascade height + foam views, set once in
@@ -2879,7 +2895,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     }
                 }
                 for (auto it = grassStates.begin(); it != grassStates.end(); ) {
-                    if (it->second->liveCheck.expired()) {
+                    if (it->second->liveCheck.expired() || it->second->owner.gone()) {
                         auto& st = it->second;
                         if (st->blas) {
                             auto& rec = st->blas;
@@ -2899,7 +2915,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     }
                 }
                 for (auto it = morphedMeshStates.begin(); it != morphedMeshStates.end(); ) {
-                    if (it->second->liveCheck.expired()) {
+                    if (it->second->liveCheck.expired() || it->second->owner.gone()) {
                         auto& rec = it->second->blas;
                         if (rec) {
                             if (rec->as) ctx->rt().destroyAccelerationStructure(ctx->device(), rec->as, nullptr);

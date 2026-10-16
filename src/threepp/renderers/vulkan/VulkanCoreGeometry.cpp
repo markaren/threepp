@@ -1785,11 +1785,13 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
                 // frame refit's scratch regrowth under a deforming producer).
                 // Rewrite the slots in place, exactly as the full rebuild
                 // fills them, and stage the change for every frame in flight.
+                // This runs between frames: the entries are matched by
+                // lodGeomKey and never followed (see lastVisibleEntries_), so a
+                // mesh freed since the last frame is not read.
                 const auto lodSel0 = selectLodGeom(*recPtr, 0);
                 for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
                     const MeshEntry& en = lastVisibleEntries_[i];
-                    if (en.isOverlay || !en.mesh) continue;
-                    if (en.mesh->geometry().get() != geomSp.get()) continue;
+                    if (en.isOverlay || en.lodGeomKey != geomSp.get()) continue;
                     if (i >= geomDescsCached_.size()) continue;
                     auto& gd = geomDescsCached_[i];
                     gd.vertexAddress = recPtr->vertex.address;
@@ -1806,9 +1808,12 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
                              stableCorrespondence)
                                     ? recPtr->prevVertex.address
                                     : recPtr->vertex.address;
-                    const auto mat = en.mesh->material();
-                    gd.colorAddress = (recPtr->color.handle != VK_NULL_HANDLE &&
-                                       mat && mat->vertexColors)
+                    // The slot keeps the vertex-colour decision the structural
+                    // rebuild made from the material (a colour buffer exists for
+                    // the same geometry packed or not), so the material is not
+                    // read here either.
+                    gd.colorAddress = (gd.colorAddress != 0ull &&
+                                       recPtr->color.handle != VK_NULL_HANDLE)
                                               ? recPtr->color.address
                                               : 0ull;
                     gd.indexed = lodSel0.indexed ? 1u : 0u;
@@ -2008,11 +2013,13 @@ void VulkanRenderer::Impl::setStableCorrespondence(const Mesh& mesh, bool stable
             // draw inputs are rebuilt; the RT side reads the entries-indexed
             // GeometryDesc mirror, which is only rewritten on a structural
             // rebuild -- so republish prevVertexAddress in place, the same way
-            // enableVertexInterop's unpacked swap does.
+            // enableVertexInterop's unpacked swap does. By lodGeomKey, not
+            // through the entry's Mesh*, which may be freed by now (see
+            // lastVisibleEntries_); a dead mesh's slot that matches is rewritten
+            // harmlessly, the next frame is a structural rebuild without it.
             for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
                 const MeshEntry& en = lastVisibleEntries_[i];
-                if (en.isOverlay || !en.mesh) continue;
-                if (en.mesh->geometry().get() != geomSp.get()) continue;
+                if (en.isOverlay || en.lodGeomKey != geomSp.get()) continue;
                 if (i >= geomDescsCached_.size()) continue;
                 geomDescsCached_[i].prevVertexAddress =
                         (rec.prevVertex.handle != VK_NULL_HANDLE && stable)
@@ -4048,6 +4055,7 @@ VulkanRenderer::Impl::SkinnedMeshState* VulkanRenderer::Impl::ensureSkinnedBlas(
             auto state = std::make_unique<SkinnedMeshState>();
             state->blas = std::move(rec);
             state->liveCheck = sm.geometry();
+            state->owner.bind(sm);
             const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
             const uint32_t boneCount   = static_cast<uint32_t>(sm.skeleton->bones.size());
             state->vertexCount = vertexCount;
@@ -4230,6 +4238,7 @@ VulkanRenderer::Impl::TetMeshState* VulkanRenderer::Impl::ensureTetBlas(Mesh& m)
             auto state = std::make_unique<TetMeshState>();
             state->blas = std::move(rec);
             state->liveCheck = geom;
+            state->owner.bind(m);
             const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
             state->vertexCount = vertexCount;
             auto* idxAttr = geom->getIndex();
@@ -4445,6 +4454,7 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             state->planeSizeX = planeSizeX;
             state->planeSizeZ = planeSizeZ;
             state->liveCheck = dm.geometry();
+            state->owner.bind(dm);
 
             // FFT cascades — one Phillips/Dynamic/IFFT chain per non-zero
             // `tileSize` in DisplacedMesh::Params. Cascades are band-passed
@@ -4863,6 +4873,7 @@ VulkanRenderer::Impl::GrassMeshState* VulkanRenderer::Impl::ensureGrassState(Gra
             auto state = std::make_unique<GrassMeshState>();
             state->vertexCount = vertexCount;
             state->liveCheck = gm.geometry();
+            state->owner.bind(gm);
 
             // Immutable rest positions — the shader reads these and writes the
             // displaced result into the (separate) BLAS vertex buffer. Both

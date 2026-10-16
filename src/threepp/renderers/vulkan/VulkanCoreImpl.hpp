@@ -1271,6 +1271,17 @@ namespace threepp {
         // call. renderFrame consumes this to compute per-instance motion matrices
         // after the in-flight fence has been waited (safe to write the
         // motionMatBuffers[currentFrame] HOST_VISIBLE buffer).
+        //
+        // Between two frames the entries still name the meshes the LAST frame
+        // drew, and any of them may have been removed and freed since: the
+        // caller owns its objects, and a Python app frees one the moment it
+        // drops the last reference. ensureSceneBuilt re-validates the list
+        // against the live scene (the snapshot replay compares address AND id
+        // before it reads an object), so inside a frame every MeshEntry::mesh
+        // is live. Code that runs between frames (setEmissiveCastsLight,
+        // setStableCorrespondence, enableVertexInterop) must only COMPARE
+        // entries, by EntrySpan::meshId or MeshEntry::lodGeomKey, and never
+        // follow the pointer.
         std::vector<MeshEntry> lastVisibleEntries_;
         // Per-mesh spans over lastVisibleEntries_ (see EntrySpan). Rebuilt at
         // every full expansion; on lean frames the per-frame loops consult the
@@ -3285,6 +3296,7 @@ namespace threepp {
             auto state = std::make_unique<MorphedMeshState>();
             state->blas = std::move(rec);
             state->liveCheck = mesh.geometry();
+            state->owner.bind(mesh);
 
             auto* raw = state.get();
             morphedMeshStates.emplace(&mesh, std::move(state));

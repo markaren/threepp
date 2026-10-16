@@ -289,6 +289,15 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanSpotBeamFog_test COMMAND VulkanSpotBeamFog_test)
     set_tests_properties(VulkanSpotBeamFog_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # A mesh removed and freed between two frames: the calls that walk the last
+    # frame's entries (setEmissiveCastsLight, setStableCorrespondence,
+    # enableVertexInterop) never read it, and a freed skinned clone's GPU state
+    # goes with it although its geometry lives on in the template.
+    add_executable(VulkanFreedMesh_test VulkanFreedMesh_test.cpp)
+    target_link_libraries(VulkanFreedMesh_test PRIVATE threepp)
+    add_test(NAME VulkanFreedMesh_test COMMAND VulkanFreedMesh_test)
+    set_tests_properties(VulkanFreedMesh_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # The screenshot path's sizing. writeFramebuffer used to take w/h from the
     # canvas's requested window size while the pixels came from the swapchain;
     # a window the platform clamped (Windows work-area clamp) then over-read

@@ -20,6 +20,7 @@
 
 #include "threepp/core/BufferAttribute.hpp"
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/core/Object3D.hpp"
 #include "threepp/materials/Material.hpp"
 #include "threepp/renderers/vulkan/water/OceanFFT.hpp"
 #include "threepp/textures/Texture.hpp"
@@ -335,6 +336,26 @@ namespace threepp::vulkan::impl {
         bool indexed;
     };
 
+    // The mesh a per-mesh deform state below belongs to. Those maps are keyed
+    // by the mesh's ADDRESS and their liveCheck follows the GEOMETRY, which a
+    // clone shares with its template: a freed clone's state (megabytes of
+    // buffers and a BLAS) used to live on until the template's geometry died,
+    // and a new mesh the allocator put at the dead one's address adopted it.
+    // With the mesh shared-owned (Mesh::create, every Python mesh) the
+    // structural rebuild's prune frees the state with the mesh; a mesh the
+    // caller owns some other way has no weak reference to take, and its state
+    // goes with the geometry as before.
+    struct MeshOwner {
+        std::weak_ptr<const Object3D> ref;
+        bool tracked = false;
+
+        void bind(const Object3D& mesh) {
+            ref     = mesh.weak_from_this();
+            tracked = !ref.expired();
+        }
+        [[nodiscard]] bool gone() const { return tracked && ref.expired(); }
+    };
+
     // Per-SkinnedMesh deformed-geometry BLAS. Unlike static meshes, skinned
     // meshes can't share BLAS even when they share BufferGeometry — each
     // instance has its own pose. Vertex/normal buffers are host-mapped and
@@ -347,6 +368,7 @@ namespace threepp::vulkan::impl {
         std::unique_ptr<BlasRecord> blas;
         std::vector<float> prevBoneMats;
         std::weak_ptr<BufferGeometry> liveCheck;
+        MeshOwner owner;// the mesh itself (see MeshOwner)
 
         // GPU skinning input buffers — populated once at ensureSkinnedBlas
         // time and reused every frame. Output is the BLAS's own vertex /
@@ -417,6 +439,7 @@ namespace threepp::vulkan::impl {
     struct TetMeshState {
         std::unique_ptr<BlasRecord> blas;
         std::weak_ptr<BufferGeometry> liveCheck;
+        MeshOwner owner;// the mesh itself (see MeshOwner)
         // Static per-vertex inputs (uploaded once at ensureTetBlas).
         Buffer tetIndex   {};// vec4<float> — 4 tet-vertex indices
         Buffer tetWeight  {};// vec4<float> — barycentric weights
@@ -466,6 +489,7 @@ namespace threepp::vulkan::impl {
         std::vector<float> blendedPositions;
         std::vector<float> blendedNormals;
         std::weak_ptr<BufferGeometry> liveCheck;
+        MeshOwner owner;// the mesh itself (see MeshOwner)
     };
 
     // Per-DisplacedMesh: BLAS (rebuilt-in-place each frame, same scheme as
@@ -537,6 +561,7 @@ namespace threepp::vulkan::impl {
         // skips it and keeps the last good field instead.
         bool      heightReadbackWritten[kFramesInFlight] = {};
         std::weak_ptr<BufferGeometry> liveCheck;
+        MeshOwner owner;// the mesh itself (see MeshOwner)
         // Per-frame BLAS-refit state. The initial AS is built (buildBlasFor)
         // with ALLOW_UPDATE, so subsequent per-frame refreshes can use
         // MODE_UPDATE (refit) instead of full BUILD — typically 3-10× faster
@@ -619,6 +644,7 @@ namespace threepp::vulkan::impl {
         Buffer   heightFrac{};// per-vertex height fraction (device addr)
         uint32_t vertexCount = 0;
         std::weak_ptr<BufferGeometry> liveCheck;
+        MeshOwner owner;// the mesh itself (see MeshOwner)
         uint32_t blasRefitCounter = 0;
         static constexpr uint32_t kBlasFullRebuildInterval = 64;
     };
