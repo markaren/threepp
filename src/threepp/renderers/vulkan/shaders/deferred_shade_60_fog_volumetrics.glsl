@@ -1005,6 +1005,67 @@ vec3 proceduralStars(vec3 dir) {
 // cone (the lighthouse turns to mush), a thin tree-gap god ray (a cell can't
 // resolve a shaft narrower than itself). Per-pixel marching is scale-independent.)
 
+// The stretch of the ray ro + t·rd inside the FORWARD nappe of a spot cone
+// (apex P, unit axis A, cosine of the half angle cosHalf): [x, y], an open end
+// as ±1e30, x > y when the ray misses. A cone no wider than a hemisphere is
+// convex, so a line meets it in one interval. The interval only decides where
+// the beam march puts its samples; the cone factor stays in the integrand. So
+// every case the arithmetic cannot settle (a ray parallel to the cone's side,
+// a wider cone) returns the whole line: more samples spent outside the beam,
+// never light lost.
+vec2 spotConeInterval(vec3 ro, vec3 rd, vec3 P, vec3 A, float cosHalf) {
+    const vec2 whole = vec2(-1e30, 1e30);
+    const vec2 none  = vec2(1e30, -1e30);
+    if (cosHalf <= 0.0) return whole;
+    const vec3  o  = ro - P;
+    const float dA = dot(rd, A);
+    const float oA = dot(o, A);
+    const float c2 = cosHalf * cosHalf;
+    // f(t) = (A·(o + t·rd))² − c2·|o + t·rd|² = a·t² + 2b·t + c, >= 0 inside
+    // the double cone (rd is unit length).
+    const float a = dA * dA - c2;
+    const float b = dA * oA - c2 * dot(rd, o);
+    const float c = oA * oA - c2 * dot(o, o);
+    if (abs(a) < 1e-6) return whole;
+    const float disc = b * b - a * c;
+    if (disc < 0.0) return (a > 0.0) ? whole : none;
+    // The stable root pair (no cancellation when one root is far away).
+    const float q  = -(b + ((b >= 0.0) ? sqrt(disc) : -sqrt(disc)));
+    const float r0 = q / a;
+    const float r1 = (abs(q) > 1e-30) ? c / q : r0;
+    const float lo = min(r0, r1), hi = max(r0, r1);
+    // The ray's direction inside the cone's angle: it is in one nappe for
+    // t <= lo and in the other for t >= hi; the forward one is the end it runs
+    // toward along A.
+    if (a > 0.0) return (dA > 0.0) ? vec2(hi, 1e30) : vec2(-1e30, lo);
+    // Outside the cone's angle: inside between the roots, in one nappe.
+    return (oA + 0.5 * (lo + hi) * dA > 0.0) ? vec2(lo, hi) : none;
+}
+
+// Single scattering of the spot lights along the view ray.
+//
+// The in-scatter falls off as the inverse square of the distance to the lamp
+// and is zero outside the cone, so the integrand is a narrow, tall spike
+// wherever the ray passes close to a lamp. The march used to spread its 40
+// steps evenly over the whole [range sphere] stretch of the ray, up to 400 m:
+// metres apart, so whether a step landed in a 10 cm wide beam near the lamp
+// was a coin toss per pixel and per frame, and a step that did carried the
+// spike's whole weight. That is the grain in a strong beam that no temporal
+// resolve settles (the dune buggy's drive beam seen from the cockpit: 64 still
+// frames, air noise mean 1.3, p99 7, max 25 levels).
+//
+// Now the stretch is first clipped to the cone (spotConeInterval), then sampled
+// EQUI-ANGULARLY about the lamp (Kulla and Fajardo 2012, "Importance sampling
+// techniques for path tracing in participating media"): with tc the ray's
+// closest approach to the lamp and h its distance there,
+//     t = tc + h·tan(θ),  θ evenly spread (one per-pixel jitter, as before)
+//                         over the angle [θa, θb] the stretch subtends,
+// whose density h / ((θb − θa)(h² + (t − tc)²)) is the inverse square itself,
+// so each step's weight 1/pdf cancels it. h is clamped to 1 m, the same clamp
+// the attenuation applies (no firefly core at the lamp): that keeps the weight
+// within a factor of 2 of the integrand on a ray through the lamp's own metre
+// instead of an unbounded one. Same integrand, same step count, an unbiased
+// estimate of the same beam; it only stops guessing where the light is.
 vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
     // Scene fog drives the march when active (σ, HG g, and the medium albedo
     // tint all come from the fog UBO → spotlight god rays appear automatically
@@ -1044,21 +1105,27 @@ vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
         const float disc = b * b - c;
         if (disc <= 0.0) continue;
         const float sq = sqrt(disc);
-        const float t0 = max(-b - sq, tLo);
-        const float t1 = min(-b + sq, tHi);
+        const vec2  cone = spotConeInterval(ro, rd, sl.position, sl.direction, sl.cosAngleOuter);
+        const float t0 = max(max(-b - sq, tLo), cone.x);
+        const float t1 = min(min(-b + sq, tHi), cone.y);
         if (t1 <= t0) continue;
-        const float dt = (t1 - t0) / float(STEPS);
+        // Equi-angular steps about the lamp (see above).
+        const float tc  = -b;// dot(sl.position - ro, rd): the closest approach
+        const float h   = max(length(oc + rd * tc), 1.0);
+        const float thA = atan((t0 - tc) / h);
+        const float thB = atan((t1 - tc) / h);
+        const float dTh = (thB - thA) / float(STEPS);
         vec3 acc = vec3(0.0);
         for (int s = 0; s < STEPS; ++s) {
-            const float t = t0 + (float(s) + jitter) * dt;
+            const float t = clamp(tc + h * tan(thA + (float(s) + jitter) * dTh), t0, t1);
             const vec3  x = ro + rd * t;
             vec3  toL = sl.position - x;
             const float dist = length(toL);
             if (dist < 1e-3) continue;
             toL /= dist;
             const float spotCos = dot(-toL, sl.direction);
-            const float cone    = smoothstep(sl.cosAngleOuter, sl.cosAngleInner, spotCos);
-            if (cone <= 0.0) continue;
+            const float coneW   = smoothstep(sl.cosAngleOuter, sl.cosAngleInner, spotCos);
+            if (coneW <= 0.0) continue;
             // Inverse-square with a 1 m clamp (no firefly core at the lamp) +
             // the same range window the surface path applies.
             float atten = 1.0 / max(dist * dist, 1.0);
@@ -1071,10 +1138,13 @@ vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
             const float phase = hgPhase(mu, hgG);
             // Transmittance camera→x and light→x (uniform thin haze).
             const vec3 trans = exp(-sigmaRgb * (t + dist));
-            acc += sl.color * (cone * atten * phase * trans);
+            // 1/pdf = (θb − θa)·w; the average's (θb − θa)/STEPS is dTh below.
+            const float u = t - tc;
+            const float w = (h * h + u * u) / h;
+            acc += sl.color * (coneW * atten * phase * trans * w);
         }
         // σ_s = σ_t · albedo: the medium's tint scales what gets IN-scattered.
-        sum += acc * medAlbedo * (sigmaRgb * dt);
+        sum += acc * medAlbedo * (sigmaRgb * dTh);
     }
     return sum;
 }
