@@ -4,8 +4,8 @@
 // things that say somebody uses the place, each built here from the cabin's
 // own materials and a few primitives, merged so a prop is one or two draws:
 //
-//   woodpile      birch rounds stacked against the gable, under the rake,
-//                 pale bark and sawn ends, held by a stake at each side
+//   woodpile      spruce rounds stacked against the gable, under the rake,
+//                 dark bark and pale sawn ends, held by a stake at each side
 //   choppingBlock a fat round with an axe left in it
 //   skigard       the slanted split-rail fence of rural Norway: pairs of
 //                 upright poles a stride apart, rails laid aslant between them
@@ -78,10 +78,13 @@ namespace fjord {
         return qy.multiply(qx).multiply(qz);
     }
 
+    // Spruce only. A share of birch rounds was tried (2026-10-16) and taken out
+    // again: the pile is loosely stacked, and the pale birch sides showing
+    // through the gaps between the rounds read as a rendering defect, not as
+    // firewood.
     struct BarkAndEnds {
-        std::shared_ptr<threepp::BufferGeometry> bark; // sides: the bark material
-        std::shared_ptr<threepp::BufferGeometry> birch;// the birch share of the sides
-        std::shared_ptr<threepp::BufferGeometry> ends; // sawn faces: the log-end material
+        std::shared_ptr<threepp::BufferGeometry> bark;// sides: the bark material
+        std::shared_ptr<threepp::BufferGeometry> ends;// sawn faces: the log-end material
     };
 
     // Local frame: the pile's back against a wall in the plane z = 0, the
@@ -92,7 +95,7 @@ namespace fjord {
         std::uniform_real_distribution<float> u01(0.f, 1.f);
         const auto side = CylinderGeometry::create(1.f, 1.f, 1.f, 9, 1, true);
         const auto cap = CircleGeometry::create(1.f, 9);
-        PieceBag bark, birch, ends;
+        PieceBag bark, ends;
         float y = 0.f;
         int row = 0;
         while (y < height) {
@@ -134,7 +137,7 @@ namespace fjord {
         for (float sx : {-1.f, 1.f})
             bark.add(stake, trs({sx * (width * 0.5f + 0.06f), height * 0.55f, logLength * 0.8f},
                                 euler(0.f, 0.f, sx * 0.06f), {1.f, height * 1.1f, 1.f}));
-        return {bark.build(), birch.build(), ends.build()};
+        return {bark.build(), ends.build()};
     }
 
     // A round set on end with an axe left in it. Local origin at its foot.

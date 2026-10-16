@@ -1276,11 +1276,18 @@ int main(int argc, char** argv) {
         const float r = hash01(static_cast<int>(std::floor(x * 4.f)), static_cast<int>(std::floor(z * 4.f)) + 7919);
         return r < pPine ? 0 : (r < pPine + pBirch ? 1 : 2);
     };
+    // ONE ground height for everything a site's species decides: its height
+    // here, its crown colour below, the kit it is planted with (speciesFn).
+    // The forest builder hands speciesFn its own ground, prov.height (bicubic
+    // plus the detail relief), up to a couple of metres off the field's
+    // bilinear sample, and near a hash threshold in the 80-215 m band a site
+    // sized as a spruce was then planted as a birch, or the other way round.
+    const auto speciesAtSite = [&](float x, float z) { return speciesAt(x, z, field.sampleBilinear(x, z)); };
     const auto heightAt = [&](float x, float z, float r) {
         const float ground = field.sampleBilinear(x, z);
         const float hi = math::smoothstep(60.f, kTreeline, ground);
         const float shrink = 1.f - 0.40f * hi;// stunted toward the treeline
-        switch (speciesAt(x, z, ground)) {
+        switch (speciesAtSite(x, z)) {
             case 0: return (9.f + 7.f * r) * shrink;  // pine
             case 1: return (6.f + 5.f * r) * shrink;  // birch (the kit tree is 4.6 m)
             default: return (13.f + 9.f * r) * shrink;// spruce
@@ -1312,7 +1319,7 @@ int main(int argc, char** argv) {
         std::vector<Crown> tmp;
         tmp.reserve(sites.size());
         for (const auto& s : sites) {
-            const int sp = speciesAt(s.x, s.z, field.sampleBilinear(s.x, s.z));
+            const int sp = speciesAtSite(s.x, s.z);
             const float rf = sp == 2 ? 0.20f : (sp == 0 ? 0.24f : 0.30f);// spruce narrow, birch round
             tmp.push_back({s.x, s.z, std::max(1.6f, rf * s.canopyHeight), sp});
             ++crownStart[cellOf(s.x, s.z) + 1];
@@ -1815,7 +1822,9 @@ int main(int argc, char** argv) {
         lo.maxScale = 2.6f;
         lo.sink = 0.35f;
         lo.cap = 250000;
-        lo.speciesFn = [&](const vegetation::TreeSite& s, float ground) { return speciesAt(s.x, s.z, ground); };
+        // The builder's ground is prov.height; the species comes from the same
+        // field sample that sized the site (see speciesAtSite).
+        lo.speciesFn = [&](const vegetation::TreeSite& s, float /*ground*/) { return speciesAtSite(s.x, s.z); };
         auto forest = Group::create();
         forest->name = "forest";
         const terrain::HeightGrid none;
@@ -1843,13 +1852,6 @@ int main(int argc, char** argv) {
     std::unique_ptr<fjord::Pennant> pennant;
     {
         auto& cm = fjordCabinMaterials();
-        auto birch = vegetation::makeBarkTextures(256, 23u, {0.70f, 0.69f, 0.65f}, vegetation::BarkStyle::Papery);
-        birch.first->repeat.set(1.f, 2.f);
-        birch.second->repeat.set(1.f, 2.f);
-        auto barkMat = MeshStandardMaterial::create(
-                MeshStandardMaterial::Params{}.color(Color::white).roughness(0.9f).metalness(0.f));
-        barkMat->map = birch.first;
-        barkMat->normalMap = birch.second;
         const auto addMesh = [&](const std::shared_ptr<BufferGeometry>& g, const std::shared_ptr<Material>& m,
                                  const Vector3& at, float yaw, const char* name) {
             if (!g) return;
@@ -1860,7 +1862,8 @@ int main(int argc, char** argv) {
             scene.add(mesh);
         };
 
-        // Rounds against the gable, under the rake: mostly spruce, some birch,
+        // Rounds against the gable, under the rake: spruce only (birch rounds
+        // read as a defect through the gaps of the stack, see makeWoodpile),
         // sawn ends still pale and warm (the cabin's own log ends are stained).
         auto spruceBark = vegetation::makeBarkTextures(256, 29u, {0.30f, 0.22f, 0.15f}, vegetation::BarkStyle::Plated);
         spruceBark.first->repeat.set(1.f, 2.f);
@@ -2336,7 +2339,10 @@ int main(int argc, char** argv) {
         tElapsed += dt;
         if (simDt > 0.f) renderer.setSimTime(tElapsed);
         sinceBake += dt;
-        fpsAccum += dt;
+        // Wall time: the fps readout and --bench measure what a frame costs,
+        // not the sim step (a --simdt run used to report its own step as the
+        // frame rate, 60 fps whatever the frame cost).
+        fpsAccum += wallDt;
         ++fpsFrames;
         if (fpsAccum > 0.5f) {
             fps = fpsFrames / fpsAccum;
@@ -2582,7 +2588,7 @@ int main(int argc, char** argv) {
         } else if (shotPath.empty()) {
             ui->render();
         } else if (++shotFrame, benchFrames > 0 && shotFrame > shotFrames - benchFrames) {
-            benchWall.push_back(dt * 1000.f);
+            benchWall.push_back(wallDt * 1000.f);
             benchGpu.push_back(renderer.lastFrameTimings().gpuTotalMs);
         }
         if (!shotPath.empty() && shotFrame >= shotFrames) {

@@ -1307,6 +1307,14 @@ namespace threepp::vegetation {
         // object per cell however many trees it holds. Supersedes l2Keep.
         std::function<std::shared_ptr<Object3D>(const std::vector<FarTree>& trees)> farImpostors;
         bool buildCanopyMesh = false;
+        // Where the canopy surface (buildCanopyMesh) takes over, in metres.
+        // 0 = l1Distance, unless farImpostors is set too: the impostors hold
+        // l1Distance themselves and the surface, the coarser and cheaper of
+        // the two, starts at twice that. A value at or below l1Distance beside
+        // farImpostors hides the impostors for good (LOD::addLevel puts an
+        // equal distance after the level already there, and the LOD draws
+        // the last level passed).
+        float canopyDistance = 0.f;
         CanopyMeshOptions mesh;
     };
 
@@ -1527,7 +1535,14 @@ namespace threepp::vegetation {
                     if (auto* ix = geo->getIndex()) st.canopyTris += static_cast<int>(ix->count()) / 3;
                     auto m = Mesh::create(geo, canopyMat);
                     m->name = "canopy_surface";
-                    lod->addLevel(m, o.l1Distance);
+                    // Its own distance past the impostor tier (see
+                    // ForestLodOptions::canopyDistance): at the impostors'
+                    // l1Distance the surface, added after them, would be the
+                    // level the LOD keeps, and the impostors would never show.
+                    const float canopyDist = o.canopyDistance > 0.f
+                                                     ? o.canopyDistance
+                                                     : (o.farImpostors ? 2.f * o.l1Distance : o.l1Distance);
+                    lod->addLevel(m, canopyDist);
                     ++st.l2Meshes;
                 }
             }
