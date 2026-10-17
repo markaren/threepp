@@ -5000,10 +5000,14 @@ namespace threepp {
         // device without ray query, to what runs.
         VulkanRenderer::ShadowMode shadowModeReq_ = shadowModeFromEnv();
         float    shadowDistance_   = 0.f;// 0 = the camera's far plane, clamped
-        uint32_t shadowCascades_   = 4u;
-        uint32_t shadowedSpots_    = 4u;
-        uint32_t shadowedPoints_   = 8u;
+        // THREEPP_VK_SHADOW_CASCADES=<1..4> and THREEPP_VK_SHADOW_LAMPS=<spots>,<points>
+        // seed these (ablation knobs for the map pass's cost); the setters win.
+        uint32_t shadowCascades_   = shadowCascadesFromEnv();
+        uint32_t shadowedSpots_    = shadowedLampsFromEnv(0);
+        uint32_t shadowedPoints_   = shadowedLampsFromEnv(1);
         uint32_t shadowMapSizeCap_ = shadowMapSizeCapFromEnv();// THREEPP_VK_SHADOW_MAPSIZE, 0 = none
+        static uint32_t shadowCascadesFromEnv();
+        static uint32_t shadowedLampsFromEnv(int which);
         static VulkanRenderer::ShadowMode shadowModeFromEnv();
         static uint32_t shadowMapSizeCapFromEnv();
         [[nodiscard]] VulkanRenderer::ShadowMode activeShadowMode() const;
@@ -5047,13 +5051,30 @@ namespace threepp {
         // strong emitter, no viewmodel), kept when its world sphere meets a
         // cascade's box or a slotted lamp's range. Same DrawInfo records as
         // the G-buffer's.
+        // One volume per layer of ShadowMapPass::layers, in the same order:
+        // a cascade's box (centre, the sun's frame, half extent; every box
+        // shares the frame), a spot's cone (the lamp, its axis, tan of the
+        // half angle, far) or a point lamp's cube face (the lamp, the face's
+        // axis, far). A layer the view cannot see is `skip`: cleared, drawn
+        // into by nothing.
         struct ShadowCullVolumes {
-            struct Box { float c[3], x[3], y[3], l[3], r; };// a cascade: centre, light basis, half extent
-            struct Ball { float c[3], r; };                 // a lamp: position, range
-            std::vector<Box>  boxes;
-            std::vector<Ball> balls;
+            struct Volume {
+                enum Kind : uint32_t { Box, Cone, Face };
+                Kind  kind = Box;
+                float c[3]{};
+                float x[3]{}, y[3]{}, l[3]{};
+                float d[3]{};
+                float r       = 0.f;
+                float tanHalf = 0.f;
+                bool  skip    = false;
+            };
+            std::vector<Volume> layers;
         };
         void buildShadowDrawData(uint32_t frame, const ShadowCullVolumes& vol, const Vector3& camPos);
+        // buildShadowDrawData's scratch: every caster once, then one command
+        // list per (layer, group); cleared, never reallocated, between frames.
+        std::vector<DrawInfoGpu>                        shadowDrawScratch_;
+        std::vector<std::vector<VkDrawIndirectCommand>> shadowCmdScratch_;
         // Depth-only, reverse-Z, dynamic rendering into one D32 layer: the
         // indirect G-buffer draw reduced to position + the cutout test, with
         // depth clamp where the device has it and dynamic cull mode, front

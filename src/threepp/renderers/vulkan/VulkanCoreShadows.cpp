@@ -45,6 +45,26 @@ namespace threepp {
         return e ? static_cast<uint32_t>(std::strtoul(e, nullptr, 10)) : 0u;
     }
 
+    // Ablation knobs for the map pass's cost: THREEPP_VK_SHADOW_CASCADES=<1..4>,
+    // THREEPP_VK_SHADOW_LAMPS=<spots>,<points>. The setters still win.
+    uint32_t VulkanRenderer::Impl::shadowCascadesFromEnv() {
+        const char* e = std::getenv("THREEPP_VK_SHADOW_CASCADES");
+        if (!e || !*e) return 4u;
+        return std::clamp(static_cast<uint32_t>(std::strtoul(e, nullptr, 10)), 1u,
+                          static_cast<uint32_t>(kMaxShadowCascades));
+    }
+
+    uint32_t VulkanRenderer::Impl::shadowedLampsFromEnv(int which) {
+        const char* e = std::getenv("THREEPP_VK_SHADOW_LAMPS");
+        if (!e || !*e) return which == 0 ? 4u : 8u;
+        char*          end   = nullptr;
+        const uint32_t spots = static_cast<uint32_t>(std::strtoul(e, &end, 10));
+        uint32_t       pts   = 8u;
+        if (end && *end == ',') pts = static_cast<uint32_t>(std::strtoul(end + 1, nullptr, 10));
+        return which == 0 ? std::min(spots, static_cast<uint32_t>(kMaxShadowSpots))
+                          : std::min(pts, static_cast<uint32_t>(kMaxShadowPoints));
+    }
+
     VulkanRenderer::ShadowMode VulkanRenderer::Impl::activeShadowMode() const {
         using M = VulkanRenderer::ShadowMode;
         switch (shadowModeReq_) {
@@ -299,6 +319,15 @@ namespace threepp {
 
         GpuShadowMapsUbo  u{};
         ShadowCullVolumes vol;
+        // The view's frustum: a lamp layer none of it can see is cleared and
+        // drawn into by nothing (cone and face volumes below).
+        Frustum viewFrustum;
+        {
+            camera.updateMatrixWorld();
+            Matrix4 vp;
+            vp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+            viewFrustum.setFromProjectionMatrix(vp);
+        }
 
         // ── The sun's cascades ───────────────────────────────────────────────
         // Practical split (lambda 0.75) of [near, distance] into N slices; each
@@ -432,13 +461,14 @@ namespace threepp {
                 // this one does not (that takes a blocker search). 0 degrees,
                 // the default, adds nothing.
                 u.cascadeParams[i][2] = shadowSun_.radius + sunTan * kSunPenumbraHeight / texel;
-                ShadowCullVolumes::Box b{};
+                ShadowCullVolumes::Volume b{};
+                b.kind = ShadowCullVolumes::Volume::Box;
                 std::memcpy(b.c, c, sizeof(c));
                 std::memcpy(b.x, x, sizeof(x));
                 std::memcpy(b.y, y, sizeof(y));
                 std::memcpy(b.l, L, sizeof(b.l));
                 b.r = r;
-                vol.boxes.push_back(b);
+                vol.layers.push_back(b);
             }
             u.cascadeCount    = n;
             u.flags          |= 1u;
@@ -473,11 +503,29 @@ namespace threepp {
             const float   t   = kLampNear * std::tan(0.5f * L.fov);
             Matrix4       proj;
             proj.makePerspective(-t, t, t, -t, kLampNear, far);
+            // Its cone, and whether the view sees any of it: a spot lighting
+            // nothing in the frustum has no visible shadow, so its layer is
+            // cleared and left empty (a reflected surface it lights would then
+            // read it as unshadowed; the rays' hits do not use the maps).
+            ShadowCullVolumes::Volume cone{};
+            cone.kind    = ShadowCullVolumes::Volume::Cone;
+            cone.tanHalf = std::tan(0.5f * L.fov);
+            cone.r       = far;
+            std::memcpy(cone.c, L.pos, sizeof(cone.c));
+            cone.d[0] = fwd.x; cone.d[1] = fwd.y; cone.d[2] = fwd.z;
+            {
+                const float   rad = 0.5f * far * std::sqrt(1.f + 4.f * cone.tanHalf * cone.tanHalf);
+                const Vector3 mid(L.pos[0] + 0.5f * far * fwd.x, L.pos[1] + 0.5f * far * fwd.y,
+                                  L.pos[2] + 0.5f * far * fwd.z);
+                cone.skip = !viewFrustum.intersectsSphere(Sphere(mid, rad));
+            }
             vulkan::ShadowMapPass::Layer layer{};
             lightClip(layer.vp, lampCamera(L.pos, fwd, up), proj);
             layer.target = vulkan::ShadowMapPass::Target::Spot;
             layer.layer  = k;
+            layer.skip   = cone.skip;
             smp.layers.push_back(layer);
+            vol.layers.push_back(cone);
             std::memcpy(u.spotVP[k], layer.vp, 64);
             u.lampParams[k][0] = L.bias;
             u.lampParams[k][1] = L.normalBias;
@@ -487,7 +535,6 @@ namespace threepp {
             u.lampTexel[k][1]  = kLampNear;
             u.lampTexel[k][2]  = far;
             u.lampTexel[k][3]  = float(sz.spotSize);
-            vol.balls.push_back({{L.pos[0], L.pos[1], L.pos[2]}, far});
         }
         for (uint32_t k = 0; k < sz.points && k < shadowPointSlots_.size(); ++k) {
             const ShadowLamp& L = shadowPointSlots_[k];
@@ -498,11 +545,27 @@ namespace threepp {
             Matrix4              proj;
             proj.makePerspective(-kLampNear, kLampNear, kLampNear, -kLampNear, kLampNear, far);
             for (uint32_t face = 0; face < 6; ++face) {
+                // The face's 90 degree wedge out to far, and whether the view
+                // sees any of it (its bounding sphere against the frustum): a
+                // face the camera cannot see is cleared and drawn into by
+                // nothing.
+                ShadowCullVolumes::Volume fv{};
+                fv.kind = ShadowCullVolumes::Volume::Face;
+                fv.r    = far;
+                std::memcpy(fv.c, L.pos, sizeof(fv.c));
+                fv.d[0] = kFwd[face].x; fv.d[1] = kFwd[face].y; fv.d[2] = kFwd[face].z;
+                {
+                    const Vector3 mid(L.pos[0] + 0.5f * far * fv.d[0], L.pos[1] + 0.5f * far * fv.d[1],
+                                      L.pos[2] + 0.5f * far * fv.d[2]);
+                    fv.skip = !viewFrustum.intersectsSphere(Sphere(mid, 1.5f * far));
+                }
                 vulkan::ShadowMapPass::Layer layer{};
                 lightClip(layer.vp, lampCamera(L.pos, kFwd[face], kUp[face]), proj);
                 layer.target = vulkan::ShadowMapPass::Target::PointFace;
                 layer.layer  = 6u * k + face;
+                layer.skip   = fv.skip;
                 smp.layers.push_back(layer);
+                vol.layers.push_back(fv);
             }
             const uint32_t pi = kMaxShadowSpots + k;
             u.pointPosFar[k][0] = L.pos[0];
@@ -517,7 +580,6 @@ namespace threepp {
             u.lampTexel[pi][1]  = kLampNear;
             u.lampTexel[pi][2]  = far;
             u.lampTexel[pi][3]  = float(sz.pointSize);
-            vol.balls.push_back({{L.pos[0], L.pos[1], L.pos[2]}, far});
         }
         u.spotCount  = sz.spots;
         u.pointCount = sz.points;
@@ -540,28 +602,87 @@ namespace threepp {
     void VulkanRenderer::Impl::buildShadowDrawData(uint32_t frame, const ShadowCullVolumes& vol,
                                                    const Vector3& camPos) {
         THREEPP_CPUPROF("frame.D_buildShadowDraws");
-        constexpr uint32_t                                kGroups = vulkan::ShadowMapPass::kGroups;
-        auto&                                             smp     = *view().shadowMaps_;
-        std::array<std::vector<DrawInfoGpu>, kGroups>     draws;
-        std::array<std::vector<VkDrawIndirectCommand>, kGroups> cmds;
-        const auto&                                       entries = lastVisibleEntries_;
-        const float                                       cam[3]  = {camPos.x, camPos.y, camPos.z};
+        constexpr uint32_t kGroups = vulkan::ShadowMapPass::kGroups;
+        using Volume               = ShadowCullVolumes::Volume;
+        auto&          smp         = *view().shadowMaps_;
+        const auto&    entries     = lastVisibleEntries_;
+        const float    cam[3]      = {camPos.x, camPos.y, camPos.z};
+        const uint32_t nLayers     = static_cast<uint32_t>(std::min<size_t>(vol.layers.size(), 128));
 
-        const auto reaches = [&](const float* e, float er) {
-            for (const auto& b : vol.boxes) {
-                const float d[3] = {e[0] - b.c[0], e[1] - b.c[1], e[2] - b.c[2]};
-                const float lim  = b.r + er;
-                // Sideways inside the box; along the sun anything in front of
-                // its far plane (casters sunward of the box are pancaked).
-                if (std::abs(dot3(d, b.x)) <= lim && std::abs(dot3(d, b.y)) <= lim && dot3(d, b.l) >= -lim)
-                    return true;
+        // Every caster once (a DrawInfo record), then one indirect command per
+        // layer it reaches, bucketed per layer by cull mode and alpha test: the
+        // near cascade draws the metres around the camera, a cube face what
+        // lies in its 90 degree wedge within the lamp's range, a skipped layer
+        // nothing. A caster whose bounds are unknown (a deformer) reaches every
+        // layer, as the G-buffer keeps it.
+        auto& draws = shadowDrawScratch_;
+        auto& cmds  = shadowCmdScratch_;// [layer * kGroups + group]
+        draws.clear();
+        cmds.resize(size_t(nLayers) * kGroups);
+        for (auto& v : cmds) v.clear();
+
+        // The cascades share the sun's frame, so a caster's coordinates in it
+        // are taken once; each box keeps its centre's coordinates.
+        struct BoxProj {
+            float bx = 0.f, by = 0.f, bl = 0.f;
+        };
+        std::vector<BoxProj> boxProj(nLayers);
+        const float*         sx = nullptr;
+        const float*         sy = nullptr;
+        const float*         sl = nullptr;
+        uint64_t             allMask[2] = {0u, 0u};
+        for (uint32_t li = 0; li < nLayers; ++li) {
+            const Volume& v = vol.layers[li];
+            if (v.kind == Volume::Box) {
+                if (!sx) {
+                    sx = v.x;
+                    sy = v.y;
+                    sl = v.l;
+                }
+                boxProj[li] = {dot3(v.c, v.x), dot3(v.c, v.y), dot3(v.c, v.l)};
             }
-            for (const auto& s : vol.balls) {
-                const float d[3] = {e[0] - s.c[0], e[1] - s.c[1], e[2] - s.c[2]};
-                const float lim  = s.r + er;
-                if (dot3(d, d) <= lim * lim) return true;
+            if (!v.skip) allMask[li >> 6] |= 1ull << (li & 63u);
+        }
+
+        // The layers a world sphere (centre e, radius er) can cast into.
+        const auto reachMask = [&](const float* e, float er, uint64_t* m) {
+            m[0] = m[1] = 0u;
+            float px = 0.f, py = 0.f, pl = 0.f;
+            if (sx) {
+                px = dot3(e, sx);
+                py = dot3(e, sy);
+                pl = dot3(e, sl);
             }
-            return false;
+            for (uint32_t li = 0; li < nLayers; ++li) {
+                const Volume& v = vol.layers[li];
+                if (v.skip) continue;
+                bool in = false;
+                if (v.kind == Volume::Box) {
+                    // Sideways inside the box; along the sun anything in front
+                    // of its far plane (casters sunward of the box are pancaked).
+                    const float    lim = v.r + er;
+                    const BoxProj& b   = boxProj[li];
+                    in = std::abs(px - b.bx) <= lim && std::abs(py - b.by) <= lim && pl - b.bl >= -lim;
+                } else {
+                    const float d[3]  = {e[0] - v.c[0], e[1] - v.c[1], e[2] - v.c[2]};
+                    const float along = dot3(d, v.d);
+                    if (along + er < 0.f || along - er > v.r) continue;
+                    if (v.kind == Volume::Cone) {
+                        // Within the cone widened by the sphere's radius.
+                        const float perp2 = std::max(dot3(d, d) - along * along, 0.f);
+                        const float lim   = std::max(along + er, 0.f) * v.tanHalf +
+                                          er * std::sqrt(1.f + v.tanHalf * v.tanHalf);
+                        in = perp2 <= lim * lim;
+                    } else {
+                        // The face's wedge: within er of both of its 45 degree
+                        // planes (the axis component is `along`, the rest `dd`).
+                        const float dd[3] = {d[0] - v.d[0] * along, d[1] - v.d[1] * along, d[2] - v.d[2] * along};
+                        const float u     = std::max({std::abs(dd[0]), std::abs(dd[1]), std::abs(dd[2])});
+                        in                = along >= u - 1.4142136f * er;
+                    }
+                }
+                if (in) m[li >> 6] |= 1ull << (li & 63u);
+            }
         };
 
         for (const auto& sp : entrySpans_) {
@@ -604,6 +725,7 @@ namespace threepp {
                 if (md.transmission > 0.f || md.alphaCutoff < 0.f) continue;
                 if (std::max({md.emissive[0], md.emissive[1], md.emissive[2]}) * md.emissiveIntensity >= 1.f)
                     continue;
+                uint64_t mask[2] = {allMask[0], allMask[1]};
                 if (bounded) {
                     const float* M     = en.worldMatrix.data();
                     const float* lc    = sp.localCenter;
@@ -614,8 +736,9 @@ namespace threepp {
                     const float  s1    = M[4] * M[4] + M[5] * M[5] + M[6] * M[6];
                     const float  s2    = M[8] * M[8] + M[9] * M[9] + M[10] * M[10];
                     const float  wr    = sp.localRadius * std::sqrt(std::max({s0, s1, s2}));
-                    if (!reaches(wc, wr)) continue;
+                    reachMask(wc, wr, mask);
                 }
+                if ((mask[0] | mask[1]) == 0u) continue;
                 const auto sel    = lodStatic ? sel0 : selectLodGeom(*rec, en.lodLevel);
                 uint32_t   vcount = sel.indexed ? sel.indexCount : rec->vertexCount;
                 uint32_t   vfirst = 0u;
@@ -632,8 +755,8 @@ namespace threepp {
                 const bool tested = md.alphaCutoff > 0.f && md.albedoTexIndex >= 0 &&
                                     !(cutoutRayDistance_ > 0.f && cutoutCaster(md) &&
                                       entryBeyond(en, cam, cutoutRayDistance_));
-                const int group = (tested ? 3 : 0) + bucket;
-                DrawInfoGpu di{};
+                const uint32_t group = (tested ? 3u : 0u) + static_cast<uint32_t>(bucket);
+                DrawInfoGpu    di{};
                 std::memcpy(di.model, en.worldMatrix.data(), 64);
                 di.posAddr             = rec->vertex.address;
                 di.nrmAddr             = rec->normal.address;
@@ -643,37 +766,44 @@ namespace threepp {
                 di.instanceCustomIndex = i;
                 di.indexed             = sel.indexed ? 1u : 0u;
                 di.packedAttrs         = rec->packedMask;
-                draws[group].push_back(di);
                 VkDrawIndirectCommand cmd{};
                 cmd.vertexCount   = vcount;
                 cmd.instanceCount = 1u;
                 cmd.firstVertex   = vfirst;
-                cmds[group].push_back(cmd);
+                cmd.firstInstance = static_cast<uint32_t>(draws.size());// its DrawInfo record
+                draws.push_back(di);
+                for (uint32_t li = 0; li < nLayers; ++li) {
+                    if (mask[li >> 6] & (1ull << (li & 63u))) cmds[size_t(li) * kGroups + group].push_back(cmd);
+                }
             }
         }
 
-        uint32_t total = 0;
-        for (const auto& d : draws) total += static_cast<uint32_t>(d.size());
-        smp.ensureDrawCapacity(frame, total);
+        uint32_t totalCmds = 0;
+        for (const auto& v : cmds) totalCmds += static_cast<uint32_t>(v.size());
+        const uint32_t totalDraws = static_cast<uint32_t>(draws.size());
+        smp.ensureDrawCapacity(frame, totalDraws, totalCmds);
         auto& slot = smp.slot(frame);
         void* dm   = nullptr;
         void* cm   = nullptr;
         check(vmaMapMemory(ctx->allocator(), slot.drawInfo.alloc, &dm), "vmaMapMemory(shadow drawInfo)");
         check(vmaMapMemory(ctx->allocator(), slot.cmds.alloc, &cm), "vmaMapMemory(shadow cmds)");
+        if (totalDraws > 0u) std::memcpy(dm, draws.data(), size_t(totalDraws) * sizeof(DrawInfoGpu));
+        smp.layerGroups.assign(nLayers, {});
         uint32_t offset = 0;
-        for (uint32_t b = 0; b < kGroups; ++b) {
-            const uint32_t nb = static_cast<uint32_t>(draws[b].size());
-            smp.groups[b]     = {offset, nb};
-            for (uint32_t k = 0; k < nb; ++k) cmds[b][k].firstInstance = offset + k;
-            if (nb > 0u) {
-                std::memcpy(static_cast<uint8_t*>(dm) + offset * sizeof(DrawInfoGpu), draws[b].data(),
-                            nb * sizeof(DrawInfoGpu));
-                std::memcpy(static_cast<uint8_t*>(cm) + offset * sizeof(VkDrawIndirectCommand), cmds[b].data(),
-                            nb * sizeof(VkDrawIndirectCommand));
+        for (uint32_t li = 0; li < nLayers; ++li) {
+            for (uint32_t g = 0; g < kGroups; ++g) {
+                const auto&    list = cmds[size_t(li) * kGroups + g];
+                const uint32_t n    = static_cast<uint32_t>(list.size());
+                smp.layerGroups[li][g] = {offset, n};
+                if (n > 0u) {
+                    std::memcpy(static_cast<uint8_t*>(cm) + size_t(offset) * sizeof(VkDrawIndirectCommand),
+                                list.data(), size_t(n) * sizeof(VkDrawIndirectCommand));
+                }
+                offset += n;
             }
-            offset += nb;
         }
-        smp.totalDraws = total;
+        smp.totalDraws = totalDraws;
+        smp.totalCmds  = totalCmds;
         flushHostWrites(ctx->allocator(), slot.drawInfo.alloc);
         flushHostWrites(ctx->allocator(), slot.cmds.alloc);
         vmaUnmapMemory(ctx->allocator(), slot.cmds.alloc);

@@ -157,10 +157,10 @@ namespace threepp::vulkan {
         s.gen   = ++genCounter_;
     }
 
-    bool ShadowMapPass::ensureDrawCapacity(uint32_t frame, uint32_t draws) {
+    bool ShadowMapPass::ensureDrawCapacity(uint32_t frame, uint32_t draws, uint32_t cmds) {
         Slot&              s     = slots_[frame];
         const VkDeviceSize need  = VkDeviceSize(std::max(draws, 1u)) * sizeof(impl::DrawInfoGpu);
-        const VkDeviceSize needC = VkDeviceSize(std::max(draws, 1u)) * sizeof(VkDrawIndirectCommand);
+        const VkDeviceSize needC = VkDeviceSize(std::max(cmds, 1u)) * sizeof(VkDrawIndirectCommand);
         if (s.cmds.size < needC) {
             destroyBuffer(ctx_.allocator(), s.cmds);
             s.cmds = createBuffer(ctx_.allocator(), ctx_.device(), std::max(needC, s.cmds.size * 2u),
@@ -223,7 +223,8 @@ namespace threepp::vulkan {
         vkCmdSetDepthBias(cb, depthBiasConstant, 0.f, depthBiasSlope);
         constexpr VkCullModeFlags kCull[3] = {VK_CULL_MODE_BACK_BIT, VK_CULL_MODE_FRONT_BIT, VK_CULL_MODE_NONE};
         constexpr VkDeviceSize    kStride  = sizeof(VkDrawIndirectCommand);
-        for (const Layer& L : layers) {
+        for (size_t li = 0; li < layers.size(); ++li) {
+            const Layer&            L   = layers[li];
             const ShadowDepthArray& arr = L.target == Target::Cascade ? s.cascades
                                         : L.target == Target::Spot    ? s.spots
                                                                       : s.points;
@@ -261,12 +262,13 @@ namespace threepp::vulkan {
             std::memcpy(pc.vp, L.vp, sizeof(pc.vp));
             pc.info[0] = face ? 1u : 0u;
             vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
-            // The depth-only groups first (the pipeline the layer starts in),
-            // then the alpha-tested ones, and back for the next layer. Both
-            // pipelines share the layout and the dynamic state.
+            // This layer's groups: the depth-only ones first (the pipeline the
+            // layer starts in), then the alpha-tested ones, and back for the
+            // next layer. Both pipelines share the layout and the dynamic
+            // state. A skipped layer (the view cannot see it) is cleared only.
             bool tested = false;
-            for (uint32_t b = 0; b < kGroups; ++b) {
-                const Group& g = groups[b];
+            for (uint32_t b = 0; b < kGroups && !L.skip && li < layerGroups.size(); ++b) {
+                const Group& g = layerGroups[li][b];
                 if (g.count == 0u) continue;
                 if (b >= 3u && !tested) {
                     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, alphaTest);

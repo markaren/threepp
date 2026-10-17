@@ -95,10 +95,10 @@ namespace threepp::vulkan {
         [[nodiscard]] Slot& slot(uint32_t frame) { return slots_[frame]; }
         [[nodiscard]] const Slot& slot(uint32_t frame) const { return slots_[frame]; }
 
-        // Grow the slot's caster buffers to hold `draws` records; true when the
-        // DrawInfo buffer moved (binding 4 of the slot's raster set was then
-        // rewritten here).
-        bool ensureDrawCapacity(uint32_t frame, uint32_t draws);
+        // Grow the slot's caster buffers to hold `draws` records and `cmds`
+        // indirect commands; true when the DrawInfo buffer moved (binding 4 of
+        // the slot's raster set was then rewritten here).
+        bool ensureDrawCapacity(uint32_t frame, uint32_t draws, uint32_t cmds);
         // Bindings 2 (MaterialDesc[]) and, when matTex is given, 3 (the
         // bindless albedo maps) of the slot's raster set: the shadow fragment
         // shader's alpha test reads them.
@@ -111,18 +111,23 @@ namespace threepp::vulkan {
         struct Layer {
             float    vp[16];// world -> clip, reverse-Z (a point face is drawn without the y flip)
             Target   target = Target::Cascade;
-            uint32_t layer  = 0;// layer of its array
+            uint32_t layer  = 0;    // layer of its array
+            bool     skip   = false;// the view cannot see it: cleared, nothing drawn
         };
         std::vector<Layer> layers;
-        // The caster list's buckets: [BACK, FRONT, NONE] drawn depth only,
-        // then the same three through the alpha test (a cutout caster within
-        // the cutout ray distance, see buildShadowDrawData).
+        // Per layer, the caster list's buckets: [BACK, FRONT, NONE] drawn
+        // depth only, then the same three through the alpha test (a cutout
+        // caster within the cutout ray distance, see buildShadowDrawData).
+        // Each is a range of the slot's command buffer; the commands name
+        // their DrawInfo record by firstInstance, so a caster that reaches
+        // several layers has one record and one command per layer.
         struct Group {
             uint32_t offset = 0, count = 0;
         };
         static constexpr uint32_t kGroups = 6;
-        std::array<Group, kGroups> groups{};
-        uint32_t             totalDraws = 0;
+        std::vector<std::array<Group, kGroups>> layerGroups;// [layers.size()]
+        uint32_t             totalDraws = 0;// DrawInfo records
+        uint32_t             totalCmds  = 0;// indirect commands over every layer
         // vkCmdSetDepthBias for the raster side (reverse-Z: negative pushes the
         // stored depth away from the light).
         float depthBiasConstant = 0.f, depthBiasSlope = 0.f;
