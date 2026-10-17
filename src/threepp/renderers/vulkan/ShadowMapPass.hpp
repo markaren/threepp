@@ -151,12 +151,27 @@ namespace threepp::vulkan {
             bool     valid = false;
             float    c[3]{}, r = 0.f, texel = 0.f, far = 0.f;// the frozen box
             float    sunDir[3]{};
-            uint64_t staticHash = 0;
+            uint64_t staticGen = 0;// the static caster set it was drawn for
             float    vp[16]{};
         };
         std::array<CascadeCache, 4> cascadeCache{};
+        // The lamps' caches: one 2D layer per spot slot (spotSize) and per
+        // point-cube face (pointSize), same life and layout as `cache`. A
+        // lamp layer is valid while its light clip matrix is the same bits
+        // (the lamp has not moved, its cone and range hold) and the static
+        // caster set is the one it was drawn for; a layer the view cannot see
+        // keeps its entry and is served again when it comes back.
+        ShadowDepthArray spotCache, pointCache;
+        struct LampCache {
+            bool     valid     = false;
+            uint64_t staticGen = 0;
+            float    vp[16]{};
+        };
+        std::vector<LampCache> spotCacheState, pointFaceCacheState;// [spots], [6 * points]
         void invalidateCache() {
             for (auto& c : cascadeCache) c.valid = false;
+            for (auto& c : spotCacheState) c.valid = false;
+            for (auto& c : pointFaceCacheState) c.valid = false;
         }
         // vkCmdSetDepthBias for the raster side (reverse-Z: negative pushes the
         // stored depth away from the light).
@@ -175,7 +190,7 @@ namespace threepp::vulkan {
         VkDescriptorPool      pool_ = VK_NULL_HANDLE;
         std::vector<Slot>     slots_;
         uint64_t              genCounter_ = 0;
-        bool                  cacheReady_ = false;// the cache image's one-time move to GENERAL was recorded
+        bool cacheReady_ = false, spotCacheReady_ = false, pointCacheReady_ = false;// each cache image's one-time move to GENERAL was recorded
 
         void freeImages(Slot& s);
     };

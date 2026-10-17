@@ -992,10 +992,13 @@ void VulkanRenderer::Impl::addGbufferPasses(rg::RenderGraph& g) {
                     if (arr->image == VK_NULL_HANDLE) continue;
                     pass.use(g.importImage("shadowMap", arr->image, kDepth, 1, VK_IMAGE_LAYOUT_UNDEFINED), depthWrite);
                 }
-                // The cascades' static cache: persistent, GENERAL for its whole
-                // life, copied from and to inside the pass (its own barriers).
-                if (const auto& cache = view().shadowMaps_->cache; cache.image != VK_NULL_HANDLE) {
-                    pass.use(g.importImage("shadowCache", cache.image, kDepth, 1, VK_IMAGE_LAYOUT_GENERAL,
+                // The static caches (cascades, spots, point faces): persistent,
+                // GENERAL for their whole life, copied from and to inside the
+                // pass (its own barriers).
+                const auto& smp = *view().shadowMaps_;
+                for (const auto* cache : {&smp.cache, &smp.spotCache, &smp.pointCache}) {
+                    if (cache->image == VK_NULL_HANDLE) continue;
+                    pass.use(g.importImage("shadowCache", cache->image, kDepth, 1, VK_IMAGE_LAYOUT_GENERAL,
                                            VK_IMAGE_LAYOUT_GENERAL),
                              rg::Access{VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                                         VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT,

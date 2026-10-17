@@ -5071,7 +5071,7 @@ namespace threepp {
             };
             std::vector<Volume> layers;
         };
-        // The static cache of the cascades (ShadowMapPass::cache):
+        // The static caches of the cascades and the lamp layers (ShadowMapPass::cache, spotCache, pointCache):
         // THREEPP_VK_SHADOW_CACHE=0 turns it off; THREEPP_VK_SHADOW_CACHE_MARGIN
         // (1..2, default 1.15) is how much wider than the slice a cascade's box
         // is frozen: 1 = the slice itself, so the image is the uncached one but
@@ -5087,6 +5087,11 @@ namespace threepp {
         static float shadowCacheMarginFromEnv();
         [[nodiscard]] bool     shadowCasterDynamic(uint32_t entry) const;
         [[nodiscard]] uint64_t shadowStaticHash() const;
+        // The static set as a generation: +1 whenever shadowStaticHash changes.
+        // A cached layer is valid for one generation, never for a hash value:
+        // a layer unseen while a mesh moves and settles would meet its old
+        // hash again with the mesh at its old place.
+        uint64_t shadowStaticHashPrev_ = 0, shadowStaticGen_ = 1;
         void buildShadowDrawData(uint32_t frame, const ShadowCullVolumes& vol, const Vector3& camPos);
         // buildShadowDrawData's scratch: every caster once, then one command
         // list per (layer, group); cleared, never reallocated, between frames.

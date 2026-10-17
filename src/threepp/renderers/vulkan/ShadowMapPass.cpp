@@ -129,6 +129,8 @@ namespace threepp::vulkan {
             if (s.rasterSet) forgetDescriptorSet(s.rasterSet);
         }
         destroyShadowDepthArray(ctx_, cache);
+        destroyShadowDepthArray(ctx_, spotCache);
+        destroyShadowDepthArray(ctx_, pointCache);
         if (pool_) vkDestroyDescriptorPool(ctx_.device(), pool_, nullptr);
     }
 
@@ -166,6 +168,25 @@ namespace threepp::vulkan {
             if (sizes.cascades > 0) {
                 cache = createShadowDepthArray(ctx_, sizes.cascadeSize, sizes.cascades, false, false,
                                                "shadowMaps.cache");
+            }
+        }
+        // The lamps' caches follow their arrays the same way.
+        if (spotCache.size != sizes.spotSize || spotCache.layers != sizes.spots) {
+            destroyShadowDepthArray(ctx_, spotCache);
+            spotCacheReady_ = false;
+            spotCacheState.assign(sizes.spots, {});
+            if (sizes.spots > 0) {
+                spotCache = createShadowDepthArray(ctx_, sizes.spotSize, sizes.spots, false, false,
+                                                   "shadowMaps.spotCache");
+            }
+        }
+        if (pointCache.size != sizes.pointSize || pointCache.layers != 6u * sizes.points) {
+            destroyShadowDepthArray(ctx_, pointCache);
+            pointCacheReady_ = false;
+            pointFaceCacheState.assign(6u * sizes.points, {});
+            if (sizes.points > 0) {
+                pointCache = createShadowDepthArray(ctx_, sizes.pointSize, 6u * sizes.points, false, false,
+                                                    "shadowMaps.pointCache");
             }
         }
     }
@@ -276,13 +297,17 @@ namespace threepp::vulkan {
             rg.extent         = {size, size, 1};
             vkCmdCopyImage(cb, src, srcLayout, dst, dstLayout, 1, &rg);
         };
-        // The cache's one-time move to GENERAL, where it stays.
-        if (cache.image != VK_NULL_HANDLE && !cacheReady_) {
-            layerBarrier(cache.image, 0, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                         VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                         VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT, cache.layers);
-            cacheReady_ = true;
-        }
+        // Each cache's one-time move to GENERAL, where it stays.
+        const auto readyCache = [&](const ShadowDepthArray& c, bool& ready) {
+            if (c.image == VK_NULL_HANDLE || ready) return;
+            layerBarrier(c.image, 0, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE, 0,
+                         VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                         VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT, c.layers);
+            ready = true;
+        };
+        readyCache(cache, cacheReady_);
+        readyCache(spotCache, spotCacheReady_);
+        readyCache(pointCache, pointCacheReady_);
 
         for (size_t li = 0; li < layers.size(); ++li) {
             const Layer&            L   = layers[li];
@@ -291,8 +316,12 @@ namespace threepp::vulkan {
                                                                       : s.points;
             if (L.layer >= arr.layerViews.size()) continue;
             const LayerDraws* ld = li < layerGroups.size() ? &layerGroups[li] : nullptr;
+            // The cache this layer's static depth lives in, by target.
+            const ShadowDepthArray& cacheArr = L.target == Target::Cascade ? cache
+                                             : L.target == Target::Spot    ? spotCache
+                                                                           : pointCache;
             Mode mode = L.mode;
-            if (mode != Mode::Draw && (cache.image == VK_NULL_HANDLE || L.cacheLayer >= cache.layers))
+            if (mode != Mode::Draw && (cacheArr.image == VK_NULL_HANDLE || L.cacheLayer >= cacheArr.layers))
                 mode = Mode::Draw;
 
             // A point face is drawn without the raster's y flip, so the cube's
@@ -371,7 +400,7 @@ namespace threepp::vulkan {
                 layerBarrier(arr.image, L.layer, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, kTests, kDepthRW, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                              VK_ACCESS_2_TRANSFER_READ_BIT);
-                copyLayer(arr.image, L.layer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, cache.image, L.cacheLayer,
+                copyLayer(arr.image, L.layer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, cacheArr.image, L.cacheLayer,
                           VK_IMAGE_LAYOUT_GENERAL, arr.size);
                 layerBarrier(arr.image, L.layer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                              VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
@@ -385,7 +414,7 @@ namespace threepp::vulkan {
                 layerBarrier(arr.image, L.layer, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, kTests, kDepthRW, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                              VK_ACCESS_2_TRANSFER_WRITE_BIT);
-                copyLayer(cache.image, L.cacheLayer, VK_IMAGE_LAYOUT_GENERAL, arr.image, L.layer,
+                copyLayer(cacheArr.image, L.cacheLayer, VK_IMAGE_LAYOUT_GENERAL, arr.image, L.layer,
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, arr.size);
                 layerBarrier(arr.image, L.layer, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                              VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT,

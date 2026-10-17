@@ -380,8 +380,15 @@ namespace threepp {
         // moves. The box starts at the sphere's sunward rim; casters beyond it
         // are pancaked onto the near plane by depth clamp (or, without it, the
         // near plane is pulled 1 km toward the sun).
-        // The static caster set this frame, for the cascades' cache.
-        const uint64_t staticHash = shadowCacheOn_ ? shadowStaticHash() : 0ull;
+        // The static caster set this frame as a generation, for the caches.
+        if (shadowCacheOn_) {
+            const uint64_t h = shadowStaticHash();
+            if (h != shadowStaticHashPrev_) {
+                shadowStaticHashPrev_ = h;
+                ++shadowStaticGen_;
+            }
+        }
+        const uint64_t staticGen = shadowStaticGen_;
         if (sz.cascades > 0u) {
             camera.updateMatrixWorld();
             float camNear = 0.1f, camFar = 1000.f;
@@ -484,7 +491,7 @@ namespace threepp {
                 auto&      cc        = smp.cascadeCache[i];
                 const bool cacheable = shadowCacheOn_ && smp.cache.image != VK_NULL_HANDLE && i < smp.cache.layers;
                 bool       reuse     = false;
-                if (cacheable && cc.valid && cc.staticHash == staticHash && dot3(cc.sunDir, L) >= 0.9999996f) {
+                if (cacheable && cc.valid && cc.staticGen == staticGen && dot3(cc.sunDir, L) >= 0.9999996f) {
                     // The slice inside the frozen box, to one texel: the box's
                     // centre was snapped to the texel grid, so a still camera's
                     // slice sits up to a texel off it (the receivers pick by
@@ -523,7 +530,7 @@ namespace threepp {
                     layer.mode = cacheable ? vulkan::ShadowMapPass::Mode::Rebuild : vulkan::ShadowMapPass::Mode::Draw;
                     if (cacheable) {
                         cc.valid      = true;
-                        cc.staticHash = staticHash;
+                        cc.staticGen  = staticGen;
                         cc.r          = rBox;
                         cc.texel      = texel;
                         cc.far        = far;
@@ -612,9 +619,25 @@ namespace threepp {
             }
             vulkan::ShadowMapPass::Layer layer{};
             lightClip(layer.vp, lampCamera(L.pos, fwd, up), proj);
-            layer.target = vulkan::ShadowMapPass::Target::Spot;
-            layer.layer  = k;
-            layer.skip   = cone.skip;
+            layer.target     = vulkan::ShadowMapPass::Target::Spot;
+            layer.layer      = k;
+            layer.cacheLayer = k;
+            layer.skip       = cone.skip;
+            // Its cache (ShadowMapPass::spotCache): served while the clip
+            // matrix is the same bits and the static set holds, else rebuilt;
+            // a layer the view cannot see keeps its entry.
+            if (!layer.skip && shadowCacheOn_ && k < smp.spotCacheState.size()) {
+                auto& lc = smp.spotCacheState[k];
+                if (lc.valid && lc.staticGen == staticGen && std::memcmp(lc.vp, layer.vp, 64) == 0) {
+                    layer.mode = vulkan::ShadowMapPass::Mode::Cached;
+                } else {
+                    layer.mode   = vulkan::ShadowMapPass::Mode::Rebuild;
+                    lc.valid     = true;
+                    lc.staticGen = staticGen;
+                    std::memcpy(lc.vp, layer.vp, 64);
+                }
+            }
+            cone.cached = layer.mode == vulkan::ShadowMapPass::Mode::Cached;
             smp.layers.push_back(layer);
             vol.layers.push_back(cone);
             std::memcpy(u.spotVP[k], layer.vp, 64);
@@ -652,9 +675,23 @@ namespace threepp {
                 }
                 vulkan::ShadowMapPass::Layer layer{};
                 lightClip(layer.vp, lampCamera(L.pos, kFwd[face], kUp[face]), proj);
-                layer.target = vulkan::ShadowMapPass::Target::PointFace;
-                layer.layer  = 6u * k + face;
-                layer.skip   = fv.skip;
+                layer.target     = vulkan::ShadowMapPass::Target::PointFace;
+                layer.layer      = 6u * k + face;
+                layer.cacheLayer = layer.layer;
+                layer.skip       = fv.skip;
+                // Its cache (ShadowMapPass::pointCache), as the spot's.
+                if (!layer.skip && shadowCacheOn_ && layer.layer < smp.pointFaceCacheState.size()) {
+                    auto& lc = smp.pointFaceCacheState[layer.layer];
+                    if (lc.valid && lc.staticGen == staticGen && std::memcmp(lc.vp, layer.vp, 64) == 0) {
+                        layer.mode = vulkan::ShadowMapPass::Mode::Cached;
+                    } else {
+                        layer.mode   = vulkan::ShadowMapPass::Mode::Rebuild;
+                        lc.valid     = true;
+                        lc.staticGen = staticGen;
+                        std::memcpy(lc.vp, layer.vp, 64);
+                    }
+                }
+                fv.cached = layer.mode == vulkan::ShadowMapPass::Mode::Cached;
                 smp.layers.push_back(layer);
                 vol.layers.push_back(fv);
             }
