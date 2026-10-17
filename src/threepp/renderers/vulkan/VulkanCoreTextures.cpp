@@ -231,7 +231,7 @@ void VulkanRenderer::Impl::refreshDirtyMaterialTextures() {
             deferredDescDirty_.fill(true);
             // Every view — the flag guards per-view raster sets, and a
             // secondary skipped here keeps sampling the retired images.
-            for (auto& v : views_) v->rasterMatTexValid_.fill(0);
+            for (auto& v : views_) { v->rasterMatTexValid_.fill(0); v->shadowMatTexValid_.fill(0); }
         }
 
 std::vector<uint8_t> VulkanRenderer::Impl::generateBlueNoiseTile_() {

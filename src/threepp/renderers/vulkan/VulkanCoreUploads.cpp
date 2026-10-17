@@ -1227,6 +1227,8 @@ namespace threepp {
         scene.updateMatrixWorld();
 
         GpuLightsUbo ubo{};
+        // Dir light 0's shadow settings for the shadow maps (shadowSun_).
+        ShadowSun sun{};
 
         // Uncapped point/spot collection for the clustered path. The cull
         // radius bounds each light's influence for the cluster test: the
@@ -1302,6 +1304,13 @@ namespace threepp {
                 Vector3 toLight = lp.sub(tp);
                 if (toLight.lengthSq() < 1e-12f) toLight.set(0.f, 1.f, 0.f);
                 toLight.normalize();
+                if (ubo.dirCount == 0 && dl->shadow) {
+                    sun.bias       = dl->shadow->bias;
+                    sun.normalBias = dl->shadow->normalBias;
+                    sun.radius     = dl->shadow->radius;
+                    sun.intensity  = dl->shadow->intensity;
+                    sun.mapSize    = static_cast<uint32_t>(std::max(dl->shadow->mapSize.x, 1.f));
+                }
                 auto& g = ubo.dirLights[ubo.dirCount++];
                 g.direction[0] = toLight.x; g.direction[1] = toLight.y; g.direction[2] = toLight.z;
                 g.color[0] = dl->color.r * dl->intensity;
@@ -1450,6 +1459,12 @@ namespace threepp {
             g.color[1] = envSun_.colorE[1] * k;
             g.color[2] = envSun_.colorE[2] * k;
         }
+
+        // Dir light 0 is the sun the shadow maps follow (the one-sun policy);
+        // an environment's sun keeps the LightShadow defaults.
+        sun.valid = ubo.dirCount > 0;
+        if (sun.valid) std::memcpy(sun.dir, ubo.dirLights[0].direction, sizeof(sun.dir));
+        shadowSun_ = sun;
 
         // The knobs themselves, for sampleEnvLod and the sky (the UBO's tail).
         vulkan::SceneEnvKnobs::worldToEnvColumns(envKnobs_.envToWorld, ubo.envRot);

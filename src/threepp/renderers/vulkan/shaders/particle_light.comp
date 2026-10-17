@@ -132,7 +132,7 @@ layout(push_constant) uniform Pc {
     uint  count;            // live particles this render call
     uint  centerBase;       // first center index (render-call slot in the ring)
     uint  clusterLightCount;// 0 = no cluster grid this frame
-    uint  flags;            // bit 0 = froxel passes ran (LUT valid)
+    uint  flags;            // bit 0 = froxel passes ran (LUT valid), bit 5 = the shadow maps are live
     uint  envMipCount;
 } pc;
 
@@ -169,6 +169,16 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
     while (rayQueryProceedEXT(rq)) {}
     return (rayQueryGetIntersectionTypeEXT(rq, true) ==
             gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
+}
+
+// The sun's visibility (dir light d) at a point in the air: the view's
+// shadow map where one covers it (flags bit 5, dir light 0), else the ray.
+float sunVis(uint d, vec3 P, vec3 L) {
+    if ((pc.flags & 32u) != 0u && d == 0u) {
+        const float v = smSunVis(P, vec3(0.0), vec2(gl_GlobalInvocationID.xy));
+        if (v >= 0.0) return v;
+    }
+    return shadowVis(P, L, 1e30);
 }
 
 // Cloud shadow transmittance — KEEP IN SYNC with deferred_shade_10_lighting_utils.glsl.
@@ -252,7 +262,7 @@ void main() {
     vec3 direct = vec3(0.0);
     for (uint d = 0u; d < lights.dirCount; ++d) {
         const vec3  L   = normalize(lights.dirLights[d].direction);
-        const float vis = shadowVis(P, L, 1e30);
+        const float vis = sunVis(d, P, L);
         if (vis <= 0.0) continue;
         const float phase4 = hgPhase(dot(L, rd), kParticleHgG) * 4.0 * PI;
         direct += lights.dirLights[d].color * (vis * cloudShadowSample(P) * phase4);
@@ -418,7 +428,7 @@ void main() {
             vec3 stepSum = vec3(0.0);
             for (uint d = 0u; d < lights.dirCount; ++d) {
                 const vec3  L   = normalize(lights.dirLights[d].direction);
-                const float vis = shadowVis(x, L, 1e30);
+                const float vis = sunVis(d, x, L);
                 if (vis <= 0.0) continue;
                 stepSum += lights.dirLights[d].color
                          * (hgPhase(dot(L, rd), fog.anisotropy) * vis);

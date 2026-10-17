@@ -516,6 +516,9 @@ bool gShadowMovingOccluder = false;
 // frame stable by construction): with only 1-2 binary rays a cap-1 mean is
 // salt-and-pepper, so without the top-up the dwell floor stays at 2.
 bool gShadowSunTopUp = false;
+// analyticDirectSplit: every light of the ratio came from a shadow map (kSM),
+// so visEst is exact, not an estimate.
+bool gShadowMapOnly = false;
 // Set per-ray by giRadiance when the 1-bounce hit lands on a currently-MOVING
 // mesh (sticky GeometryDesc._pad); gatherEnv folds the RAY-COUNT fraction into
 // gGiMovFrac. Ray-count, not luminance-weighted — a dark occlusion hit (the
@@ -1583,6 +1586,7 @@ void main() {
     float visEst  = 1.0;
     bool  sOccMoved = false;// this pixel's shadow (or a subgroup neighbour's) hit a MOVING occluder
     bool  sTopUp    = false;// visEst carries the 16-ray sunShadowVis top-up (cap-1 eligible)
+    bool  sMapOnly  = false;// visEst is the shadow maps' exact ratio (kSM, no rays)
     if (shadowChannel) {
         // Cluster slice by view-space -z (matches cluster_build's AABB axis).
         const float clusterDist = max(-(viewH.z / viewH.w), 0.0);
@@ -1592,6 +1596,7 @@ void main() {
                                       nSRays, visEst);
         sOccMoved = gShadowMovingOccluder;
         sTopUp    = gShadowSunTopUp;
+        sMapOnly  = gShadowMapOnly;
         gSkipAnalyticDirect = true;// shadeDiffuseDirect: skip dir/point/spot loops
     }
 
@@ -1639,8 +1644,11 @@ void main() {
             // commits: vis was identically 0 and the whole wrapped back-light
             // vanished whenever shadows were on (the backlit canopy read flat).
             const vec3 tOrig = worldPos + ((ndl < 0.0) ? -N : N) * SHADOW_EPS;
-            const float vis = shadowsOn
-                    ? sunShadowVis(tOrig, L, pc.sunTanHalfAngle, /*cheapHit=*/true)
+            // kSM: the map, with the receiver offset toward the light's side.
+            const float smV = (kSM && shadowsOn && i == 0u)
+                    ? smSunVis(worldPos, (ndl < 0.0) ? -N : N, vec2(gl_GlobalInvocationID.xy)) : -1.0;
+            const float vis = smV >= 0.0 ? smV
+                    : shadowsOn ? sunShadowVis(tOrig, L, pc.sunTanHalfAngle, /*cheapHit=*/true)
                     : 1.0;
             tSum += lights.dirLights[i].color * (w * vis * leg);
         }
@@ -2564,6 +2572,13 @@ void main() {
                 // next frame (a jittering normal-map bevel) cold-starts instead of
                 // inheriting a placeholder.
                 imageStore(shadowVisImage, px, vec4(-1.0, 0.0, 0.0, 0.0));
+            } else if (kSM && sMapOnly) {
+                // The maps' ratio is exact each frame: no history (nothing to
+                // smear behind a moving caster), stored as settled (histLen 4)
+                // with a fixed variance of 0.1^2, so the spatial filter keeps the
+                // shadow's edges (a lit/shadowed step is 10 sigma) and only
+                // smooths the PCF dither between near-equal neighbours.
+                imageStore(shadowVisImage, px, vec4(visEst, visEst * visEst + 0.01, 4.0, 0.0));
             } else {
                 // .z==0 = cold-start marker (sky/glass/off); the magnitude guards
                 // reject first-frame / garbage fp16 history (NaN compares false).

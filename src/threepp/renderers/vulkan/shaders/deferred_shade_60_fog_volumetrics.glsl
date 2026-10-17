@@ -384,7 +384,7 @@ vec3 applyParticleFog(vec3 col, vec3 ro, vec3 rd, float tMax) {
         // that makes a soot column's shaded side actually dark.
         sun += lights.dirLights[i].color
              * (hgPhase(dot(L, rd), medG)
-                * shadowVis(cen, L, 1e30) * cloudShadowSample(cen)
+                * primarySunVis(i, cen, vec3(0.0), cen, L, false) * cloudShadowSample(cen)
                 * pdLightTransmittance(cen, L));
     }
     const vec3 amb = lights.ambient
@@ -754,7 +754,9 @@ vec3 murkSunScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
             const float depth = max(fog.waterSurfaceY - x.y, 0.0);
             const vec3  trSun = exp(-fog.murkSigma * depth / sy);
             if (max(max(trSun.r, trSun.g), trSun.b) < 0.002) continue;// too deep for this sun to reach
-            const float vis = shadowVis(x, -sd, 1e30);// hull/keel carve the real shafts
+            // Hull/keel carve the real shafts. A shadow map holds the sun's straight
+            // line, not this refracted leg: near the surface the two agree.
+            const float vis = primarySunVis(0u, x, vec3(0.0), x, -sd, false);
             if (vis <= 0.0) continue;
             float caus = 1.0;
             if (caustic) {
@@ -1237,8 +1239,7 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
             // setFogShadowOpaqueCutouts (flags bit 29): crowns are opaque blobs to
             // this march; see shadowVisOpaque. Off = every step alpha-tests every
             // card it crosses, as the surface shadows do.
-            const float vis = flagOn(536870912u) ? shadowVisOpaque(x, L, 1e30)
-                                                 : shadowVis(x, L, 1e30);// tree/terrain shaft occlusion
+            const float vis = primarySunVis(i, x, vec3(0.0), x, L, flagOn(536870912u));// tree/terrain shaft occlusion
             if (vis <= 0.0) continue;
             const float phase = hgPhase(dot(L, rd), hgG);// forward glow toward the sun
             stepSum += lights.dirLights[i].color * (phase * vis);

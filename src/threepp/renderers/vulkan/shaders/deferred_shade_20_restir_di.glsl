@@ -531,6 +531,7 @@ vec3 analyticDirectSplit(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
     const float NdotV = max(dot(N, V), 1e-4);
     const float k     = (roughness + 1.0) * (roughness + 1.0) / 8.0;
     float lw[8u + kClusterMaxPerCell];// pick weights (lum of the unshadowed contribution)
+    float mv[8u + kClusterMaxPerCell];// kSM: each light's shadow-map visibility, -1 = no map
     uint  nL = 0u;
     vec3  U    = vec3(0.0);
     float wSum = 0.0;
@@ -552,6 +553,7 @@ vec3 analyticDirectSplit(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
             c = evalLight(N, V, L, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
               * lights.dirLights[i].color * (cloudShadow * caus * leg);
         U += c;
+        mv[nL] = (kSM && i == 0u && dot(c, c) > 0.0) ? smSunVis(P, N, vec2(px)) : -1.0;
         lw[nL] = dot(c, LUM); wSum += lw[nL]; ++nL;
     }
     // Cluster lights: unified point/spot records — a point light carries the
@@ -587,6 +589,7 @@ vec3 analyticDirectSplit(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
             }
         }
         U += c;
+        mv[nL] = -1.0;
         lw[nL] = dot(c, LUM); wSum += lw[nL]; ++nL;
     }
     // NOTHING LIT (every N.L <= 0, every cluster light out of range or cone):
@@ -606,6 +609,23 @@ vec3 analyticDirectSplit(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
     if (wSum <= 1e-8) return U;
     visEst = 1.0;
     const vec3 orig = P + N * SHADOW_EPS;
+    // kSM: a light a shadow map answers enters the ratio exactly, by its map
+    // visibility, and leaves the ray pick (its weight zeroed); the rays then
+    // estimate only the share of the lights no map covers. All mapped (the
+    // no-ray-query case): no ray, a deterministic ratio.
+    float smMapped = 0.0;
+    float smRest   = wSum;
+    if (kSM) {
+        smRest = 0.0;
+        for (uint i = 0u; i < nL; ++i) {
+            if (mv[i] >= 0.0) {
+                smMapped += lw[i] * mv[i];
+                lw[i] = 0.0;
+            } else {
+                smRest += lw[i];
+            }
+        }
+    }
     float vAcc = 0.0;
     for (int s = 0; s < nRays; ++s) {
         // Distinct blue-noise salts per ray + dimension (GI uses 0/1, the
@@ -613,7 +633,7 @@ vec3 analyticDirectSplit(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         const float xiPick = blueNoiseDef(uvec2(px), pc.frame, uint(2 + s * 3));
         const vec2  xiDisc = vec2(blueNoiseDef(uvec2(px), pc.frame, uint(3 + s * 3)),
                                   blueNoiseDef(uvec2(px), pc.frame, uint(4 + s * 3)));
-        const float xi = xiPick * wSum;
+        const float xi = xiPick * smRest;
         float acc = 0.0;
         uint  pick = 0xFFFFFFFFu;
         for (uint i = 0u; i < nL; ++i) {
@@ -622,7 +642,12 @@ vec3 analyticDirectSplit(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         }
         vAcc += (pick == 0xFFFFFFFFu) ? 1.0 : shadowRayVisTo(orig, P, pick, xiDisc, cellBase);
     }
-    visEst = vAcc / float(nRays);
+    visEst = kSM ? (smMapped + smRest * (vAcc / float(nRays))) / wSum : vAcc / float(nRays);
+    // Every light answered by a map: the ratio is exact this frame, and the
+    // channel stores it without history (gShadowMapOnly, deferred_shade.comp):
+    // a map cannot say what moved, and a swept shadow accumulated over frames
+    // smears. A mapped sun also drops out of the top-up below (lw[0] = 0).
+    gShadowMapOnly = kSM && smRest <= 1e-8 * wSum;
     // SUBGROUP DILATION of the moving-occluder flag. The per-pixel signal fires
     // only when one of THIS pixel's 1-2 rays commits a hit on the mover — in the
     // OUTER penumbra (visEst 0.8..1.0) the hit probability is low, so a band of

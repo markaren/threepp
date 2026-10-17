@@ -83,6 +83,36 @@ def test_no_ray_tracing_fallback_renders():
         box = luma[H // 2 - 10:H // 2 + 10, W // 2 - 10:W // 2 + 10].mean()
         background = luma[:12, :12].mean()                 # top-left corner: sky colour
         assert box > background + 10, f"box {box:.1f} vs background {background:.1f}"
+
+        # The sun casts the box's shadow from a shadow map: on a ground plane
+        # the patch the box hides from the sun is darker than the ground
+        # beside it.
+        assert renderer.shadow_mode_active == "sm"
+        ground_mat = tp.MeshStandardMaterial()
+        ground_mat.color = 0x808080                       # mid grey: the lit side stays below 255
+        ground = tp.Mesh(tp.PlaneGeometry(20, 20), ground_mat)
+        ground.rotation.x = -math.pi / 2
+        ground.position.y = -0.5
+        scene.add(ground)
+        for c in scene.children:
+            if isinstance(c, tp.DirectionalLight):
+                c.position.set(-4, 5, 0)                  # the shadow falls toward +x
+        for _ in range(8):
+            renderer.render(scene, cam)
+        img = renderer.read_pixels()[..., :3]
+        luma = img.astype(np.float64).mean(axis=2)
+        vp = cam.projection_matrix.to_numpy() @ cam.matrix_world_inverse.to_numpy()
+
+        def ground_patch(x, z):
+            p = vp @ np.array([x, -0.5, z, 1.0])
+            u = int((p[0] / p[3] * 0.5 + 0.5) * W)
+            v = int((0.5 - p[1] / p[3] * 0.5) * H)
+            return luma[v - 3:v + 4, u - 3:u + 4].mean()
+
+        shadowed = ground_patch(1.1, 0.0)                 # just past the box, away from the sun
+        lit = ground_patch(-0.2, 1.4)                     # in front of the box, open to the sun
+        # Measured 128 vs 165 (the hemisphere light fills the shadow).
+        assert shadowed + 20.0 < lit, f"shadowed ground {shadowed:.1f} vs lit ground {lit:.1f}"
     finally:
         if prev is None:
             os.environ.pop("THREEPP_VULKAN_NO_RT", None)

@@ -3599,7 +3599,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // guards per-view sets, and addSecondaryViewPasses calls
             // uploadRasterCameraUbo once per view per frame, so each view
             // heals its own slot.
-            for (auto& v : views_) v->rasterMatTexValid_.fill(0);
+            for (auto& v : views_) { v->rasterMatTexValid_.fill(0); v->shadowMatTexValid_.fill(0); }
             prevSceneFingerprint = std::move(currFp);
             sceneBuilt_ = true;
             ++drawInputsVersion_;// structural rebuild — every draw record is new

@@ -4787,7 +4787,7 @@ namespace threepp {
         void markMaterialSamplerDirty() {
             deferredDescDirty_.fill(true);
             // Every view: the flag is per-view (it guards per-view sets).
-            for (auto& v : views_) v->rasterMatTexValid_.fill(0);
+            for (auto& v : views_) { v->rasterMatTexValid_.fill(0); v->shadowMatTexValid_.fill(0); }
         }
         void setTextureAnisotropy(float aniso);// 0 = auto; VulkanCoreTextures.cpp
 
@@ -5038,6 +5038,36 @@ namespace threepp {
         // them to `camera`, build the caster list and fill the UBO; then sync
         // the deferred set's bindings 80-83.
         void prepareShadowMaps(Camera& camera);
+        // The fit and fill half of prepareShadowMaps; false when the view has
+        // nothing to draw a map for (no sun, no slotted lamp).
+        bool fitShadowMaps(Camera& camera);
+        // The caster list of the current view's maps: every entry a shadow
+        // ray could hit (shadowOccludes' set: no blend, no transmission, no
+        // strong emitter, no viewmodel), kept when its world sphere meets a
+        // cascade's box or a slotted lamp's range. Same DrawInfo records as
+        // the G-buffer's.
+        struct ShadowCullVolumes {
+            struct Box { float c[3], x[3], y[3], l[3], r; };// a cascade: centre, light basis, half extent
+            struct Ball { float c[3], r; };                 // a lamp: position, range
+            std::vector<Box>  boxes;
+            std::vector<Ball> balls;
+        };
+        void buildShadowDrawData(uint32_t frame, const ShadowCullVolumes& vol);
+        // Depth-only, reverse-Z, dynamic rendering into one D32 layer: the
+        // indirect G-buffer draw reduced to position + the cutout test, with
+        // depth clamp where the device has it and dynamic cull mode, front
+        // face and depth bias.
+        VkPipeline shadowPipeline_ = VK_NULL_HANDLE;
+        void createShadowPipeline();
+        // Dir light 0 as updateLightsUbo packed it, with its LightShadow
+        // settings (the environment's sun: the defaults, 2048 texels).
+        struct ShadowSun {
+            bool     valid = false;
+            float    dir[3]{0.f, 1.f, 0.f};// toward the sun
+            float    bias = 0.f, normalBias = 0.f, radius = 1.f, intensity = 1.f;
+            uint32_t mapSize = 2048u;
+        };
+        ShadowSun shadowSun_;
 
         // Frame recording, split along the frame's own stage seams (bodies in
         // VulkanCoreRecord.cpp). recordCommandBuffer is the narrative: it adds

@@ -1709,6 +1709,15 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_depth.frag"
         kOverlayDepthFragSpv
         _overlay_depth_frag_spv_h)
+    # Shadow maps (ShadowMapPass): the casters' depth, with the cutout test.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/shadow_depth.vert"
+        kShadowDepthVertSpv
+        _shadow_depth_vert_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/shadow_depth.frag"
+        kShadowDepthFragSpv
+        _shadow_depth_frag_spv_h)
     # Splat depth stamp — the same depth buffer, written a second time from
     # the Gaussian-splat depth AOV, so the overlay is occluded by a cloud in
     # front of it (the compositor is compute and has no depth attachment).

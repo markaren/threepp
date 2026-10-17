@@ -547,7 +547,8 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             if (ndl <= 0.0) continue;// sun below the surface plane: no transmitted beam
             float vis = 1.0;
             if (doShadows) {
-                vis = (i == 0u && gWaterSunVis0 >= 0.0) ? gWaterSunVis0 : shadowVis(sunOrigIn, L, 1e30);
+                vis = (i == 0u && gWaterSunVis0 >= 0.0) ? gWaterSunVis0
+                                                        : primarySunVis(i, P, N, sunOrigIn, L, false);
                 if (i == 0u) gWaterSunVis0 = vis;
             }
             if (vis <= 0.0) continue;
@@ -642,7 +643,8 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             if (ndl <= 0.0) continue;
             float vis = 1.0;
             if (doShadows) {
-                vis = (i == 0u && gWaterSunVis0 >= 0.0) ? gWaterSunVis0 : shadowVis(sunOrig, L, 1e30);
+                vis = (i == 0u && gWaterSunVis0 >= 0.0) ? gWaterSunVis0
+                                                        : primarySunVis(i, P, N, sunOrig, L, false);
                 if (i == 0u) gWaterSunVis0 = vis;
             }
             if (vis <= 0.0) continue;
@@ -1125,7 +1127,7 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo, float matR
             const vec3  leg   = murkSunLeg(P, L);// submerged glass: refracted, attenuated
             const float NdotL = max(dot(N, L), 0.0);
             if (NdotL <= 0.0) continue;
-            const vec3 vis = doShadows ? shadowVis(P + N * SHADOW_EPS, L, 1e30) * leg : 1.0 * leg;
+            const vec3 vis = doShadows ? primarySunVis(i, P, N, P + N * SHADOW_EPS, L, false) * leg : 1.0 * leg;
             if (max(max(vis.r, vis.g), vis.b) <= 0.0) continue;
             const vec3  H = normalize(V + L);
             const float D = distGGX(max(dot(N, H), 0.0), gr);

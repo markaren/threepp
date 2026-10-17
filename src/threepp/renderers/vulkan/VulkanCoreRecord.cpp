@@ -970,6 +970,35 @@ void VulkanRenderer::Impl::addGbufferPasses(rg::RenderGraph& g) {
                                          VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT |
                                                  VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
                                          VK_IMAGE_LAYOUT_UNDEFINED, false};
+            // ── Shadow maps (ShadowMode::ShadowMaps) ───────────────────────────
+            // Every cascade and lamp map of this view, before the G-buffer.
+            // The maps are dead between frames (imported UNDEFINED, cleared by
+            // the pass) and leave in DEPTH_ATTACHMENT; the shade, the fog and
+            // the particle lighting read them through bindings 80-82 of their
+            // set, in DEPTH_STENCIL_READ_ONLY, which the graph transitions to.
+            if (view().shadowLive && view().shadowMaps_ && shadowPipeline_ != VK_NULL_HANDLE) {
+                const auto& sm   = view().shadowMaps_->slot(f);
+                auto        pass = g.addPass("shadowMaps", [this](VkCommandBuffer c) {
+                    gpuTimings_->begin(c, TP_ShadowMaps, currentFrame);
+                    view().shadowMaps_->record(c, currentFrame, shadowPipeline_, rasterPipelineLayout);
+                    gpuTimings_->end(c, TP_ShadowMaps, currentFrame);
+                });
+                const rg::Access depthWrite{kTests,
+                                            VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                                            VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, true};
+                for (const auto* arr : {&sm.cascades, &sm.spots, &sm.points}) {
+                    if (arr->image == VK_NULL_HANDLE) continue;
+                    pass.use(g.importImage("shadowMap", arr->image, kDepth, 1, VK_IMAGE_LAYOUT_UNDEFINED), depthWrite);
+                }
+                pass.use(g.importBuffer("shadowMap.draws", sm.drawInfo.handle),
+                         rg::Access{VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                                    VK_IMAGE_LAYOUT_UNDEFINED, false});
+                pass.use(g.importBuffer("shadowMap.cmds", sm.cmds.handle),
+                         rg::Access{VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
+                                    VK_IMAGE_LAYOUT_UNDEFINED, false});
+                pass.use(g.importMemory(kSceneGeometry), kVertexRead);
+            }
             {
                 auto pass = g.addPass("gbuffer", [this](VkCommandBuffer c) { recordGbufferRaster(c); });
                 const Image2D* colors[5] = {msFb ? &gb.normalMS : &gb.normal, msFb ? &gb.motionMS : &gb.motion,

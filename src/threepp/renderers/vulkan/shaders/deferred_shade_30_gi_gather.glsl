@@ -207,8 +207,11 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         // Soft sun shadow: adaptive multi-ray disc visibility (see sunShadowVis;
         // pc.sunTanHalfAngle = 0 → exact hard single-ray shadow). The BRDF
         // response keeps the exact L — only the occlusion test softens.
-        const float vis = (doShadows
-                ? sunShadowVis(shadowOrig, L, pc.sunTanHalfAngle, cheapHit)
+        // kSM: the shadow map answers the sun at a primary point it covers.
+        const float smV = (kSM && doShadows && !cheapHit && i == 0u)
+                ? smSunVis(P, N, vec2(gl_GlobalInvocationID.xy)) : -1.0;
+        const float vis = (smV >= 0.0 ? smV
+                : doShadows ? sunShadowVis(shadowOrig, L, pc.sunTanHalfAngle, cheapHit)
                 : 1.0) * wPick;
         if (vis <= 0.0) continue;
         // The dapple, on the INLINE path (denoise off, dispatch B, glass/sheen)

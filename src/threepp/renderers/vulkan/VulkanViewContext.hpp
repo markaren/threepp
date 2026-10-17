@@ -420,6 +420,9 @@ namespace threepp::vulkan::impl {
         // frame that needs them and kept; live = drawn and bound this frame.
         std::unique_ptr<vulkan::ShadowMapPass> shadowMaps_;
         bool shadowLive = false;
+        // Binding 3 of the shadow pass's raster set is current for slot f;
+        // reset with rasterMatTexValid_ when the texture table changes.
+        std::array<int8_t, kFramesInFlight> shadowMatTexValid_{};
     };
 
     // Per-frame raster camera data. currVPjittered drives gl_Position;

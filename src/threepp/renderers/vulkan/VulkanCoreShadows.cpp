@@ -4,6 +4,15 @@
 
 #include "VulkanCoreImpl.hpp"
 
+#include "VulkanCpuPhaseProf.hpp"
+
+#include "threepp/renderers/vulkan/shaders/shadow_depth.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/shadow_depth.vert.spv.h"
+
+#include <algorithm>
+#include <cmath>
+#include <memory>
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -80,6 +89,8 @@ namespace threepp {
     }
 
     void VulkanRenderer::Impl::destroyShadowResources() {
+        if (shadowPipeline_) vkDestroyPipeline(ctx->device(), shadowPipeline_, nullptr);
+        shadowPipeline_ = VK_NULL_HANDLE;
         vulkan::destroyShadowDepthArray(*ctx, shadowDummyArray_);
         vulkan::destroyShadowDepthArray(*ctx, shadowDummyCube_);
         destroyBuffer(ctx->allocator(), shadowDummyUbo_);
@@ -113,9 +124,428 @@ namespace threepp {
     }
 
     void VulkanRenderer::Impl::prepareShadowMaps(Camera& camera) {
-        (void) camera;
-        view().shadowLive = false;
+        view().shadowLive = shadowMapsActive() && view().deferredShade_ && rasterDsLayout != VK_NULL_HANDLE &&
+                            fitShadowMaps(camera);
         syncShadowDescriptors(currentFrame);
+    }
+
+    namespace {
+
+        float dot3(const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+
+        // world -> clip of a light camera whose matrixWorld is `world`, with
+        // the GL projection `glProj` made reverse-Z (the raster camera's own
+        // conversion, reverseZVk).
+        void lightClip(float* out, const Matrix4& world, const Matrix4& glProj) {
+            Matrix4 view = world;
+            view.invert();
+            Matrix4 proj = glProj;
+            auto&   e    = proj.elements;
+            for (int c = 0; c < 4; ++c) e[c * 4 + 2] = 0.5f * e[c * 4 + 3] - 0.5f * e[c * 4 + 2];
+            Matrix4 vp;
+            vp.multiplyMatrices(proj, view);
+            std::memcpy(out, vp.elements.data(), 64);
+        }
+
+    }// namespace
+
+    bool VulkanRenderer::Impl::fitShadowMaps(Camera& camera) {
+        const uint32_t f   = currentFrame;
+        auto&          v   = view();
+        const uint32_t cap = shadowMapSizeCap_ ? std::min(shadowMapSizeCap_, 8192u) : 8192u;
+        const auto     clampSize = [cap](uint32_t s) { return std::clamp(s, 16u, cap); };
+
+        vulkan::ShadowMapPass::Sizes sz{};
+        if (shadowSun_.valid) {
+            sz.cascadeSize = clampSize(shadowSun_.mapSize);
+            sz.cascades    = shadowCascades_;
+        }
+        if (sz.cascades == 0u && sz.spots == 0u && sz.points == 0u) return false;
+
+        if (!v.shadowMaps_) {
+            v.shadowMaps_ = std::make_unique<vulkan::ShadowMapPass>(*ctx, kFramesInFlight, rasterDsLayout);
+        }
+        if (shadowPipeline_ == VK_NULL_HANDLE) createShadowPipeline();
+        auto& smp = *v.shadowMaps_;
+        smp.ensure(f, sz);
+        smp.layers.clear();
+
+        GpuShadowMapsUbo  u{};
+        ShadowCullVolumes vol;
+
+        // ── The sun's cascades ───────────────────────────────────────────────
+        // Practical split (lambda 0.75) of [near, distance] into N slices; each
+        // slice's bounding sphere (its size depends on the camera's projection
+        // alone, so it holds still while the camera turns) is an ortho box of
+        // half extent r around its centre in the sun's frame, the centre
+        // snapped to the texel grid so the map does not shimmer as the camera
+        // moves. The box starts at the sphere's sunward rim; casters beyond it
+        // are pancaked onto the near plane by depth clamp (or, without it, the
+        // near plane is pulled 1 km toward the sun).
+        if (sz.cascades > 0u) {
+            camera.updateMatrixWorld();
+            float camNear = 0.1f, camFar = 1000.f;
+            if (auto* pc = camera.as<PerspectiveCamera>()) {
+                camNear = pc->nearPlane;
+                camFar  = pc->farPlane;
+            } else if (auto* oc = camera.as<OrthographicCamera>()) {
+                camNear = oc->nearPlane;
+                camFar  = oc->farPlane;
+            }
+            camNear    = std::max(camNear, 1e-3f);
+            float dist = shadowDistance_ > 0.f ? shadowDistance_ : std::clamp(camFar, 50.f, 2000.f);
+            // ...and no farther than the scene reaches from the camera (the
+            // farthest corner of a span's world box), so a room is not
+            // shadowed with cascades sized for a kilometre of terrain. A span
+            // the frustum cull has not boxed (a deformer) does not count.
+            {
+                const auto& mw  = camera.matrixWorld->elements;
+                float       ext = 0.f;
+                bool        any = false;
+                for (const auto& sp : entrySpans_) {
+                    if (sp.hidden || !sp.aabbValid) continue;
+                    float d2 = 0.f;
+                    for (int a = 0; a < 3; ++a) {
+                        const float e = std::max(std::abs(sp.aabbMin[a] - mw[12 + a]), std::abs(sp.aabbMax[a] - mw[12 + a]));
+                        d2 += e * e;
+                    }
+                    ext = std::max(ext, std::sqrt(d2));
+                    any = true;
+                }
+                if (any) dist = std::min(dist, std::max(ext, 1.f));
+            }
+            dist = std::max(std::min(dist, camFar), camNear * 2.f);
+            const uint32_t n = sz.cascades;
+            float          split[kMaxShadowCascades + 1];
+            for (uint32_t i = 0; i <= n; ++i) {
+                const float t   = float(i) / float(n);
+                const float lg  = camNear * std::pow(dist / camNear, t);
+                const float lin = camNear + (dist - camNear) * t;
+                split[i]        = 0.75f * lg + 0.25f * lin;
+            }
+            const auto& P    = camera.projectionMatrix.elements;
+            const auto  ndcZ = [&](float d) {// GL NDC z of the view-space point (0, 0, -d)
+                const float cz = P[10] * -d + P[14];
+                const float cw = P[11] * -d + P[15];
+                return cz / cw;
+            };
+            const Matrix4& projInv  = camera.projectionMatrixInverse;
+            const Matrix4& camWorld = *camera.matrixWorld;
+
+            const float* L       = shadowSun_.dir;
+            const bool   steep   = std::abs(L[1]) >= 0.99f;
+            const float  up0[3]  = {steep ? 1.f : 0.f, steep ? 0.f : 1.f, 0.f};
+            // The sun's frame: z toward the sun (the light camera looks along -L).
+            float x[3] = {up0[1] * L[2] - up0[2] * L[1], up0[2] * L[0] - up0[0] * L[2],
+                          up0[0] * L[1] - up0[1] * L[0]};
+            const float xl = std::sqrt(dot3(x, x));
+            for (float& c : x) c /= xl;
+            const float y[3]  = {L[1] * x[2] - L[2] * x[1], L[2] * x[0] - L[0] * x[2], L[0] * x[1] - L[1] * x[0]};
+            const float extra = ctx->depthClampSupported() ? 0.f : 1000.f;
+            const float size  = float(sz.cascadeSize);
+
+            for (uint32_t i = 0; i < n; ++i) {
+                float corners[8][3];
+                int   k = 0;
+                for (float d : {split[i], split[i + 1]}) {
+                    const float z = ndcZ(d);
+                    for (float cy : {-1.f, 1.f}) {
+                        for (float cx : {-1.f, 1.f}) {
+                            Vector3 p(cx, cy, z);
+                            p.applyMatrix4(projInv).applyMatrix4(camWorld);
+                            corners[k][0] = p.x;
+                            corners[k][1] = p.y;
+                            corners[k][2] = p.z;
+                            ++k;
+                        }
+                    }
+                }
+                float c[3] = {0.f, 0.f, 0.f};
+                for (auto& q : corners)
+                    for (int a = 0; a < 3; ++a) c[a] += q[a] / 8.f;
+                float r = 0.f;
+                for (auto& q : corners) {
+                    const float d[3] = {q[0] - c[0], q[1] - c[1], q[2] - c[2]};
+                    r                = std::max(r, std::sqrt(dot3(d, d)));
+                }
+                r                 = std::ceil(r * 16.f) / 16.f;// a stable size, off the float noise
+                const float texel = 2.f * r / size;
+                const float cx    = dot3(c, x), cy = dot3(c, y);
+                const float sx    = std::floor(cx / texel) * texel - cx;
+                const float sy    = std::floor(cy / texel) * texel - cy;
+                for (int a = 0; a < 3; ++a) c[a] += x[a] * sx + y[a] * sy;
+
+                const float far = 2.f * r + extra;
+                Matrix4     world;
+                world.makeBasis(Vector3(x[0], x[1], x[2]), Vector3(y[0], y[1], y[2]), Vector3(L[0], L[1], L[2]));
+                world.setPosition(c[0] + L[0] * (r + extra), c[1] + L[1] * (r + extra), c[2] + L[2] * (r + extra));
+                Matrix4 proj;
+                proj.makeOrthographic(-r, r, r, -r, 0.f, far);
+                vulkan::ShadowMapPass::Layer layer{};
+                lightClip(layer.vp, world, proj);
+                layer.target = vulkan::ShadowMapPass::Target::Cascade;
+                layer.layer  = i;
+                smp.layers.push_back(layer);
+
+                std::memcpy(u.cascadeVP[i], layer.vp, 64);
+                u.cascadeSphere[i][0] = c[0];
+                u.cascadeSphere[i][1] = c[1];
+                u.cascadeSphere[i][2] = c[2];
+                u.cascadeSphere[i][3] = r;
+                u.cascadeParams[i][0] = texel;
+                u.cascadeParams[i][1] = 1.f / far;
+                ShadowCullVolumes::Box b{};
+                std::memcpy(b.c, c, sizeof(c));
+                std::memcpy(b.x, x, sizeof(x));
+                std::memcpy(b.y, y, sizeof(y));
+                std::memcpy(b.l, L, sizeof(b.l));
+                b.r = r;
+                vol.boxes.push_back(b);
+            }
+            u.cascadeCount    = n;
+            u.flags          |= 1u;
+            u.sunBias         = shadowSun_.bias;
+            u.sunNormalBias   = shadowSun_.normalBias;
+            u.sunRadiusTexels = shadowSun_.radius;
+            u.sunIntensity    = shadowSun_.intensity;
+            std::memcpy(u.sunDir, L, sizeof(u.sunDir));
+            u.cascadeMapSize = size;
+        }
+
+        // Raster side: a small slope-scaled bias away from the light (reverse-
+        // Z: negative); the receivers' normal offset does most of the work.
+        smp.depthBiasConstant = 0.f;
+        smp.depthBiasSlope    = -1.f;
+
+        buildShadowDrawData(f, vol);
+
+        auto& slot = smp.slot(f);
+        std::memcpy(slot.uboMapped, &u, sizeof(u));
+        flushHostWrites(ctx->allocator(), slot.ubo.alloc);
+        return true;
+    }
+
+    void VulkanRenderer::Impl::buildShadowDrawData(uint32_t frame, const ShadowCullVolumes& vol) {
+        THREEPP_CPUPROF("frame.D_buildShadowDraws");
+        auto&                                             smp = *view().shadowMaps_;
+        std::array<std::vector<DrawInfoGpu>, 3>           draws;
+        std::array<std::vector<VkDrawIndirectCommand>, 3> cmds;
+        const auto&                                       entries = lastVisibleEntries_;
+
+        const auto reaches = [&](const float* e, float er) {
+            for (const auto& b : vol.boxes) {
+                const float d[3] = {e[0] - b.c[0], e[1] - b.c[1], e[2] - b.c[2]};
+                const float lim  = b.r + er;
+                // Sideways inside the box; along the sun anything in front of
+                // its far plane (casters sunward of the box are pancaked).
+                if (std::abs(dot3(d, b.x)) <= lim && std::abs(dot3(d, b.y)) <= lim && dot3(d, b.l) >= -lim)
+                    return true;
+            }
+            for (const auto& s : vol.balls) {
+                const float d[3] = {e[0] - s.c[0], e[1] - s.c[1], e[2] - s.c[2]};
+                const float lim  = s.r + er;
+                if (dot3(d, d) <= lim * lim) return true;
+            }
+            return false;
+        };
+
+        for (const auto& sp : entrySpans_) {
+            if (sp.hidden || sp.count == 0u) continue;
+            const MeshEntry& e0 = entries[sp.first];
+            // Overlays and particle sprites are not in the ray-traced scene, nor
+            // are ParticleFields (particle_density.glsl shadows those).
+            if (e0.isOverlay || e0.isParticle || e0.isParticleField) continue;
+            const BlasRecord* rec = resolveBlasForEntry(e0);
+            if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
+            // Deformers' and interop meshes' bounds are stale: always kept, as
+            // the G-buffer keeps them.
+            const bool stale = e0.isSkinned || e0.isDisplaced || e0.isMorphed || e0.isTet || e0.isVertexInterop ||
+                               e0.isGrass;
+            const bool bounded = !stale && sp.localBoundsValid;
+            // Both faces cast, as a shadow ray sees both; Material::shadowSide
+            // narrows it when the material sets it.
+            int        bucket = 2;
+            const auto mat    = e0.mesh->material();
+            if (mat && mat->shadowSide) {
+                bucket = *mat->shadowSide == Side::Front ? 0 : *mat->shadowSide == Side::Back ? 1 : 2;
+            }
+            const bool lodStatic = rec->lodLevels.empty();
+            const auto sel0      = selectLodGeom(*rec, 0);
+            uint32_t   drawStart = 0u, drawCount = 0xFFFFFFFFu;
+            if (auto geom = e0.mesh->geometry()) {
+                const auto& dr = geom->drawRange;
+                drawStart      = dr.start > 0 ? static_cast<uint32_t>(dr.start) : 0u;
+                drawCount      = dr.count > 0 ? static_cast<uint32_t>(dr.count) : 0u;
+            }
+            for (uint32_t j = 0; j < sp.count; ++j) {
+                const uint32_t   i  = sp.first + j;
+                const MeshEntry& en = entries[i];
+                if (en.camAttached) continue;
+                if (en.sensorOnly && !(sensorOnlySurfaces_ && view().secondary && view().sensorSurfaces)) continue;
+                if (i >= matDescsCached_.size()) continue;
+                // shadowOccludes' policy (deferred_shade_10): transmission and
+                // blend never block, strong emitters never block.
+                const auto& md = matDescsCached_[i];
+                if (md.transmission > 0.f || md.alphaCutoff < 0.f) continue;
+                if (std::max({md.emissive[0], md.emissive[1], md.emissive[2]}) * md.emissiveIntensity >= 1.f)
+                    continue;
+                if (bounded) {
+                    const float* M     = en.worldMatrix.data();
+                    const float* lc    = sp.localCenter;
+                    const float  wc[3] = {M[0] * lc[0] + M[4] * lc[1] + M[8] * lc[2] + M[12],
+                                          M[1] * lc[0] + M[5] * lc[1] + M[9] * lc[2] + M[13],
+                                          M[2] * lc[0] + M[6] * lc[1] + M[10] * lc[2] + M[14]};
+                    const float  s0    = M[0] * M[0] + M[1] * M[1] + M[2] * M[2];
+                    const float  s1    = M[4] * M[4] + M[5] * M[5] + M[6] * M[6];
+                    const float  s2    = M[8] * M[8] + M[9] * M[9] + M[10] * M[10];
+                    const float  wr    = sp.localRadius * std::sqrt(std::max({s0, s1, s2}));
+                    if (!reaches(wc, wr)) continue;
+                }
+                const auto sel    = lodStatic ? sel0 : selectLodGeom(*rec, en.lodLevel);
+                uint32_t   vcount = sel.indexed ? sel.indexCount : rec->vertexCount;
+                uint32_t   vfirst = 0u;
+                if (en.lodLevel == 0 || lodStatic) {
+                    vfirst = std::min(drawStart, vcount);
+                    vcount = std::min(vcount - vfirst, drawCount);
+                }
+                if (vcount == 0u) continue;
+                DrawInfoGpu di{};
+                std::memcpy(di.model, en.worldMatrix.data(), 64);
+                di.posAddr             = rec->vertex.address;
+                di.nrmAddr             = rec->normal.address;
+                di.uvAddr              = rec->uv.handle != VK_NULL_HANDLE ? rec->uv.address : 0ull;
+                di.prevPosAddr         = rec->vertex.address;
+                di.indexAddr           = sel.indexed ? sel.indexAddress : 0ull;
+                di.instanceCustomIndex = i;
+                di.indexed             = sel.indexed ? 1u : 0u;
+                di.packedAttrs         = rec->packedMask;
+                draws[bucket].push_back(di);
+                VkDrawIndirectCommand cmd{};
+                cmd.vertexCount   = vcount;
+                cmd.instanceCount = 1u;
+                cmd.firstVertex   = vfirst;
+                cmds[bucket].push_back(cmd);
+            }
+        }
+
+        uint32_t total = 0;
+        for (const auto& d : draws) total += static_cast<uint32_t>(d.size());
+        smp.ensureDrawCapacity(frame, total);
+        auto& slot = smp.slot(frame);
+        void* dm   = nullptr;
+        void* cm   = nullptr;
+        check(vmaMapMemory(ctx->allocator(), slot.drawInfo.alloc, &dm), "vmaMapMemory(shadow drawInfo)");
+        check(vmaMapMemory(ctx->allocator(), slot.cmds.alloc, &cm), "vmaMapMemory(shadow cmds)");
+        uint32_t offset = 0;
+        for (int b = 0; b < 3; ++b) {
+            const uint32_t nb = static_cast<uint32_t>(draws[b].size());
+            smp.groups[b]     = {offset, nb};
+            for (uint32_t k = 0; k < nb; ++k) cmds[b][k].firstInstance = offset + k;
+            if (nb > 0u) {
+                std::memcpy(static_cast<uint8_t*>(dm) + offset * sizeof(DrawInfoGpu), draws[b].data(),
+                            nb * sizeof(DrawInfoGpu));
+                std::memcpy(static_cast<uint8_t*>(cm) + offset * sizeof(VkDrawIndirectCommand), cmds[b].data(),
+                            nb * sizeof(VkDrawIndirectCommand));
+            }
+            offset += nb;
+        }
+        smp.totalDraws = total;
+        flushHostWrites(ctx->allocator(), slot.drawInfo.alloc);
+        flushHostWrites(ctx->allocator(), slot.cmds.alloc);
+        vmaUnmapMemory(ctx->allocator(), slot.cmds.alloc);
+        vmaUnmapMemory(ctx->allocator(), slot.drawInfo.alloc);
+
+        // The alpha test's inputs: this slot's material table every frame (it
+        // can grow), the texture table when it changed.
+        const bool texNeeded = !slot.matTexWritten || view().shadowMatTexValid_[frame] == 0;
+        std::unique_ptr<std::array<VkDescriptorImageInfo, kMaxMaterialTextures>> tex;
+        if (texNeeded) {
+            tex = std::make_unique<std::array<VkDescriptorImageInfo, kMaxMaterialTextures>>();
+            fillMaterialTextureInfos(*tex);
+        }
+        smp.writeRasterMaterials(frame, materialDescsBuffers[frame].handle, texNeeded ? tex->data() : nullptr,
+                                 kMaxMaterialTextures);
+        view().shadowMatTexValid_[frame] = 1;
+    }
+
+    void VulkanRenderer::Impl::createShadowPipeline() {
+        const auto module = [&](const uint32_t* code, size_t bytes, const char* what) {
+            VkShaderModuleCreateInfo ci{};
+            ci.sType         = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            ci.codeSize      = bytes;
+            ci.pCode         = code;
+            VkShaderModule m = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &ci, nullptr, &m), what);
+            return m;
+        };
+        VkShaderModule vert = module(kShadowDepthVertSpv, sizeof(kShadowDepthVertSpv),
+                                     "vkCreateShaderModule(shadow_depth.vert)");
+        VkShaderModule frag = module(kShadowDepthFragSpv, sizeof(kShadowDepthFragSpv),
+                                     "vkCreateShaderModule(shadow_depth.frag)");
+        VkPipelineShaderStageCreateInfo stages[2]{};
+        stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+        stages[0].module = vert;
+        stages[0].pName  = "main";
+        stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[1].module = frag;
+        stages[1].pName  = "main";
+
+        VkPipelineVertexInputStateCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        VkPipelineInputAssemblyStateCreateInfo ia{};
+        ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        VkPipelineViewportStateCreateInfo vp{};
+        vp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        vp.viewportCount = 1;
+        vp.scissorCount  = 1;
+        VkPipelineRasterizationStateCreateInfo rs{};
+        rs.sType            = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rs.depthClampEnable = ctx->depthClampSupported() ? VK_TRUE : VK_FALSE;
+        rs.polygonMode      = VK_POLYGON_MODE_FILL;
+        rs.cullMode         = VK_CULL_MODE_NONE;
+        rs.frontFace        = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rs.depthBiasEnable  = VK_TRUE;
+        rs.lineWidth        = 1.f;
+        VkPipelineMultisampleStateCreateInfo ms{};
+        ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        VkPipelineDepthStencilStateCreateInfo ds{};
+        ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        ds.depthTestEnable  = VK_TRUE;
+        ds.depthWriteEnable = VK_TRUE;
+        ds.depthCompareOp   = VK_COMPARE_OP_GREATER;// reverse-Z: nearer the light wins
+        VkPipelineColorBlendStateCreateInfo cb{};
+        cb.sType                   = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        const VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_CULL_MODE,
+                                      VK_DYNAMIC_STATE_FRONT_FACE, VK_DYNAMIC_STATE_DEPTH_BIAS};
+        VkPipelineDynamicStateCreateInfo dy{};
+        dy.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dy.dynamicStateCount = static_cast<uint32_t>(std::size(dyn));
+        dy.pDynamicStates    = dyn;
+        VkPipelineRenderingCreateInfo rci{};
+        rci.sType                 = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+        rci.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+        VkGraphicsPipelineCreateInfo gp{};
+        gp.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        gp.pNext               = &rci;
+        gp.stageCount          = 2;
+        gp.pStages             = stages;
+        gp.pVertexInputState   = &vi;
+        gp.pInputAssemblyState = &ia;
+        gp.pViewportState      = &vp;
+        gp.pRasterizationState = &rs;
+        gp.pMultisampleState   = &ms;
+        gp.pDepthStencilState  = &ds;
+        gp.pColorBlendState    = &cb;
+        gp.pDynamicState       = &dy;
+        gp.layout              = rasterPipelineLayout;
+        check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gp, nullptr, &shadowPipeline_),
+              "vkCreateGraphicsPipelines(shadow maps)");
+        vkDestroyShaderModule(ctx->device(), vert, nullptr);
+        vkDestroyShaderModule(ctx->device(), frag, nullptr);
     }
 
 }// namespace threepp
