@@ -115,7 +115,7 @@ namespace threepp::vulkan::impl {
     struct GpuShadowMapsUbo {
         float    cascadeVP[kMaxShadowCascades][16];
         float    cascadeSphere[kMaxShadowCascades][4];// xyz centre, w radius (world): the pick
-        float    cascadeParams[kMaxShadowCascades][4];// x texel (m), y depth units per metre, zw 0
+        float    cascadeParams[kMaxShadowCascades][4];// x texel (m), y depth units per metre, z PCF radius (texels), w 0
         float    spotVP[kMaxShadowSpots][16];
         float    pointPosFar[kMaxShadowPoints][4];// xyz light position, w far
         // Per lamp slot, spots first, then points at kMaxShadowSpots + slot:
@@ -131,12 +131,11 @@ namespace threepp::vulkan::impl {
         uint32_t flags;// bit 0 = the sun's cascades are valid this frame
         float    sunBias;        // LightShadow::bias, depth units
         float    sunNormalBias;  // LightShadow::normalBias, metres (0 = the texel-scaled default)
-        float    sunRadiusTexels;// LightShadow::radius
         float    sunIntensity;   // LightShadow::intensity
         float    sunDir[3];      // toward the sun (dir light 0)
         float    cascadeMapSize;
     };
-    static_assert(sizeof(GpuShadowMapsUbo) == 1968);
+    static_assert(sizeof(GpuShadowMapsUbo) == 1964);
 
     // Homogeneous fog (participating media). FogExp2.density maps directly
     // to sigma_t; linear Fog (near/far) is converted to an equivalent

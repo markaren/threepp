@@ -699,8 +699,10 @@ namespace threepp {
         // renderer's soft sun shadows: the primary shadow ray is jittered within
         // this cone, so thin occluders (slats, railings, foliage) cast a narrow
         // stable penumbra instead of a per-frame hard-shadow coin flip that TAA
-        // cannot converge. The real sun subtends ~0.27°; default 0.5. 0 restores
-        // the exact hard 1-ray shadow.
+        // cannot converge. The real sun subtends ~0.27°. Default 0: the exact
+        // hard 1-ray shadow. With shadow maps (ShadowMode::ShadowMaps) it widens
+        // the sun's PCF kernel by the penumbra of a caster 1 m above the
+        // receiver; the maps' penumbra does not grow with the caster's height.
         void setSunAngularRadius(float degrees);
         [[nodiscard]] float sunAngularRadius() const;
 

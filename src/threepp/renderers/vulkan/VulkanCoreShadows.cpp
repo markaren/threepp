@@ -343,6 +343,10 @@ namespace threepp {
             }
             dist = std::max(std::min(dist, camFar), camNear * 2.f);
             const uint32_t n = sz.cascades;
+            // The sun's size for the PCF kernel below: the penumbra a caster
+            // this high above the receiver gets from it.
+            constexpr float kSunPenumbraHeight = 1.f;// metres
+            const float     sunTan = std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f);
             float          split[kMaxShadowCascades + 1];
             for (uint32_t i = 0; i <= n; ++i) {
                 const float t   = float(i) / float(n);
@@ -421,6 +425,13 @@ namespace threepp {
                 u.cascadeSphere[i][3] = r;
                 u.cascadeParams[i][0] = texel;
                 u.cascadeParams[i][1] = 1.f / far;
+                // The PCF radius in this cascade's texels: LightShadow::radius,
+                // plus the sun's size (setSunAngularRadius) as the penumbra it
+                // gives a caster kSunPenumbraHeight above the receiver. A fixed
+                // kernel: the rays' penumbra grows with the caster's height,
+                // this one does not (that takes a blocker search). 0 degrees,
+                // the default, adds nothing.
+                u.cascadeParams[i][2] = shadowSun_.radius + sunTan * kSunPenumbraHeight / texel;
                 ShadowCullVolumes::Box b{};
                 std::memcpy(b.c, c, sizeof(c));
                 std::memcpy(b.x, x, sizeof(x));
@@ -433,7 +444,6 @@ namespace threepp {
             u.flags          |= 1u;
             u.sunBias         = shadowSun_.bias;
             u.sunNormalBias   = shadowSun_.normalBias;
-            u.sunRadiusTexels = shadowSun_.radius;
             u.sunIntensity    = shadowSun_.intensity;
             std::memcpy(u.sunDir, L, sizeof(u.sunDir));
             u.cascadeMapSize = size;

@@ -19,7 +19,8 @@
 // taps on a Vogel disc of LightShadow::radius texels, turned per pixel by
 // interleaved gradient noise (static per pixel; the TAA and the shadow
 // channel's spatial filter smooth it), each tap a hardware 2x2 compare, and
-// mix(1, shadow, LightShadow::intensity). LightShadow::bias keeps its
+// mix(1, shadow, LightShadow::intensity). The sun's disc adds to its radius
+// (cascadeParams.z, VulkanCoreShadows.cpp's fit), a fixed kernel per cascade. LightShadow::bias keeps its
 // three.js meaning (depth units of the map, negative = toward the light) and
 // LightShadow::normalBias its world meaning (the receiver moved along its
 // normal, metres); a light that leaves normalBias at 0 gets 1.5 texels of
@@ -35,7 +36,7 @@ layout(set = 0, binding = 82) uniform samplerCubeArrayShadow smPointTex;
 layout(set = 0, binding = 83, scalar) uniform ShadowMapsUbo {
     mat4  cascadeVP[kMaxShadowCascades];
     vec4  cascadeSphere[kMaxShadowCascades];// xyz centre, w radius (world)
-    vec4  cascadeParams[kMaxShadowCascades];// x one texel (m), y depth units per metre
+    vec4  cascadeParams[kMaxShadowCascades];// x one texel (m), y depth units per metre, z PCF radius (texels)
     mat4  spotVP[kMaxShadowSpots];
     vec4  pointPosFar[kMaxShadowPoints];
     vec4  lampParams[kMaxShadowSpots + kMaxShadowPoints];// bias, normal offset (m), radius (texels), intensity
@@ -46,7 +47,6 @@ layout(set = 0, binding = 83, scalar) uniform ShadowMapsUbo {
     uint  flags;// bit 0: the sun's cascades are valid
     float sunBias;
     float sunNormalBias;
-    float sunRadiusTexels;
     float sunIntensity;
     vec3  sunDir;
     float cascadeMapSize;
@@ -76,20 +76,20 @@ float smPcf2D(sampler2DArrayShadow tex, float layer, vec2 uv, float ref, float r
 float smSunVis(vec3 P, vec3 N, vec2 pixel) {
     if ((smU.flags & 1u) == 0u) return -1.0;
     // The cascades are nested spheres around the view's frustum slices: the
-    // first that holds P (one texel and the filter clear of its rim) is the
-    // finest. Its outer tenth hands over to the next by a static dither,
+    // first that holds P (the normal offset and the filter clear of its rim)
+    // is the finest. Its outer tenth hands over to the next by a static dither,
     // which the TAA resolves; no blend, so no second lookup.
     const int n  = int(min(smU.cascadeCount, uint(kMaxShadowCascades)));
     int       ci = -1;
     for (int i = 0; i < n; ++i) {
         const vec4  s = smU.cascadeSphere[i];
-        const float r = s.w - 3.0 * smU.cascadeParams[i].x;
+        const float r = s.w - (2.0 + smU.cascadeParams[i].z) * smU.cascadeParams[i].x;
         const vec3  d = P - s.xyz;
         if (dot(d, d) >= r * r) continue;
         ci = i;
         if (i + 1 < n) {
             const vec4  s1 = smU.cascadeSphere[i + 1];
-            const float r1 = s1.w - 3.0 * smU.cascadeParams[i + 1].x;
+            const float r1 = s1.w - (2.0 + smU.cascadeParams[i + 1].z) * smU.cascadeParams[i + 1].x;
             const vec3  d1 = P - s1.xyz;
             if (dot(d1, d1) < r1 * r1 &&
                 smIgn(pixel + vec2(37.0, 11.0)) < smoothstep(0.9 * r, r, length(d))) {
@@ -111,7 +111,7 @@ float smSunVis(vec3 P, vec3 N, vec2 pixel) {
     // hardware 2x2 tap: those march many jittered steps and blur by
     // themselves, and five taps a step cost the fog more than its rays did.
     const float s = surface ? smPcf2D(smCascadeTex, float(ci), uv, ref,
-                                      max(smU.sunRadiusTexels, 0.0) / max(smU.cascadeMapSize, 1.0),
+                                      max(smU.cascadeParams[ci].z, 0.0) / max(smU.cascadeMapSize, 1.0),
                                       smIgn(pixel) * 6.283185307)
                             : texture(smCascadeTex, vec4(uv, float(ci), ref));
     return mix(1.0, s, smU.sunIntensity);
