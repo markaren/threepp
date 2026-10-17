@@ -99,6 +99,141 @@ float waterGlint(vec3 N, vec3 V, vec3 L, float NdotV, float ndl, float r0,
 // policy); any further light traces as before.
 float gWaterSunVis0 = -1.0;
 
+
+#ifdef THREEPP_NO_RAY_QUERY
+// ── The water's mirror on a device without ray query: a screen-space march ──
+// traceRadiance has no scene to hit there (every ray misses, ray_query_stub),
+// so the water mirrored the environment alone: no hull, no quay, no shore
+// trees. This marches the water's one mirror ray against the G-buffer's depth
+// instead: what stands on screen above the waterline mirrors; what is off
+// screen or hidden stays the environment. A hit is lit from the G-buffer as a
+// cheap traced hit is (shadeDiffuseDirect with the sun through the shadow map,
+// the sky and ambient fills, the murk over a submerged hit), so the two paths
+// agree where both can see. The march is perspective-correct (1/w is linear
+// along the screen segment), jittered per pixel (TAA averages), passes
+// through water pixels as the traced ray passes through crests, and fades at
+// the screen's edge into the environment. Returns false on a miss: the caller
+// keeps its environment path, byte for byte what it was. A multisampled frame
+// (the overlay's MSAA) has no single-sample G-buffer to march: no mirror.
+bool ssrWaterReflect(vec3 origin, vec3 dir, float maxLod, float missLod, float envInt, bool doShadows,
+                     inout uint seed, out vec3 radiance, out float hitT, out bool hitMoved) {
+    radiance = vec3(0.0);
+    hitT     = -1.0;
+    hitMoved = false;
+    if (((effFlags() >> 5u) & 0x3u) != 0u) return false;
+    const bool ortho = cam.camAux.x > 0.5;
+    const mat4 view  = inverse(cam.viewInverse);
+    const mat4 proj  = inverse(cam.projInverse);
+    const vec3 o     = (view * vec4(origin, 1.0)).xyz;// view space, -z forward
+    const vec3 d     = (view * vec4(dir, 0.0)).xyz;
+    // The reach: kReach metres, cut short of the near plane for a ray that
+    // comes toward the camera.
+    const float kReach = 4000.0;
+    float       tMax   = kReach;
+    if (d.z > 1e-6) tMax = min(tMax, (-0.05 - o.z) / d.z);
+    if (tMax <= 1e-3) return false;
+    const vec4 c0 = proj * vec4(o, 1.0);
+    const vec4 c1 = proj * vec4(o + d * tMax, 1.0);
+    if (c0.w <= 1e-6 || c1.w <= 1e-6) return false;
+    // Screen uv as the G-buffer is addressed: ndc.y up, uv.y down (main's ndc).
+    const vec2 n0 = c0.xy / c0.w, n1 = c1.xy / c1.w;
+    const vec2 s0 = vec2(n0.x * 0.5 + 0.5, 0.5 - n0.y * 0.5);
+    const vec2 s1 = vec2(n1.x * 0.5 + 0.5, 0.5 - n1.y * 0.5);
+    const vec2 ds = s1 - s0;
+    // The segment clipped to the screen.
+    float kEnd = 1.0;
+    for (int a = 0; a < 2; ++a) {
+        if (abs(ds[a]) > 1e-6) kEnd = min(kEnd, ((ds[a] > 0.0 ? 1.0 : 0.0) - s0[a]) / ds[a]);
+    }
+    if (kEnd <= 0.0) return false;
+    const vec2  res   = vec2(float(pc.width), float(pc.height));
+    const float lenPx = length(ds * kEnd * res);
+    const int   steps = int(clamp(ceil(lenPx / 4.0), 4.0, 48.0));// ~4 px a step
+    const float jit   = rnd(seed);// per pixel AND per frame: TAA averages the march's phase
+    // Perspective-correct depth along the screen segment: 1/w is linear in k;
+    // an orthographic view interpolates z itself.
+    const float iw0 = 1.0 / c0.w, iw1 = 1.0 / c1.w;
+    const float z0 = o.z, z1 = o.z + d.z * tMax;
+    float kPrev = 0.0, kHit = -1.0, zRayPrev = z0;
+    for (int i = 0; i < steps; ++i) {
+        const float k     = kEnd * (float(i) + jit) / float(steps);
+        const vec2  s     = s0 + ds * k;
+        const ivec2 px    = ivec2(clamp(s * res, vec2(0.0), res - 1.0));
+        const float depth = texelFetch(gbufDepthTex, px, 0).x;
+        if (depth > 0.0) {// reverse-Z: 0 = sky
+            const uint id = texelFetch(gbufIdsTex, px, 0).x;
+            if (id != 0u && geoms[id - 1u].foamAddress == 0ul) {// not water: a crest is passed through
+                const float zRay  = ortho ? mix(z0, z1, k) : -1.0 / mix(iw0, iw1, k);
+                const vec2  ndcS  = vec2(s.x * 2.0 - 1.0, -(s.y * 2.0 - 1.0));
+                const vec4  vh    = cam.projInverse * vec4(ndcS, depth, 1.0);
+                const float zS    = vh.z / vh.w;// the surface's view z (negative)
+                // Thick enough that a crossing between two samples registers
+                // (the ray's own depth advance), never thinner than the surface.
+                const float thick = max(max(0.3, 0.03 * -zS), 1.5 * abs(zRay - zRayPrev));
+                if (zRay < zS && zRay > zS - thick) {
+                    kHit = k;
+                    break;
+                }
+                zRayPrev = zRay;
+            }
+        }
+        kPrev = k;
+    }
+    if (kHit < 0.0) return false;
+    // Refine between the last free sample and the hit (four bisections).
+    float kLo = kPrev, kHi = kHit;
+    for (int b = 0; b < 4; ++b) {
+        const float km    = 0.5 * (kLo + kHi);
+        const vec2  s     = s0 + ds * km;
+        const ivec2 px    = ivec2(clamp(s * res, vec2(0.0), res - 1.0));
+        const float depth = texelFetch(gbufDepthTex, px, 0).x;
+        bool behind = false;
+        if (depth > 0.0) {
+            const float zRay = ortho ? mix(z0, z1, km) : -1.0 / mix(iw0, iw1, km);
+            const vec2  ndcS = vec2(s.x * 2.0 - 1.0, -(s.y * 2.0 - 1.0));
+            const vec4  vh   = cam.projInverse * vec4(ndcS, depth, 1.0);
+            behind           = zRay < vh.z / vh.w;
+        }
+        if (behind) kHi = km;
+        else kLo = km;
+    }
+    const vec2  sH  = s0 + ds * kHi;
+    const ivec2 pxH = ivec2(clamp(sH * res, vec2(0.0), res - 1.0));
+    const uint  idH = texelFetch(gbufIdsTex, pxH, 0).x;
+    if (idH == 0u) return false;
+    const float depthH = texelFetch(gbufDepthTex, pxH, 0).x;
+    const vec2  ndcH   = vec2(sH.x * 2.0 - 1.0, -(sH.y * 2.0 - 1.0));
+    const vec4  vhH    = cam.projInverse * vec4(ndcH, depthH, 1.0);
+    const vec3  P      = (cam.viewInverse * vec4(vhH.xyz / vhH.w, 1.0)).xyz;
+    const vec4  nTap   = texelFetch(gbufNormalTex, pxH, 0);
+    const vec4  aTap   = texelFetch(gbufAlbedoTex, pxH, 0);
+    const MaterialDesc hm = mats[idH - 1u];
+    const vec3  V      = -dir;
+    vec3        N      = normalize(nTap.xyz * 2.0 - 1.0);
+    if (dot(N, V) < 0.0) N = -N;
+    hitT     = length(P - origin);
+    hitMoved = (geoms[idH - 1u].flags & kGeomFlagMoved) != 0u;
+    vec3 shade;
+    if (nTap.w < 0.0) {
+        shade = aTap.rgb;// unlit
+    } else {
+        const vec3 diffInd = murkAmbient(sampleEnvLod(N, maxLod) + lights.ambient + hemiAmbient(N), P, N);
+        shade = shadeDiffuseDirect(P, N, V, aTap.rgb, clamp(nTap.w, 0.04, 1.0), clamp(aTap.a, 0.0, 1.0),
+                                   hm.emissive * hm.emissiveIntensity, doShadows, diffInd,
+                                   hm.sheenColor, hm.sheenRoughness,
+                                   dielectricF0(hm.ior, hm.specularIntensity, hm.specularColor),
+                                   hm.iridescence, hm.iridescenceIOR, hm.iridescenceThicknessNm, seed,
+                                   /*addEmissive=*/true,
+                                   /*cheapHit=*/false);// the sun through the shadow map, not a stub ray
+    }
+    // The screen's edge: into the environment over the last 8 % of it.
+    const vec2  eb   = min(sH, 1.0 - sH);
+    const float edge = smoothstep(0.0, 0.08, min(eb.x, eb.y));
+    radiance         = mix(sampleEnvLod(dir, missLod) * envInt, shade, edge);
+    return true;
+}
+#endif// THREEPP_NO_RAY_QUERY
+
 vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 bool doShadows, float maxLod, uint frame, inout uint seed,
                 float slopeVarSq, vec3 Nmacro, ivec2 px, float clusterDist) {
@@ -214,10 +349,27 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // fixed offset along it fails to clear the neighbouring facet.
     gTraceSkipWater = true;
     const vec3 reflOrig = P + Nmacro * SHADOW_EPS;// this water's own reflection: pass through crests
+#ifdef THREEPP_NO_RAY_QUERY
+    // No scene to trace here: the screen-space march (ssrWaterReflect above),
+    // and where it misses the environment, exactly as traceRadiance leaves it.
+    vec3  reflectColor;
+    float ssrT;
+    bool  ssrMoved;
+    if (ssrWaterReflect(reflOrig, R, maxLod, reflLod, pm.envMapIntensity, doShadows, seed, reflectColor, ssrT,
+                        ssrMoved)) {
+        gTraceHitT     = ssrT;
+        gTraceHitMoved = ssrMoved;
+        gTraceMissTput = vec3(0.0);
+    } else {
+        reflectColor = traceRadiance(reflOrig, R, doShadows, maxLod, reflLod, seed, /*cheapHits=*/true,
+                                     /*probeHitFill=*/true, /*envInt=*/pm.envMapIntensity);
+    }
+#else
     vec3 reflectColor = traceRadiance(reflOrig, R, doShadows, maxLod,
                                       reflLod, seed, /*cheapHits=*/true,// water: blur+temporal absorb
                                       /*probeHitFill=*/true,
                                       /*envInt=*/pm.envMapIntensity);
+#endif
     gTraceSkipWater = false;
     // Reflected GEOMETRY strength, on specularIntensity (KHR_materials_specular).
     //
