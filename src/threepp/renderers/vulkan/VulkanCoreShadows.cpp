@@ -287,7 +287,8 @@ namespace threepp {
         if (sz.cascades == 0u && sz.spots == 0u && sz.points == 0u) return false;
 
         if (!v.shadowMaps_) {
-            v.shadowMaps_ = std::make_unique<vulkan::ShadowMapPass>(*ctx, kFramesInFlight, rasterDsLayout);
+            v.shadowMaps_ = std::make_unique<vulkan::ShadowMapPass>(*ctx, kFramesInFlight, rasterDsLayout,
+                                                                     transientPool_.get(), v.id);
         }
         if (shadowPipeline_ == VK_NULL_HANDLE) createShadowPipeline();
         auto& smp = *v.shadowMaps_;

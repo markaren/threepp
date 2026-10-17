@@ -1,6 +1,7 @@
 #include "threepp/renderers/vulkan/ShadowMapPass.hpp"
 
 #include "threepp/renderers/vulkan/DescriptorShadow.hpp"
+#include "threepp/renderers/vulkan/TransientPool.hpp"
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 #include "threepp/renderers/vulkan/shaders/vulkan_shared.h"// kMaxMaterialTextures
 
@@ -13,7 +14,8 @@
 namespace threepp::vulkan {
 
     ShadowDepthArray createShadowDepthArray(VulkanContext& ctx, uint32_t size, uint32_t layers, bool cube,
-                                            bool renderable, const char* name) {
+                                            bool renderable, const char* name, TransientPool* pool,
+                                            TransientSpan span, uint32_t slots) {
         ShadowDepthArray a;
         a.size   = size;
         a.layers = layers;
@@ -36,9 +38,8 @@ namespace threepp::vulkan {
         ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         applyConcurrentSharing(ici);
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        VmaAllocationCreateInfo aci{};
-        aci.usage = VMA_MEMORY_USAGE_AUTO;
-        check(vmaCreateImage(ctx.allocator(), &ici, &aci, &a.image, &a.alloc, nullptr), "vmaCreateImage(shadow map)");
+        check(createImageMaybePooled(ctx.allocator(), pool, span, slots, ici, &a.image, &a.alloc),
+              "vmaCreateImage(shadow map)");
 
         VkImageViewCreateInfo vci{};
         vci.sType                       = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -76,12 +77,13 @@ namespace threepp::vulkan {
             unregisterImageView(a.view);
             vkDestroyImageView(ctx.device(), a.view, nullptr);
         }
-        if (a.image) vmaDestroyImage(ctx.allocator(), a.image, a.alloc);
+        if (a.image && !TransientPool::release(a.image)) vmaDestroyImage(ctx.allocator(), a.image, a.alloc);
         a = {};
     }
 
-    ShadowMapPass::ShadowMapPass(VulkanContext& ctx, uint32_t framesInFlight, VkDescriptorSetLayout rasterLayout)
-        : ctx_(ctx), slots_(framesInFlight) {
+    ShadowMapPass::ShadowMapPass(VulkanContext& ctx, uint32_t framesInFlight, VkDescriptorSetLayout rasterLayout,
+                                 TransientPool* pool, uint32_t view)
+        : ctx_(ctx), transient_(pool), view_(view), slots_(framesInFlight) {
         // The raster set's shape (VulkanCorePipelines: camera UBO, motion
         // matrices, materials, the bindless albedo maps, DrawInfo); the shadow
         // shaders read 2, 3 and 4.
@@ -139,15 +141,18 @@ namespace threepp::vulkan {
         Slot& s = slots_[frame];
         if (s.gen != 0 && s.sizes == sizes) return;
         freeImages(s);
-        const std::string tag = "shadowMaps[" + std::to_string(frame) + "]";
+        const std::string   tag   = "shadowMaps[" + std::to_string(frame) + "]";
+        const TransientSpan span  = transientSpan(TransientPhase::Gbuffer, TransientPhase::Filter, view_);
+        const uint32_t      slots = transientSlot(frame);
         if (sizes.cascades > 0)
             s.cascades = createShadowDepthArray(ctx_, sizes.cascadeSize, sizes.cascades, false, true,
-                                                (tag + ".cascades").c_str());
+                                                (tag + ".cascades").c_str(), transient_, span, slots);
         if (sizes.spots > 0)
-            s.spots = createShadowDepthArray(ctx_, sizes.spotSize, sizes.spots, false, true, (tag + ".spots").c_str());
+            s.spots = createShadowDepthArray(ctx_, sizes.spotSize, sizes.spots, false, true, (tag + ".spots").c_str(),
+                                             transient_, span, slots);
         if (sizes.points > 0)
             s.points = createShadowDepthArray(ctx_, sizes.pointSize, 6u * sizes.points, true, true,
-                                              (tag + ".points").c_str());
+                                              (tag + ".points").c_str(), transient_, span, slots);
         s.sizes = sizes;
         s.gen   = ++genCounter_;
     }

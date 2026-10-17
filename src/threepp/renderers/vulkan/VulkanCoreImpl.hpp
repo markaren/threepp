@@ -264,7 +264,8 @@ namespace threepp {
         // Device memory shared by frame-local scratch images (TransientPool):
         // declared right after ctx so it outlives every pass that binds images
         // into it and dies before the allocator. transientPool_ holds the
-        // frame-local images — uv, sceneHdr, the filter / post / tail scratch —
+        // frame-local images — uv, sceneHdr, the filter / post / tail scratch,
+        // the shadow maps (ShadowMapPass) —
         // each with the span of TransientPhases it is live in (images whose
         // spans do not meet alias each other, and so do frame-in-flight slots
         // and views); gbufMsPool_ holds the

@@ -17,10 +17,17 @@
 // count change never touches an image a frame in flight still reads; each
 // reallocation takes a new generation number, which is how the deferred set
 // knows its bindings 80-83 are stale.
+//
+// The maps are dead between frames (drawn before the G-buffer, read up to the
+// particle lighting), so they live in the renderer's TransientPool when it has
+// one: live from TransientPhase::Gbuffer to Filter of their view, one frame
+// slot each, so the two slots' maps share memory and the post chain's scratch
+// may sit in it too.
 
 #ifndef THREEPP_VULKAN_SHADOW_MAP_PASS_HPP
 #define THREEPP_VULKAN_SHADOW_MAP_PASS_HPP
 
+#include "threepp/renderers/vulkan/AliasPacker.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
 #include <vulkan/vulkan.h>
@@ -31,6 +38,7 @@
 
 namespace threepp::vulkan {
 
+    class TransientPool;
     class VulkanContext;
 
     // A layered D32 depth target: the whole image as one sampled view (2D
@@ -46,14 +54,19 @@ namespace threepp::vulkan {
         bool                     cube   = false;
     };
     // layers: for a cube, 6 x cubes. renderable: the per-layer views; otherwise
-    // TRANSFER_DST usage (a dummy is cleared, never drawn).
+    // TRANSFER_DST usage (a dummy is cleared, never drawn). pool: bound into it
+    // with `span` and `slots` (TransientPool), else an allocation of its own.
     ShadowDepthArray createShadowDepthArray(VulkanContext& ctx, uint32_t size, uint32_t layers, bool cube,
-                                            bool renderable, const char* name);
+                                            bool renderable, const char* name, TransientPool* pool = nullptr,
+                                            TransientSpan span = 0, uint32_t slots = kTransientAllSlots);
     void destroyShadowDepthArray(VulkanContext& ctx, ShadowDepthArray& a);
 
     class ShadowMapPass {
     public:
-        ShadowMapPass(VulkanContext& ctx, uint32_t framesInFlight, VkDescriptorSetLayout rasterLayout);
+        // pool: the renderer's TransientPool, or null (THREEPP_VK_NO_ALIAS);
+        // view: the view's id, for the maps' span.
+        ShadowMapPass(VulkanContext& ctx, uint32_t framesInFlight, VkDescriptorSetLayout rasterLayout,
+                      TransientPool* pool, uint32_t view);
         ~ShadowMapPass();
         ShadowMapPass(const ShadowMapPass&)            = delete;
         ShadowMapPass& operator=(const ShadowMapPass&) = delete;
@@ -117,6 +130,8 @@ namespace threepp::vulkan {
 
     private:
         VulkanContext&        ctx_;
+        TransientPool*        transient_ = nullptr;
+        uint32_t              view_      = 0;
         VkDescriptorPool      pool_ = VK_NULL_HANDLE;
         std::vector<Slot>     slots_;
         uint64_t              genCounter_ = 0;
