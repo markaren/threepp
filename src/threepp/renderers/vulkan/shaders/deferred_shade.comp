@@ -2573,12 +2573,13 @@ void main() {
                 // inheriting a placeholder.
                 imageStore(shadowVisImage, px, vec4(-1.0, 0.0, 0.0, 0.0));
             } else if (kSM && sMapOnly) {
-                // The maps' ratio is exact each frame: no history (nothing to
-                // smear behind a moving caster), stored as settled (histLen 4)
-                // with a fixed variance of 0.1^2, so the spatial filter keeps the
-                // shadow's edges (a lit/shadowed step is 10 sigma) and only
-                // smooths the PCF dither between near-equal neighbours.
-                imageStore(shadowVisImage, px, vec4(visEst, visEst * visEst + 0.01, 4.0, 0.0));
+                // The maps' ratio is exact each frame and already PCF-filtered:
+                // no history (nothing to smear behind a moving caster), stored
+                // as settled (histLen 4) with zero variance, so the spatial
+                // filter leaves it as it is. (A fixed variance let the sparse
+                // a-trous taps pick up penumbra neighbours and drew contour
+                // lines along every edge.)
+                imageStore(shadowVisImage, px, vec4(visEst, visEst * visEst, 4.0, 0.0));
             } else {
                 // .z==0 = cold-start marker (sky/glass/off); the magnitude guards
                 // reject first-frame / garbage fp16 history (NaN compares false).

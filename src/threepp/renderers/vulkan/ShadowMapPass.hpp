@@ -96,7 +96,7 @@ namespace threepp::vulkan {
         // then six faces per point cube.
         enum class Target : uint32_t { Cascade, Spot, PointFace };
         struct Layer {
-            float    vp[16];// world -> clip, reverse-Z; a point face's has its y pre-flipped
+            float    vp[16];// world -> clip, reverse-Z (a point face is drawn without the y flip)
             Target   target = Target::Cascade;
             uint32_t layer  = 0;// layer of its array
         };

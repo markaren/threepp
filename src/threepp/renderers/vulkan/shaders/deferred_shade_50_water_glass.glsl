@@ -702,7 +702,10 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 atten *= wnd * wnd;
             }
             if (atten <= 1e-6) continue;
-            const float vis = doShadows ? shadowVis(sunOrig, toL, dist - 1e-2) : 1.0;
+            const float smV = (kSM && doShadows)
+                    ? smLampVis(clusterLights[li].shadowSlot, clusterLights[li].type > 0.5, P, N,
+                                clusterLights[li].position, vec2(gl_GlobalInvocationID.xy)) : -1.0;
+            const float vis = smV >= 0.0 ? smV : doShadows ? shadowVis(sunOrig, toL, dist - 1e-2) : 1.0;
             if (vis <= 0.0) continue;
             float spec = waterGlint(N, V, toL, NdotV, ndl, r0, specRough, kG, pm.clearcoat, ccRough);
             // Beam POOL — a broad faint sheen where the beam strikes the

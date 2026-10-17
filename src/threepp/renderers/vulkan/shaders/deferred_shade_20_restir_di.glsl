@@ -589,7 +589,9 @@ vec3 analyticDirectSplit(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
             }
         }
         U += c;
-        mv[nL] = -1.0;
+        mv[nL] = (kSM && dot(c, c) > 0.0)
+                ? smLampVis(clusterLights[li].shadowSlot, clusterLights[li].type > 0.5, P, N,
+                            clusterLights[li].position, vec2(px)) : -1.0;
         lw[nL] = dot(c, LUM); wSum += lw[nL]; ++nL;
     }
     // NOTHING LIT (every N.L <= 0, every cluster light out of range or cone):

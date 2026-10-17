@@ -4141,7 +4141,7 @@ namespace threepp {
         // light's world-space position toward its (possibly defaulted) target,
         // mirroring three.js's DirectionalLight.target convention. The shader
         // expects the L vector (toward the light), so we negate.
-        void updateLightsUbo(uint32_t frame, Object3D& scene);
+        void updateLightsUbo(uint32_t frame, Object3D& scene, Camera& camera);
 
         void createFogUbos();
 
@@ -5068,6 +5068,22 @@ namespace threepp {
             uint32_t mapSize = 2048u;
         };
         ShadowSun shadowSun_;
+        // The lamps holding a shadow map this frame, by slot (index = the
+        // layer in the spot array / the cube in the point array), chosen from
+        // the primary camera in updateLightsUbo (assignShadowSlots).
+        struct ShadowLamp {
+            bool         used = false;
+            unsigned int id   = 0;// Object3D::id of the light
+            float        pos[3]{}, dir[3]{};
+            float        fov = 0.f;// spot: full cone angle of the map (rad)
+            float        far = 1.f;
+            float        bias = 0.f, normalBias = 0.f, radius = 1.f, intensity = 1.f;
+        };
+        std::vector<ShadowLamp> shadowSpotSlots_, shadowPointSlots_;
+        // Writes GpuClusterLight::shadowSlot into `recs` (src: each record's
+        // light) and refreshes the two slot tables; -1 everywhere when the maps
+        // are not in use.
+        void assignShadowSlots(std::vector<GpuClusterLight>& recs, const std::vector<Light*>& src, Camera& camera);
 
         // Frame recording, split along the frame's own stage seams (bodies in
         // VulkanCoreRecord.cpp). recordCommandBuffer is the narrative: it adds

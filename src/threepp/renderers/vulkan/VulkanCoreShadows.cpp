@@ -6,6 +6,12 @@
 
 #include "VulkanCpuPhaseProf.hpp"
 
+#include "threepp/lights/PointLight.hpp"
+#include "threepp/lights/SpotLight.hpp"
+#include "threepp/lights/SpotLightShadow.hpp"
+#include "threepp/math/Frustum.hpp"
+#include "threepp/math/Sphere.hpp"
+
 #include "threepp/renderers/vulkan/shaders/shadow_depth.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/shadow_depth.vert.spv.h"
 
@@ -129,6 +135,111 @@ namespace threepp {
         syncShadowDescriptors(currentFrame);
     }
 
+    // ── Lamp slots ───────────────────────────────────────────────────────────
+    // Once a frame from the primary camera, while the maps are in use: per
+    // type, the lamps whose range reaches the camera's frustum, castShadow ==
+    // true first, then by power over the squared distance to the camera. A
+    // lamp keeps its slot (and its layer) while it stays eligible, unless a
+    // newcomer outranks it by castShadow or is twice as strong: no slot
+    // flicker between two near-equal lamps.
+    void VulkanRenderer::Impl::assignShadowSlots(std::vector<GpuClusterLight>& recs, const std::vector<Light*>& src,
+                                                 Camera& camera) {
+        const bool active = shadowMapsActive();
+        Frustum    frustum;
+        if (active) {
+            Matrix4 vp;
+            vp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+            frustum.setFromProjectionMatrix(vp);
+        }
+        const auto&   mw = camera.matrixWorld->elements;
+        const Vector3 camPos(mw[12], mw[13], mw[14]);
+        struct Cand {
+            uint32_t rec;
+            bool     prio;
+            float    score;
+            bool     taken;
+        };
+        const auto better = [](const Cand& a, const Cand& b) {
+            return a.prio != b.prio ? a.prio : a.score > b.score;
+        };
+        for (int spot = 0; spot < 2; ++spot) {
+            auto&          slots = spot ? shadowSpotSlots_ : shadowPointSlots_;
+            const uint32_t cap   = active ? (spot ? shadowedSpots_ : shadowedPoints_) : 0u;
+            std::vector<Cand> cands;
+            for (uint32_t r = 0; r < recs.size() && cap > 0u; ++r) {
+                const auto& g = recs[r];
+                if ((g.type > 0.5f) != (spot == 1) || g.cullRadius <= 0.f) continue;
+                const Vector3 p(g.position[0], g.position[1], g.position[2]);
+                if (!frustum.intersectsSphere(Sphere(p, g.cullRadius))) continue;
+                const float lum = 0.2126f * g.color[0] + 0.7152f * g.color[1] + 0.0722f * g.color[2];
+                cands.push_back({r, src[r]->castShadow, lum / std::max(p.distanceToSquared(camPos), 1e-2f), false});
+            }
+            std::stable_sort(cands.begin(), cands.end(), better);
+
+            std::vector<ShadowLamp> next(cap);
+            std::vector<Cand>       held(cap);
+            // Holders that are still eligible keep their slot.
+            for (uint32_t k = 0; k < cap && k < slots.size(); ++k) {
+                if (!slots[k].used) continue;
+                for (auto& c : cands) {
+                    if (c.taken || src[c.rec]->id != slots[k].id) continue;
+                    c.taken = true;
+                    held[k] = c;
+                    next[k].used = true;
+                    break;
+                }
+            }
+            // Newcomers fill the free slots, then may displace the weakest holder.
+            for (auto& c : cands) {
+                if (c.taken) continue;
+                int k = -1;
+                for (uint32_t i = 0; i < cap; ++i) {
+                    if (!next[i].used) {
+                        k = static_cast<int>(i);
+                        break;
+                    }
+                }
+                if (k < 0) {
+                    int weak = -1;
+                    for (uint32_t i = 0; i < cap; ++i) {
+                        if (weak < 0 || better(held[weak], held[i])) weak = static_cast<int>(i);
+                    }
+                    const Cand& w = held[weak];
+                    if (!((c.prio && !w.prio) || (c.prio == w.prio && c.score > 2.f * w.score))) break;
+                    k = weak;
+                }
+                c.taken      = true;
+                held[k]      = c;
+                next[k].used = true;
+            }
+            for (uint32_t k = 0; k < cap; ++k) {
+                if (!next[k].used) continue;
+                auto&       g     = recs[held[k].rec];
+                Light*      light = src[held[k].rec];
+                ShadowLamp& L     = next[k];
+                g.shadowSlot      = static_cast<float>(k);
+                L.id              = light->id;
+                std::memcpy(L.pos, g.position, sizeof(L.pos));
+                std::memcpy(L.dir, g.direction, sizeof(L.dir));
+                float range = g.range;
+                L.fov       = 0.f;
+                if (auto* sl = dynamic_cast<SpotLight*>(light)) {
+                    const auto  ss    = std::dynamic_pointer_cast<SpotLightShadow>(sl->shadow);
+                    const float focus = ss ? ss->focus : 1.f;
+                    L.fov             = std::clamp(2.f * sl->angle * focus, 0.02f, 3.1f);
+                }
+                L.far = range > 0.f ? range : g.cullRadius;
+                if (auto* ws = dynamic_cast<LightWithShadow*>(light); ws && ws->shadow) {
+                    L.bias       = ws->shadow->bias;
+                    L.normalBias = ws->shadow->normalBias;
+                    L.radius     = ws->shadow->radius;
+                    L.intensity  = ws->shadow->intensity;
+                }
+            }
+            slots = std::move(next);
+        }
+    }
+
     namespace {
 
         float dot3(const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
@@ -159,6 +270,19 @@ namespace threepp {
         if (shadowSun_.valid) {
             sz.cascadeSize = clampSize(shadowSun_.mapSize);
             sz.cascades    = shadowCascades_;
+        }
+        const auto anyUsed = [](const std::vector<ShadowLamp>& v) {
+            for (const auto& L : v)
+                if (L.used) return true;
+            return false;
+        };
+        if (anyUsed(shadowSpotSlots_)) {
+            sz.spotSize = clampSize(1024u);
+            sz.spots    = static_cast<uint32_t>(shadowSpotSlots_.size());
+        }
+        if (anyUsed(shadowPointSlots_)) {
+            sz.pointSize = clampSize(512u);
+            sz.points    = static_cast<uint32_t>(shadowPointSlots_.size());
         }
         if (sz.cascades == 0u && sz.spots == 0u && sz.points == 0u) return false;
 
@@ -311,6 +435,79 @@ namespace threepp {
             std::memcpy(u.sunDir, L, sizeof(u.sunDir));
             u.cascadeMapSize = size;
         }
+
+        // ── The lamps' maps ──────────────────────────────────────────────────
+        // A spot: one perspective map along its cone (fov = 2 angle focus, as
+        // SpotLightShadow), a point: six cube faces of 90 degrees. Far = the
+        // lamp's distance, or its influence radius when it has none; near
+        // 5 cm. A cube face is drawn without the raster's y flip, with the GL
+        // cube-capture cameras below, so its rows land where the hardware cube
+        // lookup reads them (the Vulkan cube face table).
+        constexpr float kLampNear = 0.05f;
+        const auto      lampCamera = [](const float* pos, const Vector3& fwd, const Vector3& up) {
+            Matrix4 world;
+            const Vector3 eye(pos[0], pos[1], pos[2]);
+            world.lookAt(eye, eye + fwd, up);
+            world.setPosition(eye);
+            return world;
+        };
+        for (uint32_t k = 0; k < sz.spots && k < shadowSpotSlots_.size(); ++k) {
+            const ShadowLamp& L = shadowSpotSlots_[k];
+            if (!L.used) continue;
+            const Vector3 fwd(L.dir[0], L.dir[1], L.dir[2]);
+            const Vector3 up = std::abs(fwd.y) < 0.99f ? Vector3(0.f, 1.f, 0.f) : Vector3(1.f, 0.f, 0.f);
+            const float   far = std::max(L.far, kLampNear * 4.f);
+            const float   t   = kLampNear * std::tan(0.5f * L.fov);
+            Matrix4       proj;
+            proj.makePerspective(-t, t, t, -t, kLampNear, far);
+            vulkan::ShadowMapPass::Layer layer{};
+            lightClip(layer.vp, lampCamera(L.pos, fwd, up), proj);
+            layer.target = vulkan::ShadowMapPass::Target::Spot;
+            layer.layer  = k;
+            smp.layers.push_back(layer);
+            std::memcpy(u.spotVP[k], layer.vp, 64);
+            u.lampParams[k][0] = L.bias;
+            u.lampParams[k][1] = L.normalBias;
+            u.lampParams[k][2] = L.radius;
+            u.lampParams[k][3] = L.intensity;
+            u.lampTexel[k][0]  = 2.f * std::tan(0.5f * L.fov) / float(sz.spotSize);
+            u.lampTexel[k][1]  = kLampNear;
+            u.lampTexel[k][2]  = far;
+            u.lampTexel[k][3]  = float(sz.spotSize);
+            vol.balls.push_back({{L.pos[0], L.pos[1], L.pos[2]}, far});
+        }
+        for (uint32_t k = 0; k < sz.points && k < shadowPointSlots_.size(); ++k) {
+            const ShadowLamp& L = shadowPointSlots_[k];
+            if (!L.used) continue;
+            static const Vector3 kFwd[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+            static const Vector3 kUp[6]  = {{0, -1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}, {0, -1, 0}, {0, -1, 0}};
+            const float          far     = std::max(L.far, kLampNear * 4.f);
+            Matrix4              proj;
+            proj.makePerspective(-kLampNear, kLampNear, kLampNear, -kLampNear, kLampNear, far);
+            for (uint32_t face = 0; face < 6; ++face) {
+                vulkan::ShadowMapPass::Layer layer{};
+                lightClip(layer.vp, lampCamera(L.pos, kFwd[face], kUp[face]), proj);
+                layer.target = vulkan::ShadowMapPass::Target::PointFace;
+                layer.layer  = 6u * k + face;
+                smp.layers.push_back(layer);
+            }
+            const uint32_t pi = kMaxShadowSpots + k;
+            u.pointPosFar[k][0] = L.pos[0];
+            u.pointPosFar[k][1] = L.pos[1];
+            u.pointPosFar[k][2] = L.pos[2];
+            u.pointPosFar[k][3] = far;
+            u.lampParams[pi][0] = L.bias;
+            u.lampParams[pi][1] = L.normalBias;
+            u.lampParams[pi][2] = L.radius;
+            u.lampParams[pi][3] = L.intensity;
+            u.lampTexel[pi][0]  = 2.f / float(sz.pointSize);
+            u.lampTexel[pi][1]  = kLampNear;
+            u.lampTexel[pi][2]  = far;
+            u.lampTexel[pi][3]  = float(sz.pointSize);
+            vol.balls.push_back({{L.pos[0], L.pos[1], L.pos[2]}, far});
+        }
+        u.spotCount  = sz.spots;
+        u.pointCount = sz.points;
 
         // Raster side: a small slope-scaled bias away from the light (reverse-
         // Z: negative); the receivers' normal offset does most of the work.

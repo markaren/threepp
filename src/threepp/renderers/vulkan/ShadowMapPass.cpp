@@ -244,9 +244,9 @@ namespace threepp::vulkan {
             VkRect2D sc{};
             sc.extent = {arr.size, arr.size};
             vkCmdSetScissor(cb, 0, 1, &sc);
-            // A point face is drawn without the raster's y flip (its matrix is
-            // pre-flipped), so the cube's faces land in the orientation the
-            // hardware cube lookup expects; that mirrors the winding too.
+            // A point face is drawn without the raster's y flip, so the cube's
+            // faces land in the orientation the hardware cube lookup expects;
+            // that mirrors the winding too.
             const bool face = L.target == Target::PointFace;
             vkCmdSetFrontFace(cb, face ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE);
             struct {

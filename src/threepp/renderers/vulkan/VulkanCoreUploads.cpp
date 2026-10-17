@@ -1220,7 +1220,7 @@ namespace threepp {
     // light's world-space position toward its (possibly defaulted) target,
     // mirroring three.js's DirectionalLight.target convention. The shader
     // expects the L vector (toward the light), so we negate.
-    void VulkanRenderer::Impl::updateLightsUbo(uint32_t frame, Object3D& scene) {
+    void VulkanRenderer::Impl::updateLightsUbo(uint32_t frame, Object3D& scene, Camera& camera) {
         // force=false: ensureSceneBuilt already brought the graph current
         // this frame — the forced variant here was a SECOND full
         // world-multiply pass over every node, every frame.
@@ -1238,6 +1238,8 @@ namespace threepp {
         // cell). Zero-power lights get cullRadius 0 → in no cell.
         std::vector<GpuClusterLight> clusterCollect;
         clusterCollect.reserve(16);
+        std::vector<Light*> clusterSrc;// each record's light (the shadow-map lamp slots)
+        clusterSrc.reserve(16);
         const auto clusterCullRadius = [](const GpuClusterLight& r) {
             if (r.range > 0.f) return r.range;
             const float L = std::max({r.color[0], r.color[1], r.color[2]});
@@ -1336,6 +1338,7 @@ namespace threepp {
                 rec.type = 0.f;
                 rec.shadowSlot = -1.f;
                 clusterCollect.push_back(rec);
+                clusterSrc.push_back(pl);
             } else if (auto* sl = dynamic_cast<SpotLight*>(&o)) {
                 Vector3 lp, tp;
                 sl->getWorldPosition(lp);
@@ -1358,6 +1361,7 @@ namespace threepp {
                 rec.type = 1.f;
                 rec.shadowSlot = -1.f;
                 clusterCollect.push_back(rec);
+                clusterSrc.push_back(sl);
             } else if (auto* rl = dynamic_cast<RectAreaLight*>(&o)) {
                 if (ubo.rectCount >= kMaxRectLights) return;
                 Vector3 wp; rl->getWorldPosition(wp);
@@ -1388,12 +1392,30 @@ namespace threepp {
         const auto lightLum = [](const GpuClusterLight& r) {
             return 0.2126f * r.color[0] + 0.7152f * r.color[1] + 0.0722f * r.color[2];
         };
-        std::stable_sort(clusterCollect.begin(), clusterCollect.end(),
-                         [&](const GpuClusterLight& a, const GpuClusterLight& b) {
-                             return lightLum(a) > lightLum(b);
-                         });
-        if (clusterCollect.size() > kMaxClusterLights)
+        // Sorted through an index so each record's light comes along (the
+        // same stable order a sort of the records gives).
+        {
+            std::vector<uint32_t> order(clusterCollect.size());
+            for (uint32_t i = 0; i < order.size(); ++i) order[i] = i;
+            std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
+                return lightLum(clusterCollect[a]) > lightLum(clusterCollect[b]);
+            });
+            std::vector<GpuClusterLight> recs;
+            std::vector<Light*>          srcs;
+            recs.reserve(order.size());
+            srcs.reserve(order.size());
+            for (const uint32_t i : order) {
+                recs.push_back(clusterCollect[i]);
+                srcs.push_back(clusterSrc[i]);
+            }
+            clusterCollect.swap(recs);
+            clusterSrc.swap(srcs);
+        }
+        if (clusterCollect.size() > kMaxClusterLights) {
             clusterCollect.resize(kMaxClusterLights);
+            clusterSrc.resize(kMaxClusterLights);
+        }
+        assignShadowSlots(clusterCollect, clusterSrc, camera);
         for (const auto& rec : clusterCollect) {
             if (rec.type < 0.5f) {
                 if (ubo.pointCount >= kMaxPointLights) continue;
