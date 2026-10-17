@@ -71,7 +71,8 @@ float smPcf2D(sampler2DArrayShadow tex, float layer, vec2 uv, float ref, float r
 }
 
 // The sun (dir light 0). N: the surface normal for the receiver offset, or
-// vec3(0) for a point in a medium (no offset; the constant bias remains).
+// vec3(0) for a point in a medium (no offset; the constant bias remains; one
+// tap instead of the PCF kernel).
 float smSunVis(vec3 P, vec3 N, vec2 pixel) {
     if ((smU.flags & 1u) == 0u) return -1.0;
     // The cascades are nested spheres around the view's frustum slices: the
@@ -98,16 +99,21 @@ float smSunVis(vec3 P, vec3 N, vec2 pixel) {
         break;
     }
     if (ci < 0) return -1.0;
-    const float texel = smU.cascadeParams[ci].x;
-    const float nb    = smU.sunNormalBias > 0.0 ? smU.sunNormalBias : 1.5 * texel;
-    const vec3  Pb    = (dot(N, N) > 0.25) ? P + N * nb : P;
-    const vec4  c     = smU.cascadeVP[ci] * vec4(Pb, 1.0);
-    const vec2  uv    = vec2(c.x * 0.5 + 0.5, 0.5 - c.y * 0.5);
+    const float texel   = smU.cascadeParams[ci].x;
+    const float nb      = smU.sunNormalBias > 0.0 ? smU.sunNormalBias : 1.5 * texel;
+    const bool  surface = dot(N, N) > 0.25;
+    const vec3  Pb      = surface ? P + N * nb : P;
+    const vec4  c       = smU.cascadeVP[ci] * vec4(Pb, 1.0);
+    const vec2  uv      = vec2(c.x * 0.5 + 0.5, 0.5 - c.y * 0.5);
     // One texel toward the sun, in the map's depth units, then three.js's bias.
-    const float ref   = c.z + texel * smU.cascadeParams[ci].y - smU.sunBias;
-    const float phi   = smIgn(pixel) * 6.283185307;
-    const float s     = smPcf2D(smCascadeTex, float(ci), uv, ref,
-                                max(smU.sunRadiusTexels, 0.0) / max(smU.cascadeMapSize, 1.0), phi);
+    const float ref     = c.z + texel * smU.cascadeParams[ci].y - smU.sunBias;
+    // A point in a medium (the fog and shaft marches, a particle) takes one
+    // hardware 2x2 tap: those march many jittered steps and blur by
+    // themselves, and five taps a step cost the fog more than its rays did.
+    const float s = surface ? smPcf2D(smCascadeTex, float(ci), uv, ref,
+                                      max(smU.sunRadiusTexels, 0.0) / max(smU.cascadeMapSize, 1.0),
+                                      smIgn(pixel) * 6.283185307)
+                            : texture(smCascadeTex, vec4(uv, float(ci), ref));
     return mix(1.0, s, smU.sunIntensity);
 }
 
