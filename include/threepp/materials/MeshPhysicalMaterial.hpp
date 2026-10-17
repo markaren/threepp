@@ -17,6 +17,7 @@ namespace threepp {
           public MaterialWithSheen,
           public MaterialWithIridescence,
           public MaterialWithPbrSpecular,
+          public MaterialWithPlanarReflection,
           public MaterialWithReflectivity {
 
     public:

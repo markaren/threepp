@@ -251,6 +251,7 @@ set(publicHeaders
         "threepp/renderers/Renderer.hpp"
         "threepp/renderers/GLRenderer.hpp"
         "threepp/renderers/RenderTarget.hpp"
+        "threepp/renderers/PlanarReflection.hpp"
         "threepp/renderers/GLRenderTarget.hpp"
 
         "threepp/renderers/gl/GLInfo.hpp"
@@ -306,6 +307,7 @@ set(privateHeaders
         "threepp/renderers/common/RenderStates.hpp"
         "threepp/renderers/common/RendererCapabilities.hpp"
         "threepp/renderers/common/ShadowConfig.hpp"
+        "threepp/renderers/common/WhiteBalance.hpp"
 
         "threepp/renderers/gl/Buffer.hpp"
         "threepp/renderers/gl/GLAttributes.hpp"
@@ -685,6 +687,7 @@ set(sources
 
         "threepp/renderers/GLRenderer.cpp"
         "threepp/renderers/RenderTarget.cpp"
+        "threepp/renderers/PlanarReflection.cpp"
 
         "threepp/postprocessing/BokehPass.cpp"
         "threepp/postprocessing/ClearPass.cpp"
@@ -705,6 +708,7 @@ set(sources
         # scene with the same one sun.
         "threepp/renderers/common/EnvSunExtract.cpp"
         "threepp/renderers/common/Lights.cpp"
+        "threepp/renderers/common/WhiteBalance.cpp"
         "threepp/renderers/common/RenderLists.cpp"
         "threepp/renderers/common/RenderStates.cpp"
         # Pure-CPU BCn encode/decode. Only the Vulkan renderer consumes these,

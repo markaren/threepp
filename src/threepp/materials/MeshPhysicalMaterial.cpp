@@ -161,6 +161,10 @@ void MeshPhysicalMaterial::copyInto(Material& material) const {
 
     m->specularIntensity = specularIntensity;
     m->specularColor.copy(specularColor);
+
+    m->planarReflection = planarReflection;
+    m->planarReflectionMatrix.copy(planarReflectionMatrix);
+    m->planarReflectionDistortion = planarReflectionDistortion;
 }
 
 bool MeshPhysicalMaterial::setValue(const std::string& key, const MaterialValue& value) {

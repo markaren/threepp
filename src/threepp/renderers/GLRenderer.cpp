@@ -883,7 +883,7 @@ struct GLRenderer::Impl {
         // far side of a glass shell shows through the near side. three.js marks
         // the material needsUpdate for each side; here setProgram notices the
         // side change itself and swaps in the program it already resolved for
-        // that side (MaterialProperties::sidePrograms), so neither pass pays a
+        // that side (MaterialProperties::variants), so neither pass pays a
         // program resolve.
         if (material->transparent && material->side == Side::Double && !material->forceSinglePass) {
 
@@ -1134,17 +1134,18 @@ struct GLRenderer::Impl {
         //
 
         bool needsProgramChange = false;
+        // Only the output target (colour space, tone mapping) differs from the
+        // current program's: a switch between two programs the material has
+        // already been drawn with, served from MaterialProperties::variants.
+        bool targetChanged = false;
         const auto& objectType = object->type();
         bool isInstancedMesh = objectType == "InstancedMesh";
         bool isSkinnedMesh = objectType == "SkinnedMesh";
+        const auto toneMapping = currentToneMapping(material);
 
         if (material->version() == materialProperties->version) {
 
             if (materialProperties->needsLights && (materialProperties->lightsStateVersion != lights.state.version)) {
-
-                needsProgramChange = true;
-
-            } else if (materialProperties->outputEncoding != encoding) {
 
                 needsProgramChange = true;
 
@@ -1210,17 +1211,20 @@ struct GLRenderer::Impl {
                 // changes the sampling code, not a uniform.
                 needsProgramChange = true;
 
-            } else if (materialProperties->toneMapping != currentToneMapping(material)) {
-
-                // TONE_MAPPING and the operator are compiled into the program,
-                // and they depend on what is bound (see currentToneMapping): a
-                // material drawn into a target and then to the screen in one
-                // frame switches between two cached programs here.
-                needsProgramChange = true;
-
             } else if (materialProperties->useLegacyLights != scope.useLegacyLights) {
 
                 needsProgramChange = true;
+
+            } else if (materialProperties->outputEncoding != encoding || materialProperties->toneMapping != toneMapping) {
+
+                // The output colour space, TONE_MAPPING and the operator are
+                // compiled into the program, and they depend on what is bound
+                // (see currentOutputColorSpace / currentToneMapping): a material
+                // drawn into a target and then to the screen in one frame
+                // switches between two cached programs here. Checked last, so
+                // that it is the ONLY difference when the switch is served
+                // from the target cache below.
+                targetChanged = true;
             }
 
         } else {
@@ -1232,24 +1236,32 @@ struct GLRenderer::Impl {
         //
 
         gl::GLProgram* program = materialProperties->currentProgram;
-        const auto sideIndex = static_cast<size_t>(material->side);
+        const bool sideChanged = materialProperties->currentSide != material->side;
+        const auto variantKey = gl::MaterialProperties::variantKey(material->side, encoding, toneMapping);
 
         if (needsProgramChange) {
 
-            // whatever changed, changed the program of every side
-            materialProperties->sidePrograms = {};
+            // whatever changed, changed the program of every variant
+            materialProperties->variants.clear();
 
-        } else if (materialProperties->currentSide != material->side) {
+        } else if (sideChanged || targetChanged) {
 
-            // only the side changed (the two-pass draw of a transparent double-sided
-            // material changes it twice an object): the program and uniform list
-            // already resolved for this side, or a resolve if there is none yet
-            auto& cached = materialProperties->sidePrograms[sideIndex];
-            if (cached.program) {
+            // Only the side and/or the output target changed (the two-pass draw
+            // of a transparent double-sided material changes the side twice an
+            // object; a frame that draws into a target and then to the screen
+            // changes the target once a material a pass): the program and the
+            // uniforms list already resolved for this variant, or a resolve if
+            // there is none yet. The lights, environment, fog, clipping and
+            // shadow state are those of the current program, since nothing
+            // else differs.
+            const auto cached = materialProperties->variants.find(variantKey);
+            if (cached != materialProperties->variants.end()) {
 
-                program = cached.program;
+                program = cached->second.program;
                 materialProperties->currentProgram = program;
-                materialProperties->uniformsList = cached.uniformsList;
+                materialProperties->uniformsList = cached->second.uniformsList;
+                materialProperties->outputEncoding = encoding;
+                materialProperties->toneMapping = toneMapping;
 
             } else {
 
@@ -1260,7 +1272,7 @@ struct GLRenderer::Impl {
         if (needsProgramChange) {
 
             program = getProgram(material, scene, object);
-            materialProperties->sidePrograms[sideIndex] = {program, materialProperties->uniformsList};
+            materialProperties->variants[variantKey] = {program, materialProperties->uniformsList};
         }
 
         materialProperties->currentSide = material->side;

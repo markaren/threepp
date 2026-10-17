@@ -447,6 +447,7 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
                     parameters->transmission ? "#define USE_TRANSMISSION" : "",
                     parameters->transmissionMap ? "#define USE_TRANSMISSIONMAP" : "",
                     parameters->thicknessMap ? "#define USE_THICKNESSMAP" : "",
+                    parameters->planarReflection ? "#define USE_PLANAR_REFLECTION" : "",
 
                     parameters->vertexTangents ? "#define USE_TANGENT" : "",
                     parameters->vertexColors ? "#define USE_COLOR" : "",
@@ -627,6 +628,7 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
                     parameters->transmissionMap ? "#define USE_TRANSMISSIONMAP" : "",
                     parameters->transmissionCoverage ? "#define TRANSMISSION_COVERAGE" : "",
                     parameters->thicknessMap ? "#define USE_THICKNESSMAP" : "",
+                    parameters->planarReflection ? "#define USE_PLANAR_REFLECTION" : "",
 
                     parameters->vertexTangents ? "#define USE_TANGENT" : "",
                     parameters->vertexColors || parameters->instancingColor ? "#define USE_COLOR" : "",

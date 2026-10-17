@@ -20,7 +20,9 @@
 #include "threepp/helpers/SonarModel.hpp"
 #include "threepp/input/KeyListener.hpp"
 #include "threepp/math/Color.hpp"
+#include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/renderers/PlanarReflection.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 #include <array>
@@ -614,6 +616,67 @@ namespace threepp_py {
                         return py::none();
                     }
                 }, py::arg("geometry"), py::arg("attribute"));
+
+        // ---- PlanarReflection (renderers/PlanarReflection.hpp) ---------------
+        // A planar mirror of the near scene for MeshPhysicalMaterial.planar_reflection:
+        // the scene rendered mirrored about a plane into a half-size target with
+        // an oblique near plane (objects/Reflector's construction), alpha 0
+        // where nothing was drawn so the material keeps its env map there.
+        //
+        //     mirror = tp.PlanarReflection(far_distance=400.0)
+        //     mirror.hide(water)                 # the mesh that reads it
+        //     ...each frame, before renderer.render():
+        //     if mirror.render(renderer, scene, camera):
+        //         mirror.apply(water.material)   # texture + matrix
+        py::class_<PlanarReflection>(m, "PlanarReflection")
+                .def(py::init([](float resolution_scale, float far_distance, float clip_bias, bool background) {
+                         PlanarReflection::Options o;
+                         o.resolutionScale = resolution_scale;
+                         o.farDistance = far_distance;
+                         o.clipBias = clip_bias;
+                         o.background = background;
+                         return std::make_unique<PlanarReflection>(o);
+                     }),
+                     py::arg("resolution_scale") = 0.5f, py::arg("far_distance") = 400.f,
+                     py::arg("clip_bias") = 0.f, py::arg("background") = false,
+                     "resolution_scale: the target's size as a share of the frame (0.5 = half).\n"
+                     "far_distance: the mirrored camera's far plane in metres; what stands further "
+                     "off stays in the environment map (0 = the camera's own far plane).\n"
+                     "clip_bias: pushes the oblique near plane off the mirror plane (hides seams).\n"
+                     "background: draw scene.background into the mirror (default False: the env map shows there).")
+                .def("set_plane", &PlanarReflection::setPlane, py::arg("point"), py::arg("normal"),
+                     "The mirror plane: a point on it and its normal, world space. Default y = 0, +y.")
+                .def("hide", [](PlanarReflection& p, const std::shared_ptr<Object3D>& object) {
+                         p.hidden.push_back(object.get());
+                     }, py::arg("object"), py::keep_alive<1, 2>(),
+                     "Set this object invisible for the mirrored render (the water itself, first of all).")
+                .def("render", [](PlanarReflection& p, GLRenderer& renderer, Object3D& scene, Camera& camera) {
+                         return p.render(renderer, scene, camera);
+                     }, py::arg("renderer"), py::arg("scene"), py::arg("camera"),
+                     "Render the mirror for this camera. False when the camera is behind the plane "
+                     "(nothing rendered). Call before the frame's own render.")
+                .def("apply", [](const PlanarReflection& p, MeshPhysicalMaterial& material) { p.apply(material); },
+                     py::arg("material"),
+                     "Set the material's planar_reflection and planar_reflection_matrix. The first time (and when the "
+                     "texture is set back to None) call material.needs_update(): the shader is keyed on the texture, as for any map.")
+                .def_property_readonly("culled_by_far", &PlanarReflection::culledByFar,
+                                       "How many objects the far limit left out of the last render.")
+                .def_property_readonly("texture", &PlanarReflection::texture,
+                                       "The mirror (scene-linear RGBA, alpha 0 where nothing was drawn), or None before the first render.")
+                .def_property_readonly("texture_matrix", [](const PlanarReflection& p) { return Matrix4().copy(p.textureMatrix()); },
+                                       "World position -> the mirror's texture coordinates, as of the last render.")
+                .def_property("resolution_scale",
+                              [](const PlanarReflection& p) { return p.options.resolutionScale; },
+                              [](PlanarReflection& p, float v) { p.options.resolutionScale = v; })
+                .def_property("far_distance",
+                              [](const PlanarReflection& p) { return p.options.farDistance; },
+                              [](PlanarReflection& p, float v) { p.options.farDistance = v; })
+                .def_property("clip_bias",
+                              [](const PlanarReflection& p) { return p.options.clipBias; },
+                              [](PlanarReflection& p, float v) { p.options.clipBias = v; })
+                .def_property("background",
+                              [](const PlanarReflection& p) { return p.options.background; },
+                              [](PlanarReflection& p, bool v) { p.options.background = v; });
 
         // ---- DepthSensor (helpers/DepthSensor.hpp) ---------------------------
         // A GPU depth-render sensor: renders the scene from its own viewpoint, linearizes

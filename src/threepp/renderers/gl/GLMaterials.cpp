@@ -381,6 +381,14 @@ struct GLMaterials::Impl {
 
         uniforms.at("attenuationDistance").value<float>() = material->attenuationDistance;
         uniforms.at("attenuationColor").value<Color>().copy(material->attenuationColor);
+
+        // Read only by a program compiled with USE_PLANAR_REFLECTION, which
+        // ProgramParameters keys on the same texture being set.
+        if (material->planarReflection) {
+            uniforms.at("planarReflection").setValue(material->planarReflection.get());
+            uniforms.at("planarReflectionMatrix").value<Matrix4>().copy(material->planarReflectionMatrix);
+            uniforms.at("planarReflectionDistortion").value<float>() = material->planarReflectionDistortion;
+        }
     }
 
     void refreshUniformsMatcap(UniformMap& uniforms, MeshMatcapMaterial* material) {

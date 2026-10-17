@@ -85,19 +85,32 @@ namespace threepp::gl {
         std::vector<UniformObject*> uniformsList;
         UniformMap* uniforms;
 
-        // A transparent double-sided material draws every object twice, back faces
-        // then front (GLRenderer::renderObject), and FLIP_SIDED / DOUBLE_SIDED are
-        // shader defines, so each side has a program and a uniform list of its own.
-        // They are kept here per side so the second pass, and every later frame,
-        // swaps sides without resolving the program again: a resolve builds the
-        // parameters and the cache key, about 30 us, and paying it twice an object
-        // made a 70-mesh HUD cost 9 ms a frame.
-        struct SideProgram {
+        // The programs this material has been drawn with, one per variant the
+        // renderer switches between while the material itself is unchanged:
+        // the side (a transparent double-sided material draws every object
+        // twice, back faces then front, and FLIP_SIDED / DOUBLE_SIDED are
+        // defines) and the output target (the colour space and the tone
+        // mapping are compiled in, so a frame that draws into a render target
+        // and then to the screen alternates between two programs for every
+        // material). Each entry keeps the uniforms list built for its program,
+        // so a switch is a swap. A resolve through getProgram builds the
+        // parameters (with copies of both shader sources), the cache key and
+        // the list, about 30 us: paid twice an object it made a 70-mesh HUD
+        // cost 9 ms a frame, paid once a material a pass it cost about 12 ms a
+        // pass on a town-sized scene. Every other parameter is baked into each
+        // entry, so the map is cleared whenever the program changes for any
+        // other reason.
+        struct Variant {
             GLProgram* program = nullptr;
             std::vector<UniformObject*> uniformsList;
         };
-        std::array<SideProgram, 3> sidePrograms{};
+        std::unordered_map<unsigned int, Variant> variants;
         std::optional<Side> currentSide;
+
+        static unsigned int variantKey(Side side, ColorSpace encoding, ToneMapping toneMapping) {
+            return (static_cast<unsigned int>(side) * 64u + static_cast<unsigned int>(encoding)) * 64u +
+                   static_cast<unsigned int>(toneMapping);
+        }
 
         unsigned int version{};
     };

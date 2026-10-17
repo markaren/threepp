@@ -254,7 +254,10 @@ ShaderLib::ShaderLib()
                                               {"thickness", Uniform(0.f)},
                                               {"thicknessMap", Uniform()}, {"thicknessMapTransform", Uniform(Matrix3())},
                                               {"attenuationDistance", Uniform(0.f)},
-                                              {"attenuationColor", Uniform(Color(0x000000))}
+                                              {"attenuationColor", Uniform(Color(0x000000))},
+                                              {"planarReflection", Uniform()},
+                                              {"planarReflectionMatrix", Uniform(Matrix4())},
+                                              {"planarReflectionDistortion", Uniform(2.f)}
                                       }
                               }),// clang-format on
 

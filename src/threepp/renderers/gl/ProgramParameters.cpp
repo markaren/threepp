@@ -66,6 +66,7 @@ ProgramParameters::ProgramParameters(
     auto transmissionMaterial = dynamic_cast<MaterialWithTransmission*>(material);
     auto roughnessMaterial = dynamic_cast<MaterialWithRoughness*>(material);
     auto metallnessMaterial = dynamic_cast<MaterialWithMetalness*>(material);
+    auto planarReflectionMaterial = dynamic_cast<MaterialWithPlanarReflection*>(material);
 
     std::string vShader, fShader;
     if (shaderIDs.contains(material->type())) {
@@ -162,6 +163,8 @@ ProgramParameters::ProgramParameters(
     transmissionMap = transmissionMaterial && transmissionMaterial->transmissionMap;
     transmissionCoverage = transmission && material->transparent;
     thicknessMap = thicknessMaterial && thicknessMaterial->thicknessMap;
+
+    planarReflection = planarReflectionMaterial && planarReflectionMaterial->planarReflection;
 
     {
         // Per-map UV set (three.js r152 #25721, #25788). Texture::channel 0/1/2
@@ -335,6 +338,7 @@ std::string ProgramParameters::hash() const {
     s << std::to_string(transmissionMap) << '\n';
     s << std::to_string(transmissionCoverage) << '\n';
     s << std::to_string(thicknessMap) << '\n';
+    s << std::to_string(planarReflection) << '\n';
     s << uvDefines << '\n';
 
     s << (combine.has_value() ? std::to_string(as_integer(*combine)) : std::string("undefined")) << '\n';

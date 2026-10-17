@@ -22,6 +22,12 @@ varying vec3 vViewPosition;
 
 #endif
 
+#ifdef USE_PLANAR_REFLECTION
+
+	varying vec3 vPlanarReflectionPosition;
+
+#endif
+
 #include <common>
 #include <uv_pars_vertex>
 #include <uv2_pars_vertex>
@@ -79,6 +85,12 @@ void main() {
 #ifdef USE_TRANSMISSION
 
 	vWorldPosition = worldPosition;
+
+#endif
+
+#ifdef USE_PLANAR_REFLECTION
+
+	vPlanarReflectionPosition = worldPosition.xyz;
 
 #endif
 }
