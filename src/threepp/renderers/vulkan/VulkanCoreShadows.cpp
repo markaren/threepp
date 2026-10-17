@@ -72,7 +72,7 @@ namespace threepp {
 
     float VulkanRenderer::Impl::shadowCacheMarginFromEnv() {
         const char* e = std::getenv("THREEPP_VK_SHADOW_CACHE_MARGIN");
-        if (!e || !*e) return 1.f;
+        if (!e || !*e) return 1.15f;
         return std::clamp(static_cast<float>(std::atof(e)), 1.f, 2.f);
     }
 

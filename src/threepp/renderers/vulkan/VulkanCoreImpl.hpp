@@ -5073,10 +5073,12 @@ namespace threepp {
         };
         // The static cache of the cascades (ShadowMapPass::cache):
         // THREEPP_VK_SHADOW_CACHE=0 turns it off; THREEPP_VK_SHADOW_CACHE_MARGIN
-        // (default 1 = the frozen box is the slice itself, so the image is the
-        // uncached one and a camera that moves redraws every frame; 1.15 = a
-        // box 15 % larger, kept while the camera stays inside it, at texels
-        // 15 % coarser). A caster is static unless it is a deformer, an interop
+        // (1..2, default 1.15) is how much wider than the slice a cascade's box
+        // is frozen: 1 = the slice itself, so the image is the uncached one but
+        // a camera that moves redraws every frame (the twin's drone at 30 m/s:
+        // 5 ms); 1.15 = a box 15 % wider, kept while the camera stays inside
+        // it, at texels 15 % coarser (0.4 ms, a 2-4 ms rebuild frame every
+        // second or so). A caster is static unless it is a deformer, an interop
         // mesh, grass, or recently moved (meshMovedSticky_); the hash of that
         // set is what a frozen box is valid for.
         bool  shadowCacheOn_     = shadowCacheFromEnv();
