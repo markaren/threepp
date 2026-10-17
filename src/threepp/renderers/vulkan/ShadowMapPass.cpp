@@ -32,9 +32,10 @@ namespace threepp::vulkan {
         ici.samples     = VK_SAMPLE_COUNT_1_BIT;
         ici.tiling      = VK_IMAGE_TILING_OPTIMAL;
         // DEPTH_STENCIL_ATTACHMENT either way: the layout the maps are sampled
-        // in (DEPTH_STENCIL_READ_ONLY) requires it.
+        // in (DEPTH_STENCIL_READ_ONLY) requires it. TRANSFER both ways: a
+        // dummy is cleared, a cascade is copied to and from the static cache.
         ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                    (renderable ? 0u : VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         applyConcurrentSharing(ici);
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -127,6 +128,7 @@ namespace threepp::vulkan {
             destroyBuffer(ctx_.allocator(), s.cmds);
             if (s.rasterSet) forgetDescriptorSet(s.rasterSet);
         }
+        destroyShadowDepthArray(ctx_, cache);
         if (pool_) vkDestroyDescriptorPool(ctx_.device(), pool_, nullptr);
     }
 
@@ -155,6 +157,17 @@ namespace threepp::vulkan {
                                               (tag + ".points").c_str(), transient_, span, slots);
         s.sizes = sizes;
         s.gen   = ++genCounter_;
+        // The static cache follows the cascades' size and count; a change
+        // drops every frozen box (the caller has waited for the fence).
+        if (cache.size != sizes.cascadeSize || cache.layers != sizes.cascades) {
+            destroyShadowDepthArray(ctx_, cache);
+            cacheReady_ = false;
+            invalidateCache();
+            if (sizes.cascades > 0) {
+                cache = createShadowDepthArray(ctx_, sizes.cascadeSize, sizes.cascades, false, false,
+                                               "shadowMaps.cache");
+            }
+        }
     }
 
     bool ShadowMapPass::ensureDrawCapacity(uint32_t frame, uint32_t draws, uint32_t cmds) {
@@ -216,40 +229,72 @@ namespace threepp::vulkan {
     }
 
     void ShadowMapPass::record(VkCommandBuffer cb, uint32_t frame, VkPipeline depthOnly, VkPipeline alphaTest,
-                               VkPipelineLayout layout) const {
+                               VkPipelineLayout layout) {
         const Slot& s = slots_[frame];
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, depthOnly);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &s.rasterSet, 0, nullptr);
         vkCmdSetDepthBias(cb, depthBiasConstant, 0.f, depthBiasSlope);
         constexpr VkCullModeFlags kCull[3] = {VK_CULL_MODE_BACK_BIT, VK_CULL_MODE_FRONT_BIT, VK_CULL_MODE_NONE};
         constexpr VkDeviceSize    kStride  = sizeof(VkDrawIndirectCommand);
+        constexpr VkPipelineStageFlags2 kTests =
+                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        constexpr VkAccessFlags2 kDepthRW =
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+        // One layer of a depth array between two layouts, with the stage and
+        // access masks of what came before and what follows.
+        const auto layerBarrier = [&](VkImage img, uint32_t layer, VkImageLayout from, VkImageLayout to,
+                                      VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
+                                      VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess, uint32_t layers = 1) {
+            VkImageMemoryBarrier2 b{};
+            b.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            b.srcStageMask                    = srcStage;
+            b.srcAccessMask                   = srcAccess;
+            b.dstStageMask                    = dstStage;
+            b.dstAccessMask                   = dstAccess;
+            b.oldLayout                       = from;
+            b.newLayout                       = to;
+            b.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+            b.image                           = img;
+            b.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_DEPTH_BIT;
+            b.subresourceRange.levelCount     = 1;
+            b.subresourceRange.baseArrayLayer = layer;
+            b.subresourceRange.layerCount     = layers;
+            VkDependencyInfo dep{};
+            dep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dep.imageMemoryBarrierCount = 1;
+            dep.pImageMemoryBarriers    = &b;
+            vkCmdPipelineBarrier2(cb, &dep);
+        };
+        // One square layer, depth aspect, between two arrays of the same size.
+        const auto copyLayer = [&](VkImage src, uint32_t srcLayer, VkImageLayout srcLayout, VkImage dst,
+                                   uint32_t dstLayer, VkImageLayout dstLayout, uint32_t size) {
+            VkImageCopy rg{};
+            rg.srcSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, srcLayer, 1};
+            rg.dstSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, dstLayer, 1};
+            rg.extent         = {size, size, 1};
+            vkCmdCopyImage(cb, src, srcLayout, dst, dstLayout, 1, &rg);
+        };
+        // The cache's one-time move to GENERAL, where it stays.
+        if (cache.image != VK_NULL_HANDLE && !cacheReady_) {
+            layerBarrier(cache.image, 0, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                         VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                         VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT, cache.layers);
+            cacheReady_ = true;
+        }
+
         for (size_t li = 0; li < layers.size(); ++li) {
             const Layer&            L   = layers[li];
             const ShadowDepthArray& arr = L.target == Target::Cascade ? s.cascades
                                         : L.target == Target::Spot    ? s.spots
                                                                       : s.points;
             if (L.layer >= arr.layerViews.size()) continue;
-            VkRenderingAttachmentInfo depth{};
-            depth.sType                   = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-            depth.imageView               = arr.layerViews[L.layer];
-            depth.imageLayout             = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-            depth.loadOp                  = VK_ATTACHMENT_LOAD_OP_CLEAR;
-            depth.storeOp                 = VK_ATTACHMENT_STORE_OP_STORE;
-            depth.clearValue.depthStencil = {0.f, 0u};// reverse-Z: far
-            VkRenderingInfo ri{};
-            ri.sType             = VK_STRUCTURE_TYPE_RENDERING_INFO;
-            ri.renderArea.extent = {arr.size, arr.size};
-            ri.layerCount        = 1;
-            ri.pDepthAttachment  = &depth;
-            vkCmdBeginRendering(cb, &ri);
-            VkViewport vp{};
-            vp.width    = float(arr.size);
-            vp.height   = float(arr.size);
-            vp.maxDepth = 1.f;
-            vkCmdSetViewport(cb, 0, 1, &vp);
-            VkRect2D sc{};
-            sc.extent = {arr.size, arr.size};
-            vkCmdSetScissor(cb, 0, 1, &sc);
+            const LayerDraws* ld = li < layerGroups.size() ? &layerGroups[li] : nullptr;
+            Mode mode = L.mode;
+            if (mode != Mode::Draw && (cache.image == VK_NULL_HANDLE || L.cacheLayer >= cache.layers))
+                mode = Mode::Draw;
+
             // A point face is drawn without the raster's y flip, so the cube's
             // faces land in the orientation the hardware cube lookup expects;
             // that mirrors the winding too.
@@ -262,25 +307,96 @@ namespace threepp::vulkan {
             std::memcpy(pc.vp, L.vp, sizeof(pc.vp));
             pc.info[0] = face ? 1u : 0u;
             vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
-            // This layer's groups: the depth-only ones first (the pipeline the
-            // layer starts in), then the alpha-tested ones, and back for the
-            // next layer. Both pipelines share the layout and the dynamic
-            // state. A skipped layer (the view cannot see it) is cleared only.
-            bool tested = false;
-            for (uint32_t b = 0; b < kGroups && !L.skip && li < layerGroups.size(); ++b) {
-                const Group& g = layerGroups[li][b];
-                if (g.count == 0u) continue;
-                if (b >= 3u && !tested) {
-                    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, alphaTest);
-                    tested = true;
+
+            const auto beginPass = [&](bool clear) {
+                VkRenderingAttachmentInfo depth{};
+                depth.sType                   = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                depth.imageView               = arr.layerViews[L.layer];
+                depth.imageLayout             = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                depth.loadOp                  = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+                depth.storeOp                 = VK_ATTACHMENT_STORE_OP_STORE;
+                depth.clearValue.depthStencil = {0.f, 0u};// reverse-Z: far
+                VkRenderingInfo ri{};
+                ri.sType             = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                ri.renderArea.extent = {arr.size, arr.size};
+                ri.layerCount        = 1;
+                ri.pDepthAttachment  = &depth;
+                vkCmdBeginRendering(cb, &ri);
+                VkViewport vp{};
+                vp.width    = float(arr.size);
+                vp.height   = float(arr.size);
+                vp.maxDepth = 1.f;
+                vkCmdSetViewport(cb, 0, 1, &vp);
+                VkRect2D sc{};
+                sc.extent = {arr.size, arr.size};
+                vkCmdSetScissor(cb, 0, 1, &sc);
+            };
+            // The groups of one list: depth-only ones on the depthOnly
+            // pipeline, alpha-tested ones (3-5) on alphaTest; the bound
+            // pipeline is tracked across the layer's lists and restored at
+            // its end. Both pipelines share the layout and the dynamic state.
+            bool       alphaBound = false;
+            const auto drawGroups = [&](const std::array<Group, kGroups>& groups) {
+                for (uint32_t b = 0; b < kGroups; ++b) {
+                    const Group& g = groups[b];
+                    if (g.count == 0u) continue;
+                    const bool wantAlpha = b >= 3u;
+                    if (wantAlpha != alphaBound) {
+                        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, wantAlpha ? alphaTest : depthOnly);
+                        alphaBound = wantAlpha;
+                    }
+                    vkCmdSetCullMode(cb, kCull[b % 3u]);
+                    vkCmdDrawIndirect(cb, s.cmds.handle, VkDeviceSize(g.offset) * kStride, g.count,
+                                      static_cast<uint32_t>(kStride));
                 }
-                vkCmdSetCullMode(cb, kCull[b % 3u]);
-                vkCmdDrawIndirect(cb, s.cmds.handle, VkDeviceSize(g.offset) * kStride, g.count,
-                                  static_cast<uint32_t>(kStride));
+            };
+
+            if (L.skip) {
+                beginPass(true);
+                vkCmdEndRendering(cb);
+                continue;
             }
-            if (tested) vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, depthOnly);
-            vkCmdEndRendering(cb);
+            if (mode == Mode::Draw) {
+                beginPass(true);
+                if (ld) {
+                    drawGroups(ld->stat);
+                    drawGroups(ld->dyn);
+                }
+                vkCmdEndRendering(cb);
+            } else if (mode == Mode::Rebuild) {
+                // The static casters, kept in the cache; the moving ones on top.
+                beginPass(true);
+                if (ld) drawGroups(ld->stat);
+                vkCmdEndRendering(cb);
+                layerBarrier(arr.image, L.layer, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, kTests, kDepthRW, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                             VK_ACCESS_2_TRANSFER_READ_BIT);
+                copyLayer(arr.image, L.layer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, cache.image, L.cacheLayer,
+                          VK_IMAGE_LAYOUT_GENERAL, arr.size);
+                layerBarrier(arr.image, L.layer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                             VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                             VK_ACCESS_2_TRANSFER_READ_BIT, kTests, kDepthRW);
+                beginPass(false);
+                if (ld) drawGroups(ld->dyn);
+                vkCmdEndRendering(cb);
+            } else {
+                // Cached: the static casters' depth copied in, the moving ones
+                // drawn on top. The graph left the layer in DEPTH_ATTACHMENT.
+                layerBarrier(arr.image, L.layer, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, kTests, kDepthRW, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                             VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                copyLayer(cache.image, L.cacheLayer, VK_IMAGE_LAYOUT_GENERAL, arr.image, L.layer,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, arr.size);
+                layerBarrier(arr.image, L.layer, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                             VK_ACCESS_2_TRANSFER_WRITE_BIT, kTests, kDepthRW);
+                beginPass(false);
+                if (ld) drawGroups(ld->dyn);
+                vkCmdEndRendering(cb);
+            }
+            if (alphaBound) vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, depthOnly);
         }
     }
 
 }// namespace threepp::vulkan
+

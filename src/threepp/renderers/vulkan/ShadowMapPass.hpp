@@ -108,26 +108,56 @@ namespace threepp::vulkan {
         // This frame's layers, in record order: the cascades, then the spots,
         // then six faces per point cube.
         enum class Target : uint32_t { Cascade, Spot, PointFace };
+        // How a layer is drawn. Draw: cleared, every caster drawn. Rebuild:
+        // cleared, the static casters drawn and the result copied into the
+        // cache's layer `cacheLayer`, then the moving casters on top. Cached:
+        // the cache's layer copied in, then the moving casters on top. A
+        // cascade's frozen box is what makes the cache valid (fitShadowMaps).
+        enum class Mode : uint32_t { Draw, Rebuild, Cached };
         struct Layer {
             float    vp[16];// world -> clip, reverse-Z (a point face is drawn without the y flip)
-            Target   target = Target::Cascade;
-            uint32_t layer  = 0;    // layer of its array
-            bool     skip   = false;// the view cannot see it: cleared, nothing drawn
+            Target   target     = Target::Cascade;
+            uint32_t layer      = 0;    // layer of its array
+            bool     skip       = false;// the view cannot see it: cleared, nothing drawn
+            Mode     mode       = Mode::Draw;
+            uint32_t cacheLayer = 0;
         };
         std::vector<Layer> layers;
         // Per layer, the caster list's buckets: [BACK, FRONT, NONE] drawn
         // depth only, then the same three through the alpha test (a cutout
-        // caster within the cutout ray distance, see buildShadowDrawData).
-        // Each is a range of the slot's command buffer; the commands name
-        // their DrawInfo record by firstInstance, so a caster that reaches
-        // several layers has one record and one command per layer.
+        // caster within the cutout ray distance, see buildShadowDrawData);
+        // `stat` for the casters that hold still, `dyn` for the moving ones
+        // (deformers, recently moved meshes), which a cached layer draws
+        // alone. Each is a range of the slot's command buffer; the commands
+        // name their DrawInfo record by firstInstance, so a caster that
+        // reaches several layers has one record and one command per layer.
         struct Group {
             uint32_t offset = 0, count = 0;
         };
         static constexpr uint32_t kGroups = 6;
-        std::vector<std::array<Group, kGroups>> layerGroups;// [layers.size()]
-        uint32_t             totalDraws = 0;// DrawInfo records
-        uint32_t             totalCmds  = 0;// indirect commands over every layer
+        struct LayerDraws {
+            std::array<Group, kGroups> stat{}, dyn{};
+        };
+        std::vector<LayerDraws> layerGroups;// [layers.size()]
+        uint32_t                totalDraws = 0;// DrawInfo records
+        uint32_t                totalCmds  = 0;// indirect commands over every layer
+
+        // The static cache of the sun's cascades: one persistent D32 layer per
+        // cascade (its own allocation, never aliased), in GENERAL for its whole
+        // life, holding the static casters' depth for the frozen box in
+        // `cascadeCache[i]`. Sized with the slots' cascade arrays (ensure).
+        ShadowDepthArray cache;
+        struct CascadeCache {
+            bool     valid = false;
+            float    c[3]{}, r = 0.f, texel = 0.f, far = 0.f;// the frozen box
+            float    sunDir[3]{};
+            uint64_t staticHash = 0;
+            float    vp[16]{};
+        };
+        std::array<CascadeCache, 4> cascadeCache{};
+        void invalidateCache() {
+            for (auto& c : cascadeCache) c.valid = false;
+        }
         // vkCmdSetDepthBias for the raster side (reverse-Z: negative pushes the
         // stored depth away from the light).
         float depthBiasConstant = 0.f, depthBiasSlope = 0.f;
@@ -136,7 +166,7 @@ namespace threepp::vulkan {
         // DEPTH_ATTACHMENT_OPTIMAL. depthOnly: no fragment stage (groups 0-2);
         // alphaTest: shadow_depth.frag's cutout test (groups 3-5).
         void record(VkCommandBuffer cb, uint32_t frame, VkPipeline depthOnly, VkPipeline alphaTest,
-                    VkPipelineLayout layout) const;
+                    VkPipelineLayout layout);
 
     private:
         VulkanContext&        ctx_;
@@ -145,6 +175,7 @@ namespace threepp::vulkan {
         VkDescriptorPool      pool_ = VK_NULL_HANDLE;
         std::vector<Slot>     slots_;
         uint64_t              genCounter_ = 0;
+        bool                  cacheReady_ = false;// the cache image's one-time move to GENERAL was recorded
 
         void freeImages(Slot& s);
     };

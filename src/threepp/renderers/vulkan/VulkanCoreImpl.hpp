@@ -5067,9 +5067,24 @@ namespace threepp {
                 float r       = 0.f;
                 float tanHalf = 0.f;
                 bool  skip    = false;
+                bool  cached  = false;// a cascade served from the static cache: only moving casters reach it
             };
             std::vector<Volume> layers;
         };
+        // The static cache of the cascades (ShadowMapPass::cache):
+        // THREEPP_VK_SHADOW_CACHE=0 turns it off; THREEPP_VK_SHADOW_CACHE_MARGIN
+        // (default 1 = the frozen box is the slice itself, so the image is the
+        // uncached one and a camera that moves redraws every frame; 1.15 = a
+        // box 15 % larger, kept while the camera stays inside it, at texels
+        // 15 % coarser). A caster is static unless it is a deformer, an interop
+        // mesh, grass, or recently moved (meshMovedSticky_); the hash of that
+        // set is what a frozen box is valid for.
+        bool  shadowCacheOn_     = shadowCacheFromEnv();
+        float shadowCacheMargin_ = shadowCacheMarginFromEnv();
+        static bool  shadowCacheFromEnv();
+        static float shadowCacheMarginFromEnv();
+        [[nodiscard]] bool     shadowCasterDynamic(uint32_t entry) const;
+        [[nodiscard]] uint64_t shadowStaticHash() const;
         void buildShadowDrawData(uint32_t frame, const ShadowCullVolumes& vol, const Vector3& camPos);
         // buildShadowDrawData's scratch: every caster once, then one command
         // list per (layer, group); cleared, never reallocated, between frames.

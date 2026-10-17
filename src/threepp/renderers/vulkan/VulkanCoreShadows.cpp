@@ -65,6 +65,48 @@ namespace threepp {
                           : std::min(pts, static_cast<uint32_t>(kMaxShadowPoints));
     }
 
+    bool VulkanRenderer::Impl::shadowCacheFromEnv() {
+        const char* e = std::getenv("THREEPP_VK_SHADOW_CACHE");
+        return !(e && *e == '0');
+    }
+
+    float VulkanRenderer::Impl::shadowCacheMarginFromEnv() {
+        const char* e = std::getenv("THREEPP_VK_SHADOW_CACHE_MARGIN");
+        if (!e || !*e) return 1.f;
+        return std::clamp(static_cast<float>(std::atof(e)), 1.f, 2.f);
+    }
+
+    // A caster that may move between two frames: a deformer or interop mesh
+    // (its bounds are stale too), grass (it sways), or a mesh moved within the
+    // last kMovedStickyFrames (the G-buffer's own notion of "moving").
+    bool VulkanRenderer::Impl::shadowCasterDynamic(uint32_t entry) const {
+        const MeshEntry& e = lastVisibleEntries_[entry];
+        if (e.isSkinned || e.isDisplaced || e.isMorphed || e.isTet || e.isVertexInterop || e.isGrass) return true;
+        return entry < meshMovedSticky_.size() && meshMovedSticky_[entry] > 0u;
+    }
+
+    // The static caster set as a number: every span's hidden flag and every
+    // entry's static/dynamic bit, FNV-1a over the entry walk. A frozen cascade
+    // box is valid for one value of it: a mesh that starts or stops moving, is
+    // hidden or shown, or a scene rebuild, changes it and redraws the cache.
+    uint64_t VulkanRenderer::Impl::shadowStaticHash() const {
+        uint64_t h = 1469598103934665603ull;
+        const auto mix = [&](uint64_t v) {
+            h ^= v;
+            h *= 1099511628211ull;
+        };
+        mix(static_cast<uint64_t>(lastVisibleEntries_.size()));
+        for (const auto& sp : entrySpans_) {
+            mix(sp.hidden ? 0x9e3779b97f4a7c15ull : 0x7f4a7c159e3779b9ull);
+            if (sp.hidden) continue;
+            for (uint32_t j = 0; j < sp.count; ++j) {
+                const uint32_t i = sp.first + j;
+                mix(static_cast<uint64_t>(i) * 2ull + (shadowCasterDynamic(i) ? 1ull : 0ull));
+            }
+        }
+        return h;
+    }
+
     VulkanRenderer::ShadowMode VulkanRenderer::Impl::activeShadowMode() const {
         using M = VulkanRenderer::ShadowMode;
         switch (shadowModeReq_) {
@@ -338,6 +380,8 @@ namespace threepp {
         // moves. The box starts at the sphere's sunward rim; casters beyond it
         // are pancaked onto the near plane by depth clamp (or, without it, the
         // near plane is pulled 1 km toward the sun).
+        // The static caster set this frame, for the cascades' cache.
+        const uint64_t staticHash = shadowCacheOn_ ? shadowStaticHash() : 0ull;
         if (sz.cascades > 0u) {
             camera.updateMatrixWorld();
             float camNear = 0.1f, camFar = 1000.f;
@@ -428,30 +472,76 @@ namespace threepp {
                     const float d[3] = {q[0] - c[0], q[1] - c[1], q[2] - c[2]};
                     r                = std::max(r, std::sqrt(dot3(d, d)));
                 }
-                r                 = std::ceil(r * 16.f) / 16.f;// a stable size, off the float noise
-                const float texel = 2.f * r / size;
-                const float cx    = dot3(c, x), cy = dot3(c, y);
-                const float sx    = std::floor(cx / texel) * texel - cx;
-                const float sy    = std::floor(cy / texel) * texel - cy;
-                for (int a = 0; a < 3; ++a) c[a] += x[a] * sx + y[a] * sy;
-
-                const float far = 2.f * r + extra;
-                Matrix4     world;
-                world.makeBasis(Vector3(x[0], x[1], x[2]), Vector3(y[0], y[1], y[2]), Vector3(L[0], L[1], L[2]));
-                world.setPosition(c[0] + L[0] * (r + extra), c[1] + L[1] * (r + extra), c[2] + L[2] * (r + extra));
-                Matrix4 proj;
-                proj.makeOrthographic(-r, r, r, -r, 0.f, far);
+                r = std::ceil(r * 16.f) / 16.f;// a stable size, off the float noise
+                // The static cache (shadowCacheOn_, ShadowMapPass::cache): the
+                // cascade's box is frozen shadowCacheMargin_ times the slice
+                // and kept while the slice stays inside it, the sun holds (to
+                // 0.05 degrees) and the static caster set is unchanged. Its
+                // static casters are then drawn once, copied in each frame,
+                // and only the moving casters drawn on top. A camera that
+                // leaves the box, a sun that moves or a mesh that starts
+                // moving redraws it: one frame at the uncached cost.
+                auto&      cc        = smp.cascadeCache[i];
+                const bool cacheable = shadowCacheOn_ && smp.cache.image != VK_NULL_HANDLE && i < smp.cache.layers;
+                bool       reuse     = false;
+                if (cacheable && cc.valid && cc.staticHash == staticHash && dot3(cc.sunDir, L) >= 0.9999996f) {
+                    // The slice inside the frozen box, to one texel: the box's
+                    // centre was snapped to the texel grid, so a still camera's
+                    // slice sits up to a texel off it (the receivers pick by
+                    // the frozen sphere, so the rim they lose is that texel).
+                    const float dc[3] = {c[0] - cc.c[0], c[1] - cc.c[1], c[2] - cc.c[2]};
+                    const float dl    = dot3(dc, L);
+                    const float lim   = cc.r + cc.texel;
+                    reuse = std::abs(dot3(dc, x)) + r <= lim && std::abs(dot3(dc, y)) + r <= lim && dl - r >= -lim &&
+                            dl + r <= lim;
+                }
+                float                        texel, far, rBox;
                 vulkan::ShadowMapPass::Layer layer{};
-                lightClip(layer.vp, world, proj);
-                layer.target = vulkan::ShadowMapPass::Target::Cascade;
-                layer.layer  = i;
+                if (reuse) {
+                    std::memcpy(c, cc.c, sizeof(c));
+                    rBox  = cc.r;
+                    texel = cc.texel;
+                    far   = cc.far;
+                    std::memcpy(layer.vp, cc.vp, 64);
+                    layer.mode = vulkan::ShadowMapPass::Mode::Cached;
+                } else {
+                    rBox  = cacheable ? std::ceil(r * shadowCacheMargin_ * 16.f) / 16.f : r;
+                    texel = 2.f * rBox / size;
+                    const float cx = dot3(c, x), cy = dot3(c, y);
+                    const float sx = std::floor(cx / texel) * texel - cx;
+                    const float sy = std::floor(cy / texel) * texel - cy;
+                    for (int a = 0; a < 3; ++a) c[a] += x[a] * sx + y[a] * sy;
+
+                    far = 2.f * rBox + extra;
+                    Matrix4 world;
+                    world.makeBasis(Vector3(x[0], x[1], x[2]), Vector3(y[0], y[1], y[2]), Vector3(L[0], L[1], L[2]));
+                    world.setPosition(c[0] + L[0] * (rBox + extra), c[1] + L[1] * (rBox + extra),
+                                      c[2] + L[2] * (rBox + extra));
+                    Matrix4 proj;
+                    proj.makeOrthographic(-rBox, rBox, rBox, -rBox, 0.f, far);
+                    lightClip(layer.vp, world, proj);
+                    layer.mode = cacheable ? vulkan::ShadowMapPass::Mode::Rebuild : vulkan::ShadowMapPass::Mode::Draw;
+                    if (cacheable) {
+                        cc.valid      = true;
+                        cc.staticHash = staticHash;
+                        cc.r          = rBox;
+                        cc.texel      = texel;
+                        cc.far        = far;
+                        std::memcpy(cc.c, c, sizeof(cc.c));
+                        std::memcpy(cc.sunDir, L, sizeof(cc.sunDir));
+                        std::memcpy(cc.vp, layer.vp, 64);
+                    }
+                }
+                layer.target     = vulkan::ShadowMapPass::Target::Cascade;
+                layer.layer      = i;
+                layer.cacheLayer = i;
                 smp.layers.push_back(layer);
 
                 std::memcpy(u.cascadeVP[i], layer.vp, 64);
                 u.cascadeSphere[i][0] = c[0];
                 u.cascadeSphere[i][1] = c[1];
                 u.cascadeSphere[i][2] = c[2];
-                u.cascadeSphere[i][3] = r;
+                u.cascadeSphere[i][3] = rBox;
                 u.cascadeParams[i][0] = texel;
                 u.cascadeParams[i][1] = 1.f / far;
                 // The PCF radius in this cascade's texels: LightShadow::radius,
@@ -467,7 +557,8 @@ namespace threepp {
                 std::memcpy(b.x, x, sizeof(x));
                 std::memcpy(b.y, y, sizeof(y));
                 std::memcpy(b.l, L, sizeof(b.l));
-                b.r = r;
+                b.r      = rBox;
+                b.cached = layer.mode == vulkan::ShadowMapPass::Mode::Cached;
                 vol.layers.push_back(b);
             }
             u.cascadeCount    = n;
@@ -616,9 +707,9 @@ namespace threepp {
         // nothing. A caster whose bounds are unknown (a deformer) reaches every
         // layer, as the G-buffer keeps it.
         auto& draws = shadowDrawScratch_;
-        auto& cmds  = shadowCmdScratch_;// [layer * kGroups + group]
+        auto& cmds  = shadowCmdScratch_;// [(layer * 2 + dynamic) * kGroups + group]
         draws.clear();
-        cmds.resize(size_t(nLayers) * kGroups);
+        cmds.resize(size_t(nLayers) * 2u * kGroups);
         for (auto& v : cmds) v.clear();
 
         // The cascades share the sun's frame, so a caster's coordinates in it
@@ -644,8 +735,9 @@ namespace threepp {
             if (!v.skip) allMask[li >> 6] |= 1ull << (li & 63u);
         }
 
-        // The layers a world sphere (centre e, radius er) can cast into.
-        const auto reachMask = [&](const float* e, float er, uint64_t* m) {
+        // The layers a world sphere (centre e, radius er) can cast into. A
+        // static caster never reaches a cached cascade: the cache holds it.
+        const auto reachMask = [&](const float* e, float er, bool dynamic, uint64_t* m) {
             m[0] = m[1] = 0u;
             float px = 0.f, py = 0.f, pl = 0.f;
             if (sx) {
@@ -655,7 +747,7 @@ namespace threepp {
             }
             for (uint32_t li = 0; li < nLayers; ++li) {
                 const Volume& v = vol.layers[li];
-                if (v.skip) continue;
+                if (v.skip || (v.cached && !dynamic)) continue;
                 bool in = false;
                 if (v.kind == Volume::Box) {
                     // Sideways inside the box; along the sun anything in front
@@ -725,7 +817,10 @@ namespace threepp {
                 if (md.transmission > 0.f || md.alphaCutoff < 0.f) continue;
                 if (std::max({md.emissive[0], md.emissive[1], md.emissive[2]}) * md.emissiveIntensity >= 1.f)
                     continue;
-                uint64_t mask[2] = {allMask[0], allMask[1]};
+                // Moving casters go to every layer's `dyn` list (a cached
+                // cascade draws only those); static ones to `stat`.
+                const bool dynamic = shadowCasterDynamic(i);
+                uint64_t   mask[2] = {allMask[0], allMask[1]};
                 if (bounded) {
                     const float* M     = en.worldMatrix.data();
                     const float* lc    = sp.localCenter;
@@ -736,7 +831,7 @@ namespace threepp {
                     const float  s1    = M[4] * M[4] + M[5] * M[5] + M[6] * M[6];
                     const float  s2    = M[8] * M[8] + M[9] * M[9] + M[10] * M[10];
                     const float  wr    = sp.localRadius * std::sqrt(std::max({s0, s1, s2}));
-                    reachMask(wc, wr, mask);
+                    reachMask(wc, wr, dynamic, mask);
                 }
                 if ((mask[0] | mask[1]) == 0u) continue;
                 const auto sel    = lodStatic ? sel0 : selectLodGeom(*rec, en.lodLevel);
@@ -773,7 +868,8 @@ namespace threepp {
                 cmd.firstInstance = static_cast<uint32_t>(draws.size());// its DrawInfo record
                 draws.push_back(di);
                 for (uint32_t li = 0; li < nLayers; ++li) {
-                    if (mask[li >> 6] & (1ull << (li & 63u))) cmds[size_t(li) * kGroups + group].push_back(cmd);
+                    if (mask[li >> 6] & (1ull << (li & 63u)))
+                        cmds[(size_t(li) * 2u + (dynamic ? 1u : 0u)) * kGroups + group].push_back(cmd);
                 }
             }
         }
@@ -791,15 +887,18 @@ namespace threepp {
         smp.layerGroups.assign(nLayers, {});
         uint32_t offset = 0;
         for (uint32_t li = 0; li < nLayers; ++li) {
-            for (uint32_t g = 0; g < kGroups; ++g) {
-                const auto&    list = cmds[size_t(li) * kGroups + g];
-                const uint32_t n    = static_cast<uint32_t>(list.size());
-                smp.layerGroups[li][g] = {offset, n};
-                if (n > 0u) {
-                    std::memcpy(static_cast<uint8_t*>(cm) + size_t(offset) * sizeof(VkDrawIndirectCommand),
-                                list.data(), size_t(n) * sizeof(VkDrawIndirectCommand));
+            for (uint32_t d = 0; d < 2u; ++d) {
+                auto& groups = d == 0u ? smp.layerGroups[li].stat : smp.layerGroups[li].dyn;
+                for (uint32_t g = 0; g < kGroups; ++g) {
+                    const auto&    list = cmds[(size_t(li) * 2u + d) * kGroups + g];
+                    const uint32_t n    = static_cast<uint32_t>(list.size());
+                    groups[g]           = {offset, n};
+                    if (n > 0u) {
+                        std::memcpy(static_cast<uint8_t*>(cm) + size_t(offset) * sizeof(VkDrawIndirectCommand),
+                                    list.data(), size_t(n) * sizeof(VkDrawIndirectCommand));
+                    }
+                    offset += n;
                 }
-                offset += n;
             }
         }
         smp.totalDraws = totalDraws;
