@@ -659,6 +659,8 @@ namespace threepp_py {
                      py::arg("material"),
                      "Set the material's planar_reflection and planar_reflection_matrix. The first time (and when the "
                      "texture is set back to None) call material.needs_update(): the shader is keyed on the texture, as for any map.")
+                .def_property_readonly("culled_by_far", &PlanarReflection::culledByFar,
+                                       "How many objects the far limit left out of the last render.")
                 .def_property_readonly("texture", &PlanarReflection::texture,
                                        "The mirror (scene-linear RGBA, alpha 0 where nothing was drawn), or None before the first render.")
                 .def_property_readonly("texture_matrix", [](const PlanarReflection& p) { return Matrix4().copy(p.textureMatrix()); },

@@ -32,10 +32,14 @@ namespace threepp {
             // a quarter of a full-size pass.
             float resolutionScale = 0.5f;
 
-            // The mirrored camera's far plane, metres. The near hulls, quays and
-            // trees cost a second pass; what stands further off stays in the
-            // environment map (an oblique near plane skews the far plane, so
-            // the limit is approximate near the frame's edges).
+            // The mirror's reach, metres: objects whose bounding sphere lies
+            // wholly beyond it from the mirrored camera are left out of the
+            // pass, and the camera's far plane closes there. The near hulls,
+            // quays and trees cost a second pass; the town behind them stays
+            // in the environment map. An object that straddles the limit (the
+            // terrain) is drawn, and the oblique near plane skews the far
+            // plane, so the cut through such an object is not a clean one.
+            // 0: no limit.
             float farDistance = 400.f;
 
             // Pushes the oblique near plane off the mirror plane, as Reflector's
@@ -79,6 +83,9 @@ namespace threepp {
         // World position -> the mirror's texture coordinates (bias * projection
         // * view of the mirrored camera), as of the last render.
         [[nodiscard]] const Matrix4& textureMatrix() const;
+
+        // How many objects the far limit left out of the last render.
+        [[nodiscard]] size_t culledByFar() const;
 
         // Hand the material the texture and the matrix (call after render()).
         // The first time, and whenever the texture is taken away again, the

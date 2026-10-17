@@ -10,10 +10,47 @@
 #include "threepp/renderers/Renderer.hpp"
 #include "threepp/scenes/Scene.hpp"
 
+#include "threepp/core/BufferGeometry.hpp"
+#include "threepp/math/Sphere.hpp"
+
 #include <algorithm>
 #include <cmath>
 
 using namespace threepp;
+
+namespace {
+
+    // Objects whose bounding sphere lies wholly beyond `far` from `eye` are
+    // set invisible for the pass: the far town and its lamps cost nothing in
+    // the mirror, which is what the far limit is for (the projection's far
+    // plane alone cannot do it: an oblique near plane skews it). An object
+    // that straddles the limit, the terrain first of all, stays. World
+    // matrices are taken as they are: a frame-old matrix on a moving boat
+    // is well within the margin.
+    void hideBeyond(Object3D& object, const Vector3& eye, float far, std::vector<Object3D*>& hidden) {
+
+        if (!object.visible) return;
+
+        if (const auto geometry = object.geometry()) {
+
+            if (!geometry->boundingSphere) geometry->computeBoundingSphere();
+            if (geometry->boundingSphere) {
+                Sphere sphere = *geometry->boundingSphere;
+                sphere.applyMatrix4(*object.matrixWorld);
+                if (sphere.center.distanceTo(eye) - 1.1f * sphere.radius > far) {
+                    object.visible = false;
+                    hidden.push_back(&object);
+                    return;// its children go with it
+                }
+            }
+        }
+
+        for (const auto& child : object.children) {
+            hideBeyond(*child, eye, far, hidden);
+        }
+    }
+
+}// namespace
 
 struct PlanarReflection::Impl {
 
@@ -23,6 +60,7 @@ struct PlanarReflection::Impl {
     PerspectiveCamera virtualCamera;
     Matrix4 textureMatrix;
     std::unique_ptr<RenderTarget> target;
+    std::vector<Object3D*> farHidden;// hidden by the far limit this pass
 
     // scratch
     Vector3 cameraWorldPosition, view, lookAtPosition, lookTarget, up;
@@ -203,6 +241,10 @@ bool PlanarReflection::render(Renderer& renderer, Object3D& scene, Camera& camer
         wasVisible.emplace_back(object, object->visible);
         object->visible = false;
     }
+    if (options.farDistance > 0) {
+        impl.farHidden.clear();
+        hideBeyond(scene, impl.virtualCamera.position, options.farDistance, impl.farHidden);
+    }
 
     auto* asScene = scene.as<Scene>();
     Background background;
@@ -228,11 +270,19 @@ bool PlanarReflection::render(Renderer& renderer, Object3D& scene, Camera& camer
     if (asScene && !options.background) {
         asScene->background = background;
     }
+    for (auto* object : impl.farHidden) {
+        object->visible = true;
+    }
     for (auto& [object, visible] : wasVisible) {
         object->visible = visible;
     }
 
     return true;
+}
+
+size_t PlanarReflection::culledByFar() const {
+
+    return pimpl_->farHidden.size();
 }
 
 std::shared_ptr<Texture> PlanarReflection::texture() const {
