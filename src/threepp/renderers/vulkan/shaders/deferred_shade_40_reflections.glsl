@@ -371,7 +371,7 @@ float probeEnvFillVis(vec3 P, vec3 N, float maxLod) {
     const vec3  LUMW   = vec3(0.2126, 0.7152, 0.0722);
     float conf;
     const float actE   = dot(probeIrradianceConf(P, N, conf), LUMW) * (1.0 / PI);
-    const float unoccE = dot(sampleEnvLod(N, maxLod), LUMW);
+    const float unoccE = dot(sampleEnvDiffuse(N), LUMW);
     const float vis    = clamp(actE / max(unoccE, 1e-5), 0.0, 1.0);
     return mix(1.0, vis, smoothstep(0.0, 0.1, conf));
 }
@@ -610,7 +610,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // the point is dark — a hard switch rendered every glass-covered dial
         // near-black. Low confidence falls back to the legacy env fill.
         // Probes off keeps the original approximation.
-        const vec3 hitEnvFill = sampleEnvLod(hitN, maxLod);
+        const vec3 hitEnvFill = sampleEnvDiffuse(hitN);
         vec3  hitDiffInd = hitEnvFill + lights.ambient + hemiAmbient(hitN);
         // Scale of the rough hit's split-sum env cap-off further down: on a
         // transmission retrace, the sky level its diffuse fill was given.
@@ -794,7 +794,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
             // routinely, not rarely. Shade the last leaf we passed as an
             // opaque diffuse surface facing the ray, under sky+ambient only.
             const vec3 nFace = -d;
-            const vec3 fill = sampleEnvLod(nFace, maxLod) + lights.ambient + hemiAmbient(nFace);
+            const vec3 fill = sampleEnvDiffuse(nFace) + lights.ambient + hemiAmbient(nFace);
             radiance += tput * lastCutout * fill * (1.0 / PI) * envInt;
         } else if (b == 0 && gTraceDeferMiss) {
             gTraceMissTput = tput;// the caller shades it, as in the miss branch
@@ -834,7 +834,7 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
     while (rayQueryProceedEXT(rq)) {}
     if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
         missed = true;// sky visible along this ray — feeds the openness estimate
-        return sampleEnvLod(dir, maxLod) * envInt;// escaped → sky (the env 1st-bounce term)
+        return sampleEnvDiffuse(dir) * envInt;// escaped → sky (the env 1st-bounce term)
     }
 
     const int          hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);

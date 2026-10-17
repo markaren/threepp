@@ -452,7 +452,8 @@ vec4 cloudGather(ivec2 px, float sceneDist, out float meanDist) {
 // main(), which is after them, so the definitions link in the same translation
 // unit. cam/clouds/fog/lights UBOs are already declared above.
 float heightFogOpticalDepth(vec3 a, vec3 b);// deferred_shade_60_fog_volumetrics.glsl
-vec3  sampleEnvLod(vec3 dir, float lod);    // deferred_shade_10_lighting_utils.glsl
+vec3  sampleEnvLod(vec3 dir, float lod);
+vec3  sampleEnvDiffuse(vec3 n);    // deferred_shade_10_lighting_utils.glsl
 vec3  sampleBackground(vec3 dir);           // deferred_shade_10_lighting_utils.glsl
 // Composite the upsampled half-res cloud layer (binding 61) over `col` at this
 // pixel. sceneDist = this pixel's own camera→surface distance (1e30 for sky).
@@ -1413,7 +1414,7 @@ void main() {
         // rationale as the retrace fill: a partially-valid interior
         // neighbourhood is trusted outright; a starved one (conf → 0) means
         // "unmeasured", not "dark" — fall back to the env fill, never black.
-        diffInd = sampleEnvLod(N, maxLod) + lights.ambient + hemiAmbient(N);
+        diffInd = sampleEnvDiffuse(N) + lights.ambient + hemiAmbient(N);
         if (probesEnabled()) {
             float bConf;
             const vec3 bFill = probeIrradianceConf(worldPos, N, bConf) * (1.0 / PI);
@@ -1505,13 +1506,13 @@ void main() {
                 // ray-free sky term the inline branch below uses, faded in over
                 // that window's last cell, where conf fades out.
                 if (probeFarW > 0.0) {
-                    fallE = mix(fallE, sampleEnvLod(bentN, maxLod) * gtaoMultiBounce(rtSkyVis, albedo), probeFarW);
+                    fallE = mix(fallE, sampleEnvDiffuse(bentN) * gtaoMultiBounce(rtSkyVis, albedo), probeFarW);
                     gGiMovFrac *= 1.0 - probeFarW;
                 }
                 fillE = mix(fillE, fallE, gatherW);
             }
         } else {
-            fillE = sampleEnvLod(bentN, maxLod) * gtaoMultiBounce(rtSkyVis, albedo);
+            fillE = sampleEnvDiffuse(bentN) * gtaoMultiBounce(rtSkyVis, albedo);
         }
         diffInd = mix(fillE, probeT, conf) + (lights.ambient + hemiAmbient(N)) * rtSkyVis;
     } else if (aoOn) {
@@ -1522,7 +1523,7 @@ void main() {
         gGiMovFrac = 0.0;// set by gatherEnv: fraction of GI rays hitting moving geometry
         diffInd = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, demodIndirect, giSpp, pm.envMapIntensity, openness) + (lights.ambient + hemiAmbient(N)) * rtAo;
     } else {
-        diffInd = sampleEnvLod(N, maxLod) + lights.ambient + hemiAmbient(N);
+        diffInd = sampleEnvDiffuse(N) + lights.ambient + hemiAmbient(N);
     }
     // A point UNDER the water gets all of that through the column over it
     // (murkAmbient): the sky, the probes' and the gather's bounce of it, the
@@ -1654,7 +1655,7 @@ void main() {
         }
         // Back-face env fill: sky/env irradiance reaching the shaded underside so
         // canopy interiors are dim, not dead black. Cheap env LOD tap (no rays).
-        const vec3 backEnv = sampleEnvLod(-N, maxLod);
+        const vec3 backEnv = sampleEnvDiffuse(-N);
         lit += pm.translucency * tCol * (tSum + backEnv * kTransAmbient);
     }
 
@@ -1741,7 +1742,7 @@ void main() {
                 const vec3  LUMW   = vec3(0.2126, 0.7152, 0.0722);
                 float conf;
                 const float actE   = dot(probeIrradianceConf(worldPos, N, conf), LUMW) * (1.0 / PI);
-                const float unoccE = dot(sampleEnvLod(N, maxLod), LUMW);
+                const float unoccE = dot(sampleEnvDiffuse(N), LUMW);
                 envSpecVis = clamp(actE / max(unoccE, 1e-5), 0.0, 1.0);
                 // …EXCEPT when the neighbourhood measured NOTHING (conf → 0: every
                 // trilinear probe invalid — inside geometry — or fully crushed).

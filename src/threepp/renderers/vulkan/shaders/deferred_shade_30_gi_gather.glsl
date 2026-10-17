@@ -84,11 +84,11 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stocha
         rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskOpaque, orig, 1e-3, dir, SKY_DIST);
         while (rayQueryProceedEXT(rq)) {}
         if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
-            acc  += sampleEnvLod(dir, maxLod) * envInt;
+            acc  += sampleEnvDiffuse(dir) * envInt;
             open += 1.0;
         } else {
             const float t = rayQueryGetIntersectionTEXT(rq, true);
-            hitHack += clamp(t / AO_RADIUS, 0.0, 1.0) * sampleEnvLod(dir, maxLod) * envInt;
+            hitHack += clamp(t / AO_RADIUS, 0.0, 1.0) * sampleEnvDiffuse(dir) * envInt;
         }
     }
     openness = open / float(GI_RAYS);

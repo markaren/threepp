@@ -217,7 +217,7 @@ bool ssrWaterReflect(vec3 origin, vec3 dir, float maxLod, float missLod, float e
     if (nTap.w < 0.0) {
         shade = aTap.rgb;// unlit
     } else {
-        const vec3 diffInd = murkAmbient(sampleEnvLod(N, maxLod) + lights.ambient + hemiAmbient(N), P, N);
+        const vec3 diffInd = murkAmbient(sampleEnvDiffuse(N) + lights.ambient + hemiAmbient(N), P, N);
         shade = shadeDiffuseDirect(P, N, V, aTap.rgb, clamp(nTap.w, 0.04, 1.0), clamp(aTap.a, 0.0, 1.0),
                                    hm.emissive * hm.emissiveIntensity, doShadows, diffInd,
                                    hm.sheenColor, hm.sheenRoughness,
@@ -748,7 +748,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     if (!below && gWake.g > 2e-3) {
         vec3 hue = max(pm.attenuationColor, vec3(1e-4));
         hue = mix(vec3(1.0), hue / max(max(hue.r, hue.g), hue.b), 0.7);
-        const vec3 aerDiff = sampleEnvLod(Nmacro, maxLod) + lights.ambient + hemiAmbient(Nmacro);
+        const vec3 aerDiff = sampleEnvDiffuse(Nmacro) + lights.ambient + hemiAmbient(Nmacro);
         const vec3 aerLit  = shadeDiffuseDirect(P, Nmacro, V, 0.30 * gWakeAlbedo * hue, 1.0, 0.0,
                                                 vec3(0.0), doShadows, aerDiff,
                                                 vec3(0.0), 0.0,
@@ -933,7 +933,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 vec3 foamCol = mix(vec3(0.62, 0.68, 0.72), vec3(0.97, 0.99, 1.00), micro);
                 foamCol = mix(foamCol, vec3(0.97, 0.99, 1.00), 0.35 * foamCoverage);// fresh caps brighter
                 const float foamRough= mix(1.0, 0.45, micro);
-                const vec3  foamDiff = sampleEnvLod(N, maxLod) + lights.ambient + hemiAmbient(N);
+                const vec3  foamDiff = sampleEnvDiffuse(N) + lights.ambient + hemiAmbient(N);
                 const vec3  foamLit  = shadeDiffuseDirect(P, N, V, foamCol, foamRough, 0.0,
                                                           vec3(0.0), doShadows, foamDiff,
                                                           vec3(0.0), 0.0,
@@ -955,7 +955,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     if (gWake.r > 4e-3) {
         const float cover = smoothstep(0.10, 0.45, gWake.r) * (below ? 0.12 : 1.0);
         const vec3  filmCol  = gWakeAlbedo * mix(vec3(0.66, 0.72, 0.75), vec3(0.97, 0.99, 1.00), smoothstep(0.15, 0.85, gWake.r));
-        const vec3  filmDiff = sampleEnvLod(N, maxLod) + lights.ambient + hemiAmbient(N);
+        const vec3  filmDiff = sampleEnvDiffuse(N) + lights.ambient + hemiAmbient(N);
         const vec3  filmLit  = shadeDiffuseDirect(P, N, V, filmCol, 0.8, 0.0,
                                                   vec3(0.0), doShadows, filmDiff,
                                                   vec3(0.0), 0.0,
@@ -1042,7 +1042,7 @@ void traceGlassInterior(vec3 origin, vec3 dir, float maxLod, bool doShadows, ino
                 vec3 n = hitN;
                 if (dot(n, -dir) < 0.0) n = -n;
                 const vec3 alb     = hitTex(hm.albedoTexIndex, hm.uvTransform, uv, hm.albedo);
-                const vec3 diffInd = sampleEnvLod(n, maxLod) + lights.ambient + hemiAmbient(n);
+                const vec3 diffInd = sampleEnvDiffuse(n) + lights.ambient + hemiAmbient(n);
                 over  += overT * a * shadeDiffuseDirect(hitP, n, -dir, alb,
                                                         clamp(hm.roughness, 0.04, 1.0), clamp(hm.metalness, 0.0, 1.0),
                                                         hm.emissive * hm.emissiveIntensity,

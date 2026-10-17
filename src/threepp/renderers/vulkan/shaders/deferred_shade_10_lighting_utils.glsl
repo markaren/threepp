@@ -353,6 +353,26 @@ vec3 sampleEnvLod(vec3 dir, float lod) {
     return textureLod(envTex, vec2(u, v), lod).rgb * lights.envIntensity;
 }
 
+// The environment as a DIFFUSE surface sees it. The last prefiltered mip,
+// which every diffuse read used, is GGX at roughness 1: as good as the
+// whole-sphere mean, the same colour for a face under the sky and a face
+// over the ground (a two-tone sky, blue above the horizon and red below, lit
+// every surface the same purple, 2026-10-18), so a sky whose lower half
+// holds the sea and the shores lit the whole scene with their average. At
+// 0.7 of the chain the lobe is still wide but it points: what a face is lit
+// by depends on where it faces, as the GL renderer's irradiance strip does.
+// The GI gather integrates the hemisphere with cosine-weighted rays, so for
+// it this only sets how smooth each ray's sky is; the single reads along a
+// normal (the fills) stand in for that integral with one wide-lobe tap.
+// Specular reads keep their roughness lod and the fog its sphere mean (light
+// scatters into it from everywhere).
+float envDiffuseLod() {
+    return 0.7 * float(max(pc.envMipCount, 1u) - 1u);
+}
+vec3 sampleEnvDiffuse(vec3 n) {
+    return sampleEnvLod(n, envDiffuseLod());
+}
+
 // The visible background along a view ray: scene.backgroundRotation and
 // backgroundIntensity, and backgroundBlurriness read from the prefiltered
 // chain at roughness = blurriness (the LOD the specular IBL uses for that

@@ -211,7 +211,9 @@ vec3 probeRayRadiance(vec3 origin, vec3 dir, bool doShadows, inout uint seed,
     rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskOpaque, origin, 1e-4, dir, 1e30);
     while (rayQueryProceedEXT(rq)) {}
     if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT)
-        return sampleEnvLod(dir, float(max(pc.envMipCount, 1u) - 1u));// sky (sun-free top mip)
+        // 0.7 of the chain, as envDiffuseLod in deferred_shade_10_lighting_utils: the
+        // top mip is the sphere mean, which lit every probe with the same colour
+        return sampleEnvLod(dir, 0.7 * float(max(pc.envMipCount, 1u) - 1u));// sky (sun-free)
 
     const int          hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
     const MaterialDesc hm     = mats[hitId];
