@@ -980,7 +980,8 @@ void VulkanRenderer::Impl::addGbufferPasses(rg::RenderGraph& g) {
                 const auto& sm   = view().shadowMaps_->slot(f);
                 auto        pass = g.addPass("shadowMaps", [this](VkCommandBuffer c) {
                     gpuTimings_->begin(c, TP_ShadowMaps, currentFrame);
-                    view().shadowMaps_->record(c, currentFrame, shadowPipeline_, rasterPipelineLayout);
+                    view().shadowMaps_->record(c, currentFrame, shadowDepthPipeline_, shadowPipeline_,
+                                               rasterPipelineLayout);
                     gpuTimings_->end(c, TP_ShadowMaps, currentFrame);
                 });
                 const rg::Access depthWrite{kTests,

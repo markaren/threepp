@@ -96,7 +96,9 @@ namespace threepp {
 
     void VulkanRenderer::Impl::destroyShadowResources() {
         if (shadowPipeline_) vkDestroyPipeline(ctx->device(), shadowPipeline_, nullptr);
-        shadowPipeline_ = VK_NULL_HANDLE;
+        if (shadowDepthPipeline_) vkDestroyPipeline(ctx->device(), shadowDepthPipeline_, nullptr);
+        shadowPipeline_      = VK_NULL_HANDLE;
+        shadowDepthPipeline_ = VK_NULL_HANDLE;
         vulkan::destroyShadowDepthArray(*ctx, shadowDummyArray_);
         vulkan::destroyShadowDepthArray(*ctx, shadowDummyCube_);
         destroyBuffer(ctx->allocator(), shadowDummyUbo_);
@@ -515,7 +517,9 @@ namespace threepp {
         smp.depthBiasConstant = 0.f;
         smp.depthBiasSlope    = -1.f;
 
-        buildShadowDrawData(f, vol);
+        Vector3 camPos;
+        camPos.setFromMatrixPosition(*camera.matrixWorld);
+        buildShadowDrawData(f, vol, camPos);
 
         auto& slot = smp.slot(f);
         std::memcpy(slot.uboMapped, &u, sizeof(u));
@@ -523,12 +527,15 @@ namespace threepp {
         return true;
     }
 
-    void VulkanRenderer::Impl::buildShadowDrawData(uint32_t frame, const ShadowCullVolumes& vol) {
+    void VulkanRenderer::Impl::buildShadowDrawData(uint32_t frame, const ShadowCullVolumes& vol,
+                                                   const Vector3& camPos) {
         THREEPP_CPUPROF("frame.D_buildShadowDraws");
-        auto&                                             smp = *view().shadowMaps_;
-        std::array<std::vector<DrawInfoGpu>, 3>           draws;
-        std::array<std::vector<VkDrawIndirectCommand>, 3> cmds;
+        constexpr uint32_t                                kGroups = vulkan::ShadowMapPass::kGroups;
+        auto&                                             smp     = *view().shadowMaps_;
+        std::array<std::vector<DrawInfoGpu>, kGroups>     draws;
+        std::array<std::vector<VkDrawIndirectCommand>, kGroups> cmds;
         const auto&                                       entries = lastVisibleEntries_;
+        const float                                       cam[3]  = {camPos.x, camPos.y, camPos.z};
 
         const auto reaches = [&](const float* e, float er) {
             for (const auto& b : vol.boxes) {
@@ -607,6 +614,15 @@ namespace threepp {
                     vcount = std::min(vcount - vfirst, drawCount);
                 }
                 if (vcount == 0u) continue;
+                // shadow_depth.frag's alpha test, for a cutout within the
+                // cutout ray distance (setCutoutRayDistance) of this view's
+                // camera. Beyond it the caster is drawn solid, as the rays then
+                // take it (FORCE_OPAQUE): its shadow is the cards' outline. The
+                // rest are depth only, with no fragment stage.
+                const bool tested = md.alphaCutoff > 0.f && md.albedoTexIndex >= 0 &&
+                                    !(cutoutRayDistance_ > 0.f && cutoutCaster(md) &&
+                                      entryBeyond(en, cam, cutoutRayDistance_));
+                const int group = (tested ? 3 : 0) + bucket;
                 DrawInfoGpu di{};
                 std::memcpy(di.model, en.worldMatrix.data(), 64);
                 di.posAddr             = rec->vertex.address;
@@ -617,12 +633,12 @@ namespace threepp {
                 di.instanceCustomIndex = i;
                 di.indexed             = sel.indexed ? 1u : 0u;
                 di.packedAttrs         = rec->packedMask;
-                draws[bucket].push_back(di);
+                draws[group].push_back(di);
                 VkDrawIndirectCommand cmd{};
                 cmd.vertexCount   = vcount;
                 cmd.instanceCount = 1u;
                 cmd.firstVertex   = vfirst;
-                cmds[bucket].push_back(cmd);
+                cmds[group].push_back(cmd);
             }
         }
 
@@ -635,7 +651,7 @@ namespace threepp {
         check(vmaMapMemory(ctx->allocator(), slot.drawInfo.alloc, &dm), "vmaMapMemory(shadow drawInfo)");
         check(vmaMapMemory(ctx->allocator(), slot.cmds.alloc, &cm), "vmaMapMemory(shadow cmds)");
         uint32_t offset = 0;
-        for (int b = 0; b < 3; ++b) {
+        for (uint32_t b = 0; b < kGroups; ++b) {
             const uint32_t nb = static_cast<uint32_t>(draws[b].size());
             smp.groups[b]     = {offset, nb};
             for (uint32_t k = 0; k < nb; ++k) cmds[b][k].firstInstance = offset + k;
@@ -742,6 +758,11 @@ namespace threepp {
         gp.layout              = rasterPipelineLayout;
         check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gp, nullptr, &shadowPipeline_),
               "vkCreateGraphicsPipelines(shadow maps)");
+        // The same without the fragment stage: casters that need no alpha
+        // test keep early depth.
+        gp.stageCount = 1;
+        check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gp, nullptr, &shadowDepthPipeline_),
+              "vkCreateGraphicsPipelines(shadow maps, depth only)");
         vkDestroyShaderModule(ctx->device(), vert, nullptr);
         vkDestroyShaderModule(ctx->device(), frag, nullptr);
     }

@@ -114,19 +114,24 @@ namespace threepp::vulkan {
             uint32_t layer  = 0;// layer of its array
         };
         std::vector<Layer> layers;
-        // The caster list's cull-mode buckets: [BACK, FRONT, NONE].
+        // The caster list's buckets: [BACK, FRONT, NONE] drawn depth only,
+        // then the same three through the alpha test (a cutout caster within
+        // the cutout ray distance, see buildShadowDrawData).
         struct Group {
             uint32_t offset = 0, count = 0;
         };
-        std::array<Group, 3> groups{};
+        static constexpr uint32_t kGroups = 6;
+        std::array<Group, kGroups> groups{};
         uint32_t             totalDraws = 0;
         // vkCmdSetDepthBias for the raster side (reverse-Z: negative pushes the
         // stored depth away from the light).
         float depthBiasConstant = 0.f, depthBiasSlope = 0.f;
 
         // Records every layer; the graph has put the images in
-        // DEPTH_ATTACHMENT_OPTIMAL.
-        void record(VkCommandBuffer cb, uint32_t frame, VkPipeline pipeline, VkPipelineLayout layout) const;
+        // DEPTH_ATTACHMENT_OPTIMAL. depthOnly: no fragment stage (groups 0-2);
+        // alphaTest: shadow_depth.frag's cutout test (groups 3-5).
+        void record(VkCommandBuffer cb, uint32_t frame, VkPipeline depthOnly, VkPipeline alphaTest,
+                    VkPipelineLayout layout) const;
 
     private:
         VulkanContext&        ctx_;

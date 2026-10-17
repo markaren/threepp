@@ -5053,12 +5053,13 @@ namespace threepp {
             std::vector<Box>  boxes;
             std::vector<Ball> balls;
         };
-        void buildShadowDrawData(uint32_t frame, const ShadowCullVolumes& vol);
+        void buildShadowDrawData(uint32_t frame, const ShadowCullVolumes& vol, const Vector3& camPos);
         // Depth-only, reverse-Z, dynamic rendering into one D32 layer: the
         // indirect G-buffer draw reduced to position + the cutout test, with
         // depth clamp where the device has it and dynamic cull mode, front
         // face and depth bias.
-        VkPipeline shadowPipeline_ = VK_NULL_HANDLE;
+        VkPipeline shadowPipeline_      = VK_NULL_HANDLE;// casters through shadow_depth.frag's alpha test
+        VkPipeline shadowDepthPipeline_ = VK_NULL_HANDLE;// the rest: no fragment stage
         void createShadowPipeline();
         // Dir light 0 as updateLightsUbo packed it, with its LightShadow
         // settings (the environment's sun: the defaults, 2048 texels).

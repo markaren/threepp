@@ -215,10 +215,10 @@ namespace threepp::vulkan {
         updateDescriptorSets(ctx_.device(), n, w, 0, nullptr);
     }
 
-    void ShadowMapPass::record(VkCommandBuffer cb, uint32_t frame, VkPipeline pipeline,
+    void ShadowMapPass::record(VkCommandBuffer cb, uint32_t frame, VkPipeline depthOnly, VkPipeline alphaTest,
                                VkPipelineLayout layout) const {
         const Slot& s = slots_[frame];
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, depthOnly);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &s.rasterSet, 0, nullptr);
         vkCmdSetDepthBias(cb, depthBiasConstant, 0.f, depthBiasSlope);
         constexpr VkCullModeFlags kCull[3] = {VK_CULL_MODE_BACK_BIT, VK_CULL_MODE_FRONT_BIT, VK_CULL_MODE_NONE};
@@ -261,13 +261,22 @@ namespace threepp::vulkan {
             std::memcpy(pc.vp, L.vp, sizeof(pc.vp));
             pc.info[0] = face ? 1u : 0u;
             vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
-            for (int b = 0; b < 3; ++b) {
+            // The depth-only groups first (the pipeline the layer starts in),
+            // then the alpha-tested ones, and back for the next layer. Both
+            // pipelines share the layout and the dynamic state.
+            bool tested = false;
+            for (uint32_t b = 0; b < kGroups; ++b) {
                 const Group& g = groups[b];
                 if (g.count == 0u) continue;
-                vkCmdSetCullMode(cb, kCull[b]);
+                if (b >= 3u && !tested) {
+                    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, alphaTest);
+                    tested = true;
+                }
+                vkCmdSetCullMode(cb, kCull[b % 3u]);
                 vkCmdDrawIndirect(cb, s.cmds.handle, VkDeviceSize(g.offset) * kStride, g.count,
                                   static_cast<uint32_t>(kStride));
             }
+            if (tested) vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, depthOnly);
             vkCmdEndRendering(cb);
         }
     }
