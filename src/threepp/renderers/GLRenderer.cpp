@@ -989,6 +989,9 @@ struct GLRenderer::Impl {
 
                 updateCommonMaterialProperties(material, parameters);
 
+                materialProperties->targetPrograms[gl::MaterialProperties::targetKey(parameters.outputEncoding, parameters.toneMapping)] =
+                        {program, materialProperties->uniformsList};
+
                 return program;
             }
 
@@ -1060,6 +1063,8 @@ struct GLRenderer::Impl {
 
         materialProperties->currentProgram = program;
         materialProperties->uniformsList = uniformsList;
+        materialProperties->targetPrograms[gl::MaterialProperties::targetKey(parameters.outputEncoding, parameters.toneMapping)] =
+                {program, uniformsList};
 
         return materialProperties->currentProgram;
     }
@@ -1134,17 +1139,18 @@ struct GLRenderer::Impl {
         //
 
         bool needsProgramChange = false;
+        // Only the output target (colour space, tone mapping) differs from the
+        // current program's: a switch between two programs the material has
+        // already been drawn with, served from MaterialProperties::targetPrograms.
+        bool targetChanged = false;
         const auto& objectType = object->type();
         bool isInstancedMesh = objectType == "InstancedMesh";
         bool isSkinnedMesh = objectType == "SkinnedMesh";
+        const auto toneMapping = currentToneMapping(material);
 
         if (material->version() == materialProperties->version) {
 
             if (materialProperties->needsLights && (materialProperties->lightsStateVersion != lights.state.version)) {
-
-                needsProgramChange = true;
-
-            } else if (materialProperties->outputEncoding != encoding) {
 
                 needsProgramChange = true;
 
@@ -1210,17 +1216,20 @@ struct GLRenderer::Impl {
                 // changes the sampling code, not a uniform.
                 needsProgramChange = true;
 
-            } else if (materialProperties->toneMapping != currentToneMapping(material)) {
-
-                // TONE_MAPPING and the operator are compiled into the program,
-                // and they depend on what is bound (see currentToneMapping): a
-                // material drawn into a target and then to the screen in one
-                // frame switches between two cached programs here.
-                needsProgramChange = true;
-
             } else if (materialProperties->useLegacyLights != scope.useLegacyLights) {
 
                 needsProgramChange = true;
+
+            } else if (materialProperties->outputEncoding != encoding || materialProperties->toneMapping != toneMapping) {
+
+                // The output colour space, TONE_MAPPING and the operator are
+                // compiled into the program, and they depend on what is bound
+                // (see currentOutputColorSpace / currentToneMapping): a material
+                // drawn into a target and then to the screen in one frame
+                // switches between two cached programs here. Checked last, so
+                // that it is the ONLY difference when the switch is served
+                // from the target cache below.
+                targetChanged = true;
             }
 
         } else {
@@ -1255,6 +1264,34 @@ struct GLRenderer::Impl {
 
                 needsProgramChange = true;
             }
+        }
+
+        if (targetChanged) {
+
+            const auto cached = materialProperties->targetPrograms.find(gl::MaterialProperties::targetKey(encoding, toneMapping));
+
+            if (cached != materialProperties->targetPrograms.end()) {
+
+                // The same program getProgram would return, with the uniforms
+                // list it built then; the lights, environment, fog, clipping
+                // and shadow state are those of the current program, since
+                // nothing else differs.
+                materialProperties->currentProgram = cached->second.program;
+                materialProperties->uniformsList = cached->second.uniformsList;
+                materialProperties->outputEncoding = encoding;
+                materialProperties->toneMapping = toneMapping;
+                program = materialProperties->currentProgram;
+
+            } else {
+
+                needsProgramChange = true;
+            }
+
+        } else if (needsProgramChange) {
+
+            // Anything but the target changed: every cached entry was built
+            // against the old state.
+            materialProperties->targetPrograms.clear();
         }
 
         if (needsProgramChange) {

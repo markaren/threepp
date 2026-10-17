@@ -99,6 +99,26 @@ namespace threepp::gl {
         std::array<SideProgram, 3> sidePrograms{};
         std::optional<Side> currentSide;
 
+        // The programs this material has already switched to, one per output
+        // target (colour space + tone mapping), each with the uniforms list
+        // built for it. A frame that draws into a render target and then to
+        // the screen (the transmission pass, a planar reflection) alternates
+        // between two of these for every material; without the cache each
+        // switch went through getProgram, rebuilding the program parameters
+        // (with copies of both shader sources), the cache key and the list,
+        // which cost about 12 ms a pass on a town-sized scene. Every entry has
+        // the rest of the program's parameters baked in, so the map is cleared
+        // whenever the program changes for any other reason.
+        struct TargetProgram {
+            GLProgram* program = nullptr;
+            std::vector<UniformObject*> uniformsList;
+        };
+        std::unordered_map<unsigned int, TargetProgram> targetPrograms;
+
+        static unsigned int targetKey(ColorSpace encoding, ToneMapping toneMapping) {
+            return static_cast<unsigned int>(encoding) * 64u + static_cast<unsigned int>(toneMapping);
+        }
+
         unsigned int version{};
     };
 
