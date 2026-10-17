@@ -251,6 +251,7 @@ set(publicHeaders
         "threepp/renderers/Renderer.hpp"
         "threepp/renderers/GLRenderer.hpp"
         "threepp/renderers/RenderTarget.hpp"
+        "threepp/renderers/PlanarReflection.hpp"
         "threepp/renderers/GLRenderTarget.hpp"
 
         "threepp/renderers/gl/GLInfo.hpp"
@@ -685,6 +686,7 @@ set(sources
 
         "threepp/renderers/GLRenderer.cpp"
         "threepp/renderers/RenderTarget.cpp"
+        "threepp/renderers/PlanarReflection.cpp"
 
         "threepp/postprocessing/BokehPass.cpp"
         "threepp/postprocessing/ClearPass.cpp"

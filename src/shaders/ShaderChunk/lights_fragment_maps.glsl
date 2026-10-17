@@ -38,3 +38,14 @@
 
 #endif
 
+#if defined( USE_PLANAR_REFLECTION ) && defined( RE_IndirectSpecular )
+
+	// The near scene in a planar mirror stands in for the environment where it
+	// was drawn; the environment keeps the rest (meshphysical_frag).
+	{
+		vec4 planarRadiance = getPlanarReflection( geometry.normal, geometryNormal );
+		radiance = mix( radiance, planarRadiance.rgb, planarRadiance.a );
+	}
+
+#endif
+

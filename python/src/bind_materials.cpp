@@ -341,7 +341,20 @@ namespace threepp_py {
                 .def_readwrite("sheen_color", &MeshPhysicalMaterial::sheenColor,
                                "Sheen tint (KHR_materials_sheen), default black.")
                 .def_readwrite("sheen_roughness", &MeshPhysicalMaterial::sheenRoughness,
-                               "Sheen roughness in [0, 1] (default 0).");
+                               "Sheen roughness in [0, 1] (default 0).")
+                // A planar mirror of the near scene as the specular environment
+                // (GLRenderer): what tp.PlanarReflection renders. Where the
+                // mirror holds a drawn pixel it replaces the env map's
+                // reflection; where it holds nothing the env map stays. None
+                // (the default) leaves the shader exactly as it was.
+                .def_readwrite("planar_reflection", &MeshPhysicalMaterial::planarReflection,
+                               "The mirror texture (tp.PlanarReflection.texture), or None. GLRenderer only.")
+                .def_readwrite("planar_reflection_matrix", &MeshPhysicalMaterial::planarReflectionMatrix,
+                               "World position -> the mirror's texture coordinates "
+                               "(tp.PlanarReflection.texture_matrix, or set both with its apply()).")
+                .def_readwrite("planar_reflection_distortion", &MeshPhysicalMaterial::planarReflectionDistortion,
+                               "Metres the lookup moves per unit tilt of the shading normal off the surface: "
+                               "how much the normal map breaks the mirror up. Default 2.");
 
         // ---- MeshPhongMaterial ----------------------------------------------
         auto phong = py::class_<MeshPhongMaterial, Material, std::shared_ptr<MeshPhongMaterial>>(m, "MeshPhongMaterial");

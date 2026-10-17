@@ -84,6 +84,10 @@ namespace threepp {
             bool transmissionCoverage{};// transmissive AND alpha-blended: alpha is coverage
             bool thicknessMap{};
 
+            // MaterialWithPlanarReflection holds a mirror texture: the specular
+            // environment reads it where it was drawn (USE_PLANAR_REFLECTION).
+            bool planarReflection{};
+
             std::optional<CombineOperation> combine;
 
             bool vertexTangents{};

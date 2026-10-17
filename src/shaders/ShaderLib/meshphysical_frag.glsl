@@ -77,6 +77,43 @@ varying vec3 vViewPosition;
 #include <cube_uv_reflection_fragment>
 #include <envmap_common_pars_fragment>
 #include <envmap_physical_pars_fragment>
+
+#ifdef USE_PLANAR_REFLECTION
+
+	// A planar mirror of the near scene (renderers/PlanarReflection), read in
+	// <lights_fragment_maps> in place of the environment where it was drawn.
+	uniform sampler2D planarReflection;
+	uniform mat4 planarReflectionMatrix;
+	uniform float planarReflectionDistortion;
+	varying vec3 vPlanarReflectionPosition;
+
+	// The mirror's radiance for this fragment, alpha 0 where it holds nothing
+	// (nothing drawn, or off its frame). The surface point is projected through
+	// the mirrored camera after a push along the shading normal's tilt off the
+	// geometric normal: a wave slope moves the mirrored image as it would move
+	// the reflected ray, the way objects/Water shifts its lookup by the normal.
+	// A short fade at the frame's edges hands over to the environment softly.
+	vec4 getPlanarReflection( const in vec3 shadingNormal, const in vec3 flatNormal ) {
+
+		vec3 n = inverseTransformDirection( shadingNormal, viewMatrix );
+		vec3 g = inverseTransformDirection( flatNormal, viewMatrix );
+		vec3 tilt = n - g * dot( n, g );
+		vec4 coord = planarReflectionMatrix * vec4( vPlanarReflectionPosition + tilt * planarReflectionDistortion, 1.0 );
+
+		if ( coord.w <= 0.0 ) return vec4( 0.0 );
+
+		vec2 uv = coord.xy / coord.w;
+		if ( any( lessThan( uv, vec2( 0.0 ) ) ) || any( greaterThan( uv, vec2( 1.0 ) ) ) ) return vec4( 0.0 );
+
+		vec4 mirror = texture2D( planarReflection, uv );
+		float edge = min( min( uv.x, 1.0 - uv.x ), min( uv.y, 1.0 - uv.y ) );
+		mirror.a *= smoothstep( 0.0, 0.05, edge );
+		return mirror;
+
+	}
+
+#endif
+
 #include <fog_pars_fragment>
 #include <lights_pars_begin>
 #include <lights_physical_pars_fragment>

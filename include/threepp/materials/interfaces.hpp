@@ -355,6 +355,24 @@ namespace threepp {
         float iridescenceThicknessNm = 400.f;// thin-film thickness in nanometers
     };
 
+    // A planar mirror of the scene as the material's specular environment:
+    // what the GL renderer's PlanarReflection helper renders into its target,
+    // with the matrix that takes a WORLD position to that target's texture
+    // coordinates (bias * projection * view of the mirrored camera). Where the
+    // mirror holds a drawn pixel (alpha 1) it replaces the environment map's
+    // reflection; where it holds nothing (alpha 0, the target is cleared to
+    // transparent) the environment stays. The lookup is pushed about by the
+    // shading normal's tilt off the geometric normal, so a normal-mapped
+    // surface (water) breaks the mirror up the way objects/Water does:
+    // planarReflectionDistortion is the world offset in metres per unit tilt.
+    // Null here means no mirror and the unchanged shader.
+    struct MaterialWithPlanarReflection: virtual Material {
+
+        std::shared_ptr<Texture> planarReflection;
+        Matrix4 planarReflectionMatrix;
+        float planarReflectionDistortion = 2.f;
+    };
+
     struct MaterialWithPbrSpecular: virtual Material {
 
         float specularIntensity{1.f};

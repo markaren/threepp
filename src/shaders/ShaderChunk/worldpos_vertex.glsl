@@ -1,5 +1,5 @@
 
-#if defined( USE_ENVMAP ) || defined( DISTANCE ) || defined ( USE_SHADOWMAP ) || defined ( USE_TRANSMISSION )
+#if defined( USE_ENVMAP ) || defined( DISTANCE ) || defined ( USE_SHADOWMAP ) || defined ( USE_TRANSMISSION ) || defined ( USE_PLANAR_REFLECTION )
 
 	vec4 worldPosition = vec4( transformed, 1.0 );
 
