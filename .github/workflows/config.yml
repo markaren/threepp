@@ -430,6 +430,11 @@ jobs:
       # GPU. The test preset selects VulkanValidation_nort_test, so that the
       # notices name the mode that ran.
       #
+      # THREEPP_VK_SHADOW_MAPSIZE: without ray query the gate draws shadow maps
+      # (the sun's cascades at 2048 texels, lamp maps) for every view in every
+      # frame slot, all of it host memory on lavapipe; 512 keeps the maps a few
+      # MB while every path that makes, binds and reads them still runs.
+      #
       # The swap step and the report step come from the ray-traced gate. They
       # stay as its tripwire: the notices say what a run used, and annotations
       # are public where the log is not.
@@ -451,6 +456,7 @@ jobs:
           THREEPP_VULKAN_STRICT_VALIDATION: '1'
           THREEPP_GATE_UNLIT: '1'
           THREEPP_VULKAN_NO_RT: '1'
+          THREEPP_VK_SHADOW_MAPSIZE: '512'
         run: |
           set -euo pipefail
           # Memory in use and swap in use, in MB, every five seconds.

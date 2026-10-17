@@ -26,6 +26,8 @@
 // stb_image_write - implementation is compiled in utils/StbImageWrite.cpp.
 #include "stb_image_write.h"
 
+#include <cstdio>
+
 namespace threepp {
 
 
@@ -2735,6 +2737,12 @@ namespace threepp {
     }
 
     void VulkanRenderer::setShadowMode(ShadowMode mode) {
+        static bool told = false;
+        if (mode == ShadowMode::RayTraced && !rayTracingSupported() && !told) {
+            told = true;
+            std::fprintf(stderr, "[VulkanRenderer] shadow mode RayTraced needs ray tracing, which this device "
+                                 "lacks: running ShadowMaps\n");
+        }
         pimpl_->shadowModeReq_ = mode;
     }
 

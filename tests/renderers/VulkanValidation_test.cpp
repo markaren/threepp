@@ -481,6 +481,47 @@ int main() {
     }
     endPhase("instanced-span churn");
 
+    // ── Phase 9: shadow-mode switches ───────────────────────────────────────
+    // The shadow maps (setShadowMode) are made per view and per frame slot on
+    // the first frame that draws them, and the deferred set's bindings 80-83
+    // are rewritten to them, and back to the 1x1 dummies, as the mode goes
+    // maps -> ray traced -> off -> maps: with a secondary view alive (its own
+    // maps), a resize in between, and a point and a spot lamp in the scene for
+    // the lamps' maps (the point cubes are a cube array). On a device without
+    // ray query, RayTraced runs the maps too.
+    {
+        auto lamp = PointLight::create(0xffeedd, 6.f, 8.f);
+        lamp->position.set(0.f, 2.5f, 1.5f);
+        scene.add(lamp);
+        auto spot = SpotLight::create(0xddeeff, 20.f, 12.f, math::PI / 6.f, 0.3f);
+        spot->position.set(-2.f, 4.f, 2.f);
+        scene.add(spot);
+        auto camB = PerspectiveCamera::create(50.f, float(kW) / float(kH), 0.1f, 100.f);
+        camB->position.set(3.f, 2.f, 3.f);
+        camB->lookAt(Vector3(0.f, 0.8f, 0.f));
+        const auto viewB = renderer.addView(*camB, kW / 2, kH / 2);
+        const auto mode0 = renderer.shadowMode();
+        const auto readB = [&](int) { (void) renderer.readViewRGBPixels(viewB); };
+
+        renderer.setShadowMode(VulkanRenderer::ShadowMode::ShadowMaps);
+        runFrames(canvas, renderer, scene, *camera, kPhaseFrames, readB);
+        renderer.setShadowMode(VulkanRenderer::ShadowMode::RayTraced);
+        runFrames(canvas, renderer, scene, *camera, kPhaseFrames, readB);
+        renderer.setSize({kW * 3 / 4, kH * 3 / 4});
+        renderer.setShadowMode(VulkanRenderer::ShadowMode::Off);
+        runFrames(canvas, renderer, scene, *camera, kPhaseFrames, readB);
+        renderer.setSize({kW, kH});
+        renderer.setShadowMode(VulkanRenderer::ShadowMode::ShadowMaps);
+        runFrames(canvas, renderer, scene, *camera, kPhaseFrames, readB);
+
+        renderer.removeView(viewB);
+        renderer.setShadowMode(mode0);
+        scene.remove(*spot);
+        scene.remove(*lamp);
+        runFrames(canvas, renderer, scene, *camera, 3);
+    }
+    endPhase("shadow-mode switches");
+
     // ── Verdict ─────────────────────────────────────────────────────────────
     const auto errors   = vulkan::validationErrorCount();
     const auto warnings = vulkan::validationWarningCount();
