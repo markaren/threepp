@@ -1519,7 +1519,75 @@ namespace threepp_py {
                      "free-rolls the wheel (spin from ground speed) and ignores the torque.")
                 .def("clear_wheel_external_torque",
                      [](PhysxVehicle& v, int i) { v.clearWheelExternalTorque(wheelIndex(i)); },
-                     py::arg("wheel"), "Stop adding an external torque to this wheel's spin.");
+                     py::arg("wheel"), "Stop adding an external torque to this wheel's spin.")
+                // -- Bulk: a field of vehicles in one call each way --
+                .def_static(
+                        "read_states",
+                        [](const std::vector<const PhysxVehicle*>& vehicles) {
+                            constexpr py::ssize_t W0 = 7, WN = 15;
+                            const auto n = static_cast<py::ssize_t>(vehicles.size());
+                            py::array_t<double> out({n, W0 + 4 * WN});
+                            auto o = out.mutable_unchecked<2>();
+                            for (py::ssize_t k = 0; k < n; ++k) {
+                                const PhysxVehicle* v = vehicles[k];
+                                if (!v) throw std::invalid_argument("read_states: a vehicle is None");
+                                double* r = o.mutable_data(k, 0);
+                                const auto pose = v->chassisPose();
+                                r[0] = pose.p.x, r[1] = pose.p.y, r[2] = pose.p.z;
+                                r[3] = pose.q.x, r[4] = pose.q.y, r[5] = pose.q.z, r[6] = pose.q.w;
+                                for (int i = 0; i < 4; ++i) {
+                                    double* w = r + W0 + WN * i;
+                                    const auto lp = v->wheelLocalPose(i);
+                                    w[0] = lp.p.x, w[1] = lp.p.y, w[2] = lp.p.z;
+                                    w[3] = lp.q.x, w[4] = lp.q.y, w[5] = lp.q.z, w[6] = lp.q.w;
+                                    w[7] = v->wheelRotationAngle(i);
+                                    w[8] = v->wheelGrounded(i) ? 1.0 : 0.0;
+                                    w[9] = v->suspensionJounce(i);
+                                    w[10] = v->suspensionJounceSpeed(i);
+                                    w[11] = v->wheelAngularSpeed(i);
+                                    w[12] = v->suspensionForce(i);
+                                    w[13] = v->tireLongitudinalSlip(i);
+                                    w[14] = v->tireLateralSlip(i);
+                                }
+                            }
+                            return out;
+                        },
+                        py::arg("vehicles"),
+                        "Every vehicle's readouts in one call: an (N, 67) float64 array, one row per vehicle "
+                        "in list order. Columns 0-2 the chassis position, 3-6 its quaternion (x, y, z, w), "
+                        "then 15 per wheel (wheel i at 7 + 15 i): its local position (3) and quaternion (4) "
+                        "as wheel_local_pose, wheel_rotation_angle, wheel_grounded (1.0 / 0.0), "
+                        "suspension_jounce, suspension_jounce_speed, wheel_angular_speed, suspension_force, "
+                        "tire_longitudinal_slip, tire_lateral_slip. The same values the per-wheel getters "
+                        "return (each read whether the wheel is grounded or not).")
+                .def_static(
+                        "add_forces_at_pos",
+                        [](const std::vector<PhysxVehicle*>& vehicles,
+                           const py::array_t<double, py::array::c_style | py::array::forcecast>& forces) {
+                            if (forces.ndim() != 3 || forces.shape(0) != static_cast<py::ssize_t>(vehicles.size()) ||
+                                forces.shape(2) != 6) {
+                                throw std::invalid_argument("add_forces_at_pos: forces must be (len(vehicles), K, 6)");
+                            }
+                            auto f = forces.unchecked<3>();
+                            for (py::ssize_t k = 0; k < f.shape(0); ++k) {
+                                PhysxVehicle* v = vehicles[k];
+                                if (!v) throw std::invalid_argument("add_forces_at_pos: a vehicle is None");
+                                for (py::ssize_t j = 0; j < f.shape(1); ++j) {
+                                    const float fx = static_cast<float>(f(k, j, 0)), fy = static_cast<float>(f(k, j, 1)),
+                                                fz = static_cast<float>(f(k, j, 2));
+                                    if (fx == 0.f && fy == 0.f && fz == 0.f) continue;
+                                    ::physx::PxRigidBodyExt::addForceAtPos(
+                                            *v->chassisActor(), ::physx::PxVec3(fx, fy, fz),
+                                            ::physx::PxVec3(static_cast<float>(f(k, j, 3)), static_cast<float>(f(k, j, 4)),
+                                                            static_cast<float>(f(k, j, 5))),
+                                            ::physx::PxForceMode::eFORCE);
+                                }
+                            }
+                        },
+                        py::arg("vehicles"), py::arg("forces"),
+                        "add_force_at_pos for a field of vehicles in one call: forces[k, j] = (force xyz, "
+                        "world point xyz), the j-th force on vehicles[k], applied in that order. A row whose "
+                        "force is zero is skipped (pad the K slots with zeros).");
 
         m.attr("HAS_PHYSX") = true;
     }
