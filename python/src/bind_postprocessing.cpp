@@ -187,8 +187,31 @@ namespace threepp_py {
         py::class_<OutputPass, Pass, std::shared_ptr<OutputPass>>(
                 m, "OutputPass",
                 "Tone mapping + output colour space. The composer appends one implicitly; add it "
-                "explicitly only when a later pass needs display-ready input.")
-                .def(py::init([] { return std::make_shared<OutputPass>(); }));
+                "explicitly only when a later pass needs display-ready input, or to set a white "
+                "balance or a colour grade: the same two stages, in the same order and with the same "
+                "math, as VulkanRenderer.set_white_balance / set_color_grade, so one look reads the "
+                "same on both renderers. Both default to off and then cost nothing.")
+                .def(py::init([] { return std::make_shared<OutputPass>(); }))
+                .def("set_white_balance",
+                     [](OutputPass& p, float temperatureK, float tint) { p.setWhiteBalance(temperatureK, tint); },
+                     py::arg("temperature") = 6500.f, py::arg("tint") = 0.f,
+                     "Scene-illuminant white balance, applied in linear before the tone curve: Kelvin on the "
+                     "Planckian locus (6500 = neutral = off), tint green(-)/magenta(+).")
+                .def("set_color_grade",
+                     [](OutputPass& p, const Vector3& lift, const Vector3& gamma, const Vector3& gain,
+                        float saturation, float contrast) {
+                         OutputPass::ColorGrade g;
+                         g.lift = lift;
+                         g.gamma = gamma;
+                         g.gain = gain;
+                         g.saturation = saturation;
+                         g.contrast = contrast;
+                         p.setColorGrade(g);
+                     },
+                     py::arg("lift") = Vector3(0, 0, 0), py::arg("gamma") = Vector3(1, 1, 1),
+                     py::arg("gain") = Vector3(1, 1, 1), py::arg("saturation") = 1.f, py::arg("contrast") = 1.f,
+                     "Lift/gamma/gain wheels + saturation + contrast on the display-referred (sRGB-encoded) "
+                     "result, after the tone map. Defaults = identity = off.");
 
         // ---- UnrealBloomPass -------------------------------------------------
         py::class_<UnrealBloomPass, Pass, std::shared_ptr<UnrealBloomPass>>(m, "UnrealBloomPass")
