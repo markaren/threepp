@@ -5086,12 +5086,21 @@ namespace threepp {
         static bool  shadowCacheFromEnv();
         static float shadowCacheMarginFromEnv();
         [[nodiscard]] bool     shadowCasterDynamic(uint32_t entry) const;
-        [[nodiscard]] uint64_t shadowStaticHash() const;
+        [[nodiscard]] uint64_t shadowStaticHash();
+        // The hash walk's by-products: the moving casters' entry indices in
+        // span order, and each entry's span. In steady state (every layer
+        // skipped or served from its cache) buildShadowDrawData walks only
+        // those; the caches hold the static casters.
+        std::vector<uint32_t> shadowDynamicIdx_, shadowSpanOfEntry_;
         // The static set as a generation: +1 whenever shadowStaticHash changes.
         // A cached layer is valid for one generation, never for a hash value:
         // a layer unseen while a mesh moves and settles would meet its old
         // hash again with the mesh at its old place.
         uint64_t shadowStaticHashPrev_ = 0, shadowStaticGen_ = 1;
+        // THREEPP_VK_SHADOW_CACHE_DEBUG=1: a line per generation step (what
+        // flipped) and per frame (layers cached / rebuilt / drawn / skipped).
+        bool                 shadowCacheDebug_ = std::getenv("THREEPP_VK_SHADOW_CACHE_DEBUG") != nullptr;
+        std::vector<uint8_t> shadowDynPrev_;
         void buildShadowDrawData(uint32_t frame, const ShadowCullVolumes& vol, const Vector3& camPos);
         // buildShadowDrawData's scratch: every caster once, then one command
         // list per (layer, group); cleared, never reallocated, between frames.

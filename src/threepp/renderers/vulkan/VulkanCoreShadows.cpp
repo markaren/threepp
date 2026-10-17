@@ -89,19 +89,27 @@ namespace threepp {
     // entry's static/dynamic bit, FNV-1a over the entry walk. A frozen cascade
     // box is valid for one value of it: a mesh that starts or stops moving, is
     // hidden or shown, or a scene rebuild, changes it and redraws the cache.
-    uint64_t VulkanRenderer::Impl::shadowStaticHash() const {
+    uint64_t VulkanRenderer::Impl::shadowStaticHash() {
         uint64_t h = 1469598103934665603ull;
         const auto mix = [&](uint64_t v) {
             h ^= v;
             h *= 1099511628211ull;
         };
         mix(static_cast<uint64_t>(lastVisibleEntries_.size()));
-        for (const auto& sp : entrySpans_) {
+        shadowDynamicIdx_.clear();
+        shadowSpanOfEntry_.assign(lastVisibleEntries_.size(), 0u);
+        for (size_t s = 0; s < entrySpans_.size(); ++s) {
+            const auto& sp = entrySpans_[s];
             mix(sp.hidden ? 0x9e3779b97f4a7c15ull : 0x7f4a7c159e3779b9ull);
             if (sp.hidden) continue;
             for (uint32_t j = 0; j < sp.count; ++j) {
-                const uint32_t i = sp.first + j;
-                mix(static_cast<uint64_t>(i) * 2ull + (shadowCasterDynamic(i) ? 1ull : 0ull));
+                const uint32_t i   = sp.first + j;
+                const bool     dyn = shadowCasterDynamic(i);
+                mix(static_cast<uint64_t>(i) * 2ull + (dyn ? 1ull : 0ull));
+                if (i < shadowSpanOfEntry_.size()) {
+                    shadowSpanOfEntry_[i] = static_cast<uint32_t>(s);
+                    if (dyn) shadowDynamicIdx_.push_back(i);
+                }
             }
         }
         return h;
@@ -386,6 +394,30 @@ namespace threepp {
             if (h != shadowStaticHashPrev_) {
                 shadowStaticHashPrev_ = h;
                 ++shadowStaticGen_;
+                if (shadowCacheDebug_) {
+                    const size_t n = lastVisibleEntries_.size();
+                    size_t hidden = 0, dyn = 0, flips = 0;
+                    std::string first;
+                    for (const auto& sp : entrySpans_) hidden += sp.hidden ? 1u : 0u;
+                    std::vector<uint8_t> cur(n, 0u);
+                    for (size_t i = 0; i < n; ++i) {
+                        cur[i] = shadowCasterDynamic(static_cast<uint32_t>(i)) ? 1u : 0u;
+                        dyn += cur[i];
+                        const uint8_t prev = i < shadowDynPrev_.size() ? shadowDynPrev_[i] : 0u;
+                        if (cur[i] != prev) {
+                            if (flips < 8) {
+                                const MeshEntry& e = lastVisibleEntries_[i];
+                                first += " " + std::to_string(i) + (cur[i] ? "->dyn" : "->static") +
+                                         (e.isSkinned ? "(skin)" : e.isDisplaced ? "(disp)" : e.isGrass ? "(grass)" : e.isMorphed ? "(morph)" : "") +
+                                         "(span " + std::to_string(i < shadowSpanOfEntry_.size() ? shadowSpanOfEntry_[i] : 0u) + ")";
+                            }
+                            ++flips;
+                        }
+                    }
+                    std::fprintf(stderr, "[shadowCache] gen %llu: entries %zu (prev %zu), hidden spans %zu, dynamic %zu, flips %zu:%s\n",
+                                 static_cast<unsigned long long>(shadowStaticGen_), n, shadowDynPrev_.size(), hidden, dyn, flips, first.c_str());
+                    shadowDynPrev_ = std::move(cur);
+                }
             }
         }
         const uint64_t staticGen = shadowStaticGen_;
@@ -711,6 +743,16 @@ namespace threepp {
         }
         u.spotCount  = sz.spots;
         u.pointCount = sz.points;
+        if (shadowCacheDebug_) {
+            size_t cached = 0, rebuilt = 0, drawn = 0, skipped = 0;
+            for (const auto& l : smp.layers) {
+                if (l.skip) ++skipped;
+                else if (l.mode == vulkan::ShadowMapPass::Mode::Cached) ++cached;
+                else if (l.mode == vulkan::ShadowMapPass::Mode::Rebuild) ++rebuilt;
+                else ++drawn;
+            }
+            std::fprintf(stderr, "[shadowCache] frame: layers cached %zu rebuilt %zu drawn %zu skipped %zu\n", cached, rebuilt, drawn, skipped);
+        }
 
         // Raster side: a small slope-scaled bias away from the light (reverse-
         // Z: negative); the receivers' normal offset does most of the work.
@@ -814,100 +856,141 @@ namespace threepp {
             }
         };
 
-        for (const auto& sp : entrySpans_) {
-            if (sp.hidden || sp.count == 0u) continue;
+        // One span's constants (its record, bounds, cull bucket, LOD, draw
+        // range), then one of its entries' record and commands.
+        struct SpanInfo {
+            const BlasRecord* rec       = nullptr;
+            bool              bounded   = false;
+            bool              lodStatic = false;
+            int               bucket    = 2;
+            LodGeomSel        sel0{};
+            uint32_t          drawStart = 0u, drawCount = 0xFFFFFFFFu;
+        };
+        const auto spanInfo = [&](const EntrySpan& sp, SpanInfo& si) -> bool {
             const MeshEntry& e0 = entries[sp.first];
             // Overlays and particle sprites are not in the ray-traced scene, nor
             // are ParticleFields (particle_density.glsl shadows those).
-            if (e0.isOverlay || e0.isParticle || e0.isParticleField) continue;
-            const BlasRecord* rec = resolveBlasForEntry(e0);
-            if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
+            if (e0.isOverlay || e0.isParticle || e0.isParticleField) return false;
+            si.rec = resolveBlasForEntry(e0);
+            if (!si.rec || si.rec->vertex.handle == VK_NULL_HANDLE) return false;
             // Deformers' and interop meshes' bounds are stale: always kept, as
             // the G-buffer keeps them.
             const bool stale = e0.isSkinned || e0.isDisplaced || e0.isMorphed || e0.isTet || e0.isVertexInterop ||
                                e0.isGrass;
-            const bool bounded = !stale && sp.localBoundsValid;
+            si.bounded = !stale && sp.localBoundsValid;
             // Both faces cast, as a shadow ray sees both; Material::shadowSide
             // narrows it when the material sets it.
-            int        bucket = 2;
-            const auto mat    = e0.mesh->material();
+            si.bucket      = 2;
+            const auto mat = e0.mesh->material();
             if (mat && mat->shadowSide) {
-                bucket = *mat->shadowSide == Side::Front ? 0 : *mat->shadowSide == Side::Back ? 1 : 2;
+                si.bucket = *mat->shadowSide == Side::Front ? 0 : *mat->shadowSide == Side::Back ? 1 : 2;
             }
-            const bool lodStatic = rec->lodLevels.empty();
-            const auto sel0      = selectLodGeom(*rec, 0);
-            uint32_t   drawStart = 0u, drawCount = 0xFFFFFFFFu;
+            si.lodStatic = si.rec->lodLevels.empty();
+            si.sel0      = selectLodGeom(*si.rec, 0);
+            si.drawStart = 0u;
+            si.drawCount = 0xFFFFFFFFu;
             if (auto geom = e0.mesh->geometry()) {
                 const auto& dr = geom->drawRange;
-                drawStart      = dr.start > 0 ? static_cast<uint32_t>(dr.start) : 0u;
-                drawCount      = dr.count > 0 ? static_cast<uint32_t>(dr.count) : 0u;
+                si.drawStart   = dr.start > 0 ? static_cast<uint32_t>(dr.start) : 0u;
+                si.drawCount   = dr.count > 0 ? static_cast<uint32_t>(dr.count) : 0u;
             }
-            for (uint32_t j = 0; j < sp.count; ++j) {
-                const uint32_t   i  = sp.first + j;
-                const MeshEntry& en = entries[i];
-                if (en.camAttached) continue;
-                if (en.sensorOnly && !(sensorOnlySurfaces_ && view().secondary && view().sensorSurfaces)) continue;
-                if (i >= matDescsCached_.size()) continue;
-                // shadowOccludes' policy (deferred_shade_10): transmission and
-                // blend never block, strong emitters never block.
-                const auto& md = matDescsCached_[i];
-                if (md.transmission > 0.f || md.alphaCutoff < 0.f) continue;
-                if (std::max({md.emissive[0], md.emissive[1], md.emissive[2]}) * md.emissiveIntensity >= 1.f)
-                    continue;
-                // Moving casters go to every layer's `dyn` list (a cached
-                // cascade draws only those); static ones to `stat`.
-                const bool dynamic = shadowCasterDynamic(i);
-                uint64_t   mask[2] = {allMask[0], allMask[1]};
-                if (bounded) {
-                    const float* M     = en.worldMatrix.data();
-                    const float* lc    = sp.localCenter;
-                    const float  wc[3] = {M[0] * lc[0] + M[4] * lc[1] + M[8] * lc[2] + M[12],
-                                          M[1] * lc[0] + M[5] * lc[1] + M[9] * lc[2] + M[13],
-                                          M[2] * lc[0] + M[6] * lc[1] + M[10] * lc[2] + M[14]};
-                    const float  s0    = M[0] * M[0] + M[1] * M[1] + M[2] * M[2];
-                    const float  s1    = M[4] * M[4] + M[5] * M[5] + M[6] * M[6];
-                    const float  s2    = M[8] * M[8] + M[9] * M[9] + M[10] * M[10];
-                    const float  wr    = sp.localRadius * std::sqrt(std::max({s0, s1, s2}));
-                    reachMask(wc, wr, dynamic, mask);
+            return true;
+        };
+        const auto emit = [&](const EntrySpan& sp, const SpanInfo& si, uint32_t i) {
+            const MeshEntry& en = entries[i];
+            if (en.camAttached) return;
+            if (en.sensorOnly && !(sensorOnlySurfaces_ && view().secondary && view().sensorSurfaces)) return;
+            if (i >= matDescsCached_.size()) return;
+            // shadowOccludes' policy (deferred_shade_10): transmission and
+            // blend never block, strong emitters never block.
+            const auto& md = matDescsCached_[i];
+            if (md.transmission > 0.f || md.alphaCutoff < 0.f) return;
+            if (std::max({md.emissive[0], md.emissive[1], md.emissive[2]}) * md.emissiveIntensity >= 1.f) return;
+            // Moving casters go to every layer's `dyn` list (a cached cascade
+            // draws only those); static ones to `stat`.
+            const bool dynamic = shadowCasterDynamic(i);
+            uint64_t   mask[2] = {allMask[0], allMask[1]};
+            if (si.bounded) {
+                const float* M     = en.worldMatrix.data();
+                const float* lc    = sp.localCenter;
+                const float  wc[3] = {M[0] * lc[0] + M[4] * lc[1] + M[8] * lc[2] + M[12],
+                                      M[1] * lc[0] + M[5] * lc[1] + M[9] * lc[2] + M[13],
+                                      M[2] * lc[0] + M[6] * lc[1] + M[10] * lc[2] + M[14]};
+                const float  s0    = M[0] * M[0] + M[1] * M[1] + M[2] * M[2];
+                const float  s1    = M[4] * M[4] + M[5] * M[5] + M[6] * M[6];
+                const float  s2    = M[8] * M[8] + M[9] * M[9] + M[10] * M[10];
+                const float  wr    = sp.localRadius * std::sqrt(std::max({s0, s1, s2}));
+                reachMask(wc, wr, dynamic, mask);
+            }
+            if ((mask[0] | mask[1]) == 0u) return;
+            const BlasRecord* rec    = si.rec;
+            const auto        sel    = si.lodStatic ? si.sel0 : selectLodGeom(*rec, en.lodLevel);
+            uint32_t          vcount = sel.indexed ? sel.indexCount : rec->vertexCount;
+            uint32_t          vfirst = 0u;
+            if (en.lodLevel == 0 || si.lodStatic) {
+                vfirst = std::min(si.drawStart, vcount);
+                vcount = std::min(vcount - vfirst, si.drawCount);
+            }
+            if (vcount == 0u) return;
+            // shadow_depth.frag's alpha test, for a cutout within the cutout
+            // ray distance (setCutoutRayDistance) of this view's camera. Beyond
+            // it the caster is drawn solid, as the rays then take it
+            // (FORCE_OPAQUE): its shadow is the cards' outline. The rest are
+            // depth only, with no fragment stage.
+            const bool tested = md.alphaCutoff > 0.f && md.albedoTexIndex >= 0 &&
+                                !(cutoutRayDistance_ > 0.f && cutoutCaster(md) && entryBeyond(en, cam, cutoutRayDistance_));
+            const uint32_t group = (tested ? 3u : 0u) + static_cast<uint32_t>(si.bucket);
+            DrawInfoGpu    di{};
+            std::memcpy(di.model, en.worldMatrix.data(), 64);
+            di.posAddr             = rec->vertex.address;
+            di.nrmAddr             = rec->normal.address;
+            di.uvAddr              = rec->uv.handle != VK_NULL_HANDLE ? rec->uv.address : 0ull;
+            di.prevPosAddr         = rec->vertex.address;
+            di.indexAddr           = sel.indexed ? sel.indexAddress : 0ull;
+            di.instanceCustomIndex = i;
+            di.indexed             = sel.indexed ? 1u : 0u;
+            di.packedAttrs         = rec->packedMask;
+            VkDrawIndirectCommand cmd{};
+            cmd.vertexCount   = vcount;
+            cmd.instanceCount = 1u;
+            cmd.firstVertex   = vfirst;
+            cmd.firstInstance = static_cast<uint32_t>(draws.size());// its DrawInfo record
+            draws.push_back(di);
+            for (uint32_t li = 0; li < nLayers; ++li) {
+                if (mask[li >> 6] & (1ull << (li & 63u)))
+                    cmds[(size_t(li) * 2u + (dynamic ? 1u : 0u)) * kGroups + group].push_back(cmd);
+            }
+        };
+
+        // Steady state: every layer is skipped or served from its cache, so
+        // only the moving casters need commands this frame (the caches hold
+        // the static ones); their indices came out of the hash walk, in span
+        // order. Any layer drawn or rebuilt this frame needs the full walk.
+        bool anyStatic = false;
+        for (uint32_t li = 0; li < nLayers && !anyStatic; ++li) {
+            const Volume& v = vol.layers[li];
+            anyStatic       = !v.skip && !v.cached;
+        }
+        if (shadowCacheOn_ && !anyStatic) {
+            uint32_t curSpan = 0xFFFFFFFFu;
+            bool     spanOk  = false;
+            SpanInfo si{};
+            for (const uint32_t i : shadowDynamicIdx_) {
+                if (i >= shadowSpanOfEntry_.size() || i >= entries.size()) continue;
+                const uint32_t s = shadowSpanOfEntry_[i];
+                if (s != curSpan) {
+                    curSpan = s;
+                    spanOk  = s < entrySpans_.size() && !entrySpans_[s].hidden && entrySpans_[s].count > 0u &&
+                             spanInfo(entrySpans_[s], si);
                 }
-                if ((mask[0] | mask[1]) == 0u) continue;
-                const auto sel    = lodStatic ? sel0 : selectLodGeom(*rec, en.lodLevel);
-                uint32_t   vcount = sel.indexed ? sel.indexCount : rec->vertexCount;
-                uint32_t   vfirst = 0u;
-                if (en.lodLevel == 0 || lodStatic) {
-                    vfirst = std::min(drawStart, vcount);
-                    vcount = std::min(vcount - vfirst, drawCount);
-                }
-                if (vcount == 0u) continue;
-                // shadow_depth.frag's alpha test, for a cutout within the
-                // cutout ray distance (setCutoutRayDistance) of this view's
-                // camera. Beyond it the caster is drawn solid, as the rays then
-                // take it (FORCE_OPAQUE): its shadow is the cards' outline. The
-                // rest are depth only, with no fragment stage.
-                const bool tested = md.alphaCutoff > 0.f && md.albedoTexIndex >= 0 &&
-                                    !(cutoutRayDistance_ > 0.f && cutoutCaster(md) &&
-                                      entryBeyond(en, cam, cutoutRayDistance_));
-                const uint32_t group = (tested ? 3u : 0u) + static_cast<uint32_t>(bucket);
-                DrawInfoGpu    di{};
-                std::memcpy(di.model, en.worldMatrix.data(), 64);
-                di.posAddr             = rec->vertex.address;
-                di.nrmAddr             = rec->normal.address;
-                di.uvAddr              = rec->uv.handle != VK_NULL_HANDLE ? rec->uv.address : 0ull;
-                di.prevPosAddr         = rec->vertex.address;
-                di.indexAddr           = sel.indexed ? sel.indexAddress : 0ull;
-                di.instanceCustomIndex = i;
-                di.indexed             = sel.indexed ? 1u : 0u;
-                di.packedAttrs         = rec->packedMask;
-                VkDrawIndirectCommand cmd{};
-                cmd.vertexCount   = vcount;
-                cmd.instanceCount = 1u;
-                cmd.firstVertex   = vfirst;
-                cmd.firstInstance = static_cast<uint32_t>(draws.size());// its DrawInfo record
-                draws.push_back(di);
-                for (uint32_t li = 0; li < nLayers; ++li) {
-                    if (mask[li >> 6] & (1ull << (li & 63u)))
-                        cmds[(size_t(li) * 2u + (dynamic ? 1u : 0u)) * kGroups + group].push_back(cmd);
-                }
+                if (spanOk) emit(entrySpans_[s], si, i);
+            }
+        } else {
+            for (const auto& sp : entrySpans_) {
+                if (sp.hidden || sp.count == 0u) continue;
+                SpanInfo si{};
+                if (!spanInfo(sp, si)) continue;
+                for (uint32_t j = 0; j < sp.count; ++j) emit(sp, si, sp.first + j);
             }
         }
 
