@@ -906,6 +906,9 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // by the indirect-drawing gbuf pass. Runs after the cull
             // pass + camera upload (depends on both) and before record.
             buildIndirectDrawData(currentFrame);
+            // The view's shadow maps (ShadowMode::ShadowMaps): the fit, the
+            // caster list and the UBO, or the dummies back in its deferred set.
+            prepareShadowMaps(camera);
             // GPU per-instance world matrices — the producer half only; nothing
             // above or below reads its output yet (stage 1 of
             // plans/gpu-driven-instances.md). Placed after ensureHybridResources
@@ -1728,6 +1731,7 @@ void VulkanRenderer::Impl::destroySecondaryViewResources(ViewContext& v) {
             v.post_.reset();
             v.bloom_.reset();
             v.deferredShade_.reset();
+            v.shadowMaps_.reset();
 
             ViewContext* saved = curView_;
             curView_ = &v;
@@ -1958,6 +1962,7 @@ bool VulkanRenderer::Impl::addSecondaryViewPasses(rg::RenderGraph& g) {
                 cullEntriesAgainstFrustum(cam);
                 uploadRasterCameraUbo(currentFrame, cam);
                 buildIndirectDrawData(currentFrame);
+                prepareShadowMaps(cam);
                 // Sizes/creates this view's G-buffer on the first frame and is
                 // a cheap no-op after (the extent never changes for a view).
                 ensureHybridResources();

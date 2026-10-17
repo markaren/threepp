@@ -1181,6 +1181,15 @@ namespace threepp::vulkan {
             storageImageReadWithoutFormat_ = sup.shaderStorageImageReadWithoutFormat == VK_TRUE;
             features2.features.shaderStorageImageReadWithoutFormat =
                     storageImageReadWithoutFormat_ ? VK_TRUE : VK_FALSE;
+            // Shadow maps (ShadowMapPass): the point lamps' cubes are one cube
+            // array (core 1.0 feature, on every desktop GPU and lavapipe), and
+            // depth clamp keeps a caster behind a cascade's near plane.
+            if (sup.imageCubeArray != VK_TRUE) {
+                throw std::runtime_error("[VulkanContext] the device lacks imageCubeArray (shadow maps)");
+            }
+            features2.features.imageCubeArray = VK_TRUE;
+            depthClamp_ = sup.depthClamp == VK_TRUE;
+            features2.features.depthClamp = depthClamp_ ? VK_TRUE : VK_FALSE;
         }
         // Per-attachment color-blend on the gbuffer MRT: the decal pipeline
         // blends only the albedo attachment (SRC_ALPHA) while the other targets

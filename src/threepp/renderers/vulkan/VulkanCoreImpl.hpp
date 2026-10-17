@@ -169,6 +169,7 @@ namespace threepp {
     using vulkan::TP_SensorImage;
     using vulkan::TP_Splat;
     using vulkan::TP_ProbeGI;
+    using vulkan::TP_ShadowMaps;
     using vulkan::TP_Rtao;
 
     namespace {
@@ -629,6 +630,7 @@ namespace threepp {
         static constexpr uint32_t kClusterMaxPerCell  = 24;
         // Layout moved to VulkanGpuLayouts.hpp.
         using GpuClusterLight = vulkan::impl::GpuClusterLight;
+        using GpuShadowMapsUbo = vulkan::impl::GpuShadowMapsUbo;
         std::array<Buffer, kFramesInFlight> clusterLightsBuffers{};// host-visible mapped (CPU fills per frame)
         std::array<Buffer, kFramesInFlight> clusterGridBuffers{};  // device-local (cluster_build writes)
         uint32_t clusterLightCountThisFrame_ = 0;
@@ -4990,6 +4992,52 @@ namespace threepp {
         [[nodiscard]] bool envSunDefersToSceneSun() const {
             return envSunPolicy_ == VulkanRenderer::EnvSunPolicy::Auto;
         }
+
+        // ── Shadows (setShadowMode; VulkanCoreShadows.cpp) ─────────────────
+        // The request as set (THREEPP_VK_SHADOW_MODE seeds it) and the knobs of
+        // the map mode; activeShadowMode() resolves Auto, and RayTraced on a
+        // device without ray query, to what runs.
+        VulkanRenderer::ShadowMode shadowModeReq_ = shadowModeFromEnv();
+        float    shadowDistance_   = 0.f;// 0 = the camera's far plane, clamped
+        uint32_t shadowCascades_   = 4u;
+        uint32_t shadowedSpots_    = 4u;
+        uint32_t shadowedPoints_   = 8u;
+        uint32_t shadowMapSizeCap_ = shadowMapSizeCapFromEnv();// THREEPP_VK_SHADOW_MAPSIZE, 0 = none
+        static VulkanRenderer::ShadowMode shadowModeFromEnv();
+        static uint32_t shadowMapSizeCapFromEnv();
+        [[nodiscard]] VulkanRenderer::ShadowMode activeShadowMode() const;
+        [[nodiscard]] bool shadowMapsActive() const {
+            return activeShadowMode() == VulkanRenderer::ShadowMode::ShadowMaps;
+        }
+        // Bindings 80-83 of every view's deferred set when the view has no
+        // live maps: a 1x1 D32 2D array (cascades and spots), a 1x1 D32 cube
+        // array (points), both resting in DEPTH_STENCIL_READ_ONLY, and a zeroed
+        // GpuShadowMapsUbo (flags 0: every lookup answers "no map").
+        vulkan::ShadowDepthArray shadowDummyArray_{};
+        vulkan::ShadowDepthArray shadowDummyCube_{};
+        Buffer                   shadowDummyUbo_{};
+        void ensureShadowDummies();
+        void destroyShadowResources();
+        // What bindings 80-83 of the current view's deferred set slot `frame`
+        // should name now: the view's maps while its pass is live, else the
+        // dummies.
+        struct ShadowBinding {
+            VkImageView cascades = VK_NULL_HANDLE;
+            VkImageView spots    = VK_NULL_HANDLE;
+            VkImageView points   = VK_NULL_HANDLE;
+            VkBuffer    ubo      = VK_NULL_HANDLE;
+            uint64_t    gen      = 0;// 0 = the dummies
+        };
+        [[nodiscard]] ShadowBinding shadowBindingFor(uint32_t frame) const;
+        // Per view, per frame, after the slot's fence: rewrite bindings 80-83
+        // of the view's deferred set slot `frame` when they name something
+        // else than shadowBindingFor(frame) says.
+        void syncShadowDescriptors(uint32_t frame);
+        // Per view, after its cull and G-buffer draw build: decide whether the
+        // view draws shadow maps this frame (view().shadowLive) and, if so, fit
+        // them to `camera`, build the caster list and fill the UBO; then sync
+        // the deferred set's bindings 80-83.
+        void prepareShadowMaps(Camera& camera);
 
         // Frame recording, split along the frame's own stage seams (bodies in
         // VulkanCoreRecord.cpp). recordCommandBuffer is the narrative: it adds

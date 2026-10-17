@@ -122,7 +122,10 @@ namespace threepp::vulkan {
         // per-view share. It sat in the unbracketed residual while the
         // per-view-duplication claim was being made about it.
         TP_ProbeGI        = 26,
-        TP_COUNT          = 27,
+        // The shadow-map pass (ShadowMapPass): every cascade and lamp map of
+        // the primary view. Secondary views' brackets are suppressed.
+        TP_ShadowMaps     = 27,
+        TP_COUNT          = 28,
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
 

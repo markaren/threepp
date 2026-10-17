@@ -13,6 +13,8 @@
 
 #include "VulkanImplCommon.hpp"
 
+#include "threepp/renderers/vulkan/shaders/vulkan_shared.h"// kMaxShadow*
+
 #include <cstdint>
 
 namespace threepp::vulkan::impl {
@@ -25,6 +27,7 @@ namespace threepp::vulkan::impl {
         float position[3]; float range;
         float color[3];    float decay;
         float radius;      // physical source radius (world units) → RT soft shadows; 0 = hard
+        float shadowSlot;  // cube layer in the point shadow maps (ShadowMapPass), -1 = none
     };
     struct GpuSpotLight {
         float position[3];   float range;
@@ -33,6 +36,7 @@ namespace threepp::vulkan::impl {
         float cosAngleOuter; // cos(angle)
         float cosAngleInner; // cos(angle * (1-penumbra))
         float radius;        // physical source radius (world units) → RT soft shadows; 0 = hard
+        float shadowSlot;    // layer in the spot shadow maps (ShadowMapPass), -1 = none
     };
     struct GpuRectLight {
         float position[3];
@@ -82,10 +86,13 @@ namespace threepp::vulkan::impl {
         float    envKnobPad[2];
     };
     static_assert(sizeof(GpuDirLight)   == 24);
-    static_assert(sizeof(GpuPointLight) == 36);
-    static_assert(sizeof(GpuSpotLight)  == 56);
+    static_assert(sizeof(GpuPointLight) == 40);
+    static_assert(sizeof(GpuSpotLight)  == 60);
     static_assert(sizeof(GpuRectLight)  == 60);
-    static_assert(sizeof(GpuLightsUbo)  == 1328);
+    // splat_common.glsl declares a prefix of this block and skips to the
+    // environment knobs with a float array sized from it: a size change here
+    // moves that skip (it ends 96 bytes before the end).
+    static_assert(sizeof(GpuLightsUbo)  == 1392);
 
     struct GpuClusterLight {
         float position[3];   float range;         // range 0 = infinite (three.js)
@@ -95,8 +102,41 @@ namespace threepp::vulkan::impl {
         float radius;        // physical source radius (soft shadows)
         float cullRadius;    // conservative influence radius (range, or the atten<eps solve)
         float type;          // 0 = point, 1 = spot
+        float shadowSlot;    // layer in the point (cube) or spot shadow maps, by type; -1 = none
     };
-    static_assert(sizeof(GpuClusterLight) == 64);
+    static_assert(sizeof(GpuClusterLight) == 68);
+
+    // The shadow maps of one view (ShadowMapPass), set 0 binding 83 of the
+    // deferred shade's set: shadow_maps.glsl's ShadowMapsUbo, scalar layout.
+    // Clip matrices are world -> clip with the reverse-Z projection the raster
+    // camera uses (reverseZVk); the shaders turn clip y into the texture's v
+    // as the raster's y flip wrote it. All zero (flags 0) when the maps are
+    // not in use: every lookup then answers "no map here".
+    struct GpuShadowMapsUbo {
+        float    cascadeVP[kMaxShadowCascades][16];
+        float    cascadeSphere[kMaxShadowCascades][4];// xyz centre, w radius (world): the pick
+        float    cascadeParams[kMaxShadowCascades][4];// x texel (m), y depth units per metre, zw 0
+        float    spotVP[kMaxShadowSpots][16];
+        float    pointPosFar[kMaxShadowPoints][4];// xyz light position, w far
+        // Per lamp slot, spots first, then points at kMaxShadowSpots + slot:
+        // bias (depth units, LightShadow::bias), normal offset (m, 0 = auto),
+        // PCF radius (texels), intensity.
+        float    lampParams[kMaxShadowSpots + kMaxShadowPoints][4];
+        // Per lamp slot: x = one texel's angle (tan) at unit distance, y near,
+        // z far, w map size.
+        float    lampTexel[kMaxShadowSpots + kMaxShadowPoints][4];
+        uint32_t cascadeCount;
+        uint32_t spotCount;
+        uint32_t pointCount;
+        uint32_t flags;// bit 0 = the sun's cascades are valid this frame
+        float    sunBias;        // LightShadow::bias, depth units
+        float    sunNormalBias;  // LightShadow::normalBias, metres (0 = the texel-scaled default)
+        float    sunRadiusTexels;// LightShadow::radius
+        float    sunIntensity;   // LightShadow::intensity
+        float    sunDir[3];      // toward the sun (dir light 0)
+        float    cascadeMapSize;
+    };
+    static_assert(sizeof(GpuShadowMapsUbo) == 1968);
 
     // Homogeneous fog (participating media). FogExp2.density maps directly
     // to sigma_t; linear Fog (near/far) is converted to an equivalent

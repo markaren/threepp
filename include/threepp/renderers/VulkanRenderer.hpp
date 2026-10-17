@@ -600,12 +600,65 @@ namespace threepp {
         // True when the device has inline ray queries and acceleration
         // structures (VK_KHR_ray_query + VK_KHR_acceleration_structure), and
         // THREEPP_VULKAN_NO_RT=1 did not force them off. When false the
-        // renderer still draws every frame, as a raster renderer: every ray the
-        // shading would trace misses, so there are no sun or lamp shadows, GI is
-        // sky and environment light only (no traced bounce, no probe grid),
-        // reflections and refraction show the environment only, RTAO and
-        // traced fog shadowing are off, and the lidar sensor throws.
+        // renderer still draws every frame, as a raster renderer: the sun and
+        // the shadowed lamps cast shadows from shadow maps (setShadowMode), GI
+        // is sky and environment light only (no traced bounce, no probe grid),
+        // reflections and refraction show the environment only (a reflected
+        // surface is lit without shadows), RTAO is off, and the lidar sensor
+        // throws.
         [[nodiscard]] bool rayTracingSupported() const;
+
+        // ── Shadows ──────────────────────────────────────────────────────
+        // How the sun (directional light 0) and the point and spot lamps
+        // shadow the surfaces the camera sees, the water, the fog and the lit
+        // particles.
+        //   RayTraced   a shadow ray per light per pixel, every lamp included,
+        //               soft by the light's size. Needs ray query.
+        //   ShadowMaps  rasterised depth maps, every frame, per view: the sun
+        //               in cascades fitted to the view's camera
+        //               (setShadowDistance, setShadowCascades), and the
+        //               strongest lamps near the camera in maps of their own
+        //               (setShadowedLamps). PCF-filtered as three.js r186.
+        //               Cheaper than the rays; the edges are those of a
+        //               filtered map. On a ray-tracing device, a point past the
+        //               last cascade and a lamp without a map are traced.
+        //   Off         no shadows.
+        //   Auto        RayTraced where rayTracingSupported(), else ShadowMaps.
+        // RayTraced on a device without ray query runs ShadowMaps. Default
+        // Auto; THREEPP_VK_SHADOW_MODE=auto|rt|sm|off sets the starting value.
+        // The maps replace the visibility at the shaded pixel only: a
+        // reflection, a GI bounce or a probe ray is traced as before on a
+        // ray-tracing device and unshadowed without one. Rect area lights
+        // have no map (traced, or unshadowed without ray query).
+        // Per light, LightShadow::bias (depth units of the map, negative =
+        // toward the light, as three.js), normalBias (metres along the
+        // receiver's normal; 0 = 1.5 texels of the map there), radius (PCF
+        // radius in texels) and intensity are honoured, and the sun's map size
+        // is its shadow->mapSize.x (2048 for the environment's sun). Casters are
+        // everything a shadow ray would hit: Object3D::castShadow and
+        // receiveShadow are not read, nor is the GL renderer's shadowMap()
+        // configuration. THREEPP_VK_SHADOW_MAPSIZE=<n> caps every map's size.
+        enum class ShadowMode { Auto, RayTraced, ShadowMaps, Off };
+        void setShadowMode(ShadowMode mode);
+        [[nodiscard]] ShadowMode shadowMode() const;      // as set
+        [[nodiscard]] ShadowMode activeShadowMode() const;// what runs: never Auto
+        // How far the sun's cascades reach from the camera, in metres. 0 (the
+        // default) = the camera's far plane, clamped to [50, 2000].
+        void setShadowDistance(float metres);
+        [[nodiscard]] float shadowDistance() const;
+        // Cascades over that distance, 1-4 (default 4).
+        void setShadowCascades(uint32_t n);
+        [[nodiscard]] uint32_t shadowCascades() const;
+        // How many spot and point lamps get a shadow map per frame (defaults 4
+        // and 8; at most 8 and 16). The lamps are chosen once a frame from the
+        // primary camera: castShadow == true first, then by power over the
+        // squared distance to the camera, and a lamp keeps its map until a
+        // newcomer is twice as strong. A lamp without a map casts NO shadow in
+        // ShadowMaps mode on a device without ray query: its light passes
+        // through walls. A secondary view uses the primary's lamp choice.
+        void setShadowedLamps(uint32_t spots, uint32_t points);
+        [[nodiscard]] uint32_t shadowedSpots() const;
+        [[nodiscard]] uint32_t shadowedPoints() const;
 
         // Material-texture anisotropic filtering. Default AUTO (0), which is
         // 16× in EVERY mode — jittered or not. Pass 1..16 to force a fixed
@@ -1570,6 +1623,10 @@ namespace threepp {
             // once per frame for all views — the dispatch is primary-only — so
             // this is the frame's whole probe cost, not a per-view share.
             float probeGiMs       = 0.f;
+            // The shadow-map pass (setShadowMode ShadowMaps): the sun's cascades
+            // and the lamps' maps, rasterised. 0 in the other modes. The
+            // primary view's; a secondary view's pass is in gpuTotalMs.
+            float shadowMapsMs    = 0.f;
             // GPU execution SPAN of the whole submitted command buffer — not a sum
             // of the fields above, and not busy time. It covers the passes that
             // have no timestamp bracket at all (skinned/tet/grass deformers,

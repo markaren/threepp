@@ -39,7 +39,7 @@ namespace threepp::vulkan {
     // that no validation layer can see). Both tables are std::array of this
     // size now, filled through .at(), and the fill count is checked, so the
     // failure mode is a loud throw at init instead.
-    constexpr uint32_t kDeferredBindingCount = 79;
+    constexpr uint32_t kDeferredBindingCount = 83;
 
     // ParticleField density volumes bound at once (binding 67 is an array of
     // this many). KEEP IN SYNC with kMaxDensityFields in
@@ -82,6 +82,7 @@ namespace threepp::vulkan {
         if (particlePipeLayout_)  vkDestroyPipelineLayout(d, particlePipeLayout_, nullptr);
         if (particleIoLayout_)    vkDestroyDescriptorSetLayout(d, particleIoLayout_, nullptr);
         if (lutSampler_) vkDestroySampler(d, lutSampler_, nullptr);
+        if (shadowSampler_) vkDestroySampler(d, shadowSampler_, nullptr);
         if (pipeLayout_) vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
         if (dsLayout_)   vkDestroyDescriptorSetLayout(d, dsLayout_, nullptr);
         if (descPool_)   vkDestroyDescriptorPool(d, descPool_, nullptr);
@@ -111,6 +112,20 @@ namespace threepp::vulkan {
         lci.magFilter  = VK_FILTER_LINEAR;
         lci.minFilter  = VK_FILTER_LINEAR;
         check(vkCreateSampler(d, &lci, nullptr, &lutSampler_), "vkCreateSampler(froxel LUT)");
+
+        // The shadow maps' compare sampler (bindings 80-82, shadow_maps.glsl):
+        // LINEAR makes each tap a hardware 2x2 PCF; GREATER_OR_EQUAL is lit
+        // for a receiver at least as near the light as the stored caster
+        // (reverse-Z: nearer = larger); the border, depth 0 = the far plane,
+        // reads as nothing cast.
+        VkSamplerCreateInfo shci = lci;
+        shci.addressModeU  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+        shci.addressModeV  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+        shci.addressModeW  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+        shci.borderColor   = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+        shci.compareEnable = VK_TRUE;
+        shci.compareOp     = VK_COMPARE_OP_GREATER_OR_EQUAL;
+        check(vkCreateSampler(d, &shci, nullptr, &shadowSampler_), "vkCreateSampler(shadow maps)");
 
         // Without ray query the shade, froxel inject and particle lighting run
         // their no-ray-query variants, RTAO does not exist, and the set has no
@@ -257,6 +272,14 @@ namespace threepp::vulkan {
         // Its ripples: the slopes of the waves the producers make, mipped,
         // REPEAT and anisotropic. The same dummy when no ocean has any.
         set(79, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // ocean wake ripples (rgba16f 2D array, mipped)
+        // The view's shadow maps (ShadowMapPass, shadow_maps.glsl): the sun's
+        // cascades, the spot lamps' maps, the point lamps' cubes, and their
+        // UBO. Always bound: 1x1 dummies and a zeroed UBO when the view
+        // renders without maps.
+        set(80, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // sun cascades (D32 2D array, compare sampler)
+        set(81, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // spot maps (D32 2D array)
+        set(82, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // point cubes (D32 cube array)
+        set(83, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // GpuShadowMapsUbo
 
         // Exact fit is the contract: a new binding must bump
         // kDeferredBindingCount, and rewriteDescriptors must gain the matching
@@ -1068,6 +1091,26 @@ namespace threepp::vulkan {
             oceanRippleInfo.imageView   = in.oceanRippleView;
             oceanRippleInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
             setw(78, 79, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanRippleInfo,    nullptr);
+            // Shadow maps (80-83): the maps or the dummies, in the layout the
+            // shadow pass leaves them in.
+            auto depthRO = [&](VkImageView v) {
+                VkDescriptorImageInfo i{};
+                i.sampler     = shadowSampler_;
+                i.imageView   = v;
+                i.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                return i;
+            };
+            const VkDescriptorImageInfo smCascInfo  = depthRO(in.shadowCascades[f]);
+            const VkDescriptorImageInfo smSpotInfo  = depthRO(in.shadowSpots[f]);
+            const VkDescriptorImageInfo smPointInfo = depthRO(in.shadowPoints[f]);
+            VkDescriptorBufferInfo smUboInfo{};
+            smUboInfo.buffer = in.shadowUbo[f];
+            smUboInfo.offset = 0;
+            smUboInfo.range  = VK_WHOLE_SIZE;
+            setw(79, 80, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &smCascInfo,  nullptr);
+            setw(80, 81, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &smSpotInfo,  nullptr);
+            setw(81, 82, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &smPointInfo, nullptr);
+            setw(82, 83, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr, &smUboInfo);
             // Without ray query the layout has no binding 8: drop its write.
             uint32_t writeCount = static_cast<uint32_t>(w.size());
             if (!ctx_.rayQuerySupported()) {
@@ -1093,6 +1136,33 @@ namespace threepp::vulkan {
         vulkan::updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
     }
 
+    void DeferredShade::rewriteShadowMaps(uint32_t frame, VkImageView cascades, VkImageView spots,
+                                          VkImageView points, VkBuffer ubo) {
+        VkDescriptorImageInfo img[3]{};
+        const VkImageView views[3] = {cascades, spots, points};
+        for (int i = 0; i < 3; ++i) {
+            img[i].sampler     = shadowSampler_;
+            img[i].imageView   = views[i];
+            img[i].imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        }
+        VkDescriptorBufferInfo buf{};
+        buf.buffer = ubo;
+        buf.offset = 0;
+        buf.range  = VK_WHOLE_SIZE;
+        VkWriteDescriptorSet w[4]{};
+        for (uint32_t i = 0; i < 4; ++i) {
+            w[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[i].dstSet          = sets_[frame];
+            w[i].dstBinding      = 80u + i;
+            w[i].descriptorCount = 1;
+            w[i].descriptorType  = i < 3 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+                                         : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            w[i].pImageInfo      = i < 3 ? &img[i] : nullptr;
+            w[i].pBufferInfo     = i < 3 ? nullptr : &buf;
+        }
+        vulkan::updateDescriptorSets(ctx_.device(), 4, w, 0, nullptr);
+    }
+
     void DeferredShade::declare(rg::RenderGraph& graph, rg::PassBuilder& pass, Stage stage, uint32_t frame,
                                 VkDescriptorSet particleIoSet) const {
         const auto& refl = refl_[static_cast<int>(stage)];
@@ -1106,9 +1176,10 @@ namespace threepp::vulkan {
     // key = (flags & mask) | probe state << 32, built on first use (see
     // createPipeline). With no knob set the key is the MSAA code alone, so an
     // app holds one pipeline per G-buffer sample count its views use.
-    VkPipeline DeferredShade::shadePipeline(uint32_t flags, bool probeGi) {
+    VkPipeline DeferredShade::shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps) {
         const uint64_t probeState = specProbe_ ? (probeGi ? 2u : 1u) : 0u;
-        const uint64_t key = static_cast<uint64_t>(flags & specMask_) | (probeState << 32u);
+        const uint64_t key = static_cast<uint64_t>(flags & specMask_) | (probeState << 32u) |
+                             (shadowMaps ? (1ull << 40u) : 0ull);
         for (const auto& [k, perm] : shadePerms_) {
             if (k == key) return perm;
         }
@@ -1118,11 +1189,12 @@ namespace threepp::vulkan {
     }
 
     VkPipeline DeferredShade::createShadePipeline(uint64_t key) {
-        const std::array<uint32_t, 3> values{static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
-                                            static_cast<uint32_t>((key >> 32u) & 0xFFu)};
-        std::array<VkSpecializationMapEntry, 3> entries{};
-        for (uint32_t i = 0; i < 3; ++i) {
-            entries[i].constantID = i;// kSpecFlags, kSpecMask, kProbeGi
+        const std::array<uint32_t, 4> values{static_cast<uint32_t>(key & 0xFFFFFFFFu), specMask_,
+                                            static_cast<uint32_t>((key >> 32u) & 0xFFu),
+                                            static_cast<uint32_t>((key >> 40u) & 1u)};
+        std::array<VkSpecializationMapEntry, 4> entries{};
+        for (uint32_t i = 0; i < 4; ++i) {
+            entries[i].constantID = i;// kSpecFlags, kSpecMask, kProbeGi, kShadowMaps
             entries[i].offset     = i * sizeof(uint32_t);
             entries[i].size       = sizeof(uint32_t);
         }
@@ -1263,7 +1335,7 @@ namespace threepp::vulkan {
                    | (std::min(p.cutoutRayCap, 15u) << 16u)// bits 16-19: cutout ray cap (0 = off)
                    | (std::min(static_cast<uint32_t>(std::max(p.cutoutRayCapFrom, 0.f) / 4.f + 0.5f), 255u)
                       << 20u);                       // bits 20-27: ...from this distance, in 4 m steps
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, shadePipeline(push.flags, p.probeGi));
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, shadePipeline(push.flags, p.probeGi, p.shadowMaps));
         push.frame             = p.frameCounter;
         push.emissiveCount      = p.emissiveCount;
         push.emissiveTotalPower = p.emissiveTotalPower;
@@ -1407,14 +1479,16 @@ namespace threepp::vulkan {
                                             VkDescriptorSet ioSet,
                                             uint32_t count, uint32_t centerBase,
                                             uint32_t clusterLightCount,
-                                            bool froxelsActive, uint32_t envMipCount) {
+                                            bool froxelsActive, uint32_t envMipCount,
+                                            bool shadowMaps) {
         if (count == 0 || ioSet == VK_NULL_HANDLE) return;
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, particleLightPipe_);
         const VkDescriptorSet sets[2] = {sets_[frame], ioSet};
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 particlePipeLayout_, 0, 2, sets, 0, nullptr);
+        // flags: bit 0 = the froxel LUT is valid, bit 5 = the shadow maps are live.
         const uint32_t pc[5] = {count, centerBase, clusterLightCount,
-                                froxelsActive ? 1u : 0u, envMipCount};
+                                (froxelsActive ? 1u : 0u) | (shadowMaps ? 32u : 0u), envMipCount};
         vkCmdPushConstants(cb, particlePipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(pc), pc);
         // One thread per live particle (local_size_x = 64).

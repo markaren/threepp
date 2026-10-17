@@ -1325,6 +1325,7 @@ namespace threepp {
                 rec.radius = pl->radius;
                 rec.cullRadius = clusterCullRadius(rec);
                 rec.type = 0.f;
+                rec.shadowSlot = -1.f;
                 clusterCollect.push_back(rec);
             } else if (auto* sl = dynamic_cast<SpotLight*>(&o)) {
                 Vector3 lp, tp;
@@ -1346,6 +1347,7 @@ namespace threepp {
                 rec.radius = sl->radius;
                 rec.cullRadius = clusterCullRadius(rec);
                 rec.type = 1.f;
+                rec.shadowSlot = -1.f;
                 clusterCollect.push_back(rec);
             } else if (auto* rl = dynamic_cast<RectAreaLight*>(&o)) {
                 if (ubo.rectCount >= kMaxRectLights) return;
@@ -1392,6 +1394,7 @@ namespace threepp {
                 std::memcpy(g.color, rec.color, sizeof(g.color));
                 g.decay  = rec.decay;
                 g.radius = rec.radius;
+                g.shadowSlot = rec.shadowSlot;
             } else {
                 if (ubo.spotCount >= kMaxSpotLights) continue;
                 auto& g = ubo.spotLights[ubo.spotCount++];
@@ -1403,6 +1406,7 @@ namespace threepp {
                 g.cosAngleOuter = rec.cosAngleOuter;
                 g.cosAngleInner = rec.cosAngleInner;
                 g.radius = rec.radius;
+                g.shadowSlot = rec.shadowSlot;
             }
         }
         clusterLightCountThisFrame_ = static_cast<uint32_t>(clusterCollect.size());

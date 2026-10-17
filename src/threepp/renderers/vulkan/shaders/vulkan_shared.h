@@ -29,6 +29,13 @@
 // Above it (Bistro's hundreds of lamps) there is no table and no gate.
 #define kEmissiveGateMaxLights 64
 
+// Shadow maps (VulkanRenderer::setShadowMode, ShadowMapPass): compile-time
+// ceilings of the GpuShadowMapsUbo arrays. The sun takes up to four cascades;
+// the lamp counts in use come from setShadowedLamps and stay under these.
+#define kMaxShadowCascades 4
+#define kMaxShadowSpots    8
+#define kMaxShadowPoints   16
+
 // TLAS instance visibility groups (VkAccelerationStructureInstanceKHR.mask).
 // Opaque + alpha-CUTOUT instances carry kRayMaskOpaque; alpha-BLEND and
 // transmissive instances (text decals, alpha quads, glass — anything whose

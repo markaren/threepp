@@ -183,6 +183,15 @@ namespace threepp::vulkan {
             const VkImageView* splatVolume      = nullptr;// [kMaxSplatVolumes]
             uint32_t           splatVolumeCount = 0;      // == kMaxSplatVolumes
             const VkBuffer*    splatVolumeUbo   = nullptr;// [framesInFlight]
+            // The view's shadow maps (bindings 80-83, ShadowMapPass): the
+            // sun's cascades and the spot maps (D32 2D arrays), the point
+            // cubes (D32 cube array), all in DEPTH_STENCIL_READ_ONLY, and the
+            // GpuShadowMapsUbo. 1x1 dummies and a zeroed UBO when the view has
+            // no live maps.
+            const VkImageView* shadowCascades = nullptr;// [framesInFlight]
+            const VkImageView* shadowSpots    = nullptr;// [framesInFlight]
+            const VkImageView* shadowPoints   = nullptr;// [framesInFlight]
+            const VkBuffer*    shadowUbo      = nullptr;// [framesInFlight]
         };
         // onlyFrame >= 0 rewrites just that frame-in-flight slot's set (the
         // caller has fence-proven that slot is idle — used by the per-FIF
@@ -195,6 +204,12 @@ namespace threepp::vulkan {
         // the emissive buffer grows in the per-frame path, so call this when it
         // reallocates (mirrors the RT rewriteEmissiveTriDescriptors).
         void rewriteEmissive(uint32_t frame, VkBuffer emissiveTriBuf);
+
+        // Bindings 80-83 alone for one frame slot: the view's maps when its
+        // shadow pass goes live, the dummies when it stops (a mode switch, a
+        // map reallocation). The slot must be idle (called after its fence).
+        void rewriteShadowMaps(uint32_t frame, VkImageView cascades, VkImageView spots,
+                               VkImageView points, VkBuffer ubo);
 
         // Everything the deferred-shade dispatch needs, filled by NAME at the
         // call site (a 24-argument positional list is a silent-swap trap).
@@ -302,6 +317,9 @@ namespace threepp::vulkan {
             // reads the UBO; this copy only picks the pipeline permutation when
             // THREEPP_VK_SHADE_SPEC_PROBE specializes the probe gate.
             bool probeGi = false;
+            // This view's shadow maps are live (ShadowMode::ShadowMaps): the
+            // shade's kShadowMaps permutation (constant_id 3).
+            bool shadowMaps = false;
         };
         // Dispatch the deferred shade over the render extent.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame, const DispatchParams& p);
@@ -375,7 +393,8 @@ namespace threepp::vulkan {
                                  VkDescriptorSet ioSet,
                                  uint32_t count, uint32_t centerBase,
                                  uint32_t clusterLightCount,
-                                 bool froxelsActive, uint32_t envMipCount);
+                                 bool froxelsActive, uint32_t envMipCount,
+                                 bool shadowMaps);
 
         // Layout of the particle IO set (binding 0 = readonly centers SSBO,
         // binding 1 = writeonly light/fog result SSBO) — the caller allocates
@@ -424,6 +443,7 @@ namespace threepp::vulkan {
 
         VkSampler             gbufSampler_  = VK_NULL_HANDLE;// nearest (texelFetch ignores it)
         VkSampler             lutSampler_   = VK_NULL_HANDLE;// LINEAR clamp — froxel LUT trilinear sampling
+        VkSampler             shadowSampler_ = VK_NULL_HANDLE;// shadow maps: LINEAR compare, border = nothing cast
         VkDescriptorSetLayout dsLayout_     = VK_NULL_HANDLE;
         VkPipelineLayout      pipeLayout_   = VK_NULL_HANDLE;
         // The shade is a set of specialization permutations, built on first use
@@ -434,7 +454,7 @@ namespace threepp::vulkan {
         bool                  specProbe_    = false;// THREEPP_VK_SHADE_SPEC_PROBE
         VkShaderModule        shadeMod_     = VK_NULL_HANDLE;// kept for the lazy creates
         std::vector<std::pair<uint64_t, VkPipeline>> shadePerms_;// key -> permutation
-        VkPipeline shadePipeline(uint32_t flags, bool probeGi);
+        VkPipeline shadePipeline(uint32_t flags, bool probeGi, bool shadowMaps);
         VkPipeline createShadePipeline(uint64_t key);
         // What the pipeline-cache blob holds of the shade, kept in a text file
         // beside it (<blob stem>.shade_keys.txt): one "<SPIR-V hash> <key>"

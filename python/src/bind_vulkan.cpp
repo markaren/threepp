@@ -1101,7 +1101,60 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r) { return r.native().rayTracingSupported(); },
                               "True when the device traces rays (ray query + acceleration structures) and "
                               "THREEPP_VULKAN_NO_RT=1 did not turn them off. False: a raster-only frame where "
-                              "every ray misses (no shadows, sky/env-only GI and reflections, no lidar).")
+                              "every ray misses (sky/env-only GI and reflections, no lidar); shadows come from "
+                              "shadow maps (shadow_mode).")
+                // Shadows: 'auto' (ray traced where ray_tracing, else shadow
+                // maps), 'rt', 'sm' (shadow maps), 'off'.
+                .def_property("shadow_mode",
+                              [](PyVulkanRenderer& r) -> std::string {
+                                  switch (r.native().shadowMode()) {
+                                      case VulkanRenderer::ShadowMode::RayTraced: return "rt";
+                                      case VulkanRenderer::ShadowMode::ShadowMaps: return "sm";
+                                      case VulkanRenderer::ShadowMode::Off: return "off";
+                                      default: return "auto";
+                                  }
+                              },
+                              [](PyVulkanRenderer& r, const std::string& v) {
+                                  if (v == "auto") r.native().setShadowMode(VulkanRenderer::ShadowMode::Auto);
+                                  else if (v == "rt") r.native().setShadowMode(VulkanRenderer::ShadowMode::RayTraced);
+                                  else if (v == "sm") r.native().setShadowMode(VulkanRenderer::ShadowMode::ShadowMaps);
+                                  else if (v == "off") r.native().setShadowMode(VulkanRenderer::ShadowMode::Off);
+                                  else throw std::invalid_argument("shadow_mode: expected 'auto', 'rt', 'sm' or 'off'");
+                              },
+                              "How the sun and lamps cast shadows: 'auto' (ray traced where ray_tracing, else "
+                              "shadow maps), 'rt' (a ray per light per pixel), 'sm' (shadow maps: the sun in "
+                              "cascades, the strongest lamps near the camera in their own maps), 'off'.")
+                .def_property_readonly("shadow_mode_active",
+                                       [](PyVulkanRenderer& r) -> std::string {
+                                           switch (r.native().activeShadowMode()) {
+                                               case VulkanRenderer::ShadowMode::ShadowMaps: return "sm";
+                                               case VulkanRenderer::ShadowMode::Off: return "off";
+                                               default: return "rt";
+                                           }
+                                       },
+                                       "The shadow mode that runs: 'rt', 'sm' or 'off' (never 'auto').")
+                .def_property("shadow_distance",
+                              [](PyVulkanRenderer& r) { return r.native().shadowDistance(); },
+                              [](PyVulkanRenderer& r, float v) { r.native().setShadowDistance(v); },
+                              "How far the sun's shadow cascades reach, metres; 0 (default) = the camera's far "
+                              "plane clamped to [50, 2000].")
+                .def_property("shadow_cascades",
+                              [](PyVulkanRenderer& r) { return r.native().shadowCascades(); },
+                              [](PyVulkanRenderer& r, uint32_t v) { r.native().setShadowCascades(v); },
+                              "The sun's shadow cascades, 1-4 (default 4).")
+                .def("set_shadowed_lamps",
+                     [](PyVulkanRenderer& r, uint32_t spots, uint32_t points) {
+                         r.native().setShadowedLamps(spots, points);
+                     },
+                     py::arg("spots"), py::arg("points"),
+                     "How many spot and point lamps get a shadow map per frame (defaults 4 and 8, at most 8 "
+                     "and 16). Without ray tracing a lamp without a map casts no shadow.")
+                .def_property_readonly("shadowed_lamps",
+                                       [](PyVulkanRenderer& r) {
+                                           return std::make_tuple(r.native().shadowedSpots(),
+                                                                  r.native().shadowedPoints());
+                                       },
+                                       "(spots, points) as set_shadowed_lamps left them.")
                 // HDR bloom (added in linear HDR before the tone-map curve).
                 .def_property("bloom_intensity",
                               [](PyVulkanRenderer& r) { return r.native().bloomIntensity(); },
@@ -1375,6 +1428,8 @@ namespace threepp_py {
                                            // Half-res RT AO + bent normals (rtao.comp);
                                            // 0 unless deferred AO is enabled.
                                            d["rtao_ms"] = t.rtaoMs;
+                                           // The shadow-map pass (shadow_mode 'sm'); 0 otherwise.
+                                           d["shadow_maps_ms"] = t.shadowMapsMs;
                                            d["instance_expand_ms"] = t.instanceExpandMs;
                                            // Staging (or interop-export) -> vertex/normal copies +
                                            // the batched BLAS refit, for every graduated CPU

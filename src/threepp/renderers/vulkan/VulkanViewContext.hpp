@@ -16,6 +16,7 @@
 #include "VulkanSceneTypes.hpp"// DrawGroup (indirect-skip cache)
 #include "BloomPass.hpp"
 #include "DeferredShade.hpp"
+#include "ShadowMapPass.hpp"
 #include "PostComposite.hpp"
 #include "TaaResolve.hpp"
 
@@ -411,6 +412,14 @@ namespace threepp::vulkan::impl {
         std::unique_ptr<vulkan::BloomPass>     bloom_;
         std::unique_ptr<vulkan::PostComposite> post_;
         std::unique_ptr<vulkan::DeferredShade> deferredShade_;
+        // What bindings 80-83 of deferredShade_'s set slot f name: 0 = the
+        // dummies, else the generation of the view's shadow maps
+        // (Impl::syncShadowDescriptors).
+        std::array<uint64_t, kFramesInFlight> shadowBoundGen{};
+        // The view's shadow maps (ShadowMode::ShadowMaps), created on the first
+        // frame that needs them and kept; live = drawn and bound this frame.
+        std::unique_ptr<vulkan::ShadowMapPass> shadowMaps_;
+        bool shadowLive = false;
     };
 
     // Per-frame raster camera data. currVPjittered drives gl_Position;

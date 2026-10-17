@@ -292,9 +292,11 @@ layout(set = 0, binding = 20, scalar) uniform LightsUbo {
     vec3     ambient;
     uint     dirCount;
     DirLight dirLights[8];
-    // Skips the point/spot/rect lists and the hemi rows (bytes 208..1232 of
-    // GpuLightsUbo) to reach the environment knobs at the tail.
-    float    lightsSkipToEnvKnobs[256];
+    // Skips the point/spot/rect lists and the hemi rows (bytes 208..1296 of
+    // GpuLightsUbo) to reach the environment knobs at the tail. KEEP IN SYNC
+    // with GpuLightsUbo's size (VulkanGpuLayouts.hpp): its static_assert
+    // names this skip.
+    float    lightsSkipToEnvKnobs[272];
     vec3     envRotC0;// scene.environmentRotation, world -> env
     vec3     envRotC1;
     vec3     envRotC2;

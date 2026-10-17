@@ -255,6 +255,13 @@ layout(set = 0, binding = 54, scalar) readonly buffer ProbeDepthBuf { uint probe
 layout(constant_id = 0) const uint kSpecFlags = 0u;
 layout(constant_id = 1) const uint kSpecMask  = 0u;
 layout(constant_id = 2) const uint kProbeGi   = 0u;
+// 1 = this view's shadow maps are live (ShadowMode::ShadowMaps): the sun and
+// every slotted lamp take their PRIMARY visibility from the maps
+// (shadow_maps.glsl), and a point no map covers traces as before (a miss
+// in the no-ray-query variant). Compile-time so a ray-traced frame runs the
+// kernel it always ran.
+layout(constant_id = 3) const uint kShadowMaps = 0u;
+const bool kSM = kShadowMaps != 0u;
 bool probesEnabled() { return kProbeGi == 0u ? probeGrid.enabled > 0.5 : kProbeGi == 2u; }
 // probe_common.glsl's own gate, made the same test here (its default is the UBO).
 #define PROBE_GRID_OFF (!probesEnabled())
@@ -296,6 +303,9 @@ layout(set = 0, binding = 45, rgba16f) uniform writeonly image2D directUImage;
 // multiplies the filtered diffuse irradiance by (base diffuse under the sheen
 // share, plus the sheen lobe, all times diffBaseShare). vec3(0) off the demod path.
 layout(set = 0, binding = 77, rgba16f) uniform writeonly image2D demodColorImage;
+
+// The view's shadow maps (bindings 80-83), read only where kSM is set.
+#include "shadow_maps.glsl"
 
 // ── Clustered lights (bindings 48/49, built by cluster_build.comp) ─────────
 // ALL scene point/spot lights (power-sorted, no 8-per-type cap) + per-cell

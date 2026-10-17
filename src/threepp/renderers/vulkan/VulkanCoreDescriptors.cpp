@@ -426,7 +426,27 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             in.splatVolume      = svViews.data();
             in.splatVolumeCount = vulkan::kMaxSplatVolumes;
             in.splatVolumeUbo   = svUbos.data();
+            // Shadow maps (bindings 80-83): the view's live maps or the dummies,
+            // per slot, as syncShadowDescriptors keeps them from frame to frame.
+            ensureShadowDummies();
+            std::array<ShadowBinding, kFramesInFlight> smBind{};
+            std::array<VkImageView, kFramesInFlight> smCasc{}, smSpot{}, smPoint{};
+            std::array<VkBuffer, kFramesInFlight> smUbo{};
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                smBind[f]  = shadowBindingFor(f);
+                smCasc[f]  = smBind[f].cascades;
+                smSpot[f]  = smBind[f].spots;
+                smPoint[f] = smBind[f].points;
+                smUbo[f]   = smBind[f].ubo;
+            }
+            in.shadowCascades = smCasc.data();
+            in.shadowSpots    = smSpot.data();
+            in.shadowPoints   = smPoint.data();
+            in.shadowUbo      = smUbo.data();
             view().deferredShade_->rewriteDescriptors(in, onlyFrame);
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                if (onlyFrame < 0 || static_cast<uint32_t>(onlyFrame) == f) view().shadowBoundGen[f] = smBind[f].gen;
+            }
             // The set now names the pass's CURRENT volume list; record that so
             // the per-frame check in updateParticleDensityUbo can tell an
             // already-correct set from a stale one.

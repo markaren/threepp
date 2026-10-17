@@ -428,6 +428,7 @@ VulkanRenderer::Impl::~Impl() {
             // 5 VkImage + 5 VkImageView leaked per device. They are not
             // recreated on resize, so this destructor is their only owner.
             for (auto& img : gbufDummyMS_) destroyImage2D(ctx->allocator(), d, img);
+            destroyShadowResources();
             destroyImage2D(ctx->allocator(), d, oceanFineHeightDummy);
             destroyImage2D(ctx->allocator(), d, oceanFoamDummy);
             destroyImage2D(ctx->allocator(), d, foamDetailImage);
@@ -612,6 +613,7 @@ VulkanRenderer::Impl::~Impl() {
                 vp->post_.reset();
                 vp->bloom_.reset();
                 vp->deferredShade_.reset();
+                vp->shadowMaps_.reset();
             }
             et.mark("upscalers, taa, post, bloom, shade");
         }

@@ -24,6 +24,7 @@ struct ClusterLight {
     float radius;                          // physical source radius (soft shadows)
     float cullRadius;                      // conservative influence radius (range, or the atten<eps solve)
     float type;                            // 0 = point, 1 = spot
+    float shadowSlot;                      // layer in the point or spot shadow-map array (by type), -1 = none
 };
 
 const uint  kClusterX = 16u, kClusterY = 8u, kClusterZ = 24u;

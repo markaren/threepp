@@ -115,6 +115,10 @@ namespace threepp::vulkan {
         // image (GLSL has no bgra8 qualifier; rgba8 mismatches the view). The
         // event camera's Final source needs it; universal on desktop GPUs.
         bool storageImageReadWithoutFormat() const { return storageImageReadWithoutFormat_; }
+        // depthClamp is enabled (the shadow-map pass pancakes the casters
+        // behind a cascade's near plane onto it; without it the cascade's near
+        // plane is pulled back instead).
+        bool depthClampSupported() const { return depthClamp_; }
 
         bool rayTracingEnabled() const { return rayTracingEnabled_; }
 
@@ -260,6 +264,7 @@ namespace threepp::vulkan {
         std::vector<VkImageView> swapchainImageViews_;
         bool                     swapchainTransferSrc_ = false;
         bool                     storageImageReadWithoutFormat_ = false;
+        bool                     depthClamp_ = false;
 
         bool vsync_ = true;// FIFO when true, else MAILBOX/IMMEDIATE (see createSwapchain)
         bool headlessSurface_ = false;// VK_EXT_headless_surface instead of a window surface

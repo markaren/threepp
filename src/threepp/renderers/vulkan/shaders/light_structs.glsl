@@ -6,9 +6,12 @@
 #define LIGHT_STRUCTS_GLSL
 
 struct DirLight   { vec3 direction; vec3 color; };
-struct PointLight { vec3 position; float range; vec3 color; float decay; float radius; };
+// shadowSlot: the light's layer in the shadow-map arrays (shadow_maps.glsl),
+// -1 = none; GpuPointLight / GpuSpotLight in VulkanGpuLayouts.hpp.
+struct PointLight { vec3 position; float range; vec3 color; float decay; float radius; float shadowSlot; };
 struct SpotLight  { vec3 position; float range; vec3 color; float decay;
-                    vec3 direction; float cosAngleOuter; float cosAngleInner; float radius; };
+                    vec3 direction; float cosAngleOuter; float cosAngleInner; float radius;
+                    float shadowSlot; };
 struct RectLight  { vec3 position; vec3 halfU; vec3 halfV; vec3 normal; vec3 color; };
 
 #endif// LIGHT_STRUCTS_GLSL

@@ -119,6 +119,10 @@ layout(set = 0, binding = 65) uniform sampler2D cloudShadowTex;
 #define PD_LINEAR
 #include "particle_density.glsl"
 
+// The view's shadow maps (bindings 80-83), read under pc.flags bit 5.
+#include "vulkan_shared.h"// kMaxShadow*
+#include "shadow_maps.glsl"
+
 // Particle IO (set 1) — centers written by the CPU per render call (world
 // space, one vec4 per particle), light/fog results read by particle.vert.
 layout(set = 1, binding = 0, scalar) readonly buffer ParticleCenters { vec4 centers[]; };

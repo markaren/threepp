@@ -227,7 +227,8 @@ namespace threepp {
         shadeParams.width              = regionRenderExt_.width;
         shadeParams.height             = regionRenderExt_.height;
         shadeParams.envMipCount        = envImage.mipLevels;
-        shadeParams.shadows            = true;
+        shadeParams.shadows            = activeShadowMode() != VulkanRenderer::ShadowMode::Off;
+        shadeParams.shadowMaps         = view().shadowLive;
         shadeParams.ao                 = rtaoOn;
         shadeParams.frameCounter       = sampleIndex;
         shadeParams.emissiveCount      = emissiveTriCountThisFrame_;
@@ -338,11 +339,12 @@ namespace threepp {
         // vertex-stage reads of the same slot buffer (WAR), and its exit
         // barrier hands the results to the overlay pass's vertex fetches.
         if (particleLightCount_ > 0) {
-            auto pass = g.addPass("particleLight", [this, f, froxelsActive](VkCommandBuffer c) {
+            const bool smLive = view().shadowLive;
+            auto pass = g.addPass("particleLight", [this, f, froxelsActive, smLive](VkCommandBuffer c) {
                 view().deferredShade_->recordParticleLight(c, f, particleIoDescSets_[f],
                                                            particleLightCount_, /*centerBase=*/0u,
                                                            clusterLightCountThisFrame_, froxelsActive,
-                                                           envImage.mipLevels);
+                                                           envImage.mipLevels, smLive);
             });
             shade.declare(g, pass, Stage::ParticleLight, f, particleIoDescSets_[f]);
         }
@@ -2730,6 +2732,47 @@ namespace threepp {
 
     float VulkanRenderer::deferredStarfield() const {
         return pimpl_->deferredStarIntensity_;
+    }
+
+    void VulkanRenderer::setShadowMode(ShadowMode mode) {
+        pimpl_->shadowModeReq_ = mode;
+    }
+
+    VulkanRenderer::ShadowMode VulkanRenderer::shadowMode() const {
+        return pimpl_->shadowModeReq_;
+    }
+
+    VulkanRenderer::ShadowMode VulkanRenderer::activeShadowMode() const {
+        return pimpl_->activeShadowMode();
+    }
+
+    void VulkanRenderer::setShadowDistance(float metres) {
+        pimpl_->shadowDistance_ = std::max(metres, 0.f);
+    }
+
+    float VulkanRenderer::shadowDistance() const {
+        return pimpl_->shadowDistance_;
+    }
+
+    void VulkanRenderer::setShadowCascades(uint32_t n) {
+        pimpl_->shadowCascades_ = std::clamp(n, 1u, static_cast<uint32_t>(kMaxShadowCascades));
+    }
+
+    uint32_t VulkanRenderer::shadowCascades() const {
+        return pimpl_->shadowCascades_;
+    }
+
+    void VulkanRenderer::setShadowedLamps(uint32_t spots, uint32_t points) {
+        pimpl_->shadowedSpots_  = std::min(spots, static_cast<uint32_t>(kMaxShadowSpots));
+        pimpl_->shadowedPoints_ = std::min(points, static_cast<uint32_t>(kMaxShadowPoints));
+    }
+
+    uint32_t VulkanRenderer::shadowedSpots() const {
+        return pimpl_->shadowedSpots_;
+    }
+
+    uint32_t VulkanRenderer::shadowedPoints() const {
+        return pimpl_->shadowedPoints_;
     }
 
     void VulkanRenderer::setEnvSunPolicy(EnvSunPolicy policy) {
