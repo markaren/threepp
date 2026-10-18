@@ -25,6 +25,14 @@
 //       has landed, then is moved up once: an edit of a record with a chain
 //       used to drain to free the chain (a rut chunk reused from a pool);
 //       the chain is retired instead.
+//   strip a row of twelve green quads along the top, one triangle soup
+//       preallocated at capacity and drawn one quad long, that admits one more
+//       quad on every third frame, eleven times: the live triangle count the
+//       BLAS is rebuilt from grows past the count its storage was created for.
+//       The refit used to build past the end of the structure (the SLAM
+//       surface in spot_slam: VK_ERROR_DEVICE_LOST, or a neighbouring vertex
+//       buffer drawn as a fan of garbage); the record moves to storage that
+//       fits, and the renderer refuses the build when it does not.
 //
 // Plain exit-code program, not Catch2, like the other Vulkan tests here.
 // Exits 42 (CTest "Skipped") when no Vulkan GPU is available.
@@ -32,6 +40,7 @@
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/core/BufferAttribute.hpp"
+#include "threepp/core/BufferGeometry.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
@@ -62,6 +71,8 @@ namespace {
     constexpr float kMoverStep = 0.08f;
     constexpr float kBallX = 1.3f, kBallY = -0.9f, kBallLift = 0.3f;
     constexpr int kBallEditFrame = kFramesPerPhase + 40;
+    constexpr int kStripQuads = 12;
+    constexpr float kStripX0 = -1.95f, kStripPitch = 0.33f, kStripW = 0.3f, kStripY = 1.3f, kStripH = 0.4f;
 
     std::shared_ptr<Texture> constantEnv(float le) {
         constexpr int W = 64, H = 32;
@@ -144,6 +155,43 @@ namespace {
         uv->needsUpdate();
     }
 
+    float stripCenterX(int k) { return kStripX0 + static_cast<float>(k) * kStripPitch + kStripW * 0.5f; }
+
+    // Place quad k of the strip and admit it to the draw range. The vertices
+    // of a quad not yet placed sit at the origin, outside the range.
+    void growStrip(BufferGeometry& g, int k) {
+        auto* pos = g.getAttribute<float>("position");
+        const float x0 = kStripX0 + static_cast<float>(k) * kStripPitch, x1 = x0 + kStripW;
+        const float y0 = kStripY - kStripH * 0.5f, y1 = kStripY + kStripH * 0.5f;
+        const float xy[6][2] = {{x0, y0}, {x1, y0}, {x1, y1}, {x0, y0}, {x1, y1}, {x0, y1}};
+        for (int v = 0; v < 6; ++v) pos->setXYZ(k * 6 + v, xy[v][0], xy[v][1], 0.f);
+        pos->needsUpdate();
+        g.setDrawRange(0, (k + 1) * 6);
+    }
+
+    // kStripQuads quads of triangle soup, green vertex colors, every attribute
+    // allocated at capacity, the first quad placed and drawn.
+    std::shared_ptr<Mesh> makeStrip() {
+        const int n = kStripQuads * 6;
+        auto geom = BufferGeometry::create();
+        geom->setAttribute("position", FloatBufferAttribute::create(std::vector<float>(n * 3, 0.f), 3));
+        std::vector<float> nrm(static_cast<size_t>(n) * 3, 0.f);
+        for (int i = 0; i < n; ++i) nrm[i * 3 + 2] = 1.f;
+        geom->setAttribute("normal", FloatBufferAttribute::create(std::move(nrm), 3));
+        std::vector<float> col(static_cast<size_t>(n) * 3, 0.f);
+        for (int i = 0; i < n; ++i) col[i * 3 + 1] = 1.f;
+        geom->setAttribute("color", FloatBufferAttribute::create(std::move(col), 3));
+        growStrip(*geom, 0);
+        auto mat = MeshStandardMaterial::create();
+        mat->color = Color(1, 1, 1);
+        mat->roughness = 1.f;
+        mat->metalness = 0.f;
+        mat->vertexColors = true;
+        auto mesh = Mesh::create(geom, mat);
+        mesh->frustumCulled = false;
+        return mesh;
+    }
+
     std::shared_ptr<Mesh> makeQuad(float x, bool vertexColors) {
         auto geom = PlaneGeometry::create(1.f, 1.f);
         auto mat = MeshStandardMaterial::create();
@@ -204,6 +252,8 @@ int main() {
     auto ball = Mesh::create(SphereGeometry::create(0.4f, 64, 32), ballMat);// 4096 triangles
     ball->position.set(kBallX, kBallY, 0.f);
     scene.add(ball);
+    auto strip = makeStrip();
+    scene.add(strip);
     setColors(*quads[0]->geometry(), 1, 0, 0);
     setColors(*quads[1]->geometry(), 1, 0, 0);
     for (int i = 2; i < 4; ++i) {
@@ -269,6 +319,12 @@ int main() {
             (frame - kFramesPerPhase) % 3 == 0) {
             shiftX(*quads[4]->geometry(), kMoverStep);
         }
+        // The strip admits one more quad on every third frame: each edit
+        // grows the live triangle count its BLAS is rebuilt from.
+        if (frame >= kFramesPerPhase && frame < kFramesPerPhase + 3 * (kStripQuads - 1) &&
+            (frame - kFramesPerPhase) % 3 == 0) {
+            growStrip(*strip->geometry(), 1 + (frame - kFramesPerPhase) / 3);
+        }
         renderer.render(scene, camera);
         ++frame;
 
@@ -281,6 +337,9 @@ int main() {
             check("quad[3] uv on the blue half", dominant(sample(px, 3)) == 2);
             check("quad[4] green where it starts", dominant(sample(px, 4)) == 1);
             check("ball not yet at its lifted spot", dominant(samplePoint(px, kBallX, kBallY + 0.55f)) == -1);
+            check("strip starts one quad long",
+                  dominant(samplePoint(px, stripCenterX(0), kStripY)) == 1 &&
+                          dominant(samplePoint(px, stripCenterX(kStripQuads - 1), kStripY)) == -1);
 
             setColors(*quads[0]->geometry(), 0, 1, 0);
             setUvRange(*quads[2]->geometry(), 0.8f, 0.95f);
@@ -307,6 +366,9 @@ int main() {
             check("quad[1] graduated, quad[4] (every third frame) did not", st.graduated == 1u);
             check("no in-place edit drained the device (the ball's chain included)", st.drains == 0u);
             check("ball moved up by one edit", dominant(samplePoint(px, kBallX, kBallY + 0.55f)) == 2);
+            check("strip grew to twelve quads, its BLAS storage with it",
+                  dominant(samplePoint(px, stripCenterX(0), kStripY)) == 1 &&
+                          dominant(samplePoint(px, stripCenterX(kStripQuads - 1), kStripY)) == 1);
             if (vulkan::validationActive()) {
                 check("no validation errors", vulkan::validationErrorCount() == 0u);
             }

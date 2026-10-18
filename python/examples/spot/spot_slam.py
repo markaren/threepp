@@ -893,6 +893,9 @@ def main():
     assert tp.HAS_PHYSX, "needs a PhysX-enabled threepp build"
     headless = bool(args.shot) or bool(args.trip_probe) or bool(args.film)
     bench    = int(args.bench)
+    # SPOT_BENCH_HEADLESS=1 runs the bench loop on a hidden canvas, no ImGui: the same frame() as the
+    # live window, without a window taking the keyboard (a debugging run, not a measurement).
+    bench_headless = bool(bench) and bool(os.environ.get("SPOT_BENCH_HEADLESS"))
 
     # ── assets ────────────────────────────────────────────────────────────────
     assets = fetch_assets()
@@ -1022,7 +1025,7 @@ def main():
         _fullscreen = False
     _vsync = (not bench) or bool(os.environ.get("SPOT_BENCH_VSYNC"))
     canvas = tp.Canvas("threepp · Spot SLAM", width=_bw, height=_bh,
-                       antialiasing=4, headless=headless, vsync=_vsync,
+                       antialiasing=4, headless=headless or bench_headless, vsync=_vsync,
                        fullscreen=_fullscreen)
     rend = tp.VulkanRenderer(canvas)
     rend.shadow_map_enabled       = True
@@ -1790,7 +1793,7 @@ def main():
         return
 
     # ── interactive ───────────────────────────────────────────────────────────
-    ui = tp.ImguiContext(canvas, rend) if tp.HAS_IMGUI else None
+    ui = tp.ImguiContext(canvas, rend) if (tp.HAS_IMGUI and not bench_headless) else None
 
     def on_resize(w, h):
         camera.aspect = w / max(h, 1)

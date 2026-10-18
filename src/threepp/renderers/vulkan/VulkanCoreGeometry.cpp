@@ -9,6 +9,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace {
@@ -2883,6 +2885,19 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                             ctx->device(),
                             VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                             &blasBuilds[kk], &primitiveCount, &blasSizes);
+                    // The enqueue in ensureSceneBuilt moved the record to
+                    // storage that holds the live count before this frame's
+                    // TLAS fill read its address (moveToUpdatableBlasStorage).
+                    // A build past the end of the structure is memory
+                    // corruption only the validation layers would name, so a
+                    // record that slipped through fails here instead.
+                    if (blasSizes.accelerationStructureSize > rec.storage.size) {
+                        throw std::runtime_error(
+                                "[VulkanRenderer] BLAS refit: the structure was created with " +
+                                std::to_string(rec.storage.size) + " bytes of storage, but " +
+                                std::to_string(primitiveCount) + " primitives (the live draw range) need " +
+                                std::to_string(blasSizes.accelerationStructureSize));
+                    }
                     // Scratch grows via retire(), never destroyBuffer: a still-
                     // in-flight frame's refit may be reading the old one. Cold
                     // path: a record's first edit sizes it for good.

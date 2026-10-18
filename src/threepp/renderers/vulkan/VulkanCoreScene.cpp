@@ -2226,11 +2226,19 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 // A record still in its static storage (built
                                 // without ALLOW_UPDATE, or compacted) moves to
                                 // updatable storage now, before this frame's TLAS
-                                // fill reads its address. The old pair is retired:
-                                // earlier frames in flight still trace it.
+                                // fill reads its address. So does a record whose
+                                // draw range has grown past what its structure was
+                                // created for: the refit builds the live count, and
+                                // a marching-cubes surface that gains triangles at
+                                // every rebuild (spot_slam's SLAM surface) used to
+                                // build past the end of its storage, which was
+                                // VK_ERROR_DEVICE_LOST at the next submit or a
+                                // neighbouring vertex buffer drawn as a fan of
+                                // garbage (2026-10-18). moveToUpdatableBlasStorage
+                                // is a no-op for an updatable record that still
+                                // fits. The old pair is retired: earlier frames in
+                                // flight still trace it.
                                 if (ctx->rayQuerySupported() &&
-                                    (rec.compacted ||
-                                     (rec.blasBuiltFlags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR) == 0u) &&
                                     moveToUpdatableBlasStorage(rec, updatableBlasSize(rec, *entries[i].mesh->geometry()),
                                                                /*retireOld=*/true)) {
                                     rec.blasBuiltFlags = 0;// the next build is a MODE_BUILD
