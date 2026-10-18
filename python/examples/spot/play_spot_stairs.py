@@ -41,7 +41,7 @@ sys.path.insert(0, os.path.join(_HERE, "scratch_distillation"))   # scratch_cloc
 import threepp as tp
 from threepp.rl import load_policy
 from spot_deploy import (build_spot, fetch_assets, grid_texture, _quat_to_R,
-                         default_q, add_to_isaac, isaac_to_add, ACTION_SCALE, Z0)
+                         default_q, add_to_isaac, ACTION_SCALE, Z0)
 from spot_terrain_env import STAIR_X0, LAND_LEN, HALF_W, VX_HI, VY_HI, WZ_HI
 from scratch_env import STIFF_GAINS
 from scratch_clock import GAIT_PERIOD

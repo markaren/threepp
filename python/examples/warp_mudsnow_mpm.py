@@ -59,10 +59,7 @@ import threepp as tp
 from warp_common import (DensitySurface, bench_loop, cli_arg, orbit_loop, parse_size,
                          standard_material)
 
-try:
-    from threepp.cuda_interop import VkInteropArray
-except ImportError:
-    VkInteropArray = None
+from threepp.cuda_interop import VkInteropArray
 
 BENCH = "--bench" in sys.argv
 VULKAN = "--vulkan" in sys.argv
@@ -644,7 +641,7 @@ class Pit:
         created on the frame the mesh is first drawn. Any failure leaves the
         pit on the host route.
         """
-        if VkInteropArray is None or not hasattr(renderer, "enable_vertex_interop"):
+        if not hasattr(renderer, "enable_vertex_interop"):
             print(f"  note: no CUDA->Vulkan vertex interop in this build -- "
                   f"{name} takes the host route")
             return False

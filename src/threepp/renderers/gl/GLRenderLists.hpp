@@ -9,9 +9,6 @@
 
 namespace threepp::gl {
 
-    // Backward-compatible aliases — existing code using gl::RenderItem, gl::GLRenderList, etc. continues to work.
-    using RenderItem = threepp::RenderItem;
-
     struct GLRenderList : public threepp::RenderList {};
 
     struct GLRenderLists {

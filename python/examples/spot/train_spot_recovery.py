@@ -27,7 +27,6 @@ import os
 import sys
 import time
 
-import numpy as np
 import torch
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -37,7 +36,7 @@ sys.path.insert(0, os.path.join(_HERE, "scratch_distillation"))
 
 import threepp as tp
 from threepp.rl import PPO, load_policy
-from spot_recovery_env import (SpotRecoveryEnv, CONFIG, OBS_DIM, ACT_DIM, N_LEVELS, KIND_NAMES, EPISODE_S, CONTROL_HZ,
+from spot_recovery_env import (SpotRecoveryEnv, CONFIG, OBS_DIM, ACT_DIM, N_LEVELS, EPISODE_S, CONTROL_HZ,
                                OBS_LAST_ACT)
 from spot_deploy import ACTION_SCALE
 from spot_terrain_env import HIDDEN

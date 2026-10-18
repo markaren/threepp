@@ -172,10 +172,6 @@ namespace threepp::shaders {
             return get("gradientmap_pars_fragment");
         }
 
-        const std::string& lightmap_fragment() {
-            return get("lightmap_fragment");
-        }
-
         const std::string& lightmap_pars_fragment() {
             return get("lightmap_pars_fragment");
         }

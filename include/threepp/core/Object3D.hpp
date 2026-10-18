@@ -13,7 +13,7 @@
 #include "threepp/core/EventDispatcher.hpp"
 #include "threepp/core/Layers.hpp"
 
-#include "misc.hpp"
+#include "threepp/core/misc.hpp"
 
 #include <any>
 #include <array>
@@ -21,6 +21,9 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace threepp {
 

@@ -40,7 +40,7 @@ if os.path.isdir(_dll):
 import torch                                                              # noqa: E402
 import threepp as tp                                                      # noqa: E402
 from threepp.rl import load_policy                                        # noqa: E402
-from spot_deploy import (build_spot, fetch_assets, default_q, add_to_isaac,  # noqa: E402
+from spot_deploy import (build_spot, default_q, add_to_isaac,  # noqa: E402
                          isaac_to_add, ACTION_SCALE, Z0, STIFF_GAINS, LEGS, _quat_to_R)
 from policy_runner import PolicyBundle, PolicyController, Adapter         # noqa: E402
 

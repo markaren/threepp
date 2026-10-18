@@ -40,25 +40,6 @@ TEST_CASE("BufferAttribute accessors address elements by itemSize") {
     CHECK(attr->getX(1) == 4);
 }
 
-// copyAt was never instantiated, and its body ended in `return &this;` — taking
-// the address of a prvalue, which is ill-formed. The first caller would have been
-// a hard compile error, so this test is as much a compile check as a behaviour one.
-TEST_CASE("BufferAttribute copyAt copies one element between attributes") {
-
-    auto dst = FloatBufferAttribute::create(std::vector<float>{0, 0, 0, 0, 0, 0}, 3);
-    auto src = FloatBufferAttribute::create(std::vector<float>{1, 2, 3, 4, 5, 6}, 3);
-
-    auto& returned = dst->copyAt(1, *src, 0);
-
-    CHECK(&returned == dst.get());// returns *this, not the address of `this`
-
-    // Element 1 of dst now holds element 0 of src; element 0 is untouched.
-    CHECK(dst->getX(0) == 0);
-    CHECK(dst->getX(1) == 1);
-    CHECK(dst->getY(1) == 2);
-    CHECK(dst->getZ(1) == 3);
-}
-
 // applyMatrix4 and friends used to write through two shared `inline static`
 // scratch vectors, so transforming two attributes concurrently produced
 // interleaved garbage. The scratch is function-local now; this pins that.

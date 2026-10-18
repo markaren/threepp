@@ -230,7 +230,7 @@ def gate_a1(g, c):
     drift = np.abs(g["q"] - g["q_req"]).max()
     dp = np.abs(g["link_pos"] - c["link_pos"])
     wl = int(dp.max(axis=(0, 2)).argmax())
-    print(f"\n[A1.0] the comparison poses. Uniform draws from the joint limits self-intersect,")
+    print("\n[A1.0] the comparison poses. Uniform draws from the joint limits self-intersect,")
     print(f"       so PhysX moves them: max |q_reached - q_asked| = "
           f"{math.degrees(drift):.3f} deg. Both sides are then posed at q_reached, and the")
     print(f"       21 link positions agree to {dp.max()*1000:.4f} mm "
@@ -257,9 +257,9 @@ def gate_a1(g, c):
     print(f"\n[A1b] index moment arms (mm) by finite difference. h = {FD_H:g} rad, reached "
           f"{', '.join(f'{d/2:.3e}' for d in dqs)};")
     print(f"      worst settle drift {off.max()*1e6:.1f} urad at {dof[wj[1]]}.")
-    print(f"      Two references, because they answer different questions: the C++ cable at")
-    print(f"      the SAME pose is the port test; the --selftest column is the C++ cable at")
-    print(f"      the exact nominal pose with h = 1e-4, which is a different measurement.")
+    print("      Two references, because they answer different questions: the C++ cable at")
+    print("      the SAME pose is the port test; the --selftest column is the C++ cable at")
+    print("      the exact nominal pose with h = 1e-4, which is a different measurement.")
     ok, ok_ref, worst, worst_ref = True, True, 0.0, 0.0
     for (cn, jn), ref in SELFTEST_ARMS.items():
         ci, ji = names.index(cn), ARM_JOINTS.index(jn)

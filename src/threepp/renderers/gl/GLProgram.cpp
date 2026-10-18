@@ -357,8 +357,6 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
     auto envMapModeDefine = generateEnvMapModeDefine(parameters);
     auto envMapBlendingDefine = generateEnvMapBlendingDefine(parameters);
 
-    auto gammaFactorDefine = (renderer->gammaFactor > 0) ? renderer->gammaFactor : 1.f;
-
     auto customDefines = generateDefines(defines);
 
     this->program = glCreateProgram();
@@ -417,8 +415,6 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
                     parameters->instancingColor ? "#define USE_INSTANCING_COLOR" : "",
 
                     parameters->supportsVertexTextures ? "#define VERTEX_TEXTURES" : "",
-
-                    "#define GAMMA_FACTOR " + std::to_string(gammaFactorDefine),
 
                     "#define MAX_BONES " + std::to_string(parameters->maxBones),
                     (parameters->useFog && parameters->fog) ? "#define USE_FOG" : "",
@@ -591,8 +587,6 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
                     customDefines,
 
                     (parameters->alphaTest != 0) ? "#define ALPHATEST " + std::to_string(parameters->alphaTest) + (!(std::isnan(std::fmod(parameters->alphaTest, 1.f))) ? "" : ".0") : "",// add ".0" if integer
-
-                    "#define GAMMA_FACTOR " + std::to_string(gammaFactorDefine),
 
                     (parameters->useFog && parameters->fog) ? "#define USE_FOG" : "",
                     (parameters->useFog && parameters->fogExp2) ? "#define FOG_EXP2" : "",

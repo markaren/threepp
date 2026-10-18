@@ -1,4 +1,5 @@
 #version 460
+#extension GL_GOOGLE_include_directive : enable
 
 // HUD sprite fragment shader. Pair to overlay_sprite.vert. Samples the
 // per-sprite atlas texture (e.g. TextSprite's rasterized glyph bitmap)
@@ -28,14 +29,9 @@ layout(push_constant) uniform Pc {
     float _pad2;
 } pc;
 
-vec3 linearToSRGB(vec3 x) {
-    const vec3 cutoff = vec3(lessThan(x, vec3(0.0031308)));
-    const vec3 lower  = 12.92 * x;
-    const vec3 higher = 1.055 * pow(max(x, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
-    return mix(higher, lower, cutoff);
-}
+#include "overlay_display.glsl"
 
 void main() {
     vec4 t = texture(spriteMap, vUv);
-    outColor = vec4(linearToSRGB(pc.color.rgb * t.rgb), pc.color.a * t.a);
+    outColor = vec4(odLinearToSRGB(pc.color.rgb * t.rgb), pc.color.a * t.a);
 }

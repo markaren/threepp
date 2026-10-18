@@ -53,7 +53,6 @@ import argparse
 import hashlib
 import json
 import math
-import os
 import platform
 import struct
 import subprocess

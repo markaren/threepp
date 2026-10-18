@@ -69,8 +69,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))
 sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.join(_HERE, "scratch_distillation"))
 
-import threepp as tp
-from threepp.rl import GpuSim, VecTask
+from threepp.rl import VecTask
 from spot_deploy import (build_spot, default_q, add_to_isaac, isaac_to_add, ACTION_SCALE, LIM, STIFF_GAINS, HIP_X,
                          HIP_Y, HY_Y, KN)
 from spot_terrain_env import quat_rotate_inverse, up_z, _flat_ground, CONTROL_HZ, DT, SUBSTEPS, SPACING, ACT_DIM, N_SCAN

@@ -1171,7 +1171,6 @@ def run_mission(shots=False):
     scene's own sonar; telemetry every frame, the summary, the top-down plot; stills on request.
     The main view renders every --render-every frames (the sonar's trace rides on the renderer) and
     every frame of a still's 40-frame lead-in."""
-    import json
     import snake_mission as MS
     out_dir = OUT or os.path.join(_HERE, "out", "mission")
     os.makedirs(out_dir, exist_ok=True)
@@ -1476,7 +1475,6 @@ FILM_TEST_AT = {"DOCKED": (2.0,), "UNDOCK": (2.0, 6.0, 10.5), "PIVOT": (2.0,), "
 def run_film():
     """Pass 1: the mission rendered every frame with the director's camera; mp4 intermediates +
     telemetry + a per-frame film log. --film-test: stills at phase-relative times instead."""
-    from PIL import Image
     from demo_common import Encoder
     import snake_mission as MS
     out_dir = OUT or os.path.join(_HERE, "out", "film")

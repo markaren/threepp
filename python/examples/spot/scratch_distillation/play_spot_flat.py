@@ -275,7 +275,7 @@ def main():
         vx, vy, wz = state["cmd"]
         tp.imgui.text(f"cmd  vx {vx:+.2f}  vy {vy:+.2f}  wz {wz:+.2f}")
         tp.imgui.text(f"phase phi: {state['phi']:.3f}")
-        tp.imgui.text(f"obs: 50-d scratch (48 proprio + 2 clock), normalized")
+        tp.imgui.text("obs: 50-d scratch (48 proprio + 2 clock), normalized")
         _, state["auto_fwd"]  = tp.imgui.checkbox("auto-forward (idle)", state["auto_fwd"])
         _, state["hdg_hold"]  = tp.imgui.checkbox("heading-hold (no-turn)", state["hdg_hold"])
         tp.imgui.text(f"{tp.imgui.get_framerate():.0f} fps   |   R = reset (auto-resets at plane edge)")

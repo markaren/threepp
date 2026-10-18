@@ -5,7 +5,6 @@ SplatLoader_test hand-builds buffers in C++, then render it headless on GL.
 Conventions pinned by the loader (and exercised here): opacity is stored
 pre-sigmoid, scale_* pre-exp, rot_* w-first.
 """
-import math
 import struct
 
 import pytest

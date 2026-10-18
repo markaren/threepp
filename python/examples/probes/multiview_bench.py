@@ -24,7 +24,6 @@ import json
 import math
 import os
 import statistics
-import sys
 import time
 
 import numpy as np

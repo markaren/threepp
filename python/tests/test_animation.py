@@ -1,4 +1,3 @@
-import math
 
 import threepp as tp
 

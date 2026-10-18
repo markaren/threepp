@@ -467,8 +467,8 @@ def sanity(K=1024, steps=600, device="cuda"):
         env.step(zero)
     d = env.offset()
     rest = env.obj_pos - env.target
-    print(f"\n[B1a] slack hand, 0.9 s, no pull, no roll yet: object rest offset from "
-          f"PALM_TARGET (m, hand frame)")
+    print("\n[B1a] slack hand, 0.9 s, no pull, no roll yet: object rest offset from "
+          "PALM_TARGET (m, hand frame)")
     print(f"      mean ({rest[:,0].mean():+.4f}, {rest[:,1].mean():+.4f}, "
           f"{rest[:,2].mean():+.4f})   |d| mean {d.norm(dim=-1).mean():.4f} "
           f"max {d.norm(dim=-1).max():.4f}")
@@ -508,8 +508,8 @@ def sanity(K=1024, steps=600, device="cuda"):
     # between origins would read 20-odd mm of phalanx as separation that is not there.
     tip_t = torch.tensor([0.0, 0.5 * (0.025 + 0.007), 0.0], device=env.device)
     tip_i = torch.tensor([0.0, 0.5 * (0.017 + 0.007), 0.0], device=env.device)
-    print(f"\n[B1c] scripted fist, 35 N on every flexor, no pull, no roll: thumb tip to "
-          f"index tip (mm)")
+    print("\n[B1c] scripted fist, 35 N on every flexor, no pull, no roll: thumb tip to "
+          "index tip (mm)")
     best = 1e9
     for i in range(1, 121):                     # 2 s
         env.step(a)

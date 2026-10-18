@@ -491,24 +491,6 @@ namespace threepp {
                     material.emissiveIntensity = emmisiveIntensity;
                 }
 
-                //                if (aiGetMaterialTextureCount(mat, aiTextureType_SPECULAR) > 0) {
-                //                    if (aiGetMaterialTexture(mat, aiTextureType_SPECULAR, 0, &p) == aiReturn_SUCCESS) {
-                //                        auto tex = loadTexture(aiScene, path, p.C_Str());
-                //                        material.specularMap = tex;
-                //                    }
-                //                } else {
-                //                    C_STRUCT aiColor4D specular;
-                //                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_SPECULAR, &specular)) {
-                //                        material.specular.setRGB(specular.r, specular.g, specular.b);
-                //                    }
-                //                }
-
-                //                float shininess;
-                //                if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_SHININESS, &shininess)) {
-                //                    material.shininess = shininess;
-                //                }
-
-
                 // should this be added?
                 //                C_STRUCT aiColor4D ambient;
                 //                if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_AMBIENT, &ambient)) {

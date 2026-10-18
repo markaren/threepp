@@ -47,7 +47,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))          # examples/ (build_common)
-from build_common import (Part, R, T, Z_TO_X, Z_TO_Y, annulus, box, cylinder, export, frame_from_forward_up,  # noqa: E402
+from build_common import (Part, R, T, Z_TO_Y, annulus, box, cylinder, export, frame_from_forward_up,  # noqa: E402
                           frame_y_toward, loft, make_materials, new_object, revolve, strut, table)
 
 I4 = np.eye(4)

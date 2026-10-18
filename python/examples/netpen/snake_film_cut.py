@@ -24,7 +24,6 @@ tear fires); snake_panels' HUD on top; the end card with the three-seed mission 
 """
 import argparse
 import glob
-import json
 import math
 import os
 import subprocess
@@ -371,7 +370,7 @@ def main():
     print("windows (mission t0 -> t1, real time, cut hard between):")
     for s0, s1, sp in segs:
         print(f"  {s0:6.1f} -> {s1:6.1f}  {(s1 - s0) / sp:5.1f} s")
-    print(f"events used: " + ", ".join(f"{k} {v:.1f}" for k, v in info.items() if v is not None))
+    print("events used: " + ", ".join(f"{k} {v:.1f}" for k, v in info.items() if v is not None))
     print(f"mission section {n / FPS:.1f} s, film {total:.1f} s at {FPS} fps; cuts dissolved: "
           f"{int((S['diss_w'] > 0).sum() // max(int(DISSOLVE * FPS), 1))}")
     if a.plan:

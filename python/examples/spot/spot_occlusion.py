@@ -116,14 +116,14 @@ def main():
     print(f"\n[1] directly visible this tick (% of ticks the camera has line of sight), "
           f"{ticks} steps x {args.envs} envs")
     print(_grid(vis_pct))
-    print(f"\n[2] answered from MEMORY instead (seen earlier, occluded or out of frame now)")
+    print("\n[2] answered from MEMORY instead (seen earlier, occluded or out of frame now)")
     print(_grid(mem_pct))
-    print(f"\n[3] NO answer — the cell reads flat, as it does at deploy")
+    print("\n[3] NO answer — the cell reads flat, as it does at deploy")
     print(_grid(unk_pct))
     print(f"\n  overall: {sum(vis_pct)/N_SCAN:5.1f}% visible  {sum(mem_pct)/N_SCAN:5.1f}% remembered  "
           f"{sum(unk_pct)/N_SCAN:5.1f}% blind")
 
-    print(f"\n[4] height error vs the privileged scan (m), mean over env x tick")
+    print("\n[4] height error vs the privileged scan (m), mean over env x tick")
     print(_grid((err_sum / ticks).tolist(), fmt="{:5.3f}"))
     e = err_sum / ticks
     print(f"\n  mean {e.mean().item():.4f} m   worst cell {e.max().item():.4f} m   "

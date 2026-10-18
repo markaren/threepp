@@ -863,7 +863,7 @@ def selftest():
     for jn in ("index_mcp", "index_pip", "index_dip"):
         print(f"    {jn:10s}  r = {r[idx[jn]]*1000:5.2f} mm  ->  tau = T*r ="
               f" {T*r[idx[jn]]:+.4f} N.m at T = {T} N")
-    print(f"    Schuind 1992 measured an in-vivo FDP tension:fingertip force ratio of")
+    print("    Schuind 1992 measured an in-vivo FDP tension:fingertip force ratio of")
     print(f"    7.9 +/- 6.3 during tip pinch; at r_DIP = {r[idx['index_dip']]*1000:.2f} mm and a")
     print(f"    ~20 mm pulp lever this routing implies {0.020/max(r[idx['index_dip']],1e-9):.1f}:1.")
     return hand
@@ -978,8 +978,8 @@ def grasp_test(obj="can", tension=35.0, verbose=True):
         vals = [v if v is not None else MAXF for v in results.values()]
         worst = min(vals)
         print(f"  WEAKEST DIRECTION: {worst:.2f} N ({worst/9.81*1000:.0f} g).")
-        print(f"  That is the number to quote -- a grasp is only as good as its weakest")
-        print(f"  direction, and quoting the best one is how a bad grasp looks good.")
+        print("  That is the number to quote -- a grasp is only as good as its weakest")
+        print("  direction, and quoting the best one is how a bad grasp looks good.")
     return results
 
 

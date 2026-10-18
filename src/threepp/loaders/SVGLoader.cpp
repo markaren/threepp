@@ -880,43 +880,6 @@ std::vector<SVGLoader::SVGData> SVGLoader::Impl::load(const pugi::xml_node& node
         svgNode = node.child("svg");
     }
 
-    // // Apply viewBox / width/height transform if present
-    // const auto svgNode = node.child("svg");
-    // if (svgNode) {
-    //
-    //     if (svgNode.attribute("viewBox")) {
-    //
-    //         // parse viewBox: "minX minY width height"
-    //         const auto nums = svg::parseFloats(svgNode.attribute("viewBox").value());
-    //         if (nums.size() == 4) {
-    //
-    //             const float minX = nums[0];
-    //             const float minY = nums[1];
-    //             const float vbW = nums[2];
-    //             const float vbH = nums[3];
-    //
-    //             // width/height may have units; use parseFloatWithUnits
-    //             float w = vbW;
-    //             float h = vbH;
-    //             if (svgNode.attribute("width")) w = parseFloatWithUnits(svgNode.attribute("width").value());
-    //             if (svgNode.attribute("height")) h = parseFloatWithUnits(svgNode.attribute("height").value());
-    //
-    //             if (vbW != 0 && vbH != 0) {
-    //                 const float sx = w / vbW;
-    //                 const float sy = h / vbH;
-    //
-    //                 Matrix3 vbTransform;
-    //                 vbTransform.identity();
-    //                 vbTransform.translate(-minX, -minY);
-    //                 vbTransform.scale(sx, sy);
-    //
-    //                 transformStack.emplace_back(vbTransform);
-    //                 currentTransform.copy(vbTransform);
-    //             }
-    //         }
-    //     }
-    // }
-
     parseNode(node.child("svg"), {"#000", 1, 1, 1, "miter", "butt", 4});
 
     return paths;

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <iostream>
 
 using namespace threepp;
 namespace fs = std::filesystem;

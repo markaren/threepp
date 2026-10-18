@@ -2,9 +2,6 @@
 # Set the default behavior, in case people don't have core.autocrlf set.
 * text=auto
 
-# Declare files that will always have LF line endings on checkout.
-version.txt text eol=lf
-
 # Raw binary assets — never apply text/EOL conversion. PPM golden references
 # (tests/renderers/golden/*.ppm) are raw readRGBPixels bytes; with `* text=auto`
 # + core.autocrlf=true, git misdetects a golden with no early NUL byte (e.g. the

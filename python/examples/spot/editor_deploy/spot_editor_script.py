@@ -20,7 +20,6 @@ if _HERE not in sys.path:
 
 import numpy as np
 
-import threepp
 from threepp import editor
 
 from policy_runner import PolicyBundle, PolicyController, Adapter

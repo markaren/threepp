@@ -31,8 +31,7 @@ sys.path.insert(0, _SPOT_DIR)   # spot_deploy / spot_terrain_env / spot_symmetry
 # Single source of truth for obs layout (no circular import — scratch_clock has no env dep)
 from scratch_clock import OBS_DIM, CLOCK0, CLOCK_DIM   # noqa: E402
 # Reuse the per-joint mirror constants from spot_symmetry
-from spot_symmetry import (MIRROR_PERM, MIRROR_SIGN,   # noqa: E402
-                            mirror_joints, _consts, mirror_act)
+from spot_symmetry import (mirror_joints, _consts, mirror_act)
 import _common   # noqa: E402
 
 # --------------------------------------------------------------------------- #
@@ -116,7 +115,6 @@ def make_aux_loss(coef: float):
 #  Selftest
 # --------------------------------------------------------------------------- #
 if __name__ == "__main__":
-    import math
     from scratch_clock import clock_obs, reset_phi
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -127,7 +125,7 @@ if __name__ == "__main__":
     # ---- (a) Involution test: mirror(mirror(x)) ≈ x ----
     x_obs = torch.randn(B, OBS_DIM, device=device)
     err_obs = (mirror_obs(mirror_obs(x_obs)) - x_obs).abs().max().item()
-    print(f"\n(a) Involution:")
+    print("\n(a) Involution:")
     print(f"    mirror_obs(mirror_obs(x)) max err = {err_obs:.2e}  (expect < 1e-5)")
     assert err_obs < 1e-5, f"mirror_obs is not an involution: err={err_obs}"
 
@@ -140,7 +138,7 @@ if __name__ == "__main__":
     # ---- (b) Clock-aware test ----
     # Build two obs that differ ONLY in the clock dims: one at phase phi, one at phi+0.5.
     # After mirroring obs_phi, the clock dims should equal those of obs_{phi+0.5}.
-    print(f"\n(b) Clock-aware test:")
+    print("\n(b) Clock-aware test:")
     phi     = torch.rand(B, device=device)            # random phases in [0, 1)
     phi_05  = (phi + 0.5) % 1.0                       # half-period shifted
 
@@ -170,7 +168,7 @@ if __name__ == "__main__":
     print("    -> PASS")
 
     # ---- (c) Teacher equivariance (PhysX + CUDA) ----
-    print(f"\n(c) Teacher equivariance test:")
+    print("\n(c) Teacher equivariance test:")
     _ran_teacher_test = False
     if device == "cuda":
         try:
@@ -247,8 +245,8 @@ if __name__ == "__main__":
                 rel_err   = equiv_err / max(act_scale, 1e-6)
                 print(f"    teacher equivariance: mean|t(mirror(o)) - mirror(t(o))| = {equiv_err:.4f}")
                 print(f"    action scale = {act_scale:.3f}  relative error = {rel_err:.4f}")
-                print(f"    (small relative to scale = mirror correct + teacher ~symmetric;"
-                      f" the matching spot_symmetry baseline is ~0.45)")
+                print("    (small relative to scale = mirror correct + teacher ~symmetric;"
+                      " the matching spot_symmetry baseline is ~0.45)")
                 # A broken [0:48] mirror (wrong perm/sign) blows this up to ~1-2; the teacher
                 # is only APPROXIMATELY symmetric, so allow generous headroom over the ~0.45 baseline.
                 assert rel_err < 0.8, f"teacher equivariance too large ({rel_err:.3f}) — mirror likely wrong"

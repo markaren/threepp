@@ -33,9 +33,9 @@ sys.path.insert(0, _SPOT_DIR)
 
 import threepp as tp
 from spot_terrain_env import DT
-from scratch_clock import GAIT_PERIOD, OBS_DIM
+from scratch_clock import GAIT_PERIOD
 from foot_contact import foot_world, contact_soft
-from scratch_env import SpotScratchEnv, ACT_DIM
+from scratch_env import SpotScratchEnv
 
 
 def cross_corr_offset(a, b):
@@ -223,11 +223,11 @@ def main():
         print(f"\n  NOTE: recommended GAIT_PERIOD ({rec_period:.4f} s) differs from "
               f"the current default ({GAIT_PERIOD:.4f} s) by "
               f"{abs(rec_period - GAIT_PERIOD)*1000:.0f} ms.")
-        print(f"  To update scratch_clock.py, change line:")
+        print("  To update scratch_clock.py, change line:")
         print(f"      GAIT_PERIOD = {GAIT_PERIOD}   # seconds; calibrated default ...")
-        print(f"  to:")
+        print("  to:")
         print(f"      GAIT_PERIOD = {rec_period:.4f}   # calibrated by scratch_calibrate.py")
-        print(f"  (Do NOT auto-edit; review the calibration trace first.)")
+        print("  (Do NOT auto-edit; review the calibration trace first.)")
     else:
         print(f"\n  GAIT_PERIOD {GAIT_PERIOD:.4f} s is within 50 ms of the measured "
               f"{rec_period:.4f} s — no update needed.")

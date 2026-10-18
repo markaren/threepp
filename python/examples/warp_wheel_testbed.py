@@ -636,7 +636,7 @@ def mode_render():
     # Per-PIXEL grain on the Vulkan detail layer: the marching-cubes vertex
     # normals can only carry relief coarser than ~2.5 cells (finer aliases into
     # diagonal streaks), so the sand's own grain lives here. ~7 mm stones.
-    if not NO_DETAIL and hasattr(sand, "detail_normal_map"):
+    if not NO_DETAIL:
         from warp_common import grain_detail_texture
         sand.detail_normal_map = tp.data_texture(grain_detail_texture(256, 144), srgb=False)
         sand.detail_repeat = 12.0

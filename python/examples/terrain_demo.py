@@ -11,7 +11,6 @@ four species presets and the key generation knobs.
 """
 
 import argparse
-import math
 import threading
 import sys
 import os

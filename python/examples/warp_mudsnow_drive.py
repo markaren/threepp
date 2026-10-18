@@ -201,10 +201,7 @@ from warp_common import (DensitySurface, cli_arg, encode_png_sequence, find_ffmp
                          grain_detail_texture, parse_size,
                          standard_material, write_radiance_hdr)
 
-try:
-    from threepp.cuda_interop import VkInteropArray
-except ImportError:                                 # build without the interop helper
-    VkInteropArray = None
+from threepp.cuda_interop import VkInteropArray
 
 GL = "--gl" in sys.argv
 INTEROP = "--interop" in sys.argv    # zero-copy publish; see the note on Strip
@@ -925,7 +922,7 @@ class Strip:
                   outputs=[pos, nrm])
 
     def arm(self, renderer):
-        if not INTEROP or VkInteropArray is None                 or not hasattr(renderer, "enable_vertex_interop"):
+        if not INTEROP or not hasattr(renderer, "enable_vertex_interop"):
             return False
         # Grid vertices keep their identity frame to frame, so the renderer's
         # per-vertex motion vectors are real motion: leave stable_correspondence
@@ -2263,17 +2260,16 @@ class GranularLane:
 gravel = GranularLane() if GRAVEL else None
 if gravel is not None:
     scene.add(gravel.mesh)
-    if hasattr(gravel.material, "detail_normal_map"):
-        # The stones: a per-PIXEL detail layer (triplanar, world-anchored, so
-        # the strip and the soup carry the SAME stones across the seam). One
-        # stone is 1 / (detail_repeat * 12) m: 28 mm. GL ignores the layer.
-        _grain = tp.data_texture(grain_detail_texture(256, 144), srgb=False)
-        for _m in (gravel.material, gravel_mat):
-            _m.detail_normal_map = _grain
-            # Sand: the same layer, 3x finer and faint (a 9 mm stipple, not
-            # stones; S2 owns the sand's own look).
-            _m.detail_repeat = 9.0 if SAND else 3.0
-            _m.detail_normal_scale = 0.35 if SAND else 1.0
+    # The stones: a per-PIXEL detail layer (triplanar, world-anchored, so
+    # the strip and the soup carry the SAME stones across the seam). One
+    # stone is 1 / (detail_repeat * 12) m: 28 mm. GL ignores the layer.
+    _grain = tp.data_texture(grain_detail_texture(256, 144), srgb=False)
+    for _m in (gravel.material, gravel_mat):
+        _m.detail_normal_map = _grain
+        # Sand: the same layer, 3x finer and faint (a 9 mm stipple, not
+        # stones; S2 owns the sand's own look).
+        _m.detail_repeat = 9.0 if SAND else 3.0
+        _m.detail_normal_scale = 0.35 if SAND else 1.0
 
 
 def gravel_couple(hub, lane_of, grade, w_load, q):

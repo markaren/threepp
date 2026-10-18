@@ -5026,65 +5026,6 @@ int EditorApp::runSelfTest() {
                   "and undoes back to what it replaced");
         }
 
-#if 0
-        // PLAY MODE. Grains are a CUDA-only PhysX feature, so this machine
-        // either has a device — in which case a pour has to arrive and be drawn
-        // — or it has not, in which case the session must decline with a line
-        // and let the rest of the scene play. Both are assertions; "did nothing
-        // and said nothing" is the failure.
-        {
-            // Modest and short: the assertion is that grains flow, not how many
-            // a laptop can hold.
-            if (auto* live = findByUuid(document_.scene(), granularUuid)) {
-                GranularConfig pour;
-                pour.capacity = 20000;
-                pour.rate = 4000.f;
-                pour.write(*live);
-                step();
-            }
-
-            const auto grainVisuals = [&] {
-                std::size_t n = 0;
-                document_.scene().traverse([&](Object3D& o) {
-                    if (document_.isEditorOnly(o)) return;
-                    if (o.name == "Grains (play)") ++n;
-                });
-                return n;
-            };
-
-            startPlay();
-            stepFixed(120);
-
-            // Asked of the WORLD rather than of the session, so the branch below
-            // is not the session grading its own homework.
-            const bool cuda = physics_ && physics_->world() &&
-                              physics_->world()->cudaContextManager() != nullptr;
-            check(granularSession_ && granularSession_->granularNodeCount() == 1,
-                  "the play session counts the authored chute");
-            if (cuda) {
-                check(granularSession_ && !granularSession_->declined() &&
-                              granularSession_->groupCount() == 1,
-                      "and pours it into one PBD group on a CUDA machine");
-                check(granularSession_ && granularSession_->activeGrainCount() > 0,
-                      "grains are emitted through the chute frame");
-                check(grainVisuals() == 1, "and drawn by a visual in the played scene");
-            } else {
-                check(granularSession_ && granularSession_->declined() &&
-                              granularSession_->groupCount() == 0,
-                      "and declines with a line where there is no CUDA device");
-                check(grainVisuals() == 0, "drawing nothing it cannot simulate");
-            }
-
-            stopPlay();
-            step();
-            check(grainVisuals() == 0, "Stop takes the grain visual with it");
-            check(granularSession_ && granularSession_->activeGrainCount() == 0,
-                  "and the solver with it");
-            check(GranularConfig::read(*findByUuid(document_.scene(), granularUuid)).has_value(),
-                  "leaving the authored chute exactly as it was");
-        }
-#endif
-
         commands_.undo();
         step();
         check(findByUuid(document_.scene(), granularUuid) == nullptr,

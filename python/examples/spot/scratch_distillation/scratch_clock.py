@@ -156,7 +156,7 @@ if __name__ == "__main__":
     s = desired_stance(phi_zero)   # [1, 4]
     fl, fr, hl, hr = s[0, 0].item(), s[0, 1].item(), s[0, 2].item(), s[0, 3].item()
     print(f"[2] stance at phi=0: fl={fl:.3f} fr={fr:.3f} hl={hl:.3f} hr={hr:.3f}")
-    print(f"    expect: fl~1, fr~0, hl~0, hr~1 (trot diagonal A)")
+    print("    expect: fl~1, fr~0, hl~0, hr~1 (trot diagonal A)")
     assert fl > 0.85 and hr > 0.85, "fl and hr should be in stance at phi=0"
     assert fr < 0.15 and hl < 0.15, "fr and hl should be in swing at phi=0"
 
@@ -165,7 +165,7 @@ if __name__ == "__main__":
     s2 = desired_stance(phi_half)
     fl2, fr2, hl2, hr2 = s2[0, 0].item(), s2[0, 1].item(), s2[0, 2].item(), s2[0, 3].item()
     print(f"    stance at phi=0.5: fl={fl2:.3f} fr={fr2:.3f} hl={hl2:.3f} hr={hr2:.3f}")
-    print(f"    expect: fl~0, fr~1, hl~1, hr~0 (trot diagonal B)")
+    print("    expect: fl~0, fr~1, hl~1, hr~0 (trot diagonal B)")
     assert fr2 > 0.85 and hl2 > 0.85, "fr and hl should be in stance at phi=0.5"
     assert fl2 < 0.15 and hr2 < 0.15, "fl and hr should be in swing at phi=0.5"
 

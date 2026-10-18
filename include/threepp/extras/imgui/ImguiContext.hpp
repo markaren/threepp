@@ -12,7 +12,6 @@
 #endif
 
 #include <functional>
-#include <iostream>
 
 #include <threepp/canvas/Canvas.hpp>
 #include <threepp/canvas/Monitor.hpp>
@@ -183,11 +182,6 @@ public:
     void setFontScale(float scale) {
         dpiAwareIsConfigured_ = false;
         dpiScale_ = scale;
-    }
-
-    void makeDpiAware() {
-
-        std::cerr << "Deprecated function. Use setFontScale instead." << std::endl;
     }
 
     [[nodiscard]] float dpiScale() const {

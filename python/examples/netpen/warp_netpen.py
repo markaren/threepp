@@ -29,10 +29,7 @@ import warp as wp
 import threepp as tp
 from warp_common import cli_arg, orbit_loop, parse_size, sky_env, standard_material
 from drone_rig import Drone
-try:
-    from threepp.cuda_interop import VkInteropArray
-except ImportError:
-    VkInteropArray = None
+from threepp.cuda_interop import VkInteropArray
 
 SHOT = cli_arg("--shot", "", str)
 FILM = "--film" in sys.argv
@@ -739,7 +736,7 @@ def net_on_frame(k):
 
 def arm_net_interop():
     """After the first render: all three net meshes go zero-copy, or none (net_upload is one host path)."""
-    if VkInteropArray is None or not device.is_cuda or not (INTEROP and NET_INTEROP):
+    if not device.is_cuda or not (INTEROP and NET_INTEROP):
         return
     for k, m in enumerate(net_meshes):
         h = renderer.enable_vertex_interop(m, net_on_frame(k))
@@ -2559,7 +2556,7 @@ def fish_on_frame():
 def arm_fish_interop():
     """After the first render: CUDA->Vulkan zero copy for the school; host upload stays the fallback."""
     global fish_vk
-    if VkInteropArray is None or not device.is_cuda or not INTEROP:
+    if not device.is_cuda or not INTEROP:
         return
     h = renderer.enable_vertex_interop(fish, fish_on_frame)
     if h is None:

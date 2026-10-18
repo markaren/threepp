@@ -100,7 +100,6 @@ def main():
     import numpy as np
     import carb
     import omni
-    from pxr import Gf, UsdGeom
     # Isaac Sim 6.x: the core.api and the camera, physics-sensor and RTX-sensor extensions live in
     # extsDeprecated. They are on the search path but not all enabled by the python experience, and
     # the isaacsim.sensors.physics namespace is otherwise occupied by the .nodes/.ui extensions, so

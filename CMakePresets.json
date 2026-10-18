@@ -254,11 +254,6 @@
     },
 
     {
-      "name": "ci-linux",
-      "configurePreset": "ci-linux",
-      "configuration": "Release"
-    },
-    {
       "name": "ci-linux-asan",
       "configurePreset": "ci-linux-asan",
       "configuration": "RelWithDebInfo"
@@ -340,12 +335,6 @@
       "inherits": "base",
       "configurePreset": "gl-debug",
       "configuration": "Debug"
-    },
-    {
-      "name": "ci-linux",
-      "inherits": "base",
-      "configurePreset": "ci-linux",
-      "configuration": "Release"
     },
     {
       "name": "ci-linux-asan",

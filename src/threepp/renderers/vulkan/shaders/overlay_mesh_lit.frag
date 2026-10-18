@@ -1,4 +1,5 @@
 #version 460
+#extension GL_GOOGLE_include_directive : enable
 
 // Pair to overlay_mesh_lit.vert — Lambert shading for the lit split-screen
 // pane. Deliberately a PREVIEW, not the deferred pipeline: one directional
@@ -33,18 +34,7 @@ layout(location = 0) in vec3 vNormal;
 
 layout(location = 0) out vec4 outColor;
 
-vec3 linearToSRGB(vec3 x) {
-    const vec3 cutoff = vec3(lessThan(x, vec3(0.0031308)));
-    const vec3 lower  = 12.92 * x;
-    const vec3 higher = 1.055 * pow(max(x, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
-    return mix(higher, lower, cutoff);
-}
-
-// Narkowicz ACES fit — close enough to the main pipeline's filmic curve for a
-// preview pane, and a single fma chain rather than the full RRT/ODT.
-vec3 acesFilm(vec3 x) {
-    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
-}
+#include "overlay_display.glsl"
 
 void main() {
     vec3 N = normalize(vNormal);
@@ -54,6 +44,6 @@ void main() {
     if (!gl_FrontFacing) N = -N;
     const float ndl = max(dot(N, normalize(lit.sunDir.xyz)), 0.0);
     vec3 c = pc.color.rgb * (lit.ambient.rgb + lit.sunColor.rgb * lit.sunDir.w * ndl);
-    c = acesFilm(c);
-    outColor = vec4(linearToSRGB(c), pc.color.a);
+    c = odAcesNarkowicz(c);
+    outColor = vec4(odLinearToSRGB(c), pc.color.a);
 }

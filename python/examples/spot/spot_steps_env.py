@@ -50,9 +50,9 @@ from spot_deploy import build_spot, default_q, add_to_isaac, isaac_to_add, ACTIO
 from spot_terrain_env import (quat_rotate_inverse, up_z, heading_cossin, _flat_ground,
                               scan_offsets, scan_xy, N_SCAN,
                               CONTROL_HZ, DT, SUBSTEPS, SPACING, SPAWN_Z, PROBE_DX, ACT_DIM,
-                              HIDDEN, HALF_W, VX_LO, VX_HI, VY_HI, WZ_HI, STAND_PROB,
+                              HIDDEN, VX_LO, VX_HI, VY_HI, WZ_HI, STAND_PROB,
                               FWD_DRIVE_FRAC, CMD_MIN, CMD_MAX, SIG)
-from scratch_clock import CLOCK0, CLOCK_DIM, GAIT_PERIOD, advance, clock_obs, reset_phi
+from scratch_clock import CLOCK_DIM, GAIT_PERIOD, advance, clock_obs, reset_phi
 from scratch_env import STIFF_GAINS
 import spot_feet as sf
 import spot_slopes as ss

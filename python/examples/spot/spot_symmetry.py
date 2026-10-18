@@ -19,7 +19,6 @@ Mirror = reflection across the body x-z plane (y -> -y):
 import os
 import sys
 
-import numpy as np
 import torch
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
