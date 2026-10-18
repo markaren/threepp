@@ -282,7 +282,10 @@ namespace threepp::vulkan::impl {
         // triangles), so a level swap is purely an index-buffer +
         // BLAS-reference change, consumed identically by the raster
         // vertex-pulling path (buildIndirectDrawData) and the TLAS
-        // instance fill (ensureSceneBuilt).
+        // instance fill (ensureSceneBuilt). A record without a structure
+        // (no ray query, or a geometry only overlay meshes draw) has levels
+        // without one: `as`, `storage` and `address` empty, the index
+        // buffer the raster draws.
         struct LodLevel {
             VkAccelerationStructureKHR as = VK_NULL_HANDLE;
             Buffer storage;
@@ -726,6 +729,7 @@ namespace threepp::vulkan::impl {
     // consumed by submitLodLevelBuilds — resources (AS handle, storage,
     // index buffer, scratch) already exist; only the build execution is
     // deferred so a whole frame's worth records into one command buffer.
+    // `as` null: a level without a structure, only its index copy to record.
     struct LodPendingBuild {
         VkAccelerationStructureKHR as = VK_NULL_HANDLE;
         VkDeviceAddress vertexAddress = 0;

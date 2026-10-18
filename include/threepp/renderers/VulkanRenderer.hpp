@@ -836,6 +836,10 @@ namespace threepp {
             uint64_t blasBytes  = 0;// resident LOD BLAS storage bytes
             uint32_t chainsReady  = 0;// unique geometries with a finalized chain
             uint32_t chainsQueued = 0;// unique geometries with a chain job in flight
+            // Triangles the primary view's G-buffer draw list submitted last
+            // frame, each entry at the level selected for it (before GPU
+            // occlusion culling): what a chain saves the raster.
+            uint64_t trianglesDrawn = 0;
         };
         [[nodiscard]] AutoLodStats autoLodStats() const;
 

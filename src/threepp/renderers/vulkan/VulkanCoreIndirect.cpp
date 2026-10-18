@@ -75,6 +75,7 @@ namespace threepp {
         for (auto& g : indirectGroups_) { g.offset = 0; g.count = 0; }
         indirectTotalDraws_ = 0;
         particleDrawSlots_.clear();
+        if (!view().secondary) autoLodStats_.trianglesDrawn = 0;
 
         if (lastVisibleEntries_.empty()) return;
 
@@ -123,7 +124,10 @@ namespace threepp {
         if (particleFields_.empty() && view().indirectBuiltSig[frame] == buildSig) {
             indirectGroups_     = view().cachedIndirectGroups;
             indirectTotalDraws_ = view().cachedIndirectTotal;
-            if (!view().secondary) occlActiveThisFrame_ = view().cachedOcclActive;
+            if (!view().secondary) {
+                occlActiveThisFrame_ = view().cachedOcclActive;
+                autoLodStats_.trianglesDrawn = view().cachedIndirectTriangles;
+            }
             if (view().cachedOcclActive && indirectTotalDraws_ > 0u) {
                 // Descriptor upkeep only: the records and the meta are the
                 // ones this slot already holds.
@@ -188,6 +192,7 @@ namespace threepp {
         // must (see the EntrySpan work).
         uint32_t          memoDrawStart = 0u;
         uint32_t          memoDrawCount = 0xFFFFFFFFu;
+        uint64_t          drawnTriangles = 0;// AutoLodStats::trianglesDrawn
         for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
             const auto& en = lastVisibleEntries_[i];
             if (en.isOverlay)  continue;
@@ -289,6 +294,7 @@ namespace threepp {
                 vcount = std::min(vcount - vfirst, memoDrawCount);
             }
             if (vcount == 0u) continue;
+            drawnTriangles += vcount / 3u;
 
             const VkCullModeFlags wantCull =
                     (i < lastVisibleCullMode_.size())
@@ -463,7 +469,11 @@ namespace threepp {
         // function later in the same frame (wantOcclMeta forced false above)
         // and must not stomp the flag the primary's frame body branched on.
         const bool occlThisBuild = wantOcclMeta && globalIdx > 0u;
-        if (!view().secondary) occlActiveThisFrame_ = occlThisBuild;
+        if (!view().secondary) {
+            occlActiveThisFrame_ = occlThisBuild;
+            autoLodStats_.trianglesDrawn = drawnTriangles;
+        }
+        view().cachedIndirectTriangles = drawnTriangles;
         if (globalIdx == 0u) {
             // Nothing visible: cache the (all-zero) outputs so identical
             // frames skip even the entry walk.

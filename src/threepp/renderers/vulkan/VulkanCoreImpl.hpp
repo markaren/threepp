@@ -287,7 +287,9 @@ namespace threepp {
         static LodGeomSel selectLodGeom(const BlasRecord& rec, uint8_t lodLevel) {
             if (lodLevel > 0 && static_cast<size_t>(lodLevel - 1) < rec.lodLevels.size()) {
                 const auto& lvl = rec.lodLevels[lodLevel - 1];
-                if (lvl.as != VK_NULL_HANDLE) {
+                // asAddress is 0 for a level without a structure (its record
+                // has none either, so no TLAS instance reads it).
+                if (lvl.index.handle != VK_NULL_HANDLE) {
                     return {lvl.address, lvl.index.address, lvl.indexCount, true};
                 }
             }

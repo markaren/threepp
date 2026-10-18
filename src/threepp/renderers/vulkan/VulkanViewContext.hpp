@@ -251,6 +251,7 @@ namespace threepp::vulkan::impl {
         std::array<std::array<uint64_t, 2>, kFramesInFlight> indirectBuiltSig{};
         std::array<vulkan::impl::DrawGroup, 4> cachedIndirectGroups{};
         uint32_t cachedIndirectTotal = 0;
+        uint64_t cachedIndirectTriangles = 0;// AutoLodStats::trianglesDrawn
         bool     cachedOcclActive = false;
 
         // Per-view raster descriptor POOL. The layout is shared (one set

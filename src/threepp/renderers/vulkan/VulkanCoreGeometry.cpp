@@ -977,7 +977,10 @@ void VulkanRenderer::Impl::destroyBlasCompactionResources() {
 // uv/color buffers (those are shared with LOD0 via the same vertexAddress-
 // keyed lookup the shaders already do). The build itself is DEFERRED into
 // `pending` — drainLodResults batches a whole frame's builds into one
-// one-shot submit via submitLodLevelBuilds.
+// one-shot submit via submitLodLevelBuilds. A record without a structure
+// (no ray query on the device, or a geometry only overlay meshes draw) gets
+// levels without one too: the index buffer the raster draws, `as` and
+// `address` null, the shape buildBlasFor(traced = false) gives the record.
 bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
                                                      const geometrylod::Level& level,
                                                      BlasRecord::LodLevel& out,
@@ -987,8 +990,12 @@ bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
             const uint32_t primitiveCount = static_cast<uint32_t>(level.indices.size() / 3);
             if (primitiveCount == 0) return false;
 
+            // Traced exactly when the record is: a level BLAS reads the
+            // record's vertex buffer, which carries the build-input usage only
+            // when the record has a structure of its own.
+            const bool traced = ctx->rayQuerySupported() && rec.as != VK_NULL_HANDLE;
             const VkBufferUsageFlags idxUsage =
-                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                    (traced ? VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR : 0u) |
                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
@@ -1023,6 +1030,17 @@ bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
                                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_AUTO,
                                          VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
                 uploadHostVisible(ctx->allocator(), ibStaging, ibSrc, ibBytes);
+            }
+
+            LodPendingBuild build{};
+            build.indexStaging = ibStaging;
+            build.indexBuffer = out.index.handle;
+            out.indexCount  = static_cast<uint32_t>(level.indices.size());
+            out.errorBound  = level.error;
+            if (!traced) {
+                // Only the index copy rides the batch; the level lands with it.
+                pending.push_back(build);
+                return true;
             }
 
             // Size query needs a fully-specified build info; a LOCAL struct is
@@ -1088,7 +1106,6 @@ bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
             addrInfo.accelerationStructure = out.as;
             out.address = ctx->rt().getAccelerationStructureDeviceAddress(ctx->device(), &addrInfo);
 
-            LodPendingBuild build{};
             build.as = out.as;
             build.vertexAddress = rec.vertex.address;
             build.indexAddress = out.index.address;
@@ -1099,19 +1116,20 @@ bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
             // buffer must not alias scratch memory (same rule as
             // refreshGeomBlasBatch's per-record persistent scratch).
             build.scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
-            build.indexStaging = ibStaging;
-            build.indexBuffer = out.index.handle;
             // The caller appends `out` to rec.lodLanding right after this
             // returns, and sets `level` to its index there.
             pending.push_back(build);
-
-            out.indexCount  = static_cast<uint32_t>(level.indices.size());
-            out.errorBound  = level.error;
             return true;
         }
 
 void VulkanRenderer::Impl::recordLodLevelBuilds(VkCommandBuffer cb, std::vector<LodPendingBuild>& pending) {
-            const uint32_t N = static_cast<uint32_t>(pending.size());
+            // Levels of a record without a structure have no build here.
+            std::vector<const LodPendingBuild*> traced;
+            for (const auto& p : pending) {
+                if (p.as != VK_NULL_HANDLE) traced.push_back(&p);
+            }
+            const uint32_t N = static_cast<uint32_t>(traced.size());
+            if (N == 0) return;
             // The build-info structs must stay pointer-stable for the record
             // call (pGeometries / rangePtrs), so they live in N-sized vectors —
             // same shape as refreshGeomBlasBatch's Phase D.
@@ -1121,7 +1139,7 @@ void VulkanRenderer::Impl::recordLodLevelBuilds(VkCommandBuffer cb, std::vector<
             std::vector<VkAccelerationStructureBuildRangeInfoKHR>        ranges(N);
             std::vector<const VkAccelerationStructureBuildRangeInfoKHR*> rangePtrs(N);
             for (uint32_t k = 0; k < N; ++k) {
-                const auto& b = pending[k];
+                const auto& b = *traced[k];
                 triDatas[k].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
                 triDatas[k].vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
                 triDatas[k].vertexData.deviceAddress = b.vertexAddress;
@@ -1336,17 +1354,19 @@ void VulkanRenderer::Impl::submitLodLevelBuilds(std::vector<LodPendingBuild>& pe
                                      0, 1, &mb, 0, nullptr, 0, nullptr);
             }
             recordLodLevelBuilds(cb, pending);
-            if (blasCompact_) {
+            uint32_t tracedN = 0;
+            for (const auto& p : pending) tracedN += p.as != VK_NULL_HANDLE ? 1u : 0u;
+            if (blasCompact_ && tracedN > 0) {
                 // A pool of the batch's own: its results are read drains later,
                 // and the shared blasCompactPools_ are reused by every
                 // synchronous compaction in between.
                 VkQueryPoolCreateInfo qpci{};
                 qpci.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
                 qpci.queryType = VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR;
-                qpci.queryCount = N;
+                qpci.queryCount = tracedN;
                 check(vkCreateQueryPool(ctx->device(), &qpci, nullptr, &b.queries),
                       "vkCreateQueryPool(auto-LOD compaction)");
-                vkCmdResetQueryPool(cb, b.queries, 0, N);
+                vkCmdResetQueryPool(cb, b.queries, 0, tracedN);
                 VkMemoryBarrier mb{};
                 mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
                 mb.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
@@ -1355,17 +1375,18 @@ void VulkanRenderer::Impl::submitLodLevelBuilds(std::vector<LodPendingBuild>& pe
                                      VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                                      VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                                      0, 1, &mb, 0, nullptr, 0, nullptr);
-                std::vector<VkAccelerationStructureKHR> ases(N);
+                std::vector<VkAccelerationStructureKHR> ases;
                 for (uint32_t k = 0; k < N; ++k) {
-                    ases[k] = pending[k].as;
+                    if (pending[k].as == VK_NULL_HANDLE) continue;
+                    ases.push_back(pending[k].as);
                     b.queryLevels.emplace_back(pendingGeoms[k], pending[k].level);
                 }
                 ctx->rt().cmdWriteAccelerationStructuresProperties(
-                        cb, N, ases.data(), VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
+                        cb, tracedN, ases.data(), VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
                         b.queries, 0);
             }
             for (auto& p : pending) {
-                b.garbage.push_back(p.scratch);
+                if (p.scratch.handle != VK_NULL_HANDLE) b.garbage.push_back(p.scratch);
                 if (p.indexStaging.handle != VK_NULL_HANDLE) b.garbage.push_back(p.indexStaging);
             }
             pending.clear();
@@ -5023,9 +5044,8 @@ VulkanRenderer::Impl::GrassMeshState* VulkanRenderer::Impl::ensureGrassState(Gra
 
 bool VulkanRenderer::Impl::enqueueLodJob(const BufferGeometry* geomPtr, unsigned int geomVersion, BufferGeometry& geom,
                            float normalWeight) {
-            // Every level is a BLAS build; without ray query there is no chain
-            // (the record is marked Failed and draws its full geometry).
-            if (!ctx->rayQuerySupported()) return false;
+            // Without ray query a level is its index buffer alone (see
+            // buildLodLevelFor): the raster draws it all the same.
             auto* posAttr = geom.getAttribute<float>("position");
             if (!posAttr) return false;
             LodJob job;
