@@ -56,6 +56,14 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanEnvKnobs_test COMMAND VulkanEnvKnobs_test)
     set_tests_properties(VulkanEnvKnobs_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # An OrthographicCamera declared a 3D view takes the deferred path: the
+    # nearest standard-material surface wins and the background shows, as
+    # under a PerspectiveCamera. Same shape and skip code.
+    add_executable(VulkanOrthoView_test VulkanOrthoView_test.cpp)
+    target_link_libraries(VulkanOrthoView_test PRIVATE threepp)
+    add_test(NAME VulkanOrthoView_test COMMAND VulkanOrthoView_test)
+    set_tests_properties(VulkanOrthoView_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # A/B probe for the analyticDirectSplit light pick. NOT a ctest: it needs
     # two builds (old shader / new shader) to say anything, and it exists
     # because the golden scenes above have zero analytic lights and so never
