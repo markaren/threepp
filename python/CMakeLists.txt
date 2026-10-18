@@ -114,6 +114,18 @@ endif ()
 # says "not compiled in" vs "the DLL or GPU refused" when dlss = True is a no-op.
 if (THREEPP_WITH_DLSS)
     target_compile_definitions(threepp_py PRIVATE THREEPP_PY_HAS_DLSS)
+    # NVIDIA's DLSS runtime (NGX_DLSS_DLL, from cmake/FetchDLSS.cmake). DlssUpscaler
+    # gives NGX the directory of the module it is compiled into as the search path,
+    # so the .pyd needs the DLL beside it, as the FSR block above does for its DLL.
+    # Without it Python reports DLSS "not available on this GPU/driver" on an RTX
+    # card. Dev builds only: there is deliberately no install() rule, so the DLL
+    # never reaches a wheel (56 to 66 MB, and NVIDIA's licence), the copy is skipped
+    # under scikit-build-core, and python/.gitignore already ignores *.dll.
+    if (WIN32 AND NGX_DLSS_DLL AND NOT DEFINED SKBUILD)
+        add_custom_command(TARGET threepp_py POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${NGX_DLSS_DLL}" $<TARGET_FILE_DIR:threepp_py>
+                COMMENT "Copying nvngx_dlss.dll next to the Python module (dev build only)")
+    endif ()
 endif ()
 
 if (THREEPP_WITH_AUDIO)
