@@ -1354,6 +1354,61 @@ namespace threepp {
         std::vector<VkCullModeFlags> lastVisibleCullMode_;
         bool sceneBuilt_ = false;
 
+        // ── Stable entry slots (VulkanCoreSlots.cpp) ─────────────────────
+        // plans/gpu-driven-instances.md, stage 2a. A mesh added or removed,
+        // an InstancedMesh count changed or a mesh shown for the first time
+        // edits rows of the entry index space in place (trySlotEdit) instead
+        // of the structural rebuild: removed spans become FREE spans
+        // (EntrySpan::isFree), new ones take free runs or the end, nothing
+        // compacts, and the rows that did not change are not touched.
+        // slotCapacity_: the entries every entry-indexed GPU buffer (the
+        // geometry / material desc rings, the TLAS instance buffers and
+        // storage, the motion and moved-bit buffers) was sized for at the
+        // last structural rebuild. Growing past it is a structural rebuild.
+        uint32_t slotCapacity_ = 0;
+        // Set by trySlotEdit on the frame it edits; read by the lean tail
+        // (a class change: full TLAS build, draw inputs, emitter re-walk).
+        bool slotsEditedThisFrame_ = false;
+        // The mesh every free slot names: one triangle with position and
+        // normal, a default material, identity matrixWorld, never in a scene.
+        std::shared_ptr<Mesh> slotTombstone_;
+        Mesh& slotTombstone();
+        // A free span over [first, first + count), and the entry every slot
+        // of one holds.
+        EntrySpan slotFreeSpan(uint32_t first, uint32_t count, uint64_t parkedUntil);
+        MeshEntry slotFreeEntry();
+        // Slots an InstancedMesh span is laid out with past its count, so a
+        // setCount grows in place: none for a plain mesh or a full instance
+        // buffer, else min(capacity - count, max(count / 2, 64)). Both the
+        // structural layout and the slot path leave it.
+        static uint32_t slotSlackFor(const EntrySpan& sp, uint32_t count);
+        // THREEPP_VULKAN_NO_SLOTS=1: every content change is a structural
+        // rebuild in today's dense layout, the A/B lever against the slots.
+        static bool slotsDisabled();
+        // MaterialDesc::materialAssetIdx outlives one structural rebuild's
+        // dense numbering: the rebuild leaves its map here (with each
+        // material's id, the address-recycling guard) and the slot path
+        // hands a material it has not seen the next index.
+        std::unordered_map<const Material*, std::pair<unsigned int, uint32_t>> slotMatAssetIdx_;
+        uint32_t slotNextMatAssetIdx_ = 0;
+        uint32_t slotMaterialAssetIdx(const Material* mat);
+        // Called at the end of the full expansion with what it built. Edits
+        // lastVisibleEntries_, entrySpans_ and every entry-indexed row in
+        // place and returns true, or touches nothing the full rebuild reads
+        // and returns false (the change is structural: the caller rebuilds).
+        bool trySlotEdit(std::vector<MeshEntry>& built, std::vector<EntrySpan>& builtSpans,
+                         const std::vector<std::pair<ParticleField*, uint32_t>>& builtFields);
+        // The lean path's per-span world-matrix refresh (scene.3), shared with
+        // the frame trySlotEdit edited.
+        void refreshSpanMatrices();
+        // A mesh's MaterialDesc before its instance color, with every map
+        // admitted to the bindless array; materialAssetIdx left for the
+        // caller. One function for the structural rebuild and the slot path.
+        MaterialDesc buildMaterialDesc(Mesh& m);
+        // An entry's GeometryDesc for the selected BLAS level, as the
+        // structural rebuild and the slot path both write it.
+        GeometryDesc buildGeometryDesc(const MeshEntry& en, const BlasRecord& rec, const LodGeomSel& lodSel) const;
+
         // Path-traced LIDAR scanner — see vulkan/LidarScanner.{hpp,cpp}.
         // Owns its own RT pipeline + SBT + descriptor set; reuses the
         // main TLAS + geomDescs + matDescs via per-scan binding updates.
@@ -3469,10 +3524,12 @@ namespace threepp {
                              const std::vector<VkAccelerationStructureInstanceKHR>& instances,
                              bool fullBuild);
 
+        // Sized for `capacity` descs (at least descs.size()): the slot path
+        // writes rows past the structural build's count into the same buffer.
         template<typename DescT>
-        void uploadDescBuffer(Buffer& target, const std::vector<DescT>& descs) {
+        void uploadDescBuffer(Buffer& target, const std::vector<DescT>& descs, size_t capacity = 0) {
             const VkDeviceSize bytes = std::max<VkDeviceSize>(
-                    descs.size() * sizeof(DescT), sizeof(DescT));
+                    std::max(descs.size(), capacity) * sizeof(DescT), sizeof(DescT));
             target = createBuffer(
                     ctx->allocator(), ctx->device(), bytes,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |

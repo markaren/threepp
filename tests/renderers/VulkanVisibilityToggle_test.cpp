@@ -13,7 +13,9 @@
 //   red    sphere, left   toggled through Object3D::visible, then its material;
 //   green  sphere, right  inside a group, hidden through the group;
 //   yellow sphere, centre hidden from the start, shown late: its first show is
-//                         the one structural rebuild the default allows;
+//                         a slot edit (stable entry slots, VulkanCoreSlots.cpp),
+//                         no structural rebuild; with THREEPP_VULKAN_NO_SLOTS=1
+//                         it is the one structural rebuild the default allows;
 //   blue   quad, top      toggled with the red sphere.
 //
 // Then five more are added hidden before they were ever rendered, each with
@@ -24,11 +26,13 @@
 //   red     quad, top right      Object3D::visible, seen only by the raster;
 //   grey    sphere, far behind   beyond the probe grid: its first show re-fits it.
 // Beside them, two more spheres, hidden from the start, without the hint:
-//   plain   sphere, upper left   never gets it: its first show is still the one
-//                                structural rebuild, as yellow's was;
+//   plain   sphere, upper left   never gets it: its first show is a slot edit,
+//                                as yellow's was (without slots, the one
+//                                structural rebuild);
 //   late    sphere, upper right  gets it after it was rendered hidden: setting
-//                                it builds the entries (that render is the
-//                                structural one), its first show is in place.
+//                                it builds the entries (a slot edit; without
+//                                slots, the structural one), its first show is
+//                                in place.
 // Lidar beams check the spheres' TLAS masks directly.
 //
 // Plain exit-code program, not Catch2, like the other Vulkan tests here.
@@ -215,6 +219,11 @@ int main() {
                         static_cast<unsigned long long>(renderer.tlasStats().structuralRebuilds));
         };
         const auto structural = [&] { return renderer.tlasStats().structuralRebuilds; };
+        const auto slotEdits = [&] { return renderer.tlasStats().slotEdits; };
+        // A first show of a mesh with no entries: a slot edit, or with the
+        // slots switched off the structural rebuild it always was.
+        const char* noSlots = std::getenv("THREEPP_VULKAN_NO_SLOTS");
+        const uint64_t firstShow = (noSlots && *noSlots == '1') ? 1u : 0u;
 
         auto im = settle();
         report(im, "as built:");
@@ -258,23 +267,26 @@ int main() {
         check("no structural rebuild", structural() == s0);
 
         const auto y0 = at(im, pYel, 8);
+        const auto e0 = slotEdits();
         yel->visible = true;
         im = settle();
         report(im, "yellow shown for the first time:");
-        // Only on its way to yellow: a first show is a structural rebuild, and
-        // the mirror's history of the empty spot is not rejected there, so the
+        // Only on its way to yellow: a first show adds entries, and the
+        // mirror's history of the empty spot is not rejected there, so the
         // reflection converges over hundreds of frames (as it did before for
         // every toggle). Hiding it again below is in place.
         const auto y1 = at(im, pYel, 8);
         check("yellow appears (its blue drops from the empty mirror's)", y1[2] < y0[2] - 10.0);
         check("green still there", leads(at(im, pGreen, 8), 1));
-        check("one structural rebuild (yellow's first show)", structural() == s0 + 1);
+        check(firstShow ? "one structural rebuild (yellow's first show)"
+                        : "no structural rebuild, one slot edit (yellow's first show)",
+              structural() == s0 + firstShow && (firstShow || slotEdits() == e0 + 1));
 
         yel->visible = false;
         im = settle();
         report(im, "yellow hidden again:");
         check("yellow gone", !yellow(at(im, pYel, 8)));
-        check("no further structural rebuild", structural() == s0 + 1);
+        check("no further structural rebuild", structural() == s0 + firstShow);
 
         // Object3D::resident: a mesh hidden before it was ever rendered has
         // its entries, hidden, from the start. Adding these is structural;
@@ -413,21 +425,25 @@ int main() {
         reportLower(im, "late: resident set while it is hidden:");
         h = lidarHits();
         check("late still hidden (TLAS mask 0)", !h[kLate]);
-        check("one structural rebuild (late's entries)", structural() == s1 + 1);
+        check(firstShow ? "one structural rebuild (late's entries)" : "no structural rebuild (late's entries)",
+              structural() == s1 + firstShow);
         late->visible = true;
         im = settle();
         reportLower(im, "late shown for the first time:");
         h = lidarHits();
         check("lidar returns from late", h[kLate]);
-        check("no further structural rebuild", structural() == s1 + 1);
+        check("no further structural rebuild", structural() == s1 + firstShow);
 
-        // Without the hint a first show is still the structural rebuild.
+        // Without the hint a first show is a slot edit (without slots, the
+        // structural rebuild).
         plain->visible = true;
         im = settle();
         reportLower(im, "plain (never resident) shown for the first time:");
         h = lidarHits();
         check("lidar returns from plain", h[kPlain]);
-        check("one structural rebuild (plain's first show)", structural() == s1 + 2);
+        check(firstShow ? "one structural rebuild (plain's first show)"
+                        : "no structural rebuild (plain's first show)",
+              structural() == s1 + 2u * firstShow);
 
         lens->visible = false;
         cyan->material()->visible = false;
@@ -441,7 +457,7 @@ int main() {
         h = lidarHits();
         check("no lidar return from the five (TLAS mask 0)", lidarIs(h, {}));
         check("quad2 gone from the raster", !quad2Seen(im));
-        check("no structural rebuild", structural() == s1 + 2);
+        check("no structural rebuild", structural() == s1 + 2u * firstShow);
 
         // Clearing the hint keeps the entries a hidden mesh has, as for any
         // mesh that was shown: the re-show stays in place.
@@ -452,7 +468,7 @@ int main() {
         reportLower(im, "lens: resident cleared while hidden, then shown:");
         h = lidarHits();
         check("lidar returns from the lens only", lidarIs(h, {kLens}));
-        check("no structural rebuild", structural() == s1 + 2);
+        check("no structural rebuild", structural() == s1 + 2u * firstShow);
         if (vulkan::validationActive()) {
             check("no validation errors", vulkan::validationErrorCount() == 0u);
         }

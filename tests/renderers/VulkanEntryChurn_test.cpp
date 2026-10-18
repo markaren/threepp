@@ -2,12 +2,13 @@
 // list, the way terrain::CellStreamer and the pine forest's LODs drive it, and
 // what each kind of change costs the frame that carries it.
 //
-// The renderer keeps one MeshEntry per mesh instance. Any change to that
-// list's SHAPE is a structural rebuild in ensureSceneBuilt: the device is
-// drained, and every descriptor, draw record and TLAS instance is re-derived
-// (about 30 ms an event on the forest, 2026-10-18). This bench pins that
-// defect before it is fixed (plans/gpu-driven-instances.md, stage 2a: stable
-// entry slots), and is the gate every later stage is measured against.
+// The renderer keeps one MeshEntry per mesh instance. Until 2026-10-19 any
+// change to that list's SHAPE was a structural rebuild in ensureSceneBuilt: the
+// device drained, every descriptor, draw record and TLAS instance re-derived
+// (about 30 ms an event on the forest, 43-51 ms here at 33k entries). Now such
+// a change is a slot edit (VulkanCoreSlots.cpp, plans/gpu-driven-instances.md
+// stage 2a): rows of the entry index space written in place. This bench pinned
+// the defect first and is the gate every later stage is measured against.
 //
 // The scene: a ground plane, an InstancedMesh "forest" of cones, cells of
 // plain meshes (boxes, spheres, cylinders from shared geometries and
@@ -18,7 +19,8 @@
 //   add cached cell    a detached cell re-attached (coming back to it)
 //   add new cell       a cell built now from the shared assets and attached
 //   add new geometry   a cell whose meshes carry geometries never seen
-//                      (a BLAS admission; informational, never asserted)
+//                      (a BLAS admission: a slot edit, but its frame builds
+//                      the BLASes, so its frame time is not asserted)
 //   instanced grow     InstancedMesh::setCount up by kInstStep
 //   instanced shrink   InstancedMesh::setCount down by kInstStep
 //   first show         a mesh hidden since before its first render is shown
@@ -29,10 +31,18 @@
 // history resets per event and the event frame against the quiet median.
 //
 // The assertion is the per-kind expectation in kExpect: the structural
-// rebuilds one event of that kind costs TODAY (one). A kind whose expectation
-// becomes 0 must also bring its event frame within kHitchRatio of the quiet
-// median: the row edit replaces the rebuild, it does not move it to the next
-// frame. No history reset on any event, ever.
+// rebuilds one event of that kind costs (the baseline was one for every kind;
+// now none). A kind expecting none must also, when kFrameAsserted says so,
+// keep what an event costs (the slower of its frame and the frame after: a
+// cost moved one frame later is no fix) within kHitchRatio of the quiet median
+// over its events, and within kHitchMaxRatio on its worst one. Each ratio has
+// an absolute floor: this bench's quiet frame is about a millisecond, where a
+// ratio is noise, and the rebuild it replaces cost ten (8.9k entries) - the
+// floors keep the gate sharp against that and blind to scheduler jitter. No
+// history reset on any event, ever. A last phase removes every mesh (no TLAS
+// instance left), renders, and adds some back.
+// THREEPP_VULKAN_NO_SLOTS=1 restores the rebuild, and with it the baseline:
+// run with it, the bench expects one structural rebuild per event.
 //
 // Auto-LOD is off: its chains land asynchronously and their TLAS rebuilds
 // would land on random frames of the table.
@@ -40,7 +50,8 @@
 // THREEPP_CHURN_DUMP=<dir> writes the event frames and the frame after each as
 // PPM there, for looking at; that readback stalls, so its timings are void.
 // THREEPP_CHURN_INSTANCES=<n> sets the forest's starting count (default 8192;
-// its capacity is twice that).
+// its capacity is twice that). THREEPP_CHURN_VERBOSE=1 prints every event's
+// frame and the frame after it.
 //
 // Plain exit-code program, not Catch2, like the other Vulkan tests here.
 // Exits 42 (CTest "Skipped") when no Vulkan GPU is available.
@@ -90,15 +101,19 @@ namespace {
     constexpr int kMeshesPerCell = 12;
     constexpr int kHiddenMeshes = 8;
     constexpr size_t kInstStep = 512;
-    constexpr double kHitchRatio = 2.0;
-    constexpr double kHitchSlackMs = 2.0;// floor for frames so short that 2x is noise
+    constexpr double kHitchRatio = 2.0;     // median event against the quiet median
+    constexpr double kHitchSlackMs = 2.5;   // ... or the quiet median + this, whichever is larger
+    constexpr double kHitchMaxRatio = 4.0;  // the worst event
+    constexpr double kHitchMaxSlackMs = 5.0;
 
     enum Kind { kRemoveCell, kAddCachedCell, kAddNewCell, kAddNewGeom, kInstGrow, kInstShrink, kFirstShow, kKinds };
     constexpr const char* kKindName[kKinds] = {"remove cell", "add cached cell", "add new cell", "add new geometry",
                                                "instanced grow", "instanced shrink", "first show"};
-    // Structural rebuilds one event of the kind costs. -1: informational, not
-    // asserted. The baseline (2026-10-19): every kind is one.
-    constexpr int kExpect[kKinds] = {1, 1, 1, -1, 1, 1, 1};
+    // Structural rebuilds one event of the kind costs. The baseline before the
+    // slots (081b3ead, 2026-10-19): one for every kind.
+    constexpr int kExpect[kKinds] = {0, 0, 0, 0, 0, 0, 0};
+    // Whether the event frame's time is asserted (new geometry builds BLASes).
+    constexpr bool kFrameAsserted[kKinds] = {true, true, true, false, true, true, true};
 
     std::shared_ptr<Texture> constantEnv(float le) {
         constexpr int W = 64, H = 32;
@@ -187,6 +202,10 @@ int main() {
     const size_t kInstCapacity = instStart * 2;
     const char* dumpDir = std::getenv("THREEPP_CHURN_DUMP");
     const bool dump = dumpDir && *dumpDir;
+    const char* verboseEnv = std::getenv("THREEPP_CHURN_VERBOSE");
+    const bool verbose = verboseEnv && *verboseEnv == '1';
+    const char* noSlotsEnv = std::getenv("THREEPP_VULKAN_NO_SLOTS");
+    const bool slotsOff = noSlotsEnv && *noSlotsEnv == '1';
 
     auto gpu = vktest::openHeadlessVulkan("VulkanEntryChurn_test", kW, kH);
     if (!gpu) return kSkipCode;
@@ -364,6 +383,12 @@ int main() {
                 }
                 for (int f = 0; f < kGap; ++f) {
                     rows.push_back(frame(f == 0 ? kind : -1, f));
+                    if (verbose && f < 2) {
+                        const FrameRow& r = rows.back();
+                        std::printf("  r%d %-17s f%d wall %6.2f ensure %6.2f cpu %6.2f gpu %5.2f structural %llu\n",
+                                    round, kKindName[kind], f, r.wallMs, r.cpuEnsureMs, r.cpuFrameMs, r.gpuMs,
+                                    static_cast<unsigned long long>(r.structural));
+                    }
                     if (dump && f < 2) {
                         const auto im = renderer.readRGBPixels();
                         if (im.size() >= static_cast<size_t>(kW) * kH * 3) {
@@ -403,13 +428,15 @@ int main() {
         std::printf("frame wall ms: median %.2f  p99 %.2f  max %.2f   quiet median %.2f (cpuFrame %.2f, gpu %.2f)\n",
                     percentile(all, 0.5), percentile(all, 0.99), percentile(all, 1.0), quietMedian,
                     percentile(quietCpu, 0.5), percentile(quietGpu, 0.5));
-        std::printf("TLAS: %llu full builds, %llu updates over the loop\n",
+        std::printf("TLAS: %llu full builds, %llu updates over the loop; %llu slot edits, %llu structural rebuilds\n",
                     static_cast<unsigned long long>(stats1.fullRebuilds - stats0.fullRebuilds),
-                    static_cast<unsigned long long>(stats1.updates - stats0.updates));
+                    static_cast<unsigned long long>(stats1.updates - stats0.updates),
+                    static_cast<unsigned long long>(stats1.slotEdits - stats0.slotEdits),
+                    static_cast<unsigned long long>(stats1.structuralRebuilds - stats0.structuralRebuilds));
         std::printf("\n%-18s %3s %10s %9s %22s %12s %12s %8s\n", "event", "n", "structural", "history",
                     "event frame ms med/max", "ensure ms", "next ms med", "ratio");
         for (int kind = 0; kind < kKinds; ++kind) {
-            std::vector<double> ev, evEnsure, next;
+            std::vector<double> ev, evEnsure, next, cost;
             uint64_t structural = 0, history = 0;
             int n = 0;
             for (size_t i = 0; i < rows.size(); ++i) {
@@ -425,26 +452,66 @@ int main() {
                     next.push_back(rows[i + 1].wallMs);
                     structural += rows[i + 1].structural;
                     history += rows[i + 1].history;
+                    cost.push_back(std::max(rows[i].wallMs, rows[i + 1].wallMs));
+                } else {
+                    cost.push_back(rows[i].wallMs);
                 }
             }
-            const double evMax = std::max(percentile(ev, 1.0), percentile(next, 1.0));
-            const double ratio = quietMedian > 0 ? evMax / quietMedian : 0.0;
+            const double costMed = percentile(cost, 0.5), costMax = percentile(cost, 1.0);
+            const double ratio = quietMedian > 0 ? costMed / quietMedian : 0.0;
             std::printf("%-18s %3d %10.2f %9.2f %11.2f / %8.2f %12.2f %12.2f %8.2f\n", kKindName[kind], n,
                         n ? static_cast<double>(structural) / n : 0.0, n ? static_cast<double>(history) / n : 0.0,
                         percentile(ev, 0.5), percentile(ev, 1.0), percentile(evEnsure, 0.5), percentile(next, 0.5),
                         ratio);
 
-            if (kExpect[kind] >= 0) {
-                check(std::string(kKindName[kind]) + ": " + std::to_string(kExpect[kind]) +
+            const int expect = slotsOff ? 1 : kExpect[kind];
+            if (expect >= 0) {
+                check(std::string(kKindName[kind]) + ": " + std::to_string(expect) +
                               " structural rebuild(s) per event",
-                      structural == static_cast<uint64_t>(kExpect[kind]) * static_cast<uint64_t>(n));
-                if (kExpect[kind] == 0) {
-                    check(std::string(kKindName[kind]) + ": event frame within " + std::to_string(kHitchRatio) +
-                                  "x the quiet median",
-                          evMax <= std::max(kHitchRatio * quietMedian, quietMedian + kHitchSlackMs));
+                      structural == static_cast<uint64_t>(expect) * static_cast<uint64_t>(n));
+                if (expect == 0 && kFrameAsserted[kind]) {
+                    char what[112];
+                    std::snprintf(what, sizeof(what), "%s: events within %.0fx the quiet median (%.2f ms)",
+                                  kKindName[kind], kHitchRatio, costMed);
+                    check(what, costMed <= std::max(kHitchRatio * quietMedian, quietMedian + kHitchSlackMs));
+                    std::snprintf(what, sizeof(what), "%s: worst event within %.0fx (%.2f ms)",
+                                  kKindName[kind], kHitchMaxRatio, costMax);
+                    check(what, costMax <= std::max(kHitchMaxRatio * quietMedian, quietMedian + kHitchMaxSlackMs));
                 }
             }
             check(std::string(kKindName[kind]) + ": no temporal history reset", history == 0);
+        }
+        // ── Everything removed, then some of it back ─────────────────────────
+        // No TLAS instance at all: the TLAS must be rebuilt empty, never left
+        // with the removed instances, whose desc rows are zeroed (a ray that
+        // hits one reads its geometry at address 0 and loses the device).
+        {
+            const auto s0 = renderer.tlasStats();
+            scene.remove(*ground);
+            scene.remove(*forest);
+            for (auto& g : active) scene.remove(*g);
+            for (auto& m : hiddenMeshes) scene.remove(*m);
+            for (int f = 0; f < 6; ++f) frame(-1, kGap);
+            const auto s1 = renderer.tlasStats();
+            std::printf("\nevery mesh removed: %llu TLAS instances, %llu structural rebuilds\n",
+                        static_cast<unsigned long long>(s1.instances),
+                        static_cast<unsigned long long>(s1.structuralRebuilds - s0.structuralRebuilds));
+            if (renderer.rayTracingSupported())
+                check("every mesh removed: the TLAS holds no instance", s1.instances == 0u);
+            scene.add(ground);
+            scene.add(forest);
+            scene.add(active.front());
+            for (int f = 0; f < 6; ++f) frame(-1, kGap);
+            const auto s2 = renderer.tlasStats();
+            std::printf("ground, forest and a cell back: %llu TLAS instances, %llu structural rebuilds\n",
+                        static_cast<unsigned long long>(s2.instances),
+                        static_cast<unsigned long long>(s2.structuralRebuilds - s0.structuralRebuilds));
+            if (renderer.rayTracingSupported())
+                check("added back: the TLAS holds the ground, the forest and the cell",
+                      s2.instances == 1u + forest->count() + static_cast<uint32_t>(kMeshesPerCell));
+            if (!slotsOff)
+                check("removing everything and adding back: no structural rebuild",
+                      s2.structuralRebuilds == s0.structuralRebuilds);
         }
         if (vulkan::validationActive()) {
             check("no validation errors", vulkan::validationErrorCount() == 0u);

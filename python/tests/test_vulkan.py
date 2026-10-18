@@ -472,8 +472,9 @@ def test_sim_time_round_trips(vk_renderer):
 
 def test_resident_mesh_first_show_is_no_structural_rebuild(vk_renderer):
     """Object3D.resident: a mesh hidden before it was ever rendered gets its
-    entries at once, so its first show is no structural rebuild; a hidden mesh
-    beside it without the hint still pays one (VulkanVisibilityToggle_test
+    entries at once, so its first show is no structural rebuild; since the
+    stable entry slots a hidden mesh beside it without the hint pays none
+    either: its entries are written into free slots (VulkanVisibilityToggle_test
     covers the pixels and the ray masks)."""
     scene, cam = make_scene()
     lens = tp.Mesh(tp.SphereGeometry(0.2), tp.MeshStandardMaterial())
@@ -496,7 +497,8 @@ def test_resident_mesh_first_show_is_no_structural_rebuild(vk_renderer):
     lens.visible = False
     assert structural_after() == s0
     plain.visible = True
-    assert structural_after() == s0 + 1, "a mesh without the hint: its first show is the one structural rebuild"
+    # Stable entry slots: a mesh without the hint is shown by a slot edit too.
+    assert structural_after() == s0, "a mesh without the hint: its first show rebuilt the scene"
     stats = vk_renderer.tlas_stats
     assert set(stats) == {"full_rebuilds", "updates", "instances", "structural_rebuilds"}
 

@@ -579,6 +579,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
 
             std::fill(meshMovedBits_.begin(), meshMovedBits_.end(), 0u);
             hiddenFlippedThisFrame_ = false;
+            slotsEditedThisFrame_ = false;
 
             // SNAPSHOT FAST PATH: replay the last expansion's traversal against
             // cheap invariants. On a match (the overwhelmingly common frame —
@@ -607,62 +608,14 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // fully static fields. instanceMatrix edits are version-gated
                 // (setMatrixAt + needsUpdate(), the same contract the GL
                 // backend's attribute upload requires).
-                for (auto& sp : entrySpans_) {
-                    sp.movedThisFrame = false;
-                    const float* mw = sp.mesh->matrixWorld->elements.data();
-                    if (sp.inst) {
-                        const unsigned int v = sp.inst->instanceMatrix()->version;
-                        if (v == sp.instMatVersion &&
-                            std::memcmp(sp.meshWorld.data(), mw, 64) == 0) continue;
-                        sp.instMatVersion = v;
-                        std::memcpy(sp.meshWorld.data(), mw, 64);
-                        sp.movedThisFrame = true;
-                        sp.aabbValid = false;
-                        // Tight refresh: world = meshWorld * instanceMat[j],
-                        // straight off the raw attribute floats (no
-                        // bounds-checked getMatrixAt). The multiply itself
-                        // goes through Matrix4::multiplyMatrices rather than a
-                        // hand expansion, because that is where the SSE2
-                        // kernel lives — 3.9 ns against the scalar form's
-                        // 16.0 ns. Its accumulation order is the scalar form's
-                        // term for term, so this path stays bit-identical to
-                        // the full expansion below AND to instance_expand.comp,
-                        // the `precise` GPU replica that instanceExpandCheck
-                        // compares against bit for bit.
-                        const auto& arr = sp.inst->instanceMatrix()->array();
-                        // mw is this matrix's element array; binding the
-                        // Matrix4 itself keeps the mesh world out of the
-                        // per-instance copy entirely.
-                        const Matrix4& meshWorld = *sp.mesh->matrixWorld;
-                        Matrix4 instMat;
-                        Matrix4 world;
-                        for (uint32_t j = 0; j < sp.count; ++j) {
-                            std::memcpy(instMat.elements.data(), arr.data() + size_t(j) * 16u, 64);
-                            world.multiplyMatrices(meshWorld, instMat);
-                            std::memcpy(entries[sp.first + j].worldMatrix.data(),
-                                        world.elements.data(), 64);
-                            // Keep the fingerprint's matrix mirror fresh so a
-                            // later non-lean frame's generic compare sees this
-                            // frame's state, not a stale lean-era matrix.
-                            prevSceneFingerprint[sp.first + j].matrix =
-                                    entries[sp.first + j].worldMatrix;
-                        }
-                    } else {
-                        if (std::memcmp(sp.meshWorld.data(), mw, 64) == 0) continue;
-                        std::memcpy(sp.meshWorld.data(), mw, 64);
-                        sp.movedThisFrame = true;
-                        sp.aabbValid = false;
-                        std::memcpy(entries[sp.first].worldMatrix.data(), mw, 64);
-                        prevSceneFingerprint[sp.first].matrix = entries[sp.first].worldMatrix;
-                    }
-                }
+                refreshSpanMatrices();
                 for (auto& le : lastVisibleLines_) {
                     const Object3D* src = le.line ? static_cast<const Object3D*>(le.line)
                                                   : static_cast<const Object3D*>(le.points);
                     std::memcpy(le.worldMatrix.data(), src->matrixWorld->elements.data(), 64);
                 }
             } else {
-            THREEPP_CPUPROF("scene.3b_fullExpansion");
+            THREEPP_CPUPROF_NAMED(profExpand, "scene.3b_fullExpansion");
             // Expand the visible scene into one MeshEntry per TLAS instance.
             // Regular meshes contribute one entry; an InstancedMesh contributes
             // count() entries each with worldMatrix = matrixWorld * instanceMat[i].
@@ -712,6 +665,13 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 const auto it = shownBefore.find(&mesh);
                 return it != shownBefore.end() && it->second == mesh.id;
             };
+            // Lazy rows (VulkanCoreSlots.cpp): an InstancedMesh that already
+            // has slots gets its first entry only, the one the slot path reads
+            // its per-mesh facts from (the slot path derives any entry it adds
+            // itself). A walk the structural rebuild consumes is never lazy: if
+            // the slot path declines, the walk runs again in full below.
+            bool lazyRows = sceneBuilt_ && !slotsDisabled() && particleFields_.empty();
+            bool anyRowsDeferred = false;
             // A hidden mesh has entries, hidden, when it had them before or
             // Object3D::resident asks for them up front (so its first show is
             // the same in-place flip as any later one). Never under a LOD.
@@ -988,9 +948,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     sp.localHalf[2]   = half.z;
                     sp.localBoundsValid = true;
                 }
+                bool deferRows = false;
                 if (inst && inst->count() > 0) {
                     sp.inst           = inst;
                     sp.instMatVersion = inst->instanceMatrix()->version;
+                    deferRows = lazyRows && hadEntries(*m);
                     // Read the instance matrices straight off the attribute
                     // rather than through getMatrixAt. The loop stops at
                     // count(), and setCount() clamps count() to the buffer
@@ -1004,7 +966,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     const Matrix4& meshWorld = *m->matrixWorld;
                     Matrix4 instMat;
                     Matrix4 world;
-                    for (size_t j = 0; j < inst->count(); ++j) {
+                    const size_t jEnd = deferRows ? size_t(1) : inst->count();
+                    for (size_t j = 0; j < jEnd; ++j) {
                         std::memcpy(instMat.elements.data(), instArr.data() + j * 16u, 64);
                         world.multiplyMatrices(meshWorld, instMat);
                         MeshEntry e{};
@@ -1047,6 +1010,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     built.push_back(e);
                 }
                 sp.count = static_cast<uint32_t>(built.size()) - sp.first;
+                if (deferRows) {
+                    sp.count = static_cast<uint32_t>(inst->count());
+                    sp.rowsDeferred = true;
+                    anyRowsDeferred = true;
+                }
                 if (isParticleField) {
                     // The placeholder geometry's bounds describe a point at the
                     // field's origin and say nothing about where the particles
@@ -1063,6 +1031,17 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     sceneSnapshot_[snIdx].spanIndex = static_cast<int32_t>(builtSpans.size());
                 }
                 builtSpans.push_back(sp);
+                // Room to grow (VulkanCoreSlots.cpp): an InstancedMesh whose
+                // count can rise is laid out with free slots after it, so a
+                // setCount is a slot edit in place and not a move.
+                if (!slotsDisabled() && !lazyRows && !isOverlay && !isParticle) {
+                    const uint32_t slack = slotSlackFor(sp, sp.count);
+                    if (slack > 0u) {
+                        const uint32_t first = static_cast<uint32_t>(built.size());
+                        built.resize(built.size() + slack, slotFreeEntry());
+                        builtSpans.push_back(slotFreeSpan(first, slack, 0u));
+                    }
+                }
             };
             auto visitRecord = [&](Object3D& o, bool vis, bool underLod) -> bool {
                 recordNode(o, vis, underLod);// pushes exactly one SnapNode
@@ -1073,6 +1052,28 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 return (rec.flags & kSnapLod) != 0u;
             };
             walkSceneGraph(scene, true, false, visitRecord);
+            profExpand.stop();
+            // Stable entry slots (VulkanCoreSlots.cpp): meshes added or
+            // removed, a count changed or a first show are written into the
+            // entry slots in place, and the frame goes on as a lean one.
+            if (trySlotEdit(built, builtSpans, builtFields)) {
+                lastVisibleLines_ = std::move(builtLines);
+            } else {
+            if (lazyRows) {
+                // The structural rebuild reads every entry: walk again, in
+                // full and with the room to grow laid out.
+                THREEPP_CPUPROF("scene.3b_fullExpansion");
+                lazyRows = false;
+                anyRowsDeferred = false;
+                built.clear();
+                builtLines.clear();
+                builtSpans.clear();
+                builtFields.clear();
+                sceneSnapshot_.clear();
+                skySeen_ = nullptr;
+                manualLodLevelRoots_.clear();
+                walkSceneGraph(scene, true, false, visitRecord);
+            }
             // The same entries as before with some hidden or shown is no
             // structural change (the fingerprints match), but the TLAS masks,
             // culls, draw records and emitters must re-read the flags.
@@ -1090,6 +1091,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             lastVisibleLines_   = std::move(builtLines);
             entrySpans_         = std::move(builtSpans);
             particleFields_     = std::move(builtFields);
+            }
             probeGridDirty_     = true;// scene structure changed → re-fit the probe grid
             // ...and re-bake every ParticleField surface height map (F5). The
             // set of things a flake can land on is exactly what just changed,
@@ -1099,6 +1101,14 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             if (particleFieldPass_) particleFieldPass_->invalidateSurfaceBakes();
             cutoutRayClassified_ = false;// the fresh entries' rayFarOpaque bits are all reset
             }// !snapLean
+            // A slot edit left entries, spans and fingerprints in the shape a
+            // lean frame starts from: from here on this frame IS one, with the
+            // spans it did not touch refreshed and diffed as on any other.
+            if (slotsEditedThisFrame_) {
+                snapLean = true;
+                THREEPP_CPUPROF("scene.3_leanMatrixRefresh");
+                refreshSpanMatrices();
+            }
 
             // ── Automatic mesh LOD selection (setAutoLod; ON by default) ────
             // Runs UNCONDITIONALLY every frame — camera motion alone can flip
@@ -1489,6 +1499,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             if (auto gg = sp.mesh->geometry()) gg->boundingBox.reset();
                             sp.localBoundsValid = false;
                             sp.aabbValid = false;
+                            sp.probeChunksValid = 0;
                         }
                     }
                     if (xfmChanged) matricesSame = false;// fp.matrix refreshed with the span above
@@ -1874,6 +1885,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         if (sp.first < entryGeomDirty.size() && entryGeomDirty[sp.first]) {
                             sp.localBoundsValid = false;
                             sp.aabbValid = false;
+                            sp.probeChunksValid = 0;
                         }
                     }
                 }
@@ -2381,10 +2393,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     // opacity dropping below 1) sets instClassChanged, which forces the
                     // fill even on a frame with no motion, and a full build.
                     bool instClassChanged = false;
-                    if (hiddenFlippedThisFrame_) {
+                    if (hiddenFlippedThisFrame_ || slotsEditedThisFrame_) {
                         // Hidden or shown in place: new ray masks (a full TLAS
                         // build, like any class change), every view's cull and
-                        // draw records, and the emitter walk.
+                        // draw records, and the emitter walk. A slot edit is the
+                        // same event with instances added or removed.
                         instClassChanged = true;
                         ++drawInputsVersion_;
                         cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
@@ -2997,6 +3010,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
 
             rbDrain.stop();
             THREEPP_CPUPROF_NAMED(rbLoop, "scene.R1_entryLoop");
+            // The slot pool the edits until the next structural rebuild write
+            // into (VulkanCoreSlots.cpp): every entry-indexed GPU buffer this
+            // build makes is sized for it. 1.5x and not 2x: the material desc
+            // is 608 B per entry per ring slot, three slots.
+            slotCapacity_ = std::max<uint32_t>(1024u, static_cast<uint32_t>(entries.size() + entries.size() / 2u));
             std::vector<VkAccelerationStructureInstanceKHR> instances;
             instances.reserve(entries.size());
             // geomDescs / matDescs are ENTRIES-indexed: one slot per entry, with
@@ -3073,6 +3091,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // the TLAS. Skip before the geometry-keyed build so we don't
                 // allocate (or per-frame refit) an AS for them.
                 if (en.isParticle) continue;
+                // A free slot (VulkanCoreSlots.cpp): no record, no instance,
+                // the default descs.
+                if (slotTombstone_ && m == slotTombstone_.get()) continue;
                 const BufferGeometry* geomKey = m->geometry().get();
 
                 // The ParticleField MeshRepr proxy is nobody's Mesh geometry —
@@ -3336,68 +3357,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 inst.accelerationStructureReference = lodSel.asAddress;
                 instances.push_back(inst);
 
-                GeometryDesc gdesc{};
-                gdesc.vertexAddress = recPtr->vertex.address;
-                gdesc.normalAddress = recPtr->normal.address;
-                // Must reference the SAME index buffer the selected BLAS
-                // level was built from — RT secondary hits (reflections/GI/
-                // lidar/probe update) read this keyed by gl_PrimitiveID,
-                // which only lines up against that exact index array. A
-                // record with a ray-tracing proxy (DisplacedMesh) was built
-                // over rtIndex; its `index` is the raster's.
-                gdesc.indexAddress  = recPtr->rtIndexCount ? recPtr->rtIndex.address
-                                                           : lodSel.indexAddress;
-                gdesc.uvAddress     = recPtr->uv.address;// 0 if no UV attribute
-                // 0 = not water; 1 = an FFT-displaced ocean surface; anything
-                // else = one with a wake field, and this is its patch table.
-                gdesc.foamAddress   = recPtr->isOceanSurface
-                                              ? (recPtr->oceanWakeTable ? recPtr->oceanWakeTable : 1ull)
-                                              : 0ull;
-                // prevVertexAddress: skinned + displaced meshes have a real
-                // prev-vertex buffer (different from current). Static meshes
-                // get vertex.address as a fallback — the chit reads the same
-                // buffer for both, prevHitWorldPos ends up equal to current.
-                //
-                // A warp-enabled DisplacedMesh is the exception: its vertices
-                // reflow every frame as the adaptive grid re-centres on the
-                // vessel, so prevVertex (indexed by vertex id) doesn't track a
-                // stable world point — using it corrupts motion vectors. Fall
-                // back to the current buffer so the chit's prevWorldPos
-                // resolves to hitWorldPos: the ocean reprojects as world-
-                // static (camera-parallax only), matching the foam texture.
-                // An interop record whose producer declared unstable vertex
-                // correspondence (interopWorldStatic — marching-cubes soups)
-                // gets the same world-static fallback.
-                bool warpReproject = recPtr->interopWorldStatic;
-                if (en.isDisplaced) {
-                    warpReproject = static_cast<DisplacedMesh*>(m)->warp.halfRange > 0.0f;
-                }
-                gdesc.prevVertexAddress =
-                        (recPtr->prevVertex.handle != VK_NULL_HANDLE && !warpReproject)
-                                ? recPtr->prevVertex.address
-                                : recPtr->vertex.address;
-                // Per SELECTION, not per record: a level of a non-indexed
-                // soup record IS indexed (welded canonical indices).
-                gdesc.indexed = lodSel.indexed ? 1u : 0u;
-                // Per-vertex color only when the material opts in (three.js
-                // semantics: vertexColors == true) AND the geometry uploaded a
-                // color buffer. 0 otherwise → chit skips the modulation.
-                {
-                    const auto mat = m->material();
-                    const bool useVtxColor = recPtr->color.handle != VK_NULL_HANDLE &&
-                                             mat && mat->vertexColors;
-                    gdesc.colorAddress = useVtxColor ? recPtr->color.address : 0;
-                }
-                // kGeomFlagMoved is stamped per frame in VulkanCoreFrame; it is
-                // seeded 0 here, with the packed bits above it.
-                // kGeomFlagRtProxy: the record traces a ray-tracing proxy
-                // (rtIndex), a coarser grid than the raster drew; the water
-                // shade moves its surface point onto it before it launches rays.
-                // kGeomFlagGlowOnly: an emissive that glows but is not a light
-                // (setEmissiveCastsLight): its ray hits keep their emission.
-                gdesc.flags = (recPtr->packedMask << kGeomFlagPackedShift) |
-                              (recPtr->rtIndexCount ? kGeomFlagRtProxy : 0u) |
-                              (isGlowOnly(*en.mesh) ? kGeomFlagGlowOnly : 0u);
+                const GeometryDesc gdesc = buildGeometryDesc(en, *recPtr, lodSel);
                 geomDescs[i] = gdesc;
                 // Read-only: assignment of auto ids stays in the indirect draw
                 // builder so this cannot renumber what the Ids AOV reports.
@@ -3409,68 +3369,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 if (memoIt != matDescMemo.end()) {
                     md = memoIt->second;// identical for every instance of this material
                 } else {
-                    md = materialFromMesh(*m);
+                    md = buildMaterialDesc(*m);
                     {
                         auto [matIt, inserted] = matAssetMap.try_emplace(
                                 matKey, static_cast<uint32_t>(matAssetMap.size()));
                         md.materialAssetIdx = matIt->second;
-                    }
-                    if (auto tex = albedoTexOf(*m)) {
-                        md.albedoTexIndex = ensureMaterialTexture(tex);
-                        copyTexUvTransform(md.uvTransform, tex);
-                    }
-                    if (auto tex = roughnessTexOf(*m)) {
-                        md.roughnessTexIndex = ensureMaterialTexture(tex);
-                        copyTexUvTransform(md.uvTransformRoughMetal, tex);
-                    }
-                    if (auto tex = metalnessTexOf(*m)) {
-                        md.metalnessTexIndex = ensureMaterialTexture(tex);
-                        if (md.roughnessTexIndex < 0) copyTexUvTransform(md.uvTransformRoughMetal, tex);
-                    }
-                    if (auto tex = normalTexOf(*m)) {
-                        md.normalTexIndex = ensureMaterialTexture(tex);
-                        copyTexUvTransform(md.uvTransformNormal, tex);
-                    }
-                    if (auto tex = transmissionTexOf(*m)) {
-                        md.transmissionTexIndex = ensureMaterialTexture(tex);
-                        copyTexUvTransform(md.uvTransformTransmission, tex);
-                    }
-                    if (auto tex = clearcoatTexOf(*m)) {
-                        md.clearcoatTexIndex = ensureMaterialTexture(tex);
-                        copyTexUvTransform(md.uvTransformClearcoat, tex);
-                    }
-                    if (auto tex = clearcoatRoughnessTexOf(*m)) {
-                        md.clearcoatRoughnessTexIndex = ensureMaterialTexture(tex);
-                        copyTexUvTransform(md.uvTransformClearcoatRough, tex);
-                    }
-                    if (auto tex = emissiveTexOf(*m)) {
-                        md.emissiveTexIndex = ensureMaterialTexture(tex);
-                        copyTexUvTransform(md.uvTransformEmissive, tex);
-                    }
-                    if (auto tex = occlusionTexOf(*m)) {
-                        md.occlusionTexIndex = ensureMaterialTexture(tex);
-                        copyTexUvTransform(md.uvTransformOcclusion, tex);
-                    }
-                    if (auto tex = detailTexOf(*m)) {
-                        md.detailTexIndex = ensureMaterialTexture(tex);
-                    }
-                    if (auto tex = detailNormalTexOf(*m)) {
-                        md.detailNormalTexIndex = ensureMaterialTexture(tex);
-                    }
-                    if (auto tex = terrainWeightTexOf(*m)) {
-                        md.terrainWeightTexIndex = ensureMaterialTexture(tex);
-                        // Band sets are SHARED textures (one allocation across
-                        // every tile material — ensureMaterialTexture dedupes
-                        // by pointer), so this costs 8 slots total, not 8/tile.
-                        for (int bi = 0; bi < 4; ++bi) {
-                            if (auto bt = terrainBandAlbedoTexOf(*m, bi))
-                                md.terrainBandAlbedoTex[bi] = ensureMaterialTexture(bt);
-                            if (auto bt = terrainBandNormalTexOf(*m, bi))
-                                md.terrainBandNormalTex[bi] = ensureMaterialTexture(bt);
-                        }
-                    }
-                    if (auto tex = terrainNormalTexOf(*m)) {
-                        md.terrainNormalTexIndex = ensureMaterialTexture(tex);
                     }
                     matDescMemo.emplace(matKey, md);
                 }
@@ -3530,7 +3433,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // flips geomDescsDirty_ and flushGeometryDescsIfDirty carries
             // deltas per slot from then on.
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                uploadDescBuffer(geometryDescsBuffers[f], geomDescs);
+                uploadDescBuffer(geometryDescsBuffers[f], geomDescs, slotCapacity_);
             }
             // Every slot now holds the fresh array, so no slot owes anything —
             // including any range marked earlier in this same frame, which this
@@ -3548,11 +3451,15 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // matDescsCached_ stays in sync as the host-side authoritative
             // copy used by the hot-path flush.
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                uploadDescBuffer(materialDescsBuffers[f], matDescs);
+                uploadDescBuffer(materialDescsBuffers[f], matDescs, slotCapacity_);
             }
             matDescsCached_ = matDescs;
             for (auto& d : matDescsDirty_) d.clear();
             cacheCullFlags(matDescs);
+            // The asset numbering the slot path continues (slotMaterialAssetIdx).
+            slotMatAssetIdx_.clear();
+            for (const auto& [mat, idx] : matAssetMap) slotMatAssetIdx_[mat] = {mat ? mat->id : 0u, idx};
+            slotNextMatAssetIdx_ = static_cast<uint32_t>(matAssetMap.size());
             // matDescs just folded in every span's current instance colors.
             for (auto& sp : entrySpans_) {
                 if (!sp.inst) continue;
@@ -3607,6 +3514,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 oldIdx.reserve(prevSceneFingerprint.size());
                 for (size_t i = 0; i < prevSceneFingerprint.size() && identityOk; ++i) {
                     const auto& p = prevSceneFingerprint[i];
+                    // A free slot (VulkanCoreSlots.cpp) names the tombstone,
+                    // every one of them at instance 0: no history to carry,
+                    // and not an ambiguous match.
+                    if (slotTombstone_ && p.mesh == slotTombstone_.get()) continue;
                     identityOk = oldIdx.try_emplace(
                             EntryKey{static_cast<const Mesh*>(p.mesh), p.instanceIndex}, i).second;
                 }
@@ -3660,9 +3571,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             THREEPP_CPUPROF_NAMED(rbViews, "scene.R6_capacityDescriptors");
             const uint32_t motionSlots    = static_cast<uint32_t>(entries.size());
             const uint32_t neededBitWords = std::max<uint32_t>((motionSlots + 31u) / 32u, 1u);
+            // The buffers hold the slot pool, the host arrays the entries.
+            const uint32_t poolSlots = std::max(motionSlots, slotCapacity_);
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                ensureMotionMatCapacity(f, std::max<uint32_t>(motionSlots, 1u));
-                ensureMeshMovedBitsCapacity(f, neededBitWords);
+                ensureMotionMatCapacity(f, std::max<uint32_t>(poolSlots, 1u));
+                ensureMeshMovedBitsCapacity(f, std::max<uint32_t>((poolSlots + 31u) / 32u, 1u));
             }
             meshMovedBits_.resize(neededBitWords, 0u);
 
@@ -3700,6 +3613,191 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // Always on: one line when a deformer created by this build landed
             // in system memory (its deform pass then crosses PCIe every frame).
             reportDeformPlacement();
+        }
+
+VulkanRenderer::Impl::GeometryDesc VulkanRenderer::Impl::buildGeometryDesc(const MeshEntry& en, const BlasRecord& rec,
+                                                                         const LodGeomSel& lodSel) const {
+            GeometryDesc gdesc{};
+            gdesc.vertexAddress = rec.vertex.address;
+            gdesc.normalAddress = rec.normal.address;
+            // Must reference the SAME index buffer the selected BLAS
+            // level was built from — RT secondary hits (reflections/GI/
+            // lidar/probe update) read this keyed by gl_PrimitiveID,
+            // which only lines up against that exact index array. A
+            // record with a ray-tracing proxy (DisplacedMesh) was built
+            // over rtIndex; its `index` is the raster's.
+            gdesc.indexAddress  = rec.rtIndexCount ? rec.rtIndex.address
+                                                       : lodSel.indexAddress;
+            gdesc.uvAddress     = rec.uv.address;// 0 if no UV attribute
+            // 0 = not water; 1 = an FFT-displaced ocean surface; anything
+            // else = one with a wake field, and this is its patch table.
+            gdesc.foamAddress   = rec.isOceanSurface
+                                          ? (rec.oceanWakeTable ? rec.oceanWakeTable : 1ull)
+                                          : 0ull;
+            // prevVertexAddress: skinned + displaced meshes have a real
+            // prev-vertex buffer (different from current). Static meshes
+            // get vertex.address as a fallback — the chit reads the same
+            // buffer for both, prevHitWorldPos ends up equal to current.
+            //
+            // A warp-enabled DisplacedMesh is the exception: its vertices
+            // reflow every frame as the adaptive grid re-centres on the
+            // vessel, so prevVertex (indexed by vertex id) doesn't track a
+            // stable world point — using it corrupts motion vectors. Fall
+            // back to the current buffer so the chit's prevWorldPos
+            // resolves to hitWorldPos: the ocean reprojects as world-
+            // static (camera-parallax only), matching the foam texture.
+            // An interop record whose producer declared unstable vertex
+            // correspondence (interopWorldStatic — marching-cubes soups)
+            // gets the same world-static fallback.
+            bool warpReproject = rec.interopWorldStatic;
+            if (en.isDisplaced) {
+                warpReproject = static_cast<DisplacedMesh*>(en.mesh)->warp.halfRange > 0.0f;
+            }
+            gdesc.prevVertexAddress =
+                    (rec.prevVertex.handle != VK_NULL_HANDLE && !warpReproject)
+                            ? rec.prevVertex.address
+                            : rec.vertex.address;
+            // Per SELECTION, not per record: a level of a non-indexed
+            // soup record IS indexed (welded canonical indices).
+            gdesc.indexed = lodSel.indexed ? 1u : 0u;
+            // Per-vertex color only when the material opts in (three.js
+            // semantics: vertexColors == true) AND the geometry uploaded a
+            // color buffer. 0 otherwise → chit skips the modulation.
+            {
+                const auto mat = en.mesh->material();
+                const bool useVtxColor = rec.color.handle != VK_NULL_HANDLE &&
+                                         mat && mat->vertexColors;
+                gdesc.colorAddress = useVtxColor ? rec.color.address : 0;
+            }
+            // kGeomFlagMoved is stamped per frame in VulkanCoreFrame; it is
+            // seeded 0 here, with the packed bits above it.
+            // kGeomFlagRtProxy: the record traces a ray-tracing proxy
+            // (rtIndex), a coarser grid than the raster drew; the water
+            // shade moves its surface point onto it before it launches rays.
+            // kGeomFlagGlowOnly: an emissive that glows but is not a light
+            // (setEmissiveCastsLight): its ray hits keep their emission.
+            gdesc.flags = (rec.packedMask << kGeomFlagPackedShift) |
+                          (rec.rtIndexCount ? kGeomFlagRtProxy : 0u) |
+                          (isGlowOnly(*en.mesh) ? kGeomFlagGlowOnly : 0u);
+            return gdesc;
+        }
+
+VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::buildMaterialDesc(Mesh& m) {
+            MaterialDesc md = materialFromMesh(m);
+            if (auto tex = albedoTexOf(m)) {
+                md.albedoTexIndex = ensureMaterialTexture(tex);
+                copyTexUvTransform(md.uvTransform, tex);
+            }
+            if (auto tex = roughnessTexOf(m)) {
+                md.roughnessTexIndex = ensureMaterialTexture(tex);
+                copyTexUvTransform(md.uvTransformRoughMetal, tex);
+            }
+            if (auto tex = metalnessTexOf(m)) {
+                md.metalnessTexIndex = ensureMaterialTexture(tex);
+                if (md.roughnessTexIndex < 0) copyTexUvTransform(md.uvTransformRoughMetal, tex);
+            }
+            if (auto tex = normalTexOf(m)) {
+                md.normalTexIndex = ensureMaterialTexture(tex);
+                copyTexUvTransform(md.uvTransformNormal, tex);
+            }
+            if (auto tex = transmissionTexOf(m)) {
+                md.transmissionTexIndex = ensureMaterialTexture(tex);
+                copyTexUvTransform(md.uvTransformTransmission, tex);
+            }
+            if (auto tex = clearcoatTexOf(m)) {
+                md.clearcoatTexIndex = ensureMaterialTexture(tex);
+                copyTexUvTransform(md.uvTransformClearcoat, tex);
+            }
+            if (auto tex = clearcoatRoughnessTexOf(m)) {
+                md.clearcoatRoughnessTexIndex = ensureMaterialTexture(tex);
+                copyTexUvTransform(md.uvTransformClearcoatRough, tex);
+            }
+            if (auto tex = emissiveTexOf(m)) {
+                md.emissiveTexIndex = ensureMaterialTexture(tex);
+                copyTexUvTransform(md.uvTransformEmissive, tex);
+            }
+            if (auto tex = occlusionTexOf(m)) {
+                md.occlusionTexIndex = ensureMaterialTexture(tex);
+                copyTexUvTransform(md.uvTransformOcclusion, tex);
+            }
+            if (auto tex = detailTexOf(m)) {
+                md.detailTexIndex = ensureMaterialTexture(tex);
+            }
+            if (auto tex = detailNormalTexOf(m)) {
+                md.detailNormalTexIndex = ensureMaterialTexture(tex);
+            }
+            if (auto tex = terrainWeightTexOf(m)) {
+                md.terrainWeightTexIndex = ensureMaterialTexture(tex);
+                // Band sets are SHARED textures (one allocation across
+                // every tile material — ensureMaterialTexture dedupes
+                // by pointer), so this costs 8 slots total, not 8/tile.
+                for (int bi = 0; bi < 4; ++bi) {
+                    if (auto bt = terrainBandAlbedoTexOf(m, bi))
+                        md.terrainBandAlbedoTex[bi] = ensureMaterialTexture(bt);
+                    if (auto bt = terrainBandNormalTexOf(m, bi))
+                        md.terrainBandNormalTex[bi] = ensureMaterialTexture(bt);
+                }
+            }
+            if (auto tex = terrainNormalTexOf(m)) {
+                md.terrainNormalTexIndex = ensureMaterialTexture(tex);
+            }
+            return md;
+        }
+
+void VulkanRenderer::Impl::refreshSpanMatrices() {
+            // Per SPAN: a span's entry world matrices are a pure function of
+            // (mesh->matrixWorld, instanceMatrix contents); see the lean path.
+            for (auto& sp : entrySpans_) {
+                sp.movedThisFrame = false;
+                const float* mw = sp.mesh->matrixWorld->elements.data();
+                if (sp.inst) {
+                    const unsigned int v = sp.inst->instanceMatrix()->version;
+                    if (v == sp.instMatVersion &&
+                        std::memcmp(sp.meshWorld.data(), mw, 64) == 0) continue;
+                    sp.instMatVersion = v;
+                    std::memcpy(sp.meshWorld.data(), mw, 64);
+                    sp.movedThisFrame = true;
+                    sp.aabbValid = false;
+                    sp.probeChunksValid = 0;
+                    // Tight refresh: world = meshWorld * instanceMat[j],
+                    // straight off the raw attribute floats (no
+                    // bounds-checked getMatrixAt). The multiply itself
+                    // goes through Matrix4::multiplyMatrices rather than a
+                    // hand expansion, because that is where the SSE2
+                    // kernel lives — 3.9 ns against the scalar form's
+                    // 16.0 ns. Its accumulation order is the scalar form's
+                    // term for term, so this path stays bit-identical to
+                    // the full expansion below AND to instance_expand.comp,
+                    // the `precise` GPU replica that instanceExpandCheck
+                    // compares against bit for bit.
+                    const auto& arr = sp.inst->instanceMatrix()->array();
+                    // mw is this matrix's element array; binding the
+                    // Matrix4 itself keeps the mesh world out of the
+                    // per-instance copy entirely.
+                    const Matrix4& meshWorld = *sp.mesh->matrixWorld;
+                    Matrix4 instMat;
+                    Matrix4 world;
+                    for (uint32_t j = 0; j < sp.count; ++j) {
+                        std::memcpy(instMat.elements.data(), arr.data() + size_t(j) * 16u, 64);
+                        world.multiplyMatrices(meshWorld, instMat);
+                        std::memcpy(lastVisibleEntries_[sp.first + j].worldMatrix.data(),
+                                    world.elements.data(), 64);
+                        // Keep the fingerprint's matrix mirror fresh so a
+                        // later non-lean frame's generic compare sees this
+                        // frame's state, not a stale lean-era matrix.
+                        prevSceneFingerprint[sp.first + j].matrix =
+                                lastVisibleEntries_[sp.first + j].worldMatrix;
+                    }
+                } else {
+                    if (std::memcmp(sp.meshWorld.data(), mw, 64) == 0) continue;
+                    std::memcpy(sp.meshWorld.data(), mw, 64);
+                    sp.movedThisFrame = true;
+                    sp.aabbValid = false;
+                    sp.probeChunksValid = 0;
+                    std::memcpy(lastVisibleEntries_[sp.first].worldMatrix.data(), mw, 64);
+                    prevSceneFingerprint[sp.first].matrix = lastVisibleEntries_[sp.first].worldMatrix;
+                }
+            }
         }
 
 bool VulkanRenderer::Impl::classifyCutoutFar(const float camPos[3]) {

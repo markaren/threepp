@@ -24,10 +24,12 @@
 //     The first update builds everything in range in one go: a startup frame
 //     is allowed to be slow, and a headless --shot must not photograph a
 //     half-grown world;
-//   • removal has hysteresis (`removeSlack`). It matters more than the adds:
-//     removing a scene entry clears the Vulkan renderer's temporal history,
-//     so a cell that flickers in and out at the ring boundary would strobe the
-//     whole frame. Adds are appends and are cheap.
+//   • removal has hysteresis (`removeSlack`): a cell at the ring boundary
+//     would otherwise leave and come back every few frames. In the Vulkan
+//     renderer both are slot edits (rows of its entry index space written in
+//     place, no device drain, temporal history kept for everything else in
+//     the frame), but each still costs its frame a little, and the cell's own
+//     pixels lose their history every time.
 //
 // Header-only, threepp core only. update() is main-thread only.
 

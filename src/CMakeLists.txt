@@ -897,6 +897,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/VulkanCoreInit.cpp"
             "threepp/renderers/vulkan/VulkanCoreGeometry.cpp"
             "threepp/renderers/vulkan/VulkanCoreScene.cpp"
+            "threepp/renderers/vulkan/VulkanCoreSlots.cpp"
             "threepp/renderers/vulkan/VulkanCoreUploads.cpp"
             "threepp/renderers/vulkan/VulkanCoreIndirect.cpp"
             "threepp/renderers/vulkan/VulkanCorePipelines.cpp"

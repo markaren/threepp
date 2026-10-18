@@ -3848,8 +3848,13 @@ void VulkanRenderer::Impl::buildTlas(const std::vector<VkAccelerationStructureIn
             // per-frame refit (recordTlasRefit) into a no-op.
             if (!ctx->rayQuerySupported()) return;
             const uint32_t instanceCount = static_cast<uint32_t>(instances.size());
+            // Sized for the slot pool, not for this build's count: a slot edit
+            // (VulkanCoreSlots.cpp) adds instances with a MODE_BUILD in the
+            // frame command buffer (recordTlasRefit), which needs instance
+            // buffers and storage that already hold them.
+            const uint32_t maxInstances = std::max(instanceCount, slotCapacity_);
             const VkDeviceSize instBytes = std::max<VkDeviceSize>(
-                    instanceCount * sizeof(VkAccelerationStructureInstanceKHR),
+                    VkDeviceSize(maxInstances) * sizeof(VkAccelerationStructureInstanceKHR),
                     sizeof(VkAccelerationStructureInstanceKHR));// keep buf non-empty
 
             // (Re)allocate all in-flight instance buffers and seed every slot
@@ -3894,7 +3899,7 @@ void VulkanRenderer::Impl::buildTlas(const std::vector<VkAccelerationStructureIn
             ctx->rt().getAccelerationStructureBuildSizes(
                     ctx->device(),
                     VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                    &tlasBuild, &instanceCount, &tlasSizes);
+                    &tlasBuild, &maxInstances, &tlasSizes);
 
             tlasBuffer = createBuffer(
                     ctx->allocator(), ctx->device(), tlasSizes.accelerationStructureSize,
@@ -3936,7 +3941,13 @@ void VulkanRenderer::Impl::recordTlasRefit(VkCommandBuffer cb,
                              const std::vector<VkAccelerationStructureInstanceKHR>& instances,
                              bool fullBuild) {
             const uint32_t instanceCount = static_cast<uint32_t>(instances.size());
-            if (instanceCount == 0 || tlas == VK_NULL_HANDLE) return;
+            if (tlas == VK_NULL_HANDLE) return;
+            // Nothing built and nothing to build. A count that DROPS to zero (a
+            // slot edit removed the last traced mesh, VulkanCoreSlots.cpp) is an
+            // empty full build below, never a skip: the old TLAS would keep
+            // instances whose desc rows are zeroed, and a ray that hits one
+            // reads its geometry at device address 0 (device lost).
+            if (instanceCount == 0 && tlasBuiltInstanceCount_ == 0) return;
 
             // A MODE_UPDATE must carry exactly the instance count of the TLAS's
             // last full build — anything else is invalid and corrupts traversal
@@ -3967,7 +3978,7 @@ void VulkanRenderer::Impl::recordTlasRefit(VkCommandBuffer cb,
             // scene.7_tlasRefitFill, which is the CPU FILL of the same array back
             // inside ensureSceneBuilt; this is the copy to the device. Scoped to
             // the copy ALONE so it stays a sibling of frame.L_tlasRefitRec below.
-            {
+            if (instBytes > 0) {
                 THREEPP_CPUPROF("frame.H_uploadTlasInst");
                 uploadHostVisible(ctx->allocator(), instBuf, instances.data(), instBytes);
             }

@@ -880,6 +880,14 @@ namespace threepp {
             // resetTemporalHistory, the first scene build). An entry added or
             // removed is not one: surviving entries keep their history.
             uint64_t historyResets = 0;
+            // Content changes taken as slot edits instead: meshes added or
+            // removed, an InstancedMesh count changed, a mesh shown for the
+            // first time, each written into stable entry slots (rows of the
+            // entry index space) with no device drain and no rebuild of the
+            // rows that did not change. A change the slot path does not take
+            // (a deformer, a texture swap, more entries than the slot pool
+            // holds) is still a structural rebuild.
+            uint64_t slotEdits = 0;
         };
         [[nodiscard]] TlasStats tlasStats() const;
 

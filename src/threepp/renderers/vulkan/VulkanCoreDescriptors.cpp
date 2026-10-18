@@ -485,19 +485,43 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
 void VulkanRenderer::Impl::fitProbeGridToScene() {
             if (!probeGI_ || lastVisibleEntries_.empty()) return;
             Box3 sceneBox;
-            for (const auto& en : lastVisibleEntries_) {
-                if (en.isOverlay || en.isParticle) continue;
-                if (en.sensorOnly) continue;// must not move the GI grid the camera sees
-                if (en.hidden) continue;// hidden at run time: not in the scene the camera sees
-                auto geom = en.mesh->geometry();
-                if (!geom) continue;
-                if (!geom->boundingBox) geom->computeBoundingBox();
-                if (!geom->boundingBox) continue;
-                Box3 worldAabb = *geom->boundingBox;
-                Matrix4 w;
-                std::memcpy(w.elements.data(), en.worldMatrix.data(), 64);
-                worldAabb.applyMatrix4(w);
-                sceneBox.union_(worldAabb);
+            // Per SPAN (all its entries share the mesh, the flags and the
+            // hidden state), the union of each kProbeChunk entries cached
+            // until its matrices or bounds move (EntrySpan::probeChunks).
+            constexpr uint32_t kChunk = EntrySpan::kProbeChunk;
+            for (auto& sp : entrySpans_) {
+                if (sp.count == 0u) continue;
+                const MeshEntry& e0 = lastVisibleEntries_[sp.first];
+                if (e0.isOverlay || e0.isParticle) continue;
+                if (e0.sensorOnly) continue;// must not move the GI grid the camera sees
+                if (sp.hidden) continue;// hidden at run time: not in the scene the camera sees
+                const uint32_t nChunks = (sp.count + kChunk - 1u) / kChunk;
+                if (sp.probeChunks.size() != nChunks) sp.probeChunks.resize(nChunks);
+                if (sp.probeChunksValid < nChunks) {
+                    auto geom = sp.mesh->geometry();
+                    if (geom && !geom->boundingBox) geom->computeBoundingBox();
+                    for (uint32_t ch = sp.probeChunksValid; ch < nChunks; ++ch) {
+                        Box3 chunkBox;
+                        if (geom && geom->boundingBox) {
+                            const uint32_t j1 = std::min(sp.count, (ch + 1u) * kChunk);
+                            for (uint32_t j = ch * kChunk; j < j1; ++j) {
+                                Box3 worldAabb = *geom->boundingBox;
+                                Matrix4 w;
+                                std::memcpy(w.elements.data(), lastVisibleEntries_[sp.first + j].worldMatrix.data(), 64);
+                                worldAabb.applyMatrix4(w);
+                                chunkBox.union_(worldAabb);
+                            }
+                        }
+                        auto& c = sp.probeChunks[ch];
+                        c = {chunkBox.min().x, chunkBox.min().y, chunkBox.min().z,
+                             chunkBox.max().x, chunkBox.max().y, chunkBox.max().z};
+                    }
+                    sp.probeChunksValid = nChunks;
+                }
+                for (const auto& c : sp.probeChunks) {
+                    if (c[0] > c[3] || c[1] > c[4] || c[2] > c[5]) continue;// empty
+                    sceneBox.union_(Box3(Vector3(c[0], c[1], c[2]), Vector3(c[3], c[4], c[5])));
+                }
             }
             if (sceneBox.isEmpty()) return;
             const float mn[3] = {sceneBox.min().x, sceneBox.min().y, sceneBox.min().z};

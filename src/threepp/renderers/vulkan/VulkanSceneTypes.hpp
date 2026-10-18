@@ -315,6 +315,31 @@ namespace threepp::vulkan::impl {
         float localCenter[3]{}, localHalf[3]{};
         float localRadius = 0.f;
         bool  localBoundsValid = false;
+        // Stable entry slots (VulkanCoreSlots.cpp): a FREE span is a run of
+        // entry slots no mesh owns. It is hidden, its entries are hidden and
+        // its mesh is the renderer's tombstone, so every loop that already
+        // skips a hidden span skips it; it pushes no TLAS instance. A freed run
+        // is PARKED until frame serial parkedUntil: a readback of a frame still
+        // in flight maps its entry indices through the current entries, and a
+        // parked slot then names the tombstone, never an unrelated mesh.
+        bool isFree = false;
+        uint64_t parkedUntil = 0;
+        // On a span the expansion walk built, never on a live one: the walk
+        // pushed only this InstancedMesh's first entry (it already has slots,
+        // and the slot path derives any rows it adds itself); `count` is still
+        // the instance count. A walk the full rebuild consumes has none.
+        bool rowsDeferred = false;
+        // fitProbeGridToScene's unions of this span's entry world boxes, one
+        // per kProbeChunk entries (min [0..2], max [3..5]; an empty chunk has
+        // min > max), the first probeChunksValid of them current: all are
+        // dropped by a matrix refresh or a geometry edit (wherever aabbValid
+        // is), and a count change drops the chunks from the one it touches on.
+        // min / max are exact, so the union of the chunks is the per-entry
+        // walk's box bit for bit, and a re-fit after a slot edit costs
+        // O(chunks), not O(entries).
+        static constexpr uint32_t kProbeChunk = 512;
+        std::vector<std::array<float, 6>> probeChunks;
+        uint32_t probeChunksValid = 0;
     };
 
     struct EntryKey {
