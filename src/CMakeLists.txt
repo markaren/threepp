@@ -706,6 +706,10 @@ set(sources
         # env prefilter run it, on the same pixels, so the two backends light a
         # scene with the same one sun.
         "threepp/renderers/common/EnvSunExtract.cpp"
+        # threepp::Sky's Preetham model on the CPU: its uniforms as a record,
+        # the radiance along a direction, its sun as an EnvSunExtract. The
+        # Vulkan backend bakes the model from it (vulkan/SkyBake).
+        "threepp/renderers/common/PreethamSky.cpp"
         "threepp/renderers/common/Lights.cpp"
         "threepp/renderers/common/WhiteBalance.cpp"
         "threepp/renderers/common/RenderLists.cpp"
@@ -903,6 +907,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/VulkanCoreShadows.cpp"
             "threepp/renderers/vulkan/LidarScanner.cpp"
             "threepp/renderers/vulkan/EnvPrefilter.cpp"
+            "threepp/renderers/vulkan/SkyBake.cpp"
             "threepp/renderers/vulkan/EventCameraDetector.cpp"
             "threepp/renderers/vulkan/SkinningPipeline.cpp"
             "threepp/renderers/vulkan/TetSkinningPipeline.cpp"
@@ -1216,6 +1221,13 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/prefilter_env.comp"
         kPrefilterEnvCompSpv
         _prefilter_env_spv_h)
+    # threepp::Sky on the deferred renderer: the Preetham model baked into mip 0
+    # of the env image, in place, each frame its uniforms change
+    # (vulkan/SkyBake.{hpp,cpp}); prefilter_env mips it.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/sky_preetham.comp"
+        kSkyPreethamCompSpv
+        _sky_preetham_spv_h)
     # Post stack: progressive bloom pyramid (Jimenez 2014 — Karis 13-tap down
     # chain + 3x3 tent additive upsample, vulkan/BloomPass.{hpp,cpp}) + the
     # exposure/white-balance/tone-map/grade/sRGB composite that closes the

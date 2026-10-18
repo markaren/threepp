@@ -314,6 +314,15 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanLodDither_test COMMAND VulkanLodDither_test)
     set_tests_properties(VulkanLodDither_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # A threepp::Sky is the environment on the deferred renderer, not a mesh:
+    # its dome builds no entry, the sky it describes lights and backs the
+    # scene, follows its sun in place, and yields to a scene.environment.
+    add_executable(VulkanSky_test VulkanSky_test.cpp)
+    target_link_libraries(VulkanSky_test PRIVATE threepp)
+    target_include_directories(VulkanSky_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME VulkanSky_test COMMAND VulkanSky_test)
+    set_tests_properties(VulkanSky_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # A mesh removed and freed between two frames: the calls that walk the last
     # frame's entries (setEmissiveCastsLight, setStableCorrespondence,
     # enableVertexInterop) never read it, and a freed skinned clone's GPU state

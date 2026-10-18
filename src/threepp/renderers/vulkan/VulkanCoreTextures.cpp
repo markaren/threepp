@@ -514,11 +514,39 @@ void VulkanRenderer::Impl::createOceanFoamDummy_() {
 bool VulkanRenderer::Impl::refreshEnvTextureFromScene(Object3D& scene) {
             auto* sc = dynamic_cast<Scene*>(&scene);
             std::shared_ptr<Texture> tex;
-            if (sc) {
-                tex = sc->environment;
-                if (!tex && sc->background.isTexture()) {
-                    tex = sc->background.texture();
+            if (sc) tex = sc->environment;
+            if (!tex && skySeen_) {
+                // A visible threepp::Sky and no scene.environment: the Sky is
+                // the environment AND the background, baked from its uniforms
+                // (vulkan/SkyBake) — on GL the dome is what you see behind the
+                // scene, and here the one env image is also what lights it. A
+                // scene.environment outranks it, as it outranks a background
+                // texture; a background texture or colour yields to it.
+                // Re-read every frame: a change in the uniforms (a sun that
+                // moves) marks a bake, done in place inside the frame — no
+                // drain, no history wipe, which a new env costs.
+                if (!envIsSky) skyBakedValid_ = false;// (re)activation bakes afresh
+                const PreethamSkyParams params = preethamParamsFromSky(*skySeen_);
+                if (!skyBakedValid_ || params != skyBaked_) {
+                    skyBaked_       = params;
+                    skyBakedValid_  = true;
+                    skyBakePending_ = true;
+                    // The model's sun, for the one-sun policy, exactly as an
+                    // HDRI's detected disc; nothing to inject when extraction
+                    // is off (the disc then stays in the mips).
+                    envSun_ = envSunExtractionWanted() ? preethamSun(params) : EnvSunExtract{};
                 }
+                if (envIsSky) return false;
+                dropEnvImage();// caller drains + flushes + rewrites
+                envImage      = skyBake_->image();// non-owning: see dropEnvImage
+                envIsSky      = true;
+                envIsDefault  = false;
+                envIsBgColor  = false;
+                envTextureIdUploaded = 0xFFFFFFFFu;
+                return true;
+            }
+            if (sc && !tex && sc->background.isTexture()) {
+                tex = sc->background.texture();
             }
             if (!tex) {
                 // No environment and no background texture: a background COLOR
@@ -534,7 +562,7 @@ bool VulkanRenderer::Impl::refreshEnvTextureFromScene(Object3D& scene) {
                     // Retire the old env image (in-flight frames' descriptor
                     // sets may still sample it); the sole caller
                     // (beginDeferredFrame) drains + flushes + rewrites right after.
-                    retire(std::move(envImage));
+                    dropEnvImage();
                     const float px[4] = {c.r, c.g, c.b, 1.f};
                     envImage = createSampledImage2D(
                             1, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
@@ -551,7 +579,7 @@ bool VulkanRenderer::Impl::refreshEnvTextureFromScene(Object3D& scene) {
                     return true;
                 }
                 if (envIsDefault) return false;
-                retire(std::move(envImage));// caller drains + flushes + rewrites
+                dropEnvImage();// caller drains + flushes + rewrites
                 createDefaultEnvImage();
                 envIsBgColor = false;
                 envSun_ = {};
@@ -576,7 +604,7 @@ bool VulkanRenderer::Impl::refreshEnvTextureFromScene(Object3D& scene) {
                 return false;
             }
 
-            retire(std::move(envImage));// caller drains + flushes + rewrites
+            dropEnvImage();// caller drains + flushes + rewrites
 
             // GGX-prefilter the env into a mip chain so the closest_hit
             // shader can sample at a roughness-derived LOD instead of the cheap

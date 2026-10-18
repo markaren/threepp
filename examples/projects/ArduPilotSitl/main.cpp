@@ -449,8 +449,10 @@ int main(int argc, char** argv) {
     // environment drives image-based lighting and serves as the sky backdrop
     // (the same noon_grass HDRI spot_slam caches; THREEPP_HDRI overrides the
     // path), plus exponential-fog aerial perspective below. The Preetham dome
-    // stays the GL fallback (its ShaderMaterial can't shade on the deferred
-    // renderer), and a flat sky covers a Vulkan machine with no cached HDRI.
+    // is the GL look; the deferred renderer bakes a Sky into its environment
+    // too (vulkan/SkyBake), but this scene keeps the photographed sky for
+    // the ground bounce and the look spot_slam was tuned to, and a flat sky
+    // covers a Vulkan machine with no cached HDRI.
     const bool vulkan = canvas.graphicsApi() == GraphicsAPI::Vulkan;
     float hemiIntensity = 0.9f;
     bool hdrSky = false;

@@ -21,7 +21,9 @@
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineSegments.hpp"
+#include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/Sky.hpp"
 #include "threepp/objects/Bone.hpp"
 #include "threepp/objects/Points.hpp"
 #include "threepp/objects/Skeleton.hpp"
@@ -145,6 +147,44 @@ namespace threepp_py {
                 .def_property_readonly("fade", &Mesh::fade, "The fade set_fade gave (1 = fully drawn).")
                 .def_property_readonly("fade_complement", &Mesh::fadeComplement,
                                        "Whether set_fade picked the complementary dither pattern.");
+
+        // ---- Sky ---------------------------------------------------------------
+        // The Preetham daylight model (three.js's Sky). Its look is the six
+        // uniforms of its ShaderMaterial, exposed here as properties since the
+        // bindings carry no ShaderMaterial uniform map.
+        {
+            auto uniform = [](Sky& s, const char* name) -> Uniform& {
+                return s.materialAs<ShaderMaterial>()->uniforms.at(name);
+            };
+            py::class_<Sky, Mesh, std::shared_ptr<Sky>>(
+                    m, "Sky",
+                    "The Preetham daylight model (three.js's Sky). On the GL renderer a dome the scene sits "
+                    "in, shaded per pixel; on the Vulkan renderer the environment itself: the sky the camera "
+                    "sees, the light the scene is lit by (and its sun, where the scene has no DirectionalLight), "
+                    "baked from these properties each frame they change. A scene.environment outranks it.")
+                    .def(py::init([]() { return Sky::create(); }))
+                    .def_property(
+                            "turbidity", [=](Sky& s) { return uniform(s, "turbidity").value<float>(); },
+                            [=](Sky& s, float v) { uniform(s, "turbidity").value<float>() = v; },
+                            "Haze: 2 is a clear sky, 10 a hazy one.")
+                    .def_property(
+                            "rayleigh", [=](Sky& s) { return uniform(s, "rayleigh").value<float>(); },
+                            [=](Sky& s, float v) { uniform(s, "rayleigh").value<float>() = v; },
+                            "Rayleigh scattering: the blue of the sky (1 = the model's).")
+                    .def_property(
+                            "mie_coefficient", [=](Sky& s) { return uniform(s, "mieCoefficient").value<float>(); },
+                            [=](Sky& s, float v) { uniform(s, "mieCoefficient").value<float>() = v; },
+                            "Mie scattering: the glow around the sun (0.005 = the model's).")
+                    .def_property(
+                            "mie_directional_g", [=](Sky& s) { return uniform(s, "mieDirectionalG").value<float>(); },
+                            [=](Sky& s, float v) { uniform(s, "mieDirectionalG").value<float>() = v; },
+                            "How tightly that glow hugs the sun, 0..1 (0.8 = the model's).")
+                    .def_property(
+                            "sun_position", [=](Sky& s) { return uniform(s, "sunPosition").value<Vector3>(); },
+                            [=](Sky& s, const Vector3& v) { uniform(s, "sunPosition").value<Vector3>().copy(v); },
+                            "Where the sun stands, as a direction from the origin (its length does not matter); "
+                            "copy a DirectionalLight's position here to keep the two in step.");
+        }
 
         // ---- Bone / Skeleton / SkinnedMesh -----------------------------------
         // Registering these lets pybind11's RTTI downcast hand back a glTF

@@ -70,6 +70,9 @@ VulkanRenderer::Impl::Impl(Canvas& c) : canvas(c), size(c.size()), lastCanvasSiz
             // Construct before createDefaultEnvImage so the env upload path is
             // ready if scene.environment is set before the first render().
             envPrefilter_ = std::make_unique<vulkan::EnvPrefilter>(*ctx, cmdPool);
+            // The Sky's bake mips with that same pipeline (its image comes
+            // lazily, with the first Sky).
+            skyBake_ = std::make_unique<vulkan::SkyBake>(*ctx, *envPrefilter_);
             createDefaultEnvImage();
             createTextureSampler();
             createDefaultMaterialTexture();
@@ -420,6 +423,7 @@ VulkanRenderer::Impl::~Impl() {
             for (auto& b : motionMatBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : meshMovedBitsBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : emissiveTriBuffers) destroyBuffer(ctx->allocator(), b);
+            if (envIsSky) envImage = {};// the sky bake's own; it goes with the bake below
             destroyImage2D(ctx->allocator(), d, envImage);
             destroyImage2D(ctx->allocator(), d, blueNoiseImage);
             // 1x1 stand-ins bound to the MS gbuffer descriptor slots whenever
@@ -445,7 +449,10 @@ VulkanRenderer::Impl::~Impl() {
             for (VkSampler s : parkedSamplers_) vkDestroySampler(d, s, nullptr);
             parkedSamplers_.clear();
 
-            // EnvPrefilter owns its pipeline / layout / pool / sampler.
+            // The sky bake (its image, views, sets, pipeline) before the
+            // prefilter it mips with; EnvPrefilter owns its pipeline / layout /
+            // pool / sampler.
+            skyBake_.reset();
             envPrefilter_.reset();
 
             // GPU skinning teardown. Per-SkinnedMeshState buffers were already

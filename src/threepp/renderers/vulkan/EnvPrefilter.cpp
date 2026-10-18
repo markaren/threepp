@@ -297,8 +297,8 @@ namespace threepp::vulkan {
         mipStorageViews.reserve(out.mipLevels);
         if (out.mipLevels > 1) {
             vkResetDescriptorPool(ctx_.device(), descPool_, 0);
-            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
-
+            std::vector<VkDescriptorSet> sets;
+            sets.reserve(out.mipLevels);
             for (uint32_t mip = 1; mip < out.mipLevels; ++mip) {
                 VkImageViewCreateInfo vci{};
                 vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -322,61 +322,15 @@ namespace threepp::vulkan {
                 VkDescriptorSet set = VK_NULL_HANDLE;
                 check(vkAllocateDescriptorSets(ctx_.device(), &ai, &set),
                       "vkAllocateDescriptorSets(prefilter)");
-
-                VkDescriptorImageInfo srcInfo{};
-                srcInfo.sampler     = srcSampler_;
-                srcInfo.imageView   = out.view;// full-chain view; sampler reads mip 0
-                srcInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-                VkDescriptorImageInfo dstInfo{};
-                dstInfo.sampler     = VK_NULL_HANDLE;
-                dstInfo.imageView   = mipView;
-                dstInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-                std::array<VkWriteDescriptorSet, 2> ws{};
-                ws[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                ws[0].dstSet          = set;
-                ws[0].dstBinding      = 0;
-                ws[0].descriptorCount = 1;
-                ws[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                ws[0].pImageInfo      = &srcInfo;
-                ws[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                ws[1].dstSet          = set;
-                ws[1].dstBinding      = 1;
-                ws[1].descriptorCount = 1;
-                ws[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                ws[1].pImageInfo      = &dstInfo;
-                vulkan::updateDescriptorSets(ctx_.device(), 2, ws.data(), 0, nullptr);
-
-                struct Pc {
-                    float    alpha;
-                    uint32_t numSamples;
-                    uint32_t _pad0;
-                    uint32_t _pad1;
-                } pc{};
-                const float r = static_cast<float>(mip) /
-                                static_cast<float>(out.mipLevels - 1);
-                pc.alpha      = r * r;// GGX α = roughness²
-                // 512 (was 64): a tiny, very bright HDR sun under a narrow lobe needs
-                // many samples to integrate smoothly — 64 left it quantized into
-                // discrete bright lumps. Paired with the per-texel Cranley-Patterson
-                // rotation in the shader (decorrelates the residual into absorbable
-                // noise). One-shot per env upload, so essentially free at runtime.
-                pc.numSamples = 512u;
-                vkCmdPushConstants(cb, pipelineLayout_,
-                                   VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                        pipelineLayout_, 0, 1, &set,
-                                        0, nullptr);
-
-                const uint32_t mipW = std::max(1u, w >> mip);
-                const uint32_t mipH = std::max(1u, h >> mip);
-                const uint32_t gx = (mipW + 7u) / 8u;
-                const uint32_t gy = (mipH + 7u) / 8u;
-                vkCmdDispatch(cb, gx, gy, 1u);
-                // No barrier between dispatches: each writes a different mip
-                // and reads only mip 0, no hazard.
+                writeSet(set, out.view, mipView);
+                sets.push_back(set);
             }
+            // 512 (was 64): a tiny, very bright HDR sun under a narrow lobe needs
+            // many samples to integrate smoothly — 64 left it quantized into
+            // discrete bright lumps. Paired with the per-texel Cranley-Patterson
+            // rotation in the shader (decorrelates the residual into absorbable
+            // noise). One-shot per env upload, so essentially free at runtime.
+            recordMips(cb, w, h, out.mipLevels, sets.data(), 512u);
         }
 
         if (!sunFound) {
@@ -474,6 +428,58 @@ namespace threepp::vulkan {
         }
 
         return out;
+    }
+
+    void EnvPrefilter::writeSet(VkDescriptorSet set, VkImageView fullChainView, VkImageView mipView) const {
+        VkDescriptorImageInfo srcInfo{};
+        srcInfo.sampler     = srcSampler_;
+        srcInfo.imageView   = fullChainView;// full-chain view; sampler reads mip 0
+        srcInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+        VkDescriptorImageInfo dstInfo{};
+        dstInfo.sampler     = VK_NULL_HANDLE;
+        dstInfo.imageView   = mipView;
+        dstInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+        std::array<VkWriteDescriptorSet, 2> ws{};
+        ws[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        ws[0].dstSet          = set;
+        ws[0].dstBinding      = 0;
+        ws[0].descriptorCount = 1;
+        ws[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        ws[0].pImageInfo      = &srcInfo;
+        ws[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        ws[1].dstSet          = set;
+        ws[1].dstBinding      = 1;
+        ws[1].descriptorCount = 1;
+        ws[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        ws[1].pImageInfo      = &dstInfo;
+        vulkan::updateDescriptorSets(ctx_.device(), 2, ws.data(), 0, nullptr);
+    }
+
+    void EnvPrefilter::recordMips(VkCommandBuffer cb, uint32_t w, uint32_t h, uint32_t mipLevels,
+                                  const VkDescriptorSet* sets, uint32_t numSamples) const {
+        if (mipLevels <= 1) return;
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
+        for (uint32_t mip = 1; mip < mipLevels; ++mip) {
+            struct Pc {
+                float    alpha;
+                uint32_t numSamples;
+                uint32_t _pad0;
+                uint32_t _pad1;
+            } pc{};
+            const float r = static_cast<float>(mip) / static_cast<float>(mipLevels - 1);
+            pc.alpha      = r * r;// GGX α = roughness²
+            pc.numSamples = numSamples;
+            vkCmdPushConstants(cb, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 1, &sets[mip - 1],
+                                    0, nullptr);
+            const uint32_t mipW = std::max(1u, w >> mip);
+            const uint32_t mipH = std::max(1u, h >> mip);
+            vkCmdDispatch(cb, (mipW + 7u) / 8u, (mipH + 7u) / 8u, 1u);
+            // No barrier between dispatches: each writes a different mip
+            // and reads only mip 0, no hazard.
+        }
     }
 
 }// namespace threepp::vulkan

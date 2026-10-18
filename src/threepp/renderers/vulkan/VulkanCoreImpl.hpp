@@ -16,6 +16,7 @@
 #include "VulkanSceneTypes.hpp"
 #include "VulkanViewContext.hpp"
 #include "EnvPrefilter.hpp"
+#include "SkyBake.hpp"
 #include "SceneEnvKnobs.hpp"
 #include "EventCameraDetector.hpp"
 #include "LidarScanner.hpp"
@@ -88,6 +89,7 @@
 #include "threepp/objects/ParticleSystem.hpp"
 #include "threepp/objects/Skeleton.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
+#include "threepp/objects/Sky.hpp"
 #include "threepp/objects/SplatCloud.hpp"
 #include "threepp/objects/Sprite.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
@@ -705,6 +707,28 @@ namespace threepp {
         bool envIsDefault  = true;
         bool envIsBgColor  = false;
         Color envBgColor{0.f, 0.f, 0.f};
+        // threepp::Sky (vulkan/SkyBake): the visible Sky the last full scene
+        // expansion met, if any (its box builds no entry), and whether envImage
+        // is a NON-OWNING copy of the bake's persistent image — dropEnvImage
+        // knows. refreshEnvTextureFromScene reads the Sky's uniforms every
+        // frame; a change marks a re-bake, recorded in place at the top of the
+        // frame's command buffer, with none of what a new env costs.
+        Sky* skySeen_ = nullptr;
+        bool envIsSky = false;
+        PreethamSkyParams skyBaked_{};
+        bool skyBakedValid_  = false;
+        bool skyBakePending_ = false;
+        std::unique_ptr<vulkan::SkyBake> skyBake_;
+        // Let go of envImage: retired when this Impl owns it, forgotten when it
+        // is the sky bake's, which keeps its image for the renderer's life.
+        void dropEnvImage() {
+            if (envIsSky) {
+                envImage = {};
+                envIsSky = false;
+            } else {
+                retire(std::move(envImage));
+            }
+        }
         // HDRI sun extracted at PMREM build (deferred only — see
         // envSunExtractionWanted). found=false when no sun / extraction off.
         // updateLightsUbo re-injects it as an analytic directional light.

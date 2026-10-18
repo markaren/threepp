@@ -2796,6 +2796,7 @@ namespace threepp {
         if (wasOff != isOff) {
             pimpl_->envTextureIdUploaded = 0xFFFFFFFFu;
             pimpl_->envSun_ = {};
+            pimpl_->skyBakedValid_ = false;// a Sky's mips are re-baked with/without its disc
         }
     }
 

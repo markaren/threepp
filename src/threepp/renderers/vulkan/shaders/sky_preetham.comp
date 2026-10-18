@@ -1,0 +1,121 @@
+#version 460
+
+// threepp::Sky on the deferred renderer: the Preetham daylight model (three.js's
+// Sky; Simon Wallner, Martin Upitis) baked into mip 0 of the environment
+// equirect. The GL renderer shades the Sky's dome with the same maths per
+// pixel (Sky.cpp); here one dispatch writes the whole sphere, and the
+// prefilter chain (prefilter_env.comp) mips it like any HDRI. Same equirect
+// mapping as the prefilter's dirFromUV, so a texel here is the direction every
+// env lookup reads it at. The CPU twin, for the sun's energy and for tests, is
+// renderers/common/PreethamSky.cpp; keep the two in step.
+//
+// Dispatched by vulkan/SkyBake.cpp, once without the solar disc (the source the
+// glossy and diffuse mips integrate: a disc of 1e4 x the sky cannot be Monte
+// Carlo prefiltered, so its energy returns as the analytic sun of the one-sun
+// policy) and once with it (mip 0: the background, clear glass and true
+// mirrors show the disc).
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform writeonly image2D dstMip0;
+
+layout(push_constant) uniform Pc {
+    vec4 sunDir; // xyz: unit, toward the sun; w: sunPosition.y as given (sunfade reads it raw)
+    vec4 up;     // xyz: unit; w: turbidity
+    vec4 coeffs; // rayleigh, mieCoefficient, mieDirectionalG, withDisc (0 or 1)
+} pc;
+
+const float PI     = 3.14159265358979;
+const float TWO_PI = 6.28318530717958;
+
+// Sky.cpp's constants, verbatim.
+const float e = 2.71828182845904523536028747135266249775724709369995957;
+const vec3 totalRayleigh = vec3(5.804542996261093E-6, 1.3562911419845635E-5, 3.0265902468824876E-5);
+const vec3 MieConst = vec3(1.8399918514433978E14, 2.7798023919660528E14, 4.0790479543861094E14);
+const float cutoffAngle = 1.6110731556870734;// pi / 1.95
+const float steepness = 1.5;
+const float EE = 1000.0;
+const float rayleighZenithLength = 8.4E3;
+const float mieZenithLength = 1.25E3;
+const float sunAngularDiameterCos = 0.999956676946448443553574619906976478926848692873900859324;
+const float THREE_OVER_SIXTEENPI = 0.05968310365946075;
+const float ONE_OVER_FOURPI = 0.07957747154594767;
+
+vec3 dirFromUV(vec2 uv) {
+    const float phi   = (uv.x - 0.5) * TWO_PI;
+    const float theta = (uv.y - 0.5) * PI;
+    const float cosT  = cos(theta);
+    return vec3(cosT * cos(phi), sin(theta), cosT * sin(phi));
+}
+
+float sunIntensity(float zenithAngleCos) {
+    zenithAngleCos = clamp(zenithAngleCos, -1.0, 1.0);
+    return EE * max(0.0, 1.0 - pow(e, -((cutoffAngle - acos(zenithAngleCos)) / steepness)));
+}
+
+vec3 totalMie(float T) {
+    float c = (0.2 * T) * 10E-18;
+    return 0.434 * c * MieConst;
+}
+
+float rayleighPhase(float cosTheta) {
+    return THREE_OVER_SIXTEENPI * (1.0 + pow(cosTheta, 2.0));
+}
+
+float hgPhase(float cosTheta, float g) {
+    float g2 = pow(g, 2.0);
+    float inverse = 1.0 / pow(1.0 - 2.0 * g * cosTheta + g2, 1.5);
+    return ONE_OVER_FOURPI * ((1.0 - g2) * inverse);
+}
+
+void main() {
+    const ivec2 p    = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 size = imageSize(dstMip0);
+    if (p.x >= size.x || p.y >= size.y) return;
+
+    const vec3  sunDirection = pc.sunDir.xyz;
+    const vec3  up = pc.up.xyz;
+    const float turbidity = pc.up.w;
+    const float rayleigh = pc.coeffs.x;
+    const float mieCoefficient = pc.coeffs.y;
+    const float mieDirectionalG = pc.coeffs.z;
+    const bool  withDisc = pc.coeffs.w > 0.5;
+
+    // The GL vertex stage: per-sun constants.
+    const float sunE = sunIntensity(dot(sunDirection, up));
+    const float sunfade = 1.0 - clamp(1.0 - exp((pc.sunDir.w / 450000.0)), 0.0, 1.0);
+    const float rayleighCoefficient = rayleigh - (1.0 * (1.0 - sunfade));
+    const vec3  betaR = totalRayleigh * rayleighCoefficient;
+    const vec3  betaM = totalMie(turbidity) * mieCoefficient;
+
+    // The GL fragment stage, along this texel's direction.
+    const vec3 direction = dirFromUV((vec2(p) + 0.5) / vec2(size));
+
+    const float zenithAngle = acos(max(0.0, dot(up, direction)));
+    const float inverse = 1.0 / (cos(zenithAngle) + 0.15 * pow(93.885 - ((zenithAngle * 180.0) / PI), -1.253));
+    const float sR = rayleighZenithLength * inverse;
+    const float sM = mieZenithLength * inverse;
+
+    const vec3 Fex = exp(-(betaR * sR + betaM * sM));
+
+    const float cosTheta = dot(direction, sunDirection);
+
+    const float rPhase = rayleighPhase(cosTheta * 0.5 + 0.5);
+    const vec3  betaRTheta = betaR * rPhase;
+
+    const float mPhase = hgPhase(cosTheta, mieDirectionalG);
+    const vec3  betaMTheta = betaM * mPhase;
+
+    vec3 Lin = pow(sunE * ((betaRTheta + betaMTheta) / (betaR + betaM)) * (1.0 - Fex), vec3(1.5));
+    Lin *= mix(vec3(1.0), pow(sunE * ((betaRTheta + betaMTheta) / (betaR + betaM)) * Fex, vec3(1.0 / 2.0)),
+               clamp(pow(1.0 - dot(up, sunDirection), 5.0), 0.0, 1.0));
+
+    vec3 L0 = vec3(0.1) * Fex;
+    const float sundisk = withDisc ? smoothstep(sunAngularDiameterCos, sunAngularDiameterCos + 0.00002, cosTheta) : 0.0;
+    L0 += (sunE * 19000.0 * Fex) * sundisk;
+
+    const vec3 texColor = (Lin + L0) * 0.04 + vec3(0.0, 0.0003, 0.00075);
+    const vec3 retColor = pow(texColor, vec3(1.0 / (1.2 + (1.2 * sunfade))));
+
+    imageStore(dstMip0, p, vec4(retColor, 1.0));
+}

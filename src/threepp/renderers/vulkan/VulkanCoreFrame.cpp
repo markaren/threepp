@@ -1045,6 +1045,17 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 THREEPP_CPUPROF("frame.3a_cbBegin");
                 vkResetCommandBuffer(cmdBuffers[currentFrame], 0);
                 beginCommandRecording(cmdBuffers[currentFrame]);
+                // The Sky's bake, when refreshEnvTextureFromScene marked one:
+                // mip 0 and the prefiltered mips of the env image, rewritten
+                // in place ahead of every pass of this frame that samples it
+                // (the secondaries ride the same submission). Under the
+                // async-compute pilot the compute buffer's readers are
+                // ordered behind this by the pilot's own queue sync.
+                if (envIsSky && skyBakePending_) {
+                    THREEPP_CPUPROF("frame.3b_skyBake");
+                    skyBake_->record(cmdBuffers[currentFrame], skyBaked_, envSunExtractionWanted());
+                    skyBakePending_ = false;
+                }
                 // The async-compute pilot takes full frames only: the hybrid
                 // debug view and events-only frames build no shade to overlap.
                 const bool gbufOnlyFrame = rasterGbufPipeline != VK_NULL_HANDLE &&

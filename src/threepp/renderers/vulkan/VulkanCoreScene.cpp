@@ -686,6 +686,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // can't reach a frame where this list is stale.
             std::vector<std::pair<ParticleField*, uint32_t>> builtFields;
             sceneSnapshot_.clear();
+            // Re-found below if a visible Sky is still in the scene; a Sky
+            // added, removed or toggled is a structural change, so the
+            // snapshot fast path never serves a frame where this is stale.
+            skySeen_ = nullptr;
             // Rebuilt below as the walk visits each threepp::LOD node — a
             // mesh entry whose parent chain hits one of these is exempt from
             // auto-LOD (see the selection pass just after this expansion).
@@ -849,6 +853,16 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // below anyway; saying so out loud is the difference between an
                 // invariant and a coincidence.
                 if (dynamic_cast<SplatCloud*>(m)) return;
+                // A threepp::Sky is the environment, not a mesh. Its dome is a
+                // 1000 m box carrying a ShaderMaterial no deferred path shades;
+                // as a mesh it sealed the scene in a dark room — the box's
+                // inside on every pixel, every sun and GI ray stopped by it.
+                // Noted for the env refresh (refreshEnvTextureFromScene bakes
+                // it, vulkan/SkyBake) and dropped here, as a SplatCloud is.
+                if (auto* sky = dynamic_cast<Sky*>(m)) {
+                    if (!hidden) skySeen_ = sky;// a resident hidden one gets this far
+                    return;
+                }
                 auto geom = m->geometry();
                 if (!geom || !geom->hasAttribute("position")) return;
                 if (!geom->hasAttribute("normal")) return;
