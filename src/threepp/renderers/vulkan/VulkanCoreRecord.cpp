@@ -849,6 +849,9 @@ void VulkanRenderer::Impl::recordOverlayDepthPrepass(VkCommandBuffer cb) {
                     // meshes; the alternative is a second particle pipeline
                     // for a depth-only pass, which no consumer has asked for.
                     if (en.isParticleField) continue;
+                    // A LOD crossfade's pair occludes overlays as one level,
+                    // the one the shadows see (lodFadeCasts).
+                    if (i < entryLodFade_.size() && !lodFadeCasts(entryLodFade_[i])) continue;
                     // Below the skips: the resolve is a pure lookup, so a
                     // culled entry has no reason to pay for it. It cannot
                     // stale the memo either — the answer depends only on

@@ -38,6 +38,24 @@ namespace threepp {
 
         void setMatrixAt(size_t index, const Matrix4& matrix) const;
 
+        // Per-instance LOD crossfade: Mesh::setFade for one instance. The first
+        // call creates instanceFade() (two floats per instance: the fade and
+        // the complement flag as 0 or 1) with every instance fully drawn; from
+        // then on it replaces the mesh-wide Mesh::setFade for all instances.
+        // Unlike setColorAt these mark the attribute for upload themselves.
+        void setFadeAt(size_t index, float fade, bool complement = false);
+
+        // Instances offset .. offset + n - 1 in one call. `complement` holds n
+        // flags, or is null for all plain.
+        void setFades(size_t offset, size_t n, const float* fades, const bool* complement = nullptr);
+
+        // 1 / false for an instance (or a mesh) that was never given a fade.
+        [[nodiscard]] float getFadeAt(size_t index) const;
+        [[nodiscard]] bool getFadeComplementAt(size_t index) const;
+
+        // Null until the first setFadeAt / setFades.
+        [[nodiscard]] FloatBufferAttribute* instanceFade() const;
+
         void computeBoundingBox();
 
         void computeBoundingSphere();
@@ -68,6 +86,9 @@ namespace threepp {
 
         std::unique_ptr<FloatBufferAttribute> instanceMatrix_;
         std::unique_ptr<FloatBufferAttribute> instanceColor_ = nullptr;
+        std::unique_ptr<FloatBufferAttribute> instanceFade_ = nullptr;
+
+        void ensureInstanceFade();
 
         Matrix4 _instanceLocalMatrix;
         Matrix4 _instanceWorldMatrix;

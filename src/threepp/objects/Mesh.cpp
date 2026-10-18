@@ -386,7 +386,17 @@ void Mesh::copy(const Object3D& source, bool recursive) {
 
         materials_ = m->materials_;
         geometry_ = m->geometry_;
+        fade_ = m->fade_;
+        fadeComplement_ = m->fadeComplement_;
     }
+}
+
+void Mesh::setFade(float fade, bool complement) {
+
+    // NaN reads as fully drawn: a mesh that silently vanished would be the
+    // harder bug to find.
+    fade_ = !(fade < 1.f) ? 1.f : (fade > 0.f ? fade : 0.f);
+    fadeComplement_ = complement;
 }
 
 const Sphere* Mesh::raycastBoundingSphere() {

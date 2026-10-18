@@ -275,6 +275,18 @@ namespace threepp::vulkan::impl {
         // diff records it when it patches the descs.
         const FloatBufferAttribute* instColorAttr = nullptr;
         unsigned int instColorVersion = ~0u;
+        // The LOD fade source last packed into entryLodFade_ for this span
+        // (refreshLodFades): InstancedMesh::instanceFade() pointer + version,
+        // and the mesh-wide Mesh::fade / fadeComplement. fadeAny: some entry
+        // of the span carries a fade word, so the TLAS fill must ask per entry.
+        // fadeKnown is false on a span fresh from an expansion, which a lean
+        // diff may still follow: its words are re-packed whatever the source.
+        bool fadeKnown = false;
+        const FloatBufferAttribute* fadeAttr = nullptr;
+        unsigned int fadeVersion = ~0u;
+        float meshFade = 1.f;
+        bool meshFadeComplement = false;
+        bool fadeAny = false;
         bool movedThisFrame = false;     // set by the lean refresh; consumed by
                                           // the diff, motion matrices and TLAS refit
         // True while the motionMat scratch holds non-identity blocks for this

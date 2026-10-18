@@ -3902,6 +3902,12 @@ class ImuSample:
 class InstancedMesh(Mesh):
     def __init__(self, geometry: BufferGeometry, material: typing.Any, count: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
+    def get_fade_at(self, index: typing.SupportsInt | typing.SupportsIndex) -> float:
+        """
+        The instance's fade (the mesh-wide one before any set_fade_at / set_fades).
+        """
+    def get_fade_complement_at(self, index: typing.SupportsInt | typing.SupportsIndex) -> bool:
+        ...
     def get_matrix_at(self, index: typing.SupportsInt | typing.SupportsIndex) -> Matrix4:
         ...
     def instance_color_needs_update(self) -> None:
@@ -3912,6 +3918,14 @@ class InstancedMesh(Mesh):
         ...
     def set_count(self, count: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
+    def set_fade_at(self, index: typing.SupportsInt | typing.SupportsIndex, fade: typing.SupportsFloat | typing.SupportsIndex, complement: bool = False) -> None:
+        """
+        Mesh.set_fade for one instance. The first call gives every instance its own fade (all fully drawn), which then replaces the mesh-wide set_fade. Marks the fades for upload.
+        """
+    def set_fades(self, fades: numpy.ndarray, offset: typing.SupportsInt | typing.SupportsIndex = 0, complement: typing.Any = False) -> None:
+        """
+        Fades for instances offset .. offset+N-1 in one call (Mesh.set_fade per instance). fades is a numpy array of shape (N,), values in [0, 1]; complement a bool for the whole run or a bool array of shape (N,). Marks the fades for upload. Raises ValueError on a bad shape or offset + N past the instance capacity.
+        """
     def set_matrices(self, matrices: numpy.ndarray, offset: typing.SupportsInt | typing.SupportsIndex = 0) -> None:
         """
         Write N instance matrices in one call: instances offset .. offset+N-1. matrices is a float32/float64 numpy array, shape (N, 16) in Matrix4.elements order (column-major, what get_matrix_at(i).elements() holds) or (N, 4, 4) conventional row-major M[row, col] (transposed on copy). Marks the instance matrix for re-upload, which set_matrix_at does not. Raises ValueError on a bad shape/dtype or offset + N past the instance capacity.
@@ -5134,6 +5148,10 @@ class Mesh(Object3D):
         ...
     def rotate_z(self, angle: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
+    def set_fade(self, fade: typing.SupportsFloat | typing.SupportsIndex, complement: bool = False) -> None:
+        """
+        Dithered LOD crossfade (Vulkan): draw this share of the mesh's pixels, 1 = all (the default), 0 = none, through a per-frame screen-space dither the temporal resolve blends. Crossfade two levels with fade f on the outgoing one and fade 1 - f, complement=True, on the incoming one: together they cover every pixel exactly once. Shadows and rays see one of the pair (the plain side while its fade >= 0.5). On an InstancedMesh this applies to every instance until set_fade_at / set_fades.
+        """
     def set_geometry(self, geometry: BufferGeometry) -> None:
         ...
     def set_material(self, material: typing.Any) -> None:
@@ -5157,6 +5175,16 @@ class Mesh(Object3D):
     @property
     def children(self) -> list[Object3D]:
         ...
+    @property
+    def fade(self) -> float:
+        """
+        The fade set_fade gave (1 = fully drawn).
+        """
+    @property
+    def fade_complement(self) -> bool:
+        """
+        Whether set_fade picked the complementary dither pattern.
+        """
     @property
     def geometry(self) -> BufferGeometry:
         ...

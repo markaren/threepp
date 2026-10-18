@@ -361,6 +361,8 @@ namespace threepp {
                 memoIdsValid = true;
             }
             flags |= (static_cast<uint32_t>(memoClassId) & 0xFFu) << 8;
+            // LOD crossfade word in the high half (vulkan_shared.h, kLodFade*).
+            if (i < entryLodFade_.size()) flags |= entryLodFade_[i];
             di.flags   = flags;
             di.indexed = indexed ? 1u : 0u;
             // STABLE per-object instance id -> outIds.y (survives visible-set

@@ -96,6 +96,9 @@ namespace threepp {
             h *= 1099511628211ull;
         };
         mix(static_cast<uint64_t>(lastVisibleEntries_.size()));
+        // A crossfade handing the shadow to its other level changes the
+        // static casters without moving anything.
+        mix(static_cast<uint64_t>(lodFadeCastEpoch_));
         shadowDynamicIdx_.clear();
         shadowSpanOfEntry_.assign(lastVisibleEntries_.size(), 0u);
         for (size_t s = 0; s < entrySpans_.size(); ++s) {
@@ -900,6 +903,8 @@ namespace threepp {
             const MeshEntry& en = entries[i];
             if (en.camAttached) return;
             if (en.sensorOnly && !(sensorOnlySurfaces_ && view().secondary && view().sensorSurfaces)) return;
+            // One side of a LOD crossfade casts, the same one the rays see.
+            if (i < entryLodFade_.size() && !lodFadeCasts(entryLodFade_[i])) return;
             if (i >= matDescsCached_.size()) return;
             // shadowOccludes' policy (deferred_shade_10): transmission and
             // blend never block, strong emitters never block.

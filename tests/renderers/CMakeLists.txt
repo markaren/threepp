@@ -305,6 +305,15 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanGrassMotion_test COMMAND VulkanGrassMotion_test)
     set_tests_properties(VulkanGrassMotion_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # A dithered LOD crossfade (Mesh::setFade, InstancedMesh::setFadeAt): a
+    # plain fade f and a complement fade 1 - f cover every pixel of two
+    # coincident quads exactly once, in shares f and 1 - f, with a pattern
+    # that moves every frame, and the temporal resolve settles on the blend.
+    add_executable(VulkanLodDither_test VulkanLodDither_test.cpp)
+    target_link_libraries(VulkanLodDither_test PRIVATE threepp)
+    add_test(NAME VulkanLodDither_test COMMAND VulkanLodDither_test)
+    set_tests_properties(VulkanLodDither_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # A mesh removed and freed between two frames: the calls that walk the last
     # frame's entries (setEmissiveCastsLight, setStableCorrespondence,
     # enableVertexInterop) never read it, and a freed skinned clone's GPU state

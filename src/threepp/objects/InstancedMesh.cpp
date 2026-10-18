@@ -102,6 +102,67 @@ void InstancedMesh::setMatrixAt(size_t index, const Matrix4& matrix) const {
     matrix.toArray(this->instanceMatrix_->array(), index * 16);
 }
 
+namespace {
+
+    // Same reading as Mesh::setFade: NaN is fully drawn.
+    float clampFade(float f) {
+
+        return !(f < 1.f) ? 1.f : (f > 0.f ? f : 0.f);
+    }
+
+}// namespace
+
+void InstancedMesh::ensureInstanceFade() {
+
+    if (instanceFade_) return;
+
+    std::vector<float> data(maxCount_ * 2, 0.f);
+    for (size_t i = 0; i < maxCount_; ++i) data[i * 2] = 1.f;
+    instanceFade_ = FloatBufferAttribute::create(std::move(data), 2);
+}
+
+void InstancedMesh::setFadeAt(size_t index, float fade, bool complement) {
+
+    checkInstanceIndex(index, maxCount_);
+    ensureInstanceFade();
+
+    auto& a = instanceFade_->array();
+    a[index * 2] = clampFade(fade);
+    a[index * 2 + 1] = complement ? 1.f : 0.f;
+    instanceFade_->needsUpdate();
+}
+
+void InstancedMesh::setFades(size_t offset, size_t n, const float* fades, const bool* complement) {
+
+    if (n == 0) return;
+    checkInstanceIndex(offset + n - 1, maxCount_);
+    ensureInstanceFade();
+
+    auto& a = instanceFade_->array();
+    for (size_t i = 0; i < n; ++i) {
+        a[(offset + i) * 2] = clampFade(fades[i]);
+        a[(offset + i) * 2 + 1] = (complement && complement[i]) ? 1.f : 0.f;
+    }
+    instanceFade_->needsUpdate();
+}
+
+float InstancedMesh::getFadeAt(size_t index) const {
+
+    checkInstanceIndex(index, maxCount_);
+    return instanceFade_ ? instanceFade_->array()[index * 2] : fade();
+}
+
+bool InstancedMesh::getFadeComplementAt(size_t index) const {
+
+    checkInstanceIndex(index, maxCount_);
+    return instanceFade_ ? instanceFade_->array()[index * 2 + 1] != 0.f : fadeComplement();
+}
+
+FloatBufferAttribute* InstancedMesh::instanceFade() const {
+
+    return instanceFade_.get();
+}
+
 void InstancedMesh::dispose() {
 
     // Every call, as in three.js and Texture::dispose; see Material::dispose.
@@ -162,6 +223,18 @@ void InstancedMesh::copy(const Object3D& source, bool recursive) {
             } else {
 
                 instanceColor_ = m->instanceColor_->clone();
+            }
+        }
+
+        if (m->instanceFade_) {
+
+            if (instanceFade_) {
+
+                instanceFade_->copy(*m->instanceFade_);
+                instanceFade_->needsUpdate();
+            } else {
+
+                instanceFade_ = m->instanceFade_->clone();
             }
         }
 

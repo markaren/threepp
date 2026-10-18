@@ -29,6 +29,22 @@ namespace threepp {
 
         void copy(const Object3D& source, bool recursive = true) override;
 
+        // Dithered LOD crossfade (Vulkan G-buffer; the GL renderer ignores it).
+        // `fade` in [0, 1] is the share of this mesh's pixels that are drawn:
+        // 1 (the default) all of them, 0 none. Which pixels comes from a
+        // screen-space hash that changes every frame, so the temporal resolve
+        // (TAA, DLSS, FSR) turns the pattern into a blend. Two levels of one
+        // object crossfade with no holes and no overlap when the outgoing one
+        // has fade f and the incoming one fade 1 - f with complement = true:
+        // the complement draws exactly the pixels the plain side leaves out.
+        // Shadows and rays see ONE of the pair, never both: the plain side
+        // while its fade is at least 0.5, the complement side while its fade
+        // is above 0.5. On an InstancedMesh this applies to every instance
+        // until InstancedMesh::setFadeAt gives them their own.
+        void setFade(float fade, bool complement = false);
+        [[nodiscard]] float fade() const { return fade_; }
+        [[nodiscard]] bool fadeComplement() const { return fadeComplement_; }
+
         static std::shared_ptr<Mesh> create(
                 std::shared_ptr<BufferGeometry> geometry = nullptr,
                 std::shared_ptr<Material> material = nullptr);
@@ -56,6 +72,10 @@ namespace threepp {
         virtual const Box3* raycastBoundingBox();
 
         std::shared_ptr<Object3D> createDefault() override;
+
+    private:
+        float fade_ = 1.f;
+        bool fadeComplement_ = false;
     };
 
 }// namespace threepp

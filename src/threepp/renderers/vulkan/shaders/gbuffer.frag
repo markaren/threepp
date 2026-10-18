@@ -112,15 +112,35 @@ layout(constant_id = 0) const uint DECAL_PASS = 0u;
 // jitter is ZEROED under gbuf-MSAA without an upscaler (rasterJitterOn), and
 // jitter-only seeding froze the dither bit-identical every frame there — a
 // permanent static screen-door instead of a converging blend.
-float alphaHash(vec2 fragXY, vec2 jitter, float frameSalt) {
+// `seed` separates the screen-doors that share this hash: the LOD crossfade
+// below uses its own, so a fading BLEND surface keeps alpha x fade coverage
+// instead of the two thresholds cutting the same pixels.
+uint screenDoorHash(vec2 fragXY, vec2 jitter, float frameSalt, uint seed) {
     uint h = uint(fragXY.x) * 1973u + uint(fragXY.y) * 9277u
            + floatBitsToUint(jitter.x) * 26699u
            + floatBitsToUint(jitter.y) * 53401u
-           + uint(frameSalt) * 15731u + 0x9e3779b9u;
+           + uint(frameSalt) * 15731u + seed;
     h ^= h >> 16; h *= 0x7feb352du;
     h ^= h >> 15; h *= 0x846ca68bu;
     h ^= h >> 16;
-    return float(h) / 4294967296.0;
+    return h;
+}
+
+float alphaHash(vec2 fragXY, vec2 jitter, float frameSalt) {
+    return float(screenDoorHash(fragXY, jitter, frameSalt, 0x9e3779b9u)) / 4294967296.0;
+}
+
+// Dithered LOD crossfade (vulkan_shared.h, kLodFade*): whether this pixel is
+// one of the share the entry draws this frame. Integer cut against the hash
+// scaled to [0, kLodFadeSteps): the two sides of a pair compare the SAME value
+// with the same cut, one keeping below it and one at or above it, so their
+// union is every pixel and their intersection none, whatever the fade.
+bool lodFadeKeeps(uint fadeBits) {
+    uint scaled, lowBits;
+    umulExtended(screenDoorHash(gl_FragCoord.xy, cam.jitter.xy, cam.prevJitter.w, 0x85ebca6bu),
+                 kLodFadeSteps, scaled, lowBits);
+    const uint cut = (fadeBits & kLodFadeCutMask) >> kLodFadeCutShift;
+    return (fadeBits & kLodFadeComplement) != 0u ? scaled >= cut : scaled < cut;
 }
 
 // ── Detail-layer stochastic tiling (Deliot & Heitz 2019) ─────────────────────
@@ -811,6 +831,9 @@ void main() {
             }
         }
     }
+    // LOD crossfade, after every derivative for the same reason as the alpha
+    // test. A mesh without a fade has a zero high half: one test, no hash.
+    if ((vFlags & kLodFadeActive) != 0u && !lodFadeKeeps(vFlags)) discard;
 
     // Remap [-1, 1] → [0, 1] so negative components are visible in the
     // BGRA8_UNORM debug blit (which clamps negatives to 0). deferred_shade.comp
@@ -844,7 +867,9 @@ void main() {
     // every ordinary mesh — see the vParticleId declaration). Every channel is
     // 32 bits, so none of these wrap: the 16-bit channels this attachment had
     // wrapped .x past 65,535 visible entries and read the wrong material.
-    outIds = uvec4(vInstanceIdx + 1u, vStableId, vFlags, vParticleId);
+    // The LOD fade in vFlags' high half is this pass's input, not a surface
+    // property: the readers of .z expect it zero.
+    outIds = uvec4(vInstanceIdx + 1u, vStableId, vFlags & 0xFFFFu, vParticleId);
 
     // log2 of the per-pixel UV-footprint diameter (texture-size-independent).
     // A consumer would turn this into a per-texture LOD via `bias + log2(textureSize.x)`.

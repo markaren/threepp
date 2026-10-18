@@ -7,6 +7,7 @@
 #include <pybind11/typing.h>
 
 #include <algorithm>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -133,7 +134,17 @@ namespace threepp_py {
                 .def_property_readonly("geometry", &Mesh::geometry)
                 .def_property_readonly("material", [](Mesh& self) { return PyMaterial(material_to_py(self.material())); })
                 .def("set_geometry", &Mesh::setGeometry, py::arg("geometry"))
-                .def("set_material", [](Mesh& self, const py::object& mat) { self.setMaterial(as_material(mat)); }, py::arg("material"));
+                .def("set_material", [](Mesh& self, const py::object& mat) { self.setMaterial(as_material(mat)); }, py::arg("material"))
+                .def("set_fade", &Mesh::setFade, py::arg("fade"), py::arg("complement") = false,
+                     "Dithered LOD crossfade (Vulkan): draw this share of the mesh's pixels, 1 = all (the "
+                     "default), 0 = none, through a per-frame screen-space dither the temporal resolve "
+                     "blends. Crossfade two levels with fade f on the outgoing one and fade 1 - f, "
+                     "complement=True, on the incoming one: together they cover every pixel exactly once. "
+                     "Shadows and rays see one of the pair (the plain side while its fade >= 0.5). On an "
+                     "InstancedMesh this applies to every instance until set_fade_at / set_fades.")
+                .def_property_readonly("fade", &Mesh::fade, "The fade set_fade gave (1 = fully drawn).")
+                .def_property_readonly("fade_complement", &Mesh::fadeComplement,
+                                       "Whether set_fade picked the complementary dither pattern.");
 
         // ---- Bone / Skeleton / SkinnedMesh -----------------------------------
         // Registering these lets pybind11's RTTI downcast hand back a glTF
@@ -271,7 +282,48 @@ namespace threepp_py {
                 .def("instance_matrix_needs_update", [](InstancedMesh& im) { im.instanceMatrix()->needsUpdate(); })
                 .def("instance_color_needs_update", [](InstancedMesh& im) {
                     if (auto* c = im.instanceColor()) c->needsUpdate();
-                });
+                })
+                .def("set_fade_at", &InstancedMesh::setFadeAt, py::arg("index"), py::arg("fade"),
+                     py::arg("complement") = false,
+                     "Mesh.set_fade for one instance. The first call gives every instance its own fade "
+                     "(all fully drawn), which then replaces the mesh-wide set_fade. Marks the fades for "
+                     "upload.")
+                .def("set_fades", [](InstancedMesh& im, const py::array& fades, size_t offset, const py::object& complement) {
+                    if (fades.dtype().kind() != 'f' && fades.dtype().kind() != 'i' && fades.dtype().kind() != 'u') {
+                        throw py::value_error("set_fades: fades must be a numeric array");
+                    }
+                    const auto f = py::array_t<float, py::array::c_style | py::array::forcecast>::ensure(fades);
+                    if (!f || f.ndim() != 1) throw py::value_error("set_fades: fades must have shape (N,)");
+                    const auto n = static_cast<size_t>(f.shape(0));
+                    if (offset + n > im.instanceMatrix()->array().size() / 16) {
+                        throw py::value_error("set_fades: offset + N = " + std::to_string(offset + n) +
+                                              " exceeds the instance capacity " +
+                                              std::to_string(im.instanceMatrix()->array().size() / 16));
+                    }
+                    if (py::isinstance<py::bool_>(complement)) {
+                        // One flag for the whole run: no per-instance array to build.
+                        if (complement.cast<bool>()) {
+                            const auto all = std::make_unique<bool[]>(n);
+                            std::fill_n(all.get(), n, true);
+                            im.setFades(offset, n, f.data(), all.get());
+                        } else {
+                            im.setFades(offset, n, f.data(), nullptr);
+                        }
+                        return;
+                    }
+                    const auto c = py::array_t<bool, py::array::c_style | py::array::forcecast>::ensure(complement);
+                    if (!c || c.ndim() != 1 || static_cast<size_t>(c.shape(0)) != n) {
+                        throw py::value_error("set_fades: complement must be a bool or a bool array of shape (N,)");
+                    }
+                    im.setFades(offset, n, f.data(), c.data());
+                }, py::arg("fades"), py::arg("offset") = 0, py::arg("complement") = false,
+                   "Fades for instances offset .. offset+N-1 in one call (Mesh.set_fade per instance). fades "
+                   "is a numpy array of shape (N,), values in [0, 1]; complement a bool for the whole run or "
+                   "a bool array of shape (N,). Marks the fades for upload. Raises ValueError on a bad "
+                   "shape or offset + N past the instance capacity.")
+                .def("get_fade_at", &InstancedMesh::getFadeAt, py::arg("index"),
+                     "The instance's fade (the mesh-wide one before any set_fade_at / set_fades).")
+                .def("get_fade_complement_at", &InstancedMesh::getFadeComplementAt, py::arg("index"));
 
         // ---- GrassMesh -------------------------------------------------------
         // Mesh subclass whose vertices are GPU wind-displaced by the Vulkan path

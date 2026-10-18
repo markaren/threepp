@@ -91,6 +91,22 @@
                                   // prev frame's draw list, so geoms[pid-1] reads the WRONG
                                   // entry after any topology renumber (tile streaming).
 
+// Dithered LOD crossfade (Mesh::setFade, InstancedMesh::setFadeAt), packed
+// host-side (VulkanRenderer::Impl::packLodFade) into the HIGH half of
+// DrawInfo.flags, which the kInstFlag* byte and the class byte leave zero.
+// gbuffer.frag reads it there and masks it off before the flags reach the IDs
+// attachment, so ids .z keeps bits 16..31 zero. A zero half means no fade.
+//   bit 31       the entry fades
+//   bit 30       complement: drawn where the pixel's hash is AT OR ABOVE the
+//                cut (plain: below it). A plain fade f and a complement fade
+//                1 - f get the same cut, so the pair covers each pixel once.
+//   bits 16..29  the cut, in kLodFadeSteps steps of the hash's range
+#define kLodFadeActive     0x80000000u
+#define kLodFadeComplement 0x40000000u
+#define kLodFadeCutShift   16u
+#define kLodFadeCutMask    0x3FFF0000u
+#define kLodFadeSteps      16383u// odd: a pair's cut is never exactly half, so one side casts
+
 // Packed vertex data — BlasRecord::packedMask. Static geometry narrows its
 // attribute and index buffers when its BLAS is built, and this word says
 // which. It reaches the shaders twice: as DrawInfo.packedAttrs (the raster's
@@ -130,6 +146,10 @@
 static_assert((kPackedNormal + kPackedUv + kPackedColor + kPackedIndex16) == kPackedAll &&
               (kPackedNormal | kPackedUv | kPackedColor | kPackedIndex16) == kPackedAll,
               "kPacked*: two names share a bit, or kPackedAll does not cover them.");
+static_assert(((kLodFadeActive | kLodFadeComplement | kLodFadeCutMask) & 0xFFFFu) == 0u &&
+              (kLodFadeCutMask >> kLodFadeCutShift) == kLodFadeSteps &&
+              (kLodFadeCutMask & (kLodFadeActive | kLodFadeComplement)) == 0u,
+              "kLodFade*: the fade must sit above the flag and class bytes, and the cut field hold kLodFadeSteps.");
 static_assert((kGeomFlagMoved + kGeomFlagPackedAll + kGeomFlagRtProxy + kGeomFlagGlowOnly) ==
               (kGeomFlagMoved | kGeomFlagPackedAll | kGeomFlagRtProxy | kGeomFlagGlowOnly),
               "GeometryDesc.flags: two kGeomFlag* names share a bit.");

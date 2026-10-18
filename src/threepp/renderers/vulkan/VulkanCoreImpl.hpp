@@ -3491,6 +3491,39 @@ namespace threepp {
         // plain meshes and for instanced meshes that never set a color.
         static void applyInstanceColor(MaterialDesc& md, const MeshEntry& en);
 
+        // Dithered LOD crossfade (Mesh::setFade, InstancedMesh::setFadeAt).
+        // One word per entry in the high-half layout of vulkan_shared.h
+        // (kLodFade*), 0 for no fade: buildIndirectDrawData ORs it into
+        // DrawInfo.flags, where gbuffer.frag dithers against it. The rest of
+        // the renderer (TLAS masks, shadow-map casters, overlay occluders)
+        // asks lodFadeCasts, so a crossfading pair is ONE level to them.
+        // Kept beside the entries rather than in the MaterialDescs: fades
+        // change every frame of a transition on scattered instances, and a
+        // 4-byte word beats re-flushing 624-byte descs range by range.
+        std::vector<uint32_t> entryLodFade_;
+        // Bumped whenever an entry's lodFadeCasts flips, so the cached static
+        // shadow cascades (shadowStaticHash) redraw with the other level.
+        uint32_t lodFadeCastEpoch_ = 0;
+        struct LodFadeChange {
+            bool words   = false;// some entry's word changed: DrawInfo is stale
+            bool casters = false;// some entry's lodFadeCasts flipped
+        };
+        // Polls every span's fade source (the instanceFade attribute's
+        // pointer + version, else the mesh-wide fade) and re-packs the entries
+        // of the spans that changed; `all` re-packs every span (structural
+        // rebuild). O(spans) on a frame where nothing changed.
+        LodFadeChange refreshLodFades(bool all);
+        static uint32_t packLodFade(float fade, bool complement);
+        // Whether shadows and rays see this entry. Exactly one side of a
+        // plain-f / complement-(1-f) pair: plain while its fade is at least
+        // 0.5, complement while above 0.5 (the odd step count makes the cut
+        // of a pair never sit exactly on the half).
+        static bool lodFadeCasts(uint32_t word) {
+            if (word == 0u) return true;
+            const uint32_t cut = (word & kLodFadeCutMask) >> kLodFadeCutShift;
+            return (word & kLodFadeComplement) ? 2u * cut < kLodFadeSteps : 2u * cut > kLodFadeSteps;
+        }
+
         static std::shared_ptr<Texture> emissiveTexOf(const Mesh& m) {
             auto mat = m.material();
             if (!mat) return nullptr;

@@ -2365,6 +2365,14 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         ++drawInputsVersion_;
                         cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
                     }
+                    // LOD fades: new words re-record the draws; a side of a
+                    // crossfade taking over the shadows changes ray masks,
+                    // which is a class change (a full TLAS build).
+                    {
+                        const LodFadeChange fc = refreshLodFades(false);
+                        if (fc.words) ++drawInputsVersion_;
+                        if (fc.casters) instClassChanged = true;
+                    }
                     if (!materialValuesSame) {
                         THREEPP_CPUPROF("scene.8_matDescPatch");
                         // Material-values-only update: rebuild MaterialDescs into
@@ -2664,7 +2672,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                     }
                                 }
                                 inst.instanceCustomIndex = static_cast<uint32_t>(i);
-                                inst.mask = spanMask;
+                                // The side of a LOD crossfade the shadows do not
+                                // take is hit by no ray (lodFadeCasts).
+                                inst.mask = (sp.fadeAny && !lodFadeCasts(entryLodFade_[i])) ? 0u : spanMask;
                                 inst.instanceShaderBindingTableRecordOffset = 0;
                                 inst.flags = (spanCutout && en.rayFarOpaque)
                                                      ? (spanFlags | VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR)
@@ -2977,6 +2987,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // the geomDescs loop below so a skipped/overlay entry keeps the 0
             // its dummy slot already means.
             entryStableIds_.assign(entries.size(), 0u);
+            // LOD fade words for the new entry order, before the instance loop
+            // below derives the ray masks from them.
+            refreshLodFades(true);
 
             // Material-asset dedup. Meshes sharing one Material C++ pointer
             // get the same matAssetIdx so the deferred shade's bilinear
@@ -3414,6 +3427,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 if (!instances.empty()) {
                     instances.back().mask =
                             en.hidden ? 0u// MeshEntry::hidden: no ray hits it
+                            : !lodFadeCasts(entryLodFade_[i]) ? 0u// the other side of a LOD crossfade
                             : en.sensorOnly
                                     // Sensors only, and only once opted in: mask 0
                                     // is hit by no ray at all.
@@ -3884,6 +3898,70 @@ void VulkanRenderer::Impl::applyInstanceColor(MaterialDesc& md, const MeshEntry&
             md.albedo[0] *= a[o];
             md.albedo[1] *= a[o + 1];
             md.albedo[2] *= a[o + 2];
+        }
+
+uint32_t VulkanRenderer::Impl::packLodFade(float fade, bool complement) {
+            // The complement side is cut at 1 - fade, so the plain f and the
+            // complement 1 - f of one crossfade land on the same cut and the
+            // shader's below / at-or-above split partitions the pixels.
+            if (!(fade < 1.f)) return 0u;// NaN too, as Mesh::setFade reads it
+            const float share = complement ? 1.f - fade : fade;
+            const float c = std::clamp(share, 0.f, 1.f);
+            const auto cut = static_cast<uint32_t>(std::lround(c * float(kLodFadeSteps)));
+            // Fully drawn reads as no fade at all: the shader's zero test.
+            if (complement ? cut == 0u : cut >= kLodFadeSteps) return 0u;
+            return kLodFadeActive | (complement ? kLodFadeComplement : 0u) | (cut << kLodFadeCutShift);
+        }
+
+VulkanRenderer::Impl::LodFadeChange VulkanRenderer::Impl::refreshLodFades(bool all) {
+            LodFadeChange out;
+            const auto& entries = lastVisibleEntries_;
+            // A structural rebuild renumbers the entries: start from "no fade"
+            // rather than compare against another entry's word.
+            if (all || entryLodFade_.size() != entries.size()) {
+                entryLodFade_.assign(entries.size(), 0u);
+                all = true;
+            }
+            for (auto& sp : entrySpans_) {
+                if (!sp.mesh || sp.count == 0u) continue;
+                const FloatBufferAttribute* attr = sp.inst ? sp.inst->instanceFade() : nullptr;
+                const unsigned int ver = attr ? attr->version : ~0u;
+                const float meshFade = sp.mesh->fade();
+                const bool meshComp = sp.mesh->fadeComplement();
+                if (!all && sp.fadeKnown && attr == sp.fadeAttr && ver == sp.fadeVersion &&
+                    meshFade == sp.meshFade && meshComp == sp.meshFadeComplement)
+                    continue;
+                sp.fadeKnown = true;
+                sp.fadeAttr = attr;
+                sp.fadeVersion = ver;
+                sp.meshFade = meshFade;
+                sp.meshFadeComplement = meshComp;
+                // Overlays, sprites and particle fields are not G-buffer meshes:
+                // no dither reaches them, so nothing may hide them from rays.
+                const MeshEntry& e0 = entries[sp.first];
+                const bool eligible = !(e0.isOverlay || e0.isParticle || e0.isParticleField);
+                const uint32_t meshWord = eligible ? packLodFade(meshFade, meshComp) : 0u;
+                const std::vector<float>* fa = (attr && eligible) ? &attr->array() : nullptr;
+                bool any = false;
+                for (uint32_t j = 0; j < sp.count; ++j) {
+                    const size_t i = size_t(sp.first) + j;
+                    uint32_t w = meshWord;
+                    if (fa) {
+                        const size_t o = size_t(entries[i].instanceIndex) * 2u;
+                        w = o + 2u <= fa->size() ? packLodFade((*fa)[o], (*fa)[o + 1] != 0.f) : 0u;
+                    }
+                    const uint32_t was = entryLodFade_[i];
+                    if (w != was) {
+                        out.words = true;
+                        if (lodFadeCasts(w) != lodFadeCasts(was)) out.casters = true;
+                        entryLodFade_[i] = w;
+                    }
+                    any = any || w != 0u;
+                }
+                sp.fadeAny = any;
+            }
+            if (out.casters) ++lodFadeCastEpoch_;
+            return out;
         }
 
 VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const Mesh& m) {
