@@ -9,6 +9,7 @@
 #include "threepp/threepp.hpp"
 
 #include <cstring>
+#include <iostream>
 
 using namespace threepp;
 

@@ -61,9 +61,6 @@ namespace threepp::terrain {
 
         // Cars.
         bool cars = true;
-        float lotBayPitch = 2.5f;  // along the lot's long axis
-        float lotRowPitch = 5.0f;  // across it (car length + a share of aisle)
-        float lotOccupancy = 0.55f;
         // Nobody parks a whole row solid. A run is broken every 4-8 cars by at
         // least one empty stall, and no row is ever more than 70% full.
         int lotRunMax = 8;

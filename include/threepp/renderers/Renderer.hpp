@@ -45,8 +45,6 @@ namespace threepp {
         std::vector<Plane> clippingPlanes;
         bool localClippingEnabled = false;
 
-        float gammaFactor = 2.0f;
-
         // Color space of the final output (post tone mapping). SRGBColorSpace
         // applies the linear→sRGB encode for display. LinearSRGBColorSpace
         // emits raw linear values (used by HDR / readback pipelines and the

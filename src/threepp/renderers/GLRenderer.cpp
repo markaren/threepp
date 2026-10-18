@@ -17,11 +17,11 @@
 #include "threepp/renderers/gl/GLObjects.hpp"
 #include "threepp/renderers/gl/GLPrograms.hpp"
 #include "threepp/renderers/gl/GLRenderLists.hpp"
-#include "threepp/renderers/gl/GLRenderStates.hpp"
 #include "threepp/renderers/gl/GLTextures.hpp"
 #include "threepp/renderers/gl/GLUtils.hpp"
 
 #include "threepp/renderers/common/EnvSunExtract.hpp"
+#include "threepp/renderers/common/RenderStates.hpp"
 #include "threepp/renderers/common/RendererCapabilities.hpp"
 #include "threepp/renderers/common/ShadowConfig.hpp"
 
@@ -90,7 +90,7 @@ struct GLRenderer::Impl {
     OnMaterialDispose onMaterialDispose;
 
     gl::GLRenderList* currentRenderList = nullptr;
-    gl::GLRenderState* currentRenderState = nullptr;
+    RenderState* currentRenderState = nullptr;
 
     // Screen-space sprite overlay queue. Collected during projectObject
     // when a Sprite has screenSpace=true; drained after the regular
@@ -103,7 +103,7 @@ struct GLRenderer::Impl {
     std::shared_ptr<OrthographicCamera> screenSpaceCam_;
 
     std::vector<gl::GLRenderList*> renderListStack;
-    std::vector<gl::GLRenderState*> renderStateStack;
+    std::vector<RenderState*> renderStateStack;
 
     int _currentActiveCubeFace = 0;
     int _currentActiveMipmapLevel = 0;
@@ -163,7 +163,7 @@ struct GLRenderer::Impl {
     gl::GLClipping clipping;
     gl::GLTextures textures;
     gl::GLMaterials materials;
-    gl::GLRenderStates renderStates;
+    RenderStates renderStates;
     gl::GLRenderLists renderLists;
     gl::GLObjects objects;
     gl::GLMorphTargets morphTargets;
@@ -763,8 +763,8 @@ struct GLRenderer::Impl {
     }
 
     void renderTransmissiveObjects(
-            const std::vector<gl::RenderItem*>& opaqueObjects,
-            const std::vector<gl::RenderItem*>& transmissiveObjects,
+            const std::vector<RenderItem*>& opaqueObjects,
+            const std::vector<RenderItem*>& transmissiveObjects,
             Object3D* scene, Camera* camera) {
 
         if (!_transmissionRenderTarget) {
@@ -850,7 +850,7 @@ struct GLRenderer::Impl {
         state.depthBuffer.setTest(true);
     }
 
-    void renderObjects(const std::vector<gl::RenderItem*>& renderList, Object3D* scene, Camera* camera) {
+    void renderObjects(const std::vector<RenderItem*>& renderList, Object3D* scene, Camera* camera) {
 
         Material* overrideMaterial = nullptr;
         if (auto _scene = scene->as<Scene>()) {
