@@ -52,6 +52,12 @@ vec3 odAcesFilmic(vec3 c) {
     return clamp(outMat * (a / b), 0.0, 1.0);
 }
 
+// Narkowicz ACES fit — close enough to the main pipeline's filmic curve for a
+// preview pane, and a single fma chain rather than the full RRT/ODT.
+vec3 odAcesNarkowicz(vec3 x) {
+    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
+
 vec3 odNeutral(vec3 color) {
     const float startCompression = 0.8 - 0.04;
     const float desaturation = 0.15;

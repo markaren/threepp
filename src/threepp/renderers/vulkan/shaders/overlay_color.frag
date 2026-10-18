@@ -1,4 +1,5 @@
 #version 460
+#extension GL_GOOGLE_include_directive : enable
 
 // Pair to overlay_color.vert. Modulates the material color (push constant)
 // by the per-vertex color, which is the three.js convention when
@@ -19,13 +20,8 @@ layout(push_constant) uniform Pc {
 
 layout(location = 0) out vec4 outColor;
 
-vec3 linearToSRGB(vec3 x) {
-    const vec3 cutoff = vec3(lessThan(x, vec3(0.0031308)));
-    const vec3 lower  = 12.92 * x;
-    const vec3 higher = 1.055 * pow(max(x, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
-    return mix(higher, lower, cutoff);
-}
+#include "overlay_display.glsl"
 
 void main() {
-    outColor = vec4(linearToSRGB(pc.color.rgb * vColor), pc.color.w);
+    outColor = vec4(odLinearToSRGB(pc.color.rgb * vColor), pc.color.w);
 }

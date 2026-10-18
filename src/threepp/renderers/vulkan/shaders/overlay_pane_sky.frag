@@ -1,4 +1,5 @@
 #version 460
+#extension GL_GOOGLE_include_directive : enable
 
 // Lit split-screen pane sky. Samples the SAME equirect the deferred primary
 // miss shows (Impl::envImage), along this pixel's view ray through the pane
@@ -28,16 +29,7 @@ layout(location = 0) out vec4 outColor;
 const float PI     = 3.14159265358979;
 const float TWO_PI = 6.28318530717959;
 
-vec3 linearToSRGB(vec3 x) {
-    const vec3 cutoff = vec3(lessThan(x, vec3(0.0031308)));
-    const vec3 lower  = 12.92 * x;
-    const vec3 higher = 1.055 * pow(max(x, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
-    return mix(higher, lower, cutoff);
-}
-
-vec3 acesFilm(vec3 x) {
-    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
-}
+#include "overlay_display.glsl"
 
 void main() {
     // Pane-relative GL-style NDC (y up). gl_FragCoord is top-left origin,
@@ -60,6 +52,6 @@ void main() {
 
     const float lod = pc.params.z * float(max(textureQueryLevels(envTex), 1) - 1);
     vec3 c = textureLod(envTex, vec2(u, v), lod).rgb * pc.params.y * pc.params.x;
-    c = acesFilm(c);
-    outColor = vec4(linearToSRGB(c), 1.0);
+    c = odAcesNarkowicz(c);
+    outColor = vec4(odLinearToSRGB(c), 1.0);
 }
