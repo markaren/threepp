@@ -233,6 +233,17 @@ namespace threepp::vulkan {
         }
     }
 
+    int DlssUpscaler::qualityFor(uint32_t renderWidth, uint32_t displayWidth) {
+        const float ratio = (renderWidth > 0 && displayWidth > 0)
+                                    ? static_cast<float>(renderWidth) / static_cast<float>(displayWidth)
+                                    : 1.f;
+        if (ratio >= 0.99f) return NVSDK_NGX_PerfQuality_Value_DLAA;
+        if (ratio >= 0.62f) return NVSDK_NGX_PerfQuality_Value_MaxQuality;
+        if (ratio >= 0.55f) return NVSDK_NGX_PerfQuality_Value_Balanced;
+        if (ratio >= 0.45f) return NVSDK_NGX_PerfQuality_Value_MaxPerf;
+        return NVSDK_NGX_PerfQuality_Value_UltraPerformance;
+    }
+
     bool DlssUpscaler::create(VkCommandBuffer initCb,
                               uint32_t displayWidth, uint32_t displayHeight,
                               uint32_t renderWidth, uint32_t renderHeight) {
@@ -240,19 +251,16 @@ namespace threepp::vulkan {
         if (displayWidth == 0 || displayHeight == 0) return false;
         if (!ensureNgx()) return false;
 
-        // Quality mode is a model-selection hint keyed to the CURRENT upscale
-        // ratio; the feature itself is created with maxRenderSize == display
-        // (dynamic render subrects), so later renderScale changes stay valid
-        // without recreation — only the hint goes stale, which is benign.
-        const float ratio = renderWidth > 0
-                                    ? static_cast<float>(renderWidth) / static_cast<float>(displayWidth)
-                                    : 1.f;
-        NVSDK_NGX_PerfQuality_Value quality = NVSDK_NGX_PerfQuality_Value_MaxQuality;
-        if (ratio >= 0.99f)      quality = NVSDK_NGX_PerfQuality_Value_DLAA;
-        else if (ratio >= 0.62f) quality = NVSDK_NGX_PerfQuality_Value_MaxQuality;
-        else if (ratio >= 0.55f) quality = NVSDK_NGX_PerfQuality_Value_Balanced;
-        else if (ratio >= 0.45f) quality = NVSDK_NGX_PerfQuality_Value_MaxPerf;
-        else                     quality = NVSDK_NGX_PerfQuality_Value_UltraPerformance;
+        // The quality preset is keyed to the CURRENT upscale ratio. The feature
+        // is created with maxRenderSize == display (dynamic render subrects),
+        // so a renderScale change inside the preset's range needs no
+        // recreation; one that selects another preset does, because NGX
+        // rejects a subrect the preset cannot take (0xBAD00005): DLAA takes
+        // the display size and nothing smaller, and a renderScale set after
+        // the feature was created at scale 1 used to fail every frame until
+        // the self-heal recreated it. The display-extent funnel compares
+        // quality() with qualityFor() and recreates across a preset change.
+        const auto quality = static_cast<NVSDK_NGX_PerfQuality_Value>(qualityFor(renderWidth, displayWidth));
 
         NVSDK_NGX_DLSS_Create_Params cp{};
         cp.Feature.InWidth            = displayWidth; // max render size (dynamic subrect)
@@ -279,6 +287,7 @@ namespace threepp::vulkan {
         }
         displayW_ = displayWidth;
         displayH_ = displayHeight;
+        quality_  = static_cast<int>(quality);
         evalFails_ = 0;// fresh feature — clear any sticky-failure state
         // Bias-mask scratch at the DISPLAY (== maxRenderSize) extent — the
         // compute writes only the render sub-region each frame.
@@ -295,6 +304,7 @@ namespace threepp::vulkan {
         }
         destroyReactiveImages();
         displayW_ = displayH_ = 0;
+        quality_ = -1;
     }
 
     void DlssUpscaler::recordDispatch(const DispatchInputs& in) {

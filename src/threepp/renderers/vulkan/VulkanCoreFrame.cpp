@@ -530,13 +530,19 @@ void VulkanRenderer::Impl::reallocateRenderExtentResources() {
             }
 #endif
 #if defined(THREEPP_WITH_DLSS)
-            // Same display-extent-only recreate rule as FSR: the DLSS feature is
-            // created with maxRenderSize == display, so renderScale changes are
-            // covered by the per-dispatch render subrect.
+            // FSR's display-extent rule, plus the quality preset: the DLSS
+            // feature is created with maxRenderSize == display, so a
+            // renderScale change inside its preset's range is covered by the
+            // per-dispatch render subrect, but one that selects another preset
+            // needs a new feature. The feature made at init is DLAA (scale 1),
+            // which takes no subrect smaller than the display, so a renderScale
+            // set after init failed to evaluate on every frame until the
+            // self-heal in renderFrame recreated it (spot_slam, 2026-10-18).
             if (dlss_) {
                 const VkExtent2D disp = ctx->swapchainExtent();
                 if (!dlssActive_ || dlss_->displayWidth() != disp.width ||
-                    dlss_->displayHeight() != disp.height) {
+                    dlss_->displayHeight() != disp.height ||
+                    dlss_->quality() != vulkan::DlssUpscaler::qualityFor(renderExtent().width, disp.width)) {
                     VkCommandBuffer initCb = beginOneShot();
                     dlssActive_ = dlss_->create(initCb, disp.width, disp.height,
                                                 renderExtent().width,
@@ -713,7 +719,12 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // read as "GPU back-pressure".
             {
                 THREEPP_CPUPROF("frame.0_fenceWait");
-                vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
+                // Checked: a lost device returns here at once, and recording
+                // on as if the fence had signaled reuses a command buffer and
+                // descriptors still pending, so the error surfaces frames
+                // later at whatever submit comes next (a lidar trace, say).
+                check(vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX),
+                      "vkWaitForFences(frame)");
             }
             // Fence signaled ⇒ frame (frameSerial_ - kFramesInFlight) is
             // GPU-complete (this slot's previous occupant). Reclaim every
@@ -1199,7 +1210,8 @@ bool VulkanRenderer::Impl::beginFrameOrthoOnly() {
             // paths into one number.
             {
                 THREEPP_CPUPROF("frame.0y_fenceWaitOrtho");
-                vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
+                check(vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX),
+                      "vkWaitForFences(frame, ortho)");
             }
             // Same retire reclaim as beginDeferredFrame (the ortho-only frame
             // path shares the fence ring). See VulkanRetireQueue.hpp.

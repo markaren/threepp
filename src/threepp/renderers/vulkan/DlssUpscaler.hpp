@@ -66,9 +66,10 @@ namespace threepp::vulkan {
         // (Re)create the DLSS feature for the given display (swapchain) extent.
         // Idempotent — releases any existing feature first. NGX itself is
         // initialised lazily on the first call (needs the live device).
-        // renderW/H hint the quality-mode selection (DLAA at scale 1, MaxQuality
-        // below); the feature itself is created with maxRenderSize == display so
-        // renderScale changes need no recreation, only display resizes do.
+        // renderW/H select the quality preset (qualityFor); the feature itself
+        // is created with maxRenderSize == display, so a renderScale change
+        // inside that preset's range needs no recreation, only a display resize
+        // or a change of preset does (see quality()).
         // Feature creation records initialisation GPU work into initCb — the
         // caller submits and waits it before the first recordDispatch. Returns
         // true on success; on failure the feature stays null (valid() == false)
@@ -80,6 +81,16 @@ namespace threepp::vulkan {
         [[nodiscard]] bool valid() const { return feature_ != nullptr; }
         [[nodiscard]] uint32_t displayWidth() const { return displayW_; }
         [[nodiscard]] uint32_t displayHeight() const { return displayH_; }
+
+        // The NGX quality preset a render/display ratio selects (DLAA at
+        // scale 1, then MaxQuality down to UltraPerformance), as the enum's
+        // integer, and the preset the live feature was created with. NGX
+        // evaluates a render subrect only inside the created preset's range —
+        // DLAA takes the display size and nothing smaller — so a renderScale
+        // whose preset differs from the feature's needs a recreate; the
+        // display-extent funnel compares the two. -1 until create() succeeds.
+        static int qualityFor(uint32_t renderWidth, uint32_t displayWidth);
+        [[nodiscard]] int quality() const { return quality_; }
 
         // All render-extent inputs unless noted. NGX binds by IMAGE VIEW (it
         // uses VK_NVX_image_view_handle), so views are required alongside the
@@ -170,6 +181,7 @@ namespace threepp::vulkan {
         NVSDK_NGX_Parameter* params_    = nullptr;// capability/eval parameter map
         NVSDK_NGX_Handle*    feature_   = nullptr;// the DLSS SR feature
         uint32_t displayW_ = 0, displayH_ = 0;
+        int      quality_  = -1;// the created feature's preset (see quality())
         uint32_t evalFails_ = 0;// consecutive evaluate failures (see failing())
 
         // Module directory (wide) kept alive for NGX's PathListInfo.
