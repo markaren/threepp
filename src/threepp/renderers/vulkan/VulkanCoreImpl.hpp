@@ -3000,6 +3000,19 @@ namespace threepp {
 
         void beginOneShotBatch() { oneShotBatch_ = true; }
         void flushOneShotBatch();
+        // The batch submitted WITHOUT a host wait, for work the frame about
+        // to be recorded consumes (the slot path's BLAS builds and texture
+        // uploads): the frame's command buffer is submitted after it on the
+        // same queue, and the render graph's entry barrier (ALL_COMMANDS,
+        // every prior submission in its first scope) orders and publishes it.
+        // Its transients go to the frame-serial retire queue, its command
+        // buffer to asyncOneShots_ until its fence signals. No compaction: the
+        // size queries would need the wait this exists to avoid.
+        void flushOneShotBatchAsync();
+        // Free the command buffers and fences of async batches that finished
+        // (all of them when the device is known idle).
+        void reapAsyncOneShots(bool deviceIdle);
+        std::vector<std::pair<VkCommandBuffer, VkFence>> asyncOneShots_;
 
         // ── Static BLAS compaction ───────────────────────────────────────────
         // A static record (built once, traced for its lifetime) is built

@@ -555,6 +555,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             for (auto* st : pendingSkinnedRebuilds_) st->prevBoneMats.clear();
             pendingSkinnedRebuilds_.clear();
             pendingTetRebuilds_.clear();// re-queued every frame
+            // The slot path's async batches that have finished.
+            if (!asyncOneShots_.empty()) reapAsyncOneShots(/*deviceIdle=*/false);
             pendingDisplacedDeforms_.clear();// dirty every frame
             pendingGrassDeforms_.clear();
             // force=false (matching GLRenderer): with
@@ -2800,6 +2802,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // holding (e.g. material textures retired earlier this frame)
                 // rather than carry it across the rebuild. Safe: fully drained.
                 flushRetireQueue();
+                reapAsyncOneShots(/*deviceIdle=*/true);
                 if (tlas) {
                     ctx->rt().destroyAccelerationStructure(ctx->device(), tlas, nullptr);
                     tlas = VK_NULL_HANDLE;

@@ -19,8 +19,8 @@
 //   add cached cell    a detached cell re-attached (coming back to it)
 //   add new cell       a cell built now from the shared assets and attached
 //   add new geometry   a cell whose meshes carry geometries never seen
-//                      (a BLAS admission: a slot edit, but its frame builds
-//                      the BLASes, so its frame time is not asserted)
+//                      (a BLAS admission: a slot edit whose BLAS builds are
+//                      submitted ahead of the frame, never waited for)
 //   instanced grow     InstancedMesh::setCount up by kInstStep
 //   instanced shrink   InstancedMesh::setCount down by kInstStep
 //   first show         a mesh hidden since before its first render is shown
@@ -112,8 +112,9 @@ namespace {
     // Structural rebuilds one event of the kind costs. The baseline before the
     // slots (081b3ead, 2026-10-19): one for every kind.
     constexpr int kExpect[kKinds] = {0, 0, 0, 0, 0, 0, 0};
-    // Whether the event frame's time is asserted (new geometry builds BLASes).
-    constexpr bool kFrameAsserted[kKinds] = {true, true, true, false, true, true, true};
+    // Whether the event frame's time is asserted: every kind, now that new
+    // geometry's BLAS builds are submitted without a host wait.
+    constexpr bool kFrameAsserted[kKinds] = {true, true, true, true, true, true, true};
 
     std::shared_ptr<Texture> constantEnv(float le) {
         constexpr int W = 64, H = 32;

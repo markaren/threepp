@@ -282,6 +282,7 @@ VulkanRenderer::Impl::~Impl() {
             // now or they leak at device destroy (VUID-vkDestroyDevice-device-
             // 05137 — the class of bug that bit lineGeomCache_ below).
             flushRetireQueue();
+            reapAsyncOneShots(/*deviceIdle=*/true);
             et.mark("retire queue");
 
             // Secondary views that were never removeView()'d. Their resources

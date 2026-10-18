@@ -500,7 +500,10 @@ def test_resident_mesh_first_show_is_no_structural_rebuild(vk_renderer):
     # Stable entry slots: a mesh without the hint is shown by a slot edit too.
     assert structural_after() == s0, "a mesh without the hint: its first show rebuilt the scene"
     stats = vk_renderer.tlas_stats
-    assert set(stats) == {"full_rebuilds", "updates", "instances", "structural_rebuilds"}
+    assert set(stats) == {"full_rebuilds", "updates", "instances", "structural_rebuilds", "slot_edits",
+                          "history_resets"}
+    assert stats["slot_edits"] >= 1, "the first shows were slot edits"
+    assert stats["history_resets"] >= 1, "the first build wiped the histories once"
 
 
 _OCEAN_PROBES = [(0.0, 0.0), (13.5, -7.25), (-41.0, 30.5)]

@@ -1890,13 +1890,18 @@ namespace threepp_py {
                                            d["updates"]             = s.updates;
                                            d["instances"]           = s.instances;
                                            d["structural_rebuilds"] = s.structuralRebuilds;
+                                           d["slot_edits"]          = s.slotEdits;
+                                           d["history_resets"]      = s.historyResets;
                                            return d;
                                        },
                                        "Scene build counters since the renderer was made: TLAS full builds and "
-                                       "refits, the instance count of the latest one, and structural_rebuilds "
-                                       "(the entry list re-derived: an object added or removed, a texture "
-                                       "swapped, a mesh shown for the first time unless it is resident; a hide "
-                                       "or a re-show is none).")
+                                       "refits, the instance count of the latest one; structural_rebuilds (the "
+                                       "entry list re-derived behind a device drain: a texture or geometry "
+                                       "swapped on a mesh, a deformer added or removed, the entry pool "
+                                       "outgrown), slot_edits (meshes added or removed, an InstancedMesh count "
+                                       "changed, a first show: written into the entry slots in place, no "
+                                       "drain) and history_resets (temporal histories wiped: a new environment, "
+                                       "a resize, reset_temporal_history; never an object added or removed).")
                 .def_property("deferred_ao",
                               [](PyVulkanRenderer& r) { return r.native().deferredAO(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setDeferredAO(v); },

@@ -219,6 +219,44 @@ void VulkanRenderer::Impl::flushOneShotBatch() {
             }
         }
 
+void VulkanRenderer::Impl::flushOneShotBatchAsync() {
+            oneShotBatch_ = false;
+            // No compaction (it needs the queried sizes on the host): these
+            // records keep their build size.
+            blasCompactPending_.clear();
+            // Stamped with the serial of the frame about to be recorded, which
+            // is submitted after this batch: freed once that frame retired.
+            for (auto& b : oneShotBatchGarbage_) retire(std::move(b));
+            oneShotBatchGarbage_.clear();
+            if (oneShotBatchCb_ == VK_NULL_HANDLE) return;
+            VkCommandBuffer cb = oneShotBatchCb_;
+            oneShotBatchCb_ = VK_NULL_HANDLE;
+            check(vkEndCommandBuffer(cb), "end async one-shot batch cb");
+            VkFenceCreateInfo fi{};
+            fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            VkFence fence = VK_NULL_HANDLE;
+            check(vkCreateFence(ctx->device(), &fi, nullptr, &fence), "create async one-shot fence");
+            VkSubmitInfo si{};
+            si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            si.commandBufferCount = 1;
+            si.pCommandBuffers = &cb;
+            check(vkQueueSubmit(ctx->graphicsQueue(), 1, &si, fence), "submit async one-shot batch");
+            asyncOneShots_.emplace_back(cb, fence);
+        }
+
+void VulkanRenderer::Impl::reapAsyncOneShots(bool deviceIdle) {
+            for (size_t i = 0; i < asyncOneShots_.size();) {
+                const auto [cb, fence] = asyncOneShots_[i];
+                if (!deviceIdle && vkGetFenceStatus(ctx->device(), fence) != VK_SUCCESS) {
+                    ++i;
+                    continue;
+                }
+                vkFreeCommandBuffers(ctx->device(), cmdPool, 1, &cb);
+                vkDestroyFence(ctx->device(), fence, nullptr);
+                asyncOneShots_.erase(asyncOneShots_.begin() + static_cast<std::ptrdiff_t>(i));
+            }
+        }
+
 void VulkanRenderer::Impl::createReservoirImages() {
             // Render extent, not swapchain extent — the per-pixel ReSTIR DI
             // reservoir images are sized to the resolution the deferred shade

@@ -11679,7 +11679,7 @@ class VulkanRenderer:
     @property
     def tlas_stats(self) -> dict:
         """
-        Scene build counters since the renderer was made: TLAS full builds and refits, the instance count of the latest one, and structural_rebuilds (the entry list re-derived: an object added or removed, a texture swapped, a mesh shown for the first time unless it is resident; a hide or a re-show is none).
+        Scene build counters since the renderer was made: TLAS full builds and refits, the instance count of the latest one; structural_rebuilds (the entry list re-derived behind a device drain: a texture or geometry swapped on a mesh, a deformer added or removed, the entry pool outgrown), slot_edits (meshes added or removed, an InstancedMesh count changed, a first show: written into the entry slots in place, no drain) and history_resets (temporal histories wiped: a new environment, a resize, reset_temporal_history; never an object added or removed).
         """
     @property
     def tone_mapping_exposure(self) -> float:

@@ -466,12 +466,16 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                 r.stableId = stableIdIfAssigned(m);
                 meshRows.emplace(&m, std::move(r));
             }
-            flushOneShotBatch();
-            {
-                // Records compacted by that flush were in no TLAS yet: free the
-                // pairs they replaced (no instance array to remap).
+            // No host wait: the frame recorded next is submitted after this
+            // batch on the same queue, and its graph's entry barrier orders it.
+            // Under the async-compute pilot the TLAS builds on another queue,
+            // outside that order: there the batch is waited for, as before.
+            if (asyncPilot_) {
+                flushOneShotBatch();
                 std::vector<VkAccelerationStructureInstanceKHR> none;
-                applyBlasCompactionRemap(none);
+                applyBlasCompactionRemap(none);// compacted records were in no TLAS yet
+            } else {
+                flushOneShotBatchAsync();
             }
             const bool texturesAdded = materialTextures.size() != texCount0 || freeTextureSlots.size() != texFree0;
             for (auto& [mesh, r] : meshRows) {
