@@ -38,7 +38,7 @@ _dll = os.environ.get("THREEPP_DLL_DIR",
 if os.path.isdir(_dll):
     os.add_dll_directory(_dll)
 
-from spot_deploy import HIP_X, HIP_Y, HY_Y, KN, FOOT, MASS, LEGS, SIGN   # noqa: E402
+from spot_deploy import HY_Y, KN, FOOT, MASS, LEGS, SIGN   # noqa: E402
 
 HALF_PI = math.pi / 2
 # The upper leg runs from the hy joint to the knee: mostly -z, tipped slightly +x.
@@ -177,7 +177,7 @@ def main():
     total = MASS["base"] + 4 * (MASS["hip"] + MASS["uleg"] + MASS["lleg"])
     print(f"[urdf] {args.out}")
     print(f"  {len(touched)} links given <inertial> + <collision>   total mass {total:.1f} kg")
-    print(f"  collisions: spec-conforming Z-aligned cylinders")
+    print("  collisions: spec-conforming Z-aligned cylinders")
     print(f"  uleg pitch {ULEG_PITCH:+.6f} rad  (knee offset {tuple(KN)})")
     return 0
 

@@ -424,12 +424,12 @@ def main():
     ppo.save(latest)
     csv_file.close()
 
-    print(f"\nTraining complete.")
+    print("\nTraining complete.")
     print(f"  Best checkpoint (gate: fell<={args.fell_max}, drift<={args.drift_max}): {args.out}")
     print(f"  Latest checkpoint: {latest}")
     print(f"  CSV log: {csv_path}")
     print(f"  Best track: {best_track[0]:.4f}")
-    print(f"\nNext step:")
+    print("\nNext step:")
     print(f"  python {os.path.basename(__file__)} --eval {args.out}")
     print(f"  python {os.path.basename(__file__)} --score {args.out}")
 

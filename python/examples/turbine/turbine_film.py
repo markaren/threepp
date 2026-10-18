@@ -160,7 +160,7 @@ def label_rgba(key):
 
 def inset_rgba(x, y, w, h, label):
     """A thin frame round the inset and its name tag (design pixels)."""
-    from PIL import Image, ImageDraw
+    from PIL import ImageDraw
     im = _canvas()
     d = ImageDraw.Draw(im)
     d.rectangle([x - 2, y - 2, x + w + 1, y + h + 1], outline=(236, 238, 236, 235), width=2)
@@ -172,7 +172,7 @@ def inset_rgba(x, y, w, h, label):
 
 
 def endcard_rgba(lines):
-    from PIL import Image, ImageDraw
+    from PIL import ImageDraw
     im = _canvas()
     d = ImageDraw.Draw(im)
     fb, fr = _font("bold", 42), _font("regular", 42)

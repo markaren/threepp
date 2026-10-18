@@ -31,10 +31,9 @@ import threepp as tp
 from threepp.rl import load_policy
 from threepp.utils import fetch_file
 from spot_deploy import (build_spot, fetch_assets,
-                         _quat_to_R, _quat_from_R,
-                         default_q, isaac_to_add, add_to_isaac, ACTION_SCALE, Z0, LIM, MASS)
+                         _quat_to_R, default_q, add_to_isaac, ACTION_SCALE, Z0, LIM, MASS)
 from spot_depth_scan import ForwardDepthScanner
-from spot_terrain_env import VX_HI, VY_HI, WZ_HI
+from spot_terrain_env import VX_HI
 from scratch_env import STIFF_GAINS
 from scratch_clock import GAIT_PERIOD
 from _common import v2_obs

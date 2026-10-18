@@ -40,8 +40,8 @@ import threepp as tp
 from spot_feet import cpu_foot_tips
 from threepp.rl import load_policy
 from spot_deploy import (build_spot, fetch_assets, grid_texture, _quat_to_R,
-                         default_q, add_to_isaac, isaac_to_add, ACTION_SCALE, Z0)
-from spot_terrain_env import HALF_W, VX_HI, VY_HI, WZ_HI
+                         default_q, add_to_isaac, ACTION_SCALE, Z0)
+from spot_terrain_env import VX_HI, VY_HI, WZ_HI
 from spot_steps_env import (RISERS, N_LEVELS, N_UP, STEP_RUN, FLAT_APPROACH, LAND, BAND_LEN,
                             SPAWN_OFF, STRIP_LEN, HALF_W_BOX, HALF_W_STEPS, STIFF_GAINS)
 from scratch_clock import GAIT_PERIOD

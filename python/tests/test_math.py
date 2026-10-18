@@ -1,7 +1,6 @@
 import math
 
 import numpy as np
-import pytest
 
 import threepp as tp
 

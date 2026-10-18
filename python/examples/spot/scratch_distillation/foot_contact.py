@@ -147,7 +147,7 @@ def contact_soft(tip_z):
 if __name__ == "__main__":
     import threepp as tp
     from threepp.rl import GpuSim
-    from spot_deploy import default_q, add_to_isaac, isaac_to_add
+    from spot_deploy import default_q, add_to_isaac
     from spot_terrain_env import SpotGpu, _flat_ground, SPAWN_Z
 
     if not tp.HAS_PHYSX or not torch.cuda.is_available():

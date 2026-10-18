@@ -17,7 +17,6 @@ Binary format:
 """
 import struct
 import sys
-import numpy as np
 
 try:
     from ultralytics import YOLO
@@ -56,7 +55,7 @@ with open(output_path, "wb") as f:
         f.write(raw)
 
 print(f"Done.  File size: {__import__('os').path.getsize(output_path) / 1e6:.1f} MB")
-print(f"\nTensor summary (first 10):")
+print("\nTensor summary (first 10):")
 for i, (name, tensor) in enumerate(list(tensors.items())[:10]):
     print(f"  {name:50s}  {list(tensor.shape)}")
 if len(tensors) > 10:

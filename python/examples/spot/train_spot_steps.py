@@ -30,7 +30,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "spot"))
 sys.path.insert(0, os.path.join(_HERE, "scratch_distillation"))
 
 import threepp as tp
-from spot_terrain_env import quat_rotate_inverse
 from spot_steps_env import (ACT_DIM, CONFIG, HIDDEN, N_LEVELS, OBS_DIM, RISERS, W_IMIT, W_STAND, SPAWN_HOLD,
                             PLACE_SAT, PLACE_PERCH, SpotStepsEnv)
 import spot_course as sc

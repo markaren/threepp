@@ -98,7 +98,7 @@ if __name__ == "__main__":
     err_obs = (mirror_obs(mirror_obs(x_obs)) - x_obs).abs().max().item()
     a_rand  = torch.randn(B, 12, device=device)
     err_act = (mirror_act(mirror_act(a_rand)) - a_rand).abs().max().item()
-    print(f"\n(a) Involution:")
+    print("\n(a) Involution:")
     print(f"    mirror_obs(mirror_obs(x)) max err = {err_obs:.2e}  (expect < 1e-5)")
     print(f"    mirror_act(mirror_act(a)) max err = {err_act:.2e}  (expect < 1e-5)")
     assert err_obs < 1e-5, f"mirror_obs not an involution: err={err_obs}"
@@ -106,7 +106,7 @@ if __name__ == "__main__":
     print("    -> PASS")
 
     # ---- (b) Clock-sign test: mirror maps [sin,cos] -> [-sin,-cos] ----
-    print(f"\n(b) Clock-sign test:")
+    print("\n(b) Clock-sign test:")
     phi    = torch.rand(B, device=device)
     phi_05 = (phi + 0.5) % 1.0
     angle     = 2.0 * math.pi * phi
@@ -135,7 +135,7 @@ if __name__ == "__main__":
     print("    -> PASS")
 
     # ---- (c) base_above unchanged ----
-    print(f"\n(c) base_above unchanged:")
+    print("\n(c) base_above unchanged:")
     m = mirror_obs(x_obs)
     err_ba = (m[..., 50:51] - x_obs[..., 50:51]).abs().max().item()
     print(f"    max|mirrored_base_above - orig| = {err_ba:.2e}  (expect 0)")

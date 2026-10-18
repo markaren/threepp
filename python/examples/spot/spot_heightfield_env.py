@@ -33,7 +33,7 @@ from spot_terrain_env import (quat_rotate_inverse, up_z, heading_cossin, _flat_g
                               CONTROL_HZ, DT, SUBSTEPS, SPACING, SPAWN_Z, PROBE_DX, ACT_DIM,
                               HIDDEN, HALF_W, FLAT_FRAC, VX_LO, VX_HI, VY_HI, WZ_HI, STAND_PROB,
                               FWD_DRIVE_FRAC, CMD_MIN, CMD_MAX, SIG, W_IMIT)
-from scratch_clock import CLOCK0, CLOCK_DIM, GAIT_PERIOD, advance, clock_obs, reset_phi
+from scratch_clock import CLOCK_DIM, GAIT_PERIOD, advance, clock_obs, reset_phi
 from scratch_env import STIFF_GAINS
 
 OBS_DIM = 48 + CLOCK_DIM + 1 + N_SCAN   # = 96: [proprio(48)|clock(2)|base_above(1)|scan(45)]

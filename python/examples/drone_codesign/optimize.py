@@ -138,8 +138,8 @@ def check_tables(device, verbose=True):
         if not good and verbose:
             print(f"  FAIL  {name}: demo {theirs!r} vs ours {mine!r}")
     if verbose:
-        print(f"  ok    11 scalar constants (EAR, RHO, the box, Burrill's "
-              f"line) match the demo's source")
+        print("  ok    11 scalar constants (EAR, RHO, the box, Burrill's "
+              "line) match the demo's source")
 
     rng = np.random.default_rng(7)
     j = rng.uniform(prop.J_LO, prop.J_HI, 64)
@@ -296,12 +296,12 @@ def grid_search(brief, device, nd=240, npd=240, nh=8, chunk=65536,
     if verbose:
         print(f"  swept in {dt:.2f} s   (range_ref = step-0 range "
               f"{range_ref:.3f} km, as the optimiser's)")
-        print(f"  penalised optimum (min loss, Adam's objective):")
+        print("  penalised optimum (min loss, Adam's objective):")
         print(f"    {design_line(best, brief)}")
         print(f"  binding: {', '.join(prop.binding(best, brief))}")
         if best_hard is not None:
-            print(f"  hard-feasible optimum (ratio_sprint <= 1, "
-                  f"n_sprint <= n_max), for the physics reading:")
+            print("  hard-feasible optimum (ratio_sprint <= 1, "
+                  "n_sprint <= n_max), for the physics reading:")
             print(f"    {design_line(best_hard, brief)}")
         else:
             print("  hard-feasible optimum: none on the grid")

@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))    # python/
 sys.path.insert(0, _HERE)
 
 import threepp as tp
-from tendon_hand_env import ACT_DIM, CONFIG, TendonHandEnv
+from tendon_hand_env import ACT_DIM, TendonHandEnv
 from threepp.rl import PPO
 
 

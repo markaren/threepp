@@ -274,17 +274,17 @@ def e1_recip_coefficient():
         note = "  SATURATED at the joint limit - M is only bounded, not measured" if sat else ""
         print(f"  {name:>12}   q2* = {q:+.8f} rad   =>  effective multiplier"
               f" {'<=' if sat else '='} {m:.4f}{note}")
-    print(f"  MEASURED: only recip = 1/c reproduces the analytic spring. A converged sweep over")
+    print("  MEASURED: only recip = 1/c reproduces the analytic spring. A converged sweep over")
     print(f"  recip in (0.01, 0.1, 1, 10, 100) at c = {C} gives effective joint stiffnesses")
-    print(f"  1.5e-3, 2.5e-3, 1.7e-2, 0.53, 2020 N.m/rad against an analytic K*c*recip of")
+    print("  1.5e-3, 2.5e-3, 1.7e-2, 0.53, 2020 N.m/rad against an analytic K*c*recip of")
     print(f"  0.2, 2, 20, 200, 2000 -- agreement ONLY at recip = 1/c ({1/C:.0f}), where k_eff = K.")
-    print(f"  So PhysX's fixed-tendon constraint is formulated around the header's 'commonly")
-    print(f"  expected' recip = 1/coefficient, and any other value gives a force the analytic")
-    print(f"  spring law does not predict. Note the consequence, UNMEASURED here: with")
-    print(f"  recip_i = 1/c_i the torques go as tau_i = F/c_i, whereas virtual work on")
-    print(f"  L = sum(c_i q_i) demands tau_i proportional to c_i. Equal coefficients only")
-    print(f"  rescale the stiffness and stay conservative; UNEQUAL coefficients would invert")
-    print(f"  the torque ratio. Do not use unequal coefficients without measuring first.")
+    print("  So PhysX's fixed-tendon constraint is formulated around the header's 'commonly")
+    print("  expected' recip = 1/coefficient, and any other value gives a force the analytic")
+    print("  spring law does not predict. Note the consequence, UNMEASURED here: with")
+    print("  recip_i = 1/c_i the torques go as tau_i = F/c_i, whereas virtual work on")
+    print("  L = sum(c_i q_i) demands tau_i proportional to c_i. Equal coefficients only")
+    print("  rescale the stiffness and stay conservative; UNEQUAL coefficients would invert")
+    print("  the torque ratio. Do not use unequal coefficients without measuring first.")
 
 
 

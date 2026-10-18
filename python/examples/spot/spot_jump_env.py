@@ -65,10 +65,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 
 from spot_recovery_env import (SpotRecoveryEnv, quat_axis_angle, quat_mul, quat_rot, lowest_point, OBS_DIM, ACT_DIM,
-                               CONTROL_HZ, DT, N_SCAN, STAND_Z, SUCCESS_HOLD, QD_BINS, QD_W, QD_OVER, JOINT_GROUPS,
+                               CONTROL_HZ, DT, SUCCESS_HOLD, QD_BINS, QD_W, QD_OVER, JOINT_GROUPS,
                                STIFF_GAINS)
-from spot_terrain_env import quat_rotate_inverse
-from spot_deploy import ACTION_SCALE
 
 EPISODE_S = 4.0
 SETTLE_TICKS = 5                       # rewards and fall checks start after these

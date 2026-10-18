@@ -55,7 +55,7 @@ except Exception:
 import threepp as tp
 from threepp.rl import load_policy
 from spot_deploy import (build_spot, fetch_assets, _quat_to_R,
-                         default_q, isaac_to_add, add_to_isaac, ACTION_SCALE, Z0)
+                         default_q, add_to_isaac, ACTION_SCALE, Z0)
 from spot_depth_scan import ForwardDepthScanner
 from calico_slam_pip import SlamSurface, DepthPip
 import calico_collider as CC

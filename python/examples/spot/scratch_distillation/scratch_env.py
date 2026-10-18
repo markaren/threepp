@@ -43,11 +43,11 @@ import threepp as tp
 from threepp.rl import GpuSim, VecTask
 from spot_deploy import (build_spot, default_q, add_to_isaac, isaac_to_add,
                          ACTION_SCALE, GAINS)
-from spot_terrain_env import (quat_rotate_inverse, up_z, heading_cossin, _flat_ground,
+from spot_terrain_env import (quat_rotate_inverse, up_z, _flat_ground,
                                CONTROL_HZ, DT, SUBSTEPS, SPACING, SPAWN_Z)
-from scratch_clock import (OBS_DIM, CLOCK0, ACT_DIM, N_PROPRIO, GAIT_PERIOD,
-                            advance, clock_obs, leg_phase, desired_stance, reset_phi, DUTY)
-from foot_contact import foot_world, contact_soft, FEET, H_C
+from scratch_clock import (OBS_DIM, ACT_DIM, GAIT_PERIOD,
+                            advance, clock_obs, desired_stance, reset_phi, DUTY)
+from foot_contact import foot_world, contact_soft
 
 # --------------------------------------------------------------------------- #
 #  Isaac teacher — reward ORACLE for the from-scratch gait (imitation-reward signal only; its weights
@@ -431,7 +431,7 @@ if __name__ == "__main__":
         assert torch.isfinite(obs).all(), f"obs non-finite at step {step_i}"
         assert torch.isfinite(rew).all(), f"rew non-finite at step {step_i}"
 
-    print(f"200 zero-action steps: all finite")
+    print("200 zero-action steps: all finite")
     print(f"  track     = {env.last_track:.3f}")
     print(f"  fell/step = {env.last_fell:.3f}")
     print(f"  imit_div  = {env.last_imit_div:.3f}")

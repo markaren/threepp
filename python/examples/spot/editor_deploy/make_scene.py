@@ -16,9 +16,7 @@ Two frame details worth naming, because they are what a hand-authored scene gets
 """
 import argparse
 import json
-import math
 import os
-import pathlib
 import sys
 import uuid as uuidlib
 
