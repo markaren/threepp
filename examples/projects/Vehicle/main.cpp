@@ -107,15 +107,6 @@ int main() {
     carBody->position.y = -1.f;
     chassisMesh->add(carBody);
 
-    // The .gltf packs AO and metalRoughness into the SAME texture (R=AO,
-    // G=rough, B=metal). R wasn't authored, so GL's aoMap reads it as 0
-    // (full occlusion) and the body goes dark. Drop the aoMap.
-    carBody->traverseType<Mesh>([](Mesh& m) {
-        if (auto* std = m.materialAs<MeshStandardMaterial>()) {
-            std->aoMap = nullptr;
-        }
-    });
-
     // Extract the model's wheels into PhysX-driven rigs. The .gltf's per-wheel
     // "pivot" nodes have identity transforms — wheel positions are baked into
     // the geometry — so we compute the hub from the combined AABB and clone
