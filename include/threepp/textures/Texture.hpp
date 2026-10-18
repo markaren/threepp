@@ -146,8 +146,6 @@ namespace threepp {
 
         void dispose();
 
-        // void transformUv(Vector2& uv) const;
-
         void needsUpdate();
 
         [[nodiscard]] unsigned int version() const;
