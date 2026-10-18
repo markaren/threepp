@@ -76,10 +76,7 @@ from warp_common import (DensitySurface, Encoder, bench_loop, cli_arg,
                          open_display, parse_size, pbf_constants,
                          resize_handler, standard_material,
                          write_radiance_hdr)
-try:
-    from threepp.cuda_interop import VkInteropArray
-except ImportError:                  # older threepp builds have no CUDA<->Vulkan interop
-    VkInteropArray = None
+from threepp.cuda_interop import VkInteropArray
 
 # Warp compiles with fast_math off, so every sqrt and divide in the neighbour
 # loops is a multi-instruction IEEE sequence instead of one hardware op. Nothing
@@ -1887,7 +1884,7 @@ def arm_vulkan_interop():
     """
     global vk_interop, vk_route, stage_pos, stage_nrm, host_pos, host_nrm
     global hview_pos, hview_nrm
-    if VkInteropArray is None or not hasattr(renderer, "enable_vertex_interop"):
+    if not hasattr(renderer, "enable_vertex_interop"):
         print("  note: this threepp build predates the CUDA->Vulkan vertex "
               "interop -- using the host route")
         return False

@@ -882,7 +882,7 @@ def refresh_geometry():
 
 # --- threepp scene ----------------------------------------------------------
 
-if not getattr(tp, "HAS_VULKAN", True) or not hasattr(tp, "VulkanRenderer"):
+if not tp.HAS_VULKAN:
     raise SystemExit("this demo needs the Vulkan renderer (the water is its glass path)")
 
 canvas = tp.Canvas("threepp x warp - water balloon", width=W, height=H,

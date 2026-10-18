@@ -1876,10 +1876,7 @@ def arm_drum_interop():
     DRUM_ROUTE = "host copy"
     if not device.is_cuda or not hasattr(renderer, "enable_vertex_interop"):
         return
-    try:
-        from threepp.cuda_interop import VkInteropArray
-    except ImportError:
-        return
+    from threepp.cuda_interop import VkInteropArray
     handles = []
     try:
         for m in (drum_out, drum_in):

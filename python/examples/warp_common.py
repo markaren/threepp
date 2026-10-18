@@ -964,11 +964,7 @@ class SoupInterop:
             m.geometry.update_attribute("normal", n[s:s + c])
 
     def _try_arm(self):
-        try:
-            from threepp.cuda_interop import VkInteropArray
-        except ImportError:
-            self._tries = 0
-            return
+        from threepp.cuda_interop import VkInteropArray
         enabled = []
         try:
             for k, (m, s, c) in enumerate(self.parts):
