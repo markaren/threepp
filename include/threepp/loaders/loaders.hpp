@@ -2,23 +2,23 @@
 #ifndef THREEPP_LOADERS_HPP
 #define THREEPP_LOADERS_HPP
 
-#include "DDSLoader.hpp"
-#include "EXRLoader.hpp"
-#include "FontLoader.hpp"
-#include "ModelLoader.hpp"
-#include "OBJLoader.hpp"
-#include "ObjectExporter.hpp"
-#include "ObjectLoader.hpp"
-#include "RGBELoader.hpp"
-#include "STLLoader.hpp"
-#include "TextureLoader.hpp"
+#include "threepp/loaders/DDSLoader.hpp"
+#include "threepp/loaders/EXRLoader.hpp"
+#include "threepp/loaders/FontLoader.hpp"
+#include "threepp/loaders/ModelLoader.hpp"
+#include "threepp/loaders/OBJLoader.hpp"
+#include "threepp/loaders/ObjectExporter.hpp"
+#include "threepp/loaders/ObjectLoader.hpp"
+#include "threepp/loaders/RGBELoader.hpp"
+#include "threepp/loaders/STLLoader.hpp"
+#include "threepp/loaders/TextureLoader.hpp"
 
 #ifdef THREEPP_WITH_USD
-#include "USDLoader.hpp"
+#include "threepp/loaders/USDLoader.hpp"
 #endif
 
 #ifdef THREEPP_WITH_FBX
-#include "FBXLoader.hpp"
+#include "threepp/loaders/FBXLoader.hpp"
 #endif
 
 #endif//THREEPP_LOADERS_HPP
