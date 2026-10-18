@@ -52,7 +52,11 @@ namespace threepp {
             bool background = false;
         };
 
-        explicit PlanarReflection(const Options& options = Options());
+        // Two overloads rather than `const Options& = Options()`: Clang needs
+        // the nested struct's default member initializers to evaluate that
+        // default argument while the enclosing class is still incomplete.
+        PlanarReflection();
+        explicit PlanarReflection(const Options& options);
 
         PlanarReflection(const PlanarReflection&) = delete;
         PlanarReflection& operator=(const PlanarReflection&) = delete;

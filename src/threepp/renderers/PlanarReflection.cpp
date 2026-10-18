@@ -193,6 +193,8 @@ struct PlanarReflection::Impl {
     }
 };
 
+PlanarReflection::PlanarReflection(): PlanarReflection(Options()) {}
+
 PlanarReflection::PlanarReflection(const Options& options)
     : options(options), pimpl_(std::make_unique<Impl>()) {}
 
