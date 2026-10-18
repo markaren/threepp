@@ -130,6 +130,33 @@ gl::GLTextures::GLTextures(gl::GLState& state, gl::GLProperties& properties, gl:
       onTextureDispose_(this),
       onRenderTargetDispose_(this) {}
 
+Texture& gl::GLTextures::emptyTexture2D() {
+
+    if (!emptyTexture2D_) {
+        emptyTexture2D_ = Texture::create(Image(std::vector<unsigned char>(4, 0), 1, 1));
+        emptyTexture2D_->name = "emptyTexture";
+    }
+    return *emptyTexture2D_;
+}
+
+Texture& gl::GLTextures::emptyTexture3D() {
+
+    if (!emptyTexture3D_) {
+        emptyTexture3D_ = DataTexture3D::create(std::vector<unsigned char>(4, 0), 1, 1, 1);
+        emptyTexture3D_->name = "emptyTexture3d";
+    }
+    return *emptyTexture3D_;
+}
+
+Texture& gl::GLTextures::emptyTextureCube() {
+
+    if (!emptyTextureCube_) {
+        emptyTextureCube_ = CubeTexture::create(std::vector<Image>(6, Image(std::vector<unsigned char>(4, 0), 1, 1)));
+        emptyTextureCube_->name = "emptyCubeTexture";
+    }
+    return *emptyTextureCube_;
+}
+
 void gl::GLTextures::generateMipmap(GLuint target, Texture& texture, GLuint width, GLuint height) {
 
     glGenerateMipmap(target);

@@ -2,7 +2,39 @@
 
 #include "threepp/renderers/gl/GLUniforms.hpp"
 
+using namespace threepp;
 using namespace threepp::gl;
+
+namespace {
+
+    // Counts the loads it is asked for; the GL program it stands in for is
+    // not needed to decide whether a uniform is loaded at all.
+    struct RecordingUniform: UniformObject {
+
+        int loads = 0;
+
+        using UniformObject::UniformObject;
+
+        void setValue(const UniformValue&, GLTextures*) override { ++loads; }
+    };
+
+}// namespace
+
+TEST_CASE("upload skips a uniform that has no value yet and loads it once it has one") {
+
+    RecordingUniform u("tDiffuse");
+    std::vector<UniformObject*> seq{&u};
+
+    UniformMap values;
+    values["tDiffuse"] = Uniform();// declared, value still to come
+
+    GLUniforms::upload(seq, values, nullptr);
+    REQUIRE(u.loads == 0);
+
+    values["tDiffuse"].setValue(1.f);
+    GLUniforms::upload(seq, values, nullptr);
+    REQUIRE(u.loads == 1);
+}
 
 TEST_CASE("uniformCacheDiffers detects a change in any single component") {
 

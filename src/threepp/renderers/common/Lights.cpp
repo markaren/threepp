@@ -46,6 +46,24 @@ namespace {
         }
     }
 
+    // Writes one slot of the light state and reports whether it changed. A
+    // material copies these vectors when it is wired to the lights (GLRenderer
+    // getProgram) where three.js shares the arrays by reference, so a slot
+    // that comes to hold a different pointer has to bump the version or every
+    // wired material keeps reading the old one: a light swapped for another
+    // of the same type within one frame kept lighting from the removed light,
+    // and a shadow map rebuilt at a new size left a freed texture behind the
+    // sampler. Counting only the lights, as the hash below does, sees neither.
+    template<class T>
+    void setSlot(std::vector<T>& slots, size_t index, T value, bool& changed) {
+
+        ensureCapacity(slots, index + 1);
+        if (slots[index] != value) {
+            slots[index] = value;
+            changed = true;
+        }
+    }
+
 }// namespace
 
 
@@ -64,6 +82,8 @@ void Lights::setup(std::vector<Light*>& lights) {
     int numDirectionalShadows = 0;
     int numPointShadows = 0;
     int numSpotShadows = 0;
+
+    bool slotsChanged = false;
 
     std::ranges::stable_sort(lights, shadowCastingLightsFirst);
 
@@ -105,18 +125,14 @@ void Lights::setup(std::vector<Light*>& lights) {
                 shadowUniforms->at("shadowRadius") = shadow->radius;
                 std::get<Vector2>(shadowUniforms->at("shadowMapSize")).copy(shadow->mapSize);
 
-                ensureCapacity(state.directionalShadow, directionalLength + 1);
-                ensureCapacity(state.directionalShadowMap, directionalLength + 1);
-                ensureCapacity(state.directionalShadowMatrix, directionalLength + 1);
-                state.directionalShadow[directionalLength] = shadowUniforms;
-                state.directionalShadowMap[directionalLength] = shadowMapTexture(*shadow);
-                state.directionalShadowMatrix[directionalLength] = &shadow->matrix;
+                setSlot(state.directionalShadow, directionalLength, shadowUniforms, slotsChanged);
+                setSlot(state.directionalShadowMap, directionalLength, shadowMapTexture(*shadow), slotsChanged);
+                setSlot(state.directionalShadowMatrix, directionalLength, &shadow->matrix, slotsChanged);
 
                 ++numDirectionalShadows;
             }
 
-            ensureCapacity(state.directional, directionalLength + 1);
-            state.directional[directionalLength] = uniforms;
+            setSlot(state.directional, directionalLength, uniforms, slotsChanged);
 
             ++directionalLength;
 
@@ -144,18 +160,14 @@ void Lights::setup(std::vector<Light*>& lights) {
                 shadowUniforms->at("shadowRadius") = shadow->radius;
                 std::get<Vector2>(shadowUniforms->at("shadowMapSize")).copy(shadow->mapSize);
 
-                ensureCapacity(state.spotShadow, spotLength + 1);
-                ensureCapacity(state.spotShadowMap, spotLength + 1);
-                ensureCapacity(state.spotShadowMatrix, spotLength + 1);
-                state.spotShadow[spotLength] = shadowUniforms;
-                state.spotShadowMap[spotLength] = shadowMapTexture(*shadow);
-                state.spotShadowMatrix[spotLength] = &shadow->matrix;
+                setSlot(state.spotShadow, spotLength, shadowUniforms, slotsChanged);
+                setSlot(state.spotShadowMap, spotLength, shadowMapTexture(*shadow), slotsChanged);
+                setSlot(state.spotShadowMatrix, spotLength, &shadow->matrix, slotsChanged);
 
                 ++numSpotShadows;
             }
 
-            ensureCapacity(state.spot, spotLength + 1);
-            state.spot[spotLength] = uniforms;
+            setSlot(state.spot, spotLength, uniforms, slotsChanged);
 
             ++spotLength;
 
@@ -180,18 +192,14 @@ void Lights::setup(std::vector<Light*>& lights) {
                 shadowUniforms->at("shadowCameraNear") = shadow->camera->nearPlane;
                 shadowUniforms->at("shadowCameraFar") = shadow->camera->farPlane;
 
-                ensureCapacity(state.pointShadow, pointLength + 1);
-                ensureCapacity(state.pointShadowMap, pointLength + 1);
-                ensureCapacity(state.pointShadowMatrix, pointLength + 1);
-                state.pointShadow[pointLength] = shadowUniforms;
-                state.pointShadowMap[pointLength] = shadowMapTexture(*shadow);
-                state.pointShadowMatrix[pointLength] = &shadow->matrix;
+                setSlot(state.pointShadow, pointLength, shadowUniforms, slotsChanged);
+                setSlot(state.pointShadowMap, pointLength, shadowMapTexture(*shadow), slotsChanged);
+                setSlot(state.pointShadowMatrix, pointLength, &shadow->matrix, slotsChanged);
 
                 ++numPointShadows;
             }
 
-            ensureCapacity(state.point, pointLength + 1);
-            state.point[pointLength] = uniforms;
+            setSlot(state.point, pointLength, uniforms, slotsChanged);
 
             ++pointLength;
 
@@ -201,8 +209,7 @@ void Lights::setup(std::vector<Light*>& lights) {
 
             std::get<Color>(uniforms->at("color")).copy(light->color).multiplyScalar(light->intensity);
 
-            ensureCapacity(state.rectArea, rectAreaLength + 1);
-            state.rectArea[rectAreaLength] = uniforms;
+            setSlot(state.rectArea, rectAreaLength, uniforms, slotsChanged);
 
             ++rectAreaLength;
 
@@ -213,8 +220,7 @@ void Lights::setup(std::vector<Light*>& lights) {
             std::get<Color>(uniforms->at("skyColor")).copy(hemisphereLight->color).multiplyScalar(intensity);
             std::get<Color>(uniforms->at("groundColor")).copy(hemisphereLight->groundColor).multiplyScalar(intensity);
 
-            ensureCapacity(state.hemi, hemiLength + 1);
-            state.hemi[hemiLength] = uniforms;
+            setSlot(state.hemi, hemiLength, uniforms, slotsChanged);
 
             ++hemiLength;
         }
@@ -232,7 +238,8 @@ void Lights::setup(std::vector<Light*>& lights) {
         hash.numDirectionalShadows != numDirectionalShadows ||
         hash.numPointShadows != numPointShadows ||
         hash.numSpotShadows != numSpotShadows ||
-        hash.ambient != state.ambient) {
+        hash.ambient != state.ambient ||
+        slotsChanged) {
 
         state.directional.resize(directionalLength);
         state.spot.resize(spotLength);

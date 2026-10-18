@@ -10,6 +10,7 @@
 #include <GL/glew.h>
 #endif
 
+#include <algorithm>
 #include <iostream>
 #include <regex>
 
@@ -113,27 +114,30 @@ namespace {
             }
         }
 
-        // Single texture (2D / Cube)
+        // Single texture (2D / 3D / Cube). A null value binds the empty texture
+        // of the sampler's kind, as three.js does (`v || emptyTexture`): a pass
+        // whose input is assigned after its first render reads black, rather
+        // than dereferencing null.
 
         void setValueT1(const UniformValue& value, GLTextures* textures) const {
             const auto unit = textures->allocateTextureUnit();
             glUniform1i(addr, unit);
             auto tex = std::get<Texture*>(value);
-            textures->setTexture2D(*tex, unit);
+            textures->setTexture2D(tex ? *tex : textures->emptyTexture2D(), unit);
         }
 
         void setValueT3D1(const UniformValue& value, GLTextures* textures) const {
             const auto unit = textures->allocateTextureUnit();
             glUniform1i(addr, unit);
             auto tex = std::get<Texture*>(value);
-            textures->setTexture3D(*tex, unit);
+            textures->setTexture3D(tex ? *tex : textures->emptyTexture3D(), unit);
         }
 
         void setValueT6(const UniformValue& value, GLTextures* textures) const {
             const auto unit = textures->allocateTextureUnit();
             glUniform1i(addr, unit);
             auto tex = std::get<Texture*>(value);
-            textures->setTextureCube(*tex, unit);
+            textures->setTextureCube(tex ? *tex : textures->emptyTextureCube(), unit);
         }
 
         void setValueV1i(const UniformValue& value) const {
@@ -311,36 +315,45 @@ namespace {
                 case 0x1406:// FLOAT
                     return [&](const UniformValue& value, GLTextures*) {
                         auto& data = std::get<std::vector<float>>(value);
-                        glUniform1fv(addr, activeInfo.size, data.data());
+                        glUniform1fv(addr, count(data.size()), data.data());
                     };
                 case 0x8b50:// VEC2
                     return [&](const UniformValue& value, GLTextures*) {
                         auto& data = std::get<std::vector<Vector2>>(value);
-                        glUniform2fv(addr, activeInfo.size, flatten(data, activeInfo.size, 2).data());
+                        const auto n = count(data.size());
+                        glUniform2fv(addr, n, flatten(data, n, 2).data());
                     };
                 case 0x8b51:// VEC3
                     return [&](const UniformValue& value, GLTextures*) {
                         auto& data = std::get<std::vector<Vector3>>(value);
-                        glUniform3fv(addr, activeInfo.size, flatten(data, activeInfo.size, 3).data());
+                        const auto n = count(data.size());
+                        glUniform3fv(addr, n, flatten(data, n, 3).data());
                     };
                 case 0x8b52:// VEC4
                     return [&](const UniformValue& value, GLTextures*) {
                         auto& data = std::get<std::vector<float>>(value);
-                        glUniform4fv(addr, activeInfo.size, data.data());
+                        glUniform4fv(addr, count(data.size() / 4), data.data());
                     };
 
                 case 0x8b5b:// MAT3
                     return [&](const UniformValue& value, GLTextures*) {
                         auto& data = std::get<std::vector<Matrix3>>(value);
-                        glUniformMatrix3fv(addr, activeInfo.size, false, flatten(data, activeInfo.size, 9).data());
+                        const auto n = count(data.size());
+                        glUniformMatrix3fv(addr, n, false, flatten(data, n, 9).data());
                     };
                 case 0x8b5c:// MAT4
                     return [&](const UniformValue& value, GLTextures*) {
                         std::visit(overloaded{
                                            [&](auto) { std::cerr << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
-                                           [&](std::vector<float> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, arg.data()); },
-                                           [&](std::vector<Matrix4> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, flatten(arg, activeInfo.size, 16).data()); },
-                                           [&](std::vector<Matrix4*> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, flattenP(arg, activeInfo.size, 16).data()); }},
+                                           [&](const std::vector<float>& arg) { glUniformMatrix4fv(addr, count(arg.size() / 16), false, arg.data()); },
+                                           [&](const std::vector<Matrix4>& arg) {
+                                               const auto n = count(arg.size());
+                                               glUniformMatrix4fv(addr, n, false, flatten(arg, n, 16).data());
+                                           },
+                                           [&](const std::vector<Matrix4*>& arg) {
+                                               const auto n = count(arg.size());
+                                               glUniformMatrix4fv(addr, n, false, flattenP(arg, n, 16).data());
+                                           }},
                                    value);
                     };
                 case 0x8b5e:// SAMPLER_2D
@@ -350,15 +363,13 @@ namespace {
                 case 0x8b62:// SAMPLER_2D_SHADOW
                     return [&](const UniformValue& value, GLTextures* textures) {
                         auto& data = std::get<std::vector<Texture*>>(value);
-                        const auto n = data.size();
+                        const auto n = count(data.size());
                         auto units = allocTexUnits(*textures, n);
 
-                        glUniform1iv(addr, static_cast<int>(n), units.data());
+                        glUniform1iv(addr, n, units.data());
 
-                        for (unsigned i = 0; i != n; ++i) {
-                            auto value = data[i];
-                            if (!value) continue;
-                            textures->setTexture2D(*data[i], units[i]);
+                        for (int i = 0; i != n; ++i) {
+                            textures->setTexture2D(data[i] ? *data[i] : textures->emptyTexture2D(), units[i]);
                         }
                     };
                 case 0x8b60:// SAMPLER_CUBE
@@ -366,14 +377,13 @@ namespace {
                     // Point-light shadow maps: an array of cube depth textures.
                     return [&](const UniformValue& value, GLTextures* textures) {
                         auto& data = std::get<std::vector<Texture*>>(value);
-                        const auto n = data.size();
+                        const auto n = count(data.size());
                         auto units = allocTexUnits(*textures, n);
 
-                        glUniform1iv(addr, static_cast<int>(n), units.data());
+                        glUniform1iv(addr, n, units.data());
 
-                        for (unsigned i = 0; i != n; ++i) {
-                            if (!data[i]) continue;
-                            textures->setTextureCube(*data[i], units[i]);
+                        for (int i = 0; i != n; ++i) {
+                            textures->setTextureCube(data[i] ? *data[i] : textures->emptyTextureCube(), units[i]);
                         }
                     };
                 default:
@@ -388,6 +398,14 @@ namespace {
         int addr;
         ActiveUniformInfo activeInfo;
         std::function<void(const UniformValue&, GLTextures*)> setValueFun;
+
+        // How many elements to load: the shader's array length, capped by what
+        // the caller supplied. Loading the full length from a shorter vector
+        // read past it (three.js's flatten reads `undefined` there, harmless);
+        // a short vector now loads a partial array, as glUniform*v allows.
+        [[nodiscard]] int count(size_t supplied) const {
+            return static_cast<int>(std::min(static_cast<size_t>(activeInfo.size), supplied));
+        }
     };
 
     struct StructuredUniform: UniformObject, Container {
@@ -520,6 +538,10 @@ void GLUniforms::upload(std::vector<UniformObject*>& seq, UniformMap& values, GL
     for (const auto& u : seq) {
 
         Uniform& v = values.at(u->id);
+
+        // Declared, value still to come (three.js `{ value: null }`): nothing
+        // to load, and Uniform::value() on an empty optional is undefined.
+        if (!v.hasValue()) continue;
 
         if (!v.needsUpdate || (v.needsUpdate && v.needsUpdate.value())) {
 

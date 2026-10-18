@@ -47,6 +47,15 @@ namespace threepp::gl {
 
         void setTextureCube(Texture& texture, unsigned int slot);
 
+        // What a sampler uniform binds when its value is null: a 1x1 black
+        // texture of the sampler's kind (three.js's emptyTexture,
+        // emptyTexture3d and emptyCubeTexture), so the shader reads black
+        // rather than whatever the unit held last. Owned here, per renderer,
+        // so they are uploaded and freed with its other textures.
+        Texture& emptyTexture2D();
+        Texture& emptyTexture3D();
+        Texture& emptyTextureCube();
+
         // Setup storage for target texture and bind it to correct framebuffer
         void setupFrameBufferTexture(unsigned int framebuffer, GLRenderTarget* renderTarget, Texture& texture, unsigned int attachment, unsigned int textureTarget);
 
@@ -99,6 +108,10 @@ namespace threepp::gl {
 
         TextureEventListener onTextureDispose_;
         RenderTargetEventListener onRenderTargetDispose_;
+
+        std::shared_ptr<Texture> emptyTexture2D_;
+        std::shared_ptr<Texture> emptyTexture3D_;
+        std::shared_ptr<Texture> emptyTextureCube_;
 
         int textureUnits = 0;
     };

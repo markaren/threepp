@@ -2,6 +2,10 @@
 add_test_executable(GLRenderLists_test)
 add_test_executable(GLUniforms_test)
 
+# Lights::setup's version, which tells a wired material its copy of the light
+# state is stale: slot identity, not only the counts. No GL.
+add_test_executable(LightsStateVersion_test)
+
 # Source-level check on ProgramParameters::hash(); needs the two files at runtime.
 add_test_executable(GLProgramCacheKey_test)
 target_compile_definitions(GLProgramCacheKey_test PRIVATE
@@ -58,6 +62,7 @@ if (THREEPP_WITH_GLFW)
     add_gl_render_test(GLFogColorSpace_test)
     add_gl_render_test(GLTextureNameReuse_test)
     add_gl_render_test(GLProgramNameReuse_test)
+    add_gl_render_test(GLUniformGuards_test)
     add_gl_render_test(GLFramebufferNameReuse_test)
     add_gl_render_test(GLEnvironmentKnobs_test)
     add_gl_render_test(GLMaterialsR186_test)
