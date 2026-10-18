@@ -228,6 +228,7 @@ namespace threepp_py {
                 .def_readwrite("metalness_map", &MeshStandardMaterial::metalnessMap)
                 .def_readwrite("emissive_map", &MeshStandardMaterial::emissiveMap)
                 .def_readwrite("ao_map", &MeshStandardMaterial::aoMap)
+                .def_readwrite("ao_map_intensity", &MeshStandardMaterial::aoMapIntensity)
                 .def_readwrite("alpha_map", &MeshStandardMaterial::alphaMap)
                 .def_readwrite("bump_map", &MeshStandardMaterial::bumpMap)
                 .def_readwrite("displacement_map", &MeshStandardMaterial::displacementMap)

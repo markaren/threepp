@@ -1216,9 +1216,16 @@ void main() {
     // (e.g. the SWAT exoskeleton) glow full white. The primary UV comes from the
     // G-buffer (gbuffer.frag attachment 3). Mirrors the reflection-hit path
     // (hitTex at the hit UV); texIndex < 0 → factor unchanged (no regression).
-    const vec2 primUv     = (msSampleIdx >= 0) ? texelFetch(gbufUvMS, px, msSampleIdx).rg : texelFetch(gbufUvTex, px, 0).rg;
+    const vec4 primUvTap  = (msSampleIdx >= 0) ? texelFetch(gbufUvMS, px, msSampleIdx) : texelFetch(gbufUvTex, px, 0);
+    const vec2 primUv     = primUvTap.rg;
     const vec3 emissive   = hitTex(pm.emissiveTexIndex, pm.uvTransformEmissive, primUv,
                                    pm.emissive * pm.emissiveIntensity);
+    // The material's ambient occlusion (aoMap), sampled by gbuffer.frag into the
+    // same attachment's .a as 1 - ao. It scales the INDIRECT light only: the
+    // diffuse indirect with the scene ambient (diffIndW below, on the denoised
+    // and the inline path alike) and the env specular (specularOcclusion, as
+    // three.js's computeSpecularOcclusion). 1 exactly without a map.
+    const float matAo     = 1.0 - primUvTap.a;
 
     const float NdotV = max(dot(N, V), 1e-4);
     const vec3  dielF0 = dielectricF0(pm.ior, pm.specularIntensity, pm.specularColor);
@@ -1555,16 +1562,21 @@ void main() {
         const vec3 envSpec = envSpecularWeight(F0, envBRDFApprox(NdotV, roughness));
         diffBaseShare = 1.0 - max(max(envSpec.r, envSpec.g), envSpec.b);
     }
+    // The material AO rides the same way, for the same reason: per pixel and
+    // unfiltered, so the denoiser never blurs the map's crevices. It reaches
+    // the ReSTIR emissive irradiance too, the one direct light this channel
+    // carries; the analytic lights below never see it.
+    const float diffIndW = diffBaseShare * matAo;
     // The recombine's factor for the filtered irradiance: the exact vec3 the
-    // inline gather applies to diffInd·diffBaseShare (deferred_shade_30_gi_gather,
+    // inline gather applies to diffInd·diffIndW (deferred_shade_30_gi_gather,
     // the sheen branch at its end), so a sheen pixel can take the denoised path.
-    // Without sheen it is diffBaseShare·albedo·(1 − metalness), what the
+    // Without sheen it is diffIndW·albedo·(1 − metalness), what the
     // recombine rebuilt from the G-buffer before.
     const bool  hasSheen    = dot(pm.sheenColor, pm.sheenColor) > 0.0;
     const float sheenAlbedo = hasSheen ? IBLSheenBRDF(NdotV, pm.sheenRoughness) : 0.0;
     const float sheenBase   = hasSheen ? sheenBaseShare(pm.sheenColor, sheenAlbedo) : 1.0;
     const vec3  demodColor  = demodIndirect
-        ? diffBaseShare * (albedo * (1.0 - metalness) * sheenBase + pm.sheenColor * sheenAlbedo)
+        ? diffIndW * (albedo * (1.0 - metalness) * sheenBase + pm.sheenColor * sheenAlbedo)
         : vec3(0.0);
     // ReSTIR DI emissive area lighting → DEMOD irradiance folded into the diffuse-
     // indirect channel so it rides the SVGF temporal + à-trous denoise (the reservoir
@@ -1575,7 +1587,7 @@ void main() {
         const float rNdotV = max(dot(N, V), 1e-4);
         diffInd += restirEmissiveDI(worldPos, N, rNdotV, F0, shadowsOn);// F0 already iridescence-modulated
     }
-    const vec3 diffIndShade = demodIndirect ? vec3(0.0) : diffInd * diffBaseShare;
+    const vec3 diffIndShade = demodIndirect ? vec3(0.0) : diffInd * diffIndW;
 
     // ── Denoised direct-shadow channel (demod path only) ─────────────────────
     // Split the analytic direct into the exact unshadowed sum U (directUImage)
@@ -1758,6 +1770,9 @@ void main() {
                 envSpecVis = mix(1.0, envSpecVis, smoothstep(0.0, 0.1, conf));
             }
         }
+        // The material's AO on top, through the same fit (three.js's
+        // computeSpecularOcclusion): exactly 1 at matAo = 1.
+        if (matAo < 1.0) envSpecVis *= specularOcclusion(NdotV, matAo, roughness);
         // envMapIntensity rides here too: on a >=0.7-rough metal the traced
         // reflection band is faded out entirely (reflBlend 0) and THIS
         // split-sum lookup is the surface's whole environment answer -- leaving

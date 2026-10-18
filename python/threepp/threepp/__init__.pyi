@@ -5802,6 +5802,12 @@ class MeshStandardMaterial(Material):
     def alpha_test(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
+    def ao_map_intensity(self) -> float:
+        ...
+    @ao_map_intensity.setter
+    def ao_map_intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
     def detail_map(self) -> Texture:
         """
         LINEAR albedo modulation texture, 0.5 = neutral.
@@ -11492,6 +11498,14 @@ class VulkanRenderer:
         """
     @motion_blur.setter
     def motion_blur(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def normal_map_toksvig(self) -> bool:
+        """
+        Normal-map specular AA (vMF/Toksvig): a minified normal-map tap's shortened length widens the G-buffer roughness and damps the tap's tilt, so a fine normal map does not shimmer at a distance, at the cost of flattening its relief there. No-op at full resolution and without a normal map. On by default.
+        """
+    @normal_map_toksvig.setter
+    def normal_map_toksvig(self, arg1: bool) -> None:
         ...
     @property
     def occlusion_culling(self) -> bool:

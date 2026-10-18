@@ -86,6 +86,7 @@ layout(location = 2) out uvec4 outIds;
 // textureLod. Without this, ray-traced hits (reflection/GI bounces have no
 // implicit derivatives) would snap to mip 0 and per-frame texture shimmer
 // would survive TAA at the deferred pass's 1-2 spp/frame sample count.
+// .a = material occlusion, 1 - ao of the aoMap (0 = open; see main()).
 layout(location = 3) out vec4 outUv;
 
 // Attachment 4: albedo + metalness (rgba8 unorm). .rgb = linear base colour
@@ -795,6 +796,29 @@ void main() {
         }
     }
 
+    // Material ambient occlusion (aoMap; glTF occlusionTexture): the R channel,
+    // ao = 1 + (r - 1) x aoMapIntensity as three.js reads it. Stored as the
+    // OCCLUSION 1 - ao in outUv.a, so the clear value and every surface
+    // without a map read 0 = open and the deferred shade's multiply by 1 - 0
+    // leaves them bit-identical. The shade takes it off the indirect light
+    // only (diffuse indirect and ambient, and the env specular through the
+    // specular-occlusion fit); direct lights never see it. An unlit
+    // (MeshBasicMaterial) surface has no indirect term in the deferred shade,
+    // but three.js treats its colour as indirect diffuse and darkens that, so
+    // it is folded into the albedo here instead.
+    float occlusion = 0.0;
+    if (m.occlusionTexIndex >= 0) {
+        const int  oi    = clamp(m.occlusionTexIndex, 0, int(kMaxMaterialTextures) - 1);
+        const vec2 uvOcc = (m.uvTransformOcclusion * vec3(vUv, 1.0)).xy;
+        const float aoR  = texture(gbufAlbedoMaps[nonuniformEXT(oi)], uvOcc).r;
+        occlusion = clamp((1.0 - aoR) * m.aoMapIntensity, 0.0, 1.0);
+    }
+    vec3 albedoOut = albedo;
+    if (m.roughness < 0.0) {
+        albedoOut *= 1.0 - occlusion;
+        occlusion = 0.0;
+    }
+
     // ── Alpha cutout / blend test. The
     // raster prepass draws every visible mesh regardless of transparency
     // (buildIndirectDrawData does not filter), so without this, alpha-tested
@@ -843,7 +867,7 @@ void main() {
     // Decals emit texture alpha as the blend factor (the decal pipeline's
     // SRC_ALPHA blend consumes it; its RGB-only write mask keeps the
     // receiver's metalness in .a). Everything else writes metalness.
-    outAlbedoMetal = vec4(albedo, isDecal ? albedoAlpha : metalness);
+    outAlbedoMetal = vec4(albedoOut, isDecal ? albedoAlpha : metalness);
 
     vec2 currNDC = vCurrClipUnjit.xy / vCurrClipUnjit.w;
     vec2 prevNDC = vPrevClip.xy      / vPrevClip.w;
@@ -878,5 +902,5 @@ void main() {
     const float fp2 = max(dot(duvx, duvx), dot(duvy, duvy));
     const float lodBias = 0.5 * log2(max(fp2, 1e-32));
 
-    outUv = vec4(vUv, lodBias, 0.0);
+    outUv = vec4(vUv, lodBias, occlusion);
 }

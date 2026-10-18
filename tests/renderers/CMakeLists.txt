@@ -323,6 +323,17 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanSky_test COMMAND VulkanSky_test)
     set_tests_properties(VulkanSky_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # A material's aoMap (glTF occlusionTexture) darkens its indirect light,
+    # never a light's: a split map under a uniform environment and under a
+    # sun, the glTF strength, a map of 1, an unlit surface. Twice: ray traced
+    # where the GPU can, and in the no-ray-tracing mode.
+    add_executable(VulkanAoMap_test VulkanAoMap_test.cpp)
+    target_link_libraries(VulkanAoMap_test PRIVATE threepp)
+    add_test(NAME VulkanAoMap_test COMMAND VulkanAoMap_test)
+    add_test(NAME VulkanAoMap_nort_test COMMAND VulkanAoMap_test)
+    set_tests_properties(VulkanAoMap_test VulkanAoMap_nort_test PROPERTIES SKIP_RETURN_CODE 42)
+    set_tests_properties(VulkanAoMap_nort_test PROPERTIES ENVIRONMENT "THREEPP_VULKAN_NO_RT=1")
+
     # A mesh removed and freed between two frames: the calls that walk the last
     # frame's entries (setEmissiveCastsLight, setStableCorrespondence,
     # enableVertexInterop) never read it, and a freed skinned clone's GPU state

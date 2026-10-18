@@ -4032,7 +4032,7 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
             d.terrainRoughStrength = 0.f;
             d.terrainHeightBlend = 0.f;
             d.envMapIntensity = 1.f;// unscaled IBL: what every material that never sets it carries
-            d._padTerrain = 0.f;
+            d.aoMapIntensity = 1.f;
             for (int bi = 0; bi < 4; ++bi) {
                 d.terrainBandAlbedoTex[bi] = -1;
                 d.terrainBandNormalTex[bi] = -1;
@@ -4183,6 +4183,12 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialFromMesh(const 
                 // surface. Negative values would flip the sign of a radiance,
                 // so the knob is clamped at zero and left open above 1.
                 d.envMapIntensity = std::max(0.f, em->envMapIntensity);
+            }
+            if (auto* ao = dynamic_cast<MaterialWithAoMap*>(mat.get())) {
+                // The index is bound at the texture-index fill sites
+                // (occlusionTexOf). Negative would brighten the indirect light
+                // through the map; above 1 deepens it, as in three.js.
+                d.aoMapIntensity = std::max(0.f, ao->aoMapIntensity);
             }
             if (auto* th = dynamic_cast<MaterialWithThickness*>(mat.get())) {
                 d.thickness  = std::max(0.0f, th->thickness);

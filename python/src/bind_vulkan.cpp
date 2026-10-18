@@ -1875,6 +1875,13 @@ namespace threepp_py {
                               "the texture then steps along that lattice edge (hard straight lines at 0, 60 and "
                               "120 degrees). On removes the lines and redraws every offset, so the texture "
                               "placement of such a scene changes. Off by default.")
+                .def_property("normal_map_toksvig",
+                              [](PyVulkanRenderer& r) { return r.native().normalMapToksvig(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setNormalMapToksvig(v); },
+                              "Normal-map specular AA (vMF/Toksvig): a minified normal-map tap's shortened "
+                              "length widens the G-buffer roughness and damps the tap's tilt, so a fine normal "
+                              "map does not shimmer at a distance, at the cost of flattening its relief there. "
+                              "No-op at full resolution and without a normal map. On by default.")
                 .def_property_readonly("tlas_stats",
                                        [](PyVulkanRenderer& r) {
                                            const auto s = r.native().tlasStats();
