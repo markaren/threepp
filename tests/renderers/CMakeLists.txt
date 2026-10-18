@@ -254,6 +254,17 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     set_tests_properties(VulkanEntryChurn_test VulkanEntryChurn_nort_test PROPERTIES SKIP_RETURN_CODE 42)
     set_tests_properties(VulkanEntryChurn_nort_test PROPERTIES ENVIRONMENT "THREEPP_VULKAN_NO_RT=1")
 
+    # Stage 2 of plans/gpu-driven-instances.md: the G-buffer draw records
+    # draw_gen.comp writes for instanced meshes against the CPU's, byte for
+    # byte, while instances move, a count changes and the camera orbits.
+    # Twice: ray traced where the GPU can, and in the no-ray-tracing mode.
+    add_executable(VulkanDrawGen_test VulkanDrawGen_test.cpp)
+    target_link_libraries(VulkanDrawGen_test PRIVATE threepp)
+    add_test(NAME VulkanDrawGen_test COMMAND VulkanDrawGen_test)
+    add_test(NAME VulkanDrawGen_nort_test COMMAND VulkanDrawGen_test)
+    set_tests_properties(VulkanDrawGen_test VulkanDrawGen_nort_test PROPERTIES SKIP_RETURN_CODE 42)
+    set_tests_properties(VulkanDrawGen_nort_test PROPERTIES ENVIRONMENT "THREEPP_VULKAN_NO_RT=1")
+
     # CPU wave-height query of the FFT ocean against an analytic Gerstner
     # wave: the choppy-displacement inversion and the cascade-1 rotation.
     # No device needed; DisplacedMesh is only built with Vulkan.

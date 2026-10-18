@@ -46,6 +46,7 @@
 #include "DeferredShade.hpp"
 #include "HiZPyramid.hpp"
 #include "InstanceExpand.hpp"
+#include "DrawGen.hpp"
 #include "OcclusionCull.hpp"
 #include "ParticleFieldPass.hpp"
 #include "ProbeGI.hpp"
@@ -2486,6 +2487,37 @@ namespace threepp {
             }
         };
         std::vector<InstExpandSpan> instExpandSpans_, instExpandScratch_;
+
+        // ── GPU draw records (stage 2; DrawGen.hpp, draw_gen.comp) ─────────
+        // OFF by default, and only with the expansion on (its world matrices
+        // are the input): setGpuDrawGeneration. The primary view's records of
+        // eligible instanced spans (static, no LOD chain, no fades, no
+        // occlusion culling this frame) are written by compute; everything
+        // else stays the CPU's.
+        std::unique_ptr<vulkan::DrawGen> drawGen_;
+        bool gpuDrawGen_ = false;
+        // The frame's dispatch, filled by buildIndirectDrawData (primary view)
+        // and uploaded by prepareDrawGen; drawGenActive_ gates the graph pass.
+        std::vector<vulkan::DrawGen::SpanDesc> drawGenSpans_;
+        uint32_t drawGenWork_   = 0;
+        bool     drawGenActive_ = false;
+        float    drawGenPlanes_[24]{};
+        // setGpuDrawGenerationCheck: the CPU path also builds the GPU spans'
+        // records, into drawGenExpected_, for drawGenCheck to compare.
+        bool gpuDrawGenCheck_ = false;
+        struct DrawGenExpected {
+            uint32_t entry  = 0;
+            uint32_t record = 0;
+            bool     culled = false;
+            vulkan::impl::DrawInfoGpu draw{};
+            VkDrawIndirectCommand     cmd{};
+        };
+        std::vector<DrawGenExpected> drawGenExpected_;
+        uint32_t drawGenExpectedFrame_ = 0;
+        std::array<std::vector<uint32_t>, 4> indirectCpuPosScratch_;// bucket position of each CPU record
+        void prepareDrawGen(uint32_t frame);
+        void recordDrawGen(VkCommandBuffer cb, uint32_t frame);
+        bool verifyDrawGen(VulkanRenderer::DrawGenCheck& out);
         uint32_t instExpandMatrixTotal_ = 0;// matrices in the pool
         uint32_t instExpandWorkTotal_   = 0;// dispatch domain
         // Content serial per GPU-path span, bumped whenever the CPU re-baked

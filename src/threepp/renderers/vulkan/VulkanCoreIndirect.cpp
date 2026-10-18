@@ -72,6 +72,14 @@ namespace threepp {
         // frame.F_uploadDrawInfo, as a sibling. Every early return between here
         // and the stop() still accounts (the destructor is what fires).
         THREEPP_CPUPROF_NAMED(profD, "frame.D_buildIndirect");
+        // The primary's build owns the frame's draw_gen dispatch: none unless
+        // this build plans one (a skipped build leaves this slot's records,
+        // GPU-written ones included, as they are).
+        if (!view().secondary) {
+            drawGenActive_ = false;
+            drawGenSpans_.clear();
+            drawGenWork_ = 0;
+        }
         for (auto& g : indirectGroups_) { g.offset = 0; g.count = 0; }
         indirectTotalDraws_ = 0;
         particleDrawSlots_.clear();
@@ -155,6 +163,107 @@ namespace threepp {
         struct PfSlot { const ParticleField* field; int bucket; uint32_t pos; VkCullModeFlags cull; };
         std::vector<PfSlot> pfSlots;
 
+        // Records per bucket so far (the CPU's and the reserved GPU ranges),
+        // and each CPU record's position in its bucket.
+        std::array<uint32_t, 4> bucketTotal{};
+        auto& cpuPos = indirectCpuPosScratch_;
+        for (auto& v : cpuPos) v.clear();
+
+        // ── Stage 2: instanced spans whose records draw_gen.comp writes ─────
+        // (DrawGen.hpp). The primary view, the expansion on (its world
+        // matrices are the input), no occlusion meta this build. Per span the
+        // constants the shader stamps onto every record, derived as the loop
+        // below derives its per-mesh memo; the loop then reserves the span's
+        // records where its first entry would have put them (draw order kept)
+        // and skips its entries - or, under setGpuDrawGenerationCheck, still
+        // builds them, into drawGenExpected_, as the reference.
+        struct GpuSpanPlan {
+            uint32_t first = 0, count = 0;
+            int      bucket = 0;
+            uint32_t bucketPos = 0;
+            uint32_t visible = 0;
+            uint32_t vcount = 0;
+            size_t   expectedBase = 0;
+            vulkan::DrawGen::SpanDesc desc{};
+        };
+        std::vector<GpuSpanPlan> gpuPlans;
+        const bool gpuDraws = !view().secondary && gpuDrawGen_ && gpuInstanceExpand_ && drawGen_ && instExpand_ &&
+                              !wantOcclMeta;
+        if (!view().secondary && gpuDrawGenCheck_) {
+            drawGenExpected_.clear();
+            drawGenExpectedFrame_ = frame;
+        }
+        if (gpuDraws) {
+            for (const auto& sp : entrySpans_) {
+                if (!sp.inst || sp.isFree || sp.hidden || sp.count == 0u || sp.fadeAny || !sp.localBoundsValid) continue;
+                const MeshEntry& e0 = lastVisibleEntries_[sp.first];
+                if (!e0.isInstanced || e0.isOverlay || e0.sensorOnly || e0.isParticleField || e0.isVertexInterop ||
+                    e0.isSkinned || e0.isDisplaced || e0.isGrass || e0.isMorphed || e0.isTet)
+                    continue;
+                const BlasRecord* rec = resolveBlasForEntry(e0);
+                // A record with a LOD chain picks per entry (en.lodLevel): CPU.
+                if (!rec || rec->vertex.handle == VK_NULL_HANDLE || !rec->lodLevels.empty()) continue;
+                const auto matSp = e0.mesh->material();
+                const Material* sm = matSp.get();
+                uint32_t matFlags = 0u;
+                if (sm && sm->side == Side::Double) matFlags |= kInstFlagDoubleSided;
+                if (sm && sm->textureAnimatedHint) matFlags |= kInstFlagTexAnim;
+                const bool vtxColor = sm && sm->vertexColors;
+                float polyOff = 0.f;
+                if (sm && sm->polygonOffset) {
+                    const float uf = sm->polygonOffsetUnits + sm->polygonOffsetFactor;
+                    polyOff = (uf != 0.f) ? (-uf * 1.0e-6f) : 4.0e-6f;
+                }
+                uint32_t drawStart = 0u, drawCount = 0xFFFFFFFFu;
+                if (auto geom = e0.mesh->geometry()) {
+                    const auto& dr = geom->drawRange;
+                    drawStart = dr.start > 0 ? static_cast<uint32_t>(dr.start) : 0u;
+                    drawCount = dr.count > 0 ? static_cast<uint32_t>(dr.count) : 0u;
+                }
+                const LodGeomSel sel = selectLodGeom(*rec, 0);
+                uint32_t vcount = sel.indexed ? sel.indexCount : rec->vertexCount;
+                const uint32_t vfirst = std::min(drawStart, vcount);
+                vcount = std::min(vcount - vfirst, drawCount);
+                if (vcount == 0u) continue;// the loop draws nothing of it either
+                const VkCullModeFlags wantCull =
+                        sp.first < lastVisibleCullMode_.size() ? lastVisibleCullMode_[sp.first] : VK_CULL_MODE_BACK_BIT;
+                const bool isDecal = sp.first < matDescsCached_.size() &&
+                                     matDescsCached_[sp.first].alphaCutoff == -2.0f;
+                GpuSpanPlan gp;
+                gp.first  = sp.first;
+                gp.count  = sp.count;
+                gp.bucket = isDecal ? 3 : bucketOf(wantCull);
+                gp.vcount = vcount;
+                for (uint32_t j = 0; j < sp.count; ++j)
+                    if (viewCulled(size_t(sp.first) + j)) ++gp.visible;
+                auto& d = gp.desc;
+                d.posAddr     = rec->vertex.address;
+                d.nrmAddr     = rec->normal.address;
+                d.uvAddr      = (rec->uv.handle != VK_NULL_HANDLE) ? rec->uv.address : 0ull;
+                d.prevPosAddr = (rec->prevVertex.handle != VK_NULL_HANDLE && !rec->interopWorldStatic)
+                                        ? rec->prevVertex.address
+                                        : rec->vertex.address;
+                d.indexAddr   = sel.indexed ? sel.indexAddress : 0ull;
+                d.colorAddr   = (rec->color.handle != VK_NULL_HANDLE && vtxColor) ? rec->color.address : 0ull;
+                d.firstEntry  = sp.first;
+                d.count       = sp.count;
+                d.flagsBase   = matFlags;// | class id, at the reservation (entry order)
+                d.indexed     = sel.indexed ? 1u : 0u;
+                d.packedAttrs = rec->packedMask;
+                d.polygonOffset = polyOff;
+                d.vertexCount = vcount;
+                d.firstVertex = vfirst;
+                d.localCenter[0] = sp.localCenter[0];
+                d.localCenter[1] = sp.localCenter[1];
+                d.localCenter[2] = sp.localCenter[2];
+                d.localRadius    = sp.localRadius;
+                gpuPlans.push_back(gp);
+            }
+        }
+        size_t   gpuNext    = 0;// the next plan, in entry order
+        uint32_t gpuSinkEnd = 0;// check mode: entries below this belong to a GPU span
+        size_t   gpuSinkPlan = 0;
+
         uint32_t globalIdx = 0;
         // Last-entry memos. An InstancedMesh expands to one entry per instance,
         // all sharing a single en.mesh, so these collapse a whole instanced run
@@ -194,6 +303,37 @@ namespace threepp {
         uint32_t          memoDrawCount = 0xFFFFFFFFu;
         uint64_t          drawnTriangles = 0;// AutoLodStats::trianglesDrawn
         for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
+            if (gpuNext < gpuPlans.size() && i == gpuPlans[gpuNext].first) {
+                GpuSpanPlan& gp = gpuPlans[gpuNext];
+                gp.bucketPos = bucketTotal[gp.bucket];
+                bucketTotal[gp.bucket] += gp.count;
+                // The id pair as the loop assigns it: lazily, and only for a
+                // mesh with an entry drawn (stableIdForObject hands out the next
+                // auto id, so the order must stay the entries').
+                Mesh& gm = *lastVisibleEntries_[i].mesh;
+                const uint16_t classId = classIdForObject(gm);
+                gp.desc.stableId = gp.visible > 0u ? stableIdForObject(gm) : stableIdIfAssigned(gm);
+                gp.desc.flagsBase |= (static_cast<uint32_t>(classId) & 0xFFu) << 8;
+                if (gpuDrawGenCheck_) {
+                    // The loop builds this span's records too, as the reference.
+                    gp.expectedBase = drawGenExpected_.size();
+                    for (uint32_t j = 0; j < gp.count; ++j) {
+                        DrawGenExpected x;
+                        x.entry  = gp.first + j;
+                        x.culled = !viewCulled(size_t(gp.first) + j);
+                        drawGenExpected_.push_back(x);
+                    }
+                    gpuSinkEnd  = gp.first + gp.count;
+                    gpuSinkPlan = gpuNext;
+                    ++gpuNext;
+                } else {
+                    drawnTriangles += uint64_t(gp.vcount / 3u) * gp.visible;
+                    ++gpuNext;
+                    i += gp.count - 1u;
+                    continue;
+                }
+            }
+            const bool sinkExpected = i < gpuSinkEnd;
             const auto& en = lastVisibleEntries_[i];
             if (en.isOverlay)  continue;
             // Sensor-only surfaces rasterize into the secondary views that ASK
@@ -376,7 +516,16 @@ namespace threepp {
             di.stableId    = memoStableId;
             di.packedAttrs = rec->packedMask;
             di.polygonOffset = memoPolyOff;// per-mesh, derived once in the memo
+            if (sinkExpected) {
+                // The reference for a GPU-written record (check mode).
+                const GpuSpanPlan& gp = gpuPlans[gpuSinkPlan];
+                DrawGenExpected& x = drawGenExpected_[gp.expectedBase + (i - gp.first)];
+                x.draw = di;
+                x.cmd  = VkDrawIndirectCommand{vcount, 1u, vfirst, 0u};
+                continue;
+            }
             draws[b].push_back(di);
+            cpuPos[b].push_back(bucketTotal[b]++);
 
             VkDrawIndirectCommand cmd{};
             // A ParticleField's DrawInfo record is real — the particle pipeline
@@ -398,8 +547,7 @@ namespace threepp {
             cmd.firstInstance = 0u;// patched below to the final-position index
             cmds[b].push_back(cmd);
             if (en.isParticleField) {
-                pfSlots.push_back({static_cast<const ParticleField*>(en.mesh), b,
-                                   static_cast<uint32_t>(draws[b].size()) - 1u, wantCull});
+                pfSlots.push_back({static_cast<const ParticleField*>(en.mesh), b, cpuPos[b].back(), wantCull});
             }
 
             if (wantOcclMeta) {
@@ -463,6 +611,8 @@ namespace threepp {
             }
             ++globalIdx;
         }
+        // Every record, the reserved GPU ranges included.
+        globalIdx = bucketTotal[0] + bucketTotal[1] + bucketTotal[2] + bucketTotal[3];
 
         indirectTotalDraws_ = globalIdx;
         // Publish only from the primary's build: a secondary reruns this
@@ -522,29 +672,67 @@ namespace threepp {
                 VK_CULL_MODE_NONE// decals: DecalGeometry wraps edges, don't cull
         };
         for (int b = 0; b < 4; ++b) {
-            const uint32_t n = static_cast<uint32_t>(draws[b].size());
+            const uint32_t n = static_cast<uint32_t>(draws[b].size());// the CPU's records
             indirectGroups_[b].cullMode = cullForBucket[b];
             indirectGroups_[b].offset   = offset;
-            indirectGroups_[b].count    = n;
-            if (n > 0u) {
-                // Patch firstInstance now that we know each draw's final
-                // position in the concatenated DrawInfo / indirect arrays.
-                // Entry-order assignment up above doesn't match concat
-                // order once we partition by cull mode — the VS reads
-                // `draws[gl_InstanceIndex]` so the encoded index has to
-                // be the FINAL position, not the bucket-order index.
-                for (uint32_t k = 0; k < n; ++k) {
-                    cmds[b][k].firstInstance = offset + k;
-                }
-                std::memcpy(dDst + offset * sizeof(DrawInfoGpu),
-                            draws[b].data(), n * sizeof(DrawInfoGpu));
-                std::memcpy(cDst + offset * sizeof(VkDrawIndirectCommand),
-                            cmds[b].data(), n * sizeof(VkDrawIndirectCommand));
+            indirectGroups_[b].count    = bucketTotal[b];
+            // Patch firstInstance now that we know each draw's final
+            // position in the concatenated DrawInfo / indirect arrays.
+            // Entry-order assignment up above doesn't match concat
+            // order once we partition by cull mode — the VS reads
+            // `draws[gl_InstanceIndex]` so the encoded index has to
+            // be the FINAL position, not the bucket-order index.
+            // Copied in runs: a GPU span's reserved range splits them
+            // (draw_gen.comp fills it on the device).
+            for (uint32_t k = 0; k < n;) {
+                uint32_t e = k + 1u;
+                while (e < n && cpuPos[b][e] == cpuPos[b][e - 1u] + 1u) ++e;
+                const uint32_t dst = offset + cpuPos[b][k];
+                for (uint32_t q = k; q < e; ++q) cmds[b][q].firstInstance = offset + cpuPos[b][q];
+                std::memcpy(dDst + size_t(dst) * sizeof(DrawInfoGpu), draws[b].data() + k,
+                            size_t(e - k) * sizeof(DrawInfoGpu));
+                std::memcpy(cDst + size_t(dst) * sizeof(VkDrawIndirectCommand), cmds[b].data() + k,
+                            size_t(e - k) * sizeof(VkDrawIndirectCommand));
                 if (occlMetaDst)
-                    std::memcpy(occlMetaDst + offset, occlMeta[b].data(),
-                                n * sizeof(vulkan::OcclusionCull::CullMeta));
+                    std::memcpy(occlMetaDst + dst, occlMeta[b].data() + k,
+                                size_t(e - k) * sizeof(vulkan::OcclusionCull::CullMeta));
+                k = e;
             }
-            offset += n;
+            offset += bucketTotal[b];
+        }
+
+        // The GPU spans' record ranges are final too: the dispatch's input.
+        if (!gpuPlans.empty()) {
+            Matrix4 cvp;
+            std::memcpy(cvp.elements.data(), view().prevCullVp, 64);
+            Frustum frustum;
+            frustum.setFromProjectionMatrix(cvp);
+            const auto& planes = frustum.planes();
+            for (int k = 0; k < 6; ++k) {
+                drawGenPlanes_[k * 4 + 0] = planes[k].normal.x;
+                drawGenPlanes_[k * 4 + 1] = planes[k].normal.y;
+                drawGenPlanes_[k * 4 + 2] = planes[k].normal.z;
+                drawGenPlanes_[k * 4 + 3] = planes[k].constant;
+            }
+            uint32_t work = 0;
+            for (auto& gp : gpuPlans) {
+                gp.desc.recordBase = indirectGroups_[gp.bucket].offset + gp.bucketPos;
+                gp.desc.workBase   = work;
+                work += gp.count;
+                drawGenSpans_.push_back(gp.desc);
+                if (gpuDrawGenCheck_) {
+                    for (uint32_t j = 0; j < gp.count; ++j) {
+                        DrawGenExpected& x = drawGenExpected_[gp.expectedBase + j];
+                        x.record = gp.desc.recordBase + j;
+                        // A culled instance the loop skips: its record is the
+                        // span's draw with nothing to draw.
+                        if (x.culled) x.cmd = VkDrawIndirectCommand{0u, 1u, gp.desc.firstVertex, 0u};
+                        x.cmd.firstInstance = x.record;
+                    }
+                }
+            }
+            drawGenWork_   = work;
+            drawGenActive_ = true;
         }
 
         // Now that the bucket offsets are final, resolve each field's DrawInfo

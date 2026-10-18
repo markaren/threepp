@@ -2405,6 +2405,28 @@ namespace threepp {
         return core()->verifyInstanceExpansion(out);
     }
 
+    void VulkanRenderer::setGpuDrawGeneration(bool enabled) {
+        if (core()->gpuDrawGen_ == enabled) return;
+        core()->gpuDrawGen_ = enabled;
+        ++core()->drawInputsVersion_;// no slot's cached records are this mode's
+    }
+
+    bool VulkanRenderer::gpuDrawGeneration() const {
+        return core()->gpuDrawGen_;
+    }
+
+    void VulkanRenderer::setGpuDrawGenerationCheck(bool keep) {
+        if (core()->gpuDrawGenCheck_ == keep) return;
+        core()->gpuDrawGenCheck_ = keep;
+        core()->drawGenExpected_.clear();
+        ++core()->drawInputsVersion_;// the next build collects the reference
+    }
+
+    bool VulkanRenderer::drawGenCheck(DrawGenCheck& out) {
+        out = {};
+        return core()->verifyDrawGen(out);
+    }
+
     void VulkanRenderer::setBloomThreshold(float threshold) {
         core()->bloomThreshold_ = threshold < 0.f ? 0.f : threshold;
     }

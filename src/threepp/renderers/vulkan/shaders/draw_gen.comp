@@ -1,0 +1,149 @@
+// draw_gen.comp — the G-buffer draw records of an InstancedMesh span, written
+// on the GPU (stage 2 of plans/gpu-driven-instances.md).
+//
+// buildIndirectDrawData (VulkanCoreIndirect.cpp) writes one DrawInfo and one
+// VkDrawIndirectCommand per visible entry on the CPU. For an eligible
+// instanced span (static, no LOD chain, no LOD fades; DrawGen.hpp) it instead
+// reserves `count` records at the span's place in its cull-mode bucket and
+// hands this shader the per-span constants; one thread per instance writes:
+//   - DrawInfo: the world matrix stage 1 (instance_expand.comp) produced for
+//     the entry, the span's addresses / flags / ids, the entry index as
+//     instanceCustomIndex, and the moved-sticky bit read from the entry's
+//     GeometryDesc (the sticky stamp has already landed in this slot's desc);
+//   - the command: the span's vertex range, firstInstance = the record, and
+//     vertexCount 0 for an instance outside the view frustum. That is the CPU
+//     cull's per-entry world-sphere test, operand for operand and `precise`
+//     (no FMA contraction), so the two agree on every entry: where the CPU
+//     classifies a whole chunk or span at once, the sphere test gives the same
+//     answer by construction. A culled record is a no-op draw that stays in
+//     place (records never move within a frame).
+// The CPU path's record for the same entry is the reference: VulkanRenderer::
+// drawGenCheck compares them byte for byte.
+
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive : enable
+
+#include "vulkan_shared.h"// kGeomFlagMoved, kInstFlagMoving
+
+layout(local_size_x = 64) in;
+
+// Matches DrawGen::SpanDesc (scalar, 112 B).
+struct DrawSpan {
+    uint64_t posAddr;
+    uint64_t nrmAddr;
+    uint64_t uvAddr;
+    uint64_t prevPosAddr;
+    uint64_t indexAddr;
+    uint64_t colorAddr;
+    uint     firstEntry; // entry index of instance 0 (== instanceCustomIndex base)
+    uint     count;      // instances (records) in the span
+    uint     recordBase; // record index of instance 0 in the concatenated buckets
+    uint     workBase;   // exclusive prefix sum of count over the spans
+    uint     flagsBase;  // material flag bits | class id << 8 (no per-entry bits)
+    uint     indexed;
+    uint     stableId;
+    uint     packedAttrs;
+    float    polygonOffset;
+    uint     vertexCount;// the span's draw range (index or vertex count)
+    uint     firstVertex;
+    uint     pad0;
+    float    localCenter[3];
+    float    localRadius;// object-space enclosing sphere of the shared geometry
+};
+
+// The vertex shader's DrawInfo (gbuffer_indirect.vert), scalar, 136 B.
+struct DrawInfo {
+    mat4     model;
+    uint64_t posAddr;
+    uint64_t nrmAddr;
+    uint64_t uvAddr;
+    uint64_t prevPosAddr;
+    uint64_t indexAddr;
+    uint64_t colorAddr;
+    uint     instanceCustomIndex;
+    uint     flags;
+    uint     indexed;
+    float    polygonOffset;
+    uint     stableId;
+    uint     packedAttrs;
+};
+
+layout(set = 0, binding = 0, scalar) readonly  buffer Spans     { DrawSpan spans[]; };
+layout(set = 0, binding = 1, scalar) readonly  buffer World     { float    world[]; };// 16 per entry
+layout(set = 0, binding = 2, scalar) readonly  buffer GeomDescs { uint     geomWords[]; };
+layout(set = 0, binding = 3, scalar) writeonly buffer Draws     { DrawInfo draws[]; };
+layout(set = 0, binding = 4, scalar) writeonly buffer Cmds      { uint     cmdWords[]; };// 4 per record
+
+layout(push_constant, scalar) uniform Pc {
+    vec4 planes[6];      // the CPU Frustum's planes: xyz normal, w constant
+    uint spanCount;
+    uint totalWork;      // sum of every span's count == the dispatch domain
+    uint geomStrideWords;// sizeof(GeometryDesc) / 4
+    uint geomFlagsWord;  // offsetof(GeometryDesc, flags) / 4
+} pc;
+
+void main() {
+    const uint g = gl_GlobalInvocationID.x;
+    if (g >= pc.totalWork) return;
+
+    uint lo = 0u, hi = pc.spanCount;
+    while (lo + 1u < hi) {
+        const uint mid = (lo + hi) >> 1u;
+        if (spans[mid].workBase <= g) lo = mid;
+        else hi = mid;
+    }
+    const uint j = g - spans[lo].workBase;
+    if (j >= spans[lo].count) return;// defensive; the prefix sums make it unreachable
+
+    const uint e = spans[lo].firstEntry + j;
+    const uint rec = spans[lo].recordBase + j;
+
+    float M[16];
+    for (int k = 0; k < 16; ++k) M[k] = world[e * 16u + uint(k)];
+
+    // The CPU's straddling-chunk test (cullEntriesAgainstFrustum), verbatim.
+    const float lc0 = spans[lo].localCenter[0];
+    const float lc1 = spans[lo].localCenter[1];
+    const float lc2 = spans[lo].localCenter[2];
+    precise float cx = M[0] * lc0 + M[4] * lc1 + M[8] * lc2 + M[12];
+    precise float cy = M[1] * lc0 + M[5] * lc1 + M[9] * lc2 + M[13];
+    precise float cz = M[2] * lc0 + M[6] * lc1 + M[10] * lc2 + M[14];
+    precise float s0 = M[0] * M[0] + M[1] * M[1] + M[2] * M[2];
+    precise float s1 = M[4] * M[4] + M[5] * M[5] + M[6] * M[6];
+    precise float s2 = M[8] * M[8] + M[9] * M[9] + M[10] * M[10];
+    precise float r = spans[lo].localRadius * sqrt(max(s0, max(s1, s2)));
+    bool vis = true;
+    for (int p = 0; p < 6; ++p) {
+        const vec4 pl = pc.planes[p];
+        precise float d = pl.x * cx + pl.y * cy + pl.z * cz + pl.w;
+        if (d < -r) {
+            vis = false;
+            break;
+        }
+    }
+
+    const uint gflags = geomWords[e * pc.geomStrideWords + pc.geomFlagsWord];
+    DrawInfo d;
+    d.model = mat4(M[0], M[1], M[2], M[3], M[4], M[5], M[6], M[7],
+                   M[8], M[9], M[10], M[11], M[12], M[13], M[14], M[15]);
+    d.posAddr     = spans[lo].posAddr;
+    d.nrmAddr     = spans[lo].nrmAddr;
+    d.uvAddr      = spans[lo].uvAddr;
+    d.prevPosAddr = spans[lo].prevPosAddr;
+    d.indexAddr   = spans[lo].indexAddr;
+    d.colorAddr   = spans[lo].colorAddr;
+    d.instanceCustomIndex = e;
+    d.flags = spans[lo].flagsBase | ((gflags & kGeomFlagMoved) != 0u ? kInstFlagMoving : 0u);
+    d.indexed       = spans[lo].indexed;
+    d.polygonOffset = spans[lo].polygonOffset;
+    d.stableId      = spans[lo].stableId;
+    d.packedAttrs   = spans[lo].packedAttrs;
+    draws[rec] = d;
+
+    cmdWords[rec * 4u + 0u] = vis ? spans[lo].vertexCount : 0u;
+    cmdWords[rec * 4u + 1u] = 1u;
+    cmdWords[rec * 4u + 2u] = spans[lo].firstVertex;
+    cmdWords[rec * 4u + 3u] = rec;
+}

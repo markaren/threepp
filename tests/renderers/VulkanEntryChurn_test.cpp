@@ -51,7 +51,8 @@
 // PPM there, for looking at; that readback stalls, so its timings are void.
 // THREEPP_CHURN_INSTANCES=<n> sets the forest's starting count (default 8192;
 // its capacity is twice that). THREEPP_CHURN_VERBOSE=1 prints every event's
-// frame and the frame after it.
+// frame and the frame after it. THREEPP_CHURN_DRAWGEN=1 turns on the GPU
+// instance expansion and the GPU draw records (stage 2), for A/B runs.
 //
 // Plain exit-code program, not Catch2, like the other Vulkan tests here.
 // Exits 42 (CTest "Skipped") when no Vulkan GPU is available.
@@ -222,6 +223,11 @@ int main() {
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.0f;
     std::printf("ray query: %s\n", renderer.rayTracingSupported() ? "yes" : "no");
+    if (const char* e = std::getenv("THREEPP_CHURN_DRAWGEN"); e && *e == '1') {
+        renderer.setGpuInstanceExpansion(true);
+        renderer.setGpuDrawGeneration(true);
+        std::printf("GPU instance expansion + draw records: on\n");
+    }
 
     const auto env = constantEnv(0.35f);
     Scene scene;

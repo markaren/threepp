@@ -930,6 +930,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/HiZPyramid.cpp"
             "threepp/renderers/vulkan/OcclusionCull.cpp"
             "threepp/renderers/vulkan/InstanceExpand.cpp"
+            "threepp/renderers/vulkan/DrawGen.cpp"
             "threepp/renderers/vulkan/ParticleFieldPass.cpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.cpp"
             "threepp/renderers/vulkan/FoamWorldPipeline.cpp"
@@ -1434,6 +1435,12 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/instance_expand.comp"
         kInstanceExpandCompSpv
         _instance_expand_spv_h)
+    # The G-buffer draw records of eligible instanced spans, written from the
+    # expansion's world matrices (stage 2; DrawGen.{hpp,cpp}).
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/draw_gen.comp"
+        kDrawGenCompSpv
+        _draw_gen_spv_h)
     # ParticleField density representation (plans/particle-field.md §3.3): one
     # thread per particle slot splats fixed-point sigma_t into a world-anchored
     # r32ui volume that every view's froxel pass then samples. See

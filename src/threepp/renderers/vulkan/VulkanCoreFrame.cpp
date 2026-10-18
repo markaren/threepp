@@ -965,6 +965,10 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // post-fence window because it writes this slot's host-mapped pools
             // and this slot's descriptor set.
             prepareInstanceExpansion(currentFrame);
+            // The draw records' dispatch reads the world buffer the expansion
+            // just sized and this slot's DrawInfo / command buffers, both final
+            // now (buildIndirectDrawData above): its set is written here.
+            prepareDrawGen(currentFrame);
             // ParticleField position rings + FieldDesc SSBO. Same site for the
             // same reason (R6): this writes this slot's host-visible buffers,
             // and phase 1's descriptor write lands here too.

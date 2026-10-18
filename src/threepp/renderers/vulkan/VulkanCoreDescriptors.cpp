@@ -695,6 +695,8 @@ void VulkanRenderer::Impl::ensureHybridResources() {
                         *ctx, kFramesInFlight,
                         [this](Buffer&& b) { retire(std::move(b)); });
             }
+            // GPU draw records (stage 2): reads the expansion's output.
+            if (!drawGen_) drawGen_ = std::make_unique<vulkan::DrawGen>(*ctx, kFramesInFlight);
             // ParticleField device state. Same retire contract again: a field
             // that left the scene may still be named by an in-flight frame.
             ensureParticleFieldPass();

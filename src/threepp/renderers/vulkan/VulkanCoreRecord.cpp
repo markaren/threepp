@@ -59,6 +59,12 @@ void VulkanRenderer::Impl::addHeadPasses(rg::RenderGraph& g) {
                 });
                 instExpand_->declare(g, pass, f);
             }
+            // The G-buffer records of the GPU spans (stage 2): after the
+            // expansion it reads, before the G-buffer pass that draws them.
+            if (drawGenActive_ && drawGen_) {
+                auto pass = g.addPass("drawGen", [this, f](VkCommandBuffer c) { recordDrawGen(c, f); });
+                drawGen_->declare(g, pass, f);
+            }
             if (!particleFieldPass_) return;
 
             // The ParticleField block, once for all views (the positions and
@@ -1038,6 +1044,12 @@ void VulkanRenderer::Impl::addGbufferPasses(rg::RenderGraph& g) {
                                             VK_ACCESS_2_INDEX_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
                                     VK_IMAGE_LAYOUT_UNDEFINED, false});
                 pass.use(g.importMemory(kSceneGeometry), kVertexRead);
+                // DrawInfo, when draw_gen.comp wrote part of it this frame.
+                if (drawGenActive_ && !view().secondary) {
+                    pass.use(g.importBuffer("gbuf.drawInfo", view().drawInfoBuffers[f].handle),
+                             rg::Access{VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                                        VK_IMAGE_LAYOUT_UNDEFINED, false});
+                }
                 // The ParticleField draws: device-written instance counts and
                 // positions pulled by address (recordParticleFieldDraws).
                 useParticleFields(g, pass, true);

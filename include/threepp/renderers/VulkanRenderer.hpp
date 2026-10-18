@@ -2035,6 +2035,33 @@ namespace threepp {
         };
         bool instanceExpandCheck(InstanceExpandCheck& out);
 
+        // ── GPU draw records ──────────────────────────────────────────────────
+        // A compute pass (draw_gen.comp) that writes the G-buffer draw records
+        // (DrawInfo + indirect command, frustum cull included) of instanced
+        // meshes from the world matrices the expansion above produced, instead
+        // of the CPU writing one per visible instance every frame the camera or
+        // the instances move. Stage 2 of plans/gpu-driven-instances.md. Takes
+        // the primary view's static InstancedMeshes with no auto-LOD chain and
+        // no LOD fades, on frames without occlusion culling; the rest stays on
+        // the CPU. OFF by default; needs setGpuInstanceExpansion(true).
+        void setGpuDrawGeneration(bool enabled);
+        [[nodiscard]] bool gpuDrawGeneration() const;
+        // Test/debug: while on, the CPU also builds the records the compute
+        // pass writes, and drawGenCheck compares them, byte for byte, over the
+        // frame last rendered: DrawInfo of every instance the CPU draws, and the
+        // command of every instance (vertex count 0 exactly where the CPU culls).
+        // FINALIZES the in-flight frame and DRAINS THE DEVICE, as
+        // instanceExpandCheck does. False when nothing was generated.
+        void setGpuDrawGenerationCheck(bool keep);
+        struct DrawGenCheck {
+            std::size_t spans              = 0;// instanced spans written by compute
+            std::size_t records            = 0;// their records
+            std::size_t drawInfoMismatches = 0;// visible instances whose DrawInfo differs
+            std::size_t cmdMismatches      = 0;// commands that differ (vertex range, instance, record)
+            std::size_t cullMismatches     = 0;// drawn by one side and culled by the other
+        };
+        bool drawGenCheck(DrawGenCheck& out);
+
     private:
         // The one implementation struct, defined in vulkan/VulkanCoreImpl.hpp
         // and opaque to callers of this header.

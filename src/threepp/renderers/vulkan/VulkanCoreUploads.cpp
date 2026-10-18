@@ -2554,6 +2554,79 @@ void VulkanRenderer::Impl::recordInstanceExpansion(VkCommandBuffer cb, uint32_t 
             gpuTimings_->end(cb, vulkan::TP_InstanceExpand, frame);
         }
 
+void VulkanRenderer::Impl::prepareDrawGen(uint32_t frame) {
+            if (!drawGenActive_) return;
+            const auto n = static_cast<uint32_t>(drawGenSpans_.size());
+            // The expansion covers every instanced span and has just sized its
+            // world buffer for this frame's entries. If it ever did not, the
+            // reserved records would draw whatever they held: they are made
+            // empty instead (a missed frame, never a wrong one).
+            const bool covered = drawGen_ && instExpand_ && !instExpandSpans_.empty() &&
+                                 instExpand_->worldBuffer() != VK_NULL_HANDLE &&
+                                 instExpand_->worldCapacity() >= lastVisibleEntries_.size();
+            if (!covered) {
+                void* mapped = nullptr;
+                check(vmaMapMemory(ctx->allocator(), view().indirectCmdBuffers[frame].alloc, &mapped),
+                      "vmaMapMemory(drawGen fallback)");
+                auto* cmds = static_cast<VkDrawIndirectCommand*>(mapped);
+                for (const auto& d : drawGenSpans_)
+                    for (uint32_t j = 0; j < d.count; ++j) cmds[d.recordBase + j] = {0u, 1u, 0u, d.recordBase + j};
+                flushHostWrites(ctx->allocator(), view().indirectCmdBuffers[frame].alloc, 0, VK_WHOLE_SIZE);
+                vmaUnmapMemory(ctx->allocator(), view().indirectCmdBuffers[frame].alloc);
+                drawGenActive_ = false;
+                return;
+            }
+            drawGen_->prepareFrame(frame, n, instExpand_->worldBuffer(), geometryDescsBuffers[frame].handle,
+                                   view().drawInfoBuffers[frame].handle, view().indirectCmdBuffers[frame].handle);
+            std::memcpy(drawGen_->spanPtr(frame), drawGenSpans_.data(), size_t(n) * sizeof(vulkan::DrawGen::SpanDesc));
+            drawGen_->flushSpans(frame, n);
+        }
+
+void VulkanRenderer::Impl::recordDrawGen(VkCommandBuffer cb, uint32_t frame) {
+            if (!drawGenActive_ || !drawGen_) return;
+            vulkan::DrawGen::Pc pc{};
+            std::memcpy(pc.planes, drawGenPlanes_, sizeof(pc.planes));
+            pc.spanCount       = static_cast<uint32_t>(drawGenSpans_.size());
+            pc.totalWork       = drawGenWork_;
+            pc.geomStrideWords = static_cast<uint32_t>(sizeof(GeometryDesc) / 4u);
+            pc.geomFlagsWord   = static_cast<uint32_t>(offsetof(GeometryDesc, flags) / 4u);
+            drawGen_->record(cb, frame, pc);
+        }
+
+bool VulkanRenderer::Impl::verifyDrawGen(VulkanRenderer::DrawGenCheck& out) {
+            out = {};
+            if (!gpuDrawGenCheck_ || drawGenExpected_.empty()) return false;
+            // Same reason as verifyInstanceExpansion: render() leaves the frame
+            // open; close it, then wait for it.
+            if (frameState_ != FrameState::Idle) endFrame();
+            check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle(drawGenCheck)");
+            ViewContext& pv = primaryView();
+            const uint32_t f = drawGenExpectedFrame_;
+            const Buffer& dBuf = pv.drawInfoBuffers[f];
+            const Buffer& cBuf = pv.indirectCmdBuffers[f];
+            if (dBuf.handle == VK_NULL_HANDLE || cBuf.handle == VK_NULL_HANDLE) return false;
+            void* dMap = nullptr;
+            void* cMap = nullptr;
+            check(vmaMapMemory(ctx->allocator(), dBuf.alloc, &dMap), "vmaMapMemory(drawGenCheck draws)");
+            check(vmaMapMemory(ctx->allocator(), cBuf.alloc, &cMap), "vmaMapMemory(drawGenCheck cmds)");
+            invalidateHostReads(ctx->allocator(), dBuf.alloc, 0, VK_WHOLE_SIZE);
+            invalidateHostReads(ctx->allocator(), cBuf.alloc, 0, VK_WHOLE_SIZE);
+            const auto* draws = static_cast<const DrawInfoGpu*>(dMap);
+            const auto* cmds  = static_cast<const VkDrawIndirectCommand*>(cMap);
+            out.spans = drawGenSpans_.size();
+            for (const auto& x : drawGenExpected_) {
+                ++out.records;
+                const VkDrawIndirectCommand& gc = cmds[x.record];
+                if (std::memcmp(&gc, &x.cmd, sizeof(gc)) != 0) ++out.cmdMismatches;
+                if ((gc.vertexCount == 0u) != x.culled) ++out.cullMismatches;
+                if (!x.culled && std::memcmp(&draws[x.record], &x.draw, sizeof(DrawInfoGpu)) != 0)
+                    ++out.drawInfoMismatches;
+            }
+            vmaUnmapMemory(ctx->allocator(), cBuf.alloc);
+            vmaUnmapMemory(ctx->allocator(), dBuf.alloc);
+            return true;
+        }
+
 bool VulkanRenderer::Impl::verifyInstanceExpansion(VulkanRenderer::InstanceExpandCheck& out) {
             out = {};
             if (!gpuInstanceExpand_ || !instExpand_ || instExpandSpans_.empty()) return false;
