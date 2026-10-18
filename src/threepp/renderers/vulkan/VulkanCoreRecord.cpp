@@ -219,9 +219,12 @@ void VulkanRenderer::Impl::addDeformAndTlasPasses(rg::RenderGraph& g) {
             // recordGrassDeform issues the grass_wind dispatch + a compute→AS
             // barrier + the in-place BLAS refit per mesh. (The TLAS sees last
             // frame's bounds — fine for the small sway envelope, same
-            // 1-frame-late deal as skinned.)
-            if (!pendingGrassDeforms_.empty() && grassWind_) {
+            // 1-frame-late deal as skinned.) Each deform first copies the pose
+            // the field shows into its previous pose (motion vectors); a field
+            // the distance gate froze this frame gets that copy alone, once.
+            if ((!pendingGrassDeforms_.empty() || grassPrevSettlePending()) && grassWind_) {
                 g.addPass("deform.grass", [this](VkCommandBuffer c) {
+                     recordGrassPrevSettles(c);
                      for (auto& [gm, st] : pendingGrassDeforms_) recordGrassDeform(c, *gm, *st);
                      pendingGrassDeforms_.clear();
                  }).use(geom, deform);

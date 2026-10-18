@@ -647,6 +647,13 @@ namespace threepp::vulkan::impl {
         MeshOwner owner;// the mesh itself (see MeshOwner)
         uint32_t blasRefitCounter = 0;
         static constexpr uint32_t kBlasFullRebuildInterval = 64;
+        // blas->prevVertex holds the pose BEFORE the last wind step (the
+        // motion-vector base), so it differs from blas->vertex. Set by each
+        // deform; the first frame without one (time frozen does not count:
+        // that deform runs and rewrites the same pose, so prev == vertex already;
+        // this is the distance-gated freeze) copies vertex -> prevVertex once
+        // and clears it, so a field that stops swaying reports zero motion.
+        bool prevResyncPending = false;
     };
 
     // Per-instance descriptor tables the closest-hit shader indexes by

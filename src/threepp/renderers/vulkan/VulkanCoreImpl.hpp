@@ -3404,12 +3404,22 @@ namespace threepp {
         // exactly like the skinned-mesh path, so there is NO mid-frame
         // vkQueueWaitIdle. Uses the persistent per-BLAS scratch (grass geometry
         // is fixed-size, so it's allocated once on first use). Normals are left
-        // static, so only the position buffer is written/barriered.
+        // static, so only the position buffer is written/barriered. Before the
+        // dispatch it copies the current pose into blas->prevVertex, the motion
+        // vectors' previous pose, as the skinned and displaced paths do.
         void recordGrassDeform(VkCommandBuffer cb, GrassMesh& gm, GrassMeshState& st);
+
+        // Grass fields that swayed last frame and are not deformed this frame
+        // (the distance-gated freeze): copy vertex -> prevVertex once so their
+        // motion collapses to zero. grassPrevSettlePending() says whether any
+        // is due, so the deform.grass pass exists on a frame with no deform.
+        [[nodiscard]] bool grassPrevSettlePending() const;
+        void recordGrassPrevSettles(VkCommandBuffer cb);
 
         // One-shot wrapper — used only for the initial prime during scene build
         // (rare). The per-frame path records into the frame cb via the pending
-        // queue, so it never drains.
+        // queue, so it never drains. Leaves prevVertex == vertex (no motion on
+        // the field's first frame).
         void refreshGrassBlas(GrassMesh& gm, GrassMeshState& st, float /*elapsedSeconds*/);
 
         // Build a TLAS over the supplied instance descriptors. Empty input is

@@ -3593,7 +3593,85 @@ void VulkanRenderer::Impl::refreshDisplacedBlas(DisplacedMesh& dm, DisplacedMesh
             mirrorDisplacedHeightfields(dm, st);
         }
 
+namespace {
+
+        // The motion-vector base of a grass field: blas->vertex (the pose the
+        // field shows) -> blas->prevVertex, which the G-buffer vertex stage and
+        // the closest-hit reprojection read as the previous pose. Without it
+        // prevVertex kept the pose of the field's BLAS build forever, so a
+        // swaying blade reported its offset from that pose, not its motion
+        // since the last frame: a field frozen in time read up to a pixel of
+        // motion, a swaying one the wrong amount, and TAA and the upscalers
+        // reprojected its history to the wrong place every frame.
+        void copyGrassPose(VkCommandBuffer cb, vulkan::VulkanContext& ctx, const vulkan::impl::BlasRecord& rec,
+                           uint32_t vertexCount) {
+            // The last deform's compute write and last frame's reads of
+            // prevVertex come before the copy reads vertex and writes prevVertex.
+            VkMemoryBarrier2 before{};
+            before.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            before.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                   VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
+                                   VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | ctx.rtShaderStage2();
+            before.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            before.dstStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
+            before.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            VkDependencyInfo dep{};
+            dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dep.memoryBarrierCount = 1;
+            dep.pMemoryBarriers    = &before;
+            vkCmdPipelineBarrier2(cb, &dep);
+
+            VkBufferCopy region{};
+            region.size = VkDeviceSize(vertexCount) * 3u * sizeof(float);
+            vkCmdCopyBuffer(cb, rec.vertex.handle, rec.prevVertex.handle, 1, &region);
+
+            // The copy before the wind dispatch overwrites vertex (an execution
+            // dependency covers that) and before anything reads prevVertex: the
+            // raster G-buffer (attribute or buffer-reference fetch) and the
+            // ray-query reprojection.
+            VkMemoryBarrier2 after{};
+            after.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            after.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
+            after.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            after.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                  VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
+                                  VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | ctx.rtShaderStage2();
+            after.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                  VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
+            dep.pMemoryBarriers = &after;
+            vkCmdPipelineBarrier2(cb, &dep);
+        }
+
+    }// namespace
+
+bool VulkanRenderer::Impl::grassPrevSettlePending() const {
+            for (const auto& [gm, st] : grassStates) {
+                if (st && st->prevResyncPending) return true;
+            }
+            return false;
+        }
+
+void VulkanRenderer::Impl::recordGrassPrevSettles(VkCommandBuffer cb) {
+            for (auto& [gm, st] : grassStates) {
+                if (!st || !st->prevResyncPending || !st->blas) continue;
+                const bool deformsNow = std::any_of(pendingGrassDeforms_.begin(), pendingGrassDeforms_.end(),
+                                                    [&](const auto& p) { return p.second == st.get(); });
+                if (deformsNow) continue;// its deform copies the pose itself
+                if (st->blas->prevVertex.handle != VK_NULL_HANDLE) {
+                    copyGrassPose(cb, *ctx, *st->blas, st->vertexCount);
+                }
+                st->prevResyncPending = false;
+            }
+        }
+
 void VulkanRenderer::Impl::recordGrassDeform(VkCommandBuffer cb, GrassMesh& gm, GrassMeshState& st) {
+            // The pose the field shows now becomes the previous pose of the one
+            // the dispatch below writes.
+            if (st.blas->prevVertex.handle != VK_NULL_HANDLE) {
+                copyGrassPose(cb, *ctx, *st.blas, st.vertexCount);
+                st.prevResyncPending = true;
+            }
+
             vulkan::GrassWindPipeline::PushConstants pc{};
             pc.posOut       = st.blas->vertex.address;
             pc.restIn       = st.restPos.address;
@@ -3702,6 +3780,12 @@ void VulkanRenderer::Impl::recordGrassDeform(VkCommandBuffer cb, GrassMesh& gm, 
 void VulkanRenderer::Impl::refreshGrassBlas(GrassMesh& gm, GrassMeshState& st, float /*elapsedSeconds*/) {
             VkCommandBuffer cb = beginOneShot();
             recordGrassDeform(cb, gm, st);
+            // The prime's own pose is the field's first previous pose: without
+            // this the first frame reports the sway offset from the rest pose.
+            if (st.blas->prevVertex.handle != VK_NULL_HANDLE) {
+                copyGrassPose(cb, *ctx, *st.blas, st.vertexCount);
+                st.prevResyncPending = false;
+            }
             endAndSubmitOneShot(cb, "grass prime");
         }
 

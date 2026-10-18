@@ -297,6 +297,14 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanSpotBeamFog_test COMMAND VulkanSpotBeamFog_test)
     set_tests_properties(VulkanSpotBeamFog_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # A GrassMesh's motion vectors are its sway since the last frame: zero when
+    # time is frozen or the distance gate freezes it, the wind's step when it
+    # sways (TAA and the upscalers reproject the grass through them).
+    add_executable(VulkanGrassMotion_test VulkanGrassMotion_test.cpp)
+    target_link_libraries(VulkanGrassMotion_test PRIVATE threepp)
+    add_test(NAME VulkanGrassMotion_test COMMAND VulkanGrassMotion_test)
+    set_tests_properties(VulkanGrassMotion_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # A mesh removed and freed between two frames: the calls that walk the last
     # frame's entries (setEmissiveCastsLight, setStableCorrespondence,
     # enableVertexInterop) never read it, and a freed skinned clone's GPU state
