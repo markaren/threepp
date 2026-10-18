@@ -314,7 +314,7 @@ void VulkanRenderer::Impl::submitStagedUploads(StagedUploads& up, const char* la
 
 std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBlasFor(const BufferGeometry& geom, bool allowPacked, bool updatable,
                                                                                      const std::vector<uint32_t>* rtIndices,
-                                                                                     VertexWriter writer) {
+                                                                                     VertexWriter writer, bool traced) {
             // Escape hatch for A/B triage: THREEPP_NO_PACK=1 forces every
             // attribute buffer back to tightly-packed float, same binary.
             static const bool noPack = std::getenv("THREEPP_NO_PACK") != nullptr;
@@ -407,8 +407,10 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
             // new positions arrive by GPU copy from staging instead of a
             // host memcpy (recordDynamicGeomRefits).
             // Without ray query there is no BLAS: no build-input usage (it is
-            // invalid without the acceleration-structure extension).
-            const bool rt = ctx->rayQuerySupported();
+            // invalid without the acceleration-structure extension). A geometry
+            // no ray meets (traced == false, drawn only by overlay meshes) takes
+            // the same shape by choice.
+            const bool rt = ctx->rayQuerySupported() && traced;
             const VkBufferUsageFlags geomUsage =
                     (rt ? VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR : 0u) |
                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
@@ -590,9 +592,10 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBla
                 stageUpload(up, rec->rtIndex, rtIndices->data(), ibBytes);
                 rec->rtIndexCount = static_cast<uint32_t>(rtIndices->size() - rtIndices->size() % 3u);
             }
-            // No ray query: the record is its buffers. The raster draws and the
-            // shaders' buffer fetches need nothing else; as stays null and
-            // address 0, and no instance of it is ever traced.
+            // No ray query, or a geometry no ray meets: the record is its
+            // buffers. The raster draws and the shaders' buffer fetches need
+            // nothing else; as stays null and address 0, and no instance of it
+            // is ever traced.
             if (!rt) {
                 rec->prevVertex = createBuffer(
                         ctx->allocator(), ctx->device(), vbBytes,
@@ -2229,18 +2232,23 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
             // snapshot and before the refits below read them.
             submitStagedUploads(up, "refreshGeomBlasBatch (uploads)");
 
-            if (!ctx->rayQuerySupported()) {
-                // No BLAS to refit: the uploads above are the whole refresh.
-                for (const size_t k : liveOps) stampVersions(*ops[k].rec, *ops[k].geom);
-                return;
+            // A record without an acceleration structure — every record without
+            // ray query, and the record of a geometry only overlay meshes draw —
+            // is its buffers: the uploads above were its whole refresh.
+            std::vector<size_t> asOps;
+            asOps.reserve(liveOps.size());
+            for (const size_t k : liveOps) {
+                if (ops[k].rec->as != VK_NULL_HANDLE) asOps.push_back(k);
+                else stampVersions(*ops[k].rec, *ops[k].geom);
             }
+            if (asOps.empty()) return;
 
             // Phase D — refit each BLAS. The build-info structs need to outlive
             // the cmdBuildAccelerationStructures call until the GPU executes
             // them, so we hold them in vectors that live until after the submit-
             // wait below. Each op uses its own (persistent) scratch buffer so
             // concurrent builds within the cmdbuf don't alias.
-            const uint32_t N = static_cast<uint32_t>(liveOps.size());
+            const uint32_t N = static_cast<uint32_t>(asOps.size());
             std::vector<VkAccelerationStructureGeometryTrianglesDataKHR> triDatas(N);
             std::vector<VkAccelerationStructureGeometryKHR>              blasGeoms(N);
             std::vector<VkAccelerationStructureBuildGeometryInfoKHR>     blasBuilds(N);
@@ -2248,7 +2256,7 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
             std::vector<const VkAccelerationStructureBuildRangeInfoKHR*> rangePtrs(N);
 
             for (uint32_t kk = 0; kk < N; ++kk) {
-                const size_t k = liveOps[kk];
+                const size_t k = asOps[kk];
                 const auto& geom = *ops[k].geom;
                 auto& rec = *ops[k].rec;
                 auto* posAttr = geom.getAttribute<float>("position");
@@ -2409,6 +2417,7 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
             // VkAccelerationStructureBuildGeometryInfoKHR unassigned and relies
             // on the value-initialisation a fresh vector used to hand it.
             static thread_local std::vector<size_t>   liveOps;
+            static thread_local std::vector<size_t>   asOps;// liveOps with a structure to refit
             static thread_local std::vector<uint32_t> packedNormals;
             static thread_local std::vector<VkAccelerationStructureGeometryTrianglesDataKHR> triDatas;
             static thread_local std::vector<VkAccelerationStructureGeometryKHR>              blasGeoms;
@@ -2732,7 +2741,16 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                 vkCmdPipelineBarrier2(cb, &dep);
             }
 
-            if (anyRefit && ctx->rayQuerySupported()) {
+            // The records with a structure to refit: none without ray query,
+            // and none for a geometry only overlay meshes draw — the uploads
+            // above were its whole refresh, as in refreshGeomBlasBatch.
+            asOps.clear();
+            if (anyRefit) {
+                for (const size_t k : liveOps) {
+                    if (pendingDynamicGeomRefits_[k].rec->as != VK_NULL_HANDLE) asOps.push_back(k);
+                }
+            }
+            if (!asOps.empty()) {
                 // Phase 6 — batched BLAS refit, the recorded twin of
                 // refreshGeomBlasBatch's Phase D. The build-info structs are
                 // consumed by the record below and never outlive it, so the
@@ -2740,7 +2758,7 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                 // them; clear() before resize() so every element is
                 // value-initialised exactly as a freshly constructed vector
                 // would be.
-                const uint32_t N = static_cast<uint32_t>(liveOps.size());
+                const uint32_t N = static_cast<uint32_t>(asOps.size());
                 triDatas.clear();
                 triDatas.resize(N);
                 blasGeoms.clear();
@@ -2752,7 +2770,7 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                 rangePtrs.clear();
                 rangePtrs.resize(N);
                 for (uint32_t kk = 0; kk < N; ++kk) {
-                    auto& rec = *pendingDynamicGeomRefits_[liveOps[kk]].rec;
+                    auto& rec = *pendingDynamicGeomRefits_[asOps[kk]].rec;
                     // Never a compacted record: ensureSceneBuilt moves a record
                     // to updatable storage when it enqueues its first edit
                     // (moveToUpdatableBlasStorage); interop records are never
@@ -2762,7 +2780,7 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                     // Only [0, drawRange start+count) is built — same clamp
                     // and same no-offset rationale as buildBlasFor.
                     const DrawSpan span = drawSpanOf(
-                            *pendingDynamicGeomRefits_[liveOps[kk]].geom,
+                            *pendingDynamicGeomRefits_[asOps[kk]].geom,
                             indexed ? rec.indexCount : rec.vertexCount);
                     const uint32_t primitiveCount = (span.first + span.elems) / 3u;
 
@@ -2860,7 +2878,7 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                     // update-must-match-its-source reason.
                     const bool fullRebuild = primitiveCount != rec.blasBuiltPrims ||
                             wantFlags != rec.blasBuiltFlags || blasRebuildThisFrame_ ||
-                            indexChanged[liveOps[kk]] != 0u ||
+                            indexChanged[asOps[kk]] != 0u ||
                             rec.blasRefitCounter >= BlasRecord::kBlasFullRebuildInterval;
                     rec.blasRefitCounter = fullRebuild ? 0u : (rec.blasRefitCounter + 1u);
                     rec.blasBuiltPrims = primitiveCount;

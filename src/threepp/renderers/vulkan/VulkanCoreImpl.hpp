@@ -3147,9 +3147,16 @@ namespace threepp {
         // `writer`: for an updatable record, VertexWriter::Gpu places vertex
         // and normal device-local (see VertexWriter); ignored for static and
         // interop records.
+        // traced = false builds the record as it is built without ray query:
+        // its buffers, no acceleration structure. For a geometry that only
+        // overlay meshes draw (a wireframe, an overlay-layer panel): no ray
+        // meets an overlay, it is never a TLAS instance, and its structure was
+        // build time at admission, a refit per edit and device memory for
+        // nothing (ensureSceneBuilt decides per geometry, see tracedGeoms).
         std::unique_ptr<BlasRecord> buildBlasFor(const BufferGeometry& geom, bool allowPacked, bool updatable,
                                                  const std::vector<uint32_t>* rtIndices = nullptr,
-                                                 VertexWriter writer = VertexWriter::Host);
+                                                 VertexWriter writer = VertexWriter::Host,
+                                                 bool traced = true);
 
         // Allocate or look up the per-SkinnedMesh BLAS state. Builds the BLAS
         // once with the current pose; subsequent dirty frames go through

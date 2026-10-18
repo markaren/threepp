@@ -219,6 +219,14 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanGeometryRefresh_test COMMAND VulkanGeometryRefresh_test)
     set_tests_properties(VulkanGeometryRefresh_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # A geometry only overlay meshes draw (wireframe, overlay layer) gets no
+    # acceleration structure: it still draws, no ray meets it, its edits record
+    # no BLAS refit, and a solid mesh that comes to share it is traced.
+    add_executable(VulkanOverlayBlas_test VulkanOverlayBlas_test.cpp)
+    target_link_libraries(VulkanOverlayBlas_test PRIVATE threepp)
+    add_test(NAME VulkanOverlayBlas_test COMMAND VulkanOverlayBlas_test)
+    set_tests_properties(VulkanOverlayBlas_test PROPERTIES SKIP_RETURN_CODE 42)
+
     # Object3D::visible / material visible toggles at run time: no structural
     # rebuild, and the hidden mesh is gone from the raster and the ray hits.
     add_executable(VulkanVisibilityToggle_test VulkanVisibilityToggle_test.cpp)

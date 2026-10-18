@@ -2238,7 +2238,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 // is a no-op for an updatable record that still
                                 // fits. The old pair is retired: earlier frames in
                                 // flight still trace it.
-                                if (ctx->rayQuerySupported() &&
+                                // A record without a structure (a geometry only
+                                // overlay meshes draw) has nothing to move.
+                                if (ctx->rayQuerySupported() && rec.as != VK_NULL_HANDLE &&
                                     moveToUpdatableBlasStorage(rec, updatableBlasSize(rec, *entries[i].mesh->geometry()),
                                                                /*retireOld=*/true)) {
                                     rec.blasBuiltFlags = 0;// the next build is a MODE_BUILD
@@ -3040,6 +3042,23 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // of every iteration and flushed just before each deformer branch
             // (whose FFT/skin/wind refit submits its own readback-bearing command
             // buffers that must run immediately) and once more before buildTlas.
+            // The geometries some traced entry draws this build. A geometry
+            // drawn only by overlay meshes (a wireframe, an overlay-layer
+            // panel, a UI blend) gets a record without an acceleration
+            // structure below: no ray meets an overlay, it is never a TLAS
+            // instance, so its structure was build time at admission, a refit
+            // per edit and device memory for nothing — spot_slam's wireframe
+            // marching-cubes surface, 600k vertices rebuilt every 3 s, until
+            // 2026-10-18. One insert per mesh, not per instance: an
+            // InstancedMesh's entries are contiguous.
+            std::unordered_set<const BufferGeometry*> tracedGeoms;
+            for (size_t i = 0; i < entries.size(); ++i) {
+                const MeshEntry& e0 = entries[i];
+                if (e0.isOverlay || !e0.mesh) continue;
+                if (i > 0 && entries[i - 1].mesh == e0.mesh) continue;
+                tracedGeoms.insert(e0.mesh->geometry().get());
+            }
+
             for (size_t i = 0; i < entries.size(); ++i) {
                 beginOneShotBatch();// (re)arm; idempotent if a batch is already open
                 const MeshEntry& en = entries[i];
@@ -3141,6 +3160,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     if (!st) continue;
                     recPtr = st->blas.get();
                 } else {
+                    const bool traced = ctx->rayQuerySupported() && tracedGeoms.count(geomKey) != 0;
                     auto it = blasCache.find(geomKey);
                     if (it != blasCache.end()) {
                         const unsigned int curVer = geomVersionOf(*m->geometry());
@@ -3259,8 +3279,21 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             }
                         }
                     }
+                    // A record built without a structure — its geometry was
+                    // drawn only by overlay meshes then — that a traced mesh
+                    // now shares (a solid mesh added beside its own wireframe):
+                    // rebuilt with one, before the instance below reads its
+                    // address. An interop record always has one.
+                    if (it != blasCache.end() && traced && it->second->as == VK_NULL_HANDLE &&
+                        !it->second->interop) {
+                        destroyBlasLodLevels(*it->second);
+                        destroyBlasRecord(*it->second);
+                        blasCache.erase(it);
+                        it = blasCache.end();
+                    }
                     if (it == blasCache.end()) {
-                        auto rec = buildBlasFor(*m->geometry(), /*allowPacked=*/true, /*updatable=*/false);
+                        auto rec = buildBlasFor(*m->geometry(), /*allowPacked=*/true, /*updatable=*/false,
+                                                nullptr, VertexWriter::Host, traced);
                         if (!rec) continue;// degenerate / unsupported geometry
                         rec->liveCheck = m->geometry();
                         it = blasCache.emplace(geomKey, std::move(rec)).first;
@@ -3268,10 +3301,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     recPtr = it->second.get();
                 }
 
-                // Overlay meshes need a BlasRecord (vertex buffer for the
-                // raster overlay pass) but must not appear in the TLAS or
-                // GeometryDesc/MaterialDesc arrays — the traced/rasterized
-                // scene must not see them.
+                // Overlay meshes need a BlasRecord (the raster overlay pass
+                // binds its vertex buffer) but no acceleration structure, and
+                // must not appear in the TLAS or GeometryDesc/MaterialDesc
+                // arrays — the traced/rasterized scene must not see them.
                 if (en.isOverlay) continue;
 
                 VkAccelerationStructureInstanceKHR inst{};
