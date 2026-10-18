@@ -2758,6 +2758,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             }
 
             fullRebuild:
+            // The rebuild's phases, siblings under THREEPP_CPU_PHASE_PROFILE
+            // (the per-event cost VulkanEntryChurn_test reports, broken down).
+            THREEPP_CPUPROF_NAMED(rbDrain, "scene.R0_drainPrune");
             // Structural change — invalidate the emissive-tri cache so next
             // frame's buildAndUploadEmissiveTris does a full walk regardless
             // of whether entries.size() happens to match.
@@ -2992,6 +2995,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 retiredTextureSlots_.clear();
             }
 
+            rbDrain.stop();
+            THREEPP_CPUPROF_NAMED(rbLoop, "scene.R1_entryLoop");
             std::vector<VkAccelerationStructureInstanceKHR> instances;
             instances.reserve(entries.size());
             // geomDescs / matDescs are ENTRIES-indexed: one slot per entry, with
@@ -3509,11 +3514,17 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // seeds + texture staging/blits), waiting a single time. After this
             // returns every new BLAS is built and every new albedo texture is
             // resident, so buildTlas below can reference the fresh BLAS.
+            rbLoop.stop();
+            THREEPP_CPUPROF_NAMED(rbFlush, "scene.R2_batchFlush");
             flushOneShotBatch();
             // Records compacted by the batch flushes in this pass were pushed
             // above with their build-size addresses.
             applyBlasCompactionRemap(instances);
+            rbFlush.stop();
+            THREEPP_CPUPROF_NAMED(rbTlas, "scene.R3_buildTlas");
             buildTlas(instances);
+            rbTlas.stop();
+            THREEPP_CPUPROF_NAMED(rbDescs, "scene.R4_descUpload");
             // Every per-frame GeometryDesc slot seeded fresh — same ring
             // model as the matDescs loop below; the lean auto-LOD patch
             // flips geomDescsDirty_ and flushGeometryDescsIfDirty carries
@@ -3585,6 +3596,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // A duplicate (mesh, instanceIndex) key would make the identity
             // match ambiguous — not expected, every entry is its own TLAS
             // slot — so that lone case falls back to the old global reset.
+            rbDescs.stop();
+            THREEPP_CPUPROF_NAMED(rbRemap, "scene.R5_identityRemap");
             std::vector<std::array<float, 16>> oldPrevWorld = std::move(prevWorldByEntry_);
             std::vector<uint8_t> oldPrevValid = std::move(prevWorldValidByEntry_);
             seedMotionState(entries);// identity motion + prev=current for every slot
@@ -3643,6 +3656,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // computeAndUploadMotionMatrices uploads
             // entries.size() matrices, so the instance-count sizing overflowed
             // the host buffer too.
+            rbRemap.stop();
+            THREEPP_CPUPROF_NAMED(rbViews, "scene.R6_capacityDescriptors");
             const uint32_t motionSlots    = static_cast<uint32_t>(entries.size());
             const uint32_t neededBitWords = std::max<uint32_t>((motionSlots + 31u) / 32u, 1u);
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {

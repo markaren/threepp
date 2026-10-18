@@ -26,6 +26,7 @@
 namespace threepp {
 
 void VulkanRenderer::Impl::clearGbufImages() {
+            ++tlasStats_.historyResets;
             VkCommandBuffer cb = beginOneShot();
 
             // Clears the ReSTIR DI reservoir ping-pong (pos + W) so M=0 on

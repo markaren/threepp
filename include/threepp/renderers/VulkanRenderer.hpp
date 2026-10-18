@@ -874,6 +874,12 @@ namespace threepp {
             // texture swapped, a mesh shown for the first time (unless it is
             // Object3D::resident). Hiding or re-showing a mesh is not one.
             uint64_t structuralRebuilds = 0;
+            // Temporal history wipes, per view: the ReSTIR reservoirs, the
+            // denoiser and reflection histories, the fog and cloud
+            // accumulators start over (a new environment, a resize,
+            // resetTemporalHistory, the first scene build). An entry added or
+            // removed is not one: surviving entries keep their history.
+            uint64_t historyResets = 0;
         };
         [[nodiscard]] TlasStats tlasStats() const;
 

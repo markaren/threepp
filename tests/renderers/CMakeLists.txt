@@ -241,6 +241,19 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     add_test(NAME VulkanVisibilityToggle_test COMMAND VulkanVisibilityToggle_test)
     set_tests_properties(VulkanVisibilityToggle_test PROPERTIES SKIP_RETURN_CODE 42)
 
+    # Content streamed through the entry list the way CellStreamer and the
+    # forest's LODs drive it (cells detached and re-attached, an InstancedMesh
+    # count grown and shrunk, a never-shown mesh shown): what each event costs
+    # its frame in structural rebuilds, history resets and milliseconds. The
+    # gate of plans/gpu-driven-instances.md stage 2a (stable entry slots).
+    # Twice: ray traced where the GPU can, and in the no-ray-tracing mode.
+    add_executable(VulkanEntryChurn_test VulkanEntryChurn_test.cpp)
+    target_link_libraries(VulkanEntryChurn_test PRIVATE threepp)
+    add_test(NAME VulkanEntryChurn_test COMMAND VulkanEntryChurn_test)
+    add_test(NAME VulkanEntryChurn_nort_test COMMAND VulkanEntryChurn_test)
+    set_tests_properties(VulkanEntryChurn_test VulkanEntryChurn_nort_test PROPERTIES SKIP_RETURN_CODE 42)
+    set_tests_properties(VulkanEntryChurn_nort_test PROPERTIES ENVIRONMENT "THREEPP_VULKAN_NO_RT=1")
+
     # CPU wave-height query of the FFT ocean against an analytic Gerstner
     # wave: the choppy-displacement inversion and the cascade-1 rotation.
     # No device needed; DisplacedMesh is only built with Vulkan.
