@@ -657,6 +657,11 @@ namespace threepp::vulkan::impl {
         // this is the distance-gated freeze) copies vertex -> prevVertex once
         // and clears it, so a field that stops swaying reports zero motion.
         bool prevResyncPending = false;
+        // A field the slot path admitted: its first deform runs in the frame
+        // (no blocking one-shot), even where the distance gate would freeze
+        // it, and copies the pose it writes into prevVertex as the
+        // synchronous prime does, so its first frame reports no motion.
+        bool primePending = false;
     };
 
     // Per-instance descriptor tables the closest-hit shader indexes by

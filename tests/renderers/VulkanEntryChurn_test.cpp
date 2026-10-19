@@ -45,8 +45,10 @@
 // live field may not (until 2026-10-20 any field sent every slot edit back to
 // the rebuild). Then the forest grows to its whole capacity at once, more
 // entries than the slot pool the last rebuild laid out: the pool grows in place
-// (one device wait, no rebuild). A last phase removes every mesh (no TLAS
-// instance left), renders, and adds some back.
+// (one device wait, no rebuild). GrassMesh fields (wind-swayed, each its own
+// BLAS) are added, detached, re-attached, swapped, admitted hidden and dropped,
+// each a slot edit. A last phase removes every mesh (no TLAS instance left),
+// renders, and adds some back.
 // THREEPP_VULKAN_NO_SLOTS=1 restores the rebuild, and with it the baseline:
 // run with it, the bench expects one structural rebuild per event.
 //
@@ -69,6 +71,7 @@
 
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
+#include "threepp/extras/vegetation/GrassTiles.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/ConeGeometry.hpp"
 #include "threepp/geometries/CylinderGeometry.hpp"
@@ -77,6 +80,7 @@
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/math/MathUtils.hpp"
+#include "threepp/objects/GrassMesh.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -387,11 +391,18 @@ int main() {
         field->submit(fieldPos.data(), kFieldParticles);
     };
 
+    // The grass phase's fields, their wind clock a closed form of the frame
+    // count (both lanes see the same poses).
+    std::vector<std::shared_ptr<GrassMesh>> grassFields;
+    uint32_t grassTick = 0;
+
     std::vector<FrameRow> rows;
     try {
         const auto frame = [&](int kind, int sinceEvent) {
             placeCamera();
             feedField();
+            for (auto& g : grassFields) g->params.time = 0.05f * static_cast<float>(grassTick);
+            ++grassTick;
             const auto before = renderer.tlasStats();
             double wall = 0;
             canvas.animateOnce([&] {
@@ -790,6 +801,123 @@ int main() {
                       w1.structuralRebuilds - w0.structuralRebuilds == 6u);
             }
             check("swaps: no temporal history reset", w1.historyResets == w0.historyResets);
+        }
+
+        // ── Grass fields streamed ────────────────────────────────────────────
+        // GrassMesh fields (one merged mesh of blades the wind compute pass
+        // sways, its own BLAS refit every frame) come and go the way a
+        // streamed heath's cells do: fields added shown, one detached and
+        // attached again, one whose geometry is swapped (the old one kept
+        // alive) and swapped back, one added hidden and shown later, and all
+        // of them dropped for good. Until 2026-10-20 each was a structural
+        // rebuild (a deformer's state was the rebuild's to build and to free);
+        // now each is a slot edit: a field's record and inputs are built in the
+        // edit's batch, or over the frames after for the hidden one, and its
+        // first wind pose is recorded in the frame. THREEPP_CHURN_DUMP writes
+        // the frame after each event (churn_grass_*) for comparing against the
+        // rebuild lane: a field that did not sway, or swayed from the wrong
+        // pose, shows there.
+        {
+            const char* syncEnv = std::getenv("THREEPP_VULKAN_SYNC_ADMIT");
+            const bool syncAdmit = syncEnv && *syncEnv == '1';
+            for (int f = 0; f < kGap; ++f) frame(-1, kGap);
+            std::vector<double> quiet;
+            for (int f = 0; f < 16; ++f) quiet.push_back(frame(-1, kGap).wallMs);
+            const double q = percentile(quiet, 0.5);
+            const auto r0 = renderer.tlasStats();
+            const uint64_t mem0 = renderer.gpuAllocatedBytes();
+            auto grassMat = paint(Color(1, 1, 1));
+            grassMat->vertexColors = true;
+            grassMat->side = Side::Double;
+            const auto fieldGeometry = [](float cx, float cz, uint32_t seed) {
+                constexpr int kBlades = 2400;
+                std::vector<vegetation::GrassBlade> blades;
+                blades.reserve(kBlades);
+                for (int b = 0; b < kBlades; ++b) {
+                    const uint32_t s = seed * 7919u + static_cast<uint32_t>(b);
+                    vegetation::GrassBlade bl;
+                    bl.position.set(cx + 4.f * hash(s * 4u), 0.f, cz + 4.f * hash(s * 4u + 1u));
+                    bl.scale.set(1.5f, 0.7f + 0.35f * hash(s * 4u + 2u), 1.5f);
+                    bl.yaw.setFromAxisAngle(Vector3(0, 1, 0), math::PI * hash(s * 4u + 3u));
+                    blades.push_back(bl);
+                }
+                return vegetation::buildGrassGeometry(blades);
+            };
+            const auto makeField = [&](float cx, float cz, uint32_t seed) {
+                auto g = GrassMesh::create(fieldGeometry(cx, cz, seed), grassMat);
+                g->params.windStrength = 0.35f;
+                grassFields.push_back(g);
+                return g;
+            };
+            int events = 0;
+            std::vector<double> cost;
+            const auto settle = [&](const char* what) {
+                const double ev = frame(-1, 0).wallMs;
+                if (dump) dumpFrame("churn_grass", events, 0, 0);
+                cost.push_back(std::max(ev, frame(-1, 1).wallMs));
+                if (dump) dumpFrame("churn_grass", events, 0, 1);
+                if (verbose) std::printf("  grass: %-34s %.2f ms\n", what, cost.back());
+                for (int f = 2; f < kGap; ++f) {
+                    frame(-1, kGap);
+                    if (dump && f == kGap - 1) dumpFrame("churn_grass", events, 0, f);
+                }
+                ++events;
+            };
+            std::vector<std::shared_ptr<GrassMesh>> live;
+            for (int k = 0; k < 4; ++k) {
+                live.push_back(makeField(-18.f + 12.f * static_cast<float>(k), -4.f, 11u + static_cast<uint32_t>(k)));
+                scene.add(live.back());
+                settle("a new field");
+            }
+            scene.remove(*live[0]);
+            settle("a field detached");
+            scene.add(live[0]);
+            settle("the field attached again");
+            const auto keepGeom = live[1]->geometry();
+            live[1]->setGeometry(fieldGeometry(-6.f, -4.f, 97u));
+            settle("a field's geometry swapped");
+            live[1]->setGeometry(keepGeom);
+            settle("and swapped back");
+            const auto a0 = renderer.tlasStats();
+            auto ahead = makeField(0.f, 8.f, 41u);
+            ahead->visible = false;
+            ahead->resident = true;
+            scene.add(ahead);
+            settle("a field added hidden");
+            for (int f = 0; f < 24; ++f) frame(-1, kGap);
+            const auto a1 = renderer.tlasStats();
+            ahead->visible = true;
+            settle("the hidden field shown");
+            for (auto& g : live) scene.remove(*g);
+            scene.remove(*ahead);
+            live.clear();
+            ahead.reset();
+            grassFields.clear();// the last references: the fields and their geometries die
+            settle("every field dropped");
+            for (int f = 0; f < 8; ++f) frame(-1, kGap);// past the frames in flight: the retired go
+            const auto r1 = renderer.tlasStats();
+            const uint64_t mem1 = renderer.gpuAllocatedBytes();
+            constexpr double MiB = 1024.0 * 1024.0;
+            std::printf("\ngrass fields streamed: %d events, %llu structural rebuilds, %llu history resets, %llu "
+                        "records pruned; event ms med/max %.2f / %.2f, quiet median %.2f; device memory %.1f MiB "
+                        "before, %.1f after\n",
+                        events, static_cast<unsigned long long>(r1.structuralRebuilds - r0.structuralRebuilds),
+                        static_cast<unsigned long long>(r1.historyResets - r0.historyResets),
+                        static_cast<unsigned long long>(r1.recordsPruned - r0.recordsPruned), percentile(cost, 0.5),
+                        percentile(cost, 1.0), q, mem0 / MiB, mem1 / MiB);
+            if (!slotsOff) {
+                check("grass fields: no structural rebuild", r1.structuralRebuilds == r0.structuralRebuilds);
+                if (!syncAdmit)
+                    check("grass fields: the hidden one admitted over the frames after, landed before its show",
+                          a1.admissionsDeferred - a0.admissionsDeferred == 1u &&
+                                  a1.admissionsLanded - a0.admissionsLanded == 1u);
+                check("grass fields: every field's state freed with it", r1.recordsPruned - r0.recordsPruned >= 5u);
+                check("grass fields: the worst event within 4x the quiet median",
+                      percentile(cost, 1.0) <= std::max(kHitchMaxRatio * q, q + kHitchMaxSlackMs));
+            }
+            check("grass fields: device memory back within 8 MiB of where it started",
+                  mem1 <= mem0 + static_cast<uint64_t>(8 * MiB));
+            check("grass fields: no temporal history reset", r1.historyResets == r0.historyResets);
         }
 
         // ── A streamed world frees what it drops ─────────────────────────────

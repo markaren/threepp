@@ -3773,6 +3773,14 @@ void VulkanRenderer::Impl::recordGrassDeform(VkCommandBuffer cb, GrassMesh& gm, 
                 vkCmdPipelineBarrier2(cb, &dep);
             }
 
+            // A prime's own pose is the field's first previous pose: without
+            // this its first frame reports the sway offset from the rest pose.
+            if (st.primePending) {
+                if (st.blas->prevVertex.handle != VK_NULL_HANDLE) copyGrassPose(cb, *ctx, *st.blas, st.vertexCount);
+                st.prevResyncPending = false;
+                st.primePending = false;
+            }
+
             if (!ctx->rayQuerySupported()) return;// no BLAS to refit
 
             // Refit the BLAS in place (periodic full rebuild keeps it balanced).
@@ -3844,13 +3852,8 @@ void VulkanRenderer::Impl::recordGrassDeform(VkCommandBuffer cb, GrassMesh& gm, 
 
 void VulkanRenderer::Impl::refreshGrassBlas(GrassMesh& gm, GrassMeshState& st, float /*elapsedSeconds*/) {
             VkCommandBuffer cb = beginOneShot();
+            st.primePending = true;
             recordGrassDeform(cb, gm, st);
-            // The prime's own pose is the field's first previous pose: without
-            // this the first frame reports the sway offset from the rest pose.
-            if (st.blas->prevVertex.handle != VK_NULL_HANDLE) {
-                copyGrassPose(cb, *ctx, *st.blas, st.vertexCount);
-                st.prevResyncPending = false;
-            }
             endAndSubmitOneShot(cb, "grass prime");
         }
 

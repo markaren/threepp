@@ -197,6 +197,8 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             // mesh to take the shared_ptr (the record's liveCheck) from.
             std::vector<std::pair<const BufferGeometry*, Mesh*>> toBuild;
             std::unordered_set<const BufferGeometry*> shownNeeds;// new geometries a shown new span draws
+            // New grass fields (a field owns its record), and whether each shows.
+            std::vector<std::pair<GrassMesh*, bool>> newGrass;
             for (size_t b = 0; b < builtSpans.size(); ++b) {
                 const EntrySpan& bs = builtSpans[b];
                 // The walk's own room to grow: the layout below leaves its own.
@@ -233,11 +235,18 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                     ++tlasStats_.swapEdits;
                 }
                 // A new span: a static mesh whose geometry has a record the TLAS
-                // can reference as it is, or none yet.
-                if (be.isOverlay || be.isParticle || be.isParticleField || be.isVertexInterop || isDeformer(be))
+                // can reference as it is, or none yet; or a grass field, whose
+                // record is its own (admitGrassState, step 3).
+                if (be.isOverlay || be.isParticle || be.isParticleField || be.isVertexInterop ||
+                    (isDeformer(be) && !be.isGrass))
                     return decline("a new overlay, particle, deformer or interop mesh");
                 const auto geomSp = m.geometry();
                 if (!geomSp) return decline("a new mesh without geometry");
+                if (be.isGrass) {
+                    if (!grassInputsValid(*geomSp)) return decline("a grass field without heightFrac");
+                    newGrass.emplace_back(static_cast<GrassMesh*>(&m), !bs.hidden);
+                    continue;
+                }
                 const BufferGeometry* gk = geomSp.get();
                 if (const auto rit = blasCache.find(gk); rit != blasCache.end()) {
                     const BlasRecord& rec = *rit->second;
@@ -257,6 +266,9 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             // A geometry only hidden new spans draw is admitted over the next
             // frames (pumpHiddenAdmissions): no record now, no texture upload.
             std::unordered_set<const BufferGeometry*> deferredGeoms;
+            // So is a hidden new grass field without a state (a cached field
+            // coming back keeps its own).
+            std::unordered_set<const Mesh*> deferredGrass;
             if (!syncAdmission()) {
                 for (auto t = toBuild.begin(); t != toBuild.end();) {
                     if (shownNeeds.count(t->first) == 0u) {
@@ -266,14 +278,23 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                         ++t;
                     }
                 }
+                for (const auto& [gm, shown] : newGrass) {
+                    if (shown) continue;
+                    const auto it = grassStates.find(gm);
+                    if (it == grassStates.end() || it->second->liveCheck.lock() != gm->geometry())
+                        deferredGrass.insert(gm);
+                }
             }
             for (uint32_t s = 0; s < entrySpans_.size(); ++s) {
                 const EntrySpan& sp = entrySpans_[s];
                 if (sp.isFree || kept[s]) continue;
-                // A deformer's state owns descriptor sets and images the retire
-                // queue does not model; a ParticleField its published index.
+                // A skinned, displaced, morphed or tet mesh's state owns
+                // descriptor sets and images the retire queue does not model; a
+                // ParticleField its published index. A grass field's state stays
+                // with its mesh (a cached field comes back as a show) and is
+                // retired when the mesh or its geometry dies (pruneFreedAssets).
                 const MeshEntry& e0 = entries[sp.first];
-                if (isDeformer(e0) || e0.isParticleField || e0.isVertexInterop)
+                if ((isDeformer(e0) && !e0.isGrass) || e0.isParticleField || e0.isVertexInterop)
                     return decline("a deformer, ParticleField or interop mesh removed");
             }
 
@@ -415,7 +436,8 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                 ns.isFree = false;
                 ns.parkedUntil = 0u;
                 ns.fadeKnown = false;
-                ns.admitPending = !deferredGeoms.empty() && deferredGeoms.count(bs.mesh->geometry().get()) != 0u;
+                ns.admitPending = (!deferredGeoms.empty() && deferredGeoms.count(bs.mesh->geometry().get()) != 0u) ||
+                                  deferredGrass.count(bs.mesh) != 0u;
                 if (ns.admitPending) admitNow.push_back(bs.mesh);
                 if (ns.inst) {
                     ns.instColorAttr    = ns.inst->instanceColor();
@@ -455,6 +477,12 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             // A field's MeshRepr proxy is nobody's Mesh geometry: the rebuild
             // admits it per field, and so does this (a lookup when it has one).
             for (const auto& fe : builtFields) ensureCachedBlas(fe.first->meshRepr().geometry);
+            // New grass fields: their records and inputs in this batch, their
+            // first wind pose in the frame (no blocking prime).
+            for (const auto& [gm, shown] : newGrass) {
+                if (deferredGrass.count(gm) == 0u) admitGrassState(*gm);
+                grassPlacedThisFrame_.push_back(gm);
+            }
             seBlas.stop();
             for (Mesh* m : admitNow) beginHiddenAdmission(*m);
             admitPendingSpans_ += static_cast<uint32_t>(admitNow.size());
@@ -464,17 +492,30 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             // Every new texture this edit admits is prepared (its CPU half:
             // RGBA8, mips, BC7) on worker threads at once, and the descs below
             // collect them: the frame pays the longest encode, not their sum.
+            // A span's record: its geometry's in blasCache, or a grass field's own.
+            // (A field's state only for the geometry it draws now: one left from
+            // a swapped geometry waits for its admission.)
+            const auto recordOf = [&](const MeshEntry& e) -> const BlasRecord* {
+                if (e.isGrass) {
+                    const auto it = grassStates.find(static_cast<GrassMesh*>(e.mesh));
+                    if (it == grassStates.end() || it->second->liveCheck.lock() != e.mesh->geometry()) return nullptr;
+                    return it->second->blas.get();
+                }
+                const auto g = e.mesh->geometry();
+                const auto it = g ? blasCache.find(g.get()) : blasCache.end();
+                return it != blasCache.end() ? it->second.get() : nullptr;
+            };
             if (!syncAdmission()) {
                 for (const RowFill& fl : fills) {
-                    Mesh& m = *built[builtSpans[fl.builtSpan].first].mesh;
-                    const auto g = m.geometry();
-                    if (g && blasCache.count(g.get()) != 0u) prepareTexturesAsync(m);
+                    const MeshEntry& e0 = built[builtSpans[fl.builtSpan].first];
+                    if (recordOf(e0)) prepareTexturesAsync(*e0.mesh);
                 }
             }
             const size_t texCount0 = materialTextures.size();
             const size_t texFree0 = freeTextureSlots.size();
             // Per mesh, once: the rows every entry of a fill shares.
             struct MeshRows {
+                const MeshEntry* proto = nullptr;
                 const BlasRecord* rec = nullptr;
                 MaterialDesc md{};
                 MeshFingerprint fp{};
@@ -482,12 +523,14 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             };
             std::unordered_map<const Mesh*, MeshRows> meshRows;
             for (const RowFill& fl : fills) {
-                Mesh& m = *built[builtSpans[fl.builtSpan].first].mesh;
+                const MeshEntry& proto = built[builtSpans[fl.builtSpan].first];
+                Mesh& m = *proto.mesh;
                 if (meshRows.count(&m)) continue;
                 MeshRows r;
+                r.proto = &proto;
                 const auto geom = m.geometry();
                 const auto mat = m.material();
-                if (const auto rit = blasCache.find(geom.get()); rit != blasCache.end()) {
+                if (recordOf(proto)) {
                     r.md = buildMaterialDesc(m);
                     r.md.materialAssetIdx = slotMaterialAssetIdx(mat.get());
                 }
@@ -545,10 +588,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             }
             seSubmit.stop();
             const bool texturesAdded = materialTextures.size() != texCount0 || freeTextureSlots.size() != texFree0;
-            for (auto& [mesh, r] : meshRows) {
-                const auto rit = blasCache.find(mesh->geometry().get());
-                r.rec = rit != blasCache.end() ? rit->second.get() : nullptr;
-            }
+            for (auto& [mesh, r] : meshRows) r.rec = recordOf(*r.proto);
 
             seAssets.stop();
             THREEPP_CPUPROF_NAMED(seRows, "scene.S4_slotRows");
@@ -832,6 +872,19 @@ void VulkanRenderer::Impl::pruneFreedAssets() {
                 ++tlasStats_.recordsPruned;
                 it = blasCache.erase(it);
             }
+            // A grass field whose mesh or geometry died: the same, with its two
+            // input buffers. A new GrassMesh at the dead one's address must not
+            // find the old state.
+            for (auto it = grassStates.begin(); it != grassStates.end();) {
+                GrassMeshState& st = *it->second;
+                if (!st.liveCheck.expired() && !st.owner.gone()) {
+                    ++it;
+                    continue;
+                }
+                retireGrassState(st);
+                ++tlasStats_.recordsPruned;
+                it = grassStates.erase(it);
+            }
             // A texture that died: no live material names it, and every row that
             // did was tombstoned. Its image is retired; its slot is free at once.
             bool freed = false;
@@ -890,6 +943,41 @@ std::vector<std::shared_ptr<Texture>> VulkanRenderer::Impl::texturesOf(const Mes
                 }
             }
             return out;
+        }
+
+bool VulkanRenderer::Impl::grassInputsValid(const BufferGeometry& g) {
+            // ensureGrassState's own test, ahead of an edit that cannot back out.
+            const auto* pos = g.getAttribute<float>("position");
+            const auto* hf = g.getAttribute<float>("heightFrac");
+            return pos && hf && pos->count() > 0 && hf->count() == pos->count();
+        }
+
+void VulkanRenderer::Impl::retireGrassState(GrassMeshState& st) {
+            // The frames in flight may still deform it, refit it and trace it.
+            const GrassMeshState* p = &st;
+            pendingGrassDeforms_.erase(std::remove_if(pendingGrassDeforms_.begin(), pendingGrassDeforms_.end(),
+                                                      [p](const auto& d) { return d.second == p; }),
+                                       pendingGrassDeforms_.end());
+            if (st.blas) retiredRecords_.emplace_back(frameSerial_, std::move(st.blas));
+            retire(std::move(st.restPos));
+            retire(std::move(st.heightFrac));
+            st.restPos = {};
+            st.heightFrac = {};
+        }
+
+VulkanRenderer::Impl::GrassMeshState* VulkanRenderer::Impl::admitGrassState(GrassMesh& gm) {
+            if (const auto it = grassStates.find(&gm); it != grassStates.end()) {
+                // Its own state, for the geometry it draws: a cached field back.
+                if (it->second->liveCheck.lock() == gm.geometry() && !it->second->owner.gone())
+                    return it->second.get();
+                // A geometry swapped while the old one lives on elsewhere.
+                retireGrassState(*it->second);
+                grassStates.erase(it);
+            }
+            // Its record and inputs record into the open batch (no wait).
+            auto* st = ensureGrassState(gm);
+            if (st) st->primePending = true;
+            return st;
         }
 
 bool VulkanRenderer::Impl::syncAdmission() {
@@ -973,18 +1061,26 @@ void VulkanRenderer::Impl::pumpHiddenAdmissions() {
                     beginOneShotBatch();
                     batch = true;
                 }
-                auto rit = geom ? blasCache.find(geom.get()) : blasCache.end();
-                if (geom && rit == blasCache.end()) {
-                    auto rec = buildBlasFor(*geom, /*allowPacked=*/true, /*updatable=*/false, nullptr,
-                                            VertexWriter::Host, /*traced=*/rq);
-                    if (rec) {
-                        rec->liveCheck = geom;
-                        rit = blasCache.emplace(geom.get(), std::move(rec)).first;
+                const BlasRecord* recp = nullptr;
+                if (entries[sp.first].isGrass) {
+                    // A field's own record and inputs, primed by its first deform.
+                    auto* st = admitGrassState(static_cast<GrassMesh&>(m));
+                    recp = st ? st->blas.get() : nullptr;
+                } else {
+                    auto rit = geom ? blasCache.find(geom.get()) : blasCache.end();
+                    if (geom && rit == blasCache.end()) {
+                        auto rec = buildBlasFor(*geom, /*allowPacked=*/true, /*updatable=*/false, nullptr,
+                                                VertexWriter::Host, /*traced=*/rq);
+                        if (rec) {
+                            rec->liveCheck = geom;
+                            rit = blasCache.emplace(geom.get(), std::move(rec)).first;
+                        }
                     }
+                    recp = rit != blasCache.end() ? rit->second.get() : nullptr;
                 }
                 sp.admitPending = false;
-                if (rit == blasCache.end()) continue;// degenerate: default rows and no instance, as in a rebuild
-                const BlasRecord& rec = *rit->second;
+                if (!recp) continue;// degenerate: default rows and no instance, as in a rebuild
+                const BlasRecord& rec = *recp;
                 MaterialDesc md = buildMaterialDesc(m);// takes the prepared images
                 md.materialAssetIdx = slotMaterialAssetIdx(m.material().get());
                 const GeometryDesc gd = buildGeometryDesc(entries[sp.first], rec, selectLodGeom(rec, 0));

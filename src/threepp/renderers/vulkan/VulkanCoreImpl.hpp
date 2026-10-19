@@ -353,6 +353,11 @@ namespace threepp {
         // command buffer in recordCommandBuffer (no blocking submit) — same
         // pattern as pendingSkinnedRebuilds_. Cleared at end of recordCommandBuffer.
         std::vector<std::pair<GrassMesh*, GrassMeshState*>> pendingGrassDeforms_;
+        // Grass fields this frame's slot edit placed (new, or attached again):
+        // their deform runs, but like every entry the structural rebuild
+        // places they carry no moved bit on that frame (a moved bit is a
+        // shorter history for thirty frames). Cleared with the deform queue.
+        std::vector<const Mesh*> grassPlacedThisFrame_;
 
         // Graduated per-frame dynamic plain meshes (BlasRecord::perFrameDynamic)
         // whose attributes changed this frame — staging upload + GPU copy +
@@ -2927,6 +2932,16 @@ namespace threepp {
         // of the frame that retired it, destroyed by the retire queue's rule.
         std::vector<std::pair<uint64_t, std::unique_ptr<BlasRecord>>> retiredRecords_;
         void reapRetiredRecords(bool all);
+        // A GrassMesh on the slot path (VulkanCoreSlots.cpp). Its state is the
+        // field's own record plus its rest pose and height fractions: a field
+        // the slot edit admits gets one built in the edit's batch (or, added
+        // hidden, over the frames after) and primed by its first deform in the
+        // frame; one whose mesh or geometry died, or whose mesh took another
+        // geometry, is retired: the record with retiredRecords_, the two
+        // input buffers through the retire queue.
+        GrassMeshState* admitGrassState(GrassMesh& gm);
+        void retireGrassState(GrassMeshState& st);
+        static bool grassInputsValid(const BufferGeometry& g);
         // Retire (rather than inline-destroy) a particle geometry record's
         // buffers on an in-flight topology change. Mirrors destroyParticleGeomRec.
         void retireParticleGeomRec(ParticleGeomRec& rec) {

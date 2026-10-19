@@ -666,6 +666,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             if (!asyncOneShots_.empty()) reapAsyncOneShots(/*deviceIdle=*/false);
             pendingDisplacedDeforms_.clear();// dirty every frame
             pendingGrassDeforms_.clear();
+            grassPlacedThisFrame_.clear();
             // force=false (matching GLRenderer): with
             // updateMatrix()'s change-detection early-out, only subtrees whose
             // transforms actually moved pay the world-matrix multiplies — a
@@ -2093,9 +2094,16 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 const Vector3 camPos(cw[12], cw[13], cw[14]);
                 for (const auto& sp : entrySpans_) {
                     if (!entries[sp.first].isGrass) continue;
+                    // A field the slot path admitted takes its first deform here.
+                    // One whose state was built for a geometry it no longer draws
+                    // (swapped, its new state still to be admitted) takes none.
+                    auto* gm = static_cast<GrassMesh*>(entries[sp.first].mesh);
+                    const auto stIt = grassStates.find(gm);
+                    if (stIt != grassStates.end() && stIt->second->liveCheck.lock() != gm->geometry()) continue;
+                    const bool prime = stIt != grassStates.end() && stIt->second->primePending;
                     for (uint32_t j = 0; j < sp.count; ++j) {
                         const size_t i = size_t(sp.first) + j;
-                        entryGrassDirty[i] = grassShouldAnimate(entries[i], camPos);
+                        entryGrassDirty[i] = prime || grassShouldAnimate(entries[i], camPos);
                     }
                 }
             }
@@ -2148,6 +2156,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 for (const auto& sp : entrySpans_) {
                     const auto& e0 = entries[sp.first];
                     if (!(e0.isSkinned || e0.isDisplaced || e0.isGrass || e0.isMorphed)) continue;
+                    const bool placedNow = e0.isGrass && !grassPlacedThisFrame_.empty() &&
+                                           std::find(grassPlacedThisFrame_.begin(), grassPlacedThisFrame_.end(),
+                                                     sp.mesh) != grassPlacedThisFrame_.end();
                     for (size_t i = sp.first; i < size_t(sp.first) + sp.count; ++i) {
                         const bool b = entryBonesDirty[i];
                         const bool d = entryDisplacedDirty[i];
@@ -2158,6 +2169,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         if (d) displacedDirtyAny = true;
                         if (gr) grassDirtyAny = true;
                         if (mo) morphDirtyAny = true;
+                        if (placedNow) continue;
                         const size_t w = i >> 5;
                         if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
                         meshMovedBits_[w] |= (1u << (i & 31u));
@@ -3413,19 +3425,13 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         ++it;
                     }
                 }
+                // destroyBlasRecord, not a list of its buffers: the list here
+                // missed the refit scratch, the colour and the RT index, so every
+                // field or morphed mesh the rebuild dropped leaked them.
                 for (auto it = grassStates.begin(); it != grassStates.end(); ) {
                     if (it->second->liveCheck.expired() || it->second->owner.gone()) {
                         auto& st = it->second;
-                        if (st->blas) {
-                            auto& rec = st->blas;
-                            if (rec->as) ctx->rt().destroyAccelerationStructure(ctx->device(), rec->as, nullptr);
-                            destroyBuffer(ctx->allocator(), rec->storage);
-                            destroyBuffer(ctx->allocator(), rec->vertex);
-                            destroyBuffer(ctx->allocator(), rec->index);
-                            destroyBuffer(ctx->allocator(), rec->normal);
-                            destroyBuffer(ctx->allocator(), rec->uv);
-                            destroyBuffer(ctx->allocator(), rec->prevVertex);
-                        }
+                        if (st->blas) destroyBlasRecord(*st->blas);
                         destroyBuffer(ctx->allocator(), st->restPos);
                         destroyBuffer(ctx->allocator(), st->heightFrac);
                         it = grassStates.erase(it);
@@ -3435,16 +3441,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 }
                 for (auto it = morphedMeshStates.begin(); it != morphedMeshStates.end(); ) {
                     if (it->second->liveCheck.expired() || it->second->owner.gone()) {
-                        auto& rec = it->second->blas;
-                        if (rec) {
-                            if (rec->as) ctx->rt().destroyAccelerationStructure(ctx->device(), rec->as, nullptr);
-                            destroyBuffer(ctx->allocator(), rec->storage);
-                            destroyBuffer(ctx->allocator(), rec->vertex);
-                            destroyBuffer(ctx->allocator(), rec->index);
-                            destroyBuffer(ctx->allocator(), rec->normal);
-                            destroyBuffer(ctx->allocator(), rec->uv);
-                            destroyBuffer(ctx->allocator(), rec->prevVertex);
-                        }
+                        if (auto& rec = it->second->blas) destroyBlasRecord(*rec);
                         it = morphedMeshStates.erase(it);
                     } else {
                         ++it;
@@ -3626,6 +3623,16 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     }
                 } else if (en.isGrass) {
                     auto* gm = static_cast<GrassMesh*>(m);
+                    // A state built for a geometry the field no longer draws (a
+                    // swap, the old geometry alive elsewhere): behind this
+                    // rebuild's device wait, freed and built again.
+                    if (const auto sIt = grassStates.find(gm);
+                        sIt != grassStates.end() && sIt->second->liveCheck.lock() != gm->geometry()) {
+                        if (sIt->second->blas) destroyBlasRecord(*sIt->second->blas);
+                        destroyBuffer(ctx->allocator(), sIt->second->restPos);
+                        destroyBuffer(ctx->allocator(), sIt->second->heightFrac);
+                        grassStates.erase(sIt);
+                    }
                     const bool existed = grassStates.count(gm) > 0;
                     auto* st = ensureGrassState(*gm);
                     if (!st) continue;

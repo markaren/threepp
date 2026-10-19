@@ -908,9 +908,10 @@ namespace threepp {
             // first time, a geometry, material or texture swapped on a mesh,
             // each written into stable entry slots (rows of the entry index
             // space) with no device drain and no rebuild of the rows that did
-            // not change. A change the slot path does not take (a deformer or a
-            // ParticleField added or removed, a mesh changing class) is still
-            // a structural rebuild.
+            // not change. A change the slot path does not take (a skinned,
+            // displaced, morphed or tet mesh or a ParticleField added or
+            // removed, a mesh changing class) is still a structural rebuild; a
+            // GrassMesh added, removed or swapped is a slot edit.
             uint64_t slotEdits = 0;
             // BLASes a slot edit built (its new geometries) and compacted once
             // their build had completed, a frame or two later, without a host
