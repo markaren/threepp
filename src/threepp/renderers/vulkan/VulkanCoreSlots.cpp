@@ -165,6 +165,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                        emissiveTexOf(m) != f.emissiveTex || occlusionTexOf(m) != f.occlusionTex;
             };
 
+            THREEPP_CPUPROF_NAMED(seMatch, "scene.S1_slotMatch");
             // ── 1. Match the walk's spans to the live ones, and decide ───────
             // Nothing is edited before every span has been judged: a span the
             // slot path cannot take sends the whole frame to the full rebuild,
@@ -240,6 +241,8 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                     return decline("a deformer, ParticleField or interop mesh removed");
             }
 
+            seMatch.stop();
+            THREEPP_CPUPROF_NAMED(sePlan, "scene.S2_slotPlan");
             // ── 2. Plan the layout on a copy of the spans ──────────────────────
             const uint64_t serial = frameSerial_;
             const uint64_t parkUntil = serial + kFramesInFlight + 1u;
@@ -394,6 +397,8 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                     return decline("a motion buffer smaller than the pool");
             }
 
+            sePlan.stop();
+            THREEPP_CPUPROF_NAMED(seAssets, "scene.S3_slotAssets");
             // ── 3. New geometries' records, and the new spans' maps ───────────
             // One batch: the BLAS builds and the texture uploads the material
             // descs below admit (a queue wait for that work, not a drain, and
@@ -483,6 +488,8 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                 r.rec = rit != blasCache.end() ? rit->second.get() : nullptr;
             }
 
+            seAssets.stop();
+            THREEPP_CPUPROF_NAMED(seRows, "scene.S4_slotRows");
             // ── 4. The rows ────────────────────────────────────────────────────
             const uint32_t newSize = highWater;
             const MeshEntry tombEntry = slotFreeEntry();
@@ -640,6 +647,8 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                 if (!sp.hidden) probeGridDirty_ = true;
             }
 
+            seRows.stop();
+            THREEPP_CPUPROF_NAMED(seSpans, "scene.S5_slotSpans");
             // ── 5. The span list: sorted by first, free runs merged ────────────
             std::vector<size_t> order(spans.size());
             for (size_t k = 0; k < order.size(); ++k) order[k] = k;

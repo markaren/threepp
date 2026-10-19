@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <typeindex>
+#include <unordered_map>
 
 namespace threepp {
 
@@ -23,6 +25,71 @@ namespace {
         const bool isLod = f(o, vis, underLod);
         if (!vis && (underLod || isLod)) return;
         for (Object3D* c : o.children) walkSceneGraph(*c, vis, underLod || isLod, f);
+    }
+
+    // The casts the expansion walk asks of a node and of its material, answered
+    // once per dynamic type: typeid is a vtable read, while a dynamic_cast
+    // through Object3D's virtual base that fails walks the whole hierarchy
+    // (about 0.1 us, and a plain mesh failed about fifteen of them per walk).
+    // Only a cast the type is known to pass is still made, for its pointer.
+    enum NodeKind : uint32_t {
+        kNodeLod = 1u << 0,
+        kNodeLine = 1u << 1,
+        kNodeLineSegments = 1u << 2,
+        kNodePoints = 1u << 3,
+        kNodeMesh = 1u << 4,
+        kNodeInstanced = 1u << 5,
+        kNodeSplat = 1u << 6,
+        kNodeSky = 1u << 7,
+        kNodeSkinned = 1u << 8,
+        kNodeDisplaced = 1u << 9,
+        kNodeGrass = 1u << 10,
+        kNodeField = 1u << 11,
+        kNodeCamera = 1u << 12,
+    };
+
+    uint32_t nodeKind(Object3D& o) {
+        static thread_local std::unordered_map<std::type_index, uint32_t> kinds;
+        const std::type_index t(typeid(o));
+        if (auto it = kinds.find(t); it != kinds.end()) return it->second;
+        uint32_t k = 0u;
+        if (dynamic_cast<LOD*>(&o)) k |= kNodeLod;
+        if (auto* line = dynamic_cast<Line*>(&o)) {
+            k |= kNodeLine;
+            if (dynamic_cast<LineSegments*>(line)) k |= kNodeLineSegments;
+        }
+        if (dynamic_cast<Points*>(&o)) k |= kNodePoints;
+        if (auto* m = dynamic_cast<Mesh*>(&o)) {
+            k |= kNodeMesh;
+            if (dynamic_cast<InstancedMesh*>(m)) k |= kNodeInstanced;
+            if (dynamic_cast<SplatCloud*>(m)) k |= kNodeSplat;
+            if (dynamic_cast<Sky*>(m)) k |= kNodeSky;
+            if (dynamic_cast<SkinnedMesh*>(m)) k |= kNodeSkinned;
+            if (dynamic_cast<DisplacedMesh*>(m)) k |= kNodeDisplaced;
+            if (dynamic_cast<GrassMesh*>(m)) k |= kNodeGrass;
+            if (dynamic_cast<ParticleField*>(m)) k |= kNodeField;
+        }
+        if (dynamic_cast<Camera*>(&o)) k |= kNodeCamera;
+        kinds.emplace(t, k);
+        return k;
+    }
+
+    enum MaterialKind : uint32_t {
+        kMatWireframe = 1u << 0,
+        kMatBasic = 1u << 1,
+        kMatEmissive = 1u << 2,
+    };
+
+    uint32_t materialKind(const Material& m) {
+        static thread_local std::unordered_map<std::type_index, uint32_t> kinds;
+        const std::type_index t(typeid(m));
+        if (auto it = kinds.find(t); it != kinds.end()) return it->second;
+        uint32_t k = 0u;
+        if (dynamic_cast<const MaterialWithWireframe*>(&m)) k |= kMatWireframe;
+        if (dynamic_cast<const MeshBasicMaterial*>(&m)) k |= kMatBasic;
+        if (dynamic_cast<const MaterialWithEmissive*>(&m)) k |= kMatEmissive;
+        kinds.emplace(t, k);
+        return k;
     }
 
 }// namespace
@@ -50,7 +117,7 @@ uint32_t VulkanRenderer::Impl::snapMeshFlags(Mesh& m, const MaterialWithWirefram
             // the overlayMeshColoredPipelines / line-geometry-cache path
             // (drawOverlayMesh); before that path existed they stayed in the
             // G-buffer and rendered opaque, ignoring transparent/opacity.
-            if (!(fl & kSnapWire) && mat) {
+            if (!(fl & kSnapWire) && mat && (materialKind(*mat) & kMatBasic)) {
                 if (auto* mb = dynamic_cast<MeshBasicMaterial*>(mat.get());
                     mb && mb->transparent && !mb->map) fl |= kSnapUiBlend;
             }
@@ -709,7 +776,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // Recorded with a typed view + kSnapLod so the replay walk
                 // re-runs the selection cast-free (Object3D is a virtual
                 // base — the replay cannot static_cast down).
-                if (auto* lod = dynamic_cast<LOD*>(&o)) {
+                const uint32_t kind = nodeKind(o);
+                if (kind & kNodeLod) {
+                    auto* lod = dynamic_cast<LOD*>(&o);
                     if (lod->autoUpdate && vis) lod->update(camera);
                     sn.lod   = lod;
                     sn.flags = kSnapKindOther | kSnapLod;
@@ -724,7 +793,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // scene, always overlay.
                 // Collected before the Mesh dispatch so subclasses don't
                 // accidentally route through the Mesh path.
-                if (auto* line = dynamic_cast<Line*>(&o); line && vis) {
+                if ((kind & kNodeLine) && vis) {
+                    auto* line = dynamic_cast<Line*>(&o);
                     auto geom = line->geometry();
                     sn.flags = kSnapKindLine;
                     sn.line  = line;
@@ -739,7 +809,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         LineEntry le{};
                         le.line       = line;
                         le.points     = nullptr;
-                        le.isSegments = (dynamic_cast<LineSegments*>(line) != nullptr);
+                        le.isSegments = (kind & kNodeLineSegments) != 0u;
                         le.isPoints   = false;
                         std::memcpy(le.worldMatrix.data(),
                                     line->matrixWorld->elements.data(), 64);
@@ -752,7 +822,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // scene, always rasterise as POINT_LIST in the overlay pass.
                 // Shares the same geometry cache as Line via the
                 // BufferGeometry* key.
-                if (auto* pts = dynamic_cast<Points*>(&o); pts && vis) {
+                if ((kind & kNodePoints) && vis) {
+                    auto* pts = dynamic_cast<Points*>(&o);
                     auto geom = pts->geometry();
                     sn.flags = kSnapKindPoints;
                     sn.pts   = pts;
@@ -776,7 +847,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     sceneSnapshot_.push_back(sn);
                     return;
                 }
-                auto* m = dynamic_cast<Mesh*>(&o);
+                auto* m = (kind & kNodeMesh) ? dynamic_cast<Mesh*>(&o) : nullptr;
                 // Hidden: kind Other, pointer identity only, unless it has
                 // entries while hidden (see entriesWhileHidden above).
                 if (!m || (!vis && !entriesWhileHidden(*m, underLod))) {
@@ -790,10 +861,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // emissive NEE). The scene render can't see/shadow overlay
                 // meshes — they're pure debug visuals.
                 const MaterialWithWireframe* wf = nullptr;
-                if (auto mat = m->material()) {
+                if (auto mat = m->material(); mat && (materialKind(*mat) & kMatWireframe)) {
                     wf = dynamic_cast<MaterialWithWireframe*>(mat.get());
                 }
-                auto* inst = dynamic_cast<InstancedMesh*>(m);
+                auto* inst = (kind & kNodeInstanced) ? dynamic_cast<InstancedMesh*>(m) : nullptr;
                 sn.mesh      = m;
                 sn.inst      = inst;
                 sn.geom      = m->geometry().get();
@@ -802,7 +873,9 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 sn.geomId    = sn.geomB ? sn.geomB->id : 0u;
                 sn.matId     = sn.mat ? sn.mat->id : 0u;
                 sn.wf        = wf;
-                sn.basic     = dynamic_cast<const MeshBasicMaterial*>(sn.mat);
+                sn.basic     = sn.mat && (materialKind(*sn.mat) & kMatBasic)
+                                       ? dynamic_cast<const MeshBasicMaterial*>(sn.mat)
+                                       : nullptr;
                 sn.instCount = inst ? static_cast<int32_t>(inst->count()) : -1;
                 sn.flags     = snapMeshFlags(*m, wf);
                 // material()->visible == false: record the full mesh node (so a
@@ -827,15 +900,15 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // The missing "normal" attribute would exclude it two lines
                 // below anyway; saying so out loud is the difference between an
                 // invariant and a coincidence.
-                if (dynamic_cast<SplatCloud*>(m)) return;
+                if (kind & kNodeSplat) return;
                 // A threepp::Sky is the environment, not a mesh. Its dome is a
                 // 1000 m box carrying a ShaderMaterial no deferred path shades;
                 // as a mesh it sealed the scene in a dark room — the box's
                 // inside on every pixel, every sun and GI ray stopped by it.
                 // Noted for the env refresh (refreshEnvTextureFromScene bakes
                 // it, vulkan/SkyBake) and dropped here, as a SplatCloud is.
-                if (auto* sky = dynamic_cast<Sky*>(m)) {
-                    if (!hidden) skySeen_ = sky;// a resident hidden one gets this far
+                if (kind & kNodeSky) {
+                    if (!hidden) skySeen_ = dynamic_cast<Sky*>(m);// a resident hidden one gets this far
                     return;
                 }
                 auto geom = m->geometry();
@@ -854,14 +927,14 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // those tables. Only the raster views it reaches and the ray
                 // masks that include it differ.
                 const bool sensorOnly = (sn.flags & kSnapSensorOnly) != 0u;
-                // One-shot type probes: an N-instance InstancedMesh costs 3
-                // dynamic_casts total, not 3·N — and on snapshot-match frames
-                // none at all (the cached entry flags are reused). Consumed by
+                // One-shot type probes: an N-instance InstancedMesh pays them
+                // once (nodeKind), not N times — and on snapshot-match frames
+                // not at all (the cached entry flags are reused). Consumed by
                 // raster pass loops, resolveBlasForEntry, TLAS refit, and
                 // dirty-detection.
-                const bool isSkinned   = (dynamic_cast<SkinnedMesh*>(m)   != nullptr);
-                const bool isDisplaced = (dynamic_cast<DisplacedMesh*>(m) != nullptr);
-                const bool isGrass     = (dynamic_cast<GrassMesh*>(m)     != nullptr);
+                const bool isSkinned   = (kind & kNodeSkinned) != 0u;
+                const bool isDisplaced = (kind & kNodeDisplaced) != 0u;
+                const bool isGrass     = (kind & kNodeGrass) != 0u;
                 // A ParticleField expands to exactly one entry whatever its
                 // capacity — the property the type exists to provide. It is
                 // classified here rather than dropped like SplatCloud because it
@@ -872,7 +945,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // (see ParticleField.cpp), so the machinery below builds it a
                 // harmless one-triangle BLAS and one desc slot apiece, and the
                 // field draws no pixels until a representation is switched on.
-                ParticleField* particleField = dynamic_cast<ParticleField*>(m);
+                ParticleField* particleField = (kind & kNodeField) ? dynamic_cast<ParticleField*>(m) : nullptr;
                 const bool isParticleField = (particleField != nullptr);
                 // Their passes read no MeshEntry::hidden: hidden, they have no
                 // entries, as before.
@@ -886,8 +959,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                    m->material() && m->material()->tetSkinning &&
                                    m->material()->tetTexture != nullptr;
                 // Zero-copy vertex interop (enableVertexInterop). One blasCache
-                // probe per MESH, not per instance — the same budget the three
-                // dynamic_casts above spend, and for the same payoff: the two
+                // probe per MESH, not per instance — the same budget the type
+                // probes above spend, and for the same payoff: the two
                 // CPU-bounds culls read a bool instead of hashing per entry.
                 bool isVertexInterop = false;
                 if (!isSkinned && !isDisplaced && !isGrass && !isMorphed && !isTet &&
@@ -907,7 +980,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     if (manualLodLevelRoots_.count(p)) lodExempt = true;
                 }
                 const MaterialWithEmissive* lodEmissive = nullptr;
-                if (auto mat = m->material()) {
+                if (auto mat = m->material(); mat && (materialKind(*mat) & kMatEmissive)) {
                     lodEmissive = dynamic_cast<MaterialWithEmissive*>(mat.get());
                 }
                 if (!geom->boundingBox) geom->computeBoundingBox();
@@ -923,7 +996,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // walk per Mesh per full expansion.
                 bool camAttached = false;
                 for (auto* p = m->parent; p; p = p->parent) {
-                    if (dynamic_cast<Camera*>(p)) {
+                    if (nodeKind(*p) & kNodeCamera) {
                         camAttached = true;
                         break;
                     }
