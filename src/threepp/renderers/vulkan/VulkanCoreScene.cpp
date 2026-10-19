@@ -4493,6 +4493,7 @@ VulkanRenderer::Impl::LodFadeChange VulkanRenderer::Impl::refreshLodFades(bool a
                 entryLodFade_.assign(entries.size(), 0u);
                 all = true;
                 ++lodFadeVersion_;
+                markLodFadeWhole();
             }
             for (auto& sp : entrySpans_) {
                 if (!sp.mesh || sp.count == 0u) continue;
@@ -4515,6 +4516,7 @@ VulkanRenderer::Impl::LodFadeChange VulkanRenderer::Impl::refreshLodFades(bool a
                 const uint32_t meshWord = eligible ? packLodFade(meshFade, meshComp) : 0u;
                 const std::vector<float>* fa = (attr && eligible) ? &attr->array() : nullptr;
                 bool any = false;
+                bool spanChanged = false;
                 for (uint32_t j = 0; j < sp.count; ++j) {
                     const size_t i = size_t(sp.first) + j;
                     uint32_t w = meshWord;
@@ -4525,12 +4527,14 @@ VulkanRenderer::Impl::LodFadeChange VulkanRenderer::Impl::refreshLodFades(bool a
                     const uint32_t was = entryLodFade_[i];
                     if (w != was) {
                         out.words = true;
+                        spanChanged = true;
                         if (lodFadeCasts(w) != lodFadeCasts(was)) out.casters = true;
                         entryLodFade_[i] = w;
                     }
                     any = any || w != 0u;
                 }
                 sp.fadeAny = any;
+                if (spanChanged) markLodFadeDirty(sp.first, sp.count);
             }
             if (out.casters) ++lodFadeCastEpoch_;
             if (out.words) ++lodFadeVersion_;

@@ -2562,9 +2562,19 @@ namespace threepp {
         void prepareTlasGen(uint32_t frame);
         // The per-entry LOD fade words (entryLodFade_) for the GPU producers:
         // the DrawInfo flag bits and the TLAS mask of a crossfading instance.
-        // Per frame-in-flight, host-mapped, re-sent whole when lodFadeVersion_
-        // moved (4 B per entry); bound by the sets prepareDrawGen /
-        // prepareTlasGen rewrite every frame, so growth is a plain swap.
+        // Per frame-in-flight, host-mapped, re-sent when lodFadeVersion_ moved:
+        // the spans whose words changed since that slot's last upload
+        // (lodFadeDirty_, as motionDirty_ does for the motion matrices), whole
+        // after a rebuild, a slot edit or growth. Bound by the sets
+        // prepareDrawGen / prepareTlasGen rewrite every frame, so growth is a
+        // plain swap.
+        std::array<DescDirtyRanges, kFramesInFlight> lodFadeDirty_{};
+        void markLodFadeDirty(uint32_t first, uint32_t count) {
+            for (auto& d : lodFadeDirty_) d.mark(first, count);
+        }
+        void markLodFadeWhole() {
+            for (auto& d : lodFadeDirty_) d.markWhole();
+        }
         std::array<Buffer, kFramesInFlight> lodFadeBuffers_{};
         std::array<uint32_t, kFramesInFlight> lodFadeUploaded_{};
         std::array<size_t, kFramesInFlight> lodFadeUploadedCount_{};

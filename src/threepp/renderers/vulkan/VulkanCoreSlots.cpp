@@ -716,6 +716,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             if (newSize > oldSize) markMotionDirty(static_cast<uint32_t>(oldSize), newSize - static_cast<uint32_t>(oldSize));
             ++motionScratchVersion_;
             ++lodFadeVersion_;// rows written, the high-water mark moved
+            markLodFadeWhole();
             cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
             ++drawInputsVersion_;
             if (texturesAdded) {

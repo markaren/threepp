@@ -2595,14 +2595,32 @@ VkBuffer VulkanRenderer::Impl::uploadLodFades(uint32_t frame) {
                                  VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                                          VMA_ALLOCATION_CREATE_MAPPED_BIT);
                 lodFadeUploaded_[frame] = lodFadeVersion_ - 1u;
+                lodFadeDirty_[frame].markWhole();
             }
             if (lodFadeUploaded_[frame] != lodFadeVersion_ || lodFadeUploadedCount_[frame] != n) {
-                if (have > 0u) uploadHostVisible(ctx->allocator(), b, entryLodFade_.data(), have * sizeof(uint32_t));
-                if (have < n) {
-                    const std::vector<uint32_t> zeros(n - have, 0u);
-                    uploadHostVisible(ctx->allocator(), b, zeros.data(), zeros.size() * sizeof(uint32_t),
-                                      have * sizeof(uint32_t));
+                auto& dirty = lodFadeDirty_[frame];
+                if (dirty.whole || !dirty.any() || lodFadeUploadedCount_[frame] != n) {
+                    if (have > 0u) uploadHostVisible(ctx->allocator(), b, entryLodFade_.data(), have * sizeof(uint32_t));
+                    if (have < n) {
+                        const std::vector<uint32_t> zeros(n - have, 0u);
+                        uploadHostVisible(ctx->allocator(), b, zeros.data(), zeros.size() * sizeof(uint32_t),
+                                          have * sizeof(uint32_t));
+                    }
+                } else {
+                    // Only the spans whose words changed since this slot's last
+                    // upload.
+                    void* mapped = nullptr;
+                    check(vmaMapMemory(ctx->allocator(), b.alloc, &mapped), "vmaMapMemory(lod fade ranges)");
+                    for (auto [first, last] : dirty.ranges) {
+                        last = std::min<uint32_t>(last, static_cast<uint32_t>(have));
+                        if (first >= last) continue;
+                        const VkDeviceSize off = VkDeviceSize(first) * 4u, bytes = VkDeviceSize(last - first) * 4u;
+                        std::memcpy(static_cast<uint8_t*>(mapped) + off, &entryLodFade_[first], bytes);
+                        flushHostWrites(ctx->allocator(), b.alloc, off, bytes);
+                    }
+                    vmaUnmapMemory(ctx->allocator(), b.alloc);
                 }
+                dirty.clear();
                 lodFadeUploaded_[frame] = lodFadeVersion_;
                 lodFadeUploadedCount_[frame] = n;
             }
