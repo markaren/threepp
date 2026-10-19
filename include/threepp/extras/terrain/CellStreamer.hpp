@@ -11,8 +11,14 @@
 //   • cells are keyed by (level, cx, cz) and built ONCE, on first activation,
 //     by a caller-supplied builder. The result is CACHED for the life of the
 //     streamer: leaving a cell removes its subtree from the scene, coming back
-//     re-adds the same objects. A cell is never rebuilt, and a cell that built
-//     nothing is remembered as built-and-empty so it is never re-scanned;
+//     re-adds the same objects. A cell is never rebuilt while it is cached,
+//     and a cell that built nothing is remembered as built-and-empty so it is
+//     never re-scanned. The cache holds the cells within the outer radius x
+//     removeSlack of the camera (`evictRadius`): a cell detached inside that
+//     (a fine/coarse swap, the ring's hysteresis) comes back as a re-attach,
+//     its GPU assets still resident, a show and not an admission; one beyond
+//     it is dropped, its assets freed, and a revisit builds it again. Without
+//     that a session's memory grew with every metre it had covered;
 //   • two levels. Fine cells (`fineCellSize`) inside `fineRadius`, coarse
 //     cells (`coarseFactor` × that edge) out to `coarseRadius`. The two tile
 //     the same ground EXACTLY — a coarse cell is a whole block of
@@ -57,6 +63,14 @@ namespace threepp::terrain {
         float removeSlack = 1.3f;   // cells drop beyond radius × this
         int maxCellBuildsPerFrame = 2;
         bool burstFirstUpdate = true;// build the whole first ring in one update
+        // Cached cells farther than this from the camera (to their footprint)
+        // are dropped from the cache, and with them what they hold (in the
+        // Vulkan renderer the next slot edit frees their BLAS records and
+        // texture slots); a revisit builds them again. Negative (the default):
+        // the outer radius x removeSlack, the distance at which a block leaves
+        // the ring. 0: never, every built cell kept for the streamer's life
+        // (memory grows with the ground covered).
+        float evictRadius = -1.f;
     };
 
     struct CellStreamerStats {
@@ -66,7 +80,8 @@ namespace threepp::terrain {
         int adds = 0;     // cached cells re-attached by the last update()
         int removes = 0;  // detached by the last update()
         int pending = 0;  // wanted but not yet built (budget)
-        long long totalBuilds = 0, totalRemoves = 0;
+        int evictions = 0;// cached cells dropped by the last update() (evictRadius)
+        long long totalBuilds = 0, totalRemoves = 0, totalEvictions = 0;
     };
 
     class CellStreamer: public Group {
@@ -87,7 +102,7 @@ namespace threepp::terrain {
 
         // Call once per frame with the primary camera position.
         void update(const Vector3& camPos) {
-            st_.builds = st_.adds = st_.removes = 0;
+            st_.builds = st_.adds = st_.removes = st_.evictions = 0;
             if (!build_) return;
 
             const float fcs = o_.fineCellSize;
@@ -185,6 +200,23 @@ namespace threepp::terrain {
                 ++st_.totalBuilds;
             }
             st_.pending = static_cast<int>(missing.size()) - st_.builds;
+            // ── drop cached cells beyond evictRadius ───────────────────────
+            const float evictAt = o_.evictRadius < 0.f ? outerKeep : o_.evictRadius;
+            if (evictAt > 0.f) {
+                for (auto it = cells_.begin(); it != cells_.end();) {
+                    const int level = static_cast<int>((it->first >> 48) & 0xff);
+                    const float cs = level ? ccs : fcs;
+                    if (!it->second.active &&
+                        boxDistance(camPos, static_cast<float>(cxOf(it->first)) * cs,
+                                    static_cast<float>(czOf(it->first)) * cs, cs) > evictAt) {
+                        it = cells_.erase(it);
+                        ++st_.evictions;
+                        ++st_.totalEvictions;
+                    } else {
+                        ++it;
+                    }
+                }
+            }
             st_.cached = static_cast<int>(cells_.size());
             st_.active = 0;
             for (const auto& [k, c] : cells_)
