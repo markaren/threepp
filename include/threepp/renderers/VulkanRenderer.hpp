@@ -2016,6 +2016,9 @@ namespace threepp {
         // would take with an allocation each. Both 0 under
         // THREEPP_VK_NO_ALIAS=1, which gives each its own allocation.
         [[nodiscard]] std::uint64_t gpuAllocatedBytes() const;
+        // The device memory blocks the allocator holds those allocations in,
+        // in bytes: what the process takes from the heaps, slack included.
+        [[nodiscard]] std::uint64_t gpuReservedBytes() const;
         void transientImageBytes(std::uint64_t& shared, std::uint64_t& unshared) const;
         // Prints the allocator's memory report to stderr, prefixed with `tag`:
         // the heaps' usage against budget, then where the geometry buffers

@@ -272,6 +272,15 @@ namespace threepp::terrain {
         [[nodiscard]] float packWorldSize() const { return pack_.region.worldSize; }
         [[nodiscard]] float seaLevel() const { return pack_.region.seaLevel; }
 
+        // The streamed forest's and parked cars' cell streamers (default stats
+        // when the pack streams none).
+        [[nodiscard]] CellStreamerStats forestStreamStats() const {
+            return forestStream_ ? forestStream_->stats() : CellStreamerStats{};
+        }
+        [[nodiscard]] CellStreamerStats carStreamStats() const {
+            return carStream_ ? carStream_->stats() : CellStreamerStats{};
+        }
+
         [[nodiscard]] Stats stats() const {
             Stats s = stats_;
             if (tiles_) {

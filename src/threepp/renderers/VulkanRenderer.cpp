@@ -2362,6 +2362,10 @@ namespace threepp {
         return core()->ctx ? core()->vmaAllocatedBytes() : 0;
     }
 
+    std::uint64_t VulkanRenderer::gpuReservedBytes() const {
+        return core()->ctx ? core()->vmaReservedBytes() : 0;
+    }
+
     void VulkanRenderer::dumpMemoryStats(const std::string& tag) const {
         core()->dumpMemoryStats(tag.c_str());
     }

@@ -1600,6 +1600,16 @@ namespace threepp {
                 total += budgets[i].statistics.allocationBytes;
             return total;
         }
+        [[nodiscard]] VkDeviceSize vmaReservedBytes() const {
+            VkPhysicalDeviceMemoryProperties mp{};
+            vkGetPhysicalDeviceMemoryProperties(ctx->physicalDevice(), &mp);
+            std::vector<VmaBudget> budgets(mp.memoryHeapCount);
+            vmaGetHeapBudgets(ctx->allocator(), budgets.data());
+            VkDeviceSize total = 0;
+            for (uint32_t i = 0; i < mp.memoryHeapCount; ++i)
+                total += budgets[i].statistics.blockBytes;
+            return total;
+        }
         ViewContext&       view()       { return *curView_; }
         const ViewContext& view() const { return *curView_; }
         // The primary view, by name, for the (many) places that mean "the

@@ -3428,6 +3428,11 @@ class GeoScene(Group):
         """
         dict: tiles, baking, shell_tris, forest_sites, forest_cells, load_seconds, buildings, building_tris, cars, car_cells_live, boats, deck_runs, cars_rejected_slope, road_chunks, road_chunks_live, apron_cells. `cars` is the pack-wide placement count; `car_cells_live` is what is streamed in around the last update() position. Likewise `road_chunks` is every near-field ribbon chunk built pack-wide and `road_chunks_live` the ones inside ribbon_distance of that position.
         """
+    @property
+    def stream_stats(self) -> dict:
+        """
+        dict of the streamed content's cell streamers, 'forest' and 'cars', each a dict: active, cached (cells ever built, kept for revisits), builds / adds (cached cells re-attached) / removes / pending / evictions (CellStreamerOptions::evictRadius) by the last update(), total_builds, total_removes, total_evictions. All 0 for a layer the pack does not stream.
+        """
 class GrassMesh(Mesh):
     wind_dir: Vector2
     def __init__(self, geometry: BufferGeometry, material: typing.Any) -> None:
@@ -11470,6 +11475,11 @@ class VulkanRenderer:
     @gbuffer_msaa.setter
     def gbuffer_msaa(self, arg1: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
+    @property
+    def gpu_memory(self) -> dict:
+        """
+        Device memory the renderer holds through its allocator, in bytes: allocated_bytes (every buffer, image and acceleration structure it created) and reserved_bytes (the memory blocks those live in, slack included). Cheap enough to read every frame.
+        """
     @property
     def gpu_instances(self) -> bool:
         """

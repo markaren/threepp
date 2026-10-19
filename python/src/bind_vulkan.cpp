@@ -2282,6 +2282,17 @@ namespace threepp_py {
                      "(skinned, tet, grass) in the system-memory column means its deform pass "
                      "crosses PCIe every frame. THREEPP_VK_MEMDUMP=1 prints the same report after "
                      "init, after each structural scene build and at frame 8.")
+                .def_property_readonly("gpu_memory",
+                                       [](PyVulkanRenderer& r) {
+                                           py::dict d;
+                                           d["allocated_bytes"] = r.native().gpuAllocatedBytes();
+                                           d["reserved_bytes"]  = r.native().gpuReservedBytes();
+                                           return d;
+                                       },
+                                       "Device memory the renderer holds through its allocator, in "
+                                       "bytes: allocated_bytes (every buffer, image and acceleration "
+                                       "structure it created) and reserved_bytes (the memory blocks "
+                                       "those live in, slack included). Cheap enough to read every frame.")
                 // Fog medium PROFILE control (advanced). Phase 2: there is ONE air
                 // medium. scene.set_fog_exp2(...) is the primary knob (density +
                 // colour); set_height_fog is the ADVANCED control of that medium's

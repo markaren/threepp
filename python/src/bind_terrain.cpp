@@ -302,7 +302,32 @@ namespace threepp_py {
                      "`cars` is the pack-wide placement count; `car_cells_live` is what is "
                      "streamed in around the last update() position. Likewise `road_chunks` is "
                      "every near-field ribbon chunk built pack-wide and `road_chunks_live` the "
-                     "ones inside ribbon_distance of that position.");
+                     "ones inside ribbon_distance of that position.")
+                .def_property_readonly("stream_stats", [](const GeoScene& g) {
+                         const auto one = [](const CellStreamerStats& s) {
+                             py::dict d;
+                             d["active"] = s.active;
+                             d["cached"] = s.cached;
+                             d["builds"] = s.builds;
+                             d["adds"] = s.adds;
+                             d["removes"] = s.removes;
+                             d["pending"] = s.pending;
+                             d["evictions"] = s.evictions;
+                             d["total_builds"] = s.totalBuilds;
+                             d["total_removes"] = s.totalRemoves;
+                             d["total_evictions"] = s.totalEvictions;
+                             return d;
+                         };
+                         py::dict d;
+                         d["forest"] = one(g.forestStreamStats());
+                         d["cars"] = one(g.carStreamStats());
+                         return d;
+                     },
+                     "dict of the streamed content's cell streamers, 'forest' and 'cars', each a dict: "
+                     "active, cached (cells ever built, kept for revisits), builds / adds (cached "
+                     "cells re-attached) / removes / pending / evictions (CellStreamerOptions::evictRadius) by the "
+                     "last update(), total_builds, total_removes, total_evictions. All 0 for a layer the pack "
+                     "does not stream.");
 
         // ── Free functions ────────────────────────────────────────────────────
         m.def("apply_terrain_preset",
