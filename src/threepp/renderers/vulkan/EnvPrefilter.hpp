@@ -70,13 +70,15 @@ namespace threepp::vulkan {
         // In-frame use (vulkan/SkyBake): a caller that owns a persistent env
         // image mips it inside the frame's command buffer with this same
         // pipeline. setLayout() for its sets, writeSet() to point one at the
-        // source (the full-chain view; the sampler reads mip 0) and at the
-        // target mip, recordMips() for the dispatches of mips 1..mipLevels-1:
+        // source (a view of mip 0 alone: the shader samples nothing else, and a
+        // view of the whole chain would name the mips the other dispatches
+        // write) and at the target mip, recordMips() for the dispatches of
+        // mips 1..mipLevels-1:
         // every mip in GENERAL layout, sets[mip - 1] the set for `mip`, and no
         // barrier between the dispatches (each writes its own mip, all read
         // mip 0). buildPmrem is built from the same two calls.
         [[nodiscard]] VkDescriptorSetLayout setLayout() const { return dsLayout_; }
-        void writeSet(VkDescriptorSet set, VkImageView fullChainView, VkImageView mipView) const;
+        void writeSet(VkDescriptorSet set, VkImageView srcView, VkImageView mipView) const;
         void recordMips(VkCommandBuffer cb, uint32_t w, uint32_t h, uint32_t mipLevels,
                         const VkDescriptorSet* sets, uint32_t numSamples) const;
 

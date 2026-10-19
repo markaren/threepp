@@ -763,15 +763,19 @@ namespace threepp::vulkan {
         const uint32_t gy = (outHeight + 7u) / 8u;
         vkCmdDispatch(cb, gx, gy, 1);
 
-        // Reused by every downstream stage: all producers/consumers here are
-        // compute storage accesses on GENERAL-layout images.
+        // Reused by every downstream stage, on GENERAL-layout images: the
+        // producers write storage images; the consumers read them as storage
+        // images or SAMPLE them (the reconstruction and RCAS read the resolved
+        // history through a combined image sampler), so the sampled read is a
+        // destination access too.
         auto computeBarrier = [&] {
             VkMemoryBarrier2 mb{};
             mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
             mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
             mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
             mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+            mb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
+                               VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
                                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
             VkDependencyInfo di{};
             di.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;

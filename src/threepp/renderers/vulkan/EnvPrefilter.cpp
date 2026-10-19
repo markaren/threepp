@@ -297,6 +297,22 @@ namespace threepp::vulkan {
         mipStorageViews.reserve(out.mipLevels);
         if (out.mipLevels > 1) {
             vkResetDescriptorPool(ctx_.device(), descPool_, 0);
+            // The source: mip 0 alone (writeSet), destroyed with the targets.
+            VkImageView srcView = VK_NULL_HANDLE;
+            {
+                VkImageViewCreateInfo vci{};
+                vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                vci.image    = out.image;
+                vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                vci.format   = out.format;
+                vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                vci.subresourceRange.baseMipLevel = 0;
+                vci.subresourceRange.levelCount = 1;
+                vci.subresourceRange.layerCount = 1;
+                check(vulkan::createImageView(ctx_.device(), &vci, nullptr, &srcView),
+                      "vulkan::createImageView(prefilter source)");
+                mipStorageViews.push_back(srcView);
+            }
             std::vector<VkDescriptorSet> sets;
             sets.reserve(out.mipLevels);
             for (uint32_t mip = 1; mip < out.mipLevels; ++mip) {
@@ -322,7 +338,7 @@ namespace threepp::vulkan {
                 VkDescriptorSet set = VK_NULL_HANDLE;
                 check(vkAllocateDescriptorSets(ctx_.device(), &ai, &set),
                       "vkAllocateDescriptorSets(prefilter)");
-                writeSet(set, out.view, mipView);
+                writeSet(set, srcView, mipView);
                 sets.push_back(set);
             }
             // 512 (was 64): a tiny, very bright HDR sun under a narrow lobe needs
@@ -430,10 +446,10 @@ namespace threepp::vulkan {
         return out;
     }
 
-    void EnvPrefilter::writeSet(VkDescriptorSet set, VkImageView fullChainView, VkImageView mipView) const {
+    void EnvPrefilter::writeSet(VkDescriptorSet set, VkImageView srcView, VkImageView mipView) const {
         VkDescriptorImageInfo srcInfo{};
         srcInfo.sampler     = srcSampler_;
-        srcInfo.imageView   = fullChainView;// full-chain view; sampler reads mip 0
+        srcInfo.imageView   = srcView;// mip 0 alone, all the shader samples
         srcInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
         VkDescriptorImageInfo dstInfo{};

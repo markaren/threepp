@@ -160,8 +160,8 @@ namespace threepp::vulkan {
                   "vkCreateSampler(skyBake)");
         }
 
-        // One single-level storage view per mip: mip 0 for the bake, the rest
-        // for the prefilter's targets.
+        // One single-level view per mip: mip 0 for the bake and as the
+        // prefilter's source, the rest for the prefilter's targets.
         mipViews_.reserve(image_.mipLevels);
         for (uint32_t mip = 0; mip < image_.mipLevels; ++mip) {
             VkImageViewCreateInfo vci{};
@@ -208,7 +208,7 @@ namespace threepp::vulkan {
             ai.pSetLayouts        = &layout;
             VkDescriptorSet set = VK_NULL_HANDLE;
             check(vkAllocateDescriptorSets(ctx_.device(), &ai, &set), "vkAllocateDescriptorSets(skyBake prefilter)");
-            prefilter_.writeSet(set, image_.view, mipViews_[mip]);
+            prefilter_.writeSet(set, mipViews_[0], mipViews_[mip]);
             mipSets_.push_back(set);
         }
         firstUse_ = true;
