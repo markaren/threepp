@@ -644,6 +644,43 @@ def test_auto_lod_chain_lands_on_a_fixed_frame_under_a_pinned_clock():
         renderer.sim_time = None
 
 
+def test_auto_lod_opt_out_queues_no_chain():
+    """Object3D.auto_lod = False opts a mesh out of the automatic LOD: it draws at
+    full detail and no chain is simplified for its geometry on its account. A
+    streamed world whose cells pick their own detail (the pine forest's floor
+    plants, InstancedMeshes) must not pay the worker for chains it never draws;
+    until 2026-10-20 the flag had no binding. Three dense geometries of their
+    own: a plain mesh (gets its chain), the same opted out and an InstancedMesh
+    opted out (neither does). The pinned clock makes every queued chain land
+    inside the frames rendered, so chains_ready counts every one queued."""
+    canvas = tp.Canvas("vk-test-lod-optout", width=W, height=H, headless=True, vsync=False)
+    renderer = tp.VulkanRenderer(canvas, flush_frames=1)
+    skip_without_ray_tracing(renderer)                    # its levels are BLAS builds
+    scene, cam = make_scene()
+    on = tp.Mesh(tp.SphereGeometry(0.4, 384, 384), tp.MeshStandardMaterial())
+    on.position.set(-1.2, 0.0, 0.0)
+    assert on.auto_lod, "auto_lod is on by default"
+    off = tp.Mesh(tp.SphereGeometry(0.4, 384, 383), tp.MeshStandardMaterial())
+    off.auto_lod = False
+    inst = tp.InstancedMesh(tp.SphereGeometry(0.2, 300, 300), tp.MeshStandardMaterial(), 3)
+    for i in range(3):
+        inst.set_matrix_at(i, tp.Matrix4().make_translation(0.9 + 0.45 * i, 0.0, 0.0))
+    inst.instance_matrix_needs_update()
+    inst.auto_lod = False
+    assert not off.auto_lod and not inst.auto_lod
+    for m in (on, off, inst):
+        scene.add(m)
+    try:
+        for i in range(40):
+            renderer.sim_time = i / 60.0
+            renderer.render(scene, cam)
+        stats = renderer.auto_lod_stats
+        assert stats["chains_queued"] == 0
+        assert stats["chains_ready"] == 1, f"{stats['chains_ready']} chains: the opted-out meshes got one too"
+    finally:
+        renderer.sim_time = None
+
+
 def test_domain_randomisation_swaps_are_slot_edits(vk_renderer):
     """Domain randomisation: every reset gives 50 meshes a new material or a new
     map (a texture of its own each time). Until 2026-10-20 every reset was a

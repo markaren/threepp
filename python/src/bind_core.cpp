@@ -124,6 +124,7 @@ namespace threepp_py {
                 .def_readwrite("receive_shadow", &Object3D::receiveShadow)
                 .def_readwrite("frustum_culled", &Object3D::frustumCulled)
                 .def_readwrite("resident", &Object3D::resident, kResidentDoc)
+                .def_readwrite("auto_lod", &Object3D::autoLod, kAutoLodDoc)
                 .def_readwrite("render_order", &Object3D::renderOrder)
                 .def_readwrite("matrix_auto_update", &Object3D::matrixAutoUpdate)
                 // Mutable in place: `obj.layers.set(1)` moves the object to channel 1.

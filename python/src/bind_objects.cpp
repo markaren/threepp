@@ -78,6 +78,7 @@ namespace threepp_py {
                 .def_readwrite("receive_shadow", &T::receiveShadow)
                 .def_readwrite("frustum_culled", &T::frustumCulled)
                 .def_readwrite("resident", &T::resident, kResidentDoc)
+                .def_readwrite("auto_lod", &T::autoLod, kAutoLodDoc)
                 .def_readwrite("render_order", &T::renderOrder)
                 .def_readwrite("matrix_auto_update", &T::matrixAutoUpdate)
                 .def_readwrite("layers", &T::layers)

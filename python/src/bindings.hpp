@@ -94,6 +94,16 @@ namespace threepp_py {
             "by default; checked on the mesh itself, not inherited; no effect on overlays, particle "
             "billboards, ParticleFields or LOD levels.";
 
+    // Docstring of Object3D.auto_lod, bound at the same two sites.
+    inline constexpr const char* kAutoLodDoc =
+            "Opt-out of the Vulkan renderer's automatic mesh LOD (renderer.auto_lod). False: the mesh is drawn "
+            "at full detail and no simplification job is queued for its geometry on its account (a geometry "
+            "another mesh draws with auto_lod on still gets one). For meshes that manage their own level of "
+            "detail (terrain tiles, a streamed world's per-cell content that already picks its own LOD), "
+            "where an automatic chain only adds jobs and flattens shading against neighbours at other levels. "
+            "Set it before the mesh is first rendered. True by default; checked on the mesh itself, not "
+            "inherited (set it on the InstancedMesh or Mesh, not on a parent Group).";
+
     // The string userData entry for `key` as a Python str, or None when the key
     // is absent or the value is not a string. Read access for scripts to the
     // editor's flat `key=value;...` configs (spline, physics, script), which
