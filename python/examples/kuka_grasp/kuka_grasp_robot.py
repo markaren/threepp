@@ -33,21 +33,38 @@ import kuka_grasp_contract as C  # noqa: E402
 #  Locate the stock KUKA URDF + generate the combined arm+gripper URDF
 # --------------------------------------------------------------------------- #
 _REPO = os.path.dirname(_PYTHON_DIR)  # C:\dev\threepp
-_URDF_CANDIDATES = [
-    os.path.join(_REPO, "build", "_deps", "threepp_data-src", "urdf", "lbr_iiwa_14_r820.urdf"),
-    os.path.join(_REPO, "cmake-build-relwithdebinfo", "_deps", "threepp_data-src", "urdf", "lbr_iiwa_14_r820.urdf"),
-    os.path.join(_REPO, "cmake-build-release", "_deps", "threepp_data-src", "urdf", "lbr_iiwa_14_r820.urdf"),
-    os.path.join(_REPO, "cmake-build-debug", "_deps", "threepp_data-src", "urdf", "lbr_iiwa_14_r820.urdf"),
-]
+_KUKA = os.path.join("urdf", "lbr_iiwa_14_r820.urdf")
+
+
+def _urdf_candidates():
+    """THREEPP_DATA_DIR first, then, for the repository and each of its ancestors (a Claude
+    worktree sits three levels below the main checkout), a sibling threepp_data / threepp-data
+    checkout and the data dependency every CMake build directory fetches."""
+    out = []
+    env = os.environ.get("THREEPP_DATA_DIR")
+    if env:
+        out.append(os.path.join(env, _KUKA))
+    d = _REPO
+    for _ in range(5):
+        parent = os.path.dirname(d)
+        out += [os.path.join(parent, name, _KUKA) for name in ("threepp_data", "threepp-data")]
+        builds = ["build"] + sorted(n for n in (os.listdir(d) if os.path.isdir(d) else [])
+                                    if n.startswith("cmake-build-"))
+        out += [os.path.join(d, b, "_deps", "threepp_data-src", _KUKA) for b in builds]
+        if parent == d:
+            break
+        d = parent
+    return out
 
 
 def find_kuka_urdf():
-    for p in _URDF_CANDIDATES:
+    cands = _urdf_candidates()
+    for p in cands:
         if os.path.exists(p):
             return p
     raise FileNotFoundError(
-        "lbr_iiwa_14_r820.urdf not found — build threepp once so the data dep is fetched. "
-        f"Looked in: {_URDF_CANDIDATES}")
+        "lbr_iiwa_14_r820.urdf not found — set THREEPP_DATA_DIR to a threepp_data checkout or "
+        f"build threepp once so the data dependency is fetched. Looked in: {cands}")
 
 
 def _finger_xml():
@@ -137,7 +154,7 @@ def build_arm(world, env_idx, spacing, urdf_path, render_visuals=False):
         damping=C.PD_DAMPING,
         max_force=C.PD_MAX_FORCE,
         self_collision=False,          # fingers must not self-collide with the arm or each other
-        solver_position_iterations=16,  # firmer contact for the grasp
+        solver_position_iterations=C.ARM_SOLVER_ITERS,
         render_visuals=render_visuals,
     )
     return art, meshes, joints
@@ -157,7 +174,7 @@ def build_cube(world, env_idx, spacing, material, render_visuals=True):
     mesh = tp.Mesh(tp.BoxGeometry(C.CUBE, C.CUBE, C.CUBE), tp.MeshStandardMaterial())
     mesh.material.color = 0xff8c42
     mesh.position.set(ox + C.TABLE_CX, C.TABLE_CY, C.CUBE_REST_Z)
-    art = world.create_articulation(fixed_base=False, solver_position_iterations=16,
+    art = world.create_articulation(fixed_base=False, solver_position_iterations=C.CUBE_SOLVER_ITERS,
                                     disable_self_collision=True)
     art.add_link(mesh, density=C.CUBE_DENSITY, material=material)
     art.finalize()

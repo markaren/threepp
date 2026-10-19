@@ -1,16 +1,20 @@
 """kuka_grasp_friction.py — the friction-grasp feasibility gate.
 
-Scripts a top-down parallel-jaw grasp (no kinematic attach, no grasp-lock): straddle the cube with
-the open gripper, CLOSE the fingers, then LIFT the arm — and check the cube rises with the gripper,
-held by friction alone. This proves the physics supports a real friction grasp before we build the
-RL env around it.
+Scripts a top-down parallel-jaw grasp (no kinematic attach): open fingers straddle the cube,
+close, then lift the arm by IK waypoints and hold — the cube must rise with the gripper, held
+by friction alone. Runs K envs at once with the cube yawed and offset differently in each, so
+the gate is a hold rate rather than one lucky case.
 
-    python kuka_grasp_friction.py
+    python kuka_grasp_friction.py [K]
 
-PASS if the cube lifts with the gripper (cube z rises ~0.15 m) and stays between the fingers.
+PASS if in at least 90 % of the envs the cube rose with the fingers (cube rise over 90 % of the
+grasp point's, which is at least 0.08 m) and its centre ends within 0.02 m of the finger
+midpoint. The arm sags under gravity on its PD drive, so the grasp point does not reach the
+commanded 0.15 m; the gate measures the hold, not the tracking.
 """
 import os
 import sys
+import time
 
 import numpy as np
 import torch
@@ -20,74 +24,94 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 import kuka_grasp_contract as C  # noqa: E402
+import kuka_grasp_robot as R  # noqa: E402
+from kuka_grasp_kin import KukaKinematics, down_frame  # noqa: E402
 from kuka_grasp_sim import KukaGraspSim  # noqa: E402
+
+LIFT_DZ = 0.15
+
+
+def grasp_yaw(cube_yaw, ref_yaw):
+    """The jaw yaw square to the cube nearest to ref_yaw (the cube has fourfold symmetry)."""
+    k = torch.round((ref_yaw - cube_yaw) / (np.pi / 2))
+    return cube_yaw + k * (np.pi / 2)
+
+
+def run(K=64, seed=0, verbose=True):
+    sim = KukaGraspSim(K)
+    dev = sim.device
+    kin = KukaKinematics(R.find_kuka_urdf(), device=dev)
+    g = torch.Generator(device=dev).manual_seed(seed)
+    idx = torch.arange(K, device=dev)
+
+    # cube placements: yaw in [-pi, pi), offset up to 8 cm from the table centre
+    cyaw = (torch.rand(K, generator=g, device=dev) * 2 - 1) * np.pi
+    cxy = (torch.rand(K, 2, generator=g, device=dev) * 2 - 1) * 0.08
+    cxy[:, 0] += C.TABLE_CX
+    cxy[:, 1] += C.TABLE_CY
+    dq = torch.tensor(C.DEFAULT_Q, device=dev).expand(K, 7).contiguous()
+    _, R0 = kin.grasp_frame(dq)
+    yaw = grasp_yaw(cyaw, torch.atan2(R0[:, 1, 0], R0[:, 0, 0]))
+
+    def solve(z):
+        p = torch.stack([cxy[:, 0], cxy[:, 1], torch.full((K,), z, device=dev)], 1)
+        q, pe, re = kin.ik(p, down_frame(yaw), dq)
+        assert pe.max().item() < 3e-3 and re.max().item() < 3e-2, (pe.max().item(), re.max().item())
+        return q
+
+    q_grasp = solve(C.GRASP_TABLE_Z)
+    q_lift = solve(C.GRASP_TABLE_Z + LIFT_DZ)
+    opened = torch.full((K, 2), C.GRIP_OPEN, device=dev)
+    closed = torch.full((K, 2), C.GRIP_CLOSE, device=dev)
+
+    # 1. arm at the grasp posture, fingers open, cube placed between them
+    q9 = torch.cat([q_grasp, opened], 1)
+    sim.set_joint_state(idx, q9, torch.zeros_like(q9))
+    pose = torch.zeros(K, 7, device=dev)
+    pose[:, 2], pose[:, 3] = torch.sin(cyaw / 2), torch.cos(cyaw / 2)
+    pose[:, 4] = sim.env_x + cxy[:, 0]
+    pose[:, 5] = cxy[:, 1]
+    pose[:, 6] = C.CUBE_REST_Z + C.CUBE_PLACE_DZ
+    sim.set_cube_state(idx, pose)
+    sim.settle_arm(q9, 50)
+    c0 = sim.cube_position().clone()
+    t0 = sim.tip_state()[0].clone()
+    moved = (c0 - pose[:, 4:7]).norm(dim=1)
+
+    # 2. close; 3. lift through eight waypoints; 4. hold
+    sim.settle_arm(torch.cat([q_grasp, closed], 1), 100)
+    for k in range(1, 9):
+        f = k / 8.0
+        sim.settle_arm(torch.cat([q_grasp + f * (q_lift - q_grasp), closed], 1), 25)
+    sim.settle_arm(torch.cat([q_lift, closed], 1), 125)        # 0.5 s hold
+
+    tip = sim.tip_state()[0]
+    cube = sim.cube_position()
+    rose = cube[:, 2] - c0[:, 2]
+    tip_rose = tip[:, 2] - t0[:, 2]
+    off = (cube - tip).norm(dim=1)
+    held = (tip_rose > 0.08) & (rose > 0.9 * tip_rose) & (off < 0.02)
+    rate = held.float().mean().item()
+    if verbose:
+        print(f"[friction] K={K}  placement disturbance (straddle) max {moved.max().item() * 1e3:.1f} mm")
+        print(f"[friction] grasp point rose: mean {tip_rose.mean().item():.3f} m (commanded {LIFT_DZ})  "
+              f"cube rose: mean {rose.mean().item():.3f} m  min {rose.min().item():.3f} m")
+        print(f"[friction] cube to finger midpoint after the hold: mean {off.mean().item() * 1e3:.1f} mm  "
+              f"max {off.max().item() * 1e3:.1f} mm")
+    return rate
 
 
 def main():
-    np.set_printoptions(precision=3, suppress=True)
-    sim = KukaGraspSim(num_envs=1, render_visuals=False)
-    dev = sim.device
-
-    cube_center = (C.TABLE_CX, C.TABLE_CY, C.CUBE_REST_Z)
-
-    def reset_cube():
-        pose = sim.make_pose(torch.tensor([cube_center], device=dev), device=dev)
-        sim.set_cube_state(torch.tensor([0], device=dev), pose)
-
-    def cube_xyz():
-        return sim.cube_position()[0].cpu().numpy()
-
-    def tip_xyz():
-        return sim.tip_state()[0][0].cpu().numpy()
-
-    print("[friction] searching grasp + lift postures...")
-    q_grasp = sim.search_posture((C.TABLE_CX, C.TABLE_CY, C.CUBE_REST_Z - 0.005), grip=C.GRIP_OPEN)
-    q_lift = sim.search_posture((C.TABLE_CX, C.TABLE_CY, C.CUBE_REST_Z + 0.22), seed=1, grip=C.GRIP_CLOSE)
-    assert q_grasp and q_lift, "posture search failed"
-    print(f"  q_grasp={[round(v,3) for v in q_grasp]}")
-    print(f"  q_lift ={[round(v,3) for v in q_lift]}")
-
-    # 1. hover above the cube, gripper OPEN, cube reset to centre
-    reset_cube()
-    sim.settle_arm(list(C.DEFAULT_Q) + [C.GRIP_OPEN, C.GRIP_OPEN], 120)
-    reset_cube()
-    sim.settle_arm(list(C.DEFAULT_Q) + [C.GRIP_OPEN, C.GRIP_OPEN], 60)
-    print(f"\n[1] hover     tip={tip_xyz()}  cube={cube_xyz()}")
-
-    # 2. descend so the open fingers straddle the cube, then CENTRE the cube under the actual
-    #    tip (x,y) at table height — the posture search is imprecise, and this gate tests the
-    #    friction hold, not IK precision (the policy will learn the centring itself).
-    sim.settle_arm(q_grasp + [C.GRIP_OPEN, C.GRIP_OPEN], 150)
-    tip = tip_xyz()
-    centred = sim.make_pose(torch.tensor([[tip[0], tip[1], C.CUBE_REST_Z]], device=dev), device=dev)
-    sim.set_cube_state(torch.tensor([0], device=dev), centred)
-    sim.settle_arm(q_grasp + [C.GRIP_OPEN, C.GRIP_OPEN], 20)
-    print(f"[2] straddle  tip={tip_xyz()}  cube={cube_xyz()}  finger_open={sim.finger_opening()[0]:.3f}")
-
-    # 3. CLOSE the fingers on the cube (arm holds the grasp posture)
-    sim.settle_arm(q_grasp + [C.GRIP_CLOSE, C.GRIP_CLOSE], 120)
-    print(f"[3] close     tip={tip_xyz()}  cube={cube_xyz()}  finger_open={sim.finger_opening()[0]:.3f}")
-    cube_before_lift = cube_xyz()
-
-    # 4. LIFT — raise the arm, fingers stay closed; the cube must come up by friction
-    zs = []
-    for k in range(8):
-        sim.settle_arm(q_lift + [C.GRIP_CLOSE, C.GRIP_CLOSE], 40)
-        zs.append(float(cube_xyz()[2]))
-    cube_after = cube_xyz()
-    tip_after = tip_xyz()
-    print(f"[4] lift      tip={tip_after}  cube={cube_after}")
-    print(f"    cube z during lift: {[round(z,3) for z in zs]}")
-
-    # ---- verdict ----
-    rose = cube_after[2] - cube_before_lift[2]
-    lateral = float(np.linalg.norm(cube_after[:2] - tip_after[:2]))
-    held = rose > 0.10 and lateral < 0.05
-    print("\n" + "=" * 56)
-    print(f"cube rose {rose:.3f} m,  lateral tip-cube {lateral:.3f} m")
-    print(f"FRICTION GRASP GATE: {'PASS' if held else 'FAIL'}")
-    print("=" * 56)
-    return 0 if held else 1
+    K = int(sys.argv[1]) if len(sys.argv) > 1 else 64
+    t0 = time.perf_counter()
+    rate = run(K)
+    ok = rate >= 0.9
+    print("=" * 60)
+    print(f"held {rate * 100:.1f} % of {K} envs ({time.perf_counter() - t0:.1f} s, solver iterations "
+          f"arm {C.ARM_SOLVER_ITERS} / cube {C.CUBE_SOLVER_ITERS})")
+    print(f"FRICTION GRASP GATE: {'PASS' if ok else 'FAIL'}")
+    print("=" * 60)
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

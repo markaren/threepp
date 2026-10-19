@@ -1,17 +1,22 @@
-"""kuka_grasp_env.py — the KUKA grasp RL environment (threepp.rl contract).
+"""kuka_grasp_env.py — the KUKA grasp RL environment, a threepp.rl.VecTask.
 
-The policy commands all 7 arm joints + the gripper (8 actions) to reach a cube on the table, close
-the parallel-jaw gripper, and lift it. Reward is a sum of shaped terms (reach → down → centre →
-descend → grasp → lift → success). A real FRICTION grasp is the goal — there is NO grasp-lock weld.
-The bootstrap is a graduated reset-height curriculum (start_high 0→1): early episodes start with the arm
-already straddling the cube (learn the grasp), then the start height spreads up toward the DEFAULT_Q home
-so the descent is trained at every depth.
+The policy commands the 7 arm joints and the gripper (8 actions) to reach a cube on the table,
+close the parallel-jaw gripper on it and lift it, held by finger friction alone (there is no
+weld or kinematic attach anywhere).
 
-Contract (see python/threepp/rl/README.md):
-    reset() -> obs [K, OBS_DIM]
-    step(action [K, ACT_DIM]) -> (obs, reward, done, terminal_obs, is_timeout)
-`step` auto-resets finished envs; `is_timeout` marks time-limit truncations (bootstrap V(term_obs))
-vs. true terminals (cube knocked off the table → bootstrap 0).
+The world is KukaGraspSim: a GpuSim arm batch plus a second batch for the free-base cubes, so
+the env passes build_robot=None to VecTask and attaches the sim itself; everything else (the
+step/reset choreography, terminal-obs capture, env_state() re-initialisation, per-term reward
+logging, CUDA-graph replay of the per-step torch region) is VecTask's.
+
+The June scaffold: a shaped reach/centre/descend/close/lift reward and a reset-height
+curriculum driven by set_iter(it), so early episodes start with the open fingers already
+straddling a centred cube and later ones start anywhere up to the DEFAULT_Q home.
+
+Success, for every mode: the cube centre LIFT_SUCCESS_DZ above its rest height and within
+SUCCESS_NEAR of the finger midpoint for SUCCESS_HOLD_STEPS consecutive control steps.
+
+    python kuka_grasp_env.py            # selftest (the gate)
 """
 import os
 import sys
@@ -24,149 +29,173 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 import kuka_grasp_contract as C  # noqa: E402
+import kuka_grasp_robot as R  # noqa: E402
+from kuka_grasp_kin import KukaKinematics, down_frame  # noqa: E402
 from kuka_grasp_sim import KukaGraspSim  # noqa: E402
+from threepp.rl import RobotState, VecTask  # noqa: E402
 
 # --------------------------------------------------------------------------- #
-#  Reward weights + grasp thresholds (tunable; kept here, not scattered)
+#  Scaffold reward weights + grasp thresholds (the June env's)
 # --------------------------------------------------------------------------- #
 W_REACH = 1.0
 K_REACH = 6.0          # exp(-K_REACH * ||tip - cube||)
-W_DOWN = 1.0           # reward the TOOL pointing straight down (DESIGN's "align tool-axis down" term)
-K_DOWN = 3.0           # exp(-K_DOWN * (1 - down)); down = -approach_z ∈ [-1,1], 1 = straight down
+W_DOWN = 1.0           # tool pointing straight down
+K_DOWN = 3.0           # exp(-K_DOWN * (1 - down)); down = -approach_z, 1 = straight down
 W_CENTER = 0.6
-K_CENTER = 22.0        # exp(-K_CENTER * lateral_xy) — centre the tip over the cube (sharp)
-W_VERT = 1.5           # reward tip descending to cube Z level (the missing descent gradient)
-K_VERT = 10.0          # exp(-K_VERT * max(0, tip_z - cube_z))
-W_CLOSE = 0.6          # dense: reward closing the fingers while positioned over the cube
-W_GRASP = 1.5          # per-step bonus for a real FIRM grasp
-W_LIFT = 24.0          # per metre of lift, GATED ON A FIRM GRASP (not a loose "held")
-W_SUCCESS = 6.0        # per-step bonus while holding the cube above the success height
+K_CENTER = 22.0        # exp(-K_CENTER * lateral_xy)
+W_VERT = 1.5           # tip descending to the cube's height, gated on being over it
+K_VERT = 10.0
+W_CLOSE = 0.6          # closing the fingers while in the grasp zone
+W_GRASP = 1.5          # per-step bonus for a firm grasp
+W_LIFT = 24.0          # per metre of lift, gated on a firm grasp
+W_SUCCESS = 6.0        # per step held above the lift height
 W_ACT_RATE = 0.004
 W_ACT_MAG = 0.001
 W_LIMIT = 0.08
-W_FALL = 3.0           # one-time penalty when the cube is knocked off the table
+W_FALL = 3.0           # one-time penalty when the cube leaves the table
 
-# A FIRM grasp = tightly centred AND fingers closed on the cube. The lift + success rewards require
-# THIS (not a loose proximity), so the only way to earn the lift reward is a real, centred squeeze
-# that holds the cube by friction. (There is no weld to fake it — see step().)
-FIRM_LAT = 0.018       # lateral tip↔cube must be tight (was 0.035 — too loose, off-centre grips slip)
-FIRM_VERT = 0.045      # fingers vertically around the cube
-FIRM_OPEN = 0.018      # fingers genuinely closed on the cube
-OVER_LAT = 0.045       # loosely above the cube — gates the dense "close" reward
-OVER_VERT = 0.045      # close reward fires ONLY in the grasp zone (fingers around the cube). Looser values
-                       # reward closing while still high up — and once shut the fingers (gap 0.044 < cube
-                       # 0.07) can't descend, so the arm grips the air above the cube.
-LOST_MARGIN = 0.10     # cube this far beyond the table edge == knocked off → terminal fail
+# A firm grasp = tightly centred and the fingers closed on the cube (an observation flag in
+# every mode; the scaffold's lift and grasp rewards are gated on it).
+FIRM_LAT = 0.018
+FIRM_VERT = 0.045
+FIRM_OPEN = 0.018
+OVER_LAT = 0.045       # the scaffold's close reward fires only in the grasp zone
+OVER_VERT = 0.045
+LOST_MARGIN = C.LOST_MARGIN
 
-ARM_RESET_NOISE = 0.05  # rad jitter on the arm reset posture
+ARM_RESET_NOISE = 0.05  # rad jitter on the scaffold's reset posture
 
 
-class KukaGraspEnv:
-    def __init__(self, num_envs=2048, device="cuda", seed=0, spacing=2.5, render_visuals=False):
-        self.sim = KukaGraspSim(num_envs, device=device, spacing=spacing, render_visuals=render_visuals)
-        self.K = num_envs
-        self.device = self.sim.device
-        self.max_steps = C.MAX_STEPS
-        self.g = torch.Generator(device=self.device).manual_seed(seed)
+class KukaGraspEnv(VecTask):
+    control_hz = C.CONTROL_HZ
+    episode_s = C.EPISODE_S
+    act_dim = C.ACT_DIM
+    control = "drive"
+    substeps = C.SUBSTEPS
+    clip_actions = 1.0
 
+    def __init__(self, num_envs=512, device="cuda", seed=0, *, mode="scaffold",
+                 render_visuals=False, graph=False):
+        if mode not in ("scaffold",):
+            raise ValueError(f"unknown mode {mode!r}")
+        super().__init__(num_envs, None, device=device, seed=seed, graph=graph)
+        self.mode = mode
+        self.sim = KukaGraspSim(num_envs, device=device, render_visuals=render_visuals)
+        self.state = RobotState(self.sim, self.dt)
         dev = self.device
-        self.steps = torch.zeros(num_envs, dtype=torch.long, device=dev)
-        self.last_action = torch.zeros(num_envs, C.ACT_DIM, device=dev)
         self.default_q = torch.tensor(C.DEFAULT_Q, device=dev)
         self.arm_lo = torch.tensor(C.ARM_LIMITS[:, 0], device=dev)
         self.arm_hi = torch.tensor(C.ARM_LIMITS[:, 1], device=dev)
         self.arm_scale = torch.tensor(C.ARM_ACTION_SCALE, device=dev)
+        self.vel_fail = torch.tensor(C.ARM_VEL_LIMITS * C.FAIL_VEL_FACTOR, device=dev)
         self.env_x = self.sim.env_x
+        self.kin = KukaKinematics(R.find_kuka_urdf(), device=dev)
 
-        # curriculum state (set via set_iter)
-        self.spawn_half = torch.tensor([0.0, 0.0], device=dev)   # cube spawn region half-extent (x,y)
-        self.start_high = 0.0      # graduated reset: 0 → all envs start AT the cube; 1 → up to the home pose
-        self.deploy = False        # eval/deploy: force the true home start (df=0)
+        # per-env state the base re-initialises on every reset
+        self.last_action = self.env_state((C.ACT_DIM,))
+        self.prev_action = self.env_state((C.ACT_DIM,))
+        self.hold = self.env_state(())                       # consecutive lifted-and-held steps
+        self.ep_success = self.env_state((), init=False, dtype=torch.bool)
 
-        # descended grasp posture (tip down at the cube) for the reset-posture curriculum — the
-        # scaffold that lets the policy ever EXPERIENCE the grasp+lift states (see _init_grasp_posture).
-        self._init_grasp_posture()
+        # per-step masks, written in place inside the (graph-capturable) hot region
+        self.success = torch.zeros(num_envs, dtype=torch.bool, device=dev)
+        self.fail_cube = torch.zeros(num_envs, dtype=torch.bool, device=dev)
+        self.fail_vel = torch.zeros(num_envs, dtype=torch.bool, device=dev)
+        # device-side metric accumulators, read (one host sync each) only in stats_line()
+        self._m = {k: torch.zeros((), device=dev) for k in ("reach", "firm", "steps")}
+        self._ep = {k: torch.zeros((), device=dev) for k in ("n", "succ", "fail_cube", "fail_vel")}
+        # first-episode outcome per env (-1 = not finished yet): what the evaluation reads
+        self.first_outcome = torch.full((num_envs,), -1, dtype=torch.long, device=dev)
+        self.last_metrics = {}
 
-        # metrics (read in on_log)
-        self.last_reach = 0.0
-        self.last_grasp_rate = 0.0
-        self.last_lift = 0.0
-        self.last_success_rate = 0.0
+        # the scaffold's curriculum state (set_iter) and its descended grasp posture
+        self.spawn_half = torch.tensor([0.0, 0.0], device=dev)
+        self.start_high = 0.0
+        self.cur_iter = 0
+        if mode == "scaffold":
+            self._init_grasp_posture()
+            self.set_iter(0)
 
-        self.set_iter(0)
-
+    # ---- the scaffold ---------------------------------------------------------------
     def _init_grasp_posture(self):
-        """The descended grasp posture (arm posed so the open fingers straddle a centred cube) used by
-        the reset-posture curriculum. Found once via the same posture search the friction gate uses
-        (kuka_grasp_friction.py), then CACHED to disk so later runs are instant + deterministic.
+        """The descended posture of the reset-height curriculum: open fingers straddling a cube
+        resting at the table centre, tool down. Solved by IK (the June env ran a random
+        posture search in the simulator and cached it), then settled under the PD drive with
+        gravity in every env at once and measured, because the arm sags below its target.
+        The grasp point sits at GRASP_TABLE_Z; the June target, the cube centre, put the
+        finger tips 7.5 mm inside the table."""
+        dev = self.device
+        target = torch.tensor([[C.TABLE_CX, C.TABLE_CY, C.GRASP_TABLE_Z]], device=dev)
+        _, R0 = self.kin.grasp_frame(self.default_q.view(1, 7))
+        yaw0 = torch.atan2(R0[:, 1, 0], R0[:, 0, 0])
+        q, pe, re = self.kin.ik(target, down_frame(yaw0), self.default_q.view(1, 7))
+        if pe.item() > 2e-3 or re.item() > 2e-2:
+            raise RuntimeError(f"kuka_grasp: no IK posture at the cube (err {pe.item():.4f} m, "
+                               f"{re.item():.3f} rad)")
+        q9 = torch.cat([q[0], torch.tensor([C.GRIP_OPEN, C.GRIP_OPEN], device=dev)])
+        q9k = q9.view(1, 9).expand(self.K, 9).contiguous()
+        self.sim.set_joint_state(torch.arange(self.K, device=dev), q9k, torch.zeros_like(q9k))
+        self.sim.settle_arm(q9, 150)
+        tip = self.sim.tip_state()[0][0] - torch.stack([self.env_x[0], torch.zeros((), device=dev),
+                                                       torch.zeros((), device=dev)])
+        if (tip[0:2] - target[0, 0:2]).norm().item() > 0.03 or abs(tip[2].item() - target[0, 2].item()) > 0.04:
+            raise RuntimeError(f"kuka_grasp: the settled grasp posture misses the cube (tip {tip.tolist()})")
+        self.grasp_q = q[0]
+        self.grasp_cube_xy = tip[0:2].clone()
 
-        Without this scaffold the policy resets only ever start at DEFAULT_Q (hovering ~9 cm above the
-        cube); the coordinated descent to the cube is too hard to discover by exploration, so grasp/lift
-        states are never visited and never learned. Starting a (annealed) fraction of episodes already
-        in the straddle teaches close→grasp→lift directly and propagates value back to teach the reach.
-
-        CRITICAL: the posture must genuinely DESCEND the tip to the cube. The search is stochastic and a
-        single seed can return a near-hover (high tip) that ranks well only because the PD arm hadn't
-        settled when it was scored. So we settle FULLY, measure the achieved tip, and accept only a
-        posture whose tip is actually at the cube (xy + z within tolerance) — retrying seeds, and failing
-        LOUDLY rather than silently training on a no-op scaffold."""
-        cache = os.path.join(_HERE, "kuka_grasp_pose.npy")
-        target = np.array([C.TABLE_CX, C.TABLE_CY, C.CUBE_REST_Z], np.float32)
-        XY_TOL, Z_TOL = 0.030, 0.040            # tip must straddle the 0.07 m cube (half=0.035)
-        if os.path.exists(cache):
-            data = np.load(cache).astype(np.float32)
-            q7, tip = data[0:7], data[7:10]
-        else:
-            best = None                          # (err, q7, tip) — keep the best across seeds for the error msg
-            q7 = tip = None
-            for seed in range(12):
-                cand = self.sim.search_posture(tuple(target), n=200, settle=80, seed=seed, grip=C.GRIP_OPEN)
-                if cand is None:
-                    continue
-                self.sim.settle_arm(list(cand) + [C.GRIP_OPEN, C.GRIP_OPEN], 150)  # settle FULLY before measuring
-                t = self.sim.tip_state()[0][0].detach().cpu().numpy().astype(np.float32)
-                xy_err = float(np.linalg.norm(t[0:2] - target[0:2]))
-                z_err = float(abs(t[2] - target[2]))
-                err = xy_err + z_err
-                print(f"[kuka_grasp] grasp-posture seed {seed}: tip={np.round(t,3).tolist()} "
-                      f"xy_err={xy_err:.3f} z_err={z_err:.3f}")
-                if best is None or err < best[0]:
-                    best = (err, np.asarray(cand, np.float32), t)
-                if xy_err < XY_TOL and z_err < Z_TOL:
-                    q7, tip = np.asarray(cand, np.float32), t
-                    break
-            if q7 is None:
-                be = best[2] if best else None
-                raise RuntimeError(
-                    "kuka_grasp: could not find a posture that DESCENDS the tip to the cube "
-                    f"(target {target.tolist()}, best achieved tip {None if be is None else be.tolist()}). "
-                    "The reset-posture scaffold would be a no-op — fix the geometry/reach before training.")
-            np.save(cache, np.concatenate([q7, tip]))
-        print(f"[kuka_grasp] grasp posture ACCEPTED: q7={np.round(q7,3).tolist()} tip(fingers)={np.round(tip,3).tolist()} "
-              f"(must be ~[{C.TABLE_CX}, {C.TABLE_CY}, {C.CUBE_REST_Z:.2f}] — the FINGER midpoint at the cube)")
-        self.grasp_q = torch.tensor(q7, device=self.device, dtype=torch.float32)        # [7] arm posture
-        self.grasp_cube_xy = torch.tensor(tip[0:2], device=self.device, dtype=torch.float32)  # [2] tip xy (env-local)
-
-    # ---- curriculum ---------------------------------------------------------
     def set_iter(self, it):
-        """Curriculum schedule. Early: cube near the table centre, episodes start AT the cube (learn the
-        grasp). Later: the arm's start height spreads up toward the DEFAULT_Q home, so the DESCENT is
-        practised at every depth, and the cube spreads across the table."""
-        t = min(max(it / 1200.0, 0.0), 1.0)        # cube spawn region grows 0→full over 1200 iters
+        """The scaffold's schedule: the cube spawn region grows from the table centre to the
+        whole table over 1200 iterations, and the reset height spreads from at-the-cube
+        (start_high 0) to anywhere up to the DEFAULT_Q home (1) over 500."""
+        t = min(max(it / 1200.0, 0.0), 1.0)
         sx = 0.02 + t * (C.TABLE_HALF[0] - 0.06)
         sy = 0.02 + t * (C.TABLE_HALF[1] - 0.06)
         self.spawn_half = torch.tensor([sx, sy], device=self.device)
-        # graduated reset height: 0 → every env starts AT the cube (grasp_q); grows to 1 → start anywhere
-        # between the cube and the home pose. Trains the last-mile descent at all depths (not one plunge),
-        # while keeping grasp-zone starts alive — the scaffold replacing the removed grasp-lock weld.
         self.start_high = float(min(it / 500.0, 1.0))
         self.cur_iter = it
 
-    # ---- observation --------------------------------------------------------
+    def _reset_scaffold(self, idx):
+        n = idx.numel()
+        dev, g = self.device, self.g
+        u = torch.rand(n, generator=g, device=dev) * self.start_high
+        df = (1.0 - u).unsqueeze(1)                 # 1 = at the cube, 0 = the DEFAULT_Q home
+        q9 = torch.zeros(n, C.N_DOF, device=dev)
+        q9[:, 0:7] = (self.default_q + df * (self.grasp_q - self.default_q)
+                      + ARM_RESET_NOISE * (torch.rand(n, 7, generator=g, device=dev) * 2 - 1))
+        q9[:, 7] = C.GRIP_OPEN
+        q9[:, 8] = C.GRIP_OPEN
+        self.sim.set_joint_state(idx, q9, torch.zeros_like(q9))
+        # the cube under the descended fingers; its lateral spread grows as the start rises
+        spread = 1.0 - df.squeeze(1)
+        rx = (torch.rand(n, generator=g, device=dev) * 2 - 1) * self.spawn_half[0] * spread
+        ry = (torch.rand(n, generator=g, device=dev) * 2 - 1) * self.spawn_half[1] * spread
+        yaw = (torch.rand(n, generator=g, device=dev) * 2 - 1) * np.pi * spread
+        pose = torch.zeros(n, 7, device=dev)
+        pose[:, 2] = torch.sin(yaw / 2)
+        pose[:, 3] = torch.cos(yaw / 2)
+        pose[:, 4] = self.env_x[idx] + self.grasp_cube_xy[0] + rx
+        pose[:, 5] = self.grasp_cube_xy[1] + ry
+        pose[:, 6] = C.CUBE_REST_Z + C.CUBE_PLACE_DZ
+        self.sim.set_cube_state(idx, pose)
+
+    # ---- VecTask hooks ----------------------------------------------------------------
+    def on_reset(self, idx):
+        self._reset_scaffold(idx)
+
+    def reset(self):
+        self.first_outcome.fill_(-1)
+        return super().reset()
+
+    def act(self, a):
+        """Arm joint targets about DEFAULT_Q (clamped to the limits) and one mirrored gripper
+        command: a7 <= 0 keeps the fingers open, a7 = +1 closes them fully."""
+        self.prev_action.copy_(self.last_action)
+        self.last_action.copy_(a)
+        arm = torch.clamp(self.default_q + self.arm_scale * a[:, 0:7], self.arm_lo, self.arm_hi)
+        grip = C.GRIP_OPEN + a[:, 7].clamp(0.0, 1.0) * (C.GRIP_CLOSE - C.GRIP_OPEN)
+        return torch.cat([arm, grip.unsqueeze(1), grip.unsqueeze(1)], dim=1)
+
     def _grasp_state(self):
-        """Return (tip, cube, lateral_xy, vert, dist, opening, firm, approach) describing the tip↔cube
-        relation. `firm` = a real grasp: tightly centred + fingers closed on the cube. `approach` is the
-        tool approach axis (world); -approach_z is "down-ness" (1 = pointing straight down)."""
         tip, approach = self.sim.tip_state()
         cube = self.sim.cube_position()
         d = cube - tip
@@ -177,196 +206,150 @@ class KukaGraspEnv:
         firm = (lateral < FIRM_LAT) & (vert < FIRM_VERT) & (opening < FIRM_OPEN)
         return tip, cube, lateral, vert, dist, opening, firm, approach
 
-    def _obs(self):
-        s = self.sim
-        tip, cube, lateral, vert, dist, opening, firm, approach = self._grasp_state()
-        # tip relative to this env's table centre (strip the per-env X offset)
-        tip_rel = tip.clone()
-        tip_rel[:, 0] -= self.env_x + C.TABLE_CX
-        tip_rel[:, 1] -= C.TABLE_CY
-        tip_rel[:, 2] -= C.TABLE_TOP_Z
-        tip_to_cube = cube - tip                       # env_x cancels
-        lift_frac = ((cube[:, 2] - C.CUBE_REST_Z) / C.LIFT_SUCCESS_DZ).clamp(0.0, 1.5)
-        flags = torch.stack([firm.float(), lift_frac], dim=1)
-        finger_vel = 0.5 * (s.arm_jv[:, 7] + s.arm_jv[:, 8])
-        obs = torch.cat([
-            s.arm_jp[:, 0:7] - self.default_q,         # 7 arm qpos_rel
-            s.arm_jv[:, 0:7] * C.QVEL_SCALE,           # 7 arm qvel
-            torch.stack([opening, finger_vel * C.QVEL_SCALE], dim=1),  # 2 gripper
-            tip_rel,                                   # 3 tip (table-relative)
-            tip_to_cube,                               # 3 tip→cube
-            approach,                                  # 3 tool approach axis (so the policy SEES orientation)
-            s.cube_up(),                               # 3 cube up-axis
-            s.cube_linvel,                             # 3 cube linvel
-            self.last_action,                          # 8 last action
-            flags,                                     # 2 grasp flag + lift frac
-        ], dim=1)
-        return obs
+    def on_step(self, s):
+        """Advance the hold counter: lifted and between the fingers, consecutively."""
+        tip, cube = self.sim.tip_state()[0], self.sim.cube_position()
+        held = ((cube[:, 2] > C.CUBE_REST_Z + C.LIFT_SUCCESS_DZ)
+                & ((cube - tip).norm(dim=1) < C.SUCCESS_NEAR))
+        self.hold.copy_(torch.where(held, self.hold + 1.0, torch.zeros_like(self.hold)))
+        self.success.copy_(self.hold >= C.SUCCESS_HOLD_STEPS)
+        self.ep_success.logical_or_(self.success)
 
-    # ---- reset --------------------------------------------------------------
-    def _reset_idx(self, idx):
-        n = idx.numel()
-        if n == 0:
-            return
-        dev = self.device
-        g = self.g
-
-        # GRADUATED reset height. df=1 starts the arm AT the cube (grasp_q, open fingers straddling);
-        # df=0 at the DEFAULT_Q home ~22 cm above. The start height spreads up to home over the curriculum
-        # (start_high), so the last-mile descent is trained at EVERY depth — not only as one full plunge —
-        # and grasp-zone starts never vanish. Deploy/eval forces df=0 (the true home start).
-        if self.deploy:
-            df = torch.zeros(n, 1, device=dev)
-        else:
-            u = torch.rand(n, generator=g, device=dev) * self.start_high
-            df = (1.0 - u).unsqueeze(1)                 # [n,1] in [1-start_high, 1]
-
-        q9 = torch.zeros(n, C.N_DOF, device=dev)
-        q9[:, 0:7] = (self.default_q + df * (self.grasp_q - self.default_q)
-                      + ARM_RESET_NOISE * (torch.rand(n, 7, generator=g, device=dev) * 2 - 1))
-        q9[:, 7] = C.GRIP_OPEN
-        q9[:, 8] = C.GRIP_OPEN
-        self.sim.set_arm_joint_state(idx, q9, torch.zeros(n, C.N_DOF, device=dev))
-
-        # cube under the descended fingers (grasp_cube_xy); lateral spread GROWS as the arm starts higher
-        # (df→0), so a start-at-cube env gets a clean straddle while a home-start env must also centre on a
-        # cube placed anywhere in the (curriculum-widening) spawn region.
-        spread = (1.0 - df.squeeze(1))
-        rx = (torch.rand(n, generator=g, device=dev) * 2 - 1) * self.spawn_half[0] * spread
-        ry = (torch.rand(n, generator=g, device=dev) * 2 - 1) * self.spawn_half[1] * spread
-        cx = self.env_x[idx] + self.grasp_cube_xy[0] + rx
-        cy = self.grasp_cube_xy[1] + ry
-        yaw = (torch.rand(n, generator=g, device=dev) * 2 - 1) * np.pi * spread
-        pos = torch.stack([cx, cy, torch.full((n,), C.CUBE_REST_Z, device=dev)], dim=1)
-        quat = torch.zeros(n, 4, device=dev)
-        quat[:, 2] = torch.sin(yaw / 2)   # qz
-        quat[:, 3] = torch.cos(yaw / 2)   # qw
-        pose = torch.cat([quat, pos], dim=1)
-        self.sim.set_cube_state(idx, pose)
-
-        self.steps[idx] = 0
-        self.last_action[idx] = 0.0
-
-    def reset(self):
-        self._reset_idx(torch.arange(self.K, device=self.device))
-        self.sim.read()
-        return self._obs()
-
-    # ---- step ---------------------------------------------------------------
-    @torch.no_grad()
-    def step(self, action):
-        a = action.clamp(-1.0, 1.0)
-        # arm targets (add-order joints 0..6) + mirrored gripper (7,8). Gripper DEFAULTS OPEN: a7<=0 keeps
-        # the fingers fully open (clears the cube during the descent); only a7>0 closes. This makes the
-        # action-penalty-neutral pose open, so the arm doesn't half-shut the gripper and jam on the cube.
-        arm_tgt = torch.clamp(self.default_q + self.arm_scale * a[:, 0:7], self.arm_lo, self.arm_hi)
-        grip = C.GRIP_OPEN + a[:, 7].clamp(0.0, 1.0) * (C.GRIP_CLOSE - C.GRIP_OPEN)   # a7<=0 open, a7=+1 close
-        targets = torch.cat([arm_tgt, grip.unsqueeze(1), grip.unsqueeze(1)], dim=1)
-        self.sim.set_arm_targets(targets)
-        self.sim.substep(C.SUBSTEPS)
-
-        tip, cube, lateral, vert, dist, opening, firm, approach = self._grasp_state()
-        over_cube = (lateral < OVER_LAT) & (vert < OVER_VERT)
-        close_amt = ((C.GRIP_OPEN - opening) / (C.GRIP_OPEN - C.GRIP_CLOSE)).clamp(0.0, 1.0)
-        down = -approach[:, 2]        # tool down-ness: 1 = straight down, 0 = horizontal, -1 = up
-
-        # NO grasp-lock weld. The earlier latch (teleport the cube to the tip once firm, hold it there)
-        # let the policy fake the task: brief firm → latch → raise the arm → the weld carried the cube up
-        # and paid the lift reward WITHOUT a real grip. Result: succ ~0.6 but real grasp ~0.1, and in
-        # deploy (no weld) the arm just lifted away from the cube. The pre-pose curriculum already gives
-        # the bootstrap the weld was meant to provide (episodes that START straddling the box) — but here
-        # lift only pays off if the fingers actually hold the cube by FRICTION, which is the real skill.
-        firm_gate = firm                 # lift/success require a genuine firm friction grasp, full stop
-
-        self.steps += 1
-        lift = (cube[:, 2] - C.CUBE_REST_Z).clamp(min=0.0)
-        success = firm_gate & (cube[:, 2] > C.CUBE_REST_Z + C.LIFT_SUCCESS_DZ)
-        # terminal fail: cube knocked below the table OR batted off the table footprint. The lateral
-        # check is essential — without it a cube swept sideways never resets and its distance inflates
-        # the reach metric (and starves the reward) for the rest of the episode.
+    def terminated(self, s):
+        cube = self.sim.cube_position()
         off_x = (cube[:, 0] - (self.env_x + C.TABLE_CX)).abs() > (C.TABLE_HALF[0] + LOST_MARGIN)
         off_y = (cube[:, 1] - C.TABLE_CY).abs() > (C.TABLE_HALF[1] + LOST_MARGIN)
-        fell = (cube[:, 2] < (C.TABLE_TOP_Z - C.DROP_FAIL_DZ)) | off_x | off_y
+        self.fail_cube.copy_((cube[:, 2] < (C.TABLE_TOP_Z - C.DROP_FAIL_DZ)) | off_x | off_y)
+        self.fail_vel.copy_((s.joint_vel[:, 0:7].abs() > self.vel_fail).any(dim=1))
+        return self.fail_cube.clone()
 
-        # joint-limit proximity (arm only)
-        q = self.sim.arm_jp[:, 0:7]
+    def observe(self, s):
+        tip, cube, lateral, vert, dist, opening, firm, approach = self._grasp_state()
+        tip_rel = torch.stack([tip[:, 0] - self.env_x - C.TABLE_CX, tip[:, 1] - C.TABLE_CY,
+                               tip[:, 2] - C.TABLE_TOP_Z], dim=1)
+        lift_frac = ((cube[:, 2] - C.CUBE_REST_Z) / C.LIFT_SUCCESS_DZ).clamp(0.0, 1.5)
+        finger_vel = 0.5 * (s.joint_vel[:, 7] + s.joint_vel[:, 8])
+        return torch.cat([
+            s.joint_pos[:, 0:7] - self.default_q,                      # 7 arm qpos_rel
+            s.joint_vel[:, 0:7] * C.QVEL_SCALE,                        # 7 arm qvel
+            torch.stack([opening, finger_vel * C.QVEL_SCALE], dim=1),  # 2 gripper
+            tip_rel,                                                   # 3 tip, table-relative
+            cube - tip,                                                # 3 tip -> cube
+            approach,                                                  # 3 tool approach axis
+            self.sim.cube_up(),                                        # 3 cube up-axis
+            self.sim.cube_linvel,                                      # 3 cube linvel
+            self.last_action,                                          # 8 last action
+            torch.stack([firm.float(), lift_frac], dim=1),             # 2 grasp flag, lift frac
+        ], dim=1)
+
+    def reward_terms(self, s, a):
+        tip, cube, lateral, vert, dist, opening, firm, approach = self._grasp_state()
+        self._m["reach"] += dist.sum()
+        self._m["firm"] += firm.float().sum()
+        self._m["steps"] += float(self.K)
+        over_cube = (lateral < OVER_LAT) & (vert < OVER_VERT)
+        close_amt = ((C.GRIP_OPEN - opening) / (C.GRIP_OPEN - C.GRIP_CLOSE)).clamp(0.0, 1.0)
+        down = -approach[:, 2]
+        lift = (cube[:, 2] - C.CUBE_REST_Z).clamp(min=0.0)
+        above = firm & (cube[:, 2] > C.CUBE_REST_Z + C.LIFT_SUCCESS_DZ)
+        q = s.joint_pos[:, 0:7]
         over = (q - 0.95 * self.arm_hi).clamp(min=0.0) + (0.95 * self.arm_lo - q).clamp(min=0.0)
-
-        tip_above = (tip[:, 2] - cube[:, 2]).clamp(min=0.0)   # 0 when tip at or below cube Z level
-        # GATE the descent reward on being laterally OVER the cube. Without this gate, vert is z-only:
-        # the policy banks the full descent bonus by dropping to the cube's height ANYWHERE laterally,
-        # and (1.5) it outweighs the centring term (0.6) — so it "descends to the side". over_xy → 0
-        # off-centre, so descending only pays off above the cube (reach/centre pull it over first).
+        tip_above = (tip[:, 2] - cube[:, 2]).clamp(min=0.0)
         over_xy = torch.exp(-12.0 * lateral)
+        return {
+            "reach": W_REACH * torch.exp(-K_REACH * dist),
+            "down": W_DOWN * torch.exp(-K_DOWN * (1.0 - down)),
+            "centre": W_CENTER * torch.exp(-K_CENTER * lateral),
+            "descend": W_VERT * torch.exp(-K_VERT * tip_above) * over_xy,
+            "close": W_CLOSE * close_amt * over_cube.float(),
+            "grasp": W_GRASP * firm.float(),
+            "lift": W_LIFT * lift * firm.float(),
+            "above": W_SUCCESS * above.float(),
+            "rate": -W_ACT_RATE * ((a - self.prev_action) ** 2).sum(dim=1),
+            "mag": -W_ACT_MAG * (a ** 2).sum(dim=1),
+            "limit": -W_LIMIT * (over ** 2).sum(dim=1),
+            "fall": -W_FALL * s.terminated.float(),
+        }
 
-        rew = (
-            W_REACH * torch.exp(-K_REACH * dist)
-            + W_DOWN * torch.exp(-K_DOWN * (1.0 - down))    # keep the TOOL pointing straight down
-            + W_CENTER * torch.exp(-K_CENTER * lateral)
-            + W_VERT * torch.exp(-K_VERT * tip_above) * over_xy   # descend, but only while OVER the cube
-            + W_CLOSE * close_amt * over_cube.float()       # dense: close the fingers when over the cube
-            + W_GRASP * firm.float()                        # firm-grasp bonus (REAL grasp only)
-            + W_LIFT * lift * firm_gate.float()             # lift reward requires a genuine firm grasp
-            + W_SUCCESS * success.float()
-            - W_ACT_RATE * ((a - self.last_action) ** 2).sum(dim=1)
-            - W_ACT_MAG * (a ** 2).sum(dim=1)
-            - W_LIMIT * (over ** 2).sum(dim=1)
-            - W_FALL * fell.float()
-        )
+    def on_done(self, idx):
+        succ = self.ep_success[idx]
+        self._ep["n"] += float(idx.numel())
+        self._ep["succ"] += succ.float().sum()
+        self._ep["fail_cube"] += self.fail_cube[idx].float().sum()
+        self._ep["fail_vel"] += self.fail_vel[idx].float().sum()
+        first = self.first_outcome[idx]
+        self.first_outcome[idx] = torch.where(first < 0, succ.long(), first)
 
-        self.last_action = a.clone()
+    # ---- logging ------------------------------------------------------------------------
+    def metrics(self, reset=True):
+        """Episode success / failure rates and mean tip-cube distance / firm-grasp share since
+        the last call, as host floats (one sync per value)."""
+        n, st = self._ep["n"].item(), self._m["steps"].item()
+        out = {"episodes": int(n),
+               "success": self._ep["succ"].item() / n if n else float("nan"),
+               "fail_cube": self._ep["fail_cube"].item() / n if n else float("nan"),
+               "fail_vel": self._ep["fail_vel"].item() / n if n else float("nan"),
+               "reach": self._m["reach"].item() / st if st else float("nan"),
+               "firm": self._m["firm"].item() / st if st else float("nan")}
+        if reset:
+            for v in (*self._m.values(), *self._ep.values()):
+                v.zero_()
+        return out
 
-        timeout = self.steps >= self.max_steps
-        done = timeout | fell
-        is_timeout = timeout & ~fell           # fell is a true terminal (bootstrap 0)
+    def stats_line(self):
+        base = super().stats_line()
+        m = self.last_metrics = self.metrics()
+        return (f"{base}\n        succ {m['success']:.3f}  fail_cube {m['fail_cube']:.3f}  "
+                f"fail_vel {m['fail_vel']:.3f}  reach {m['reach']:.3f}  firm {m['firm']:.3f}  "
+                f"eps {m['episodes']}")
 
-        # metrics (grasp_rate / lift / success now all reflect a REAL firm grasp)
-        self.last_reach = float(dist.mean())
-        self.last_grasp_rate = float(firm.float().mean())          # REAL firm grasps
-        self.last_lift = float((lift * firm_gate.float()).mean())
-        self.last_success_rate = float(success.float().mean())     # REAL friction lifts (no weld) — honest now
-
-        term_obs = self._obs()                 # snapshot BEFORE auto-reset
-        d = torch.nonzero(done, as_tuple=False).squeeze(-1)
-        if d.numel() > 0:
-            self._reset_idx(d)
-            self.sim.read()
-        obs = self._obs()
-        return obs, rew, done, term_obs, is_timeout
+    def config(self):
+        return {**super().config(), "task": "kuka_grasp", "mode": self.mode,
+                "obs_dim": C.OBS_DIM, "act_dim": C.ACT_DIM, "substeps": C.SUBSTEPS,
+                "phys_dt": C.PHYS_DT, "default_q": C.DEFAULT_Q.tolist(),
+                "arm_action_scale": C.ARM_ACTION_SCALE.tolist(),
+                "grip_open": C.GRIP_OPEN, "grip_close": C.GRIP_CLOSE}
 
 
 # --------------------------------------------------------------------------- #
-#  --selftest : shapes / no-NaN / cube rests / grasp detection
+#  selftest: shapes / no NaN / cube rests / graph replay matches eager
 # --------------------------------------------------------------------------- #
-def _selftest():
+def _selftest(K=64):
+    import time
     torch.manual_seed(0)
-    env = KukaGraspEnv(num_envs=8, render_visuals=False)
+    t0 = time.perf_counter()
+    env = KukaGraspEnv(num_envs=K, graph=True)
+    print(f"[selftest] built K={K} in {time.perf_counter() - t0:.1f} s")
     obs = env.reset()
-    assert obs.shape == (8, C.OBS_DIM), obs.shape
+    assert obs.shape == (K, C.OBS_DIM), obs.shape
     assert torch.isfinite(obs).all(), "non-finite obs after reset"
     print(f"[selftest] obs {tuple(obs.shape)} OBS_DIM={C.OBS_DIM} ACT_DIM={C.ACT_DIM}  OK")
 
-    # cube must rest on the table shortly after reset (not fall through / fly off)
-    env.reset()
-    for _ in range(10):
-        env.step(torch.zeros(8, C.ACT_DIM, device=env.device))   # hold the default posture
+    for _ in range(10):        # hold still: the cube must rest on the table
+        env.step(torch.zeros(K, C.ACT_DIM, device=env.device))
     cube_z = env.sim.cube_position()[:, 2]
-    assert (cube_z > C.TABLE_TOP_Z - 0.02).all(), f"cube fell through table: {cube_z}"
-    print(f"[selftest] cube rests on table after reset  z={cube_z.mean():.3f} "
-          f"(rest {C.CUBE_REST_Z:.3f})  OK")
+    assert (cube_z > C.TABLE_TOP_Z - 0.02).all(), f"cube fell through the table: {cube_z}"
+    print(f"[selftest] cube rests on the table  z={cube_z.mean():.3f} (rest {C.CUBE_REST_Z:.3f})  OK")
 
-    # a few random steps — check shapes, finiteness, reward sanity
-    for k in range(20):
-        a = torch.rand(8, C.ACT_DIM, device=env.device) * 2 - 1
+    worst = env.verify_graph(steps=16)
+    print(f"[selftest] graph replay vs eager observe: worst {worst:.2e}  OK")
+
+    t0 = time.perf_counter()
+    n = 2 * env.max_steps
+    for k in range(n):
+        a = torch.rand(K, C.ACT_DIM, device=env.device) * 2 - 1
         obs, rew, done, term, tmo = env.step(a)
-        assert obs.shape == (8, C.OBS_DIM)
-        assert rew.shape == (8,) and done.shape == (8,)
+        assert obs.shape == (K, C.OBS_DIM) and rew.shape == (K,) and done.shape == (K,)
         assert torch.isfinite(obs).all() and torch.isfinite(rew).all(), f"non-finite at step {k}"
-    print(f"[selftest] 20 random steps OK  reach={env.last_reach:.3f} "
-          f"grasp_rate={env.last_grasp_rate:.3f}  reward[0]={float(rew[0]):.3f}")
+    torch.cuda.synchronize()
+    dt = time.perf_counter() - t0
+    m = env.metrics()
+    print(f"[selftest] {n} random steps OK  {n * K / dt:.0f} env-steps/s  episodes {m['episodes']}  "
+          f"fail_cube {m['fail_cube']:.2f}  fail_vel {m['fail_vel']:.2f}  reach {m['reach']:.3f}")
+    print(f"[selftest] per-term: {env.stats_line()}")
     print("[selftest] (the friction-grasp physics gate is kuka_grasp_friction.py)")
     print("[selftest] PASS")
 
 
 if __name__ == "__main__":
-    _selftest()
+    _selftest(int(sys.argv[1]) if len(sys.argv) > 1 else 64)

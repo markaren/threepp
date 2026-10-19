@@ -1,16 +1,16 @@
-"""train_kuka_grasp.py — train the KUKA to reach, grasp, and lift a cube (threepp.rl PPO).
+"""train_kuka_grasp.py — train the KUKA to reach, grasp by friction and lift a cube (threepp.rl PPO).
 
-    python train_kuka_grasp.py --envs 2048 --iters 2000        # full run
-    python train_kuka_grasp.py --envs 256 --iters 60 --smoke   # quick smoke test
+    python train_kuka_grasp.py --sampler scaffold --envs 512 --iters 50     # the June env, short run
 
-Drives the env curriculum (cube spawn region grows; graduated reset height start_high 0→1 so the arm
-starts from "at the cube" → "anywhere up to the DEFAULT_Q home") from the PPO log callback, and
-checkpoints the best policy by success rate. Watch a checkpoint with
-`python play_kuka_grasp.py --model kuka_grasp_best.pt`.
+--sampler scaffold is the June env: a shaped reward and a reset-height curriculum advanced by
+set_iter(it) from the iteration hook. Every log line goes to stdout and, as JSON, to
+<run>/train.jsonl; a policy snapshot is written to <run>/ckpt/ every --save-every iterations.
 """
 import argparse
+import json
 import os
 import sys
+import time
 
 import torch
 
@@ -23,59 +23,57 @@ if _PYTHON_DIR not in sys.path:
 
 import kuka_grasp_contract as C  # noqa: E402
 from kuka_grasp_env import KukaGraspEnv  # noqa: E402
-
-
-def _iter_of(msg):
-    # PPO log line is "it  120 | ep_ret ..." — pull the iteration out to drive the curriculum
-    try:
-        return int(msg.split("|")[0].split()[1])
-    except Exception:
-        return 0
+from threepp.rl import PPO  # noqa: E402
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--envs", type=int, default=2048)
-    ap.add_argument("--iters", type=int, default=2000)
+    ap.add_argument("--sampler", choices=("scaffold",), default="scaffold")
+    ap.add_argument("--envs", type=int, default=512)
+    ap.add_argument("--iters", type=int, default=1500)
+    ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--horizon", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-4)
-    ap.add_argument("--device", default="cuda")
-    ap.add_argument("--out", default=os.path.join(_HERE, "kuka_grasp.pt"))
-    ap.add_argument("--smoke", action="store_true", help="tiny run; just checks learning happens")
+    ap.add_argument("--minibatches", type=int, default=4)
+    ap.add_argument("--log-std-init", type=float, default=-0.5)
+    ap.add_argument("--no-graph", action="store_true", help="run the per-step torch region eagerly")
+    ap.add_argument("--save-every", type=int, default=25)
+    ap.add_argument("--run", default=None, help="run directory (default runs/<sampler>_s<seed>)")
     args = ap.parse_args()
 
-    from threepp.rl import PPO
-
-    env = KukaGraspEnv(num_envs=args.envs, device=args.device)
+    run = args.run or os.path.join(_HERE, "runs", f"{args.sampler}_s{args.seed}")
+    os.makedirs(os.path.join(run, "ckpt"), exist_ok=True)
+    torch.manual_seed(args.seed)
+    t_build = time.perf_counter()
+    env = KukaGraspEnv(num_envs=args.envs, seed=args.seed, mode=args.sampler, graph=not args.no_graph)
+    build_s = time.perf_counter() - t_build
     ppo = PPO(env, C.ACT_DIM, hidden=(512, 256, 128), lr=args.lr, horizon=args.horizon,
-              normalize_obs=True, normalize_returns=True, target_kl=0.02, log_std_init=-0.5,
-              meta={"task": "kuka_grasp", "dt": C.DT, "control_hz": C.CONTROL_HZ,
-                    "arm_action_scale": C.ARM_ACTION_SCALE.tolist(), "default_q": C.DEFAULT_Q.tolist()})
-
-    best_path = os.path.splitext(args.out)[0] + "_best.pt"
-    latest_path = os.path.splitext(args.out)[0] + "_latest.pt"
-    best = [-1.0]
+              minibatches=args.minibatches, normalize_obs=True, normalize_returns=True,
+              target_kl=0.02, log_std_init=args.log_std_init)
+    ppo.meta.update({"sampler": args.sampler, "seed": args.seed, "envs": args.envs})
+    log = open(os.path.join(run, "train.jsonl"), "a")
+    log.write(json.dumps({"event": "start", "args": vars(args), "build_s": build_s}) + "\n")
+    print(f"[train] {args.sampler}: {args.envs} envs x {args.iters} iters  built in {build_s:.1f} s  "
+          f"obs={C.OBS_DIM} act={C.ACT_DIM}  -> {run}")
 
     def on_log(msg):
-        it = _iter_of(msg)
-        env.set_iter(it)
-        ppo.meta["iter"] = it    # record the curriculum stage so play can match the spawn region
-        print(f"{msg} | reach {env.last_reach:.3f} grasp {env.last_grasp_rate:.2f} "
-              f"lift {env.last_lift:.3f} succ {env.last_success_rate:.2f} "
-              f"spawn {env.spawn_half[0]:.2f}x{env.spawn_half[1]:.2f} startH {env.start_high:.2f}")
-        ppo.save(latest_path)
-        if env.last_success_rate >= best[0]:
-            best[0] = env.last_success_rate
-            ppo.save(best_path)
+        print(msg, flush=True)
+        log.write(json.dumps({"event": "log", **ppo.last_log, **ppo.diagnostics(),
+                              **{f"train_{k}": v for k, v in env.last_metrics.items()}}) + "\n")
+        log.flush()
 
-    print(f"[train] {args.envs} envs x {args.iters} iters  obs={C.OBS_DIM} act={C.ACT_DIM}")
-    ppo.learn(args.iters, log_every=10, on_log=on_log)
-    ppo.save(args.out)
-    print(f"[train] saved {args.out}  (best succ={best[0]:.3f} -> {best_path})")
+    def on_iter(it):
+        ppo.meta["iter"] = it
+        if args.sampler == "scaffold":
+            env.set_iter(it)
+        if it % args.save_every == 0 or it == args.iters:
+            ppo.save(os.path.join(run, "ckpt", f"it{it:05d}.pt"))
 
-    if args.smoke:
-        print(f"[smoke] final reach={env.last_reach:.3f} grasp_rate={env.last_grasp_rate:.2f} "
-              f"success={env.last_success_rate:.2f}")
+    ppo.learn(args.iters, log_every=10, on_log=on_log, on_iter=on_iter)
+    ppo.save(os.path.join(run, "final.pt"))
+    log.write(json.dumps({"event": "end", "iters": args.iters, **ppo.last_log}) + "\n")
+    log.close()
+    print(f"[train] saved {os.path.join(run, 'final.pt')}")
 
 
 if __name__ == "__main__":

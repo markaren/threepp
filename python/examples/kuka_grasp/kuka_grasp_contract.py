@@ -45,11 +45,14 @@ ARM_LIMITS = np.array([
     [-3.0541, 3.0541],
 ], np.float32)
 
-# Default arm posture: flange hovering above the table centre with the gripper pointing down.
-# TUNED empirically (see kuka_grasp_robot.py --inspect). Joint order = ARM_JOINTS (add order).
+# Default arm posture: gripper above the table centre, pointing down. Joint order = ARM_JOINTS.
 DEFAULT_Q = np.array([0.0, 0.195, 0.0, -1.073, 0.0, 1.699, 0.0], np.float32)
-# ^ tuned via `kuka_grasp_robot.py --inspect`: tip at (0.524, 0.0, 0.541), tool straight down,
-#   ~0.05 m above the cube top, all joints clear of limits.
+# ^ by FK (kuka_grasp_kin.py, which matches PhysX): grasp point (0.492, 0.0, 0.729), approach
+#   axis 10 deg off straight down, finger tips ~0.20 m above the cube top.
+
+# KUKA joint velocity limits (rad/s), from the URDF. Over twice these is a failure terminal.
+ARM_VEL_LIMITS = np.array([1.4834, 1.4834, 1.7452, 1.3089, 2.2688, 2.356, 2.356], np.float32)
+FAIL_VEL_FACTOR = 2.0
 
 # Action: 7 arm joint-target offsets (about DEFAULT_Q) + 1 gripper. ACT_DIM = 8.
 ACT_DIM = ARM_DOF + 1          # 8
@@ -61,6 +64,13 @@ ARM_ACTION_SCALE = np.array([1.4, 1.0, 1.4, 1.2, 1.6, 1.4, 1.6], np.float32)  # 
 PD_STIFFNESS = 1200.0
 PD_DAMPING = 60.0
 PD_MAX_FORCE = 300.0
+
+# PhysX position-solver iterations (June: 16 for both). Under contact these set the cost of a
+# GPU step: at K=512 a control step under random actions costs 94 ms at 16/16 (arm/cube), 40 ms
+# at 16/4 and 21 ms at 4/4 on the laptop's RTX 4060, and kuka_grasp_friction.py holds the cube
+# identically at all three (2026-10-19). Overridable for that sweep.
+ARM_SOLVER_ITERS = int(__import__("os").environ.get("KUKA_ARM_ITERS", 4))
+CUBE_SOLVER_ITERS = int(__import__("os").environ.get("KUKA_CUBE_ITERS", 4))
 
 # --------------------------------------------------------------------------- #
 #  Gripper geometry (combined-URDF finger params, link_7 frame, metres)
@@ -83,15 +93,30 @@ TABLE_CX = 0.50                # table centre (front of the robot)
 TABLE_CY = 0.00
 TABLE_HALF = (0.22, 0.30)      # table slab half-extent in (x, y)
 TABLE_THICK = 0.04
+SPACING = 2.5                  # env-to-env distance along world X
 
 CUBE = 0.07                    # cube edge
 CUBE_HALF = CUBE / 2
 CUBE_REST_Z = TABLE_TOP_Z + CUBE_HALF   # cube CoM at rest on the table
+# Grasp-point height for a cube on the table: the finger boxes are centred on the grasp point,
+# so at CUBE_REST_Z their tips would sit 7.5 mm inside the table. 6 mm clear of the table puts
+# the cube top 16.5 mm under link_7's collision box.
+GRASP_TABLE_Z = TABLE_TOP_Z + FINGER_BOX[2] / 2 + 0.006
+# A cube teleported sideways while resting exactly on the table is thrown (up to 0.75 m at
+# 8 cm offsets, measured 2026-10-19): the table contact persists across the GPU teleport and
+# its friction pulls the cube back toward the old contact point. Placing the cube this far
+# above the table breaks the loaded contact; it drops in the first control step.
+CUBE_PLACE_DZ = 0.002
 CUBE_DENSITY = 300.0           # → ~0.10 kg
 CUBE_FRICTION = 2.5            # high static/dynamic friction, "max" combine → grippy contact
 
-LIFT_SUCCESS_DZ = 0.12         # cube lifted this far above the table top → grasp success
+LIFT_SUCCESS_DZ = 0.12         # cube centre this far above its rest height → lifted
+SUCCESS_HOLD_S = 0.5           # lifted AND within SUCCESS_NEAR of the grasp point this long = success
+SUCCESS_HOLD_STEPS = int(round(SUCCESS_HOLD_S * CONTROL_HZ))   # 25 control steps
+SUCCESS_NEAR = 0.04            # cube centre to finger midpoint (m): held between the fingers, not
+                               # balanced on top of them (that would put the centre ~0.08 m away)
 DROP_FAIL_DZ = 0.10            # cube knocked this far below the table top → terminal fail (off the table)
+LOST_MARGIN = 0.10             # cube this far beyond the table edge → terminal fail
 
 # --------------------------------------------------------------------------- #
 #  Observation layout (assembled in kuka_grasp_env._obs via torch.cat)
