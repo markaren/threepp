@@ -13,12 +13,11 @@
 //     streamer: leaving a cell removes its subtree from the scene, coming back
 //     re-adds the same objects. A cell is never rebuilt while it is cached,
 //     and a cell that built nothing is remembered as built-and-empty so it is
-//     never re-scanned. The cache holds the cells within the outer radius x
-//     removeSlack of the camera (`evictRadius`): a cell detached inside that
-//     (a fine/coarse swap, the ring's hysteresis) comes back as a re-attach,
-//     its GPU assets still resident, a show and not an admission; one beyond
-//     it is dropped, its assets freed, and a revisit builds it again. Without
-//     that a session's memory grew with every metre it had covered;
+//     never re-scanned. A cached cell's GPU assets stay resident with it, so
+//     a revisit is a show, not an admission. `evictRadius` (opt-in) drops
+//     cached cells that far away instead: their assets are freed and a
+//     revisit builds them again, for a session that keeps covering new
+//     ground;
 //   • two levels. Fine cells (`fineCellSize`) inside `fineRadius`, coarse
 //     cells (`coarseFactor` × that edge) out to `coarseRadius`. The two tile
 //     the same ground EXACTLY — a coarse cell is a whole block of
@@ -66,11 +65,12 @@ namespace threepp::terrain {
         // Cached cells farther than this from the camera (to their footprint)
         // are dropped from the cache, and with them what they hold (in the
         // Vulkan renderer the next slot edit frees their BLAS records and
-        // texture slots); a revisit builds them again. Negative (the default):
-        // the outer radius x removeSlack, the distance at which a block leaves
-        // the ring. 0: never, every built cell kept for the streamer's life
-        // (memory grows with the ground covered).
-        float evictRadius = -1.f;
+        // texture slots); a revisit builds them again. 0 (the default): never,
+        // every built cell kept for the streamer's life, so a revisit is only
+        // a re-attach and memory grows with the ground covered. Negative: the
+        // outer radius x removeSlack, the distance at which a block leaves the
+        // ring.
+        float evictRadius = 0.f;
         // Cells this far outside a ring (metres, to their footprint) are built
         // and attached HIDDEN ahead of it, with Object3D::resident on what they
         // hold, and shown when they enter it; a cell that leaves a ring but

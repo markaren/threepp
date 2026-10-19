@@ -16,7 +16,7 @@ TEST_CASE("CellStreamer follows the camera and caches what it built") {
     o.coarseRadius = 0.f;// fine only, so the test is about the ring
     o.removeSlack = 1.3f;
     o.maxCellBuildsPerFrame = 1000;
-    o.evictRadius = 0.f;// keep every built cell: the come-back case below
+    REQUIRE(o.evictRadius == 0.f);// the default: every built cell kept
 
     auto s = CellStreamer::create(
             [&](int, int, int, float) -> std::shared_ptr<Object3D> {
@@ -36,6 +36,8 @@ TEST_CASE("CellStreamer follows the camera and caches what it built") {
     s->update(Vector3(2000, 0, 0));
     REQUIRE(s->stats().removes == atOrigin);
     REQUIRE(s->stats().builds > 0);
+    REQUIRE(s->stats().evictions == 0);
+    REQUIRE(s->stats().cached > s->stats().active);
     const int away = static_cast<int>(builds);
 
     // Come back: same cells, re-attached from the cache, nothing rebuilt.
@@ -51,7 +53,7 @@ TEST_CASE("CellStreamer follows the camera and caches what it built") {
     REQUIRE(s->stats().active >= before);
 }
 
-TEST_CASE("CellStreamer drops cached cells beyond the outer radius x removeSlack by default") {
+TEST_CASE("CellStreamer drops cached cells beyond the outer radius x removeSlack when opted in") {
 
     int builds = 0;
     CellStreamerOptions o;
@@ -60,7 +62,7 @@ TEST_CASE("CellStreamer drops cached cells beyond the outer radius x removeSlack
     o.coarseRadius = 0.f;
     o.removeSlack = 1.3f;
     o.maxCellBuildsPerFrame = 1000;
-    REQUIRE(o.evictRadius < 0.f);// the default: the outer radius x removeSlack
+    o.evictRadius = -1.f;// the outer radius x removeSlack
 
     auto s = CellStreamer::create(
             [&](int, int, int, float) -> std::shared_ptr<Object3D> {
