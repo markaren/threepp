@@ -12,6 +12,13 @@ State, refreshed in place by read() (one read per buffer, so tensor identities s
     cube_pose              [K, 7]     cube root pose, same layout
     cube_linvel            [K, 3]     cube root linear velocity (world)
 Link order on this path: base_link 0, link_1..link_7 1..7, finger_left 8, finger_right 9.
+
+The arm is gravity-compensated, as a real KUKA controller is: before every substep each arm
+link gets an upward m*g at its centre of mass (write_link_force; PhysX clears link forces after
+every step). Without it the 64 kg arm on its PD drive (stiffness 1200, max force 300) sags
+58 mm on average and up to 103 mm below an IK posture with the tool down over the table, and
+a grasp posture presses the fingers into the table hard enough that friction stops them
+closing. The cube keeps the scene's gravity.
 """
 import os
 import sys
@@ -45,8 +52,10 @@ class _Cell:
 
 
 class KukaGraspSim(GpuSim):
-    def __init__(self, num_envs, device="cuda", spacing=C.SPACING, render_visuals=False):
+    def __init__(self, num_envs, device="cuda", spacing=C.SPACING, render_visuals=False,
+                 gravity_comp=True):
         self.spacing = spacing
+        self.gravity_comp = gravity_comp
         self._urdf = R.generate_combined_urdf()
         self._render = render_visuals
         self._k = num_envs
@@ -67,6 +76,12 @@ class KukaGraspSim(GpuSim):
         self._cube_angvel = torch.zeros(self.K, 3, device=dev)
         self.env_x = torch.arange(self.K, device=dev, dtype=torch.float32) * spacing
         self._ez = torch.tensor([0.0, 0.0, 1.0], device=dev).expand(self.K, 3).contiguous()
+        # links list order == GPU slot order for this chain (base, link_1..7, the two fingers)
+        mass = torch.tensor([float(lk.mass) for lk in self.robots[0].art.links], device=dev)
+        assert mass.numel() == self.max_links, (mass.numel(), self.max_links)
+        self._gcomp = torch.zeros(self.K, self.max_links, 3, device=dev)
+        self._gcomp[:, :, 2] = mass * 9.81
+        torch.cuda.synchronize()     # _gcomp is never written again, so later writes need no sync
         self.read()
 
     # ---- construction ---------------------------------------------------------------
@@ -81,6 +96,21 @@ class KukaGraspSim(GpuSim):
             self.joint_names = joints
         cube_art, cube_mesh = R.build_cube(world, i, self.spacing, self.cube_material)
         return _Cell(art, meshes, cube_art, cube_mesh)
+
+    # ---- stepping ---------------------------------------------------------------------
+    def step(self, dt, read=True):
+        if self.gravity_comp:
+            self.batch.write_link_force(self._gcomp)
+        self.batch.step(dt)
+        if read:
+            self.read()
+
+    def substep(self, dt, n):
+        for _ in range(n):
+            if self.gravity_comp:
+                self.batch.write_link_force(self._gcomp)
+            self.batch.step(dt)
+        self.read()
 
     # ---- state ----------------------------------------------------------------------
     def read(self):

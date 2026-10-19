@@ -17,8 +17,11 @@ import numpy as np
 # --------------------------------------------------------------------------- #
 CONTROL_HZ = 50
 DT = 1.0 / CONTROL_HZ          # 0.02 s control tick (policy acts at this rate)
-PHYS_DT = 0.004                # physics substep
-SUBSTEPS = int(round(DT / PHYS_DT))   # 5 substeps per control tick
+# Physics substep (June: 0.004, 5 substeps). A GPU substep costs ~8 ms on the laptop whatever K
+# is (latency, not compute), so the substep count sets the step cost. At 0.01 the friction gate
+# holds 512/512 and the scripted oracle succeeds on 256/256 eval starts, as at 0.004 (2026-10-19).
+PHYS_DT = float(__import__("os").environ.get("KUKA_PHYS_DT", 0.01))
+SUBSTEPS = int(round(DT / PHYS_DT))   # 2 substeps per control tick
 
 EPISODE_S = 3.0                # short episode (keep horizons tight) — a grasp is a few seconds
 MAX_STEPS = int(EPISODE_S * CONTROL_HZ)   # 150 control steps
@@ -50,13 +53,22 @@ DEFAULT_Q = np.array([0.0, 0.195, 0.0, -1.073, 0.0, 1.699, 0.0], np.float32)
 # ^ by FK (kuka_grasp_kin.py, which matches PhysX): grasp point (0.492, 0.0, 0.729), approach
 #   axis 10 deg off straight down, finger tips ~0.20 m above the cube top.
 
+
 # KUKA joint velocity limits (rad/s), from the URDF. Over twice these is a failure terminal.
 ARM_VEL_LIMITS = np.array([1.4834, 1.4834, 1.7452, 1.3089, 2.2688, 2.356, 2.356], np.float32)
 FAIL_VEL_FACTOR = 2.0
 
-# Action: 7 arm joint-target offsets (about DEFAULT_Q) + 1 gripper. ACT_DIM = 8.
+# Action: 7 arm joint targets + 1 gripper. ACT_DIM = 8.
 ACT_DIM = ARM_DOF + 1          # 8
 ARM_ACTION_SCALE = np.array([1.4, 1.0, 1.4, 1.2, 1.6, 1.4, 1.6], np.float32)  # rad span of a[i]∈[-1,1]
+# Two action semantics over the same 8-d layout:
+#   "absolute" (the June scaffold): arm target = DEFAULT_Q + ARM_ACTION_SCALE * a; gripper
+#              target open for a7 <= 0, fully closed at a7 = +1.
+#   "delta"    (the reset-pool modes): every action moves the PD targets, a in [-1, 1] ->
+#              arm target += a * ARM_VEL_LIMITS * DT, finger target closes by a7 * GRIP_RATE * DT
+#              (clamped to the joint ranges), so zero action holds the current command and
+#              the commanded joint speed never exceeds the URDF limits.
+GRIP_RATE = 0.275              # m/s of finger target: full travel GRIP_OPEN..GRIP_CLOSE in 0.2 s
 
 # PD drive (uniform across all 9 joints — load_articulation applies one gain set).
 # High stiffness so the prismatic fingers squeeze hard (N/m) AND the arm tracks tightly (N·m/rad);

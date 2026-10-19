@@ -9,9 +9,25 @@ the env passes build_robot=None to VecTask and attaches the sim itself; everythi
 step/reset choreography, terminal-obs capture, env_state() re-initialisation, per-term reward
 logging, CUDA-graph replay of the per-step torch region) is VecTask's.
 
-The June scaffold: a shaped reach/centre/descend/close/lift reward and a reset-height
-curriculum driven by set_iter(it), so early episodes start with the open fingers already
-straddling a centred cube and later ones start anywhere up to the DEFAULT_Q home.
+Two modes:
+
+    scaffold  the June env: a shaped reach/centre/descend/close/lift reward and a reset-height
+              curriculum driven by set_iter(it), so early episodes start with the open fingers
+              straddling a centred cube and later ones start anywhere up to the DEFAULT_Q home.
+              Failure = the cube leaves the table.
+    pool      the recipe of Zhang et al. (CoRL 2026): every reset draws a cell of the
+              collision-checked reset pool (kuka_grasp_pool.py; Reaching, Stable Grasp and Near-
+              Goal starts) from a threepp.rl.sgs.SuccessGuidedSampler (any mode) or uniformly,
+              and one shared sparse reward
+                  r = 100 success - 1 failure - 1e-5 |a|^2 - 1e-4 |a - a_prev|^2 - 1e-4 |qdot|^2
+              (each squared norm clipped at 1e4). Success and failure end the episode. Failure =
+              the cube leaves the table or an arm joint exceeds twice its URDF velocity limit.
+              Actions are deltas of the PD targets (contract: "delta"): the arm's at up to the
+              URDF velocity limits, the gripper's at GRIP_RATE. Zero action holds the command,
+              so a Stable Grasp or Near-Goal start stays held under it; under the June absolute
+              mapping zero action opens the gripper, and the drive (stiffness 1200, max force
+              300) exceeds twice the velocity limit on almost every large command (the
+              scaffold's own zero-action return to DEFAULT_Q: A4 at 5.4x).
 
 Success, for every mode: the cube centre LIFT_SUCCESS_DZ above its rest height and within
 SUCCESS_NEAR of the finger midpoint for SUCCESS_HOLD_STEPS consecutive control steps.
@@ -65,6 +81,14 @@ LOST_MARGIN = C.LOST_MARGIN
 
 ARM_RESET_NOISE = 0.05  # rad jitter on the scaffold's reset posture
 
+# the pool mode's shared reward (Zhang et al.)
+R_SUCCESS = 100.0
+R_FAILURE = 1.0
+R_ACT = 1e-5
+R_RATE = 1e-4
+R_QVEL = 1e-4
+R_CLIP = 1e4
+
 
 class KukaGraspEnv(VecTask):
     control_hz = C.CONTROL_HZ
@@ -74,10 +98,20 @@ class KukaGraspEnv(VecTask):
     substeps = C.SUBSTEPS
     clip_actions = 1.0
 
-    def __init__(self, num_envs=512, device="cuda", seed=0, *, mode="scaffold",
-                 render_visuals=False, graph=False):
-        if mode not in ("scaffold",):
+    def __init__(self, num_envs=512, device="cuda", seed=0, *, mode="scaffold", pool=None,
+                 sampler=None, cells=None, render_visuals=False, graph=False):
+        """
+        mode      "scaffold" (the June env) or "pool"
+        pool      pool mode: kuka_grasp_pool.load_pool(...) tensors
+        sampler   pool mode: a SuccessGuidedSampler over the pool's cells (any of its modes);
+                  None draws cells uniformly
+        cells     pool mode: a fixed [M] cell list, env i always resets into cells[i % M]
+                  (the evaluation and the viewer); the sampler is then neither drawn nor fed
+        """
+        if mode not in ("scaffold", "pool"):
             raise ValueError(f"unknown mode {mode!r}")
+        if mode == "pool" and pool is None:
+            raise ValueError("pool mode needs a pool (kuka_grasp_pool.load_pool)")
         super().__init__(num_envs, None, device=device, seed=seed, graph=graph)
         self.mode = mode
         self.sim = KukaGraspSim(num_envs, device=device, render_visuals=render_visuals)
@@ -96,6 +130,7 @@ class KukaGraspEnv(VecTask):
         self.prev_action = self.env_state((C.ACT_DIM,))
         self.hold = self.env_state(())                       # consecutive lifted-and-held steps
         self.ep_success = self.env_state((), init=False, dtype=torch.bool)
+        self.target = self.env_state((C.N_DOF,))             # pool: the PD target the deltas move
 
         # per-step masks, written in place inside the (graph-capturable) hot region
         self.success = torch.zeros(num_envs, dtype=torch.bool, device=dev)
@@ -115,6 +150,18 @@ class KukaGraspEnv(VecTask):
         if mode == "scaffold":
             self._init_grasp_posture()
             self.set_iter(0)
+
+        # the pool mode's cells
+        self.pool, self.sampler = pool, sampler
+        self.fixed_cells = None if cells is None else torch.as_tensor(cells, dtype=torch.long, device=dev)
+        self.cell = torch.zeros(num_envs, dtype=torch.long, device=dev)
+        self.delta = mode == "pool"
+        # whether a velocity violation ends a pool episode; a tensor because terminated() runs
+        # inside the CUDA graph (the evaluation turns it off for scaffold policies)
+        self.vel_terminal = torch.ones((), dtype=torch.bool, device=dev)
+        self.arm_step = torch.tensor(C.ARM_VEL_LIMITS, device=dev) * self.dt
+        self.grip_step = C.GRIP_RATE * self.dt
+        self._fam = torch.zeros(3, 2, device=dev)                # per family: episodes, successes
 
     # ---- the scaffold ---------------------------------------------------------------
     def _init_grasp_posture(self):
@@ -178,19 +225,49 @@ class KukaGraspEnv(VecTask):
         pose[:, 6] = C.CUBE_REST_Z + C.CUBE_PLACE_DZ
         self.sim.set_cube_state(idx, pose)
 
+    # ---- the pool ---------------------------------------------------------------------
+    def _reset_pool(self, idx):
+        n = idx.numel()
+        p = self.pool
+        if self.fixed_cells is not None:
+            cells = self.fixed_cells[idx % self.fixed_cells.numel()]
+        elif self.sampler is not None:
+            cells = self.sampler.sample(n)
+        else:
+            cells = torch.randint(0, p["n"], (n,), device=self.device, generator=self.g)
+        self.cell[idx] = cells
+        q9 = p["q9"][cells]
+        self.sim.set_joint_state(idx, q9, torch.zeros_like(q9))
+        self.target[idx] = p["hold"][cells]        # the command the cell was verified under
+        pose = p["cube"][cells].clone()
+        pose[:, 4] += self.env_x[idx]
+        pose[:, 6] += C.CUBE_PLACE_DZ * p["on_table"][cells].float()
+        self.sim.set_cube_state(idx, pose)
+
     # ---- VecTask hooks ----------------------------------------------------------------
     def on_reset(self, idx):
-        self._reset_scaffold(idx)
+        if self.mode == "pool":
+            self._reset_pool(idx)
+        else:
+            self._reset_scaffold(idx)
 
     def reset(self):
         self.first_outcome.fill_(-1)
         return super().reset()
 
     def act(self, a):
-        """Arm joint targets about DEFAULT_Q (clamped to the limits) and one mirrored gripper
-        command: a7 <= 0 keeps the fingers open, a7 = +1 closes them fully."""
+        """The PD targets [K, 9] for the clamped action. delta (pool): move the held targets by
+        a * rate * dt. absolute (scaffold): arm targets about DEFAULT_Q and one mirrored gripper
+        command, a7 <= 0 open, a7 = +1 fully closed."""
         self.prev_action.copy_(self.last_action)
         self.last_action.copy_(a)
+        if self.delta:
+            arm = torch.clamp(self.target[:, 0:7] + a[:, 0:7] * self.arm_step, self.arm_lo, self.arm_hi)
+            grip = (self.target[:, 7] - a[:, 7] * self.grip_step).clamp(C.GRIP_CLOSE, C.GRIP_OPEN)
+            self.target[:, 0:7] = arm
+            self.target[:, 7] = grip
+            self.target[:, 8] = grip
+            return self.target.clone()
         arm = torch.clamp(self.default_q + self.arm_scale * a[:, 0:7], self.arm_lo, self.arm_hi)
         grip = C.GRIP_OPEN + a[:, 7].clamp(0.0, 1.0) * (C.GRIP_CLOSE - C.GRIP_OPEN)
         return torch.cat([arm, grip.unsqueeze(1), grip.unsqueeze(1)], dim=1)
@@ -221,6 +298,8 @@ class KukaGraspEnv(VecTask):
         off_y = (cube[:, 1] - C.TABLE_CY).abs() > (C.TABLE_HALF[1] + LOST_MARGIN)
         self.fail_cube.copy_((cube[:, 2] < (C.TABLE_TOP_Z - C.DROP_FAIL_DZ)) | off_x | off_y)
         self.fail_vel.copy_((s.joint_vel[:, 0:7].abs() > self.vel_fail).any(dim=1))
+        if self.mode == "pool":
+            return self.success | self.fail_cube | (self.fail_vel & self.vel_terminal)
         return self.fail_cube.clone()
 
     def observe(self, s):
@@ -247,6 +326,15 @@ class KukaGraspEnv(VecTask):
         self._m["reach"] += dist.sum()
         self._m["firm"] += firm.float().sum()
         self._m["steps"] += float(self.K)
+        if self.mode == "pool":
+            failure = (self.fail_cube | self.fail_vel) & ~self.success
+            return {
+                "success": R_SUCCESS * self.success.float(),
+                "failure": -R_FAILURE * failure.float(),
+                "act": -R_ACT * (a ** 2).sum(dim=1).clamp(max=R_CLIP),
+                "rate": -R_RATE * ((a - self.prev_action) ** 2).sum(dim=1).clamp(max=R_CLIP),
+                "qvel": -R_QVEL * (s.joint_vel ** 2).sum(dim=1).clamp(max=R_CLIP),
+            }
         over_cube = (lateral < OVER_LAT) & (vert < OVER_VERT)
         close_amt = ((C.GRIP_OPEN - opening) / (C.GRIP_OPEN - C.GRIP_CLOSE)).clamp(0.0, 1.0)
         down = -approach[:, 2]
@@ -279,6 +367,12 @@ class KukaGraspEnv(VecTask):
         self._ep["fail_vel"] += self.fail_vel[idx].float().sum()
         first = self.first_outcome[idx]
         self.first_outcome[idx] = torch.where(first < 0, succ.long(), first)
+        if self.mode == "pool":
+            fam = self.pool["family"][self.cell[idx]]
+            self._fam[:, 0].index_add_(0, fam, torch.ones_like(succ, dtype=torch.float32))
+            self._fam[:, 1].index_add_(0, fam, succ.float())
+            if self.sampler is not None and self.fixed_cells is None:
+                self.sampler.record(self.cell[idx], succ)
 
     # ---- logging ------------------------------------------------------------------------
     def metrics(self, reset=True):
@@ -291,45 +385,88 @@ class KukaGraspEnv(VecTask):
                "fail_vel": self._ep["fail_vel"].item() / n if n else float("nan"),
                "reach": self._m["reach"].item() / st if st else float("nan"),
                "firm": self._m["firm"].item() / st if st else float("nan")}
+        if self.mode == "pool":
+            fam = self._fam.cpu()
+            for f, name in enumerate(("reaching", "stable_grasp", "near_goal")):
+                out[f"success_{name}"] = float(fam[f, 1] / fam[f, 0]) if fam[f, 0] > 0 else float("nan")
         if reset:
             for v in (*self._m.values(), *self._ep.values()):
                 v.zero_()
+            self._fam.zero_()
         return out
 
     def stats_line(self):
         base = super().stats_line()
         m = self.last_metrics = self.metrics()
-        return (f"{base}\n        succ {m['success']:.3f}  fail_cube {m['fail_cube']:.3f}  "
+        line = (f"{base}\n        succ {m['success']:.3f}  fail_cube {m['fail_cube']:.3f}  "
                 f"fail_vel {m['fail_vel']:.3f}  reach {m['reach']:.3f}  firm {m['firm']:.3f}  "
                 f"eps {m['episodes']}")
+        if self.mode == "pool":
+            line += (f"  | succ R {m['success_reaching']:.3f}  SG {m['success_stable_grasp']:.3f}  "
+                     f"NG {m['success_near_goal']:.3f}")
+        return line
 
     def config(self):
         return {**super().config(), "task": "kuka_grasp", "mode": self.mode,
                 "obs_dim": C.OBS_DIM, "act_dim": C.ACT_DIM, "substeps": C.SUBSTEPS,
                 "phys_dt": C.PHYS_DT, "default_q": C.DEFAULT_Q.tolist(),
                 "arm_action_scale": C.ARM_ACTION_SCALE.tolist(),
-                "grip_open": C.GRIP_OPEN, "grip_close": C.GRIP_CLOSE}
+                "grip_open": C.GRIP_OPEN, "grip_close": C.GRIP_CLOSE,
+                "action": "delta" if self.delta else "absolute", "grip_rate": C.GRIP_RATE,
+                "arm_vel_limits": C.ARM_VEL_LIMITS.tolist(), "gravity_comp": self.sim.gravity_comp}
 
 
 # --------------------------------------------------------------------------- #
 #  selftest: shapes / no NaN / cube rests / graph replay matches eager
 # --------------------------------------------------------------------------- #
-def _selftest(K=64):
+def _selftest(K=64, mode="pool"):
+    """One mode per process (PhysX allows one foundation per process):
+    python kuka_grasp_env.py 64 pool  /  python kuka_grasp_env.py 64 scaffold"""
     import time
     torch.manual_seed(0)
+    pool = None
+    if mode == "pool":
+        from kuka_grasp_pool import NEAR_GOAL, REACHING, STABLE_GRASP, load_pool
+        pool = load_pool()
     t0 = time.perf_counter()
-    env = KukaGraspEnv(num_envs=K, graph=True)
-    print(f"[selftest] built K={K} in {time.perf_counter() - t0:.1f} s")
+    env = KukaGraspEnv(num_envs=K, mode=mode, pool=pool, graph=True)
+    print(f"[selftest] {mode}: built K={K} in {time.perf_counter() - t0:.1f} s")
     obs = env.reset()
     assert obs.shape == (K, C.OBS_DIM), obs.shape
     assert torch.isfinite(obs).all(), "non-finite obs after reset"
     print(f"[selftest] obs {tuple(obs.shape)} OBS_DIM={C.OBS_DIM} ACT_DIM={C.ACT_DIM}  OK")
 
-    for _ in range(10):        # hold still: the cube must rest on the table
-        env.step(torch.zeros(K, C.ACT_DIM, device=env.device))
-    cube_z = env.sim.cube_position()[:, 2]
-    assert (cube_z > C.TABLE_TOP_Z - 0.02).all(), f"cube fell through the table: {cube_z}"
-    print(f"[selftest] cube rests on the table  z={cube_z.mean():.3f} (rest {C.CUBE_REST_Z:.3f})  OK")
+    zero = torch.zeros(K, C.ACT_DIM, device=env.device)
+    if mode == "pool":
+        # zero action holds every command: Reaching cubes stay put, held cubes stay held
+        fam = pool["family"]
+        pick = [torch.nonzero(fam == f).squeeze(1)[: K // 3 + 1] for f in (REACHING, STABLE_GRASP, NEAR_GOAL)]
+        cells = torch.cat(pick)[:K]
+        env.fixed_cells = cells
+        env.reset()
+        c0 = env.sim.cube_position().clone()
+        for _ in range(10):
+            env.step(zero)
+        f = fam[cells]
+        tip, cube = env.sim.tip_state()[0], env.sim.cube_position()
+        moved = (cube - c0).norm(dim=1)
+        near = (cube - tip).norm(dim=1)
+        ok_r = (moved[f == REACHING] < 5e-3).all().item()
+        ok_h = (near[f != REACHING] < 0.02).all().item()
+        ok_ng = (cube[f == NEAR_GOAL, 2] > C.CUBE_REST_Z + 0.005).all().item()
+        print(f"[selftest] zero action, 10 steps: Reaching cubes moved max {moved[f == REACHING].max() * 1e3:.1f} mm, "
+              f"held cubes to finger midpoint max {near[f != REACHING].max() * 1e3:.1f} mm  "
+              f"{'OK' if ok_r and ok_h and ok_ng else 'FAIL'}")
+        assert ok_r and ok_h and ok_ng
+        env.fixed_cells = None
+        env.reset()
+    else:
+        for _ in range(10):        # the cube must rest on the table
+            env.step(zero)
+        cube_z = env.sim.cube_position()[:, 2]
+        assert (cube_z > C.TABLE_TOP_Z - 0.02).all(), f"cube fell through the table: {cube_z}"
+        print(f"[selftest] cube on the table after 10 zero-action steps  z={cube_z.mean():.3f} "
+              f"(rest {C.CUBE_REST_Z:.3f})  OK")
 
     worst = env.verify_graph(steps=16)
     print(f"[selftest] graph replay vs eager observe: worst {worst:.2e}  OK")
@@ -343,13 +480,13 @@ def _selftest(K=64):
         assert torch.isfinite(obs).all() and torch.isfinite(rew).all(), f"non-finite at step {k}"
     torch.cuda.synchronize()
     dt = time.perf_counter() - t0
-    m = env.metrics()
+    m = env.metrics(reset=False)
     print(f"[selftest] {n} random steps OK  {n * K / dt:.0f} env-steps/s  episodes {m['episodes']}  "
-          f"fail_cube {m['fail_cube']:.2f}  fail_vel {m['fail_vel']:.2f}  reach {m['reach']:.3f}")
+          f"success {m['success']:.2f}  fail_cube {m['fail_cube']:.2f}  fail_vel {m['fail_vel']:.2f}")
     print(f"[selftest] per-term: {env.stats_line()}")
     print("[selftest] (the friction-grasp physics gate is kuka_grasp_friction.py)")
     print("[selftest] PASS")
 
 
 if __name__ == "__main__":
-    _selftest(int(sys.argv[1]) if len(sys.argv) > 1 else 64)
+    _selftest(int(sys.argv[1]) if len(sys.argv) > 1 else 64, sys.argv[2] if len(sys.argv) > 2 else "pool")
