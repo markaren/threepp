@@ -940,6 +940,17 @@ namespace threepp {
         // meshes have entries, so a change re-expands.
         static constexpr uint32_t kSnapResident   = 16384u;
         std::vector<SnapNode> sceneSnapshot_;
+        // The full expansion's reuse of the last one (VulkanCoreScene.cpp,
+        // reuseNode): the last walk's nodes, by object, and the objects this
+        // walk met whose parent chain is the one they had. Members so their
+        // storage survives between expansions.
+        std::vector<SnapNode> prevSceneSnapshot_;
+        std::unordered_map<const Object3D*, uint32_t> prevSnapIndex_;
+        std::unordered_set<const Object3D*> walkStable_;
+        // THREEPP_VULKAN_WALK_CHECK=1: every expansion that reuses also walks
+        // without reuse and compares the two, node for node; the mismatches
+        // land here (and on stderr).
+        uint64_t walkCheckMismatches_ = 0;
         // A mesh with entries was hidden or shown this frame (MeshEntry::hidden):
         // the TLAS fill, the frustum culls, the draw records and the emitter
         // walk re-read the flags. Set by the snapshot replay or the expansion,

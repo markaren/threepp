@@ -721,7 +721,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // disappearing is a structural change, so the snapshot fast path
             // can't reach a frame where this list is stale.
             std::vector<std::pair<ParticleField*, uint32_t>> builtFields;
+            // The last walk's nodes, kept for this one to reuse (reuseNode).
+            prevSceneSnapshot_.swap(sceneSnapshot_);
             sceneSnapshot_.clear();
+            sceneSnapshot_.reserve(prevSceneSnapshot_.size());
             // Re-found below if a visible Sky is still in the scene; a Sky
             // added, removed or toggled is a structural change, so the
             // snapshot fast path never serves a frame where this is stale.
@@ -769,6 +772,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 SnapNode sn{};
                 sn.obj = &o;
                 sn.objId = o.id;
+                sn.parent = o.parent;
                 // three.js parity — LOD level selection (GLRenderer::
                 // projectObject runs lod.update(camera) as it projects).
                 // traverseVisible is PRE-ORDER: this LOD's children are
@@ -1132,8 +1136,159 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     }
                 }
             };
+            // Reuse. A mesh node the last walk recorded, under the parent chain
+            // it had, that passes the replay walk's unchanged-node test, gives
+            // this walk the same snapshot node, span and first entry recordNode
+            // would derive, from what the last walk derived: its class (type,
+            // routing and material bits, all compared), its exemption and camera
+            // attachment (the same ancestors), with the inputs that move without
+            // a structural change read live (world matrices, bounds, the instance
+            // count, the interop record). Everything else is recorded anew: other
+            // kinds, overlays, fields, a visibility flip, a dirty LOD sphere.
+            // Lazy walks only (a walk the rebuild consumes records everything).
+            static const bool walkCheck = [] {
+                const char* v = std::getenv("THREEPP_VULKAN_WALK_CHECK");
+                return v && v[0] == '1';
+            }();
+            bool reuseNodes = lazyRows && !prevSceneSnapshot_.empty();
+            if (reuseNodes) {
+                prevSnapIndex_.clear();
+                prevSnapIndex_.reserve(prevSceneSnapshot_.size());
+                for (uint32_t k = 0; k < prevSceneSnapshot_.size(); ++k)
+                    prevSnapIndex_.emplace(prevSceneSnapshot_[k].obj, k);
+                walkStable_.clear();
+                walkStable_.reserve(prevSceneSnapshot_.size());
+            }
+            const auto reuseNode = [&](const SnapNode& sn, Object3D& o, bool vis, bool underLod) -> bool {
+                if ((sn.flags & kSnapKindMask) != kSnapKindMesh || sn.spanIndex < 0) return false;
+                if (((sn.flags & kSnapUnderLod) != 0u) != underLod ||
+                    ((sn.flags & kSnapResident) != 0u) != o.resident ||
+                    ((sn.flags & kSnapHidden) != 0u) == vis)
+                    return false;
+                Mesh* m = sn.mesh;
+                const auto geom = m->geometry();
+                const auto mat = m->material();
+                if (geom.get() != sn.geom || mat.get() != sn.mat || (geom && geom->id != sn.geomId) ||
+                    (mat && mat->id != sn.matId))
+                    return false;
+                if (!geom || geom->attributesVersion() != sn.attrVer || !geom->boundingBox) return false;
+                // The routing bits, as the replay reads them.
+                const bool wire = sn.wf && sn.wf->wireframe;
+                const bool over = overlayLayer_ >= 0 && o.layers.isEnabled(static_cast<unsigned>(overlayLayer_));
+                const bool sensor = o.layers.isEnabled(VulkanRenderer::kSensorOnlyLayer);
+                const bool tet = sn.mat && sn.mat->tetSkinning && sn.mat->tetTexture != nullptr;
+                const bool particle = sn.mat && sn.mat->name == kParticleMaterialName;
+                const bool uiBlend = !wire && sn.basic && sn.basic->transparent && !sn.basic->map;
+                if (wire != ((sn.flags & kSnapWire) != 0u) || over != ((sn.flags & kSnapOverlay) != 0u) ||
+                    sensor != ((sn.flags & kSnapSensorOnly) != 0u) || tet != ((sn.flags & kSnapTet) != 0u) ||
+                    particle != ((sn.flags & kSnapParticle) != 0u) || uiBlend != ((sn.flags & kSnapUiBlend) != 0u))
+                    return false;
+                const bool matHidden = sn.mat && !sn.mat->visible;
+                if (matHidden != ((sn.flags & kSnapMatHidden) != 0u)) return false;
+                InstancedMesh* inst = sn.inst;
+                if (inst && (inst->count() != static_cast<size_t>(sn.instCount) || inst->count() == 0u)) return false;
+                if (static_cast<size_t>(sn.spanIndex) >= entrySpans_.size()) return false;
+                const EntrySpan& os = entrySpans_[static_cast<size_t>(sn.spanIndex)];
+                if (os.isFree || os.mesh != m || os.meshId != m->id || os.count == 0u) return false;
+                const MeshEntry& oe = lastVisibleEntries_[os.first];
+                if (oe.isOverlay || oe.isParticleField || oe.lodSphereDirty) return false;
+                // Exempt from auto-LOD: per object, or under a manual LOD level
+                // (the same ancestors as before). The old answer settles it
+                // unless it was "exempt" and the object no longer opts out.
+                bool lodExempt = !m->autoLod;
+                if (!lodExempt) {
+                    if (oe.lodExemptStatic) return false;// an ancestor or the old opt-out: re-derive
+                }
+                const bool hidden = !vis || matHidden;
+
+                SnapNode nsn = sn;
+                nsn.spanIndex = static_cast<int32_t>(builtSpans.size());
+                sceneSnapshot_.push_back(nsn);
+
+                Vector3 lodCenter = geom->boundingBox->getCenter();
+                const float lodRadius = geom->boundingBox->getSize().length() * 0.5f;
+                bool isVertexInterop = false;
+                if (!oe.isSkinned && !oe.isDisplaced && !oe.isGrass && !oe.isMorphed && !oe.isTet) {
+                    auto ic = blasCache.find(geom.get());
+                    isVertexInterop = (ic != blasCache.end() && ic->second->interop);
+                }
+                EntrySpan sp{};
+                sp.mesh = m;
+                sp.first = static_cast<uint32_t>(built.size());
+                sp.meshId = m->id;
+                sp.hidden = hidden;
+                sp.movedThisFrame = true;
+                sp.meshWorld = {};
+                std::memcpy(sp.meshWorld.data(), m->matrixWorld->elements.data(), 64);
+                sp.localRadius = lodRadius;
+                {
+                    const Vector3 half = geom->boundingBox->getSize() * 0.5f;
+                    sp.localCenter[0] = lodCenter.x;
+                    sp.localCenter[1] = lodCenter.y;
+                    sp.localCenter[2] = lodCenter.z;
+                    sp.localHalf[0]   = half.x;
+                    sp.localHalf[1]   = half.y;
+                    sp.localHalf[2]   = half.z;
+                    sp.localBoundsValid = true;
+                }
+                MeshEntry e{};
+                e.mesh = m;
+                e.instanceIndex = 0u;
+                e.isOverlay    = oe.isOverlay;
+                e.isParticle   = oe.isParticle;
+                e.isSkinned    = oe.isSkinned;
+                e.isDisplaced  = oe.isDisplaced;
+                e.isGrass      = oe.isGrass;
+                e.isMorphed    = oe.isMorphed;
+                e.isTet        = oe.isTet;
+                e.isVertexInterop = isVertexInterop;
+                e.isInstanced  = inst != nullptr;
+                e.camAttached  = oe.camAttached;
+                e.sensorOnly   = oe.sensorOnly;
+                e.hidden       = hidden;
+                e.lodExemptStatic = lodExempt;
+                e.lodEmissive  = oe.lodEmissive;
+                e.lodGeomKey   = geom.get();
+                e.lodCenter[0] = lodCenter.x;
+                e.lodCenter[1] = lodCenter.y;
+                e.lodCenter[2] = lodCenter.z;
+                e.lodRadius    = lodRadius;
+                if (inst) {
+                    sp.inst           = inst;
+                    sp.instMatVersion = inst->instanceMatrix()->version;
+                    Matrix4 instMat;
+                    Matrix4 world;
+                    std::memcpy(instMat.elements.data(), inst->instanceMatrix()->array().data(), 64);
+                    world.multiplyMatrices(*m->matrixWorld, instMat);
+                    std::memcpy(e.worldMatrix.data(), world.elements.data(), 64);
+                    built.push_back(e);
+                    sp.count = static_cast<uint32_t>(inst->count());
+                    sp.rowsDeferred = true;
+                    anyRowsDeferred = true;
+                } else {
+                    std::memcpy(e.worldMatrix.data(), m->matrixWorld->elements.data(), 64);
+                    built.push_back(e);
+                    sp.count = 1u;
+                }
+                builtSpans.push_back(sp);
+                return true;
+            };
             auto visitRecord = [&](Object3D& o, bool vis, bool underLod) -> bool {
-                recordNode(o, vis, underLod);// pushes exactly one SnapNode
+                bool reused = false;
+                if (reuseNodes) {
+                    const SnapNode* prev = nullptr;
+                    if (const auto it = prevSnapIndex_.find(&o); it != prevSnapIndex_.end()) {
+                        const SnapNode& p = prevSceneSnapshot_[it->second];
+                        if (p.objId == o.id) prev = &p;
+                    }
+                    // Stable: met last time under the same parent, itself stable.
+                    if (prev && prev->parent == o.parent &&
+                        (o.parent == nullptr || walkStable_.count(o.parent) != 0u)) {
+                        walkStable_.insert(&o);
+                        reused = reuseNode(*prev, o, vis, underLod);
+                    }
+                }
+                if (!reused) recordNode(o, vis, underLod);// pushes exactly one SnapNode
                 SnapNode& rec = sceneSnapshot_.back();
                 if (!vis) rec.flags |= kSnapHidden;
                 if (underLod) rec.flags |= kSnapUnderLod;
@@ -1142,6 +1297,88 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             };
             walkSceneGraph(scene, true, false, visitRecord);
             profExpand.stop();
+            if (reuseNodes && walkCheck) {
+                // The same walk without reuse, compared node for node.
+                auto snapA = std::move(sceneSnapshot_);
+                auto builtA = std::move(built);
+                auto spansA = std::move(builtSpans);
+                auto linesA = std::move(builtLines);
+                auto fieldsA = std::move(builtFields);
+                auto skyA = skySeen_;
+                auto rootsA = manualLodLevelRoots_;
+                const bool deferredA = anyRowsDeferred;
+                sceneSnapshot_.clear();
+                built.clear();
+                builtSpans.clear();
+                builtLines.clear();
+                builtFields.clear();
+                skySeen_ = nullptr;
+                manualLodLevelRoots_.clear();
+                anyRowsDeferred = false;
+                reuseNodes = false;
+                walkSceneGraph(scene, true, false, visitRecord);
+                uint64_t bad = 0;
+                const auto mismatch = [&](const char* what, size_t k) {
+                    if (bad++ < 8) std::fprintf(stderr, "[VulkanRenderer] walk reuse differs: %s %zu\n", what, k);
+                };
+                // Field by field: copies leave padding undefined, and a span
+                // carries vectors.
+                const auto sameSnap = [](const SnapNode& a, const SnapNode& b) {
+                    return a.obj == b.obj && a.parent == b.parent && a.objId == b.objId && a.geomId == b.geomId &&
+                           a.matId == b.matId && a.mesh == b.mesh && a.inst == b.inst && a.line == b.line &&
+                           a.pts == b.pts && a.lod == b.lod && a.geom == b.geom && a.geomB == b.geomB &&
+                           a.mat == b.mat && a.wf == b.wf && a.basic == b.basic && a.instCount == b.instCount &&
+                           a.spanIndex == b.spanIndex && a.flags == b.flags && a.attrVer == b.attrVer;
+                };
+                const auto sameRow = [](const MeshEntry& a, const MeshEntry& b) {
+                    return a.mesh == b.mesh && a.worldMatrix == b.worldMatrix && a.instanceIndex == b.instanceIndex &&
+                           a.isOverlay == b.isOverlay && a.isParticle == b.isParticle && a.hidden == b.hidden &&
+                           a.camAttached == b.camAttached && a.sensorOnly == b.sensorOnly &&
+                           a.isSkinned == b.isSkinned && a.isDisplaced == b.isDisplaced && a.isGrass == b.isGrass &&
+                           a.isMorphed == b.isMorphed && a.isTet == b.isTet && a.isParticleField == b.isParticleField &&
+                           a.isVertexInterop == b.isVertexInterop && a.isInstanced == b.isInstanced &&
+                           a.lodLevel == b.lodLevel && a.rayFarOpaque == b.rayFarOpaque &&
+                           a.lodExemptStatic == b.lodExemptStatic && a.lodSphereDirty == b.lodSphereDirty &&
+                           a.lodEmissive == b.lodEmissive && a.lodGeomKey == b.lodGeomKey &&
+                           std::memcmp(a.lodCenter, b.lodCenter, sizeof(a.lodCenter)) == 0 && a.lodRadius == b.lodRadius;
+                };
+                const auto sameSpan = [](const EntrySpan& a, const EntrySpan& b) {
+                    return a.mesh == b.mesh && a.inst == b.inst && a.first == b.first && a.count == b.count &&
+                           a.meshId == b.meshId && a.hidden == b.hidden && a.meshWorld == b.meshWorld &&
+                           a.instMatVersion == b.instMatVersion && a.instColorVersion == b.instColorVersion &&
+                           a.fadeKnown == b.fadeKnown && a.movedThisFrame == b.movedThisFrame &&
+                           a.lodNonZero == b.lodNonZero && a.aabbValid == b.aabbValid &&
+                           std::memcmp(a.localCenter, b.localCenter, sizeof(a.localCenter)) == 0 &&
+                           std::memcmp(a.localHalf, b.localHalf, sizeof(a.localHalf)) == 0 &&
+                           a.localRadius == b.localRadius && a.localBoundsValid == b.localBoundsValid &&
+                           a.isFree == b.isFree && a.rowsDeferred == b.rowsDeferred &&
+                           a.chunkAabbs.size() == b.chunkAabbs.size() && a.probeChunks.size() == b.probeChunks.size();
+                };
+                if (snapA.size() != sceneSnapshot_.size()) mismatch("snapshot size", snapA.size());
+                for (size_t k = 0; k < std::min(snapA.size(), sceneSnapshot_.size()); ++k)
+                    if (!sameSnap(snapA[k], sceneSnapshot_[k])) mismatch("snapshot node", k);
+                if (builtA.size() != built.size()) mismatch("row count", builtA.size());
+                for (size_t k = 0; k < std::min(builtA.size(), built.size()); ++k)
+                    if (!sameRow(builtA[k], built[k])) mismatch("row", k);
+                if (spansA.size() != builtSpans.size()) mismatch("span count", spansA.size());
+                for (size_t k = 0; k < std::min(spansA.size(), builtSpans.size()); ++k)
+                    if (!sameSpan(spansA[k], builtSpans[k])) mismatch("span", k);
+                if (linesA.size() != builtLines.size()) mismatch("line count", linesA.size());
+                if (fieldsA != builtFields) mismatch("fields", fieldsA.size());
+                if (skyA != skySeen_) mismatch("sky", 0);
+                if (rootsA != manualLodLevelRoots_) mismatch("manual LOD roots", rootsA.size());
+                if (deferredA != anyRowsDeferred) mismatch("deferred rows", 0);
+                walkCheckMismatches_ += bad;
+                sceneSnapshot_ = std::move(snapA);
+                built = std::move(builtA);
+                builtSpans = std::move(spansA);
+                builtLines = std::move(linesA);
+                builtFields = std::move(fieldsA);
+                skySeen_ = skyA;
+                manualLodLevelRoots_ = std::move(rootsA);
+                anyRowsDeferred = deferredA;
+                reuseNodes = true;
+            }
             // Stable entry slots (VulkanCoreSlots.cpp): meshes added or
             // removed, a count changed or a first show are written into the
             // entry slots in place, and the frame goes on as a lean one.
@@ -1153,6 +1390,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 // full and with the room to grow laid out.
                 THREEPP_CPUPROF("scene.3b_fullExpansion");
                 lazyRows = false;
+                reuseNodes = false;
                 anyRowsDeferred = false;
                 built.clear();
                 builtLines.clear();
