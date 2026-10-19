@@ -724,6 +724,74 @@ int main() {
             for (int f = 0; f < kGap; ++f) frame(-1, kGap);
         }
 
+        // ── Swaps on meshes that stay ────────────────────────────────────────
+        // A geometry, a material and a texture swapped on meshes of a live
+        // cell, each kind twice (domain randomisation, a damaged prop): until
+        // 2026-10-20 each was a structural rebuild; now the slot edit places
+        // the mesh again with what it holds. THREEPP_CHURN_DUMP writes the
+        // frame after each swap (churn_swap_*) for comparing the lanes.
+        {
+            for (int f = 0; f < kGap; ++f) frame(-1, kGap);
+            std::vector<double> quiet;
+            for (int f = 0; f < 16; ++f) quiet.push_back(frame(-1, kGap).wallMs);
+            const double q = percentile(quiet, 0.5);
+            const auto w0 = renderer.tlasStats();
+            auto& cellGroup = active.front();
+            std::vector<Mesh*> targets;
+            std::vector<std::shared_ptr<BufferGeometry>> origGeom;
+            for (size_t c = 0; c < cellGroup->children.size(); c += 3) {
+                if (auto* mm = cellGroup->children[c]->as<Mesh>()) {
+                    targets.push_back(mm);
+                    origGeom.push_back(mm->geometry());
+                }
+            }
+            const auto otherGeom = SphereGeometry::create(0.7f, 20, 10);
+            // Materials of their own, textured: the material swaps put one on,
+            // the texture swaps then change its map.
+            std::array<std::shared_ptr<MeshStandardMaterial>, 2> swapMats = {paint(Color(1, 1, 1)),
+                                                                             paint(Color(0.9f, 0.85f, 0.6f))};
+            swapMats[0]->map = checker();
+            swapMats[1]->map = checker();
+            int swaps = 0;
+            std::vector<double> swapCost;
+            const char* kSwapName[3] = {"geometry", "material", "texture"};
+            for (int round = 0; round < 2; ++round) {
+                for (int kind = 0; kind < 3; ++kind) {
+                    if (kind == 2) {// one map change, on the material every target holds
+                        swapMats[round]->map = round == 0 ? tileMap(7u) : tileMap(9u);
+                        swapMats[round]->needsUpdate();
+                    }
+                    for (size_t t = 0; t < targets.size(); ++t) {
+                        Mesh& m = *targets[t];
+                        if (kind == 0) m.setGeometry(round == 0 ? otherGeom : origGeom[t]);
+                        if (kind == 1) m.setMaterial(swapMats[round]);
+                        ++swaps;
+                    }
+                    const double ev = frame(-1, 0).wallMs;
+                    swapCost.push_back(std::max(ev, frame(-1, 1).wallMs));
+                    if (dump) dumpFrame("churn_swap", round, kind, 1);
+                    for (int f = 2; f < kGap; ++f) frame(-1, kGap);
+                    std::printf("%s swap, round %d: %.2f ms (quiet %.2f)\n", kSwapName[kind], round,
+                                swapCost.back(), q);
+                }
+            }
+            const auto w1 = renderer.tlasStats();
+            std::printf("\nswaps on meshes that stay: %d swaps in 6 events, %llu taken as slot edits, %llu structural "
+                        "rebuilds, %llu history resets; event ms med/max %.2f / %.2f, quiet median %.2f\n",
+                        swaps, static_cast<unsigned long long>(w1.swapEdits - w0.swapEdits),
+                        static_cast<unsigned long long>(w1.structuralRebuilds - w0.structuralRebuilds),
+                        static_cast<unsigned long long>(w1.historyResets - w0.historyResets),
+                        percentile(swapCost, 0.5), percentile(swapCost, 1.0), q);
+            if (!slotsOff) {
+                check("swaps: no structural rebuild", w1.structuralRebuilds == w0.structuralRebuilds);
+                check("swaps: each a slot edit", w1.swapEdits - w0.swapEdits >= static_cast<uint64_t>(swaps));
+            } else {
+                check("swaps: a structural rebuild each (the rebuild lane)",
+                      w1.structuralRebuilds - w0.structuralRebuilds == 6u);
+            }
+            check("swaps: no temporal history reset", w1.historyResets == w0.historyResets);
+        }
+
         // ── A streamed world frees what it drops ─────────────────────────────
         // Tiles made of geometries and textures nobody else holds, added and
         // dropped again and again, the way a terrain quadtree streams: their

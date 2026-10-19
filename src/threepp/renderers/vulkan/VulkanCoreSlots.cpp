@@ -28,8 +28,10 @@
 // What it does not take (the caller then rebuilds, exactly as before): a
 // deformer (skinned, displaced, grass, tet, morph), a ParticleField or a
 // vertex-interop mesh added or removed, an overlay or particle mesh added, a
-// texture or geometry or material swapped on a mesh that stays, a geometry
-// whose BLAS record cannot be referenced as it is.
+// mesh that changed class (overlay, deformer, instancing), a geometry whose
+// BLAS record cannot be referenced as it is. A geometry, material or texture
+// swapped on a mesh that stays IS taken: the mesh is placed again, as a new
+// one is, with what it holds now.
 
 #include "VulkanCoreImpl.hpp"
 
@@ -214,17 +216,21 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                         return decline("a mesh changed class (overlay, deformer, instancing, layer)");
                     const auto geom = m.geometry();
                     const auto mat = m.material();
-                    if (!geom || of.geom != geom.get() || of.geomId != geom->id || of.mat != mat.get() ||
-                        of.matId != (mat ? mat->id : 0u))
-                        return decline("a geometry or material swapped on a mesh");
-                    // The lean diff aborts to the full path on a texture swap
-                    // under a bumped material version: take that path now,
-                    // before anything is edited.
-                    if ((mat ? mat->version() : 0u) != of.matVersion && texturesChanged(m, of))
-                        return decline("a texture swapped on a mesh");
-                    match[b] = static_cast<int32_t>(it->second);
-                    kept[it->second] = 1u;
-                    continue;
+                    // A geometry, material or texture swapped on a mesh that
+                    // stays (the lean diff aborts to the full path on a texture
+                    // swap under a bumped material version): the mesh is placed
+                    // again below, as a new mesh is, with what it holds now; its
+                    // old slots are freed like a removed mesh's. Its stable id
+                    // (the Ids AOV, lidar instance ids) is the mesh's and stays.
+                    const bool swapped = !geom || of.geom != geom.get() || of.geomId != geom->id ||
+                                         of.mat != mat.get() || of.matId != (mat ? mat->id : 0u) ||
+                                         ((mat ? mat->version() : 0u) != of.matVersion && texturesChanged(m, of));
+                    if (!swapped) {
+                        match[b] = static_cast<int32_t>(it->second);
+                        kept[it->second] = 1u;
+                        continue;
+                    }
+                    ++tlasStats_.swapEdits;
                 }
                 // A new span: a static mesh whose geometry has a record the TLAS
                 // can reference as it is, or none yet.

@@ -213,6 +213,22 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
                     ok = false;// attribute added/replaced/removed → full pass re-derives
                     return false;
                 }
+                // A texture swapped on its material (a bumped version and a map
+                // that is not the one its rows hold): the full pass, whose slot
+                // edit places the mesh again. Only read on a version bump; a
+                // values-only change stays on this path (the lean diff).
+                if (sn.spanIndex >= 0 && sn.mat && static_cast<size_t>(sn.spanIndex) < entrySpans_.size()) {
+                    const MeshFingerprint& fp0 = prevSceneFingerprint[entrySpans_[sn.spanIndex].first];
+                    if (sn.mat->version() != fp0.matVersion &&
+                        (albedoTexOf(*m) != fp0.albedoTex || roughnessTexOf(*m) != fp0.roughnessTex ||
+                         metalnessTexOf(*m) != fp0.metalnessTex || normalTexOf(*m) != fp0.normalTex ||
+                         transmissionTexOf(*m) != fp0.transmissionTex || clearcoatTexOf(*m) != fp0.clearcoatTex ||
+                         clearcoatRoughnessTexOf(*m) != fp0.clearcoatRoughnessTex ||
+                         emissiveTexOf(*m) != fp0.emissiveTex || occlusionTexOf(*m) != fp0.occlusionTex)) {
+                        ok = false;
+                        return false;
+                    }
+                }
                 // Dynamic routing bits — plain bool reads, no lookups. The
                 // pointed-to material is alive (the mesh holding it just
                 // compared equal) and its dynamic type is fixed.

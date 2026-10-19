@@ -893,9 +893,9 @@ namespace threepp {
             uint64_t updates = 0;     // MODE_UPDATE refits
             uint32_t instances = 0;   // instance count of the most recent build/update
             // Structural scene rebuilds (the entry list re-derived, every
-            // descriptor and draw record new): an object added or removed, a
-            // texture swapped, a mesh shown for the first time (unless it is
-            // Object3D::resident). Hiding or re-showing a mesh is not one.
+            // descriptor and draw record new) behind a device drain: what the
+            // slot path does not take (see slotEdits). Hiding or re-showing a
+            // mesh is not one.
             uint64_t structuralRebuilds = 0;
             // Temporal history wipes, per view: the ReSTIR reservoirs, the
             // denoiser and reflection histories, the fog and cloud
@@ -905,11 +905,12 @@ namespace threepp {
             uint64_t historyResets = 0;
             // Content changes taken as slot edits instead: meshes added or
             // removed, an InstancedMesh count changed, a mesh shown for the
-            // first time, each written into stable entry slots (rows of the
-            // entry index space) with no device drain and no rebuild of the
-            // rows that did not change. A change the slot path does not take
-            // (a deformer, a texture swap, more entries than the slot pool
-            // holds) is still a structural rebuild.
+            // first time, a geometry, material or texture swapped on a mesh,
+            // each written into stable entry slots (rows of the entry index
+            // space) with no device drain and no rebuild of the rows that did
+            // not change. A change the slot path does not take (a deformer or a
+            // ParticleField added or removed, a mesh changing class) is still
+            // a structural rebuild.
             uint64_t slotEdits = 0;
             // BLASes a slot edit built (its new geometries) and compacted once
             // their build had completed, a frame or two later, without a host
@@ -936,6 +937,10 @@ namespace threepp {
             // placed them. Landed later with no visible change.
             uint64_t admissionsDeferred = 0;
             uint64_t admissionsLanded = 0;// of those, landed (shown before: admitted at the show)
+            // A geometry, material or texture swapped on a mesh that stays,
+            // taken by a slot edit (the mesh placed again with what it holds
+            // now) instead of a structural rebuild.
+            uint64_t swapEdits = 0;
         };
         [[nodiscard]] TlasStats tlasStats() const;
 

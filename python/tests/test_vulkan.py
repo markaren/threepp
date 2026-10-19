@@ -502,7 +502,7 @@ def test_resident_mesh_first_show_is_no_structural_rebuild(vk_renderer):
     stats = vk_renderer.tlas_stats
     assert set(stats) == {"full_rebuilds", "updates", "instances", "structural_rebuilds", "slot_edits",
                           "history_resets", "records_pruned", "textures_pruned", "texture_slots_in_use",
-                          "texture_slot_fallbacks", "admissions_deferred", "admissions_landed"}
+                          "texture_slot_fallbacks", "admissions_deferred", "admissions_landed", "swap_edits"}
     assert stats["slot_edits"] >= 1, "the first shows were slot edits"
     assert stats["history_resets"] >= 1, "the first build wiped the histories once"
 
@@ -641,6 +641,56 @@ def test_auto_lod_chain_lands_on_a_fixed_frame_under_a_pinned_clock():
         assert ready_at is not None, "the sphere never got a chain"
     finally:
         renderer.sim_time = None
+
+
+def test_domain_randomisation_swaps_are_slot_edits(vk_renderer):
+    """Domain randomisation: every reset gives 50 meshes a new material or a new
+    map (a texture of its own each time). Until 2026-10-20 every reset was a
+    structural rebuild (the entry list re-derived behind a device drain); now
+    each is a slot edit that places the swapped meshes again, and the textures
+    the previous reset used are freed as it goes (texture slots do not run out
+    over a long randomisation run). The reset cost is printed."""
+    scene, cam = make_scene()
+    rng = np.random.default_rng(7)
+    meshes = []
+    for i in range(50):
+        m = tp.Mesh(tp.BoxGeometry(0.14, 0.14, 0.14), tp.MeshStandardMaterial())
+        m.position.set(-1.3 + (i % 10) * 0.29, -0.7 + (i // 10) * 0.3, 0.6)
+        scene.add(m)
+        meshes.append(m)
+
+    def new_material():
+        mat = tp.MeshStandardMaterial()
+        mat.color = tp.Color(*rng.random(3))
+        mat.roughness = float(rng.random())
+        mat.map = tp.data_texture(rng.integers(0, 255, (32, 32, 4), dtype=np.uint8), True)
+        return mat
+
+    for m in meshes:
+        m.set_material(new_material())
+    for _ in range(3):
+        vk_renderer.render(scene, cam)
+    s0 = vk_renderer.tlas_stats
+    costs = []
+    for reset in range(100):
+        for m in meshes:
+            if reset % 2 == 0:
+                m.set_material(new_material())          # a material swap
+            else:
+                m.material.map = tp.data_texture(rng.integers(0, 255, (32, 32, 4), dtype=np.uint8), True)
+                m.material.needs_update()               # a texture swap
+        t0 = time.perf_counter()
+        vk_renderer.render(scene, cam)
+        costs.append((time.perf_counter() - t0) * 1e3)
+    s1 = vk_renderer.tlas_stats
+    costs.sort()
+    print(f"\n100 resets of 50 meshes: render() median {costs[50]:.2f} ms, max {costs[-1]:.2f} ms; "
+          f"{s1['swap_edits'] - s0['swap_edits']} swaps as slot edits, "
+          f"{s1['structural_rebuilds'] - s0['structural_rebuilds']} structural rebuilds, "
+          f"{s1['textures_pruned'] - s0['textures_pruned']} textures freed")
+    assert s1["structural_rebuilds"] == s0["structural_rebuilds"], "a reset rebuilt the scene"
+    assert s1["swap_edits"] - s0["swap_edits"] >= 100 * 50
+    assert s1["textures_pruned"] - s0["textures_pruned"] >= 98 * 50, "the replaced textures were not freed"
 
 
 def test_auto_lod_chain_lands_without_a_wait_when_the_replayable_schedule_is_off():
