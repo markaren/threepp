@@ -2995,7 +2995,12 @@ namespace threepp {
     }
 
     VulkanRenderer::TlasStats VulkanRenderer::tlasStats() const {
-        return core()->tlasStats_;
+        auto stats = core()->tlasStats_;
+        uint32_t inUse = 0;
+        for (const auto& t : core()->materialTextures)
+            if (t.view) ++inUse;
+        stats.textureSlotsInUse = inUse;
+        return stats;
     }
 
     VulkanRenderer::FrameTimings VulkanRenderer::lastFrameTimings() const {

@@ -2890,11 +2890,33 @@ namespace threepp {
         // Frame-start reclaim: destroys everything whose referencing frame has
         // provably completed (fence waited). Call right after the
         // vkWaitForFences(inFlight[currentFrame]) at each frame-begin path.
-        void drainRetireQueue() { retireQueue_.drain(*ctx, frameSerial_, kFramesInFlight); }
+        void drainRetireQueue() {
+            retireQueue_.drain(*ctx, frameSerial_, kFramesInFlight);
+            reapRetiredRecords(false);
+        }
         // Post-vkDeviceWaitIdle flush: whole device idle ⇒ destroy all queued
         // resources now, or they leak at device destroy. Call after EVERY
         // remaining vkDeviceWaitIdle that precedes resource destruction.
-        void flushRetireQueue() { retireQueue_.flushAll(*ctx); }
+        void flushRetireQueue() {
+            retireQueue_.flushAll(*ctx);
+            reapRetiredRecords(true);
+        }
+        // On the slot path nothing rebuilds, so nothing runs the structural
+        // rebuild's prune: a streamed world (terrain tiles, cells) frees a
+        // geometry and its textures with every mesh it drops, and their
+        // records and bindless texture slots stayed until the next rebuild,
+        // which never came (a long GeoScene flight ran out of the 2048 texture
+        // slots and drew its new tiles white). pruneFreedAssets, at the end of
+        // each slot edit, retires the records of geometries that died and the
+        // images of textures that died, with this frame's serial; the slots
+        // go back to the free list at once (each frame-in-flight descriptor
+        // set is rewritten before the retired image is destroyed, as
+        // refreshDirtyMaterialTextures does). VulkanCoreSlots.cpp.
+        void pruneFreedAssets();
+        // Records pruneFreedAssets took out of blasCache, each with the serial
+        // of the frame that retired it, destroyed by the retire queue's rule.
+        std::vector<std::pair<uint64_t, std::unique_ptr<BlasRecord>>> retiredRecords_;
+        void reapRetiredRecords(bool all);
         // Retire (rather than inline-destroy) a particle geometry record's
         // buffers on an in-flight topology change. Mirrors destroyParticleGeomRec.
         void retireParticleGeomRec(ParticleGeomRec& rec) {

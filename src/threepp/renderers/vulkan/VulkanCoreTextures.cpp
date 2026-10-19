@@ -163,6 +163,7 @@ int32_t VulkanRenderer::Impl::ensureMaterialTexture(const std::shared_ptr<Textur
                 }
             }
             if (freeTextureSlots.empty() && materialTextures.size() >= kMaxMaterialTextures) {
+                ++tlasStats_.textureSlotFallbacks;
                 std::cerr << "[VulkanRenderer] material texture slots exhausted ("
                           << kMaxMaterialTextures << "); using -1 fallback\n";
                 return -1;

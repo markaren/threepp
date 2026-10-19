@@ -697,6 +697,9 @@ namespace threepp::vulkan::impl {
     struct LodJob {
         const BufferGeometry* geom = nullptr;
         unsigned int geomVersion = 0;
+        // BufferGeometry::id: the address alone names a new geometry too once
+        // the old one died (a streamed world frees and makes them all along).
+        unsigned int geomId = 0;
         std::vector<float> positions;// tightly packed xyz
         // Indexed geometry: the source index array; normals/uvs stay
         // empty (the weld step is skipped, topology already exists).
@@ -722,6 +725,7 @@ namespace threepp::vulkan::impl {
     struct LodResult {
         const BufferGeometry* geom = nullptr;
         unsigned int geomVersion = 0;
+        unsigned int geomId = 0;
         std::vector<geometrylod::Level> levels;// empty ⇒ degenerate/failed
     };
 

@@ -920,6 +920,16 @@ namespace threepp {
             // grew it in place: one device wait and those buffers made anew,
             // no rebuild of the entries.
             uint64_t slotPoolGrowths = 0;
+            // Records of geometries and images of textures that died, retired
+            // by a slot edit (the structural rebuild prunes its own): what a
+            // streamed world frees as it drops content.
+            uint64_t recordsPruned = 0;
+            uint64_t texturesPruned = 0;
+            // Bindless material texture slots holding an image now (of 2048),
+            // and the textures that found none and drew with no map (the
+            // renderer prints "material texture slots exhausted" for each).
+            uint32_t textureSlotsInUse = 0;
+            uint64_t textureSlotFallbacks = 0;
         };
         [[nodiscard]] TlasStats tlasStats() const;
 
