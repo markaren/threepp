@@ -262,6 +262,16 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
                         ok = false;
                         return false;
                     }
+                    // A span whose hidden admission has not landed has no record
+                    // and default rows: flipped visible in place it would draw
+                    // nothing until the pump lands it (a hole where a staged
+                    // terrain tile swaps in). Its first show takes the full
+                    // path, whose slot edit admits it as a visible mesh.
+                    if (vis && !matHidden && static_cast<size_t>(sn.spanIndex) < entrySpans_.size() &&
+                        entrySpans_[sn.spanIndex].admitPending) {
+                        ok = false;
+                        return false;
+                    }
                     flips.push_back({snIdx, !vis, matHidden});
                 }
                 return false;
@@ -1482,7 +1492,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // Hidden meshes' admissions that are ready land here, on a frame
             // that ends lean (never ahead of a structural rebuild, whose old
             // spans may name meshes that are gone). VulkanCoreSlots.cpp.
-            if (snapLean) pumpHiddenAdmissions();
+            if (snapLean) {
+                pumpHiddenAdmissions();
+                if (hiddenFlippedThisFrame_) stableIdsPending_ = true;
+                refreshPendingStableIds();
+            }
 
             // ── Automatic mesh LOD selection (setAutoLod; ON by default) ────
             // Runs UNCONDITIONALLY every frame — camera motion alone can flip
@@ -3489,6 +3503,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // the geomDescs loop below so a skipped/overlay entry keeps the 0
             // its dummy slot already means.
             entryStableIds_.assign(entries.size(), 0u);
+            stableIdsPending_ = true;
             // LOD fade words for the new entry order, before the instance loop
             // below derives the ray masks from them.
             refreshLodFades(true);

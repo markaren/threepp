@@ -789,6 +789,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             // The geometries and textures the removed meshes were the last to
             // hold have died by now (or die before a later edit sees them).
             pruneFreedAssets();
+            stableIdsPending_ = true;
             slotsEditedThisFrame_ = true;
             if (edited || !hiddenFlips.empty()) ++tlasStats_.slotEdits;
             return true;
@@ -1024,6 +1025,25 @@ void VulkanRenderer::Impl::pumpHiddenAdmissions() {
                     v->shadowMatTexValid_.fill(0);
                 }
             }
+        }
+
+void VulkanRenderer::Impl::refreshPendingStableIds() {
+            if (!stableIdsPending_) return;
+            bool still = false;
+            for (const EntrySpan& sp : entrySpans_) {
+                if (sp.isFree || sp.hidden || sp.count == 0u || size_t(sp.first) + sp.count > entryStableIds_.size())
+                    continue;
+                if (entryStableIds_[sp.first] != 0u) continue;
+                const MeshEntry& e0 = lastVisibleEntries_[sp.first];
+                if (e0.isOverlay || e0.isParticle || e0.isParticleField) continue;
+                const uint32_t id = stableIdIfAssigned(*sp.mesh);
+                if (id == 0u) {
+                    still = true;// not drawn yet: its id comes with its first draw
+                    continue;
+                }
+                for (uint32_t i = sp.first; i < sp.first + sp.count; ++i) entryStableIds_[i] = id;
+            }
+            stableIdsPending_ = still;
         }
 
 void VulkanRenderer::Impl::reapRetiredRecords(bool all) {

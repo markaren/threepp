@@ -5056,6 +5056,17 @@ namespace threepp {
         std::unordered_map<const Texture*, PreparingTexture> preparingTextures_;
         uint32_t admitPendingSpans_ = 0;
         void beginHiddenAdmission(Mesh& m);
+        // The lidar's entry -> stable id table (entryStableIds_) is written
+        // read-only (stableIdIfAssigned) where entries are made, and a mesh's
+        // auto id is assigned by the indirect draw builder the first time it
+        // draws: an entry made before that reads 0. The rebuild used to heal it
+        // at the next rebuild; the slot path never makes one, so every mesh
+        // streamed in after the first frame reported lidar id 0. On a frame
+        // that ends lean after entries were made or shown, this fills the
+        // visible spans still at 0 from their meshes' assigned ids, until none
+        // is left.
+        void refreshPendingStableIds();
+        bool stableIdsPending_ = false;
         // Start the CPU half of every texture of `m` that is not resident and
         // not already being prepared (worker threads); ensureMaterialTexture
         // takes the result. The slot edit calls it for all its new meshes
