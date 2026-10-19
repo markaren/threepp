@@ -1,4 +1,5 @@
 #include "VulkanCoreImpl.hpp"
+#include "VulkanCpuPhaseProf.hpp"
 
 #include "threepp/math/Rng.hpp"
 
@@ -168,7 +169,22 @@ int32_t VulkanRenderer::Impl::ensureMaterialTexture(const std::shared_ptr<Textur
                           << kMaxMaterialTextures << "); using -1 fallback\n";
                 return -1;
             }
-            Image2D out = buildMaterialImage2D(tex);
+            Image2D out{};
+            if (auto pit = preparingTextures_.find(tex); pit != preparingTextures_.end()) {
+                // Its CPU half ran on a worker for a hidden admission: take it
+                // (waiting for it if it has not finished: never encode twice),
+                // unless the texture was edited since.
+                THREEPP_CPUPROF_NAMED(texWait, "scene.T1_texPreparedWait");
+                PreparedMaterialImage prepared = pit->second.job.get();
+                texWait.stop();
+                const bool current = pit->second.version == tex->version();
+                preparingTextures_.erase(pit);
+                THREEPP_CPUPROF("scene.T2_texCreate");
+                out = current ? createPreparedImage(prepared) : buildMaterialImage2D(tex);
+            } else {
+                THREEPP_CPUPROF("scene.T3_texBuildInline");
+                out = buildMaterialImage2D(tex);
+            }
             if (!out.view) return -1;
             // Clamp-to-edge on BOTH axes selects the clamp policy sampler for
             // this slot (edge-inclusive atlases: terrain splats, UI sheets).
@@ -690,7 +706,58 @@ const Image2D* VulkanRenderer::Impl::ensureParticleTexture(const Texture* tex) {
             return &ins->second.image;
         }
 
+// The CPU half of a material texture's upload (everything up to the device:
+// RGBA8 normalisation, the mip chain, the BC7 encode), so a texture can be
+// prepared on a worker thread and uploaded later on the render thread
+// (createPreparedImage). Reads only the Texture's image; no device state.
+VulkanRenderer::Impl::PreparedMaterialImage VulkanRenderer::Impl::preparedLevels(uint32_t w, uint32_t h, VkFormat fmt,
+                                                                std::vector<std::vector<std::uint8_t>>&& levels,
+                                                                VkSamplerAddressMode u, VkSamplerAddressMode v,
+                                                                const char* name) {
+        VulkanRenderer::Impl::PreparedMaterialImage p;
+        p.ok = !levels.empty();
+        p.levelsPath = true;
+        p.w = w;
+        p.h = h;
+        p.format = fmt;
+        p.levels = std::move(levels);
+        p.addrU = u;
+        p.addrV = v;
+        p.name = name;
+        return p;
+    }
+VulkanRenderer::Impl::PreparedMaterialImage VulkanRenderer::Impl::preparedRgba(uint32_t w, uint32_t h, VkFormat fmt,
+                                                              std::vector<unsigned char>&& rgba,
+                                                              VkSamplerAddressMode u, VkSamplerAddressMode v,
+                                                              const char* name) {
+        VulkanRenderer::Impl::PreparedMaterialImage p;
+        p.ok = !rgba.empty();
+        p.levelsPath = false;
+        p.w = w;
+        p.h = h;
+        p.format = fmt;
+        p.rgba = std::move(rgba);
+        p.addrU = u;
+        p.addrV = v;
+        p.name = name;
+        return p;
+    }
+
 Image2D VulkanRenderer::Impl::buildMaterialImage2D(const Texture* tex) {
+            return createPreparedImage(prepareMaterialImage(tex, bc7SampledSupported()));
+        }
+
+Image2D VulkanRenderer::Impl::createPreparedImage(const PreparedMaterialImage& p) {
+            if (!p.ok) return {};
+            if (p.levelsPath)
+                return createSampledImageBC(p.w, p.h, p.format, p.levels, VK_FILTER_LINEAR, p.addrU, p.addrV,
+                                            p.name.c_str());
+            return createSampledImage2D(p.w, p.h, p.format, p.rgba.data(), p.rgba.size(), VK_FILTER_LINEAR, p.addrU,
+                                        p.addrV, p.name.c_str());
+        }
+
+VulkanRenderer::Impl::PreparedMaterialImage VulkanRenderer::Impl::prepareMaterialImage(
+        const Texture* tex, bool bc7Ok) const {
             Image& img = const_cast<Texture*>(tex)->image();
             const uint32_t w = img.width();
             const uint32_t h = img.height();
@@ -729,7 +796,7 @@ Image2D VulkanRenderer::Impl::buildMaterialImage2D(const Texture* tex) {
                 // THREEPP_NO_BC) falls through to the decode path below, which
                 // re-encodes to BC7 with CPU-built mips.
                 static const bool noBcPass = std::getenv("THREEPP_NO_BC") != nullptr;
-                if (!noBcPass && bc7SampledSupported()) {
+                if (!noBcPass && bc7Ok) {
                     const VkFormat vkFmt = glCompressedToVk(
                             *img.compressedFormat, tex->colorSpace == ColorSpace::sRGB);
                     const uint32_t fullLevels =
@@ -762,12 +829,7 @@ Image2D VulkanRenderer::Impl::buildMaterialImage2D(const Texture* tex) {
                             std::snprintf(bcName, sizeof(bcName),
                                           "materialTexture BC-passthrough (%ux%u, tex=%p)",
                                           w, h, static_cast<const void*>(tex));
-                            return createSampledImageBC(
-                                    w, h, vkFmt, levels,
-                                    VK_FILTER_LINEAR,
-                                    wrapToVk(tex->wrapS),
-                                    wrapToVk(tex->wrapT),
-                                    bcName);
+                            return preparedLevels(w, h, vkFmt, std::move(levels), wrapToVk(tex->wrapS), wrapToVk(tex->wrapT), bcName);
                         }
                     }
                 }
@@ -883,7 +945,7 @@ Image2D VulkanRenderer::Impl::buildMaterialImage2D(const Texture* tex) {
             // leaves the last row and column out and stretches the rest over
             // them (a 1 px frame is gone, a tile no longer meets itself).
             static const bool noBc = std::getenv("THREEPP_NO_BC") != nullptr;
-            if (!noBc && w >= 8u && h >= 8u && bc7SampledSupported()) {
+            if (!noBc && w >= 8u && h >= 8u && bc7Ok) {
                 auto mips = bcn::buildMipChainRGBA8Area(rgba.data(), static_cast<int>(w),
                                                         static_cast<int>(h), srgb);
                 std::vector<std::vector<std::uint8_t>> blocks;
@@ -896,14 +958,7 @@ Image2D VulkanRenderer::Impl::buildMaterialImage2D(const Texture* tex) {
                     mh = std::max(1, mh >> 1);
                     blocks.push_back(bcn::bc7EncodeMode6(lvl.data(), mw, mh));
                 }
-                return createSampledImageBC(
-                        w, h,
-                        srgb ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC7_UNORM_BLOCK,
-                        blocks,
-                        VK_FILTER_LINEAR,
-                        wrapToVk(tex->wrapS),
-                        wrapToVk(tex->wrapT),
-                        texName);
+                return preparedLevels(w, h, srgb ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC7_UNORM_BLOCK, std::move(blocks), wrapToVk(tex->wrapS), wrapToVk(tex->wrapT), texName);
             }
 
             const VkFormat fmt = srgb ? VK_FORMAT_R8G8B8A8_SRGB
@@ -922,20 +977,9 @@ Image2D VulkanRenderer::Impl::buildMaterialImage2D(const Texture* tex) {
                 auto levels = bcn::buildMipChainRGBA8Area(rgba.data(), static_cast<int>(w),
                                                           static_cast<int>(h), srgb);
                 levels.insert(levels.begin(), std::move(rgba));
-                return createSampledImageBC(// uploads pre-built levels of any format
-                        w, h, fmt, levels,
-                        VK_FILTER_LINEAR,
-                        wrapToVk(tex->wrapS),
-                        wrapToVk(tex->wrapT),
-                        texName);
+                return preparedLevels(w, h, fmt, std::move(levels), wrapToVk(tex->wrapS), wrapToVk(tex->wrapT), texName);
             }
-            return createSampledImage2D(
-                    w, h, fmt,
-                    rgba.data(), rgba.size(),
-                    VK_FILTER_LINEAR,
-                    wrapToVk(tex->wrapS),
-                    wrapToVk(tex->wrapT),
-                    texName);
+            return preparedRgba(w, h, fmt, std::move(rgba), wrapToVk(tex->wrapS), wrapToVk(tex->wrapT), texName);
         }
 
 VkFormat VulkanRenderer::Impl::glCompressedToVk(unsigned int glFmt, bool srgb) {

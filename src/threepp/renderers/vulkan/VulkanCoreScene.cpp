@@ -1437,6 +1437,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 THREEPP_CPUPROF("scene.3_leanMatrixRefresh");
                 refreshSpanMatrices();
             }
+            // Hidden meshes' admissions that are ready land here, on a frame
+            // that ends lean (never ahead of a structural rebuild, whose old
+            // spans may name meshes that are gone). VulkanCoreSlots.cpp.
+            if (snapLean) pumpHiddenAdmissions();
 
             // ── Automatic mesh LOD selection (setAutoLod; ON by default) ────
             // Runs UNCONDITIONALLY every frame — camera motion alone can flip

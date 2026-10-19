@@ -1896,6 +1896,8 @@ namespace threepp_py {
                                            d["textures_pruned"]     = s.texturesPruned;
                                            d["texture_slots_in_use"]   = s.textureSlotsInUse;
                                            d["texture_slot_fallbacks"] = s.textureSlotFallbacks;
+                                           d["admissions_deferred"] = s.admissionsDeferred;
+                                           d["admissions_landed"]   = s.admissionsLanded;
                                            return d;
                                        },
                                        "Scene build counters since the renderer was made: TLAS full builds and "
@@ -1907,9 +1909,11 @@ namespace threepp_py {
                                        "drain) and history_resets (temporal histories wiped: a new environment, "
                                        "a resize, reset_temporal_history; never an object added or removed), "
                                        "records_pruned and textures_pruned (geometries and textures that died, "
-                                       "freed by a slot edit without a rebuild), texture_slots_in_use (of 2048) "
-                                       "and texture_slot_fallbacks (textures that found no slot and drew without "
-                                       "their map).")
+                                       "freed by a slot edit without a rebuild), texture_slots_in_use (of 2048), "
+                                       "texture_slot_fallbacks (textures that found no slot and drew without "
+                                       "their map), admissions_deferred (meshes that arrived hidden and were "
+                                       "admitted over the following frames) and admissions_landed (of those, "
+                                       "landed while still hidden).")
                 .def_property("deferred_ao",
                               [](PyVulkanRenderer& r) { return r.native().deferredAO(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setDeferredAO(v); },

@@ -130,6 +130,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <future>
 #include <mutex>
 #include <map>
 #include <set>
@@ -5009,6 +5010,61 @@ namespace threepp {
         // initial upload (ensureMaterialTexture) and the in-place re-upload
         // (refreshDirtyMaterialTextures) share one code path.
         Image2D buildMaterialImage2D(const Texture* tex);
+        // The same upload in its two halves. prepareMaterialImage is the CPU
+        // work (the RGBA8 normalisation, the mip chain, the BC7 encode: most
+        // of a new texture's cost) and touches no device state, so it can run
+        // on a worker thread;
+        // createPreparedImage is the device half (render thread).
+        struct PreparedMaterialImage {
+            bool ok = false;
+            bool levelsPath = true;// every level built (BC7, odd sizes) vs RGBA8 with a blit chain
+            uint32_t w = 0, h = 0;
+            VkFormat format = VK_FORMAT_UNDEFINED;
+            std::vector<std::vector<std::uint8_t>> levels;
+            std::vector<unsigned char> rgba;
+            VkSamplerAddressMode addrU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            VkSamplerAddressMode addrV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            std::string name;
+        };
+        PreparedMaterialImage prepareMaterialImage(const Texture* tex, bool bc7Ok) const;
+        static PreparedMaterialImage preparedLevels(uint32_t w, uint32_t h, VkFormat fmt,
+                                                    std::vector<std::vector<std::uint8_t>>&& levels,
+                                                    VkSamplerAddressMode u, VkSamplerAddressMode v, const char* name);
+        static PreparedMaterialImage preparedRgba(uint32_t w, uint32_t h, VkFormat fmt, std::vector<unsigned char>&& rgba,
+                                                  VkSamplerAddressMode u, VkSamplerAddressMode v, const char* name);
+        Image2D createPreparedImage(const PreparedMaterialImage& p);
+        // ── Hidden admission off the edit frame ──────────────────────────────
+        // A mesh that arrives hidden (resident, visible false) is neither drawn
+        // nor traced until it shows, so its admission (the BLAS build, the
+        // textures' encode and upload) need not be paid on the frame it was
+        // added: its slot edit places it with default rows and starts its
+        // textures' CPU half (prepareMaterialImage) on worker threads, and
+        // pumpHiddenAdmissions, after each frame's scene walk, lands the spans
+        // whose textures are ready, a few a frame: record, images, rows, and
+        // a full TLAS build as for any first show. Nothing visible changes. A
+        // mesh shown before its admission landed is placed again by that
+        // frame's slot edit, with the synchronous admission a mesh arriving
+        // visible gets (a texture still being prepared is waited for, not
+        // encoded twice). THREEPP_VULKAN_SYNC_ADMIT=1 admits hidden meshes
+        // synchronously too, and encodes a slot edit's textures one after the
+        // other on the render thread (the A/B lane: the admission as it was).
+        static bool syncAdmission();
+        struct PreparingTexture {
+            std::shared_ptr<Texture> tex;// held while the job runs
+            unsigned int version = 0;
+            std::future<PreparedMaterialImage> job;
+        };
+        std::unordered_map<const Texture*, PreparingTexture> preparingTextures_;
+        uint32_t admitPendingSpans_ = 0;
+        void beginHiddenAdmission(Mesh& m);
+        // Start the CPU half of every texture of `m` that is not resident and
+        // not already being prepared (worker threads); ensureMaterialTexture
+        // takes the result. The slot edit calls it for all its new meshes
+        // before building their descs, so their encodes run side by side.
+        void prepareTexturesAsync(Mesh& m);
+        // Every map buildMaterialDesc would admit for `m` (null where unset).
+        static std::vector<std::shared_ptr<Texture>> texturesOf(const Mesh& m);
+        void pumpHiddenAdmissions();
 
         // GL compressed-format enum (Image::compressedFormat, as the DDS
         // loader stores it) → Vulkan BC format. The COLOR-SPACE TAG on the

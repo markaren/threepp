@@ -71,6 +71,15 @@ namespace threepp::terrain {
         // the ring. 0: never, every built cell kept for the streamer's life
         // (memory grows with the ground covered).
         float evictRadius = -1.f;
+        // Cells this far outside a ring (metres, to their footprint) are built
+        // and attached HIDDEN ahead of it, with Object3D::resident on what they
+        // hold, and shown when they enter it; a cell that leaves a ring but
+        // stays within the band is hidden, not detached. The Vulkan renderer
+        // admits a hidden mesh over the frames after it was added (its BLAS,
+        // its textures' encode and upload), so the frame a cell shows on only
+        // flips it visible. 0 (the default) builds and attaches cells as they
+        // enter, visible: their admission lands on that frame.
+        float prefetchBand = 0.f;
     };
 
     struct CellStreamerStats {
@@ -81,6 +90,8 @@ namespace threepp::terrain {
         int removes = 0;  // detached by the last update()
         int pending = 0;  // wanted but not yet built (budget)
         int evictions = 0;// cached cells dropped by the last update() (evictRadius)
+        int prefetched = 0;// cells attached hidden, ahead of their ring (prefetchBand)
+        int shows = 0;     // hidden cells shown by the last update()
         long long totalBuilds = 0, totalRemoves = 0, totalEvictions = 0;
     };
 
@@ -102,7 +113,7 @@ namespace threepp::terrain {
 
         // Call once per frame with the primary camera position.
         void update(const Vector3& camPos) {
-            st_.builds = st_.adds = st_.removes = st_.evictions = 0;
+            st_.builds = st_.adds = st_.removes = st_.evictions = st_.shows = 0;
             if (!build_) return;
 
             const float fcs = o_.fineCellSize;
@@ -111,15 +122,26 @@ namespace threepp::terrain {
             const bool twoLevel = o_.coarseRadius > o_.fineRadius * 1.01f;
             const float outer = twoLevel ? o_.coarseRadius : o_.fineRadius;
             const float outerKeep = outer * o_.removeSlack;
+            const float band = std::max(0.f, o_.prefetchBand);
+            const float scan = std::max(outerKeep, outer + band);
 
             // ── which cells does this camera want? ─────────────────────────
             // Decided per BLOCK (one coarse cell = cf² fine cells) so the two
             // levels partition the ground instead of overlapping.
-            std::map<std::int64_t, float> want;// key → distance² (build order)
-            const int b0x = ifloor((camPos.x - outerKeep) / ccs);
-            const int b1x = ifloor((camPos.x + outerKeep) / ccs);
-            const int b0z = ifloor((camPos.z - outerKeep) / ccs);
-            const int b1z = ifloor((camPos.z + outerKeep) / ccs);
+            std::map<std::int64_t, float> want;    // key → distance (build order), shown
+            std::map<std::int64_t, float> prefetch;// attached hidden, ahead of their ring
+            const auto fineCellsOf = [&](int bx, int bz, std::map<std::int64_t, float>& into) {
+                for (int i = 0; i < cf; ++i)
+                    for (int j = 0; j < cf; ++j) {
+                        const int cx = bx * cf + j, cz = bz * cf + i;
+                        into[key(0, cx, cz)] = boxDistance(camPos, static_cast<float>(cx) * fcs,
+                                                           static_cast<float>(cz) * fcs, fcs);
+                    }
+            };
+            const int b0x = ifloor((camPos.x - scan) / ccs);
+            const int b1x = ifloor((camPos.x + scan) / ccs);
+            const int b0z = ifloor((camPos.z - scan) / ccs);
+            const int b1z = ifloor((camPos.z + scan) / ccs);
             ++gen_;
             for (int bz = b0z; bz <= b1z; ++bz) {
                 for (int bx = b0x; bx <= b1x; ++bx) {
@@ -133,6 +155,12 @@ namespace threepp::terrain {
                     const bool inRange = known ? d <= outerKeep : d <= outer;
                     if (!inRange) {
                         if (known) blocks_.erase(it);
+                        // Within the band outside the outer ring: the cells the
+                        // block will enter with, hidden.
+                        if (band > 0.f && d <= outer + band) {
+                            if (twoLevel) prefetch[key(1, bx, bz)] = d;
+                            else fineCellsOf(bx, bz, prefetch);
+                        }
                         continue;
                     }
                     bool fine = !twoLevel;
@@ -147,15 +175,12 @@ namespace threepp::terrain {
                         blocks_[bk] = Block{fine, gen_};
                     }
                     if (fine) {
-                        for (int i = 0; i < cf; ++i)
-                            for (int j = 0; j < cf; ++j) {
-                                const int cx = bx * cf + j, cz = bz * cf + i;
-                                want[key(0, cx, cz)] =
-                                        boxDistance(camPos, static_cast<float>(cx) * fcs,
-                                                    static_cast<float>(cz) * fcs, fcs);
-                            }
+                        fineCellsOf(bx, bz, want);
                     } else {
                         want[key(1, bx, bz)] = d;
+                        // Drawn coarse, within the band of the fine ring: its
+                        // fine cells, hidden.
+                        if (band > 0.f && d <= o_.fineRadius + band) fineCellsOf(bx, bz, prefetch);
                     }
                 }
             }
@@ -164,7 +189,7 @@ namespace threepp::terrain {
 
             // ── detach what is no longer wanted ────────────────────────────
             for (auto& [k, c] : cells_) {
-                if (!c.active || want.count(k)) continue;
+                if (!c.active || want.count(k) || prefetch.count(k)) continue;
                 if (c.content) remove(*c.content);
                 c.active = false;
                 ++st_.removes;
@@ -179,27 +204,73 @@ namespace threepp::terrain {
                     missing.emplace_back(d, k);
                     continue;
                 }
-                if (!it->second.active) {
-                    if (it->second.content) addRef(*it->second.content);
-                    it->second.active = true;
+                Cell& c = it->second;
+                if (!c.active) {
+                    if (c.content) {
+                        c.content->visible = true;
+                        addRef(*c.content);
+                    }
+                    c.active = true;
+                    c.shown = true;
                     ++st_.adds;
+                } else if (!c.shown) {
+                    if (c.content) c.content->visible = true;
+                    c.shown = true;
+                    ++st_.shows;
+                }
+            }
+            std::vector<std::pair<float, std::int64_t>> missingAhead;
+            for (const auto& [k, d] : prefetch) {
+                if (want.count(k)) continue;
+                auto it = cells_.find(k);
+                if (it == cells_.end()) {
+                    missingAhead.emplace_back(d, k);
+                    continue;
+                }
+                Cell& c = it->second;
+                if (!c.active) {
+                    if (c.content) {
+                        c.content->visible = false;
+                        addRef(*c.content);
+                    }
+                    c.active = true;
+                    c.shown = false;
+                    ++st_.adds;
+                } else if (c.shown) {
+                    if (c.content) c.content->visible = false;
+                    c.shown = false;
                 }
             }
             std::sort(missing.begin(), missing.end());
             int budget = (first_ && o_.burstFirstUpdate) ? static_cast<int>(missing.size())
                                                          : std::max(0, o_.maxCellBuildsPerFrame);
             first_ = false;
-            for (const auto& [d, k] : missing) {
-                if (budget-- <= 0) break;
+            const auto buildCell = [&](std::int64_t k, bool shown) {
                 const int level = static_cast<int>((k >> 48) & 0xff);
                 const float cs = level ? ccs : fcs;
                 auto content = build_(level, cxOf(k), czOf(k), cs);
-                if (content) addRef(*content);
-                cells_.emplace(k, Cell{std::move(content), true});
+                if (content) {
+                    // With a band, every cell may spend time hidden: its meshes
+                    // keep (or get) their renderer entries while hidden.
+                    if (band > 0.f) content->traverse([](Object3D& o) { o.resident = true; });
+                    content->visible = shown;
+                    addRef(*content);
+                }
+                cells_.emplace(k, Cell{std::move(content), true, shown});
                 ++st_.builds;
                 ++st_.totalBuilds;
+            };
+            for (const auto& [d, k] : missing) {
+                if (budget-- <= 0) break;
+                buildCell(k, true);
             }
             st_.pending = static_cast<int>(missing.size()) - st_.builds;
+            // The band's cells after the ring's, from what the budget left.
+            std::sort(missingAhead.begin(), missingAhead.end());
+            for (const auto& [d, k] : missingAhead) {
+                if (budget-- <= 0) break;
+                buildCell(k, false);
+            }
             // ── drop cached cells beyond evictRadius ───────────────────────
             const float evictAt = o_.evictRadius < 0.f ? outerKeep : o_.evictRadius;
             if (evictAt > 0.f) {
@@ -219,8 +290,11 @@ namespace threepp::terrain {
             }
             st_.cached = static_cast<int>(cells_.size());
             st_.active = 0;
-            for (const auto& [k, c] : cells_)
+            st_.prefetched = 0;
+            for (const auto& [k, c] : cells_) {
                 if (c.active) ++st_.active;
+                if (c.active && !c.shown) ++st_.prefetched;
+            }
         }
 
         [[nodiscard]] const CellStreamerStats& stats() const { return st_; }
@@ -230,6 +304,7 @@ namespace threepp::terrain {
         struct Cell {
             std::shared_ptr<Object3D> content;// null = built, empty
             bool active = false;
+            bool shown = true;// attached visible (false: hidden, ahead of its ring)
         };
         struct Block {
             bool fine = true;

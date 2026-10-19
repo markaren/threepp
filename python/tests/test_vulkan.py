@@ -502,7 +502,7 @@ def test_resident_mesh_first_show_is_no_structural_rebuild(vk_renderer):
     stats = vk_renderer.tlas_stats
     assert set(stats) == {"full_rebuilds", "updates", "instances", "structural_rebuilds", "slot_edits",
                           "history_resets", "records_pruned", "textures_pruned", "texture_slots_in_use",
-                          "texture_slot_fallbacks"}
+                          "texture_slot_fallbacks", "admissions_deferred", "admissions_landed"}
     assert stats["slot_edits"] >= 1, "the first shows were slot edits"
     assert stats["history_resets"] >= 1, "the first build wiped the histories once"
 

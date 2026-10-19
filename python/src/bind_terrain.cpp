@@ -179,7 +179,7 @@ namespace threepp_py {
                                  bool decks, float propsCellSize, float propsExtent,
                                  int streamBudget, float forestDilate, int urbanForestCap,
                                  float carMaxSlope, bool roadRibbon, float ribbonDistance,
-                                 bool landUsePaint, bool quayApron) {
+                                 bool landUsePaint, bool quayApron, float streamPrefetch, int tileStageFrames) {
                          GeoSceneOptions o;
                          o.packDir = packDir;
                          o.bands = bands;
@@ -223,6 +223,8 @@ namespace threepp_py {
                          // water and the sink excavates them, which is what
                          // puts the Skansekaia warehouses in the fjord.
                          o.quayApron = quayApron;
+                         o.streamPrefetch = streamPrefetch;
+                         o.tileStageFrames = tileStageFrames;
                          // Loading a 4 km 1 m pack is seconds of I/O + a distance
                          // transform + shell/forest baking: hold no GIL for it,
                          // or a threaded caller stalls for the whole load.
@@ -248,6 +250,8 @@ namespace threepp_py {
                      py::arg("road_ribbon") = true, py::arg("ribbon_distance") = 600.f,
                      py::arg("land_use_paint") = true,
                      py::arg("quay_apron") = true,
+                     py::arg("stream_prefetch") = 0.f,
+                     py::arg("tile_stage_frames") = 0,
                      "Load a geodata region pack and build the whole terrain scene. "
                      "Raises RuntimeError if the pack directory is missing or malformed. "
                      "`car_max_slope` (degrees) refuses a parked car on ground steeper than "
@@ -262,7 +266,14 @@ namespace threepp_py {
                      "the bathymetry runs: a Kartverket DTM stores reclaimed land at exactly "
                      "sea level (93.8% of ground inside the Alesund pack's pier polygons reads "
                      "0.00 m), so without it the sink excavates the quay into the seabed and "
-                     "the harbour buildings stand with their walls in the fjord.")
+                     "the harbour buildings stand with their walls in the fjord. "
+                     "`stream_prefetch` (metres, default 0 = off) builds and attaches the streamed forest "
+                     "and car cells HIDDEN that far ahead of their ring and shows them when they enter it; "
+                     "the Vulkan renderer admits a hidden mesh over the frames in between, so a cell's "
+                     "first frame on screen only flips it visible. "
+                     "`tile_stage_frames` (default 0 = off) attaches a terrain tile hidden as soon as its "
+                     "bake is done and swaps it in that many updates later, so its swap only flips "
+                     "visibility (the swap comes that many updates later than without).")
                 .def("update", [](GeoScene& g, const Vector3& p) { g.update(p); }, py::arg("pos"),
                      "Once per frame, with the ACTIVE camera position: tile LOD + scatter.")
                 .def("update", [](GeoScene& g, const std::array<float, 3>& p) {
@@ -313,6 +324,8 @@ namespace threepp_py {
                              d["removes"] = s.removes;
                              d["pending"] = s.pending;
                              d["evictions"] = s.evictions;
+                             d["prefetched"] = s.prefetched;
+                             d["shows"] = s.shows;
                              d["total_builds"] = s.totalBuilds;
                              d["total_removes"] = s.totalRemoves;
                              d["total_evictions"] = s.totalEvictions;
@@ -325,8 +338,9 @@ namespace threepp_py {
                      },
                      "dict of the streamed content's cell streamers, 'forest' and 'cars', each a dict: "
                      "active, cached (cells ever built, kept for revisits), builds / adds (cached "
-                     "cells re-attached) / removes / pending / evictions (CellStreamerOptions::evictRadius) by the "
-                     "last update(), total_builds, total_removes, total_evictions. All 0 for a layer the pack "
+                     "cells re-attached) / removes / pending / evictions (CellStreamerOptions::evictRadius) / shows "
+                     "(hidden cells shown) by the last update(), prefetched (cells attached hidden ahead of "
+                     "their ring, stream_prefetch), total_builds, total_removes, total_evictions. All 0 for a layer the pack "
                      "does not stream.");
 
         // ── Free functions ────────────────────────────────────────────────────

@@ -50,6 +50,10 @@ def parse_args(argv=None):
     ap.add_argument("--replayable-lod", action="store_true", help="keep the pinned clock's replayable LOD schedule")
     ap.add_argument("--urban-forest-cap", type=int, default=80000, help="GeoScene urban_forest_cap")
     ap.add_argument("--stream-budget", type=int, default=2, help="GeoScene stream_budget (cell builds per update)")
+    ap.add_argument("--tile-stage", type=int, default=0,
+                    help="GeoScene tile_stage_frames: terrain tiles attached hidden, swapped in this many updates later")
+    ap.add_argument("--prefetch", type=float, default=0.0,
+                    help="GeoScene stream_prefetch: cells built and attached hidden this far ahead of their ring")
     return ap.parse_args(argv)
 
 
@@ -120,7 +124,8 @@ def main(argv=None):
     renderer = tp.VulkanRenderer(canvas, flush_frames=1)
     renderer.replayable_lod_schedule = bool(args.replayable_lod)
     t0 = time.perf_counter()
-    geo = tp.GeoScene(args.pack, urban_forest_cap=args.urban_forest_cap, stream_budget=args.stream_budget)
+    geo = tp.GeoScene(args.pack, urban_forest_cap=args.urban_forest_cap, stream_budget=args.stream_budget,
+                      stream_prefetch=args.prefetch, tile_stage_frames=args.tile_stage)
     load_s = time.perf_counter() - t0
     scene = tp.Scene()
     scene.background = 0x9fb8d0
@@ -134,7 +139,7 @@ def main(argv=None):
     print(f"geo-flight {args.tag}: pack {os.path.basename(os.path.normpath(args.pack))} loaded in {load_s:.1f} s, "
           f"loop {2 * math.pi * math.sqrt((a * a + b * b) / 2) / 1000:.1f} km, {loop.over_land * 100:.0f} % over land, "
           f"{period:.0f} s a lap, NO_SLOTS={os.environ.get('THREEPP_VULKAN_NO_SLOTS', '')}, "
-          f"replayable_lod={renderer.replayable_lod_schedule}", flush=True)
+          f"replayable_lod={renderer.replayable_lod_schedule}, prefetch={args.prefetch:g} m, tile_stage={args.tile_stage}", flush=True)
 
     def place(t):
         x, y, z = loop.at(t)
@@ -179,16 +184,18 @@ def main(argv=None):
             ss["forest"]["active"], ss["forest"]["cached"],
             int(mem["allocated_bytes"]), int(mem["reserved_bytes"]),
             1 if k in still_frames else 0,
+            int(ts["admissions_deferred"]), ss["forest"]["shows"] + ss["cars"]["shows"],
         ])
         if k in still_frames:
             save_still(renderer, os.path.join(args.out, f"{args.tag}_t{still_frames[k]:05.1f}.png"))
     cols = ["t", "whole", "update", "render", "ensure", "record", "cpu_frame", "gpu", "sr", "se", "hr",
             "f_builds", "f_adds", "f_removes", "f_pending", "c_builds", "c_adds", "c_removes",
-            "f_active", "f_cached", "mem_alloc", "mem_reserved", "still"]
+            "f_active", "f_cached", "mem_alloc", "mem_reserved", "still", "deferred", "shows"]
     summary = summarise(rows, cols, ts0, frames, period)
     summary.update({"tag": args.tag, "pack": os.path.basename(os.path.normpath(args.pack)),
                     "no_slots": os.environ.get("THREEPP_VULKAN_NO_SLOTS", ""),
-                    "replayable_lod": bool(args.replayable_lod), "size": [w, h], "load_s": round(load_s, 1),
+                    "replayable_lod": bool(args.replayable_lod), "prefetch": args.prefetch, "tile_stage": args.tile_stage, "size": [w, h],
+                    "load_s": round(load_s, 1),
                     "first_frame_ms": round(first_ms, 1), "loop_over_land": round(loop.over_land, 3),
                     "ray_tracing": bool(getattr(renderer, "ray_tracing", True))})
     with open(os.path.join(args.out, f"{args.tag}.json"), "w", encoding="utf-8") as f:
@@ -238,6 +245,8 @@ def summarise(rows, cols, ts0, frames, period):
             ev.append("cell_add")
         if r[c["f_removes"]] or r[c["c_removes"]]:
             ev.append("cell_remove")
+        if r[c["shows"]]:
+            ev.append("cell_show")
         key = cause + ("[" + ",".join(ev) + "]" if ev else "")
         by_cause[key] = by_cause.get(key, 0) + 1
 
@@ -275,6 +284,8 @@ def summarise(rows, cols, ts0, frames, period):
         "cell_adds": sum(r[c["f_adds"]] + r[c["c_adds"]] for r in rows),
         "cell_removes": sum(r[c["f_removes"]] + r[c["c_removes"]] for r in rows),
         "forest_cells_cached_end": last[c["f_cached"]],
+        "admissions_deferred": last[c["deferred"]] - rows[0][c["deferred"]],
+        "cell_shows": sum(r[c["shows"]] for r in rows),
         "slow_frames_by_cause": dict(sorted(by_cause.items(), key=lambda kv: -kv[1])),
         "laps": laps,
         "mem_alloc_mb": {"start": round(rows[0][c["mem_alloc"]] / 2**20, 1),

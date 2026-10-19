@@ -930,6 +930,12 @@ namespace threepp {
             // renderer prints "material texture slots exhausted" for each).
             uint32_t textureSlotsInUse = 0;
             uint64_t textureSlotFallbacks = 0;
+            // Meshes that arrived hidden (Object3D::resident) and were admitted
+            // over the frames after their slot edit instead of on it (the BLAS
+            // build, the textures' encode and upload): their slot edit only
+            // placed them. Landed later with no visible change.
+            uint64_t admissionsDeferred = 0;
+            uint64_t admissionsLanded = 0;// of those, landed (shown before: admitted at the show)
         };
         [[nodiscard]] TlasStats tlasStats() const;
 

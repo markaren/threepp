@@ -134,6 +134,13 @@ namespace threepp::terrain {
         float propsCellSize = 250.f;// one car draw per cell
         float propsExtent = 1500.f; // car streaming radius from the camera
         int streamBudget = 2;       // cell builds per update(), forest and cars alike
+        // CellStreamerOptions::prefetchBand for the forest and the cars: cells
+        // built and attached hidden this far ahead of their ring, shown when
+        // they enter it (the renderer admits them in between). 0 = off.
+        float streamPrefetch = 0.f;
+        // TileTerrainOptions::stageFrames for the terrain tiles: a finished
+        // bake attached hidden and swapped in this many updates later. 0 = off.
+        int tileStageFrames = 0;
         // Steepest ground a parked car is allowed to stand on, in degrees. OSM
         // land use is drawn in plan view, so a `parking` polygon can be draped
         // over a mountainside — the Ålesund pack has one at world XZ (684, -85)
@@ -569,6 +576,7 @@ namespace threepp::terrain {
                 tileOpts.detailRoughStrength = 0.5f;
             }
 
+            tileOpts.stageFrames = o.tileStageFrames;
             tiles_ = TileTerrain::create(prov_, tileOpts);
             tiles_->name = "geo_tiles";
             add(tiles_);
@@ -867,6 +875,7 @@ namespace threepp::terrain {
             cso.fineRadius = 800.f;
             cso.coarseRadius = 1600.f;
             cso.maxCellBuildsPerFrame = o.streamBudget;
+            cso.prefetchBand = o.streamPrefetch;
             forestStream_ = CellStreamer::create(builder, cso);
             forestStream_->name = "geo_forest_stream";
             add(forestStream_);
@@ -929,6 +938,7 @@ namespace threepp::terrain {
             pso.fineRadius = o.propsExtent;
             pso.coarseRadius = 0.f;// a car has no far tier: past the ring, nothing
             pso.maxCellBuildsPerFrame = o.streamBudget;
+            pso.prefetchBand = o.streamPrefetch;
             auto carField = carField_;
             carStream_ = CellStreamer::create(
                     [carField, carMat](int, int cx, int cz, float) -> std::shared_ptr<Object3D> {
