@@ -2609,6 +2609,34 @@ VkBuffer VulkanRenderer::Impl::uploadLodFades(uint32_t frame) {
             return b.handle;
         }
 
+VkBuffer VulkanRenderer::Impl::uploadLodLevels(uint32_t frame) {
+            const size_t n = lastVisibleEntries_.size();
+            const size_t bytes = std::max<size_t>((n + 3u) & ~size_t(3), 4u);
+            Buffer& b = lodLevelBuffers_[frame];
+            if (b.size < bytes) {
+                // This slot's fence has signaled and the sets that name the
+                // buffer are rewritten below: a plain swap.
+                destroyBuffer(ctx->allocator(), b);
+                b = createBuffer(ctx->allocator(), ctx->device(), std::max<VkDeviceSize>(VkDeviceSize(bytes) * 2, 4096u),
+                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO,
+                                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                         VMA_ALLOCATION_CREATE_MAPPED_BIT);
+                lodLevelUploaded_[frame] = lodLevelVersion_ - 1u;
+            }
+            if (lodLevelUploaded_[frame] != lodLevelVersion_ || lodLevelUploadedCount_[frame] != n) {
+                lodLevelScratch_.assign(bytes, 0u);
+                for (const EntrySpan& sp : entrySpans_) {
+                    if (sp.isFree || !sp.lodNonZero) continue;
+                    for (uint32_t j = 0; j < sp.count; ++j)
+                        lodLevelScratch_[sp.first + j] = lastVisibleEntries_[sp.first + j].lodLevel;
+                }
+                uploadHostVisible(ctx->allocator(), b, lodLevelScratch_.data(), bytes);
+                lodLevelUploaded_[frame] = lodLevelVersion_;
+                lodLevelUploadedCount_[frame] = n;
+            }
+            return b.handle;
+        }
+
 void VulkanRenderer::Impl::prepareDrawGen(uint32_t frame) {
             if (!drawGenActive_) return;
             const auto n = static_cast<uint32_t>(drawGenSpans_.size());
@@ -2631,11 +2659,14 @@ void VulkanRenderer::Impl::prepareDrawGen(uint32_t frame) {
                 drawGenActive_ = false;
                 return;
             }
-            drawGen_->prepareFrame(frame, n, instExpand_->worldBuffer(), geometryDescsBuffers[frame].handle,
+            const auto rows = static_cast<uint32_t>(drawGenLodRows_.size());
+            drawGen_->prepareFrame(frame, n, rows, instExpand_->worldBuffer(), geometryDescsBuffers[frame].handle,
                                    view().drawInfoBuffers[frame].handle, view().indirectCmdBuffers[frame].handle,
-                                   uploadLodFades(frame));
+                                   uploadLodFades(frame), uploadLodLevels(frame));
             std::memcpy(drawGen_->spanPtr(frame), drawGenSpans_.data(), size_t(n) * sizeof(vulkan::DrawGen::SpanDesc));
-            drawGen_->flushSpans(frame, n);
+            if (rows > 0u)
+                std::memcpy(drawGen_->rowPtr(frame), drawGenLodRows_.data(), size_t(rows) * sizeof(vulkan::DrawGen::LodRow));
+            drawGen_->flushSpans(frame, n, rows);
         }
 
 void VulkanRenderer::Impl::recordDrawGen(VkCommandBuffer cb, uint32_t frame) {
@@ -2670,6 +2701,8 @@ bool VulkanRenderer::Impl::verifyDrawGen(VulkanRenderer::DrawGenCheck& out) {
             const auto* draws = static_cast<const DrawInfoGpu*>(dMap);
             const auto* cmds  = static_cast<const VkDrawIndirectCommand*>(cMap);
             out.spans = drawGenSpans_.size();
+            for (const auto& d : drawGenSpans_)
+                if (d.lodRowCount > 0u) ++out.lodSpans;
             for (const auto& x : drawGenExpected_) {
                 ++out.records;
                 const VkDrawIndirectCommand& gc = cmds[x.record];
@@ -2708,9 +2741,12 @@ void VulkanRenderer::Impl::prepareTlasGen(uint32_t frame) {
                 tlasGenActive_ = false;
                 return;
             }
-            tlasGen_->prepareFrame(frame, n, instExpand_->worldBuffer(), instBuf.handle, uploadLodFades(frame));
+            const auto rows = static_cast<uint32_t>(tlasGenLodRows_.size());
+            tlasGen_->prepareFrame(frame, n, rows, instExpand_->worldBuffer(), instBuf.handle, uploadLodFades(frame),
+                                   uploadLodLevels(frame));
             std::memcpy(tlasGen_->spanPtr(frame), tlasGenSpans_.data(), size_t(n) * sizeof(vulkan::TlasGen::SpanDesc));
-            tlasGen_->flushSpans(frame, n);
+            if (rows > 0u) std::memcpy(tlasGen_->rowPtr(frame), tlasGenLodRows_.data(), size_t(rows) * sizeof(uint64_t));
+            tlasGen_->flushSpans(frame, n, rows);
         }
 
 void VulkanRenderer::Impl::recordTlasGen(VkCommandBuffer cb, uint32_t frame) {
@@ -2731,6 +2767,8 @@ bool VulkanRenderer::Impl::verifyTlasGen(VulkanRenderer::TlasGenCheck& out) {
             invalidateHostReads(ctx->allocator(), buf.alloc, 0, VK_WHOLE_SIZE);
             const auto* inst = static_cast<const VkAccelerationStructureInstanceKHR*>(mapped) + tlasGenExpectedBase_;
             out.spans = tlasGenSpans_.size();
+            for (const auto& d : tlasGenSpans_)
+                if (d.lodRowCount > 0u) ++out.lodSpans;
             for (size_t k = 0; k < tlasGenExpected_.size(); ++k) {
                 ++out.instances;
                 if (std::memcmp(&inst[k], &tlasGenExpected_[k], sizeof(VkAccelerationStructureInstanceKHR)) != 0)

@@ -3,14 +3,16 @@
 //
 // buildIndirectDrawData (VulkanCoreIndirect.cpp) writes one DrawInfo and one
 // VkDrawIndirectCommand per visible entry on the CPU. For an eligible
-// instanced span (static, no LOD chain; DrawGen.hpp) it instead
+// instanced span (static; DrawGen.hpp) it instead
 // reserves `count` records at the span's place in its cull-mode bucket and
 // hands this shader the per-span constants; one thread per instance writes:
 //   - DrawInfo: the world matrix stage 1 (instance_expand.comp) produced for
 //     the entry, the span's addresses / flags / ids, the entry index as
 //     instanceCustomIndex, the moved-sticky bit read from the entry's
 //     GeometryDesc (the sticky stamp has already landed in this slot's desc)
-//     and the entry's LOD crossfade word;
+//     and the entry's LOD crossfade word; with an auto-LOD chain, the index
+//     buffer and count of the entry's level (MeshEntry::lodLevel, the CPU's
+//     selection, as a byte per entry);
 //   - the command: the span's vertex range, firstInstance = the record, and
 //     vertexCount 0 for an instance outside the view frustum. That is the CPU
 //     cull's per-entry world-sphere test, operand for operand and `precise`
@@ -30,7 +32,7 @@
 
 layout(local_size_x = 64) in;
 
-// Matches DrawGen::SpanDesc (scalar, 112 B).
+// Matches DrawGen::SpanDesc (scalar, 120 B).
 struct DrawSpan {
     uint64_t posAddr;
     uint64_t nrmAddr;
@@ -49,9 +51,18 @@ struct DrawSpan {
     float    polygonOffset;
     uint     vertexCount;// the span's draw range (index or vertex count)
     uint     firstVertex;
-    uint     pad0;
+    uint     lodRowBase; // its first LodRow, when lodRowCount > 0
     float    localCenter[3];
     float    localRadius;// object-space enclosing sphere of the shared geometry
+    uint     lodRowCount;// levels 1..n, then the fallback row; 0: no chain
+    uint     pad0;
+};
+
+// Matches DrawGen::LodRow (scalar, 16 B): selectLodGeom(rec, k) for k >= 1.
+struct LodRow {
+    uint64_t indexAddr;
+    uint     vertexCount;
+    uint     indexed;
 };
 
 // The vertex shader's DrawInfo (gbuffer_indirect.vert), scalar, 136 B.
@@ -77,6 +88,8 @@ layout(set = 0, binding = 2, scalar) readonly  buffer GeomDescs { uint     geomW
 layout(set = 0, binding = 3, scalar) writeonly buffer Draws     { DrawInfo draws[]; };
 layout(set = 0, binding = 4, scalar) writeonly buffer Cmds      { uint     cmdWords[]; };// 4 per record
 layout(set = 0, binding = 5, scalar) readonly  buffer LodFades  { uint     lodFades[]; };// entryLodFade_
+layout(set = 0, binding = 6, scalar) readonly  buffer LodRows   { LodRow   lodRows[]; };
+layout(set = 0, binding = 7, scalar) readonly  buffer LodLevels { uint     lodLevelWords[]; };// a byte per entry
 
 layout(push_constant, scalar) uniform Pc {
     vec4 planes[6];      // the CPU Frustum's planes: xyz normal, w constant
@@ -126,6 +139,24 @@ void main() {
         }
     }
 
+    // The entry's level: the span's own draw at 0 (drawRange-clamped), else
+    // its row, unclamped, exactly as the CPU loop's selectLodGeom.
+    uint64_t indexAddr = spans[lo].indexAddr;
+    uint indexed = spans[lo].indexed;
+    uint vcount  = spans[lo].vertexCount;
+    uint vfirst  = spans[lo].firstVertex;
+    if (spans[lo].lodRowCount > 0u) {
+        const uint level = (lodLevelWords[e >> 2u] >> ((e & 3u) * 8u)) & 0xFFu;
+        const uint row   = min(level, spans[lo].lodRowCount);
+        if (row > 0u) {
+            const LodRow r = lodRows[spans[lo].lodRowBase + row - 1u];
+            indexAddr = r.indexAddr;
+            indexed   = r.indexed;
+            vcount    = r.vertexCount;
+            vfirst    = 0u;
+        }
+    }
+
     const uint gflags = geomWords[e * pc.geomStrideWords + pc.geomFlagsWord];
     DrawInfo d;
     d.model = mat4(M[0], M[1], M[2], M[3], M[4], M[5], M[6], M[7],
@@ -134,18 +165,18 @@ void main() {
     d.nrmAddr     = spans[lo].nrmAddr;
     d.uvAddr      = spans[lo].uvAddr;
     d.prevPosAddr = spans[lo].prevPosAddr;
-    d.indexAddr   = spans[lo].indexAddr;
+    d.indexAddr   = indexAddr;
     d.colorAddr   = spans[lo].colorAddr;
     d.instanceCustomIndex = e;
     d.flags = spans[lo].flagsBase | ((gflags & kGeomFlagMoved) != 0u ? kInstFlagMoving : 0u) | lodFades[e];
-    d.indexed       = spans[lo].indexed;
+    d.indexed       = indexed;
     d.polygonOffset = spans[lo].polygonOffset;
     d.stableId      = spans[lo].stableId;
     d.packedAttrs   = spans[lo].packedAttrs;
     draws[rec] = d;
 
-    cmdWords[rec * 4u + 0u] = vis ? spans[lo].vertexCount : 0u;
+    cmdWords[rec * 4u + 0u] = vis ? vcount : 0u;
     cmdWords[rec * 4u + 1u] = 1u;
-    cmdWords[rec * 4u + 2u] = spans[lo].firstVertex;
+    cmdWords[rec * 4u + 2u] = vfirst;
     cmdWords[rec * 4u + 3u] = rec;
 }

@@ -3,8 +3,8 @@
 // byte for byte what the CPU writes.
 //
 // Stage 2 of plans/gpu-driven-instances.md. With setGpuDrawGeneration the
-// primary view's records of eligible InstancedMeshes (static, no auto-LOD
-// chain) are written by compute from the expansion's world
+// primary view's records of eligible InstancedMeshes (static) are written by
+// compute from the expansion's world
 // matrices, the frustum cull included (vertex count 0 for an instance outside
 // the view). setGpuDrawGenerationCheck keeps the CPU building them too, and
 // drawGenCheck compares: every visible instance's DrawInfo, every instance's
@@ -20,6 +20,11 @@
 // the DrawInfo fade bits, and the TLAS mask the side no ray hits loses), and
 // the camera orbits through the forest so the cull changes every frame and
 // instances leave and enter the view.
+//
+// Then auto-LOD: a mesh dense enough for a chain is instanced down a long row,
+// and once its chain lands the camera dollies along the row and back, so the
+// instances' levels (the CPU's selection, hysteresis included) change in both
+// directions; every record and TLAS instance draws its own entry's level.
 //
 // Plain exit-code program, not Catch2, like the other Vulkan tests here.
 // Exits 42 (CTest "Skipped") when no Vulkan GPU is available.
@@ -98,7 +103,7 @@ int main() {
     renderer.setDlss(false);
     renderer.setFsr(false);
     renderer.setAutoExposure(false);
-    renderer.setAutoLod(false);// a LOD chain takes a span back to the CPU path
+    renderer.setAutoLod(false);// until the auto-LOD phase: no chain lands on a random frame of the first
 
     Scene scene;
     scene.background = Color(0.4f, 0.5f, 0.6f);
@@ -215,6 +220,81 @@ int main() {
         std::printf("structural rebuilds %llu, slot edits %llu\n",
                     static_cast<unsigned long long>(stats.structuralRebuilds),
                     static_cast<unsigned long long>(stats.slotEdits));
+        // ── Auto-LOD chains ─────────────────────────────────────────────────
+        {
+            constexpr size_t kRocks = 300;
+            constexpr int kMaxLodWait = 600;
+            constexpr int kLodFrames = 60;
+            renderer.setAutoLod(true);
+            auto rocks = InstancedMesh::create(SphereGeometry::create(0.9f, 48, 32), paint(Color(0.55f, 0.55f, 0.5f)),
+                                               kRocks);
+            for (size_t i = 0; i < kRocks; ++i) {
+                m.makeTranslation(hash(7001u + uint32_t(i)) * 6.f, 0.9f, 20.f - 0.8f * float(i));
+                rocks->setMatrixAt(i, m);
+            }
+            rocks->instanceMatrix()->needsUpdate();
+            scene.add(rocks);
+            const auto placeLodCamera = [&](float z) {
+                camera.position.set(0.f, 4.f, z);
+                camera.lookAt(Vector3{0.f, 1.f, z - 40.f});
+                camera.updateMatrixWorld();
+            };
+            placeLodCamera(30.f);
+            int waited = 0;
+            for (; waited < kMaxLodWait && renderer.autoLodStats().chainsReady < 1u; ++waited)
+                canvas.animateOnce([&] { renderer.render(scene, camera); });
+            std::printf("auto-LOD: %u chain(s) ready after %d frames\n", renderer.autoLodStats().chainsReady, waited);
+            check("the row's auto-LOD chain landed", renderer.autoLodStats().chainsReady >= 1u);
+
+            std::size_t lodChecked = 0, lodSpansMax = 0, lodDraw = 0, lodCmd = 0, lodCull = 0;
+            std::size_t lodTlasChecked = 0, lodTlasSpansMax = 0, lodTlas = 0;
+            uint32_t levelsSeen = 0;// a bit per level some entry was at
+            for (int f = 0; f < kLodFrames; ++f) {
+                // 60 m along the row, then back: levels coarsen, then refine.
+                const float t = static_cast<float>(f) / static_cast<float>(kLodFrames - 1);
+                placeLodCamera(30.f - 60.f * (t < 0.5f ? 2.f * t : 2.f - 2.f * t));
+                canvas.animateOnce([&] { renderer.render(scene, camera); });
+                const auto st = renderer.autoLodStats();
+                uint32_t level = 0;
+                for (const auto n : st.entriesPerLevel) {
+                    if (n > 0u) levelsSeen |= 1u << level;
+                    ++level;
+                }
+                VulkanRenderer::TlasGenCheck tc;
+                if (renderer.tlasGenCheck(tc)) {
+                    ++lodTlasChecked;
+                    lodTlasSpansMax = std::max(lodTlasSpansMax, tc.lodSpans);
+                    lodTlas += tc.mismatches;
+                    if (tc.mismatches)
+                        std::printf("  lod frame %d: %zu TLAS instances, %zu mismatched\n", f, tc.instances,
+                                    tc.mismatches);
+                }
+                VulkanRenderer::DrawGenCheck dc;
+                if (!renderer.drawGenCheck(dc)) continue;
+                ++lodChecked;
+                lodSpansMax = std::max(lodSpansMax, dc.lodSpans);
+                lodDraw += dc.drawInfoMismatches;
+                lodCmd += dc.cmdMismatches;
+                lodCull += dc.cullMismatches;
+                if (dc.drawInfoMismatches || dc.cmdMismatches || dc.cullMismatches) {
+                    std::printf("  lod frame %d: %zu records, DrawInfo %zu, cmd %zu, cull %zu mismatched\n", f,
+                                dc.records, dc.drawInfoMismatches, dc.cmdMismatches, dc.cullMismatches);
+                }
+            }
+            std::printf("auto-LOD: %zu frames compared, up to %zu chained GPU spans, levels seen 0x%x; mismatches "
+                        "DrawInfo %zu, cmd %zu, cull %zu; TLAS %zu refits, %zu mismatched\n",
+                        lodChecked, lodSpansMax, levelsSeen, lodDraw, lodCmd, lodCull, lodTlasChecked, lodTlas);
+            check("auto-LOD: the GPU wrote the chained mesh's records", lodSpansMax >= 1u);
+            check("auto-LOD: instances drew coarser levels than the base", (levelsSeen & ~1u) != 0u);
+            check("auto-LOD: frames compared", lodChecked >= static_cast<std::size_t>(kLodFrames - 4));
+            check("auto-LOD: every visible instance's DrawInfo is the CPU's, byte for byte", lodDraw == 0u);
+            check("auto-LOD: every command is the CPU's (vertex range, instance, record)", lodCmd == 0u);
+            check("auto-LOD: the GPU culls exactly the instances the CPU culls", lodCull == 0u);
+            if (renderer.rayTracingSupported()) {
+                check("auto-LOD: the GPU wrote the chained mesh's TLAS instances", lodTlasSpansMax >= 1u);
+                check("auto-LOD: every TLAS instance is the CPU's, byte for byte", lodTlas == 0u);
+            }
+        }
         if (vulkan::validationActive()) {
             check("no validation errors", vulkan::validationErrorCount() == 0u);
         }

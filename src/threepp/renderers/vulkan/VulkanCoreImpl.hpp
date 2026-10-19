@@ -2502,14 +2502,15 @@ namespace threepp {
         // ── GPU draw records (stage 2; DrawGen.hpp, draw_gen.comp) ─────────
         // OFF by default, and only with the expansion on (its world matrices
         // are the input): setGpuDrawGeneration. The primary view's records of
-        // eligible instanced spans (static, no LOD chain, no fades, no
-        // occlusion culling this frame) are written by compute; everything
+        // eligible instanced spans (static, no occlusion culling this frame)
+        // are written by compute; everything
         // else stays the CPU's.
         std::unique_ptr<vulkan::DrawGen> drawGen_;
         bool gpuDrawGen_ = false;
         // The frame's dispatch, filled by buildIndirectDrawData (primary view)
         // and uploaded by prepareDrawGen; drawGenActive_ gates the graph pass.
         std::vector<vulkan::DrawGen::SpanDesc> drawGenSpans_;
+        std::vector<vulkan::DrawGen::LodRow>   drawGenLodRows_;// the spans' auto-LOD levels
         uint32_t drawGenWork_   = 0;
         bool     drawGenActive_ = false;
         float    drawGenPlanes_[24]{};
@@ -2535,6 +2536,7 @@ namespace threepp {
         std::unique_ptr<vulkan::TlasGen> tlasGen_;
         bool gpuTlasGen_ = false;
         std::vector<vulkan::TlasGen::SpanDesc> tlasGenSpans_;
+        std::vector<uint64_t> tlasGenLodRows_;// the spans' auto-LOD level BLAS addresses
         uint32_t tlasGenWork_   = 0;
         bool     tlasGenActive_ = false;// this frame's refit carries GPU instances
         // The CPU/GPU split of the TLAS last built: a different one is a full
@@ -2557,6 +2559,17 @@ namespace threepp {
         std::array<size_t, kFramesInFlight> lodFadeUploadedCount_{};
         uint32_t lodFadeVersion_ = 1;
         VkBuffer uploadLodFades(uint32_t frame);
+        // MeshEntry::lodLevel for the GPU producers, a byte per entry: the
+        // CPU's selection, read by the spans with an auto-LOD chain. Gathered
+        // from the spans with a level above 0 (EntrySpan::lodNonZero), re-sent
+        // when lodLevelVersion_ moved: a selection that changed a level, or
+        // entries laid out anew.
+        std::array<Buffer, kFramesInFlight> lodLevelBuffers_{};
+        std::array<uint32_t, kFramesInFlight> lodLevelUploaded_{};
+        std::array<size_t, kFramesInFlight> lodLevelUploadedCount_{};
+        uint32_t lodLevelVersion_ = 1;
+        std::vector<uint8_t> lodLevelScratch_;
+        VkBuffer uploadLodLevels(uint32_t frame);
         void recordTlasGen(VkCommandBuffer cb, uint32_t frame);
         bool verifyTlasGen(VulkanRenderer::TlasGenCheck& out);
         // The span's record when draw_gen.comp may write its draws (the

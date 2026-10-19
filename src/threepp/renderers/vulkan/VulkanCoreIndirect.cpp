@@ -71,8 +71,7 @@ namespace threepp {
             e0.isSkinned || e0.isDisplaced || e0.isGrass || e0.isMorphed || e0.isTet)
             return nullptr;
         const BlasRecord* rec = resolveBlasForEntry(e0);
-        // A record with a LOD chain picks per entry (en.lodLevel): CPU.
-        if (!rec || rec->vertex.handle == VK_NULL_HANDLE || !rec->lodLevels.empty()) return nullptr;
+        if (!rec || rec->vertex.handle == VK_NULL_HANDLE) return nullptr;
         return rec;
     }
 
@@ -90,6 +89,7 @@ namespace threepp {
         if (!view().secondary) {
             drawGenActive_ = false;
             drawGenSpans_.clear();
+            drawGenLodRows_.clear();
             drawGenWork_ = 0;
         }
         for (auto& g : indirectGroups_) { g.offset = 0; g.count = 0; }
@@ -194,7 +194,7 @@ namespace threepp {
             int      bucket = 0;
             uint32_t bucketPos = 0;
             uint32_t visible = 0;
-            uint32_t vcount = 0;
+            uint64_t triangles = 0;// AutoLodStats::trianglesDrawn of its visible entries
             size_t   expectedBase = 0;
             vulkan::DrawGen::SpanDesc desc{};
         };
@@ -240,10 +240,31 @@ namespace threepp {
                 gp.first  = sp.first;
                 gp.count  = sp.count;
                 gp.bucket = isDecal ? 3 : bucketOf(wantCull);
-                gp.vcount = vcount;
-                for (uint32_t j = 0; j < sp.count; ++j)
-                    if (viewCulled(size_t(sp.first) + j)) ++gp.visible;
                 auto& d = gp.desc;
+                // An auto-LOD chain: a row per level (and the fallback past it),
+                // each selectLodGeom(rec, k) as the loop draws it, unclamped.
+                d.lodRowBase  = static_cast<uint32_t>(drawGenLodRows_.size());
+                d.lodRowCount = 0u;
+                if (!rec->lodLevels.empty()) {
+                    const auto levels = static_cast<uint32_t>(rec->lodLevels.size());
+                    for (uint32_t k = 1; k <= levels + 1u; ++k) {
+                        const LodGeomSel s = selectLodGeom(*rec, static_cast<uint8_t>(k));
+                        drawGenLodRows_.push_back({s.indexed ? s.indexAddress : 0ull,
+                                                   s.indexed ? s.indexCount : rec->vertexCount, s.indexed ? 1u : 0u});
+                    }
+                    d.lodRowCount = levels + 1u;
+                }
+                for (uint32_t j = 0; j < sp.count; ++j) {
+                    const size_t e = size_t(sp.first) + j;
+                    if (!viewCulled(e)) continue;
+                    ++gp.visible;
+                    uint32_t vc = vcount;
+                    if (d.lodRowCount > 0u) {
+                        const uint32_t row = std::min<uint32_t>(lastVisibleEntries_[e].lodLevel, d.lodRowCount);
+                        if (row > 0u) vc = drawGenLodRows_[d.lodRowBase + row - 1u].vertexCount;
+                    }
+                    gp.triangles += vc / 3u;
+                }
                 d.posAddr     = rec->vertex.address;
                 d.nrmAddr     = rec->normal.address;
                 d.uvAddr      = (rec->uv.handle != VK_NULL_HANDLE) ? rec->uv.address : 0ull;
@@ -334,7 +355,7 @@ namespace threepp {
                     gpuSinkPlan = gpuNext;
                     ++gpuNext;
                 } else {
-                    drawnTriangles += uint64_t(gp.vcount / 3u) * gp.visible;
+                    drawnTriangles += gp.triangles;
                     ++gpuNext;
                     i += gp.count - 1u;
                     continue;

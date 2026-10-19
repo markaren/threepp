@@ -312,6 +312,7 @@ VulkanRenderer::Impl::~Impl() {
             // The two density handles the renderer (not the pass) owns.
             for (auto& b : particleDensityUbos_) destroyBuffer(ctx->allocator(), b);
             for (auto& b : lodFadeBuffers_) destroyBuffer(ctx->allocator(), b);
+            for (auto& b : lodLevelBuffers_) destroyBuffer(ctx->allocator(), b);
             destroyImage2D(ctx->allocator(), d, particleDensityDummy_);
             destroyImage2D(ctx->allocator(), d, particleDensityLinDummy_);
             // The splat reflection table's two renderer-owned handles, beside

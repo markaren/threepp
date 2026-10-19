@@ -1181,6 +1181,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             particleFields_     = std::move(builtFields);
             }
             probeGridDirty_     = true;// scene structure changed → re-fit the probe grid
+            ++lodLevelVersion_;// the entries are laid out anew
             // ...and re-bake every ParticleField surface height map (F5). The
             // set of things a flake can land on is exactly what just changed,
             // and this is the trigger the plan names ("the same trigger as
@@ -1448,6 +1449,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     stats.entriesPerLevel[0] = nonOverlay;
                 }
                 autoLodStats_ = stats;
+                if (lodChangedThisFrame_) ++lodLevelVersion_;
             }
 
             // Camera position for the cutout ray distance (setCutoutRayDistance):
@@ -2686,6 +2688,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         const bool tlasGenOn = gpuTlasGen_ && gpuInstanceExpand_ && tlasGen_ && instExpand_ &&
                                                ctx->rayQuerySupported() && !asyncPilot_;
                         tlasGenSpans_.clear();
+                        tlasGenLodRows_.clear();
                         tlasGenWork_ = 0;
                         if (gpuDrawGenCheck_) tlasGenExpected_.clear();
                         // instanceCustomIndex == entry index (matches the entries-
@@ -2739,8 +2742,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             // the loop below does per entry still runs (a chain
                             // destroyed since leaves a level's index address).
                             bool sinkTlas = false;
-                            if (tlasGenOn && sp.inst && !sp.isFree && !isDeformer && rec && !perEntryLod &&
-                                !spanCutout && lodSel0.asAddress != 0) {
+                            if (tlasGenOn && sp.inst && !sp.isFree && !isDeformer && rec && !spanCutout &&
+                                lodSel0.asAddress != 0) {
                                 vulkan::TlasGen::SpanDesc d{};
                                 d.blasAddress = lodSel0.asAddress;
                                 d.firstEntry  = sp.first;
@@ -2748,6 +2751,15 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 d.workBase    = tlasGenWork_;
                                 d.maskWord    = static_cast<uint32_t>(spanMask) << 24;
                                 d.flagsWord   = static_cast<uint32_t>(spanFlags) << 24;
+                                // An auto-LOD chain: each level's BLAS (and the
+                                // fallback past it), as the loop below reads them.
+                                d.lodRowBase  = static_cast<uint32_t>(tlasGenLodRows_.size());
+                                if (perEntryLod) {
+                                    const auto levels = static_cast<uint32_t>(rec->lodLevels.size());
+                                    for (uint32_t k = 1; k <= levels + 1u; ++k)
+                                        tlasGenLodRows_.push_back(selectLodGeom(*rec, static_cast<uint8_t>(k)).asAddress);
+                                    d.lodRowCount = levels + 1u;
+                                }
                                 tlasGenSpans_.push_back(d);
                                 tlasGenWork_ += sp.count;
                                 if (!gpuDrawGenCheck_) {
@@ -2755,9 +2767,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                         const size_t i = size_t(sp.first) + j;
                                         if (i >= geomDescsCached_.size()) break;
                                         auto& gd = geomDescsCached_[i];
-                                        const uint32_t ix = lodSel0.indexed ? 1u : 0u;
-                                        if (gd.indexAddress != lodSel0.indexAddress || gd.indexed != ix) {
-                                            gd.indexAddress = lodSel0.indexAddress;
+                                        const auto sel = perEntryLod ? selectLodGeom(*rec, entries[i].lodLevel)
+                                                                     : lodSel0;
+                                        const uint32_t ix = sel.indexed ? 1u : 0u;
+                                        if (gd.indexAddress != sel.indexAddress || gd.indexed != ix) {
+                                            gd.indexAddress = sel.indexAddress;
                                             gd.indexed      = ix;
                                             markGeomDescsDirty(static_cast<uint32_t>(i));
                                         }

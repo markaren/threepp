@@ -37,7 +37,7 @@ namespace threepp::vulkan {
 
     class DrawGen {
     public:
-        // Matches draw_gen.comp's DrawSpan (scalar, 112 B).
+        // Matches draw_gen.comp's DrawSpan (scalar, 120 B).
         struct SpanDesc {
             uint64_t posAddr;
             uint64_t nrmAddr;
@@ -56,11 +56,24 @@ namespace threepp::vulkan {
             float    polygonOffset;
             uint32_t vertexCount;
             uint32_t firstVertex;
-            uint32_t pad0;
+            uint32_t lodRowBase; // the span's first LodRow, when lodRowCount > 0
             float    localCenter[3];
             float    localRadius;
+            uint32_t lodRowCount;// an auto-LOD chain's levels 1..n and the fallback row; 0: no chain
+            uint32_t pad0;
         };
-        static_assert(sizeof(SpanDesc) == 112, "draw_gen SpanDesc drift");
+        static_assert(sizeof(SpanDesc) == 120, "draw_gen SpanDesc drift");
+
+        // Matches draw_gen.comp's LodRow (scalar, 16 B): what the record of an
+        // entry at level k >= 1 draws, selectLodGeom(rec, k) with no drawRange
+        // clamp (the range is the base level's). Row n is the fallback a level
+        // past the chain gets.
+        struct LodRow {
+            uint64_t indexAddr;
+            uint32_t vertexCount;
+            uint32_t indexed;
+        };
+        static_assert(sizeof(LodRow) == 16, "draw_gen LodRow drift");
 
         // Matches draw_gen.comp's push constants (scalar, 112 B).
         struct Pc {
@@ -77,13 +90,16 @@ namespace threepp::vulkan {
         DrawGen(const DrawGen&) = delete;
         DrawGen& operator=(const DrawGen&) = delete;
 
-        // Grow this frame's span pool to `spanCount` and point this frame's set
+        // Grow this frame's span and LOD row pools and point this frame's set
         // at the buffers it reads and writes. Once per frame, after this
         // slot's fence and before this frame's record() (invariant 4).
-        void prepareFrame(uint32_t frame, uint32_t spanCount, VkBuffer world, VkBuffer geomDescs,
-                          VkBuffer drawInfo, VkBuffer cmds, VkBuffer lodFades);
+        // lodLevels: one byte per entry (MeshEntry::lodLevel), four a word.
+        void prepareFrame(uint32_t frame, uint32_t spanCount, uint32_t rowCount, VkBuffer world,
+                          VkBuffer geomDescs, VkBuffer drawInfo, VkBuffer cmds, VkBuffer lodFades,
+                          VkBuffer lodLevels);
         [[nodiscard]] SpanDesc* spanPtr(uint32_t frame) { return spanPtrs_[frame]; }
-        void flushSpans(uint32_t frame, uint32_t spanCount);
+        [[nodiscard]] LodRow* rowPtr(uint32_t frame) { return rowPtrs_[frame]; }
+        void flushSpans(uint32_t frame, uint32_t spanCount, uint32_t rowCount);
 
         void record(VkCommandBuffer cb, uint32_t frame, const Pc& pc);
         // record()'s accesses, from the reflected shader.
@@ -94,6 +110,8 @@ namespace threepp::vulkan {
         uint32_t       framesInFlight_;
         std::vector<Buffer>    spanBufs_;// [fif] host-mapped SpanDesc[]
         std::vector<SpanDesc*> spanPtrs_;
+        std::vector<Buffer>    rowBufs_; // [fif] host-mapped LodRow[]
+        std::vector<LodRow*>   rowPtrs_;
         VkDescriptorSetLayout dsLayout_   = VK_NULL_HANDLE;
         VkPipelineLayout      pipeLayout_ = VK_NULL_HANDLE;
         VkPipeline            pipe_       = VK_NULL_HANDLE;
