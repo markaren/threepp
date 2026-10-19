@@ -11471,6 +11471,14 @@ class VulkanRenderer:
     def gbuffer_msaa(self, arg1: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
     @property
+    def gpu_instances(self) -> bool:
+        """
+        The instanced meshes' per-frame work on the GPU: their world matrices, G-buffer draw records (frustum cull included) and ray-tracing instances written by compute instead of the CPU, byte for byte the CPU's. Off by default; a script can A/B it on its own content.
+        """
+    @gpu_instances.setter
+    def gpu_instances(self, arg1: bool) -> None:
+        ...
+    @property
     def lens_distortion(self) -> dict:
         """
         Current lens distortion as a dict (see set_lens_distortion).
