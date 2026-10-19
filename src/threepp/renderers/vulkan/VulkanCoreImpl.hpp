@@ -1132,6 +1132,11 @@ namespace threepp {
         // at enqueue/drain time — surfaced via autoLodStats().
         uint32_t lodChainsReadyCount_  = 0;
         uint32_t lodChainsQueuedCount_ = 0;
+        // setReplayableLodSchedule: with the clock pinned, drainLodResults
+        // waits for the worker (on) or takes what it has (off).
+        bool lodReplayableSchedule_ = true;
+        // AutoLodStats::drainWaitMs: the time those waits took, cumulative.
+        double lodDrainWaitMs_ = 0.0;
         VulkanRenderer::AutoLodStats autoLodStats_{};
         VulkanRenderer::DynamicGeomStats dynGeomStats_{};
         VulkanRenderer::TlasStats tlasStats_{};
@@ -1175,7 +1180,8 @@ namespace threepp {
         // first. On the wall clock it takes what the worker has finished; on
         // a pinned clock (setSimTime) it waits for the worker until the
         // budget is spent or no job is outstanding, so the frame each chain
-        // lands on is the same in every run.
+        // lands on is the same in every run, unless setReplayableLodSchedule
+        // turned that wait off.
         // All of a frame's level BLAS builds are recorded into ONE
         // one-shot submit (fenced and unwaited, see LodLandingBatch below) —
         // a submit per level (or even per geometry) at Bistro-scale entry

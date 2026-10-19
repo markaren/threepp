@@ -1206,8 +1206,12 @@ void VulkanRenderer::Impl::drainLodResults() {
             // frames counted by frameSerial_, and the budget is a function of
             // the results, so the whole schedule is then a function of the
             // scene. The wait is the chain's own generation time, once per
-            // geometry. On the wall clock nothing waits.
-            const bool waitForWorker = simTimeSec_ >= 0.0;
+            // geometry. On the wall clock nothing waits, nor on a pinned clock
+            // whose caller turned the replayable schedule off: a game pins
+            // the clock for its TAA and animation timing, and pays the wait as
+            // hitches while its scene's chains are made (the dune buggy: one
+            // ~600 ms frame and 33 of its first 60 over 16.7 ms).
+            const bool waitForWorker = simTimeSec_ >= 0.0 && lodReplayableSchedule_;
 
             // Fenced path: the chains submitted kLodLandDrains drains ago land
             // first (their levels become selectable this frame), then this
@@ -1230,7 +1234,11 @@ void VulkanRenderer::Impl::drainLodResults() {
                         // has not been taken here yet: nonzero with an empty
                         // queue means the worker still owes one.
                         if (!waitForWorker || lodChainsQueuedCount_ == 0) break;
+                        const auto waitStart = std::chrono::steady_clock::now();
                         lodResultCv_.wait(lk, [this] { return !lodResultQueue_.empty(); });
+                        lodDrainWaitMs_ += std::chrono::duration<double, std::milli>(
+                                                   std::chrono::steady_clock::now() - waitStart)
+                                                   .count();
                     }
                     result = std::move(lodResultQueue_.front());
                     lodResultQueue_.pop_front();

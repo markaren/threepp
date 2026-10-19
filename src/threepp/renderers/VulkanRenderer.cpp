@@ -2947,6 +2947,14 @@ namespace threepp {
         return core()->autoLod_;
     }
 
+    void VulkanRenderer::setReplayableLodSchedule(bool enabled) {
+        core()->lodReplayableSchedule_ = enabled;
+    }
+
+    bool VulkanRenderer::replayableLodSchedule() const {
+        return core()->lodReplayableSchedule_;
+    }
+
     void VulkanRenderer::setAutoLodError(float px) {
         core()->lodErrorPx_ = std::clamp(px, 0.1f, 8.f);
     }
@@ -2977,7 +2985,9 @@ namespace threepp {
     }
 
     VulkanRenderer::AutoLodStats VulkanRenderer::autoLodStats() const {
-        return core()->autoLodStats_;
+        auto stats        = core()->autoLodStats_;
+        stats.drainWaitMs = core()->lodDrainWaitMs_;
+        return stats;
     }
 
     VulkanRenderer::DynamicGeomStats VulkanRenderer::dynamicGeomStats() const {

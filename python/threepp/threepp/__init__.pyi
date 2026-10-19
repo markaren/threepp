@@ -11234,7 +11234,7 @@ class VulkanRenderer:
     @property
     def auto_lod_stats(self) -> dict:
         """
-        Auto-LOD counters: resident index/BLAS bytes, chains ready/queued, and the per-level entry histogram.
+        Auto-LOD counters: resident index/BLAS bytes, chains ready/queued, the per-level entry histogram, and drain_wait_ms (ms render() has waited for the chain worker, cumulative; see replayable_lod_schedule).
         """
     @property
     def bloom_clamp(self) -> float:
@@ -11588,6 +11588,26 @@ class VulkanRenderer:
         """
     @render_scale.setter
     def render_scale(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def replayable_lod_schedule(self) -> bool:
+        """
+        With sim_time pinned, render() waits for each auto-LOD chain the
+        background worker owes, so a chain lands on the same frame in every
+        run (default True). Headless films, image comparisons and replayed
+        captures leave it on: without it a level switch moves by a frame with
+        machine load, and every stochastically shaded pixel near that mesh
+        differs from then on. The cost is each chain's generation time inside
+        render() on the frames the scene's chains land. A window game that pins
+        sim_time for its TAA and animation timing pays it as hitches: the dune
+        buggy's race start had 33 of its first 60 frames over 16.7 ms and one
+        of ~600 ms, against 2-3 and 11 ms with the wait off. False lands chains
+        as the wall clock does, when the worker has them; nothing else sim_time
+        pins changes. No effect while sim_time is None. The time spent waiting
+        is auto_lod_stats['drain_wait_ms'].
+        """
+    @replayable_lod_schedule.setter
+    def replayable_lod_schedule(self, arg1: bool) -> None:
         ...
     @property
     def restir_di(self) -> bool:
