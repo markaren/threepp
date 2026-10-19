@@ -41,7 +41,7 @@ mattered) onto two native backends:
 | | |
 |---|---|
 | **`GLRenderer`** | OpenGL 3.3 raster. The portable baseline — Windows, Linux, macOS, MinGW, and Emscripten/WebGL2. A mechanical port of three.js's WebGLRenderer, so its behaviour matches three.js closely. |
-| **`VulkanRenderer`** | A deferred renderer: raster G-buffer with ray-traced shadows, ambient occlusion, GI and reflections, denoised, with TAA. Opt-in (`-DTHREEPP_WITH_VULKAN=ON`), evolves fast. |
+| **`VulkanRenderer`** | A deferred renderer: raster G-buffer with ray-traced shadows, ambient occlusion, GI and reflections, denoised, with TAA. On a device without the ray-tracing extensions it runs as a raster renderer with shadow maps. Opt-in (`-DTHREEPP_WITH_VULKAN=ON`), evolves fast. |
 
 The important structural fact: **the scene graph is backend-neutral.** You build a `Scene` of
 `Object3D`s once, and hand it to either renderer. Nothing in your scene code knows which one it
@@ -54,7 +54,7 @@ got.
 ## Your first program
 
 Consume `threepp` with CMake `FetchContent` — the recipe, along with Conan, xmake and the
-build flags, lives in the [README](../README.md#consuming-threepp). This guide assumes you
+build flags, lives in the [README](../README.md#using-threepp-in-your-project). This guide assumes you
 have a target linking `threepp::threepp`.
 
 The smallest complete program — a spinning cube:
@@ -772,6 +772,8 @@ renderer.setDenoise(true);
 renderer.setRestirDIEnabled(true);
 renderer.setRenderScale(0.9f);   // trace below native res; TAA upsamples
 renderer.setFireflyClamp(6.0f);
+renderer.setShadowMode(VulkanRenderer::ShadowMode::ShadowMaps);  // cascaded maps instead of shadow rays
+if (!renderer.rayTracingSupported()) { /* raster fallback: shadow maps, no traced GI, no lidar */ }
 ```
 
 The `Canvas` picks its context from whichever renderer is constructed against it — you do not
@@ -806,30 +808,47 @@ renderer.writeFramebuffer("frame.png");     // .png/.jpg/.bmp by extension
 ## Beyond three.js
 
 Everything above is the three.js surface. `threepp` adds a substantial layer on top, mostly
-under `extras/` and `helpers/`:
+under `extras/` and `helpers/`, with `audio/` and `splats/` beside them:
 
 **Simulation & robotics**
 - `extras/physx/` — PhysX integration: `PhysxWorld` (fixed-timestep stepping), `Articulation`
-  and `UrdfArticulation` (robots), `PhysxVehicle`, `PhysxSoftBody`, GPU batching for RL.
-- `helpers/` sensors — `LidarSensor`, `PathTracedLidarSensor`, `DepthSensor`,
-  `EventCameraSensor`: ray-traced range/depth/event data for perception work.
+  and `loadArticulation` (robots from URDF, with PD drives), `Joint`, `TendonCable`,
+  `PhysxVehicle`, `SoftBody`, `PbdParticles`, V-HACD convex decomposition
+  (`ConvexDecomposition.hpp`) and `PhysxGpuBatch` for RL.
+- `extras/kinematics/` — `IkSolver`, damped-least-squares IK over a `Robot`.
+- `helpers/` sensors — `LidarSensor`, `PathTracedLidarSensor`, `DepthSensor`, `CameraSensor`,
+  `EventCameraSensor` and `SonarSensor` (Vulkan): ray-traced range, depth, image and event data
+  for perception work. `extras/sensors/` adds IMU, joint encoder, contact, force/torque and
+  vision sensors.
 - `loaders/URDFLoader` + `objects/Robot` — robot descriptions with articulated joints.
+- `extras/uav/` — `QuadSim` multirotor dynamics and `SitlBridge`, the lock-step link that lets an
+  unmodified ArduPilot fly a threepp airframe ([ardupilot_sitl.md](ardupilot_sitl.md)).
 
 **World building**
-- `extras/terrain/` — `TerrainGenerator`, quadtree-LOD `TerrainTiles`, splat maps, real-world
-  DEM/geodata (`GeoTerrain`, `GeoBuildings`).
-- `extras/vegetation/` — `TreeGenerator`, `GrassField`, `GrassTiles`.
+- `extras/terrain/` — `TerrainGenerator`, quadtree-LOD `TileTerrain`, splat maps, and real-world
+  terrain and buildings from Norwegian open data (`GeoTerrain.hpp`, `GeoBuildings.hpp`, `GeoScene`).
+- `extras/vegetation/` — `TreeGenerator`, `GrassField`, `buildGrassTiles`, `buildCanopyForest`.
 - `extras/road/` — `RoadNetwork`, `RoadGenerator`.
-- `extras/pointcloud/` — `VoxelGrid`, `MarchingCubes`, ICP registration.
+- `extras/fauna/` (`Flock`, bird flocks), `extras/conveyor/`, `extras/architecture/` (`createLogCabin`).
+- `extras/pointcloud/` — `VoxelGrid`, marching cubes (`IsoMesh`), ICP registration.
 
-**Rendering extras** — `Ocean` (FFT-displaced water with foam), `Sky`, `Water`, `Reflector`,
-`ParticleSystem`, `GrassMesh`, `DisplacedMesh`.
+**Rendering extras** — `Ocean` (Vulkan: FFT water with foam), `ParticleField` (Vulkan: GPU
+particles), `SplatCloud` (Gaussian splats; `splats/` bakes a scan into a triangle surface), `Sky`,
+`Water`, `Reflector`, `ParticleSystem`, `GrassMesh`, `DisplacedMesh`, `extras/effects/FireEffect`
+and `extras/environments/RoomEnvironment`.
+
+**Audio** — `audio/`: `Audio`, `PositionalAudio` and `AudioListener` on miniaudio, and
+`AcousticScene` for ray-traced occlusion and reverb.
 
 **Tooling**
 - `extras/imgui/ImguiContext` — a few lines to get a Dear ImGui overlay on either backend, plus
   a prebuilt `RendererSettings` panel.
-- **Python bindings** (`-DTHREEPP_WITH_PYTHON=ON`, or `pip install .`) — the same scene graph
-  from Python, rendering into NumPy arrays.
+- **Serialization** — `loaders/ObjectLoader.hpp` and `ObjectExporter.hpp` read and write three.js
+  Object JSON and the single-file `.tpz` archive. The scene editor and the headless player
+  ([editor.md](editor.md), [player.md](player.md)) build on them.
+- **Python bindings** (`pip install threepp` from PyPI, or build them with `-DTHREEPP_WITH_PYTHON=ON`) —
+  the same scene graph from Python, rendering into NumPy arrays; [python/README.md](../python/README.md)
+  is the guide.
 
 **Curves and shapes** — `extras/core/` (`Curve`, `Path`, `Shape`, `Font`) and `extras/curves/`
 (Catmull-Rom, Bézier, spline), feeding `ExtrudeGeometry`, `TubeGeometry`, `LatheGeometry`,
@@ -858,7 +877,7 @@ under `extras/` and `helpers/`:
 The [examples](../examples) folder is the de-facto documentation. The examples build from the
 repository itself, not from a FetchContent consumer: clone `threepp`, configure with the
 defaults (`THREEPP_BUILD_EXAMPLES` is ON for a top-level build), and the models/textures they need are fetched
-automatically into a `threepp_data` checkout — see [How to build](../README.md#how-to-build).
+automatically into a `threepp_data` checkout — see [Building](../README.md#building).
 
 A reading order:
 

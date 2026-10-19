@@ -37,8 +37,9 @@ controls, material fixes, the newer post-processing passes).
 
 **Rendering beyond three.js**
 
-* A deferred Vulkan renderer: raster G-buffer, ray-traced shadows, reflections, AO and probe GI,
-  volumetric fog, denoising and TAA, DLSS and FSR 3.1 upscaling, automatic mesh LOD and GPU occlusion culling
+* A deferred Vulkan renderer: raster G-buffer, ray-traced shadows (or cascaded shadow maps), reflections,
+  AO and probe GI, volumetric fog, denoising and TAA, DLSS and FSR 3.1 upscaling, automatic mesh LOD and
+  GPU occlusion culling
 * `Ocean` (Vulkan): three-cascade FFT water with foam, wind, JONSWAP fetch and an underwater view
 * `ParticleField` (Vulkan): GPU particles for fire, smoke, snow, rain and physics-coupled grains,
   drawn as meshes or billboards, or marched as participating media
@@ -93,9 +94,11 @@ The three.js port is the mature layer, and the one most users touch. The simulat
 (the Vulkan renderer, sensors, PhysX, the editor and Python) is where development goes, and it
 moves fastest. Limits worth knowing:
 
-* The Vulkan backend needs the Vulkan ray-tracing extensions (in practice an RT-capable GPU), so it
-  does not run on macOS, where MoltenVK has none. Use `GLRenderer` there; it is also the
-  conservative choice elsewhere.
+* The Vulkan backend is built around the ray-tracing extensions (ray query and acceleration
+  structures). On a device without them it runs as a raster renderer: shadow maps, sky and
+  environment light only, environment-only reflections, no ray-traced AO and no lidar. That fallback
+  is exercised by forcing it on RT hardware and in CI, not yet on a real non-RT GPU or on macOS,
+  where MoltenVK has no ray tracing. `GLRenderer` is the conservative choice.
 * Gaussian splats cast no shadows and are invisible to the ray-traced sensors unless baked into a surface.
 * The editor is tested on OpenGL; its Vulkan viewport is best-effort.
 * CI has no GPU. The Vulkan backend runs there on lavapipe under the validation layers, which gates
@@ -255,7 +258,7 @@ to a rendered image that can be captured headless and judged.
 <td align="center" colspan="2"><img src="doc/screenshots/trollstigen_show.jpg" width="826" alt="A drone light show writes threepp over the Stigfossen waterfall at Trollstigen"><br><em>Vulkan and Warp: a drone light show writes the name at dusk over Stigfossen, in a digital twin of Trollstigen, Norway; the drones are a <code>ParticleField</code> and the waterfall is GPU parcels (the scene is not in the repository)</em></td>
 </tr>
 <tr>
-<td align="center" colspan="2"><img src="doc/screenshots/norvasundet_kayak.jpg" width="826" alt="Sea kayak in a digital twin of a waterfront in Ålesund"><br><em>Vulkan: a sea kayak under way in the same digital twin as the Otter X at the top of this page (the scene is not in the repository)</em></td>
+<td align="center" colspan="2"><img src="doc/screenshots/pine_forest.jpg" width="826" alt="A drone flying low through a pine forest"><br><em>Vulkan: a Norwegian pine forest, scanned trees placed by a stand simulation as instanced meshes, grass and heath on the floor, and a drone low over the ground (the scene is not in the repository)</em></td>
 </tr>
 <tr>
 <td align="center"><img src="doc/screenshots/rover_sand.jpg" width="400" alt="Rover on a sand slope"><br><em>Vulkan and Warp: a rover climbs loose sand in GPU grains, with slip plotted against tilt-bed data (<a href="python/examples/rover">rover</a>)</em></td>
