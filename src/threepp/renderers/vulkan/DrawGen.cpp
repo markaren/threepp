@@ -11,7 +11,7 @@
 namespace threepp::vulkan {
 
     namespace {
-        constexpr uint32_t kBindings = 5;
+        constexpr uint32_t kBindings = 6;
         constexpr uint32_t kMinSpans = 64;
     }// namespace
 
@@ -98,7 +98,7 @@ namespace threepp::vulkan {
     }
 
     void DrawGen::prepareFrame(uint32_t frame, uint32_t spanCount, VkBuffer world, VkBuffer geomDescs,
-                               VkBuffer drawInfo, VkBuffer cmds) {
+                               VkBuffer drawInfo, VkBuffer cmds, VkBuffer lodFades) {
         // Per-frame span pool: host-mapped, rewritten whole each frame it is
         // used (O(spans)), so a plain destroy on growth is safe - this slot's
         // fence has signaled.
@@ -120,7 +120,8 @@ namespace threepp::vulkan {
                                                    {world, 0, VK_WHOLE_SIZE},
                                                    {geomDescs, 0, VK_WHOLE_SIZE},
                                                    {drawInfo, 0, VK_WHOLE_SIZE},
-                                                   {cmds, 0, VK_WHOLE_SIZE}};
+                                                   {cmds, 0, VK_WHOLE_SIZE},
+                                                   {lodFades, 0, VK_WHOLE_SIZE}};
         VkWriteDescriptorSet w[kBindings]{};
         for (uint32_t i = 0; i < kBindings; ++i) {
             w[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;

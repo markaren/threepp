@@ -2547,6 +2547,16 @@ namespace threepp {
         uint32_t tlasGenExpectedFrame_ = 0;
         uint32_t tlasGenExpectedBase_  = 0;
         void prepareTlasGen(uint32_t frame);
+        // The per-entry LOD fade words (entryLodFade_) for the GPU producers:
+        // the DrawInfo flag bits and the TLAS mask of a crossfading instance.
+        // Per frame-in-flight, host-mapped, re-sent whole when lodFadeVersion_
+        // moved (4 B per entry); bound by the sets prepareDrawGen /
+        // prepareTlasGen rewrite every frame, so growth is a plain swap.
+        std::array<Buffer, kFramesInFlight> lodFadeBuffers_{};
+        std::array<uint32_t, kFramesInFlight> lodFadeUploaded_{};
+        std::array<size_t, kFramesInFlight> lodFadeUploadedCount_{};
+        uint32_t lodFadeVersion_ = 1;
+        VkBuffer uploadLodFades(uint32_t frame);
         void recordTlasGen(VkCommandBuffer cb, uint32_t frame);
         bool verifyTlasGen(VulkanRenderer::TlasGenCheck& out);
         // The span's record when draw_gen.comp may write its draws (the

@@ -81,7 +81,7 @@ namespace threepp::vulkan {
         // at the buffers it reads and writes. Once per frame, after this
         // slot's fence and before this frame's record() (invariant 4).
         void prepareFrame(uint32_t frame, uint32_t spanCount, VkBuffer world, VkBuffer geomDescs,
-                          VkBuffer drawInfo, VkBuffer cmds);
+                          VkBuffer drawInfo, VkBuffer cmds, VkBuffer lodFades);
         [[nodiscard]] SpanDesc* spanPtr(uint32_t frame) { return spanPtrs_[frame]; }
         void flushSpans(uint32_t frame, uint32_t spanCount);
 

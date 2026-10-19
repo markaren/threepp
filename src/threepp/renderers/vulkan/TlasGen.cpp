@@ -11,7 +11,7 @@
 namespace threepp::vulkan {
 
     namespace {
-        constexpr uint32_t kBindings = 3;
+        constexpr uint32_t kBindings = 4;
         constexpr uint32_t kMinSpans = 64;
     }// namespace
 
@@ -97,7 +97,8 @@ namespace threepp::vulkan {
         check(vkAllocateDescriptorSets(d, &dsai, sets_.data()), "vkAllocateDescriptorSets(tlas_gen)");
     }
 
-    void TlasGen::prepareFrame(uint32_t frame, uint32_t spanCount, VkBuffer world, VkBuffer instances) {
+    void TlasGen::prepareFrame(uint32_t frame, uint32_t spanCount, VkBuffer world, VkBuffer instances,
+                               VkBuffer lodFades) {
         // Per-frame span pool: host-mapped, rewritten whole each frame it is
         // used (O(spans)), so a plain destroy on growth is safe - this slot's
         // fence has signaled.
@@ -117,7 +118,8 @@ namespace threepp::vulkan {
         // come back with the handle value it had.
         const VkDescriptorBufferInfo bi[kBindings]{{spanBufs_[frame].handle, 0, VK_WHOLE_SIZE},
                                                    {world, 0, VK_WHOLE_SIZE},
-                                                   {instances, 0, VK_WHOLE_SIZE}};
+                                                   {instances, 0, VK_WHOLE_SIZE},
+                                                   {lodFades, 0, VK_WHOLE_SIZE}};
         VkWriteDescriptorSet w[kBindings]{};
         for (uint32_t i = 0; i < kBindings; ++i) {
             w[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;

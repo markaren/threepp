@@ -2667,7 +2667,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             // destroyed since leaves a level's index address).
                             bool sinkTlas = false;
                             if (tlasGenOn && sp.inst && !sp.isFree && !isDeformer && rec && !perEntryLod &&
-                                !sp.fadeAny && !spanCutout && lodSel0.asAddress != 0) {
+                                !spanCutout && lodSel0.asAddress != 0) {
                                 vulkan::TlasGen::SpanDesc d{};
                                 d.blasAddress = lodSel0.asAddress;
                                 d.firstEntry  = sp.first;
@@ -4166,6 +4166,7 @@ VulkanRenderer::Impl::LodFadeChange VulkanRenderer::Impl::refreshLodFades(bool a
             if (all || entryLodFade_.size() != entries.size()) {
                 entryLodFade_.assign(entries.size(), 0u);
                 all = true;
+                ++lodFadeVersion_;
             }
             for (auto& sp : entrySpans_) {
                 if (!sp.mesh || sp.count == 0u) continue;
@@ -4206,6 +4207,7 @@ VulkanRenderer::Impl::LodFadeChange VulkanRenderer::Impl::refreshLodFades(bool a
                 sp.fadeAny = any;
             }
             if (out.casters) ++lodFadeCastEpoch_;
+            if (out.words) ++lodFadeVersion_;
             return out;
         }
 

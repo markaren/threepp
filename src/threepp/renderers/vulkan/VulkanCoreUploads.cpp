@@ -2579,6 +2579,36 @@ void VulkanRenderer::Impl::recordInstanceExpansion(VkCommandBuffer cb, uint32_t 
             gpuTimings_->end(cb, vulkan::TP_InstanceExpand, frame);
         }
 
+VkBuffer VulkanRenderer::Impl::uploadLodFades(uint32_t frame) {
+            // One word per entry the producers can read: past the end of
+            // entryLodFade_ (the CPU's "i < size" test) the word is 0.
+            const size_t have = entryLodFade_.size();
+            const size_t n = std::max({have, lastVisibleEntries_.size(), size_t(1)});
+            Buffer& b = lodFadeBuffers_[frame];
+            const VkDeviceSize bytes = VkDeviceSize(n) * sizeof(uint32_t);
+            if (b.size < bytes) {
+                // This slot's fence has signaled and the sets that name the
+                // buffer are rewritten below: a plain swap.
+                destroyBuffer(ctx->allocator(), b);
+                b = createBuffer(ctx->allocator(), ctx->device(), std::max<VkDeviceSize>(bytes * 2, 4096u),
+                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO,
+                                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                         VMA_ALLOCATION_CREATE_MAPPED_BIT);
+                lodFadeUploaded_[frame] = lodFadeVersion_ - 1u;
+            }
+            if (lodFadeUploaded_[frame] != lodFadeVersion_ || lodFadeUploadedCount_[frame] != n) {
+                if (have > 0u) uploadHostVisible(ctx->allocator(), b, entryLodFade_.data(), have * sizeof(uint32_t));
+                if (have < n) {
+                    const std::vector<uint32_t> zeros(n - have, 0u);
+                    uploadHostVisible(ctx->allocator(), b, zeros.data(), zeros.size() * sizeof(uint32_t),
+                                      have * sizeof(uint32_t));
+                }
+                lodFadeUploaded_[frame] = lodFadeVersion_;
+                lodFadeUploadedCount_[frame] = n;
+            }
+            return b.handle;
+        }
+
 void VulkanRenderer::Impl::prepareDrawGen(uint32_t frame) {
             if (!drawGenActive_) return;
             const auto n = static_cast<uint32_t>(drawGenSpans_.size());
@@ -2602,7 +2632,8 @@ void VulkanRenderer::Impl::prepareDrawGen(uint32_t frame) {
                 return;
             }
             drawGen_->prepareFrame(frame, n, instExpand_->worldBuffer(), geometryDescsBuffers[frame].handle,
-                                   view().drawInfoBuffers[frame].handle, view().indirectCmdBuffers[frame].handle);
+                                   view().drawInfoBuffers[frame].handle, view().indirectCmdBuffers[frame].handle,
+                                   uploadLodFades(frame));
             std::memcpy(drawGen_->spanPtr(frame), drawGenSpans_.data(), size_t(n) * sizeof(vulkan::DrawGen::SpanDesc));
             drawGen_->flushSpans(frame, n);
         }
@@ -2677,7 +2708,7 @@ void VulkanRenderer::Impl::prepareTlasGen(uint32_t frame) {
                 tlasGenActive_ = false;
                 return;
             }
-            tlasGen_->prepareFrame(frame, n, instExpand_->worldBuffer(), instBuf.handle);
+            tlasGen_->prepareFrame(frame, n, instExpand_->worldBuffer(), instBuf.handle, uploadLodFades(frame));
             std::memcpy(tlasGen_->spanPtr(frame), tlasGenSpans_.data(), size_t(n) * sizeof(vulkan::TlasGen::SpanDesc));
             tlasGen_->flushSpans(frame, n);
         }

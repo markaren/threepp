@@ -4,7 +4,7 @@
 //
 // Stage 2 of plans/gpu-driven-instances.md. With setGpuDrawGeneration the
 // primary view's records of eligible InstancedMeshes (static, no auto-LOD
-// chain, no LOD fades) are written by compute from the expansion's world
+// chain) are written by compute from the expansion's world
 // matrices, the frustum cull included (vertex count 0 for an instance outside
 // the view). setGpuDrawGenerationCheck keeps the CPU building them too, and
 // drawGenCheck compares: every visible instance's DrawInfo, every instance's
@@ -16,8 +16,10 @@
 // double-sided, back faces) between plain meshes, so the GPU ranges sit
 // between CPU records in every bucket; one mesh's instances move every frame
 // (instanceMatrix()->needsUpdate()), one grows and shrinks through setCount (a
-// slot edit), and the camera orbits through the forest so the cull changes
-// every frame and instances leave and enter the view.
+// slot edit), one crossfades per instance (setFades, both sides of the pair:
+// the DrawInfo fade bits, and the TLAS mask the side no ray hits loses), and
+// the camera orbits through the forest so the cull changes every frame and
+// instances leave and enter the view.
 //
 // Plain exit-code program, not Catch2, like the other Vulkan tests here.
 // Exits 42 (CTest "Skipped") when no Vulkan GPU is available.
@@ -38,6 +40,7 @@
 #include "threepp/scenes/Scene.hpp"
 #include "vulkan_test_util.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <exception>
@@ -142,6 +145,8 @@ int main() {
         std::size_t checked = 0, records = 0, spansMax = 0, drawMis = 0, cmdMis = 0, cullMis = 0, culledSeen = 0;
         std::size_t tlasChecked = 0, tlasInstances = 0, tlasSpansMax = 0, tlasMis = 0;
         Matrix4 m;
+        std::array<float, 400> shellFade{};
+        std::array<bool, 400> shellComp{};
         for (int f = 0; f < kFrames; ++f) {
             const float a = 0.13f * static_cast<float>(f);
             camera.position.set(std::sin(a) * 18.f, 6.f + 2.f * std::sin(a * 0.7f), std::cos(a) * 18.f);
@@ -154,6 +159,15 @@ int main() {
                 movers->setMatrixAt(i, m);
             }
             movers->instanceMatrix()->needsUpdate();
+            // The shells crossfade, re-set every third frame so frames with
+            // unchanged fades are compared too.
+            if (f % 3 == 0) {
+                for (size_t i = 0; i < shellFade.size(); ++i) {
+                    shellFade[i] = 0.5f + 0.5f * std::sin(a * 1.7f + float(i));
+                    shellComp[i] = (i & 1u) != 0u;
+                }
+                shells->setFades(0, shellFade.size(), shellFade.data(), shellComp.data());
+            }
             // The forest grows and shrinks (slot edits).
             if (f % 12 == 4) forest->setCount(forest->count() + 400);
             if (f % 12 == 10) forest->setCount(forest->count() - 300);

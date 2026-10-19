@@ -52,7 +52,8 @@ namespace threepp::vulkan {
 
         // Grow this frame's span pool and point this frame's set at the world
         // buffer and the frame's instance buffer. Post-fence, pre-record.
-        void prepareFrame(uint32_t frame, uint32_t spanCount, VkBuffer world, VkBuffer instances);
+        void prepareFrame(uint32_t frame, uint32_t spanCount, VkBuffer world, VkBuffer instances,
+                          VkBuffer lodFades);
         [[nodiscard]] SpanDesc* spanPtr(uint32_t frame) { return spanPtrs_[frame]; }
         void flushSpans(uint32_t frame, uint32_t spanCount);
 

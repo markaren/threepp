@@ -65,7 +65,7 @@ namespace threepp {
     // sidesteps the gl_DrawIDARB-resets-per-call issue without
     // needing dynamic-offset descriptors or per-call push constants.
     const VulkanRenderer::Impl::BlasRecord* VulkanRenderer::Impl::drawGenEligibleRecord(const EntrySpan& sp) {
-        if (!sp.inst || sp.isFree || sp.hidden || sp.count == 0u || sp.fadeAny || !sp.localBoundsValid) return nullptr;
+        if (!sp.inst || sp.isFree || sp.hidden || sp.count == 0u || !sp.localBoundsValid) return nullptr;
         const MeshEntry& e0 = lastVisibleEntries_[sp.first];
         if (!e0.isInstanced || e0.isOverlay || e0.sensorOnly || e0.isParticleField || e0.isVertexInterop ||
             e0.isSkinned || e0.isDisplaced || e0.isGrass || e0.isMorphed || e0.isTet)

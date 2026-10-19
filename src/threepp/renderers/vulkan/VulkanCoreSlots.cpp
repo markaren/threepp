@@ -687,6 +687,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             for (const RowRange& t : tombs) markMotionDirty(t.first, t.count);
             if (newSize > oldSize) markMotionDirty(static_cast<uint32_t>(oldSize), newSize - static_cast<uint32_t>(oldSize));
             ++motionScratchVersion_;
+            ++lodFadeVersion_;// rows written, the high-water mark moved
             cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
             ++drawInputsVersion_;
             if (texturesAdded) {
