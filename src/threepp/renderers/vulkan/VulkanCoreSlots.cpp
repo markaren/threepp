@@ -151,9 +151,10 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                 matDescsCached_.size() != oldSize || prevWorldByEntry_.size() != oldSize ||
                 prevWorldValidByEntry_.size() != oldSize || motionScratch_.size() != oldSize * 16u)
                 return decline("entry-indexed arrays out of step");
-            // A ParticleField publishes its entry index (particleFields_), which
-            // this does not remap.
-            if (!builtFields.empty() || !particleFields_.empty()) return decline("a ParticleField in the scene");
+            // A ParticleField publishes its entry index (particleFields_). One
+            // neither added nor removed (both decline below) keeps its span, and
+            // the list is re-pointed at the spans' places at the end.
+            if (builtFields.size() != particleFields_.size()) return decline("a ParticleField added or removed");
             Mesh& tomb = slotTombstone();
             const bool rq = ctx->rayQuerySupported();
 
@@ -412,6 +413,9 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                 rec->liveCheck = geomSp;
                 blasCache.emplace(gk, std::move(rec));
             }
+            // A field's MeshRepr proxy is nobody's Mesh geometry: the rebuild
+            // admits it per field, and so does this (a lookup when it has one).
+            for (const auto& fe : builtFields) ensureCachedBlas(fe.first->meshRepr().geometry);
             const size_t texCount0 = materialTextures.size();
             const size_t texFree0 = freeTextureSlots.size();
             // Per mesh, once: the rows every entry of a fill shares.
@@ -680,6 +684,21 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             }
 #endif
             entrySpans_ = std::move(sorted);
+            // The fields at their spans' places, in the walk's order (the order
+            // the rebuild gives them).
+            if (!builtFields.empty()) {
+                std::vector<std::pair<ParticleField*, uint32_t>> fields;
+                fields.reserve(builtFields.size());
+                for (const auto& fe : builtFields) {
+                    const Mesh* fm = fe.first;
+                    for (const EntrySpan& sp : entrySpans_) {
+                        if (sp.isFree || sp.mesh != fm) continue;
+                        fields.emplace_back(fe.first, sp.first);
+                        break;
+                    }
+                }
+                particleFields_ = std::move(fields);
+            }
             // The walk recorded indices into builtSpans; point them at the list.
             for (auto& sn : sceneSnapshot_) {
                 if (sn.spanIndex < 0) continue;

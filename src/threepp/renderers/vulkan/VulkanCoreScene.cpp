@@ -752,7 +752,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // its per-mesh facts from (the slot path derives any entry it adds
             // itself). A walk the structural rebuild consumes is never lazy: if
             // the slot path declines, the walk runs again in full below.
-            bool lazyRows = sceneBuilt_ && !slotsDisabled() && particleFields_.empty();
+            bool lazyRows = sceneBuilt_ && !slotsDisabled();
             bool anyRowsDeferred = false;
             // A hidden mesh has entries, hidden, when it had them before or
             // Object3D::resident asks for them up front (so its first show is
