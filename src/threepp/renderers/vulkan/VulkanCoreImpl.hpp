@@ -47,6 +47,7 @@
 #include "HiZPyramid.hpp"
 #include "InstanceExpand.hpp"
 #include "DrawGen.hpp"
+#include "TlasGen.hpp"
 #include "OcclusionCull.hpp"
 #include "ParticleFieldPass.hpp"
 #include "ProbeGI.hpp"
@@ -2516,6 +2517,28 @@ namespace threepp {
         uint32_t drawGenExpectedFrame_ = 0;
         std::array<std::vector<uint32_t>, 4> indirectCpuPosScratch_;// bucket position of each CPU record
         void prepareDrawGen(uint32_t frame);
+
+        // ── GPU TLAS instances (stage 5; TlasGen.hpp, tlas_gen.comp) ───────
+        // OFF by default, needs the expansion: setGpuTlasInstances. The lean
+        // TLAS fill writes the CPU's instances to the front of the frame's
+        // instance buffer and plans tlasGenSpans_; the dispatch appends theirs.
+        std::unique_ptr<vulkan::TlasGen> tlasGen_;
+        bool gpuTlasGen_ = false;
+        std::vector<vulkan::TlasGen::SpanDesc> tlasGenSpans_;
+        uint32_t tlasGenWork_   = 0;
+        bool     tlasGenActive_ = false;// this frame's refit carries GPU instances
+        // The CPU/GPU split of the TLAS last built: a different one is a full
+        // build, never an update (the instance order changes).
+        uint64_t tlasGenPartition_ = 0;
+        // Instances the dispatch appends after pendingTlasInstances_.
+        uint32_t pendingTlasGpuInstances_ = 0;
+        // setGpuDrawGenerationCheck: the CPU's instances for the GPU spans.
+        std::vector<VkAccelerationStructureInstanceKHR> tlasGenExpected_;
+        uint32_t tlasGenExpectedFrame_ = 0;
+        uint32_t tlasGenExpectedBase_  = 0;
+        void prepareTlasGen(uint32_t frame);
+        void recordTlasGen(VkCommandBuffer cb, uint32_t frame);
+        bool verifyTlasGen(VulkanRenderer::TlasGenCheck& out);
         // The span's record when draw_gen.comp may write its draws (the
         // primary view's eligibility, minus the per-frame conditions), else
         // null. One predicate for buildIndirectDrawData and the frustum cull.

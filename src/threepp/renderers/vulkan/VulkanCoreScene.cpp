@@ -2608,6 +2608,13 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         auto& instances = tlasInstanceScratch_;
                         instances.clear();
                         instances.reserve(entries.size());
+                        // Stage 5: instanced spans whose instances tlas_gen.comp
+                        // appends after these (the expansion's world matrices).
+                        const bool tlasGenOn = gpuTlasGen_ && gpuInstanceExpand_ && tlasGen_ && instExpand_ &&
+                                               ctx->rayQuerySupported() && !asyncPilot_;
+                        tlasGenSpans_.clear();
+                        tlasGenWork_ = 0;
+                        if (gpuDrawGenCheck_) tlasGenExpected_.clear();
                         // instanceCustomIndex == entry index (matches the entries-
                         // indexed geomDescs/matDescs built in the full rebuild);
                         // overlay/skipped entries push no instance, exactly as
@@ -2653,6 +2660,38 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                 rec = it->second.get();
                                 perEntryLod = !rec->lodLevels.empty();
                                 lodSel0 = selectLodGeom(*rec, 0);
+                            }
+                            // Stage 5: one span-level descriptor instead of a
+                            // per-instance fill. The GeometryDesc LOD reconcile
+                            // the loop below does per entry still runs (a chain
+                            // destroyed since leaves a level's index address).
+                            bool sinkTlas = false;
+                            if (tlasGenOn && sp.inst && !sp.isFree && !isDeformer && rec && !perEntryLod &&
+                                !sp.fadeAny && !spanCutout && lodSel0.asAddress != 0) {
+                                vulkan::TlasGen::SpanDesc d{};
+                                d.blasAddress = lodSel0.asAddress;
+                                d.firstEntry  = sp.first;
+                                d.count       = sp.count;
+                                d.workBase    = tlasGenWork_;
+                                d.maskWord    = static_cast<uint32_t>(spanMask) << 24;
+                                d.flagsWord   = static_cast<uint32_t>(spanFlags) << 24;
+                                tlasGenSpans_.push_back(d);
+                                tlasGenWork_ += sp.count;
+                                if (!gpuDrawGenCheck_) {
+                                    for (uint32_t j = 0; j < sp.count; ++j) {
+                                        const size_t i = size_t(sp.first) + j;
+                                        if (i >= geomDescsCached_.size()) break;
+                                        auto& gd = geomDescsCached_[i];
+                                        const uint32_t ix = lodSel0.indexed ? 1u : 0u;
+                                        if (gd.indexAddress != lodSel0.indexAddress || gd.indexed != ix) {
+                                            gd.indexAddress = lodSel0.indexAddress;
+                                            gd.indexed      = ix;
+                                            markGeomDescsDirty(static_cast<uint32_t>(i));
+                                        }
+                                    }
+                                    continue;
+                                }
+                                sinkTlas = true;// check mode: the loop builds the reference
                             }
                             for (uint32_t j = 0; j < sp.count; ++j) {
                                 const size_t i = size_t(sp.first) + j;
@@ -2732,6 +2771,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                                                      ? (spanFlags | VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR)
                                                      : spanFlags;
                                 inst.accelerationStructureReference = blasAddr;
+                                if (sinkTlas) {
+                                    tlasGenExpected_.push_back(inst);
+                                    continue;
+                                }
                                 instances.push_back(inst);
                             }
                         }
@@ -2757,6 +2800,24 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || morphDirtyAny || geomDirtyAny || lodChangedThisFrame_;
                         // Stage the refit; recordCommandBuffer records it into the
                         // frame cb after the deformable BLAS rebuilds (no drain).
+                        // The GPU spans go after the CPU's instances; a new split
+                        // is a full build.
+                        pendingTlasGpuInstances_ = tlasGenWork_;
+                        tlasGenActive_ = tlasGenWork_ > 0u;
+                        uint64_t partition = 0;
+                        if (tlasGenActive_) {
+                            partition = 1469598103934665603ull ^ instances.size();
+                            for (auto& d : tlasGenSpans_) {
+                                d.instBase = static_cast<uint32_t>(instances.size()) + d.workBase;
+                                partition = (partition ^ ((uint64_t(d.firstEntry) << 32) | d.count)) * 1099511628211ull;
+                            }
+                            if (gpuDrawGenCheck_) {
+                                tlasGenExpectedFrame_ = currentFrame;
+                                tlasGenExpectedBase_  = static_cast<uint32_t>(instances.size());
+                            }
+                        }
+                        const bool splitChanged = partition != tlasGenPartition_;
+                        tlasGenPartition_ = partition;
                         pendingTlasInstances_.swap(instances);// scratch keeps its capacity
                         // A class flip rebuilds rather than updates: whether an
                         // update may change instance flags is not worth betting a
@@ -2764,7 +2825,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // A deformer refit (bones, displaced, grass, tet, morph) keeps
                         // every BLAS handle, so the TLAS is UPDATED; a geometry or LOD
                         // change re-references BLASes and rebuilds.
-                        pendingTlasFullBuild_ = geomDirtyAny || lodChangedThisFrame_ || instClassChanged;
+                        pendingTlasFullBuild_ = geomDirtyAny || lodChangedThisFrame_ || instClassChanged || splitChanged;
                         (void)blasDeformed;
                         pendingTlasRefit_ = true;
                     }

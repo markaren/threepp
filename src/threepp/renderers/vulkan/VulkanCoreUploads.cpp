@@ -2627,6 +2627,63 @@ bool VulkanRenderer::Impl::verifyDrawGen(VulkanRenderer::DrawGenCheck& out) {
             return true;
         }
 
+void VulkanRenderer::Impl::prepareTlasGen(uint32_t frame) {
+            if (!tlasGenActive_ || !pendingTlasRefit_) {
+                tlasGenActive_ = false;
+                return;
+            }
+            const auto n = static_cast<uint32_t>(tlasGenSpans_.size());
+            Buffer& instBuf = tlasInstancesBuffers[frame];
+            const bool covered = tlasGen_ && instExpand_ && !instExpandSpans_.empty() &&
+                                 instExpand_->worldBuffer() != VK_NULL_HANDLE &&
+                                 instExpand_->worldCapacity() >= lastVisibleEntries_.size();
+            if (!covered) {
+                // Never trace an uninitialised instance: make the range inactive
+                // (a null BLAS reference), a missed frame, never a wrong one.
+                if (instBuf.handle != VK_NULL_HANDLE && tlasGenWork_ > 0u) {
+                    void* mapped = nullptr;
+                    check(vmaMapMemory(ctx->allocator(), instBuf.alloc, &mapped), "vmaMapMemory(tlasGen fallback)");
+                    const size_t base = pendingTlasInstances_.size();
+                    std::memset(static_cast<VkAccelerationStructureInstanceKHR*>(mapped) + base, 0,
+                                size_t(tlasGenWork_) * sizeof(VkAccelerationStructureInstanceKHR));
+                    flushHostWrites(ctx->allocator(), instBuf.alloc, 0, VK_WHOLE_SIZE);
+                    vmaUnmapMemory(ctx->allocator(), instBuf.alloc);
+                }
+                tlasGenActive_ = false;
+                return;
+            }
+            tlasGen_->prepareFrame(frame, n, instExpand_->worldBuffer(), instBuf.handle);
+            std::memcpy(tlasGen_->spanPtr(frame), tlasGenSpans_.data(), size_t(n) * sizeof(vulkan::TlasGen::SpanDesc));
+            tlasGen_->flushSpans(frame, n);
+        }
+
+void VulkanRenderer::Impl::recordTlasGen(VkCommandBuffer cb, uint32_t frame) {
+            if (!tlasGenActive_ || !tlasGen_) return;
+            const vulkan::TlasGen::Pc pc{static_cast<uint32_t>(tlasGenSpans_.size()), tlasGenWork_};
+            tlasGen_->record(cb, frame, pc);
+        }
+
+bool VulkanRenderer::Impl::verifyTlasGen(VulkanRenderer::TlasGenCheck& out) {
+            out = {};
+            if (!gpuDrawGenCheck_ || tlasGenExpected_.empty()) return false;
+            if (frameState_ != FrameState::Idle) endFrame();
+            check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle(tlasGenCheck)");
+            const Buffer& buf = tlasInstancesBuffers[tlasGenExpectedFrame_];
+            if (buf.handle == VK_NULL_HANDLE) return false;
+            void* mapped = nullptr;
+            check(vmaMapMemory(ctx->allocator(), buf.alloc, &mapped), "vmaMapMemory(tlasGenCheck)");
+            invalidateHostReads(ctx->allocator(), buf.alloc, 0, VK_WHOLE_SIZE);
+            const auto* inst = static_cast<const VkAccelerationStructureInstanceKHR*>(mapped) + tlasGenExpectedBase_;
+            out.spans = tlasGenSpans_.size();
+            for (size_t k = 0; k < tlasGenExpected_.size(); ++k) {
+                ++out.instances;
+                if (std::memcmp(&inst[k], &tlasGenExpected_[k], sizeof(VkAccelerationStructureInstanceKHR)) != 0)
+                    ++out.mismatches;
+            }
+            vmaUnmapMemory(ctx->allocator(), buf.alloc);
+            return true;
+        }
+
 bool VulkanRenderer::Impl::verifyInstanceExpansion(VulkanRenderer::InstanceExpandCheck& out) {
             out = {};
             if (!gpuInstanceExpand_ || !instExpand_ || instExpandSpans_.empty()) return false;

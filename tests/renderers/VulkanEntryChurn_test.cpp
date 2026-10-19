@@ -52,7 +52,9 @@
 // THREEPP_CHURN_INSTANCES=<n> sets the forest's starting count (default 8192;
 // its capacity is twice that). THREEPP_CHURN_VERBOSE=1 prints every event's
 // frame and the frame after it. THREEPP_CHURN_DRAWGEN=1 turns on the GPU
-// instance expansion and the GPU draw records (stage 2), for A/B runs.
+// instance expansion, draw records and TLAS instances (stages 1, 2 and 5),
+// for A/B runs. THREEPP_CHURN_MOVER=1 adds one small mesh that moves every
+// frame (a car in the forest): every frame then refits the TLAS.
 //
 // Plain exit-code program, not Catch2, like the other Vulkan tests here.
 // Exits 42 (CTest "Skipped") when no Vulkan GPU is available.
@@ -226,7 +228,8 @@ int main() {
     if (const char* e = std::getenv("THREEPP_CHURN_DRAWGEN"); e && *e == '1') {
         renderer.setGpuInstanceExpansion(true);
         renderer.setGpuDrawGeneration(true);
-        std::printf("GPU instance expansion + draw records: on\n");
+        renderer.setGpuTlasInstances(true);
+        std::printf("GPU instance expansion + draw records + TLAS instances: on\n");
     }
 
     const auto env = constantEnv(0.35f);
@@ -309,8 +312,18 @@ int main() {
     }
     size_t nextShow = 0;
 
+    // One mesh moving every frame (THREEPP_CHURN_MOVER=1).
+    const char* moverEnv = std::getenv("THREEPP_CHURN_MOVER");
+    std::shared_ptr<Mesh> mover;
+    if (moverEnv && *moverEnv == '1') {
+        mover = Mesh::create(cellGeoms[0], cellMats[0]);
+        mover->position.set(0.f, 1.f, 0.f);
+        scene.add(mover);
+    }
+
     float orbit = 0.f;
     const auto placeCamera = [&] {
+        if (mover) mover->position.x = std::sin(orbit * 7.f) * 20.f;
         camera.position.set(std::sin(orbit) * 70.f, 28.f, std::cos(orbit) * 70.f);
         camera.lookAt(Vector3{0, 0, 0});
         camera.updateMatrixWorld();

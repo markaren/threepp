@@ -1,5 +1,6 @@
 // VulkanDrawGen_test: the G-buffer draw records draw_gen.comp writes for
-// instanced meshes are, byte for byte, the records the CPU writes.
+// instanced meshes, and the TLAS instances tlas_gen.comp writes for them, are
+// byte for byte what the CPU writes.
 //
 // Stage 2 of plans/gpu-driven-instances.md. With setGpuDrawGeneration the
 // primary view's records of eligible InstancedMeshes (static, no auto-LOD
@@ -7,7 +8,9 @@
 // matrices, the frustum cull included (vertex count 0 for an instance outside
 // the view). setGpuDrawGenerationCheck keeps the CPU building them too, and
 // drawGenCheck compares: every visible instance's DrawInfo, every instance's
-// command, and the cull, over the frame last rendered.
+// command, and the cull, over the frame last rendered. Stage 5 the same way:
+// setGpuTlasInstances, and tlasGenCheck compares the ray-tracing instance
+// descriptors of the frame's TLAS refit (ray-traced lane only).
 //
 // The scene puts instanced meshes in three cull-mode buckets (front faces,
 // double-sided, back faces) between plain meshes, so the GPU ranges sit
@@ -126,6 +129,7 @@ int main() {
 
     renderer.setGpuInstanceExpansion(true);
     renderer.setGpuDrawGeneration(true);
+    renderer.setGpuTlasInstances(true);
     renderer.setGpuDrawGenerationCheck(true);
 
     int failures = 0;
@@ -136,6 +140,7 @@ int main() {
 
     try {
         std::size_t checked = 0, records = 0, spansMax = 0, drawMis = 0, cmdMis = 0, cullMis = 0, culledSeen = 0;
+        std::size_t tlasChecked = 0, tlasInstances = 0, tlasSpansMax = 0, tlasMis = 0;
         Matrix4 m;
         for (int f = 0; f < kFrames; ++f) {
             const float a = 0.13f * static_cast<float>(f);
@@ -155,6 +160,15 @@ int main() {
 
             canvas.animateOnce([&] { renderer.render(scene, camera); });
             if (f < 3) continue;// let the first builds land
+            VulkanRenderer::TlasGenCheck tc;
+            if (renderer.tlasGenCheck(tc)) {
+                ++tlasChecked;
+                tlasInstances += tc.instances;
+                tlasSpansMax = std::max(tlasSpansMax, tc.spans);
+                tlasMis += tc.mismatches;
+                if (tc.mismatches)
+                    std::printf("  frame %d: %zu TLAS instances, %zu mismatched\n", f, tc.instances, tc.mismatches);
+            }
             VulkanRenderer::DrawGenCheck dc;
             if (!renderer.drawGenCheck(dc)) continue;
             ++checked;
@@ -171,6 +185,13 @@ int main() {
         std::printf("checked %zu frames: %zu records, up to %zu GPU spans; mismatches DrawInfo %zu, cmd %zu, cull %zu\n",
                     checked, records, spansMax, drawMis, cmdMis, cullMis);
         (void) culledSeen;
+        std::printf("TLAS: checked %zu refits: %zu instances, up to %zu GPU spans; %zu mismatched\n",
+                    tlasChecked, tlasInstances, tlasSpansMax, tlasMis);
+        if (renderer.rayTracingSupported()) {
+            check("the GPU wrote the TLAS instances of the three instanced meshes", tlasSpansMax == 3u);
+            check("refits compared", tlasChecked >= static_cast<std::size_t>(kFrames - 8));
+            check("every TLAS instance is the CPU's, byte for byte", tlasMis == 0u);
+        }
         check("the GPU wrote the records of the three instanced meshes", spansMax == 3u);
         check("frames compared", checked >= static_cast<std::size_t>(kFrames - 8));
         check("every visible instance's DrawInfo is the CPU's, byte for byte", drawMis == 0u);

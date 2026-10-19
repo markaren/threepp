@@ -2427,6 +2427,21 @@ namespace threepp {
         return core()->verifyDrawGen(out);
     }
 
+    void VulkanRenderer::setGpuTlasInstances(bool enabled) {
+        if (core()->gpuTlasGen_ == enabled) return;
+        core()->gpuTlasGen_ = enabled;
+        ++core()->drawInputsVersion_;
+    }
+
+    bool VulkanRenderer::gpuTlasInstances() const {
+        return core()->gpuTlasGen_;
+    }
+
+    bool VulkanRenderer::tlasGenCheck(TlasGenCheck& out) {
+        out = {};
+        return core()->verifyTlasGen(out);
+    }
+
     void VulkanRenderer::setBloomThreshold(float threshold) {
         core()->bloomThreshold_ = threshold < 0.f ? 0.f : threshold;
     }

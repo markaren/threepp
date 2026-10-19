@@ -1,0 +1,64 @@
+// tlas_gen.comp — the TLAS instance descriptors of an InstancedMesh span,
+// written on the GPU (stage 5 of plans/gpu-driven-instances.md).
+//
+// The lean path's TLAS fill (ensureSceneBuilt) writes one
+// VkAccelerationStructureInstanceKHR per entry on the CPU every frame anything
+// moves or changes class. For an eligible instanced span (static, no LOD
+// chain, no LOD fades, no cutout ray distance; TlasGen.hpp) the fill writes
+// none: it hands this shader the span's BLAS address, mask and flags, and the
+// shader appends the span's instances after the CPU's in the same instance
+// buffer (the TLAS order is free: instanceCustomIndex is the entry index).
+// Per instance: the 3x4 row-major transform of the world matrix stage 1
+// (instance_expand.comp) produced for the entry, bit for bit the CPU's.
+
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+layout(local_size_x = 64) in;
+
+// Matches TlasGen::SpanDesc (scalar, 32 B).
+struct TlasSpan {
+    uint64_t blasAddress;
+    uint     firstEntry;// entry index of instance 0
+    uint     count;
+    uint     instBase;  // instance index of instance 0 in the buffer
+    uint     workBase;  // exclusive prefix sum of count
+    uint     maskWord;  // mask << 24 (instanceCustomIndex goes in the low 24 bits)
+    uint     flagsWord; // instance flags << 24 (SBT record offset 0)
+};
+
+layout(set = 0, binding = 0, scalar) readonly  buffer Spans { TlasSpan spans[]; };
+layout(set = 0, binding = 1, scalar) readonly  buffer World { float    world[]; };// 16 per entry
+layout(set = 0, binding = 2, scalar) writeonly buffer Insts { uint     instWords[]; };// 16 per instance
+
+layout(push_constant, scalar) uniform Pc {
+    uint spanCount;
+    uint totalWork;
+} pc;
+
+void main() {
+    const uint g = gl_GlobalInvocationID.x;
+    if (g >= pc.totalWork) return;
+
+    uint lo = 0u, hi = pc.spanCount;
+    while (lo + 1u < hi) {
+        const uint mid = (lo + hi) >> 1u;
+        if (spans[mid].workBase <= g) lo = mid;
+        else hi = mid;
+    }
+    const uint j = g - spans[lo].workBase;
+    if (j >= spans[lo].count) return;
+
+    const uint e = spans[lo].firstEntry + j;
+    const uint o = (spans[lo].instBase + j) * 16u;
+    // VkTransformMatrixKHR: row-major 3x4; the world matrix is column-major
+    // 4x4 (element [c * 4 + r]).
+    for (uint r = 0u; r < 3u; ++r)
+        for (uint c = 0u; c < 4u; ++c)
+            instWords[o + r * 4u + c] = floatBitsToUint(world[e * 16u + c * 4u + r]);
+    instWords[o + 12u] = (e & 0x00FFFFFFu) | spans[lo].maskWord;
+    instWords[o + 13u] = spans[lo].flagsWord;
+    instWords[o + 14u] = uint(spans[lo].blasAddress & 0xFFFFFFFFul);
+    instWords[o + 15u] = uint(spans[lo].blasAddress >> 32);
+}

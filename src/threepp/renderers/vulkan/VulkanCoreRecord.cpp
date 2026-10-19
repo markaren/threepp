@@ -65,6 +65,11 @@ void VulkanRenderer::Impl::addHeadPasses(rg::RenderGraph& g) {
                 auto pass = g.addPass("drawGen", [this, f](VkCommandBuffer c) { recordDrawGen(c, f); });
                 drawGen_->declare(g, pass, f);
             }
+            // The GPU spans' TLAS instances (stage 5): before the "tlas" build.
+            if (tlasGenActive_ && tlasGen_ && pendingTlasRefit_) {
+                auto pass = g.addPass("tlasGen", [this, f](VkCommandBuffer c) { recordTlasGen(c, f); });
+                tlasGen_->declare(g, pass, f);
+            }
             if (!particleFieldPass_) return;
 
             // The ParticleField block, once for all views (the positions and
@@ -257,6 +262,12 @@ void VulkanRenderer::Impl::addDeformAndTlasPasses(rg::RenderGraph& g) {
                          rg::Access{ctx->asBuildStage2(),
                                     ctx->asReadAccess2(),
                                     VK_IMAGE_LAYOUT_UNDEFINED, false});
+                // The instance buffer, when tlas_gen.comp wrote part of it.
+                if (tlasGenActive_) {
+                    pass.use(tg.importBuffer("tlas.instances", tlasInstancesBuffers[currentFrame].handle),
+                             rg::Access{ctx->asBuildStage2(), VK_ACCESS_2_SHADER_READ_BIT | ctx->asReadAccess2(),
+                                        VK_IMAGE_LAYOUT_UNDEFINED, false});
+                }
                 pass.use(tg.importBuffer("tlas", tlasBuffer.handle),
                          rg::Access{ctx->asBuildStage2(),
                                     ctx->asReadAccess2() |

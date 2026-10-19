@@ -3865,7 +3865,8 @@ void VulkanRenderer::Impl::buildTlas(const std::vector<VkAccelerationStructureIn
                 tlasInstancesBuffers[s] = createBuffer(
                         ctx->allocator(), ctx->device(), instBytes,
                         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,// tlas_gen.comp appends
                         VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
                 if (instanceCount > 0) {
@@ -3935,12 +3936,16 @@ void VulkanRenderer::Impl::buildTlas(const std::vector<VkAccelerationStructureIn
             endAndSubmitOneShot(cb, "buildTlas");
             destroyBuffer(ctx->allocator(), scratch);
             tlasBuiltInstanceCount_ = instanceCount;
+            tlasGenPartition_ = 0;// every instance the CPU's
+            pendingTlasGpuInstances_ = 0;
+            tlasGenActive_ = false;
         }
 
 void VulkanRenderer::Impl::recordTlasRefit(VkCommandBuffer cb,
                              const std::vector<VkAccelerationStructureInstanceKHR>& instances,
                              bool fullBuild) {
-            const uint32_t instanceCount = static_cast<uint32_t>(instances.size());
+            // The CPU's instances, then the ones tlas_gen.comp appends (stage 5).
+            const uint32_t instanceCount = static_cast<uint32_t>(instances.size()) + pendingTlasGpuInstances_;
             if (tlas == VK_NULL_HANDLE) return;
             // Nothing built and nothing to build. A count that DROPS to zero (a
             // slot edit removed the last traced mesh, VulkanCoreSlots.cpp) is an
@@ -3964,6 +3969,7 @@ void VulkanRenderer::Impl::recordTlasRefit(VkCommandBuffer cb,
             Buffer& instBuf = tlasInstancesBuffers[currentFrame];
             const VkDeviceSize instBytes =
                     instanceCount * sizeof(VkAccelerationStructureInstanceKHR);
+            const VkDeviceSize cpuBytes = instances.size() * sizeof(VkAccelerationStructureInstanceKHR);
             if (instBytes > instBuf.size) {
                 // Instance buffers are sized by the last structural buildTlas;
                 // writing past them corrupts whatever VMA placed next. A stale
@@ -3978,9 +3984,9 @@ void VulkanRenderer::Impl::recordTlasRefit(VkCommandBuffer cb,
             // scene.7_tlasRefitFill, which is the CPU FILL of the same array back
             // inside ensureSceneBuilt; this is the copy to the device. Scoped to
             // the copy ALONE so it stays a sibling of frame.L_tlasRefitRec below.
-            if (instBytes > 0) {
+            if (cpuBytes > 0) {
                 THREEPP_CPUPROF("frame.H_uploadTlasInst");
-                uploadHostVisible(ctx->allocator(), instBuf, instances.data(), instBytes);
+                uploadHostVisible(ctx->allocator(), instBuf, instances.data(), cpuBytes);
             }
             // The build-size query is a per-frame driver round-trip at N instances
             // and the refit record is one command — separated from the copy so a

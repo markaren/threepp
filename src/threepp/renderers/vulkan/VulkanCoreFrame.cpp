@@ -969,6 +969,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // just sized and this slot's DrawInfo / command buffers, both final
             // now (buildIndirectDrawData above): its set is written here.
             prepareDrawGen(currentFrame);
+            prepareTlasGen(currentFrame);
             // ParticleField position rings + FieldDesc SSBO. Same site for the
             // same reason (R6): this writes this slot's host-visible buffers,
             // and phase 1's descriptor write lands here too.

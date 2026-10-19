@@ -697,6 +697,9 @@ void VulkanRenderer::Impl::ensureHybridResources() {
             }
             // GPU draw records (stage 2): reads the expansion's output.
             if (!drawGen_) drawGen_ = std::make_unique<vulkan::DrawGen>(*ctx, kFramesInFlight);
+            // GPU TLAS instances (stage 5): the same input, ray tracing only.
+            if (!tlasGen_ && ctx->rayQuerySupported())
+                tlasGen_ = std::make_unique<vulkan::TlasGen>(*ctx, kFramesInFlight);
             // ParticleField device state. Same retire contract again: a field
             // that left the scene may still be named by an in-flight frame.
             ensureParticleFieldPass();

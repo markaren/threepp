@@ -2062,6 +2062,26 @@ namespace threepp {
         };
         bool drawGenCheck(DrawGenCheck& out);
 
+        // ── GPU TLAS instances ────────────────────────────────────────────────
+        // A compute pass (tlas_gen.comp) that writes the ray-tracing instance
+        // descriptors of instanced meshes from the expansion's world matrices,
+        // instead of the CPU refilling one per instance every frame anything in
+        // the scene moves. Stage 5 of plans/gpu-driven-instances.md. Takes
+        // static InstancedMeshes with no auto-LOD chain, no LOD fades and no
+        // cutout ray distance. OFF by default; needs setGpuInstanceExpansion.
+        void setGpuTlasInstances(bool enabled);
+        [[nodiscard]] bool gpuTlasInstances() const;
+        // Under setGpuDrawGenerationCheck the CPU also builds those instances,
+        // and tlasGenCheck compares them byte for byte over the frame last
+        // rendered whose TLAS was refit. Finalizes the frame and drains the
+        // device. False when no instance was generated.
+        struct TlasGenCheck {
+            std::size_t spans      = 0;
+            std::size_t instances  = 0;
+            std::size_t mismatches = 0;// instances whose 64 bytes differ
+        };
+        bool tlasGenCheck(TlasGenCheck& out);
+
     private:
         // The one implementation struct, defined in vulkan/VulkanCoreImpl.hpp
         // and opaque to callers of this header.
