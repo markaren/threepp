@@ -43,8 +43,10 @@
 // wake) joins the scene, moving every frame, and every kind runs again around
 // it: the field's arrival and departure may be rebuilds, the churn around a
 // live field may not (until 2026-10-20 any field sent every slot edit back to
-// the rebuild). A last phase removes every mesh (no TLAS instance left),
-// renders, and adds some back.
+// the rebuild). Then the forest grows to its whole capacity at once, more
+// entries than the slot pool the last rebuild laid out: the pool grows in place
+// (one device wait, no rebuild). A last phase removes every mesh (no TLAS
+// instance left), renders, and adds some back.
 // THREEPP_VULKAN_NO_SLOTS=1 restores the rebuild, and with it the baseline:
 // run with it, the bench expects one structural rebuild per event.
 //
@@ -596,6 +598,35 @@ int main() {
             scene.remove(*field);
             for (int f = 0; f < kGap; ++f) frame(-1, kGap);// its departure
             field.reset();
+        }
+
+        // ── The slot pool outgrown ───────────────────────────────────────────
+        {
+            const auto g0 = renderer.tlasStats();
+            const size_t countBefore = forest->count();
+            forest->setCount(kInstCapacity);
+            double growMs[3] = {};// the event frame and the two after it
+            for (int f = 0; f < kGap; ++f) {
+                const FrameRow r = frame(-1, f);
+                if (f < 3) growMs[f] = r.wallMs;
+                if (dump && f < 2) dumpFrame("churn_growth", 0, 0, f);
+            }
+            const auto g1 = renderer.tlasStats();
+            std::printf("\nthe forest at its whole capacity (%zu -> %zu instances): %llu pool growths, %llu slot edits, "
+                        "%llu structural rebuilds, %llu history resets; frames %.2f, %.2f, %.2f ms\n",
+                        countBefore, kInstCapacity,
+                        static_cast<unsigned long long>(g1.slotPoolGrowths - g0.slotPoolGrowths),
+                        static_cast<unsigned long long>(g1.slotEdits - g0.slotEdits),
+                        static_cast<unsigned long long>(g1.structuralRebuilds - g0.structuralRebuilds),
+                        static_cast<unsigned long long>(g1.historyResets - g0.historyResets), growMs[0], growMs[1],
+                        growMs[2]);
+            if (!slotsOff) {
+                check("the slot pool outgrown: it grows in place", g1.slotPoolGrowths > g0.slotPoolGrowths);
+                check("the slot pool outgrown: no structural rebuild", g1.structuralRebuilds == g0.structuralRebuilds);
+            }
+            check("the slot pool outgrown: no temporal history reset", g1.historyResets == g0.historyResets);
+            forest->setCount(countBefore);
+            for (int f = 0; f < kGap; ++f) frame(-1, kGap);
         }
 
         // ── Everything removed, then some of it back ─────────────────────────

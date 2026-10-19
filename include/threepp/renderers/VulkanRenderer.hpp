@@ -892,6 +892,11 @@ namespace threepp {
             // their build had completed, a frame or two later, without a host
             // wait; the rebuild compacts its own in place.
             uint64_t asyncCompactions = 0;
+            // Slot edits that outgrew the slot pool (the entry-indexed GPU
+            // buffers, laid out at the last rebuild for 1.5x its entries) and
+            // grew it in place: one device wait and those buffers made anew,
+            // no rebuild of the entries.
+            uint64_t slotPoolGrowths = 0;
         };
         [[nodiscard]] TlasStats tlasStats() const;
 

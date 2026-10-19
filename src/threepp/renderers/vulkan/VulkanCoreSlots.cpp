@@ -22,11 +22,14 @@
 // goes on as a lean one, whose TLAS fill builds the instance array from the
 // spans and records a MODE_BUILD into the frame command buffer.
 //
+// More entries than the pool holds grow the pool in place first
+// (growSlotPool: one device wait, no rebuild).
+//
 // What it does not take (the caller then rebuilds, exactly as before): a
 // deformer (skinned, displaced, grass, tet, morph), a ParticleField or a
 // vertex-interop mesh added or removed, an overlay or particle mesh added, a
 // texture or geometry or material swapped on a mesh that stays, a geometry
-// whose BLAS record cannot be referenced as it is, more entries than the pool.
+// whose BLAS record cannot be referenced as it is.
 
 #include "VulkanCoreImpl.hpp"
 
@@ -391,7 +394,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                 edited = true;
             }
             // Every buffer the rows land in holds the pool.
-            if (highWater > slotCapacity_) return decline("the slot pool is full (growth)");
+            if (highWater > slotCapacity_) growSlotPool(highWater);
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 if (highWater > motionMatBufferCapacity[f] ||
                     (highWater + 31u) / 32u > meshMovedBitsBufferCapacity[f])
@@ -731,6 +734,88 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             slotsEditedThisFrame_ = true;
             if (edited || !hiddenFlips.empty()) ++tlasStats_.slotEdits;
             return true;
+        }
+
+void VulkanRenderer::Impl::growSlotPool(uint32_t need) {
+            THREEPP_CPUPROF("scene.3d_slotPoolGrowth");
+            // Nothing in flight names the buffers about to be freed.
+            THREEPP_CPUPROF_NAMED(gWait, "scene.G1_growWait");
+            vkDeviceWaitIdle(ctx->device());
+            flushRetireQueue();
+            reapAsyncOneShots(/*deviceIdle=*/true);
+            gWait.stop();
+            THREEPP_CPUPROF_NAMED(gBufs, "scene.G2_growBuffers");
+            slotCapacity_ = std::max<uint32_t>(1024u, need + need / 2u);
+            // The desc rings, every slot from the host copy (which the frame-
+            // in-flight flushes carry deltas from).
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                destroyBuffer(ctx->allocator(), geometryDescsBuffers[f]);
+                uploadDescBuffer(geometryDescsBuffers[f], geomDescsCached_, slotCapacity_);
+                destroyBuffer(ctx->allocator(), materialDescsBuffers[f]);
+                uploadDescBuffer(materialDescsBuffers[f], matDescsCached_, slotCapacity_);
+                ensureMotionMatCapacity(f, slotCapacity_);
+                ensureMeshMovedBitsCapacity(f, (slotCapacity_ + 31u) / 32u);
+            }
+            for (auto& d : geomDescsDirty_) d.clear();
+            for (auto& d : matDescsDirty_) d.clear();
+            gBufs.stop();
+            THREEPP_CPUPROF_NAMED(gTlas, "scene.G3_growTlas");
+            // The TLAS: a new structure for the new pool, holding what the old
+            // one held until this frame's full build (the edit's) replaces it.
+            // The passes recorded ahead of that build (a ParticleField's
+            // surface bake) trace it as they trace the last frame's on any
+            // other frame. The old one is cloned into it in an async batch
+            // ahead of the frame (no wait) and retired with this frame.
+            const VkAccelerationStructureKHR oldTlas = tlas;
+            Buffer oldTlasBuffer = tlasBuffer;
+            const uint32_t builtBefore = tlasBuiltInstanceCount_;
+            tlas = VK_NULL_HANDLE;
+            tlasBuffer = {};
+            buildTlas({}, /*buildNow=*/false);
+            if (oldTlas != VK_NULL_HANDLE) {
+                if (tlas != VK_NULL_HANDLE) {
+                    VkCommandBufferAllocateInfo ai{};
+                    ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+                    ai.commandPool = cmdPool;
+                    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+                    ai.commandBufferCount = 1;
+                    VkCommandBuffer cb = VK_NULL_HANDLE;
+                    check(vkAllocateCommandBuffers(ctx->device(), &ai, &cb), "alloc TLAS clone cb");
+                    VkCommandBufferBeginInfo bi{};
+                    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+                    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                    check(vkBeginCommandBuffer(cb, &bi), "begin TLAS clone cb");
+                    VkCopyAccelerationStructureInfoKHR copy{};
+                    copy.sType = VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR;
+                    copy.src = oldTlas;
+                    copy.dst = tlas;
+                    copy.mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_CLONE_KHR;
+                    ctx->rt().cmdCopyAccelerationStructure(cb, &copy);
+                    check(vkEndCommandBuffer(cb), "end TLAS clone cb");
+                    VkFenceCreateInfo fi{};
+                    fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+                    VkFence fence = VK_NULL_HANDLE;
+                    check(vkCreateFence(ctx->device(), &fi, nullptr, &fence), "create TLAS clone fence");
+                    VkSubmitInfo si{};
+                    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                    si.commandBufferCount = 1;
+                    si.pCommandBuffers = &cb;
+                    check(vkQueueSubmit(ctx->graphicsQueue(), 1, &si, fence), "submit TLAS clone");
+                    asyncOneShots_.push_back({cb, fence, {}});
+                    tlasBuiltInstanceCount_ = builtBefore;
+                    tlasStats_.instances = builtBefore;
+                }
+                retireAS(oldTlas);
+                retire(std::move(oldTlasBuffer));
+            }
+            gTlas.stop();
+            THREEPP_CPUPROF_NAMED(gSets, "scene.G4_growDescriptors");
+            forEachLiveView([&] { rewriteDeferredDescriptors(); });
+            for (auto& v : views_) {
+                v->rasterMatTexValid_.fill(0);
+                v->shadowMatTexValid_.fill(0);
+            }
+            ++tlasStats_.slotPoolGrowths;
         }
 
 }// namespace threepp

@@ -3158,6 +3158,14 @@ namespace threepp {
         // the old pair, this one the new.
         void compactAsync(const AsyncCompaction& c);
         bool blasRereferenced_ = false;
+        // A slot edit that needs more slots than the pool holds: after one
+        // device wait, every pool-sized GPU buffer (the geometry and material
+        // desc rings, the motion matrices and moved bits, the TLAS and its
+        // instance buffers) is made anew for 1.5x what the edit needs and
+        // refilled from its host copy, and the sets that name them are
+        // rewritten, as the rebuild does; the entries, spans and every
+        // temporal history stay. VulkanCoreSlots.cpp.
+        void growSlotPool(uint32_t need);
 
         // ── Static BLAS compaction ───────────────────────────────────────────
         // A static record (built once, traced for its lifetime) is built
@@ -3670,7 +3678,10 @@ namespace threepp {
 
         // Build a TLAS over the supplied instance descriptors. Empty input is
         // legal — produces an empty TLAS that always misses.
-        void buildTlas(const std::vector<VkAccelerationStructureInstanceKHR>& instances);
+        // buildNow false: the structure and its buffers only, sized for the
+        // pool; the caller's frame records its first build (recordTlasRefit
+        // promotes the refit to one, nothing having been built).
+        void buildTlas(const std::vector<VkAccelerationStructureInstanceKHR>& instances, bool buildNow = true);
 
         // Record a per-frame TLAS refit/rebuild into `cb` — NO blocking submit.
         // The host instance write goes to tlasInstancesBuffers[currentFrame]
