@@ -2578,9 +2578,13 @@ namespace threepp {
         const BlasRecord* drawGenEligibleRecord(const EntrySpan& sp);
         // The primary view's frame hands draw_gen.comp spans to cull (stage 4):
         // the CPU cull keeps only its span-level answer for them.
+        // Not while the overlay depth prepass runs: it draws one entry at a
+        // time off this view's CPU cull, which would then hold only the span-
+        // level answer for these spans and draw every instance of a span that
+        // is partly in view (the pine forest under its HUD: +2.5 ms of GPU).
         [[nodiscard]] bool drawGenCullsOnGpu() const {
             return !curView_->secondary && gpuDrawGen_ && gpuInstanceExpand_ && drawGen_ && instExpand_ &&
-                   !gpuDrawGenCheck_ && !occlusionCullingEnabled_;
+                   !gpuDrawGenCheck_ && !occlusionCullingEnabled_ && !sceneHasOverlayContent();
         }
         void recordDrawGen(VkCommandBuffer cb, uint32_t frame);
         bool verifyDrawGen(VulkanRenderer::DrawGenCheck& out);

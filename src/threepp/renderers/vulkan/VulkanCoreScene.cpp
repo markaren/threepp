@@ -386,7 +386,10 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
             // already holds the right answer — skip the walk entirely. (The
             // sticky-only drawInputsVersion_ bumps re-run it for ~30 frames
             // after motion stops; harmless.)
-            if (view().cullValidVersion == drawInputsVersion_ &&
+            // Stage 4: a span draw_gen.comp writes is culled per instance there,
+            // from this frame's planes; here it keeps its span-level answer.
+            const bool gpuCull = drawGenCullsOnGpu();
+            if (view().cullValidVersion == drawInputsVersion_ && view().cullGpuSpans == gpuCull &&
                 cull.size() == lastVisibleEntries_.size() &&
                 std::memcmp(view().prevCullVp, vp.elements.data(), 64) == 0) {
                 return;
@@ -396,9 +399,6 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
             frustum.setFromProjectionMatrix(vp);
             const auto& planes = frustum.planes();
             auto& entries = lastVisibleEntries_;
-            // Stage 4: a span draw_gen.comp writes is culled per instance there,
-            // from this frame's planes; here it keeps its span-level answer.
-            const bool gpuCull = drawGenCullsOnGpu();
             bool anyGpuCulled = false;
 
             // Per SPAN. The old per-entry loop paid a shared_ptr geometry()
@@ -621,6 +621,7 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
             // Stamp the recompute gate: these results stay valid until the
             // frustum or the scene draw inputs change.
             view().cullValidVersion = drawInputsVersion_;
+            view().cullGpuSpans = gpuCull;
             std::memcpy(view().prevCullVp, vp.elements.data(), 64);
         }
 
