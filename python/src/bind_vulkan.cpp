@@ -1896,20 +1896,27 @@ namespace threepp_py {
                                            d["textures_pruned"]     = s.texturesPruned;
                                            d["texture_slots_in_use"]   = s.textureSlotsInUse;
                                            d["texture_slot_fallbacks"] = s.textureSlotFallbacks;
+                                           d["admissions_deferred"] = s.admissionsDeferred;
+                                           d["admissions_landed"]   = s.admissionsLanded;
+                                           d["swap_edits"]          = s.swapEdits;
                                            return d;
                                        },
                                        "Scene build counters since the renderer was made: TLAS full builds and "
                                        "refits, the instance count of the latest one; structural_rebuilds (the "
-                                       "entry list re-derived behind a device drain: a texture or geometry "
-                                       "swapped on a mesh, a deformer added or removed, the entry pool "
-                                       "outgrown), slot_edits (meshes added or removed, an InstancedMesh count "
-                                       "changed, a first show: written into the entry slots in place, no "
+                                       "entry list re-derived behind a device drain: a deformer or a "
+                                       "ParticleField added or removed, a mesh changing class), slot_edits "
+                                       "(meshes added or removed, an InstancedMesh count changed, a first show, "
+                                       "a geometry, material or texture swap: written into the entry slots in "
+                                       "place, no "
                                        "drain) and history_resets (temporal histories wiped: a new environment, "
                                        "a resize, reset_temporal_history; never an object added or removed), "
                                        "records_pruned and textures_pruned (geometries and textures that died, "
-                                       "freed by a slot edit without a rebuild), texture_slots_in_use (of 2048) "
-                                       "and texture_slot_fallbacks (textures that found no slot and drew without "
-                                       "their map).")
+                                       "freed by a slot edit without a rebuild), texture_slots_in_use (of 2048), "
+                                       "texture_slot_fallbacks (textures that found no slot and drew without "
+                                       "their map), admissions_deferred (meshes that arrived hidden and were "
+                                       "admitted over the following frames), admissions_landed (of those, "
+                                       "landed while still hidden) and swap_edits (a geometry, material or "
+                                       "texture swapped on a mesh, taken by a slot edit).")
                 .def_property("deferred_ao",
                               [](PyVulkanRenderer& r) { return r.native().deferredAO(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setDeferredAO(v); },
@@ -2282,6 +2289,17 @@ namespace threepp_py {
                      "(skinned, tet, grass) in the system-memory column means its deform pass "
                      "crosses PCIe every frame. THREEPP_VK_MEMDUMP=1 prints the same report after "
                      "init, after each structural scene build and at frame 8.")
+                .def_property_readonly("gpu_memory",
+                                       [](PyVulkanRenderer& r) {
+                                           py::dict d;
+                                           d["allocated_bytes"] = r.native().gpuAllocatedBytes();
+                                           d["reserved_bytes"]  = r.native().gpuReservedBytes();
+                                           return d;
+                                       },
+                                       "Device memory the renderer holds through its allocator, in "
+                                       "bytes: allocated_bytes (every buffer, image and acceleration "
+                                       "structure it created) and reserved_bytes (the memory blocks "
+                                       "those live in, slack included). Cheap enough to read every frame.")
                 // Fog medium PROFILE control (advanced). Phase 2: there is ONE air
                 // medium. scene.set_fog_exp2(...) is the primary knob (density +
                 // colour); set_height_fog is the ADVANCED control of that medium's

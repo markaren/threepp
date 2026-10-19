@@ -318,6 +318,11 @@ void VulkanRenderer::Impl::compactAsync(const AsyncCompaction& c) {
                 BlasRecord* rec = it->second.get();
                 const VkDeviceSize sz = sizes[k];
                 if (rec->as != c.records[k].second || rec->compacted || sz == 0 || sz >= rec->storage.size) continue;
+                // Rebuilt since the query, in place and updatable (its geometry
+                // was edited: a terrain tile's borders stitched to a neighbour
+                // a frame after its admission): the size is the old build's,
+                // and a compacting copy needs a build made for it.
+                if ((rec->blasBuiltFlags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR) == 0u) continue;
                 Swap s{rec, VK_NULL_HANDLE, {}};
                 s.storage = createBuffer(ctx->allocator(), ctx->device(), sz,
                                          VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |

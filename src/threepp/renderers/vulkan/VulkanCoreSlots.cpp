@@ -28,8 +28,10 @@
 // What it does not take (the caller then rebuilds, exactly as before): a
 // deformer (skinned, displaced, grass, tet, morph), a ParticleField or a
 // vertex-interop mesh added or removed, an overlay or particle mesh added, a
-// texture or geometry or material swapped on a mesh that stays, a geometry
-// whose BLAS record cannot be referenced as it is.
+// mesh that changed class (overlay, deformer, instancing), a geometry whose
+// BLAS record cannot be referenced as it is. A geometry, material or texture
+// swapped on a mesh that stays IS taken: the mesh is placed again, as a new
+// one is, with what it holds now.
 
 #include "VulkanCoreImpl.hpp"
 
@@ -42,6 +44,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace threepp {
 
@@ -193,6 +196,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             // Geometries a new span draws that have no record yet, with a
             // mesh to take the shared_ptr (the record's liveCheck) from.
             std::vector<std::pair<const BufferGeometry*, Mesh*>> toBuild;
+            std::unordered_set<const BufferGeometry*> shownNeeds;// new geometries a shown new span draws
             for (size_t b = 0; b < builtSpans.size(); ++b) {
                 const EntrySpan& bs = builtSpans[b];
                 // The walk's own room to grow: the layout below leaves its own.
@@ -201,7 +205,10 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                 const MeshEntry& be = built[bs.first];
                 Mesh& m = *bs.mesh;
                 const auto it = oldByMesh.find(&m);
-                if (it != oldByMesh.end() && entrySpans_[it->second].meshId == bs.meshId) {
+                // A span whose hidden admission has not landed and that shows
+                // now is placed again below, with the synchronous admission.
+                const bool admitOnShow = it != oldByMesh.end() && entrySpans_[it->second].admitPending && !bs.hidden;
+                if (it != oldByMesh.end() && entrySpans_[it->second].meshId == bs.meshId && !admitOnShow) {
                     const EntrySpan& os = entrySpans_[it->second];
                     const MeshEntry& oe = entries[os.first];
                     const MeshFingerprint& of = prevSceneFingerprint[os.first];
@@ -209,17 +216,21 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                         return decline("a mesh changed class (overlay, deformer, instancing, layer)");
                     const auto geom = m.geometry();
                     const auto mat = m.material();
-                    if (!geom || of.geom != geom.get() || of.geomId != geom->id || of.mat != mat.get() ||
-                        of.matId != (mat ? mat->id : 0u))
-                        return decline("a geometry or material swapped on a mesh");
-                    // The lean diff aborts to the full path on a texture swap
-                    // under a bumped material version: take that path now,
-                    // before anything is edited.
-                    if ((mat ? mat->version() : 0u) != of.matVersion && texturesChanged(m, of))
-                        return decline("a texture swapped on a mesh");
-                    match[b] = static_cast<int32_t>(it->second);
-                    kept[it->second] = 1u;
-                    continue;
+                    // A geometry, material or texture swapped on a mesh that
+                    // stays (the lean diff aborts to the full path on a texture
+                    // swap under a bumped material version): the mesh is placed
+                    // again below, as a new mesh is, with what it holds now; its
+                    // old slots are freed like a removed mesh's. Its stable id
+                    // (the Ids AOV, lidar instance ids) is the mesh's and stays.
+                    const bool swapped = !geom || of.geom != geom.get() || of.geomId != geom->id ||
+                                         of.mat != mat.get() || of.matId != (mat ? mat->id : 0u) ||
+                                         ((mat ? mat->version() : 0u) != of.matVersion && texturesChanged(m, of));
+                    if (!swapped) {
+                        match[b] = static_cast<int32_t>(it->second);
+                        kept[it->second] = 1u;
+                        continue;
+                    }
+                    ++tlasStats_.swapEdits;
                 }
                 // A new span: a static mesh whose geometry has a record the TLAS
                 // can reference as it is, or none yet.
@@ -237,9 +248,23 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                     if (rec.packedMask != 0u && forceUnpackedGeoms_.count(gk) != 0u)
                         return decline("a packed record marked for unpacking");
                     if (rq && rec.as == VK_NULL_HANDLE) return decline("a record built for overlays only");
-                } else if (std::none_of(toBuild.begin(), toBuild.end(),
-                                        [&](const auto& p) { return p.first == gk; })) {
-                    toBuild.emplace_back(gk, &m);
+                } else {
+                    if (std::none_of(toBuild.begin(), toBuild.end(), [&](const auto& p) { return p.first == gk; }))
+                        toBuild.emplace_back(gk, &m);
+                    if (!bs.hidden) shownNeeds.insert(gk);
+                }
+            }
+            // A geometry only hidden new spans draw is admitted over the next
+            // frames (pumpHiddenAdmissions): no record now, no texture upload.
+            std::unordered_set<const BufferGeometry*> deferredGeoms;
+            if (!syncAdmission()) {
+                for (auto t = toBuild.begin(); t != toBuild.end();) {
+                    if (shownNeeds.count(t->first) == 0u) {
+                        deferredGeoms.insert(t->first);
+                        t = toBuild.erase(t);
+                    } else {
+                        ++t;
+                    }
                 }
             }
             for (uint32_t s = 0; s < entrySpans_.size(); ++s) {
@@ -379,6 +404,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                 }
                 if (bs.hidden != spans[idx].hidden) hiddenFlips.push_back(idx);
             }
+            std::vector<Mesh*> admitNow;// the new spans placed admitPending
             for (size_t b = 0; b < builtSpans.size(); ++b) {
                 if (match[b] >= 0 || builtSpans[b].isFree) continue;
                 const EntrySpan& bs = builtSpans[b];
@@ -389,6 +415,8 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                 ns.isFree = false;
                 ns.parkedUntil = 0u;
                 ns.fadeKnown = false;
+                ns.admitPending = !deferredGeoms.empty() && deferredGeoms.count(bs.mesh->geometry().get()) != 0u;
+                if (ns.admitPending) admitNow.push_back(bs.mesh);
                 if (ns.inst) {
                     ns.instColorAttr    = ns.inst->instanceColor();
                     ns.instColorVersion = ns.instColorAttr ? ns.instColorAttr->version : ~0u;
@@ -428,8 +456,21 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             // admits it per field, and so does this (a lookup when it has one).
             for (const auto& fe : builtFields) ensureCachedBlas(fe.first->meshRepr().geometry);
             seBlas.stop();
+            for (Mesh* m : admitNow) beginHiddenAdmission(*m);
+            admitPendingSpans_ += static_cast<uint32_t>(admitNow.size());
+            tlasStats_.admissionsDeferred += admitNow.size();
             // The material descs, whose first sight of a texture uploads it.
             THREEPP_CPUPROF_NAMED(seMats, "scene.S3b_slotMaterials");
+            // Every new texture this edit admits is prepared (its CPU half:
+            // RGBA8, mips, BC7) on worker threads at once, and the descs below
+            // collect them: the frame pays the longest encode, not their sum.
+            if (!syncAdmission()) {
+                for (const RowFill& fl : fills) {
+                    Mesh& m = *built[builtSpans[fl.builtSpan].first].mesh;
+                    const auto g = m.geometry();
+                    if (g && blasCache.count(g.get()) != 0u) prepareTexturesAsync(m);
+                }
+            }
             const size_t texCount0 = materialTextures.size();
             const size_t texFree0 = freeTextureSlots.size();
             // Per mesh, once: the rows every entry of a fill shares.
@@ -748,6 +789,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             // The geometries and textures the removed meshes were the last to
             // hold have died by now (or die before a later edit sees them).
             pruneFreedAssets();
+            stableIdsPending_ = true;
             slotsEditedThisFrame_ = true;
             if (edited || !hiddenFlips.empty()) ++tlasStats_.slotEdits;
             return true;
@@ -811,6 +853,16 @@ void VulkanRenderer::Impl::pruneFreedAssets() {
             }
             for (const uint32_t slot : retiredTextureSlots_) freeSlot(slot);
             retiredTextureSlots_.clear();
+            // A texture prepared for a hidden admission whose mesh was dropped
+            // before it landed: only the job holds it now.
+            for (auto it = preparingTextures_.begin(); it != preparingTextures_.end();) {
+                if (it->second.tex.use_count() == 1 &&
+                    it->second.job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+                    it = preparingTextures_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
             if (freed) {
                 // The descriptor sets name the retired views until the per-FIF
                 // rewrite (refreshDirtyMaterialTextures' path) gives the slot
@@ -821,6 +873,177 @@ void VulkanRenderer::Impl::pruneFreedAssets() {
                     v->shadowMatTexValid_.fill(0);
                 }
             }
+        }
+
+std::vector<std::shared_ptr<Texture>> VulkanRenderer::Impl::texturesOf(const Mesh& m) {
+            // Every map buildMaterialDesc admits (the terrain's band sets are
+            // shared and resident after the first tile, but listed all the same).
+            std::vector<std::shared_ptr<Texture>> out = {
+                    albedoTexOf(m),     roughnessTexOf(m),   metalnessTexOf(m),     normalTexOf(m),
+                    transmissionTexOf(m), clearcoatTexOf(m), clearcoatRoughnessTexOf(m), emissiveTexOf(m),
+                    occlusionTexOf(m),  detailTexOf(m),      detailNormalTexOf(m),  terrainWeightTexOf(m),
+                    terrainNormalTexOf(m)};
+            if (terrainWeightTexOf(m)) {
+                for (int bi = 0; bi < 4; ++bi) {
+                    out.push_back(terrainBandAlbedoTexOf(m, bi));
+                    out.push_back(terrainBandNormalTexOf(m, bi));
+                }
+            }
+            return out;
+        }
+
+bool VulkanRenderer::Impl::syncAdmission() {
+            static const bool sync = [] {
+                const char* e = std::getenv("THREEPP_VULKAN_SYNC_ADMIT");
+                return e && e[0] == '1';
+            }();
+            return sync;
+        }
+
+void VulkanRenderer::Impl::beginHiddenAdmission(Mesh& m) { prepareTexturesAsync(m); }
+
+void VulkanRenderer::Impl::prepareTexturesAsync(Mesh& m) {
+            const bool bc7 = bc7SampledSupported();
+            for (const auto& t : texturesOf(m)) {
+                if (!t) continue;
+                const Texture* key = t.get();
+                if (const auto it = textureCache.find(key); it != textureCache.end()) {
+                    const auto live = it->second.ref.lock();
+                    if (live && live.get() == key) continue;// resident already
+                }
+                if (preparingTextures_.count(key) != 0u) continue;
+                PreparingTexture pt;
+                pt.tex = t;
+                pt.version = t->version();
+                // The CPU half only: it reads the texture's image and nothing of
+                // the renderer's state.
+                pt.job = std::async(std::launch::async,
+                                    [this, t, bc7] { return prepareMaterialImage(t.get(), bc7); });
+                preparingTextures_.emplace(key, std::move(pt));
+            }
+        }
+
+void VulkanRenderer::Impl::pumpHiddenAdmissions() {
+            if (admitPendingSpans_ == 0u) return;
+            THREEPP_CPUPROF("scene.3e_hiddenAdmission");
+            // A few spans a frame, and no more once this frame's share of the
+            // work has been spent: a landing costs the BLAS build input and the
+            // upload of encoded images, not the encode.
+            constexpr uint32_t kSpansPerFrame = 4u;
+            constexpr double kBudgetMs = 2.0;
+            const auto t0 = std::chrono::steady_clock::now();
+            const auto spentMs = [&] {
+                return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            };
+            const auto ready = [&](const std::shared_ptr<Texture>& t) {
+                if (!t) return true;
+                const auto it = preparingTextures_.find(t.get());
+                return it == preparingTextures_.end() ||
+                       it->second.job.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+            };
+            const auto texturesReady = [&](Mesh& m) {
+                for (const auto& t : texturesOf(m))
+                    if (!ready(t)) return false;
+                return true;
+            };
+            const auto cullOf = [](const MaterialDesc& md) -> VkCullModeFlags {
+                switch (md.sideMode) {
+                    case 0: return VK_CULL_MODE_BACK_BIT;
+                    case 1: return VK_CULL_MODE_FRONT_BIT;
+                    default: return VK_CULL_MODE_NONE;
+                }
+            };
+            const size_t texCount0 = materialTextures.size();
+            const size_t texFree0 = freeTextureSlots.size();
+            const bool rq = ctx->rayQuerySupported();
+            auto& entries = lastVisibleEntries_;
+            uint32_t pending = 0u, landed = 0u;
+            bool batch = false;
+            // Called on a frame that ends lean (its walk matched, or its slot
+            // edit took the change): every live span's mesh is alive.
+            for (EntrySpan& sp : entrySpans_) {
+                if (sp.isFree || !sp.admitPending) continue;
+                if (landed >= kSpansPerFrame || spentMs() > kBudgetMs || !texturesReady(*sp.mesh)) {
+                    ++pending;
+                    continue;
+                }
+                Mesh& m = *sp.mesh;
+                const auto geom = m.geometry();
+                if (!batch) {
+                    beginOneShotBatch();
+                    batch = true;
+                }
+                auto rit = geom ? blasCache.find(geom.get()) : blasCache.end();
+                if (geom && rit == blasCache.end()) {
+                    auto rec = buildBlasFor(*geom, /*allowPacked=*/true, /*updatable=*/false, nullptr,
+                                            VertexWriter::Host, /*traced=*/rq);
+                    if (rec) {
+                        rec->liveCheck = geom;
+                        rit = blasCache.emplace(geom.get(), std::move(rec)).first;
+                    }
+                }
+                sp.admitPending = false;
+                if (rit == blasCache.end()) continue;// degenerate: default rows and no instance, as in a rebuild
+                const BlasRecord& rec = *rit->second;
+                MaterialDesc md = buildMaterialDesc(m);// takes the prepared images
+                md.materialAssetIdx = slotMaterialAssetIdx(m.material().get());
+                const GeometryDesc gd = buildGeometryDesc(entries[sp.first], rec, selectLodGeom(rec, 0));
+                for (uint32_t i = sp.first; i < sp.first + sp.count; ++i) {
+                    geomDescsCached_[i] = gd;
+                    MaterialDesc mi = md;
+                    applyInstanceColor(mi, entries[i]);
+                    matDescsCached_[i] = mi;
+                    lastVisibleCullMode_[i] = cullOf(mi);
+                }
+                markGeomDescsDirty(sp.first, sp.count);
+                markMatDescsDirty(sp.first, sp.count);
+                ++landed;
+                ++tlasStats_.admissionsLanded;
+            }
+            if (batch) {
+                // As the slot edit's batch: ahead of this frame on the queue,
+                // never waited for (the async-compute pilot waits).
+                if (asyncPilot_) {
+                    flushOneShotBatch();
+                    std::vector<VkAccelerationStructureInstanceKHR> none;
+                    applyBlasCompactionRemap(none);
+                } else {
+                    flushOneShotBatchAsync();
+                }
+            }
+            admitPendingSpans_ = pending;
+            if (landed == 0u) return;
+            // New BLASes and rows: a full TLAS build and fresh draw records, as
+            // a first show (the spans stay hidden).
+            hiddenFlippedThisFrame_ = true;
+            ++drawInputsVersion_;
+            cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
+            if (materialTextures.size() != texCount0 || freeTextureSlots.size() != texFree0) {
+                deferredDescDirty_.fill(true);
+                for (auto& v : views_) {
+                    v->rasterMatTexValid_.fill(0);
+                    v->shadowMatTexValid_.fill(0);
+                }
+            }
+        }
+
+void VulkanRenderer::Impl::refreshPendingStableIds() {
+            if (!stableIdsPending_) return;
+            bool still = false;
+            for (const EntrySpan& sp : entrySpans_) {
+                if (sp.isFree || sp.hidden || sp.count == 0u || size_t(sp.first) + sp.count > entryStableIds_.size())
+                    continue;
+                if (entryStableIds_[sp.first] != 0u) continue;
+                const MeshEntry& e0 = lastVisibleEntries_[sp.first];
+                if (e0.isOverlay || e0.isParticle || e0.isParticleField) continue;
+                const uint32_t id = stableIdIfAssigned(*sp.mesh);
+                if (id == 0u) {
+                    still = true;// not drawn yet: its id comes with its first draw
+                    continue;
+                }
+                for (uint32_t i = sp.first; i < sp.first + sp.count; ++i) entryStableIds_[i] = id;
+            }
+            stableIdsPending_ = still;
         }
 
 void VulkanRenderer::Impl::reapRetiredRecords(bool all) {

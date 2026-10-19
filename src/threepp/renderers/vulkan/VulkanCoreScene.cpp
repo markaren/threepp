@@ -213,6 +213,22 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
                     ok = false;// attribute added/replaced/removed → full pass re-derives
                     return false;
                 }
+                // A texture swapped on its material (a bumped version and a map
+                // that is not the one its rows hold): the full pass, whose slot
+                // edit places the mesh again. Only read on a version bump; a
+                // values-only change stays on this path (the lean diff).
+                if (sn.spanIndex >= 0 && sn.mat && static_cast<size_t>(sn.spanIndex) < entrySpans_.size()) {
+                    const MeshFingerprint& fp0 = prevSceneFingerprint[entrySpans_[sn.spanIndex].first];
+                    if (sn.mat->version() != fp0.matVersion &&
+                        (albedoTexOf(*m) != fp0.albedoTex || roughnessTexOf(*m) != fp0.roughnessTex ||
+                         metalnessTexOf(*m) != fp0.metalnessTex || normalTexOf(*m) != fp0.normalTex ||
+                         transmissionTexOf(*m) != fp0.transmissionTex || clearcoatTexOf(*m) != fp0.clearcoatTex ||
+                         clearcoatRoughnessTexOf(*m) != fp0.clearcoatRoughnessTex ||
+                         emissiveTexOf(*m) != fp0.emissiveTex || occlusionTexOf(*m) != fp0.occlusionTex)) {
+                        ok = false;
+                        return false;
+                    }
+                }
                 // Dynamic routing bits — plain bool reads, no lookups. The
                 // pointed-to material is alive (the mesh holding it just
                 // compared equal) and its dynamic type is fixed.
@@ -243,6 +259,16 @@ bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera)
                 const bool matHidden = sn.mat && !sn.mat->visible;
                 if (visFlip || matHidden != ((sn.flags & kSnapMatHidden) != 0u)) {
                     if (sn.spanIndex < 0) {
+                        ok = false;
+                        return false;
+                    }
+                    // A span whose hidden admission has not landed has no record
+                    // and default rows: flipped visible in place it would draw
+                    // nothing until the pump lands it (a hole where a staged
+                    // terrain tile swaps in). Its first show takes the full
+                    // path, whose slot edit admits it as a visible mesh.
+                    if (vis && !matHidden && static_cast<size_t>(sn.spanIndex) < entrySpans_.size() &&
+                        entrySpans_[sn.spanIndex].admitPending) {
                         ok = false;
                         return false;
                     }
@@ -1151,14 +1177,43 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 return v && v[0] == '1';
             }();
             bool reuseNodes = lazyRows && !prevSceneSnapshot_.empty();
-            if (reuseNodes) {
-                prevSnapIndex_.clear();
-                prevSnapIndex_.reserve(prevSceneSnapshot_.size());
-                for (uint32_t k = 0; k < prevSceneSnapshot_.size(); ++k)
-                    prevSnapIndex_.emplace(prevSceneSnapshot_[k].obj, k);
-                walkStable_.clear();
-                walkStable_.reserve(prevSceneSnapshot_.size());
-            }
+            // The last walk's node for each node met: this walk meets them in
+            // the same pre-order wherever nothing changed, so a cursor into the
+            // last snapshot finds each with no hashing; the index by address is
+            // built only at the first node not where the cursor expects it (a
+            // subtree added or removed), and the cursor resyncs on it. Was a
+            // hash map of every node rebuilt and probed on every edit, plus a
+            // hash set for the stable ancestors (the chain below): ~6 ms an edit
+            // frame on a GeoScene pack's scene graph.
+            size_t prevCursor = 0;
+            bool prevIndexBuilt = false;
+            // The walk's current chain of ancestors (pre-order: a node's parent
+            // is on it), each with whether it is stable.
+            struct WalkAncestor {
+                const Object3D* obj;
+                bool stable;
+            };
+            std::vector<WalkAncestor> walkChain;
+            if (reuseNodes) walkChain.reserve(64);
+            const auto prevNodeOf = [&](const Object3D& o) -> const SnapNode* {
+                size_t idx = prevSceneSnapshot_.size();
+                if (prevCursor < prevSceneSnapshot_.size() && prevSceneSnapshot_[prevCursor].obj == &o) {
+                    idx = prevCursor;
+                } else {
+                    if (!prevIndexBuilt) {
+                        prevIndexBuilt = true;
+                        prevSnapIndex_.clear();
+                        prevSnapIndex_.reserve(prevSceneSnapshot_.size());
+                        for (uint32_t k = 0; k < prevSceneSnapshot_.size(); ++k)
+                            prevSnapIndex_.emplace(prevSceneSnapshot_[k].obj, k);
+                    }
+                    if (const auto it = prevSnapIndex_.find(&o); it != prevSnapIndex_.end()) idx = it->second;
+                }
+                if (idx >= prevSceneSnapshot_.size()) return nullptr;
+                prevCursor = idx + 1;
+                const SnapNode& p = prevSceneSnapshot_[idx];
+                return p.objId == o.id ? &p : nullptr;
+            };
             const auto reuseNode = [&](const SnapNode& sn, Object3D& o, bool vis, bool underLod) -> bool {
                 if ((sn.flags & kSnapKindMask) != kSnapKindMesh || sn.spanIndex < 0) return false;
                 if (((sn.flags & kSnapUnderLod) != 0u) != underLod ||
@@ -1276,17 +1331,14 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             auto visitRecord = [&](Object3D& o, bool vis, bool underLod) -> bool {
                 bool reused = false;
                 if (reuseNodes) {
-                    const SnapNode* prev = nullptr;
-                    if (const auto it = prevSnapIndex_.find(&o); it != prevSnapIndex_.end()) {
-                        const SnapNode& p = prevSceneSnapshot_[it->second];
-                        if (p.objId == o.id) prev = &p;
-                    }
+                    const SnapNode* prev = prevNodeOf(o);
+                    while (!walkChain.empty() && walkChain.back().obj != o.parent) walkChain.pop_back();
+                    const bool parentStable =
+                            o.parent == nullptr || (!walkChain.empty() && walkChain.back().stable);
                     // Stable: met last time under the same parent, itself stable.
-                    if (prev && prev->parent == o.parent &&
-                        (o.parent == nullptr || walkStable_.count(o.parent) != 0u)) {
-                        walkStable_.insert(&o);
-                        reused = reuseNode(*prev, o, vis, underLod);
-                    }
+                    const bool stable = prev && prev->parent == o.parent && parentStable;
+                    if (stable) reused = reuseNode(*prev, o, vis, underLod);
+                    walkChain.push_back({&o, stable});
                 }
                 if (!reused) recordNode(o, vis, underLod);// pushes exactly one SnapNode
                 SnapNode& rec = sceneSnapshot_.back();
@@ -1436,6 +1488,14 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                 snapLean = true;
                 THREEPP_CPUPROF("scene.3_leanMatrixRefresh");
                 refreshSpanMatrices();
+            }
+            // Hidden meshes' admissions that are ready land here, on a frame
+            // that ends lean (never ahead of a structural rebuild, whose old
+            // spans may name meshes that are gone). VulkanCoreSlots.cpp.
+            if (snapLean) {
+                pumpHiddenAdmissions();
+                if (hiddenFlippedThisFrame_) stableIdsPending_ = true;
+                refreshPendingStableIds();
             }
 
             // ── Automatic mesh LOD selection (setAutoLod; ON by default) ────
@@ -3443,6 +3503,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // the geomDescs loop below so a skipped/overlay entry keeps the 0
             // its dummy slot already means.
             entryStableIds_.assign(entries.size(), 0u);
+            stableIdsPending_ = true;
             // LOD fade words for the new entry order, before the instance loop
             // below derives the ray masks from them.
             refreshLodFades(true);

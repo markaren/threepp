@@ -502,7 +502,7 @@ def test_resident_mesh_first_show_is_no_structural_rebuild(vk_renderer):
     stats = vk_renderer.tlas_stats
     assert set(stats) == {"full_rebuilds", "updates", "instances", "structural_rebuilds", "slot_edits",
                           "history_resets", "records_pruned", "textures_pruned", "texture_slots_in_use",
-                          "texture_slot_fallbacks"}
+                          "texture_slot_fallbacks", "admissions_deferred", "admissions_landed", "swap_edits"}
     assert stats["slot_edits"] >= 1, "the first shows were slot edits"
     assert stats["history_resets"] >= 1, "the first build wiped the histories once"
 
@@ -641,6 +641,56 @@ def test_auto_lod_chain_lands_on_a_fixed_frame_under_a_pinned_clock():
         assert ready_at is not None, "the sphere never got a chain"
     finally:
         renderer.sim_time = None
+
+
+def test_domain_randomisation_swaps_are_slot_edits(vk_renderer):
+    """Domain randomisation: every reset gives 50 meshes a new material or a new
+    map (a texture of its own each time). Until 2026-10-20 every reset was a
+    structural rebuild (the entry list re-derived behind a device drain); now
+    each is a slot edit that places the swapped meshes again, and the textures
+    the previous reset used are freed as it goes (texture slots do not run out
+    over a long randomisation run). The reset cost is printed."""
+    scene, cam = make_scene()
+    rng = np.random.default_rng(7)
+    meshes = []
+    for i in range(50):
+        m = tp.Mesh(tp.BoxGeometry(0.14, 0.14, 0.14), tp.MeshStandardMaterial())
+        m.position.set(-1.3 + (i % 10) * 0.29, -0.7 + (i // 10) * 0.3, 0.6)
+        scene.add(m)
+        meshes.append(m)
+
+    def new_material():
+        mat = tp.MeshStandardMaterial()
+        mat.color = tp.Color(*rng.random(3))
+        mat.roughness = float(rng.random())
+        mat.map = tp.data_texture(rng.integers(0, 255, (32, 32, 4), dtype=np.uint8), True)
+        return mat
+
+    for m in meshes:
+        m.set_material(new_material())
+    for _ in range(3):
+        vk_renderer.render(scene, cam)
+    s0 = vk_renderer.tlas_stats
+    costs = []
+    for reset in range(100):
+        for m in meshes:
+            if reset % 2 == 0:
+                m.set_material(new_material())          # a material swap
+            else:
+                m.material.map = tp.data_texture(rng.integers(0, 255, (32, 32, 4), dtype=np.uint8), True)
+                m.material.needs_update()               # a texture swap
+        t0 = time.perf_counter()
+        vk_renderer.render(scene, cam)
+        costs.append((time.perf_counter() - t0) * 1e3)
+    s1 = vk_renderer.tlas_stats
+    costs.sort()
+    print(f"\n100 resets of 50 meshes: render() median {costs[50]:.2f} ms, max {costs[-1]:.2f} ms; "
+          f"{s1['swap_edits'] - s0['swap_edits']} swaps as slot edits, "
+          f"{s1['structural_rebuilds'] - s0['structural_rebuilds']} structural rebuilds, "
+          f"{s1['textures_pruned'] - s0['textures_pruned']} textures freed")
+    assert s1["structural_rebuilds"] == s0["structural_rebuilds"], "a reset rebuilt the scene"
+    assert s1["swap_edits"] - s0["swap_edits"] >= 100 * 50
+    assert s1["textures_pruned"] - s0["textures_pruned"] >= 98 * 50, "the replaced textures were not freed"
 
 
 def test_auto_lod_chain_lands_without_a_wait_when_the_replayable_schedule_is_off():
@@ -1608,6 +1658,68 @@ def test_pathtraced_lidar_sensor(vk_renderer):
     assert raw_hits.sum() > 32 and (raw["intensity"][raw_hits] > 0).all()
     raw2 = vk_renderer.scan_lidar(org, dirs, tp.LidarParams())
     assert np.array_equal(raw["position"], raw2["position"])
+
+
+def test_resident_mesh_shown_before_its_hidden_admission_lands_draws(vk_renderer):
+    """A mesh that arrives hidden (resident) is admitted over the frames after
+    it; shown by its own visible flag before that has landed (a staged terrain
+    tile swapping in early), its first show is admitted on the spot. Until the
+    fix it was flipped visible in place with no record and drew NOTHING until
+    the admission landed: a hole where the tile should be."""
+    skip_without_ray_tracing(vk_renderer)
+    scene, cam = make_scene()
+    for _ in range(3):
+        vk_renderer.render(scene, cam)
+    before = vk_renderer.render_aov(scene, cam, "rgb").astype(np.int16)
+    mat = tp.MeshStandardMaterial()
+    mat.map = tp.data_texture(np.full((1024, 1024, 4), (40, 220, 60, 255), np.uint8), True)  # a long encode
+    m = tp.Mesh(tp.SphereGeometry(0.9, 48, 24), mat)
+    m.position.set(0.0, 0.6, 0.6)
+    m.visible = False
+    m.resident = True
+    scene.add(m)
+    s0 = vk_renderer.tlas_stats
+    vk_renderer.render(scene, cam)                        # placed, its admission deferred
+    s1 = vk_renderer.tlas_stats
+    m.visible = True                                      # shown before it could land
+    shown = vk_renderer.render_aov(scene, cam, "rgb").astype(np.int16)
+    s2 = vk_renderer.tlas_stats
+    assert s1["admissions_deferred"] - s0["admissions_deferred"] == 1
+    assert s2["admissions_landed"] == s1["admissions_landed"], "it landed hidden: the case was not exercised"
+    changed = (np.abs(shown - before).max(axis=2) > 24).mean()
+    assert changed > 0.05, f"the mesh drew nothing on its first show ({changed:.3f} of the pixels changed)"
+
+
+def test_lidar_ids_of_a_mesh_streamed_in_later(vk_renderer):
+    """A mesh added after the scene's first frame is admitted by a slot edit,
+    not a rebuild, and its lidar instance id is filled once the draw builder
+    has numbered it (the frame after it first draws). Until 2026-10-20 the
+    slot path left it 0 for good: every lidar return off streamed-in content
+    (a twin's terrain cells, a CellStreamer forest) reported instance id 0."""
+    skip_without_ray_tracing(vk_renderer)
+    scene, cam = make_scene()                             # unit box at the origin
+    for _ in range(3):
+        vk_renderer.render(scene, cam)
+    org = np.zeros((32, 3), np.float32)
+    org[:, 2] = 3.0
+    org[:, 0] = np.linspace(-0.2, 0.2, 32)
+    dirs = np.tile(np.float32([0, 0, -1]), (32, 1))
+    box = vk_renderer.scan_lidar(org, dirs, tp.LidarParams())
+    box_ids = set(box["instance_id"][box["return_no"] > 0].tolist())
+    assert box_ids and 0 not in box_ids
+    s0 = vk_renderer.tlas_stats
+    streamed = tp.Mesh(tp.BoxGeometry(1.2, 1.2, 0.2), tp.MeshStandardMaterial())
+    streamed.position.set(0, 0, 1.2)                      # in front of the box
+    scene.add(streamed)
+    for _ in range(3):
+        vk_renderer.render(scene, cam)
+    assert vk_renderer.tlas_stats["structural_rebuilds"] == s0["structural_rebuilds"]
+    r = vk_renderer.scan_lidar(org, dirs, tp.LidarParams())
+    hits = r["return_no"] > 0
+    assert hits.sum() > 16
+    ids = set(r["instance_id"][hits].tolist())
+    assert 0 not in ids, "a mesh streamed in after the first frame reports lidar id 0"
+    assert not (ids & box_ids), "the beams should stop at the streamed mesh, in front of the box"
 
 
 def test_lidar_intensity_monotone_at_grazing(vk_renderer):

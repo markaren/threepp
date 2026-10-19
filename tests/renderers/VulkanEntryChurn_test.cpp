@@ -164,6 +164,29 @@ namespace {
         return tex;
     }
 
+    // A terrain-tile-sized map of its own (512x512 noise over a colour): its
+    // encode (mips + BC7) is real work, as a streamed tile's three maps are.
+    std::shared_ptr<Texture> tileMap(uint32_t seed) {
+        constexpr int N = 512;
+        std::vector<unsigned char> data(static_cast<size_t>(N) * N * 4);
+        for (int y = 0; y < N; ++y) {
+            for (int x = 0; x < N; ++x) {
+                const uint32_t h = (static_cast<uint32_t>(x) * 73856093u) ^ (static_cast<uint32_t>(y) * 19349663u) ^
+                                   (seed * 83492791u);
+                unsigned char* p = &data[(static_cast<size_t>(y) * N + x) * 4];
+                p[0] = static_cast<unsigned char>(90 + (h & 63u) + (seed * 37u) % 80u);
+                p[1] = static_cast<unsigned char>(110 + ((h >> 6) & 63u));
+                p[2] = static_cast<unsigned char>(60 + ((h >> 12) & 63u));
+                p[3] = 255;
+            }
+        }
+        Image img{std::move(data), static_cast<unsigned>(N), static_cast<unsigned>(N), 0};
+        auto tex = Texture::create(img);
+        tex->format = Format::RGBA;
+        tex->needsUpdate();
+        return tex;
+    }
+
     std::shared_ptr<MeshStandardMaterial> paint(const Color& c) {
         auto m = MeshStandardMaterial::create();
         m->color = c;
@@ -627,6 +650,146 @@ int main() {
             check("the slot pool outgrown: no temporal history reset", g1.historyResets == g0.historyResets);
             forest->setCount(countBefore);
             for (int f = 0; f < kGap; ++f) frame(-1, kGap);
+        }
+
+        // ── A cell admitted hidden, shown later ──────────────────────────────
+        // Meshes that arrive hidden (Object3D::resident; a CellStreamer
+        // prefetch band attaches cells so) with geometries and terrain-tile-
+        // sized maps never seen: their slot edit only places them, their
+        // admission (BLAS, the maps' encode on worker threads, the uploads)
+        // lands over the next frames while they stay hidden, and their show
+        // is a flip. THREEPP_VULKAN_SYNC_ADMIT=1 admits them on the add frame
+        // (the lane as it was); both lanes render the same frames, so the
+        // dumped frame after the show (THREEPP_CHURN_DUMP, churn_ahead_*)
+        // compares pixel for pixel across them.
+        {
+            const char* syncEnv = std::getenv("THREEPP_VULKAN_SYNC_ADMIT");
+            const bool syncAdmit = syncEnv && *syncEnv == '1';
+            for (int f = 0; f < kGap; ++f) frame(-1, kGap);
+            std::vector<double> quiet;
+            for (int f = 0; f < 16; ++f) quiet.push_back(frame(-1, kGap).wallMs);
+            const double q = percentile(quiet, 0.5);
+            const auto a0 = renderer.tlasStats();
+            constexpr int kAhead = 12;
+            auto cell = Group::create();
+            for (int k = 0; k < kAhead; ++k) {
+                auto mat = paint(Color(1, 1, 1));
+                mat->map = tileMap(static_cast<uint32_t>(k) + 1u);
+                auto m = Mesh::create(SphereGeometry::create(1.2f, 40 + k, 20), mat);
+                m->position.set(-55.f + static_cast<float>(k) * 9.f, 2.5f, 20.f);
+                m->resident = true;
+                cell->add(m);
+            }
+            cell->visible = false;
+            scene.add(cell);
+            const double addMs = frame(-1, 0).wallMs;
+            const double afterAddMs = frame(-1, 1).wallMs;
+            std::vector<double> between;// the frames the admission lands on
+            for (int f = 0; f < 180; ++f) between.push_back(frame(-1, kGap).wallMs);
+            const auto a1 = renderer.tlasStats();
+            cell->visible = true;
+            const double showMs = frame(-1, 0).wallMs;
+            const double afterShowMs = frame(-1, 1).wallMs;
+            for (int f = 0; f < 30; ++f) frame(-1, kGap);
+            if (dump) dumpFrame("churn_ahead", 0, 0, 30);
+            const auto a2 = renderer.tlasStats();
+            const double betweenMax = percentile(between, 1.0);
+            std::printf("\na cell of %d never-seen meshes with 512x512 maps, added hidden and shown 182 frames later "
+                        "(%s): %llu admissions deferred, %llu landed before the show, %llu structural rebuilds, "
+                        "%llu history resets; quiet %.2f ms, add frame %.2f / %.2f, frames between max %.2f, "
+                        "show frame %.2f / %.2f\n",
+                        kAhead, syncAdmit ? "synchronous admission" : "admitted over the frames after",
+                        static_cast<unsigned long long>(a1.admissionsDeferred - a0.admissionsDeferred),
+                        static_cast<unsigned long long>(a1.admissionsLanded - a0.admissionsLanded),
+                        static_cast<unsigned long long>(a2.structuralRebuilds - a0.structuralRebuilds),
+                        static_cast<unsigned long long>(a2.historyResets - a0.historyResets), q, addMs, afterAddMs,
+                        betweenMax, showMs, afterShowMs);
+            if (!slotsOff) {
+                check("a cell admitted hidden: no structural rebuild", a2.structuralRebuilds == a0.structuralRebuilds);
+                if (!syncAdmit) {
+                    check("a cell admitted hidden: every mesh's admission deferred",
+                          a1.admissionsDeferred - a0.admissionsDeferred == static_cast<uint64_t>(kAhead));
+                    check("a cell admitted hidden: every admission landed before the show",
+                          a1.admissionsLanded - a0.admissionsLanded == static_cast<uint64_t>(kAhead));
+                    check("a cell admitted hidden: the add frame within 4x the quiet median (one event)",
+                          std::max(addMs, afterAddMs) <= std::max(kHitchMaxRatio * q, q + kHitchMaxSlackMs));
+                    check("a cell admitted hidden: the frames it lands on within 4x",
+                          betweenMax <= std::max(kHitchMaxRatio * q, q + kHitchMaxSlackMs));
+                }
+                check("a cell admitted hidden: the show within 4x the quiet median (one event)",
+                      std::max(showMs, afterShowMs) <= std::max(kHitchMaxRatio * q, q + kHitchMaxSlackMs));
+            }
+            check("a cell admitted hidden: no temporal history reset", a2.historyResets == a0.historyResets);
+            scene.remove(*cell);
+            for (int f = 0; f < kGap; ++f) frame(-1, kGap);
+        }
+
+        // ── Swaps on meshes that stay ────────────────────────────────────────
+        // A geometry, a material and a texture swapped on meshes of a live
+        // cell, each kind twice (domain randomisation, a damaged prop): until
+        // 2026-10-20 each was a structural rebuild; now the slot edit places
+        // the mesh again with what it holds. THREEPP_CHURN_DUMP writes the
+        // frame after each swap (churn_swap_*) for comparing the lanes.
+        {
+            for (int f = 0; f < kGap; ++f) frame(-1, kGap);
+            std::vector<double> quiet;
+            for (int f = 0; f < 16; ++f) quiet.push_back(frame(-1, kGap).wallMs);
+            const double q = percentile(quiet, 0.5);
+            const auto w0 = renderer.tlasStats();
+            auto& cellGroup = active.front();
+            std::vector<Mesh*> targets;
+            std::vector<std::shared_ptr<BufferGeometry>> origGeom;
+            for (size_t c = 0; c < cellGroup->children.size(); c += 3) {
+                if (auto* mm = cellGroup->children[c]->as<Mesh>()) {
+                    targets.push_back(mm);
+                    origGeom.push_back(mm->geometry());
+                }
+            }
+            const auto otherGeom = SphereGeometry::create(0.7f, 20, 10);
+            // Materials of their own, textured: the material swaps put one on,
+            // the texture swaps then change its map.
+            std::array<std::shared_ptr<MeshStandardMaterial>, 2> swapMats = {paint(Color(1, 1, 1)),
+                                                                             paint(Color(0.9f, 0.85f, 0.6f))};
+            swapMats[0]->map = checker();
+            swapMats[1]->map = checker();
+            int swaps = 0;
+            std::vector<double> swapCost;
+            const char* kSwapName[3] = {"geometry", "material", "texture"};
+            for (int round = 0; round < 2; ++round) {
+                for (int kind = 0; kind < 3; ++kind) {
+                    if (kind == 2) {// one map change, on the material every target holds
+                        swapMats[round]->map = round == 0 ? tileMap(7u) : tileMap(9u);
+                        swapMats[round]->needsUpdate();
+                    }
+                    for (size_t t = 0; t < targets.size(); ++t) {
+                        Mesh& m = *targets[t];
+                        if (kind == 0) m.setGeometry(round == 0 ? otherGeom : origGeom[t]);
+                        if (kind == 1) m.setMaterial(swapMats[round]);
+                        ++swaps;
+                    }
+                    const double ev = frame(-1, 0).wallMs;
+                    swapCost.push_back(std::max(ev, frame(-1, 1).wallMs));
+                    if (dump) dumpFrame("churn_swap", round, kind, 1);
+                    for (int f = 2; f < kGap; ++f) frame(-1, kGap);
+                    std::printf("%s swap, round %d: %.2f ms (quiet %.2f)\n", kSwapName[kind], round,
+                                swapCost.back(), q);
+                }
+            }
+            const auto w1 = renderer.tlasStats();
+            std::printf("\nswaps on meshes that stay: %d swaps in 6 events, %llu taken as slot edits, %llu structural "
+                        "rebuilds, %llu history resets; event ms med/max %.2f / %.2f, quiet median %.2f\n",
+                        swaps, static_cast<unsigned long long>(w1.swapEdits - w0.swapEdits),
+                        static_cast<unsigned long long>(w1.structuralRebuilds - w0.structuralRebuilds),
+                        static_cast<unsigned long long>(w1.historyResets - w0.historyResets),
+                        percentile(swapCost, 0.5), percentile(swapCost, 1.0), q);
+            if (!slotsOff) {
+                check("swaps: no structural rebuild", w1.structuralRebuilds == w0.structuralRebuilds);
+                check("swaps: each a slot edit", w1.swapEdits - w0.swapEdits >= static_cast<uint64_t>(swaps));
+            } else {
+                check("swaps: a structural rebuild each (the rebuild lane)",
+                      w1.structuralRebuilds - w0.structuralRebuilds == 6u);
+            }
+            check("swaps: no temporal history reset", w1.historyResets == w0.historyResets);
         }
 
         // ── A streamed world frees what it drops ─────────────────────────────

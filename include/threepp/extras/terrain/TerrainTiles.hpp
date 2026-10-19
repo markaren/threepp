@@ -200,6 +200,14 @@ namespace threepp::terrain {
 
         int maxBakesInFlight = 4; // background bakes running at once
         int maxSwapsPerFrame = 2; // split/merge swaps applied per update()
+        // A finished bake's tile is attached HIDDEN at once (Object3D::resident)
+        // and swapped in once it has been staged this many update()s: the
+        // Vulkan renderer admits a hidden mesh over the frames after it was
+        // added (its BLAS, its three maps' encode and upload), so the swap
+        // only flips visibility. The swap itself waits that many updates more
+        // than without staging. 0 (the default) attaches a tile at its swap,
+        // visible, and its admission lands on that frame.
+        int stageFrames = 0;
         bool asyncBake = true;    // false → bake lazily on the update() thread
 
         float roughness = 0.96f;  // tile material
@@ -376,6 +384,10 @@ namespace threepp::terrain {
             // currently CONFORMED to a coarser neighbour's interpolation.
             std::array<std::vector<float>, 4> borderOrig;
             std::array<int8_t, 4> edgeConf{0, 0, 0, 0};
+            // stageFrames: `mesh` is attached but hidden, waiting for its swap
+            // (a split's child, or a merge's parent), for `stagedAge` updates.
+            bool staged = false;
+            int stagedAge = 0;
 
             [[nodiscard]] bool bakeReady() const {
                 // deferred futures (sync mode) count as ready — .get() bakes inline.
@@ -429,7 +441,7 @@ namespace threepp::terrain {
             if (ix < 0 || ix >= o_.rootGrid || iz < 0 || iz >= o_.rootGrid) return nullptr;
             Node* n = roots_[static_cast<size_t>(iz) * o_.rootGrid + ix].get();
             while (n) {
-                if (n->mesh || !n->kid[0]) return n;// visible leaf / SPLITTING parent
+                if ((n->mesh && !n->staged) || !n->kid[0]) return n;// visible leaf / SPLITTING parent
                 const float s = n->size * 0.5f;
                 const int cx = x >= n->x0 + s ? 1 : 0;
                 const int cz = z >= n->z0 + s ? 1 : 0;
@@ -520,7 +532,7 @@ namespace threepp::terrain {
                     return;
             }
 
-            if (n.mesh && n.kid[0]) {// SPLITTING
+            if (n.mesh && n.kid[0] && !n.staged) {// SPLITTING
                 // Camera receded before the children landed — abandon (small
                 // margin over the split radius so boundary hover doesn't churn).
                 if (d > splitRadius * 1.15f) {
@@ -529,10 +541,20 @@ namespace threepp::terrain {
                 }
                 bool allReady = true;
                 for (auto& c : n.kid) {
-                    if (c->mesh) continue;
+                    if (c->mesh) {
+                        if (c->staged && c->stagedAge++ < o_.stageFrames) allReady = false;
+                        continue;
+                    }
                     requestBake(*c);
-                    if (c->bakeReady()) releaseSlot(*c);// done: free the slot while we wait on the gate
-                    else allReady = false;
+                    if (c->bakeReady()) {
+                        releaseSlot(*c);// done: free the slot while we wait on the gate
+                        if (o_.stageFrames > 0) {
+                            stage(*c);
+                            allReady = false;
+                        }
+                    } else {
+                        allReady = false;
+                    }
                 }
                 // Swap gate: children going visible at level+1 requires every
                 // side neighbour's visible level >= our level, or the border
@@ -540,8 +562,10 @@ namespace threepp::terrain {
                 // parent on screen and keep nudging the laggards.
                 if (allReady && swapsLeft_ > 0 && neighborsAtLeast(n, n.level, /*force=*/true)) {
                     --swapsLeft_;
-                    for (auto& c : n.kid)
+                    for (auto& c : n.kid) {
                         if (!c->mesh) applyBake(*c);
+                        else if (c->staged) unstage(*c);
+                    }
                     detachMesh(n);
                 }
                 return;// children not live yet — do not recurse
@@ -557,20 +581,36 @@ namespace threepp::terrain {
             // finer than level+1 (delta invariant). The finer neighbour merges
             // on its own radius and unblocks us a frame later — no forcing.
             if (d > mergeRadius && childrenAreSimpleLeaves && neighborsAtMost(n, n.level + 1)) {
-                if (swapsLeft_ > 0) {
+                if (n.staged) {
+                    if (n.stagedAge++ >= o_.stageFrames && swapsLeft_ > 0) {
+                        --swapsLeft_;
+                        unstage(n);
+                        for (auto& c : n.kid) detachMesh(*c);
+                        for (auto& c : n.kid) c.reset();
+                    }
+                } else if (swapsLeft_ > 0) {
                     requestBake(n);
                     if (n.bakeReady()) {
                         releaseSlot(n);
-                        --swapsLeft_;
-                        applyBake(n);
-                        for (auto& c : n.kid) detachMesh(*c);
-                        for (auto& c : n.kid) c.reset();
+                        if (o_.stageFrames > 0) {
+                            stage(n);
+                        } else {
+                            --swapsLeft_;
+                            applyBake(n);
+                            for (auto& c : n.kid) detachMesh(*c);
+                            for (auto& c : n.kid) c.reset();
+                        }
                     }
                 }
                 return;
             }
-            // Camera came back — a pending merge bake is stale; discard it.
+            // Camera came back — a pending merge bake is stale; discard it,
+            // and a merge's staged parent with it.
             if (n.baking.valid()) discardBake(n);
+            if (n.staged) {
+                detachMesh(n);
+                n.staged = false;
+            }
             for (auto& c : n.kid) resolve(*c, views, viewCount);
         }
 
@@ -634,7 +674,7 @@ namespace threepp::terrain {
             }
         }
         static void signatureRec(const Node& n, std::uint64_t& h) {
-            if (n.mesh) {
+            if (n.mesh && !n.staged) {
                 fnvBytes(h, &n.level, sizeof(n.level));
                 fnvBytes(h, &n.x0, sizeof(n.x0));
                 fnvBytes(h, &n.z0, sizeof(n.z0));
@@ -1096,7 +1136,23 @@ namespace threepp::terrain {
             ++activeTiles_;
         }
 
+        // stageFrames: the bake applied now, its tile attached hidden; resident
+        // gives a mesh hidden since it was added its renderer entries.
+        void stage(Node& n) {
+            applyBake(n);
+            if (!n.mesh) return;
+            n.mesh->resident = true;
+            n.mesh->visible = false;
+            n.staged = true;
+            n.stagedAge = 0;
+        }
+        void unstage(Node& n) {
+            if (n.mesh) n.mesh->visible = true;
+            n.staged = false;
+        }
+
         void detachMesh(Node& n) {
+            n.staged = false;
             if (!n.mesh) return;
             remove(*n.mesh);
             n.mesh.reset();

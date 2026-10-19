@@ -3392,7 +3392,7 @@ class Gait:
     def value(self) -> int:
         ...
 class GeoScene(Group):
-    def __init__(self, pack_dir: str, bands: bool = True, cliff_shell: bool = True, forest: bool = True, forest_extent: typing.SupportsFloat | typing.SupportsIndex = 1100.0, forest_focus: typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(3)"] = [0.0, 0.0, 0.0], forest_cap: typing.SupportsInt | typing.SupportsIndex = 40000, scatter: bool = True, shell_level_step: typing.SupportsFloat | typing.SupportsIndex = 2.0, shell_extent: typing.SupportsFloat | typing.SupportsIndex = 1200.0, bathymetry: bool = True, shore_slope: typing.SupportsFloat | typing.SupportsIndex = 0.3499999940395355, max_depth: typing.SupportsFloat | typing.SupportsIndex = 180.0, seed: typing.SupportsInt | typing.SupportsIndex = 4242, buildings: bool = True, pitched_roofs: bool = True, measured_roofs: bool = True, urban_props: bool = True, cars: bool = True, boats: bool = True, decks: bool = True, props_cell_size: typing.SupportsFloat | typing.SupportsIndex = 250.0, props_extent: typing.SupportsFloat | typing.SupportsIndex = 1500.0, stream_budget: typing.SupportsInt | typing.SupportsIndex = 2, forest_dilate: typing.SupportsFloat | typing.SupportsIndex = 4.0, urban_forest_cap: typing.SupportsInt | typing.SupportsIndex = 80000, car_max_slope: typing.SupportsFloat | typing.SupportsIndex = 28.0, road_ribbon: bool = True, ribbon_distance: typing.SupportsFloat | typing.SupportsIndex = 600.0, land_use_paint: bool = True, quay_apron: bool = True) -> None:
+    def __init__(self, pack_dir: str, bands: bool = True, cliff_shell: bool = True, forest: bool = True, forest_extent: typing.SupportsFloat | typing.SupportsIndex = 1100.0, forest_focus: typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(3)"] = [0.0, 0.0, 0.0], forest_cap: typing.SupportsInt | typing.SupportsIndex = 40000, scatter: bool = True, shell_level_step: typing.SupportsFloat | typing.SupportsIndex = 2.0, shell_extent: typing.SupportsFloat | typing.SupportsIndex = 1200.0, bathymetry: bool = True, shore_slope: typing.SupportsFloat | typing.SupportsIndex = 0.3499999940395355, max_depth: typing.SupportsFloat | typing.SupportsIndex = 180.0, seed: typing.SupportsInt | typing.SupportsIndex = 4242, buildings: bool = True, pitched_roofs: bool = True, measured_roofs: bool = True, urban_props: bool = True, cars: bool = True, boats: bool = True, decks: bool = True, props_cell_size: typing.SupportsFloat | typing.SupportsIndex = 250.0, props_extent: typing.SupportsFloat | typing.SupportsIndex = 1500.0, stream_budget: typing.SupportsInt | typing.SupportsIndex = 2, forest_dilate: typing.SupportsFloat | typing.SupportsIndex = 4.0, urban_forest_cap: typing.SupportsInt | typing.SupportsIndex = 80000, car_max_slope: typing.SupportsFloat | typing.SupportsIndex = 28.0, road_ribbon: bool = True, ribbon_distance: typing.SupportsFloat | typing.SupportsIndex = 600.0, land_use_paint: bool = True, quay_apron: bool = True, stream_prefetch: typing.SupportsFloat | typing.SupportsIndex = 0.0, tile_stage_frames: typing.SupportsInt | typing.SupportsIndex = 0) -> None:
         """
         Load a geodata region pack and build the whole terrain scene. Raises RuntimeError if the pack directory is missing or malformed. `car_max_slope` (degrees) refuses a parked car on ground steeper than this: OSM parking polygons are drawn in plan view and some are draped over a mountainside. `road_ribbon` adds bridge decks plus near-field road geometry with crisp edges and lane markings, distance-culled at `ribbon_distance` metres — past that the asphalt painted into the terrain is the road. `land_use_paint` paints the surveyed town surfacing (parking, grass, pitches, quay concrete) into the splat. `quay_apron` raises the reclaimed harbour front out of the water before the bathymetry runs: a Kartverket DTM stores reclaimed land at exactly sea level (93.8% of ground inside the Alesund pack's pier polygons reads 0.00 m), so without it the sink excavates the quay into the seabed and the harbour buildings stand with their walls in the fjord.
         """
@@ -3427,6 +3427,11 @@ class GeoScene(Group):
     def stats(self) -> dict:
         """
         dict: tiles, baking, shell_tris, forest_sites, forest_cells, load_seconds, buildings, building_tris, cars, car_cells_live, boats, deck_runs, cars_rejected_slope, road_chunks, road_chunks_live, apron_cells. `cars` is the pack-wide placement count; `car_cells_live` is what is streamed in around the last update() position. Likewise `road_chunks` is every near-field ribbon chunk built pack-wide and `road_chunks_live` the ones inside ribbon_distance of that position.
+        """
+    @property
+    def stream_stats(self) -> dict:
+        """
+        dict of the streamed content's cell streamers, 'forest' and 'cars', each a dict: active, cached (cells ever built, kept for revisits), builds / adds (cached cells re-attached) / removes / pending / evictions (CellStreamerOptions::evictRadius) / shows (hidden cells shown) by the last update(), prefetched (cells attached hidden ahead of their ring, stream_prefetch), total_builds, total_removes, total_evictions. All 0 for a layer the pack does not stream.
         """
 class GrassMesh(Mesh):
     wind_dir: Vector2
@@ -11470,6 +11475,11 @@ class VulkanRenderer:
     @gbuffer_msaa.setter
     def gbuffer_msaa(self, arg1: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
+    @property
+    def gpu_memory(self) -> dict:
+        """
+        Device memory the renderer holds through its allocator, in bytes: allocated_bytes (every buffer, image and acceleration structure it created) and reserved_bytes (the memory blocks those live in, slack included). Cheap enough to read every frame.
+        """
     @property
     def gpu_instances(self) -> bool:
         """
