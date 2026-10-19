@@ -329,6 +329,10 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
             frustum.setFromProjectionMatrix(vp);
             const auto& planes = frustum.planes();
             auto& entries = lastVisibleEntries_;
+            // Stage 4: a span draw_gen.comp writes is culled per instance there,
+            // from this frame's planes; here it keeps its span-level answer.
+            const bool gpuCull = drawGenCullsOnGpu();
+            bool anyGpuCulled = false;
 
             // Per SPAN. The old per-entry loop paid a shared_ptr geometry()
             // fetch plus an 8-corner Box3::applyMatrix4 (with per-point
@@ -484,6 +488,11 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
                     continue;
                 }
                 if (cls == 2 || sp.count == 1) continue;// keep(1) — single spans were classified exactly
+                // Straddling, and culled per instance on the GPU: kept whole.
+                if (gpuCull && drawGenEligibleRecord(sp)) {
+                    anyGpuCulled = true;
+                    continue;
+                }
                 // Straddling instanced span: classify chunk AABBs first, then
                 // per-entry world-sphere tests only for straddling chunks.
                 const float* lc = sp.localCenter;
@@ -537,6 +546,10 @@ void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
                 std::memcmp(prev.data(), cull.data(), cull.size()) != 0) {
                 ++view().cullVersion;
                 prev = cull;
+            } else if (anyGpuCulled && std::memcmp(view().prevCullVp, vp.elements.data(), 64) != 0) {
+                // ...except where the GPU culls: there the planes are the input,
+                // so a moved camera regenerates the records.
+                ++view().cullVersion;
             }
             // Stamp the recompute gate: these results stay valid until the
             // frustum or the scene draw inputs change.

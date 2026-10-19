@@ -64,6 +64,18 @@ namespace threepp {
     // so the shader fetches `draws[gl_InstanceIndex]`. This trick
     // sidesteps the gl_DrawIDARB-resets-per-call issue without
     // needing dynamic-offset descriptors or per-call push constants.
+    const VulkanRenderer::Impl::BlasRecord* VulkanRenderer::Impl::drawGenEligibleRecord(const EntrySpan& sp) {
+        if (!sp.inst || sp.isFree || sp.hidden || sp.count == 0u || sp.fadeAny || !sp.localBoundsValid) return nullptr;
+        const MeshEntry& e0 = lastVisibleEntries_[sp.first];
+        if (!e0.isInstanced || e0.isOverlay || e0.sensorOnly || e0.isParticleField || e0.isVertexInterop ||
+            e0.isSkinned || e0.isDisplaced || e0.isGrass || e0.isMorphed || e0.isTet)
+            return nullptr;
+        const BlasRecord* rec = resolveBlasForEntry(e0);
+        // A record with a LOD chain picks per entry (en.lodLevel): CPU.
+        if (!rec || rec->vertex.handle == VK_NULL_HANDLE || !rec->lodLevels.empty()) return nullptr;
+        return rec;
+    }
+
     void VulkanRenderer::Impl::buildIndirectDrawData(uint32_t frame) {
         // SPLIT, not nested: function-scope until now, so its number already
         // included the ~15 MB of memcpy at the bottom of this function and the
@@ -195,14 +207,9 @@ namespace threepp {
         }
         if (gpuDraws) {
             for (const auto& sp : entrySpans_) {
-                if (!sp.inst || sp.isFree || sp.hidden || sp.count == 0u || sp.fadeAny || !sp.localBoundsValid) continue;
+                const BlasRecord* rec = drawGenEligibleRecord(sp);
+                if (!rec) continue;
                 const MeshEntry& e0 = lastVisibleEntries_[sp.first];
-                if (!e0.isInstanced || e0.isOverlay || e0.sensorOnly || e0.isParticleField || e0.isVertexInterop ||
-                    e0.isSkinned || e0.isDisplaced || e0.isGrass || e0.isMorphed || e0.isTet)
-                    continue;
-                const BlasRecord* rec = resolveBlasForEntry(e0);
-                // A record with a LOD chain picks per entry (en.lodLevel): CPU.
-                if (!rec || rec->vertex.handle == VK_NULL_HANDLE || !rec->lodLevels.empty()) continue;
                 const auto matSp = e0.mesh->material();
                 const Material* sm = matSp.get();
                 uint32_t matFlags = 0u;

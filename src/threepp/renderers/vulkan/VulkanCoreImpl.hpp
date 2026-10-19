@@ -2516,6 +2516,16 @@ namespace threepp {
         uint32_t drawGenExpectedFrame_ = 0;
         std::array<std::vector<uint32_t>, 4> indirectCpuPosScratch_;// bucket position of each CPU record
         void prepareDrawGen(uint32_t frame);
+        // The span's record when draw_gen.comp may write its draws (the
+        // primary view's eligibility, minus the per-frame conditions), else
+        // null. One predicate for buildIndirectDrawData and the frustum cull.
+        const BlasRecord* drawGenEligibleRecord(const EntrySpan& sp);
+        // The primary view's frame hands draw_gen.comp spans to cull (stage 4):
+        // the CPU cull keeps only its span-level answer for them.
+        [[nodiscard]] bool drawGenCullsOnGpu() const {
+            return !curView_->secondary && gpuDrawGen_ && gpuInstanceExpand_ && drawGen_ && instExpand_ &&
+                   !gpuDrawGenCheck_ && !occlusionCullingEnabled_;
+        }
         void recordDrawGen(VkCommandBuffer cb, uint32_t frame);
         bool verifyDrawGen(VulkanRenderer::DrawGenCheck& out);
         uint32_t instExpandMatrixTotal_ = 0;// matrices in the pool
