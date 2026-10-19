@@ -958,6 +958,16 @@ namespace threepp {
         // shrinks the pool.
         void reserveEntrySlots(uint32_t entries);
 
+        // Whether a mesh's admission has landed: it has renderer entries (its
+        // BLAS, its textures uploaded, its rows written), so showing it is a
+        // flip of its visibility and nothing more. A mesh added hidden with
+        // Object3D::resident is admitted over the frames after its slot edit;
+        // until this says true, showing it pays that admission on the frame of
+        // the show. False for a mesh the renderer holds no entries for (not
+        // rendered yet, removed, or hidden before its first render without
+        // resident). As of the last render(); matched by Object3D::id.
+        [[nodiscard]] bool admitted(const Object3D& mesh) const;
+
         // HDR bloom, added in linear HDR before the tone-map curve. 0 disables.
         void setBloomIntensity(float intensity);
         [[nodiscard]] float bloomIntensity() const;

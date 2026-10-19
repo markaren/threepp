@@ -10917,6 +10917,10 @@ class VulkanRenderer:
         
         Returns a handle (> 0), or 0 if the view could not be created — notably when render() has not run yet, since a view shares the primary's render pass and pipelines.
         """
+    def admitted(self, mesh: Object3D) -> bool:
+        """
+        Whether the mesh's admission has landed: it has renderer entries (its BLAS, its textures uploaded, its rows written), so showing it is a flip of its visibility and nothing more. A mesh added hidden with resident = True is admitted over the frames after it was added; until this says True, showing it pays that admission on the frame of the show. A streamed world shows a prefetched cell once its meshes are admitted. False for a mesh the renderer holds no entries for (not rendered yet, removed, or hidden before its first render without resident). As of the last render().
+        """
     def disable_clouds(self) -> None:
         """
         Turn the volumetric cloud layer off (default).

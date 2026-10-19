@@ -3008,6 +3008,14 @@ namespace threepp {
         return stats;
     }
 
+    bool VulkanRenderer::admitted(const Object3D& mesh) const {
+        // One span per mesh; spans are a few per thousand entries, so a scan
+        // is cheaper than a map kept in step with every slot edit.
+        for (const auto& sp : core()->entrySpans_)
+            if (!sp.isFree && sp.meshId == mesh.id) return !sp.admitPending;
+        return false;
+    }
+
     void VulkanRenderer::reserveEntrySlots(uint32_t entries) {
         // Taken by the next scene build (the first lays the pool out at it,
         // a slot edit grows it there): never mid-frame.

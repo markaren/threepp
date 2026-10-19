@@ -681,6 +681,48 @@ def test_auto_lod_opt_out_queues_no_chain():
         renderer.sim_time = None
 
 
+def test_admitted_says_when_a_hidden_mesh_can_be_shown_for_free(vk_renderer):
+    """renderer.admitted(mesh): whether a mesh's admission has landed, so that a
+    streamed world can show a prefetched cell once it costs nothing to show. A
+    mesh added hidden with resident = True is admitted over the frames after it
+    was added (its BLAS, its map's encode and upload); shown before that, its
+    show pays the admission on the frame of the show. Until 2026-10-20 only the
+    global admission counters said anything."""
+    scene, cam = make_scene()
+    plain = tp.Mesh(tp.BoxGeometry(0.3, 0.3, 0.3), tp.MeshStandardMaterial())
+    plain.position.set(-1.0, 0.5, 0.0)
+    scene.add(plain)
+    mat = tp.MeshStandardMaterial()
+    mat.map = tp.data_texture(np.random.default_rng(3).integers(0, 255, (512, 512, 4), dtype=np.uint8), True)
+    ahead = tp.Mesh(tp.SphereGeometry(0.3, 61, 31), mat)
+    ahead.position.set(0.8, 0.0, 0.0)
+    ahead.visible = False
+    ahead.resident = True
+    never = tp.Mesh(tp.BoxGeometry(0.2, 0.2, 0.2), tp.MeshStandardMaterial())
+    assert not vk_renderer.admitted(never), "a mesh the renderer never saw"
+    vk_renderer.render(scene, cam)                        # a new scene: its first render rebuilds (admits all)
+    assert vk_renderer.admitted(plain), "a shown mesh is admitted by its first render"
+    scene.add(ahead)                                      # into a live scene: a slot edit places it
+    vk_renderer.render(scene, cam)
+    sync = os.environ.get("THREEPP_VULKAN_SYNC_ADMIT") == "1"
+    assert vk_renderer.admitted(ahead) == sync, "the hidden mesh's admission landed on its add frame"
+    s0 = vk_renderer.tlas_stats
+    frames = 0
+    while not vk_renderer.admitted(ahead) and frames < 120:
+        vk_renderer.render(scene, cam)
+        frames += 1
+    assert vk_renderer.admitted(ahead), "the hidden mesh was never admitted"
+    print(f"\nthe hidden mesh admitted {frames} frames after its add frame")
+    ahead.visible = True
+    vk_renderer.render(scene, cam)
+    s1 = vk_renderer.tlas_stats
+    assert s1["structural_rebuilds"] == s0["structural_rebuilds"]
+    assert vk_renderer.admitted(ahead)
+    scene.remove(ahead)
+    vk_renderer.render(scene, cam)
+    assert not vk_renderer.admitted(ahead), "a removed mesh holds no entries"
+
+
 def test_domain_randomisation_swaps_are_slot_edits(vk_renderer):
     """Domain randomisation: every reset gives 50 meshes a new material or a new
     map (a texture of its own each time). Until 2026-10-20 every reset was a

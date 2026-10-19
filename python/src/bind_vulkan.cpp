@@ -1933,6 +1933,17 @@ namespace threepp_py {
                      "that size, or the next slot edit grows it there, instead of growing as it "
                      "fills. Never shrinks the pool. tlas_stats['slot_capacity'] says what it "
                      "holds.")
+                .def("admitted",
+                     [](PyVulkanRenderer& r, const Object3D& mesh) { return r.native().admitted(mesh); },
+                     py::arg("mesh"),
+                     "Whether the mesh's admission has landed: it has renderer entries (its BLAS, its "
+                     "textures uploaded, its rows written), so showing it is a flip of its visibility "
+                     "and nothing more. A mesh added hidden with resident = True is admitted over the "
+                     "frames after it was added; until this says True, showing it pays that admission "
+                     "on the frame of the show. A streamed world shows a prefetched cell once its "
+                     "meshes are admitted. False for a mesh the renderer holds no entries for (not "
+                     "rendered yet, removed, or hidden before its first render without resident). As "
+                     "of the last render().")
                 .def_property("deferred_ao",
                               [](PyVulkanRenderer& r) { return r.native().deferredAO(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setDeferredAO(v); },

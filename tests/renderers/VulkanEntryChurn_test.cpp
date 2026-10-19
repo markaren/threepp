@@ -100,6 +100,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -740,10 +741,17 @@ int main() {
             }
             cell->visible = false;
             scene.add(cell);
+            const auto admittedCount = [&] {
+                int n = 0;
+                for (const auto& c : cell->children) n += renderer.admitted(*c) ? 1 : 0;
+                return n;
+            };
             const double addMs = frame(-1, 0).wallMs;
+            const int admittedAtAdd = admittedCount();
             const double afterAddMs = frame(-1, 1).wallMs;
             std::vector<double> between;// the frames the admission lands on
             for (int f = 0; f < 180; ++f) between.push_back(frame(-1, kGap).wallMs);
+            const int admittedBeforeShow = admittedCount();
             const auto a1 = renderer.tlasStats();
             cell->visible = true;
             const double showMs = frame(-1, 0).wallMs;
@@ -769,6 +777,12 @@ int main() {
                           a1.admissionsDeferred - a0.admissionsDeferred == static_cast<uint64_t>(kAhead));
                     check("a cell admitted hidden: every admission landed before the show",
                           a1.admissionsLanded - a0.admissionsLanded == static_cast<uint64_t>(kAhead));
+                    std::printf("admitted(): %d of %d meshes after the add frame, %d before the show\n",
+                                admittedAtAdd, kAhead, admittedBeforeShow);
+                    check("a cell admitted hidden: admitted() false for each mesh after its add frame",
+                          admittedAtAdd == 0);
+                    check("a cell admitted hidden: admitted() true for each mesh before its show",
+                          admittedBeforeShow == kAhead);
                     check("a cell admitted hidden: the add frame within 4x the quiet median (one event)",
                           std::max(addMs, afterAddMs) <= std::max(kHitchMaxRatio * q, q + kHitchMaxSlackMs));
                     check("a cell admitted hidden: the frames it lands on within 4x",
@@ -898,8 +912,9 @@ int main() {
             };
             int events = 0;
             std::vector<double> cost;
-            const auto settle = [&](const char* what) {
+            const auto settle = [&](const char* what, const std::function<void()>& afterEvent = {}) {
                 const double ev = frame(-1, 0).wallMs;
+                if (afterEvent) afterEvent();
                 if (dump) dumpFrame("churn_grass", events, 0, 0);
                 cost.push_back(std::max(ev, frame(-1, 1).wallMs));
                 if (dump) dumpFrame("churn_grass", events, 0, 1);
@@ -930,8 +945,10 @@ int main() {
             ahead->visible = false;
             ahead->resident = true;
             scene.add(ahead);
-            settle("a field added hidden");
+            bool aheadAdmittedAtAdd = true;
+            settle("a field added hidden", [&] { aheadAdmittedAtAdd = renderer.admitted(*ahead); });
             for (int f = 0; f < 24; ++f) frame(-1, kGap);
+            const bool aheadAdmittedBeforeShow = renderer.admitted(*ahead);
             const auto a1 = renderer.tlasStats();
             ahead->visible = true;
             settle("the hidden field shown");
@@ -954,10 +971,17 @@ int main() {
                         percentile(cost, 1.0), q, mem0 / MiB, mem1 / MiB);
             if (!slotsOff) {
                 check("grass fields: no structural rebuild", r1.structuralRebuilds == r0.structuralRebuilds);
-                if (!syncAdmit)
+                if (!syncAdmit) {
                     check("grass fields: the hidden one admitted over the frames after, landed before its show",
                           a1.admissionsDeferred - a0.admissionsDeferred == 1u &&
                                   a1.admissionsLanded - a0.admissionsLanded == 1u);
+                    // A field has no maps to encode: the admissions that land at the
+                    // end of a lean frame take it on its add frame already.
+                    std::printf("admitted(): the hidden field %s after its add frame, %s before its show\n",
+                                aheadAdmittedAtAdd ? "yes" : "no", aheadAdmittedBeforeShow ? "yes" : "no");
+                    check("grass fields: admitted() true for the hidden field before its show",
+                          aheadAdmittedBeforeShow);
+                }
                 check("grass fields: every field's state freed with it", r1.recordsPruned - r0.recordsPruned >= 5u);
                 check("grass fields: the worst event within 4x the quiet median",
                       percentile(cost, 1.0) <= std::max(kHitchMaxRatio * q, q + kHitchMaxSlackMs));
