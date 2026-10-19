@@ -1332,6 +1332,16 @@ namespace threepp {
         std::vector<float> motionScratch_;
         uint32_t motionScratchVersion_ = 0;
         std::array<uint32_t, kFramesInFlight> motionUploadedVersion_{};
+        // The entry ranges of motionScratch_ each frame-in-flight slot has not
+        // received yet: one moving mesh re-sends its own blocks, not the
+        // array (3.2 MB at 50k entries, every frame anything moved).
+        std::array<DescDirtyRanges, kFramesInFlight> motionDirty_{};
+        void markMotionDirty(uint32_t first, uint32_t count) {
+            for (auto& d : motionDirty_) d.mark(first, count);
+        }
+        void markMotionWhole() {
+            for (auto& d : motionDirty_) d.markWhole();
+        }
         // TLAS refit instance staging, swapped with pendingTlasInstances_ so
         // both vectors keep their capacity across frames (a fresh 4.8 MB
         // allocation per moving frame at 100k instances otherwise).

@@ -511,6 +511,7 @@ int main() {
             scene.remove(*forest);
             for (auto& g : active) scene.remove(*g);
             for (auto& m : hiddenMeshes) scene.remove(*m);
+            if (mover) scene.remove(*mover);
             for (int f = 0; f < 6; ++f) frame(-1, kGap);
             const auto s1 = renderer.tlasStats();
             std::printf("\nevery mesh removed: %llu TLAS instances, %llu structural rebuilds\n",

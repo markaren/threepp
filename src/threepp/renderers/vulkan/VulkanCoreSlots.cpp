@@ -681,6 +681,11 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             stickyActiveCount_ = 0;
             for (const uint32_t v : meshMovedSticky_)
                 if (v > 0u) ++stickyActiveCount_;
+            // The motion rows this edit wrote, and the slots it appended.
+            for (const RowCopy& c : copies) markMotionDirty(c.dst, c.count);
+            for (const RowFill& fl : fills) markMotionDirty(fl.dst, fl.count);
+            for (const RowRange& t : tombs) markMotionDirty(t.first, t.count);
+            if (newSize > oldSize) markMotionDirty(static_cast<uint32_t>(oldSize), newSize - static_cast<uint32_t>(oldSize));
             ++motionScratchVersion_;
             cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
             ++drawInputsVersion_;

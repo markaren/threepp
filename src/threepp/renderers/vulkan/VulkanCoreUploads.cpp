@@ -175,10 +175,13 @@ namespace threepp {
                                     kIdentity, 64);
                     sp.motionNonIdentity = false;
                     changedAny = true;
+                    markMotionDirty(sp.first, sp.count);
                 }
                 continue;
             }
             bool spanNonIdentity = false;
+            const bool changedBefore = changedAny;
+            changedAny = false;
             for (uint32_t j = 0; j < sp.count; ++j) {
                 const size_t i = size_t(sp.first) + j;
                 const float* cur = entries[i].worldMatrix.data();
@@ -250,6 +253,8 @@ namespace threepp {
                 changedAny = true;
             }
             if (spanNonIdentity) sp.motionNonIdentity = true;
+            if (changedAny) markMotionDirty(sp.first, sp.count);
+            changedAny = changedAny || changedBefore;
         }
         if (changedAny) ++motionScratchVersion_;
         profA.stop();
@@ -260,9 +265,26 @@ namespace threepp {
         // re-copies every entry's block.
         if (motionUploadedVersion_[frame] != motionScratchVersion_) {
             THREEPP_CPUPROF("frame.G_uploadMotion");
-            uploadHostVisible(ctx->allocator(), motionMatBuffers[frame],
-                              motionScratch_.data(),
-                              motionScratch_.size() * sizeof(float));
+            auto& dirty = motionDirty_[frame];
+            if (dirty.whole || !dirty.any()) {
+                uploadHostVisible(ctx->allocator(), motionMatBuffers[frame],
+                                  motionScratch_.data(),
+                                  motionScratch_.size() * sizeof(float));
+            } else {
+                // Only what changed since this slot's last upload.
+                void* mapped = nullptr;
+                check(vmaMapMemory(ctx->allocator(), motionMatBuffers[frame].alloc, &mapped),
+                      "vmaMapMemory(motion ranges)");
+                for (auto [first, last] : dirty.ranges) {
+                    last = std::min<uint32_t>(last, count);
+                    if (first >= last) continue;
+                    const VkDeviceSize off = VkDeviceSize(first) * 64u, n = VkDeviceSize(last - first) * 64u;
+                    std::memcpy(static_cast<uint8_t*>(mapped) + off, &motionScratch_[size_t(first) * 16u], n);
+                    flushHostWrites(ctx->allocator(), motionMatBuffers[frame].alloc, off, n);
+                }
+                vmaUnmapMemory(ctx->allocator(), motionMatBuffers[frame].alloc);
+            }
+            dirty.clear();
             motionUploadedVersion_[frame] = motionScratchVersion_;
         }
     }
@@ -289,6 +311,7 @@ namespace threepp {
         // New layout ⇒ every FIF slot's contents are stale regardless of
         // version equality (the buffers may have been reallocated too).
         motionUploadedVersion_.fill(motionScratchVersion_ - 1u);
+        markMotionWhole();
     }
 
     // Upload meshMovedBits_ to meshMovedBitsBuffers[frame]. Caller must have
@@ -615,8 +638,10 @@ namespace threepp {
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                         VMA_ALLOCATION_CREATE_MAPPED_BIT);
         motionMatBufferCapacity[frame] = newCap;
-        // New buffer is undefined; force the next upload to actually run.
+        // New buffer is undefined; force the next upload to actually run,
+        // and send it whole.
         motionUploadedVersion_[frame] = motionScratchVersion_ - 1u;
+        motionDirty_[frame].markWhole();
         return true;
     }
 
