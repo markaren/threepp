@@ -3,6 +3,7 @@
     python play_kuka_grasp.py --policy kuka_grasp.pt                     # three arms, one per start family
     python play_kuka_grasp.py --policy kuka_grasp.pt --layout reaching   # one arm, Reaching starts
     python play_kuka_grasp.py --policy kuka_grasp.pt --shot strip.png    # headless: frames of the first 0.8 s
+    python play_kuka_grasp.py --policy kuka_grasp.pt --video grasp.mp4   # headless: 15 s, 1920x1080, 50 fps
 
 The env is the training env (pool mode, GPU PhysX) built with the URDF's visual meshes; each
 frame the meshes take the GPU link and cube poses, so what is drawn is what the evaluation
@@ -141,6 +142,72 @@ def arm_camera(i, aspect):
     return cam
 
 
+def video_camera(i, aspect):
+    """A camera on arm i framed wider than arm_camera: the lifts swing the cube up and back."""
+    cam = tp.PerspectiveCamera(42, aspect, 0.05, 50.0)
+    cam.up.set(0, 0, 1)
+    x0 = i * C.SPACING
+    cam.position.set(x0 + 1.75, -1.55, 1.2)
+    cam.look_at(x0 + 0.3, 0.0, 0.68)
+    return cam
+
+
+def _font(size):
+    from PIL import ImageFont
+    for name in ("segoeui.ttf", "arial.ttf", "DejaVuSans.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            pass
+    return ImageFont.load_default(size=size)
+
+
+def make_video(env, scene, control_step, path, seconds, families, policy_name):
+    """Real time at the 50 Hz control rate, one control step per frame: a 1280x1080 tile of the
+    first arm on the left, the other arms as 640x540 tiles stacked on the right (each rendered at
+    1280x1080 and box-filtered down), labels and lift counts drawn with PIL, piped to ffmpeg."""
+    from PIL import Image, ImageDraw
+    from threepp import capture
+    from threepp.lesson.media import FramePipe, ffmpeg_exe, rawvideo_args, shrink
+    W, H, fps = 1920, 1080, int(round(1.0 / env.dt))
+    exe = ffmpeg_exe()
+    if exe is None:
+        raise SystemExit("no ffmpeg: pip install imageio-ffmpeg")
+    renderer = capture.make_renderer("gl", (1280, 1080))
+    cams = [video_camera(i, 1280 / 1080) for i in range(len(families))]
+    names = {REACHING: "Reaching start (held-out cells)", STABLE_GRASP: "Stable Grasp start",
+             NEAR_GOAL: "Near-Goal start"}
+    big, small, cap = _font(40), _font(26), _font(28)
+    pipe = FramePipe(rawvideo_args(exe, W, H, fps) + ["-c:v", "libx264", "-pix_fmt", "yuv420p",
+                                                      "-crf", "18", "-preset", "medium", path])
+    n = int(round(seconds * fps))
+    for k in range(n):
+        control_step()
+        sync_meshes(env)
+        frame = np.zeros((H, W, 3), np.uint8)
+        tiles = [capture.render(scene, cam, backend=renderer).image for cam in cams]
+        frame[:, 0:1280] = tiles[0]
+        for j, t in enumerate(tiles[1:3]):
+            frame[j * 540:(j + 1) * 540, 1280:1920] = shrink(t, 2)
+        img = Image.fromarray(frame)
+        d = ImageDraw.Draw(img)
+        d.line([(1280, 0), (1280, H)], fill=(12, 15, 20), width=4)
+        d.line([(1280, 540), (W, 540)], fill=(12, 15, 20), width=4)
+        boxes = [(28, 24, big), (1280 + 20, 16, small), (1280 + 20, 540 + 16, small)]
+        for i, f in enumerate(families[:3]):
+            x, y, font = boxes[i]
+            d.text((x, y), names[f], fill=(235, 238, 242), font=font)
+            d.text((x, y + (52 if i == 0 else 34)), f"lifted {env.successes[i]} of {env.episodes[i]} episodes",
+                   fill=(150, 220, 160), font=small)
+        d.text((28, H - 92), "KUKA iiwa 14 + parallel gripper, PPO in threepp: the cube is held by "
+               "finger friction only", fill=(225, 228, 232), font=cap)
+        d.text((28, H - 52), f"{policy_name}, real time. Green cube: lifted and held between the fingers",
+               fill=(165, 172, 182), font=small)
+        pipe.write(np.asarray(img))
+    code = pipe.close()
+    return code, n
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--policy", default=os.path.join(_HERE, "kuka_grasp.pt"))
@@ -152,11 +219,16 @@ def main():
                     help="seconds the --shot frames spread over from the episode start (a success "
                          "ends the episode, so a longer span shows the arm's next cell)")
     ap.add_argument("--seconds", type=float, default=0.0, help="auto-quit after this long (self-test)")
+    ap.add_argument("--video", metavar="MP4", help="headless: write a real-time video (families layout)")
+    ap.add_argument("--video-seconds", type=float, default=15.0)
     args = ap.parse_args()
     if not os.path.exists(args.policy):
         raise SystemExit(f"no policy at {args.policy}; train one with train_kuka_grasp.py")
 
     ac, norm, meta = load_policy(args.policy, device="cuda")
+    if "mode" not in meta:
+        raise SystemExit(f"{args.policy} predates the port to the current env (no 'mode' in its meta); "
+                         "train one with train_kuka_grasp.py")
     families = LAYOUTS[args.layout]
     env = ViewerEnv(families, viewer_pool("cuda"), seed=args.seed)
     action = meta.get("action", "absolute")
@@ -172,6 +244,14 @@ def main():
     scene = build_scene(env)
     print(f"[play] {os.path.basename(args.policy)} ({meta.get('sampler', '?')}, {action} actions, "
           f"iteration {meta.get('iter', '?')}); arms: {', '.join(FAMILIES[f] for f in families)}")
+
+    if args.video:
+        code, n = make_video(env, scene, control_step, args.video, args.video_seconds, families,
+                             f"{os.path.basename(args.policy)} ({meta.get('sampler', '?')} pool, "
+                             f"iteration {meta.get('iter', '?')})")
+        print(f"[play] wrote {args.video}: {n} frames, ffmpeg exit {code}; lifted per arm "
+              f"{env.successes} of {env.episodes} finished episodes")
+        return
 
     if args.shot:
         from threepp import capture

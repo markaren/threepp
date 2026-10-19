@@ -87,6 +87,8 @@ def evaluate(env, act_fn, action="delta"):
 
 def policy_fn(path, device):
     ac, norm, meta = load_policy(path, device)
+    if "mode" not in meta:
+        raise SystemExit(f"{path} predates the port to the current env (no 'mode' in its meta)")
     ac.eval()
 
     def act(obs, t):
