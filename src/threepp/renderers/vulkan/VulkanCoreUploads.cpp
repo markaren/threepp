@@ -629,7 +629,9 @@ namespace threepp {
     bool VulkanRenderer::Impl::ensureMotionMatCapacity(uint32_t frame, uint32_t needed) {
         if (needed <= motionMatBufferCapacity[frame]) return false;
         const uint32_t newCap = std::max<uint32_t>(needed, motionMatBufferCapacity[frame] * 2u);
-        destroyBuffer(ctx->allocator(), motionMatBuffers[frame]);
+        // Retired, not destroyed: a slot pool growth grows every frame's
+        // buffer ahead of the fence waits, while the frames in flight read them.
+        retire(std::move(motionMatBuffers[frame]));
         motionMatBuffers[frame] = createBuffer(
                 ctx->allocator(), ctx->device(),
                 /*size*/ newCap * 16 * sizeof(float),
@@ -653,7 +655,7 @@ namespace threepp {
         const uint32_t newCap = std::max<uint32_t>(
                 neededWords,
                 static_cast<uint32_t>(meshMovedBitsBufferCapacity[frame] * 2u));
-        destroyBuffer(ctx->allocator(), meshMovedBitsBuffers[frame]);
+        retire(std::move(meshMovedBitsBuffers[frame]));// as above
         meshMovedBitsBuffers[frame] = createBuffer(
                 ctx->allocator(), ctx->device(),
                 /*size*/ newCap * sizeof(uint32_t),

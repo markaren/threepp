@@ -45,7 +45,8 @@
 // live field may not (until 2026-10-20 any field sent every slot edit back to
 // the rebuild). Then the forest grows to its whole capacity at once, more
 // entries than the slot pool the last rebuild laid out: the pool grows in place
-// (one device wait, no rebuild). GrassMesh fields (wind-swayed, each its own
+// (no device wait, no rebuild), and a reservation (reserveEntrySlots) sizes it
+// up front. GrassMesh fields (wind-swayed, each its own
 // BLAS) are added, detached, re-attached, swapped, admitted hidden and dropped,
 // each a slot edit. A last phase removes every mesh (no TLAS instance left),
 // renders, and adds some back.
@@ -635,7 +636,16 @@ int main() {
         }
 
         // ── The slot pool outgrown ───────────────────────────────────────────
+        // In place and, since 2026-10-20, with no device wait: the old buffers
+        // go to the frames in flight's retire queue. A growth stays a hitch
+        // (tens of MB of buffers made anew and the old ones freed), so a
+        // reservation (reserveEntrySlots, a streamed world sizing its pool up
+        // front) is taken by the next edit, and the forest at its whole
+        // capacity again fits without another growth.
         {
+            std::vector<double> quiet;
+            for (int f = 0; f < 16; ++f) quiet.push_back(frame(-1, kGap).wallMs);
+            const double q = percentile(quiet, 0.5);
             const auto g0 = renderer.tlasStats();
             const size_t countBefore = forest->count();
             forest->setCount(kInstCapacity);
@@ -646,20 +656,57 @@ int main() {
                 if (dump && f < 2) dumpFrame("churn_growth", 0, 0, f);
             }
             const auto g1 = renderer.tlasStats();
-            std::printf("\nthe forest at its whole capacity (%zu -> %zu instances): %llu pool growths, %llu slot edits, "
-                        "%llu structural rebuilds, %llu history resets; frames %.2f, %.2f, %.2f ms\n",
+            std::printf("\nthe forest at its whole capacity (%zu -> %zu instances): %llu pool growths (pool %u -> %u), "
+                        "%llu slot edits, %llu structural rebuilds, %llu history resets; frames %.2f, %.2f, %.2f ms "
+                        "(quiet %.2f)\n",
                         countBefore, kInstCapacity,
-                        static_cast<unsigned long long>(g1.slotPoolGrowths - g0.slotPoolGrowths),
-                        static_cast<unsigned long long>(g1.slotEdits - g0.slotEdits),
+                        static_cast<unsigned long long>(g1.slotPoolGrowths - g0.slotPoolGrowths), g0.slotCapacity,
+                        g1.slotCapacity, static_cast<unsigned long long>(g1.slotEdits - g0.slotEdits),
                         static_cast<unsigned long long>(g1.structuralRebuilds - g0.structuralRebuilds),
                         static_cast<unsigned long long>(g1.historyResets - g0.historyResets), growMs[0], growMs[1],
-                        growMs[2]);
+                        growMs[2], q);
             if (!slotsOff) {
                 check("the slot pool outgrown: it grows in place", g1.slotPoolGrowths > g0.slotPoolGrowths);
                 check("the slot pool outgrown: no structural rebuild", g1.structuralRebuilds == g0.structuralRebuilds);
             }
             check("the slot pool outgrown: no temporal history reset", g1.historyResets == g0.historyResets);
             forest->setCount(countBefore);
+            for (int f = 0; f < kGap; ++f) frame(-1, kGap);
+
+            const uint32_t want = g1.slotCapacity + 20000u;
+            renderer.reserveEntrySlots(want);
+            auto extra = buildCell(nextFreshCell++ % kCells, false);
+            scene.add(extra);
+            for (int f = 0; f < kGap; ++f) frame(-1, kGap);
+            const auto g2 = renderer.tlasStats();
+            // The same forest event again, now with no growth in it: what the
+            // growth adds is measured against this, not against a quiet frame
+            // (the event writes 8192 rows either way).
+            forest->setCount(kInstCapacity);
+            double sameMs[3] = {};
+            for (int f = 0; f < kGap; ++f) {
+                const FrameRow r = frame(-1, f);
+                if (f < 3) sameMs[f] = r.wallMs;
+            }
+            const auto g3 = renderer.tlasStats();
+            const double growWorst = std::max({growMs[0], growMs[1], growMs[2]});
+            const double sameWorst = std::max({sameMs[0], sameMs[1], sameMs[2]});
+            std::printf("a reservation of %u entries: pool %u after the next edit (%llu growths), %u with the forest "
+                        "at its whole capacity again (%llu growths; frames %.2f, %.2f, %.2f ms against %.2f, %.2f, "
+                        "%.2f with the growth)\n",
+                        want, g2.slotCapacity, static_cast<unsigned long long>(g2.slotPoolGrowths - g1.slotPoolGrowths),
+                        g3.slotCapacity, static_cast<unsigned long long>(g3.slotPoolGrowths - g2.slotPoolGrowths),
+                        sameMs[0], sameMs[1], sameMs[2], growMs[0], growMs[1], growMs[2]);
+            if (!slotsOff) {
+                check("a reservation: the next edit grows the pool to it", g2.slotCapacity >= want);
+                check("a reservation: what fits in it grows nothing", g3.slotPoolGrowths == g2.slotPoolGrowths);
+                // A growth is tens of MB of buffers made anew: bounded against
+                // the same event without one, not against a quiet frame.
+                check("the slot pool outgrown: the growth's worst frame within 2x the same event's + 5 ms",
+                      growWorst <= 2.0 * sameWorst + 5.0);
+            }
+            forest->setCount(countBefore);
+            scene.remove(*extra);
             for (int f = 0; f < kGap; ++f) frame(-1, kGap);
         }
 

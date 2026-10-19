@@ -1398,8 +1398,11 @@ namespace threepp {
         // slotCapacity_: the entries every entry-indexed GPU buffer (the
         // geometry / material desc rings, the TLAS instance buffers and
         // storage, the motion and moved-bit buffers) was sized for at the
-        // last structural rebuild. Growing past it is a structural rebuild.
+        // last structural rebuild, or grown to since (growSlotPool).
         uint32_t slotCapacity_ = 0;
+        // VulkanRenderer::reserveEntrySlots: the least the pool is laid out or
+        // grown to, by the next rebuild or slot edit.
+        uint32_t reservedSlots_ = 0;
         // Set by trySlotEdit on the frame it edits; read by the lean tail
         // (a class change: full TLAS build, draw inputs, emitter re-walk).
         bool slotsEditedThisFrame_ = false;
@@ -3211,14 +3214,15 @@ namespace threepp {
         // the old pair, this one the new.
         void compactAsync(const AsyncCompaction& c);
         bool blasRereferenced_ = false;
-        // A slot edit that needs more slots than the pool holds: after one
-        // device wait, every pool-sized GPU buffer (the geometry and material
-        // desc rings, the motion matrices and moved bits, the TLAS and its
-        // instance buffers) is made anew for 1.5x what the edit needs and
-        // refilled from its host copy, and the sets that name them are
-        // rewritten, as the rebuild does; the entries, spans and every
-        // temporal history stay. VulkanCoreSlots.cpp.
-        void growSlotPool(uint32_t need);
+        // A slot edit that needs more slots than the pool holds: every
+        // pool-sized GPU buffer (the geometry and material desc rings, the
+        // motion matrices and moved bits, the TLAS and its instance buffers)
+        // is made anew for `capacity` entries and refilled from its host copy;
+        // the old ones are retired with this frame (the frames in flight keep
+        // reading them), and each frame-in-flight's sets that name them are
+        // rewritten after its own fence. No device wait; the entries, spans
+        // and every temporal history stay. VulkanCoreSlots.cpp.
+        void growSlotPool(uint32_t capacity);
 
         // ── Static BLAS compaction ───────────────────────────────────────────
         // A static record (built once, traced for its lifetime) is built

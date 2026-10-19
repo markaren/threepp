@@ -3480,7 +3480,8 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // into (VulkanCoreSlots.cpp): every entry-indexed GPU buffer this
             // build makes is sized for it. 1.5x and not 2x: the material desc
             // is 608 B per entry per ring slot, three slots.
-            slotCapacity_ = std::max<uint32_t>(1024u, static_cast<uint32_t>(entries.size() + entries.size() / 2u));
+            slotCapacity_ = std::max<uint32_t>({1024u, static_cast<uint32_t>(entries.size() + entries.size() / 2u),
+                                                reservedSlots_});
             std::vector<VkAccelerationStructureInstanceKHR> instances;
             instances.reserve(entries.size());
             // geomDescs / matDescs are ENTRIES-indexed: one slot per entry, with

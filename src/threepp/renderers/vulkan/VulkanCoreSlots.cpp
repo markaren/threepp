@@ -450,8 +450,11 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                 fills.push_back({dst, bs.first, bs.count, builtToSpan[b], b});
                 edited = true;
             }
-            // Every buffer the rows land in holds the pool.
-            if (highWater > slotCapacity_) growSlotPool(highWater);
+            // Every buffer the rows land in holds the pool (and a reservation
+            // made since the last build is taken here).
+            if (highWater > slotCapacity_ || reservedSlots_ > slotCapacity_)
+                growSlotPool(std::max<uint32_t>({1024u, highWater > slotCapacity_ ? highWater + highWater / 2u : 0u,
+                                                 reservedSlots_, slotCapacity_}));
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 if (highWater > motionMatBufferCapacity[f] ||
                     (highWater + 31u) / 32u > meshMovedBitsBufferCapacity[f])
@@ -1167,22 +1170,25 @@ void VulkanRenderer::Impl::reapRetiredRecords(bool all) {
             retiredRecords_.resize(keep);
         }
 
-void VulkanRenderer::Impl::growSlotPool(uint32_t need) {
+void VulkanRenderer::Impl::growSlotPool(uint32_t capacity) {
             THREEPP_CPUPROF("scene.3d_slotPoolGrowth");
-            // Nothing in flight names the buffers about to be freed.
-            THREEPP_CPUPROF_NAMED(gWait, "scene.G1_growWait");
-            vkDeviceWaitIdle(ctx->device());
-            flushRetireQueue();
-            reapAsyncOneShots(/*deviceIdle=*/true);
-            gWait.stop();
+            // No device wait (until 2026-10-20 there was one): this runs ahead
+            // of the frame's fence wait, so the frames in flight may still read
+            // every buffer below. They keep them: each old buffer is retired
+            // with this frame's serial and freed once both are done, and their
+            // descriptor sets are rewritten only after their own fences (the
+            // deferred-descriptor refresh, as for a texture swap). The wait was
+            // never the cost (1.5 ms): the new buffers are tens of MB the
+            // driver pages in on the GPU timeline, and the old ones' frees,
+            // 10-20 ms either way. reserveEntrySlots avoids a growth outright.
             THREEPP_CPUPROF_NAMED(gBufs, "scene.G2_growBuffers");
-            slotCapacity_ = std::max<uint32_t>(1024u, need + need / 2u);
+            slotCapacity_ = capacity;
             // The desc rings, every slot from the host copy (which the frame-
             // in-flight flushes carry deltas from).
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                destroyBuffer(ctx->allocator(), geometryDescsBuffers[f]);
+                retire(std::move(geometryDescsBuffers[f]));
                 uploadDescBuffer(geometryDescsBuffers[f], geomDescsCached_, slotCapacity_);
-                destroyBuffer(ctx->allocator(), materialDescsBuffers[f]);
+                retire(std::move(materialDescsBuffers[f]));
                 uploadDescBuffer(materialDescsBuffers[f], matDescsCached_, slotCapacity_);
                 ensureMotionMatCapacity(f, slotCapacity_);
                 ensureMeshMovedBitsCapacity(f, (slotCapacity_ + 31u) / 32u);
@@ -1216,6 +1222,19 @@ void VulkanRenderer::Impl::growSlotPool(uint32_t need) {
                     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
                     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
                     check(vkBeginCommandBuffer(cb, &bi), "begin TLAS clone cb");
+                    // The frame in flight may still be refitting or building the
+                    // old structure: the clone reads it after those writes.
+                    VkMemoryBarrier2 mb{};
+                    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    mb.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                    mb.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+                    mb.dstStageMask = ctx->asBuildStage2();
+                    mb.dstAccessMask = ctx->asReadAccess2() | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+                    VkDependencyInfo dep{};
+                    dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dep.memoryBarrierCount = 1;
+                    dep.pMemoryBarriers = &mb;
+                    vkCmdPipelineBarrier2(cb, &dep);
                     VkCopyAccelerationStructureInfoKHR copy{};
                     copy.sType = VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR;
                     copy.src = oldTlas;
@@ -1241,7 +1260,10 @@ void VulkanRenderer::Impl::growSlotPool(uint32_t need) {
             }
             gTlas.stop();
             THREEPP_CPUPROF_NAMED(gSets, "scene.G4_growDescriptors");
-            forEachLiveView([&] { rewriteDeferredDescriptors(); });
+            // Each frame-in-flight's deferred sets, after its own fence (this
+            // frame's in beginDeferredFrame, the other's when its frame comes);
+            // the raster and shadow sets likewise at their next use.
+            deferredDescDirty_.fill(true);
             for (auto& v : views_) {
                 v->rasterMatTexValid_.fill(0);
                 v->shadowMatTexValid_.fill(0);

@@ -3004,7 +3004,14 @@ namespace threepp {
         for (const auto& t : core()->materialTextures)
             if (t.view) ++inUse;
         stats.textureSlotsInUse = inUse;
+        stats.slotCapacity = core()->slotCapacity_;
         return stats;
+    }
+
+    void VulkanRenderer::reserveEntrySlots(uint32_t entries) {
+        // Taken by the next scene build (the first lays the pool out at it,
+        // a slot edit grows it there): never mid-frame.
+        core()->reservedSlots_ = std::max(core()->reservedSlots_, entries);
     }
 
     VulkanRenderer::FrameTimings VulkanRenderer::lastFrameTimings() const {

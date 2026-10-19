@@ -3874,9 +3874,12 @@ void VulkanRenderer::Impl::buildTlas(const std::vector<VkAccelerationStructureIn
 
             // (Re)allocate all in-flight instance buffers and seed every slot
             // with the current instances, so whichever slot the next per-frame
-            // refit overwrites is already a valid build input.
+            // refit overwrites is already a valid build input. The old ones are
+            // retired: a slot pool growth (no device wait) runs while the
+            // frames in flight still refit from theirs.
             for (uint32_t s = 0; s < kFramesInFlight; ++s) {
-                destroyBuffer(ctx->allocator(), tlasInstancesBuffers[s]);
+                retire(std::move(tlasInstancesBuffers[s]));
+                tlasInstancesBuffers[s] = {};
                 tlasInstancesBuffers[s] = createBuffer(
                         ctx->allocator(), ctx->device(), instBytes,
                         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |

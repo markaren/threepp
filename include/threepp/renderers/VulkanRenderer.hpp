@@ -918,10 +918,13 @@ namespace threepp {
             // wait; the rebuild compacts its own in place.
             uint64_t asyncCompactions = 0;
             // Slot edits that outgrew the slot pool (the entry-indexed GPU
-            // buffers, laid out at the last rebuild for 1.5x its entries) and
-            // grew it in place: one device wait and those buffers made anew,
-            // no rebuild of the entries.
+            // buffers, laid out at the last rebuild for 1.5x its entries, or
+            // for reserveEntrySlots) and grew it in place: those buffers made
+            // anew, the old ones kept for the frames in flight, no device wait
+            // and no rebuild of the entries.
             uint64_t slotPoolGrowths = 0;
+            // The entries the slot pool holds now (see reserveEntrySlots).
+            uint32_t slotCapacity = 0;
             // Records of geometries and images of textures that died, retired
             // by a slot edit (the structural rebuild prunes its own): what a
             // streamed world frees as it drops content.
@@ -944,6 +947,16 @@ namespace threepp {
             uint64_t swapEdits = 0;
         };
         [[nodiscard]] TlasStats tlasStats() const;
+
+        // Size the slot pool (the entry-indexed GPU buffers stable entry slots
+        // write into) for at least `entries` mesh entries, one per mesh and
+        // one per InstancedMesh instance. A streamed world that knows how much
+        // it will hold at once calls it before it streams: its pool is then
+        // laid out at that size by the first scene build, or grown to it by
+        // the next slot edit, instead of growing as it fills. A growth costs
+        // no device wait, but makes those buffers and the TLAS anew. Never
+        // shrinks the pool.
+        void reserveEntrySlots(uint32_t entries);
 
         // HDR bloom, added in linear HDR before the tone-map curve. 0 disables.
         void setBloomIntensity(float intensity);

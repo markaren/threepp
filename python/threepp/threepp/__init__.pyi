@@ -11054,6 +11054,10 @@ class VulkanRenderer:
         """
         Render the requested AOVs and return {name: (H, W, 3) uint8}.
         """
+    def reserve_entry_slots(self, entries: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Size the slot pool (the entry-indexed GPU buffers stable entry slots write into) for at least `entries` mesh entries, one per mesh and one per InstancedMesh instance. A streamed world that knows how much it will hold at once calls it before it streams: the first scene build lays the pool out at that size, or the next slot edit grows it there, instead of growing as it fills. Never shrinks the pool. tlas_stats['slot_capacity'] says what it holds.
+        """
     def reset_sensor_noise(self) -> None:
         """
         Restart the noise sequence -- call on episode reset so two episodes with the same seed produce the same frames.
@@ -11717,7 +11721,7 @@ class VulkanRenderer:
     @property
     def tlas_stats(self) -> dict:
         """
-        Scene build counters since the renderer was made: TLAS full builds and refits, the instance count of the latest one; structural_rebuilds (the entry list re-derived behind a device drain: a texture or geometry swapped on a mesh, a deformer added or removed, the entry pool outgrown), slot_edits (meshes added or removed, an InstancedMesh count changed, a first show: written into the entry slots in place, no drain) and history_resets (temporal histories wiped: a new environment, a resize, reset_temporal_history; never an object added or removed).
+        Scene build counters since the renderer was made: TLAS full builds and refits, the instance count of the latest one; structural_rebuilds (the entry list re-derived behind a device drain: a skinned, displaced, morphed or tet mesh or a ParticleField added or removed, a mesh changing class), slot_edits (meshes added or removed, a GrassMesh among them, an InstancedMesh count changed, a first show, a geometry, material or texture swap: written into the entry slots in place, no drain) and history_resets (temporal histories wiped: a new environment, a resize, reset_temporal_history; never an object added or removed), records_pruned, textures_pruned, texture_slots_in_use, texture_slot_fallbacks, admissions_deferred, admissions_landed, swap_edits, slot_pool_growths (slot edits that outgrew the slot pool and grew it in place, no device wait) and slot_capacity (the entries the pool holds now, see reserve_entry_slots).
         """
     @property
     def tone_mapping_exposure(self) -> float:
