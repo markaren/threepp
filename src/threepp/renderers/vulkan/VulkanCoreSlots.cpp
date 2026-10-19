@@ -408,6 +408,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             // descs below admit (a queue wait for that work, not a drain, and
             // none when the new content shares its assets).
             beginOneShotBatch();
+            THREEPP_CPUPROF_NAMED(seBlas, "scene.S3a_slotBlas");
             for (const auto& [gk, mesh] : toBuild) {
                 const auto geomSp = mesh->geometry();
                 auto rec = buildBlasFor(*geomSp, /*allowPacked=*/true, /*updatable=*/false, nullptr,
@@ -419,6 +420,9 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             // A field's MeshRepr proxy is nobody's Mesh geometry: the rebuild
             // admits it per field, and so does this (a lookup when it has one).
             for (const auto& fe : builtFields) ensureCachedBlas(fe.first->meshRepr().geometry);
+            seBlas.stop();
+            // The material descs, whose first sight of a texture uploads it.
+            THREEPP_CPUPROF_NAMED(seMats, "scene.S3b_slotMaterials");
             const size_t texCount0 = materialTextures.size();
             const size_t texFree0 = freeTextureSlots.size();
             // Per mesh, once: the rows every entry of a fill shares.
@@ -478,6 +482,8 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                 r.stableId = stableIdIfAssigned(m);
                 meshRows.emplace(&m, std::move(r));
             }
+            seMats.stop();
+            THREEPP_CPUPROF_NAMED(seSubmit, "scene.S3c_slotSubmit");
             // No host wait: the frame recorded next is submitted after this
             // batch on the same queue, and its graph's entry barrier orders it.
             // Under the async-compute pilot the TLAS builds on another queue,
@@ -489,6 +495,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             } else {
                 flushOneShotBatchAsync();
             }
+            seSubmit.stop();
             const bool texturesAdded = materialTextures.size() != texCount0 || freeTextureSlots.size() != texFree0;
             for (auto& [mesh, r] : meshRows) {
                 const auto rit = blasCache.find(mesh->geometry().get());

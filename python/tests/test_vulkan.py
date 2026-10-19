@@ -642,6 +642,58 @@ def test_auto_lod_chain_lands_on_a_fixed_frame_under_a_pinned_clock():
         renderer.sim_time = None
 
 
+def test_auto_lod_chain_lands_without_a_wait_when_the_replayable_schedule_is_off():
+    """The same sphere under the same pinned clock with replayable_lod_schedule
+    off: what a window game wants, which pins sim_time for its TAA and animation
+    timing and would otherwise pay each chain's generation time inside render()
+    (the dune buggy's race start: one ~600 ms frame). Nothing waits, so frames
+    end with the job still in the worker, and the chain lands when the worker is
+    done, as on the wall clock. drain_wait_ms (the time render() spent waiting
+    for the worker) stays 0. The control: a second sphere with the schedule back
+    on waits, and no frame ends with its job outstanding."""
+    canvas = tp.Canvas("vk-test-lod-unscheduled", width=W, height=H, headless=True, vsync=False)
+    renderer = tp.VulkanRenderer(canvas, flush_frames=1)
+    skip_without_ray_tracing(renderer)
+    assert renderer.replayable_lod_schedule is True       # the default replays
+    scene, cam = make_scene()
+    ball = tp.Mesh(tp.SphereGeometry(0.5, 384, 384), tp.MeshStandardMaterial())
+    ball.position.set(-1.2, 0.0, 0.0)
+    scene.add(ball)
+    frame = 0
+
+    def step():
+        nonlocal frame
+        renderer.sim_time = frame / 60.0
+        renderer.render(scene, cam)
+        frame += 1
+        return renderer.auto_lod_stats
+
+    try:
+        renderer.replayable_lod_schedule = False
+        assert renderer.replayable_lod_schedule is False
+        outstanding = 0
+        t0 = time.perf_counter()
+        stats = step()
+        while stats["chains_ready"] < 1 and time.perf_counter() - t0 < 60.0:
+            outstanding += stats["chains_queued"] > 0
+            stats = step()
+        assert stats["chains_ready"] == 1, "the sphere's chain never landed"
+        assert outstanding > 0, "every frame ended with the job taken: nothing showed the wait was gone"
+        assert stats["drain_wait_ms"] == 0.0
+
+        renderer.replayable_lod_schedule = True
+        ball2 = tp.Mesh(tp.SphereGeometry(0.5, 384, 384), tp.MeshStandardMaterial())
+        ball2.position.set(1.2, 0.0, 0.0)
+        scene.add(ball2)
+        for _ in range(40):
+            stats = step()
+            assert stats["chains_queued"] == 0, f"frame {frame - 1} ended with a chain still in the worker"
+        assert stats["chains_ready"] == 2, "the second sphere never got a chain"
+        assert stats["drain_wait_ms"] > 0.0
+    finally:
+        renderer.sim_time = None
+
+
 def test_aov_shapes(vk_renderer):
     scene, cam = make_scene()
     out = vk_renderer.render_aovs(scene, cam, ["rgb", "normals", "segmentation", "albedo"])

@@ -404,7 +404,8 @@ namespace threepp {
         // While pinned, auto-LOD also waits for its background chains instead
         // of taking whichever have finished, so a level switch lands on the
         // same frame however busy the machine is; the wait is each chain's
-        // generation time, once per geometry (see setAutoLod).
+        // generation time, once per geometry (see setAutoLod and
+        // setReplayableLodSchedule, which turns that wait off).
         // Negative disables and returns to the wall clock (the default).
         // Sensor pipelines should drive this with the same sim clock that
         // stamps their measurements (see extras/sensors/Sensor.hpp).
@@ -782,6 +783,24 @@ namespace threepp {
         void setAutoLod(bool enabled);
         [[nodiscard]] bool autoLod() const;
 
+        // The replayable auto-LOD schedule; on by default. With the clock
+        // pinned (setSimTime) the frame loop waits for each chain job it has
+        // queued, up to its per-frame budget, so the frame a chain lands on
+        // is a function of the scene and a replayed run switches level on
+        // the same frame (films, image comparisons and the golden tests rely
+        // on it). The cost is each chain's generation time, paid inside
+        // render() on the frames the chains land: a game that pins the clock
+        // for its TAA and animation timing gets it as hitches while the
+        // scene's chains are made (the dune buggy's race start: 33 of its
+        // first 60 frames over 16.7 ms, one of ~600 ms). Off, a pinned clock
+        // lands chains as the wall clock does, whenever the worker has them:
+        // nothing waits, and the frame a level switch lands on varies with
+        // machine load. Everything else setSimTime pins is unchanged. No
+        // effect on the wall clock, which never waits. Takes effect at the
+        // next render().
+        void setReplayableLodSchedule(bool enabled);
+        [[nodiscard]] bool replayableLodSchedule() const;
+
         // Auto-LOD screen-space error budget τ, in RENDER-scale pixels.
         // Selection picks the coarsest level whose projected simplification
         // error stays under τ (hysteresis raises a level only under 0.8·τ).
@@ -840,6 +859,10 @@ namespace threepp {
             // frame, each entry at the level selected for it (before GPU
             // occlusion culling): what a chain saves the raster.
             uint64_t trianglesDrawn = 0;
+            // Wall time render() has spent waiting for the chain worker, in
+            // ms, cumulative since construction: the replayable schedule's
+            // cost (setReplayableLodSchedule). Always 0 on the wall clock.
+            double drainWaitMs = 0.0;
         };
         [[nodiscard]] AutoLodStats autoLodStats() const;
 

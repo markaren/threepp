@@ -1933,6 +1933,22 @@ namespace threepp_py {
                               "Toggle automatic mesh LOD (background-simplified chains chosen "
                               "by projected screen-space error). Default ON; False pins every "
                               "mesh to full detail.")
+                .def_property("replayable_lod_schedule",
+                              [](PyVulkanRenderer& r) { return r.native().replayableLodSchedule(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setReplayableLodSchedule(v); },
+                              "With sim_time pinned, render() waits for each auto-LOD chain the\n"
+                              "background worker owes, so a chain lands on the same frame in every\n"
+                              "run (default True). Headless films, image comparisons and replayed\n"
+                              "captures leave it on: without it a level switch moves by a frame with\n"
+                              "machine load, and every stochastically shaded pixel near that mesh\n"
+                              "differs from then on. The cost is each chain's generation time inside\n"
+                              "render() on the frames the scene's chains land. A window game that pins\n"
+                              "sim_time for its TAA and animation timing pays it as hitches: the dune\n"
+                              "buggy's race start had 33 of its first 60 frames over 16.7 ms and one\n"
+                              "of ~600 ms, against 2-3 and 11 ms with the wait off. False lands chains\n"
+                              "as the wall clock does, when the worker has them; nothing else sim_time\n"
+                              "pins changes. No effect while sim_time is None. The time spent waiting\n"
+                              "is auto_lod_stats['drain_wait_ms'].")
                 // The GPU-driven instance producers (plans/gpu-driven-instances.md
                 // stages 1, 2, 4 and 5) as one switch: the expansion feeds the
                 // other two, and an A/B on real content wants all of them.
@@ -1973,13 +1989,16 @@ namespace threepp_py {
                                            d["blas_bytes"]    = s.blasBytes;
                                            d["chains_ready"]  = s.chainsReady;
                                            d["chains_queued"] = s.chainsQueued;
+                                           d["drain_wait_ms"] = s.drainWaitMs;
                                            py::list per;
                                            for (unsigned i = 0; i < 6; ++i) per.append(s.entriesPerLevel[i]);
                                            d["entries_per_level"] = per;
                                            return d;
                                        },
                                        "Auto-LOD counters: resident index/BLAS bytes, chains "
-                                       "ready/queued, and the per-level entry histogram.")
+                                       "ready/queued, the per-level entry histogram, and drain_wait_ms "
+                                       "(ms render() has waited for the chain worker, cumulative; see "
+                                       "replayable_lod_schedule).")
                 // ReSTIR DI master toggle. ON by default because it is what makes
                 // many-light and emissive-geometry scenes converge at 1 spp, and it
                 // is the path the renderer is tuned and golden-tested against. A
