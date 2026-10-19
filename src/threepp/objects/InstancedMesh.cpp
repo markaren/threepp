@@ -3,6 +3,7 @@
 
 #include "threepp/core/Raycaster.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 
 using namespace threepp;
@@ -93,6 +94,20 @@ void InstancedMesh::setColorAt(size_t index, const Color& color) {
     }
 
     color.toArray(this->instanceColor_->array(), index * 3);
+}
+
+void InstancedMesh::setColors(size_t offset, size_t n, const float* rgb) {
+
+    if (n == 0) return;
+    checkInstanceIndex(offset + n - 1, maxCount_);
+
+    if (!this->instanceColor_) {
+
+        this->instanceColor_ = FloatBufferAttribute ::create(std::vector<float>(maxCount_ * 3), 3);
+    }
+
+    std::copy_n(rgb, n * 3, this->instanceColor_->array().data() + offset * 3);
+    this->instanceColor_->needsUpdate();
 }
 
 void InstancedMesh::setMatrixAt(size_t index, const Matrix4& matrix) const {

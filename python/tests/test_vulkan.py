@@ -723,6 +723,55 @@ def test_admitted_says_when_a_hidden_mesh_can_be_shown_for_free(vk_renderer):
     assert not vk_renderer.admitted(ahead), "a removed mesh holds no entries"
 
 
+def test_instance_colours_set_in_bulk_reach_the_gpu(vk_renderer):
+    """InstancedMesh.set_colors marks the colours for upload itself (set_color_at
+    does not): a new run of tones shows in the frames after it, with no
+    instance_color_needs_update, and setting the first tones back draws what
+    set_color_at plus instance_color_needs_update drew."""
+    scene = tp.Scene()
+    scene.background = 0x000000
+    cam = tp.PerspectiveCamera(55, W / H, 0.1, 100)
+    cam.position.set(0.0, 0.0, 5.0)
+    cam.look_at(0, 0, 0)
+    n = 16
+    inst = tp.InstancedMesh(tp.BoxGeometry(0.8, 0.8, 0.8), tp.MeshBasicMaterial(), n)
+    for i in range(n):
+        inst.set_matrix_at(i, tp.Matrix4().make_translation(-1.5 + (i % 4), -1.5 + (i // 4), 0.0))
+    inst.instance_matrix_needs_update()
+    rng = np.random.default_rng(11)
+    first = rng.random((n, 3)).astype(np.float32)
+    for i in range(n):
+        inst.set_color_at(i, tp.Color(float(first[i, 0]), float(first[i, 1]), float(first[i, 2])))
+    inst.instance_color_needs_update()
+    scene.add(inst)
+
+    def settle():
+        for _ in range(24):
+            vk_renderer.render(scene, cam)
+        return vk_renderer.read_pixels()[..., :3].astype(np.int16)
+
+    a = settle()
+    inst.set_colors(1.0 - first)                          # no instance_color_needs_update
+    b = settle()
+    inst.set_colors(first)
+    c = settle()
+    changed = float(np.abs(a - b).mean())
+    # The tones themselves: pixels whose 3x3 neighbourhood is flat in both
+    # frames (the box edges still carry the temporal history of the swap).
+    def flat(img):
+        p = np.pad(img, ((1, 1), (1, 1), (0, 0)), mode="edge")
+        win = np.stack([p[y:y + img.shape[0], x:x + img.shape[1]] for y in range(3) for x in range(3)])
+        return (win.max(axis=0) - win.min(axis=0)).max(axis=2) <= 2
+    inner = flat(a) & flat(c)
+    d = np.abs(a - c).max(axis=2)
+    off_inner = float((d[inner] > 2).mean())
+    off_all = float((d > 8).mean())
+    print(f"\nbulk tones: mean change {changed:.1f}/255; set back: {100 * off_inner:.3f} % of {int(inner.sum())} "
+          f"flat pixels off by > 2/255 ({100 * off_all:.2f} % of all pixels by > 8, at the edges)")
+    assert changed > 10.0, "the tones set in bulk never reached the GPU"
+    assert inner.sum() > 1000 and off_inner < 0.001, "set_colors drew other tones than set_color_at"
+
+
 def test_domain_randomisation_swaps_are_slot_edits(vk_renderer):
     """Domain randomisation: every reset gives 50 meshes a new material or a new
     map (a texture of its own each time). Until 2026-10-20 every reset was a

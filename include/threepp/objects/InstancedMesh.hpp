@@ -36,6 +36,12 @@ namespace threepp {
 
         void setColorAt(size_t index, const Color& color);
 
+        // Colours for instances offset .. offset + n - 1 in one call: `rgb`
+        // holds 3 floats per instance (the components Color::toArray writes).
+        // Creates instanceColor() on the first call, as setColorAt does, and,
+        // unlike setColorAt, marks it for upload (once for the run).
+        void setColors(size_t offset, size_t n, const float* rgb);
+
         void setMatrixAt(size_t index, const Matrix4& matrix) const;
 
         // Per-instance LOD crossfade: Mesh::setFade for one instance. The first

@@ -187,6 +187,58 @@ def test_instanced_mesh_set_matrices():
         inst.set_matrices(flat, offset=1)  # 1 + 5 > 5
 
 
+def test_instanced_mesh_set_colors():
+    """set_colors writes a run of instance colours in one call (the pine forest
+    landed each streamed cell's tones one set_color_at call each, most of its
+    streamer's main-thread time). Same values as set_color_at, at an offset,
+    float32 or float64; a bad shape, dtype or a run past the capacity raises.
+    The time against the per-instance loop is printed."""
+    np = pytest.importorskip("numpy")
+    import time
+
+    n = 6
+    rng = np.random.default_rng(5)
+    cols = rng.random((n, 3)).astype(np.float32)
+    inst = tp.InstancedMesh(tp.BoxGeometry(), tp.MeshBasicMaterial(), n)
+    inst.set_colors(cols)
+    got = np.array([[c.r, c.g, c.b] for c in (inst.get_color_at(i) for i in range(n))], np.float32)
+    assert np.array_equal(got, cols)
+
+    loop = tp.InstancedMesh(tp.BoxGeometry(), tp.MeshBasicMaterial(), n)
+    for i in range(n):
+        loop.set_color_at(i, tp.Color(float(cols[i, 0]), float(cols[i, 1]), float(cols[i, 2])))
+    assert np.array_equal(np.array([[c.r, c.g, c.b] for c in (loop.get_color_at(i) for i in range(n))],
+                                   np.float32), got)
+
+    inst.set_colors(np.ones((2, 3), np.float64), offset=4)  # float64, the last two
+    got2 = np.array([[c.r, c.g, c.b] for c in (inst.get_color_at(i) for i in range(n))], np.float32)
+    assert np.array_equal(got2[:4], cols[:4]) and np.array_equal(got2[4:], np.ones((2, 3), np.float32))
+
+    with pytest.raises(ValueError):
+        inst.set_colors(np.zeros((3, 4), np.float32))       # not (N, 3)
+    with pytest.raises(ValueError):
+        inst.set_colors(np.zeros((3, 3), np.int32))         # not float
+    with pytest.raises(ValueError):
+        inst.set_colors(cols, offset=1)                     # 1 + 6 > 6
+
+    big = 20000
+    many = rng.random((big, 3)).astype(np.float32)
+    a = tp.InstancedMesh(tp.BoxGeometry(), tp.MeshBasicMaterial(), big)
+    t0 = time.perf_counter()
+    a.set_colors(many)
+    bulk_ms = (time.perf_counter() - t0) * 1e3
+    b = tp.InstancedMesh(tp.BoxGeometry(), tp.MeshBasicMaterial(), big)
+    col = tp.Color()
+    t0 = time.perf_counter()
+    for i in range(big):
+        col.set_rgb(float(many[i, 0]), float(many[i, 1]), float(many[i, 2]))
+        b.set_color_at(i, col)
+    b.instance_color_needs_update()
+    loop_ms = (time.perf_counter() - t0) * 1e3
+    print(f"\n{big} instance colours: set_colors {bulk_ms:.3f} ms, set_color_at loop {loop_ms:.1f} ms")
+    assert bulk_ms < loop_ms
+
+
 def test_skinned_mesh_is_a_mesh_with_a_skeleton():
     """SkinnedMesh/Bone/Skeleton are registered: a skinned mesh is a tp.Mesh
     (material/geometry work) and comes back as SkinnedMesh from children."""

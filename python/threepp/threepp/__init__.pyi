@@ -3907,6 +3907,10 @@ class ImuSample:
 class InstancedMesh(Mesh):
     def __init__(self, geometry: BufferGeometry, material: typing.Any, count: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
+    def get_color_at(self, index: typing.SupportsInt | typing.SupportsIndex) -> Color:
+        """
+        The instance's colour. Raises before any set_color_at / set_colors (no instance colours).
+        """
     def get_fade_at(self, index: typing.SupportsInt | typing.SupportsIndex) -> float:
         """
         The instance's fade (the mesh-wide one before any set_fade_at / set_fades).
@@ -3921,6 +3925,10 @@ class InstancedMesh(Mesh):
         ...
     def set_color_at(self, index: typing.SupportsInt | typing.SupportsIndex, color: Color) -> None:
         ...
+    def set_colors(self, colors: numpy.ndarray, offset: typing.SupportsInt | typing.SupportsIndex = 0) -> None:
+        """
+        Write N instance colours in one call: instances offset .. offset+N-1. colors is a float32/float64 numpy array of shape (N, 3), the r, g, b each set_color_at's Color holds. Marks the instance colours for upload once, which set_color_at does not. Raises ValueError on a bad shape/dtype or offset + N past the instance capacity.
+        """
     def set_count(self, count: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
     def set_fade_at(self, index: typing.SupportsInt | typing.SupportsIndex, fade: typing.SupportsFloat | typing.SupportsIndex, complement: bool = False) -> None:

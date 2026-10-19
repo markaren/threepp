@@ -320,6 +320,34 @@ namespace threepp_py {
                     return mtx;
                 }, py::arg("index"))
                 .def("set_color_at", &InstancedMesh::setColorAt, py::arg("index"), py::arg("color"))
+                .def("get_color_at", [](InstancedMesh& im, size_t i) {
+                    Color c;
+                    im.getColorAt(i, c);
+                    return c;
+                }, py::arg("index"),
+                   "The instance's colour. Raises before any set_color_at / set_colors (no instance colours).")
+                .def("set_colors", [](InstancedMesh& im, const py::array& colors, size_t offset) {
+                    const auto dt = colors.dtype();
+                    if (dt.kind() != 'f' || (dt.itemsize() != 4 && dt.itemsize() != 8)) {
+                        throw py::value_error("set_colors: colors must be float32 or float64");
+                    }
+                    if (colors.ndim() != 2 || colors.shape(1) != 3) {
+                        throw py::value_error("set_colors: colors must have shape (N, 3)");
+                    }
+                    const auto n = static_cast<size_t>(colors.shape(0));
+                    const size_t capacity = im.instanceMatrix()->array().size() / 16;
+                    if (offset + n > capacity) {
+                        throw py::value_error("set_colors: offset + N = " + std::to_string(offset + n) +
+                                              " exceeds the instance capacity " + std::to_string(capacity));
+                    }
+                    // One contiguous float32 view (a no-op for a C-contiguous float32 input).
+                    const auto src = py::array_t<float, py::array::c_style | py::array::forcecast>::ensure(colors);
+                    im.setColors(offset, n, src.data());
+                }, py::arg("colors"), py::arg("offset") = 0,
+                   "Write N instance colours in one call: instances offset .. offset+N-1. colors is a "
+                   "float32/float64 numpy array of shape (N, 3), the r, g, b each set_color_at's Color "
+                   "holds. Marks the instance colours for upload once, which set_color_at does not. "
+                   "Raises ValueError on a bad shape/dtype or offset + N past the instance capacity.")
                 .def("instance_matrix_needs_update", [](InstancedMesh& im) { im.instanceMatrix()->needsUpdate(); })
                 .def("instance_color_needs_update", [](InstancedMesh& im) {
                     if (auto* c = im.instanceColor()) c->needsUpdate();
