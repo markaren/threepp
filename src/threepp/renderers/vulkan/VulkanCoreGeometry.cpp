@@ -1248,6 +1248,9 @@ void VulkanRenderer::Impl::drainLodResults() {
                 auto it = blasCache.find(result.geom);
                 if (it == blasCache.end()) continue;// record evicted while the job was in flight
                 BlasRecord& rec = *it->second;
+                // A new geometry at a dead one's address (its record pruned
+                // while the job ran): not this result's.
+                if (const auto live = rec.liveCheck.lock(); !live || live->id != result.geomId) continue;
                 if (rec.geomVersion != result.geomVersion) {
                     // Stale — drop WITHOUT touching lodState. Every version-
                     // advance path already reset it (refreshGeomBlasBatch's
@@ -4134,7 +4137,7 @@ void VulkanRenderer::Impl::lodWorkerMain() {
                         job.normalWeight);
                 {
                     std::lock_guard<std::mutex> lk(lodResultMutex_);
-                    lodResultQueue_.push_back({job.geom, job.geomVersion, std::move(levels)});
+                    lodResultQueue_.push_back({job.geom, job.geomVersion, job.geomId, std::move(levels)});
                 }
                 lodResultCv_.notify_one();// a pinned-clock drain may be waiting
             }
@@ -5085,6 +5088,7 @@ bool VulkanRenderer::Impl::enqueueLodJob(const BufferGeometry* geomPtr, unsigned
             LodJob job;
             job.geom = geomPtr;
             job.geomVersion = geomVersion;
+            job.geomId = geom.id;
             job.normalWeight = normalWeight;
             const auto& pos = posAttr->array();
             job.positions.assign(pos.begin(), pos.end());

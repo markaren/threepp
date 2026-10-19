@@ -158,6 +158,13 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             // neither added nor removed (both decline below) keeps its span, and
             // the list is re-pointed at the spans' places at the end.
             if (builtFields.size() != particleFields_.size()) return decline("a ParticleField added or removed");
+            // What died since the last edit goes first: a streamed world drops a
+            // tile and makes the next one at once, and the allocator hands the
+            // new geometry the dead one's address. Its record, still keyed there,
+            // would read as "a stale record at a new geometry's address" below.
+            // Only the meshes this edit removes refer to it, and the retire
+            // queue keeps it for the frames in flight.
+            pruneFreedAssets();
             Mesh& tomb = slotTombstone();
             const bool rq = ctx->rayQuerySupported();
 
@@ -738,9 +745,107 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                     v->shadowMatTexValid_.fill(0);
                 }
             }
+            // The geometries and textures the removed meshes were the last to
+            // hold have died by now (or die before a later edit sees them).
+            pruneFreedAssets();
             slotsEditedThisFrame_ = true;
             if (edited || !hiddenFlips.empty()) ++tlasStats_.slotEdits;
             return true;
+        }
+
+void VulkanRenderer::Impl::pruneFreedAssets() {
+            THREEPP_CPUPROF("scene.S6_slotPrune");
+            // A record whose geometry died: no mesh draws it any more (the edit
+            // that dropped its last mesh tombstoned that mesh's rows), but the
+            // frames in flight may still trace its BLAS and read its buffers.
+            // It leaves blasCache now (a new geometry at the same address gets
+            // a record of its own) and is destroyed kFramesInFlight frames on.
+            for (auto it = blasCache.begin(); it != blasCache.end();) {
+                if (!it->second->liveCheck.expired()) {
+                    ++it;
+                    continue;
+                }
+                BlasRecord* rec = it->second.get();
+                blasCompactPending_.erase(std::remove(blasCompactPending_.begin(), blasCompactPending_.end(), rec),
+                                          blasCompactPending_.end());
+                // An async batch that queried its BLAS for compaction passes it
+                // over (records are matched by key and structure, and either can
+                // come back on a new geometry).
+                for (auto& os : asyncOneShots_)
+                    for (auto& q : os.compaction.records)
+                        if (q.first == it->first) q.first = nullptr;
+                forceUnpackedGeoms_.erase(it->first);
+                worldStaticGeoms_.erase(it->first);
+                // The dynamic-geometry queues hold records by pointer for the
+                // frame being recorded; a dead geometry is never queued, but a
+                // frame that queued and never recorded must not hand it on.
+                pendingDynamicGeomRefits_.erase(
+                        std::remove_if(pendingDynamicGeomRefits_.begin(), pendingDynamicGeomRefits_.end(),
+                                       [rec](const GeomRefreshOp& op) { return op.rec == rec; }),
+                        pendingDynamicGeomRefits_.end());
+                pendingDynamicPrevResyncs_.erase(
+                        std::remove(pendingDynamicPrevResyncs_.begin(), pendingDynamicPrevResyncs_.end(), rec),
+                        pendingDynamicPrevResyncs_.end());
+                retiredRecords_.emplace_back(frameSerial_, std::move(it->second));
+                ++tlasStats_.recordsPruned;
+                it = blasCache.erase(it);
+            }
+            // A texture that died: no live material names it, and every row that
+            // did was tombstoned. Its image is retired; its slot is free at once.
+            bool freed = false;
+            const auto freeSlot = [&](uint32_t slot) {
+                if (slot >= materialTextures.size() || !materialTextures[slot].view) return;
+                retire(std::move(materialTextures[slot]));
+                materialTextures[slot] = {};
+                freeTextureSlots.push_back(slot);
+                ++tlasStats_.texturesPruned;
+                freed = true;
+            };
+            for (auto it = textureCache.begin(); it != textureCache.end();) {
+                if (!it->second.ref.expired()) {
+                    ++it;
+                    continue;
+                }
+                freeSlot(it->second.slot);
+                it = textureCache.erase(it);
+            }
+            for (const uint32_t slot : retiredTextureSlots_) freeSlot(slot);
+            retiredTextureSlots_.clear();
+            if (freed) {
+                // The descriptor sets name the retired views until the per-FIF
+                // rewrite (refreshDirtyMaterialTextures' path) gives the slot
+                // its next image or the white default.
+                deferredDescDirty_.fill(true);
+                for (auto& v : views_) {
+                    v->rasterMatTexValid_.fill(0);
+                    v->shadowMatTexValid_.fill(0);
+                }
+            }
+        }
+
+void VulkanRenderer::Impl::reapRetiredRecords(bool all) {
+            if (retiredRecords_.empty()) return;
+            size_t keep = 0;
+            for (size_t i = 0; i < retiredRecords_.size(); ++i) {
+                auto& [serial, rec] = retiredRecords_[i];
+                if (!all && serial + kFramesInFlight > frameSerial_) {
+                    if (keep != i) retiredRecords_[keep] = std::move(retiredRecords_[i]);
+                    ++keep;
+                    continue;
+                }
+                // A chain still landing: its batch was submitted ahead of a frame
+                // that has completed, so its fence has signalled; wait on it all
+                // the same before freeing what it builds into.
+                if (rec->lodLandingBatch != 0) {
+                    for (const auto& b : lodLanding_)
+                        if (b.id == rec->lodLandingBatch && b.fence != VK_NULL_HANDLE)
+                            check(vkWaitForFences(ctx->device(), 1, &b.fence, VK_TRUE, UINT64_MAX),
+                                  "wait auto-LOD batch of a retired record");
+                }
+                destroyBlasLodLevels(*rec);
+                destroyBlasRecord(*rec);
+            }
+            retiredRecords_.resize(keep);
         }
 
 void VulkanRenderer::Impl::growSlotPool(uint32_t need) {

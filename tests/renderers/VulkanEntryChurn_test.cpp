@@ -629,6 +629,73 @@ int main() {
             for (int f = 0; f < kGap; ++f) frame(-1, kGap);
         }
 
+        // ── A streamed world frees what it drops ─────────────────────────────
+        // Tiles made of geometries and textures nobody else holds, added and
+        // dropped again and again, the way a terrain quadtree streams: their
+        // BLAS records and bindless texture slots must go with them, without
+        // a rebuild. Until 2026-10-20 they stayed until the next structural
+        // rebuild, which the slot path never makes: a kilometre GeoScene
+        // flight ran out of the 2048 texture slots and drew new tiles white.
+        // 100 tiles of 24 meshes, each with a texture of its own, cycle 2400
+        // textures through the 2048 slots; device memory must come back.
+        {
+            for (int f = 0; f < kGap; ++f) frame(-1, kGap);
+            const auto p0 = renderer.tlasStats();
+            const uint64_t mem0 = renderer.gpuAllocatedBytes();
+            uint64_t memPeak = mem0;
+            constexpr int kTiles = 100, kTileMeshes = 24;
+            for (int t = 0; t < kTiles; ++t) {
+                auto tile = Group::create();
+                for (int k = 0; k < kTileMeshes; ++k) {
+                    auto mat = paint(Color(1, 1, 1));
+                    mat->map = checker();
+                    auto m = Mesh::create(SphereGeometry::create(0.8f, 32, 16), mat);
+                    m->position.set(-70.f + static_cast<float>(k) * 6.f, 2.f, -60.f + static_cast<float>(t % 5) * 4.f);
+                    tile->add(m);
+                }
+                scene.add(tile);
+                for (int f = 0; f < 2; ++f) frame(-1, kGap);
+                memPeak = std::max(memPeak, renderer.gpuAllocatedBytes());
+                scene.remove(*tile);
+                tile.reset();// the last reference: its geometries, materials and textures die
+                for (int f = 0; f < 2; ++f) frame(-1, kGap);
+            }
+            for (int f = 0; f < 8; ++f) frame(-1, kGap);// past the frames in flight: the retired go
+            const auto p1 = renderer.tlasStats();
+            const uint64_t mem1 = renderer.gpuAllocatedBytes();
+            constexpr double MiB = 1024.0 * 1024.0;
+            std::printf("\na streamed world, %d tiles of %d meshes with their own geometry and texture: "
+                        "%llu records and %llu textures pruned, %llu structural rebuilds, %llu history resets; "
+                        "device memory %.1f MiB before, %.1f at the peak, %.1f after\n",
+                        kTiles, kTileMeshes, static_cast<unsigned long long>(p1.recordsPruned - p0.recordsPruned),
+                        static_cast<unsigned long long>(p1.texturesPruned - p0.texturesPruned),
+                        static_cast<unsigned long long>(p1.structuralRebuilds - p0.structuralRebuilds),
+                        static_cast<unsigned long long>(p1.historyResets - p0.historyResets), mem0 / MiB,
+                        memPeak / MiB, mem1 / MiB);
+            if (!slotsOff) {
+                check("a streamed world: no structural rebuild", p1.structuralRebuilds == p0.structuralRebuilds);
+                check("a streamed world: every tile's records pruned",
+                      p1.recordsPruned - p0.recordsPruned >= static_cast<uint64_t>(kTiles * kTileMeshes));
+                check("a streamed world: every tile's textures pruned",
+                      p1.texturesPruned - p0.texturesPruned >= static_cast<uint64_t>(kTiles * kTileMeshes));
+            }
+            // What stays is pool slack (staging, scratch, the slot pool), not
+            // a tile's worth per tile.
+            check("a streamed world: device memory back within 8 MiB of where it started",
+                  mem1 <= mem0 + static_cast<uint64_t>(8 * MiB));
+            std::printf("texture slots in use %u before, %u after; %llu textures found no slot\n",
+                        p0.textureSlotsInUse, p1.textureSlotsInUse,
+                        static_cast<unsigned long long>(p1.textureSlotFallbacks - p0.textureSlotFallbacks));
+            check("a streamed world: no texture found the slots exhausted",
+                  p1.textureSlotFallbacks == p0.textureSlotFallbacks);
+            // The rebuild lane frees the last tile's textures at its next rebuild
+            // (its prune runs while the old rows still hold them).
+            if (!slotsOff)
+                check("a streamed world: texture slots in use back to where they started",
+                      p1.textureSlotsInUse <= p0.textureSlotsInUse);
+            check("a streamed world: no temporal history reset", p1.historyResets == p0.historyResets);
+        }
+
         // ── Everything removed, then some of it back ─────────────────────────
         // No TLAS instance at all: the TLAS must be rebuilt empty, never left
         // with the removed instances, whose desc rows are zeroed (a ray that
