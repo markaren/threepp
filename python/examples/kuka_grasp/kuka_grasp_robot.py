@@ -134,8 +134,18 @@ def generate_combined_urdf(dest=None):
     text = text.replace("</robot>", _finger_xml() + "\n</robot>")
     if dest is None:
         dest = os.path.join(_HERE, "kuka_iiwa_gripper.urdf")
-    with open(dest, "w", encoding="utf-8") as f:
+    # Several trainers and the evaluator start together: an identical file is left alone, and a
+    # new one is written beside it and moved into place, so no process reads a half-written file.
+    try:
+        with open(dest, "r", encoding="utf-8") as f:
+            if f.read() == text:
+                return dest
+    except OSError:
+        pass
+    tmp = f"{dest}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         f.write(text)
+    os.replace(tmp, dest)
     return dest
 
 
