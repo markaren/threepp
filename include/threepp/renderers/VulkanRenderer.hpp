@@ -888,6 +888,10 @@ namespace threepp {
             // (a deformer, a texture swap, more entries than the slot pool
             // holds) is still a structural rebuild.
             uint64_t slotEdits = 0;
+            // BLASes a slot edit built (its new geometries) and compacted once
+            // their build had completed, a frame or two later, without a host
+            // wait; the rebuild compacts its own in place.
+            uint64_t asyncCompactions = 0;
         };
         [[nodiscard]] TlasStats tlasStats() const;
 

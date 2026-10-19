@@ -3129,13 +3129,35 @@ namespace threepp {
         // same queue, and the render graph's entry barrier (ALL_COMMANDS,
         // every prior submission in its first scope) orders and publishes it.
         // Its transients go to the frame-serial retire queue, its command
-        // buffer to asyncOneShots_ until its fence signals. No compaction: the
-        // size queries would need the wait this exists to avoid.
+        // buffer to asyncOneShots_ until its fence signals. Its static BLASes
+        // are compacted after that (compactAsync): their compacted-size
+        // queries ride the batch, in a pool of its own.
         void flushOneShotBatchAsync();
         // Free the command buffers and fences of async batches that finished
-        // (all of them when the device is known idle).
+        // (all of them when the device is known idle), and compact what a
+        // finished batch queried.
         void reapAsyncOneShots(bool deviceIdle);
-        std::vector<std::pair<VkCommandBuffer, VkFence>> asyncOneShots_;
+        struct AsyncCompaction {
+            VkQueryPool pool = VK_NULL_HANDLE;
+            // Each record by its geometry (blasCache's key) and the structure
+            // queried: a record evicted or rebuilt since is passed over.
+            std::vector<std::pair<const BufferGeometry*, VkAccelerationStructureKHR>> records;
+        };
+        struct AsyncOneShot {
+            VkCommandBuffer cb = VK_NULL_HANDLE;
+            VkFence fence = VK_NULL_HANDLE;
+            AsyncCompaction compaction;
+        };
+        std::vector<AsyncOneShot> asyncOneShots_;
+        // A finished async batch's queried BLASes: each copied with
+        // COPY_MODE_COMPACT into storage of its compacted size, in one more
+        // async batch (ahead of the frame in queue order, as the build was),
+        // the record swapped to the copy at once and the build-size pair
+        // retired with the frame about to be recorded, whose TLAS is then
+        // built anew (blasRereferenced_): the frames still in flight trace
+        // the old pair, this one the new.
+        void compactAsync(const AsyncCompaction& c);
+        bool blasRereferenced_ = false;
 
         // ── Static BLAS compaction ───────────────────────────────────────────
         // A static record (built once, traced for its lifetime) is built

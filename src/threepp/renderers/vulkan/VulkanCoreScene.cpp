@@ -2722,6 +2722,12 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     // opacity dropping below 1) sets instClassChanged, which forces the
                     // fill even on a frame with no motion, and a full build.
                     bool instClassChanged = false;
+                    // A BLAS compacted since the last fill (compactAsync): every
+                    // instance of it re-referenced, a full build.
+                    if (blasRereferenced_) {
+                        blasRereferenced_ = false;
+                        instClassChanged = true;
+                    }
                     if (hiddenFlippedThisFrame_ || slotsEditedThisFrame_) {
                         // Hidden or shown in place: new ray masks (a full TLAS
                         // build, like any class change), every view's cull and

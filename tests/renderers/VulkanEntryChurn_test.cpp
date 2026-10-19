@@ -479,11 +479,20 @@ int main() {
         std::printf("frame wall ms: median %.2f  p99 %.2f  max %.2f   quiet median %.2f (cpuFrame %.2f, gpu %.2f)\n",
                     percentile(all, 0.5), percentile(all, 0.99), percentile(all, 1.0), quietMedian,
                     percentile(quietCpu, 0.5), percentile(quietGpu, 0.5));
-        std::printf("TLAS: %llu full builds, %llu updates over the loop; %llu slot edits, %llu structural rebuilds\n",
+        std::printf("TLAS: %llu full builds, %llu updates over the loop; %llu slot edits, %llu structural rebuilds, "
+                    "%llu BLASes compacted after their slot edit\n",
                     static_cast<unsigned long long>(stats1.fullRebuilds - stats0.fullRebuilds),
                     static_cast<unsigned long long>(stats1.updates - stats0.updates),
                     static_cast<unsigned long long>(stats1.slotEdits - stats0.slotEdits),
-                    static_cast<unsigned long long>(stats1.structuralRebuilds - stats0.structuralRebuilds));
+                    static_cast<unsigned long long>(stats1.structuralRebuilds - stats0.structuralRebuilds),
+                    static_cast<unsigned long long>(stats1.asyncCompactions - stats0.asyncCompactions));
+        // The geometries "add new geometry" brings are built by the slot edit
+        // and compacted a frame or two later, with no wait (unless
+        // THREEPP_VK_BLAS_COMPACT=0 turns compaction off).
+        const char* compactEnv = std::getenv("THREEPP_VK_BLAS_COMPACT");
+        if (!slotsOff && renderer.rayTracingSupported() && !(compactEnv && *compactEnv == '0'))
+            check("the slot edits' new BLASes were compacted after their build",
+                  stats1.asyncCompactions > stats0.asyncCompactions);
         std::printf("\n%-18s %3s %10s %9s %22s %12s %12s %8s\n", "event", "n", "structural", "history",
                     "event frame ms med/max", "ensure ms", "next ms med", "ratio");
         for (int kind = 0; kind < kKinds; ++kind) {
