@@ -3,10 +3,11 @@
 //
 // The lean path's TLAS fill (ensureSceneBuilt) writes one
 // VkAccelerationStructureInstanceKHR per entry on the CPU every frame anything
-// moves or changes class. For an eligible instanced span (static, no LOD
-// chain, no cutout ray distance; TlasGen.hpp) the fill writes
+// moves or changes class. For an eligible instanced span (static, no cutout
+// ray distance; TlasGen.hpp) the fill writes
 // none: it hands this shader the span's BLAS address, mask and flags (the
-// mask cleared per instance on the side of a LOD crossfade no ray hits), and the
+// mask cleared per instance on the side of a LOD crossfade no ray hits; with
+// an auto-LOD chain, the BLAS of the entry's level, MeshEntry::lodLevel), and the
 // shader appends the span's instances after the CPU's in the same instance
 // buffer (the TLAS order is free: instanceCustomIndex is the entry index).
 // Per instance: the 3x4 row-major transform of the world matrix stage 1
@@ -21,21 +22,25 @@
 
 layout(local_size_x = 64) in;
 
-// Matches TlasGen::SpanDesc (scalar, 32 B).
+// Matches TlasGen::SpanDesc (scalar, 40 B).
 struct TlasSpan {
-    uint64_t blasAddress;
+    uint64_t blasAddress;// level 0's
     uint     firstEntry;// entry index of instance 0
     uint     count;
     uint     instBase;  // instance index of instance 0 in the buffer
     uint     workBase;  // exclusive prefix sum of count
     uint     maskWord;  // mask << 24 (instanceCustomIndex goes in the low 24 bits)
     uint     flagsWord; // instance flags << 24 (SBT record offset 0)
+    uint     lodRowBase; // its first level BLAS address, when lodRowCount > 0
+    uint     lodRowCount;// levels 1..n, then the fallback; 0: no chain
 };
 
 layout(set = 0, binding = 0, scalar) readonly  buffer Spans { TlasSpan spans[]; };
 layout(set = 0, binding = 1, scalar) readonly  buffer World { float    world[]; };// 16 per entry
 layout(set = 0, binding = 2, scalar) writeonly buffer Insts { uint     instWords[]; };// 16 per instance
 layout(set = 0, binding = 3, scalar) readonly  buffer Fades { uint     lodFades[]; };// entryLodFade_
+layout(set = 0, binding = 4, scalar) readonly  buffer Rows  { uint64_t lodBlas[]; };// selectLodGeom(rec, k).asAddress
+layout(set = 0, binding = 5, scalar) readonly  buffer Levels { uint    lodLevelWords[]; };// a byte per entry
 
 // VulkanRenderer::Impl::lodFadeCasts: the side of a crossfade that keeps the
 // shadows (the other side is hit by no ray).
@@ -72,6 +77,12 @@ void main() {
             instWords[o + r * 4u + c] = floatBitsToUint(world[e * 16u + c * 4u + r]);
     instWords[o + 12u] = (e & 0x00FFFFFFu) | (lodFadeCasts(lodFades[e]) ? spans[lo].maskWord : 0u);
     instWords[o + 13u] = spans[lo].flagsWord;
-    instWords[o + 14u] = uint(spans[lo].blasAddress & 0xFFFFFFFFul);
-    instWords[o + 15u] = uint(spans[lo].blasAddress >> 32);
+    uint64_t blas = spans[lo].blasAddress;
+    if (spans[lo].lodRowCount > 0u) {
+        const uint level = (lodLevelWords[e >> 2u] >> ((e & 3u) * 8u)) & 0xFFu;
+        const uint row   = min(level, spans[lo].lodRowCount);
+        if (row > 0u) blas = lodBlas[spans[lo].lodRowBase + row - 1u];
+    }
+    instWords[o + 14u] = uint(blas & 0xFFFFFFFFul);
+    instWords[o + 15u] = uint(blas >> 32);
 }

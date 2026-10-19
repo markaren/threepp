@@ -242,6 +242,7 @@ namespace threepp::vulkan::impl {
         // and the scene draw inputs are unchanged since it was last written
         // (static scene + static camera skips the whole cull walk).
         uint32_t cullValidVersion = 0;// drawInputsVersion_ at last cull; 0 = never
+        bool cullGpuSpans = false;     // whether that cull left draw_gen's spans to the GPU
         float prevCullVp[16] = {};
 
         // buildIndirectDrawData skip cache: the input signature each FIF slot's

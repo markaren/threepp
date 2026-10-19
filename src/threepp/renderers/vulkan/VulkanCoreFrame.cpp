@@ -1,3 +1,4 @@
+#include "DescriptorShadow.hpp"
 #include "VulkanCoreImpl.hpp"
 
 #include "VulkanCpuPhaseProf.hpp"
@@ -221,8 +222,42 @@ void VulkanRenderer::Impl::flushOneShotBatch() {
 
 void VulkanRenderer::Impl::flushOneShotBatchAsync() {
             oneShotBatch_ = false;
-            // No compaction (it needs the queried sizes on the host): these
-            // records keep their build size.
+            // The static records built in it: their compacted sizes are queried
+            // at its end, in a pool of its own, and read once it has finished
+            // (compactAsync), with no wait.
+            AsyncCompaction compaction;
+            if (blasCompact_ && oneShotBatchCb_ != VK_NULL_HANDLE && !blasCompactPending_.empty()) {
+                std::vector<VkAccelerationStructureKHR> ases;
+                for (const BlasRecord* r : blasCompactPending_) {
+                    const auto g = r->liveCheck.lock();
+                    if (r->as == VK_NULL_HANDLE || !g) continue;
+                    compaction.records.emplace_back(g.get(), r->as);
+                    ases.push_back(r->as);
+                }
+                if (!ases.empty()) {
+                    VkQueryPoolCreateInfo qpci{};
+                    qpci.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+                    qpci.queryType = VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR;
+                    qpci.queryCount = static_cast<uint32_t>(ases.size());
+                    check(vkCreateQueryPool(ctx->device(), &qpci, nullptr, &compaction.pool),
+                          "vkCreateQueryPool(async BLAS compaction)");
+                    VkCommandBuffer qcb = oneShotBatchCb_;
+                    vkCmdResetQueryPool(qcb, compaction.pool, 0, qpci.queryCount);
+                    // The size query reads the built structures.
+                    VkMemoryBarrier mb{};
+                    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+                    mb.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+                    mb.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+                    vkCmdPipelineBarrier(qcb, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                         VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 1, &mb, 0,
+                                         nullptr, 0, nullptr);
+                    ctx->rt().cmdWriteAccelerationStructuresProperties(
+                            qcb, qpci.queryCount, ases.data(),
+                            VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR, compaction.pool, 0);
+                } else {
+                    compaction.records.clear();
+                }
+            }
             blasCompactPending_.clear();
             // Stamped with the serial of the frame about to be recorded, which
             // is submitted after this batch: freed once that frame retired.
@@ -241,20 +276,107 @@ void VulkanRenderer::Impl::flushOneShotBatchAsync() {
             si.commandBufferCount = 1;
             si.pCommandBuffers = &cb;
             check(vkQueueSubmit(ctx->graphicsQueue(), 1, &si, fence), "submit async one-shot batch");
-            asyncOneShots_.emplace_back(cb, fence);
+            asyncOneShots_.push_back({cb, fence, std::move(compaction)});
         }
 
 void VulkanRenderer::Impl::reapAsyncOneShots(bool deviceIdle) {
             for (size_t i = 0; i < asyncOneShots_.size();) {
-                const auto [cb, fence] = asyncOneShots_[i];
-                if (!deviceIdle && vkGetFenceStatus(ctx->device(), fence) != VK_SUCCESS) {
+                if (!deviceIdle && vkGetFenceStatus(ctx->device(), asyncOneShots_[i].fence) != VK_SUCCESS) {
                     ++i;
                     continue;
                 }
-                vkFreeCommandBuffers(ctx->device(), cmdPool, 1, &cb);
-                vkDestroyFence(ctx->device(), fence, nullptr);
+                AsyncOneShot done = std::move(asyncOneShots_[i]);
                 asyncOneShots_.erase(asyncOneShots_.begin() + static_cast<std::ptrdiff_t>(i));
+                vkFreeCommandBuffers(ctx->device(), cmdPool, 1, &done.cb);
+                vkDestroyFence(ctx->device(), done.fence, nullptr);
+                if (done.compaction.pool != VK_NULL_HANDLE) {
+                    // An idle device is a rebuild or teardown: the records keep
+                    // their build size.
+                    if (!deviceIdle) compactAsync(done.compaction);
+                    vkDestroyQueryPool(ctx->device(), done.compaction.pool, nullptr);
+                }
             }
+        }
+
+void VulkanRenderer::Impl::compactAsync(const AsyncCompaction& c) {
+            const auto n = static_cast<uint32_t>(c.records.size());
+            std::vector<VkDeviceSize> sizes(n, 0);
+            // The batch has finished: every result is available, no wait.
+            if (vkGetQueryPoolResults(ctx->device(), c.pool, 0, n, n * sizeof(VkDeviceSize), sizes.data(),
+                                      sizeof(VkDeviceSize), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
+                return;
+            struct Swap {
+                BlasRecord* rec;
+                VkAccelerationStructureKHR as;
+                Buffer storage;
+            };
+            std::vector<Swap> swaps;
+            VkCommandBuffer cb = VK_NULL_HANDLE;
+            for (uint32_t k = 0; k < n; ++k) {
+                const auto it = blasCache.find(c.records[k].first);
+                if (it == blasCache.end()) continue;
+                BlasRecord* rec = it->second.get();
+                const VkDeviceSize sz = sizes[k];
+                if (rec->as != c.records[k].second || rec->compacted || sz == 0 || sz >= rec->storage.size) continue;
+                Swap s{rec, VK_NULL_HANDLE, {}};
+                s.storage = createBuffer(ctx->allocator(), ctx->device(), sz,
+                                         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                                                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                         VMA_MEMORY_USAGE_AUTO);
+                VkAccelerationStructureCreateInfoKHR ci{};
+                ci.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+                ci.buffer = s.storage.handle;
+                ci.size = sz;
+                ci.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+                check(ctx->rt().createAccelerationStructure(ctx->device(), &ci, nullptr, &s.as),
+                      "vkCreateAccelerationStructureKHR(async compacted BLAS)");
+                vulkan::registerAccelerationStructure(s.as, ci.buffer);
+                if (cb == VK_NULL_HANDLE) {
+                    VkCommandBufferAllocateInfo ai{};
+                    ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+                    ai.commandPool = cmdPool;
+                    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+                    ai.commandBufferCount = 1;
+                    check(vkAllocateCommandBuffers(ctx->device(), &ai, &cb), "alloc async compaction cb");
+                    VkCommandBufferBeginInfo bi{};
+                    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+                    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                    check(vkBeginCommandBuffer(cb, &bi), "begin async compaction cb");
+                }
+                VkCopyAccelerationStructureInfoKHR copy{};
+                copy.sType = VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR;
+                copy.src = rec->as;
+                copy.dst = s.as;
+                copy.mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
+                ctx->rt().cmdCopyAccelerationStructure(cb, &copy);
+                swaps.push_back(std::move(s));
+            }
+            if (cb == VK_NULL_HANDLE) return;
+            check(vkEndCommandBuffer(cb), "end async compaction cb");
+            VkFenceCreateInfo fi{};
+            fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            VkFence fence = VK_NULL_HANDLE;
+            check(vkCreateFence(ctx->device(), &fi, nullptr, &fence), "create async compaction fence");
+            VkSubmitInfo si{};
+            si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            si.commandBufferCount = 1;
+            si.pCommandBuffers = &cb;
+            check(vkQueueSubmit(ctx->graphicsQueue(), 1, &si, fence), "submit async compaction");
+            asyncOneShots_.push_back({cb, fence, {}});
+            for (Swap& s : swaps) {
+                BlasRecord& r = *s.rec;
+                retireAS(r.as);
+                retire(std::move(r.storage));
+                r.as = s.as;
+                r.storage = std::move(s.storage);
+                VkAccelerationStructureDeviceAddressInfoKHR ai{};
+                ai.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+                ai.accelerationStructure = r.as;
+                r.address = ctx->rt().getAccelerationStructureDeviceAddress(ctx->device(), &ai);
+                r.compacted = true;
+                ++tlasStats_.asyncCompactions;
+            }
+            blasRereferenced_ = true;
         }
 
 void VulkanRenderer::Impl::createReservoirImages() {

@@ -1933,6 +1933,17 @@ namespace threepp_py {
                               "Toggle automatic mesh LOD (background-simplified chains chosen "
                               "by projected screen-space error). Default ON; False pins every "
                               "mesh to full detail.")
+                // The GPU-driven instance producers (plans/gpu-driven-instances.md
+                // stages 1, 2, 4 and 5) as one switch: the expansion feeds the
+                // other two, and an A/B on real content wants all of them.
+                .def_property("gpu_instances",
+                              [](PyVulkanRenderer& r) { return r.native().gpuDrawGeneration(); },
+                              [](PyVulkanRenderer& r, bool v) {
+                                  r.native().setGpuInstanceExpansion(v);
+                                  r.native().setGpuDrawGeneration(v);
+                                  r.native().setGpuTlasInstances(v);
+                              },
+                              "The instanced meshes' per-frame work on the GPU: their world matrices, G-buffer draw records (frustum cull included) and ray-tracing instances written by compute instead of the CPU, byte for byte the CPU's. Off by default; a script can A/B it on its own content.")
                 .def_property("cutout_ray_distance",
                               [](PyVulkanRenderer& r) { return r.native().cutoutRayDistance(); },
                               [](PyVulkanRenderer& r, float v) { r.native().setCutoutRayDistance(v); },

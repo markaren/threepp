@@ -39,7 +39,13 @@
 // an absolute floor: this bench's quiet frame is about a millisecond, where a
 // ratio is noise, and the rebuild it replaces cost ten (8.9k entries) - the
 // floors keep the gate sharp against that and blind to scheduler jitter. No
-// history reset on any event, ever. A last phase removes every mesh (no TLAS
+// history reset on any event, ever. Then a ParticleField (debris, dust, a
+// wake) joins the scene, moving every frame, and every kind runs again around
+// it: the field's arrival and departure may be rebuilds, the churn around a
+// live field may not (until 2026-10-20 any field sent every slot edit back to
+// the rebuild). Then the forest grows to its whole capacity at once, more
+// entries than the slot pool the last rebuild laid out: the pool grows in place
+// (one device wait, no rebuild). A last phase removes every mesh (no TLAS
 // instance left), renders, and adds some back.
 // THREEPP_VULKAN_NO_SLOTS=1 restores the rebuild, and with it the baseline:
 // run with it, the bench expects one structural rebuild per event.
@@ -48,7 +54,9 @@
 // would land on random frames of the table.
 //
 // THREEPP_CHURN_DUMP=<dir> writes the event frames and the frame after each as
-// PPM there, for looking at; that readback stalls, so its timings are void.
+// PPM there (churn_r* for the main rounds, churn_field_r* for the field's), for
+// looking at and for comparing against a THREEPP_VULKAN_NO_SLOTS=1 run; that
+// readback stalls, so its timings are void.
 // THREEPP_CHURN_INSTANCES=<n> sets the forest's starting count (default 8192;
 // its capacity is twice that). THREEPP_CHURN_VERBOSE=1 prints every event's
 // frame and the frame after it. THREEPP_CHURN_DRAWGEN=1 turns on the GPU
@@ -72,6 +80,7 @@
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/ParticleField.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/renderers/vulkan/ValidationReport.hpp"
 #include "threepp/scenes/Scene.hpp"
@@ -104,6 +113,8 @@ namespace {
     constexpr int kMeshesPerCell = 12;
     constexpr int kHiddenMeshes = 8;
     constexpr size_t kInstStep = 512;
+    constexpr int kFieldRounds = 2;      // every kind this many times around a live ParticleField
+    constexpr uint32_t kFieldParticles = 256;
     constexpr double kHitchRatio = 2.0;     // median event against the quiet median
     constexpr double kHitchSlackMs = 2.5;   // ... or the quiet median + this, whichever is larger
     constexpr double kHitchMaxRatio = 4.0;  // the worst event
@@ -336,10 +347,28 @@ int main() {
         if (!ok) ++failures;
     };
 
+    // The ParticleField phase's field, fed every frame it is in the scene: a
+    // ring of boxes drifting around the scene's centre, a closed form of the
+    // frame count so both lanes see the same positions.
+    std::shared_ptr<ParticleField> field;
+    std::vector<ParticlePos> fieldPos(kFieldParticles);
+    uint32_t fieldTick = 0;
+    const auto feedField = [&] {
+        if (!field) return;
+        const float t = 0.02f * static_cast<float>(fieldTick++);
+        for (uint32_t i = 0; i < kFieldParticles; ++i) {
+            const float a = 6.2831853f * static_cast<float>(i) / kFieldParticles + t;
+            const float r = 18.f + 4.f * hash(i * 5u);
+            fieldPos[i] = {std::cos(a) * r, 2.f + 1.5f * std::sin(3.f * a + t), std::sin(a) * r, 1.f};
+        }
+        field->submit(fieldPos.data(), kFieldParticles);
+    };
+
     std::vector<FrameRow> rows;
     try {
         const auto frame = [&](int kind, int sinceEvent) {
             placeCamera();
+            feedField();
             const auto before = renderer.tlasStats();
             double wall = 0;
             canvas.animateOnce([&] {
@@ -363,44 +392,58 @@ int main() {
 
         for (int i = 0; i < kWarmupFrames; ++i) frame(-1, kGap);
 
+        const auto applyEvent = [&](int kind) {
+            switch (kind) {
+                case kRemoveCell: {
+                    auto g = active.front();
+                    active.erase(active.begin());
+                    scene.remove(*g);
+                    cached.push_back(g);
+                    break;
+                }
+                case kAddCachedCell: {
+                    auto g = cached.front();
+                    cached.erase(cached.begin());
+                    scene.add(g);
+                    active.push_back(g);
+                    break;
+                }
+                case kAddNewCell:
+                case kAddNewGeom: {
+                    auto g = buildCell(nextFreshCell++ % kCells, kind == kAddNewGeom);
+                    scene.add(g);
+                    active.push_back(g);
+                    break;
+                }
+                case kInstGrow:
+                    forest->setCount(forest->count() + kInstStep);
+                    break;
+                case kInstShrink:
+                    forest->setCount(forest->count() - kInstStep);
+                    break;
+                case kFirstShow:
+                    hiddenMeshes[nextShow++ % hiddenMeshes.size()]->visible = true;
+                    break;
+                default:
+                    break;
+            }
+        };
+        const auto dumpFrame = [&](const char* prefix, int round, int kind, int f) {
+            const auto im = renderer.readRGBPixels();
+            if (im.size() < static_cast<size_t>(kW) * kH * 3) return;
+            char name[112];
+            std::snprintf(name, sizeof(name), "/%s_r%d_%02d_%s_f%d.ppm", prefix, round, kind, f == 0 ? "event" : "after",
+                          f);
+            std::string fname = name;
+            std::replace(fname.begin(), fname.end(), ' ', '_');
+            writePpm(std::string(dumpDir) + fname, im);
+        };
+
         const auto stats0 = renderer.tlasStats();
         const auto t0 = std::chrono::steady_clock::now();
         for (int round = 0; round < kRounds; ++round) {
             for (int kind = 0; kind < kKinds; ++kind) {
-                switch (kind) {
-                    case kRemoveCell: {
-                        auto g = active.front();
-                        active.erase(active.begin());
-                        scene.remove(*g);
-                        cached.push_back(g);
-                        break;
-                    }
-                    case kAddCachedCell: {
-                        auto g = cached.front();
-                        cached.erase(cached.begin());
-                        scene.add(g);
-                        active.push_back(g);
-                        break;
-                    }
-                    case kAddNewCell:
-                    case kAddNewGeom: {
-                        auto g = buildCell(nextFreshCell++ % kCells, kind == kAddNewGeom);
-                        scene.add(g);
-                        active.push_back(g);
-                        break;
-                    }
-                    case kInstGrow:
-                        forest->setCount(forest->count() + kInstStep);
-                        break;
-                    case kInstShrink:
-                        forest->setCount(forest->count() - kInstStep);
-                        break;
-                    case kFirstShow:
-                        hiddenMeshes[nextShow++ % hiddenMeshes.size()]->visible = true;
-                        break;
-                    default:
-                        break;
-                }
+                applyEvent(kind);
                 for (int f = 0; f < kGap; ++f) {
                     rows.push_back(frame(f == 0 ? kind : -1, f));
                     if (verbose && f < 2) {
@@ -409,17 +452,7 @@ int main() {
                                     round, kKindName[kind], f, r.wallMs, r.cpuEnsureMs, r.cpuFrameMs, r.gpuMs,
                                     static_cast<unsigned long long>(r.structural));
                     }
-                    if (dump && f < 2) {
-                        const auto im = renderer.readRGBPixels();
-                        if (im.size() >= static_cast<size_t>(kW) * kH * 3) {
-                            char name[96];
-                            std::snprintf(name, sizeof(name), "/churn_r%d_%02d_%s_f%d.ppm", round, kind,
-                                          f == 0 ? "event" : "after", f);
-                            std::string fname = name;
-                            std::replace(fname.begin(), fname.end(), ' ', '_');
-                            writePpm(std::string(dumpDir) + fname, im);
-                        }
-                    }
+                    if (dump && f < 2) dumpFrame("churn", round, kind, f);
                 }
             }
         }
@@ -448,11 +481,20 @@ int main() {
         std::printf("frame wall ms: median %.2f  p99 %.2f  max %.2f   quiet median %.2f (cpuFrame %.2f, gpu %.2f)\n",
                     percentile(all, 0.5), percentile(all, 0.99), percentile(all, 1.0), quietMedian,
                     percentile(quietCpu, 0.5), percentile(quietGpu, 0.5));
-        std::printf("TLAS: %llu full builds, %llu updates over the loop; %llu slot edits, %llu structural rebuilds\n",
+        std::printf("TLAS: %llu full builds, %llu updates over the loop; %llu slot edits, %llu structural rebuilds, "
+                    "%llu BLASes compacted after their slot edit\n",
                     static_cast<unsigned long long>(stats1.fullRebuilds - stats0.fullRebuilds),
                     static_cast<unsigned long long>(stats1.updates - stats0.updates),
                     static_cast<unsigned long long>(stats1.slotEdits - stats0.slotEdits),
-                    static_cast<unsigned long long>(stats1.structuralRebuilds - stats0.structuralRebuilds));
+                    static_cast<unsigned long long>(stats1.structuralRebuilds - stats0.structuralRebuilds),
+                    static_cast<unsigned long long>(stats1.asyncCompactions - stats0.asyncCompactions));
+        // The geometries "add new geometry" brings are built by the slot edit
+        // and compacted a frame or two later, with no wait (unless
+        // THREEPP_VK_BLAS_COMPACT=0 turns compaction off).
+        const char* compactEnv = std::getenv("THREEPP_VK_BLAS_COMPACT");
+        if (!slotsOff && renderer.rayTracingSupported() && !(compactEnv && *compactEnv == '0'))
+            check("the slot edits' new BLASes were compacted after their build",
+                  stats1.asyncCompactions > stats0.asyncCompactions);
         std::printf("\n%-18s %3s %10s %9s %22s %12s %12s %8s\n", "event", "n", "structural", "history",
                     "event frame ms med/max", "ensure ms", "next ms med", "ratio");
         for (int kind = 0; kind < kKinds; ++kind) {
@@ -501,6 +543,92 @@ int main() {
             }
             check(std::string(kKindName[kind]) + ": no temporal history reset", history == 0);
         }
+        // ── The same churn around a live ParticleField ───────────────────────
+        // A field publishes its entry index to its pass; its arrival and its
+        // departure may each be a rebuild (THREEPP_VULKAN_SLOTS_LOG names them),
+        // every event around it must be a slot edit like any other.
+        {
+            ParticleField::Config cfg;
+            cfg.capacity = kFieldParticles;
+            cfg.uniformRadius = 0.4f;
+            cfg.orientations = true;
+            field = ParticleField::create(cfg);
+            field->setMeshRepr(BoxGeometry::create(0.8f, 0.8f, 0.8f), paint(Color(0.95f, 0.75f, 0.2f)));
+            std::vector<float> quats(static_cast<size_t>(kFieldParticles) * 4u, 0.f);
+            for (uint32_t i = 0; i < kFieldParticles; ++i) quats[static_cast<size_t>(i) * 4u + 3u] = 1.f;
+            field->setOrientations(quats.data(), kFieldParticles);
+            scene.add(field);
+            for (int f = 0; f < kGap; ++f) frame(-1, kGap);// the field's arrival
+            const auto f0 = renderer.tlasStats();
+            int events = 0;
+            std::vector<double> fieldQuiet, fieldCost;
+            for (int round = 0; round < kFieldRounds; ++round) {
+                for (int kind = 0; kind < kKinds; ++kind) {
+                    applyEvent(kind);
+                    ++events;
+                    double eventMs = 0;
+                    for (int f = 0; f < kGap; ++f) {
+                        const FrameRow r = frame(f == 0 ? kind : -1, f);
+                        if (f == 0) eventMs = r.wallMs;
+                        if (f == 1) fieldCost.push_back(std::max(eventMs, r.wallMs));
+                        if (f >= 3) fieldQuiet.push_back(r.wallMs);
+                        if (dump && f < 2) dumpFrame("churn_field", round, kind, f);
+                    }
+                }
+            }
+            const auto f1 = renderer.tlasStats();
+            const uint64_t structural = f1.structuralRebuilds - f0.structuralRebuilds;
+            const double fq = percentile(fieldQuiet, 0.5), fMed = percentile(fieldCost, 0.5),
+                         fMax = percentile(fieldCost, 1.0);
+            std::printf("\naround a live ParticleField: %d events, %llu slot edits, %llu structural rebuilds, "
+                        "%llu history resets; event ms med/max %.2f / %.2f, quiet median %.2f\n",
+                        events, static_cast<unsigned long long>(f1.slotEdits - f0.slotEdits),
+                        static_cast<unsigned long long>(structural),
+                        static_cast<unsigned long long>(f1.historyResets - f0.historyResets), fMed, fMax, fq);
+            const uint64_t expect = slotsOff ? static_cast<uint64_t>(events) : 0u;
+            check("around a live ParticleField: " + std::to_string(expect) + " structural rebuilds",
+                  structural == expect);
+            if (!slotsOff) {
+                check("around a live ParticleField: events within 2x the quiet median",
+                      fMed <= std::max(kHitchRatio * fq, fq + kHitchSlackMs));
+                check("around a live ParticleField: worst event within 4x",
+                      fMax <= std::max(kHitchMaxRatio * fq, fq + kHitchMaxSlackMs));
+            }
+            check("around a live ParticleField: no temporal history reset", f1.historyResets == f0.historyResets);
+            scene.remove(*field);
+            for (int f = 0; f < kGap; ++f) frame(-1, kGap);// its departure
+            field.reset();
+        }
+
+        // ── The slot pool outgrown ───────────────────────────────────────────
+        {
+            const auto g0 = renderer.tlasStats();
+            const size_t countBefore = forest->count();
+            forest->setCount(kInstCapacity);
+            double growMs[3] = {};// the event frame and the two after it
+            for (int f = 0; f < kGap; ++f) {
+                const FrameRow r = frame(-1, f);
+                if (f < 3) growMs[f] = r.wallMs;
+                if (dump && f < 2) dumpFrame("churn_growth", 0, 0, f);
+            }
+            const auto g1 = renderer.tlasStats();
+            std::printf("\nthe forest at its whole capacity (%zu -> %zu instances): %llu pool growths, %llu slot edits, "
+                        "%llu structural rebuilds, %llu history resets; frames %.2f, %.2f, %.2f ms\n",
+                        countBefore, kInstCapacity,
+                        static_cast<unsigned long long>(g1.slotPoolGrowths - g0.slotPoolGrowths),
+                        static_cast<unsigned long long>(g1.slotEdits - g0.slotEdits),
+                        static_cast<unsigned long long>(g1.structuralRebuilds - g0.structuralRebuilds),
+                        static_cast<unsigned long long>(g1.historyResets - g0.historyResets), growMs[0], growMs[1],
+                        growMs[2]);
+            if (!slotsOff) {
+                check("the slot pool outgrown: it grows in place", g1.slotPoolGrowths > g0.slotPoolGrowths);
+                check("the slot pool outgrown: no structural rebuild", g1.structuralRebuilds == g0.structuralRebuilds);
+            }
+            check("the slot pool outgrown: no temporal history reset", g1.historyResets == g0.historyResets);
+            forest->setCount(countBefore);
+            for (int f = 0; f < kGap; ++f) frame(-1, kGap);
+        }
+
         // ── Everything removed, then some of it back ─────────────────────────
         // No TLAS instance at all: the TLAS must be rebuilt empty, never left
         // with the removed instances, whose desc rows are zeroed (a ray that

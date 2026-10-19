@@ -28,17 +28,19 @@ namespace threepp::vulkan {
 
     class TlasGen {
     public:
-        // Matches tlas_gen.comp's TlasSpan (scalar, 32 B).
+        // Matches tlas_gen.comp's TlasSpan (scalar, 40 B).
         struct SpanDesc {
-            uint64_t blasAddress;
+            uint64_t blasAddress;// level 0's
             uint32_t firstEntry;
             uint32_t count;
             uint32_t instBase;
             uint32_t workBase;
             uint32_t maskWord; // mask << 24
             uint32_t flagsWord;// instance flags << 24
+            uint32_t lodRowBase; // its first level BLAS address, when lodRowCount > 0
+            uint32_t lodRowCount;// an auto-LOD chain's levels 1..n and the fallback; 0: no chain
         };
-        static_assert(sizeof(SpanDesc) == 32, "tlas_gen SpanDesc drift");
+        static_assert(sizeof(SpanDesc) == 40, "tlas_gen SpanDesc drift");
 
         struct Pc {
             uint32_t spanCount;
@@ -52,10 +54,13 @@ namespace threepp::vulkan {
 
         // Grow this frame's span pool and point this frame's set at the world
         // buffer and the frame's instance buffer. Post-fence, pre-record.
-        void prepareFrame(uint32_t frame, uint32_t spanCount, VkBuffer world, VkBuffer instances,
-                          VkBuffer lodFades);
+        // rows: the level BLAS addresses the spans' lodRowBase index (level k
+        // >= 1: selectLodGeom(rec, k).asAddress). lodLevels: a byte per entry.
+        void prepareFrame(uint32_t frame, uint32_t spanCount, uint32_t rowCount, VkBuffer world,
+                          VkBuffer instances, VkBuffer lodFades, VkBuffer lodLevels);
         [[nodiscard]] SpanDesc* spanPtr(uint32_t frame) { return spanPtrs_[frame]; }
-        void flushSpans(uint32_t frame, uint32_t spanCount);
+        [[nodiscard]] uint64_t* rowPtr(uint32_t frame) { return rowPtrs_[frame]; }
+        void flushSpans(uint32_t frame, uint32_t spanCount, uint32_t rowCount);
 
         void record(VkCommandBuffer cb, uint32_t frame, const Pc& pc);
         void declare(rg::RenderGraph& g, rg::PassBuilder& pass, uint32_t frame) const;
@@ -65,6 +70,8 @@ namespace threepp::vulkan {
         uint32_t       framesInFlight_;
         std::vector<Buffer>    spanBufs_;
         std::vector<SpanDesc*> spanPtrs_;
+        std::vector<Buffer>    rowBufs_;
+        std::vector<uint64_t*> rowPtrs_;
         VkDescriptorSetLayout dsLayout_   = VK_NULL_HANDLE;
         VkPipelineLayout      pipeLayout_ = VK_NULL_HANDLE;
         VkPipeline            pipe_       = VK_NULL_HANDLE;

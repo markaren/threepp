@@ -199,6 +199,9 @@ namespace threepp::vulkan::impl {
     // (position/normal additions ARE detected via the flag bits below).
     struct SnapNode {
         Object3D* obj = nullptr;
+        // obj->parent when recorded: the next expansion reuses this node's
+        // record only while its whole parent chain is the one it was.
+        Object3D* parent = nullptr;
         // Process-unique ids of obj, its geometry and its material, compared
         // alongside the pointers. A pointer alone cannot tell the object it was
         // recorded from apart from a NEW one the allocator placed at the dead

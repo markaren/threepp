@@ -11,14 +11,29 @@
 namespace threepp::vulkan {
 
     namespace {
-        constexpr uint32_t kBindings = 4;
+        constexpr uint32_t kBindings = 6;
         constexpr uint32_t kMinSpans = 64;
+
+        // A per-frame host-mapped pool, rewritten whole each frame it is used,
+        // so a plain destroy on growth is safe: this slot's fence has signaled.
+        void* growHostPool(VulkanContext& ctx, Buffer& b, VkDeviceSize bytes, VkDeviceSize minBytes) {
+            if (b.size >= bytes && b.handle != VK_NULL_HANDLE) return nullptr;
+            destroyBuffer(ctx.allocator(), b);
+            b = createBuffer(ctx.allocator(), ctx.device(), std::max(bytes * 2, minBytes),
+                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO,
+                             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
+            VmaAllocationInfo info{};
+            vmaGetAllocationInfo(ctx.allocator(), b.alloc, &info);
+            return info.pMappedData;
+        }
     }// namespace
 
     TlasGen::TlasGen(VulkanContext& ctx, uint32_t framesInFlight)
         : ctx_(ctx), framesInFlight_(framesInFlight) {
         spanBufs_.resize(framesInFlight_);
         spanPtrs_.resize(framesInFlight_, nullptr);
+        rowBufs_.resize(framesInFlight_);
+        rowPtrs_.resize(framesInFlight_, nullptr);
         createPipeline();
     }
 
@@ -29,6 +44,7 @@ namespace threepp::vulkan {
         if (dsLayout_)   vkDestroyDescriptorSetLayout(d, dsLayout_, nullptr);
         if (descPool_)   vkDestroyDescriptorPool(d, descPool_, nullptr);
         for (auto& b : spanBufs_) destroyBuffer(ctx_.allocator(), b);
+        for (auto& b : rowBufs_) destroyBuffer(ctx_.allocator(), b);
     }
 
     void TlasGen::createPipeline() {
@@ -97,29 +113,24 @@ namespace threepp::vulkan {
         check(vkAllocateDescriptorSets(d, &dsai, sets_.data()), "vkAllocateDescriptorSets(tlas_gen)");
     }
 
-    void TlasGen::prepareFrame(uint32_t frame, uint32_t spanCount, VkBuffer world, VkBuffer instances,
-                               VkBuffer lodFades) {
-        // Per-frame span pool: host-mapped, rewritten whole each frame it is
-        // used (O(spans)), so a plain destroy on growth is safe - this slot's
-        // fence has signaled.
-        const VkDeviceSize spanBytes = VkDeviceSize(std::max(spanCount, 1u)) * sizeof(SpanDesc);
-        if (spanBufs_[frame].size < spanBytes) {
-            destroyBuffer(ctx_.allocator(), spanBufs_[frame]);
-            const VkDeviceSize cap = std::max<VkDeviceSize>(spanBytes * 2, kMinSpans * sizeof(SpanDesc));
-            spanBufs_[frame] = createBuffer(ctx_.allocator(), ctx_.device(), cap, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                            VMA_MEMORY_USAGE_AUTO,
-                                            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                                                    VMA_ALLOCATION_CREATE_MAPPED_BIT);
-            VmaAllocationInfo info{};
-            vmaGetAllocationInfo(ctx_.allocator(), spanBufs_[frame].alloc, &info);
-            spanPtrs_[frame] = static_cast<SpanDesc*>(info.pMappedData);
-        }
+    void TlasGen::prepareFrame(uint32_t frame, uint32_t spanCount, uint32_t rowCount, VkBuffer world,
+                               VkBuffer instances, VkBuffer lodFades, VkBuffer lodLevels) {
+        // Per-frame span and row pools: rewritten whole each frame they are
+        // used (O(spans)).
+        if (void* p = growHostPool(ctx_, spanBufs_[frame], VkDeviceSize(std::max(spanCount, 1u)) * sizeof(SpanDesc),
+                                   kMinSpans * sizeof(SpanDesc)))
+            spanPtrs_[frame] = static_cast<SpanDesc*>(p);
+        if (void* p = growHostPool(ctx_, rowBufs_[frame], VkDeviceSize(std::max(rowCount, 1u)) * sizeof(uint64_t),
+                                   kMinSpans * sizeof(uint64_t)))
+            rowPtrs_[frame] = static_cast<uint64_t*>(p);
         // Unconditionally, as InstanceExpand does: a reallocated buffer can
         // come back with the handle value it had.
         const VkDescriptorBufferInfo bi[kBindings]{{spanBufs_[frame].handle, 0, VK_WHOLE_SIZE},
                                                    {world, 0, VK_WHOLE_SIZE},
                                                    {instances, 0, VK_WHOLE_SIZE},
-                                                   {lodFades, 0, VK_WHOLE_SIZE}};
+                                                   {lodFades, 0, VK_WHOLE_SIZE},
+                                                   {rowBufs_[frame].handle, 0, VK_WHOLE_SIZE},
+                                                   {lodLevels, 0, VK_WHOLE_SIZE}};
         VkWriteDescriptorSet w[kBindings]{};
         for (uint32_t i = 0; i < kBindings; ++i) {
             w[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -132,9 +143,11 @@ namespace threepp::vulkan {
         vulkan::updateDescriptorSets(ctx_.device(), kBindings, w, 0, nullptr);
     }
 
-    void TlasGen::flushSpans(uint32_t frame, uint32_t spanCount) {
-        if (spanCount == 0u || spanBufs_[frame].alloc == VK_NULL_HANDLE) return;
-        flushHostWrites(ctx_.allocator(), spanBufs_[frame].alloc, 0, VkDeviceSize(spanCount) * sizeof(SpanDesc));
+    void TlasGen::flushSpans(uint32_t frame, uint32_t spanCount, uint32_t rowCount) {
+        if (spanCount > 0u && spanBufs_[frame].alloc != VK_NULL_HANDLE)
+            flushHostWrites(ctx_.allocator(), spanBufs_[frame].alloc, 0, VkDeviceSize(spanCount) * sizeof(SpanDesc));
+        if (rowCount > 0u && rowBufs_[frame].alloc != VK_NULL_HANDLE)
+            flushHostWrites(ctx_.allocator(), rowBufs_[frame].alloc, 0, VkDeviceSize(rowCount) * sizeof(uint64_t));
     }
 
     void TlasGen::record(VkCommandBuffer cb, uint32_t frame, const Pc& pc) {

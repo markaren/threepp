@@ -940,6 +940,17 @@ namespace threepp {
         // meshes have entries, so a change re-expands.
         static constexpr uint32_t kSnapResident   = 16384u;
         std::vector<SnapNode> sceneSnapshot_;
+        // The full expansion's reuse of the last one (VulkanCoreScene.cpp,
+        // reuseNode): the last walk's nodes, by object, and the objects this
+        // walk met whose parent chain is the one they had. Members so their
+        // storage survives between expansions.
+        std::vector<SnapNode> prevSceneSnapshot_;
+        std::unordered_map<const Object3D*, uint32_t> prevSnapIndex_;
+        std::unordered_set<const Object3D*> walkStable_;
+        // THREEPP_VULKAN_WALK_CHECK=1: every expansion that reuses also walks
+        // without reuse and compares the two, node for node; the mismatches
+        // land here (and on stderr).
+        uint64_t walkCheckMismatches_ = 0;
         // A mesh with entries was hidden or shown this frame (MeshEntry::hidden):
         // the TLAS fill, the frustum culls, the draw records and the emitter
         // walk re-read the flags. Set by the snapshot replay or the expansion,
@@ -2502,14 +2513,15 @@ namespace threepp {
         // ── GPU draw records (stage 2; DrawGen.hpp, draw_gen.comp) ─────────
         // OFF by default, and only with the expansion on (its world matrices
         // are the input): setGpuDrawGeneration. The primary view's records of
-        // eligible instanced spans (static, no LOD chain, no fades, no
-        // occlusion culling this frame) are written by compute; everything
+        // eligible instanced spans (static, no occlusion culling this frame)
+        // are written by compute; everything
         // else stays the CPU's.
         std::unique_ptr<vulkan::DrawGen> drawGen_;
         bool gpuDrawGen_ = false;
         // The frame's dispatch, filled by buildIndirectDrawData (primary view)
         // and uploaded by prepareDrawGen; drawGenActive_ gates the graph pass.
         std::vector<vulkan::DrawGen::SpanDesc> drawGenSpans_;
+        std::vector<vulkan::DrawGen::LodRow>   drawGenLodRows_;// the spans' auto-LOD levels
         uint32_t drawGenWork_   = 0;
         bool     drawGenActive_ = false;
         float    drawGenPlanes_[24]{};
@@ -2535,6 +2547,7 @@ namespace threepp {
         std::unique_ptr<vulkan::TlasGen> tlasGen_;
         bool gpuTlasGen_ = false;
         std::vector<vulkan::TlasGen::SpanDesc> tlasGenSpans_;
+        std::vector<uint64_t> tlasGenLodRows_;// the spans' auto-LOD level BLAS addresses
         uint32_t tlasGenWork_   = 0;
         bool     tlasGenActive_ = false;// this frame's refit carries GPU instances
         // The CPU/GPU split of the TLAS last built: a different one is a full
@@ -2549,14 +2562,35 @@ namespace threepp {
         void prepareTlasGen(uint32_t frame);
         // The per-entry LOD fade words (entryLodFade_) for the GPU producers:
         // the DrawInfo flag bits and the TLAS mask of a crossfading instance.
-        // Per frame-in-flight, host-mapped, re-sent whole when lodFadeVersion_
-        // moved (4 B per entry); bound by the sets prepareDrawGen /
-        // prepareTlasGen rewrite every frame, so growth is a plain swap.
+        // Per frame-in-flight, host-mapped, re-sent when lodFadeVersion_ moved:
+        // the spans whose words changed since that slot's last upload
+        // (lodFadeDirty_, as motionDirty_ does for the motion matrices), whole
+        // after a rebuild, a slot edit or growth. Bound by the sets
+        // prepareDrawGen / prepareTlasGen rewrite every frame, so growth is a
+        // plain swap.
+        std::array<DescDirtyRanges, kFramesInFlight> lodFadeDirty_{};
+        void markLodFadeDirty(uint32_t first, uint32_t count) {
+            for (auto& d : lodFadeDirty_) d.mark(first, count);
+        }
+        void markLodFadeWhole() {
+            for (auto& d : lodFadeDirty_) d.markWhole();
+        }
         std::array<Buffer, kFramesInFlight> lodFadeBuffers_{};
         std::array<uint32_t, kFramesInFlight> lodFadeUploaded_{};
         std::array<size_t, kFramesInFlight> lodFadeUploadedCount_{};
         uint32_t lodFadeVersion_ = 1;
         VkBuffer uploadLodFades(uint32_t frame);
+        // MeshEntry::lodLevel for the GPU producers, a byte per entry: the
+        // CPU's selection, read by the spans with an auto-LOD chain. Gathered
+        // from the spans with a level above 0 (EntrySpan::lodNonZero), re-sent
+        // when lodLevelVersion_ moved: a selection that changed a level, or
+        // entries laid out anew.
+        std::array<Buffer, kFramesInFlight> lodLevelBuffers_{};
+        std::array<uint32_t, kFramesInFlight> lodLevelUploaded_{};
+        std::array<size_t, kFramesInFlight> lodLevelUploadedCount_{};
+        uint32_t lodLevelVersion_ = 1;
+        std::vector<uint8_t> lodLevelScratch_;
+        VkBuffer uploadLodLevels(uint32_t frame);
         void recordTlasGen(VkCommandBuffer cb, uint32_t frame);
         bool verifyTlasGen(VulkanRenderer::TlasGenCheck& out);
         // The span's record when draw_gen.comp may write its draws (the
@@ -2565,9 +2599,13 @@ namespace threepp {
         const BlasRecord* drawGenEligibleRecord(const EntrySpan& sp);
         // The primary view's frame hands draw_gen.comp spans to cull (stage 4):
         // the CPU cull keeps only its span-level answer for them.
+        // Not while the overlay depth prepass runs: it draws one entry at a
+        // time off this view's CPU cull, which would then hold only the span-
+        // level answer for these spans and draw every instance of a span that
+        // is partly in view (the pine forest under its HUD: +2.5 ms of GPU).
         [[nodiscard]] bool drawGenCullsOnGpu() const {
             return !curView_->secondary && gpuDrawGen_ && gpuInstanceExpand_ && drawGen_ && instExpand_ &&
-                   !gpuDrawGenCheck_ && !occlusionCullingEnabled_;
+                   !gpuDrawGenCheck_ && !occlusionCullingEnabled_ && !sceneHasOverlayContent();
         }
         void recordDrawGen(VkCommandBuffer cb, uint32_t frame);
         bool verifyDrawGen(VulkanRenderer::DrawGenCheck& out);
@@ -3091,13 +3129,43 @@ namespace threepp {
         // same queue, and the render graph's entry barrier (ALL_COMMANDS,
         // every prior submission in its first scope) orders and publishes it.
         // Its transients go to the frame-serial retire queue, its command
-        // buffer to asyncOneShots_ until its fence signals. No compaction: the
-        // size queries would need the wait this exists to avoid.
+        // buffer to asyncOneShots_ until its fence signals. Its static BLASes
+        // are compacted after that (compactAsync): their compacted-size
+        // queries ride the batch, in a pool of its own.
         void flushOneShotBatchAsync();
         // Free the command buffers and fences of async batches that finished
-        // (all of them when the device is known idle).
+        // (all of them when the device is known idle), and compact what a
+        // finished batch queried.
         void reapAsyncOneShots(bool deviceIdle);
-        std::vector<std::pair<VkCommandBuffer, VkFence>> asyncOneShots_;
+        struct AsyncCompaction {
+            VkQueryPool pool = VK_NULL_HANDLE;
+            // Each record by its geometry (blasCache's key) and the structure
+            // queried: a record evicted or rebuilt since is passed over.
+            std::vector<std::pair<const BufferGeometry*, VkAccelerationStructureKHR>> records;
+        };
+        struct AsyncOneShot {
+            VkCommandBuffer cb = VK_NULL_HANDLE;
+            VkFence fence = VK_NULL_HANDLE;
+            AsyncCompaction compaction;
+        };
+        std::vector<AsyncOneShot> asyncOneShots_;
+        // A finished async batch's queried BLASes: each copied with
+        // COPY_MODE_COMPACT into storage of its compacted size, in one more
+        // async batch (ahead of the frame in queue order, as the build was),
+        // the record swapped to the copy at once and the build-size pair
+        // retired with the frame about to be recorded, whose TLAS is then
+        // built anew (blasRereferenced_): the frames still in flight trace
+        // the old pair, this one the new.
+        void compactAsync(const AsyncCompaction& c);
+        bool blasRereferenced_ = false;
+        // A slot edit that needs more slots than the pool holds: after one
+        // device wait, every pool-sized GPU buffer (the geometry and material
+        // desc rings, the motion matrices and moved bits, the TLAS and its
+        // instance buffers) is made anew for 1.5x what the edit needs and
+        // refilled from its host copy, and the sets that name them are
+        // rewritten, as the rebuild does; the entries, spans and every
+        // temporal history stay. VulkanCoreSlots.cpp.
+        void growSlotPool(uint32_t need);
 
         // ── Static BLAS compaction ───────────────────────────────────────────
         // A static record (built once, traced for its lifetime) is built
@@ -3610,7 +3678,10 @@ namespace threepp {
 
         // Build a TLAS over the supplied instance descriptors. Empty input is
         // legal — produces an empty TLAS that always misses.
-        void buildTlas(const std::vector<VkAccelerationStructureInstanceKHR>& instances);
+        // buildNow false: the structure and its buffers only, sized for the
+        // pool; the caller's frame records its first build (recordTlasRefit
+        // promotes the refit to one, nothing having been built).
+        void buildTlas(const std::vector<VkAccelerationStructureInstanceKHR>& instances, bool buildNow = true);
 
         // Record a per-frame TLAS refit/rebuild into `cb` — NO blocking submit.
         // The host instance write goes to tlasInstancesBuffers[currentFrame]

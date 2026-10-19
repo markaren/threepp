@@ -3843,7 +3843,8 @@ void VulkanRenderer::Impl::refreshGrassBlas(GrassMesh& gm, GrassMeshState& st, f
             endAndSubmitOneShot(cb, "grass prime");
         }
 
-void VulkanRenderer::Impl::buildTlas(const std::vector<VkAccelerationStructureInstanceKHR>& instances) {
+void VulkanRenderer::Impl::buildTlas(const std::vector<VkAccelerationStructureInstanceKHR>& instances,
+                                     bool buildNow) {
             // No ray query: no TLAS. tlas stays null, which also turns the
             // per-frame refit (recordTlasRefit) into a no-op.
             if (!ctx->rayQuerySupported()) return;
@@ -3917,6 +3918,14 @@ void VulkanRenderer::Impl::buildTlas(const std::vector<VkAccelerationStructureIn
                   "vkCreateAccelerationStructureKHR(TLAS)");
             vulkan::registerAccelerationStructure(tlas, tlasCreate.buffer, kSceneGeometry);
 
+            if (!buildNow) {
+                tlasBuiltInstanceCount_ = 0;
+                tlasStats_.instances = 0;
+                tlasGenPartition_ = 0;
+                pendingTlasGpuInstances_ = 0;
+                tlasGenActive_ = false;
+                return;
+            }
             Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), tlasSizes.buildScratchSize);
 
             tlasBuild.dstAccelerationStructure = tlas;

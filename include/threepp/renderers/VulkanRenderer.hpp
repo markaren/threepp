@@ -888,6 +888,15 @@ namespace threepp {
             // (a deformer, a texture swap, more entries than the slot pool
             // holds) is still a structural rebuild.
             uint64_t slotEdits = 0;
+            // BLASes a slot edit built (its new geometries) and compacted once
+            // their build had completed, a frame or two later, without a host
+            // wait; the rebuild compacts its own in place.
+            uint64_t asyncCompactions = 0;
+            // Slot edits that outgrew the slot pool (the entry-indexed GPU
+            // buffers, laid out at the last rebuild for 1.5x its entries) and
+            // grew it in place: one device wait and those buffers made anew,
+            // no rebuild of the entries.
+            uint64_t slotPoolGrowths = 0;
         };
         [[nodiscard]] TlasStats tlasStats() const;
 
@@ -2041,9 +2050,10 @@ namespace threepp {
         // meshes from the world matrices the expansion above produced, instead
         // of the CPU writing one per visible instance every frame the camera or
         // the instances move. Stage 2 of plans/gpu-driven-instances.md. Takes
-        // the primary view's static InstancedMeshes with no auto-LOD chain and
-        // no LOD fades, on frames without occlusion culling; the rest stays on
-        // the CPU. OFF by default; needs setGpuInstanceExpansion(true).
+        // the primary view's static InstancedMeshes (LOD crossfades and auto-LOD
+        // chains included: each instance draws the level the CPU selected for
+        // it), on frames without occlusion culling; the rest stays on the CPU.
+        // OFF by default; needs setGpuInstanceExpansion(true).
         void setGpuDrawGeneration(bool enabled);
         [[nodiscard]] bool gpuDrawGeneration() const;
         // Test/debug: while on, the CPU also builds the records the compute
@@ -2055,6 +2065,7 @@ namespace threepp {
         void setGpuDrawGenerationCheck(bool keep);
         struct DrawGenCheck {
             std::size_t spans              = 0;// instanced spans written by compute
+            std::size_t lodSpans           = 0;// ... of them with an auto-LOD chain
             std::size_t records            = 0;// their records
             std::size_t drawInfoMismatches = 0;// visible instances whose DrawInfo differs
             std::size_t cmdMismatches      = 0;// commands that differ (vertex range, instance, record)
@@ -2067,8 +2078,9 @@ namespace threepp {
         // descriptors of instanced meshes from the expansion's world matrices,
         // instead of the CPU refilling one per instance every frame anything in
         // the scene moves. Stage 5 of plans/gpu-driven-instances.md. Takes
-        // static InstancedMeshes with no auto-LOD chain, no LOD fades and no
-        // cutout ray distance. OFF by default; needs setGpuInstanceExpansion.
+        // static InstancedMeshes without a cutout ray distance (crossfades and
+        // auto-LOD chains included). OFF by default; needs
+        // setGpuInstanceExpansion.
         void setGpuTlasInstances(bool enabled);
         [[nodiscard]] bool gpuTlasInstances() const;
         // Under setGpuDrawGenerationCheck the CPU also builds those instances,
@@ -2077,6 +2089,7 @@ namespace threepp {
         // device. False when no instance was generated.
         struct TlasGenCheck {
             std::size_t spans      = 0;
+            std::size_t lodSpans   = 0;// ... of them with an auto-LOD chain
             std::size_t instances  = 0;
             std::size_t mismatches = 0;// instances whose 64 bytes differ
         };
