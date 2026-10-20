@@ -268,6 +268,7 @@ void Object3D::addRef(Object3D& object) {
 
     object.parent = this;
     this->children.emplace_back(&object);
+    structureChanged();
 
     // The new parent's world transform must flow into this subtree even when
     // the child's local transform is unchanged (updateMatrix()'s early-out no
@@ -310,6 +311,7 @@ std::shared_ptr<Object3D> Object3D::detachChild(Object3D& object) {
 
         Object3D* child = *it;
         children.erase(it);
+        structureChanged();
 
         child->parent = nullptr;
         child->dispatchEvent("remove", child);
@@ -338,7 +340,15 @@ std::shared_ptr<Object3D> Object3D::removeFromParent() {
     return parent->detachChild(*this);
 }
 
+void Object3D::structureChanged() {
+
+    const uint64_t v = ++structureCounter_;
+    for (Object3D* o = this; o; o = o->parent) o->structureVersion_ = v;
+}
+
 void Object3D::clear() {
+
+    if (!this->children.empty()) structureChanged();
 
     for (auto& object : this->children) {
 

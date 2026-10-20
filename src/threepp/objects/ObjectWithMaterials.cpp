@@ -36,6 +36,7 @@ const std::vector<std::shared_ptr<Material>>& ObjectWithMaterials::materials() c
 void ObjectWithMaterials::setMaterials(const std::vector<std::shared_ptr<Material>>& materials) {
 
     this->materials_ = materials;
+    structureChanged();
 }
 
 size_t ObjectWithMaterials::numMaterials() const {

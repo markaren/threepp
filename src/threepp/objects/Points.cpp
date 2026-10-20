@@ -65,6 +65,7 @@ std::shared_ptr<BufferGeometry> Points::geometry() const {
 void Points::setGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
 
     this->geometry_ = geometry;
+    structureChanged();
 }
 
 std::shared_ptr<Points> Points::create(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material) {

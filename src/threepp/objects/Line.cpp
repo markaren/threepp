@@ -36,6 +36,7 @@ std::shared_ptr<BufferGeometry> Line::geometry() const {
 void Line::setGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
 
     this->geometry_ = geometry;
+    structureChanged();
 }
 
 std::shared_ptr<Line> Line::create(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material) {

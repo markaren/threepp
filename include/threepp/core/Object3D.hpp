@@ -389,6 +389,17 @@ namespace threepp {
 
         ~Object3D() override;
 
+        // A version of this object's subtree's structure: bumped when a child
+        // is added or removed below it, or a geometry, material or instance
+        // count is set on it or below it, and carried to every ancestor at the
+        // change (as a moved transform is). Equal to what a renderer recorded,
+        // nothing in the subtree was added, removed or swapped since; flags
+        // set as plain fields (visible, resident, layers) do not move it.
+        [[nodiscard]] uint64_t structureVersion() const { return structureVersion_; }
+        // Marks this object's subtree changed (see structureVersion): for a
+        // subclass whose own setter changes what a renderer draws of it.
+        void structureChanged();
+
     protected:
         virtual std::shared_ptr<Object3D> createDefault() {
 
@@ -397,6 +408,8 @@ namespace threepp {
 
     private:
         inline static std::atomic<unsigned int> _object3Did{0};
+        inline static std::atomic<uint64_t> structureCounter_{0};
+        uint64_t structureVersion_ = 0;
 
         // Unlink `object` from this node: drop it from `children`, clear its
         // parent, fire "remove", and hand back the owning reference if this node

@@ -46,7 +46,10 @@ size_t InstancedMesh::count() const {
 
 void InstancedMesh::setCount(size_t count) {
 
-    count_ = std::min(maxCount_, count);
+    const size_t next = std::min(maxCount_, count);
+    if (next == count_) return;
+    count_ = next;
+    structureChanged();
 }
 
 FloatBufferAttribute* InstancedMesh::instanceMatrix() const {
