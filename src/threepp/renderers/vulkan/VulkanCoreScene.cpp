@@ -2097,13 +2097,14 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     // A field the slot path admitted takes its first deform here.
                     // One whose state was built for a geometry it no longer draws
                     // (swapped, its new state still to be admitted) takes none.
+                    // A hidden one takes none (grassWantsDeform).
                     auto* gm = static_cast<GrassMesh*>(entries[sp.first].mesh);
                     const auto stIt = grassStates.find(gm);
-                    if (stIt != grassStates.end() && stIt->second->liveCheck.lock() != gm->geometry()) continue;
-                    const bool prime = stIt != grassStates.end() && stIt->second->primePending;
+                    if (stIt == grassStates.end() || stIt->second->liveCheck.lock() != gm->geometry()) continue;
                     for (uint32_t j = 0; j < sp.count; ++j) {
                         const size_t i = size_t(sp.first) + j;
-                        entryGrassDirty[i] = prime || grassShouldAnimate(entries[i], camPos);
+                        entryGrassDirty[i] = grassWantsDeform(*stIt->second, entries[i].hidden,
+                                                              grassShouldAnimate(entries[i], camPos));
                     }
                 }
             }
@@ -3645,9 +3646,10 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // by unrelated scene churn (e.g. terrain LOD tile swaps as
                         // the camera roams the valley) doesn't wake every frozen
                         // far field. recPtr already keeps the field in the TLAS.
+                        // A hidden field takes none (grassWantsDeform).
                         const auto& cw = camera.matrixWorld->elements;
                         const Vector3 camPos(cw[12], cw[13], cw[14]);
-                        if (grassShouldAnimate(en, camPos)) {
+                        if (grassWantsDeform(*st, en.hidden, grassShouldAnimate(en, camPos))) {
                             pendingGrassDeforms_.emplace_back(gm, st);
                             ++gm->frameTick;
                         }

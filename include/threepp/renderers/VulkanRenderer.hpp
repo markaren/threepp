@@ -880,6 +880,10 @@ namespace threepp {
             // record with an auto-LOD chain (and its prevVertex settle) still
             // drains; every other edit records into the frame command buffer.
             uint64_t drains = 0;
+            // GrassMesh wind deforms (with their BLAS refits) recorded: one per
+            // shown field per frame within its distance gate; a hidden field
+            // takes none, and its first frame shown again one (a prime).
+            uint64_t grassDeforms = 0;
         };
         [[nodiscard]] DynamicGeomStats dynamicGeomStats() const;
 

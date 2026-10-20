@@ -3694,6 +3694,24 @@ namespace threepp {
         // beyond that the field is frozen (skips the per-frame dispatch + refit,
         // holds its last pose). Distance is measured to the nearest point of the
         // box so a large field animates whenever the camera is anywhere near it.
+        // Whether a field with a state deforms this frame. Hidden: no (no ray
+        // hits it, no raster draws it), except an admission's prime, which
+        // gives its BLAS a pose before any show; the skip is remembered, and
+        // the first frame shown again is a prime whatever the distance gate
+        // says (GrassMeshState::skippedHidden).
+        static bool grassWantsDeform(GrassMeshState& st, bool hidden, bool animate) {
+            if (hidden) {
+                if (st.primePending) return true;
+                st.skippedHidden = true;
+                return false;
+            }
+            if (st.skippedHidden) {
+                st.skippedHidden = false;
+                st.primePending = true;
+            }
+            return st.primePending || animate;
+        }
+
         bool grassShouldAnimate(const MeshEntry& en, const Vector3& camPos) const {
             auto* gm = static_cast<GrassMesh*>(en.mesh);
             const float maxD = gm->params.maxAnimDistance;

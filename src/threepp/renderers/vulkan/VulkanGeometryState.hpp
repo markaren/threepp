@@ -662,6 +662,11 @@ namespace threepp::vulkan::impl {
         // it, and copies the pose it writes into prevVertex as the
         // synchronous prime does, so its first frame reports no motion.
         bool primePending = false;
+        // A hidden field takes no deform and no BLAS refit (no ray hits it, no
+        // raster draws it). Set on a frame it skipped; its first frame shown
+        // again is then a prime: the wind of that frame, with no motion from
+        // the pose it was left in.
+        bool skippedHidden = false;
     };
 
     // Per-instance descriptor tables the closest-hit shader indexes by

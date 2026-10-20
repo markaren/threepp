@@ -3730,6 +3730,7 @@ void VulkanRenderer::Impl::recordGrassPrevSettles(VkCommandBuffer cb) {
         }
 
 void VulkanRenderer::Impl::recordGrassDeform(VkCommandBuffer cb, GrassMesh& gm, GrassMeshState& st) {
+            ++dynGeomStats_.grassDeforms;
             // The pose the field shows now becomes the previous pose of the one
             // the dispatch below writes.
             if (st.blas->prevVertex.handle != VK_NULL_HANDLE) {

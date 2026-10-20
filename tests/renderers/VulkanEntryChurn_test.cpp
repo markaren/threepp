@@ -940,6 +940,31 @@ int main() {
             settle("a field's geometry swapped");
             live[1]->setGeometry(keepGeom);
             settle("and swapped back");
+            // A hidden field takes no deform and no BLAS refit; shown again it
+            // takes one on its first frame (a prime: that frame's wind, no
+            // motion from the pose it was left in).
+            const auto deformsOver = [&](int n) {
+                const uint64_t a = renderer.dynamicGeomStats().grassDeforms;
+                for (int f = 0; f < n; ++f) frame(-1, kGap);
+                return renderer.dynamicGeomStats().grassDeforms - a;
+            };
+            const uint64_t allShown = deformsOver(4);
+            live[2]->visible = false;
+            live[3]->visible = false;
+            frame(-1, kGap);// the hide
+            const uint64_t twoHidden = deformsOver(4);
+            live[2]->visible = true;
+            live[3]->visible = true;
+            uint64_t atShow = 0;
+            {
+                const uint64_t a = renderer.dynamicGeomStats().grassDeforms;
+                settle("two hidden fields shown again",
+                       [&] { atShow = renderer.dynamicGeomStats().grassDeforms - a; });
+            }
+            std::printf("grass deforms: %llu in 4 frames with 4 fields shown, %llu with 2 of them hidden, %llu on "
+                        "the frame they show again\n",
+                        static_cast<unsigned long long>(allShown), static_cast<unsigned long long>(twoHidden),
+                        static_cast<unsigned long long>(atShow));
             const auto a0 = renderer.tlasStats();
             auto ahead = makeField(0.f, 8.f, 41u);
             ahead->visible = false;
@@ -986,6 +1011,9 @@ int main() {
                 check("grass fields: the worst event within 4x the quiet median",
                       percentile(cost, 1.0) <= std::max(kHitchMaxRatio * q, q + kHitchMaxSlackMs));
             }
+            check("grass fields: a shown field deforms every frame", allShown == 16u);
+            check("grass fields: a hidden field takes no deform", twoHidden == 8u);
+            check("grass fields: shown again, each takes one on its first frame", atShow == 4u);
             check("grass fields: device memory back within 8 MiB of where it started",
                   mem1 <= mem0 + static_cast<uint64_t>(8 * MiB));
             check("grass fields: no temporal history reset", r1.historyResets == r0.historyResets);
