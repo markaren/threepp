@@ -644,6 +644,26 @@ int main() {
         // front) is taken by the next edit, and the forest at its whole
         // capacity again fits without another growth.
         {
+            // Through both growths, a field whose sprites the scene shadows (one
+            // ray query per particle through the field pass's TLAS set): the
+            // growth makes a new TLAS with no device wait while the frame
+            // before may still trace the old one, so the set it binds must be
+            // that frame's own (under THREEPP_VULKAN_VALIDATION=1 a rewrite of
+            // a set in use is VUID-vkUpdateDescriptorSets-None-03047).
+            {
+                ParticleField::Config cfg;
+                cfg.capacity = kFieldParticles;
+                cfg.uniformRadius = 0.4f;
+                field = ParticleField::create(cfg);
+                field->setBillboardRepr(Color(1.f, 0.8f, 0.5f), Color(0.6f, 0.3f, 0.2f));
+                field->setDensityRepr(Vector3(0.f, 2.f, 0.f), Vector3(24.f, 4.f, 24.f), 0.02f, 32);
+                auto& br = field->billboardRepr();
+                br.volumeExtinction = 1.f;
+                br.volumeShadow = 0.8f;
+                br.sunGeometryShadow = true;
+                scene.add(field);
+                for (int f = 0; f < kGap; ++f) frame(-1, kGap);// its arrival
+            }
             std::vector<double> quiet;
             for (int f = 0; f < 16; ++f) quiet.push_back(frame(-1, kGap).wallMs);
             const double q = percentile(quiet, 0.5);
@@ -708,7 +728,9 @@ int main() {
             }
             forest->setCount(countBefore);
             scene.remove(*extra);
+            scene.remove(*field);
             for (int f = 0; f < kGap; ++f) frame(-1, kGap);
+            field.reset();
         }
 
         // ── A cell admitted hidden, shown later ──────────────────────────────

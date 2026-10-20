@@ -982,18 +982,19 @@ void ParticleFieldPass::ensureAuxCapacity(std::uint32_t frame, std::uint32_t cou
 // of the SCENE and not of either pipeline: one write per TLAS handle change
 // serves both.
 //
-// Returns true when tlasSet_ names the scene's current acceleration structure,
-// which is what a caller has to know before it records a dispatch against it.
-// The write happens here, in prepareFrame's post-fence window, and only on the
-// frame the handle actually changed — a structural rebuild, which is itself
-// vkDeviceWaitIdle-guarded (see setTlas), so it can never land on a set an
-// in-flight frame names (R6 / VUID-03047).
+// Returns true when this frame's set names the scene's current acceleration
+// structure, which is what a caller has to know before it records a dispatch
+// against it. The write happens here, in this frame's post-fence window, to
+// this frame's set only, and only when the structure changed since that set
+// was last written: the other frame in flight may still be tracing through its
+// own set (R6 / VUID-03047; the TLAS is made anew without a device wait when
+// the entry slot pool grows).
 bool ParticleFieldPass::ensureTlasSet() {
 
     if (!ctx_.rayQuerySupported()) return false;
     const VkDevice d = ctx_.device();
 
-    if (tlasSet_ == VK_NULL_HANDLE) {
+    if (tlasPool_ == VK_NULL_HANDLE) {
         VkDescriptorSetLayoutBinding b{};
         b.binding         = 0;
         b.descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -1008,26 +1009,29 @@ bool ParticleFieldPass::ensureTlasSet() {
 
         VkDescriptorPoolSize ps{};
         ps.type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-        ps.descriptorCount = 1;
+        ps.descriptorCount = vulkan::impl::kFramesInFlight;
         VkDescriptorPoolCreateInfo pci{};
         pci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pci.maxSets       = 1;
+        pci.maxSets       = vulkan::impl::kFramesInFlight;
         pci.poolSizeCount = 1;
         pci.pPoolSizes    = &ps;
         check(vkCreateDescriptorPool(d, &pci, nullptr, &tlasPool_),
               "vkCreateDescriptorPool(particle field TLAS)");
 
+        VkDescriptorSetLayout layouts[vulkan::impl::kFramesInFlight];
+        for (auto& l : layouts) l = tlasDsLayout_;
         VkDescriptorSetAllocateInfo ai{};
         ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         ai.descriptorPool     = tlasPool_;
-        ai.descriptorSetCount = 1;
-        ai.pSetLayouts        = &tlasDsLayout_;
-        check(vkAllocateDescriptorSets(d, &ai, &tlasSet_),
+        ai.descriptorSetCount = vulkan::impl::kFramesInFlight;
+        ai.pSetLayouts        = layouts;
+        check(vkAllocateDescriptorSets(d, &ai, tlasSets_),
               "vkAllocateDescriptorSets(particle field TLAS)");
     }
-    if (tlasSet_ == VK_NULL_HANDLE || wantTlas_ == VK_NULL_HANDLE) return false;
+    const VkDescriptorSet set = tlasSets_[tlasFrame_];
+    if (set == VK_NULL_HANDLE || wantTlas_ == VK_NULL_HANDLE) return false;
 
-    if (tlasBoundSerial_ != wantTlasSerial_) {
+    if (tlasBoundSerial_[tlasFrame_] != wantTlasSerial_) {
         VkWriteDescriptorSetAccelerationStructureKHR asInfo{};
         asInfo.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
         asInfo.accelerationStructureCount = 1;
@@ -1035,12 +1039,12 @@ bool ParticleFieldPass::ensureTlasSet() {
         VkWriteDescriptorSet w{};
         w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w.pNext           = &asInfo;
-        w.dstSet          = tlasSet_;
+        w.dstSet          = set;
         w.dstBinding      = 0;
         w.descriptorCount = 1;
         w.descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         vulkan::updateDescriptorSets(d, 1, &w, 0, nullptr);
-        tlasBoundSerial_ = wantTlasSerial_;
+        tlasBoundSerial_[tlasFrame_] = wantTlasSerial_;
     }
     return true;
 }
@@ -1098,13 +1102,14 @@ void ParticleFieldPass::ensureBakePipeline() {
 // different OBJECT, by serial: the rebuilt TLAS can come back with the handle
 // value the destroyed one had, and the set would go on naming that one.
 //
-// That conditional is the whole safety argument. A TLAS is recreated
-// only by a structural scene rebuild, which is bracketed by vkDeviceWaitIdle,
-// so a write that happens on that frame cannot land on a set an in-flight frame
-// names (R6 / VUID-03047). A steady-state scene refits the SAME acceleration
-// structure object in place and this function writes nothing.
-void ParticleFieldPass::setTlas(VkAccelerationStructureKHR tlas) {
+// A new TLAS comes from a structural scene rebuild (after a device wait) or
+// from an entry slot pool growth (no wait: the previous frame can still be
+// tracing the old one), so each frame in flight has its own set, written by
+// ensureTlasSet in that frame's post-fence window. A steady-state scene refits
+// the SAME acceleration structure object in place and nothing is written.
+void ParticleFieldPass::setTlas(VkAccelerationStructureKHR tlas, std::uint32_t frame) {
 
+    tlasFrame_ = frame % vulkan::impl::kFramesInFlight;
     const std::uint64_t serial = accelerationStructureSerial(tlas);
     if (serial == wantTlasSerial_) return;
     wantTlas_       = tlas;
@@ -1119,7 +1124,7 @@ void ParticleFieldPass::recordSurfaceBake(VkCommandBuffer cb) {
 
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, bakePipe_);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, bakePipeLayout_, 0, 1,
-                            &tlasSet_, 0, nullptr);
+                            &tlasSets_[tlasFrame_], 0, nullptr);
     for (const BakeDispatch& bd : bakeDispatch_) {
         vkCmdPushConstants(cb, bakePipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            static_cast<std::uint32_t>(sizeof(BakePc)), bd.pc);
@@ -2170,7 +2175,7 @@ void ParticleFieldPass::declareEmit(rg::RenderGraph& g, rg::PassBuilder& pass,
     if (!bakeDispatch_.empty() && bakePipe_ != VK_NULL_HANDLE) {
         static const auto bakeRefl = reflectSpirvBindings(
                 kParticleHeightBakeCompSpv, sizeof(kParticleHeightBakeCompSpv) / sizeof(std::uint32_t));
-        declareDescriptorSet(g, pass, tlasSet_, 0, bakeRefl, kCs);
+        declareDescriptorSet(g, pass, tlasSets_[tlasFrame_], 0, bakeRefl, kCs);
     }
 }
 
@@ -2242,7 +2247,7 @@ void ParticleFieldPass::recordTransmittance(VkCommandBuffer cb, const float camW
 
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, occludePipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, occludePipeLayout_,
-                                0, 1, &tlasSet_, 0, nullptr);
+                                0, 1, &tlasSets_[tlasFrame_], 0, nullptr);
         for (TransDispatch& td : transDispatch_) {
             if (!td.occlude) continue;
             // The sun is this pass's ONLY per-view-invariant vector and the
@@ -2283,7 +2288,7 @@ void ParticleFieldPass::declareTransmittance(rg::RenderGraph& g, rg::PassBuilder
         static const auto occludeRefl = reflectSpirvBindings(
                 kParticleFieldSunOccludeCompSpv,
                 sizeof(kParticleFieldSunOccludeCompSpv) / sizeof(std::uint32_t));
-        declareDescriptorSet(g, pass, tlasSet_, 0, occludeRefl, kCs);
+        declareDescriptorSet(g, pass, tlasSets_[tlasFrame_], 0, occludeRefl, kCs);
     }
 }
 

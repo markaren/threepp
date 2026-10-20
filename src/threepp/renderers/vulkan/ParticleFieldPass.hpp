@@ -602,12 +602,12 @@ namespace threepp::vulkan {
         // the renderer skip the timestamp bracket on the frames that do nothing.
         [[nodiscard]] bool surfaceBakeActive() const { return !bakeDispatch_.empty(); }
 
-        // The scene TLAS every bake traces. Called every frame from
-        // prepareParticleFields, in the post-fence window; the descriptor is
-        // rewritten ONLY when the handle actually changes, which happens only on
-        // a structural rebuild, which is itself vkDeviceWaitIdle-guarded — so
-        // this pass never writes a set an in-flight frame could name.
-        void setTlas(VkAccelerationStructureKHR tlas);
+        // The scene TLAS every bake traces, and the frame in flight being
+        // prepared. Called every frame from prepareParticleFields, in that
+        // frame's post-fence window; only that frame's set is rewritten, and
+        // only when the structure changed, so this pass never writes a set an
+        // in-flight frame could name.
+        void setTlas(VkAccelerationStructureKHR tlas, std::uint32_t frame);
 
         // This frame's slot of the renderer's GeometryDesc ring, by device
         // address. Handed over beside the TLAS and for the same pass: the sun
@@ -1041,19 +1041,21 @@ namespace threepp::vulkan {
 
         // ── F5: the height bake ─────────────────────────────────────────────
         // The ONE pipeline in this pass with a descriptor set, because an
-        // acceleration structure cannot ride a device address. A single set, not
-        // one per frame in flight: its only binding is the TLAS, whose handle
-        // changes only on a structural rebuild, which is vkDeviceWaitIdle
-        // guarded — so it is never rewritten under an in-flight frame.
+        // acceleration structure cannot ride a device address. One set per
+        // frame in flight, each rewritten only in its own frame's post-fence
+        // window: the TLAS is made anew without a device wait when the entry
+        // slot pool grows, so the previous frame may still be tracing through
+        // its set while this one names the new structure (VUID-03047).
         VkDescriptorSetLayout tlasDsLayout_   = VK_NULL_HANDLE;
         VkDescriptorPool      tlasPool_       = VK_NULL_HANDLE;
-        VkDescriptorSet       tlasSet_        = VK_NULL_HANDLE;
+        VkDescriptorSet       tlasSets_[vulkan::impl::kFramesInFlight]{};
+        std::uint32_t         tlasFrame_      = 0;// the frame setTlas was last given
         VkPipelineLayout      bakePipeLayout_ = VK_NULL_HANDLE;
         VkPipeline            bakePipe_       = VK_NULL_HANDLE;
         // "What the set holds" and "what the scene has" are compared by
         // accelerationStructureSerial: a scene rebuild destroys the TLAS and
         // creates another, which can come back with the handle value it had.
-        std::uint64_t              tlasBoundSerial_ = 0;       // what the set holds
+        std::uint64_t              tlasBoundSerial_[vulkan::impl::kFramesInFlight]{};// what each set holds
         VkAccelerationStructureKHR wantTlas_  = VK_NULL_HANDLE;// what the scene has
         std::uint64_t              wantTlasSerial_  = 0;
         std::uint64_t         bakeStructGen_  = 0;
@@ -1102,7 +1104,7 @@ namespace threepp::vulkan {
 
         // The sun-occlusion pass: one ray query per particle against the scene
         // TLAS, folded into the T_sun half of the word the prepass wrote. NO
-        // descriptor of its own — it binds the shared tlasSet_, and its three
+        // descriptor of its own — it binds the shared tlasSets_, and its three
         // buffers (positions, transmittance, the renderer's GeometryDesc array)
         // are device addresses in an 88 B push block. Created only for a field
         // that set BillboardRepr::sunGeometryShadow, which defaults off.

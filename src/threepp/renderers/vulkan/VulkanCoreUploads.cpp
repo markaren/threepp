@@ -2139,12 +2139,13 @@ void VulkanRenderer::Impl::prepareParticleFields(uint32_t frame) {
                 particleFieldPass_->liveFieldCount() == 0) return;
             THREEPP_CPUPROF("frame.P_particleFields");
             // F5: the acceleration structure the surface bake traces. Handed
-            // over every frame and acted on only when the handle moved — which
-            // is a structural rebuild, and therefore vkDeviceWaitIdle-guarded,
-            // which is what makes writing that descriptor here safe. Given here
-            // rather than in rewriteDeferredDescriptors because the pass is
-            // created lazily and may not exist when that last ran.
-            particleFieldPass_->setTlas(tlas);
+            // over every frame with the frame in flight, whose own set the
+            // pass rewrites when the structure changed (a structural rebuild,
+            // or a slot pool growth, which does not wait for the device): this
+            // is that frame's post-fence window. Given here rather than in
+            // rewriteDeferredDescriptors because the pass is created lazily
+            // and may not exist when that last ran.
+            particleFieldPass_->setTlas(tlas, frame);
             // Beside it, and for the sun-occlusion query that shares its set:
             // this frame's slot of the GeometryDesc ring, whose foamAddress is
             // how that query tells a water hit (walk past it) from a hull hit
